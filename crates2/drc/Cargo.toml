@@ -1,0 +1,21 @@
+[package]
+name = "gdsverify-drc"
+version = "0.1.0"
+edition = "2021"
+description = "Design-rule checking for gdsverify."
+
+[features]
+default = []
+gpu = ["gdsverify-backend/gpu", "gdsverify-core/gpu"]
+
+[dependencies]
+gdsverify-backend = { path = "../backend" }
+gdsverify-core = { path = "../core" }
+gdsverify-lvs = { path = "../lvs" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

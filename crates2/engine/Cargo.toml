@@ -1,0 +1,29 @@
+[package]
+name = "gdsverify"
+version = "0.1.0"
+edition = "2021"
+description = "GDS verification facade: re-exports DRC, LVS, PEX, ERC under stable paths."
+
+[features]
+default = []
+gpu = [
+    "gdsverify-backend/gpu",
+    "gdsverify-core/gpu",
+    "gdsverify-drc/gpu",
+    "gdsverify-erc/gpu",
+    "gdsverify-lvs/gpu",
+    "gdsverify-pex/gpu",
+]
+
+[dependencies]
+gdsverify-backend = { path = "../backend" }
+gdsverify-core = { path = "../core" }
+gdsverify-drc = { path = "../drc" }
+gdsverify-erc = { path = "../erc" }
+gdsverify-lvs = { path = "../lvs" }
+gdsverify-pex = { path = "../pex" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

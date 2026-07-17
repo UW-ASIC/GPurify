@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = ["backend", "core", "pex", "lvs", "drc", "erc", "engine"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1"
+flate2 = "1"
+thiserror = "1"
+# GPU: AOT SPIR-V from GLSL. No JIT. (was cubecl; see MIGRATION.md)
+vulkano = "0.35"
+vulkano-shaders = "0.35"
+
+# Skills: lint-workspace-lints — one policy, inherited by every crate.
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+# pedantic on, with the noisy-but-low-value ones opted back out per-need.
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"  # DBU coords are i32 by design; casts are intentional
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unexpected_cfgs = "warn"
+
+# Skills: perf-release-profile / opt-lto-release / opt-codegen-units.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = true
+strip = false
+
+[profile.dev.package."*"]
+opt-level = 3  # optimize deps even in dev; our own crates stay fast to compile

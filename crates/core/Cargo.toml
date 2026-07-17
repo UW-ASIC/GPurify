@@ -1,0 +1,15 @@
+[package]
+name = "gdsverify-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+gpu = ["gdsverify-backend/gpu"]
+
+[dependencies]
+gdsverify-backend = { path = "../backend" }
+gdsverify-macros = { path = "../../macros" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+flate2 = { workspace = true }

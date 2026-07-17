@@ -1,0 +1,57 @@
+* 5-turn rectangular spiral inductor, RFIC geometry.
+* 100um line width, 50um spacing (150um pitch), 2um thick copper.
+* Inner opening 200x200um. nhinc=4 nwinc=4 -> 16 filaments/segment.
+* 27 segments x 16 filaments = 432 filaments total.
+.units um
+.default sigma=5.8e7 nhinc=4 nwinc=4 w=100 h=2
+* Spiral winds outward from N1 (bottom-left of innermost turn).
+* Each turn is 4 sides. Between turns, the trace steps outward 150um.
+* Turn 1: half-side 150um from center
+N1  x=-150  y=-150  z=0
+N2  x=150   y=-150  z=0
+N3  x=150   y=150   z=0
+N4  x=-150  y=150   z=0
+N5  x=-150  y=-300  z=0
+E1  N1 N2
+E2  N2 N3
+E3  N3 N4
+E4  N4 N5
+* Turn 2: half-side 300um from center
+N6  x=300   y=-300  z=0
+N7  x=300   y=300   z=0
+N8  x=-300  y=300   z=0
+N9  x=-300  y=-450  z=0
+E5  N5 N6
+E6  N6 N7
+E7  N7 N8
+E8  N8 N9
+* Turn 3: half-side 450um from center
+N10 x=450   y=-450  z=0
+N11 x=450   y=450   z=0
+N12 x=-450  y=450   z=0
+N13 x=-450  y=-600  z=0
+E9  N9 N10
+E10 N10 N11
+E11 N11 N12
+E12 N12 N13
+* Turn 4: half-side 600um from center
+N14 x=600   y=-600  z=0
+N15 x=600   y=600   z=0
+N16 x=-600  y=600   z=0
+N17 x=-600  y=-750  z=0
+E13 N13 N14
+E14 N14 N15
+E15 N15 N16
+E16 N16 N17
+* Turn 5: half-side 750um from center (outermost)
+N18 x=750   y=-750  z=0
+N19 x=750   y=750   z=0
+N20 x=-750  y=750   z=0
+N21 x=-750  y=-750  z=0
+E17 N17 N18
+E18 N18 N19
+E19 N19 N20
+E20 N20 N21
+.external N1 N21 port1
+.freq fmin=1e6 fmax=10e9 ndec=3
+.end

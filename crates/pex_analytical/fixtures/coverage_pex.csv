@@ -1,0 +1,9 @@
+rule,pass_tests,fail_tests,status
+area_cap,PEX_PLATE_C;PEX_FILL;PEX_MET2_CAP,PEX_NEG_AC,proven
+coupling_cap,PEX_COUPLING_C;PEX_SPACING_100;PEX_SPACING_400;PEX_VERT_COUPLING,PEX_NEG_CC,proven
+coupling_cap_met2,PEX_MET2_COUPLING,PEX_NEG_CC2,proven
+interlayer_cap,PEX_CROSSOVER,PEX_NEG_IL,proven
+per_net,PEX_PER_NET,PEX_NEG_PNET,proven
+resistance,PEX_WIRE_R;PEX_LONG_WIRE_R;PEX_WIDTH_100;PEX_WIDTH_400;PEX_DIFF_M1R,PEX_NEG_R,proven
+resistance_met2,PEX_MET2_R;PEX_DIFF_M2R,PEX_NEG_R2,proven
+via_resistance,PEX_VIA_R;PEX_VIA_R2,PEX_NEG_VIA,proven

@@ -1,0 +1,70 @@
+{
+  "layers": {
+    "dnwell": { "layer": 12, "datatype": 0 },
+    "nwell": { "layer": 21, "datatype": 0 },
+    "lvpwell": { "layer": 204, "datatype": 0 },
+    "comp": { "layer": 22, "datatype": 0 },
+    "dualgate": { "layer": 55, "datatype": 0 },
+    "poly2": { "layer": 30, "datatype": 0 },
+    "nplus": { "layer": 32, "datatype": 0 },
+    "pplus": { "layer": 31, "datatype": 0 },
+    "sab": { "layer": 49, "datatype": 0 },
+    "esd": { "layer": 24, "datatype": 0 },
+    "contact": { "layer": 33, "datatype": 0 },
+    "metal1": { "layer": 34, "datatype": 0 },
+    "via1": { "layer": 35, "datatype": 0 },
+    "metal2": { "layer": 36, "datatype": 0 },
+    "via2": { "layer": 38, "datatype": 0 },
+    "metal3": { "layer": 42, "datatype": 0 },
+    "via3": { "layer": 40, "datatype": 0 },
+    "metal4": { "layer": 46, "datatype": 0 },
+    "via4": { "layer": 41, "datatype": 0 },
+    "metal5": { "layer": 81, "datatype": 0 },
+    "via5": { "layer": 82, "datatype": 0 },
+    "metaltop": { "layer": 53, "datatype": 0 },
+    "pad": { "layer": 37, "datatype": 0 },
+    "resistor": { "layer": 62, "datatype": 0 },
+    "fhres": { "layer": 227, "datatype": 0 },
+    "fusetop": { "layer": 75, "datatype": 0 },
+    "nat": { "layer": 5, "datatype": 0 },
+    "mvsd": { "layer": 210, "datatype": 0 },
+    "mvpsd": { "layer": 11, "datatype": 39 },
+    "schottky_diode": { "layer": 241, "datatype": 0 },
+    "zener": { "layer": 178, "datatype": 0 },
+    "res_mk": { "layer": 110, "datatype": 5 },
+    "cap_mk": { "layer": 117, "datatype": 5 },
+    "mos_cap_mk": { "layer": 166, "datatype": 5 },
+    "diode_mk": { "layer": 115, "datatype": 5 },
+    "lvs_bjt": { "layer": 118, "datatype": 5 },
+    "v5_xtor": { "layer": 112, "datatype": 1 },
+    "border": { "layer": 63, "datatype": 0 }
+  },
+  "drc": [],
+  "lvs": {
+    "cut_required": true
+  },
+  "connectivity": {
+    "conductors": [
+      "comp",
+      "poly2",
+      "metal1",
+      "metal2",
+      "metal3",
+      "metal4",
+      "metal5",
+      "metaltop"
+    ],
+    "vias": [
+      { "layer": "contact", "connects": ["comp", "poly2", "metal1"] },
+      { "layer": "via1", "connects": ["metal1", "metal2"] },
+      { "layer": "via2", "connects": ["metal2", "metal3"] },
+      { "layer": "via3", "connects": ["metal3", "metal4"] },
+      { "layer": "via4", "connects": ["metal4", "metal5"] },
+      { "layer": "via5", "connects": ["metal5", "metaltop"] }
+    ],
+    "intra_layer_touch": true
+  },
+  "device_recognition": {},
+  "pex": {},
+  "devices": {}
+}

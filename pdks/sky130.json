@@ -1,0 +1,377 @@
+{
+  "layers": {
+    "nwell": {
+      "layer": 64,
+      "datatype": 20
+    },
+    "diff": {
+      "layer": 65,
+      "datatype": 20
+    },
+    "poly": {
+      "layer": 66,
+      "datatype": 20
+    },
+    "licon": {
+      "layer": 66,
+      "datatype": 44
+    },
+    "li": {
+      "layer": 67,
+      "datatype": 20
+    },
+    "mcon": {
+      "layer": 67,
+      "datatype": 44
+    },
+    "met1": {
+      "layer": 68,
+      "datatype": 20
+    },
+    "via1": {
+      "layer": 68,
+      "datatype": 44
+    },
+    "met2": {
+      "layer": 69,
+      "datatype": 20
+    },
+    "via2": {
+      "layer": 69,
+      "datatype": 44
+    },
+    "met3": {
+      "layer": 70,
+      "datatype": 20
+    },
+    "via3": {
+      "layer": 70,
+      "datatype": 44
+    },
+    "met4": {
+      "layer": 71,
+      "datatype": 20
+    },
+    "via4": {
+      "layer": 71,
+      "datatype": 44
+    },
+    "met5": {
+      "layer": 72,
+      "datatype": 20
+    },
+    "nsdm": {
+      "layer": 93,
+      "datatype": 44
+    },
+    "psdm": {
+      "layer": 94,
+      "datatype": 20
+    },
+    "hvtp": {
+      "layer": 78,
+      "datatype": 44
+    },
+    "lvtn": {
+      "layer": 125,
+      "datatype": 44
+    },
+    "rpm": {
+      "layer": 86,
+      "datatype": 20
+    }
+  },
+  "drc": {
+    "min_width": {
+      "layer": "met1",
+      "min": 140
+    },
+    "min_spacing": {
+      "layer": "met1",
+      "min": 140
+    },
+    "min_enclosure": {
+      "outer": "met1",
+      "inner": "mcon",
+      "min": 30
+    },
+    "min_extension": {
+      "layer": "poly",
+      "ref": "diff",
+      "min": 130
+    },
+    "min_area": {
+      "layer": "met1",
+      "min": 83000
+    },
+    "notch": {
+      "layer": "met1",
+      "min": 140
+    },
+    "off_grid": {
+      "grid": 5
+    },
+    "angle": {
+      "allowed": [
+        0,
+        45,
+        90,
+        135
+      ]
+    },
+    "min_density": {
+      "layer": "met1",
+      "window": 700000,
+      "min_frac": 0.35
+    },
+    "max_density": {
+      "layer": "met1",
+      "window": 700000,
+      "max_frac": 0.7
+    },
+    "overlap": {
+      "layer_a": "li",
+      "layer_b": "licon",
+      "min": 170
+    },
+    "corner_to_corner": {
+      "layer": "met1",
+      "min": 140
+    }
+  },
+  "lvs": {
+    "cut_required": true
+  },
+  "connectivity": {
+    "conductors": [
+      "diff",
+      "poly",
+      "li",
+      "met1",
+      "met2",
+      "met3",
+      "met4",
+      "met5"
+    ],
+    "vias": [
+      {
+        "layer": "licon",
+        "connects": [
+          "diff",
+          "poly",
+          "li"
+        ]
+      },
+      {
+        "layer": "mcon",
+        "connects": [
+          "li",
+          "met1"
+        ]
+      },
+      {
+        "layer": "via1",
+        "connects": [
+          "met1",
+          "met2"
+        ]
+      },
+      {
+        "layer": "via2",
+        "connects": [
+          "met2",
+          "met3"
+        ]
+      },
+      {
+        "layer": "via3",
+        "connects": [
+          "met3",
+          "met4"
+        ]
+      },
+      {
+        "layer": "via4",
+        "connects": [
+          "met4",
+          "met5"
+        ]
+      }
+    ]
+  },
+  "device_recognition": {
+    "mos": [
+      {
+        "name": "nmos",
+        "gate_layer": "poly",
+        "channel_layer": "diff",
+        "type_implant": "nsdm",
+        "device_type": "nmos",
+        "flavor_markers": [
+          [
+            "lvtn",
+            "lvt"
+          ]
+        ]
+      },
+      {
+        "name": "pmos",
+        "gate_layer": "poly",
+        "channel_layer": "diff",
+        "type_implant": "psdm",
+        "device_type": "pmos",
+        "well_layer": "nwell",
+        "flavor_markers": [
+          [
+            "hvtp",
+            "hvt"
+          ]
+        ]
+      }
+    ],
+    "bjt": [
+      {
+        "name": "pnp",
+        "collector_layer": "diff",
+        "base_layer": "poly",
+        "emitter_layer": "diff",
+        "type_marker": "psdm",
+        "device_type": "pnp"
+      }
+    ]
+  },
+  "pex": {
+    "poly": {
+      "sheet_res_ohm_sq": 48.2,
+      "area_cap_af_um2": 106.0,
+      "fringe_cap_af_um": 55.0,
+      "coupling_cap_af_um": 40.0,
+      "coupling_ref_spacing_nm": 210
+    },
+    "li": {
+      "sheet_res_ohm_sq": 12.8,
+      "area_cap_af_um2": 37.0,
+      "fringe_cap_af_um": 40.0,
+      "coupling_cap_af_um": 50.0,
+      "coupling_ref_spacing_nm": 170
+    },
+    "met1": {
+      "sheet_res_ohm_sq": 0.125,
+      "area_cap_af_um2": 25.0,
+      "fringe_cap_af_um": 40.0,
+      "coupling_cap_af_um": 85.0,
+      "coupling_ref_spacing_nm": 140
+    },
+    "met2": {
+      "sheet_res_ohm_sq": 0.125,
+      "area_cap_af_um2": 17.0,
+      "fringe_cap_af_um": 38.0,
+      "coupling_cap_af_um": 85.0,
+      "coupling_ref_spacing_nm": 140
+    },
+    "met3": {
+      "sheet_res_ohm_sq": 0.047,
+      "area_cap_af_um2": 12.0,
+      "fringe_cap_af_um": 35.0,
+      "coupling_cap_af_um": 80.0,
+      "coupling_ref_spacing_nm": 300
+    },
+    "met4": {
+      "sheet_res_ohm_sq": 0.047,
+      "area_cap_af_um2": 8.0,
+      "fringe_cap_af_um": 30.0,
+      "coupling_cap_af_um": 75.0,
+      "coupling_ref_spacing_nm": 300
+    },
+    "met5": {
+      "sheet_res_ohm_sq": 0.029,
+      "area_cap_af_um2": 9.0,
+      "fringe_cap_af_um": 32.0,
+      "coupling_cap_af_um": 60.0,
+      "coupling_ref_spacing_nm": 1600
+    }
+  },
+  "devices": {
+    "_prefixes": ["sky130_fd_pr__"],
+    "nfet_01v8":          { "type": "nmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "pfet_01v8":          { "type": "pmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "nfet_01v8_lvt":      { "type": "nmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "nfet_01v8_hvt":      { "type": "nmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "pfet_01v8_lvt":      { "type": "pmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "pfet_01v8_hvt":      { "type": "pmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "nfet_g5v0d10v5":     { "type": "nmos",  "cell": "mosfet",    "min_w": 420, "min_l": 500 },
+    "pfet_g5v0d10v5":     { "type": "pmos",  "cell": "mosfet",    "min_w": 420, "min_l": 500 },
+    "nfet_03v3_nvt":      { "type": "nmos",  "cell": "mosfet",    "min_w": 420, "min_l": 150 },
+    "nfet_05v0_nvt":      { "type": "nmos",  "cell": "mosfet",    "min_w": 420, "min_l": 900 },
+    "res_generic_po":     { "type": "res",   "cell": "resistor",  "default_w": 1410, "min_w": 330 },
+    "res_high_po_0p35":   { "type": "res",   "cell": "resistor",  "default_w": 350,  "min_w": 350 },
+    "res_high_po_0p69":   { "type": "res",   "cell": "resistor",  "default_w": 690,  "min_w": 690 },
+    "res_high_po_1p41":   { "type": "res",   "cell": "resistor",  "default_w": 1410, "min_w": 1410 },
+    "res_xhigh_po_0p35":  { "type": "res",   "cell": "resistor",  "default_w": 350,  "min_w": 350 },
+    "res_xhigh_po_0p69":  { "type": "res",   "cell": "resistor",  "default_w": 690,  "min_w": 690 },
+    "res_generic_m1":     { "type": "res",   "cell": "resistor",  "default_w": 280,  "min_w": 140 },
+    "res_generic_m2":     { "type": "res",   "cell": "resistor",  "default_w": 280,  "min_w": 140 },
+    "res_generic_m3":     { "type": "res",   "cell": "resistor",  "default_w": 300,  "min_w": 300 },
+    "res_generic_m4":     { "type": "res",   "cell": "resistor",  "default_w": 300,  "min_w": 300 },
+    "cap_mim_m3_1":       { "type": "cap",   "cell": "capacitor" },
+    "diode_pw2nd_05v5":   { "type": "diode", "cell": "diode" },
+    "npn_05v5_1x1":       { "type": "bjt",   "cell": "bjt" },
+    "pnp_05v5_W3p40L3p40": { "type": "bjt",  "cell": "bjt", "default_w": 3400, "default_l": 3400 },
+    "pnp_05v5_W0p68L0p68": { "type": "bjt",  "cell": "bjt", "default_w": 680,  "default_l": 680 }
+  },
+  "cell": {
+    "layers": {
+      "diff": "diff",
+      "poly": "poly",
+      "li": "li",
+      "licon": "licon",
+      "mcon": "mcon",
+      "met1": "met1",
+      "nwell": "nwell",
+      "nsdm": "nsdm",
+      "psdm": "psdm",
+      "tap": "diff",
+      "routing_metals": ["met1", "met2", "met3", "met4", "met5"],
+      "routing_vias": ["via1", "via2", "via3", "via4"]
+    },
+    "contact": 170,
+    "sd_width": 250,
+    "min_finger_width": 420,
+    "max_finger_width": 10000,
+    "poly_ext": 130,
+    "via_enclosure": 300,
+    "plate_spacing": 200,
+    "res_head": 300,
+    "well_enclosure": 300,
+    "via_spacing": 170,
+    "mcon_size": 170,
+    "m1_enc": 60,
+    "met1_space": 140,
+    "device_gap": 600,
+    "well_spacing": 600,
+    "dti": null,
+    "res_corner_squares": 0.56,
+    "res_serpentine_aspect": 10.0,
+    "res_min_segment": 10000,
+    "res_seg_gap": 400,
+    "bjt_max_emitter_stripe": 25000,
+    "bjt_min_emitter_side": 420,
+    "bjt_base_frac": 0.3,
+    "bjt_collector_frac": 0.5,
+    "bjt_stripe_gap": 200,
+    "diode_gap": 200,
+    "ind_min_trace": 1000,
+    "ind_min_diameter": 10000,
+    "wpe_clearance_nm": [2000, 3000, 5000],
+    "nwell_diff_enc": 180,
+    "min_guard_ring_width": 420,
+    "guard_licon_pitch": 340,
+    "p_epi_thickness": 3000,
+    "p_well_depth": 1500,
+    "n_well_depth": 2000,
+    "retrograde_pwell": false,
+    "lod_moat_ext_nm": [3000, 5000],
+    "sheet_tolerance": {},
+    "linewidth_control_nm": {}
+  }
+}

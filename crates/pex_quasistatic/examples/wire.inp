@@ -1,0 +1,9 @@
+* FastHenry-format example: a straight 10 cm copper wire, 1x1 mm cross-section.
+* Frequency sweep 1 Hz .. 1 GHz, 5 filaments per side to resolve skin effect.
+.units m
+N1 x=0    y=0 z=0
+N2 x=0.1  y=0 z=0
+E1 N1 N2 w=0.001 h=0.001 sigma=5.8e7 nhinc=5 nwinc=5
+.external N1 N2 port1
+.freq fmin=1 fmax=1e9 ndec=1
+.end

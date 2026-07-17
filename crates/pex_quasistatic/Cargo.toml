@@ -1,0 +1,36 @@
+[package]
+name = "quasiss"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["quasiss contributors"]
+repository = "https://example.com/quasiss"
+rust-version = "1.80"
+description = "Unified quasistatic field solver: FastCap-class capacitance + FastHenry-class inductance extraction on one shared BEM core (analytic near-field integrals, bbFMM, GMRES, SIMD P2P, optional Vulkan AOT GPU offload)."
+
+[[bin]]
+name = "fastcap"
+path = "src/bin/fastcap.rs"
+
+[[bin]]
+name = "fasthenry"
+path = "src/bin/fasthenry.rs"
+
+[[example]]
+name = "gpu_bench"
+required-features = ["gpu"]
+
+[dependencies]
+num-complex = "0.4"
+rayon = "1.10"
+thiserror = "1.0"
+wide = "0.7"
+# Vulkano: safe Vulkan bindings with AOT SPIR-V shader compilation via vulkano-shaders.
+vulkano = { version = "0.35", optional = true }
+vulkano-shaders = { version = "0.35", optional = true }
+
+[features]
+default = []
+# Vulkano (Vulkan) GPU backend. Shaders compiled AOT at build time (~1ms startup).
+gpu = ["dep:vulkano", "dep:vulkano-shaders"]
+# ponytail: [profile.release] dropped — ignored in a workspace member; set it in the workspace root Cargo.toml.

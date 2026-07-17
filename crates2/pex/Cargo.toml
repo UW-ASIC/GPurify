@@ -1,0 +1,24 @@
+[package]
+name = "gdsverify-pex"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gdsverify-backend = { path = "../backend" }
+gdsverify-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+num-complex = "0.4"
+wide = "0.7"
+# Vulkano: safe Vulkan bindings with AOT SPIR-V shader compilation via vulkano-shaders.
+vulkano = { workspace = true, optional = true }
+vulkano-shaders = { workspace = true, optional = true }
+
+[features]
+# Vulkano (Vulkan) GPU backend for the quasistatic solver. Shaders compiled AOT.
+gpu = ["dep:vulkano", "dep:vulkano-shaders", "gdsverify-backend/gpu"]
+
+[lints]
+workspace = true

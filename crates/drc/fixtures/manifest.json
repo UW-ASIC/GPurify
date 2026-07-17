@@ -1,0 +1,1546 @@
+{
+  "drc": {
+    "cases": [
+      {
+        "cell": "DRC_MW_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MW_PASS",
+        "rule": "min_width"
+      },
+      {
+        "cell": "DRC_MW_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MW_FAIL",
+        "rule": "min_width",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MW_L",
+        "expect_violations": 1,
+        "id": "DRC_MW_LSHAPE",
+        "rule": "min_width",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MS_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MS_PASS",
+        "rule": "min_spacing"
+      },
+      {
+        "cell": "DRC_MS_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MS_FAIL",
+        "rule": "min_spacing",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MSD_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MSD_PASS",
+        "rule": "min_spacing_diff"
+      },
+      {
+        "cell": "DRC_MSD_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MSD_FAIL",
+        "rule": "min_spacing_diff",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_ENC_PASS",
+        "expect_violations": 0,
+        "id": "DRC_ENC_PASS",
+        "rule": "min_enclosure"
+      },
+      {
+        "cell": "DRC_ENC_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_ENC_FAIL",
+        "rule": "min_enclosure",
+        "violations": [
+          {
+            "measured": 30
+          }
+        ]
+      },
+      {
+        "cell": "DRC_ENC_NONE",
+        "expect_violations": 1,
+        "id": "DRC_ENC_UNHOSTED",
+        "rule": "min_enclosure",
+        "violations": [
+          {
+            "measured": 0
+          }
+        ]
+      },
+      {
+        "cell": "DRC_ENC_CONC_P",
+        "expect_violations": 0,
+        "id": "DRC_ENC_CONC_PASS",
+        "rule": "min_enclosure"
+      },
+      {
+        "cell": "DRC_ENC_CONC_F",
+        "expect_violations": 1,
+        "id": "DRC_ENC_CONC_FAIL",
+        "rule": "min_enclosure",
+        "violations": [
+          {
+            "measured": 0
+          }
+        ]
+      },
+      {
+        "cell": "DRC_EXT_PASS",
+        "expect_violations": 0,
+        "id": "DRC_EXT_PASS",
+        "rule": "min_extension"
+      },
+      {
+        "cell": "DRC_EXT_FAIL",
+        "expect_violations": 2,
+        "id": "DRC_EXT_FAIL",
+        "rule": "min_extension",
+        "violations": [
+          {
+            "measured": 20
+          },
+          {
+            "measured": 20
+          }
+        ]
+      },
+      {
+        "cell": "DRC_EXT_H_PASS",
+        "expect_violations": 0,
+        "id": "DRC_EXT_H_PASS",
+        "rule": "min_extension"
+      },
+      {
+        "cell": "DRC_EXT_H_FAIL",
+        "expect_violations": 2,
+        "id": "DRC_EXT_H_FAIL",
+        "rule": "min_extension",
+        "violations": [
+          {
+            "measured": 20
+          },
+          {
+            "measured": 20
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MA_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MA_PASS",
+        "rule": "min_area"
+      },
+      {
+        "cell": "DRC_MA_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MA_FAIL",
+        "rule": "min_area",
+        "violations": [
+          {
+            "measured": 20000
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MA_EXACT",
+        "expect_violations": 0,
+        "id": "DRC_MA_EXACT",
+        "rule": "min_area"
+      },
+      {
+        "cell": "DRC_XW_PASS",
+        "expect_violations": 0,
+        "id": "DRC_XW_PASS",
+        "rule": "max_width"
+      },
+      {
+        "cell": "DRC_XW_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_XW_FAIL",
+        "rule": "max_width",
+        "violations": [
+          {
+            "measured": 6000
+          }
+        ]
+      },
+      {
+        "cell": "DRC_N_PASS",
+        "expect_violations": 0,
+        "id": "DRC_N_PASS",
+        "rule": "notch"
+      },
+      {
+        "cell": "DRC_N_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_N_FAIL",
+        "rule": "notch",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_NVS_MERGE",
+        "expect_violations": 1,
+        "id": "DRC_NVS_MERGE_NOTCH",
+        "rule": "notch",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_NVS_MERGE",
+        "expect_violations": 0,
+        "id": "DRC_NVS_MERGE_SPACE",
+        "rule": "min_spacing"
+      },
+      {
+        "cell": "DRC_NVS_SEP",
+        "expect_violations": 1,
+        "id": "DRC_NVS_SEP_SPACE",
+        "rule": "min_spacing",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_NVS_SEP",
+        "expect_violations": 0,
+        "id": "DRC_NVS_SEP_NOTCH",
+        "rule": "notch"
+      },
+      {
+        "cell": "DRC_EL_PASS",
+        "expect_violations": 0,
+        "id": "DRC_EL_PASS",
+        "rule": "min_edge_length"
+      },
+      {
+        "cell": "DRC_EL_FAIL",
+        "expect_violations": 2,
+        "id": "DRC_EL_FAIL",
+        "rule": "min_edge_length",
+        "violations": [
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_OG_PASS",
+        "expect_violations": 0,
+        "id": "DRC_OG_PASS",
+        "rule": "off_grid"
+      },
+      {
+        "cell": "DRC_OG_FAIL",
+        "expect_violations": 2,
+        "id": "DRC_OG_FAIL",
+        "rule": "off_grid",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_ANG_PASS",
+        "expect_violations": 0,
+        "id": "DRC_ANG_PASS",
+        "rule": "angle"
+      },
+      {
+        "cell": "DRC_ANG_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_ANG_FAIL",
+        "rule": "angle",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_MD_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MD_PASS",
+        "rule": "min_density"
+      },
+      {
+        "cell": "DRC_MD_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MD_FAIL",
+        "rule": "min_density",
+        "violations": [
+          {
+            "limit_frac": 0.3,
+            "measured_frac": 0.0625
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MD_MULTI",
+        "expect_violations": 1,
+        "id": "DRC_MD_MULTI",
+        "rule": "min_density",
+        "violations": [
+          {
+            "limit_frac": 0.3,
+            "measured_frac": 0.25
+          }
+        ]
+      },
+      {
+        "cell": "DRC_XD_PASS",
+        "expect_violations": 0,
+        "id": "DRC_XD_PASS",
+        "rule": "max_density"
+      },
+      {
+        "cell": "DRC_XD_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_XD_FAIL",
+        "rule": "max_density",
+        "violations": [
+          {
+            "limit_frac": 0.8,
+            "measured_frac": 0.81
+          }
+        ]
+      },
+      {
+        "cell": "DRC_DGRAD",
+        "expect_violations": 0,
+        "id": "DRC_DGRAD_MAX",
+        "rule": "max_density"
+      },
+      {
+        "cell": "DRC_DGRAD",
+        "expect_violations": 1,
+        "id": "DRC_DGRAD_MIN",
+        "rule": "min_density",
+        "violations": [
+          {
+            "limit_frac": 0.3,
+            "measured_frac": 0.0025
+          }
+        ]
+      },
+      {
+        "cell": "DRC_OV_PASS",
+        "expect_violations": 0,
+        "id": "DRC_OV_PASS",
+        "rule": "overlap"
+      },
+      {
+        "cell": "DRC_OV_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_OV_FAIL",
+        "rule": "overlap",
+        "violations": [
+          {
+            "measured": 30
+          }
+        ]
+      },
+      {
+        "cell": "DRC_C2C_PASS",
+        "expect_violations": 0,
+        "id": "DRC_C2C_PASS",
+        "rule": "corner_to_corner"
+      },
+      {
+        "cell": "DRC_C2C_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_C2C_FAIL",
+        "rule": "corner_to_corner",
+        "violations": [
+          {
+            "measured": 141
+          }
+        ]
+      },
+      {
+        "cell": "DRC_FUZZ_ZERO",
+        "expect_violations": 1,
+        "id": "DRC_FUZZ_ZERO_W",
+        "rule": "min_width",
+        "violations": [
+          {
+            "measured": 0
+          }
+        ]
+      },
+      {
+        "cell": "DRC_FUZZ_COIN",
+        "expect_violations": 0,
+        "id": "DRC_FUZZ_COIN_SP",
+        "rule": "min_spacing"
+      },
+      {
+        "cell": "DRC_FUZZ_COIN",
+        "expect_violations": 0,
+        "id": "DRC_FUZZ_COIN_N",
+        "rule": "notch"
+      },
+      {
+        "cell": "DRC_FUZZ_OFFG",
+        "expect_violations": 3,
+        "id": "DRC_FUZZ_OFFG",
+        "rule": "off_grid",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_FUZZ_SELF",
+        "expect_violations": 2,
+        "id": "DRC_FUZZ_SELF_ANG",
+        "rule": "angle",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_FUZZ_ACUTE",
+        "expect_violations": 1,
+        "id": "DRC_FUZZ_ACUTE_ANG",
+        "rule": "angle",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_NVS_MERGE",
+        "expect_violations": 1,
+        "id": "DRC_STRICT_MERGE_SP",
+        "rule": "min_spacing",
+        "strict": true,
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_NVS_MERGE",
+        "expect_violations": 0,
+        "id": "DRC_STRICT_MERGE_N",
+        "rule": "notch",
+        "strict": true
+      },
+      {
+        "cell": "DRC_NVS_SEP",
+        "expect_violations": 1,
+        "id": "DRC_STRICT_SEP_SP",
+        "rule": "min_spacing",
+        "strict": true,
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_ANT_PASS",
+        "expect_violations": 0,
+        "id": "DRC_ANT_PASS",
+        "rule": "antenna"
+      },
+      {
+        "cell": "DRC_ANT_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_ANT_FAIL",
+        "rule": "antenna",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_EOL_PASS",
+        "expect_violations": 0,
+        "id": "DRC_EOL_PASS",
+        "rule": "eol_spacing"
+      },
+      {
+        "cell": "DRC_EOL_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_EOL_FAIL",
+        "rule": "eol_spacing",
+        "violations": [
+          {
+            "measured": 100
+          }
+        ]
+      },
+      {
+        "cell": "DRC_EOL_WIDE",
+        "expect_violations": 0,
+        "id": "DRC_EOL_WIDE",
+        "rule": "eol_spacing"
+      },
+      {
+        "cell": "DRC_WE_PASS",
+        "expect_violations": 0,
+        "id": "DRC_WE_PASS",
+        "rule": "min_enclosure"
+      },
+      {
+        "cell": "DRC_WE_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_WE_FAIL",
+        "rule": "min_enclosure",
+        "violations": [
+          {
+            "measured": 30
+          }
+        ]
+      },
+      {
+        "cell": "DRC_WE_NONE",
+        "expect_violations": 1,
+        "id": "DRC_WE_NONE",
+        "rule": "min_enclosure",
+        "violations": [
+          {
+            "measured": 0
+          }
+        ]
+      },
+      {
+        "cell": "DRC_WDS_PASS",
+        "expect_violations": 0,
+        "id": "DRC_WDS_PASS",
+        "rule": "wide_dependent_spacing"
+      },
+      {
+        "cell": "DRC_WDS_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_WDS_FAIL",
+        "rule": "wide_dependent_spacing",
+        "violations": [
+          {
+            "measured": 150
+          }
+        ]
+      },
+      {
+        "cell": "DRC_WDS_WIDE_OK",
+        "expect_violations": 0,
+        "id": "DRC_WDS_WIDE_OK",
+        "rule": "wide_dependent_spacing"
+      },
+      {
+        "cell": "DRC_PRL_PASS",
+        "expect_violations": 0,
+        "id": "DRC_PRL_PASS",
+        "rule": "prl_spacing"
+      },
+      {
+        "cell": "DRC_PRL_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_PRL_FAIL",
+        "rule": "prl_spacing",
+        "violations": [
+          {
+            "measured": 150
+          }
+        ]
+      },
+      {
+        "cell": "DRC_AENC_PASS",
+        "expect_violations": 0,
+        "id": "DRC_AENC_PASS",
+        "rule": "asymmetric_enclosure"
+      },
+      {
+        "cell": "DRC_AENC_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_AENC_FAIL",
+        "rule": "asymmetric_enclosure",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_MEA_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MEA_PASS",
+        "rule": "min_enclosed_area"
+      },
+      {
+        "cell": "DRC_MEA_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MEA_FAIL",
+        "rule": "min_enclosed_area",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_CH_PASS",
+        "expect_violations": 0,
+        "id": "DRC_CH_PASS",
+        "rule": "cheesing"
+      },
+      {
+        "cell": "DRC_CH_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_CH_FAIL",
+        "rule": "cheesing",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_CH_SMALL",
+        "expect_violations": 0,
+        "id": "DRC_CH_SMALL",
+        "rule": "cheesing"
+      },
+      {
+        "cell": "DRC_RV_PASS",
+        "expect_violations": 0,
+        "id": "DRC_RV_PASS",
+        "rule": "redundant_via"
+      },
+      {
+        "cell": "DRC_RV_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_RV_FAIL",
+        "rule": "redundant_via",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_VAS_PASS",
+        "expect_violations": 0,
+        "id": "DRC_VAS_PASS",
+        "rule": "via_array_spacing"
+      },
+      {
+        "cell": "DRC_VAS_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_VAS_FAIL",
+        "rule": "via_array_spacing",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_MDT_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MDT_PASS",
+        "rule": "max_distance_to_tap"
+      },
+      {
+        "cell": "DRC_MDT_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MDT_FAIL",
+        "rule": "max_distance_to_tap",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_MP_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MP_PASS",
+        "rule": "multi_patterning"
+      },
+      {
+        "cell": "DRC_MP_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MP_FAIL",
+        "rule": "multi_patterning",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_HIER",
+        "expect_violations": 7,
+        "id": "DRC_HIER",
+        "rule": "min_spacing",
+        "violations": [
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          },
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_HIER_NEST",
+        "expect_violations": 1,
+        "id": "DRC_HIER_NEST",
+        "rule": "min_spacing",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_PATH",
+        "expect_violations": 1,
+        "id": "DRC_PATH",
+        "rule": "min_spacing",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_PATH_BEND",
+        "expect_violations": 0,
+        "id": "DRC_PATH_BEND",
+        "rule": "min_width"
+      },
+      {
+        "cell": "DRC_CAR_PASS",
+        "expect_violations": 0,
+        "id": "DRC_CAR_PASS",
+        "rule": "antenna_car"
+      },
+      {
+        "cell": "DRC_CAR_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_CAR_FAIL",
+        "rule": "antenna_car",
+        "violations": [
+          {
+            "measured": 450000
+          }
+        ]
+      },
+      {
+        "cell": "DRC_CAR_DIODE",
+        "expect_violations": 0,
+        "id": "DRC_CAR_DIODE",
+        "rule": "antenna_car"
+      },
+      {
+        "cell": "DRC_MW_DIAG_FAIL",
+        "expect_violations": 1,
+        "id": "DRC_MW_DIAG_FAIL",
+        "rule": "min_width",
+        "violations": [
+          {
+            "measured": 80
+          }
+        ]
+      },
+      {
+        "cell": "DRC_MW_DIAG_PASS",
+        "expect_violations": 0,
+        "id": "DRC_MW_DIAG_PASS",
+        "rule": "min_width"
+      },
+      {
+        "cell": "DRC_EOL_SIDE",
+        "expect_violations": 0,
+        "id": "DRC_EOL_SIDE",
+        "rule": "eol_spacing"
+      },
+      {
+        "cell": "DRC_FUZZ_SELF",
+        "expect_violations": 1,
+        "id": "DRC_VALID_SELF",
+        "rule": "polygon_validity",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_FUZZ_ZERO",
+        "expect_violations": 1,
+        "id": "DRC_VALID_ZERO",
+        "rule": "polygon_validity",
+        "violations": [
+          {}
+        ]
+      },
+      {
+        "cell": "DRC_VALID_KEYHOLE",
+        "expect_violations": 0,
+        "id": "DRC_VALID_KEYHOLE",
+        "rule": "polygon_validity"
+      }
+    ]
+  },
+  "erc": {
+    "cases": [
+      {
+        "cell": "ERC_FG",
+        "check": "floating_gate",
+        "expect_violations": 1,
+        "id": "ERC_FLOAT_GATE"
+      },
+      {
+        "cell": "ERC_FG_OK",
+        "check": "floating_gate",
+        "expect_violations": 0,
+        "id": "ERC_FLOAT_GATE_PASS"
+      },
+      {
+        "cell": "ERC_FW",
+        "check": "floating_well",
+        "expect_violations": 1,
+        "id": "ERC_FLOAT_WELL"
+      },
+      {
+        "cell": "ERC_FW_OK",
+        "check": "floating_well",
+        "expect_violations": 0,
+        "id": "ERC_FLOAT_WELL_PASS"
+      },
+      {
+        "cell": "ERC_MT",
+        "check": "missing_tie",
+        "expect_violations": 1,
+        "id": "ERC_MISSING_TIE"
+      },
+      {
+        "cell": "ERC_SHORT",
+        "check": "supply_short",
+        "expect_violations": 1,
+        "id": "ERC_VDD_VSS_SHORT"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "supply_short",
+        "expect_violations": 0,
+        "id": "ERC_VDD_VSS_PASS"
+      },
+      {
+        "cell": "ERC_UP",
+        "check": "unconnected_pin",
+        "expect_violations": 1,
+        "id": "ERC_UNCONNECTED"
+      },
+      {
+        "cell": "ERC_SOFT",
+        "check": "soft_connection",
+        "expect_violations": 1,
+        "id": "ERC_SOFT_CONN"
+      },
+      {
+        "cell": "ERC_MD",
+        "check": "multiple_drivers",
+        "expect_violations": 1,
+        "id": "ERC_MULTI_DRIVER"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "multiple_drivers",
+        "expect_violations": 0,
+        "id": "ERC_MULTI_DRIVER_PASS"
+      },
+      {
+        "cell": "ERC_THL",
+        "check": "tie_high_low",
+        "expect_violations": 1,
+        "id": "ERC_TIE_HL"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "tie_high_low",
+        "expect_violations": 0,
+        "id": "ERC_TIE_HL_PASS"
+      },
+      {
+        "cell": "ERC_AE_PASS",
+        "check": "antenna_electrical",
+        "expect_violations": 0,
+        "id": "ERC_ANTENNA_ELEC_PASS"
+      },
+      {
+        "cell": "ERC_AE_FAIL",
+        "check": "antenna_electrical",
+        "expect_violations": 1,
+        "id": "ERC_ANTENNA_ELEC_FAIL"
+      },
+      {
+        "cell": "ERC_ESD",
+        "check": "esd_missing",
+        "expect_violations": 1,
+        "id": "ERC_ESD_MISSING"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "esd_missing",
+        "expect_violations": 0,
+        "id": "ERC_ESD_PASS"
+      },
+      {
+        "cell": "ERC_HV",
+        "check": "hv_domain_crossing",
+        "expect_violations": 1,
+        "id": "ERC_HV_CROSS"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "hv_domain_crossing",
+        "expect_violations": 0,
+        "id": "ERC_HV_PASS"
+      },
+      {
+        "cell": "ERC_EM",
+        "check": "em_current_density",
+        "expect_violations": 1,
+        "id": "ERC_EM_FAIL"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "em_current_density",
+        "expect_violations": 0,
+        "id": "ERC_EM_PASS"
+      },
+      {
+        "cell": "ERC_P2P",
+        "check": "p2p_resistance",
+        "expect_violations": 1,
+        "id": "ERC_P2P_FAIL"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "p2p_resistance",
+        "expect_violations": 0,
+        "id": "ERC_P2P_PASS"
+      }
+    ]
+  },
+  "gds_file": "conformance.gds",
+  "lvs": {
+    "cases": [
+      {
+        "cell": "LVS_INV",
+        "expect_match": true,
+        "id": "LVS_CLEAN_MATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VSS",
+              "type": "nmos"
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VDD",
+              "type": "pmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_INV",
+        "expect_match": true,
+        "id": "LVS_SD_PERMUTE",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "VSS",
+              "g": "A",
+              "s": "Y",
+              "type": "nmos"
+            },
+            {
+              "d": "VDD",
+              "g": "A",
+              "s": "Y",
+              "type": "pmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_DCNT",
+        "expect_match": false,
+        "id": "LVS_DEVICE_MISMATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D1",
+              "g": "A",
+              "s": "S1",
+              "type": "nmos"
+            },
+            {
+              "d": "D2",
+              "g": "B",
+              "s": "S2",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_TOPO",
+        "expect_match": false,
+        "id": "LVS_TOPO_MISMATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VSS",
+              "type": "nmos"
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VDD",
+              "type": "pmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_SHORT",
+        "expect_match": false,
+        "id": "LVS_INTENTIONAL_SHORT",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VSS",
+              "type": "nmos"
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VDD",
+              "type": "pmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_OPEN",
+        "expect_match": false,
+        "id": "LVS_INTENTIONAL_OPEN",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VSS",
+              "type": "nmos"
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VDD",
+              "type": "pmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_FINGERS",
+        "expect_match": true,
+        "id": "LVS_FINGERS_MATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "M",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            },
+            {
+              "d": "D",
+              "g": "B",
+              "s": "M",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_FINGERS",
+        "expect_match": false,
+        "id": "LVS_FINGERS_MISMATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_INV",
+        "expect_match": true,
+        "id": "LVS_PARAM_MATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "l": 50,
+              "s": "VSS",
+              "type": "nmos",
+              "w": 200
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "l": 50,
+              "s": "VDD",
+              "type": "pmos",
+              "w": 200
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_INV",
+        "expect_match": false,
+        "id": "LVS_PARAM_MISMATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "l": 50,
+              "s": "VSS",
+              "type": "nmos",
+              "w": 300
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "l": 50,
+              "s": "VDD",
+              "type": "pmos",
+              "w": 300
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_HVT",
+        "expect_match": true,
+        "id": "LVS_HVT_MATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D",
+              "flavor": "hvt",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_HVT",
+        "expect_match": false,
+        "id": "LVS_HVT_MISMATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D",
+              "flavor": "standard",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_LVT",
+        "expect_match": true,
+        "id": "LVS_LVT_MATCH",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D",
+              "flavor": "lvt",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_SERIES",
+        "expect_match": true,
+        "id": "LVS_SERIES_MERGE",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_PARALLEL",
+        "expect_match": true,
+        "id": "LVS_PARALLEL_MERGE",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "D",
+              "g": "A",
+              "s": "S",
+              "type": "nmos"
+            }
+          ]
+        }
+      },
+      {
+        "cell": "LVS_INV",
+        "expect_match": true,
+        "id": "LVS_ISOMORPHIC",
+        "reference_netlist": {
+          "devices": [
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VSS",
+              "type": "nmos"
+            },
+            {
+              "d": "Y",
+              "g": "A",
+              "s": "VDD",
+              "type": "pmos"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "pex": {
+    "cases": [
+      {
+        "cell": "PEX_R",
+        "expected": {
+          "r_ohm": 1.0
+        },
+        "id": "PEX_WIRE_R",
+        "kind": "resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_C",
+        "expected": {
+          "c_af": 185.0
+        },
+        "id": "PEX_PLATE_C",
+        "kind": "area_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_CC",
+        "expected": {
+          "c_af": 200.0
+        },
+        "id": "PEX_COUPLING_C",
+        "kind": "coupling_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_LR",
+        "expected": {
+          "r_ohm": 5.0
+        },
+        "id": "PEX_LONG_WIRE_R",
+        "kind": "resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_PNET",
+        "expected": {
+          "0": {
+            "cap_af": 386.0,
+            "r_ohm": 1.0
+          },
+          "1": {
+            "cap_af": 386.0,
+            "r_ohm": 1.0
+          }
+        },
+        "id": "PEX_PER_NET",
+        "kind": "per_net",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_S100",
+        "expected": {
+          "c_af": 400.0
+        },
+        "id": "PEX_SPACING_100",
+        "kind": "coupling_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_S400",
+        "expected": {
+          "c_af": 100.0
+        },
+        "id": "PEX_SPACING_400",
+        "kind": "coupling_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_W100",
+        "expected": {
+          "r_ohm": 2.0
+        },
+        "id": "PEX_WIDTH_100",
+        "kind": "resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_W400",
+        "expected": {
+          "r_ohm": 0.5
+        },
+        "id": "PEX_WIDTH_400",
+        "kind": "resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_VERT",
+        "expected": {
+          "c_af": 200.0
+        },
+        "id": "PEX_VERT_COUPLING",
+        "kind": "coupling_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_VIA1",
+        "expected": {
+          "r_ohm": 5.0
+        },
+        "id": "PEX_VIA_R",
+        "kind": "via_resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_VIA2",
+        "expected": {
+          "r_ohm": 10.0
+        },
+        "id": "PEX_VIA_R2",
+        "kind": "via_resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_XOVER",
+        "expected": {
+          "c_af": 0.4
+        },
+        "id": "PEX_CROSSOVER",
+        "kind": "interlayer_cap",
+        "tol": 0.1
+      },
+      {
+        "cell": "PEX_FILL",
+        "expected": {
+          "c_af": 14.6025
+        },
+        "id": "PEX_FILL",
+        "kind": "area_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_M2R",
+        "expected": {
+          "r_ohm": 0.8
+        },
+        "id": "PEX_MET2_R",
+        "kind": "resistance_met2",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_M2C",
+        "expected": {
+          "c_af": 135.0
+        },
+        "id": "PEX_MET2_CAP",
+        "kind": "area_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_DIFF",
+        "expected": {
+          "r_ohm": 1.0
+        },
+        "id": "PEX_DIFF_M1R",
+        "kind": "resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_DIFF",
+        "expected": {
+          "r_ohm": 0.8
+        },
+        "id": "PEX_DIFF_M2R",
+        "kind": "resistance_met2",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_M2CC",
+        "expected": {
+          "c_af": 160.0
+        },
+        "id": "PEX_MET2_COUPLING",
+        "kind": "coupling_cap_met2",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "r_ohm": 1.5
+        },
+        "id": "PEX_NEG_R",
+        "kind": "resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "r_ohm": 1.2
+        },
+        "id": "PEX_NEG_R2",
+        "kind": "resistance_met2",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "r_ohm": 9.0
+        },
+        "id": "PEX_NEG_VIA",
+        "kind": "via_resistance",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "c_af": 999.0
+        },
+        "id": "PEX_NEG_AC",
+        "kind": "area_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "c_af": 300.0
+        },
+        "id": "PEX_NEG_CC",
+        "kind": "coupling_cap",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "c_af": 200.0
+        },
+        "id": "PEX_NEG_CC2",
+        "kind": "coupling_cap_met2",
+        "tol": 1e-6
+      },
+      {
+        "cell": "PEX_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "c_af": 2.0
+        },
+        "id": "PEX_NEG_IL",
+        "kind": "interlayer_cap",
+        "tol": 0.1
+      },
+      {
+        "cell": "PEX_PNET_NEG",
+        "expect_mismatch": true,
+        "expected": {
+          "0": {
+            "cap_af": 386.0,
+            "r_ohm": 2.0
+          },
+          "1": {
+            "cap_af": 386.0,
+            "r_ohm": 1.0
+          }
+        },
+        "id": "PEX_NEG_PNET",
+        "kind": "per_net",
+        "tol": 1e-6
+      }
+    ]
+  }
+}
