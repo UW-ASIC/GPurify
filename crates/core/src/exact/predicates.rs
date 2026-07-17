@@ -23,6 +23,7 @@ pub enum PointClassification {
 }
 
 /// Classify the intersection of two closed segments exactly.
+#[must_use]
 pub fn classify_segment_intersection(
     a0: Point,
     a1: Point,
@@ -90,6 +91,7 @@ fn opposite_signs(a: i128, b: i128) -> bool {
 }
 
 /// Classify an integer point against a simple ring.
+#[must_use]
 pub fn classify_point_in_ring(points: &[Point], p: Point) -> PointClassification {
     classify_point_scaled2(points, p.x as i128 * 2, p.y as i128 * 2)
 }

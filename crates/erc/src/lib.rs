@@ -20,16 +20,31 @@ pub mod substrate_extract;
 // Re-exports so internal `crate::*` paths resolve after workspace split
 pub use gdsverify_backend as backend;
 pub use gdsverify_backend::rule;
-pub use gdsverify_backend::session;
 pub use gdsverify_core::geometry;
 pub use gdsverify_core::params;
 pub use gdsverify_lvs as lvs;
 pub use gdsverify_pex as pex;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendTelemetry};
 use crate::geometry::{Bbox, GeometryStore, LayerId, PolyId};
 use crate::lvs::{extract_netlist, ExtractedNetlist};
 use crate::params::Deck;
+
+/// Public error surface for the ERC entry point that used to return
+/// `Result<_, String>`. `Display` reproduces the original message verbatim,
+/// so callers matching on substrings keep working.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ErcError {
+    /// Connectivity extraction (LVS) failed.
+    #[error("{0}")]
+    Extraction(String),
+}
+
+impl From<crate::lvs::LvsError> for ErcError {
+    fn from(e: crate::lvs::LvsError) -> Self {
+        ErcError::Extraction(e.to_string())
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ErcViolation {
@@ -46,6 +61,7 @@ pub struct ErcReport {
 }
 
 impl ErcReport {
+    #[must_use]
     pub fn by_check(&self, check: &str) -> Vec<&ErcViolation> {
         self.violations
             .iter()
@@ -62,8 +78,6 @@ pub struct ErcCtx<'a> {
     pub store: &'a GeometryStore,
     pub deck: &'a Deck,
     pub ext: &'a ExtractedNetlist,
-    /// One device session per run (CPU arena when no GPU is in play).
-    pub session: &'a crate::session::Session,
     /// Tapeout signoff inputs; a check whose input is missing reports NotRun.
     pub config: &'a SignoffConfig,
     /// Power-grid solve shared by IR-drop and EM (`run_erc` computes it once).
@@ -246,10 +260,12 @@ impl CheckReport {
         }
     }
 
+    #[must_use]
     pub fn is_clean(&self) -> bool {
         self.status == CheckStatus::Clean
     }
 
+    #[must_use]
     pub fn is_blocking(&self) -> bool {
         !self.is_clean()
     }
@@ -293,6 +309,7 @@ impl SignoffSuiteReport {
         }
     }
 
+    #[must_use]
     pub fn checks(&self) -> [&CheckReport; 6] {
         [
             &self.antenna.check,
@@ -304,10 +321,12 @@ impl SignoffSuiteReport {
         ]
     }
 
+    #[must_use]
     pub fn all_clean(&self) -> bool {
         self.checks().iter().all(|r| r.is_clean())
     }
 
+    #[must_use]
     pub fn blocking_checks(&self) -> Vec<SignoffCheck> {
         self.checks()
             .iter()
@@ -317,35 +336,22 @@ impl SignoffSuiteReport {
     }
 }
 
-/// Run the merged ERC engine: heuristic electrical checks plus the signoff
-/// suite, sharing one extracted netlist and one power-grid solve.  Missing
-/// signoff input is reported as `NOT_RUN`; extraction failure fails closed.
-pub fn run_erc(store: &GeometryStore, deck: &Deck, config: &SignoffConfig) -> ErcReport {
-    let ext = match extract_netlist(store, deck) {
-        Ok(ext) => ext,
-        Err(e) => {
-            let reason = format!("ERC connectivity extraction failed: {e}");
-            return ErcReport {
-                violations: vec![ErcViolation {
-                    check: "erc_extraction_error".into(),
-                    detail: reason.clone(),
-                    x: 0,
-                    y: 0,
-                }],
-                signoff: SignoffSuiteReport::all_error(&reason),
-            };
-        }
-    };
-    // ERC's public entry is CPU-backed (as at baseline); the session plumbing
-    // means a future run_erc_backend only changes this one constructor.
-    let session = crate::session::Session::cpu();
-
+/// Extract the netlist once, auto-derive a power grid if none was supplied,
+/// solve it, mount every rule, run them, and assemble the report. Shared by
+/// both the CPU entry (`run_erc`) and the forced-backend entry.
+fn run_erc_inner(
+    store: &GeometryStore,
+    deck: &Deck,
+    config: &SignoffConfig,
+    ext: &ExtractedNetlist,
+    backend: Backend,
+) -> ErcReport {
     // ponytail: auto-extract power grid when config.power is None but we have connectivity.
     // This is a best-effort fallback; explicit config is always preferred.
     let auto_power = if config.power.is_none() && !ext.net_names.is_empty() {
         let classification = power_extract::identify_power_nets(deck, &ext.net_names);
         if !classification.power_nets.is_empty() || !classification.ground_nets.is_empty() {
-            let grid = power_extract::extract_power_grid(store, deck, &ext, &classification);
+            let grid = power_extract::extract_power_grid(store, deck, ext, &classification);
             if !grid.nodes.is_empty() && !grid.edges.is_empty() {
                 Some(PowerSignoffConfig {
                     grid,
@@ -368,8 +374,7 @@ pub fn run_erc(store: &GeometryStore, deck: &Deck, config: &SignoffConfig) -> Er
     let ctx = ErcCtx {
         store,
         deck,
-        ext: &ext,
-        session: &session,
+        ext,
         config,
         power: power_solve.as_ref(),
     };
@@ -382,7 +387,7 @@ pub fn run_erc(store: &GeometryStore, deck: &Deck, config: &SignoffConfig) -> Er
     let mut electromigration = None;
     let mut reliability = None;
     let mut esd_latchup = None;
-    for finding in crate::rule::run_rules(&mounted, &ctx, Backend::Cpu) {
+    for finding in crate::rule::run_rules(&mounted, &ctx, backend) {
         match finding {
             ErcFinding::Violation(v) => violations.push(v),
             ErcFinding::Antenna(r) => antenna = Some(r),
@@ -409,80 +414,43 @@ pub fn run_erc(store: &GeometryStore, deck: &Deck, config: &SignoffConfig) -> Er
     }
 }
 
+/// Run the merged ERC engine: heuristic electrical checks plus the signoff
+/// suite, sharing one extracted netlist and one power-grid solve.  Missing
+/// signoff input is reported as `NOT_RUN`; extraction failure fails closed.
+#[must_use]
+pub fn run_erc(store: &GeometryStore, deck: &Deck, config: &SignoffConfig) -> ErcReport {
+    let ext = match extract_netlist(store, deck) {
+        Ok(ext) => ext,
+        Err(e) => {
+            let reason = format!("ERC connectivity extraction failed: {e}");
+            return ErcReport {
+                violations: vec![ErcViolation {
+                    check: "erc_extraction_error".into(),
+                    detail: reason.clone(),
+                    x: 0,
+                    y: 0,
+                }],
+                signoff: SignoffSuiteReport::all_error(&reason),
+            };
+        }
+    };
+    // ERC's public entry is CPU-backed (as at baseline).
+    run_erc_inner(store, deck, config, &ext, Backend::Cpu)
+}
+
 /// Forced-backend ERC: same as `run_erc` but with explicit backend + telemetry.
+/// ponytail: ERC has no GPU seam of its own, so `Gpu` runs on CPU and telemetry
+/// records actual = Cpu directly (no session plumbing).
 pub fn run_erc_backend(
     store: &GeometryStore,
     deck: &Deck,
     config: &SignoffConfig,
     backend: crate::backend::Backend,
-) -> Result<(ErcReport, crate::backend::BackendTelemetry), String> {
+) -> Result<(ErcReport, BackendTelemetry), ErcError> {
     let ext = extract_netlist(store, deck)?;
-    let session = crate::session::Session::new(backend).map_err(|e| e.to_string())?;
-
-    let auto_power = if config.power.is_none() && !ext.net_names.is_empty() {
-        let classification = power_extract::identify_power_nets(deck, &ext.net_names);
-        if !classification.power_nets.is_empty() || !classification.ground_nets.is_empty() {
-            let grid = power_extract::extract_power_grid(store, deck, &ext, &classification);
-            if !grid.nodes.is_empty() && !grid.edges.is_empty() {
-                Some(PowerSignoffConfig {
-                    grid,
-                    solver: PowerSolveConfig::default(),
-                    ir_drop: None,
-                    electromigration: None,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let effective_power = config.power.as_ref().or(auto_power.as_ref());
-    let power_solve = effective_power.map(|p| solve_power_grid(&p.grid, &p.solver));
-    let ctx = ErcCtx {
-        store,
-        deck,
-        ext: &ext,
-        session: &session,
-        config,
-        power: power_solve.as_ref(),
-    };
-    let mounted: Vec<BoxedRule> = rules::FACTORIES.iter().filter_map(|f| f(deck)).collect();
-
-    let mut violations = Vec::new();
-    let mut antenna = None;
-    let mut density_cmp = None;
-    let mut ir_drop = None;
-    let mut electromigration = None;
-    let mut reliability = None;
-    let mut esd_latchup = None;
-    for finding in crate::rule::run_rules(&mounted, &ctx, backend) {
-        match finding {
-            ErcFinding::Violation(v) => violations.push(v),
-            ErcFinding::Antenna(r) => antenna = Some(r),
-            ErcFinding::DensityCmp(r) => density_cmp = Some(r),
-            ErcFinding::IrDrop(r) => ir_drop = Some(r),
-            ErcFinding::Electromigration(r) => electromigration = Some(r),
-            ErcFinding::Reliability(r) => reliability = Some(r),
-            ErcFinding::EsdLatchup(r) => esd_latchup = Some(r),
-        }
-    }
-    let report = ErcReport {
-        violations,
-        signoff: SignoffSuiteReport {
-            antenna: antenna.expect("antenna signoff rule did not report"),
-            density_cmp: density_cmp.expect("density/CMP signoff rule did not report"),
-            ir_drop: ir_drop.expect("IR-drop signoff rule did not report"),
-            electromigration: electromigration
-                .expect("electromigration signoff rule did not report"),
-            reliability: reliability.expect("reliability signoff rule did not report"),
-            esd_latchup: esd_latchup.expect("ESD/latch-up signoff rule did not report"),
-        },
-    };
-    Ok((report, session.telemetry()))
+    let report = run_erc_inner(store, deck, config, &ext, Backend::Cpu);
+    let telemetry = BackendTelemetry::new(backend, Backend::Cpu);
+    Ok((report, telemetry))
 }
 
 /// Return a bbox only when `p` is exactly an axis-aligned rectangle.

@@ -385,7 +385,9 @@ pub fn general_boolean(
         //
         // For a sub-edge that is also on the boundary of the other polygon (shared
         // edge), this test returns Boundary, which we handle separately.
-        let (other_set, own_set) = match edge.origin {
+        // ponytail: `own_set` is unused here — the midpoint is on its own
+        // boundary by construction, so only the other set needs classifying.
+        let (other_set, _own_set) = match edge.origin {
             EdgeOrigin::Lhs => (rhs, lhs),
             EdgeOrigin::Rhs => (lhs, rhs),
         };

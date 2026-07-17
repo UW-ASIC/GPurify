@@ -4,48 +4,15 @@ use super::types::*;
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::Deck;
-use gdsverify_macros::verify_kernel;
 use std::collections::{HashMap, HashSet};
 
-/// Per-pair positive-area bbox overlap: 1 = overlaps, 0 = disjoint/touching.
-/// Single source for both compilations (`bbox_overlap_kernel::{cpu,gpu,run}`).
-#[verify_kernel(shape = pair)]
-fn bbox_overlap(
-    a_xmin: i32,
-    a_ymin: i32,
-    a_xmax: i32,
-    a_ymax: i32,
-    b_xmin: i32,
-    b_ymin: i32,
-    b_xmax: i32,
-    b_ymax: i32,
-) -> u32 {
-    let mut x0 = a_xmin;
-    if b_xmin > x0 {
-        x0 = b_xmin;
-    }
-    let mut x1 = a_xmax;
-    if b_xmax < x1 {
-        x1 = b_xmax;
-    }
-    let mut y0 = a_ymin;
-    if b_ymin > y0 {
-        y0 = b_ymin;
-    }
-    let mut y1 = a_ymax;
-    if b_ymax < y1 {
-        y1 = b_ymax;
-    }
-    let mut f = 0u32;
-    if x1 > x0 && y1 > y0 {
-        f = 1u32;
-    }
-    f
-}
+// ponytail: `#[verify_kernel]` (macro + cubecl) removed; these are the plain
+// per-element predicate bodies, unchanged. The cross_pairs sweep below runs
+// them in a CPU loop. GPU dispatch is staged for phase-2 vulkano.
+// `bbox_overlap` had no CPU caller (macro-only) and was dropped.
 
-/// Exact rect-pair positive-area overlap (cross_pairs shape: flag 1 iff any
-/// rect from range A overlaps any rect from range B).
-#[verify_kernel(shape = cross_pairs)]
+/// Exact rect-pair positive-area overlap: 1 iff the two rects overlap with
+/// positive area (open intervals).
 fn rect_overlap(
     a_x0: i32,
     a_y0: i32,
@@ -79,9 +46,8 @@ fn rect_overlap(
     f
 }
 
-/// Exact rect-pair touch (cross_pairs shape: flag 1 iff any rect from
-/// range A touches or overlaps any rect from range B; closed intervals).
-#[verify_kernel(shape = cross_pairs)]
+/// Exact rect-pair touch: 1 iff the two rects touch or overlap (closed
+/// intervals).
 fn rect_touch(
     a_x0: i32,
     a_y0: i32,
@@ -99,19 +65,53 @@ fn rect_touch(
     f
 }
 
-use crate::geometry::rects::{decompose_rectilinear, RectSet};
+/// CPU `cross_pairs` driver: for each descriptor `(a0,a1,b0,b1)`, flag 1 iff
+/// some rect `a in a0..a1` and `b in b0..b1` satisfy `pred(a, b) != 0`.
+/// Replaces the macro-generated `<name>_kernel::run` for the two predicates
+/// above (identical result).
+fn cross_pairs_flags(
+    rx0: &[i32],
+    ry0: &[i32],
+    rx1: &[i32],
+    ry1: &[i32],
+    descs: &[(u32, u32, u32, u32)],
+    pred: fn(i32, i32, i32, i32, i32, i32, i32, i32) -> u32,
+) -> Vec<u32> {
+    descs
+        .iter()
+        .map(|&(a0, a1, b0, b1)| {
+            for a in a0..a1 {
+                let ai = a as usize;
+                for b in b0..b1 {
+                    let bi = b as usize;
+                    if pred(
+                        rx0[ai], ry0[ai], rx1[ai], ry1[ai], rx0[bi], ry0[bi], rx1[bi], ry1[bi],
+                    ) != 0
+                    {
+                        return 1u32;
+                    }
+                }
+            }
+            0u32
+        })
+        .collect()
+}
+
+use crate::geometry::rects::decompose_rectilinear;
 use gdsverify_core::connectivity::host_union_find;
 
-/// Session-backed exact rect predicate over candidate pairs. For each pair,
-/// decomposes both polygons into rects and checks if any rect-pair overlaps
-/// (or touches, for intra-layer when intra_touch is set). Returns per-pair
-/// flags: 1 = connect, 0 = no geometric contact.
+/// Exact rect predicate over candidate pairs. For each pair, decomposes both
+/// polygons into rects and checks if any rect-pair overlaps (or touches, for
+/// intra-layer when intra_touch is set). Returns per-pair flags: 1 = connect,
+/// 0 = no geometric contact.
+// ponytail: `_backend` kept in the signature (callers thread it); the sweep is
+// CPU-only now. GPU rect-predicate dispatch is staged for phase-2 vulkano.
 fn rect_predicate_flags(
     store: &GeometryStore,
     nodes: &[Node],
     cands: &[(u32, u32)],
     intra_touch: bool,
-    backend: Backend,
+    _backend: Backend,
 ) -> Option<Vec<u32>> {
     if cands.len() < (1 << 14) {
         return None;
@@ -172,13 +172,13 @@ fn rect_predicate_flags(
     let mut flags = vec![0u32; cands.len()];
 
     if !overlap_descs.is_empty() {
-        let of = rect_overlap_kernel::run(backend, &rx0, &ry0, &rx1, &ry1, &overlap_descs);
+        let of = cross_pairs_flags(&rx0, &ry0, &rx1, &ry1, &overlap_descs, rect_overlap);
         for (k, &ci) in overlap_cand_idx.iter().enumerate() {
             flags[ci] = of[k];
         }
     }
     if !touch_descs.is_empty() {
-        let tf = rect_touch_kernel::run(backend, &rx0, &ry0, &rx1, &ry1, &touch_descs);
+        let tf = cross_pairs_flags(&rx0, &ry0, &rx1, &ry1, &touch_descs, rect_touch);
         for (k, &ci) in touch_cand_idx.iter().enumerate() {
             flags[ci] = tf[k];
         }
@@ -1014,7 +1014,10 @@ pub fn reduce_netlist(ext: &mut ExtractedNetlist) {
 
 // --- main extraction pipeline ---
 
-pub fn extract_netlist(store: &GeometryStore, deck: &Deck) -> Result<ExtractedNetlist, String> {
+pub fn extract_netlist(
+    store: &GeometryStore,
+    deck: &Deck,
+) -> Result<ExtractedNetlist, crate::LvsError> {
     extract_netlist_opts(
         store,
         deck,
@@ -1031,7 +1034,7 @@ pub fn extract_netlist_opts(
     deck: &Deck,
     opts: &ExtractOpts,
     backend: Backend,
-) -> Result<ExtractedNetlist, String> {
+) -> Result<ExtractedNetlist, crate::LvsError> {
     let mut extracted = extract_raw(store, deck, opts, backend, true)?.netlist;
     for device in &mut extracted.devices {
         if device.body == u32::MAX {
@@ -1380,31 +1383,10 @@ fn extract_pipeline(
         edges.push((i as u32, j as u32));
     }
 
-    // Compute connected components: GPU session path or host union-find.
-    // ponytail: GPU path for large graphs via FastSV-style session kernels;
-    // host UF for small graphs or when no device is available.
-    let component_labels = if backend == Backend::Gpu && m >= (1 << 18) {
-        // Try GPU session; on failure warn and fall through to host UF.
-        let gpu_result = crate::session::contained(|| {
-            match crate::session::Session::new(Backend::Gpu) {
-                Ok(session) => {
-                    gdsverify_core::connectivity::connected_components(&session, &edges, m)
-                }
-                Err(_) => {
-                    crate::session::warn_no_gpu("lvs connectivity");
-                    // Fall back: compute on CPU session
-                    let session = crate::session::Session::cpu();
-                    gdsverify_core::connectivity::connected_components(&session, &edges, m)
-                }
-            }
-        });
-        gpu_result.unwrap_or_else(|| {
-            // Panic in session: fall back to host union-find
-            host_union_find(&edges, m)
-        })
-    } else {
-        host_union_find(&edges, m)
-    };
+    // Compute connected components via host union-find.
+    // ponytail: session/cubecl GPU FastSV path removed; the GPU connectivity
+    // path is staged for phase-2 vulkano. Host UF is exact for all sizes.
+    let component_labels = host_union_find(&edges, m);
 
     // Assign compact net ids (first-occurrence of root in ascending node order)
     let mut root_to_net: HashMap<u32, u32> = HashMap::new();

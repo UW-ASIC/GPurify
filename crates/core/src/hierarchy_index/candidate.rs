@@ -1,6 +1,6 @@
 //! Exact query result: one transformed shape with stable hierarchy identity.
 
-use crate::geometry::exact::Point;
+use crate::exact::Point;
 use crate::geometry::Bbox;
 
 use super::fnv::Fnv64;
@@ -24,11 +24,13 @@ pub struct HierarchyCandidate {
 impl HierarchyCandidate {
     /// Alias for stable_hash — stable identity for cross-run comparison.
     #[doc(alias = "stable_hash")]
+    #[must_use]
     pub fn stable_identity(&self) -> u64 {
         self.stable_hash()
     }
 
     /// Stable non-cryptographic identity for marker/result deduplication.
+    #[must_use]
     pub fn stable_hash(&self) -> u64 {
         let mut hash = Fnv64::new();
         hash.string(&self.structure);

@@ -135,22 +135,27 @@ impl Polygon {
         })
     }
 
+    #[must_use]
     pub fn outer(&self) -> &Ring {
         &self.outer
     }
 
+    #[must_use]
     pub fn holes(&self) -> &[Ring] {
         &self.holes
     }
 
+    #[must_use]
     pub fn area2(&self) -> i128 {
         self.outer.signed_area2() + self.holes.iter().map(Ring::signed_area2).sum::<i128>()
     }
 
+    #[must_use]
     pub fn is_rectilinear(&self) -> bool {
         self.outer.is_rectilinear() && self.holes.iter().all(Ring::is_rectilinear)
     }
 
+    #[must_use]
     pub fn classify_point(&self, p: Point) -> PointClassification {
         self.classify_scaled2(p.x as i128 * 2, p.y as i128 * 2)
     }

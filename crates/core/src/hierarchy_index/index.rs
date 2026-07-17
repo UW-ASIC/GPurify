@@ -1,10 +1,10 @@
 //! Spatial index borrowing the lossless library.
 
-use crate::gds_lossless::{
+use crate::exact::{Point, Ring};
+use crate::gds::{
     checked_array_coordinate, ensure_meta_supported, exact_pitch, stroke_path, validate_hierarchy,
     Affine, GdsElement, GdsLibrary, GdsStructure, LayoutError, LayoutErrorKind,
 };
-use crate::geometry::exact::{Point, Ring};
 use crate::geometry::Bbox;
 use std::collections::{HashMap, HashSet};
 
@@ -127,10 +127,12 @@ impl<'a> HierarchySpatialIndex<'a> {
         Ok(index)
     }
 
+    #[must_use]
     pub fn top_cells(&self) -> &[String] {
         &self.top_cells
     }
 
+    #[must_use]
     pub fn cell_bbox(&self, name: &str) -> Option<Bbox> {
         self.cells.get(name).and_then(|cell| cell.hierarchy_bbox)
     }
@@ -549,7 +551,7 @@ fn index_element(element: &GdsElement, element_index: u32) -> Result<Vec<LocalSh
 }
 
 fn array_pitches(
-    reference: &crate::gds_lossless::GdsArrayReference,
+    reference: &crate::gds::GdsArrayReference,
 ) -> Result<(i32, i32, i32, i32), LayoutError> {
     Ok((
         exact_pitch(

@@ -33,12 +33,12 @@ pub use tile_candidates::TileCandidates;
 mod tests {
     use super::*;
     use crate::gds::GdsUnits;
-    use crate::gds_lossless::{
+    use crate::gds::{
         flatten_gds_library, GdsArrayReference, GdsBoundary, GdsElement, GdsElementMeta,
         GdsEnvelope, GdsFlattenOptions, GdsLibrary, GdsReference, GdsStructure, GdsTransform,
         LayoutErrorKind,
     };
-    use crate::geometry::exact::Point;
+    use crate::exact::Point;
     use crate::geometry::Bbox;
     use crate::params::{DrcRuleParam, LayerDef, LayerTable};
 

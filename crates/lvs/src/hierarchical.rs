@@ -58,9 +58,11 @@ impl HierLvsCacheSimple {
     pub fn insert(&mut self, cell: String, device: SubcircuitDevice) {
         self.matched.insert(cell, device);
     }
+    #[must_use]
     pub fn len(&self) -> usize {
         self.matched.len()
     }
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.matched.is_empty()
     }

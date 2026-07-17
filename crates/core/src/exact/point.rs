@@ -8,6 +8,7 @@ pub struct Point {
 }
 
 impl Point {
+    #[must_use]
     pub const fn new(x: i32, y: i32) -> Self {
         Self { x, y }
     }
@@ -28,6 +29,7 @@ pub enum Orientation {
 }
 
 /// Exact orientation over the complete `i32` coordinate range.
+#[must_use]
 pub fn orientation(a: Point, b: Point, c: Point) -> Orientation {
     match cross(a, b, c).cmp(&0) {
         std::cmp::Ordering::Less => Orientation::Clockwise,
@@ -46,6 +48,7 @@ pub(super) fn cross(a: Point, b: Point, c: Point) -> i128 {
 }
 
 /// True when `p` lies on the closed segment `ab`.
+#[must_use]
 pub fn on_segment(a: Point, b: Point, p: Point) -> bool {
     cross(a, b, p) == 0
         && p.x >= a.x.min(b.x)
@@ -72,6 +75,7 @@ impl RationalPoint {
     /// non-integer intersection points still produce a valid arrangement vertex.
     /// The arrangement is already approximate at non-integer intersections; the
     /// alternative is full rational arithmetic throughout, add if needed.
+    #[must_use]
     pub fn try_snap(&self) -> Option<Point> {
         let snap = |num: i128, den: i128| -> Option<i32> {
             if den == 0 {
@@ -103,6 +107,7 @@ impl RationalPoint {
 /// Uses the standard parametric formula with i128 arithmetic. The cross
 /// products involved are at most ~2×(2^31)^2 ≈ 2^63 per factor, so the final
 /// products fit comfortably in i128.
+#[must_use]
 pub fn segment_intersection_rational(
     a0: Point,
     a1: Point,

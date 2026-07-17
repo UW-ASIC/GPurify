@@ -64,7 +64,7 @@ pub struct Device {
 /// Exact source polygons used to recognize one MOS before any legacy reduction.
 /// Polygon indices address the input [`GeometryStore`](crate::geometry::GeometryStore).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DeviceRecognitionSource {
+pub struct DeviceRecognitionSource {
     pub gate_polygon: u32,
     pub channel_polygon: u32,
     pub well_polygon: Option<u32>,
@@ -89,6 +89,9 @@ pub struct FloatingNet {
     pub polygon_count: usize,
 }
 
+// ponytail: AoS (`Vec<Device>`); SoA candidate. The gpu_compare path already
+// transposes to columns where it matters, so a SoA refactor is a nice-to-have,
+// not worth the correctness risk here.
 #[derive(Default)]
 pub struct ExtractedNetlist {
     pub devices: Vec<Device>,

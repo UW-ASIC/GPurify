@@ -24,17 +24,17 @@ pub(crate) fn check_overlap(
         }
     };
     for pa in store.polys_on_layer(a) {
-        let polygon = crate::geometry::exact::Polygon::from_outer(
+        let polygon = gdsverify_core::exact::Polygon::from_outer(
             store.vertices(pa)
-                .map(|(x, y)| crate::geometry::exact::Point::new(x, y))
+                .map(|(x, y)| gdsverify_core::exact::Point::new(x, y))
                 .collect(),
         );
         let marker = store.poly_bbox[pa.0 as usize];
         let intersection = polygon
-            .map(crate::geometry::exact::PolygonSet::from_polygon)
+            .map(gdsverify_core::exact::PolygonSet::from_polygon)
             .map_err(derived::DerivedError::from)
             .and_then(|a_set| {
-                crate::geometry::exact::rectilinear_intersection(&a_set, &b_union)
+                gdsverify_core::exact::rectilinear_intersection(&a_set, &b_union)
                     .map_err(derived::DerivedError::from)
             });
         let Ok(intersection) = intersection else {

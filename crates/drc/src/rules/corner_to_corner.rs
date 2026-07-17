@@ -3,7 +3,7 @@
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
-use super::super::{candidate_pairs, gpu_far_mask, merge_groups, DrcCtx, Violation};
+use super::super::{candidate_pairs, merge_groups, DrcCtx, Violation};
 
 pub struct CornerToCornerRule { pub id: String, pub layer: LayerId, pub min: i32 }
 
@@ -15,7 +15,9 @@ fn check_corner_to_corner(
     let min2 = (min as i64) * (min as i64);
     let cands = candidate_pairs(store, &polys, None, min);
     // edge-pair distance lower-bounds corner distance, so the same GPU prefilter applies
-    let far = gpu.and_then(|c| gpu_far_mask(c, &cands, min));
+    // ponytail: GPU prefilter staged for phase-2 vulkano; exact CPU path only.
+    let _ = gpu;
+    let far: Option<Vec<bool>> = None;
     let idx_of: std::collections::HashMap<u32, u32> =
         polys.iter().enumerate().map(|(i, p)| (p.0, i as u32)).collect();
     let group = merge_groups(store, &cands, far.as_ref(), polys.len(), &idx_of);

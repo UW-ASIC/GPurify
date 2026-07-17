@@ -5,7 +5,7 @@
 //! constraints are exact polygon-set operations. Failure to converge is explicit;
 //! calibrated CMP predictions are `NotRun` unless the caller supplies a model.
 
-use crate::geometry::exact::{
+use gdsverify_core::exact::{
     rectilinear_intersection, rectilinear_subtraction, rectilinear_union, ExactGeometryError,
     Point, Polygon, PolygonSet,
 };

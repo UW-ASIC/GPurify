@@ -4,7 +4,7 @@ use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
 use super::super::{
-    gpu_far_mask, poly_poly_dist2_within_wide, poly_strictly_inside, DrcCtx, Violation,
+    poly_poly_dist2_within_wide, poly_strictly_inside, DrcCtx, Violation,
 };
 
 pub struct MinEnclosureRule { pub id: String, pub outer: LayerId, pub inner: LayerId, pub min: i32 }
@@ -42,7 +42,9 @@ fn check_enclosure(
     // phase 2: margin = min inner-boundary-to-outer-boundary distance, best
     // host wins. The GPU clears pairs whose margin is comfortably >= min
     // (clearing the inner entirely); the rest are measured exactly.
-    let far = gpu.and_then(|c| gpu_far_mask(c, &hosted, min));
+    // ponytail: GPU prefilter staged for phase-2 vulkano; exact CPU path only.
+    let _ = gpu;
+    let far: Option<Vec<bool>> = None;
     let mut best: std::collections::HashMap<u32, i64> = std::collections::HashMap::new();
     let mut cleared: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for (k, &(pi, po)) in hosted.iter().enumerate() {

@@ -3,35 +3,19 @@
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
-use super::super::{edge_cols, DrcCtx, Violation, GPU_MIN_LINEAR_WORK};
-use gdsverify_macros::verify_kernel;
+use super::super::{DrcCtx, Violation};
 
 pub struct MinEdgeLengthRule { pub id: String, pub layer: LayerId, pub min: i32 }
 
-/// f32 squared edge length — advisory prefilter; the exact i128 length decides.
-#[verify_kernel(shape = map)]
-pub fn edge_len2_approx(x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    dx * dx + dy * dy
-}
-
 fn check_min_edge_length(
-    store: &GeometryStore, lt: &LayerTable, layer: LayerId, min: i32, backend: Backend,
+    store: &GeometryStore, lt: &LayerTable, layer: LayerId, min: i32, _backend: Backend,
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
     let min2 = (min as i64) * (min as i64);
     let edges = build_edges(store, layer);
-    // GPU prefilter: edges with len2 clearly >= min2 need no exact check
-    let approx = if backend == Backend::Gpu && edges.len() >= GPU_MIN_LINEAR_WORK {
-        let (x0, y0, x1, y1) = edge_cols(&edges);
-        edge_len2_approx_kernel::gpu(&x0, &y0, &x1, &y1)
-    } else {
-        None
-    };
-    let thr = (min as f32) * (min as f32) * 1.05 + 4.0;
-    for (i, e) in edges.iter().enumerate() {
-        if approx.as_ref().is_some_and(|a| a[i] >= thr) { continue; }
+    // ponytail: GPU prefilter (edge_len2_approx f32 kernel) staged for phase-2
+    // vulkano; the exact i128 length below is the sole verdict path.
+    for e in edges.iter() {
         let l2 = e.len2_i128();
         if l2 > 0 && l2 < i128::from(min2) {
             out.push(Violation {

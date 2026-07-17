@@ -1,15 +1,18 @@
 //! Free-function geometric primitives over the SoA store: segment distance,
 //! intersection, window clipping, point-in-polygon, self-intersection, isqrt.
+//!
+//! The integer predicates here are correctness-critical (exact `i128` cross
+//! products, fail-closed on overflow) and are ported verbatim.
 
 use super::edge::Edge;
 use super::ids::PolyId;
 use super::store::GeometryStore;
 
 /// Squared Euclidean distance between two segments' closest points (any angle:
-/// for non-crossing segments the minimum is always at an endpoint).
-/// Returns 0 if they touch/cross. This is the primitive both spacing and corner checks use.
+/// for non-crossing segments the minimum is always at an endpoint). Returns 0
+/// if they touch/cross. The primitive both spacing and corner checks use.
+#[must_use]
 pub fn seg_seg_dist2(a: &Edge, b: &Edge) -> i64 {
-    // If bounding boxes overlap and the segments intersect, distance is 0.
     if segments_intersect(a, b) {
         return 0;
     }
@@ -39,13 +42,13 @@ fn point_seg_dist2(px: i32, py: i32, e: &Edge) -> i64 {
         let dy = i128::from(py) - i128::from(e.y1);
         return i64::try_from(dx * dx + dy * dy).unwrap_or(i64::MAX);
     }
-    // projection falls on the segment: d² = |w|² − c1²/c2, exact in i128
-    // (f64 here loses ulps on diagonal edges at large coordinates)
+    // Projection falls on the segment: d² = |w|² − c1²/c2, exact in i128
+    // (f64 here loses ulps on diagonal edges at large coordinates).
     let Some(num) = (wx * wx + wy * wy)
         .checked_mul(c2)
         .and_then(|lhs| c1.checked_mul(c1).and_then(|rhs| lhs.checked_sub(rhs)))
     else {
-        // The legacy scalar-distance API cannot represent this intermediate.
+        // The legacy scalar-distance API cannot represent this intermediate;
         // DRC validation rejects such coordinate extents before rule execution.
         return i64::MAX;
     };
@@ -61,9 +64,21 @@ fn on_seg(ax: i64, ay: i64, bx: i64, by: i64, cx: i64, cy: i64) -> bool {
     cx >= ax.min(bx) && cx <= ax.max(bx) && cy >= ay.min(by) && cy <= ay.max(by)
 }
 
+/// Do two segments intersect (proper crossing or collinear touch)?
+#[must_use]
 pub fn segments_intersect(a: &Edge, b: &Edge) -> bool {
-    let (ax, ay, bx, by) = (a.x0 as i64, a.y0 as i64, a.x1 as i64, a.y1 as i64);
-    let (cx, cy, dx, dy) = (b.x0 as i64, b.y0 as i64, b.x1 as i64, b.y1 as i64);
+    let (ax, ay, bx, by) = (
+        i64::from(a.x0),
+        i64::from(a.y0),
+        i64::from(a.x1),
+        i64::from(a.y1),
+    );
+    let (cx, cy, dx, dy) = (
+        i64::from(b.x0),
+        i64::from(b.y0),
+        i64::from(b.x1),
+        i64::from(b.y1),
+    );
     let d1 = orient(cx, cy, dx, dy, ax, ay);
     let d2 = orient(cx, cy, dx, dy, bx, by);
     let d3 = orient(ax, ay, bx, by, cx, cy);
@@ -77,10 +92,11 @@ pub fn segments_intersect(a: &Edge, b: &Edge) -> bool {
         || (d4 == 0 && on_seg(ax, ay, bx, by, dx, dy))
 }
 
-/// Area of a polygon clipped to an axis-aligned window (Sutherland–Hodgman + shoelace).
-/// Exact for rectilinear geometry; f64 for the fractional intersection points diagonal
-/// edges can produce. This is what density checks need — a bbox-based coverage estimate
-/// wildly overstates non-convex shapes like combs.
+/// Area of a polygon clipped to an axis-aligned window (Sutherland–Hodgman +
+/// shoelace). Exact for rectilinear geometry; `f64` for the fractional
+/// intersection points diagonal edges can produce. Density checks need this —
+/// a bbox-based coverage estimate wildly overstates non-convex shapes.
+#[must_use]
 pub fn clipped_area(
     store: &GeometryStore,
     p: PolyId,
@@ -99,9 +115,9 @@ pub fn clipped_area(
     )
 }
 
-/// Wide-coordinate density clip. Window edges may extend past the i32 layout
-/// domain even though every stored vertex is representable (for example a
-/// 10-DBU window anchored five DBU below i32::MAX).
+/// Wide-coordinate density clip. Window edges may extend past the `i32` layout
+/// domain even though every stored vertex is representable.
+#[must_use]
 pub fn clipped_area_i64(
     store: &GeometryStore,
     p: PolyId,
@@ -122,7 +138,6 @@ pub fn clipped_area_i64(
             )
         })
         .collect();
-    // clip against each half-plane: keep(pt) true => inside
     let planes: [(f64, bool, bool); 4] = [
         (0.0, true, true),
         ((i128::from(xmax) - origin_x) as f64, true, false),
@@ -164,23 +179,22 @@ pub fn clipped_area_i64(
     (a2 / 2.0).abs()
 }
 
-/// Is a point strictly inside a polygon? Even-odd ray cast; points exactly on the boundary
-/// return false. Integer-exact for the on-edge test, half-open on crossing counts.
+/// Is a point strictly inside a polygon? Even-odd ray cast; points exactly on
+/// the boundary return `false`. Integer-exact for the on-edge test.
+#[must_use]
 pub fn point_in_poly(store: &GeometryStore, p: PolyId, px: i32, py: i32) -> bool {
     let (s, e) = store.poly_range(p);
     let n = e - s;
-    let (px, py) = (px as i64, py as i64);
+    let (px, py) = (i64::from(px), i64::from(py));
     let mut inside = false;
     for i in 0..n {
         let (x0, y0) = store.poly_vertex(s, i);
         let (x1, y1) = store.poly_vertex(s, (i + 1) % n);
-        let (x0, y0, x1, y1) = (x0 as i64, y0 as i64, x1 as i64, y1 as i64);
-        // on-boundary => not strictly inside
+        let (x0, y0, x1, y1) = (i64::from(x0), i64::from(y0), i64::from(x1), i64::from(y1));
         if orient(x0, y0, x1, y1, px, py) == 0 && on_seg(x0, y0, x1, y1, px, py) {
             return false;
         }
         if (y0 > py) != (y1 > py) {
-            // exact crossing test: px < x-intersection of the edge with the horizontal ray
             let lhs = i128::from(x1 - x0) * i128::from(py - y0);
             let rhs = i128::from(px - x0) * i128::from(y1 - y0);
             let cross = if y1 > y0 { lhs > rhs } else { lhs < rhs };
@@ -193,16 +207,18 @@ pub fn point_in_poly(store: &GeometryStore, p: PolyId, px: i32, py: i32) -> bool
 }
 
 /// Does the polygon's boundary properly cross itself (bow-tie / figure-8)?
+///
 /// Only PROPER crossings of non-adjacent edges count: collinear-overlap slits
-/// (the GDS keyhole representation of holes) are legal and must not flag.
-/// O(n²) over the ring — polygons are small (rects dominate); revisit with a
-/// sweep if fractured all-angle data shows up.
+/// (the GDS keyhole representation of holes) are legal and must not flag. A
+/// sweep along the wider axis keeps the look-ahead window local instead of the
+/// all-pairs O(n²) that melts on many-thousand-vertex comb polygons.
+#[must_use]
 pub fn poly_self_intersects(store: &GeometryStore, p: PolyId) -> bool {
     let (s, e) = store.poly_range(p);
     let n = e - s;
     if n < 4 {
         return false;
-    } // triangle can't self-cross
+    }
     let edge = |i: usize| -> Edge {
         let (x0, y0) = store.poly_vertex(s, i);
         let (x1, y1) = store.poly_vertex(s, (i + 1) % n);
@@ -214,10 +230,7 @@ pub fn poly_self_intersects(store: &GeometryStore, p: PolyId) -> bool {
             poly: p.0,
         }
     };
-    // Sweep along the axis with more bbox-min spread: crossing edges must have
-    // overlapping bboxes, so the look-ahead window stays local instead of the
-    // all-pairs O(n²) that melts on many-thousand-vertex comb polygons.
-    let bb = store.poly_bbox[p.0 as usize];
+    let bb = store.poly_bbox[p.index()];
     let sweep_x = bb.width_i64() >= bb.height_i64();
     let lo = |ed: &Edge| {
         if sweep_x {
@@ -242,51 +255,35 @@ pub fn poly_self_intersects(store: &GeometryStore, p: PolyId) -> bool {
             continue;
         }
         let a_hi = hi(&a);
-        for &jj in order[w + 1..].iter() {
+        for &jj in &order[w + 1..] {
             let j = jj as usize;
             let b = edge(j);
             if lo(&b) > a_hi {
                 break;
-            } // sweep window closed
-              // adjacent edges share a vertex; skip (incl. the ring wrap)
+            }
+            // Adjacent edges share a vertex; skip (incl. the ring wrap).
             if j == (i + 1) % n || i == (j + 1) % n {
                 continue;
             }
             if b.len2_i128() == 0 {
                 continue;
             }
-            let d1 = orient(
-                b.x0 as i64,
-                b.y0 as i64,
-                b.x1 as i64,
-                b.y1 as i64,
-                a.x0 as i64,
-                a.y0 as i64,
+            let (bx0, by0, bx1, by1) = (
+                i64::from(b.x0),
+                i64::from(b.y0),
+                i64::from(b.x1),
+                i64::from(b.y1),
             );
-            let d2 = orient(
-                b.x0 as i64,
-                b.y0 as i64,
-                b.x1 as i64,
-                b.y1 as i64,
-                a.x1 as i64,
-                a.y1 as i64,
+            let (ax0, ay0, ax1, ay1) = (
+                i64::from(a.x0),
+                i64::from(a.y0),
+                i64::from(a.x1),
+                i64::from(a.y1),
             );
-            let d3 = orient(
-                a.x0 as i64,
-                a.y0 as i64,
-                a.x1 as i64,
-                a.y1 as i64,
-                b.x0 as i64,
-                b.y0 as i64,
-            );
-            let d4 = orient(
-                a.x0 as i64,
-                a.y0 as i64,
-                a.x1 as i64,
-                a.y1 as i64,
-                b.x1 as i64,
-                b.y1 as i64,
-            );
+            let d1 = orient(bx0, by0, bx1, by1, ax0, ay0);
+            let d2 = orient(bx0, by0, bx1, by1, ax1, ay1);
+            let d3 = orient(ax0, ay0, ax1, ay1, bx0, by0);
+            let d4 = orient(ax0, ay0, ax1, ay1, bx1, by1);
             if ((d1 > 0) != (d2 > 0))
                 && ((d3 > 0) != (d4 > 0))
                 && d1 != 0
@@ -302,6 +299,7 @@ pub fn poly_self_intersects(store: &GeometryStore, p: PolyId) -> bool {
 }
 
 /// Integer sqrt floor, for reporting measured distances from squared values.
+#[must_use]
 pub fn isqrt(n: i64) -> i64 {
     if n < 0 {
         return 0;

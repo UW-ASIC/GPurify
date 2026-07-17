@@ -4,7 +4,7 @@ use super::extract::extract_raw;
 use super::production::*;
 use super::types::{DeviceFlavor, DeviceKind, ExtractOpts, TwoTerminalKind};
 use crate::backend::Backend;
-use crate::geometry::exact::{Point, PointClassification, Polygon};
+use gdsverify_core::exact::{Point, PointClassification, Polygon};
 use crate::geometry::{GeometryStore, LayerId, PolyId};
 use crate::params::{Deck, MosRule};
 use std::collections::{BTreeMap, BTreeSet, HashSet};

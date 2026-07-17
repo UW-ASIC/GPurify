@@ -75,14 +75,17 @@ impl Ring {
         Ok(Self { vertices, area2 })
     }
 
+    #[must_use]
     pub fn vertices(&self) -> &[Point] {
         &self.vertices
     }
 
+    #[must_use]
     pub fn signed_area2(&self) -> i128 {
         self.area2
     }
 
+    #[must_use]
     pub fn winding(&self) -> Winding {
         if self.area2 > 0 {
             Winding::CounterClockwise
@@ -91,6 +94,7 @@ impl Ring {
         }
     }
 
+    #[must_use]
     pub fn is_rectilinear(&self) -> bool {
         self.vertices.iter().enumerate().all(|(i, &a)| {
             let b = self.vertices[(i + 1) % self.vertices.len()];
@@ -98,6 +102,7 @@ impl Ring {
         })
     }
 
+    #[must_use]
     pub fn classify_point(&self, p: Point) -> PointClassification {
         classify_point_in_ring(&self.vertices, p)
     }
@@ -182,6 +187,7 @@ pub enum EdgeKind {
 }
 
 /// Classify the edge from `a` to `b`.
+#[must_use]
 pub fn classify_edge(a: Point, b: Point) -> EdgeKind {
     let dx = (b.x as i64 - a.x as i64).abs();
     let dy = (b.y as i64 - a.y as i64).abs();

@@ -8,7 +8,7 @@ use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
 use super::super::{
-    candidate_pairs, gpu_far_mask, merge_groups, poly_edges, poly_poly_dist2_within, DrcCtx,
+    candidate_pairs, merge_groups, poly_edges, poly_poly_dist2_within, DrcCtx,
     Violation,
 };
 
@@ -21,7 +21,9 @@ fn check_eol_spacing(
     let polys: Vec<PolyId> = store.polys_on_layer(layer).collect();
     let eol_sp2 = (eol_spacing as i64) * (eol_spacing as i64);
     let cands = candidate_pairs(store, &polys, None, eol_spacing);
-    let far = gpu.and_then(|c| gpu_far_mask(c, &cands, eol_spacing));
+    // ponytail: GPU prefilter staged for phase-2 vulkano; exact CPU path only.
+    let _ = gpu;
+    let far: Option<Vec<bool>> = None;
     let idx_of: std::collections::HashMap<u32, u32> =
         polys.iter().enumerate().map(|(i, p)| (p.0, i as u32)).collect();
     let group = merge_groups(store, &cands, far.as_ref(), polys.len(), &idx_of);

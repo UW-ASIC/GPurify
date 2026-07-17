@@ -52,9 +52,7 @@ pub use types::*;
 // Re-exports so internal `crate::*` paths resolve after workspace split
 pub use gdsverify_backend as backend;
 pub use gdsverify_backend::rule;
-pub use gdsverify_backend::session;
 pub use gdsverify_core::gds;
-pub use gdsverify_core::gds_lossless;
 pub use gdsverify_core::geometry;
 pub use gdsverify_core::hierarchy_index;
 pub use gdsverify_core::params;
@@ -62,6 +60,31 @@ pub use gdsverify_core::schema;
 pub use gdsverify_pex as pex;
 
 use std::cell::RefCell;
+
+/// Public LVS error surface. Internal deeply-nested helpers still hand back
+/// `String`; those convert here via `?`. `Display` reproduces the message
+/// verbatim, so callers matching on substrings keep working.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LvsError {
+    /// GPU backend requested but no device is available.
+    #[error("gpu backend requested but no device available")]
+    NoGpu,
+    /// Any extraction/comparison failure, message-carrying.
+    #[error("{0}")]
+    Message(String),
+}
+
+impl From<String> for LvsError {
+    fn from(s: String) -> Self {
+        LvsError::Message(s)
+    }
+}
+
+impl From<&str> for LvsError {
+    fn from(s: &str) -> Self {
+        LvsError::Message(s.to_owned())
+    }
+}
 
 /// Context handed to the check rules after the compare pipeline's
 /// extract/graph-build/refinement stages have run.
@@ -100,8 +123,12 @@ pub fn extract_netlist_backend(
     store: &crate::geometry::GeometryStore,
     deck: &crate::params::Deck,
     backend: crate::backend::Backend,
-) -> Result<(ExtractedNetlist, crate::backend::BackendTelemetry), String> {
-    let session = crate::session::Session::new(backend).map_err(|e| e.to_string())?;
+) -> Result<(ExtractedNetlist, crate::backend::BackendTelemetry), LvsError> {
+    // ponytail: session/Col arena removed; telemetry is built directly.
+    // GPU dispatch is staged for phase-2 vulkano — extraction runs on CPU.
+    if backend == crate::backend::Backend::Gpu && !crate::backend::gpu_ready() {
+        return Err(LvsError::NoGpu);
+    }
     let netlist = extract_netlist_opts(
         store,
         deck,
@@ -111,7 +138,8 @@ pub fn extract_netlist_backend(
         },
         backend,
     )?;
-    Ok((netlist, session.telemetry()))
+    let telemetry = crate::backend::BackendTelemetry::new(backend, crate::backend::Backend::Cpu);
+    Ok((netlist, telemetry))
 }
 
 #[cfg(test)]
@@ -673,6 +701,7 @@ mod tests {
         no_implant.add_rect(poly, 40, -20, 20, 140);
         let err = extract_netlist(&no_implant, &deck)
             .err()
+            .map(|e| e.to_string())
             .expect("unclassified channel must fail");
         assert!(
             err.contains("no matching MOS type implant"),
@@ -688,6 +717,7 @@ mod tests {
         ambiguous_implant.add_rect(psdm, -10, -10, 120, 120);
         let err = extract_netlist(&ambiguous_implant, &deck)
             .err()
+            .map(|e| e.to_string())
             .expect("overlapping N/P implants must not select the first rule");
         assert!(err.contains("ambiguously matches MOS rules"), "{err}");
 
@@ -704,6 +734,7 @@ mod tests {
         ambiguous_flavor.add_rect(lvt, 30, -10, 40, 120);
         let err = extract_netlist(&ambiguous_flavor, &flavor_deck)
             .err()
+            .map(|e| e.to_string())
             .expect("overlapping HVT/LVT markers must not select the first marker");
         assert!(err.contains("multiple flavor markers"), "{err}");
     }
