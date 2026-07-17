@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-gpu = ["gdsverify-backend/gpu", "gdsverify-core/gpu"]
+gpu = [
+    "gdsverify-backend/gpu",
+    "gdsverify-core/gpu",
+    "dep:vulkano",
+    "dep:vulkano-shaders",
+]
 
 [dependencies]
 gdsverify-backend = { path = "../backend" }
@@ -14,6 +19,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
+vulkano = { workspace = true, optional = true }
+vulkano-shaders = { workspace = true, optional = true }
 
 [lints]
 workspace = true

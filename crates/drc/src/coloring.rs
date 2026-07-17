@@ -668,7 +668,7 @@ mod tests {
     fn ac3_detects_domain_wipeout() {
         // Node 0 forced to color 0, node 1 forced to color 0, conflict (0,1)
         // AC-3 should detect this is uncolorable
-        let mut adj = vec![vec![1], vec![0]];
+        let adj = vec![vec![1], vec![0]];
         let mut domains = vec![BTreeSet::from([0]), BTreeSet::from([0])];
         assert!(ac3_preprocess(&adj, &mut domains).is_err());
     }

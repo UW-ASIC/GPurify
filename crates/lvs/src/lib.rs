@@ -22,6 +22,8 @@ pub mod devices;
 pub mod extract;
 pub mod gds_adapter;
 pub mod gpu_compare;
+#[cfg(feature = "gpu")]
+pub mod gpu_overlap;
 pub mod hier_production;
 pub mod hierarchical;
 pub mod netlist;

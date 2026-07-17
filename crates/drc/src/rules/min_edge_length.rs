@@ -8,14 +8,31 @@ use super::super::{DrcCtx, Violation};
 pub struct MinEdgeLengthRule { pub id: String, pub layer: LayerId, pub min: i32 }
 
 fn check_min_edge_length(
-    store: &GeometryStore, lt: &LayerTable, layer: LayerId, min: i32, _backend: Backend,
+    store: &GeometryStore, lt: &LayerTable, layer: LayerId, min: i32, backend: Backend,
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
     let min2 = (min as i64) * (min as i64);
     let edges = build_edges(store, layer);
-    // ponytail: GPU prefilter (edge_len2_approx f32 kernel) staged for phase-2
-    // vulkano; the exact i128 length below is the sole verdict path.
-    for e in edges.iter() {
+    // GPU advisory prefilter: f32 approx len2 with a slack threshold. Edges
+    // clearly longer than min are skipped; borderline/short edges take the exact
+    // i128 verdict below. thr chosen so no real hit is dropped (superset).
+    #[cfg(feature = "gpu")]
+    let approx: Option<Vec<f32>> =
+        if backend == Backend::Gpu && edges.len() >= crate::gpu::GPU_MIN_LINEAR_WORK {
+            let (x0, y0, x1, y1) = crate::gpu::edge_cols(&edges);
+            crate::gpu::edge_len2_approx(&x0, &y0, &x1, &y1)
+        } else {
+            None
+        };
+    #[cfg(feature = "gpu")]
+    let thr = (min as f32) * (min as f32) * 1.05 + 4.0;
+    #[cfg(not(feature = "gpu"))]
+    let _ = backend;
+    for (_i, e) in edges.iter().enumerate() {
+        #[cfg(feature = "gpu")]
+        if approx.as_ref().is_some_and(|a| a[_i] >= thr) {
+            continue;
+        }
         let l2 = e.len2_i128();
         if l2 > 0 && l2 < i128::from(min2) {
             out.push(Violation {

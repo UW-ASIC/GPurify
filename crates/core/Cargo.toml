@@ -6,7 +6,7 @@ description = "Core data model (SoA geometry, exact predicates, connectivity, la
 
 [features]
 default = []
-gpu = ["gdsverify-backend/gpu"]
+gpu = ["gdsverify-backend/gpu", "dep:vulkano", "dep:vulkano-shaders"]
 
 [dependencies]
 gdsverify-backend = { path = "../backend" }
@@ -15,6 +15,8 @@ serde_json = { workspace = true }
 rayon = { workspace = true }
 flate2 = { workspace = true }
 thiserror = { workspace = true }
+vulkano = { workspace = true, optional = true }
+vulkano-shaders = { workspace = true, optional = true }
 
 [lints]
 workspace = true
