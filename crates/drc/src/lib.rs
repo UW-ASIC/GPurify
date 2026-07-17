@@ -17,8 +17,6 @@
 // Re-exports so internal `crate::*` paths resolve after workspace split
 pub use gdsverify_backend as backend;
 pub use gdsverify_backend::rule;
-pub use gdsverify_backend::session;
-pub use gdsverify_core::gds_lossless;
 pub use gdsverify_core::geometry;
 pub use gdsverify_core::params;
 pub use gdsverify_lvs as lvs;
@@ -26,10 +24,6 @@ pub use gdsverify_lvs as lvs;
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::{Deck, DrcRuleParam, LayerTable};
-use gdsverify_macros::{kernel_fn, verify_kernel};
-// cube-dialect expansion of the kernel fns needs these operator traits in scope
-#[cfg(feature = "gpu")]
-use cubecl::frontend::{Abs, FloatOps};
 
 pub mod cmp;
 pub mod coloring;
@@ -38,61 +32,32 @@ pub mod fill;
 pub mod production;
 pub mod results;
 
+/// The crate's public error surface. Wraps the geometry-capacity errors the
+/// rule kernels can hit and the completeness check on the incremental result DB.
+/// The deck/rule schema (`production::DeckError`, `production::RunError`), fill
+/// (`fill::FillError`), and result-DB (`results::ResultDbError`) errors remain
+/// their own typed enums — this is only the surface that was previously
+/// `Result<_, String>`.
+#[derive(Debug, thiserror::Error)]
+pub enum DrcError {
+    /// Geometry outside the declared numeric limits of the exact kernels.
+    #[error(transparent)]
+    Geometry(#[from] gdsverify_core::exact::ExactGeometryError),
+    /// The incremental result database is missing tiles.
+    #[error("expected {expected} tiles, database has {records} records")]
+    IncompleteResults { expected: usize, records: usize },
+}
+
 /// Everything a DRC rule reads. Copy — plain borrowed refs.
 #[derive(Clone, Copy)]
 pub struct DrcCtx<'a> {
     pub store: &'a GeometryStore,
     pub deck: &'a Deck,
-    /// One device session per run; the canonical edge pool below lives in it.
-    pub session: &'a crate::session::Session,
-    /// Canonical per-run device edge pool: every rule's descriptors index this
-    /// ONE upload instead of building and uploading a pool per rule.
-    /// `None` on the CPU backend (and when the pool upload failed) — rules
-    /// then take their exact CPU paths, as before.
-    pub device_edges: Option<&'a DeviceEdges>,
 }
 
-/// The whole store's edges in polygon order as four device-resident f32
-/// columns, plus each polygon's (start, end) range into them. Built once per
-/// GPU run; shared by every spacing/width/notch prefilter.
-pub struct DeviceEdges {
-    pub ex0: crate::session::Col<f32>,
-    pub ey0: crate::session::Col<f32>,
-    pub ex1: crate::session::Col<f32>,
-    pub ey1: crate::session::Col<f32>,
-    pub range: Vec<(u32, u32)>,
-}
-
-fn build_device_edges(
-    session: &crate::session::Session,
-    store: &GeometryStore,
-) -> Option<DeviceEdges> {
-    if session.backend() != Backend::Gpu || store.poly_count() == 0 {
-        return None;
-    }
-    let mut x0 = Vec::new();
-    let mut y0 = Vec::new();
-    let mut x1 = Vec::new();
-    let mut y1 = Vec::new();
-    let mut range = Vec::with_capacity(store.poly_count());
-    for p in 0..store.poly_count() {
-        let start = x0.len() as u32;
-        for e in store.edges_of(PolyId(p as u32)) {
-            x0.push(e.x0 as f32);
-            y0.push(e.y0 as f32);
-            x1.push(e.x1 as f32);
-            y1.push(e.y1 as f32);
-        }
-        range.push((start, x0.len() as u32));
-    }
-    crate::session::contained(|| DeviceEdges {
-        ex0: session.upload(&x0),
-        ey0: session.upload(&y0),
-        ex1: session.upload(&x1),
-        ey1: session.upload(&y1),
-        range,
-    })
-}
+// ponytail: GPU prefilter staged for phase-2 vulkano.
+// The per-run canonical device edge pool (DeviceEdges/build_device_edges) was
+// deleted with the session seam; rules take the exact CPU path directly.
 
 /// A boxed DRC rule, generic over the context lifetime.
 pub type BoxedRule = Box<dyn for<'a> crate::rule::Rule<DrcCtx<'a>, Finding = Violation>>;
@@ -110,7 +75,7 @@ pub mod rules {
 /// Maximum number of sliding density windows evaluated by one rule/recheck.
 /// Each window performs at least one exact boolean operation, so this shares
 /// the rectilinear kernel's explicit 16M-work ceiling.
-pub const MAX_DENSITY_WINDOW_WORK: usize = crate::geometry::exact::MAX_RECTILINEAR_BOOLEAN_CELLS;
+pub const MAX_DENSITY_WINDOW_WORK: usize = gdsverify_core::exact::MAX_RECTILINEAR_BOOLEAN_CELLS;
 
 pub(crate) fn density_window_work(
     xmin: i32,
@@ -119,7 +84,7 @@ pub(crate) fn density_window_work(
     ymax: i32,
     window: i32,
     step: i32,
-) -> Result<usize, crate::geometry::exact::ExactGeometryError> {
+) -> Result<usize, gdsverify_core::exact::ExactGeometryError> {
     let axis_count = |lo: i32, hi: i32| -> Option<u128> {
         let span = u128::try_from(i64::from(hi) - i64::from(lo)).ok()?;
         let window = u128::try_from(window).ok()?;
@@ -135,17 +100,17 @@ pub(crate) fn density_window_work(
     };
     let requested = axis_count(xmin, xmax)
         .and_then(|nx| axis_count(ymin, ymax).and_then(|ny| nx.checked_mul(ny)))
-        .ok_or(crate::geometry::exact::ExactGeometryError::ArithmeticOverflow)?;
+        .ok_or(gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow)?;
     if requested > MAX_DENSITY_WINDOW_WORK as u128 {
         return Err(
-            crate::geometry::exact::ExactGeometryError::CapacityExceeded {
+            gdsverify_core::exact::ExactGeometryError::CapacityExceeded {
                 cells: usize::try_from(requested).unwrap_or(usize::MAX),
                 limit: MAX_DENSITY_WINDOW_WORK,
             },
         );
     }
     usize::try_from(requested)
-        .map_err(|_| crate::geometry::exact::ExactGeometryError::ArithmeticOverflow)
+        .map_err(|_| gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow)
 }
 
 /// A single rule violation. Flat, serializable, comparable against the manifest.
@@ -172,10 +137,12 @@ pub struct DrcReport {
 }
 
 impl DrcReport {
+    #[must_use]
     pub fn by_kind(&self, kind: &str) -> Vec<&Violation> {
         self.violations.iter().filter(|v| v.kind == kind).collect()
     }
 
+    #[must_use]
     pub fn to_canonical_json(&self) -> String {
         let mut sorted = self.violations.clone();
         sorted.sort_by(|a, b| {
@@ -257,20 +224,9 @@ fn run_drc_impl(
         .collect();
     // Rules are independent read-only scans over the store; run them in parallel
     // and concatenate in rule order so the report is deterministic.
-    // On GPU the canonical edge pool is uploaded ONCE here; every rule binds it.
-    // GPU absence is a hard error from the session — we own the fallback and
-    // say so, once, instead of silently degrading.
-    let session = crate::session::Session::new(backend).unwrap_or_else(|_| {
-        crate::session::warn_no_gpu("drc");
-        crate::session::Session::cpu()
-    });
-    let device_edges = build_device_edges(&session, store);
-    let ctx = DrcCtx {
-        store,
-        deck,
-        session: &session,
-        device_edges: device_edges.as_ref(),
-    };
+    // ponytail: GPU prefilter staged for phase-2 vulkano — rules take the exact
+    // CPU path directly; `backend` still threads through for telemetry.
+    let ctx = DrcCtx { store, deck };
     violations.extend(crate::rule::run_rules(&rules, &ctx, backend));
     // Coincident identical polygons (e.g. two pins of one device sharing a pad)
     // are one merged shape in real DRC; each copy reports the same violation.
@@ -296,7 +252,7 @@ fn run_drc_impl(
 /// self-crossing boundaries and zero-area shapes. Keyhole slits (legal GDS holes)
 /// pass; proper bow-tie crossings do not.
 pub(crate) fn check_polygon_validity(store: &GeometryStore, lt: &LayerTable) -> Vec<Violation> {
-    use crate::geometry::exact::{ExactGeometryError, SegmentIntersection};
+    use gdsverify_core::exact::{ExactGeometryError, SegmentIntersection};
 
     let mut out = Vec::new();
     for p in 0..store.poly_count() {
@@ -404,8 +360,8 @@ pub(crate) fn facing_gaps(
     store: &GeometryStore,
     p: PolyId,
     interior: bool,
-) -> Result<Vec<(i64, i32, i32)>, crate::geometry::exact::ExactGeometryError> {
-    use crate::geometry::exact::ExactGeometryError;
+) -> Result<Vec<(i64, i32, i32)>, gdsverify_core::exact::ExactGeometryError> {
+    use gdsverify_core::exact::ExactGeometryError;
 
     let edges = poly_edges(store, p);
     let n = edges.len();
@@ -503,19 +459,19 @@ pub(crate) fn facing_gaps(
 pub(crate) fn midpoint_i32(
     a: i32,
     b: i32,
-) -> Result<i32, crate::geometry::exact::ExactGeometryError> {
+) -> Result<i32, gdsverify_core::exact::ExactGeometryError> {
     checked_i32((i128::from(a) + i128::from(b)) / 2)
 }
 
-pub(crate) fn checked_i32(value: i128) -> Result<i32, crate::geometry::exact::ExactGeometryError> {
-    i32::try_from(value).map_err(|_| crate::geometry::exact::ExactGeometryError::ArithmeticOverflow)
+pub(crate) fn checked_i32(value: i128) -> Result<i32, gdsverify_core::exact::ExactGeometryError> {
+    i32::try_from(value).map_err(|_| gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow)
 }
 
 pub(crate) fn round_ratio_i128(
     numerator: i128,
     denominator: i128,
-) -> Result<i128, crate::geometry::exact::ExactGeometryError> {
-    use crate::geometry::exact::ExactGeometryError;
+) -> Result<i128, gdsverify_core::exact::ExactGeometryError> {
+    use gdsverify_core::exact::ExactGeometryError;
     if denominator <= 0 {
         return Err(ExactGeometryError::ArithmeticOverflow);
     }
@@ -559,10 +515,10 @@ pub(crate) fn push_geometry_capacity(
 /// "not strictly inside", which is the conservative answer for both callers).
 pub(crate) fn poly_strictly_inside(store: &GeometryStore, inner: PolyId, outer: PolyId) -> bool {
     let polygon = |poly: PolyId| {
-        crate::geometry::exact::Polygon::from_outer(
+        gdsverify_core::exact::Polygon::from_outer(
             store
                 .vertices(poly)
-                .map(|(x, y)| crate::geometry::exact::Point::new(x, y))
+                .map(|(x, y)| gdsverify_core::exact::Point::new(x, y))
                 .collect(),
         )
     };
@@ -572,15 +528,15 @@ pub(crate) fn poly_strictly_inside(store: &GeometryStore, inner: PolyId, outer: 
     let inner_ring = inner.outer().vertices();
     let outer_ring = outer.outer().vertices();
     inner_ring.iter().all(|&point| {
-        outer.classify_point(point) == crate::geometry::exact::PointClassification::Inside
+        outer.classify_point(point) == gdsverify_core::exact::PointClassification::Inside
     }) && (0..inner_ring.len()).all(|i| {
         (0..outer_ring.len()).all(|j| {
-            crate::geometry::exact::classify_segment_intersection(
+            gdsverify_core::exact::classify_segment_intersection(
                 inner_ring[i],
                 inner_ring[(i + 1) % inner_ring.len()],
                 outer_ring[j],
                 outer_ring[(j + 1) % outer_ring.len()],
-            ) == crate::geometry::exact::SegmentIntersection::None
+            ) == gdsverify_core::exact::SegmentIntersection::None
         })
     })
 }
@@ -697,7 +653,7 @@ pub(crate) fn gap_region_covered(
 pub fn same_shape_gap_fills(
     store: &GeometryStore,
     deck: &Deck,
-) -> Result<Vec<(LayerId, Bbox)>, crate::geometry::exact::ExactGeometryError> {
+) -> Result<Vec<(LayerId, Bbox)>, gdsverify_core::exact::ExactGeometryError> {
     if store.poly_count() > 0 {
         let mut extent = Bbox::empty();
         for bbox in &store.poly_bbox {
@@ -707,7 +663,7 @@ pub fn same_shape_gap_fills(
         let required = extent.width_i64().max(extent.height_i64()).max(0);
         if required > i64::from(i32::MAX) || !legacy_rule_arithmetic_fits(&extent) {
             return Err(
-                crate::geometry::exact::ExactGeometryError::CapacityExceeded {
+                gdsverify_core::exact::ExactGeometryError::CapacityExceeded {
                     cells: usize::try_from(required).unwrap_or(usize::MAX),
                     limit: i32::MAX as usize,
                 },
@@ -763,7 +719,7 @@ pub fn same_shape_gap_fills(
                 let required = fill.width_i64().max(fill.height_i64()).max(0);
                 if required > i64::from(i32::MAX) {
                     return Err(
-                        crate::geometry::exact::ExactGeometryError::CapacityExceeded {
+                        gdsverify_core::exact::ExactGeometryError::CapacityExceeded {
                             cells: usize::try_from(required).unwrap_or(usize::MAX),
                             limit: i32::MAX as usize,
                         },
@@ -776,182 +732,12 @@ pub fn same_shape_gap_fills(
     Ok(fills)
 }
 
-/// Below this many device-side evaluations the CPU finishes before a GPU round trip
-/// even starts — the mask builders decline (return None) and the exact path runs.
-/// This is what makes `Backend::Gpu` always-safe: dense scans go to the GPU, sparse
-/// ones stay on the CPU, per rule and per layer.
-// ponytail: fixed break-even from RTX 4060 measurements; make it a Deck knob if a
-// wildly different GPU/CPU pairing ever needs tuning.
-const GPU_MIN_PAIR_WORK: u64 = 1 << 18;
-pub(crate) const GPU_MIN_LINEAR_WORK: usize = 1 << 20;
-
-// --- single-source CPU/GPU kernels (advisory f32 prefilters) -----------------
-// EXACTNESS CONTRACT: these f32 kernels only PRUNE work; final verdicts always
-// come from the exact host-side integer code above.
-
-/// Squared distance from a point to a segment, in f32.
-#[kernel_fn]
-pub fn pt_seg_d2(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
-    let vx = x1 - x0;
-    let vy = y1 - y0;
-    let wx = px - x0;
-    let wy = py - y0;
-    let c1 = vx * wx + vy * wy;
-    let c2 = vx * vx + vy * vy;
-    let mut r = wx * wx + wy * wy;
-    if c1 > 0.0 {
-        if c2 <= c1 {
-            let dx = px - x1;
-            let dy = py - y1;
-            r = dx * dx + dy * dy;
-        } else {
-            let t = c1 / c2;
-            let dx = wx - t * vx;
-            let dy = wy - t * vy;
-            r = dx * dx + dy * dy;
-        }
-    }
-    r
-}
-
-/// Per polygon pair: 1 iff any (a-edge, b-edge) distance² is below thr2.
-#[verify_kernel(shape = cross_pairs)]
-pub fn edge_pair_near(
-    a_x0: f32,
-    a_y0: f32,
-    a_x1: f32,
-    a_y1: f32,
-    b_x0: f32,
-    b_y0: f32,
-    b_x1: f32,
-    b_y1: f32,
-    #[uniform] thr2: f32,
-) -> u32 {
-    let d0 = pt_seg_d2(a_x0, a_y0, b_x0, b_y0, b_x1, b_y1);
-    let d1 = pt_seg_d2(a_x1, a_y1, b_x0, b_y0, b_x1, b_y1);
-    let d2 = pt_seg_d2(b_x0, b_y0, a_x0, a_y0, a_x1, a_y1);
-    let d3 = pt_seg_d2(b_x1, b_y1, a_x0, a_y0, a_x1, a_y1);
-    let d = f32::min(f32::min(d0, d1), f32::min(d2, d3));
-    let mut flag = 0u32;
-    if d < thr2 {
-        flag = 1u32;
-    }
-    flag
-}
-
-/// Per polygon: 1 iff any axis-aligned facing edge pair has a gap below thr.
-#[verify_kernel(shape = cross_self)]
-pub fn facing_gap_near(
-    a_x0: f32,
-    a_y0: f32,
-    a_x1: f32,
-    a_y1: f32,
-    b_x0: f32,
-    b_y0: f32,
-    b_x1: f32,
-    b_y1: f32,
-    #[uniform] thr: f32,
-) -> u32 {
-    let mut d = 1e30f32;
-    if a_x0 == a_x1 && b_x0 == b_x1 {
-        let lo = f32::max(f32::min(a_y0, a_y1), f32::min(b_y0, b_y1));
-        let hi = f32::min(f32::max(a_y0, a_y1), f32::max(b_y0, b_y1));
-        if lo < hi {
-            d = f32::abs(a_x0 - b_x0);
-        }
-    }
-    if a_y0 == a_y1 && b_y0 == b_y1 {
-        let lo = f32::max(f32::min(a_x0, a_x1), f32::min(b_x0, b_x1));
-        let hi = f32::min(f32::max(a_x0, a_x1), f32::max(b_x0, b_x1));
-        if lo < hi {
-            d = f32::abs(a_y0 - b_y0);
-        }
-    }
-    let mut flag = 0u32;
-    if d > 0.0 && d < thr {
-        flag = 1u32;
-    }
-    flag
-}
-
-/// Split an edge pool into the four f32 coordinate columns the kernels take.
-pub(crate) fn edge_cols(edges: &[Edge]) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
-    (
-        edges.iter().map(|e| e.x0 as f32).collect(),
-        edges.iter().map(|e| e.y0 as f32).collect(),
-        edges.iter().map(|e| e.x1 as f32).collect(),
-        edges.iter().map(|e| e.y1 as f32).collect(),
-    )
-}
-
-/// GPU prefilter: for each candidate polygon pair, true iff EVERY edge-pair distance is
-/// comfortably above the rule limit — such pairs can only produce "no violation" on the
-/// exact path, so they are safe to skip. None => no GPU; run everything exactly.
-///
-/// Descriptors index the run's canonical device pool (`ctx.device_edges`):
-/// nothing is uploaded here, and every rule shares the same columns.
-pub(crate) fn gpu_far_mask(
-    ctx: &DrcCtx<'_>,
-    cands: &[(PolyId, PolyId)],
-    min: i32,
-) -> Option<Vec<bool>> {
-    let de = ctx.device_edges?;
-    if cands.is_empty() {
-        return None;
-    }
-    let descs: Vec<(u32, u32, u32, u32)> = cands
-        .iter()
-        .map(|&(pa, pb)| {
-            let (a0, a1) = de.range[pa.0 as usize];
-            let (b0, b1) = de.range[pb.0 as usize];
-            (a0, a1, b0, b1)
-        })
-        .collect();
-    let work: u64 = descs
-        .iter()
-        .map(|&(a0, a1, b0, b1)| ((a1 - a0) as u64) * ((b1 - b0) as u64))
-        .sum();
-    if work < GPU_MIN_PAIR_WORK {
-        return None;
-    } // CPU finishes first
-      // margin over the f32 approximation; anything near the limit is exact-rechecked
-    let thr2 = (min as f32) * (min as f32) * 1.05 + 4.0;
-    let flags = crate::session::contained(|| {
-        let col: crate::session::Col<u32> = ctx.session.launch(edge_pair_near_kernel::bind(
-            &de.ex0, &de.ey0, &de.ex1, &de.ey1, &descs, thr2,
-        ));
-        ctx.session.read(&col)
-    })?;
-    Some(flags.into_iter().map(|f| f == 0).collect())
-}
-
-/// GPU prefilter for the same-polygon facing-gap scans (width/notch): true per polygon
-/// iff no facing edge pair is anywhere near `min` — such polygons can skip the exact
-/// interior/exterior scan entirely. None => no GPU; scan everything exactly.
-/// Binds the same canonical pool as [`gpu_far_mask`].
-pub(crate) fn gpu_poly_clean_mask(
-    ctx: &DrcCtx<'_>,
-    polys: &[PolyId],
-    min: i32,
-) -> Option<Vec<bool>> {
-    let de = ctx.device_edges?;
-    if polys.is_empty() {
-        return None;
-    }
-    let descs: Vec<(u32, u32)> = polys.iter().map(|&p| de.range[p.0 as usize]).collect();
-    let work: u64 = descs.iter().map(|&(s, e)| ((e - s) as u64).pow(2)).sum();
-    if work < GPU_MIN_PAIR_WORK {
-        return None;
-    } // CPU finishes first
-    let thr = (min as f32) * 1.02 + 1.0; // gaps are exact integers in f32; small margin
-    let flags = crate::session::contained(|| {
-        let col: crate::session::Col<u32> = ctx.session.launch(facing_gap_near_kernel::bind(
-            &de.ex0, &de.ey0, &de.ex1, &de.ey1, &descs, thr,
-        ));
-        ctx.session.read(&col)
-    })?;
-    Some(flags.into_iter().map(|f| f == 0).collect())
-}
+// ponytail: GPU prefilter staged for phase-2 vulkano.
+// The advisory f32 kernels (pt_seg_d2, edge_pair_near, facing_gap_near) and the
+// session-based prefilters (gpu_far_mask, gpu_poly_clean_mask, edge_cols) were
+// deleted with the cubecl/session seam. DRC already has the exact CPU predicate
+// path these prefiltered for (candidate_pairs + poly_poly_dist2_within +
+// facing_gaps); rules route straight to it.
 
 /// Min squared distance between two polygons' edge sets, exact below `cutoff`.
 /// Returns exactly `cutoff²` when the true distance is >= cutoff — every caller
@@ -1059,7 +845,7 @@ pub(crate) fn poly_edges(store: &GeometryStore, p: PolyId) -> Vec<Edge> {
 pub(crate) fn keyhole_hole_rings(
     store: &GeometryStore,
     polygon: PolyId,
-) -> Vec<crate::geometry::exact::Ring> {
+) -> Vec<gdsverify_core::exact::Ring> {
     store
         .poly_as_exact(polygon)
         .map(|component| component.holes().to_vec())
@@ -1105,7 +891,7 @@ mod tests {
         too_wide.add_rect(layer, 0, 0, 25, 1);
         assert!(matches!(
             same_shape_gap_fills(&too_wide, &deck),
-            Err(crate::geometry::exact::ExactGeometryError::CapacityExceeded { .. })
+            Err(gdsverify_core::exact::ExactGeometryError::CapacityExceeded { .. })
         ));
     }
 }

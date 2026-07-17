@@ -14,11 +14,11 @@ use super::hier_production::{
 use super::production::*;
 use super::types::{DeviceRecognitionSource, ExtractOpts};
 use crate::backend::Backend;
-use crate::gds_lossless::{
+use crate::gds::{
     exact_pitch, flatten_gds_library, stroke_path, GdsElement, GdsElementMeta, GdsFlattenOptions,
     GdsGeometryPolicy, GdsLibrary, GdsProperty, GdsStructure, GdsTransform,
 };
-use crate::geometry::exact::{classify_polygon_contact, Point, PolygonContact, Ring};
+use gdsverify_core::exact::{classify_polygon_contact, Point, PolygonContact, Ring};
 use crate::geometry::{GeometryStore, LayerId, PolyId};
 use crate::params::Deck;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -311,7 +311,7 @@ fn evidence_rule<'a>(
 fn derive_text_name(
     cell: &str,
     element: usize,
-    text: &crate::gds_lossless::GdsText,
+    text: &crate::gds::GdsText,
     rule: &GdsTextEvidenceRule,
 ) -> Result<String, GdsHierarchyAdapterError> {
     let mut candidates = BTreeSet::new();
@@ -1779,7 +1779,7 @@ fn build_instance(
 fn array_for(
     cell: &str,
     element: usize,
-    reference: &crate::gds_lossless::GdsArrayReference,
+    reference: &crate::gds::GdsArrayReference,
 ) -> Result<HierArray, GdsHierarchyAdapterError> {
     if reference.columns == 0 || reference.rows == 0 {
         return Err(GdsHierarchyAdapterError::element(
@@ -2387,14 +2387,14 @@ fn validate_physical_equivalence(
     )
     .map_err(|error| {
         let kind = match error.kind {
-            crate::gds_lossless::LayoutErrorKind::CapacityExceeded
-            | crate::gds_lossless::LayoutErrorKind::ArithmeticOverflow => {
+            crate::gds::LayoutErrorKind::CapacityExceeded
+            | crate::gds::LayoutErrorKind::ArithmeticOverflow => {
                 GdsHierarchyAdapterErrorKind::CapacityExceeded
             }
-            crate::gds_lossless::LayoutErrorKind::UndefinedReference => {
+            crate::gds::LayoutErrorKind::UndefinedReference => {
                 GdsHierarchyAdapterErrorKind::UndefinedCell
             }
-            crate::gds_lossless::LayoutErrorKind::HierarchyCycle => {
+            crate::gds::LayoutErrorKind::HierarchyCycle => {
                 GdsHierarchyAdapterErrorKind::HierarchyCycle
             }
             _ => GdsHierarchyAdapterErrorKind::Unsupported,
@@ -2571,7 +2571,7 @@ pub fn adapt_gds_hierarchy_to_lvs(
 mod tests {
     use super::*;
     use crate::gds::GdsUnits;
-    use crate::gds_lossless::{
+    use crate::gds::{
         read_gds_library, write_gds_library, GdsArrayReference, GdsBoundary, GdsEnvelope, GdsNode,
         GdsPath, GdsReadMode, GdsReference, GdsText,
     };

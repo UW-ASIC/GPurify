@@ -9,7 +9,7 @@
 
 use super::derived::{DerivedError, DerivedEvaluator, DerivedExpr, DerivedValue, LayerExprRef};
 use super::{run_drc, Violation};
-use crate::geometry::exact::{
+use gdsverify_core::exact::{
     rectilinear_intersection, rectilinear_subtraction, Point, Polygon, PolygonSet,
 };
 use crate::geometry::{GeometryStore, LayerId};
@@ -777,10 +777,10 @@ pub fn run_checked(
                             RunError::Unsupported(_) => DiagnosticCode::Unsupported,
                             RunError::Derived(DerivedError::CapacityExceeded { .. })
                             | RunError::Derived(DerivedError::Geometry(
-                                crate::geometry::exact::ExactGeometryError::CapacityExceeded {
+                                gdsverify_core::exact::ExactGeometryError::CapacityExceeded {
                                     ..
                                 }
-                                | crate::geometry::exact::ExactGeometryError::ArithmeticOverflow,
+                                | gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow,
                             )) => DiagnosticCode::CapacityExceeded,
                             RunError::Derived(_) => DiagnosticCode::InvalidGeometry,
                             RunError::Expression(_) => DiagnosticCode::InvalidModel,
@@ -859,9 +859,9 @@ fn run_rule(
                 let area = polygon.area2() as f64 / 2.0;
                 if area <= limit || !polygon.holes().is_empty() { continue; }
                 let has_explicit_slot = slots_set.polygons().iter().any(|slot| {
-                    crate::geometry::exact::classify_polygon_contact(
+                    gdsverify_core::exact::classify_polygon_contact(
                         polygon.outer(), slot.outer(),
-                    ) != crate::geometry::exact::PolygonContact::Disjoint
+                    ) != gdsverify_core::exact::PolygonContact::Disjoint
                 });
                 if !has_explicit_slot {
                     let point = polygon.outer().vertices()[0];
@@ -1187,11 +1187,11 @@ fn exact_density(
         loop {
             let x1 = x
                 .checked_add(window)
-                .ok_or(crate::geometry::exact::ExactGeometryError::ArithmeticOverflow)?
+                .ok_or(gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow)?
                 .min(xmax);
             let y1 = y
                 .checked_add(window)
-                .ok_or(crate::geometry::exact::ExactGeometryError::ArithmeticOverflow)?
+                .ok_or(gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow)?
                 .min(ymax);
             let (x0, y0, x1, y1) = (
                 i32::try_from(x).map_err(|_| RunError::Expression("window x overflow".into()))?,
@@ -1239,7 +1239,7 @@ fn exact_density(
             }
         }
         if y.checked_add(window)
-            .ok_or(crate::geometry::exact::ExactGeometryError::ArithmeticOverflow)?
+            .ok_or(gdsverify_core::exact::ExactGeometryError::ArithmeticOverflow)?
             >= ymax
         {
             break;
@@ -2129,8 +2129,8 @@ impl From<DerivedError> for RunError {
     }
 }
 
-impl From<crate::geometry::exact::ExactGeometryError> for RunError {
-    fn from(value: crate::geometry::exact::ExactGeometryError) -> Self {
+impl From<gdsverify_core::exact::ExactGeometryError> for RunError {
+    fn from(value: gdsverify_core::exact::ExactGeometryError) -> Self {
         Self::Derived(DerivedError::Geometry(value))
     }
 }
@@ -2337,7 +2337,7 @@ mod tests {
         );
         assert!(matches!(
             super::super::density_window_work(0, 0, cap as i32 + 1, 1, 1, 1),
-            Err(crate::geometry::exact::ExactGeometryError::CapacityExceeded {
+            Err(gdsverify_core::exact::ExactGeometryError::CapacityExceeded {
                 cells,
                 limit
             }) if cells == cap + 1 && limit == cap
@@ -2736,7 +2736,7 @@ mod tests {
         );
 
         let mut oversized = GeometryStore::new();
-        let oversized_points = vec![(0, 0); crate::geometry::exact::MAX_BOUNDARY_WALK_VERTICES + 1];
+        let oversized_points = vec![(0, 0); gdsverify_core::exact::MAX_BOUNDARY_WALK_VERTICES + 1];
         oversized.add_polygon(layer, &oversized_points);
         let checked = run_legacy_adapter(&oversized, &deck);
         let geometry = checked

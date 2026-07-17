@@ -3,7 +3,7 @@
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
-use super::super::{facing_gaps, gpu_poly_clean_mask, push_geometry_capacity, DrcCtx, Violation};
+use super::super::{facing_gaps, push_geometry_capacity, DrcCtx, Violation};
 
 pub struct NotchRule { pub id: String, pub layer: LayerId, pub min: i32 }
 
@@ -12,7 +12,9 @@ fn check_notch(
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
     let polys: Vec<PolyId> = store.polys_on_layer(layer).collect();
-    let clean = gpu.and_then(|c| gpu_poly_clean_mask(c, &polys, min));
+    // ponytail: GPU prefilter staged for phase-2 vulkano; exact CPU path only.
+    let _ = gpu;
+    let clean: Option<Vec<bool>> = None;
     for (k, &p) in polys.iter().enumerate() {
         if clean.as_ref().is_some_and(|c| c[k]) { continue; }
         // a notch is a facing pair whose gap is OUTSIDE the polygon (see facing_gaps);

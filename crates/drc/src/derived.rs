@@ -6,7 +6,7 @@
 //! arbitrary-angle inputs fail with [`DerivedError::Geometry`] rather than falling back
 //! to bounding boxes.
 
-use crate::geometry::exact::{
+use gdsverify_core::exact::{
     rectilinear_intersection, rectilinear_subtraction, rectilinear_union, ExactGeometryError,
     Point, Polygon, PolygonSet,
 };
@@ -437,9 +437,9 @@ fn offset_square(
     if !source.is_rectilinear() {
         return Err(DerivedError::Geometry(ExactGeometryError::Unsupported {
             operation: if grow {
-                crate::geometry::exact::BooleanOp::Union
+                gdsverify_core::exact::BooleanOp::Union
             } else {
-                crate::geometry::exact::BooleanOp::Subtraction
+                gdsverify_core::exact::BooleanOp::Subtraction
             },
             reason: "arbitrary-angle offsets are not implemented",
         }));

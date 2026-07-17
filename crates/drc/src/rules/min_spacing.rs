@@ -4,7 +4,7 @@ use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
 use super::super::{
-    candidate_pairs, gap_region_covered, gpu_far_mask, merge_groups, poly_poly_dist2_within,
+    candidate_pairs, gap_region_covered, merge_groups, poly_poly_dist2_within,
     poly_strictly_inside, DrcCtx, Violation,
 };
 
@@ -17,7 +17,10 @@ pub(crate) fn check_spacing_same(
     let polys: Vec<PolyId> = store.polys_on_layer(layer).collect();
     let min2 = (min as i64) * (min as i64);
     let cands = candidate_pairs(store, &polys, None, min);
-    let far = gpu.and_then(|c| gpu_far_mask(c, &cands, min));
+    // ponytail: GPU prefilter (gpu_far_mask) staged for phase-2 vulkano; every
+    // candidate pair goes to the exact poly_poly_dist2_within path below.
+    let _ = gpu;
+    let far: Option<Vec<bool>> = None;
     let idx_of: std::collections::HashMap<u32, u32> =
         polys.iter().enumerate().map(|(i, p)| (p.0, i as u32)).collect();
     let group = merge_groups(store, &cands, far.as_ref(), polys.len(), &idx_of);

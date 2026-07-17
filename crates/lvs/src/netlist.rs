@@ -310,6 +310,7 @@ pub(crate) struct Token {
 }
 
 impl Token {
+    #[must_use]
     pub fn atom(&self) -> Option<&str> {
         match &self.kind {
             TokenKind::Atom(value) => Some(value),

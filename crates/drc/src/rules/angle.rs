@@ -3,54 +3,23 @@
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
-use super::super::{edge_cols, poly_edges, DrcCtx, Violation, GPU_MIN_LINEAR_WORK};
-use gdsverify_macros::verify_kernel;
-// cube-dialect expansion of the kernel fn needs these operator traits in scope
-#[cfg(feature = "gpu")]
-use cubecl::frontend::{Abs, Sqrt};
+use super::super::{poly_edges, DrcCtx, Violation};
 
 pub struct AngleRule { pub id: String, pub allowed: Vec<i32> }
 
-/// |sin(edge angle − allowed angle)| per (edge, allowed) pair; the driver takes
-/// the min over allowed angles. Advisory f32 prefilter — exact verdicts below.
-#[verify_kernel(shape = min_over)]
-pub fn angle_dev(
-    x0: f32, y0: f32, x1: f32, y1: f32, #[target] sin_a: f32, #[target] cos_a: f32,
-) -> f32 {
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let len = f32::sqrt(dx * dx + dy * dy);
-    let mut dev = 0.0f32;
-    if len > 0.0 {
-        dev = f32::abs(dx * sin_a - dy * cos_a) / len;
-    }
-    dev
-}
-
 fn check_angle(
-    store: &GeometryStore, lt: &LayerTable, allowed: &[i32], backend: Backend,
+    store: &GeometryStore, lt: &LayerTable, allowed: &[i32], _backend: Backend,
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
-    // GPU prefilter: |sin(edge - allowed)| < sin(0.4 deg) is clearly within the CPU's
-    // 0.5 deg tolerance -> skip. Borderline and violating edges are exact-checked below.
-    const SIN_04_DEG: f32 = 0.006_981_3;
+    // ponytail: GPU prefilter (angle_dev f32 kernel) staged for phase-2 vulkano;
+    // every edge takes the exact orientation check below.
     let mut all_edges: Vec<(Edge, LayerId)> = Vec::new();
     for p in 0..store.poly_count() as u32 {
         let layer = store.poly_layer[p as usize];
         all_edges.extend(poly_edges(store, PolyId(p)).into_iter().map(|e| (e, layer)));
     }
-    let dev = if backend == Backend::Gpu && all_edges.len() >= GPU_MIN_LINEAR_WORK {
-        let flat: Vec<Edge> = all_edges.iter().map(|(e, _)| *e).collect();
-        let (x0, y0, x1, y1) = edge_cols(&flat);
-        let sins: Vec<f32> = allowed.iter().map(|&a| (a as f32).to_radians().sin()).collect();
-        let coss: Vec<f32> = allowed.iter().map(|&a| (a as f32).to_radians().cos()).collect();
-        angle_dev_kernel::gpu(&x0, &y0, &x1, &y1, &sins, &coss)
-    } else {
-        None
-    };
-    for (i, (e, layer)) in all_edges.iter().enumerate() {
+    for (e, layer) in all_edges.iter() {
         if e.dx() == 0 && e.dy() == 0 { continue; }
-        if dev.as_ref().is_some_and(|d| d[i] < SIN_04_DEG) { continue; }
         let ang = edge_angle_deg(e);
         let ok = allowed.iter().any(|&a| ang_matches(ang, a));
         if !ok {

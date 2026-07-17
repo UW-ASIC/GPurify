@@ -495,12 +495,15 @@ impl LayerTable {
         t
     }
 
+    #[must_use]
     pub fn id(&self, name: &str) -> Option<LayerId> {
         self.name_to_id.get(name).copied()
     }
+    #[must_use]
     pub fn name(&self, id: LayerId) -> &str {
         &self.id_to_name[id as usize]
     }
+    #[must_use]
     pub fn from_gds(&self, layer: i32, datatype: i32) -> Option<LayerId> {
         self.gds_to_id.get(&(layer, datatype)).copied()
     }

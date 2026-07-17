@@ -14,6 +14,7 @@ pub enum PolygonContact {
 }
 
 /// Classify two filled simple rings without using their bounding boxes as a decision.
+#[must_use]
 pub fn classify_polygon_contact(a: &Ring, b: &Ring) -> PolygonContact {
     if !bbox_may_touch(a, b) {
         return PolygonContact::Disjoint;

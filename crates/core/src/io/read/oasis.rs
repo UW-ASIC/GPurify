@@ -10,9 +10,8 @@ use super::gds::{
     validate_hierarchy, GdsBoundary, GdsElement, GdsElementMeta, GdsEnvelope, GdsLibrary, GdsPath,
     GdsProperty, GdsReference, GdsStructure, GdsText, GdsTransform,
 };
-use crate::geometry::exact::{Point, Ring};
+use crate::exact::{Point, Ring};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 
 const MAGIC: &[u8; 13] = b"%SEMI-OASIS\r\n";
 const PAD: u64 = 0;
@@ -86,7 +85,8 @@ pub enum OasisErrorKind {
     CapacityExceeded,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("OASIS at byte offset {offset}: {message}")]
 pub struct OasisError {
     pub kind: OasisErrorKind,
     pub offset: usize,
@@ -107,13 +107,6 @@ impl OasisError {
     }
 }
 
-impl fmt::Display for OasisError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "OASIS at byte offset {}: {}", self.offset, self.message)
-    }
-}
-
-impl std::error::Error for OasisError {}
 
 // ponytail: only tracks fields we actually parse; add more when needed.
 #[derive(Clone, Debug, Default)]

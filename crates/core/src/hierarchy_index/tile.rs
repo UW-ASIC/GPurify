@@ -18,6 +18,7 @@ pub struct VerificationTile {
 
 impl VerificationTile {
     /// Compute a content fingerprint from the geometry within this tile.
+    #[must_use]
     pub fn content_hash(&self, candidates: &[super::candidate::HierarchyCandidate]) -> u64 {
         use super::fnv::Fnv64;
         let mut hash = Fnv64::new();

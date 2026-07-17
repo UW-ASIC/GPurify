@@ -1,7 +1,7 @@
 //! Stable DRC result database, waiver provenance and deterministic incremental merge.
 
 use super::production::Unit;
-use crate::geometry::exact::{Point, Polygon, Ring};
+use gdsverify_core::exact::{Point, Polygon, Ring};
 use crate::geometry::LayerId;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -164,15 +164,14 @@ pub struct ResultDatabase {
 
 impl ResultDatabase {
     /// Check that all expected tiles are present and complete.
-    pub fn verify_complete(&self, expected_tile_count: usize) -> Result<(), String> {
+    pub fn verify_complete(&self, expected_tile_count: usize) -> Result<(), crate::DrcError> {
         if self.records.len() < expected_tile_count {
             // ponytail: record count != tile count, but this is a rough completeness
             // check. Real tile completeness needs TileDatabase-level tracking.
-            return Err(format!(
-                "expected {} tiles, database has {} records",
-                expected_tile_count,
-                self.records.len()
-            ));
+            return Err(crate::DrcError::IncompleteResults {
+                expected: expected_tile_count,
+                records: self.records.len(),
+            });
         }
         Ok(())
     }

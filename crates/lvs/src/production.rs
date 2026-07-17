@@ -43,6 +43,7 @@ pub enum TerminalConnection<N> {
 }
 
 impl<N> TerminalConnection<N> {
+    #[must_use]
     pub fn connected(&self) -> Option<&N> {
         match self {
             Self::Connected(net) => Some(net),

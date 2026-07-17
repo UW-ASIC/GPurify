@@ -1,6 +1,6 @@
 //! Deterministic tiling and marker ownership.
 
-use crate::gds_lossless::{LayoutError, LayoutErrorKind};
+use crate::gds::{LayoutError, LayoutErrorKind};
 use crate::geometry::Bbox;
 use crate::params::{Deck, DrcRuleParam};
 use rayon::prelude::*;
@@ -13,6 +13,7 @@ use super::tile_candidates::TileCandidates;
 /// Compute the halo distance from the maximum reach of any rule in the deck.
 /// This ensures tiles overlap enough to avoid seam artifacts.
 // ponytail: scans DrcRuleParam values only, not production ScalarExpr
+#[must_use]
 pub fn halo_from_deck(deck: &Deck) -> i32 {
     let mut max = 0i32;
     for rule in &deck.drc_rules {
@@ -135,9 +136,11 @@ impl TileGrid {
         })
     }
 
+    #[must_use]
     pub fn columns(&self) -> u32 {
         self.columns
     }
+    #[must_use]
     pub fn rows(&self) -> u32 {
         self.rows
     }

@@ -2,21 +2,21 @@
 name = "gdsverify-erc"
 version = "0.1.0"
 edition = "2021"
+description = "Electrical-rule checking and tapeout signoff for gdsverify."
 
 [features]
+default = []
 gpu = ["gdsverify-backend/gpu", "gdsverify-core/gpu"]
 
 [dependencies]
 gdsverify-backend = { path = "../backend" }
 gdsverify-core = { path = "../core" }
 gdsverify-lvs = { path = "../lvs" }
-gdsverify-pex = { path = "../pex_analytical" }
-gdsverify-macros = { path = "../../macros" }
+gdsverify-pex = { path = "../pex" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
 
-[build-dependencies]
-# rules/ glob
-
-[dev-dependencies]
-gdsverify = { path = "../../engine" }
+[lints]
+workspace = true

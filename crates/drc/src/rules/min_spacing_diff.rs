@@ -4,7 +4,7 @@ use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
 use super::super::{
-    candidate_pairs, gpu_far_mask, poly_poly_dist2_within, poly_strictly_inside, DrcCtx,
+    candidate_pairs, poly_poly_dist2_within, poly_strictly_inside, DrcCtx,
     Violation,
 };
 
@@ -18,7 +18,9 @@ fn check_spacing_diff(
     let pbs: Vec<PolyId> = store.polys_on_layer(b).collect();
     let min2 = (min as i64) * (min as i64);
     let cands = candidate_pairs(store, &pas, Some(&pbs), min);
-    let far = gpu.and_then(|c| gpu_far_mask(c, &cands, min));
+    // ponytail: GPU prefilter staged for phase-2 vulkano; exact CPU path only.
+    let _ = gpu;
+    let far: Option<Vec<bool>> = None;
     for (k, &(pa, pb)) in cands.iter().enumerate() {
         if far.as_ref().is_some_and(|f| f[k]) { continue; }
         let ba = store.poly_bbox[pa.0 as usize];

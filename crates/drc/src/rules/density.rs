@@ -54,7 +54,7 @@ fn check_density(
         return;
     };
     if window_count
-        > i64::try_from(crate::geometry::exact::MAX_RECTILINEAR_BOOLEAN_CELLS)
+        > i64::try_from(gdsverify_core::exact::MAX_RECTILINEAR_BOOLEAN_CELLS)
             .unwrap_or(i64::MAX)
     {
         push_geometry_capacity(store, lt, polys[0], out);

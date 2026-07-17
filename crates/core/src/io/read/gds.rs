@@ -24,6 +24,7 @@ pub struct GdsUnits {
 
 impl GdsUnits {
     /// Size of one database unit in nanometers.
+    #[must_use]
     pub fn database_unit_nm(self) -> f64 {
         self.meters_per_database_unit * 1.0e9
     }
@@ -83,7 +84,7 @@ pub fn read_gds_checked(
 // represented exactly. This prevents a valid stream from becoming an approximate
 // verification database without an explicit error.
 
-use crate::geometry::exact::{Point, Ring};
+use crate::exact::{Point, Ring};
 use crate::geometry::GeometryStore;
 use crate::params::LayerTable;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -221,12 +222,15 @@ pub struct GdsTransform {
 }
 
 impl GdsTransform {
+    #[must_use]
     pub fn magnification(self) -> f64 {
         self.magnification.unwrap_or(1.0)
     }
+    #[must_use]
     pub fn angle_degrees(self) -> f64 {
         self.angle_degrees.unwrap_or(0.0)
     }
+    #[must_use]
     pub fn raw_bits(self) -> u16 {
         (if self.reflected { 0x8000 } else { 0 })
             | (if self.absolute_magnification {

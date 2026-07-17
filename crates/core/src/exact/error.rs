@@ -1,111 +1,60 @@
 //! Stable, fail-closed error type for exact geometry construction.
 
-use std::fmt;
-
 use super::boolean::BooleanOp;
 use super::contact::PolygonContact;
 use super::predicates::SegmentIntersection;
 
 /// Stable, fail-closed errors returned by exact geometry construction.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ExactGeometryError {
+    #[error("ring has {count} vertices; at least three are required")]
     TooFewVertices {
         count: usize,
     },
+    #[error("ring has a duplicate consecutive vertex at index {index}")]
     DuplicateConsecutiveVertex {
         index: usize,
     },
+    #[error("ring has zero signed area")]
     DegenerateRing,
+    #[error("exact geometry arithmetic overflowed i128")]
     ArithmeticOverflow,
+    #[error("invalid boundary walk: {0}")]
     InvalidBoundaryWalk(&'static str),
+    #[error("ring edges {edge_a} and {edge_b} have forbidden {kind:?} contact")]
     SelfIntersection {
         edge_a: usize,
         edge_b: usize,
         kind: SegmentIntersection,
     },
+    #[error("hole {hole} is not strictly contained by its outer ring")]
     HoleOutside {
         hole: usize,
     },
+    #[error("hole {hole} touches or crosses its outer ring")]
     HoleTouchesOuter {
         hole: usize,
     },
+    #[error("holes {hole_a} and {hole_b} have forbidden {contact:?} contact")]
     HoleConflict {
         hole_a: usize,
         hole_b: usize,
         contact: PolygonContact,
     },
+    #[error("{operation:?} is unsupported: {reason}")]
     Unsupported {
         operation: BooleanOp,
         reason: &'static str,
     },
+    #[error("exact geometry requires {cells} work units (limit {limit})")]
     CapacityExceeded {
         cells: usize,
         limit: usize,
     },
+    #[error("boolean boundary reconstruction failed: {0}")]
     InternalTopology(&'static str),
+    #[error("sweep-line degenerate event: {0}")]
     SweepLineDegenerate(&'static str),
+    #[error("rational arithmetic exceeded i128 capacity")]
     RationalOverflow,
 }
-
-impl fmt::Display for ExactGeometryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooFewVertices { count } => {
-                write!(f, "ring has {count} vertices; at least three are required")
-            }
-            Self::DuplicateConsecutiveVertex { index } => {
-                write!(
-                    f,
-                    "ring has a duplicate consecutive vertex at index {index}"
-                )
-            }
-            Self::DegenerateRing => write!(f, "ring has zero signed area"),
-            Self::ArithmeticOverflow => write!(f, "exact geometry arithmetic overflowed i128"),
-            Self::InvalidBoundaryWalk(reason) => {
-                write!(f, "invalid boundary walk: {reason}")
-            }
-            Self::SelfIntersection {
-                edge_a,
-                edge_b,
-                kind,
-            } => write!(
-                f,
-                "ring edges {edge_a} and {edge_b} have forbidden {kind:?} contact"
-            ),
-            Self::HoleOutside { hole } => {
-                write!(f, "hole {hole} is not strictly contained by its outer ring")
-            }
-            Self::HoleTouchesOuter { hole } => {
-                write!(f, "hole {hole} touches or crosses its outer ring")
-            }
-            Self::HoleConflict {
-                hole_a,
-                hole_b,
-                contact,
-            } => write!(
-                f,
-                "holes {hole_a} and {hole_b} have forbidden {contact:?} contact"
-            ),
-            Self::Unsupported { operation, reason } => {
-                write!(f, "{operation:?} is unsupported: {reason}")
-            }
-            Self::CapacityExceeded { cells, limit } => {
-                write!(
-                    f,
-                    "exact geometry requires {cells} work units (limit {limit})"
-                )
-            }
-            Self::InternalTopology(reason) => {
-                write!(f, "boolean boundary reconstruction failed: {reason}")
-            }
-            Self::SweepLineDegenerate(reason) => {
-                write!(f, "sweep-line degenerate event: {reason}")
-            }
-            Self::RationalOverflow => {
-                write!(f, "rational arithmetic exceeded i128 capacity")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ExactGeometryError {}

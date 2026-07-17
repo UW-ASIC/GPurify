@@ -20,26 +20,18 @@ pub enum LayoutFormat {
 }
 
 /// Reading error from either decoder, tagged by format.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ReadError {
+    #[error("gds: {0}")]
     Gds(LayoutError),
+    #[error("oasis: {0}")]
     Oasis(OasisError),
 }
-
-impl std::fmt::Display for ReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Gds(e) => write!(f, "gds: {e}"),
-            Self::Oasis(e) => write!(f, "oasis: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ReadError {}
 
 /// Detect the container format. OASIS streams begin with the standard
 /// `%SEMI-OASIS\r\n` magic; anything else is treated as GDSII (whose own
 /// record validation rejects non-GDS bytes with a typed error).
+#[must_use]
 pub fn detect_format(bytes: &[u8]) -> LayoutFormat {
     const OASIS_MAGIC: &[u8; 13] = b"%SEMI-OASIS\r\n";
     if bytes.starts_with(OASIS_MAGIC) {

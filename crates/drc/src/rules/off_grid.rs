@@ -3,35 +3,21 @@
 use crate::backend::Backend;
 use crate::geometry::*;
 use crate::params::LayerTable;
-use super::super::{DrcCtx, Violation, GPU_MIN_LINEAR_WORK};
-use gdsverify_macros::verify_kernel;
+use super::super::{DrcCtx, Violation};
 
 pub struct OffGridRule { pub id: String, pub grid: i32 }
 
-/// Exact integer remainder — GPU flags are authoritative; emission stays on
-/// the CPU in polygon order so output is identical either way.
-#[verify_kernel(shape = map)]
-pub fn offgrid_flag(x: i32, y: i32, #[uniform] grid: i32) -> u32 {
-    let mut f = 0u32;
-    if x % grid != 0 || y % grid != 0 { f = 1u32; }
-    f
-}
-
 fn check_off_grid(
-    store: &GeometryStore, lt: &LayerTable, grid: i32, backend: Backend,
+    store: &GeometryStore, lt: &LayerTable, grid: i32, _backend: Backend,
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
-    let flags = if backend == Backend::Gpu && store.verts_x.len() >= GPU_MIN_LINEAR_WORK {
-        offgrid_flag_kernel::gpu(&store.verts_x, &store.verts_y, grid)
-    } else {
-        None
-    };
+    // ponytail: GPU prefilter (offgrid_flag exact-int kernel) staged for phase-2
+    // vulkano; the exact remainder check below runs per vertex.
     for p in 0..store.poly_count() as u32 {
         let pid = PolyId(p);
         let layer = store.poly_layer[p as usize];
         let (s, e) = store.poly_range(pid);
         for i in s..e {
-            if flags.as_ref().is_some_and(|f| f[i] == 0) { continue; }
             let x = store.verts_x[i];
             let y = store.verts_y[i];
             if x % grid != 0 || y % grid != 0 {
