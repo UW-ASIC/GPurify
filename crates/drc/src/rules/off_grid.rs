@@ -8,16 +8,30 @@ use super::super::{DrcCtx, Violation};
 pub struct OffGridRule { pub id: String, pub grid: i32 }
 
 fn check_off_grid(
-    store: &GeometryStore, lt: &LayerTable, grid: i32, _backend: Backend,
+    store: &GeometryStore, lt: &LayerTable, grid: i32, backend: Backend,
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
-    // ponytail: GPU prefilter (offgrid_flag exact-int kernel) staged for phase-2
-    // vulkano; the exact remainder check below runs per vertex.
+    // GPU advisory prefilter: offgrid_flag is an EXACT integer remainder, so the
+    // flag == the CPU verdict. Flagged vertices still take the exact check below
+    // (emission stays in polygon order so output is identical either way).
+    #[cfg(feature = "gpu")]
+    let flags: Option<Vec<u32>> =
+        if backend == Backend::Gpu && store.verts_x.len() >= crate::gpu::GPU_MIN_LINEAR_WORK {
+            crate::gpu::offgrid_flag(&store.verts_x, &store.verts_y, grid)
+        } else {
+            None
+        };
+    #[cfg(not(feature = "gpu"))]
+    let _ = backend;
     for p in 0..store.poly_count() as u32 {
         let pid = PolyId(p);
         let layer = store.poly_layer[p as usize];
         let (s, e) = store.poly_range(pid);
         for i in s..e {
+            #[cfg(feature = "gpu")]
+            if flags.as_ref().is_some_and(|f| f[i] == 0) {
+                continue;
+            }
             let x = store.verts_x[i];
             let y = store.verts_y[i];
             if x % grid != 0 || y % grid != 0 {

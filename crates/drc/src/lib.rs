@@ -29,6 +29,8 @@ pub mod cmp;
 pub mod coloring;
 pub mod derived;
 pub mod fill;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod production;
 pub mod results;
 

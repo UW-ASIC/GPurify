@@ -218,6 +218,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "vulkano",
+ "vulkano-shaders",
 ]
 
 [[package]]
@@ -231,6 +233,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "vulkano",
+ "vulkano-shaders",
 ]
 
 [[package]]
@@ -258,6 +262,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "vulkano",
+ "vulkano-shaders",
 ]
 
 [[package]]

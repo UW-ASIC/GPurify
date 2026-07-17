@@ -8,18 +8,38 @@ use super::super::{poly_edges, DrcCtx, Violation};
 pub struct AngleRule { pub id: String, pub allowed: Vec<i32> }
 
 fn check_angle(
-    store: &GeometryStore, lt: &LayerTable, allowed: &[i32], _backend: Backend,
+    store: &GeometryStore, lt: &LayerTable, allowed: &[i32], backend: Backend,
     rule_id: &str, out: &mut Vec<Violation>,
 ) {
-    // ponytail: GPU prefilter (angle_dev f32 kernel) staged for phase-2 vulkano;
-    // every edge takes the exact orientation check below.
     let mut all_edges: Vec<(Edge, LayerId)> = Vec::new();
     for p in 0..store.poly_count() as u32 {
         let layer = store.poly_layer[p as usize];
         all_edges.extend(poly_edges(store, PolyId(p)).into_iter().map(|e| (e, layer)));
     }
-    for (e, layer) in all_edges.iter() {
+    // GPU advisory prefilter: |sin(edge - allowed)| < sin(0.4deg) is safely
+    // inside the CPU's 0.5deg tolerance -> skip. Borderline/violating edges are
+    // exact-checked below. Superset: no violating edge is dropped.
+    #[cfg(feature = "gpu")]
+    const SIN_04_DEG: f32 = 0.006_981_3;
+    #[cfg(feature = "gpu")]
+    let dev: Option<Vec<f32>> =
+        if backend == Backend::Gpu && all_edges.len() >= crate::gpu::GPU_MIN_LINEAR_WORK {
+            let flat: Vec<Edge> = all_edges.iter().map(|(e, _)| *e).collect();
+            let (x0, y0, x1, y1) = crate::gpu::edge_cols(&flat);
+            let sins: Vec<f32> = allowed.iter().map(|&a| (a as f32).to_radians().sin()).collect();
+            let coss: Vec<f32> = allowed.iter().map(|&a| (a as f32).to_radians().cos()).collect();
+            crate::gpu::angle_dev(&x0, &y0, &x1, &y1, &sins, &coss)
+        } else {
+            None
+        };
+    #[cfg(not(feature = "gpu"))]
+    let _ = backend;
+    for (_i, (e, layer)) in all_edges.iter().enumerate() {
         if e.dx() == 0 && e.dy() == 0 { continue; }
+        #[cfg(feature = "gpu")]
+        if dev.as_ref().is_some_and(|d| d[_i] < SIN_04_DEG) {
+            continue;
+        }
         let ang = edge_angle_deg(e);
         let ok = allowed.iter().any(|&a| ang_matches(ang, a));
         if !ok {

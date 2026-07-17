@@ -1322,10 +1322,58 @@ fn extract_pipeline(
     // segments still need per-pair CPU fallback (clip bbox != poly bbox).
     let rect_flags = rect_predicate_flags(store, &nodes, &cands, intra_touch, backend);
 
+    // GPU bbox-overlap PAIR prefilter (positive-area / open-interval, matching
+    // the original `bbox_overlap` kernel). One dispatch over all candidate node
+    // clip-bboxes: `out[k] = overlap(box[a], box[b])`. Used only as a *reject*
+    // filter for the inter-layer positive-area decision, where an empty
+    // positive-area bbox intersection guarantees no rect-pair overlaps — so a
+    // GPU flag of 0 lets us skip the exact predicate. Panic-contained; `None`
+    // (no device / off) leaves the CPU path untouched.
+    let bbox_flags: Option<Vec<u32>> = {
+        #[cfg(feature = "gpu")]
+        {
+            if backend == Backend::Gpu && gdsverify_backend::gpu::context().is_some() {
+                let (mut bx0, mut by0, mut bx1, mut by1) = (
+                    Vec::with_capacity(nodes.len()),
+                    Vec::with_capacity(nodes.len()),
+                    Vec::with_capacity(nodes.len()),
+                    Vec::with_capacity(nodes.len()),
+                );
+                for n in &nodes {
+                    bx0.push(n.clip.xmin);
+                    by0.push(n.clip.ymin);
+                    bx1.push(n.clip.xmax);
+                    by1.push(n.clip.ymax);
+                }
+                let pa: Vec<u32> = cands.iter().map(|&(i, _)| i).collect();
+                let pb: Vec<u32> = cands.iter().map(|&(_, j)| j).collect();
+                crate::gpu_overlap::bbox_overlap_pairs_gpu(&bx0, &by0, &bx1, &by1, &pa, &pb)
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            None
+        }
+    };
+
     // Collect connectivity edges.
     let mut edges: Vec<(u32, u32)> = Vec::new();
     for (pair_idx, &(i, j)) in cands.iter().enumerate() {
         let (i, j) = (i as usize, j as usize);
+
+        // GPU reject: for the inter-layer positive-area case on unclipped rect
+        // nodes, an empty bbox intersection means the exact predicate is 0 too.
+        if let Some(flags) = &bbox_flags {
+            let unclipped = nodes[i].clip == nodes[i].bbox && nodes[j].clip == nodes[j].bbox;
+            let inter_positive = !(intra_touch && nodes[i].layer == nodes[j].layer);
+            let rect_pair = !non_rect_polys.contains(&nodes[i].poly.0)
+                && !non_rect_polys.contains(&nodes[j].poly.0);
+            if unclipped && inter_positive && rect_pair && flags[pair_idx] == 0 {
+                continue;
+            }
+        }
 
         let either_non_rect =
             non_rect_polys.contains(&nodes[i].poly.0) || non_rect_polys.contains(&nodes[j].poly.0);
