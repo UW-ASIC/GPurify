@@ -1,0 +1,50 @@
+* Dense package interconnect: 20 segments in a meander, 5x5 filaments = 500 filaments.
+* Pushes into the regime where dense LU starts to hurt.
+.units um
+.default sigma=5.8e7 nhinc=5 nwinc=5 w=30 h=10
+* Meander structure: 10 horizontal runs connected by 10 short vertical jogs.
+* Horizontal pitch 200um, vertical offset 500um per jog.
+N1  x=0    y=0    z=0
+N2  x=1000 y=0    z=0
+E1  N1 N2
+N3  x=1000 y=500  z=0
+E2  N2 N3
+N4  x=0    y=500  z=0
+E3  N3 N4
+N5  x=0    y=1000 z=0
+E4  N4 N5
+N6  x=1000 y=1000 z=0
+E5  N5 N6
+N7  x=1000 y=1500 z=0
+E6  N6 N7
+N8  x=0    y=1500 z=0
+E7  N7 N8
+N9  x=0    y=2000 z=0
+E8  N8 N9
+N10 x=1000 y=2000 z=0
+E9  N9 N10
+N11 x=1000 y=2500 z=0
+E10 N10 N11
+N12 x=0    y=2500 z=0
+E11 N11 N12
+N13 x=0    y=3000 z=0
+E12 N12 N13
+N14 x=1000 y=3000 z=0
+E13 N13 N14
+N15 x=1000 y=3500 z=0
+E14 N14 N15
+N16 x=0    y=3500 z=0
+E15 N15 N16
+N17 x=0    y=4000 z=0
+E16 N16 N17
+N18 x=1000 y=4000 z=0
+E17 N17 N18
+N19 x=1000 y=4500 z=0
+E18 N18 N19
+N20 x=0    y=4500 z=0
+E19 N19 N20
+N21 x=0    y=5000 z=0
+E20 N20 N21
+.external N1 N21 port1
+.freq fmin=1e6 fmax=1e9 ndec=3
+.end

@@ -1,0 +1,20 @@
+[package]
+name = "gdsverify-backend"
+version = "0.1.0"
+edition = "2021"
+description = "Execution backend selection and the Vulkano (AOT SPIR-V) GPU context for gdsverify."
+
+[features]
+default = []
+# AOT SPIR-V compute via Vulkano. Off by default; CPU path needs no hardware.
+gpu = ["dep:vulkano", "dep:vulkano-shaders", "dep:thiserror"]
+
+[dependencies]
+serde = { workspace = true }
+rayon = { workspace = true }
+vulkano = { workspace = true, optional = true }
+vulkano-shaders = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[lints]
+workspace = true

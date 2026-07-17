@@ -1,0 +1,13 @@
+[package]
+name = "gdsverify-backend"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+gpu = ["dep:cubecl", "cubecl/cuda"]
+
+[dependencies]
+gdsverify-macros = { path = "../../macros" }
+serde = { workspace = true }
+rayon = { workspace = true }
+cubecl = { workspace = true, optional = true }

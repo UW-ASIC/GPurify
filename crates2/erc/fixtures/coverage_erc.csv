@@ -1,0 +1,15 @@
+rule,pass_tests,fail_tests,status
+antenna_electrical,ERC_ANTENNA_ELEC_PASS,ERC_ANTENNA_ELEC_FAIL,proven
+em_current_density,ERC_EM_PASS,ERC_EM_FAIL,proven
+esd_missing,ERC_ESD_PASS,ERC_ESD_MISSING,proven
+floating_gate,ERC_FLOAT_GATE_PASS,ERC_FLOAT_GATE,proven
+floating_well,ERC_FLOAT_WELL_PASS,ERC_FLOAT_WELL,proven
+hv_domain_crossing,ERC_HV_PASS,ERC_HV_CROSS,proven
+missing_tie,,ERC_MISSING_TIE,proven
+multiple_drivers,ERC_MULTI_DRIVER_PASS,ERC_MULTI_DRIVER,proven
+p2p_resistance,ERC_P2P_PASS,ERC_P2P_FAIL,proven
+soft_connection,,ERC_SOFT_CONN,proven
+supply_short,ERC_VDD_VSS_PASS,ERC_VDD_VSS_SHORT,proven
+tie_high_low,ERC_TIE_HL_PASS,ERC_TIE_HL,proven
+unconnected_pin,,ERC_UNCONNECTED,proven
+unsupported_audit,,drc_asymmetric_enclosure;drc_multi_patterning;pex_inductance,proven

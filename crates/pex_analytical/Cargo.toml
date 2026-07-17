@@ -1,0 +1,21 @@
+[package]
+name = "gdsverify-pex"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+gpu = ["gdsverify-backend/gpu", "gdsverify-core/gpu", "dep:cubecl"]
+
+[dependencies]
+gdsverify-backend = { path = "../backend" }
+gdsverify-core = { path = "../core" }
+gdsverify-macros = { path = "../../macros" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+cubecl = { workspace = true, optional = true }
+
+[build-dependencies]
+# rules/ glob
+
+[dev-dependencies]
+gdsverify = { path = "../../engine" }
