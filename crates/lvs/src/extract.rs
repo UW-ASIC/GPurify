@@ -802,6 +802,9 @@ fn extract_two_terminal_devices(
 
 fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) -> Vec<BjtDevice> {
     let mut out = Vec::new();
+    // One device per distinct (rule, kind, e, b, c) net tuple: multi-poly nets
+    // (striped emitters, ring collectors) match many triples for one device.
+    let mut seen: HashSet<(String, DeviceKind, u32, u32, u32)> = HashSet::new();
     for rule in &deck.devices.bjt_rules {
         let kind = match rule.device_type.as_str() {
             "pnp" => DeviceKind::Pnp,
@@ -815,6 +818,9 @@ fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) 
                     continue;
                 }
                 for collector in store.polys_on_layer(rule.collector_layer) {
+                    if collector == emitter {
+                        continue;
+                    }
                     let cb = store.poly_bbox[collector.0 as usize];
                     if !bb.overlaps(&cb) || !poly_poly_overlap(store, base, collector) {
                         continue;
@@ -838,6 +844,15 @@ fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) 
                     let b_net = net_of_poly[base.0 as usize];
                     let c_net = net_of_poly[collector.0 as usize];
                     if e_net == u32::MAX || b_net == u32::MAX || c_net == u32::MAX {
+                        continue;
+                    }
+                    // A diff shape on the emitter's net is part of the emitter
+                    // (striped emitter), not a collector. Genuinely shorted
+                    // devices then surface as a count mismatch — conservative.
+                    if c_net == e_net {
+                        continue;
+                    }
+                    if !seen.insert((rule.name.clone(), kind.clone(), e_net, b_net, c_net)) {
                         continue;
                     }
                     out.push(BjtDevice {
@@ -2092,5 +2107,137 @@ mod net_names_tests {
         .unwrap();
         assert_eq!(ext.netlist.devices.len(), 1);
         assert_eq!(ext.netlist.devices[0].well_provenance, Some(wp.0));
+    }
+}
+
+#[cfg(test)]
+mod bjt_extract_tests {
+    use super::*;
+    use crate::geometry::GeometryStore;
+    use crate::params::{ConnectivityConfig, Deck, DeviceConfig, ErcParams, LayerDef, LayerTable};
+
+    // diff serves as both emitter and collector layer, like a real vertical
+    // BJT recognition deck — exercises the emitter==collector exclusions.
+    fn bjt_deck() -> Deck {
+        let defs = [("diff", 1, 0), ("pbase", 2, 0), ("npnid", 3, 0)]
+            .into_iter()
+            .map(|(n, l, d)| {
+                (
+                    n.to_string(),
+                    LayerDef {
+                        layer: l,
+                        datatype: d,
+                    },
+                )
+            })
+            .collect();
+        let layers = LayerTable::from_defs(&defs);
+        let diff = layers.id("diff").unwrap();
+        let pbase = layers.id("pbase").unwrap();
+        let npnid = layers.id("npnid").unwrap();
+        Deck {
+            layers,
+            connectivity: ConnectivityConfig {
+                conductors: vec![diff, pbase],
+                vias: Vec::new(),
+            },
+            devices: DeviceConfig {
+                bjt_rules: vec![crate::params::BjtRule {
+                    name: "npn".into(),
+                    collector_layer: diff,
+                    base_layer: pbase,
+                    emitter_layer: diff,
+                    type_marker: npnid,
+                    device_type: "npn".into(),
+                }],
+                ..Default::default()
+            },
+            drc_rules: Vec::new(),
+            pex: HashMap::new(),
+            dbu_nm: 1.0,
+            lvs_cut_required: false,
+            strict: false,
+            w_tolerance: crate::schema::PropertyTolerance::default(),
+            l_tolerance: crate::schema::PropertyTolerance::default(),
+            fail_on_floating: false,
+            erc: ErcParams::default(),
+            intra_layer_touch: false,
+            global_nets: Vec::new(),
+            device_catalog: HashMap::new(),
+            pex_method: Default::default(),
+        }
+    }
+
+    #[test]
+    fn single_bjt_extracts_once() {
+        let deck = bjt_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let pbase = deck.layers.id("pbase").unwrap();
+        let npnid = deck.layers.id("npnid").unwrap();
+        let mut st = GeometryStore::new();
+        st.add_rect(diff, 0, 0, 100, 100); // emitter, net 0
+        st.add_rect(pbase, 0, 0, 300, 100); // base, net 1
+        st.add_rect(diff, 200, 0, 100, 100); // collector, net 2 — no emitter contact
+        st.add_rect(npnid, 0, 0, 100, 100); // marker over emitter∩base
+        let net_of_poly = vec![0, 1, 2, u32::MAX];
+
+        let out = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert_eq!(out.len(), 1);
+        let d = &out[0];
+        assert_eq!(d.kind, DeviceKind::Npn);
+        assert_eq!((d.emitter, d.base, d.collector), (0, 1, 2));
+    }
+
+    #[test]
+    fn striped_emitter_extracts_once() {
+        let deck = bjt_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let pbase = deck.layers.id("pbase").unwrap();
+        let npnid = deck.layers.id("npnid").unwrap();
+        let mut st = GeometryStore::new();
+        // Three emitter stripes electrically on one net.
+        st.add_rect(diff, 0, 0, 40, 100);
+        st.add_rect(diff, 60, 0, 40, 100);
+        st.add_rect(diff, 120, 0, 40, 100);
+        st.add_rect(pbase, 0, 0, 400, 100); // base, net 1
+        st.add_rect(diff, 300, 0, 100, 100); // collector, net 2
+        st.add_rect(npnid, 0, 0, 160, 100); // marker over stripes∩base
+        let net_of_poly = vec![0, 0, 0, 1, 2, u32::MAX];
+
+        let out = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert_eq!(out.len(), 1, "one device per (e,b,c) net tuple");
+        assert_eq!((out[0].emitter, out[0].base, out[0].collector), (0, 1, 2));
+    }
+
+    #[test]
+    fn no_marker_no_device() {
+        let deck = bjt_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let pbase = deck.layers.id("pbase").unwrap();
+        let mut st = GeometryStore::new();
+        st.add_rect(diff, 0, 0, 100, 100);
+        st.add_rect(pbase, 0, 0, 300, 100);
+        st.add_rect(diff, 200, 0, 100, 100);
+        let net_of_poly = vec![0, 1, 2];
+
+        let out = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn collector_on_emitter_net_rejected() {
+        let deck = bjt_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let pbase = deck.layers.id("pbase").unwrap();
+        let npnid = deck.layers.id("npnid").unwrap();
+        let mut st = GeometryStore::new();
+        st.add_rect(diff, 0, 0, 100, 100); // emitter
+        st.add_rect(pbase, 0, 0, 300, 100); // base
+        st.add_rect(diff, 200, 0, 100, 100); // "collector" shorted to emitter
+        st.add_rect(npnid, 0, 0, 100, 100);
+        let net_of_poly = vec![0, 1, 0, u32::MAX];
+
+        let out = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert!(out.is_empty(), "shorted e/c must not extract");
     }
 }
