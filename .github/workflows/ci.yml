@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # ponytail: CPU path only. --features gpu needs shaderc+vulkan+a GPU
+      # (nix develop, RTX 4060) and can't run on GitHub runners — see MIGRATION.md.
+      - run: cargo fmt --all --check
+      # Workspace lints already deny clippy::correctness; pedantic stays at warn
+      # (repo policy), so no blanket -D warnings here.
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release

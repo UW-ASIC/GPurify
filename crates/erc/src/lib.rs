@@ -13,6 +13,8 @@
 //! dangerous false-clean result.
 
 pub mod esd_extract;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 mod power;
 pub mod power_extract;
 pub mod substrate_extract;
