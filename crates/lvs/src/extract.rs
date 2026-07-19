@@ -524,8 +524,8 @@ struct MosMatch {
     rule_idx: usize,
 }
 
-/// `Ok(None)` means the crossing is a BJT base over its emitter/collector
-/// (a bjt rule's type_marker covers it) and must not extract as MOS.
+/// `Ok(None)` means the gate poly is a BJT base (a bjt rule's type_marker
+/// overlaps it somewhere) and the crossing must not extract as MOS.
 fn pick_type_and_flavor(
     store: &GeometryStore,
     deck: &Deck,
@@ -612,15 +612,17 @@ fn pick_type_and_flavor(
     }
     match matches.len() {
         0 => {
+            // A poly that anywhere carries a BJT type_marker is a recognized
+            // BJT base; ALL its unimplanted diff crossings (emitter AND
+            // collector — the collector crossing is deliberately unmarked,
+            // else the collector would become an emitter candidate) are BJT
+            // structure, not gates. A genuinely stray marked poly still
+            // surfaces downstream as an LVS count/topology mismatch.
             let bjt_marked = deck.devices.bjt_rules.iter().any(|rule| {
                 store.polys_on_layer(rule.type_marker).into_iter().any(|m| {
                     rectilinear_intersection_area(
                         store,
-                        &[
-                            full_region(store, m),
-                            full_region(store, gate),
-                            full_region(store, channel),
-                        ],
+                        &[full_region(store, m), full_region(store, gate)],
                     ) > 0
                 })
             });
@@ -2265,16 +2267,15 @@ mod bjt_extract_tests {
     }
 
     // Deck with both a MOS rule (gate=poly over channel=diff) and a BJT rule
-    // whose base is drawn in poly crossing the emitter diff — the layout that
-    // used to hard-error MOS extraction with "no matching MOS type implant".
+    // whose base is drawn in poly crossing the emitter and collector diff —
+    // the layout that used to hard-error MOS extraction with "no matching
+    // MOS type implant".
     fn bjt_mos_deck() -> Deck {
         let defs = [
             ("diff", 1, 0),
             ("poly", 2, 0),
             ("nsdm", 3, 0),
             ("npnid", 4, 0),
-            ("ctub", 5, 0),
-            ("licon", 6, 0),
         ]
         .into_iter()
         .map(|(n, l, d)| {
@@ -2292,15 +2293,11 @@ mod bjt_extract_tests {
         let poly = layers.id("poly").unwrap();
         let nsdm = layers.id("nsdm").unwrap();
         let npnid = layers.id("npnid").unwrap();
-        let ctub = layers.id("ctub").unwrap();
-        let licon = layers.id("licon").unwrap();
         Deck {
             layers,
             connectivity: ConnectivityConfig {
-                conductors: vec![diff, poly, ctub],
-                // Non-empty via list disables the cut-less overlap fallback,
-                // so base poly over collector ctub does not short b/c.
-                vias: vec![(licon, Vec::new())],
+                conductors: vec![diff, poly],
+                vias: Vec::new(),
             },
             devices: DeviceConfig {
                 mos_rules: vec![crate::params::MosRule {
@@ -2315,7 +2312,7 @@ mod bjt_extract_tests {
                 }],
                 bjt_rules: vec![crate::params::BjtRule {
                     name: "npn".into(),
-                    collector_layer: ctub,
+                    collector_layer: diff,
                     base_layer: poly,
                     emitter_layer: diff,
                     type_marker: npnid,
@@ -2345,12 +2342,15 @@ mod bjt_extract_tests {
         let diff = deck.layers.id("diff").unwrap();
         let poly = deck.layers.id("poly").unwrap();
         let npnid = deck.layers.id("npnid").unwrap();
-        let ctub = deck.layers.id("ctub").unwrap();
         let mut st = GeometryStore::new();
         st.add_rect(diff, 0, 0, 100, 100); // emitter
-        st.add_rect(poly, 30, -20, 40, 300); // base bar fully crossing emitter
-        st.add_rect(ctub, 20, 150, 120, 80); // collector under the bar's far end
-        st.add_rect(npnid, 0, 0, 100, 100); // marker over emitter∩base
+                                           // Base bar fully crossing BOTH the emitter and the collector band
+                                           // (endcap DRC forces a full cell crossing).
+        st.add_rect(poly, 30, -20, 40, 300);
+        // Collector diff band, crossed by the bar but NOT marker-covered
+        // there — marking it would make it an emitter candidate.
+        st.add_rect(diff, 0, 150, 140, 60);
+        st.add_rect(npnid, 0, 0, 100, 100); // marker over emitter∩base only
 
         let ext = extract_netlist(&st, &deck).unwrap();
         assert!(ext.devices.is_empty(), "marked crossing must not be a MOS");
