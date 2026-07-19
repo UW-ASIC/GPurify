@@ -524,12 +524,14 @@ struct MosMatch {
     rule_idx: usize,
 }
 
+/// `Ok(None)` means the crossing is a BJT base over its emitter/collector
+/// (a bjt rule's type_marker covers it) and must not extract as MOS.
 fn pick_type_and_flavor(
     store: &GeometryStore,
     deck: &Deck,
     gate: PolyId,
     channel: PolyId,
-) -> Result<MosMatch, String> {
+) -> Result<Option<MosMatch>, String> {
     if deck.devices.mos_rules.is_empty() {
         return Err("found gate crossing but no MOS rules to classify device".into());
     }
@@ -609,11 +611,28 @@ fn pick_type_and_flavor(
         });
     }
     match matches.len() {
-        0 => Err(format!(
-            "gate polygon {} crossing channel polygon {} has no matching MOS type implant",
-            gate.0, channel.0,
-        )),
-        1 => Ok(matches.pop().expect("one match")),
+        0 => {
+            let bjt_marked = deck.devices.bjt_rules.iter().any(|rule| {
+                store.polys_on_layer(rule.type_marker).into_iter().any(|m| {
+                    rectilinear_intersection_area(
+                        store,
+                        &[
+                            full_region(store, m),
+                            full_region(store, gate),
+                            full_region(store, channel),
+                        ],
+                    ) > 0
+                })
+            });
+            if bjt_marked {
+                return Ok(None);
+            }
+            Err(format!(
+                "gate polygon {} crossing channel polygon {} has no matching MOS type implant",
+                gate.0, channel.0,
+            ))
+        }
+        1 => Ok(Some(matches.pop().expect("one match"))),
         _ => {
             let names: Vec<&str> = matches
                 .iter()
@@ -1492,8 +1511,12 @@ fn extract_pipeline(
             }
             if let (Some(s), Some(dd)) = (src, drn) {
                 let gb = store.poly_bbox[gs.gate as usize];
-                let mos_match =
-                    pick_type_and_flavor(store, deck, PolyId(gs.gate), PolyId(sp.diff))?;
+                let Some(mos_match) =
+                    pick_type_and_flavor(store, deck, PolyId(gs.gate), PolyId(sp.diff))?
+                else {
+                    // BJT base crossing its emitter/collector — not a MOS.
+                    continue;
+                };
                 let matched_rule = &deck.devices.mos_rules[mos_match.rule_idx];
                 let l = gs.hi - gs.lo;
                 let w = if sp.axis_x {
@@ -2239,5 +2262,116 @@ mod bjt_extract_tests {
 
         let out = extract_bjt_devices(&st, &deck, &net_of_poly);
         assert!(out.is_empty(), "shorted e/c must not extract");
+    }
+
+    // Deck with both a MOS rule (gate=poly over channel=diff) and a BJT rule
+    // whose base is drawn in poly crossing the emitter diff — the layout that
+    // used to hard-error MOS extraction with "no matching MOS type implant".
+    fn bjt_mos_deck() -> Deck {
+        let defs = [
+            ("diff", 1, 0),
+            ("poly", 2, 0),
+            ("nsdm", 3, 0),
+            ("npnid", 4, 0),
+            ("ctub", 5, 0),
+            ("licon", 6, 0),
+        ]
+        .into_iter()
+        .map(|(n, l, d)| {
+            (
+                n.to_string(),
+                LayerDef {
+                    layer: l,
+                    datatype: d,
+                },
+            )
+        })
+        .collect();
+        let layers = LayerTable::from_defs(&defs);
+        let diff = layers.id("diff").unwrap();
+        let poly = layers.id("poly").unwrap();
+        let nsdm = layers.id("nsdm").unwrap();
+        let npnid = layers.id("npnid").unwrap();
+        let ctub = layers.id("ctub").unwrap();
+        let licon = layers.id("licon").unwrap();
+        Deck {
+            layers,
+            connectivity: ConnectivityConfig {
+                conductors: vec![diff, poly, ctub],
+                // Non-empty via list disables the cut-less overlap fallback,
+                // so base poly over collector ctub does not short b/c.
+                vias: vec![(licon, Vec::new())],
+            },
+            devices: DeviceConfig {
+                mos_rules: vec![crate::params::MosRule {
+                    name: "nch".into(),
+                    gate_layer: poly,
+                    channel_layer: diff,
+                    type_implant: nsdm,
+                    device_type: "nmos".into(),
+                    flavor_markers: Vec::new(),
+                    well_layer: None,
+                    device_class: None,
+                }],
+                bjt_rules: vec![crate::params::BjtRule {
+                    name: "npn".into(),
+                    collector_layer: ctub,
+                    base_layer: poly,
+                    emitter_layer: diff,
+                    type_marker: npnid,
+                    device_type: "npn".into(),
+                }],
+                ..Default::default()
+            },
+            drc_rules: Vec::new(),
+            pex: HashMap::new(),
+            dbu_nm: 1.0,
+            lvs_cut_required: false,
+            strict: false,
+            w_tolerance: crate::schema::PropertyTolerance::default(),
+            l_tolerance: crate::schema::PropertyTolerance::default(),
+            fail_on_floating: false,
+            erc: ErcParams::default(),
+            intra_layer_touch: false,
+            global_nets: Vec::new(),
+            device_catalog: HashMap::new(),
+            pex_method: Default::default(),
+        }
+    }
+
+    #[test]
+    fn marked_base_crossing_skips_mos_and_extracts_bjt() {
+        let deck = bjt_mos_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let poly = deck.layers.id("poly").unwrap();
+        let npnid = deck.layers.id("npnid").unwrap();
+        let ctub = deck.layers.id("ctub").unwrap();
+        let mut st = GeometryStore::new();
+        st.add_rect(diff, 0, 0, 100, 100); // emitter
+        st.add_rect(poly, 30, -20, 40, 300); // base bar fully crossing emitter
+        st.add_rect(ctub, 20, 150, 120, 80); // collector under the bar's far end
+        st.add_rect(npnid, 0, 0, 100, 100); // marker over emitter∩base
+
+        let ext = extract_netlist(&st, &deck).unwrap();
+        assert!(ext.devices.is_empty(), "marked crossing must not be a MOS");
+        assert_eq!(ext.bjt_devices.len(), 1);
+        let d = &ext.bjt_devices[0];
+        assert!(d.emitter != d.base && d.base != d.collector && d.emitter != d.collector);
+    }
+
+    #[test]
+    fn unmarked_crossing_without_implant_still_errors() {
+        let deck = bjt_mos_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let poly = deck.layers.id("poly").unwrap();
+        let mut st = GeometryStore::new();
+        st.add_rect(diff, 0, 0, 100, 100);
+        st.add_rect(poly, 30, -20, 40, 300); // crossing, no implant, no marker
+
+        let err = extract_netlist(&st, &deck).err().expect("must error");
+        assert!(
+            err.to_string().contains("no matching MOS type implant"),
+            "unexpected error: {err}"
+        );
     }
 }
