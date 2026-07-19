@@ -25,5 +25,25 @@ gdsverify-pex = { path = "../pex" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[[test]]
+name = "fixture_corpus"
+path = "../../tests/fixtures/build_fixtures.rs"
+
+[[test]]
+name = "verify_drc"
+path = "../../tests/test_drc.rs"
+
+[[test]]
+name = "verify_lvs"
+path = "../../tests/test_lvs.rs"
+
+[[test]]
+name = "verify_erc"
+path = "../../tests/test_erc.rs"
+
+[[test]]
+name = "verify_pex"
+path = "../../tests/test_pex.rs"
+
 [lints]
 workspace = true

@@ -249,6 +249,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "vulkano",
+ "vulkano-shaders",
 ]
 
 [[package]]
