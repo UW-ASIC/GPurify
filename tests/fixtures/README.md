@@ -104,3 +104,12 @@ cargo test -p gdsverify --test fixture_corpus regenerate_fixtures -- --ignored -
 
 The oracle is qualified against KLayout 0.30.8, the version pinned when this
 corpus was created. See `PLAN.md` for the coverage boundary and fixture matrix.
+
+The 27 PEX GDS goldens intentionally qualify the analytical formulas. The
+layout extrusion, deck selection, Maxwell capacitance solve, FastHenry DC
+resistance solve, same-net union, fixed-via handling, and checked failure path
+are covered separately by:
+
+```sh
+cargo test -p gdsverify-pex --test bridge
+```

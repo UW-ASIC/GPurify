@@ -110,8 +110,9 @@ pub use oasis::{
 };
 pub use params::{Deck, DrcRuleParam, LayerDef, LayerTable, PexMethod};
 pub use pex::{
-    run_pex, run_pex_backend, run_pex_by_net, run_pex_by_net_checked, Accuracy, NetParasitics,
-    Parasitic, PexReport,
+    run_pex, run_pex_backend, run_pex_by_net, run_pex_by_net_analytical,
+    run_pex_by_net_analytical_checked, run_pex_by_net_checked, run_pex_by_net_with_accuracy,
+    run_pex_by_net_with_accuracy_checked, Accuracy, NetParasitics, Parasitic, PexReport,
 };
 pub use rule::{run_rules, Rule};
 pub use schema::{DrcRuleSchema, LvsSchema, VerifySchema};
