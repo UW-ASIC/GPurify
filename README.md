@@ -20,12 +20,18 @@ layout-derived ERC heuristic, and all analytical PEX result families. A live
 KLayout 0.30.8 oracle additionally checks the directly equivalent native DRC
 operations.
 
-Analytical PEX is covered by the GDS conformance suite. The quasi-static solvers
-have their own numerical validation tests, but the layout-to-3D bridge is still
-staged and currently falls back to analytical extraction. Do not treat that
-fallback as field-solver signoff. Likewise, ERC power, reliability, CMP, and
-ESD/latch-up analyses require explicit qualified stimulus/evidence; missing
-inputs report `NotRun` rather than a false clean result.
+Analytical PEX is covered by the GDS conformance suite. Quasi-static per-net PEX
+is wired through the same lumped `NetParasitics` API: rectilinear conductors are
+extruded from layout DBU into the deck's 3-D process stack, capacitance is solved
+as one Maxwell BEM system with a substrate reference, and sheet resistance is
+solved as DC FastHenry segments. Fixed via/contact resistance remains a deck
+contribution because it is an interface-device parameter rather than a metal
+volume. Use the checked API for signoff so unsupported geometry or solver
+failure cannot select the compatibility fallback.
+
+ERC power, reliability, CMP, and ESD/latch-up analyses require explicit
+qualified stimulus/evidence; missing inputs report `NotRun` rather than a false
+clean result.
 
 ## Workspace layout
 
@@ -87,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let drc = run_drc(top, &deck);
     println!("DRC violations: {}", drc.violations.len());
 
-    let pex = run_pex(top, &deck);
+    let pex = run_pex(top, &deck); // detailed analytical report
     println!("extracted capacitance: {} aF", pex.total_cap());
     Ok(())
 }
@@ -103,6 +109,41 @@ call `run_erc` with a `SignoffConfig`; checks without required qualified inputs
 remain blocking as `NotRun`. The facade re-exports the lower-level extraction,
 hierarchy, SPICE/Spectre, result, and backend APIs for more specialized flows.
 
+### Analytical or quasi-static per-net PEX
+
+`run_pex_by_net` is the drop-in dispatcher. It reads the deck-level method:
+
+```json
+{
+  "pex_method": "field_solver"
+}
+```
+
+After connectivity extraction, the same API returns lumped ohms and
+attofarads for either engine:
+
+```rust,no_run
+use gdsverify::{extract_netlist, run_pex_by_net_checked, Deck, GeometryStore};
+
+fn extract(
+    layout: &GeometryStore,
+    deck: &Deck,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let nets = extract_netlist(layout, deck)?;
+    let parasitics = run_pex_by_net_checked(layout, deck, &nets.net_of_poly)?;
+    for (net, rc) in parasitics {
+        println!("net {net}: R={} ohm, C={} aF", rc.r_ohm, rc.cap_af);
+    }
+    Ok(())
+}
+```
+
+`"pex_method": "analytical"` is the default. Call
+`run_pex_by_net_with_accuracy` or its checked variant to override the deck for
+one run. The unchecked functions preserve compatibility by logging a field
+solver failure once and falling back to analytical extraction; the checked
+functions return an extraction diagnostic instead.
+
 ## PDK decks
 
 A deck defines:
@@ -113,7 +154,8 @@ A deck defines:
 - MOS/BJT/resistor/diode/capacitor recognition rules.
 - LVS extraction policy and tolerances.
 - ERC thresholds.
-- Analytical PEX process constants.
+- Analytical PEX process constants and quasi-static
+  `thickness_nm`/`height_nm`/`dielectric_k` geometry.
 
 Example decks are available under `pdks/`. GDS coordinates are never silently
 rescaled: the file's database unit must agree with `Deck::dbu_nm`.
@@ -158,3 +200,9 @@ cargo test --workspace
 
 This includes the conformance corpus along with unit, integration, numerical,
 and documentation tests for every crate.
+
+To run only the layout-to-quasi-static PEX wiring and dispatch tests:
+
+```sh
+cargo test -p gdsverify-pex --test bridge
+```

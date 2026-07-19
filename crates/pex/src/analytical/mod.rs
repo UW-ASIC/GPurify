@@ -240,7 +240,7 @@ impl PexReport {
 #[derive(Debug, thiserror::Error)]
 pub enum PexError {
     /// One or more configured R/C models refused unsupported geometry.
-    #[error("analytical extraction refused {} unsupported geometry(ies)", .0.len())]
+    #[error("PEX extraction refused {} unsupported geometry(ies)", .0.len())]
     UnsupportedGeometry(Vec<Parasitic>),
 }
 
@@ -356,8 +356,7 @@ pub struct NetParasitics {
     pub cap_af: f64,
 }
 
-/// Per-net PEX (defaults to [`Accuracy::Quasistatic`](crate::Accuracy), which
-/// currently falls back to the analytical path — see [`crate::bridge`]).
+/// Formula-based per-net PEX implementation.
 ///
 /// Each parasitic is attributed to the extracted net(s) of its source
 /// polygon(s) via `net_of_poly` (as produced by `ExtractedNetlist::net_of_poly`).
@@ -383,8 +382,8 @@ pub fn run_pex_by_net(
 
 /// Fail-closed per-net PEX. Returns [`PexError::UnsupportedGeometry`] with all
 /// extraction diagnostics instead of a partial numeric map when any configured
-/// R/C model encounters unsupported geometry. Defaults to
-/// [`Accuracy::Quasistatic`](crate::Accuracy) (staged → analytical).
+/// R/C model encounters unsupported geometry. This is the analytical
+/// implementation used by the crate-level dispatcher.
 pub fn run_pex_by_net_checked(
     store: &GeometryStore,
     deck: &Deck,
