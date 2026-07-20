@@ -31,13 +31,8 @@ impl<'a> crate::rule::Rule<ErcCtx<'a>> for EsdTopologicalCheck {
         }
         if cell_bb.xmin == i32::MAX { return out; } // no polygons
 
-        // Device nets: any net used as gate/source/drain
-        let mut device_nets: HashSet<u32> = HashSet::new();
-        for d in &ext.devices {
-            device_nets.insert(d.gate);
-            device_nets.insert(d.source);
-            device_nets.insert(d.drain);
-        }
+        // Device nets: any net used by a device terminal (MOS/BJT/passive)
+        let device_nets = crate::device_connected_nets(ext);
 
         // Find met1/met2 polygons touching the cell bbox edge (within 1 dbu)
         let mut flagged_nets: HashSet<u32> = HashSet::new();

@@ -2,8 +2,6 @@
 //! Geometric check: non-overlapping li pads on the same nwell, no metal strap,
 //! and not part of any device terminal (to avoid flagging normal inverter wiring).
 
-use std::collections::HashSet;
-
 use crate::backend::Backend;
 use crate::{ErcCtx, ErcViolation};
 use crate::geometry::PolyId;
@@ -24,12 +22,7 @@ impl<'a> crate::rule::Rule<ErcCtx<'a>> for SoftConnectionCheck {
 
         let metal_layers: Vec<_> = ["met1", "met2"].iter()
             .filter_map(|n| lt.id(n)).collect();
-        let mut device_nets: HashSet<u32> = HashSet::new();
-        for d in &ext.devices {
-            device_nets.insert(d.gate);
-            device_nets.insert(d.source);
-            device_nets.insert(d.drain);
-        }
+        let device_nets = crate::device_connected_nets(ext);
 
         for i in 0..li_polys.len() {
             for j in (i+1)..li_polys.len() {
