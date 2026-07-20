@@ -312,6 +312,12 @@ device_rule_pair! {
 
 device_rule_pair! {
     /// BJT: three-layer intersection with type marker.
+    ///
+    /// Contract: `type_marker` must be drawn as a single polygon per device
+    /// instance — the marker polygon identifies the instance during
+    /// extraction. A device marked with N disjoint marker rects extracts as
+    /// N devices; parallel devices sharing all three nets keep their
+    /// multiplicity via their separate marker rects.
     BjtRuleSchema => BjtRule {
         name: String => String,
         collector_layer: String => LayerId,

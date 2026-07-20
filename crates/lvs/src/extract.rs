@@ -618,6 +618,9 @@ fn pick_type_and_flavor(
             // else the collector would become an emitter candidate) are BJT
             // structure, not gates. A genuinely stray marked poly still
             // surfaces downstream as an LVS count/topology mismatch.
+            // Diagnostic downgrade: a genuinely missing implant on a
+            // marker-carrying poly no longer hard-errors here — it only
+            // shows up as that downstream count mismatch.
             let bjt_marked = deck.devices.bjt_rules.iter().any(|rule| {
                 store.polys_on_layer(rule.type_marker).into_iter().any(|m| {
                     rectilinear_intersection_area(
@@ -823,10 +826,14 @@ fn extract_two_terminal_devices(
 
 fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) -> Vec<BjtDevice> {
     let mut out = Vec::new();
-    // One device per distinct (rule, kind, e, b, c) net tuple: multi-poly nets
-    // (striped emitters, ring collectors) match many triples for one device.
-    let mut seen: HashSet<(String, DeviceKind, u32, u32, u32)> = HashSet::new();
-    for rule in &deck.devices.bjt_rules {
+    // Dedup on the recognizing marker polygon: one drawn device carries one
+    // type_marker rect, so all stripe/triple combinations under the same
+    // marker collapse to one BjtDevice, while parallel devices (separate
+    // marker rects, identical net tuples) keep their multiplicity. Contract:
+    // one marker polygon per device instance — N disjoint marker rects over
+    // one device extract as N devices.
+    let mut seen: HashSet<(usize, PolyId)> = HashSet::new();
+    for (ri, rule) in deck.devices.bjt_rules.iter().enumerate() {
         let kind = match rule.device_type.as_str() {
             "pnp" => DeviceKind::Pnp,
             _ => DeviceKind::Npn,
@@ -847,8 +854,10 @@ fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) 
                         continue;
                     }
                     // The type marker must cover the actual emitter/base device
-                    // region, not merely overlap its bounding box.
-                    let has_marker = store.polys_on_layer(rule.type_marker).any(|m| {
+                    // region, not merely overlap its bounding box. The first
+                    // covering marker (polys_on_layer order — deterministic)
+                    // identifies the device instance for dedup.
+                    let Some(marker) = store.polys_on_layer(rule.type_marker).find(|&m| {
                         rectilinear_intersection_area(
                             store,
                             &[
@@ -857,10 +866,9 @@ fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) 
                                 full_region(store, base),
                             ],
                         ) > 0
-                    });
-                    if !has_marker {
+                    }) else {
                         continue;
-                    }
+                    };
                     let e_net = net_of_poly[emitter.0 as usize];
                     let b_net = net_of_poly[base.0 as usize];
                     let c_net = net_of_poly[collector.0 as usize];
@@ -873,7 +881,7 @@ fn extract_bjt_devices(store: &GeometryStore, deck: &Deck, net_of_poly: &[u32]) 
                     if c_net == e_net {
                         continue;
                     }
-                    if !seen.insert((rule.name.clone(), kind.clone(), e_net, b_net, c_net)) {
+                    if !seen.insert((ri, marker)) {
                         continue;
                     }
                     out.push(BjtDevice {
@@ -2230,8 +2238,89 @@ mod bjt_extract_tests {
         let net_of_poly = vec![0, 0, 0, 1, 2, u32::MAX];
 
         let out = extract_bjt_devices(&st, &deck, &net_of_poly);
-        assert_eq!(out.len(), 1, "one device per (e,b,c) net tuple");
+        assert_eq!(out.len(), 1, "one device per marker rect");
         assert_eq!((out[0].emitter, out[0].base, out[0].collector), (0, 1, 2));
+    }
+
+    // Two complete BJT stacks at y=0 and y=200, each with its own marker
+    // rect. Poly order: e1, b1, c1, e2, b2, c2, m1, m2.
+    fn two_bjt_layout(deck: &Deck) -> GeometryStore {
+        let diff = deck.layers.id("diff").unwrap();
+        let pbase = deck.layers.id("pbase").unwrap();
+        let npnid = deck.layers.id("npnid").unwrap();
+        let mut st = GeometryStore::new();
+        for y in [0, 200] {
+            st.add_rect(diff, 0, y, 100, 100); // emitter
+            st.add_rect(pbase, 0, y, 300, 100); // base
+            st.add_rect(diff, 200, y, 100, 100); // collector
+        }
+        st.add_rect(npnid, 0, 0, 100, 100); // marker, device 1
+        st.add_rect(npnid, 0, 200, 100, 100); // marker, device 2
+        st
+    }
+
+    #[test]
+    fn parallel_bjts_same_nets_extract_two() {
+        let deck = bjt_deck();
+        let st = two_bjt_layout(&deck);
+        // Both devices share all three nets — a parallel matched pair.
+        let net_of_poly = vec![0, 1, 2, 0, 1, 2, u32::MAX, u32::MAX];
+
+        let out = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert_eq!(out.len(), 2, "parallel devices must keep multiplicity");
+        for d in &out {
+            assert_eq!((d.emitter, d.base, d.collector), (0, 1, 2));
+        }
+    }
+
+    #[test]
+    fn two_distinct_bjts_extract_two() {
+        let deck = bjt_deck();
+        let st = two_bjt_layout(&deck);
+        let net_of_poly = vec![0, 1, 2, 3, 4, 5, u32::MAX, u32::MAX];
+
+        let out = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].emitter, out[0].base, out[0].collector), (0, 1, 2));
+        assert_eq!((out[1].emitter, out[1].base, out[1].collector), (3, 4, 5));
+    }
+
+    // Guards the false-PASS window: an extra drawn parallel BJT must not be
+    // deduped away into a match against a single-instance reference.
+    #[test]
+    fn extra_parallel_bjt_in_layout_fails() {
+        let deck = bjt_deck();
+        let st = two_bjt_layout(&deck);
+        let net_of_poly = vec![0, 1, 2, 0, 1, 2, u32::MAX, u32::MAX];
+        let bjt_devices = extract_bjt_devices(&st, &deck, &net_of_poly);
+        assert_eq!(bjt_devices.len(), 2);
+
+        let ext = ExtractedNetlist {
+            devices: Vec::new(),
+            bjt_devices,
+            net_count: 3,
+            used_nets: 3,
+            net_of_poly: Vec::new(),
+            label_conflicts: Vec::new(),
+            two_terminal: Vec::new(),
+            floating_nets: Vec::new(),
+            net_names: HashMap::new(),
+        };
+        let reference = RefNetlist {
+            devices: Vec::new(),
+            net_seeds: HashMap::new(),
+            ref_two_terminal: Vec::new(),
+            ref_bjt: vec![RefBjt {
+                kind: DeviceKind::Npn,
+                name: "Q1".into(),
+                collector: "C".into(),
+                base: "B".into(),
+                emitter: "E".into(),
+            }],
+        };
+        let result =
+            crate::compare::compare(&ext, &reference, &crate::compare::CompareOpts::default());
+        assert!(!result.matched, "2 drawn vs 1 ref BJT must mismatch");
     }
 
     #[test]
@@ -2373,5 +2462,26 @@ mod bjt_extract_tests {
             err.to_string().contains("no matching MOS type implant"),
             "unexpected error: {err}"
         );
+    }
+
+    // The marker-on-gate skip only applies to UNimplanted crossings: a poly
+    // carrying a BJT marker can still gate a real MOS elsewhere.
+    #[test]
+    fn marked_gate_with_implanted_crossing_still_extracts_mos() {
+        let deck = bjt_mos_deck();
+        let diff = deck.layers.id("diff").unwrap();
+        let poly = deck.layers.id("poly").unwrap();
+        let nsdm = deck.layers.id("nsdm").unwrap();
+        let npnid = deck.layers.id("npnid").unwrap();
+        let mut st = GeometryStore::new();
+        st.add_rect(diff, 0, 0, 100, 100); // BJT emitter
+        st.add_rect(poly, 30, -20, 40, 300); // bar: BJT base AND MOS gate
+        st.add_rect(diff, 0, 150, 140, 60); // MOS channel, implanted
+        st.add_rect(nsdm, 0, 150, 140, 60);
+        st.add_rect(npnid, 0, 0, 100, 100); // marker over emitter∩base only
+
+        let ext = extract_netlist(&st, &deck).unwrap();
+        assert_eq!(ext.devices.len(), 1, "implanted crossing is a real MOS");
+        assert_eq!(ext.devices[0].kind, DeviceKind::Nmos);
     }
 }
