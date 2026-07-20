@@ -87,6 +87,26 @@ pub struct ErcCtx<'a> {
     pub power: Option<&'a Result<PowerSolution, String>>,
 }
 
+/// Nets connected to any extracted device terminal: MOS (gate/source/drain),
+/// BJT (collector/base/emitter), and two-terminal (resistor/cap/diode)
+/// devices. Rules that classify a net as "not connected to any device" must
+/// use this, not `ext.devices` alone — a pure-BJT or passive-only block is
+/// not an unconnected one.
+#[must_use]
+pub fn device_connected_nets(ext: &ExtractedNetlist) -> std::collections::HashSet<u32> {
+    let mut nets = std::collections::HashSet::new();
+    for d in &ext.devices {
+        nets.extend([d.gate, d.source, d.drain]);
+    }
+    for d in &ext.bjt_devices {
+        nets.extend([d.collector, d.base, d.emitter]);
+    }
+    for d in &ext.two_terminal {
+        nets.extend([d.terminal_a, d.terminal_b]);
+    }
+    nets
+}
+
 /// One finding from the merged engine: a heuristic violation, or one typed
 /// signoff check report.
 #[derive(Debug, Clone)]

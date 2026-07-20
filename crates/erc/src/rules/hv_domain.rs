@@ -27,13 +27,8 @@ impl<'a> crate::rule::Rule<ErcCtx<'a>> for HvDomainCheck {
         let nwell_polys: Vec<PolyId> = store.polys_on_layer(nwell_l).collect();
         if nwell_polys.is_empty() { return out; }
 
-        // Device terminal nets
-        let mut device_nets: HashSet<u32> = HashSet::new();
-        for d in &ext.devices {
-            device_nets.insert(d.gate);
-            device_nets.insert(d.source);
-            device_nets.insert(d.drain);
-        }
+        // Device terminal nets (MOS/BJT/passive)
+        let device_nets = crate::device_connected_nets(ext);
 
         // Build net -> {inside_nwell, outside_nwell}
         let mut inside: HashSet<u32> = HashSet::new();
