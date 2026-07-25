@@ -33,7 +33,8 @@ pub use gdsverify_core::schema;
 
 pub use backend::{available_backends, gpu_ready, Backend, BackendTelemetry};
 pub use drc::{
-    run_drc, run_drc_backend, run_drc_backend_strict, run_drc_no_density, DrcReport, Violation,
+    run_drc, run_drc_backend, run_drc_backend_strict, run_drc_no_density,
+    run_drc_no_density_backend, DrcReport, Violation,
 };
 pub use erc::{
     analyze_electromigration, analyze_ir_drop, check_antenna, check_antenna_from_deck,

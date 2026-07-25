@@ -186,7 +186,18 @@ pub fn run_drc_backend_strict(
 /// waives density (whole-die density is meaningless mid-iteration), so computing
 /// the window clips every iteration is a full-geometry pass of pure waste.
 pub fn run_drc_no_density(store: &GeometryStore, deck: &Deck) -> DrcReport {
-    run_drc_impl(store, deck, Backend::Cpu, deck.strict, |r| {
+    run_drc_no_density_backend(store, deck, Backend::Cpu)
+}
+
+/// Same as [`run_drc_no_density`], with an explicit backend — the path a P&R
+/// engine runs every iteration, on GPU when a device is available. As with
+/// [`run_drc_backend`], the verdicts are identical either way.
+pub fn run_drc_no_density_backend(
+    store: &GeometryStore,
+    deck: &Deck,
+    backend: Backend,
+) -> DrcReport {
+    run_drc_impl(store, deck, backend, deck.strict, |r| {
         !matches!(
             r,
             DrcRuleParam::MinDensity { .. } | DrcRuleParam::MaxDensity { .. }
