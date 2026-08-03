@@ -1,13 +1,13 @@
 # GPU scope and design contract
 
 **GPU acceleration exists for quasi-static PEX only, and is optional there.**
-DRC, ERC and LVS are CPU-only in `crates_clean/`.
+DRC, ERC and LVS are CPU-only.
 
 ---
 
 ## Why the original path was ~1000x slower than CPU
 
-Audited against `crates/` (3,462 LOC of GPU code, 54 `#[cfg(gpu)]` blocks
+Audited against the pre-rewrite tree (3,462 LOC of GPU code, 54 `#[cfg(gpu)]` blocks
 across 21 files, 5 shaders totalling 86 lines). The kernels were not the
 problem — the dispatch model was.
 

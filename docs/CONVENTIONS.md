@@ -6,8 +6,9 @@ workspace is held to this. It is derived from Fabian's _Data-Oriented Design_
 shape — specialised to what this codebase actually is: **a pipeline that turns
 layout geometry into verification verdicts.**
 
-The exemplar already in-tree is `crates/core/src/geometry/`. When in doubt,
-make the code you are writing look like that module.
+The exemplars already in-tree are `crates/core/src/bbox.rs` and
+`crates/core/src/store.rs`. When in doubt, make the code you are writing look
+like those.
 
 ---
 
@@ -179,11 +180,13 @@ However, try your best to not take shortcuts at all.
 
 Every change is gated on:
 
-- `cargo test --workspace` — 403 tests, the conformance corpus is the contract.
+- `cargo test --workspace` — the Testing-Phase suite is the contract. Until the
+  Implementation-Phase it is red by construction: every body is `todo!()`.
 - `cargo clippy --workspace --all-targets` — the workspace lint policy is
   `deny(correctness)`, `warn(pedantic)`.
-- For any change to a numeric or geometric kernel: a **checksum** proving the
-  output is identical, not merely plausible. `crates/core/examples/bool_bench.rs`
-  prints `area2` and component count for exactly this reason.
+- For any change to a numeric or geometric kernel: a law from `docs/TESTING.md`
+  proving the output is *correct*, not merely plausible — area conservation for
+  a boolean, matrix symmetry for a field solve. A checksum proves two runs
+  agree; a law proves they agree with physics.
 
 A refactor that changes a verification verdict is a bug, not a refactor.
