@@ -1,11 +1,13 @@
 # Testing strategy
 
-The rewrite in `crates_clean/` is gated on this. It exists because the original
-suite did not catch logic changes, which is the only thing a test suite is for.
+The rewrite is gated on this. It exists because the previous suite did not
+catch logic changes, which is the only thing a test suite is for.
+
+`crates/` is gone and is **not** an oracle. Nothing here compares against it.
 
 ---
 
-## What was wrong with the original suite
+## What was wrong with the previous suite
 
 Measured, not guessed:
 
@@ -16,120 +18,130 @@ Measured, not guessed:
 | lvs | 16 | — | **0** |
 | pex | 27 | — | **0** |
 
-- **ERC/LVS/PEX conformance compared counts and statuses only.** A rule that
-  flags the wrong shape, at the wrong coordinate, with the wrong measurement
-  passes as long as it flags the right *number* of them.
-- **Half the DRC corpus asserts absence.** A rule that never fires passes all 45.
-- **Tautology tests** — `assert_eq!(FACTORIES.len(), 19)`,
-  `assert_eq!(cases.len(), 94)` — break whenever anything is added and catch no
-  logic error ever. They measure the manifest, not the code.
-- The one real check (`measured`) was a **subset** test, and was skipped
-  entirely for the 64 cases whose manifest entry omits values.
+- **ERC/LVS/PEX compared counts and statuses only.** A rule flagging the wrong
+  shape, at the wrong coordinate, with the wrong measurement passed as long as
+  it flagged the right *number* of them.
+- **Half the DRC corpus asserted absence.** A rule that never fires passed all
+  45. This is why `RuleRun` exists: "clean" now means *this rule ran and
+  examined N shapes*, which is a different and checkable claim.
+- **Tautology tests** — `assert_eq!(FACTORIES.len(), 19)` — measured the
+  manifest, not the code.
 
 ---
 
-## The four layers
+## The oracle
 
-### 1. Golden reports — the refactoring oracle
+An oracle states the correct answer **independently of the code under test**.
+This project has three, all self-contained. No KLayout, no ngspice, no
+FasterCap: an external tool is a version-pinned dependency that cannot run in
+an inner loop, and it answers a slightly different question than we asked.
 
-All four report types derive `Serialize`, and reports sort into a canonical
-order before emission. So the whole report — every violation, its rule, layer,
-coordinates, measurement, limit and marker geometry — is snapshotted per fixture
-into `tests/golden/<suite>/<case>.json`.
+### 1. Closed form
 
-Generated from the **original** `crates/` implementation, these are what
-`crates_clean/` must reproduce byte for byte.
+An analytic solution the test computes directly:
 
-> **This layer freezes bugs, by design.**
->
-> A golden proves the rewrite *changed nothing*. It cannot prove the original
-> was right — where the original is wrong, the golden is wrong in exactly the
-> same way, and the rewrite is required to reproduce the error.
->
-> That is the correct tool for verifying a behaviour-preserving rewrite, and the
-> wrong tool for finding bugs. It is why layers 2 and 3 exist. Any intentional
-> divergence must be recorded in `tests/golden/DIVERGENCES.md` with the reason,
-> so an updated golden is never confused with a silent regression.
+- parallel-plate capacitance `εA/d`; an isolated sphere at `4πε₀r`
+- sheet resistance of a known rectangle: `R□ × squares`
+- series and parallel resistor networks
+- the area of a known polygon
 
-### 2. Property tests — the correctness oracle
+### 2. Law
 
-Invariants that must hold for *any* input, independent of both implementations.
-These are the layer that can find a bug the original also had. Deterministic
-generator, seeded, no new dependency.
+A conservation or symmetry property that holds for **any** input, so it works
+on realistic geometry where no closed form exists. These are the strongest
+tests here, because they need no constructed answer.
 
 Geometry and booleans:
 
 - `(a − b) ∪ (a ∩ b) == a`
 - `a ∩ b ⊆ a` and `a ∪ b ⊇ a`
-- union/intersection are commutative; self-union is idempotent
+- union and intersection commute; self-union is idempotent
 - `area(a ∪ b) + area(a ∩ b) == area(a) + area(b)`
-- ring winding and signed area agree in sign; a validated ring is simple
-- decomposition is coordinate-independent under translation
+- results are invariant under translation of every input
+- ring winding and signed area agree in sign
+
+Electrical:
+
+- the Maxwell capacitance matrix is **symmetric** by reciprocity, for any
+  geometry — `CapMatrix::asymmetry` exists to check exactly this
+- it is diagonally dominant with non-positive off-diagonals
+- electrostatic energy `½VᵀCV` is non-negative for every `V`
+- effective resistance obeys the triangle inequality and Rayleigh monotonicity
+- Kirchhoff's laws hold at every node of a solved power grid
+- network reduction preserves total capacitance and driving-point resistance
 
 Parsers:
 
-- GDS/OASIS parse → write → parse is the identity on the store
-- every fixture in the corpus round-trips
+- `parse → write → parse` is the identity on the store
+- interning is idempotent
 
-### 3. Differential — old vs new, and vs KLayout
+### 3. Construct-from-answer
 
-- **Old vs new:** both trees run the same 160 fixtures; reports are diffed.
-  Two separate processes comparing JSON, so `crates_clean/` keeps the original
-  package names and swaps in without renaming.
-- **vs KLayout:** `tests/fixtures/klayout/drc_oracle.rb` is an *independent*
-  correctness reference for the directly equivalent native DRC operations —
-  the one oracle not derived from our own code.
+The generator builds an input whose correct output it already knows:
 
-### 4. Mutation score — the acceptance gate
+- a layout emitted from a netlist must extract back to that netlist
+- a violation placed deliberately must be found **at that coordinate with that
+  measurement**
+- a graph built with a known partition must produce those components
 
-The others are inputs; this is the measurement. `cargo mutants` rewrites the
-logic and checks whether anything fails. It answers the actual question —
-*does a logic change break a test?* — with a number instead of a feeling.
+This is where `tools/`'s seeded scale generator earns its keep twice: it is the
+benchmark corpus and the oracle, so there is one tool rather than two.
 
-`cargo-mutants` is provided by the dev shell (`flake.nix`), so run it as
-`nix develop -c cargo mutants ...`.
+---
 
-**Scope it — a full-workspace run is not viable.** The workspace generates
-**12,830 mutants** (core 3636, pex 4246, lvs 2774, drc 1718, erc 456). At the
-cost of one workspace test run each that is over 20 hours even at `-j16`. So
-mutation testing is used **per file, on the code actually being changed**, not
-as a nightly whole-tree number:
+## Test adapters
+
+Some behaviour is invisible in a return value, and those places get an adapter
+at the seam. See `crates/core/src/observe.rs`.
+
+| Seam | Property it makes testable |
+|---|---|
+| `core::index` candidate pairs | the prune never rejects a pair the exact predicate would accept |
+| `derived::prefilter` | same, for the bbox prefilter |
+| rule dispatch | "clean" means this rule ran and examined N shapes |
+| allocation / work counters | the kernel rule and "nothing allocates per iteration" become assertions |
+
+The gate is an associated `const`, the null adapter is zero-sized, and the
+generic sits on a *private* entry point so the public interface does not widen.
+Adapter tests are therefore unit tests inside their crate — a deliberate trade.
+
+**A null adapter must be proven absent, not cheap.** For the two hot seams, the
+check is a disassembly comparison of the `bench` profile against a build with
+the seam removed by `cfg`; identical instruction sequence or it does not merge.
+For the wider seams, a benchmark within noise on the scale corpus. The failure
+mode being checked for is the observer parameter blocking inlining or defeating
+vectorisation — not a leftover call, which a symbol check would find.
+
+---
+
+## Gates
+
+A module is not done until all three hold.
+
+1. **Coverage** — every interface has at least one definitive test, or an entry
+   in `NEED_TESTING.md` naming what is missing and why.
+2. **Mutation** — no undocumented survivor in the module's files. A survivor is
+   a missing test *or* an equivalent mutant; decide which every time, and record
+   an equivalence argument **at the site in the source** so it is not
+   re-litigated. A contrived test against an equivalent mutant inflates the
+   score without adding safety.
+3. **Determinism** — output byte-identical across two runs at two thread counts.
+   This is the gate that would have caught the defect where 8 of 27 parasitic
+   outputs differed between runs of the same binary.
+
+**Performance is recorded, not gated.** Every module's benchmark number on the
+scale corpus is written down as it lands. That is a deliberate choice: the
+number is watched by a human rather than by CI.
+
+### Running mutation testing
+
+**A post-processing pass per crate, never inside the edit loop.** The previous
+workspace generated 12,830 mutants; at one test run each that is over 20 hours
+even at `-j16`. Scope it to the file being changed:
 
 ```sh
-nix develop -c cargo mutants -f crates_clean/core/src/geometry/bbox.rs
+nix develop -c cargo mutants -p gpurify-core -j 8 --timeout 120 -f src/bbox.rs
 ```
-
-**Gate:** a surviving mutant is a missing test. A module is not done while a
-mutation to its logic survives. Record each module's score in
-`tests/golden/MUTATION_BASELINE.md` as it is rewritten, so the direction of
-travel stays visible without ever needing the full-tree run.
-
-### What the first probe measured
-
-A hand-probe of the original tree scored **5/6 caught** in core and DRC —
-inverting `Ring::winding` broke 31 tests, flipping `MinWidth`'s comparison broke
-1, an `isqrt` off-by-one broke 3. The core geometry and DRC paths are better
-covered than the manifest table above suggests.
-
-One mutant was correctly **discarded as provably equivalent** rather than
-recorded as a survivor: in `rectilinear_occupancy`, `ylo*2 < cy2` → `<=` is
-unreachable because `cy2` falls strictly between two grid lines. Equivalent
-mutants must be identified and excluded, or the score lies.
-
-The one genuine survivor, and the first thing to fix:
-
-> **`Bbox::within` / `Bbox::overlaps` (`geometry/bbox.rs:71`) is effectively
-> untested.** Making the proximity test strict on one axis — "touch or overlap"
-> becoming "strictly overlap", shifting every spacing prune by one DBU —
-> produced **zero failures across all 403 tests.**
-
-It is invisible because every consumer re-verifies exactly afterwards, so a
-wrong prune costs correctness margin silently rather than failing. It feeds
-`candidate_pairs`, DRC spacing pruning, LVS connectivity and PEX overlap.
-
-**ERC, LVS and PEX were never probed** — and those are the suites that assert
-counts and aggregate sums only. Their true coverage is unmeasured, and should
-not be assumed to resemble DRC's.
 
 ---
 
@@ -138,8 +150,7 @@ not be assumed to resemble DRC's.
 Tests lead. A rewrite verified by a suite that does not catch logic changes is
 a green checkmark that means nothing.
 
-1. Goldens generated from `crates/` (layer 1) — the oracle to rewrite against.
-2. Property tests (layer 2) — these run against *both* trees.
-3. Mutation baseline (layer 4) — records where the original is untested.
-4. Then, and only then, `crates_clean/` per crate, in dependency order
-   `backend → core → pex → lvs → {drc, erc} → engine`, each gated on layers 1–4.
+The four phases (see `CLAUDE.md`) enforce that ordering structurally: signatures
+freeze in the Definition-Phase, tests are written against them in the
+Testing-Phase, and the Implementation-Phase is done when those tests pass — not
+before.

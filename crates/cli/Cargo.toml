@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 gpurify-engine = { workspace = true }
+gpurify-ingest = { workspace = true }
+gpurify-units = { workspace = true }
 gpurify-report = { workspace = true }
 gpurify-export = { workspace = true }
 thiserror = { workspace = true }
