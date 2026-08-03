@@ -222,3 +222,124 @@ pub fn read_deck(
 ) -> Result<Deck, DeckError> {
     todo!()
 }
+
+/// Layer-table tests, and the fixture the layout tests borrow.
+///
+/// These are unit tests rather than integration tests for one reason:
+/// [`LayerTable`] has private fields and no constructor, and [`read_deck`] —
+/// its only producer — takes a path to a file whose schema is not stated
+/// anywhere a test can write against. So a deck cannot be built in memory from
+/// outside this crate, and nothing that takes one can be exercised. That is a
+/// Definition-Phase defect, recorded in `docs/NEED_TESTING.md` rather than
+/// fixed here; signatures are frozen. Building the table from its fields inside
+/// the module that owns them is the workaround, and it costs the round-trip law
+/// nothing.
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::{LayerTable, StrTable};
+    use gpurify_core::LayerId;
+
+    /// Build a layer table from `(name, gds layer, gds datatype)` rows.
+    ///
+    /// `by_name` is the reverse-lookup index and is ordered by the layer's
+    /// *name bytes*, matching [`crate::intern::StrTable`]'s sorted index — the
+    /// field's doc comment points at it for exactly this reason.
+    pub(crate) fn layer_table(strings: &mut StrTable, rows: &[(&str, u16, u16)]) -> LayerTable {
+        let name = rows.iter().map(|&(n, _, _)| strings.intern(n)).collect();
+        let stream = rows.iter().map(|&(_, l, d)| (l, d)).collect();
+
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_unstable_by_key(|&i| rows[i].0);
+        let by_name = order
+            .into_iter()
+            .map(|i| LayerId(u16::try_from(i).expect("a deck has tens of layers")))
+            .collect();
+
+        LayerTable {
+            name,
+            stream,
+            by_name,
+        }
+    }
+
+    /// The rows every layout test in this crate is written against.
+    pub(crate) const ROWS: [(&str, u16, u16); 3] = [("met1", 68, 20), ("via1", 67, 44), ("poly", 66, 20)];
+
+    /// Oracle: construct-from-answer. The table is built from three known rows,
+    /// so every lookup has an answer decided before the lookup ran. The
+    /// undeclared name is the load-bearing case: a rule naming a layer the deck
+    /// does not define must be a deck error, and a table that interned the name
+    /// on the way past would hand back an id for a layer with no geometry — a
+    /// rule that then reports clean forever.
+    #[test]
+    fn a_name_the_deck_does_not_declare_resolves_to_no_layer_at_all() {
+        let mut strings = StrTable::default();
+        let layers = layer_table(&mut strings, &ROWS);
+
+        assert_eq!(layers.len(), ROWS.len());
+        assert!(!layers.is_empty());
+
+        for (index, &(name, _, _)) in ROWS.iter().enumerate() {
+            let expected = LayerId(u16::try_from(index).expect("three rows"));
+            assert_eq!(
+                layers.id(&strings, name),
+                Some(expected),
+                "{name} did not resolve to the id it was declared at"
+            );
+            assert_eq!(
+                strings.resolve(layers.name(expected)),
+                name,
+                "{expected:?} named the wrong layer"
+            );
+        }
+
+        // Interned, so it exists as a string, but never declared as a layer.
+        let stray = strings.intern("met9");
+        assert!(
+            layers.id(&strings, "met9").is_none(),
+            "an interned name that the deck never declared resolved to a layer"
+        );
+        assert!(
+            layers.id(&strings, "a name nothing ever interned").is_none(),
+            "an unknown name resolved to a layer"
+        );
+        assert_eq!(
+            strings.resolve(stray),
+            "met9",
+            "the lookup mutated the string table it was handed"
+        );
+    }
+
+    /// Oracle: construct-from-answer. Stream pairs are the reader's entry
+    /// point: a GDSII record carries `(layer, datatype)` and nothing else, so
+    /// this mapping decides which shapes exist. The datatype half is checked
+    /// separately because a table keyed on the layer number alone answers every
+    /// query in this test correctly except the last two.
+    #[test]
+    fn stream_pairs_map_only_where_the_deck_declares_them() {
+        let mut strings = StrTable::default();
+        let layers = layer_table(&mut strings, &ROWS);
+
+        for (index, &(_, layer, datatype)) in ROWS.iter().enumerate() {
+            assert_eq!(
+                layers.of_stream(layer, datatype),
+                Some(LayerId(u16::try_from(index).expect("three rows"))),
+                "stream {layer}/{datatype} did not map to the id it was declared at"
+            );
+        }
+        assert!(
+            layers.of_stream(69, 20).is_none(),
+            "an undeclared layer number mapped to a layer"
+        );
+        assert!(
+            layers.of_stream(68, 21).is_none(),
+            "an undeclared datatype on a declared layer number mapped to a layer, \
+             so the datatype is being ignored"
+        );
+        assert!(
+            layers.of_stream(66, 44).is_none(),
+            "a layer number from one row and a datatype from another mapped to a \
+             layer, so the pair is not being matched as a pair"
+        );
+    }
+}

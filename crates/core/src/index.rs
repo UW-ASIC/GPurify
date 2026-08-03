@@ -133,3 +133,272 @@ fn cross_layer_pairs_observed<O: ObservePairs>(
 ) {
     todo!()
 }
+
+// The adapter tests. They live here, inside the crate, because
+// `candidate_pairs_observed` is private — the observer is a test concern and
+// widening the module's interface to reach it from `tests/` would defeat the
+// point of the seam. That trade is recorded in [`crate::observe`].
+//
+// They also build their own geometry rather than using `gpurify-testgen`.
+// `testgen` depends on this crate, so the copy of `gpurify-core` it links
+// against is a *different* crate instance from the one under test here, and its
+// `LayerId` is a different type. That is a property of the dev-dependency
+// cycle, not a choice: the integration tests in `tests/` use the generator
+// normally, and only this file, on the private side of the seam, cannot.
+#[cfg(test)]
+mod tests {
+    use super::{candidate_pairs_observed, cross_layer_pairs_observed, ObservePairs, SpatialIndex};
+    use crate::ids::{LayerId, PolyId};
+    use crate::observe::Observer;
+    use crate::store::{GeometryStore, GeometryStoreBuilder};
+    use gpurify_units::Dbu;
+
+    const A: LayerId = LayerId(0);
+    const B: LayerId = LayerId(1);
+
+    /// Records every decision the prune made. `ENABLED` is `true`, which is the
+    /// whole difference between this adapter and [`crate::NoObserve`]: the
+    /// bodies below are reachable only because the gate constant folds the
+    /// other way.
+    #[derive(Debug, Default)]
+    struct Recorder {
+        emitted: Vec<(PolyId, PolyId)>,
+        rejected: Vec<(PolyId, PolyId)>,
+        skipped_buckets: u32,
+        skipped_rows: u32,
+    }
+
+    impl Observer for Recorder {
+        const ENABLED: bool = true;
+    }
+
+    impl ObservePairs for Recorder {
+        fn emitted(&mut self, a: PolyId, b: PolyId) {
+            self.emitted.push((a, b));
+        }
+        fn rejected(&mut self, a: PolyId, b: PolyId) {
+            self.rejected.push((a, b));
+        }
+        fn bucket_skipped(&mut self, _bucket: u32, rows: u32) {
+            self.skipped_buckets += 1;
+            self.skipped_rows += rows;
+        }
+    }
+
+    /// A deterministic scatter over a lattice: cell `n` is occupied when the
+    /// hash's low bit says so, and the shape inside it is offset by the rest of
+    /// the hash. No generator and no state — the same corpus every run, on every
+    /// platform, derived arithmetically from the seed.
+    fn hash(mut value: u64) -> u64 {
+        value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+
+    /// Squares scattered over a `cells`-by-`cells` lattice of 400-unit cells,
+    /// clear of one another but close enough that a prune has both accepting and
+    /// rejecting work to do. Two layers, offset so their shapes interleave.
+    fn corpus(seed: u64, cells: u64) -> GeometryStore {
+        let mut builder = GeometryStoreBuilder::default();
+        let mut push = |layer: LayerId, x: i64, y: i64, side: i64| {
+            let xs = [x, x + side, x + side, x].map(Dbu::new_unchecked);
+            let ys = [y, y, y + side, y + side].map(Dbu::new_unchecked);
+            builder.push(layer, &xs, &ys);
+        };
+
+        for (layer, origin) in [(A, (0i64, 0i64)), (B, (170, 90))] {
+            for row in 0..cells {
+                for col in 0..cells {
+                    let draw = hash(seed ^ (row << 20) ^ col);
+                    if draw & 1 == 0 {
+                        continue;
+                    }
+                    // Two sizes, so the layer has more than one spatial scale
+                    // and the grid's median-extent cell sizing has something to
+                    // decide.
+                    let side = if draw & 2 == 0 { 80 } else { 200 };
+                    let room = 400 - side;
+                    let jitter_x = i64::try_from((draw >> 8) % room).expect("below room");
+                    let jitter_y = i64::try_from((draw >> 30) % room).expect("below room");
+                    let x = i64::try_from(col * 400).expect("the lattice fits an i64");
+                    let y = i64::try_from(row * 400).expect("the lattice fits an i64");
+                    push(
+                        layer,
+                        origin.0 + x + jitter_x,
+                        origin.1 + y + jitter_y,
+                        i64::try_from(side).expect("a side under four hundred"),
+                    );
+                }
+            }
+        }
+        builder.finish(2).0
+    }
+
+    fn indexed(store: &GeometryStore, layer: LayerId) -> SpatialIndex {
+        let mut index = SpatialIndex::default();
+        SpatialIndex::build_into(store, layer, &mut index);
+        index
+    }
+
+    fn dbu(value: i64) -> Dbu {
+        Dbu::new_unchecked(value)
+    }
+
+    /// The exact predicate the prune is approximating, over one layer, by an
+    /// `O(n^2)` scan. Obviously right, and independent of the index.
+    fn exact_same_layer(
+        store: &GeometryStore,
+        layer: LayerId,
+        distance: Dbu,
+    ) -> Vec<(PolyId, PolyId)> {
+        let rows: Vec<u32> = store.polys_on_layer(layer).collect();
+        let mut out = Vec::new();
+        for (offset, &a) in rows.iter().enumerate() {
+            for &b in &rows[offset + 1..] {
+                let (a, b) = (PolyId(a), PolyId(b));
+                if store.poly_bbox(a).within(store.poly_bbox(b), distance) {
+                    out.push((a, b));
+                }
+            }
+        }
+        out
+    }
+
+    /// Oracle: adapter. **The property the seam exists for.** A prune that
+    /// wrongly rejects a pair returns a shorter list that is still perfectly
+    /// well-formed, so no assertion on the return value can see the mistake.
+    /// Here every rejection is recorded and re-run through the exact predicate:
+    /// if the predicate would have accepted it, the prune failed open, and a
+    /// spacing rule downstream silently passes a shape the foundry rejects.
+    #[test]
+    fn no_rejected_pair_would_have_passed_the_exact_predicate() {
+        let store = corpus(91, 12);
+        let index = indexed(&store, A);
+        let mut out = Vec::new();
+
+        for distance in [0i64, 1, 40, 300, 1_200] {
+            let mut recorder = Recorder::default();
+            candidate_pairs_observed(&store, &index, dbu(distance), &mut out, &mut recorder);
+
+            for &(a, b) in &recorder.rejected {
+                assert!(
+                    !store.poly_bbox(a).within(store.poly_bbox(b), dbu(distance)),
+                    "the prune rejected {a:?} and {b:?} at a distance of {distance}, \
+                     but their bounding boxes are within it"
+                );
+            }
+            assert!(
+                !recorder.rejected.is_empty(),
+                "nothing was rejected at a distance of {distance}, so the prune was \
+                 never exercised on the side that can lose a pair"
+            );
+        }
+    }
+
+    /// Oracle: adapter, plus an `O(n^2)` scan. Rejections account for only part
+    /// of the work: whole buckets are skipped without their rows ever reaching
+    /// the pair predicate, and a bucket skipped wrongly is invisible in both the
+    /// output and the rejection log. So completeness is asserted end to end —
+    /// every pair the exact predicate accepts is emitted — and the emitted log
+    /// is tied to the returned list, which is what callers actually see.
+    #[test]
+    fn the_prune_emits_every_pair_the_exact_predicate_accepts() {
+        let store = corpus(92, 12);
+        let index = indexed(&store, A);
+        let mut out = Vec::new();
+
+        for distance in [0i64, 25, 250, 2_000] {
+            let mut recorder = Recorder::default();
+            candidate_pairs_observed(&store, &index, dbu(distance), &mut out, &mut recorder);
+
+            for pair in exact_same_layer(&store, A, dbu(distance)) {
+                assert!(
+                    out.contains(&pair),
+                    "{pair:?} is within {distance} but was never emitted; \
+                     {} buckets holding {} rows were skipped",
+                    recorder.skipped_buckets,
+                    recorder.skipped_rows
+                );
+            }
+
+            let mut emitted = recorder.emitted.clone();
+            emitted.sort_unstable();
+            let mut returned = out.clone();
+            returned.sort_unstable();
+            assert_eq!(
+                emitted, returned,
+                "the seam and the returned list disagree at a distance of {distance}"
+            );
+        }
+    }
+
+    /// Oracle: adapter. The cross-layer form is a separate function with a
+    /// separate loop, so it is a separate chance to reject a pair that should
+    /// have survived. The same two claims, over the pairing that cannot halve
+    /// its work with `a < b`.
+    #[test]
+    fn the_cross_layer_prune_rejects_nothing_the_exact_predicate_accepts() {
+        let store = corpus(93, 10);
+        let a_index = indexed(&store, A);
+        let b_index = indexed(&store, B);
+        let mut out = Vec::new();
+
+        for distance in [0i64, 30, 400] {
+            let mut recorder = Recorder::default();
+            cross_layer_pairs_observed(
+                &store,
+                &a_index,
+                &b_index,
+                dbu(distance),
+                &mut out,
+                &mut recorder,
+            );
+
+            for &(a, b) in &recorder.rejected {
+                assert!(
+                    !store.poly_bbox(a).within(store.poly_bbox(b), dbu(distance)),
+                    "the cross-layer prune rejected {a:?} and {b:?} at {distance}"
+                );
+            }
+
+            for a in store.polys_on_layer(A) {
+                for b in store.polys_on_layer(B) {
+                    let (a, b) = (PolyId(a), PolyId(b));
+                    if store.poly_bbox(a).within(store.poly_bbox(b), dbu(distance)) {
+                        assert!(
+                            out.contains(&(a, b)),
+                            "{a:?} and {b:?} are within {distance} but were not emitted"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(!out.is_empty(), "no cross-layer pair was ever emitted");
+    }
+
+    /// Oracle: law. The observer changes what is recorded, never what is
+    /// returned. If installing an adapter altered the answer, every assertion
+    /// made through one would be about a different function from the one that
+    /// ships — the failure a seam has to rule out before it is worth anything.
+    #[test]
+    fn installing_an_observer_does_not_change_the_pairs_that_come_back() {
+        let store = corpus(94, 10);
+        let index = indexed(&store, A);
+
+        let mut observed = Vec::new();
+        let mut plain = Vec::new();
+        for distance in [0i64, 60, 700] {
+            candidate_pairs_observed(
+                &store,
+                &index,
+                dbu(distance),
+                &mut observed,
+                &mut Recorder::default(),
+            );
+            super::candidate_pairs_into(&store, &index, dbu(distance), &mut plain);
+            assert_eq!(observed, plain, "the observer changed the answer");
+        }
+        assert!(!plain.is_empty(), "the comparison would be vacuous");
+    }
+}

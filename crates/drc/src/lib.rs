@@ -196,3 +196,111 @@ pub(crate) fn record_run(
 ) {
     todo!()
 }
+
+/// Adapter tests for the one seam every rule row crosses.
+///
+/// `record_run` is `pub(crate)`, so these cannot live in `tests/`. That is the
+/// deliberate trade recorded in `crates/core/src/observe.rs`: the invariant is
+/// worth stating in one private function rather than widening the crate's
+/// interface so a test can reach it.
+#[cfg(test)]
+mod tests {
+    use super::record_run;
+    use gpurify_core::ops::Point;
+    use gpurify_core::{LayerId, PolyId};
+    use gpurify_ingest::StrId;
+    use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
+    use gpurify_units::Dbu;
+
+    /// Push `count` placeholder rows onto a violation table.
+    ///
+    /// Column by column rather than through `Violations::push`, which is a
+    /// frozen signature with a `todo!()` body: an arrangement helper that panics
+    /// before the function under test runs would test nothing.
+    fn fill(out: &mut Violations, count: usize) {
+        for _ in 0..count {
+            out.rule.push(StrId(9));
+            out.layer.push(LayerId(0));
+            out.severity.push(Severity::Error);
+            out.at.push(Point {
+                x: Dbu::new_unchecked(0),
+                y: Dbu::new_unchecked(0),
+            });
+            out.measured.push(Measurement::Count(0));
+            out.limit.push(Measurement::Count(1));
+            out.shape_a.push(PolyId(0));
+            out.shape_b.push(None);
+        }
+    }
+
+    /// Oracle: construct-from-answer. The count is *derived* from the table, so
+    /// stating a table of five rows and a mark of two fixes the answer at three
+    /// before the call. A transform cannot report a violation it did not push,
+    /// or push one it did not report, and this is the one place that holds.
+    #[test]
+    fn the_recorded_violation_count_is_what_the_row_actually_pushed() {
+        let mut out = Violations::default();
+        fill(&mut out, 5);
+
+        let mut runs = Vec::new();
+        record_run(&mut runs, &out, 2, StrId(4), Outcome::Ran, 77);
+
+        assert_eq!(
+            runs,
+            vec![RuleRun {
+                rule: StrId(4),
+                outcome: Outcome::Ran,
+                examined: 77,
+                violations: 3,
+            }]
+        );
+    }
+
+    /// Oracle: construct-from-answer. A rule that pushed nothing has a count of
+    /// zero even though the shared table is far from empty — the mark is where
+    /// *this* row started, not where the table did. Getting this wrong would
+    /// credit every rule with every earlier rule's findings.
+    #[test]
+    fn a_row_that_pushed_nothing_reports_zero_however_full_the_shared_table_is() {
+        let mut out = Violations::default();
+        fill(&mut out, 40);
+
+        let mut runs = Vec::new();
+        record_run(&mut runs, &out, 40, StrId(1), Outcome::Ran, 0);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].violations, 0);
+        assert_eq!(runs[0].examined, 0);
+    }
+
+    /// Oracle: construct-from-answer. Exactly one run row per call, appended,
+    /// whatever the outcome — a `Skipped` or `Refused` row is as much a record
+    /// as a `Ran` one, and omitting it is how a rule that did not execute comes
+    /// to look like a rule that found nothing.
+    #[test]
+    fn every_outcome_appends_exactly_one_row_and_none_replaces_another() {
+        let out = Violations::default();
+        let mut runs = Vec::new();
+
+        record_run(&mut runs, &out, 0, StrId(0), Outcome::Ran, 12);
+        record_run(&mut runs, &out, 0, StrId(1), Outcome::Refused, 12);
+        record_run(
+            &mut runs,
+            &out,
+            0,
+            StrId(2),
+            Outcome::Skipped(SkipReason::EmptyLayer),
+            0,
+        );
+
+        assert_eq!(runs.len(), 3);
+        assert_eq!(
+            runs.iter().map(|r| r.rule).collect::<Vec<_>>(),
+            vec![StrId(0), StrId(1), StrId(2)],
+            "rows are appended in call order, which is what makes a run reproducible"
+        );
+        assert_eq!(runs[1].outcome, Outcome::Refused);
+        assert_eq!(runs[2].outcome, Outcome::Skipped(SkipReason::EmptyLayer));
+        assert!(runs.iter().all(|r| r.violations == 0));
+    }
+}

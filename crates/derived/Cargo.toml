@@ -9,5 +9,8 @@ gpurify-core = { workspace = true }
 gpurify-ingest = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+
 [lints]
 workspace = true

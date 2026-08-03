@@ -9,5 +9,9 @@ gpurify-core = { workspace = true }
 thiserror = { workspace = true }
 flate2 = { workspace = true }
 
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+gpurify-export = { workspace = true }
+
 [lints]
 workspace = true

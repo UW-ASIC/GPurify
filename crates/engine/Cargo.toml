@@ -17,5 +17,8 @@ gpurify-pex = { workspace = true }
 gpurify-export = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+
 [lints]
 workspace = true

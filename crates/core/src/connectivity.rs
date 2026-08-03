@@ -75,3 +75,159 @@ fn components_observed<O: ObserveUnionFind>(
 pub fn component_count(labels: &[ComponentLabel]) -> u32 {
     todo!()
 }
+
+/// Adapter tests for the union-find seam.
+///
+/// `components_observed` is private, so these cannot live in `crates/core/tests/`.
+/// Nor can they use `gpurify-testgen`: the dev-dependency cycle gives this
+/// crate's unit-test build a second `gpurify-core` whose types are distinct from
+/// the ones under test, which is recorded in `docs/NEED_TESTING.md`. Neither
+/// costs anything here — an edge list is two `u32`s and needs no generator.
+///
+/// What the seam adds over the public interface is the *shape* of the work.
+/// `out` records the partition; it does not record how many unions were no-ops
+/// or how far a find walked, and those are the two numbers a regression in the
+/// weighting or the path halving shows up in first.
+#[cfg(test)]
+mod tests {
+    use super::{components_observed, ComponentLabel, ObserveUnionFind};
+    use crate::observe::Observer;
+
+    /// Records every callback in order. `ENABLED` is `true`, which is what makes
+    /// this an adapter rather than a second null one.
+    #[derive(Debug, Default)]
+    struct Recorder {
+        merged: Vec<(u32, u32)>,
+        redundant: Vec<(u32, u32)>,
+        depths: Vec<u32>,
+    }
+
+    impl Observer for Recorder {
+        const ENABLED: bool = true;
+    }
+
+    impl ObserveUnionFind for Recorder {
+        fn merged(&mut self, a: u32, b: u32) {
+            self.merged.push((a, b));
+        }
+        fn redundant(&mut self, a: u32, b: u32) {
+            self.redundant.push((a, b));
+        }
+        fn find_depth(&mut self, depth: u32) {
+            self.depths.push(depth);
+        }
+    }
+
+    /// Oracle: construct-from-answer. A spanning tree over `n` nodes has exactly
+    /// `n - 1` edges and every one of them joins two components that were
+    /// distinct until it arrived, so the merge count is fixed before the call
+    /// and no edge may be reported redundant. This is the seam's whole claim:
+    /// the labels alone cannot distinguish a run that merged eleven times from
+    /// one that merged eleven times and did fifty pointless finds.
+    #[test]
+    fn every_edge_of_a_spanning_tree_merges_and_none_is_redundant() {
+        // A path 0-1-2-...-11: twelve nodes, eleven edges, one component.
+        let edges: Vec<(u32, u32)> = (0..11).map(|i| (i, i + 1)).collect();
+        let mut out = Vec::new();
+        let mut seen = Recorder::default();
+        components_observed(12, &edges, &mut out, &mut seen);
+
+        assert_eq!(
+            seen.merged.len(),
+            11,
+            "a spanning tree's every edge joins two distinct components"
+        );
+        assert!(
+            seen.redundant.is_empty(),
+            "no edge of a tree can close a cycle, but {:?} were reported as \
+             finding both endpoints already joined",
+            seen.redundant
+        );
+        assert_eq!(out, vec![ComponentLabel(0); 12]);
+    }
+
+    /// Oracle: construct-from-answer. Adding an edge inside a component that is
+    /// already whole cannot change the partition, so every extra edge is a
+    /// redundant union by construction, and the count of them is the number of
+    /// extras. A union-find that reported these as merges would still produce
+    /// the right labels, which is exactly why the public interface cannot catch
+    /// it.
+    #[test]
+    fn an_edge_inside_a_finished_component_is_reported_redundant_not_merged() {
+        // The same path, then every chord of it that closes a cycle.
+        let mut edges: Vec<(u32, u32)> = (0..5).map(|i| (i, i + 1)).collect();
+        edges.extend([(0, 5), (1, 4), (2, 5), (0, 3)]);
+        let mut out = Vec::new();
+        let mut seen = Recorder::default();
+        components_observed(6, &edges, &mut out, &mut seen);
+
+        assert_eq!(seen.merged.len(), 5, "six nodes reach one component in five");
+        assert_eq!(
+            seen.redundant.len(),
+            4,
+            "the four chords each close a cycle and merge nothing"
+        );
+        assert_eq!(out, vec![ComponentLabel(0); 6]);
+    }
+
+    /// Oracle: law. Path halving bounds tree height, so no find may walk further
+    /// than the number of nodes it could possibly pass through, and a graph with
+    /// no edges cannot walk at all. Stated as a bound rather than a value
+    /// because the exact depth is a property of the union order, which the
+    /// interface does not fix — a bound fails on an implementation that
+    /// forgot to compress, and passes on any that did.
+    #[test]
+    fn no_find_walks_further_than_the_component_it_is_walking() {
+        let mut out = Vec::new();
+
+        let mut alone = Recorder::default();
+        components_observed(64, &[], &mut out, &mut alone);
+        assert!(
+            alone.depths.iter().all(|&d| d == 0),
+            "a graph with no edges performs no union and so walks nothing"
+        );
+        assert_eq!(out.len(), 64);
+
+        // A star, which is the worst case for a union-find that never
+        // compresses: every edge touches the same node.
+        let edges: Vec<(u32, u32)> = (1..64).map(|i| (0, i)).collect();
+        let mut star = Recorder::default();
+        components_observed(64, &edges, &mut out, &mut star);
+        assert!(
+            star.depths.iter().all(|&d| d < 64),
+            "a find walked {} nodes in a 64-node graph, which means the parent \
+             chain is longer than the component",
+            star.depths.iter().copied().max().unwrap_or(0)
+        );
+        assert_eq!(out, vec![ComponentLabel(0); 64]);
+    }
+
+    /// Oracle: determinism. The seam is instrumentation, so it must not change
+    /// what the transform does, and it must itself be a function of the input:
+    /// two runs report the same merges in the same order, and the null adapter
+    /// reaches the same partition as the recording one.
+    #[test]
+    fn observing_changes_neither_the_partition_nor_the_sequence_reported() {
+        let edges = [(3, 1), (4, 4), (0, 2), (7, 3), (2, 5), (6, 0), (5, 1)];
+
+        let mut first_out = Vec::new();
+        let mut first = Recorder::default();
+        components_observed(8, &edges, &mut first_out, &mut first);
+
+        let mut second_out = Vec::new();
+        let mut second = Recorder::default();
+        components_observed(8, &edges, &mut second_out, &mut second);
+
+        assert_eq!(first.merged, second.merged);
+        assert_eq!(first.redundant, second.redundant);
+        assert_eq!(first.depths, second.depths);
+        assert_eq!(first_out, second_out);
+
+        let mut unobserved = Vec::new();
+        super::components_into(8, &edges, &mut unobserved);
+        assert_eq!(
+            unobserved, first_out,
+            "the null adapter and the recording one must reach the same labels"
+        );
+    }
+}

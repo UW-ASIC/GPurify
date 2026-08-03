@@ -107,3 +107,92 @@ impl Provenance {
         todo!()
     }
 }
+
+/// The permutation, checked on the column it was written for.
+///
+/// A unit test rather than an integration test because a non-root [`PathId`]
+/// cannot be made from outside this crate: [`PathTable::intern`] needs a `&mut`
+/// and [`Provenance::paths`] hands out a shared reference only, so every
+/// externally built row sits at [`PathTable::ROOT`] and the hierarchy path —
+/// the exact column whose mispermutation names the wrong cell — is unreachable.
+/// The gap is recorded in `docs/NEED_TESTING.md`; the signature stays as it is.
+#[cfg(test)]
+mod tests {
+    use super::Provenance;
+    use crate::intern::StrTable;
+    use gpurify_core::PolyId;
+
+    /// Oracle: construct-from-answer. Each row is pushed under a path that
+    /// names it, and the permutation is stated by the test rather than taken
+    /// from a store, so the expected path of every row after the reorder is
+    /// known before `permute` runs. The permutation moves every row, which is
+    /// what stops a `permute` that does nothing from passing.
+    #[test]
+    fn permute_moves_each_hierarchy_path_onto_the_row_its_polygon_became() {
+        let mut strings = StrTable::default();
+        let mut provenance = Provenance::default();
+
+        // `permutation[new] == old`, and no row stays where it was.
+        let permutation = [3u32, 0, 4, 1, 2];
+        let mut pushed = Vec::with_capacity(permutation.len());
+        for row in 0..permutation.len() {
+            let cell = strings.intern(&format!("cell_{row}"));
+            let instance = strings.intern(&format!("inst_{row}"));
+            let path = provenance.paths.intern(&[cell, instance]);
+            provenance.push(path, &[]);
+            pushed.push((path, [cell, instance]));
+        }
+        assert!(
+            permutation
+                .iter()
+                .enumerate()
+                .all(|(new, &old)| u32::try_from(new).expect("five rows") != old),
+            "the permutation leaves a row in place, so this test would be weaker \
+             than it claims"
+        );
+
+        provenance.permute(&permutation);
+
+        for (new, &old) in permutation.iter().enumerate() {
+            let poly = PolyId(u32::try_from(new).expect("five rows"));
+            let (expected, components) = pushed[old as usize];
+            assert_eq!(
+                provenance.path_of(poly),
+                expected,
+                "{poly:?} came from arrival row {old} and must carry its path"
+            );
+            assert_eq!(
+                provenance.paths().get(provenance.path_of(poly)),
+                components,
+                "{poly:?} resolves to the wrong cell, which is what a report \
+                 would print beside every violation on it"
+            );
+        }
+    }
+
+    /// Oracle: law. The identity permutation is a no-op. Worth stating on its
+    /// own because it is what a single-layer layout produces, and a `permute`
+    /// that reversed or rotated its input would still pass a test that only
+    /// counted rows.
+    #[test]
+    fn the_identity_permutation_leaves_every_row_where_it_is() {
+        let mut strings = StrTable::default();
+        let mut provenance = Provenance::default();
+        let mut pushed = Vec::with_capacity(4);
+        for row in 0..4u32 {
+            let cell = strings.intern(&format!("cell_{row}"));
+            let path = provenance.paths.intern(&[cell]);
+            provenance.push(path, &[]);
+            pushed.push(path);
+        }
+
+        provenance.permute(&[0, 1, 2, 3]);
+
+        for (row, &path) in pushed.iter().enumerate() {
+            assert_eq!(
+                provenance.path_of(PolyId(u32::try_from(row).expect("four rows"))),
+                path
+            );
+        }
+    }
+}

@@ -14,7 +14,9 @@
 //! arithmetic and stays that way.
 //!
 //! The boundary between them is [`Grid`], and it is exact-or-rejected: a deck
-//! that asks for a 45 nm limit on a 5 nm grid is an error, not a rounding.
+//! that asks for a 47 nm limit on a 5 nm grid is an error, not a rounding.
+//! (45 nm would be fine — it is exactly nine grid units. The example has to be
+//! a length the grid cannot express, or it argues for the opposite rule.)
 
 // Definition-Phase only. Every body is `todo!()`, so every parameter is unused
 // and the real warnings drown. Removed in the Implementation-Phase — see the

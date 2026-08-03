@@ -1,0 +1,17 @@
+[package]
+name = "gpurify-testgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Seeded generators and oracles for the GPUVerify test suite."
+
+[dependencies]
+gpurify-units = { workspace = true }
+gpurify-core = { workspace = true }
+gpurify-ingest = { workspace = true }
+gpurify-report = { workspace = true }
+gpurify-topology = { workspace = true }
+gpurify-erc = { workspace = true }
+
+[lints]
+workspace = true

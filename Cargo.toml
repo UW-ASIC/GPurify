@@ -14,6 +14,7 @@ members = [
     "crates/export",
     "crates/engine",
     "crates/cli",
+    "crates/testgen",
 ]
 exclude = ["tools"]
 
@@ -30,6 +31,7 @@ gpurify-lvs = { path = "crates/lvs" }
 gpurify-pex = { path = "crates/pex" }
 gpurify-export = { path = "crates/export" }
 gpurify-engine = { path = "crates/engine" }
+gpurify-testgen = { path = "crates/testgen" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1"

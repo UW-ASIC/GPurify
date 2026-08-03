@@ -84,8 +84,8 @@ The generator builds an input whose correct output it already knows:
   measurement**
 - a graph built with a known partition must produce those components
 
-This is where `tools/`'s seeded scale generator earns its keep twice: it is the
-benchmark corpus and the oracle, so there is one tool rather than two.
+This is where `gpurify-testgen`'s seeded scale generator earns its keep twice:
+it is the benchmark corpus and the oracle, so there is one tool rather than two.
 
 ---
 
@@ -154,3 +154,86 @@ The four phases (see `CLAUDE.md`) enforce that ordering structurally: signatures
 freeze in the Definition-Phase, tests are written against them in the
 Testing-Phase, and the Implementation-Phase is done when those tests pass — not
 before.
+
+---
+
+## What the suite covers
+
+As the Testing-Phase closed: **678 tests**, none `#[ignore]`d, across fourteen
+crates. `cargo test --workspace --no-run` compiles and
+`cargo clippy --workspace --all-targets` is clean. Every one of the 678 panics
+when run, because every body outside `gpurify-testgen` is still `todo!()`. That
+is the phase's expected state.
+
+Each test opens with a comment naming its oracle. The counts below are counts of
+those annotations, not of tests: a few tests name two oracles and a few name
+none, so a row can differ from its test count by a handful. Determinism is
+counted separately from the three oracles because it is a gate rather than an
+oracle — it proves two runs agree, not that either is right.
+
+| crate | tests | closed form | law | construct-from-answer | determinism | adapter seam |
+|---|---:|---:|---:|---:|---:|---:|
+| units | 42 | 19 | 19 | 2 | 2 | — |
+| core | 77 | 12 | 39 | 17 | 6 | 3 |
+| ingest | 41 | — | 15 | 25 | 1 | — |
+| derived | 32 | 1 | 13 | 14 | 2 | 2 |
+| topology | 16 | — | 1 | 13 | 2 | — |
+| report | 21 | 2 | 11 | 8 | — | — |
+| drc | 105 | 11 | 6 | 71 | 4 | — |
+| erc | 92 | 15 | 21 | 52 | 5 | — |
+| lvs | 48 | — | 18 | 30 | — | — |
+| pex | 65 | 18 | 36 | 6 | 5 | — |
+| export | 57 | 1 | 16 | 27 | 13 | — |
+| engine | 19 | — | 2 | 15 | 2 | — |
+| cli | 34 | — | 1 | 30 | 3 | — |
+| testgen | 29 | 8 | 10 | 5 | 4 | — |
+| **total** | **678** | **87** | **208** | **315** | **49** | **5** |
+
+Where the weight sits, and why:
+
+- **`pex` and `units` are law-and-closed-form crates.** Capacitance,
+  resistance and the field solve have analytic answers, and where the unit chain
+  does not close (see `NEED_TESTING.md`) the closed form degrades to a scaling
+  law rather than being dropped. `units` splits evenly because half its surface
+  is grid arithmetic with an exact answer and half is dimensional algebra whose
+  content is the law that the dimensions compose.
+- **`drc` and `cli` are construct-from-answer crates.** A DRC rule has no
+  closed form; it has a violation placed on purpose at a coordinate with a
+  measurement, which is what `gpurify-testgen`'s violation module builds. All
+  twenty-six rules are covered this way, including the four combinatorial ones
+  the ledger expected to fail — `multi_patterning`, `cheesing`, `redundant_via`
+  and `via_array_spacing`.
+- **`core` and `lvs` are law crates.** Boolean area conservation, CSR and
+  transpose invariants, and graph-partition properties hold for any input, which
+  is what makes them worth stating on generated geometry.
+- **`export` carries the determinism weight** (13 of 48), because it owns every
+  writer. Each is run twice, again on a second thread, and again across a
+  wall-clock second boundary.
+- **`topology` has one law and thirteen construct-from-answer tests** because
+  net extraction has no conservation property to state: the answer is the
+  partition the generator built the layout from.
+
+The workspace has six private `*_observed` entry points, and all six are tested
+through a recording adapter, as unit tests inside their own crates — the trade
+recorded in `crates/core/src/observe.rs`.
+`core::index::candidate_pairs_observed` and `cross_layer_pairs_observed`,
+`core::connectivity::components_observed`,
+`derived::prefilter::candidates_observed`, `lvs::refine::refine_observed` and
+`drc::record_run`. The adapter column above counts only the tests that name the
+seam itself as their oracle; the rest are annotated construct-from-answer,
+because their fixtures state the merge sequence, the round sequence or the
+violation count before the call.
+
+`pex::matvec::ObserveMatVec` is the exception and has no test. The trait exists
+and `NoObserve` implements it, but no function in the workspace takes one, so
+there is nothing to install an adapter at. That is a signature defect, not a
+coverage decision, and it is recorded in both `NEED_TESTING.md` and
+`SIGNATURE_DEFECTS.md`.
+
+**Two of the three gates are met.** Coverage holds: every interface has a
+definitive test or an entry in `NEED_TESTING.md` naming what is missing.
+Determinism holds where a thread count exists — only `engine::run` takes one, so
+that is the single place the two-thread-count clause is stated, and the other
+crates substitute two OS threads and a reused output table. Mutation testing has
+not run: `cargo mutants` needs bodies, so it belongs to the Implementation-Phase
+and is the first thing to do once the suite goes green.

@@ -11,5 +11,8 @@ gpurify-topology = { workspace = true }
 gpurify-report = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+
 [lints]
 workspace = true
