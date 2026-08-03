@@ -3,11 +3,33 @@ resolver = "2"
 members = [
     "crates/units",
     "crates/core",
+    "crates/ingest",
+    "crates/derived",
+    "crates/topology",
+    "crates/report",
+    "crates/drc",
+    "crates/erc",
+    "crates/lvs",
+    "crates/pex",
+    "crates/export",
+    "crates/engine",
+    "crates/cli",
 ]
 exclude = ["tools"]
 
 [workspace.dependencies]
 gpurify-units = { path = "crates/units" }
+gpurify-core = { path = "crates/core" }
+gpurify-ingest = { path = "crates/ingest" }
+gpurify-derived = { path = "crates/derived" }
+gpurify-topology = { path = "crates/topology" }
+gpurify-report = { path = "crates/report" }
+gpurify-drc = { path = "crates/drc" }
+gpurify-erc = { path = "crates/erc" }
+gpurify-lvs = { path = "crates/lvs" }
+gpurify-pex = { path = "crates/pex" }
+gpurify-export = { path = "crates/export" }
+gpurify-engine = { path = "crates/engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1"

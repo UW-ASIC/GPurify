@@ -1,0 +1,19 @@
+[package]
+name = "gpurify-export"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpurify-units = { workspace = true }
+gpurify-core = { workspace = true }
+gpurify-ingest = { workspace = true }
+gpurify-topology = { workspace = true }
+gpurify-report = { workspace = true }
+gpurify-lvs = { workspace = true }
+gpurify-pex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
