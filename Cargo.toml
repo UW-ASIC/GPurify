@@ -1,32 +1,23 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/backend",
-    "crates/core",
-    "crates/pex",
-    "crates/lvs",
-    "crates/drc",
-    "crates/erc",
-    "crates/engine",
+    "crates/units",
 ]
-# The data-oriented rewrite is its own workspace so both trees can be built and
-# run side by side: `crates/` generates the golden reports in `tests/golden/`,
-# `crates_clean/` must reproduce them byte for byte. Keeping it out of this
-# workspace lets it reuse the original package names and swap in without a
-# rename. See docs/TESTING.md.
-exclude = ["crates_clean", "tools"]
+exclude = ["tools"]
 
 [workspace.dependencies]
+gpurify-units = { path = "crates/units" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1"
 flate2 = "1"
 thiserror = "1"
-# GPU: AOT SPIR-V from GLSL. No JIT. (was cubecl; see MIGRATION.md)
+wide = "0.7"
+# GPU: AOT SPIR-V from GLSL. No JIT. Quasi-static PEX only — see docs/GPU.md.
 vulkano = "0.35"
 vulkano-shaders = "0.35"
 
-# Skills: lint-workspace-lints — one policy, inherited by every crate.
+# One policy, inherited by every crate.
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
@@ -35,15 +26,21 @@ pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-cast_possible_truncation = "allow"  # DBU coords are i32 by design; casts are intentional
-cast_precision_loss = "allow"
-cast_sign_loss = "allow"
+# Nearly every function in a data-oriented tree is a pure transform returning a
+# value, so this fires on all of them and says nothing. Apply #[must_use] at the
+# few sites where dropping the result is genuinely the bug.
+must_use_candidate = "allow"
+# Definition-Phase: bodies are `todo!()`, so clippy cannot see the `push` that
+# makes a `&mut Vec` parameter necessary. Remove in the Implementation-Phase.
+ptr_arg = "allow"
+# The cast_* allows are deliberately NOT inherited from the old tree. They were
+# justified by "DBU coords are i32 by design", which is no longer true: Dbu is a
+# newtype over i64. A cast that needs allowing now needs it at the site.
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = "warn"
 
-# Skills: perf-release-profile / opt-lto-release / opt-codegen-units.
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -51,6 +48,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# The optimised-out check for test-adapter seams disassembles this profile, so it
+# keeps symbols. Same codegen as release otherwise.
 [profile.bench]
 inherits = "release"
 debug = true

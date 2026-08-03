@@ -1,5 +1,0 @@
-{
-  "err": {
-    "display": "polygon 0 on 'met1' has fewer than four vertices; exact rectilinear LVS cannot process it"
-  }
-}
