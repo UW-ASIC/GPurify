@@ -1,0 +1,23 @@
+# Numeric + shape diff of crates_clean/pex against tests/golden/pex.
+#
+# Own workspace, and `tools/` is already in the root Cargo.toml exclude list, so
+# neither `cargo test --workspace` builds it. It is the evidence behind the
+# deviation table; `crates_clean/pex/tests/golden.rs` is the gate that fails CI.
+[workspace]
+
+[package]
+name = "pex-golden-diff"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gdsverify-core = { path = "../../crates_clean/core" }
+gdsverify-pex = { path = "../../crates_clean/pex" }
+# `float_roundtrip` is load-bearing: the default parser is 1 ULP lossy and would
+# read 0.20249999999999999 back as 0.2025, i.e. it would manufacture a deviation
+# in PEX_FILL that does not exist (and hide one that does).
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[profile.release]
+opt-level = 3

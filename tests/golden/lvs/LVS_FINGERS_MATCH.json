@@ -1,0 +1,14 @@
+{
+  "ambiguous_classes": 0,
+  "device_mappings": [],
+  "extracted_devices": 2,
+  "floating_nets": [],
+  "label_conflicts": [],
+  "matched": true,
+  "mismatches": [],
+  "net_mappings": [],
+  "nmos": 2,
+  "pmos": 0,
+  "reason": "match",
+  "witness": null
+}

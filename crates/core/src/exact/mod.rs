@@ -41,7 +41,8 @@ pub mod ring;
 
 pub use boolean::{
     general_boolean, rectilinear_boolean, rectilinear_intersection, rectilinear_subtraction,
-    rectilinear_union, BooleanOp, MAX_RECTILINEAR_BOOLEAN_CELLS, MAX_SWEEP_EVENTS,
+    rectilinear_self_union, rectilinear_union, BooleanOp, MAX_RECTILINEAR_BOOLEAN_CELLS,
+    MAX_SWEEP_EVENTS,
 };
 pub use contact::{classify_polygon_contact, PolygonContact};
 pub use error::ExactGeometryError;

@@ -1,0 +1,22 @@
+{
+  "ambiguous_classes": 0,
+  "device_mappings": [],
+  "extracted_devices": 1,
+  "floating_nets": [],
+  "label_conflicts": [],
+  "matched": false,
+  "mismatches": [
+    {
+      "DeviceCount": {
+        "extracted": 1,
+        "kind": "Nmos",
+        "reference": 2
+      }
+    }
+  ],
+  "net_mappings": [],
+  "nmos": 1,
+  "pmos": 0,
+  "reason": "device count mismatch (ext 1N/0P vs ref 2N/0P)",
+  "witness": null
+}

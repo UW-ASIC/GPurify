@@ -1,0 +1,45 @@
+{
+  "ok": {
+    "bjt_devices": [],
+    "devices": [
+      {
+        "ad": 0,
+        "as": 100000,
+        "body": 0,
+        "device_class": null,
+        "drain": 2,
+        "flavor": "Standard",
+        "gate": 0,
+        "kind": "Pmos",
+        "l": 50,
+        "pd": 0,
+        "ps": 1400,
+        "source": 1,
+        "w": 200,
+        "well_provenance": 0
+      }
+    ],
+    "floating_nets": [
+      {
+        "label": null,
+        "net_id": 3,
+        "polygon_count": 1
+      }
+    ],
+    "label_conflicts": [],
+    "net_count": 4,
+    "net_names": [],
+    "net_of_poly": [
+      4294967295,
+      1,
+      4294967295,
+      0,
+      1,
+      2,
+      3,
+      4294967295
+    ],
+    "two_terminal": [],
+    "used_nets": 3
+  }
+}

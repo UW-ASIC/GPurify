@@ -34,6 +34,10 @@
           buildInputs = [
             rust
             pkgs.pkg-config
+            # Mutation testing is the acceptance gate for the test suite: a
+            # suite is only as strong as the logic changes it actually catches,
+            # and this measures that instead of assuming it. See docs/TESTING.md.
+            pkgs.cargo-mutants
           ]
           ++ pkgs.lib.optionals isLinux [
             pkgs.vulkan-loader

@@ -1,0 +1,131 @@
+{
+  "signoff": {
+    "antenna": {
+      "check": {
+        "check": "Antenna",
+        "diagnostics": [],
+        "status": "Violations",
+        "violations": [
+          {
+            "check": "Antenna",
+            "evidence_id": null,
+            "limit": 100.0,
+            "location": [
+              200,
+              0
+            ],
+            "measured": 2500.0,
+            "message": "net 0 etch-gate-area ratio 2500.000 exceeds 100.000",
+            "rule_id": "antenna",
+            "units": "ratio"
+          },
+          {
+            "check": "Antenna",
+            "evidence_id": null,
+            "limit": 400.0,
+            "location": [
+              200,
+              0
+            ],
+            "measured": 5000.09,
+            "message": "net 0 etch-gate-area ratio 5000.090 exceeds 400.000",
+            "rule_id": "antenna_car",
+            "units": "ratio"
+          }
+        ]
+      },
+      "nets": [
+        {
+          "diode_area_um2": 0.0,
+          "egar": 2500.0,
+          "etched_area_um2": 25.0,
+          "gate_area_um2": 0.01,
+          "location": [
+            200,
+            0
+          ],
+          "net": 0,
+          "rule_id": "antenna",
+          "waived": false
+        },
+        {
+          "diode_area_um2": 0.0,
+          "egar": 5000.09,
+          "etched_area_um2": 50.0009,
+          "gate_area_um2": 0.01,
+          "location": [
+            200,
+            0
+          ],
+          "net": 0,
+          "rule_id": "antenna_car",
+          "waived": false
+        }
+      ]
+    },
+    "density_cmp": {
+      "check": {
+        "check": "DensityCmp",
+        "diagnostics": [
+          "die boundary and density/CMP rules were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      },
+      "windows": []
+    },
+    "electromigration": {
+      "branches": [],
+      "check": {
+        "check": "Electromigration",
+        "diagnostics": [
+          "power-grid topology and load currents were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      }
+    },
+    "esd_latchup": {
+      "check": {
+        "check": "EsdLatchup",
+        "diagnostics": [
+          "ESD network and latch-up evidence were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      },
+      "paths": []
+    },
+    "ir_drop": {
+      "branches": [],
+      "check": {
+        "check": "IrDrop",
+        "diagnostics": [
+          "power-grid topology and load currents were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      },
+      "nodes": []
+    },
+    "reliability": {
+      "aging": [],
+      "check": {
+        "check": "Reliability",
+        "diagnostics": [
+          "reliability stress observations/models were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      }
+    }
+  },
+  "violations": [
+    {
+      "check": "antenna_electrical",
+      "detail": "cumulative antenna ratio 5000.0 exceeds limit 200.0 on gate net 0",
+      "x": 200,
+      "y": -50
+    }
+  ]
+}

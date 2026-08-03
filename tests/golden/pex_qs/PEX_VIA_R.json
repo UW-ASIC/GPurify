@@ -1,0 +1,15 @@
+{
+  "net_count": 1,
+  "net_of_poly": [
+    0
+  ],
+  "result": {
+    "ok": [
+      {
+        "cap_af": 0.0,
+        "net": 0,
+        "r_ohm": 5.0
+      }
+    ]
+  }
+}

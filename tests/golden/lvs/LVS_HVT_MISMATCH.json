@@ -1,0 +1,20 @@
+{
+  "ambiguous_classes": 0,
+  "device_mappings": [],
+  "extracted_devices": 1,
+  "floating_nets": [],
+  "label_conflicts": [],
+  "matched": false,
+  "mismatches": [
+    {
+      "TopologyMismatch": {
+        "description": "device class 2 has 1 in layout vs 0 in reference"
+      }
+    }
+  ],
+  "net_mappings": [],
+  "nmos": 1,
+  "pmos": 0,
+  "reason": "topology mismatch: device class 2 has 1 in layout vs 0 in reference",
+  "witness": null
+}

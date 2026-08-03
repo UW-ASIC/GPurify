@@ -1,0 +1,48 @@
+{
+  "parasitics": [
+    {
+      "AreaCap": {
+        "af": 186.0,
+        "area_af": 10.0,
+        "area_um2": 0.4,
+        "corner": null,
+        "fringe_af": 176.0,
+        "layer": "met1",
+        "perimeter_um": 4.4,
+        "source_polygon": null
+      }
+    },
+    {
+      "Resistance": {
+        "corner": null,
+        "layer": "met1",
+        "length_nm": 2000,
+        "ohm": 1.0,
+        "source_polygon": null,
+        "width_nm": 200
+      }
+    },
+    {
+      "AreaCap": {
+        "af": 138.0,
+        "area_af": 6.0,
+        "area_um2": 0.4,
+        "corner": null,
+        "fringe_af": 132.0,
+        "layer": "met2",
+        "perimeter_um": 4.4,
+        "source_polygon": null
+      }
+    },
+    {
+      "Resistance": {
+        "corner": null,
+        "layer": "met2",
+        "length_nm": 2000,
+        "ohm": 0.8,
+        "source_polygon": null,
+        "width_nm": 200
+      }
+    }
+  ]
+}

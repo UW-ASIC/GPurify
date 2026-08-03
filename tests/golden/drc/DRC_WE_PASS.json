@@ -1,0 +1,16 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "max_distance_to_tap",
+      "layer": "diff",
+      "limit": 3000,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "max_distance_to_tap",
+      "source_polygons": [],
+      "x": 60,
+      "y": 60
+    }
+  ]
+}

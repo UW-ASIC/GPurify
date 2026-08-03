@@ -1,0 +1,64 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "asymmetric_enclosure",
+      "layer": "via1",
+      "limit": 30,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "asymmetric_enclosure",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "asymmetric_enclosure",
+      "layer": "via1",
+      "limit": 30,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "asymmetric_enclosure",
+      "source_polygons": [],
+      "x": 150,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "asymmetric_enclosure",
+      "layer": "via1",
+      "limit": 30,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "asymmetric_enclosure",
+      "source_polygons": [],
+      "x": 300,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "asymmetric_enclosure",
+      "layer": "via1",
+      "limit": 30,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "asymmetric_enclosure",
+      "source_polygons": [],
+      "x": 450,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "via_array_spacing",
+      "layer": "via1",
+      "limit": 200,
+      "marker": null,
+      "measured": 50,
+      "rule_id": "via_array_spacing",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    }
+  ]
+}

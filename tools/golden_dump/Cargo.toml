@@ -1,0 +1,21 @@
+# Golden report generator. Deliberately its own workspace and excluded from the
+# root one, so `cargo test --workspace` in either tree never builds it and this
+# tool can never perturb a test or mutation run.
+#
+# Point it at either tree with --features/path override; by default it drives the
+# original implementation in `crates/`, which is what produces the oracle.
+[workspace]
+
+[package]
+name = "golden-dump"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gdsverify = { path = "../../crates/engine" }
+serde = "1"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3

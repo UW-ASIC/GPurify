@@ -1,0 +1,30 @@
+{
+  "parasitics": [
+    {
+      "CouplingCap": {
+        "af": 0.0,
+        "corner": null,
+        "layer": "via1",
+        "run_length_um": 0.1,
+        "source_polygon": null,
+        "spacing_nm": 100
+      }
+    },
+    {
+      "ViaResistance": {
+        "corner": null,
+        "layer": "via1",
+        "ohm": 5.0,
+        "source_polygon": null
+      }
+    },
+    {
+      "ViaResistance": {
+        "corner": null,
+        "layer": "via1",
+        "ohm": 5.0,
+        "source_polygon": null
+      }
+    }
+  ]
+}

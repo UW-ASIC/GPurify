@@ -1,0 +1,104 @@
+{
+  "signoff": {
+    "antenna": {
+      "check": {
+        "check": "Antenna",
+        "diagnostics": [],
+        "status": "Clean",
+        "violations": []
+      },
+      "nets": [
+        {
+          "diode_area_um2": 0.0,
+          "egar": 0.0,
+          "etched_area_um2": 0.0,
+          "gate_area_um2": 0.01,
+          "location": [
+            200,
+            0
+          ],
+          "net": 0,
+          "rule_id": "antenna",
+          "waived": false
+        },
+        {
+          "diode_area_um2": 0.0,
+          "egar": 0.0,
+          "etched_area_um2": 0.0,
+          "gate_area_um2": 0.01,
+          "location": [
+            200,
+            0
+          ],
+          "net": 0,
+          "rule_id": "antenna_car",
+          "waived": false
+        }
+      ]
+    },
+    "density_cmp": {
+      "check": {
+        "check": "DensityCmp",
+        "diagnostics": [
+          "die boundary and density/CMP rules were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      },
+      "windows": []
+    },
+    "electromigration": {
+      "branches": [],
+      "check": {
+        "check": "Electromigration",
+        "diagnostics": [
+          "power-grid topology and load currents were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      }
+    },
+    "esd_latchup": {
+      "check": {
+        "check": "EsdLatchup",
+        "diagnostics": [
+          "ESD network and latch-up evidence were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      },
+      "paths": []
+    },
+    "ir_drop": {
+      "branches": [],
+      "check": {
+        "check": "IrDrop",
+        "diagnostics": [
+          "power-grid topology and load currents were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      },
+      "nodes": []
+    },
+    "reliability": {
+      "aging": [],
+      "check": {
+        "check": "Reliability",
+        "diagnostics": [
+          "reliability stress observations/models were not supplied"
+        ],
+        "status": "NotRun",
+        "violations": []
+      }
+    }
+  },
+  "violations": [
+    {
+      "check": "floating_gate",
+      "detail": "gate net 0 has no driver",
+      "x": 200,
+      "y": -50
+    }
+  ]
+}

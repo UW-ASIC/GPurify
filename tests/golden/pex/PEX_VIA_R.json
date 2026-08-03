@@ -1,0 +1,12 @@
+{
+  "parasitics": [
+    {
+      "ViaResistance": {
+        "corner": null,
+        "layer": "via1",
+        "ohm": 5.0,
+        "source_polygon": null
+      }
+    }
+  ]
+}

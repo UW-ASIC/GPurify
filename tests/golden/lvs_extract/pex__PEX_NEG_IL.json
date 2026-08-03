@@ -1,0 +1,52 @@
+{
+  "ok": {
+    "bjt_devices": [],
+    "devices": [],
+    "floating_nets": [
+      {
+        "label": null,
+        "net_id": 0,
+        "polygon_count": 2
+      },
+      {
+        "label": null,
+        "net_id": 1,
+        "polygon_count": 1
+      },
+      {
+        "label": null,
+        "net_id": 2,
+        "polygon_count": 1
+      },
+      {
+        "label": null,
+        "net_id": 3,
+        "polygon_count": 1
+      },
+      {
+        "label": null,
+        "net_id": 4,
+        "polygon_count": 1
+      },
+      {
+        "label": null,
+        "net_id": 5,
+        "polygon_count": 1
+      }
+    ],
+    "label_conflicts": [],
+    "net_count": 6,
+    "net_names": [],
+    "net_of_poly": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      5
+    ],
+    "two_terminal": [],
+    "used_nets": 0
+  }
+}

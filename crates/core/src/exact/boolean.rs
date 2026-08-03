@@ -65,21 +65,202 @@ pub fn rectilinear_boolean(
             limit: MAX_RECTILINEAR_BOOLEAN_CELLS,
         });
     }
+    let in_lhs = rectilinear_occupancy(lhs, &xs, &ys, nx, ny);
+    let in_rhs = rectilinear_occupancy(rhs, &xs, &ys, nx, ny);
     let mut occupied = vec![false; cells];
-    for y in 0..ny {
-        let py2 = ys[y] as i128 + ys[y + 1] as i128;
-        for x in 0..nx {
-            let px2 = xs[x] as i128 + xs[x + 1] as i128;
-            let in_lhs = lhs.classify_scaled2(px2, py2) == PointClassification::Inside;
-            let in_rhs = rhs.classify_scaled2(px2, py2) == PointClassification::Inside;
-            occupied[y * nx + x] = match operation {
-                BooleanOp::Union => in_lhs || in_rhs,
-                BooleanOp::Intersection => in_lhs && in_rhs,
-                BooleanOp::Subtraction => in_lhs && !in_rhs,
-            };
+    for (cell, out) in occupied.iter_mut().enumerate() {
+        *out = match operation {
+            BooleanOp::Union => in_lhs[cell] || in_rhs[cell],
+            BooleanOp::Intersection => in_lhs[cell] && in_rhs[cell],
+            BooleanOp::Subtraction => in_lhs[cell] && !in_rhs[cell],
+        };
+    }
+    let (xs, ys, nx, ny, occupied) = coarsen_grid(xs, ys, nx, ny, occupied);
+    reconstruct_rectilinear_set(&xs, &ys, nx, ny, &occupied)
+}
+
+/// Merge a possibly self-overlapping rectilinear set into canonical form.
+///
+/// Equivalent to folding [`rectilinear_union`] over the set's polygons one at a
+/// time, but done as a single n-way pass. The incremental fold re-decomposes the
+/// whole accumulator on every step, so merging `n` polygons costs `O(n²)`
+/// polygon-pair work; here each polygon is visited once per grid row instead.
+///
+/// # Errors
+/// Returns [`ExactGeometryError`] if the set is not rectilinear, or if the
+/// coordinate decomposition exceeds [`MAX_RECTILINEAR_BOOLEAN_CELLS`].
+pub fn rectilinear_self_union(set: &PolygonSet) -> Result<PolygonSet, ExactGeometryError> {
+    ensure_rectilinear(set, BooleanOp::Union)?;
+    if set.polygons.is_empty() {
+        return Ok(PolygonSet::empty());
+    }
+
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    collect_coordinates(set, &mut xs, &mut ys);
+    xs.sort_unstable();
+    ys.sort_unstable();
+    xs.dedup();
+    ys.dedup();
+    if xs.len() < 2 || ys.len() < 2 {
+        return Ok(PolygonSet::empty());
+    }
+
+    let nx = xs.len() - 1;
+    let ny = ys.len() - 1;
+    let cells = nx
+        .checked_mul(ny)
+        .ok_or(ExactGeometryError::CapacityExceeded {
+            cells: usize::MAX,
+            limit: MAX_RECTILINEAR_BOOLEAN_CELLS,
+        })?;
+    if cells > MAX_RECTILINEAR_BOOLEAN_CELLS {
+        return Err(ExactGeometryError::CapacityExceeded {
+            cells,
+            limit: MAX_RECTILINEAR_BOOLEAN_CELLS,
+        });
+    }
+    // `rectilinear_occupancy` already ORs each polygon's parity into the mask, so
+    // overlapping members of the set merge here with no extra pass.
+    let occupied = rectilinear_occupancy(set, &xs, &ys, nx, ny);
+    let (xs, ys, nx, ny, occupied) = coarsen_grid(xs, ys, nx, ny, occupied);
+    reconstruct_rectilinear_set(&xs, &ys, nx, ny, &occupied)
+}
+
+/// Drop decomposition lines that do not separate differing occupancy.
+///
+/// `xs`/`ys` hold every coordinate of *both* operands, so most grid lines fall
+/// in the interior of the result. Each one still makes `reconstruct` emit a
+/// boundary edge per cell side that is then immediately re-merged as collinear.
+/// Removing them first shrinks the edge set to the result's true boundary
+/// complexity, which is what the sort, the boundary walk and `Ring::new`
+/// validation all scale with.
+///
+/// The occupied region is unchanged: a line is removed only when the cells on
+/// either side of it agree for every row (resp. column), so every merged block
+/// is uniform and the reconstructed outline is identical.
+fn coarsen_grid(
+    xs: Vec<i32>,
+    ys: Vec<i32>,
+    nx: usize,
+    ny: usize,
+    occupied: Vec<bool>,
+) -> (Vec<i32>, Vec<i32>, usize, usize, Vec<bool>) {
+    // Columns to keep: the first, plus any whose occupancy differs from its
+    // left neighbour somewhere.
+    let keep_col: Vec<bool> = (0..nx)
+        .map(|x| x == 0 || (0..ny).any(|y| occupied[y * nx + x] != occupied[y * nx + x - 1]))
+        .collect();
+    let keep_row: Vec<bool> = (0..ny)
+        .map(|y| y == 0 || (0..nx).any(|x| occupied[y * nx + x] != occupied[(y - 1) * nx + x]))
+        .collect();
+
+    let cols: Vec<usize> = (0..nx).filter(|&x| keep_col[x]).collect();
+    let rows: Vec<usize> = (0..ny).filter(|&y| keep_row[y]).collect();
+    if cols.len() == nx && rows.len() == ny {
+        return (xs, ys, nx, ny, occupied);
+    }
+
+    // A kept column starts at its own left edge; the block ends at the next kept
+    // column's left edge, so the trailing coordinate is carried over unchanged.
+    let mut new_xs: Vec<i32> = cols.iter().map(|&x| xs[x]).collect();
+    new_xs.push(xs[nx]);
+    let mut new_ys: Vec<i32> = rows.iter().map(|&y| ys[y]).collect();
+    new_ys.push(ys[ny]);
+
+    let (mx, my) = (cols.len(), rows.len());
+    let mut merged = vec![false; mx * my];
+    for (ny_i, &y) in rows.iter().enumerate() {
+        for (nx_i, &x) in cols.iter().enumerate() {
+            merged[ny_i * mx + nx_i] = occupied[y * nx + x];
         }
     }
-    reconstruct_rectilinear_set(&xs, &ys, nx, ny, &occupied)
+    (new_xs, new_ys, mx, my, merged)
+}
+
+/// Per-cell `Inside` mask for a rectilinear set over the (`xs`, `ys`) decomposition.
+///
+/// Equivalent to testing `set.classify_scaled2(cx2, cy2) == Inside` at every cell
+/// centre, but computed one grid row at a time by vertical-edge crossing parity
+/// instead of rescanning every vertex per cell, and only over the rows each
+/// polygon actually spans: `O(Σ rows(p) · V(p))` rather than `O(nx · ny · V)`.
+///
+/// Two facts make the cheap form exact here:
+/// - `Boundary` is unreachable. `xs`/`ys` hold every coordinate of both operands,
+///   so a cell centre in doubled coordinates falls strictly between two
+///   consecutive grid lines on both axes and cannot sit on an axis-aligned edge.
+/// - Parity is accumulated per polygon (outer plus its holes) and OR-ed across
+///   polygons, which reproduces `PolygonSet::classify_scaled2`'s "inside any
+///   polygon" rule without assuming the set's polygons are disjoint.
+///
+/// Coordinates stay in `i64`: the inputs are `i32` and only doubling is needed,
+/// so the `i128` cross product the general predicate uses is not required.
+fn rectilinear_occupancy(
+    set: &PolygonSet,
+    xs: &[i32],
+    ys: &[i32],
+    nx: usize,
+    ny: usize,
+) -> Vec<bool> {
+    let mut mask = vec![false; nx * ny];
+    // Reused across rows and polygons so the row scan does not allocate.
+    let mut vertical: Vec<(i32, i32, i32)> = Vec::new();
+    let mut crossings: Vec<i32> = Vec::new();
+
+    for polygon in &set.polygons {
+        vertical.clear();
+        let (mut ymin, mut ymax) = (i32::MAX, i32::MIN);
+        for ring in std::iter::once(&polygon.outer).chain(polygon.holes.iter()) {
+            let v = ring.vertices();
+            for i in 0..v.len() {
+                let a = v[i];
+                let b = v[(i + 1) % v.len()];
+                if a.x == b.x && a.y != b.y {
+                    let (lo, hi) = (a.y.min(b.y), a.y.max(b.y));
+                    vertical.push((a.x, lo, hi));
+                    ymin = ymin.min(lo);
+                    ymax = ymax.max(hi);
+                }
+            }
+        }
+        if vertical.is_empty() {
+            continue;
+        }
+        // Only rows inside this polygon's own y-extent can have a crossing, and
+        // `ys` holds every operand coordinate so `ymin`/`ymax` are grid lines.
+        // Row `y` spans `ys[y]..ys[y + 1]`, so the covered rows are exactly
+        // `index_of(ymin)..index_of(ymax)`: below that `cy2 < 2·ymin ≤ 2·ylo`
+        // and at or above it `cy2 ≥ 2·ymax ≥ 2·yhi`, either way no crossing.
+        // Without this clamp every polygon rescans all `ny` rows — for layout
+        // geometry, where a shape covers a handful of rows, that is ~99% waste.
+        let y_from = ys.partition_point(|&v| v < ymin);
+        let y_to = ys.partition_point(|&v| v < ymax).min(ny);
+        for y in y_from..y_to {
+            let cy2 = i64::from(ys[y]) + i64::from(ys[y + 1]);
+            crossings.clear();
+            for &(x, ylo, yhi) in &vertical {
+                if i64::from(ylo) * 2 < cy2 && cy2 < i64::from(yhi) * 2 {
+                    crossings.push(x);
+                }
+            }
+            if crossings.is_empty() {
+                continue;
+            }
+            crossings.sort_unstable();
+            // A closed ring gives an even crossing count, so the interior spans
+            // the [c0,c1], [c2,c3], … pairs. Every crossing x is itself a grid
+            // line, so the covered cells are exactly the index range between them.
+            let row = &mut mask[y * nx..(y + 1) * nx];
+            for pair in crossings.chunks_exact(2) {
+                let lo = xs.partition_point(|&v| v < pair[0]);
+                let hi = xs.partition_point(|&v| v < pair[1]).min(nx);
+                if lo < hi {
+                    row[lo..hi].fill(true);
+                }
+            }
+        }
+    }
+    mask
 }
 
 pub fn rectilinear_union(
@@ -181,14 +362,16 @@ fn reconstruct_rectilinear_set(
     if edges.is_empty() {
         return Ok(PolygonSet::empty());
     }
+    // Sorted by (start, end), so the edges leaving a vertex are a contiguous run
+    // already ordered by endpoint. That is exactly what the per-vertex
+    // `BTreeMap<Point, Vec<usize>>` used to hold, so a binary search replaces it —
+    // no map, and no Vec allocation per boundary vertex.
     edges.sort_unstable();
-    let mut outgoing: BTreeMap<Point, Vec<usize>> = BTreeMap::new();
-    for (index, edge) in edges.iter().enumerate() {
-        outgoing.entry(edge.start).or_default().push(index);
-    }
-    for indices in outgoing.values_mut() {
-        indices.sort_unstable_by_key(|&i| edges[i].end);
-    }
+    let outgoing_of = |p: Point| {
+        let lo = edges.partition_point(|e| e.start < p);
+        let hi = edges.partition_point(|e| e.start <= p);
+        lo..hi
+    };
 
     let mut used = vec![false; edges.len()];
     let mut rings = Vec::new();
@@ -211,9 +394,10 @@ fn reconstruct_rectilinear_set(
             if edge.end == start {
                 break;
             }
-            let candidates = outgoing
-                .get(&edge.end)
-                .ok_or(ExactGeometryError::InternalTopology("open boundary chain"))?;
+            let candidates = outgoing_of(edge.end);
+            if candidates.is_empty() {
+                return Err(ExactGeometryError::InternalTopology("open boundary chain"));
+            }
             current = choose_continuation(edge, candidates, &edges, &used).ok_or(
                 ExactGeometryError::InternalTopology("no unused boundary continuation"),
             )?;
@@ -258,14 +442,12 @@ fn reconstruct_rectilinear_set(
 
 fn choose_continuation(
     incoming: DirectedEdge,
-    candidates: &[usize],
+    candidates: std::ops::Range<usize>,
     edges: &[DirectedEdge],
     used: &[bool],
 ) -> Option<usize> {
     let incoming_dir = direction(incoming.start, incoming.end)?;
     candidates
-        .iter()
-        .copied()
         .filter(|&index| !used[index])
         .min_by_key(|&index| {
             let next_dir = direction(edges[index].start, edges[index].end).unwrap_or(0);

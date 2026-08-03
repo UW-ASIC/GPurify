@@ -23,6 +23,22 @@ pub(crate) fn check_overlap(
             return;
         }
     };
+    // Bounding box of each merged `b` component. Intersecting an `a` polygon
+    // against the whole layer forces a coordinate decomposition spanning the
+    // entire layout; a component whose box misses `a` cannot contribute area, so
+    // restricting to the overlapping ones is exact and keeps each grid local.
+    let b_boxes: Vec<Bbox> = b_union
+        .polygons()
+        .iter()
+        .map(|polygon| {
+            let mut box_ = Bbox::empty();
+            for p in polygon.outer().vertices() {
+                box_.include(p.x, p.y);
+            }
+            box_
+        })
+        .collect();
+
     for pa in store.polys_on_layer(a) {
         let polygon = gdsverify_core::exact::Polygon::from_outer(
             store.vertices(pa)
@@ -30,11 +46,25 @@ pub(crate) fn check_overlap(
                 .collect(),
         );
         let marker = store.poly_bbox[pa.0 as usize];
+        let nearby: Vec<_> = b_union
+            .polygons()
+            .iter()
+            .zip(&b_boxes)
+            .filter(|(_, box_)| {
+                box_.xmin <= marker.xmax
+                    && box_.xmax >= marker.xmin
+                    && box_.ymin <= marker.ymax
+                    && box_.ymax >= marker.ymin
+            })
+            .map(|(polygon, _)| polygon.clone())
+            .collect();
         let intersection = polygon
             .map(gdsverify_core::exact::PolygonSet::from_polygon)
             .map_err(derived::DerivedError::from)
             .and_then(|a_set| {
-                gdsverify_core::exact::rectilinear_intersection(&a_set, &b_union)
+                let b_local = gdsverify_core::exact::PolygonSet::new(nearby)
+                    .map_err(derived::DerivedError::from)?;
+                gdsverify_core::exact::rectilinear_intersection(&a_set, &b_local)
                     .map_err(derived::DerivedError::from)
             });
         let Ok(intersection) = intersection else {

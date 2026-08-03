@@ -1,0 +1,23 @@
+{
+  "ambiguous_classes": 0,
+  "device_mappings": [],
+  "extracted_devices": 2,
+  "floating_nets": [],
+  "label_conflicts": [],
+  "matched": false,
+  "mismatches": [
+    {
+      "ParametricMismatch": {
+        "expected": 300.0,
+        "got": 200.0,
+        "property": "W/L",
+        "tolerance": 10.0
+      }
+    }
+  ],
+  "net_mappings": [],
+  "nmos": 1,
+  "pmos": 1,
+  "reason": "parametric mismatch: expected W/L 300/50 got 200/50",
+  "witness": null
+}

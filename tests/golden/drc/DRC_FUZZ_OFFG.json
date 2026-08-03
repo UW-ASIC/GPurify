@@ -1,0 +1,76 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "min_area",
+      "layer": "met1",
+      "limit": 40000,
+      "marker": null,
+      "measured": 21321,
+      "rule_id": "min_area",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_density",
+      "layer": "met1",
+      "limit": 300000,
+      "marker": null,
+      "measured": 5330,
+      "rule_id": "min_density",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "off_grid",
+      "layer": "met1",
+      "limit": 5,
+      "marker": null,
+      "measured": 103,
+      "rule_id": "off_grid",
+      "source_polygons": [],
+      "x": 103,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "off_grid",
+      "layer": "met1",
+      "limit": 5,
+      "marker": null,
+      "measured": 103,
+      "rule_id": "off_grid",
+      "source_polygons": [],
+      "x": 103,
+      "y": 207
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "off_grid",
+      "layer": "met1",
+      "limit": 5,
+      "marker": null,
+      "measured": 207,
+      "rule_id": "off_grid",
+      "source_polygons": [],
+      "x": 0,
+      "y": 207
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "overlap",
+      "layer": "met1:met2",
+      "limit": 50,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "overlap",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    }
+  ]
+}

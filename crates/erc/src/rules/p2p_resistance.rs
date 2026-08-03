@@ -15,7 +15,8 @@
 //! ponytail: 1-D taps at overlap centers, no 2-D current spreading; move to
 //! real region splitting if L-shaped high-R routes need per-corner accuracy.
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use crate::backend::Backend;
 use crate::geometry::Bbox;
@@ -29,101 +30,188 @@ pub struct PointToPointResistanceCheck;
 /// over `terminal` nodes within each connected component (a terminal pair
 /// split across components has no interconnect path — e.g. joined only
 /// through an excluded device poly — and is skipped).
-/// ponytail: dense Gauss-Jordan on the reduced Laplacian, O(m^3) per
-/// component — nets are tens-to-hundreds of polys; go sparse/CG if that grows.
+/// ponytail: non-terminal nodes are Kron-eliminated first, so the dense solve
+/// runs on the terminal set (tens of nodes) instead of every polygon sub-node
+/// (thousands). Effective resistance is invariant under that elimination.
 fn worst_pair_r(n: usize, edges: &[(usize, usize, f64)], terminal: &[bool]) -> f64 {
     if n < 2 {
         return 0.0;
     }
-    let mut cond = vec![vec![0.0f64; n]; n];
+
+    // Conductance adjacency. Parallel edges add, self-loops carry no current.
+    let mut adj: Vec<BTreeMap<usize, f64>> = vec![BTreeMap::new(); n];
     for &(a, b, ohm) in edges {
+        if a == b {
+            continue;
+        }
         let g = 1.0 / ohm.max(1e-9);
-        cond[a][b] += g;
-        cond[b][a] += g;
+        *adj[a].entry(b).or_insert(0.0) += g;
+        *adj[b].entry(a).or_insert(0.0) += g;
     }
-    // Connected components (DFS over the conductance matrix).
-    let mut comp = vec![usize::MAX; n];
+
+    // ── Kron reduction ──
+    // Eliminating a node redistributes its conductance over its neighbours as a
+    // star-mesh transform: g_ij += g_ui*g_uj / sum_k(g_uk). Effective resistance
+    // between the surviving nodes is exactly preserved, so the dense solve below
+    // sees only terminals. Nodes are taken in minimum-degree order (lazy heap)
+    // because fill-in from eliminating a degree-d node is d(d-1)/2 edges — on the
+    // near-planar graphs a layout produces, most nodes are degree 1 or 2 and
+    // collapse to zero or one edge.
+    let mut order: BinaryHeap<Reverse<(usize, usize)>> = (0..n)
+        .filter(|&i| !terminal[i])
+        .map(|i| Reverse((adj[i].len(), i)))
+        .collect();
+    let mut nbrs: Vec<(usize, f64)> = Vec::new();
+    while let Some(Reverse((degree, u))) = order.pop() {
+        // Stale heap entry: a fresh one with the current degree was pushed when
+        // it changed, so this copy can be dropped.
+        if adj[u].len() != degree {
+            continue;
+        }
+        nbrs.clear();
+        nbrs.extend(adj[u].iter().map(|(&k, &g)| (k, g)));
+        for &(v, _) in &nbrs {
+            adj[v].remove(&u);
+        }
+        adj[u].clear();
+        let total: f64 = nbrs.iter().map(|&(_, g)| g).sum();
+        if total > 0.0 {
+            for i in 0..nbrs.len() {
+                let (a, ga) = nbrs[i];
+                for j in i + 1..nbrs.len() {
+                    let (b, gb) = nbrs[j];
+                    let fill = ga * gb / total;
+                    *adj[a].entry(b).or_insert(0.0) += fill;
+                    *adj[b].entry(a).or_insert(0.0) += fill;
+                }
+            }
+        }
+        for &(v, _) in &nbrs {
+            if !terminal[v] {
+                order.push(Reverse((adj[v].len(), v)));
+            }
+        }
+    }
+
+    // ── Dense solve over the surviving terminals ──
+    let terminals: Vec<usize> = (0..n).filter(|&i| terminal[i]).collect();
+    if terminals.len() < 2 {
+        return 0.0;
+    }
+    // Terminal-local indices, so the matrices below are sized by terminal count.
+    let mut local = vec![usize::MAX; n];
+    for (li, &g) in terminals.iter().enumerate() {
+        local[g] = li;
+    }
+
+    // Components over the reduced graph: a terminal pair in different components
+    // has no interconnect path and is skipped.
+    let t = terminals.len();
+    let mut comp = vec![usize::MAX; t];
     let mut ncomp = 0;
-    for s in 0..n {
+    let mut stack = Vec::new();
+    for s in 0..t {
         if comp[s] != usize::MAX {
             continue;
         }
         comp[s] = ncomp;
-        let mut stack = vec![s];
+        stack.push(s);
         while let Some(u) = stack.pop() {
-            for v in 0..n {
-                if cond[u][v] > 0.0 && comp[v] == usize::MAX {
-                    comp[v] = ncomp;
-                    stack.push(v);
+            for &v in adj[terminals[u]].keys() {
+                let lv = local[v];
+                if lv != usize::MAX && comp[lv] == usize::MAX {
+                    comp[lv] = ncomp;
+                    stack.push(lv);
                 }
             }
         }
         ncomp += 1;
     }
+    let mut by_comp: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
+    for li in 0..t {
+        by_comp[comp[li]].push(li);
+    }
+
     let mut worst = 0.0f64;
-    for c in 0..ncomp {
-        let members: Vec<usize> = (0..n).filter(|&i| comp[i] == c).collect();
-        let terms: Vec<usize> = members.iter().copied().filter(|&i| terminal[i]).collect();
-        if terms.len() < 2 {
+    let mut a: Vec<f64> = Vec::new();
+    // Column of each member in the grounded system; usize::MAX for the grounded
+    // node and for members of other components.
+    let mut slot = vec![usize::MAX; t];
+    for members in &by_comp {
+        if members.len() < 2 {
             continue;
         }
         // Ground members[0]; invert the reduced Laplacian by Gauss-Jordan.
         // R_eff(i,j) = G_ii + G_jj - 2*G_ij, with the grounded node's G = 0.
         let m = members.len() - 1;
-        let idx = |i: usize| members[1..].iter().position(|&x| x == i);
-        let mut a = vec![vec![0.0f64; 2 * m]; m];
-        for (ri, &i) in members[1..].iter().enumerate() {
+        for (ri, &li) in members[1..].iter().enumerate() {
+            slot[li] = ri;
+        }
+        let w = 2 * m;
+        a.clear();
+        a.resize(m * w, 0.0);
+        for (ri, &li) in members[1..].iter().enumerate() {
+            let row = &mut a[ri * w..(ri + 1) * w];
             let mut diag = 0.0;
-            for &j in &members {
-                if j == i {
+            for (&v, &g) in &adj[terminals[li]] {
+                let lv = local[v];
+                if lv == usize::MAX || comp[lv] != comp[li] {
                     continue;
                 }
-                diag += cond[i][j];
-                if let Some(cj) = idx(j) {
-                    a[ri][cj] = -cond[i][j];
+                diag += g;
+                let cj = slot[lv];
+                if cj != usize::MAX {
+                    row[cj] = -g;
                 }
             }
-            a[ri][ri] = diag;
-            a[ri][m + ri] = 1.0;
+            row[ri] = diag;
+            row[m + ri] = 1.0;
         }
         for col in 0..m {
             let mut piv = col;
             for r2 in col + 1..m {
-                if a[r2][col].abs() > a[piv][col].abs() {
+                if a[r2 * w + col].abs() > a[piv * w + col].abs() {
                     piv = r2;
                 }
             }
-            a.swap(col, piv);
-            let p = a[col][col];
+            if piv != col {
+                for c2 in 0..w {
+                    a.swap(col * w + c2, piv * w + c2);
+                }
+            }
+            let p = a[col * w + col];
             if p.abs() < 1e-12 {
                 continue; // singular row; components make this unreachable
             }
-            for c2 in col..2 * m {
-                a[col][c2] /= p;
+            for c2 in col..w {
+                a[col * w + c2] /= p;
             }
             for r2 in 0..m {
                 if r2 == col {
                     continue;
                 }
-                let f = a[r2][col];
+                let f = a[r2 * w + col];
                 if f != 0.0 {
-                    for c2 in col..2 * m {
-                        a[r2][c2] -= f * a[col][c2];
+                    for c2 in col..w {
+                        a[r2 * w + c2] -= f * a[col * w + c2];
                     }
                 }
             }
         }
-        let ginv = |i: usize, j: usize| a[i][m + j];
-        let reff = |i: usize, j: usize| match (idx(i), idx(j)) {
-            (Some(x), Some(y)) => ginv(x, x) + ginv(y, y) - 2.0 * ginv(x, y),
-            (None, Some(y)) => ginv(y, y),
-            (Some(x), None) => ginv(x, x),
-            (None, None) => 0.0,
+        let ginv = |i: usize, j: usize| a[i * w + m + j];
+        let reff = |i: usize, j: usize| match (slot[i], slot[j]) {
+            (usize::MAX, usize::MAX) => 0.0,
+            (usize::MAX, y) => ginv(y, y),
+            (x, usize::MAX) => ginv(x, x),
+            (x, y) => ginv(x, x) + ginv(y, y) - 2.0 * ginv(x, y),
         };
-        for x in 0..terms.len() {
-            for y in x + 1..terms.len() {
-                worst = worst.max(reff(terms[x], terms[y]));
+        for x in 0..members.len() {
+            for y in x + 1..members.len() {
+                worst = worst.max(reff(members[x], members[y]));
             }
+        }
+        for &li in &members[1..] {
+            slot[li] = usize::MAX;
         }
     }
     worst

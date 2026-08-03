@@ -1,0 +1,28 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "min_density",
+      "layer": "met1",
+      "limit": 300000,
+      "marker": null,
+      "measured": 22500,
+      "rule_id": "min_density",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_enclosure",
+      "layer": "met2",
+      "limit": 50,
+      "marker": null,
+      "measured": 30,
+      "rule_id": "min_enclosure",
+      "source_polygons": [],
+      "x": 30,
+      "y": 30
+    }
+  ]
+}

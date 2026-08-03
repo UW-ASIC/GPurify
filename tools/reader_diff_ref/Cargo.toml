@@ -1,0 +1,24 @@
+# Reader differential oracle. Its own workspace and excluded from both trees, so
+# neither `cargo test` nor a mutation run ever builds it.
+#
+# It dumps what the ORIGINAL reader in `crates/` extracts from every fixture:
+# per cell, per polygon, the layer id and the exact vertex walk, plus the
+# hierarchy path. `crates_clean/core/tests/reader_diff.rs` replays the same
+# fixtures through the new reader and compares, which is the only way to prove
+# the rewrite reads identically before the rule stack exists to produce goldens.
+#
+#   cargo run --release --manifest-path tools/reader_diff_ref/Cargo.toml
+[workspace]
+
+[package]
+name = "reader-diff-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gdsverify-core = { path = "../../crates/core" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3

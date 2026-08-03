@@ -1,0 +1,64 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "max_density",
+      "layer": "met1",
+      "limit": 800000,
+      "marker": null,
+      "measured": 997500,
+      "rule_id": "max_density",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_edge_length",
+      "layer": "met1",
+      "limit": 100,
+      "marker": null,
+      "measured": 50,
+      "rule_id": "min_edge_length",
+      "source_polygons": [],
+      "x": 950,
+      "y": 1500
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_edge_length",
+      "layer": "met1",
+      "limit": 100,
+      "marker": null,
+      "measured": 50,
+      "rule_id": "min_edge_length",
+      "source_polygons": [],
+      "x": 1000,
+      "y": 1500
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_enclosed_area",
+      "layer": "met1",
+      "limit": 50000,
+      "marker": null,
+      "measured": 10000,
+      "rule_id": "min_enclosed_area",
+      "source_polygons": [],
+      "x": 950,
+      "y": 1400
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "overlap_geometry_error",
+      "layer": "met1:met2",
+      "limit": 50,
+      "marker": null,
+      "measured": -1,
+      "rule_id": "overlap",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    }
+  ]
+}

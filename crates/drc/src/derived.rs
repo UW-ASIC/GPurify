@@ -7,7 +7,8 @@
 //! to bounding boxes.
 
 use gdsverify_core::exact::{
-    rectilinear_intersection, rectilinear_subtraction, rectilinear_union, ExactGeometryError,
+    rectilinear_intersection, rectilinear_self_union, rectilinear_subtraction, rectilinear_union,
+    ExactGeometryError,
     Point, Polygon, PolygonSet,
 };
 use crate::geometry::{GeometryStore, LayerId, PolyId};
@@ -370,12 +371,14 @@ pub fn layer_polygon_set(
     if known_layer_count.is_some_and(|count| usize::from(layer) >= count) {
         return Err(DerivedError::UnknownLayer(layer));
     }
-    let mut result = PolygonSet::empty();
+    // One n-way merge rather than a fold: unioning into an accumulator
+    // re-decomposed the entire accumulated set on every polygon, so a layer with
+    // n polygons cost O(n²) polygon-pair work.
+    let mut polygons = Vec::new();
     for poly in store.polys_on_layer(layer) {
-        let component = polygon_from_store(store, poly)?;
-        result = rectilinear_union(&result, &PolygonSet::from_polygon(component))?;
+        polygons.push(polygon_from_store(store, poly)?);
     }
-    Ok(result)
+    Ok(rectilinear_self_union(&PolygonSet::new(polygons)?)?)
 }
 
 fn polygon_from_store(store: &GeometryStore, poly: PolyId) -> Result<Polygon, DerivedError> {

@@ -1,0 +1,40 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "antenna",
+      "layer": "met1",
+      "limit": 100000,
+      "marker": null,
+      "measured": 200000,
+      "rule_id": "antenna",
+      "source_polygons": [],
+      "x": 200,
+      "y": -50
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_enclosure",
+      "layer": "met2",
+      "limit": 50,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "min_enclosure",
+      "source_polygons": [],
+      "x": 400,
+      "y": 400
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_enclosure",
+      "layer": "diff",
+      "limit": 50,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "well_enclosure",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    }
+  ]
+}

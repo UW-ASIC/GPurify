@@ -9,6 +9,12 @@ members = [
     "crates/erc",
     "crates/engine",
 ]
+# The data-oriented rewrite is its own workspace so both trees can be built and
+# run side by side: `crates/` generates the golden reports in `tests/golden/`,
+# `crates_clean/` must reproduce them byte for byte. Keeping it out of this
+# workspace lets it reuse the original package names and swap in without a
+# rename. See docs/TESTING.md.
+exclude = ["crates_clean", "tools"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

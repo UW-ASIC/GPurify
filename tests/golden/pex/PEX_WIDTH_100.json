@@ -1,0 +1,26 @@
+{
+  "parasitics": [
+    {
+      "AreaCap": {
+        "af": 173.0,
+        "area_af": 5.0,
+        "area_um2": 0.2,
+        "corner": null,
+        "fringe_af": 168.0,
+        "layer": "met1",
+        "perimeter_um": 4.2,
+        "source_polygon": null
+      }
+    },
+    {
+      "Resistance": {
+        "corner": null,
+        "layer": "met1",
+        "length_nm": 2000,
+        "ohm": 2.0,
+        "source_polygon": null,
+        "width_nm": 100
+      }
+    }
+  ]
+}

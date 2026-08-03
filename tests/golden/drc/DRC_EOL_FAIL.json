@@ -1,0 +1,52 @@
+{
+  "violations": [
+    {
+      "hierarchy_path": null,
+      "kind": "eol_spacing",
+      "layer": "met1",
+      "limit": 150,
+      "marker": null,
+      "measured": 100,
+      "rule_id": "eol_spacing",
+      "source_polygons": [],
+      "x": 100,
+      "y": 500
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "min_density",
+      "layer": "met1",
+      "limit": 300000,
+      "marker": null,
+      "measured": 25000,
+      "rule_id": "min_density",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "overlap",
+      "layer": "met1:met2",
+      "limit": 50,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "overlap",
+      "source_polygons": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "hierarchy_path": null,
+      "kind": "overlap",
+      "layer": "met1:met2",
+      "limit": 50,
+      "marker": null,
+      "measured": 0,
+      "rule_id": "overlap",
+      "source_polygons": [],
+      "x": 0,
+      "y": 600
+    }
+  ]
+}
