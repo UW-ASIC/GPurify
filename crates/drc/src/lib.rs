@@ -23,7 +23,7 @@
 //! looked at. An empty [`Violations`] is what a rule that never ran produces
 //! *and* what a clean design produces, so the violation table alone cannot tell
 //! them apart — half the old DRC suite passed for exactly that reason. See
-//! [`record_run`], which is the one place the two are separated.
+//! `record_run`, which is the one place the two are separated.
 //!
 //! A rule that cannot run says so: [`Outcome::Skipped`] when a required input
 //! is absent, [`Outcome::Refused`] when the geometry is outside what this tool

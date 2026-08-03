@@ -1,10 +1,11 @@
 //! Spacing family: how close two shapes may come.
 //!
 //! Every rule here starts from the same two steps —
-//! [`SpatialIndex::build_into`] over the layer, then
-//! [`candidate_pairs_into`] at the rule's limit — and then differs only in what
-//! makes a pair *interesting* and what the limit is once it is. That shared
-//! prefix is why they share a file, and it is also this family's one real risk.
+//! [`build_into`](gpurify_core::index::SpatialIndex::build_into) over the
+//! layer, then [`candidate_pairs_into`] at the rule's limit — and then differ
+//! only in what makes a pair *interesting* and what the limit is once it is.
+//! That shared prefix is why they share a file, and it is also this family's
+//! one real risk.
 //!
 //! # The prune is the dangerous part
 //!
@@ -24,9 +25,10 @@
 //! touching pairs) and skips pairs within one figure. The old tree made this
 //! optional behind a `strict` flag; it is not optional, it is what "external
 //! spacing" means, and the flag is gone.
+//!
+//! [`candidate_pairs_into`]: gpurify_core::index::candidate_pairs_into
 
 use crate::{Design, Scratch};
-use gpurify_core::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_core::{Bbox, LayerId};
 use gpurify_ingest::StrId;
 use gpurify_report::{RuleRun, Violations};
@@ -190,10 +192,10 @@ pub fn parallel_run_length(a: Bbox, b: Bbox) -> Dbu {
 
 /// Check every same-layer minimum-spacing rule.
 ///
-/// **Transform, gatherer.** Builds one [`SpatialIndex`] per row into the
-/// scratch, generates candidates with [`candidate_pairs_into`] at that row's
-/// limit, drops pairs belonging to one merged figure, then measures each
-/// surviving pair exactly with `ops::seg_seg_dist2`.
+/// **Transform, gatherer.** Builds one spatial index per row into the scratch,
+/// generates candidates with [`candidate_pairs_into`] at that row's limit,
+/// drops pairs belonging to one merged figure, then measures each surviving
+/// pair exactly with `ops::seg_seg_dist2`.
 ///
 /// One violation per offending pair, reported at the midpoint of the closest
 /// approach with both polygon ids in `shapes`.
@@ -202,6 +204,8 @@ pub fn parallel_run_length(a: Bbox, b: Bbox) -> Dbu {
 /// the number that tells a reader whether the prune did anything. A layer of
 /// 10 000 shapes reporting 40 000 pairs examined is healthy; the same layer
 /// reporting 50 million means the index degenerated.
+///
+/// [`candidate_pairs_into`]: gpurify_core::index::candidate_pairs_into
 pub fn check_min_spacing(
     design: Design<'_>,
     table: &MinSpacingTable,
@@ -220,6 +224,8 @@ pub fn check_min_spacing(
 /// two layers required to stay apart have failed if they intersect.
 ///
 /// `examined` counts candidate pairs.
+///
+/// [`candidate_pairs_into`]: gpurify_core::index::candidate_pairs_into
 pub fn check_min_spacing_diff(
     design: Design<'_>,
     table: &MinSpacingDiffTable,

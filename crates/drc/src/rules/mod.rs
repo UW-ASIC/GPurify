@@ -45,7 +45,7 @@
 //!   discipline the conventions ask for — the outputs are the one place it
 //!   would be wrong.
 //! - **One [`RuleRun`] per table row, always**, pushed through
-//!   [`record_run`](crate::record_run). Not per violation, not per layer, and
+//!   `record_run`. Not per violation, not per layer, and
 //!   never omitted because nothing was found.
 //! - **`examined` counts the primitive the rule actually looked at**, named in
 //!   each transform's doc: polygons for the shape rules, candidate pairs for
