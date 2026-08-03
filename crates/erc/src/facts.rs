@@ -10,6 +10,8 @@
 //! about this net*, re-keyed from interned names to [`NetId`] so no rule holds
 //! a [`StrId`] in a loop.
 //!
+//! [`StrId`]: gpurify_ingest::StrId
+//!
 //! # `IntentMap` is where the skip decision is made
 //!
 //! Six rules cannot run without design intent. Each of them could test

@@ -10,6 +10,12 @@ use gpurify_report::{RuleRun, Violations};
 /// Named flags rather than a bitmask: `Checks { drc: true, .. }` reads at the
 /// call site, and there is no combination that is illegal, so a struct of
 /// `bool` is honest here where a sum type would be forced.
+///
+/// CONVENTIONS §3 prefers a sum type over a flag-bag, but the rule it states is
+/// "an `enum` beats a struct of `bool`s **whose combinations are mostly
+/// illegal**". All sixteen combinations here are meaningful, including none,
+/// so the condition does not hold and the lint is answered rather than obeyed.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checks {
     pub drc: bool,

@@ -27,8 +27,8 @@ mod qty;
 
 pub use dbu::{Dbu, DbuArea, Grid, GridError, MAX_ABS_DBU};
 pub use qty::{
-    Area, Capacitance, Current, CurrentDensity, Dimension, Inductance, Length, Qty, Resistance,
-    Voltage,
+    celsius, Area, Capacitance, Current, CurrentDensity, Dimension, Inductance, Length, Qty,
+    Resistance, Temperature, Voltage,
 };
 
 /// Named prefix exponents, for readability at call sites.

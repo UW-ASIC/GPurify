@@ -26,7 +26,7 @@
 //! **Never an empty clean result.** A report saying "no IR-drop violations"
 //! when the run never had a supply voltage to compare against is the single
 //! failure this tool is built against. It is why [`RuleRun`] exists, why
-//! [`record_run`] is the only way a rule finishes a row, and why
+//! `record_run` is the only way a rule finishes a row, and why
 //! [`IntentMap::declared`] is a field rather than an inference from emptiness.
 //!
 //! The remaining four — antenna, cumulative antenna, density/CMP, and

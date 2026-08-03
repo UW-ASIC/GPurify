@@ -45,7 +45,9 @@ version = "0.1.0"
 dependencies = [
  "gpurify-engine",
  "gpurify-export",
+ "gpurify-ingest",
  "gpurify-report",
+ "gpurify-units",
  "thiserror",
 ]
 

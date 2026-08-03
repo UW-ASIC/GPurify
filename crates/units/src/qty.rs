@@ -36,6 +36,26 @@ dimensions! {
     Inductance => "H",
     /// Current per unit width, as electromigration limits are specified.
     CurrentDensity => "A/m",
+    /// Absolute temperature. **Kelvin, always.**
+    ///
+    /// Celsius is not a `Qty` and cannot be: it is an interval scale with an
+    /// offset, so a ratio of two Celsius values is meaningless and `1/T` — which
+    /// is exactly what an Arrhenius factor needs — divides by zero at 0 °C and
+    /// changes sign below it. Decks state temperatures in Celsius; [`celsius`]
+    /// converts at that boundary and nothing downstream sees the offset.
+    Temperature => "K",
+}
+
+/// A Celsius reading as an absolute temperature.
+///
+/// The one place the 273.15 offset appears. Deck parsers call this; nothing
+/// else needs to know Celsius exists.
+///
+/// **Decision** — pure, one value in, one out, and worth a table of cases
+/// precisely because it is the kind of conversion that gets silently skipped:
+/// absolute zero, the freezing point, and a negative reading.
+pub fn celsius(degrees: f64) -> Qty<Temperature, 0> {
+    todo!()
 }
 
 /// A quantity of dimension `D`, expressed in units of `10^P` of `D`'s base unit.

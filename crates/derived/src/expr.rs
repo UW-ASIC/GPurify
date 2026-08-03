@@ -108,20 +108,15 @@ impl Evaluator {
     }
 
     /// A previously evaluated named layer.
-    pub fn get(&self, name: StrId) -> Option<&ValidatedLayer> {
-        todo!()
-    }
-
-    /// Evaluate a one-off expression that is not in the deck.
     ///
-    /// **Transform, A-to-B.** Caller owns `out`. Used by rules that build an
-    /// expression from their own parameters rather than naming a deck layer.
-    pub fn eval_into(
-        &mut self,
-        store: &gpurify_core::GeometryStore,
-        expr: &DerivedExpr,
-        out: &mut ValidatedLayer,
-    ) -> Result<(), DerivedError> {
+    /// The only way a rule reaches derived geometry, and deliberately the only
+    /// way: everything a rule needs is a layer the deck named, so this borrows
+    /// shared and every consumer can hold it at once. A rule needing an operand
+    /// built from its own parameters — "shapes wider than W" — composes
+    /// `core::boolean::*_into` into its own scratch instead. There is no
+    /// evaluate-an-arbitrary-expression entry point, because one would need
+    /// `&mut self` and would serialise every consumer behind this cache.
+    pub fn get(&self, name: StrId) -> Option<&ValidatedLayer> {
         todo!()
     }
 }
