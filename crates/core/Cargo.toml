@@ -1,0 +1,11 @@
+[package]
+name = "gpurify-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpurify-units = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

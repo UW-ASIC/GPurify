@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "gpurify-core"
+version = "0.1.0"
+dependencies = [
+ "gpurify-units",
+ "thiserror",
+]
+
+[[package]]
 name = "gpurify-units"
 version = "0.1.0"
 dependencies = [
