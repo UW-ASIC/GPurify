@@ -2229,4 +2229,103 @@ mod tests {
             );
         }
     }
+
+    /// Oracle: construct-from-answer, derived from the GDSII composition rule
+    /// rather than from a run. A mirror and a rotation split across *two*
+    /// levels of hierarchy, in both orders — the case the corpus exercises only
+    /// through `DRC_HIER_NEST`, inside a test that is red for unrelated reasons
+    /// and therefore gates nothing.
+    ///
+    /// The two orders are **not** the same transform, and that is the point.
+    /// GDSII applies a reference's reflection before its rotation, so composing
+    /// parent over child gives:
+    ///
+    /// - mirrored parent over a child rotated a quarter turn:
+    ///   `F · R₉₀ · p = F · (−y, x) = (−y, −x)`
+    /// - a parent rotated a quarter turn over a mirrored child:
+    ///   `R₉₀ · F · p = R₉₀ · (x, −y) = (y, x)`
+    ///
+    /// Those are negatives of each other, which is `F · R_q = R_{−q} · F` seen
+    /// from outside: [`Xform::compose`] negates the child's quadrant when the
+    /// parent flips, and a composition that instead *added* the quadrants would
+    /// give both placements the same answer and pass a test that checked only
+    /// one of them. Both determinants are −1 — exactly one flip survives either
+    /// composition — so both rings reverse.
+    ///
+    /// The `assert_ne!` is the one carrying the asymmetry: it fails if the two
+    /// orders are ever collapsed into one, whatever else stays right.
+    #[test]
+    fn a_mirror_and_a_rotation_split_across_two_levels_do_not_commute() {
+        use gpurify_core::ops::{winding_of, Winding};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_hierarchy(&[
+            ("LEAF", &[ccw_triangle()], &[]),
+            // A rotated child, to sit under a mirrored parent.
+            ("ROTATED", &[], &[sref("LEAF", 0, 90.0, 0, 0)]),
+            // A mirrored child, to sit under a rotated parent.
+            ("MIRRORED", &[], &[sref("LEAF", REFLECT, 0.0, 0, 0)]),
+            (
+                "TOP",
+                &[],
+                &[
+                    sref("ROTATED", REFLECT, 0.0, 0, 0),
+                    sref("MIRRORED", 0, 90.0, 5_000, 0),
+                ],
+            ),
+        ]);
+
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(layout.store.poly_count(), 2, "one row per leaf placement");
+
+        // (0,0), (200,0), (0,100) through `(−y, −x)` is (0,0), (0,−200),
+        // (−100,0) — clockwise — so the reversal fixes vertex 0 and turns the
+        // rest around.
+        let mirrored_parent = verts(&layout.store, 0);
+        assert_eq!(
+            mirrored_parent,
+            (vec![0, -100, 0], vec![0, 0, -200]),
+            "a mirrored parent over a rotated child did not flatten to \
+             `F · R₉₀` in reversed order"
+        );
+
+        // Through `(y, x)`, offset by (5000, 0): (5000,0), (5000,200),
+        // (5100,0) — also clockwise, also reversed.
+        let rotated_parent = verts(&layout.store, 1);
+        assert_eq!(
+            rotated_parent,
+            (vec![5_000, 5_100, 5_000], vec![0, 0, 200]),
+            "a rotated parent over a mirrored child did not flatten to \
+             `R₉₀ · F` in reversed order"
+        );
+
+        // The asymmetry, stated independently of the literals above: translate
+        // each to its own first vertex and the two shapes still differ, because
+        // `(−y, −x)` and `(y, x)` are negatives rather than a translation apart.
+        let relative = |(xs, ys): &(Vec<i64>, Vec<i64>)| -> Vec<(i64, i64)> {
+            xs.iter()
+                .zip(ys)
+                .map(|(x, y)| (x - xs[0], y - ys[0]))
+                .collect()
+        };
+        assert_ne!(
+            relative(&mirrored_parent),
+            relative(&rotated_parent),
+            "`F · R_q` and `R_q · F` produced the same shape; the two orders \
+             have been collapsed and one of them is now wrong"
+        );
+
+        for (row, order) in [(0u32, "mirrored parent"), (1, "rotated parent")] {
+            let (xs, ys) = layout.store.poly_verts(PolyId(row));
+            assert_eq!(
+                winding_of(xs, ys),
+                Some(Winding::CounterClockwise),
+                "{order}: a cell's rings keep the orientation they were drawn \
+                 with however deep the mirror sits; clockwise is read \
+                 downstream as a hole"
+            );
+        }
+    }
 }
