@@ -12,7 +12,7 @@
 //! directly from their public tuple fields. That is legitimate: a `StrId` is a
 //! `u32` and nothing in `drc` resolves one back to text.
 
-#![allow(dead_code)]
+#![allow(dead_code, reason = "each test binary links only the fixtures it names")]
 
 use gpurify_core::view::validate_layer_into;
 use gpurify_core::{GeometryStore, LayerId, ValidatedLayer};

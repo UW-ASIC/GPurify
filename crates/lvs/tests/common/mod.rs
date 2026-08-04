@@ -21,7 +21,7 @@
 //!   node indices rather than [`Node`](gpurify_lvs::graph::Node)s, so that is
 //!   the numbering they must be in.
 
-#![allow(dead_code)]
+#![allow(dead_code, reason = "each test binary links only the fixtures it names")]
 
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
