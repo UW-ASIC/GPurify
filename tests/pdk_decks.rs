@@ -1,0 +1,343 @@
+//! The decks in `pdks/` are inputs this repository ships, and nothing read one.
+//!
+//! Every other test in the workspace builds its own deck text, so the four
+//! files a user actually points the tool at were never parsed by anything. That
+//! is how all four came to sit in the *previous* tree's schema, two of them with
+//! no `rules` section at all, without a single test going red: an absent section
+//! is not a parse error, it is an empty [`RuleTable`], and an empty rule table
+//! runs no checks and reports a clean pass. A PDK that configures no rules is
+//! not a PDK, it is a deck-shaped file that certifies everything.
+//!
+//! # The oracle
+//!
+//! **Construct-from-answer**, with the answer stated as a property rather than
+//! a number: whatever a deck says, if `drc` and `erc` cannot build a rule from
+//! it, or a rule names a layer the deck never declared, or a conductor has no
+//! sheet resistance, then the tool's verdict on that PDK is decided by what is
+//! *missing* from the file. No expected value below was read off a run.
+//!
+//! # Why the workspace root
+//!
+//! Same reason as `tests/test_all.rs`: this needs `ingest`, `drc` and `erc` at
+//! once and belongs to none of them.
+//!
+//! # Why the directory is read rather than listed
+//!
+//! A hard-coded list is a list someone has to remember to extend, and the fifth
+//! PDK added the week after this lands is exactly the one nobody would. The
+//! discovery is therefore the first thing asserted: an empty `pdks/` would make
+//! every loop below pass vacuously, which is the same false clean in the test
+//! suite that the tests themselves exist to prevent in the tool.
+
+use gpurify::core::LayerId;
+use gpurify::ingest::deck::{Deck, ParamValue};
+use gpurify::ingest::StrTable;
+use gpurify::units::Grid;
+use std::path::{Path, PathBuf};
+
+/// The grid every deck in `pdks/` is authored against — `pdks/README.md` states
+/// it, and a limit that is not an exact multiple of it is `DeckError::OffGrid`
+/// rather than a rounded limit. Loading at this resolution is therefore itself
+/// a check that the published numbers land on the pitch they claim.
+const DBU_PER_UM: i64 = 1000;
+
+/// Every `*.json` under `pdks/`, sorted, discovered by reading the directory.
+///
+/// Sorted so a failure names the same deck on every machine; `pdks/README.md`
+/// is skipped by extension, since the schema lives in JSON and the prose beside
+/// it is not a deck.
+fn deck_files() -> Vec<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("pdks");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|why| panic!("pdks/ must be readable at {}: {why}", dir.display()))
+        .map(|entry| entry.expect("a directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    found.sort();
+
+    assert!(
+        !found.is_empty(),
+        "no deck was discovered in {}, so every assertion in this file would \
+         pass without examining anything — which is the failure mode these \
+         tests exist to close, reproduced inside the test suite",
+        dir.display()
+    );
+    found
+}
+
+/// The deck's file name, for a message that names which of the four broke.
+fn name_of(path: &Path) -> &str {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("<unnameable deck>")
+}
+
+/// Parse one deck, or fail naming the file and the refusal.
+///
+/// The string table comes back with it: layer and rule names are `StrId`s from
+/// here on, and resolving one against a different table is a different name.
+fn load(path: &Path) -> (Deck, StrTable) {
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+    let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
+    let mut strings = StrTable::default();
+
+    match gpurify::ingest::deck::parse_deck(&source, grid, &mut strings) {
+        Ok(deck) => (deck, strings),
+        Err(why) => panic!(
+            "{} does not parse: {why}. A deck this tool ships is an input a user \
+             points at directly, so a deck that cannot be read is a broken \
+             release, not a broken test.",
+            name_of(path)
+        ),
+    }
+}
+
+/// Oracle: construct-from-answer. Every shipped deck is a deck: it parses, and
+/// both domains build a rule set from it.
+///
+/// The two `from_deck` calls are the load-bearing half. Parsing only proves the
+/// file is the right *shape*; `RuleSet::from_deck` is where a rule's parameters
+/// are read, and a deck stating `min_spacing` with no `limit` parses cleanly and
+/// dies there.
+#[test]
+fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+
+        gpurify::drc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
+            panic!(
+                "{}: the DRC rule set does not build: {why}",
+                name_of(&path)
+            )
+        });
+        gpurify::erc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
+            panic!(
+                "{}: the ERC rule set does not build: {why}",
+                name_of(&path)
+            )
+        });
+    }
+}
+
+/// Oracle: construct-from-answer. A deck configures at least one rule, and
+/// every rule it configures is filed by exactly one domain.
+///
+/// **This is the bug.** A missing `rules` section is not malformed — it is an
+/// empty table, and an empty table dispatches nothing, produces no violation and
+/// no `RuleRun`, and exits zero. The report is indistinguishable from a design
+/// that passed, which is the worst output a signoff tool can produce.
+///
+/// The second assertion closes the same hole one level in: a deck can carry a
+/// hundred rules and still check nothing if every `kind` is misspelled, because
+/// each domain steps over the kinds it does not spell. Rows filed by neither are
+/// rows that exist only in the file.
+#[test]
+fn every_deck_configures_rules_and_every_rule_belongs_to_a_domain() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+        let deck_name = name_of(&path);
+
+        let drc = gpurify::drc::RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
+        let erc = gpurify::erc::RuleSet::from_deck(&deck, &strings).expect("the ERC set builds");
+        let filed = drc.rule_count() + erc.len();
+
+        assert!(
+            filed > 0,
+            "{deck_name} configures no rule at all. It parses, it loads, and a \
+             run over it finds nothing and exits zero — a clean report for a \
+             design nothing examined."
+        );
+        assert_eq!(
+            filed,
+            deck.rules.spec.len(),
+            "{deck_name} states {} rules and only {filed} are filed under a kind \
+             either domain spells; the remainder are inert text in the file",
+            deck.rules.spec.len()
+        );
+    }
+}
+
+/// Oracle: construct-from-answer. Every layer a rule names resolves back to the
+/// same id through the layer table.
+///
+/// A rule pointing at an undeclared layer is a rule over an empty geometry set:
+/// it runs, examines nothing, and reports clean forever. `parse_deck` refuses
+/// the name outright, so what is checked here is the surviving half — that the
+/// id a rule carries indexes a real row and round-trips through
+/// `LayerTable::id`, which is what `derived` and `drc` use to find the geometry.
+///
+/// Parameters are checked as well as the `layers` list: `ParamValue::Layer` is
+/// how a rule names a second layer, and it resolves through the same table.
+#[test]
+fn every_layer_a_rule_names_resolves_in_the_layer_table() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+        let deck_name = name_of(&path);
+
+        for spec in &deck.rules.spec {
+            let rule = strings.resolve(spec.id);
+            let named = deck.rules.layers_of(spec).iter().copied().chain(
+                deck.rules
+                    .params_of(spec)
+                    .iter()
+                    .filter_map(|&(_, value)| match value {
+                        ParamValue::Layer(layer) => Some(layer),
+                        _ => None,
+                    }),
+            );
+
+            for layer in named {
+                assert!(
+                    layer.idx() < deck.layers.len(),
+                    "{deck_name}: rule {rule} names layer id {} and the table \
+                     holds {} rows; a rule over a layer that is not there \
+                     examines no geometry and reports clean",
+                    layer.idx(),
+                    deck.layers.len()
+                );
+                let name = strings.resolve(deck.layers.name(layer));
+                assert_eq!(
+                    deck.layers.id(&strings, name),
+                    Some(layer),
+                    "{deck_name}: rule {rule} names layer {name}, which does not \
+                     resolve back to the id it was given; the name index and the \
+                     name column disagree, so some lookups of this layer find it \
+                     and others do not"
+                );
+            }
+        }
+    }
+}
+
+/// Oracle: construct-from-answer, against `erc::power`'s stated refusal.
+///
+/// `power::sheet_resistances` demands a positive, finite sheet resistance for
+/// every conductor *and every via cut* in `connectivity`, and returns
+/// `PowerError::NoSheetResistance` otherwise. That error is not per-rule: it
+/// aborts the whole power stage, so one conductor missing a `pex` row is the
+/// difference between a PDK that runs IR-drop, electromigration and
+/// point-to-point resistance and one that runs none of them.
+///
+/// The condition is copied from that function deliberately, including via cuts,
+/// which carry ohms per cut rather than ohms per square. A zero is the case
+/// worth naming: it is what an absent `pex` row leaves behind, and a zero sheet
+/// resistance shorts a whole rail, which makes a bad power grid read clean.
+#[test]
+fn every_current_carrying_layer_has_a_sheet_resistance() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+        let deck_name = name_of(&path);
+
+        let carrying = deck
+            .connectivity
+            .conductors
+            .iter()
+            .chain(&deck.connectivity.via_cut);
+
+        for &layer in carrying {
+            let name = strings.resolve(deck.layers.name(layer));
+            let ohms = deck
+                .stack
+                .sheet_res_ohm_sq
+                .get(layer.idx())
+                .copied()
+                .unwrap_or(f64::NAN);
+
+            assert!(
+                ohms > 0.0 && ohms.is_finite(),
+                "{deck_name}: {name} carries current and its pex stack gives it \
+                 {ohms} ohms per square. erc::power refuses the entire stage on \
+                 this, so the deck runs no IR-drop, no electromigration and no \
+                 point-to-point resistance at all"
+            );
+        }
+
+        assert!(
+            !deck.connectivity.conductors.is_empty(),
+            "{deck_name} declares no conductor, so every polygon extracts as its \
+             own net and LVS reports a clean match for a chip that is not \
+             connected"
+        );
+    }
+}
+
+/// Oracle: law — the stack is indexed by `LayerId`, so it is as long as the
+/// layer table or it is empty.
+///
+/// `pex::analytical` reads `stack.sheet_res_ohm_sq[layer.idx()]` directly. A
+/// column shorter than the layer table does not fail: the tail layers read a
+/// neighbour's row or fall off the end into a zero, and the parasitics come back
+/// plausible and wrong. `build_stack` sizes every column to `layers.len()` once
+/// the section exists, which is exactly what this pins.
+#[test]
+fn a_pex_stack_that_exists_has_one_row_per_declared_layer() {
+    for path in deck_files() {
+        let (deck, _strings) = load(&path);
+        let deck_name = name_of(&path);
+        let rows = deck.stack.sheet_res_ohm_sq.len();
+
+        if rows == 0 {
+            assert!(
+                deck.connectivity.conductors.is_empty(),
+                "{deck_name} declares conductors and no pex section at all; every \
+                 parasitic it extracts would be zero"
+            );
+            continue;
+        }
+
+        for (column, len) in [
+            ("thickness_nm", deck.stack.thickness_nm.len()),
+            ("height_nm", deck.stack.height_nm.len()),
+            ("sheet_res_ohm_sq", rows),
+            ("area_cap_af_um2", deck.stack.area_cap_af_um2.len()),
+            ("fringe_cap_af_um", deck.stack.fringe_cap_af_um.len()),
+            ("dielectric_k", deck.stack.dielectric_k.len()),
+        ] {
+            assert_eq!(
+                len,
+                deck.layers.len(),
+                "{deck_name}: the pex column {column} holds {len} rows for {} \
+                 declared layers, and it is indexed by LayerId — the layers past \
+                 the end read another layer's process parameters",
+                deck.layers.len()
+            );
+        }
+    }
+}
+
+/// Oracle: construct-from-answer. Every via row joins two layers the deck
+/// declares as conductors.
+///
+/// A via whose `connects` names a layer that is not a conductor joins two things
+/// `topology` never unions, so the net stops at that via. The netlist that comes
+/// out is fragmented, LVS reports the fragments as opens, and the geometry was
+/// correct all along.
+#[test]
+fn every_via_joins_two_declared_conductors() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+        let deck_name = name_of(&path);
+
+        let is_conductor =
+            |layer: LayerId| deck.connectivity.conductors.contains(&layer);
+
+        for (&cut, &(lower, upper)) in deck
+            .connectivity
+            .via_cut
+            .iter()
+            .zip(&deck.connectivity.via_connects)
+        {
+            let cut_name = strings.resolve(deck.layers.name(cut));
+            for joined in [lower, upper] {
+                let name = strings.resolve(deck.layers.name(joined));
+                assert!(
+                    is_conductor(joined),
+                    "{deck_name}: via {cut_name} joins {name}, which the deck does \
+                     not list as a conductor; the net stops at this via and LVS \
+                     reads the two halves as an open"
+                );
+            }
+        }
+    }
+}

@@ -1,0 +1,5319 @@
+{
+  "$schema_version": 1,
+  "purpose": "Physics-derived expectations for the fixture corpus. Replaces the claims in `manifest.json`, which is kept untouched as the historical record. Every number here was derived from the geometry and the frozen doc comments, then compared with the manifest; the comparison result is in `corroboration`, never folded into the value.",
+  "gds_file": "_source/conformance.gds",
+  "deck": "params.json",
+  "grid_dbu_per_um": 1000,
+  "coordinate_unit": "dbu (1 dbu = 1 nm on this grid); all `at` points are [x, y] in dbu",
+  "vocabulary": {
+    "provenance": {
+      "derived_from_geometry": "The expected value was computed from the cell's shapes plus the rule's frozen reporting convention, independently of the manifest.",
+      "underivable": "Nothing in the corpus determines the answer. The case is kept and marked; the harness asserts only the fields listed in `assert`."
+    },
+    "corroboration": {
+      "manifest_agrees": "The old claim matches the derivation. Strongest evidence in the file: two independent routes to the same number.",
+      "manifest_count_only": "The old claim carries a count but no measured value, so only the count could be compared. The measurement here is new.",
+      "manifest_partial": "Part of the old claim is corroborated and part is not derivable.",
+      "manifest_disagrees": "The two differ. `dispute` names which side is wrong.",
+      "manifest_uncheckable": "The old claim states a number the corpus cannot determine either way. Neither corroborated nor refuted."
+    },
+    "dispute": {
+      "manifest_wrong": "The old implementation's answer is wrong; the derivation stands.",
+      "code_wrong": "The manifest states the physics and the frozen implementation cannot reach it. The expectation here is the physics. Do not weaken it.",
+      "convention": "Both are self-consistent; they use different reporting conventions. The frozen doc comment wins.",
+      "fixture_incomplete": "The cell does not draw what its name claims (most often a missing `licon`), so the intended measurement is unreachable from this geometry.",
+      "deck_gap": "The rule cannot be configured to see what the cell draws.",
+      "signature_defect": "A frozen signature makes the intended condition unsatisfiable.",
+      "fixture_out_of_domain": "The geometry is outside what this tool represents exactly, and the tool fails closed.",
+      "no_deck_coefficient": "The deck has no column for the coefficient the value needs.",
+      "no_intent_fixture": "The rule is intent-gated and the corpus supplies no design-intent file.",
+      "not_a_rule": "The manifest states the claim as a rule violation, but no such rule kind exists."
+    },
+    "strength": {
+      "strong": "The rule ran, its jurisdiction was non-empty, and the measurement approaches the limit. The case discriminates.",
+      "weak": "The rule ran with an empty jurisdiction for a correct reason, or the answer is right for a reason unrelated to the rule. Non-vacuity cannot be asserted on `examined`.",
+      "vacuous": "The rule ran but never approached the limit. Passing proves only that nothing crashed.",
+      "blocked": "The derivation is sound but the corpus or the frozen interface prevents the rule from reaching it.",
+      "refused": "The rule fails closed on this input. Assert `Outcome::Refused`, never a clean `Ran`.",
+      "skipped": "The rule recorded `Skipped`. A clean count here is a false clean.",
+      "underivable": "See `provenance`."
+    },
+    "examined": "The exact population size derived for this case. `examined_min` is what the harness may assert as a floor: it is 0 wherever the derived population is legitimately empty, so a `> 0` assertion is never fabricated.",
+    "assert": "The only claims the harness is entitled to check for this case. A field absent from this list was not derivable and must not be asserted."
+  },
+  "examined_semantics": {
+    "note": "Per rule family, from the frozen doc comments. `ingest::layout` drops the GDSII repeated closing point, so a rectangle stores 4 vertices, not 5; every edge and vertex count assumes that.",
+    "min_width/max_width/notch": "validated polygons",
+    "min_edge_length": "edges",
+    "min_spacing/min_spacing_diff/prl_spacing/corner_to_corner": "candidate pairs after the exact `Bbox::within` prune, which is inclusive - an at-limit pair still counts",
+    "min_enclosure/asymmetric_enclosure": "inner-layer store rows",
+    "min_extension": "overlapping pairs",
+    "min_area/cheesing": "merged figures",
+    "off_grid": "vertices, design-wide - `check_off_grid` iterates the whole store with no layer column",
+    "angle": "edges, design-wide, and with no validation - it runs on geometry `min_width` refuses"
+  },
+  "known_defects": {
+    "bbox_only_enclosure": {
+      "where": "crates/drc/src/rules/overlay.rs :: margins, pair_layers",
+      "what": "Enclosure margins are computed on bounding boxes, so a concave host encloses a shape sitting in its notch. Fail-open. Needs `ValidatedLayer::provenance`.",
+      "cases": [
+        "DRC_ENC_CONC_FAIL"
+      ]
+    },
+    "notch_no_outer_merge": {
+      "where": "crates/drc/src/rules/width.rs :: check_facing; crates/core/src/view.rs :: validate_layer_into",
+      "what": "`validate_layer_into` binds holes only and never merges touching outers, so a notch in a union of fractured rectangles is invisible to `notch`, while `min_spacing` exempts the same gap as intra-figure. A real 80 nm defect passes both. Notch and spacing must partition the same merged geometry.",
+      "cases": [
+        "DRC_NVS_MERGE_NOTCH",
+        "DRC_STRICT_MERGE_N",
+        "DRC_STRICT_MERGE_SP"
+      ]
+    },
+    "keyhole_rejected": {
+      "where": "crates/core/src/view.rs, crates/core/src/ops.rs :: self_intersects",
+      "what": "A GDSII polygon-with-hole drawn as a zero-width slit puts the slit's two edges on the same segment at non-adjacent ring indices; `segments_intersect` is endpoint- and collinear-inclusive, so the ring reads as self-intersecting. This is the standard foundry/KLayout encoding. Fails closed, so not a safety hole - but `min_enclosed_area` and `cheesing` have no runnable positive fixture in this corpus.",
+      "cases": [
+        "DRC_MEA_PASS",
+        "DRC_MEA_FAIL",
+        "DRC_CH_PASS",
+        "DRC_VALID_KEYHOLE"
+      ]
+    }
+  },
+  "blocking_findings": {
+    "F1": {
+      "title": "No fixture cell draws a `licon`.",
+      "what": "`topology::net::via_edges_append` joins two conductors only through a drawn cut, so li never contacts diff or poly. The corpus was drawn for the old tree's cut-less mode. Every ERC and LVS case whose premise is 'a strap ties X to Y' extracts two separate nets. Fix is a data change (add the rects) or a signature question (a cut-less flag).",
+      "cases": [
+        "ERC_FLOAT_GATE_PASS",
+        "ERC_SOFT_CONN",
+        "ERC_MULTI_DRIVER",
+        "ERC_TIE_HL",
+        "ERC_ANTENNA_ELEC_FAIL",
+        "ERC_P2P_FAIL",
+        "DRC_ANT_FAIL",
+        "DRC_CAR_FAIL",
+        "all 16 LVS cases"
+      ]
+    },
+    "F2": {
+      "title": "`nwell` is not in `connectivity.conductors`, but the pfet recogniser names it as a terminal.",
+      "what": "A non-conductor polygon gets `NetId::NONE` and `recognise_into` skips any marker with a NONE slot, so no pmos is recognised anywhere in the corpus. LVS_INV extracts as one nfet, not an inverter. Adding nwell to `conductors` alone does not fix it: every manifest reference declares the pmos with d/g/s only, so a 4-terminal layout pmos then reports TerminalMismatch(Bulk). The corpus implies a 3-terminal pmos recogniser."
+    },
+    "F3": {
+      "title": "Source and drain collapse onto one net.",
+      "what": "`terminals: [poly, diff, diff]` puts both slots on one layer and `recognise_into` binds per terminal LAYER keeping the lowest PolyId under the marker. Every extracted MOS has Source == Drain. Correct extraction needs the diff split at the gate span, which needs a derived layer and a channel direction `DeviceRecognition` cannot express."
+    },
+    "F4": {
+      "title": "`refine::role_code` gives Source => 1, Drain => 2.",
+      "what": "LVS_CLEAN_MATCH and LVS_SD_PERMUTE are the same cell against references that are exact S/D swaps, and both expect Match. Only S/D-interchangeable comparison satisfies both, and a MOS channel is symmetric. This is the one place the corpus proves a frozen signature wrong rather than merely insufficient."
+    },
+    "F5": {
+      "title": "No series/parallel netlist reduction exists.",
+      "what": "Nothing in `topology` or `lvs` reduces, and neither has a signature for it. LVS_SERIES_MERGE and LVS_PARALLEL_MERGE state that 2 layout devices must match 1 reference device. LVS_FINGERS is LVS_SERIES minus the li gate strap - same diff, same two gates, same contacts - so the pair brackets the merge condition deliberately, and has no code to test."
+    },
+    "F6": {
+      "title": "Device flavour has no representation.",
+      "what": "Layers 12 (lvtn) and 13 (hvtp) are drawn in LVS_LVT / LVS_HVT and are absent from `params.json` entirely. `DeviceRecognition` carries one marker layer per row, so 'nsdm AND hvtp' is unspellable, and two rows would produce two devices from one transistor. `Graph` has no flavour column."
+    },
+    "F7": {
+      "title": "The marker is the implant, one polygon per diffusion region, not per transistor.",
+      "what": "LVS_FINGERS and LVS_SERIES each draw two gates under a single nsdm rectangle, so 'one marker polygon is exactly one device' is arity-wrong on 2 of the 9 LVS cells."
+    },
+    "F8": {
+      "title": "`LVS_PARAM_MISMATCH` is a path to a false `Match`.",
+      "what": "`topology` emits only DeviceParam::Area, `graph::from_layout_into` projects no layout parameter, and `compare_params` passes over a name only one side declares - so zero parameters are compared and the result is Match. The one parameter that does exist measures the implant marker, not the channel."
+    },
+    "F9": {
+      "title": "No design-intent file exists in the corpus.",
+      "what": "`IntentMap::declared` is false, so the six intent-gated ERC rules record `Skipped(NoDesignIntent)`. ERC_HV_CROSS and ERC_EM_FAIL are underivable until an intent fixture is added.",
+      "cases": [
+        "ERC_HV_CROSS",
+        "ERC_HV_PASS",
+        "ERC_EM_FAIL",
+        "ERC_EM_PASS"
+      ]
+    },
+    "F10": {
+      "title": "A single-polygon net emits zero resistance elements.",
+      "what": "`analytical::extract_net_into` guards the series link with `node.0 > base`, so the first node of a net never gets a resistor. Every pex resistance case is a one-polygon net, so `extract_into` produces 0 resistance elements for all of them. The closed forms are exact and recoverable, but the testable seam is `segment_resistance(sheet, long, short)` directly, not the network."
+    },
+    "F11": {
+      "title": "`analytical::extract_into` emits no coupling at all, and cut layers get no node.",
+      "what": "Coupling exists only through `quasistatic` -> `CapMatrix` off-diagonals. `via1` is a via, not a conductor, so PEX_VIA1 and PEX_VIA2 produce an empty `ParasiticNetwork` - the pex equivalent of the 45 vacuous DRC cases."
+    },
+    "F12": {
+      "title": "`ProcessStack` has no lateral coupling column.",
+      "what": "`StackJson` has no `coupling_cap_af_um`, so no absolute coupling value is derivable from the deck. The manifest's coupling numbers all imply k = 20 aF/um. What is derivable is the parallel-plate lower bound and the exact 1/S and rotation-invariance laws."
+    },
+    "F13": {
+      "title": "The manifest's `kind` field has no counterpart in the frozen interface.",
+      "what": "`ParasiticNetwork` offers `net_capacitance(net)` - ground and coupling summed, no split - and nothing for resistance. A test asserting 'the area_cap of this cell' has to fold `Parasitic::GroundCap` rows itself."
+    }
+  },
+  "counts": {
+    "drc": {
+      "cases": 94,
+      "by_corroboration": {
+        "manifest_agrees": 66,
+        "manifest_count_only": 13,
+        "manifest_disagrees": 15
+      },
+      "by_strength": {
+        "blocked": 2,
+        "refused": 11,
+        "strong": 72,
+        "vacuous": 5,
+        "weak": 4
+      },
+      "by_dispute": {
+        "null": 74,
+        "code_wrong": 9,
+        "convention": 2,
+        "fixture_incomplete": 2,
+        "fixture_out_of_domain": 2,
+        "manifest_wrong": 3,
+        "not_a_rule": 2
+      },
+      "underivable": 0
+    },
+    "erc": {
+      "cases": 23,
+      "by_corroboration": {
+        "manifest_agrees": 12,
+        "manifest_count_only": 2,
+        "manifest_disagrees": 9
+      },
+      "by_strength": {
+        "blocked": 6,
+        "skipped": 2,
+        "strong": 6,
+        "underivable": 2,
+        "vacuous": 6,
+        "weak": 1
+      },
+      "by_dispute": {
+        "null": 12,
+        "deck_gap": 1,
+        "fixture_incomplete": 4,
+        "manifest_wrong": 1,
+        "no_intent_fixture": 4,
+        "signature_defect": 1
+      },
+      "underivable": 2
+    },
+    "lvs": {
+      "cases": 16,
+      "by_corroboration": {
+        "manifest_agrees": 16
+      },
+      "by_strength": {
+        "blocked": 5,
+        "strong": 10,
+        "weak": 1
+      },
+      "by_dispute": {
+        "null": 16
+      },
+      "underivable": 0
+    },
+    "pex": {
+      "cases": 27,
+      "by_corroboration": {
+        "manifest_agrees": 20,
+        "manifest_disagrees": 3,
+        "manifest_partial": 1,
+        "manifest_uncheckable": 3
+      },
+      "by_strength": {
+        "strong": 21,
+        "underivable": 3,
+        "weak": 3
+      },
+      "by_dispute": {
+        "null": 20,
+        "manifest_wrong": 3,
+        "no_deck_coefficient": 4
+      },
+      "underivable": 3
+    },
+    "total": {
+      "cases": 160
+    }
+  },
+  "drc": {
+    "cases": [
+      {
+        "id": "DRC_MW_PASS",
+        "cell": "DRC_MW_PASS",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Narrowest facing pair is 100 == limit; strict `<` passes, so the limit is exercised."
+      },
+      {
+        "id": "DRC_MW_FAIL",
+        "cell": "DRC_MW_FAIL",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              40,
+              500
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Vertical facing pair x=0/x=80 over y 0..1000; report point is the strip midpoint."
+      },
+      {
+        "id": "DRC_MW_LSHAPE",
+        "cell": "DRC_MW_L",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              150,
+              40
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Horizontal pair y=0/y=80 over x 100..200; the 80-tall arm beats the 100-wide arm."
+      },
+      {
+        "id": "DRC_MS_PASS",
+        "cell": "DRC_MS_PASS",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Gap is exactly 100 == limit. `Bbox::within` is inclusive, so the pair IS generated - that is what makes this non-vacuous."
+      },
+      {
+        "id": "DRC_MS_FAIL",
+        "cell": "DRC_MS_FAIL",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              240,
+              100
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Report point is `gap_midpoint` of the two bboxes."
+      },
+      {
+        "id": "DRC_MSD_PASS",
+        "cell": "DRC_MSD_PASS",
+        "domain": "drc",
+        "rule": "min_spacing_diff",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "cross_layer_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "met1/met2 gap 100 == limit."
+      },
+      {
+        "id": "DRC_MSD_FAIL",
+        "cell": "DRC_MSD_FAIL",
+        "domain": "drc",
+        "rule": "min_spacing_diff",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "cross_layer_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              100,
+              240
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        }
+      },
+      {
+        "id": "DRC_ENC_PASS",
+        "cell": "DRC_ENC_PASS",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Margins 50/50/50/50 == limit."
+      },
+      {
+        "id": "DRC_ENC_FAIL",
+        "cell": "DRC_ENC_FAIL",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 30
+            },
+            "at": [
+              15,
+              150
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            30
+          ]
+        },
+        "note": "`worst_sided` ties four ways and resolves Left; report point is the Left strip midpoint."
+      },
+      {
+        "id": "DRC_ENC_UNHOSTED",
+        "cell": "DRC_ENC_NONE",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 0
+            },
+            "at": [
+              100,
+              100
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0
+          ]
+        },
+        "note": "Unhosted inner shape: measured 0, reported at the centre of the met2."
+      },
+      {
+        "id": "DRC_ENC_CONC_PASS",
+        "cell": "DRC_ENC_CONC_P",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Real (non-bbox) margins are 60/360/60/360, so it passes on physics and not only on the bbox shortcut."
+      },
+      {
+        "id": "DRC_ENC_CONC_FAIL",
+        "cell": "DRC_ENC_CONC_F",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 0
+            },
+            "at": [
+              290,
+              290
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": "code_wrong",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0
+          ]
+        },
+        "known_defect": "bbox_only_enclosure",
+        "note": "The met2 square (250,250)-(330,330) sits in the L's notch, entirely outside met1: enclosure is 0. The manifest is physically right; the frozen path yields 0 because `overlay::margins` is bbox-only and met1's bbox contains the square. Do not weaken this to 0."
+      },
+      {
+        "id": "DRC_EXT_PASS",
+        "cell": "DRC_EXT_PASS",
+        "domain": "drc",
+        "rule": "min_extension",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "overlapping_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Protrusions bottom=50, top=50 == limit."
+      },
+      {
+        "id": "DRC_EXT_FAIL",
+        "cell": "DRC_EXT_FAIL",
+        "domain": "drc",
+        "rule": "min_extension",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "overlapping_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 20
+            },
+            "at": [
+              225,
+              -10
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "convention",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 2,
+          "measured": [
+            20,
+            20
+          ]
+        },
+        "note": "Two deficient endcaps exist physically (bottom y -20..0 and top y 200..220, both 20), but `check_min_extension`'s frozen doc says at most one violation per overlapping pair, measured at the smallest protrusion. One poly x one diff = one pair. The manifest's 2 is the old per-side convention. Second physical site: (225,210)."
+      },
+      {
+        "id": "DRC_EXT_H_PASS",
+        "cell": "DRC_EXT_H_PASS",
+        "domain": "drc",
+        "rule": "min_extension",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "overlapping_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Protrusions left=250, right=250."
+      },
+      {
+        "id": "DRC_EXT_H_FAIL",
+        "cell": "DRC_EXT_H_FAIL",
+        "domain": "drc",
+        "rule": "min_extension",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "overlapping_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 20
+            },
+            "at": [
+              190,
+              225
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "convention",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 2,
+          "measured": [
+            20,
+            20
+          ]
+        },
+        "note": "Per-pair, not per-side, same as DRC_EXT_FAIL. Side::Left wins the tie. Second physical site: (310,225)."
+      },
+      {
+        "id": "DRC_MA_PASS",
+        "cell": "DRC_MA_PASS",
+        "domain": "drc",
+        "rule": "min_area",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "merged_figures",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "200x200 = 40000 == limit."
+      },
+      {
+        "id": "DRC_MA_FAIL",
+        "cell": "DRC_MA_FAIL",
+        "domain": "drc",
+        "rule": "min_area",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "merged_figures",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Area",
+              "value": 20000
+            },
+            "at": [
+              50,
+              100
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            20000
+          ]
+        },
+        "note": "Report point is the centre of the figure's single rectangle."
+      },
+      {
+        "id": "DRC_MA_EXACT",
+        "cell": "DRC_MA_EXACT",
+        "domain": "drc",
+        "rule": "min_area",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "merged_figures",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "400x100 = 40000 exactly at the limit; strict `<` passes."
+      },
+      {
+        "id": "DRC_XW_PASS",
+        "cell": "DRC_XW_PASS",
+        "domain": "drc",
+        "rule": "max_width",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Narrowest width 2000 <= 5000."
+      },
+      {
+        "id": "DRC_XW_FAIL",
+        "cell": "DRC_XW_FAIL",
+        "domain": "drc",
+        "rule": "max_width",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 6000
+            },
+            "at": [
+              3000,
+              3000
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            6000
+          ]
+        }
+      },
+      {
+        "id": "DRC_N_PASS",
+        "cell": "DRC_N_PASS",
+        "domain": "drc",
+        "rule": "notch",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Notch = 200-100 = 100 == limit."
+      },
+      {
+        "id": "DRC_N_FAIL",
+        "cell": "DRC_N_FAIL",
+        "domain": "drc",
+        "rule": "notch",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              150,
+              200
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Notch = 190-110 = 80."
+      },
+      {
+        "id": "DRC_NVS_MERGE_NOTCH",
+        "cell": "DRC_NVS_MERGE",
+        "domain": "drc",
+        "rule": "notch",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "validated_polygons",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              240,
+              350
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": "code_wrong",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "known_defect": "notch_no_outer_merge",
+        "note": "Three met1 rects that touch are one conductor with an 80 nm notch - the physics, and the case's name. `check_notch` -> `check_facing` runs `validate_layer_into` per store row and never merges touching outers, so each rect is convex and the frozen path yields 0. `check_min_spacing` has a merged-figure step (`label_figures`); the width family has none. Notch and spacing must partition the same merged geometry."
+      },
+      {
+        "id": "DRC_NVS_MERGE_SPACE",
+        "cell": "DRC_NVS_MERGE",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "candidate_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "All three rects merge into one figure via the two zero-distance pairs, so the 80 nm (P0,P1) pair is dropped by `separate_figures` - clean BECAUSE it merged, not because nothing ran."
+      },
+      {
+        "id": "DRC_NVS_SEP_SPACE",
+        "cell": "DRC_NVS_SEP",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              240,
+              250
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        }
+      },
+      {
+        "id": "DRC_NVS_SEP_NOTCH",
+        "cell": "DRC_NVS_SEP",
+        "domain": "drc",
+        "rule": "notch",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Two disjoint convex rects; no facing pair across a void inside either."
+      },
+      {
+        "id": "DRC_EL_PASS",
+        "cell": "DRC_EL_PASS",
+        "domain": "drc",
+        "rule": "min_edge_length",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "edges",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Edges 100/500/100/500; 100 == limit."
+      },
+      {
+        "id": "DRC_EL_FAIL",
+        "cell": "DRC_EL_FAIL",
+        "domain": "drc",
+        "rule": "min_edge_length",
+        "expect_violations": 2,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "edges",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              40,
+              0
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              40,
+              500
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 2,
+          "measured": [
+            80,
+            80
+          ]
+        },
+        "note": "Edge midpoints, in ring order."
+      },
+      {
+        "id": "DRC_OG_PASS",
+        "cell": "DRC_OG_PASS",
+        "domain": "drc",
+        "rule": "off_grid",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "vertices",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "All coordinates congruent to 0 mod 5."
+      },
+      {
+        "id": "DRC_OG_FAIL",
+        "cell": "DRC_OG_FAIL",
+        "domain": "drc",
+        "rule": "off_grid",
+        "expect_violations": 2,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "vertices",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 2
+            },
+            "at": [
+              103,
+              0
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 2
+            },
+            "at": [
+              103,
+              200
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 2,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Measured is the Chebyshev lattice offset: 103 mod 5 = 3, min(3,2) = 2. The manifest states no measurement. The deck brief's '103 and 207' is wrong for this cell: the offending x is 103 at two vertices."
+      },
+      {
+        "id": "DRC_ANG_PASS",
+        "cell": "DRC_ANG_PASS",
+        "domain": "drc",
+        "rule": "angle",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "edges",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Three interior edges plus the wrap; all four axis-aligned."
+      },
+      {
+        "id": "DRC_ANG_FAIL",
+        "cell": "DRC_ANG_FAIL",
+        "domain": "drc",
+        "rule": "angle",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "edges",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              200,
+              0
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Reported at the vertex the offending edge leaves."
+      },
+      {
+        "id": "DRC_MD_PASS",
+        "cell": "DRC_MD_PASS",
+        "domain": "drc",
+        "rule": "min_density",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "windows",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "One window (0,0)-(2000,2000), fraction 0.6 vs limit 0.3."
+      },
+      {
+        "id": "DRC_MD_FAIL",
+        "cell": "DRC_MD_FAIL",
+        "domain": "drc",
+        "rule": "min_density",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "windows",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Ratio",
+              "value": 0.0625
+            },
+            "at": [
+              1000,
+              1000
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0.0625
+          ]
+        }
+      },
+      {
+        "id": "DRC_MD_MULTI",
+        "cell": "DRC_MD_MULTI",
+        "domain": "drc",
+        "rule": "min_density",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "windows",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Ratio",
+              "value": 0.25
+            },
+            "at": [
+              3000,
+              1000
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0.25
+          ]
+        },
+        "note": "The offending window is (2000,0)-(4000,2000)."
+      },
+      {
+        "id": "DRC_XD_PASS",
+        "cell": "DRC_XD_PASS",
+        "domain": "drc",
+        "rule": "max_density",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "windows",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Fraction 0.25 vs limit 0.8."
+      },
+      {
+        "id": "DRC_XD_FAIL",
+        "cell": "DRC_XD_FAIL",
+        "domain": "drc",
+        "rule": "max_density",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "windows",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Ratio",
+              "value": 0.81
+            },
+            "at": [
+              1000,
+              1000
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0.81
+          ]
+        }
+      },
+      {
+        "id": "DRC_DGRAD_MAX",
+        "cell": "DRC_DGRAD",
+        "domain": "drc",
+        "rule": "max_density",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "windows",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Two windows, 0.64 and 0.0025, both under 0.8."
+      },
+      {
+        "id": "DRC_DGRAD_MIN",
+        "cell": "DRC_DGRAD",
+        "domain": "drc",
+        "rule": "min_density",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "windows",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Ratio",
+              "value": 0.0025
+            },
+            "at": [
+              3200,
+              1200
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0.0025
+          ]
+        }
+      },
+      {
+        "id": "DRC_OV_PASS",
+        "cell": "DRC_OV_PASS",
+        "domain": "drc",
+        "rule": "overlap",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "overlap_figures",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Smaller side 50 == limit; strict `<` passes."
+      },
+      {
+        "id": "DRC_OV_FAIL",
+        "cell": "DRC_OV_FAIL",
+        "domain": "drc",
+        "rule": "overlap",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "overlap_figures",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 30
+            },
+            "at": [
+              485,
+              250
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            30
+          ]
+        }
+      },
+      {
+        "id": "DRC_C2C_PASS",
+        "cell": "DRC_C2C_PASS",
+        "domain": "drc",
+        "rule": "corner_to_corner",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "candidate_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "bbox gap 200 > prune distance 150, so the pair is never generated. Genuinely vacuous: move the geometry to just inside the prune distance to make it real."
+      },
+      {
+        "id": "DRC_C2C_FAIL",
+        "cell": "DRC_C2C_FAIL",
+        "domain": "drc",
+        "rule": "corner_to_corner",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 141
+            },
+            "at": [
+              150,
+              150
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            141
+          ]
+        },
+        "note": "isqrt(20000) = 141."
+      },
+      {
+        "id": "DRC_FUZZ_ZERO_W",
+        "cell": "DRC_FUZZ_ZERO",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "refused",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0
+          ]
+        },
+        "note": "Ring is (0,0),(0,0),(0,500),(0,500) after the reader drops the repeated closing point. `view.rs` rejects the repeated vertex -> `ValidityError::Degenerate` -> the whole met1 layer records `Outcome::Refused, 0`. The manifest's 1 @ measured 0 is unreachable: nothing in the new tree can produce a width of 0, and `narrowest_width`'s own assert says a validated polygon always has a facing pair. A zero-area ring is a non-answer, not a 0 nm wire."
+      },
+      {
+        "id": "DRC_FUZZ_COIN_SP",
+        "cell": "DRC_FUZZ_COIN",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "One candidate pair at distance 0, so the two rects are one merged figure."
+      },
+      {
+        "id": "DRC_FUZZ_COIN_N",
+        "cell": "DRC_FUZZ_COIN",
+        "domain": "drc",
+        "rule": "notch",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Both rects convex, so `narrowest_notch` is None for each."
+      },
+      {
+        "id": "DRC_FUZZ_OFFG",
+        "cell": "DRC_FUZZ_OFFG",
+        "domain": "drc",
+        "rule": "off_grid",
+        "expect_violations": 3,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "vertices",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 2
+            },
+            "at": [
+              103,
+              0
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 2
+            },
+            "at": [
+              103,
+              207
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 2
+            },
+            "at": [
+              0,
+              207
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 3,
+          "measured": [
+            null
+          ]
+        }
+      },
+      {
+        "id": "DRC_FUZZ_SELF_ANG",
+        "cell": "DRC_FUZZ_SELF",
+        "domain": "drc",
+        "rule": "angle",
+        "expect_violations": 2,
+        "expect_outcome": "Ran",
+        "examined": 4,
+        "examined_min": 4,
+        "examined_population": "edges",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              0,
+              0
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              200,
+              0
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 2,
+          "measured": [
+            null
+          ]
+        },
+        "note": "`check_angle` iterates the whole store with no layer column and no validation, so it runs on the bowtie that `min_width` would refuse."
+      },
+      {
+        "id": "DRC_FUZZ_ACUTE_ANG",
+        "cell": "DRC_FUZZ_ACUTE",
+        "domain": "drc",
+        "rule": "angle",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "edges",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              5,
+              0
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        }
+      },
+      {
+        "id": "DRC_STRICT_MERGE_SP",
+        "cell": "DRC_NVS_MERGE",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "candidate_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Duplicate of DRC_NVS_MERGE_SPACE: the old `strict` flag has no spelling in the frozen `MinSpacingTable` (columns are rule, layer, limit) and `check_min_spacing` unconditionally exempts merged figures. Bar C joins legs A and B, so the 80 nm gap is a notch inside one figure. The manifest gives this cell+rule 0 at DRC_NVS_MERGE_SPACE and 1 here; it cannot be both."
+      },
+      {
+        "id": "DRC_STRICT_MERGE_N",
+        "cell": "DRC_NVS_MERGE",
+        "domain": "drc",
+        "rule": "notch",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "validated_polygons",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              240,
+              350
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "code_wrong",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "known_defect": "notch_no_outer_merge",
+        "note": "Duplicate of DRC_NVS_MERGE_NOTCH, and the manifest gives this cell+rule 1 there and 0 here. Physics says 1. Blocked by the same missing outer-merge. Together with DRC_STRICT_MERGE_SP this is a real 80 nm defect that neither rule reports on fractured input."
+      },
+      {
+        "id": "DRC_STRICT_SEP_SP",
+        "cell": "DRC_NVS_SEP",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              240,
+              250
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Duplicate of DRC_NVS_SEP_SPACE; both manifest rows agree."
+      },
+      {
+        "id": "DRC_ANT_PASS",
+        "cell": "DRC_ANT_PASS",
+        "domain": "drc",
+        "rule": "antenna",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "The cell draws poly, li, mcon, met1 but no licon, so the gate net carries zero collecting area and the ratio is 0, not the intended 4. The rule runs but never approaches the limit."
+      },
+      {
+        "id": "DRC_ANT_FAIL",
+        "cell": "DRC_ANT_FAIL",
+        "domain": "drc",
+        "rule": "antenna",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_incomplete",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Same missing licon: nets are {poly}, {li,met1}, {diff}, {li}, {li}, so the gate net's collecting area is 0 and the ratio is 0. Separately, `net_areas_into` sums the whole gate-layer polygon, so the denominator is poly 50x300 = 15000 nm^2, not poly AND diff 10000 nm^2 - with a licon added the ratio would be 25e6/15000 = 1666.67, not the deck brief's 2500."
+      },
+      {
+        "id": "DRC_EOL_PASS",
+        "cell": "DRC_EOL_PASS",
+        "domain": "drc",
+        "rule": "eol_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "eol_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Gap 200 > prune distance 150, pair never generated. Genuinely vacuous."
+      },
+      {
+        "id": "DRC_EOL_FAIL",
+        "cell": "DRC_EOL_FAIL",
+        "domain": "drc",
+        "rule": "eol_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "eol_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 100
+            },
+            "at": [
+              50,
+              550
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            100
+          ]
+        },
+        "note": "100 vs limit 150."
+      },
+      {
+        "id": "DRC_EOL_WIDE",
+        "cell": "DRC_EOL_WIDE",
+        "domain": "drc",
+        "rule": "eol_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "eol_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "One candidate pair is generated, but every edge is 500 >= `eol_width` 200 so nothing is an end of line and `examined` is 0. Meaningfully non-vacuous, but the evidence is the candidate count, which `RuleRun` does not carry."
+      },
+      {
+        "id": "DRC_WE_PASS",
+        "cell": "DRC_WE_PASS",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Worst margin 60 >= 50. Select the nwell.diff row explicitly: the met1.met2 row also runs on this cell with examined = 0."
+      },
+      {
+        "id": "DRC_WE_FAIL",
+        "cell": "DRC_WE_FAIL",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 30
+            },
+            "at": [
+              15,
+              130
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            30
+          ]
+        },
+        "note": "Side Left, first of a four-way tie. Select the nwell.diff row."
+      },
+      {
+        "id": "DRC_WE_NONE",
+        "cell": "DRC_WE_NONE",
+        "domain": "drc",
+        "rule": "min_enclosure",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 0
+            },
+            "at": [
+              400,
+              400
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            0
+          ]
+        },
+        "note": "Unhosted, so `shapes.1` is None and the point is `centre(inner)`. Select the nwell.diff row."
+      },
+      {
+        "id": "DRC_WDS_PASS",
+        "cell": "DRC_WDS_PASS",
+        "domain": "drc",
+        "rule": "wide_dependent_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "wide_participating_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "One candidate pair (gap 200 == limit, `within` inclusive) but neither shape reaches `width_threshold` 300, so no pair has a wide member and `examined` is 0. Correct behaviour, not a defect: the fixture was built so the rule's jurisdiction is empty."
+      },
+      {
+        "id": "DRC_WDS_FAIL",
+        "cell": "DRC_WDS_FAIL",
+        "domain": "drc",
+        "rule": "wide_dependent_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "wide_participating_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 150
+            },
+            "at": [
+              575,
+              100
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            150
+          ]
+        },
+        "note": "650-500 = 150; shapes (0,1)."
+      },
+      {
+        "id": "DRC_WDS_WIDE_OK",
+        "cell": "DRC_WDS_WIDE_OK",
+        "domain": "drc",
+        "rule": "wide_dependent_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "wide_participating_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Gap 200 == limit, not `<`."
+      },
+      {
+        "id": "DRC_PRL_PASS",
+        "cell": "DRC_PRL_PASS",
+        "domain": "drc",
+        "rule": "prl_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Run 700 >= 500 so the pair is judged; gap 200 == limit."
+      },
+      {
+        "id": "DRC_PRL_FAIL",
+        "cell": "DRC_PRL_FAIL",
+        "domain": "drc",
+        "rule": "prl_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 150
+            },
+            "at": [
+              275,
+              450
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            150
+          ]
+        }
+      },
+      {
+        "id": "DRC_AENC_PASS",
+        "cell": "DRC_AENC_PASS",
+        "domain": "drc",
+        "rule": "asymmetric_enclosure",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Margins L20 R180 B20 T180; min(max(20,180), max(20,180)) = 180 >= 100."
+      },
+      {
+        "id": "DRC_AENC_FAIL",
+        "cell": "DRC_AENC_FAIL",
+        "domain": "drc",
+        "rule": "asymmetric_enclosure",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "inner_shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 10
+            },
+            "at": [
+              5,
+              100
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Side Left; shapes (via1#0, met1#0). The manifest carries no measured value."
+      },
+      {
+        "id": "DRC_MEA_PASS",
+        "cell": "DRC_MEA_PASS",
+        "domain": "drc",
+        "rule": "min_enclosed_area",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "holes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": "code_wrong",
+        "strength": "refused",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "known_defect": "keyhole_rejected",
+        "note": "The cell is a keyhole ring; the zero-width slit puts two ring edges on the same segment at non-adjacent indices, so `ops::self_intersects` reports `SelfIntersecting(PolyId(0))`. The count coincides with the manifest's 0 but the meaning does not: this is a refusal, not a clean check. Physics: hole 300x200 = 60000 >= 40000, clean."
+      },
+      {
+        "id": "DRC_MEA_FAIL",
+        "cell": "DRC_MEA_FAIL",
+        "domain": "drc",
+        "rule": "min_enclosed_area",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "holes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "code_wrong",
+        "strength": "refused",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "known_defect": "keyhole_rejected",
+        "note": "Same keyhole rejection. The manifest states the physics and the tree cannot reach it: hole 100x100 = 10000 < 40000 would be 1 violation, Area(10000) at (150,150). Fails closed, so not a safety hole, but `min_enclosed_area` has no runnable positive fixture in this corpus."
+      },
+      {
+        "id": "DRC_CH_PASS",
+        "cell": "DRC_CH_PASS",
+        "domain": "drc",
+        "rule": "cheesing",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "merged_figures",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": "code_wrong",
+        "strength": "refused",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "known_defect": "keyhole_rejected",
+        "note": "Keyhole again. Physics: 3990000 nm^2 with a hole, clean. Assert `Refused`, not `Ran`."
+      },
+      {
+        "id": "DRC_CH_FAIL",
+        "cell": "DRC_CH_FAIL",
+        "domain": "drc",
+        "rule": "cheesing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "merged_figures",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Area",
+              "value": 4000000
+            },
+            "at": [
+              1000,
+              1000
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Limit Area(2250000)."
+      },
+      {
+        "id": "DRC_CH_SMALL",
+        "cell": "DRC_CH_SMALL",
+        "domain": "drc",
+        "rule": "cheesing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "merged_figures",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "1000000 <= 2250000."
+      },
+      {
+        "id": "DRC_RV_PASS",
+        "cell": "DRC_RV_PASS",
+        "domain": "drc",
+        "rule": "redundant_via",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "cuts",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Each cut has one neighbour at 100 <= 500, so count 2 >= 2."
+      },
+      {
+        "id": "DRC_RV_FAIL",
+        "cell": "DRC_RV_FAIL",
+        "domain": "drc",
+        "rule": "redundant_via",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "cuts",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 1
+            },
+            "at": [
+              50,
+              50
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Limit Count(2)."
+      },
+      {
+        "id": "DRC_VAS_PASS",
+        "cell": "DRC_VAS_PASS",
+        "domain": "drc",
+        "rule": "via_array_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "array_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Cluster of 2 against an array threshold of 3, so nothing is an array and `examined` is 0. Correct behaviour: the rule's jurisdiction is empty by construction."
+      },
+      {
+        "id": "DRC_VAS_FAIL",
+        "cell": "DRC_VAS_FAIL",
+        "domain": "drc",
+        "rule": "via_array_spacing",
+        "expect_violations": 3,
+        "expect_outcome": "Ran",
+        "examined": 5,
+        "examined_min": 5,
+        "examined_population": "array_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 50
+            },
+            "at": [
+              125,
+              50
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 50
+            },
+            "at": [
+              275,
+              50
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 50
+            },
+            "at": [
+              425,
+              50
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Four cuts, five candidate pairs, one cluster of 4 > 3. Three distinct adjacent pairs are each 50 < 200; the two 200-gap pairs are judged but not short. `check_via_array_spacing`'s doc: one violation per offending PAIR, not one per cluster. The old tree counted clusters."
+      },
+      {
+        "id": "DRC_MDT_PASS",
+        "cell": "DRC_MDT_PASS",
+        "domain": "drc",
+        "rule": "max_distance_to_tap",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "wells",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Worst corner 400,400 from the tap; ceil_sqrt(320000) = 566 <= 3000."
+      },
+      {
+        "id": "DRC_MDT_FAIL",
+        "cell": "DRC_MDT_FAIL",
+        "domain": "drc",
+        "rule": "max_distance_to_tap",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "wells",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 6930
+            },
+            "at": [
+              5000,
+              5000
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "ceil_sqrt(48020000) = 6930 because 6929^2 < d^2. The deck brief says 6929; `ceil_sqrt` rounds up. `isqrt` (toward zero) is for gaps, `ceil_sqrt` for reach - the two report differently on purpose."
+      },
+      {
+        "id": "DRC_MP_PASS",
+        "cell": "DRC_MP_PASS",
+        "domain": "drc",
+        "rule": "multi_patterning",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "shapes",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "One conflict edge (gap 80 < 100), so the graph is bipartite."
+      },
+      {
+        "id": "DRC_MP_FAIL",
+        "cell": "DRC_MP_FAIL",
+        "domain": "drc",
+        "rule": "multi_patterning",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 3,
+        "examined_min": 3,
+        "examined_population": "shapes",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 3
+            },
+            "at": [
+              100,
+              100
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            null
+          ]
+        },
+        "note": "Gaps 80/50/50 form a triangle, not 2-colourable. Limit Count(2). Reported at the lowest node of the lowest odd-cycle component, store row 0."
+      },
+      {
+        "id": "DRC_HIER",
+        "cell": "DRC_HIER",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 7,
+        "expect_outcome": "Ran",
+        "examined": 7,
+        "examined_min": 7,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              440,
+              200
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              19800,
+              440
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              40440,
+              -200
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              60440,
+              200
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              80440,
+              200
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              60440,
+              20200
+            ]
+          },
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              80440,
+              20200
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 7,
+          "measured": [
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80
+          ]
+        },
+        "note": "14 flattened rows, one instance placed by an SREF with strans=0x8000 at (40000,0). Seven 80 nm gaps against a 90 nm limit, one per listed point. `examined_min` is 7 because a pair cannot be reported without having been examined. This entry asserted Refused/0 under `known_defect: mirrored_sref_winding` while the flattener emitted a mirrored instance's rings in the drawn order, so `validate_layer_into` read them as holes; the flattener now reverses the vertex order when the composed transform's determinant is negative (`crates/ingest/src/layout.rs :: emit`), and what is asserted here is the derivation this note always carried."
+      },
+      {
+        "id": "DRC_HIER_NEST",
+        "cell": "DRC_HIER_NEST",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              -200,
+              -440
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Mirror composed with a rotation, two levels deep. One 80 nm gap against a 90 nm limit at (-200,-440). Same history as DRC_HIER: this asserted Refused/0 while both rows came out clockwise, and now asserts the physics the note stated."
+      },
+      {
+        "id": "DRC_PATH",
+        "cell": "DRC_PATH",
+        "domain": "drc",
+        "rule": "min_spacing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "candidate_pairs",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 80
+            },
+            "at": [
+              1000,
+              190
+            ]
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "Stroked outlines y[-150,150] and y[230,530]; 230-150 = 80."
+      },
+      {
+        "id": "DRC_PATH_BEND",
+        "cell": "DRC_PATH_BEND",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "The stroke is rectilinear and `narrowest_width` is 300 >= 100."
+      },
+      {
+        "id": "DRC_CAR_PASS",
+        "cell": "DRC_CAR_PASS",
+        "domain": "drc",
+        "rule": "antenna_car",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "No licon/mcon/via1 is drawn, so diff, poly, li, met1 and met2 are five separate nets and the poly net's collecting area is 0. The number is right for a reason unrelated to antenna."
+      },
+      {
+        "id": "DRC_CAR_FAIL",
+        "cell": "DRC_CAR_FAIL",
+        "domain": "drc",
+        "rule": "antenna_car",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_incomplete",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            450000
+          ]
+        },
+        "note": "Same disconnection: ratio 0/15000 = 0 <= 400. The manifest's 450000 is also 10^3 too large - the physical cumulative ratio is 450 (4.5 um^2 over 0.01 um^2) and the old tree reported a milli-ratio. Neither 450 nor 450000 is reachable without via cuts, and even then the gate denominator is the whole poly polygon (15000 nm^2), not poly AND diff."
+      },
+      {
+        "id": "DRC_CAR_DIODE",
+        "cell": "DRC_CAR_DIODE",
+        "domain": "drc",
+        "rule": "antenna_car",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Same as DRC_CAR_PASS. With `diode_credit` = 0 the row does run - `check_antenna_electrical` only refuses a diode row with a non-zero credit - so the diode changes nothing and the case does not exercise diode credit at all."
+      },
+      {
+        "id": "DRC_MW_DIAG_FAIL",
+        "cell": "DRC_MW_DIAG_FAIL",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_out_of_domain",
+        "strength": "refused",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": [
+            80
+          ]
+        },
+        "note": "`ValidityError::NotRectilinear(PolyId(0))`. The manifest states the physics (perpendicular offset 57*sqrt(2) = 80.61 < 100, isqrt -> 80) but this tree is rectilinear-only by design and fails closed. The fixture is out of domain."
+      },
+      {
+        "id": "DRC_MW_DIAG_PASS",
+        "cell": "DRC_MW_DIAG_PASS",
+        "domain": "drc",
+        "rule": "min_width",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": "fixture_out_of_domain",
+        "strength": "refused",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "Same refusal. Physics: 142*sqrt(2) = 200.8 >= 100, clean. Assert `Refused`, not `Ran`; the count agrees with the manifest by coincidence."
+      },
+      {
+        "id": "DRC_EOL_SIDE",
+        "cell": "DRC_EOL_SIDE",
+        "domain": "drc",
+        "rule": "eol_spacing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "eol_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "The only sub-200 edges are A's 100-long top and bottom, whose EOL zones project where nothing sits; every vertical edge is 500 >= 200. The 100 gap is ordinary spacing, not EOL. Only `Outcome::Ran` distinguishes this from a rule that never ran."
+      },
+      {
+        "id": "DRC_VALID_SELF",
+        "cell": "DRC_FUZZ_SELF",
+        "domain": "drc",
+        "rule": "layer_validity",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "expect_validity_error": {
+          "variant": "SelfIntersecting",
+          "poly": "PolyId(0)",
+          "layer": "met1"
+        },
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "not_a_rule",
+        "strength": "refused",
+        "assert": [
+          "validity_error"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": []
+        },
+        "note": "Bowtie. 0 DRC violations and every met1 rule row records `Refused`. Assert the `ValidityError` variant instead of a violation count."
+      },
+      {
+        "id": "DRC_VALID_ZERO",
+        "cell": "DRC_FUZZ_ZERO",
+        "domain": "drc",
+        "rule": "layer_validity",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "expect_validity_error": {
+          "variant": "Degenerate",
+          "poly": "PolyId(0)",
+          "layer": "met1"
+        },
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "not_a_rule",
+        "strength": "refused",
+        "assert": [
+          "validity_error"
+        ],
+        "manifest": {
+          "expect_violations": 1,
+          "measured": []
+        },
+        "note": "Duplicate consecutive vertices, zero-length edges. 0 DRC violations, `Refused`."
+      },
+      {
+        "id": "DRC_VALID_KEYHOLE",
+        "cell": "DRC_VALID_KEYHOLE",
+        "domain": "drc",
+        "rule": "layer_validity",
+        "expect_violations": 0,
+        "expect_outcome": "Refused",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "validated_polygons",
+        "violations": [],
+        "expect_validity_error": {
+          "variant": "SelfIntersecting",
+          "poly": "PolyId(0)",
+          "layer": "met1"
+        },
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "code_wrong",
+        "strength": "refused",
+        "assert": [
+          "validity_error"
+        ],
+        "manifest": {
+          "expect_violations": 0,
+          "measured": []
+        },
+        "note": "The fixture's whole point is that a keyhole IS valid, and the manifest's 0 says so. This tree rejects it: the slit's two edges are the same segment at non-adjacent ring indices and `segments_intersect` is endpoint- and collinear-inclusive. The standard foundry/KLayout encoding, refused. Fix belongs in `core::view`/`ops`.",
+        "known_defect": "keyhole_rejected"
+      }
+    ]
+  },
+  "erc": {
+    "cases": [
+      {
+        "id": "ERC_FLOAT_GATE",
+        "cell": "ERC_FG",
+        "domain": "erc",
+        "check": "floating_gate",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "nets",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              200,
+              -50
+            ],
+            "layer": "poly"
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at",
+          "layer"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "Net 3 = {poly PolyId 4}, role mask == GATE exactly. Limit Count(1)."
+      },
+      {
+        "id": "ERC_FLOAT_GATE_PASS",
+        "cell": "ERC_FG_OK",
+        "domain": "erc",
+        "check": "floating_gate",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "nets",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              200,
+              -50
+            ],
+            "layer": "poly"
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at",
+          "layer"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "`check_floating_gate`'s whole test is `role_mask == RoleMask::GATE`. The only difference from ERC_FG is an extra li rectangle over the poly; a conductor polygon contributes no terminal role, and with no licon the li does not even touch the poly net. The gate is floating in both cells, and the cell carries no TEXT record so there is no port either. The manifest's 0 is the old tree's retired 'external connection layers' heuristic, which the rule's doc names and discards. Consequence: ERC_FG and ERC_FG_OK now produce identical verdicts and the pair discriminates nothing."
+      },
+      {
+        "id": "ERC_FLOAT_WELL",
+        "cell": "ERC_FW",
+        "domain": "erc",
+        "check": "floating_well",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "wells",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              0,
+              0
+            ],
+            "layer": "nwell"
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at",
+          "layer"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "nwell PolyId 3 CCW; the tap layer nsdm has zero polygons."
+      },
+      {
+        "id": "ERC_FLOAT_WELL_PASS",
+        "cell": "ERC_FW_OK",
+        "domain": "erc",
+        "check": "floating_well",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "wells",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "nsdm (0,300)-(200,400), centre (100,350) strictly inside the well."
+      },
+      {
+        "id": "ERC_MISSING_TIE",
+        "cell": "ERC_MT",
+        "domain": "erc",
+        "check": "missing_tie",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "tap_regions",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Length",
+              "value": 6788
+            },
+            "at": [
+              0,
+              0
+            ],
+            "layer": "diff"
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at",
+          "layer"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "Furthest point of diff [0,5000]^2 from the li tap (4800,4800)-(4900,4900) is the vertex (0,0); d^2 = 2*4800^2 = 46080000, isqrt = 6788. Limit Length(2000)."
+      },
+      {
+        "id": "ERC_VDD_VSS_SHORT",
+        "cell": "ERC_SHORT",
+        "domain": "erc",
+        "check": "supply_short",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "tap_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "deck_gap",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "The li run (50,50)-(150,650) genuinely bridges the n-type region (diff y 0..200 under nsdm) and the p-type region (diff y 500..700 under psdm) - a real rail short. But `check_supply_short` marks the net a tap polygon sits on, and nsdm/psdm are marker layers absent from `conductors`, so `net_of` returns NetId::NONE and both marks land in the trash slot. Nothing reaches marks == 3. FAIL-OPEN: Ran, examined 2, zero violations, indistinguishable from clean. Not fixable in the deck either - `from_deck` pushes LayerRef::Base for supply_short, so a derived tap (nsdm AND diff) cannot be spelled."
+      },
+      {
+        "id": "ERC_VDD_VSS_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "supply_short",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "tap_polygons",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "Clean for the same structural reason the FAIL case is clean; the pair does not bracket anything."
+      },
+      {
+        "id": "ERC_UNCONNECTED",
+        "cell": "ERC_UP",
+        "domain": "erc",
+        "check": "unconnected_pin",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "nets",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              0,
+              0
+            ],
+            "layer": "met1"
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at",
+          "layer"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "Lone met1 PolyId 0, net 0, role mask empty. Limit Count(1)."
+      },
+      {
+        "id": "ERC_SOFT_CONN",
+        "cell": "ERC_SOFT",
+        "domain": "erc",
+        "check": "soft_connection",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_incomplete",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "The premise is two li contacts joined only through the well. Extraction gives two separate li nets, not one net that falls apart. `check_soft_connection`'s first pass marks nets that touch a soft layer, and nwell polygons carry NetId::NONE, so no net is marked. Needs nwell in `conductors` AND a cut joining li to nwell; neither exists. The corpus's cleanest example of the failure `RuleRun` was built to catch: Ran with examined = 0."
+      },
+      {
+        "id": "ERC_MULTI_DRIVER",
+        "cell": "ERC_MD",
+        "domain": "erc",
+        "check": "multiple_drivers",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 2,
+        "examined_min": 2,
+        "examined_population": "nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_incomplete",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "The two diffs are meant to be joined by li (350,50)-(450,550), which spans both - but li-to-diff needs a licon and none is drawn, so each drain sits on its own net with one driver. With the contact, the merged net would carry drains from two devices with distinct gate nets -> Count(2) against Count(1) at (0,0) on diff. Note the deck brief's claim that a complementary pair must count as one driver is already true: `check_multiple_drivers` counts distinct GATE nets, so a pair sharing a gate counts once. max_drivers = 1 is correct."
+      },
+      {
+        "id": "ERC_MULTI_DRIVER_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "multiple_drivers",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        }
+      },
+      {
+        "id": "ERC_TIE_HL",
+        "cell": "ERC_THL",
+        "domain": "erc",
+        "check": "tie_high_low",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "signature_defect",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "Needs a net whose mask is GATE|SOURCE with no DRAIN. The added li overlaps the poly but there is no licon, so net 5's mask stays GATE. Even with the full contact stack, `recognise_into` binds terminals 1 and 2 to the SAME lowest diff polygon under the marker, so any net carrying a source also carries a drain. This rule is unreachable for MOS devices under the current recogniser, independent of the corpus: `DeviceRecognition` has no channel direction."
+      },
+      {
+        "id": "ERC_TIE_HL_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "tie_high_low",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        }
+      },
+      {
+        "id": "ERC_ANTENNA_ELEC_PASS",
+        "cell": "ERC_AE_PASS",
+        "domain": "erc",
+        "check": "antenna_electrical",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "Gate net 4 = {poly} alone, so the collecting area is 0 and the ratio is 0.0 against a limit of 400. With the missing licon drawn the ratio would be 80900/15000 = 5.393, still clean."
+      },
+      {
+        "id": "ERC_ANTENNA_ELEC_FAIL",
+        "cell": "ERC_AE_FAIL",
+        "domain": "erc",
+        "check": "antenna_electrical",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "gate_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_incomplete",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "The 25 um^2 met1 and met2 are on net 1, joined by mcon to li, but the li-to-poly step is a licon that is not drawn - so net 1 has zero gate area and is not examined, and net 4 = {poly} measures ratio 0. With the licon, and using the rule's actual gate area (the gate LAYER's own polygon, 50x300 = 15000 nm^2, because `from_deck` pushes LayerRef::Base and `check_antenna_electrical` refuses a derived gate): collecting = 900 + 25e6 + 25e6 = 50000900 nm^2, ratio 3333.39 > 400, one violation at centre(poly_bbox) = (225,100). This contradicts the deck note's 5000 / 8.09, which divide by a poly-AND-diff gate of 10000 nm^2."
+      },
+      {
+        "id": "ERC_ESD_MISSING",
+        "cell": "ERC_ESD",
+        "domain": "erc",
+        "check": "esd_missing",
+        "expect_violations": 1,
+        "expect_outcome": "Ran",
+        "examined": 1,
+        "examined_min": 1,
+        "examined_population": "pad_nets",
+        "violations": [
+          {
+            "measured": {
+              "kind": "Count",
+              "value": 0
+            },
+            "at": [
+              0,
+              0
+            ],
+            "layer": "met1"
+          }
+        ],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min",
+          "measured",
+          "at",
+          "layer"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "The answer is right but the test does not discriminate: `EsdTopologicalTable::clamp_model` is ALWAYS empty - `from_deck`'s arm closes the CSR without pushing anything, because a clamp is a device model NAME and `ParamValue` carries no string. So `protected` is false for every pad net on every input, and this rule flags 100% of pad nets unconditionally. It would report 1 for a pad with a perfect clamp on it."
+      },
+      {
+        "id": "ERC_ESD_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "esd_missing",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "pad_nets",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "LVS_INV has no met1 shape, so there are zero pad nets. A test asserting examined > 0 here will fail, correctly: the clean pass is 'the rule found nothing to look at', not 'the rule checked a pad and it was protected'."
+      },
+      {
+        "id": "ERC_HV_CROSS",
+        "cell": "ERC_HV",
+        "domain": "erc",
+        "check": "hv_domain_crossing",
+        "expect_violations": 0,
+        "expect_outcome": "Skipped(NoDesignIntent)",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "net_pairs",
+        "violations": [],
+        "provenance": "underivable",
+        "corroboration": "manifest_disagrees",
+        "dispute": "no_intent_fixture",
+        "strength": "underivable",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "`check_hv_domain` tests `intent.is_usable()`. No design-intent file exists in the corpus, so IntentMap::declared is false and the rule records Skipped(NoDesignIntent) with examined = 0. The rule needs per-net voltages and domain assignments, neither derivable from geometry. The manifest's 1 is not checkable without adding an intent fixture."
+      },
+      {
+        "id": "ERC_HV_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "hv_domain_crossing",
+        "expect_violations": 0,
+        "expect_outcome": "Skipped(NoDesignIntent)",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "net_pairs",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": "no_intent_fixture",
+        "strength": "skipped",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "Passes only because the rule was skipped - exactly the false-clean `RuleRun` exists to expose."
+      },
+      {
+        "id": "ERC_EM_FAIL",
+        "cell": "ERC_EM",
+        "domain": "erc",
+        "check": "em_current_density",
+        "expect_violations": 0,
+        "expect_outcome": "Skipped(NoDesignIntent)",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "segments",
+        "violations": [],
+        "provenance": "underivable",
+        "corroboration": "manifest_disagrees",
+        "dispute": "no_intent_fixture",
+        "strength": "underivable",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "`check_em_current_density` tests `power.filter(|_| intent.is_usable())`. Needs a solved supply grid, which needs declared supplies. Not derivable from geometry."
+      },
+      {
+        "id": "ERC_EM_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "em_current_density",
+        "expect_violations": 0,
+        "expect_outcome": "Skipped(NoDesignIntent)",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "segments",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_count_only",
+        "dispute": "no_intent_fixture",
+        "strength": "skipped",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "Skipped, not clean."
+      },
+      {
+        "id": "ERC_P2P_FAIL",
+        "cell": "ERC_P2P",
+        "domain": "erc",
+        "check": "p2p_resistance",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "net_networks",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "fixture_incomplete",
+        "strength": "blocked",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 1
+        },
+        "note": "`extract_nets_into` emits a row only for a net with two or more device attach points. The long met1 run (350,50)-(20350,150) is on net 2 = {li, met1}, which has NO device on it; net 0 (diff) and net 3 (poly) each have exactly one. `NetNetworks` comes back empty. The 20 ohm the fixture intends (200 squares x 0.1 ohm/sq) is real arithmetic on real geometry, but the rule never looks at that net."
+      },
+      {
+        "id": "ERC_P2P_PASS",
+        "cell": "LVS_INV",
+        "domain": "erc",
+        "check": "p2p_resistance",
+        "expect_violations": 0,
+        "expect_outcome": "Ran",
+        "examined": 0,
+        "examined_min": 0,
+        "examined_population": "net_networks",
+        "violations": [],
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "vacuous",
+        "assert": [
+          "violation_count",
+          "outcome",
+          "examined_min"
+        ],
+        "manifest": {
+          "expect_violations": 0
+        },
+        "note": "LVS_INV's li output run is never examined either - fewer than two attach points. max_resistance = 10.0 is consistent with both cases, but only because both are vacuous. Nothing here brackets it."
+      }
+    ]
+  },
+  "lvs": {
+    "cases": [
+      {
+        "id": "LVS_CLEAN_MATCH",
+        "cell": "LVS_INV",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 2,
+        "expect_nets": 4,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "nmos(g=A, s=VSS, d=Y) and pmos(g=A, s=VDD, d=Y); Y is the li (350,50)-(450,650) bridging both right diff segments. Gate = poly AND diff; W=200, L=50 on both."
+      },
+      {
+        "id": "LVS_SD_PERMUTE",
+        "cell": "LVS_INV",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 2,
+        "expect_nets": 4,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Same cell as LVS_CLEAN_MATCH against a reference that is its exact S/D swap. Both expect Match, so only S/D-interchangeable comparison satisfies both - and a MOS channel is symmetric, S and D being defined by bias rather than by layout. This is the one place the corpus proves a frozen signature wrong: `refine::role_code` gives Source => 1, Drain => 2."
+      },
+      {
+        "id": "LVS_DEVICE_MISMATCH",
+        "cell": "LVS_DCNT",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 1,
+        "expect_nets": 3,
+        "expect_difference": "The reference's second nmos (g=B, d=D2, s=S2) and its three nets have no counterpart: at least one UnpairedDevice{side: Reference}.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F3"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        },
+        "note": "One poly gate is drawn, so the layout has 1 nmos and 3 nets against the reference's 2 and 6."
+      },
+      {
+        "id": "LVS_TOPO_MISMATCH",
+        "cell": "LVS_TOPO",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 2,
+        "expect_nets": 5,
+        "expect_difference": "The gate net splits in two where the reference has one A.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        },
+        "note": "The poly is drawn as two rects (200,-50)-(250,250) and (200,450)-(250,750) with a y 250..450 gap. That gap is the only difference from LVS_INV."
+      },
+      {
+        "id": "LVS_INTENTIONAL_SHORT",
+        "cell": "LVS_SHORT",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 2,
+        "expect_nets": 3,
+        "expect_difference": "A and Y are one net.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        },
+        "note": "li (200,50)-(350,650) overlaps the poly over x 200..250 and both right diff segments. The strap only touches the left segment at x=200 (zero area), so S-D is not shorted - the short is gate-to-drain, deliberately."
+      },
+      {
+        "id": "LVS_INTENTIONAL_OPEN",
+        "cell": "LVS_OPEN",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 2,
+        "expect_nets": 5,
+        "expect_difference": "Y is open between the two drains.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        },
+        "note": "The single output strap is replaced by two separate li squares (350,50)-(450,150) and (350,550)-(450,650)."
+      },
+      {
+        "id": "LVS_FINGERS_MATCH",
+        "cell": "LVS_FINGERS",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 2,
+        "expect_nets": 5,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F7"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Two nmos in series, nets (A, B, S, M, D); the gates are on SEPARATE poly rects so they are separate nets. Isomorphic to the reference chain S-M1-M-M2-D."
+      },
+      {
+        "id": "LVS_FINGERS_MISMATCH",
+        "cell": "LVS_FINGERS",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 2,
+        "expect_nets": 5,
+        "expect_difference": "The reference's single nmos cannot absorb the second finger: the layout's poly at x 600..650 and net M are surplus.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F7"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        },
+        "note": "No merge is legal because the two gate nets differ - which is exactly the condition LVS_SERIES_MERGE removes."
+      },
+      {
+        "id": "LVS_PARAM_MATCH",
+        "cell": "LVS_INV",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 2,
+        "expect_nets": 4,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3",
+          "F8"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Gate = poly AND diff = 50 x 200, so w=200 l=50 on both devices is geometrically exact."
+      },
+      {
+        "id": "LVS_PARAM_MISMATCH",
+        "cell": "LVS_INV",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 2,
+        "expect_nets": 4,
+        "expect_difference": "Two ParameterMismatch{param: W, layout_value: 200, ref_value: 300}; spread 100/300 = 0.333, far past 0.02.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3",
+          "F8"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        },
+        "note": "TODAY THIS IS A PATH TO A FALSE Match, the one outcome `lvs/src/lib.rs` forbids in as many words. `topology` emits only DeviceParam::Area, `graph::from_layout_into` projects no layout parameter at all, and `compare_params` passes over a name only one side declares - so a reference declaring w/l against a layout declaring nothing compares ZERO parameters and returns Match. Separately, the one parameter that does exist measures the MARKER: nsdm 600x300 = 180000 nm^2, not the channel's 10000 nm^2."
+      },
+      {
+        "id": "LVS_HVT_MATCH",
+        "cell": "LVS_HVT",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 1,
+        "expect_nets": 3,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "blocked",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F6"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Flavour hvt: hvtp (layer 13) (150,-50)-(300,250) covers the channel, marker AND gate AND diff = 50 x 200 = 10000 nm^2 > 0. Derivable from geometry, NOT expressible through the frozen deck."
+      },
+      {
+        "id": "LVS_HVT_MISMATCH",
+        "cell": "LVS_HVT",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": false,
+        "expect_devices": 1,
+        "expect_nets": 3,
+        "expect_difference": "Layout flavour is hvt; the reference says standard.",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "blocked",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F6"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count",
+          "difference_kind"
+        ],
+        "manifest": {
+          "expect_match": false
+        }
+      },
+      {
+        "id": "LVS_LVT_MATCH",
+        "cell": "LVS_LVT",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 1,
+        "expect_nets": 3,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "blocked",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F6"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Flavour lvt: lvtn (layer 12), same 10000 nm^2 channel coverage."
+      },
+      {
+        "id": "LVS_SERIES_MERGE",
+        "cell": "LVS_SERIES",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 1,
+        "expect_nets": 3,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "blocked",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F5",
+          "F7"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Two nmos series-merge to one: g=A, s=S, d=D, W=200, L=100 (L adds). Nets 4 -> 3. The li strap (200,-50)-(650,0) ties both polys into one gate net and only touches diff at y=0, so it does not short the source. LVS_FINGERS is this cell minus that strap - same diff, same two gates, same contacts - which is the strongest single piece of evidence in the LVS corpus and currently has no code to test."
+      },
+      {
+        "id": "LVS_PARALLEL_MERGE",
+        "cell": "LVS_PARALLEL",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 1,
+        "expect_nets": 3,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "blocked",
+        "blocked_by": [
+          "F1",
+          "F3",
+          "F5"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "Two nmos parallel-merge to one: g=A, s=S, d=D, W=400 (W adds), L=50. Both li straps span both diffs; poly (200,-50)-(250,650) crosses both."
+      },
+      {
+        "id": "LVS_ISOMORPHIC",
+        "cell": "LVS_INV",
+        "domain": "lvs",
+        "check": "compare",
+        "expect_match": true,
+        "expect_devices": 2,
+        "expect_nets": 4,
+        "expect_difference": null,
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "blocked_by": [
+          "F1",
+          "F2",
+          "F3"
+        ],
+        "assert": [
+          "match",
+          "device_count",
+          "net_count"
+        ],
+        "manifest": {
+          "expect_match": true
+        },
+        "note": "The reference is BYTE-IDENTICAL to LVS_CLEAN_MATCH's, so the case is a duplicate unless the harness permutes the RefGraph row order before comparing."
+      }
+    ]
+  },
+  "pex": {
+    "cases": [
+      {
+        "id": "PEX_WIRE_R",
+        "cell": "PEX_R",
+        "domain": "pex",
+        "kind": "resistance",
+        "expect_value": 1.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 1.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 2000x200 = 10 squares x 0.1 ohm/sq. Equivalent-rectangle recovery from (area, perimeter) is exact: roots of t^2-(P/2)t+A give (2000,200)."
+      },
+      {
+        "id": "PEX_PLATE_C",
+        "cell": "PEX_C",
+        "domain": "pex",
+        "kind": "area_cap",
+        "expect_value": 185.0,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 185.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 1000x1000: 25 aF/um^2 x 1.0 um^2 + 40 aF/um x 4.0 um = 25 + 160."
+      },
+      {
+        "id": "PEX_COUPLING_C",
+        "cell": "PEX_CC",
+        "domain": "pex",
+        "kind": "coupling_cap",
+        "expect_value": 138.1,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::quasistatic",
+        "provenance": "underivable",
+        "corroboration": "manifest_uncheckable",
+        "dispute": "no_deck_coefficient",
+        "strength": "underivable",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 200.0
+          },
+          "tol": 1e-06
+        },
+        "note": "Two met1 2000x200 bars, gap 200. The parallel-plate lower bound eps*t*L/S is 138.1 aF. The manifest's 200 implies a lateral coefficient of 20 aF/um, and `StackJson` has no `coupling_cap_af_um` column, so the absolute value cannot be derived from the deck at all. What IS derivable and exact is the 1/S law against PEX_SPACING_100 and PEX_SPACING_400, and equality with PEX_VERT_COUPLING."
+      },
+      {
+        "id": "PEX_LONG_WIRE_R",
+        "cell": "PEX_LR",
+        "domain": "pex",
+        "kind": "resistance",
+        "expect_value": 5.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 5.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 5000x100 = 50 squares x 0.1."
+      },
+      {
+        "id": "PEX_PER_NET",
+        "cell": "PEX_PNET",
+        "domain": "pex",
+        "kind": "per_net",
+        "expect_value": null,
+        "unit": null,
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_partial",
+        "dispute": "no_deck_coefficient",
+        "strength": "strong",
+        "assert": [
+          "per_net_r",
+          "per_net_ground_cap"
+        ],
+        "manifest": {
+          "expected": {
+            "0": {
+              "cap_af": 386.0,
+              "r_ohm": 1.0
+            },
+            "1": {
+              "cap_af": 386.0,
+              "r_ohm": 1.0
+            }
+          },
+          "tol": 1e-06
+        },
+        "note": "Two met1 2000x200 bars, gap 200. Per net: 10 squares x 0.1 = 1.0 ohm (agrees), and ground capacitance 25 x 0.4 + 40 x 4.4 = 10 + 176 = 186 aF (derived). The manifest's 386 = 186 + 200, so its lateral term is the same non-deck-expressible 200 as PEX_COUPLING_C. The ground half is corroborated; the lateral half is not derivable.",
+        "expect_per_net": {
+          "0": {
+            "r_ohm": 1.0,
+            "ground_cap_af": 186.0
+          },
+          "1": {
+            "r_ohm": 1.0,
+            "ground_cap_af": 186.0
+          }
+        }
+      },
+      {
+        "id": "PEX_SPACING_100",
+        "cell": "PEX_S100",
+        "domain": "pex",
+        "kind": "coupling_cap",
+        "expect_value": 276.3,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::quasistatic",
+        "provenance": "underivable",
+        "corroboration": "manifest_uncheckable",
+        "dispute": "no_deck_coefficient",
+        "strength": "underivable",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 400.0
+          },
+          "tol": 1e-06
+        },
+        "note": "Gap 100, L 2000: plate bound 276.3 aF; the manifest's 400 needs k=20 aF/um. Absolute underivable, 1/S ratio against PEX_COUPLING_C and PEX_SPACING_400 exact."
+      },
+      {
+        "id": "PEX_SPACING_400",
+        "cell": "PEX_S400",
+        "domain": "pex",
+        "kind": "coupling_cap",
+        "expect_value": 69.1,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::quasistatic",
+        "provenance": "underivable",
+        "corroboration": "manifest_uncheckable",
+        "dispute": "no_deck_coefficient",
+        "strength": "underivable",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 100.0
+          },
+          "tol": 1e-06
+        },
+        "note": "Gap 400, L 2000: plate bound 69.1 aF; manifest 100 at k=20."
+      },
+      {
+        "id": "PEX_WIDTH_100",
+        "cell": "PEX_W100",
+        "domain": "pex",
+        "kind": "resistance",
+        "expect_value": 2.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 2.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 2000x100 = 20 squares x 0.1."
+      },
+      {
+        "id": "PEX_WIDTH_400",
+        "cell": "PEX_W400",
+        "domain": "pex",
+        "kind": "resistance",
+        "expect_value": 0.5,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 0.5
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 2000x400 = 5 squares x 0.1."
+      },
+      {
+        "id": "PEX_VERT_COUPLING",
+        "cell": "PEX_VERT",
+        "domain": "pex",
+        "kind": "coupling_cap",
+        "expect_value": 138.1,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::quasistatic",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 200.0
+          },
+          "tol": 1e-06
+        },
+        "note": "PEX_CC rotated 90 degrees. LAW: rotation invariance, so this must equal PEX_COUPLING_C exactly whatever the coefficient. The manifest agrees (200 == 200), which is what makes this the strongest coupling case in the corpus."
+      },
+      {
+        "id": "PEX_VIA_R",
+        "cell": "PEX_VIA1",
+        "domain": "pex",
+        "kind": "via_resistance",
+        "expect_value": 5.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::via_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 5.0
+          },
+          "tol": 1e-06
+        },
+        "note": "One cut: via_resistance(5.0, 1). The cell produces an EMPTY ParasiticNetwork - via1 is a via in `connectivity`, not a conductor, so cut layers get no node. Testable only at `via_resistance()` directly; a test asserting only r_ohm ~= 5.0 passes against an extractor that never looked at the cell."
+      },
+      {
+        "id": "PEX_VIA_R2",
+        "cell": "PEX_VIA2",
+        "domain": "pex",
+        "kind": "via_resistance",
+        "expect_value": 2.5,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::via_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "weak",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 10.0
+          },
+          "tol": 1e-06
+        },
+        "note": "`via_resistance`'s frozen doc: a per-cut constant from the deck, DIVIDED by the number of cuts - vias in parallel, which is why a redundant via lowers resistance. Two cuts -> 5.0/2 = 2.5. The manifest's 10.0 is 5.0 x 2, the old code summing independent cuts. Caveat that weakens the case either way: PEX_VIA2 contains no met1 and no met2 at all, so the geometry cannot say whether the two bare cuts are one array or two dangling cuts. The fixture needs landing plates."
+      },
+      {
+        "id": "PEX_CROSSOVER",
+        "cell": "PEX_XOVER",
+        "domain": "pex",
+        "kind": "interlayer_cap",
+        "expect_value": 4.604,
+        "unit": "aF",
+        "tol": 0.1,
+        "expect_mismatch": false,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 0.4
+          },
+          "tol": 0.1
+        },
+        "note": "met1 AND met2 = 200x200 = 0.04 um^2; d = met2 bottom 2000 - met1 top 1700 = 300 nm; eps*A/d with k=3.9 gives 4.604 aF. The manifest's 0.4 aF implies a plate coefficient of 10 aF/um^2, which back-solves to a 3.45 um dielectric gap - 11.5x what the stack states and physically absurd for met1-to-met2. Fringe pushes the true value above 4.6, not below. 300 nm is also the correct sky130 met1-met2 separation, so the stack is not the suspect side."
+      },
+      {
+        "id": "PEX_FILL",
+        "cell": "PEX_FILL",
+        "domain": "pex",
+        "kind": "area_cap",
+        "expect_value": 14.6025,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 14.6025
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 90x90: 25 x 0.0081 + 40 x 0.36 = 0.2025 + 14.4."
+      },
+      {
+        "id": "PEX_MET2_R",
+        "cell": "PEX_M2R",
+        "domain": "pex",
+        "kind": "resistance_met2",
+        "expect_value": 0.8,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 0.8
+          },
+          "tol": 1e-06
+        },
+        "note": "met2 2000x200 = 10 squares x 0.08."
+      },
+      {
+        "id": "PEX_MET2_CAP",
+        "cell": "PEX_M2C",
+        "domain": "pex",
+        "kind": "area_cap",
+        "expect_value": 135.0,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 135.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met2 1000x1000: 15 x 1.0 + 30 x 4.0."
+      },
+      {
+        "id": "PEX_DIFF_M1R",
+        "cell": "PEX_DIFF",
+        "domain": "pex",
+        "kind": "resistance",
+        "expect_value": 1.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 1.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 2000x200. Note the cell contains no `diff` layer - it is met1 + met2, 'different layers'. Misleading name, not a defect."
+      },
+      {
+        "id": "PEX_DIFF_M2R",
+        "cell": "PEX_DIFF",
+        "domain": "pex",
+        "kind": "resistance_met2",
+        "expect_value": 0.8,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 0.8
+          },
+          "tol": 1e-06
+        },
+        "note": "met2 2000x200 = 10 squares x 0.08."
+      },
+      {
+        "id": "PEX_MET2_COUPLING",
+        "cell": "PEX_M2CC",
+        "domain": "pex",
+        "kind": "coupling_cap_met2",
+        "expect_value": 138.1,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": false,
+        "seam": "pex::quasistatic",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_disagrees",
+        "dispute": "manifest_wrong",
+        "strength": "strong",
+        "assert": [
+          "value"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 160.0
+          },
+          "tol": 1e-06
+        },
+        "note": "LAW VIOLATED BY THE MANIFEST. PEX_M2CC is PEX_CC with layer 7 swapped for layer 9: same 2000x200 bars, same 200 nm gap. The deck gives met1 and met2 the same thickness (400 nm) and the same dielectric_k (3.9), so lateral coupling eps*t*L/S is identical - this must equal PEX_COUPLING_C. The manifest asserts 200 there and 160 here. No physics with this stack produces a 0.8 ratio; the only 0.8 in the deck is the sheet-resistance ratio 0.08/0.1, which has nothing to do with capacitance. The manifest is new-deck-inconsistent and 160 is the number to distrust. Cleanest cross-check in the pex corpus, worth keeping precisely because it fails."
+      },
+      {
+        "id": "PEX_NEG_R",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "resistance",
+        "expect_value": 1.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 1.5
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 A 2000x200 = 1.0 ohm against a deliberately wrong claim of 1.5. The mismatch holds."
+      },
+      {
+        "id": "PEX_NEG_R2",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "resistance_met2",
+        "expect_value": 0.8,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::analytical::segment_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 1.2
+          },
+          "tol": 1e-06
+        },
+        "note": "met2 C 2000x200 = 0.8 against a claim of 1.2. Mismatch holds."
+      },
+      {
+        "id": "PEX_NEG_VIA",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "via_resistance",
+        "expect_value": 5.0,
+        "unit": "ohm",
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::via_resistance",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "r_ohm": 9.0
+          },
+          "tol": 1e-06
+        },
+        "note": "One cut, 5.0/1 = 5.0 against a claim of 9.0. Mismatch holds."
+      },
+      {
+        "id": "PEX_NEG_AC",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "area_cap",
+        "expect_value": 186.0,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 999.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 A: 25 x 0.4 + 40 x 4.4 = 186 against a claim of 999. Mismatch holds."
+      },
+      {
+        "id": "PEX_NEG_CC",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "coupling_cap",
+        "expect_value": 69.1,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::quasistatic",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 300.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met1 A-B gap 600-200 = 400: plate 69.1, or 100 at k=20. The claim is 300, so the mismatch holds on either model."
+      },
+      {
+        "id": "PEX_NEG_CC2",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "coupling_cap_met2",
+        "expect_value": 69.1,
+        "unit": "aF",
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::quasistatic",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 200.0
+          },
+          "tol": 1e-06
+        },
+        "note": "met2 C-D gap 1800-1400 = 400: plate 69.1, or 80-100 depending on k. The claim is 200, so the mismatch holds on either model."
+      },
+      {
+        "id": "PEX_NEG_IL",
+        "cell": "PEX_NEG",
+        "domain": "pex",
+        "kind": "interlayer_cap",
+        "expect_value": 2.302,
+        "unit": "aF",
+        "tol": 0.1,
+        "expect_mismatch": true,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "weak",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "c_af": 2.0
+          },
+          "tol": 0.1
+        },
+        "note": "met2 E (500,100)-(700,500) AND met1 A = 200x100 = 0.02 um^2, d = 300 nm -> 2.302 aF against a claim of 2.0 with tol 0.1. The mismatch holds, but by 0.30 aF against a 0.10 aF window - a 15% margin. It was designed to mismatch a 0.2 aF answer under the old 10 aF/um^2 coefficient; under the corrected coefficient it nearly matches. Move the claim well away from 2.3 or this test silently inverts."
+      },
+      {
+        "id": "PEX_NEG_PNET",
+        "cell": "PEX_PNET_NEG",
+        "domain": "pex",
+        "kind": "per_net",
+        "expect_value": null,
+        "unit": null,
+        "tol": 1e-06,
+        "expect_mismatch": true,
+        "seam": "pex::analytical",
+        "provenance": "derived_from_geometry",
+        "corroboration": "manifest_agrees",
+        "dispute": null,
+        "strength": "strong",
+        "assert": [
+          "mismatch"
+        ],
+        "manifest": {
+          "expected": {
+            "0": {
+              "cap_af": 386.0,
+              "r_ohm": 2.0
+            },
+            "1": {
+              "cap_af": 386.0,
+              "r_ohm": 1.0
+            }
+          },
+          "tol": 1e-06
+        },
+        "note": "Two met1 2000x200 bars, gap 200, identical to PEX_PNET: both nets are 10 squares x 0.1 = 1.0 ohm and 186 aF ground. The claim injects exactly one error (net0 R = 2.0), and because both bars are identical the case is robust to net ordering.",
+        "expect_per_net": {
+          "0": {
+            "r_ohm": 1.0,
+            "ground_cap_af": 186.0
+          },
+          "1": {
+            "r_ohm": 1.0,
+            "ground_cap_af": 186.0
+          }
+        }
+      }
+    ]
+  }
+}
