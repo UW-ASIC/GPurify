@@ -474,10 +474,12 @@ fn a_qualifying_run_exactly_at_the_larger_limit_is_clean() {
 /// triangle — an arbitrary offset would give an irrational distance and the
 /// test would be asserting on the rounding rather than on the measurement.
 ///
-/// `check_corner_to_corner` reports at the vertex of the *first* shape in the
-/// closest vertex pair, not at the midpoint of the segment joining them. The
-/// first shape is the one `shapes.0` names — the lower-left square, spanning
-/// `(-130, -140) .. (-30, -40)` — so the vertex is its upper-right corner.
+/// `check_corner_to_corner` reports at the *midpoint* of the segment joining
+/// the closest vertex pair — the crate-wide convention, and what
+/// `testgen::violation` already computes, so the expected point comes straight
+/// from `case.expected` with no override. A midpoint has no pair order; the
+/// first-vertex reading made the answer depend on which of the two squares the
+/// generator happened to name first.
 #[test]
 fn a_diagonal_corner_gap_is_measured_exactly_on_a_pythagorean_offset() {
     let case = layout_with_violation(
@@ -510,13 +512,7 @@ fn a_diagonal_corner_gap_is_measured_exactly_on_a_pythagorean_offset() {
         &mut sink.runs,
     );
 
-    assert_only_violation(
-        &sink.out,
-        &Violation {
-            at: point(-30, -40),
-            ..case.expected
-        },
-    );
+    assert_only_violation(&sink.out, &case.expected);
     assert_eq!(
         assert_rule_ran(&sink.runs, RULE).examined,
         1,

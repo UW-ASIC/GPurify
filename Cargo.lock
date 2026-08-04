@@ -40,9 +40,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpurify"
+version = "0.1.0"
+dependencies = [
+ "gpurify-core",
+ "gpurify-derived",
+ "gpurify-drc",
+ "gpurify-engine",
+ "gpurify-erc",
+ "gpurify-export",
+ "gpurify-ingest",
+ "gpurify-lvs",
+ "gpurify-pex",
+ "gpurify-report",
+ "gpurify-testgen",
+ "gpurify-topology",
+ "gpurify-units",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gpurify-cli"
 version = "0.1.0"
 dependencies = [
+ "gpurify-core",
  "gpurify-engine",
  "gpurify-export",
  "gpurify-ingest",
@@ -145,6 +167,8 @@ dependencies = [
  "gpurify-export",
  "gpurify-testgen",
  "gpurify-units",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

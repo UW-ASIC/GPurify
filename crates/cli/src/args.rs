@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 /// `gpurify <check> --deck <deck> <layout> [options]`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Args {
     pub command: Command,
     pub common: Common,
@@ -18,7 +18,7 @@ pub struct Args {
 /// A subcommand rather than a flag, because the required inputs differ: `lvs`
 /// needs a reference netlist and the others do not, and a subcommand can say so
 /// in its own usage line instead of failing at runtime.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Design rule check.
     Drc,
@@ -41,7 +41,7 @@ pub enum Command {
 }
 
 /// Flags every subcommand shares.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Common {
     pub layout: PathBuf,
     pub deck: PathBuf,
@@ -76,11 +76,223 @@ pub enum Format {
 /// **Decision** — pure, argv in, either [`Args`] or a message out. Pure so the
 /// whole surface is table-testable without a process: a list of argument
 /// vectors and their expected parses, including every rejection.
+///
+/// `argv` **excludes the program name**: `argv[0]` is the subcommand, so a
+/// caller passes `std::env::args().skip(1)` and a test passes the arguments it
+/// means. An empty slice is a usage error, not a default run.
 pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
-    todo!()
+    let (subcommand, rest) = argv.split_first().ok_or_else(|| {
+        ArgError::Usage("expected a subcommand: drc, erc, lvs, pex or all".to_string())
+    })?;
+
+    let mut layout: Option<&str> = None;
+    let mut deck: Option<&str> = None;
+    let mut format = Format::Text;
+    let mut output: Option<&str> = None;
+    let mut threads: Option<usize> = None;
+    let mut check_determinism = false;
+    // On by default. Dropping geometry from a layer the deck never described
+    // is the fail-open case, so it takes an explicit `--no-strict-layers`.
+    let mut strict_layers = true;
+    let mut intent: Option<&str> = None;
+    let mut reference: Option<&str> = None;
+    let mut quasistatic: Vec<String> = Vec::new();
+
+    // An index walk, and permanently so: the bulk-loop discipline scopes to
+    // thousands of homogeneous rows, and argv is tens of heterogeneous tokens
+    // whose meanings differ per token. An option also consumes the token after
+    // it, so `taken` carries state from one iteration to the next — the chain
+    // dependency `/simd-loops` triage names as the blocker. Not debt.
+    //
+    // Every option a subcommand has no field for is accepted here and refused
+    // below, so the refusal message can name the subcommand.
+    let mut index = 0;
+    while index < rest.len() {
+        let token = rest[index].as_str();
+        let mut taken = 1;
+        match token {
+            "--deck" => {
+                deck = Some(value(rest, index)?);
+                taken = 2;
+            }
+            "--format" => {
+                format = format_named(value(rest, index)?)?;
+                taken = 2;
+            }
+            "--output" => {
+                output = Some(value(rest, index)?);
+                taken = 2;
+            }
+            "--threads" => {
+                let raw = value(rest, index)?;
+                threads = Some(raw.parse().ok().filter(|count| *count > 0).ok_or_else(|| {
+                    ArgError::Usage(format!("--threads wants a positive count, not {raw:?}"))
+                })?);
+                taken = 2;
+            }
+            "--intent" => {
+                intent = Some(value(rest, index)?);
+                taken = 2;
+            }
+            "--reference" => {
+                reference = Some(value(rest, index)?);
+                taken = 2;
+            }
+            "--quasistatic" => {
+                quasistatic.push(value(rest, index)?.to_string());
+                taken = 2;
+            }
+            "--check-determinism" => check_determinism = true,
+            "--strict-layers" => strict_layers = true,
+            "--no-strict-layers" => strict_layers = false,
+            _ if token.starts_with('-') => {
+                return Err(ArgError::Usage(format!("unknown option {token}")));
+            }
+            // An empty positional is refused for the same reason `value` refuses
+            // an empty option value, and separately: it would satisfy the
+            // `layout.ok_or_else` below and reach `Inputs::layout` as a path
+            // that names no file, which `to_inputs` already debug-asserts
+            // against.
+            "" => {
+                return Err(ArgError::Usage(
+                    "the layout file was given as an empty path".to_string(),
+                ))
+            }
+            positional => {
+                // Branchy on purpose: the taken side returns, and one token
+                // per command line is not a loop the predictor can miss on.
+                if layout.replace(positional).is_some() {
+                    return Err(ArgError::Usage(format!(
+                        "one layout file, but a second was given: {positional}"
+                    )));
+                }
+            }
+        }
+        index += taken;
+    }
+    // Every option that consumed a second token proved it existed first, so
+    // the walk lands exactly on the end rather than one past it.
+    debug_assert_eq!(index, rest.len());
+    debug_assert!(quasistatic.len() * 2 <= rest.len());
+
+    // An option this subcommand has no field for is refused rather than
+    // dropped: accepting `--intent` on a drc run discards an input the caller
+    // asked to be checked against, and says nothing about having done so.
+    let refuse = |flag: &str, given: bool| {
+        if given {
+            Err(ArgError::Usage(format!("{subcommand} takes no {flag}")))
+        } else {
+            Ok(())
+        }
+    };
+    let command = match subcommand.as_str() {
+        "drc" => {
+            refuse("--intent", intent.is_some())?;
+            refuse("--reference", reference.is_some())?;
+            refuse("--quasistatic", !quasistatic.is_empty())?;
+            Command::Drc
+        }
+        "erc" => {
+            refuse("--reference", reference.is_some())?;
+            refuse("--quasistatic", !quasistatic.is_empty())?;
+            Command::Erc {
+                intent: intent.map(PathBuf::from),
+            }
+        }
+        "lvs" => {
+            refuse("--intent", intent.is_some())?;
+            refuse("--quasistatic", !quasistatic.is_empty())?;
+            Command::Lvs {
+                reference: reference
+                    .map(PathBuf::from)
+                    .ok_or(ArgError::MissingReference)?,
+            }
+        }
+        "pex" => {
+            refuse("--intent", intent.is_some())?;
+            refuse("--reference", reference.is_some())?;
+            Command::Pex { quasistatic }
+        }
+        "all" => {
+            refuse("--quasistatic", !quasistatic.is_empty())?;
+            Command::All {
+                reference: reference.map(PathBuf::from),
+                intent: intent.map(PathBuf::from),
+            }
+        }
+        other => return Err(ArgError::UnknownCommand(other.to_string())),
+    };
+
+    // GDS output is violation markers. The two checks that produce none would
+    // write an empty layout, which reads in a viewer exactly like a clean run.
+    if format == Format::Gds && matches!(command, Command::Lvs { .. } | Command::Pex { .. }) {
+        return Err(ArgError::FormatMismatch);
+    }
+
+    let layout = layout.ok_or_else(|| {
+        ArgError::Usage(format!(
+            "{subcommand} needs a layout file: {subcommand} <layout> --deck <deck>"
+        ))
+    })?;
+    let deck = deck.ok_or_else(|| ArgError::Usage("--deck <deck> is required".to_string()))?;
+    // The guarantee `to_inputs` opens by asserting. Stated at the producing end
+    // too, because a consumer asserting what its producer never promised is a
+    // panic waiting on an input nobody tried.
+    debug_assert!(!layout.is_empty() && !deck.is_empty());
+
+    Ok(Args {
+        command,
+        common: Common {
+            layout: PathBuf::from(layout),
+            deck: PathBuf::from(deck),
+            format,
+            output: output.map(PathBuf::from),
+            threads,
+            check_determinism,
+            strict_layers,
+        },
+    })
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+/// The token after the option at `index`, or the usage error naming what was
+/// left off the end of the command line.
+///
+/// The empty string is refused here rather than at each call site: every option
+/// on this command line names a path or a net, and neither has an empty
+/// spelling. `--deck ""` would otherwise reach `engine` as a path that opens
+/// nothing, and `--quasistatic ""` as a net name that matches nothing and so
+/// silently field-solves one net fewer than was asked for.
+fn value(rest: &[String], index: usize) -> Result<&str, ArgError> {
+    debug_assert!(index < rest.len());
+    let token = rest
+        .get(index + 1)
+        .map(String::as_str)
+        .ok_or_else(|| ArgError::Usage(format!("{} wants a value", rest[index])))?;
+    if token.is_empty() {
+        Err(ArgError::Usage(format!(
+            "{} was given an empty value",
+            rest[index]
+        )))
+    } else {
+        Ok(token)
+    }
+}
+
+/// Three names, three variants. A fourth name is a usage error rather than a
+/// silent fall back to text — a run asked for JSON and given text is a run
+/// whose output nothing downstream can read.
+fn format_named(name: &str) -> Result<Format, ArgError> {
+    match name {
+        "text" => Ok(Format::Text),
+        "json" => Ok(Format::Json),
+        "gds" => Ok(Format::Gds),
+        other => Err(ArgError::Usage(format!(
+            "unknown --format {other}; expected text, json or gds"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ArgError {
     #[error("{0}")]
     Usage(String),
@@ -98,7 +310,96 @@ pub enum ArgError {
 /// convenient command line to a precise library call is testable on its own,
 /// and so the two can differ without one deforming the other.
 pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOptions) {
-    todo!()
+    debug_assert!(
+        !args.common.layout.as_os_str().is_empty() && !args.common.deck.as_os_str().is_empty(),
+        "parse rejects a command line missing either path"
+    );
+
+    let off = gpurify_engine::Checks {
+        drc: false,
+        erc: false,
+        lvs: false,
+        pex: false,
+    };
+    // One match, because all four outputs are the same decision: the
+    // subcommand names both the check to select and the inputs it may carry.
+    // `All` selects LVS whether or not a reference was given — the run then
+    // reports it Skipped, where dropping the check would leave a summary that
+    // never mentions LVS at all.
+    let (checks, reference, intent, quasistatic_nets) = match &args.command {
+        Command::Drc => (
+            gpurify_engine::Checks { drc: true, ..off },
+            None,
+            None,
+            Vec::new(),
+        ),
+        Command::Erc { intent } => (
+            gpurify_engine::Checks { erc: true, ..off },
+            None,
+            intent.clone(),
+            Vec::new(),
+        ),
+        Command::Lvs { reference } => (
+            gpurify_engine::Checks { lvs: true, ..off },
+            Some(reference.clone()),
+            None,
+            Vec::new(),
+        ),
+        Command::Pex { quasistatic } => (
+            gpurify_engine::Checks { pex: true, ..off },
+            None,
+            None,
+            quasistatic.clone(),
+        ),
+        Command::All { reference, intent } => (
+            gpurify_engine::Checks::ALL,
+            reference.clone(),
+            intent.clone(),
+            Vec::new(),
+        ),
+    };
+    debug_assert!(checks != off, "every subcommand selects at least one check");
+    debug_assert!(quasistatic_nets.is_empty() || checks.pex);
+
+    let inputs = gpurify_engine::Inputs {
+        layout: args.common.layout.clone(),
+        deck: args.common.deck.clone(),
+        // Always `None`, and therefore every run of this binary stops at
+        // `LoadError::NoGrid` before a file is opened. Nothing here can supply
+        // one: `Common` has no field to park a `--grid` value in, and a deck
+        // file does not declare a resolution — `read_deck` is *handed* the grid
+        // (`crates/ingest/src/deck.rs:46-53`). Not a shortcut this file can
+        // spend down; adding the field is a widening of a frozen struct, and
+        // making the flag required would invalidate the grammar the test module
+        // below fixes. Filed in `docs/SIGNATURE_DEFECTS.md`, under the second
+        // `cli` heading.
+        //
+        // Defaulting a grid here rather than leaving it absent is the one thing
+        // that must not happen: it silently reinterprets every limit in the
+        // deck, turning a loud dead binary into a quiet wrong one.
+        grid: None,
+        reference,
+        intent,
+        unknown_layers: if args.common.strict_layers {
+            gpurify_ingest::layout::UnknownLayers::Reject
+        } else {
+            gpurify_ingest::layout::UnknownLayers::Drop
+        },
+    };
+    #[expect(
+        clippy::default_trait_access,
+        reason = "the lint wants `CompareOptions::default()`, but `gpurify_lvs` is \
+                  not a dependency of `cli` and the module graph does not have that \
+                  edge; naming the type would mean adding a dependency to satisfy a \
+                  spelling. `engine` does not re-export it either"
+    )]
+    let options = gpurify_engine::RunOptions {
+        checks,
+        lvs: Default::default(),
+        quasistatic_nets,
+        threads: args.common.threads,
+    };
+    (inputs, options)
 }
 
 /// The command line, table-tested.
@@ -474,11 +775,39 @@ mod tests {
             &["drc", "top.gds", "--deck", "rules.json", "--format"],
             &["drc", "top.gds", "--deck", "rules.json", "--output"],
             &["drc", "top.gds", "--deck", "rules.json", "--threads"],
-            &["drc", "top.gds", "--deck", "rules.json", "--threads", "some"],
+            &[
+                "drc",
+                "top.gds",
+                "--deck",
+                "rules.json",
+                "--threads",
+                "some",
+            ],
             &["drc", "top.gds", "--deck", "rules.json", "--nonsense"],
-            &["drc", "top.gds", "--deck", "rules.json", "--intent", "i.json"],
-            &["drc", "top.gds", "--deck", "rules.json", "--reference", "r.cdl"],
-            &["erc", "top.gds", "--deck", "rules.json", "--quasistatic", "vdd"],
+            &[
+                "drc",
+                "top.gds",
+                "--deck",
+                "rules.json",
+                "--intent",
+                "i.json",
+            ],
+            &[
+                "drc",
+                "top.gds",
+                "--deck",
+                "rules.json",
+                "--reference",
+                "r.cdl",
+            ],
+            &[
+                "erc",
+                "top.gds",
+                "--deck",
+                "rules.json",
+                "--quasistatic",
+                "vdd",
+            ],
         ];
         for argv in cases {
             let error = parse_err(argv);

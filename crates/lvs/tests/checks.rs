@@ -97,3 +97,50 @@ fn a_terminal_naming_a_net_that_does_not_exist_is_found() {
 
     assert_ran(&runs, &out, 1);
 }
+
+/// Oracle: construct-from-answer, on the reporting rather than on the finding.
+///
+/// A graph with devices but no terminal CSR cannot be asked what each device's
+/// terminal count is — the column the question is about does not exist. The
+/// terminal-count check must say it could not run, and must not report a clean
+/// pass over a device table it never read.
+///
+/// This is the file's own thesis turned on the file: the shape check inside
+/// `check_topology` carries an `is_empty() ||` escape, so this graph passes it,
+/// and the compact underneath then iterates `min(devices, 0)` times. Before the
+/// guard, the check recorded `Ran` with `examined` equal to the device count
+/// while having examined nothing — a clean result that a reader cannot tell
+/// from a device table whose terminal counts are all legal.
+///
+/// Stated as `Refused` rather than `Skipped` because the graph is malformed
+/// rather than merely missing an optional input. Both deny a pass; only one is
+/// true. And asserted in **both** profiles deliberately: the `debug_assert` that
+/// guarded this before was absent from exactly the build where a false clean
+/// does damage.
+#[test]
+fn a_graph_with_devices_but_no_terminal_csr_refuses_rather_than_reporting_clean() {
+    let mut graph = stacked_pair();
+    assert!(
+        !graph.device_kind.is_empty(),
+        "the fixture must hold devices for the question to be meaningful"
+    );
+    graph.device_terminal_start.clear();
+
+    let mut out = Violations::default();
+    let mut runs = Vec::new();
+    check_topology(&LayoutGraph(graph), &mut out, &mut runs);
+
+    let terminal_count = runs
+        .iter()
+        .find(|run| run.outcome != Outcome::Ran)
+        .expect("no rule reported anything other than Ran over an unreadable graph");
+    assert_eq!(
+        terminal_count.outcome,
+        Outcome::Refused,
+        "a malformed graph is refused, not skipped and not run"
+    );
+    assert_eq!(
+        terminal_count.examined, 0,
+        "a check that read no column examined nothing, and must say so"
+    );
+}

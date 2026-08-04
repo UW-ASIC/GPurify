@@ -130,13 +130,28 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
     let fingers = (spec.polygons / spec.nets - 1) / 2;
     let mut rng = Rng::new(spec.seed);
 
+    // Leaves are `4^(depth-1)` — the property `tile`'s own test states — and the
+    // band stack has to be sized before the block side is chosen, so the count
+    // is computed here rather than read back off `origins.len()`.
+    let blocks = 4u32.pow(u32::from(spec.hierarchy_depth) - 1);
+    let bands = spec.nets.div_ceil(blocks);
+
+    // The block side has to cover the taller of the two axes. The horizontal
+    // need is the rail and its fingers; the vertical need is the whole band
+    // stack dealt to one block, which the round-robin above makes
+    // `ceil(nets / blocks)` bands of `BAND_PITCH` each.
+    //
+    // Sizing on the horizontal need alone is what the module doc's "no two nets
+    // touch" claim rested on and did not get: at 1000 polygons over 62 nets the
+    // stack is 16 bands of 1000 against a block side of 3200, so band 8 of one
+    // block landed inside the block above it, a cut there bridged two combs,
+    // and ten pairs of nets extracted as one. The corpus was wrong, not the
+    // extractor — and being wrong in the direction of *fewer* nets is the
+    // fail-open direction for anything that trusts the partition.
     let block_side = i64::from(fingers + 1) * FINGER_PITCH;
+    let block_side = block_side.max(i64::from(bands) * BAND_PITCH);
     let (extent, origins) = tile(spec.hierarchy_depth, block_side, BLOCK_GAP);
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "the leaf count is 4^(depth-1) with depth a u8 the caller keeps small"
-    )]
-    let blocks = origins.len() as u32;
+    debug_assert_eq!(origins.len(), blocks as usize, "one origin per leaf block");
 
     // Deal nets to blocks round-robin, then shuffle, so a net's index says
     // nothing about where it is. An extractor that works only when a net's

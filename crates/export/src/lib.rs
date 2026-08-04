@@ -23,19 +23,36 @@
 //!   [`Header`] a diff can skip, because a report that differs from itself
 //!   cannot be diffed against yesterday's.
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod gds;
 pub mod json;
 pub mod netlist;
 pub mod parasitic;
 
+/// Writing into a `String` is infallible — `fmt::Write` returns a `Result`
+/// because a formatter need not be one. [`WriteError::Io`] is for a writer that
+/// can actually fail, and swallowing this one silently would make an impossible
+/// case indistinguishable from a truncated file.
+///
+/// One spelling for the whole crate: three writers each invented their own, and
+/// three `expect` messages for one impossible case is three things to grep for
+/// when it somehow happens.
+pub(crate) const INFALLIBLE: &str = "a String cannot fail to be written into";
+
+/// A row index narrowed to the `u32` every id in this pipeline is made of.
+///
+/// One spelling for the whole crate, for [`INFALLIBLE`]'s reason: `netlist` and
+/// `parasitic` each grew their own, and a checked conversion that is checked in
+/// one writer and elided in the other is the shape of a truncated id nobody
+/// notices.
+pub(crate) fn narrow(value: usize) -> u32 {
+    u32::try_from(value).expect("every table in this pipeline is addressed by a u32 id")
+}
+
 /// What a writer can fail at.
 ///
 /// Deliberately narrow: a writer transcribes, and a writer that has to make a
 /// decision is doing something else's job.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WriteError {
     #[error("io: {0}")]
     Io(String),

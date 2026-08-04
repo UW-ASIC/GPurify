@@ -23,7 +23,7 @@ use gpurify_erc::rules::antenna::{
 use gpurify_erc::{Design, Scratch};
 use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::StrId;
-use gpurify_report::{Measurement, RuleRun, Violations};
+use gpurify_report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_testgen::shapes::{random_rectilinear_layer, RandomLayerSpec};
 use gpurify_testgen::{
     assert_clean, assert_close_relative, assert_rule_ran, dbu, LayoutBuilder, Rng,
@@ -198,6 +198,173 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
         1e-12,
     );
     assert_eq!(assert_rule_ran(&runs, id).examined, 1);
+}
+
+/// A gate under a two-level stack, everything on one net.
+///
+/// Layer 0 is metal 1, layer 1 the cut joining it to the gate, layer 2 the gate,
+/// layer 3 metal 2 and layer 4 the cut joining metal 1 to metal 2. The gate is a
+/// thousand units square, metal 1 is twice that area and metal 2 ten times it,
+/// so the stage-one ratio is exactly two and the stage-two ratio exactly twelve
+/// with no rounding anywhere.
+fn gate_under_a_two_level_stack() -> (GeometryStore, NetTable, gpurify_core::PolyId) {
+    let mut layout = LayoutBuilder::new(5);
+    layout.rect(LayerId(0), 0, 0, 2_000, 1_000);
+    let gate = layout.rect(LayerId(2), 0, 0, 1_000, 1_000);
+    layout.rect(LayerId(3), 0, 0, 10_000, 1_000);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(4), 1_500, 400, 1_700, 600);
+    let (store, ids) = layout.finish();
+
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0), LayerId(2), LayerId(3)],
+        via_cut: vec![LayerId(1), LayerId(4)],
+        via_connects: vec![(LayerId(0), LayerId(2)), (LayerId(0), LayerId(3))],
+        intra_layer_touch: false,
+    };
+    let mut nets = NetTable::default();
+    gpurify_topology::extract_nets_into(&store, &connectivity, &mut nets);
+    (store, nets, ids.of(gate))
+}
+
+/// Oracle: closed form. A cumulative antenna check is one measurement **per
+/// fabrication stage**, not one over the finished stack — at the moment metal
+/// *k* is etched only the layers up to *k* exist, so a wire later tied to a huge
+/// upper plane is, at that instant, just itself. This crate spells that as one
+/// rule row per stage, and the two rows below are the same gate under the same
+/// geometry differing only in which layers had been deposited.
+///
+/// Both numbers are decided by the drawing: two thousand by one thousand of
+/// metal 1 on a thousand-square gate is a ratio of two, and metal 2's ten
+/// thousand by one thousand added to it is twelve. Each is asserted exactly,
+/// which is what separates the per-stage form from the two ways of getting it
+/// wrong — a rule measuring the final stack at every stage reports twelve
+/// twice, and a rule collecting only the layer a stage names rather than
+/// everything already under it reports ten for the second.
+#[test]
+fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_at_it() {
+    let (store, nets, gate) = gate_under_a_two_level_stack();
+    let derived = Evaluator::default();
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        derived: &derived,
+        nets: &nets,
+        devices: &devices,
+    };
+    let (early, late) = (rule(80), rule(81));
+    let table = AntennaTable {
+        head: gpurify_erc::ruleset::RuleHead {
+            rule: vec![early, late],
+            severity: vec![Severity::Error, Severity::Error],
+        },
+        gate: vec![LayerRef::Base(LayerId(2)), LayerRef::Base(LayerId(2))],
+        // Stage one collects metal 1 alone; stage two collects metal 1 *and*
+        // metal 2, because metal 2's etch sees everything already under it.
+        collector_start: vec![0, 1, 3],
+        collector: vec![
+            LayerRef::Base(LayerId(0)),
+            LayerRef::Base(LayerId(0)),
+            LayerRef::Base(LayerId(3)),
+        ],
+        collector_measure: vec![AntennaMeasure::Area; 3],
+        // Limits below both ratios, so each stage's own measurement lands in the
+        // table and can be read rather than inferred from a verdict.
+        max_ratio: vec![1.0, 1.0],
+    };
+
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+
+    assert_eq!(runs.len(), 2, "one run row per stage, whatever the verdict");
+    assert_eq!(
+        assert_rule_ran(&runs, early).examined,
+        1,
+        "one net carries a gate polygon at either stage"
+    );
+    assert_eq!(assert_rule_ran(&runs, late).examined, 1);
+
+    assert_eq!(violations.rule.len(), 2, "one report per stage");
+    assert_eq!(violations.rule, vec![early, late]);
+    for row in 0..2 {
+        assert_eq!(
+            violations.shape_a[row], gate,
+            "a stage's violation is reported at the gate it would damage"
+        );
+    }
+    assert_close_relative(
+        "the ratio at the stage that has only metal 1 under it",
+        measured_ratio(&violations, 0),
+        2.0,
+        1e-12,
+    );
+    assert_close_relative(
+        "the ratio at the stage that has both metals under it",
+        measured_ratio(&violations, 1),
+        12.0,
+        1e-12,
+    );
+}
+
+/// Oracle: law. Cumulative collecting area only grows as the stack is built, so
+/// the ratio a stage reports is non-decreasing in the stage index — a later
+/// stage can never measure less than an earlier one over the same gate. Stating
+/// it against a floor of zero puts every stage's number in the table where the
+/// law can be read, whatever the geometry.
+#[test]
+fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did() {
+    let (store, nets, _) = gate_under_a_two_level_stack();
+    let derived = Evaluator::default();
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        derived: &derived,
+        nets: &nets,
+        devices: &devices,
+    };
+    let stages = [rule(82), rule(83)];
+    let table = AntennaTable {
+        head: gpurify_erc::ruleset::RuleHead {
+            rule: stages.to_vec(),
+            severity: vec![Severity::Error; 2],
+        },
+        gate: vec![LayerRef::Base(LayerId(2)); 2],
+        collector_start: vec![0, 1, 3],
+        collector: vec![
+            LayerRef::Base(LayerId(0)),
+            LayerRef::Base(LayerId(0)),
+            LayerRef::Base(LayerId(3)),
+        ],
+        collector_measure: vec![AntennaMeasure::Area; 3],
+        // A ratio strictly above zero violates a zero ceiling, so every stage
+        // that collects anything at all lands in the table.
+        max_ratio: vec![f64::MIN_POSITIVE; 2],
+    };
+
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+
+    assert_eq!(runs.len(), 2);
+    let ratios: Vec<f64> = stages
+        .iter()
+        .map(|&id| {
+            let row = violations
+                .rule
+                .iter()
+                .position(|&r| r == id)
+                .unwrap_or_else(|| panic!("stage {id:?} collected area and must report it"));
+            measured_ratio(&violations, row)
+        })
+        .collect();
+
+    assert!(
+        ratios[0] <= ratios[1],
+        "stage one measured {} and stage two {}, so the stack lost collecting area",
+        ratios[0],
+        ratios[1]
+    );
 }
 
 /// A die-sized window over one layer, with only the bound the caller states.

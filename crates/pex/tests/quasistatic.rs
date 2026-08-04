@@ -16,7 +16,8 @@
 
 mod common;
 
-use common::{extracted, serialise, serialise_matrix, uniform_stack};
+use common::{extracted, grid, serialise, serialise_matrix, uniform_stack};
+use gpurify_ingest::deck::ProcessStack;
 use gpurify_pex::network::ParasiticNetwork;
 use gpurify_pex::quasistatic::gpu::Device;
 use gpurify_pex::quasistatic::matvec::{select, Backend, CpuMatVec, MatVec};
@@ -138,6 +139,19 @@ fn mesh_options(max_edge: i64, max_panels: u32) -> MeshOptions {
     }
 }
 
+/// The process stack every mesh below is built against.
+///
+/// `build_into` gained it in the Testing-Phase: a [`GeometryStore`] is
+/// two-dimensional, so the z extent a panel needs comes from `thickness_nm` and
+/// `height_nm`, and `Mesh::epsilon` comes from `dielectric_k`. Uniform across
+/// its three rows, so no law below can depend on which layer a conductor landed
+/// on — the corpora place them freely.
+///
+/// [`GeometryStore`]: gpurify_core::GeometryStore
+fn stack() -> ProcessStack {
+    uniform_stack(3, 1.0, 0.25)
+}
+
 /// Oracle: law. A conductor's surface area is a property of the conductor, not
 /// of how finely it was cut up, so halving `max_edge` must leave every
 /// conductor's area exactly where it was while producing at least as many
@@ -154,7 +168,9 @@ fn refining_a_mesh_subdivides_it_without_changing_any_conductors_area() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         mesh_options(500, 1 << 20),
+        grid(),
         &mut coarse,
     )
     .expect("a two-conductor corpus meshes below a million panels");
@@ -163,7 +179,9 @@ fn refining_a_mesh_subdivides_it_without_changing_any_conductors_area() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         mesh_options(250, 1 << 20),
+        grid(),
         &mut fine,
     )
     .expect("halving the panel edge stays below a million panels");
@@ -209,7 +227,9 @@ fn a_built_mesh_partitions_its_panels_across_the_nets_it_was_given() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         mesh_options(400, 1 << 20),
+        grid(),
         &mut mesh,
     )
     .expect("a three-conductor corpus meshes below a million panels");
@@ -292,7 +312,9 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
             case.store(),
             &case.nets,
             &case.selected,
+            &stack(),
             mesh_options(400, 1),
+            grid(),
             &mut mesh,
         ),
         Err(MeshError::TooManyPanels),
@@ -306,7 +328,9 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         mesh_options(400, 1 << 20),
+        grid(),
         &mut roomy,
     )
     .expect("the same corpus meshes when the limit allows it");
@@ -333,7 +357,9 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         options,
+        grid(),
         &mut fresh,
     )
     .expect("the corpus meshes");
@@ -345,7 +371,9 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         options,
+        grid(),
         &mut again,
     )
     .expect("the corpus meshes");
@@ -359,7 +387,9 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
         case.store(),
         &case.nets,
         &case.selected,
+        &stack(),
         options,
+        grid(),
         &mut again,
     )
     .expect("the corpus meshes");
@@ -633,7 +663,8 @@ fn a_field_solve_obeys_reciprocity_and_reports_the_backend_that_ran_it() {
         case.store(),
         &case.nets,
         &case.selected,
-        &uniform_stack(3, 1.0, 0.25),
+        &stack(),
+        grid(),
         options,
         &mut matrix,
         &mut network,
@@ -740,6 +771,7 @@ fn a_field_solve_is_byte_identical_across_runs() {
             &case.nets,
             &case.selected,
             &stack,
+            grid(),
             options,
             matrix,
             network,

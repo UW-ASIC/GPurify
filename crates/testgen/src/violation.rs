@@ -38,7 +38,7 @@
 //! | [`ShapeKind::OffGrid`] | `off_grid` |
 //! | [`ShapeKind::Angle`] | `angle` |
 //! | [`ShapeKind::Density`] | `density` |
-//! | [`ShapeKind::Antenna`] | `antenna`, `antenna_car` |
+//! | [`ShapeKind::Antenna`] | `antenna`, `antenna_electrical` |
 //! | [`ShapeKind::ViaArray`] | `redundant_via` |
 //! | [`ShapeKind::OddCycle`] | `multi_patterning` |
 

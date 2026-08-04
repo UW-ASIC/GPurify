@@ -13,10 +13,19 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 gpurify-testgen = { workspace = true }
+# So `format.rs`'s fixtures *may* name `LayerId` and `PolyId`. They still do
+# not: `push_row!` hands the corpus's values straight to the columns that
+# already carry those types, so nothing in this crate imports `gpurify_core`.
+# The dependency is the resolution filed under `## cli` in
+# `docs/SIGNATURE_DEFECTS.md` — it turns the macro from a workaround into a
+# choice — and it costs no build time, since `gpurify-core` is already in this
+# crate's graph through `gpurify-engine`.
+gpurify-core = { workspace = true }
 
-[lints]
-workspace = true
 
 [[bin]]
 name = "gpurify"
 path = "src/main.rs"
+
+[lints]
+workspace = true

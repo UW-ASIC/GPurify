@@ -29,9 +29,6 @@
 //! violation count is reading half the answer, so the summary makes the other
 //! half hard to miss.
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod pipeline;
 pub mod run;
 

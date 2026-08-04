@@ -161,11 +161,13 @@ fn a_width_exactly_at_the_maximum_is_clean() {
 /// coordinates are asserted: reporting one violation for a shape with two short
 /// jogs loses the second place a mask fails.
 ///
-/// `check_min_edge_length` reports at the edge's *first* vertex, and the store
-/// keeps the coordinate run the builder pushed, so those two vertices are fixed
-/// before the call: the rectangle is `(-20, 0) .. (20, 1000)` wound
-/// counter-clockwise from its lower-left corner, making the short edges
-/// `(-20, 0) -> (20, 0)` and `(20, 1000) -> (-20, 1000)`.
+/// `check_min_edge_length` reports at the edge's *midpoint* — the crate-wide
+/// convention stated on `rules::mod`, and the one `testgen::violation` already
+/// followed. The rectangle is `(-20, 0) .. (20, 1000)`, so its two short edges
+/// run along `y = 0` and `y = 1000` and their midpoints are `(0, 0)` and
+/// `(0, 1000)`. A midpoint has no winding, which is why it is the convention:
+/// the first-vertex reading made the answer depend on which corner the builder
+/// happened to push first.
 #[test]
 fn two_short_edges_on_one_shape_are_two_violations_at_two_coordinates() {
     let case = layout_with_violation(
@@ -199,11 +201,11 @@ fn two_short_edges_on_one_shape_are_two_violations_at_two_coordinates() {
         2,
         "a rectangle 40 across has two 40-unit edges, and each is its own edit"
     );
-    for first_vertex in [point(-20, 0), point(20, 1_000)] {
+    for midpoint in [point(0, 0), point(0, 1_000)] {
         let _ = assert_has_violation(
             &sink.out,
             &Violation {
-                at: first_vertex,
+                at: midpoint,
                 ..case.expected
             },
         );

@@ -4,19 +4,19 @@
 //!
 //! Every law in `boolean`'s own doc comment is stated over arbitrary operands.
 //! Most of them are asserted here over *particular* configurations instead —
-//! identical layers, disjoint layers, and one layer nested inside another —
-//! and that restriction is not a choice about coverage.
+//! identical layers, disjoint layers, and one layer nested inside another.
 //!
-//! [`ValidatedLayer`] holds ring spans and polygon spans, indices into a
-//! [`GeometryStore`]. It holds no coordinates, and [`ValidatedLayer::get`] takes
-//! the store as a parameter. So a result whose geometry is *new* — the L that
-//! two partially overlapping rectangles union into — has nowhere to live, and a
-//! test cannot read one back. The configurations below are the ones whose
-//! results are expressible as spans over the input store: a union that is one
-//! operand, an intersection that is one operand, a difference that is empty, and
-//! a union of disjoint operands that is the concatenation. This is recorded in
-//! `docs/NEED_TESTING.md` as a Definition-Phase defect; it is not fixed here,
-//! because signatures are frozen.
+//! That restriction was forced when these were written: [`ValidatedLayer`] held
+//! only spans into a [`GeometryStore`], so a result whose geometry is *new* —
+//! the L that two partially overlapping rectangles union into — had nowhere to
+//! live and could not be read back. It owns its coordinates as of the
+//! Testing-Phase, so the general operands are now expressible and these cases
+//! are merely narrower than they need to be, not all that is reachable.
+//!
+//! They are kept as they stand because each one names a configuration worth
+//! pinning on its own — the idempotent union, the empty difference, the
+//! disjoint concatenation — and widening them is Phase-4 work against bodies
+//! that can answer.
 //!
 //! Region equality is asserted as "each difference is empty and the areas
 //! agree", which needs only the *empty* result to be expressible. That is what

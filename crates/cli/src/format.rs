@@ -4,22 +4,228 @@
 //! it is here rather than there because it is a presentation choice rather than
 //! an interchange format — no other tool consumes it, so it may change freely.
 
-use gpurify_engine::{Outputs, Summary};
+use gpurify_engine::{Outputs, StageStatus, Summary};
 use gpurify_ingest::StrTable;
-use gpurify_units::Grid;
+use gpurify_report::{Measurement, Outcome, Severity, SkipReason};
+use gpurify_units::{Dbu, Grid};
+use std::fmt::Write as _;
 
 /// Render the findings.
 ///
 /// **Transform.** Caller owns `out`. Grouped by rule and ordered by the
 /// canonical sort the table already carries, so two runs print identically and
 /// a human diffing two logs sees only real changes.
-pub fn write_violations(
-    outputs: &Outputs,
-    strings: &StrTable,
-    grid: Grid,
-    out: &mut String,
-) {
-    todo!()
+///
+/// Three of the four columns of [`Outputs`] are findings and are all printed
+/// here, because this is the only text renderer that is handed the
+/// [`StrTable`] a name resolves through:
+///
+/// - `violations`, in the table's order, each row with its coordinate, what it
+///   measured and the limit it was compared against.
+/// - `runs`, one line per rule — its name, the shapes it examined, and for a
+///   rule that did not run, the reason. Without this an empty `violations` is
+///   ambiguous between a rule that ran and found nothing and a rule that never
+///   ran, which is the false-clean failure the whole tool is built against.
+/// - `lvs`, when present: `Match`, or every `Discrepancy` of a `Mismatch`, or
+///   the reason a comparison was `Inconclusive`. [`write_summary`] reports only
+///   whether the stage ran, so this is the only place the verdict itself can
+///   be read.
+///
+/// `parasitics` is not rendered. A parasitic network is interchange data for a
+/// simulator, and `export`'s SPEF and DSPF writers are where it goes.
+pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: &mut String) {
+    // `Violations::len` debug-asserts that the eight columns agree, which is
+    // this function's one precondition: it reads them row-wise.
+    let rows = outputs.violations.len();
+
+    // The record of what executed comes first, so a reader meets it before the
+    // findings rather than after them. An empty violation table is produced
+    // both by a rule that ran and found nothing and by a rule that never ran,
+    // and this section is the only thing that separates the two.
+    out.push_str("rules:\n");
+    if outputs.runs.is_empty() {
+        // Fail closed in prose: no rule record at all is not a clean run.
+        out.push_str("  none recorded — nothing was checked\n");
+    }
+    // Scalar, for two reasons that are facts about the data rather than corners
+    // cut. A deck holds tens to hundreds of rules, below the few hundred
+    // elements `/simd-loops` triage says vector code starts paying at; and the
+    // body is a variable-width append into one growing `String`, so the output
+    // offset of row N depends on every row before it and the append may
+    // reallocate. The `match` is a jump table over a three-variant tag, not a
+    // data-dependent branch over a column.
+    let mut recorded = 0usize;
+    for run in &outputs.runs {
+        let _ = write!(out, "  {}: ", strings.resolve(run.rule));
+        match run.outcome {
+            Outcome::Ran => out.push_str("ran"),
+            Outcome::Skipped(reason) => {
+                let _ = write!(out, "skipped, {}", skip_reason(reason));
+            }
+            Outcome::Refused => out.push_str("refused"),
+        }
+        let _ = writeln!(
+            out,
+            ", examined {} shapes, found {} violations",
+            run.examined, run.violations
+        );
+        recorded += 1;
+    }
+    // The same tripwire the violation loop below carries, for the stronger
+    // claim: a rule record that never reached the text is a rule the reader
+    // will read as never having existed, which is the false-clean failure this
+    // section is here to prevent.
+    debug_assert_eq!(
+        recorded,
+        outputs.runs.len(),
+        "the rule-record renderer dropped rules"
+    );
+
+    let _ = writeln!(out, "violations: {rows}");
+    // A scalar loop over a column that reaches tens of thousands of rows, and
+    // it stays scalar: the output is text appended to one growing `String`, so
+    // row N's output offset is row N−1's output length and the append may
+    // reallocate. Formatting is not a kernel — that is a loop-carried chain,
+    // and `/simd-loops` triage stops there.
+    let mut written = 0usize;
+    for row in 0..rows {
+        let violation = outputs.violations.get(row);
+        // The report is the last place a `NaN` can be caught before a human
+        // reads it as a measurement; `Measurement::is_finite` is what names it.
+        debug_assert!(
+            violation.measured.is_finite(),
+            "row {row} measured {:?}, which is not finite",
+            violation.measured
+        );
+        debug_assert!(
+            violation.limit.is_finite(),
+            "row {row} has limit {:?}, which is not finite",
+            violation.limit
+        );
+
+        let _ = write!(
+            out,
+            "  {} {} layer {} at ({}, {}) measured ",
+            strings.resolve(violation.rule),
+            severity(violation.severity),
+            violation.layer.0,
+            grid.to_length(violation.at.x),
+            grid.to_length(violation.at.y),
+        );
+        write_measurement(out, grid, violation.measured);
+        out.push_str(" against limit ");
+        write_measurement(out, grid, violation.limit);
+        let _ = write!(out, " on shape {}", violation.shapes.0 .0);
+        // The taken side is a whole format call, and a spacing row is a
+        // minority of any real table: skipping expensive work is what a branch
+        // is for. There is no branchless spelling of "print another number".
+        if let Some(other) = violation.shapes.1 {
+            let _ = write!(out, " and shape {}", other.0);
+        }
+        out.push('\n');
+        written += 1;
+    }
+    // A formatter that collapsed rows sharing a rule would report fewer
+    // violations than were found — the count-only failure, one stage later.
+    debug_assert_eq!(written, rows, "the violation renderer dropped rows");
+
+    // The verdict prints through `Debug`, and not as a shortcut this file can
+    // spend down: `Outputs::lvs` is `Option<gpurify_lvs::Verdict>`,
+    // `gpurify-lvs` is not a dependency of this crate, and `gpurify_engine`
+    // re-exports `Outputs` without re-exporting `Verdict` — so the value is
+    // holdable here and the type is not nameable, which is exactly the pair
+    // that makes a `match` impossible. `Debug` reaches every `Discrepancy` but
+    // stops at `StrId(7)`: the model, net and parameter names print as interned
+    // integers while the `StrTable` that resolves them is a parameter of this
+    // very function.
+    //
+    // Filed under `## cli` in `docs/SIGNATURE_DEFECTS.md`, where the fix is a
+    // `Verdict`/`Discrepancy`/`Inconclusive`/`Side` re-export from
+    // `gpurify_engine` and a `match` here that resolves each `StrId`. Neither
+    // half is writable in this file. What the line is *not* is a lost finding:
+    // `engine::run_lvs` already turns every discrepancy of a `Mismatch` into a
+    // `Severity::Error` row of the table printed above, and `write_summary`
+    // carries `Inconclusive` through as the stage's own status, so a verdict is
+    // never readable only from here.
+    if let Some(verdict) = &outputs.lvs {
+        let _ = writeln!(out, "lvs: {verdict:?}");
+    }
+}
+
+/// One measurement, with the run's grid applied.
+///
+/// [`Measurement`]'s own `Display` prints raw database units and says so,
+/// because `std::fmt` has nowhere to carry a [`Grid`]. Whoever holds one
+/// applies it, and for the text report that is here.
+///
+/// Both layout dimensions are converted, and both land in the unit the JSON
+/// report already uses: a length in `nm`, an area in `nm^2`. One run therefore
+/// states one number for one violation whichever report a reader opens, which
+/// it did not while the area arm was missing and an area printed the raw
+/// `dbu^2` that [`Measurement`]'s own `Display` gives it.
+///
+/// `units` still has no `Grid::to_area`, and that is the one thing filed under
+/// `## cli` in `docs/SIGNATURE_DEFECTS.md` — `export::json::write_measurement`
+/// squares a *privately re-derived* `1000 / dbu_per_um`. This file does not:
+/// the area arm below reads its factor back out of [`Grid::to_length`], so
+/// there is exactly one statement of the physical conversion in this crate and
+/// it is the same one the length arm above uses. A shared `Grid::to_area`
+/// deletes json's copy; it would not delete anything here.
+///
+/// The remaining five variants need no grid at all — a ratio, a count and the
+/// three electrical quantities are already physical — so they fall through to
+/// `Display`.
+fn write_measurement(out: &mut String, grid: Grid, measurement: Measurement) {
+    match measurement {
+        Measurement::Length(value) => {
+            let _ = write!(out, "{}", grid.to_length(value));
+        }
+        Measurement::Area(value) => {
+            // Nanometres per database unit, asked of the conversion rather than
+            // recomputed from `dbu_per_um`: an area is a product of two
+            // coordinates, so its factor is the length factor squared, and
+            // taking it from `to_length` is what stops the two arms drifting.
+            let per_dbu = grid.to_length(Dbu::new_unchecked(1)).raw();
+            debug_assert!(
+                per_dbu.is_finite() && per_dbu > 0.0,
+                "a positive grid gives a positive length to one database unit, not {per_dbu}"
+            );
+
+            // `|raw| <= MAX_ABS_DBU^2 == 2^80`, so the cast rounds and cannot
+            // overflow. Rounding is acceptable precisely here and nowhere
+            // upstream: this value is printed once and never summed.
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "an area past 2^53 dbu^2 is reported to a reader, not accumulated"
+            )]
+            let square_nm = value.raw() as f64 * per_dbu * per_dbu;
+            debug_assert!(
+                square_nm.is_finite(),
+                "a bounded area over a positive grid rendered as {square_nm}"
+            );
+            let _ = write!(out, "{square_nm} nm^2");
+        }
+        other => {
+            let _ = write!(out, "{other}");
+        }
+    }
+}
+
+/// The one spelling of each severity, so a reader greps for a fixed word.
+fn severity(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Warning => "warning",
+        Severity::Error => "error",
+    }
+}
+
+/// Why a rule did not run, phrased as the thing the reader can supply.
+fn skip_reason(reason: SkipReason) -> &'static str {
+    match reason {
+        SkipReason::NoDesignIntent => "no design intent was supplied",
+        SkipReason::NotInDeck => "the deck does not configure this rule",
+        SkipReason::EmptyLayer => "the layer it names holds no geometry",
+    }
 }
 
 /// Render the summary.
@@ -29,7 +235,52 @@ pub fn write_violations(
 /// footnote is technically complete and practically a lie, and this is the last
 /// place in the pipeline where that can be got wrong.
 pub fn write_summary(summary: &Summary, out: &mut String) {
-    todo!()
+    // The same relation `Summary::passed` asserts, at the point a human reads
+    // the three numbers side by side and does the arithmetic himself. Not
+    // equality: `errors + warnings == violations` is stronger than anything
+    // `engine` promises, and asserting a guarantee its producer never made is
+    // how the panic below would end up firing on a correct run.
+    debug_assert!(
+        summary.errors <= summary.violations && summary.warnings <= summary.violations,
+        "a severity count larger than the table it counts: {summary:?}"
+    );
+
+    out.push_str("summary:\n");
+    // Four stages, named in the order the pipeline runs them. A stage that
+    // could not run carries the reason it was skipped, and that reason is the
+    // only thing telling a reader whether the missing input was theirs.
+    write_stage(out, "drc", &summary.drc);
+    write_stage(out, "erc", &summary.erc);
+    write_stage(out, "lvs", &summary.lvs);
+    write_stage(out, "pex", &summary.pex);
+
+    // Skipped before clean, clean before the violation count. Printed
+    // unconditionally, including when it is zero: a summary that leads with a
+    // count and footnotes what did not run is complete and still a lie.
+    let _ = writeln!(out, "  {} rules skipped", summary.rules_skipped);
+    let _ = writeln!(out, "  {} rules clean", summary.rules_clean);
+    let _ = writeln!(
+        out,
+        "  {} violations: {} errors, {} warnings",
+        summary.violations, summary.errors, summary.warnings
+    );
+
+    debug_assert!(out.ends_with('\n'), "the summary ends mid-line");
+}
+
+/// One stage's status line.
+fn write_stage(out: &mut String, stage: &str, status: &StageStatus) {
+    let _ = write!(out, "  {stage}: ");
+    match status {
+        StageStatus::Ran => out.push_str("ran\n"),
+        StageStatus::NotSelected => out.push_str("not selected\n"),
+        StageStatus::Skipped(why) => {
+            let _ = writeln!(out, "skipped, {why}");
+        }
+        StageStatus::Refused(why) => {
+            let _ = writeln!(out, "refused, {why}");
+        }
+    }
 }
 
 /// Render an error a user can act on.
@@ -38,7 +289,20 @@ pub fn write_summary(summary: &Summary, out: &mut String) {
 /// prints that, and does not print a backtrace: a deck with an off-grid limit
 /// is a user error, and a stack trace tells the user nothing about it.
 pub fn write_error(error: &dyn std::error::Error, out: &mut String) {
-    todo!()
+    let _ = writeln!(out, "error: {error}");
+    // A raw loop because there is nothing else this could be. An error chain
+    // is a handful of links rather than bulk data, and its length is not known
+    // until it has been walked — each `source()` is the previous one's output,
+    // the chain dependency that has no vectorised form at all.
+    // `#[error(transparent)]` makes a wrapper repeat its inner message here,
+    // which is the honest rendering: the wrapper genuinely has nothing else to
+    // say.
+    let mut cause = error.source();
+    while let Some(link) = cause {
+        let _ = writeln!(out, "  caused by: {link}");
+        cause = link.source();
+    }
+    debug_assert!(out.ends_with('\n'), "the error ends mid-line");
 }
 
 /// The text renderer, against answers built before it runs.
@@ -56,12 +320,14 @@ pub fn write_error(error: &dyn std::error::Error, out: &mut String) {
 /// from its seed, so the rows below are as fixed as literals would have been.
 #[cfg(test)]
 mod tests {
-    use super::{write_error, write_summary, write_violations};
+    use super::{write_error, write_measurement, write_summary, write_violations};
     use gpurify_engine::{Outputs, StageStatus, Summary};
     use gpurify_ingest::StrTable;
     use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
-    use gpurify_testgen::{assert_bytes_identical, dbu, point, scale_corpus, ScaleCorpus, ScaleSpec};
-    use gpurify_units::Grid;
+    use gpurify_testgen::{
+        assert_bytes_identical, dbu, point, scale_corpus, ScaleCorpus, ScaleSpec,
+    };
+    use gpurify_units::{DbuArea, Grid};
 
     /// Append one row to the violation columns directly.
     ///
@@ -79,7 +345,9 @@ mod tests {
             violations.layer.push($layer);
             violations.severity.push(Severity::Error);
             violations.at.push(point(x, y));
-            violations.measured.push(Measurement::Length(dbu($measured)));
+            violations
+                .measured
+                .push(Measurement::Length(dbu($measured)));
             violations.limit.push(Measurement::Length(dbu($limit)));
             violations.shape_a.push($shape);
             violations.shape_b.push(None);
@@ -87,10 +355,11 @@ mod tests {
     }
 
     /// One database unit is one nanometre at this resolution, so a coordinate
-    /// prints with the same digits whether the formatter renders the raw unit
-    /// or converts to nanometres as `Measurement`'s docs say it does. That is
-    /// what lets these tests assert on a coordinate without fixing a rendering
-    /// convention the frozen signatures never stated.
+    /// prints with the same digits either way. `Measurement`'s `Display` emits
+    /// raw database units as of the Testing-Phase and the grid is applied by
+    /// whoever holds one — this formatter — so the two readings coincide here
+    /// by construction, which is what lets these tests assert on a coordinate
+    /// without also fixing the conversion.
     const DBU_PER_UM: i64 = 1_000;
 
     fn grid() -> Grid {
@@ -350,6 +619,33 @@ mod tests {
         assert!(
             line_for("antenna_ratio").contains("skip"),
             "the rule that did not run is printed as though it had:\n{out}"
+        );
+    }
+
+    /// Oracle: closed form. An area is a product of two coordinates, so its
+    /// conversion is the length conversion squared, and both numbers are known
+    /// before the formatter runs: on a 2000-unit micrometre one unit is 0.5 nm,
+    /// so 4 dbu is 2 nm and 48 dbu^2 is 12 nm^2. The second assertion is the
+    /// point of the arm — an area that still printed raw database units would
+    /// read `48`, which is the number the JSON report of the same run does not
+    /// print.
+    #[test]
+    fn an_area_is_converted_through_the_same_grid_factor_a_length_is() {
+        let grid =
+            Grid::new(2_000).expect("2000 database units per micrometre is a legal resolution");
+        let mut out = String::new();
+        write_measurement(&mut out, grid, Measurement::Length(dbu(4)));
+        out.push(' ');
+        write_measurement(&mut out, grid, Measurement::Area(DbuArea::new(48)));
+
+        assert!(
+            out.contains("2 nm"),
+            "4 database units on a 0.5 nm grid is 2 nm:\n{out}"
+        );
+        assert!(
+            out.contains("12 nm^2"),
+            "48 dbu^2 on a 0.5 nm grid is 12 nm^2, and a raw 48 would be the \
+             text report disagreeing with the JSON one:\n{out}"
         );
     }
 

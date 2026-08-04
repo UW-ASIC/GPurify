@@ -19,7 +19,7 @@ use gpurify_report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_testgen::point;
 use gpurify_testgen::Rng;
 use gpurify_topology::NetId;
-use gpurify_units::{prefix, Current, Qty, Resistance, Voltage};
+use gpurify_units::{prefix, Current, Grid, Qty, Resistance, Temperature, Voltage};
 
 /// A rule id. Tests never need the text, so they never need a `StrTable` —
 /// whose `intern` is a frozen `todo!()` until the Implementation-Phase.
@@ -51,6 +51,29 @@ pub fn millivolts(value: f64) -> Qty<Voltage, { prefix::MILLI }> {
 #[must_use]
 pub fn microamps(value: f64) -> Qty<Current, { prefix::MICRO }> {
     Qty::new(value)
+}
+
+/// The 1 nm manufacturing grid every conductor width here is stated against.
+///
+/// Named against `PowerGrid`, which every test in this crate calls `grid` — the
+/// two are unrelated and the shorter name is taken. A function rather than a
+/// `const`, because [`Grid::new`] is a `const fn` over a `todo!()` body until
+/// the Implementation-Phase and a `const` would evaluate it at compile time.
+/// `PowerGrid`'s edge widths are database units and the current-density limits
+/// are amps per metre; this is what closes the chain between them.
+#[must_use]
+pub fn manufacturing_grid() -> Grid {
+    Grid::new(1_000).expect("1000 database units per micrometre is a 1 nm grid")
+}
+
+/// 85 °C, absolute — the operating point every derating below is computed at.
+///
+/// Kelvin, and stated as a named constant rather than inline, because a bare
+/// `85.0` reaching Black's equation is the exact fail-open the refusal tests
+/// further down exist to catch.
+#[must_use]
+pub fn operating_temperature() -> Qty<Temperature, { prefix::BASE }> {
+    Qty::new(358.15)
 }
 
 /// The run row a rule recorded, whatever its outcome.

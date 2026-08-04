@@ -211,24 +211,11 @@ fn a_hole_one_square_unit_under_the_limit_is_reported_at_the_hole() {
     );
 
     assert_eq!(sink.out.rule.len(), 1, "the ring has exactly one hole");
-    let hole_vertices = [
-        point(-50, -100),
-        point(50, -100),
-        point(50, 100),
-        point(-50, 100),
-    ];
-    assert!(
-        hole_vertices.contains(&sink.out.at[0]),
-        "the violation is marked at {:?}, which is not a vertex of the hole ring",
-        sink.out.at[0]
-    );
-    let _ = assert_has_violation(
-        &sink.out,
-        &Violation {
-            at: sink.out.at[0],
-            ..case.expected
-        },
-    );
+    // The centre of the hole's bounding box, per the crate's convention. The
+    // hole spans `(-50, -100) .. (50, 100)`, so that is the origin — and it is
+    // inside the hole, which no vertex of the ring is.
+    assert_eq!(sink.out.at[0], point(0, 0));
+    let _ = assert_has_violation(&sink.out, &case.expected);
 
     let run = assert_rule_ran(&sink.runs, RULE);
     assert_eq!(run.examined, 1, "examined counts holes, and the ring has one");
@@ -399,8 +386,8 @@ fn density_table(window: i64, step: i64, limit: f64, sense: LimitSense) -> Densi
 }
 
 /// Oracle: construct-from-answer. The one window whose coverage exceeds 0.2 is
-/// the one spanning `[500, 1500]` on both axes, and `check_density` reports at a
-/// window's lower-left corner, so the coordinate is `(500, 500)`. Nine windows
+/// the one spanning `[500, 1500]` on both axes, and `check_density` reports at
+/// the window's *centre*, so the coordinate is `(1000, 1000)`. Nine windows
 /// are evaluated — three step positions per axis over a 2000-unit extent — which
 /// is what `examined` must report.
 #[test]
@@ -422,7 +409,7 @@ fn a_hot_spot_straddling_two_windows_is_caught_by_the_stepped_sweep() {
         1,
         "only the half-step window covers the whole block"
     );
-    assert_eq!(sink.out.at[0], point(500, 500));
+    assert_eq!(sink.out.at[0], point(1_000, 1_000));
     assert_eq!(sink.out.measured[0], Measurement::Ratio(0.25));
     assert_eq!(sink.out.limit[0], Measurement::Ratio(0.2));
     assert_eq!(sink.out.layer[0], A);
@@ -492,7 +479,7 @@ fn a_window_exactly_at_the_density_limit_is_clean_and_just_over_it_is_not() {
         &mut over.runs,
     );
     assert_eq!(over.out.rule.len(), 1);
-    assert_eq!(over.out.at[0], point(500, 500));
+    assert_eq!(over.out.at[0], point(1_000, 1_000));
     assert_eq!(over.out.measured[0], Measurement::Ratio(0.25));
 }
 
@@ -523,8 +510,9 @@ fn the_minimum_sense_flags_the_sparse_windows_the_maximum_sense_ignores() {
          0.25"
     );
     assert!(
-        sink.out.at.iter().all(|&at| at != point(500, 500)),
-        "the densest window is the one window a minimum-density rule must not flag"
+        sink.out.at.iter().all(|&at| at != point(1_000, 1_000)),
+        "the densest window is the one window a minimum-density rule must not \
+         flag; its centre is (1000, 1000), the centre of the span [500, 1500]"
     );
 }
 

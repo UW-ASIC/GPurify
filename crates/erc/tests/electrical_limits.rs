@@ -5,19 +5,19 @@
 //! per-layer limit covers, and the two places a physically impossible parameter
 //! must produce a refusal rather than a pass.
 //!
-//! Two of the four rules here have no absolute oracle, and the reason is
-//! recorded in `docs/NEED_TESTING.md` rather than papered over: current density
-//! is amps per metre and `check_em_current_density` is handed a conductor width
-//! in database units with no `Grid` to convert it, so the number cannot be
-//! stated in closed form from outside. What *can* be stated without the unit
-//! chain is which edges the rule looks at and how its verdict moves with the
-//! limit, and that is what is asserted.
+//! Current density is amps per metre and the conductor widths are database
+//! units; the `Grid` that converts between them is a parameter as of the
+//! Testing-Phase, so the closed form is reachable here. What is asserted below
+//! is still the scope and the direction — which edges the rule looks at, and
+//! how its verdict moves with the limit — because those fail against a rule
+//! that never performs the comparison at all, which an absolute value taken at
+//! one point does not.
 
 mod common;
 
 use common::{
-    declared_supplies, head, limit_net, microamps, millivolts, rule, series_chain, solve,
-    GridBuilder,
+    declared_supplies, head, limit_net, manufacturing_grid, microamps, millivolts,
+    operating_temperature, rule, series_chain, solve, GridBuilder,
 };
 use gpurify_core::{LayerId, PolyId};
 use gpurify_erc::facts::IntentMap;
@@ -251,6 +251,7 @@ fn density_table(id: StrId, layer: LayerId, limit: f64) -> EmCurrentDensityTable
         layer_start: vec![0, 1],
         layer: vec![layer],
         max_density: vec![density(limit)],
+        max_current_per_cut: vec![microamps(200.0)],
     }
 }
 
@@ -276,6 +277,7 @@ fn em_current_density_examines_only_the_edges_on_a_limited_layer() {
         check_em_current_density(
             Some(solved),
             &intent_with(NetLimits::default()),
+            manufacturing_grid(),
             &density_table(id, LayerId(1), limit),
             &mut violations,
             &mut runs,
@@ -316,6 +318,7 @@ fn em_current_density_reports_everything_below_a_tiny_limit_and_nothing_below_a_
     check_em_current_density(
         Some(solved),
         &intent_with(NetLimits::default()),
+        manufacturing_grid(),
         &density_table(strict, LayerId(0), 1e-30),
         &mut violations,
         &mut runs,
@@ -333,6 +336,7 @@ fn em_current_density_reports_everything_below_a_tiny_limit_and_nothing_below_a_
         check_em_current_density(
             Some(solved),
             &intent_with(NetLimits::default()),
+            manufacturing_grid(),
             &density_table(lax, LayerId(0), 1e30),
             &mut v,
             &mut r,
@@ -385,6 +389,8 @@ fn an_electromigration_reference_temperature_that_is_not_absolute_is_refused() {
     check_electromigration(
         Some(solved),
         &intent_with(NetLimits::default()),
+        manufacturing_grid(),
+        operating_temperature(),
         &electromigration_table(good, 358.15, LayerId(0)),
         &mut violations,
         &mut runs,
@@ -401,6 +407,8 @@ fn an_electromigration_reference_temperature_that_is_not_absolute_is_refused() {
         check_electromigration(
             Some(solved),
             &intent_with(NetLimits::default()),
+            manufacturing_grid(),
+            operating_temperature(),
             &electromigration_table(id, absolute_zero_or_below, LayerId(0)),
             &mut violations,
             &mut runs,
@@ -454,6 +462,7 @@ fn a_reliability_duty_cycle_outside_the_unit_interval_is_refused() {
         check_reliability(
             Some(solved),
             &intent_with(NetLimits::default()),
+            operating_temperature(),
             &reliability_table(id, duty, 1_950.0),
             &mut violations,
             &mut runs,
@@ -495,6 +504,7 @@ fn a_node_over_the_absolute_voltage_cap_is_reported_with_its_own_voltage() {
             solution: &solution,
         }),
         &intent_with(NetLimits::default()),
+        operating_temperature(),
         &reliability_table(id, 0.5, 1_000.0),
         &mut violations,
         &mut runs,

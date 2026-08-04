@@ -4,18 +4,18 @@
 //! sheet resistance times squares, a via divided by its cuts, and the
 //! parallel-plate limit reached from a fringe term that has to fall away.
 //!
-//! Two of the four formulae cannot be pinned to an absolute number as their
-//! signatures stand — `ground_capacitance` and `coupling_capacitance` take deck
-//! coefficients per micrometre and geometry in database units with no `Grid`
-//! between them, so no unit chain closes (`docs/NEED_TESTING.md`). What is
-//! testable there is every law the doc comments claim: superposition of the two
-//! terms, linearity in each coefficient, and the limit the area term is the
-//! limit of. Those hold whatever convention the Implementation-Phase settles
-//! on, which is why they are worth writing now rather than waiting.
+//! `ground_capacitance` and `coupling_capacitance` take deck coefficients per
+//! micrometre and geometry in database units, and the `Grid` that closes the
+//! chain between them is a parameter as of the Testing-Phase, so both have an
+//! absolute answer now. The laws are kept alongside the worked value —
+//! superposition of the two terms, linearity in each coefficient, and the limit
+//! the area term is the limit of — because each fails against a different wrong
+//! implementation than a single number does: a formula that couples the two
+//! terms can still hit one point exactly.
 
 mod common;
 
-use common::{extracted, resistance_ohm, serialise, uniform_stack};
+use common::{extracted, grid, resistance_ohm, serialise, uniform_stack};
 use gpurify_core::LayerId;
 use gpurify_ingest::deck::ProcessStack;
 use gpurify_pex::analytical::{
@@ -107,6 +107,29 @@ fn via_conductance_adds_over_every_cut_count() {
     }
 }
 
+/// Oracle: closed form. Writable as of the Testing-Phase, when
+/// `ground_capacitance` gained the `Grid` that turns its two database-unit
+/// arguments into the micrometres its two coefficients are stated per.
+///
+/// A 4 µm by 9 µm plate on a 1 nm grid is 36 µm² of area and 26 µm of
+/// perimeter, so at 1.7 aF/µm² and 0.4 aF/µm the answer is
+/// `1.7 × 36 + 0.4 × 26 = 71.6` attofarads — `0.0716` femtofarads, which is the
+/// unit the return type names. The arithmetic is written out in the assertion
+/// and no implementation is consulted to know it. This is the one case that
+/// catches a formula off by the grid factor itself; every law below is blind to
+/// a uniform scale.
+#[test]
+fn a_four_by_nine_micrometre_plate_is_seventy_one_point_six_attofarads() {
+    let c = ground_capacitance(
+        1.7,
+        0.4,
+        DbuArea::new(4_000 * 9_000),
+        dbu(2 * (4_000 + 9_000)),
+        grid(),
+    );
+    assert_close("36 um^2 at 1.7 aF/um^2 plus 26 um at 0.4 aF/um", c.raw(), 0.0716, 1e-12);
+}
+
 /// Oracle: law. The doc comment defines ground capacitance as an area term plus
 /// a fringe term, so the two superpose: computing them together must equal
 /// computing each alone and adding. This holds whatever the unit convention
@@ -115,9 +138,9 @@ fn via_conductance_adds_over_every_cut_count() {
 fn ground_capacitance_superposes_its_area_and_fringe_terms() {
     let area = DbuArea::new(4_000 * 9_000);
     let perimeter = dbu(2 * (4_000 + 9_000));
-    let both = ground_capacitance(1.7, 0.4, area, perimeter).raw();
-    let area_only = ground_capacitance(1.7, 0.0, area, perimeter).raw();
-    let fringe_only = ground_capacitance(0.0, 0.4, area, perimeter).raw();
+    let both = ground_capacitance(1.7, 0.4, area, perimeter, grid()).raw();
+    let area_only = ground_capacitance(1.7, 0.0, area, perimeter, grid()).raw();
+    let fringe_only = ground_capacitance(0.0, 0.4, area, perimeter, grid()).raw();
     assert!(
         area_only > 0.0 && fringe_only > 0.0,
         "both terms must contribute: got {area_only} and {fringe_only}"
@@ -132,20 +155,20 @@ fn ground_capacitance_superposes_its_area_and_fringe_terms() {
 fn ground_capacitance_is_linear_in_each_deck_coefficient() {
     let area = DbuArea::new(2_500 * 2_500);
     let perimeter = dbu(4 * 2_500);
-    let reference = ground_capacitance(1.0, 1.0, area, perimeter).raw();
+    let reference = ground_capacitance(1.0, 1.0, area, perimeter, grid()).raw();
 
-    let area_share = ground_capacitance(1.0, 0.0, area, perimeter).raw();
+    let area_share = ground_capacitance(1.0, 0.0, area, perimeter, grid()).raw();
     assert_close_relative(
         "three times the area coefficient",
-        ground_capacitance(3.0, 1.0, area, perimeter).raw(),
+        ground_capacitance(3.0, 1.0, area, perimeter, grid()).raw(),
         reference + 2.0 * area_share,
         1e-12,
     );
 
-    let fringe_share = ground_capacitance(0.0, 1.0, area, perimeter).raw();
+    let fringe_share = ground_capacitance(0.0, 1.0, area, perimeter, grid()).raw();
     assert_close_relative(
         "three times the fringe coefficient",
-        ground_capacitance(1.0, 3.0, area, perimeter).raw(),
+        ground_capacitance(1.0, 3.0, area, perimeter, grid()).raw(),
         reference + 2.0 * fringe_share,
         1e-12,
     );
@@ -170,8 +193,8 @@ fn the_fringe_share_of_a_square_plate_falls_inversely_with_the_plate_side() {
     let share = |side: i64| {
         let area = DbuArea::new(i128::from(side) * i128::from(side));
         let perimeter = dbu(4 * side);
-        let plate = ground_capacitance(1.0, 0.0, area, perimeter).raw();
-        let fringe = ground_capacitance(0.0, 1.0, area, perimeter).raw();
+        let plate = ground_capacitance(1.0, 0.0, area, perimeter, grid()).raw();
+        let fringe = ground_capacitance(0.0, 1.0, area, perimeter, grid()).raw();
         assert!(
             plate > 0.0 && fringe > 0.0,
             "a plate of side {side} has an area term of {plate} and a fringe term of {fringe}"
@@ -205,8 +228,8 @@ fn the_fringe_share_of_a_square_plate_falls_inversely_with_the_plate_side() {
     // whatever a database unit is worth in the deck's length unit.
     let area = DbuArea::new(1_000_000_000_i128 * 1_000_000_000);
     let perimeter = dbu(4_000_000_000);
-    let total = ground_capacitance(1.0, 1.0, area, perimeter).raw();
-    let plate = ground_capacitance(1.0, 0.0, area, perimeter).raw();
+    let total = ground_capacitance(1.0, 1.0, area, perimeter, grid()).raw();
+    let plate = ground_capacitance(1.0, 0.0, area, perimeter, grid()).raw();
     assert_close_relative("the parallel-plate limit", total / plate, 1.0 + vast, 1e-12);
 }
 
@@ -216,7 +239,7 @@ fn the_fringe_share_of_a_square_plate_falls_inversely_with_the_plate_side() {
 /// comment claims, and none of them needs the unit convention resolved.
 #[test]
 fn coupling_capacitance_scales_with_facing_length_and_falls_with_separation() {
-    let reference = coupling_capacitance(2.0, dbu(6_000), dbu(300)).raw();
+    let reference = coupling_capacitance(2.0, dbu(6_000), dbu(300), grid()).raw();
     assert!(
         reference > 0.0,
         "two facing conductors couple: got {reference}"
@@ -224,20 +247,20 @@ fn coupling_capacitance_scales_with_facing_length_and_falls_with_separation() {
 
     assert_close_relative(
         "twice the facing length",
-        coupling_capacitance(2.0, dbu(12_000), dbu(300)).raw(),
+        coupling_capacitance(2.0, dbu(12_000), dbu(300), grid()).raw(),
         2.0 * reference,
         1e-12,
     );
     assert_close_relative(
         "twice the coefficient",
-        coupling_capacitance(4.0, dbu(6_000), dbu(300)).raw(),
+        coupling_capacitance(4.0, dbu(6_000), dbu(300), grid()).raw(),
         2.0 * reference,
         1e-12,
     );
 
     let mut previous = f64::INFINITY;
     for separation in [100_i64, 300, 900, 2_700, 8_100] {
-        let value = coupling_capacitance(2.0, dbu(6_000), dbu(separation)).raw();
+        let value = coupling_capacitance(2.0, dbu(6_000), dbu(separation), grid()).raw();
         assert!(
             value > 0.0 && value < previous,
             "coupling must fall strictly with separation: {value} at {separation} \
@@ -295,6 +318,7 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         &case.nets,
         &devices,
         &uniform_stack(3, 1.0, 0.25),
+        grid(),
         &mut single,
     );
     extract_into(
@@ -302,6 +326,7 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         &case.nets,
         &devices,
         &uniform_stack(3, 3.0, 0.75),
+        grid(),
         &mut tripled,
     );
 
@@ -331,6 +356,7 @@ fn every_extracted_resistance_is_positive_and_at_least_one_exists() {
         &case.nets,
         &DeviceTable::default(),
         &uniform_stack(3, 1.0, 0.25),
+        grid(),
         &mut network,
     );
 
@@ -364,6 +390,7 @@ fn extracted_elements_name_real_nodes_and_order_every_coupling_by_net() {
         &case.nets,
         &DeviceTable::default(),
         &uniform_stack(3, 1.0, 0.25),
+        grid(),
         &mut network,
     );
 
@@ -428,6 +455,7 @@ fn per_net_capacitance_sums_to_the_total_plus_the_coupling_counted_twice() {
         &case.nets,
         &DeviceTable::default(),
         &uniform_stack(3, 1.0, 0.25),
+        grid(),
         &mut network,
     );
 
@@ -475,6 +503,7 @@ fn extraction_emits_the_order_sort_canonical_would_have_produced() {
         &case.nets,
         &DeviceTable::default(),
         &uniform_stack(3, 1.0, 0.25),
+        grid(),
         &mut network,
     );
 
@@ -500,16 +529,16 @@ fn extraction_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     let stack = uniform_stack(3, 1.4, 0.35);
 
     let mut fresh = ParasiticNetwork::default();
-    extract_into(case.store(), &case.nets, &devices, &stack, &mut fresh);
+    extract_into(case.store(), &case.nets, &devices, &stack, grid(), &mut fresh);
     let first = serialise(&fresh);
 
     let mut again = ParasiticNetwork::default();
-    extract_into(case.store(), &case.nets, &devices, &stack, &mut again);
+    extract_into(case.store(), &case.nets, &devices, &stack, grid(), &mut again);
     assert_bytes_identical("two extractions of one corpus", &first, &serialise(&again));
 
     // The same buffer, a second time. Anything appended rather than replaced
     // shows up here and nowhere else.
-    extract_into(case.store(), &case.nets, &devices, &stack, &mut again);
+    extract_into(case.store(), &case.nets, &devices, &stack, grid(), &mut again);
     assert_bytes_identical(
         "an extraction into a reused buffer",
         &first,
@@ -531,7 +560,7 @@ fn extracting_one_net_does_not_depend_on_which_nets_came_before_it() {
         .iter()
         .map(|&net| {
             let mut one = ParasiticNetwork::default();
-            extract_net_into(case.store(), &case.nets, net, &stack, &mut one);
+            extract_net_into(case.store(), &case.nets, net, &stack, grid(), &mut one);
             assert!(
                 one.element_count() > 0,
                 "net {} extracted nothing at all",
@@ -550,6 +579,7 @@ fn extracting_one_net_does_not_depend_on_which_nets_came_before_it() {
             &case.nets,
             case.selected[index],
             &stack,
+            grid(),
             &mut one,
         );
         assert_bytes_identical(

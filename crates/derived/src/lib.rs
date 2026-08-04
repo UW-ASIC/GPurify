@@ -13,9 +13,6 @@
 //! followed by the exact operation. That is what bboxes are good at, and it is
 //! the one place they are allowed near a verdict.
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod expr;
 pub mod prefilter;
 

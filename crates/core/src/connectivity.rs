@@ -52,10 +52,44 @@ pub trait ObserveUnionFind: Observer {
     fn find_depth(&mut self, depth: u32);
 }
 
+/// The null adapter. Empty bodies on a zero-sized type, so the whole seam folds
+/// away behind `ENABLED == false`; the parameters are named out because there is
+/// nothing to name them for.
 impl ObserveUnionFind for crate::observe::NoObserve {
-    fn merged(&mut self, a: u32, b: u32) {}
-    fn redundant(&mut self, a: u32, b: u32) {}
-    fn find_depth(&mut self, depth: u32) {}
+    fn merged(&mut self, _a: u32, _b: u32) {}
+    fn redundant(&mut self, _a: u32, _b: u32) {}
+    fn find_depth(&mut self, _depth: u32) {}
+}
+
+/// Root of `node`, halving the path it walked on the way out.
+///
+/// Reports the pre-compression walk length to the seam. `depth` is dead code in
+/// a production build: `O::ENABLED` is `false`, the only reader folds away, and
+/// the counter goes with it.
+fn find<O: ObserveUnionFind>(parent: &mut [u32], node: u32, observer: &mut O) -> u32 {
+    debug_assert!((node as usize) < parent.len());
+
+    // The cursor stays in the id domain — a node id is a `u32` and every value
+    // it takes is read straight out of `parent`, so the only widening is the
+    // index expression and no `usize -> u32` narrowing exists to justify.
+    let mut x = node;
+    let mut depth = 0u32;
+    // The loop condition is the walk itself, not a per-element decision: it is
+    // the termination test, and a rooted node exits it without ever entering.
+    while parent[x as usize] != x {
+        // Path halving — snap `x` to its grandparent, which is what bounds the
+        // tree height and so bounds this loop.
+        let grand = parent[parent[x as usize] as usize];
+        parent[x as usize] = grand;
+        x = grand;
+        depth += 1;
+    }
+
+    if O::ENABLED {
+        observer.find_depth(depth);
+    }
+    debug_assert_eq!(parent[x as usize], x, "find returned a non-root");
+    x
 }
 
 fn components_observed<O: ObserveUnionFind>(
@@ -64,7 +98,82 @@ fn components_observed<O: ObserveUnionFind>(
     out: &mut Vec<ComponentLabel>,
     observer: &mut O,
 ) {
-    todo!()
+    let n = node_count as usize;
+    debug_assert!(
+        edges.iter().all(|&(a, b)| a < node_count && b < node_count),
+        "an edge names a node at or beyond node_count = {node_count}"
+    );
+
+    // Scratch, dead at return. `rank` is a tree height under path halving, so
+    // it never exceeds 64 and a `u8` holds it with room to spare.
+    let mut parent: Vec<u32> = (0..node_count).collect();
+    let mut rank: Vec<u8> = vec![0; n];
+
+    // Serial by construction, permanently so: `find` takes `&mut parent`, and
+    // the union scatters into `parent` at an index only the previous edge's
+    // finds can produce, so row N reads what row N-1 wrote and no row order is
+    // legal. The one algorithm that breaks the carried dependence is parallel
+    // label propagation, and adopting it would be a downgrade, not an upgrade:
+    // the module doc rejects it above because it trades this loop's O(E·α(N))
+    // for O(E·diameter) rounds over the whole node array to buy a parallelism
+    // that left the workspace with the GPU.
+    for &(a, b) in edges {
+        let ra = find(&mut parent, a, observer);
+        let rb = find(&mut parent, b, observer);
+        let joined = ra != rb;
+
+        // Branchless union by rank. When the roots already agree, `hi == lo ==
+        // ra`, so the store rewrites a root's own parent and is a no-op; only
+        // the rank bump has to be suppressed, and `joined` does that.
+        let smaller = rank[ra as usize] < rank[rb as usize];
+        let tie = rank[ra as usize] == rank[rb as usize];
+        let mask = u32::from(smaller).wrapping_neg();
+        let hi = (ra & !mask) | (rb & mask);
+        let lo = (ra & mask) | (rb & !mask);
+        parent[lo as usize] = hi;
+        rank[hi as usize] += u8::from(tie & joined);
+
+        if O::ENABLED {
+            // Constant-folded at monomorphisation; a production build never
+            // codegens either arm, so the data-dependent test inside is free.
+            if joined {
+                observer.merged(a, b);
+            } else {
+                observer.redundant(a, b);
+            }
+        }
+    }
+
+    out.clear();
+    out.reserve(n);
+
+    // One pass, ascending, which is what makes the min-index labelling fall
+    // out: the first node of a component reached in index order *is* its
+    // minimum, so `label` is already final by the time it is read back.
+    //
+    // Serial for the same reason as the union loop: `find` mutates `parent`, and
+    // `label[root] = ..` is a scatter-accumulate whose output index is the root,
+    // not the induction variable.
+    //
+    // Splitting this so the final write could become a gather over a scratch
+    // `roots` column is not an upgrade and should not be attempted: it
+    // costs 4·n bytes and a second streaming pass, and the gather it buys
+    // chases exactly the same random `label` addresses this loop already
+    // chases, so it duplicates the misses instead of removing them.
+    let mut label: Vec<u32> = vec![u32::MAX; n];
+    for i in 0..node_count {
+        let root = find(&mut parent, i, observer) as usize;
+        label[root] = label[root].min(i);
+        out.push(ComponentLabel(label[root]));
+    }
+
+    debug_assert_eq!(out.len(), n, "one row per node");
+    debug_assert!(
+        out.iter()
+            .enumerate()
+            .all(|(i, l)| (l.0 as usize) <= i && out[l.0 as usize] == *l),
+        "a label must be the minimum node index in its own component"
+    );
 }
 
 /// Number of distinct components in a label array.
@@ -73,7 +182,29 @@ fn components_observed<O: ObserveUnionFind>(
 /// [`components_into`] because several callers want the count without wanting
 /// to re-scan, and because it is exactly the shape that earns a table test.
 pub fn component_count(labels: &[ComponentLabel]) -> u32 {
-    todo!()
+    debug_assert!(u32::try_from(labels.len()).is_ok(), "more nodes than a u32");
+    debug_assert!(
+        labels
+            .iter()
+            .enumerate()
+            .all(|(i, l)| (l.0 as usize) <= i && labels[l.0 as usize] == *l),
+        "component_count reads the canonical min-index labelling"
+    );
+
+    // Each component is named by exactly one node — the minimum index in it,
+    // which is the one node whose label is itself. So the count of components
+    // is the count of self-labelled rows, one pass, no set and no sort.
+    //
+    // Strict ascending left fold. Branchless: `bool` is 0 or 1, so the
+    // self-labelled test folds straight into the accumulator with no branch,
+    // and `count` is an integer sum, so no reassociation question arises.
+    let mut count = 0u32;
+    for (i, label) in labels.iter().enumerate() {
+        count += u32::from(label.0 as usize == i);
+    }
+
+    debug_assert!(count as usize <= labels.len(), "more components than nodes");
+    count
 }
 
 /// Adapter tests for the union-find seam.

@@ -70,7 +70,12 @@ fn via_connectivity(cut: LayerId, joined: &[LayerId]) -> Connectivity {
         conductors: std::iter::once(LayerId(0))
             .chain(joined.iter().copied())
             .collect(),
-        via_cut: vec![cut],
+        // One `via_cut` row per `via_connects` row: `Connectivity`'s documented
+        // shape is parallel columns, one per via layer, and both
+        // `build_connectivity` and `extract_nets_into` assert it. A single cut
+        // row against several joins is ragged and panics before any erc code
+        // runs.
+        via_cut: vec![cut; joined.len()],
         via_connects: joined.iter().map(|&layer| (LayerId(0), layer)).collect(),
         // Off: every join here is via-mediated, so a broken via edge splits a
         // net rather than being masked by shapes that happen to touch.

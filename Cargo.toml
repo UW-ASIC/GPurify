@@ -1,3 +1,33 @@
+[package]
+name = "gpurify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpurify-core = { workspace = true }
+gpurify-derived = { workspace = true }
+gpurify-drc = { workspace = true }
+gpurify-engine = { workspace = true }
+gpurify-erc = { workspace = true }
+gpurify-export = { workspace = true }
+gpurify-ingest = { workspace = true }
+gpurify-lvs = { workspace = true }
+gpurify-pex = { workspace = true }
+gpurify-report = { workspace = true }
+gpurify-topology = { workspace = true }
+gpurify-units = { workspace = true }
+
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+# `tests/corpus/` reads `tests/fixtures/expectations.json`. Both crates are
+# already in the workspace graph, so this adds no new dependency.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+
+[lints]
+workspace = true
+
 [workspace]
 resolver = "2"
 members = [
@@ -32,35 +62,68 @@ gpurify-pex = { path = "crates/pex" }
 gpurify-export = { path = "crates/export" }
 gpurify-engine = { path = "crates/engine" }
 gpurify-testgen = { path = "crates/testgen" }
+
+# External dep
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 rayon = "1"
 flate2 = "1"
 thiserror = "1"
 wide = "0.7"
-# GPU: AOT SPIR-V from GLSL. No JIT. Quasi-static PEX only — see docs/GPU.md.
+
+# GPU: AOT SPIR-V from GLSL, for Quasi-static PEX only.
 vulkano = "0.35"
 vulkano-shaders = "0.35"
 
-# One policy, inherited by every crate.
+# Every `allow` below names why. An undocumented one reads as an oversight the
+# next agent will "fix" — the same discipline as a `ponytail:` comment, and for
+# the same reason. `cargo clippy` runs only inside `nix develop`.
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-module_name_repetitions = "allow"
+
+# `!(x > 0.0)` is not `x <= 0.0`: the negation is true for a NaN and the
+# comparison is false. Twelve sites spell a refusal that way *deliberately*, so
+# a NaN born of an absurd unit prefix or an overlapping stack row is refused
+# rather than accepted. Taking clippy's advice converts twelve fail-closed
+# guards into fail-open ones, which is the defect class this project exists to
+# prevent. Each site already carries a comment saying so.
+neg_cmp_op_on_partial_ord = "allow"
+
+# `&`/`|` between booleans is the `/branchless` idiom, not a typo: `&&` is a
+# branch, `&` is not, and the whole point of a bulk loop here is that it has no
+# data-dependent branch in the body. `docs/CONVENTIONS.md` and the `/branchless`
+# skill both prescribe it.
+needless_bitwise_bool = "allow"
+
+# Signatures are frozen (`CLAUDE.md`, the Definition-Phase barrier). A diff that
+# changes one is a bug report, not a commit, so an arity complaint is not
+# actionable from a body. Four sites, all public and all frozen.
+too_many_arguments = "allow"
+
+# Twenty-four bodies exceed 100 lines, and the only way to shorten one is to
+# split it into helpers — i.e. to mint signatures, in a phase whose whole rule
+# is that a signature change is a bug report rather than a commit. The length is
+# also mostly comment: `docs/CONVENTIONS.md` asks a transform to explain why it
+# is shaped the way it is, at the site.
+too_many_lines = "allow"
+
+# Geometry and linear algebra: `i`/`j`/`k` index a matrix, `a`/`b` name the two
+# operands of a boolean op, `x`/`y` are coordinates. Renaming them to satisfy a
+# lint makes the code read less like the mathematics it implements.
+similar_names = "allow"
+many_single_char_names = "allow"
+
+# Doc comments are frozen alongside the signatures they document, and the three
+# below all demand new prose in one. `must_use` additionally changes the public
+# surface. All four were allowed before the Implementation-Phase for the same
+# reason; nothing since has unfrozen them.
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-# Nearly every function in a data-oriented tree is a pure transform returning a
-# value, so this fires on all of them and says nothing. Apply #[must_use] at the
-# few sites where dropping the result is genuinely the bug.
 must_use_candidate = "allow"
-# Definition-Phase: bodies are `todo!()`, so clippy cannot see the `push` that
-# makes a `&mut Vec` parameter necessary. Remove in the Implementation-Phase.
-ptr_arg = "allow"
-# The cast_* allows are deliberately NOT inherited from the old tree. They were
-# justified by "DBU coords are i32 by design", which is no longer true: Dbu is a
-# newtype over i64. A cast that needs allowing now needs it at the site.
+module_name_repetitions = "allow"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -73,12 +136,10 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# The optimised-out check for test-adapter seams disassembles this profile, so it
-# keeps symbols. Same codegen as release otherwise.
 [profile.bench]
 inherits = "release"
 debug = true
 strip = false
 
 [profile.dev.package."*"]
-opt-level = 3  # optimize deps even in dev; our own crates stay fast to compile
+opt-level = 3

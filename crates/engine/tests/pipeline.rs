@@ -22,6 +22,7 @@ use gpurify_ingest::deck::{Connectivity, Deck};
 use gpurify_lvs::refine::TieBreak;
 use gpurify_lvs::CompareOptions;
 use gpurify_testgen::LayoutBuilder;
+use gpurify_units::Grid;
 use std::path::PathBuf;
 
 /// The single conductor layer every extraction case below lives on.
@@ -31,13 +32,18 @@ const METAL: LayerId = LayerId(0);
 /// error names whichever reader ran first. It must be the deck's: the grid has
 /// to exist before the layout can be mapped onto it, so a `LoadError::Layout`
 /// here means the layout was read against a grid that had not been established.
+///
+/// The grid is supplied, which is what makes the law observable rather than
+/// vacuous — `load_into` reads [`Inputs::grid`] before it opens either file, so
+/// an absent one would stop at [`LoadError::NoGrid`] and this test would never
+/// reach the two readers it is about.
 #[test]
 fn the_deck_is_consulted_before_the_layout_when_neither_can_be_read() {
     let inputs = Inputs {
         layout: PathBuf::from("/nonexistent/design.gds"),
         deck: PathBuf::from("/nonexistent/process.json"),
-        reference: None,
-        intent: None,
+        grid: Some(Grid::new(1_000).expect("1000 database units per micrometre is a legal grid")),
+        ..Inputs::default()
     };
     let mut loaded = Loaded::default();
 
@@ -45,10 +51,35 @@ fn the_deck_is_consulted_before_the_layout_when_neither_can_be_read() {
         load_into(&inputs, &mut loaded).expect_err("neither input exists, so this cannot succeed");
 
     assert!(
-        matches!(error, LoadError::Deck(_) | LoadError::NoGrid),
+        matches!(error, LoadError::Deck(_)),
         "both inputs were unreadable and the failure reported was {error:?}; the \
          deck establishes the grid the layout is read against, so the deck is \
          what fails first"
+    );
+}
+
+/// Oracle: law, from the same stated ordering, on its other side. A run with no
+/// grid stops before either path is touched, so the two unreadable files below
+/// cannot be what is blamed. Writable as of the Testing-Phase, when `Inputs`
+/// gained the field that carries the condition; `NoGrid` had no reachable
+/// input before it.
+#[test]
+fn a_load_with_no_grid_stops_before_either_file_is_opened() {
+    let inputs = Inputs {
+        layout: PathBuf::from("/nonexistent/design.gds"),
+        deck: PathBuf::from("/nonexistent/process.json"),
+        grid: None,
+        ..Inputs::default()
+    };
+    let mut loaded = Loaded::default();
+
+    let error =
+        load_into(&inputs, &mut loaded).expect_err("no grid was supplied, so this cannot succeed");
+
+    assert!(
+        matches!(error, LoadError::NoGrid),
+        "a run without a grid reported {error:?}; the grid is read before either \
+         file, so no reader can be what failed"
     );
 }
 
@@ -61,8 +92,8 @@ fn a_run_whose_inputs_cannot_be_read_fails_at_the_load_and_goes_no_further() {
     let inputs = Inputs {
         layout: PathBuf::from("/nonexistent/design.gds"),
         deck: PathBuf::from("/nonexistent/process.json"),
-        reference: None,
-        intent: None,
+        grid: Some(Grid::new(1_000).expect("1000 database units per micrometre is a legal grid")),
+        ..Inputs::default()
     };
     let mut out = Outputs::default();
 

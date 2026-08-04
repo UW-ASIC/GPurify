@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{head, rule};
+use common::{head, manufacturing_grid, operating_temperature, rule};
 use gpurify_core::{Bbox, LayerId};
 use gpurify_derived::{Evaluator, LayerRef};
 use gpurify_erc::facts::{IntentMap, NetFacts};
@@ -166,6 +166,7 @@ fn every_kind() -> RuleSet {
             layer_start: vec![0, 1],
             layer: vec![LayerId(0)],
             max_density: vec![density(1e9)],
+            max_current_per_cut: vec![microamps(200.0)],
         },
         electromigration: electrical::ElectromigrationTable {
             head: head(id_of("electromigration")),
@@ -258,6 +259,8 @@ impl Cell {
                 xhi: dbu(2_000),
                 yhi: dbu(2_000),
             },
+            grid: manufacturing_grid(),
+            operating_temperature: operating_temperature(),
         }
     }
 }
@@ -515,22 +518,27 @@ fn from_deck_files_each_row_under_the_kind_the_deck_named() {
     assert_eq!(rules.floating_gate.head.len(), 1);
 }
 
-/// Oracle: construct-from-answer, on the fail-closed path. A kind this crate
-/// does not implement is an error rather than a dropped row: a deck with one
-/// rule silently discarded looks fully checked and is not, and a caller cannot
-/// tell a rule that was dropped from a rule that found nothing.
+/// Oracle: construct-from-answer. A kind this crate does not implement leaves
+/// no row behind — it is another domain's, and one deck feeds every domain.
+///
+/// This test used to assert `ErcError::UnknownKind`, and the assertion moved
+/// rather than disappeared: `engine::run::run_checks` refuses a kind that is in
+/// neither `erc::ruleset::KINDS` nor `drc::ruleset::KINDS`, which is the layer
+/// that can tell "another domain's rule" from "a typo". What is checkable
+/// *here* is the half this crate is responsible for: the skipped row is not
+/// half-filed into some table, so no `RuleRun` is ever attributed to it.
 #[test]
-fn a_deck_naming_a_kind_this_crate_does_not_implement_is_refused() {
+fn a_deck_naming_a_kind_this_crate_does_not_implement_files_no_row() {
     let mut strings = StrTable::default();
-    let (deck, _) = deck_of(&mut strings, &[("gate.floating", "antenna_diode_ratio")]);
-
-    assert_eq!(
-        RuleSet::from_deck(&deck, &strings).unwrap_err(),
-        ErcError::UnknownKind {
-            rule: "gate.floating".to_owned(),
-            kind: "antenna_diode_ratio".to_owned(),
-        }
+    let (deck, _) = deck_of(
+        &mut strings,
+        &[("met1.width", "min_width"), ("gate.floating", "floating_gate")],
     );
+
+    let rules = RuleSet::from_deck(&deck, &strings)
+        .expect("min_width is drc's row, and this crate steps over it");
+    assert_eq!(rules.len(), 1, "only the erc row is filed");
+    assert_eq!(rules.floating_gate.head.len(), 1);
 }
 
 /// Oracle: construct-from-answer, on the fail-closed path. Two rows sharing one
@@ -551,20 +559,27 @@ fn a_deck_defining_one_rule_id_twice_is_refused() {
     );
 }
 
-/// Oracle: construct-from-answer. `KINDS` is the deck's contract — "a kind
-/// absent from it is `UnknownKind`, and a kind present in it must have a table
-/// and a transform". The second half is the checkable one: every name the list
-/// spells must be a name `from_deck` recognises. A row missing a parameter is a
-/// different error and is fine here; `UnknownKind` means the manifest and the
-/// match have drifted apart, which is a logic error a length assertion on the
-/// array could never see.
+/// Oracle: construct-from-answer. `KINDS` is the deck's contract — a kind
+/// present in it must have a table and a transform. That is the checkable half:
+/// every name the list spells must be a name `from_deck` files a row for.
+///
+/// The tell used to be `UnknownKind`. It cannot be any more — `from_deck` now
+/// steps over a kind it does not spell, because the deck's one rule table also
+/// carries `drc`'s rows — so the tell is `Ok` with an *empty* set instead. A
+/// row missing a parameter is a different error and is fine here; a name the
+/// match has drifted away from files nothing and reports nothing, which is the
+/// silent half this test exists to make loud.
 #[test]
 fn every_kind_the_list_names_is_a_kind_from_deck_recognises() {
     let mut strings = StrTable::default();
     for kind in KINDS {
         let (deck, _) = deck_of(&mut strings, &[("the.rule", kind)]);
-        if let Err(ErcError::UnknownKind { .. }) = RuleSet::from_deck(&deck, &strings) {
-            panic!("KINDS names {kind}, but from_deck does not implement it");
+        if let Ok(rules) = RuleSet::from_deck(&deck, &strings) {
+            assert_eq!(
+                rules.len(),
+                1,
+                "KINDS names {kind}, but from_deck files no row for it"
+            );
         }
     }
 

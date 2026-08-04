@@ -80,7 +80,7 @@ fn two_runs_of_one_design_produce_identical_violations_and_identical_run_rows() 
     assert_eq!(first_runs, second_runs);
 }
 
-/// Oracle: determinism. One `Scratch` is threaded through all twenty-six
+/// Oracle: determinism. One `Scratch` is threaded through all twenty-four
 /// transforms and through every run in a long-lived process, so a run against a
 /// buffer set that has already been filled must reach the same verdict as one
 /// against a fresh set. A transform reading what its predecessor left behind is

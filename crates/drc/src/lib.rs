@@ -29,9 +29,6 @@
 //! is absent, [`Outcome::Refused`] when the geometry is outside what this tool
 //! represents exactly. Neither is ever collapsed into a clean result.
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod rules;
 pub mod ruleset;
 
@@ -95,13 +92,16 @@ pub enum DrcError {
 /// A bundle of shared references, `Copy` and with public fields, so all data
 /// flow is still visible in every signature that takes one — this is not a
 /// context object hiding state, it is four `&` that would otherwise be four
-/// parameters on twenty-six functions.
+/// parameters on twenty-four functions.
 ///
-/// `nets` and `devices` are here even though only the antenna family reads
-/// them, and they are **not** `Option`. An absent topology and an empty one are
-/// indistinguishable once inside the rule, and "no nets extracted" reported as
-/// "no antenna violations" is fail-open. The engine extracts topology before
-/// DRC regardless, because `lvs` and `erc` need it too.
+/// `nets` and `devices` are here and **no rule in this crate reads them any
+/// more**: the antenna family was the only one that did, and it moved to `erc`
+/// — an antenna ratio is a net question with a layer cut-off, not a geometry
+/// question. They stay because they are a frozen signature and because the
+/// engine extracts topology before DRC regardless, for `lvs` and `erc`. They are
+/// **not** `Option`: an absent topology and an empty one are indistinguishable
+/// once inside a rule, and a rule reading "no nets extracted" as "nothing to
+/// report" is fail-open.
 #[derive(Debug, Clone, Copy)]
 pub struct Design<'a> {
     pub store: &'a GeometryStore,
@@ -115,10 +115,10 @@ pub struct Design<'a> {
 /// The buffer set every rule transform borrows and refills.
 ///
 /// **Five questions.** In: nothing — it is storage. Out: nothing that outlives
-/// a rule. How many: exactly one per run, threaded through all twenty-six
+/// a rule. How many: exactly one per run, threaded through all twenty-four
 /// transforms. Access pattern: each transform clears the buffers it wants and
 /// fills them; no transform reads what another left behind. Lifetime: phase —
-/// this is the allocation that would otherwise be twenty-six independent
+/// this is the allocation that would otherwise be twenty-four independent
 /// spatial indexes and pair lists per run. Parallelisable: no, and that is the
 /// stated cost of one shared scratch — see the ponytail note below.
 ///
@@ -127,12 +127,38 @@ pub struct Design<'a> {
 /// without touching a frozen signature. Rules reach them directly because they
 /// are descendants of this module.
 ///
-/// ponytail: one scratch means rules run sequentially. That is right at this
-/// scale — a real deck's twenty-six tables are dominated by two or three
-/// spacing rules, so per-rule parallelism buys little next to parallelism
-/// *inside* a rule. Upgrade to one `Scratch` per worker plus the gatherer merge
-/// `Violations::extend` already provides, if a profile on the scale corpus says
-/// otherwise. No signature changes.
+/// ponytail: one scratch means rules run sequentially — one `&mut Scratch` is
+/// one exclusive borrow, so the dispatcher can only hand it to one transform at
+/// a time. The ceiling is one core for the whole run, and on a real deck that
+/// is two or three spacing rules wide.
+///
+/// **Determinism does not block it, and that is worth stating.** `Violations`
+/// is safe to merge in any order: `Violations::sort_canonical`'s key is not the
+/// six fields its summary line names but all nine columns — `row_key` extends
+/// it precisely so ties cannot leak thread count back in — so two rows with
+/// equal keys agree in every column and the sorted table is a function of the
+/// *multiset* of rows. `runs` is the half that does need care: nothing inside
+/// [`RuleSet::run`] sorts it, and its doc promises dispatch order, so workers
+/// must merge per-table outputs in field order rather than in completion order.
+/// That is a fixed twenty-four-slot concatenation, not a coordination problem.
+/// `Design<'_>` is four shared references into types with no interior
+/// mutability anywhere in the workspace, so it is already `Sync`.
+///
+/// **What blocks it is the worker count, not the borrow.** An earlier revision
+/// of this comment claimed no signature blocks the upgrade; that was reasoning
+/// about the exclusive borrow alone. Splitting `Scratch` into worker slots is
+/// indeed private — which buffers exist is not interface — but a parallel
+/// dispatcher has to be told *how many* workers to use, and there is no route
+/// for that number to arrive. [`RuleSet::run`] takes no thread budget and
+/// `gpurify_engine::run::run_drc` does not receive `&RunOptions`, so
+/// `RunOptions::threads`, the knob `--threads` sets and `--check-determinism`
+/// flips between passes, cannot reach this crate. Defaulting to
+/// `available_parallelism` instead would make `--threads` inert for the only
+/// parallel stage and make the determinism gate compare two passes at the same
+/// real worker count — a gate that passes without testing anything is worse
+/// than the ceiling it was meant to police. Filed in
+/// `docs/SIGNATURE_DEFECTS.md` under "drc, from the `ponytail:` spend-down
+/// pass"; this comment is the marker at the site.
 #[derive(Debug, Default)]
 pub struct Scratch {
     /// Validated geometry of the rule's primary layer.
@@ -151,12 +177,11 @@ pub struct Scratch {
     rects: Vec<Rect>,
     rect_start: Vec<u32>,
     /// Edge list for the rules that group shapes before measuring them —
-    /// merged figures, via arrays, multi-patterning conflicts, per-stage
-    /// antenna connectivity.
+    /// merged figures, via arrays, multi-patterning conflicts.
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,
-    /// Per-group area accumulator: antenna collecting area, merged-figure area,
-    /// windowed density numerator.
+    /// Per-group area accumulator: merged-figure area, windowed density
+    /// numerator.
     areas: Vec<DbuArea>,
     /// Per-node scratch for the colouring search.
     colors: Vec<u8>,
@@ -169,18 +194,31 @@ impl Scratch {
     /// the scratch grows to the largest layer it ever saw and never shrinks,
     /// which is exactly what a single run wants and exactly what a server does
     /// not.
+    ///
+    /// **No observable postcondition, by construction.** The fields are private
+    /// and neither length nor capacity is exposed, so no test can distinguish
+    /// this body from an empty one — a mutant that empties it is an *equivalent
+    /// mutant*, not a survivor. `docs/NEED_TESTING.md` records that as the
+    /// accepted resolution: a capacity accessor would widen the interface of a
+    /// type whose doc says which buffers exist is an implementation question.
+    /// What *is* tested is that shrinking changes no verdict
+    /// (`tests/determinism.rs`), which is the property that matters.
     pub fn shrink(&mut self) {
-        todo!()
+        // Reassignment rather than per-field `shrink_to_fit`: `ValidatedLayer`
+        // and `SpatialIndex` own their columns privately and expose no way to
+        // release them. Every field is storage refilled before it is read, so
+        // dropping the lot is exactly "capacity gone, nothing else changed".
+        *self = Self::default();
     }
 }
 
 /// Close out one rule row: append its [`RuleRun`], with the violation count
 /// derived rather than counted by the caller.
 ///
-/// **Decision, and the invariant lives here.** Every one of the twenty-six
+/// **Decision, and the invariant lives here.** Every one of the twenty-four
 /// transforms ends each row through this function, so "a rule row always
 /// produces exactly one run row, and its `violations` always equals what that
-/// row actually pushed" is one line of code rather than twenty-six chances to
+/// row actually pushed" is one line of code rather than twenty-four chances to
 /// forget.
 ///
 /// `violations_before` is `out.len()` read before the row's work started. That
@@ -194,7 +232,33 @@ pub(crate) fn record_run(
     outcome: Outcome,
     examined: u64,
 ) {
-    todo!()
+    let after = out.len();
+    debug_assert!(
+        violations_before <= after,
+        "a rule row started at {violations_before} of a table that now holds {after}: \
+         the shared violation table was truncated under a running rule"
+    );
+    let pushed = after - violations_before;
+    debug_assert!(
+        u32::try_from(pushed).is_ok(),
+        "{pushed} violations from one rule row overflow the run's count column"
+    );
+
+    let before_rows = runs.len();
+    runs.push(RuleRun {
+        rule,
+        outcome,
+        examined,
+        // Saturating rather than wrapping: past 4 billion violations from one
+        // rule the exact count is noise, but wrapping it to a small number
+        // would read as a nearly-clean rule, which is fail-open.
+        violations: u32::try_from(pushed).unwrap_or(u32::MAX),
+    });
+    debug_assert_eq!(
+        runs.len(),
+        before_rows + 1,
+        "one rule row produces exactly one run row"
+    );
 }
 
 /// Adapter tests for the one seam every rule row crosses.

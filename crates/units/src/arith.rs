@@ -23,7 +23,14 @@ macro_rules! product {
         impl<const P: i8, const Q: i8> Mul<Qty<$rhs, Q>> for Qty<$lhs, P> {
             type Output = Qty<$out, 0>;
             fn mul(self, rhs: Qty<$rhs, Q>) -> Qty<$out, 0> {
-                todo!()
+                debug_assert!(
+                    self.is_finite() && rhs.is_finite(),
+                    concat!("non-finite operand to ", stringify!($lhs), " * ", stringify!($rhs)),
+                );
+                // Both operands to base units first: the `10^(P+Q)` factor is
+                // then just the two scalings `Qty::base` already performs, and
+                // the result is canonical because base units *are* `10^0`.
+                Qty::new(self.base() * rhs.base())
             }
         }
     )*};
@@ -35,7 +42,17 @@ macro_rules! quotient {
         impl<const P: i8, const Q: i8> Div<Qty<$den, Q>> for Qty<$num, P> {
             type Output = Qty<$out, 0>;
             fn div(self, rhs: Qty<$den, Q>) -> Qty<$out, 0> {
-                todo!()
+                debug_assert!(
+                    self.is_finite() && rhs.is_finite(),
+                    concat!("non-finite operand to ", stringify!($num), " / ", stringify!($den)),
+                );
+                // `10^(P-Q)` as the quotient of the two `base` scalings. A zero
+                // denominator is left to produce an infinity rather than a
+                // typed error: `Div` cannot return one, and a zero resistance
+                // is a short — a legal physical input, not an unsupported one.
+                // The finiteness net is `Qty::is_finite`, asserted where a
+                // quantity enters a report.
+                Qty::new(self.base() / rhs.base())
             }
         }
     )*};
@@ -52,7 +69,11 @@ quotient! {
     Current / Length => CurrentDensity, "Electromigration: current per unit conductor width.";
 }
 
-// ponytail: no Capacitance or Inductance operators. PEX produces both directly
-// from a field solve and never derives them from other quantities, so an
-// `Ohm * Farad => Time` impl would have no call site. Add one when a call site
-// exists, not before.
+// `Capacitance` and `Inductance` deliberately carry no operators, and the list
+// above is closed rather than pending. Both are terminal quantities here: `pex`
+// produces them from a field solve or a closed form, and every consumer
+// downstream — `network`, `reduce`, `export` — only sums or writes them. Nor
+// does any product or quotient of them land in a dimension this crate has:
+// `Ohm * Farad` is a time and `Farad * Volt` a charge, and `qty::dimensions!`
+// declares neither. An impl for either would therefore mean a new public marker
+// type with no reader, which is a larger interface, not a better one.

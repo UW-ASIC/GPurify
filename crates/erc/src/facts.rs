@@ -63,32 +63,46 @@ impl RoleMask {
     /// **Decision** — one small value in, one out, pure, and the single place
     /// the role-to-bit mapping is written down.
     pub const fn of(role: TerminalRole) -> Self {
-        todo!()
+        // A closed eight-arm match over a payload enum, every arm a constant:
+        // the discriminant *is* the table index, so this lowers to one load
+        // rather than a chain of compares. `Pin(_)` discards the index because
+        // the two ends of a symmetric device are interchangeable by definition
+        // — shifting by the index would put `Pin(3)` on the drain bit.
+        match role {
+            TerminalRole::Gate => Self::GATE,
+            TerminalRole::Source => Self::SOURCE,
+            TerminalRole::Drain => Self::DRAIN,
+            TerminalRole::Bulk => Self::BULK,
+            TerminalRole::Base => Self::BASE,
+            TerminalRole::Emitter => Self::EMITTER,
+            TerminalRole::Collector => Self::COLLECTOR,
+            TerminalRole::Pin(_) => Self::PIN,
+        }
     }
 
     /// True when every bit of `other` is set in `self`.
     pub const fn contains(self, other: Self) -> bool {
-        todo!()
+        self.0 & other.0 == other.0
     }
 
     /// True when the two masks share at least one bit.
     pub const fn intersects(self, other: Self) -> bool {
-        todo!()
+        self.0 & other.0 != 0
     }
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
-        todo!()
+        Self(self.0 | other.0)
     }
 
     /// `self` with every bit of `other` cleared.
     #[must_use]
     pub const fn without(self, other: Self) -> Self {
-        todo!()
+        Self(self.0 & !other.0)
     }
 
     pub const fn is_empty(self) -> bool {
-        todo!()
+        self.0 == Self::NONE.0
     }
 }
 
@@ -118,16 +132,34 @@ pub struct NetFacts {
 
 impl NetFacts {
     pub fn len(&self) -> usize {
-        todo!()
+        debug_assert_eq!(
+            self.role.len(),
+            self.terminals.len(),
+            "a mask lost its count, or a count lost its mask"
+        );
+        self.role.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        todo!()
+        // Through `len`, so the column-parity assert holds on this path too.
+        self.len() == 0
     }
 
     /// The roles on one net. [`RoleMask::NONE`] for a net no device touches.
     pub fn role_of(&self, net: NetId) -> RoleMask {
-        todo!()
+        // The same guard, and the same argument, as `DeviceTable::devices_on`:
+        // `NetId::NONE` is an absence rather than a net, so nothing is attached
+        // to it. Not a bulk branch — one compare per query, and the taken side
+        // would otherwise index at `u32::MAX`.
+        if net == NetId::NONE {
+            return RoleMask::NONE;
+        }
+        // Fail closed, as `NetTable::net_of` does: a net id this table never
+        // saw panics in every profile rather than reading as unconnected. "No
+        // device touches this net" and "this net is not in this extraction"
+        // must not answer the same, or a rule exempts a net nobody classified.
+        debug_assert_eq!(self.role.len(), self.terminals.len());
+        self.role[net.idx()]
     }
 
     /// True when any device terminal at all lands on this net.
@@ -136,7 +168,10 @@ impl NetFacts {
     /// scanning the MOS device list alone — which reported every net in a
     /// BJT-only or passive-only block as unconnected.
     pub fn is_device_connected(&self, net: NetId) -> bool {
-        todo!()
+        // Every family, not just MOS: the mask was folded from the flat
+        // terminal column, so a block of resistors reads as connected here
+        // where the old tree's MOS-list scan reported all of it floating.
+        !self.role_of(net).is_empty()
     }
 }
 
@@ -151,7 +186,49 @@ impl NetFacts {
 /// the other side: six rules each doing their own gather is six passes, and
 /// this is the one that replaces them.
 pub fn classify_nets_into(nets: &NetTable, devices: &DeviceTable, out: &mut NetFacts) {
-    todo!()
+    debug_assert_eq!(
+        devices.terminal_net.len(),
+        devices.terminal_role.len(),
+        "a net column and a role column arrive parallel"
+    );
+
+    // One row per net plus a scrap row on the end. A terminal carrying
+    // `NetId::NONE` — or any id past this extraction — clamps onto the scrap
+    // row instead of taking a branch, and the row is dropped before the caller
+    // ever sees it. That is the sentinel-object idiom: the fold body runs
+    // unconditionally, and no terminal's roles can leak onto a real net.
+    let scrap = nets.net_count();
+    out.role.clear();
+    out.role.resize(scrap + 1, RoleMask::NONE);
+    out.terminals.clear();
+    out.terminals.resize(scrap + 1, 0);
+
+    // Scalar by rule, not by omission. The output index is `terminal_net[i]`,
+    // so this is a scatter-accumulate: two terminals can land on the same net,
+    // which makes it unvectorisable without lane-conflict detection. Access to
+    // `out.role` is random rather than contiguous for the same reason. The loop
+    // is the intended form and there is nothing to upgrade.
+    //
+    // The gather reading is worse, not better: a per-net fold would have to
+    // walk `devices_on(net)` and re-read every terminal of each device to find
+    // the ones landing back on `net` — other rows, nested, for the same answer.
+    for (&net, &role) in devices.terminal_net.iter().zip(&devices.terminal_role) {
+        let row = net.idx().min(scrap);
+        out.role[row] = out.role[row].union(RoleMask::of(role));
+        // Saturating, per the column's doc: a net with four billion terminals
+        // is a broken extraction, and wrapping to zero would report it clean.
+        out.terminals[row] = out.terminals[row].saturating_add(1);
+    }
+
+    out.role.truncate(scrap);
+    out.terminals.truncate(scrap);
+
+    debug_assert_eq!(out.role.len(), scrap, "one mask per extracted net");
+    debug_assert_eq!(out.terminals.len(), scrap, "one count per extracted net");
+    debug_assert!(
+        out.terminals.iter().map(|&n| n as usize).sum::<usize>() <= devices.terminal_net.len(),
+        "the fold counted more terminals than the device table holds"
+    );
 }
 
 /// Design intent, re-keyed from interned names onto extracted nets.
@@ -206,30 +283,80 @@ pub struct IntentMap {
 impl IntentMap {
     /// Whether a net is a declared supply, and in which role and domain.
     pub fn supply_of(&self, net: NetId) -> Option<(DomainId, SupplyRole)> {
-        todo!()
+        // `binary_search` on an empty column is `Err(0)`, so this is total for
+        // any net — including one on a design that declared nothing.
+        let row = self.supply_row(net)?;
+        Some((self.supply_domain[row], self.supply_role[row]))
     }
 
     /// The nominal voltage of a declared supply net.
     pub fn nominal_voltage(&self, net: NetId) -> Option<Qty<Voltage, { prefix::MILLI }>> {
-        todo!()
+        self.supply_row(net).map(|row| self.supply_voltage[row])
     }
 
     /// The limits declared for a net. All-`None` when undeclared, which means
     /// *not checked* and never *unlimited*.
     pub fn limits_of(&self, net: NetId) -> NetLimits {
-        todo!()
+        debug_assert_eq!(
+            self.limit_net.len(),
+            self.limit.len(),
+            "a limit lost its net, or a net lost its limit"
+        );
+        // The default is all-`None`, which every reader treats as *not checked*
+        // rather than *unlimited*. That is the whole reason this returns a
+        // `NetLimits` and not an `Option<NetLimits>`.
+        self.limit_net
+            .binary_search(&net)
+            .map_or_else(|_| NetLimits::default(), |row| self.limit[row])
     }
 
     pub fn supply_count(&self) -> usize {
-        todo!()
+        debug_assert_eq!(self.supply_net.len(), self.supply_domain.len());
+        debug_assert_eq!(self.supply_net.len(), self.supply_role.len());
+        debug_assert_eq!(self.supply_net.len(), self.supply_voltage.len());
+        self.supply_net.len()
     }
 
-    /// True when there is nothing here for an intent-dependent rule to check
-    /// against — no intent file, or one that named no net this layout has.
+    /// True when there **is** something here for an intent-dependent rule to
+    /// check against. False means no intent file, or one that named no net this
+    /// layout has.
     ///
-    /// The precondition of every intent-gated transform in [`crate::rules`].
+    /// The precondition of every intent-gated transform in [`crate::rules`]:
+    /// each of the six records [`Skipped`]`(`[`NoDesignIntent`]`)` when this is
+    /// false, and runs when it is true. The sense is the name's, not its
+    /// negation — an implementation that inverts it turns six unchecked rules
+    /// into six clean ones.
+    ///
+    /// [`Skipped`]: gpurify_report::Outcome::Skipped
+    /// [`NoDesignIntent`]: gpurify_report::SkipReason::NoDesignIntent
     pub fn is_usable(&self) -> bool {
-        todo!()
+        // The sense is the name's: true means *run*. Read `declared` first —
+        // it is the one fact that distinguishes "no intent file" from "an
+        // intent file naming nothing this layout has" — then require that
+        // something survived the re-keying, because a rule handed two empty
+        // columns examines nothing and would report that as clean.
+        //
+        // Both columns, not just the supplies: a declaration of per-net limits
+        // with no supply among them is still something to check against, the
+        // same argument `DesignIntent::is_empty` makes on the other side.
+        self.declared && !(self.supply_net.is_empty() && self.limit_net.is_empty())
+    }
+
+    /// The row a declared supply net sits on.
+    ///
+    /// **Decision** — one id in, one row out, and the single place the sorted
+    /// supply column is searched, so `supply_of` and `nominal_voltage` cannot
+    /// disagree about which row a net is.
+    fn supply_row(&self, net: NetId) -> Option<usize> {
+        debug_assert_eq!(self.supply_net.len(), self.supply_domain.len());
+        debug_assert_eq!(self.supply_net.len(), self.supply_role.len());
+        debug_assert_eq!(self.supply_net.len(), self.supply_voltage.len());
+        debug_assert!(
+            self.supply_net.windows(2).all(|pair| pair[0] < pair[1]),
+            "the supply column is documented ascending, which is what this \
+             binary search stands on"
+        );
+        self.supply_net.binary_search(&net).ok()
     }
 }
 
@@ -249,5 +376,141 @@ pub fn resolve_intent_into(
     nets: &NetTable,
     out: &mut IntentMap,
 ) {
-    todo!()
+    debug_assert!(
+        ports.len() <= nets.net_count(),
+        "the port table names more nets than the extraction produced, so a \
+         name would be re-keyed onto a net that is not there"
+    );
+    debug_assert!(
+        u32::try_from(nets.net_count()).is_ok(),
+        "a NetId is a u32, so the net count fits one"
+    );
+
+    // Cleared before anything else, so a reused map cannot carry the previous
+    // extraction's supplies into this one. A stale supply row is a rule
+    // checking a net that is not there, which reports clean.
+    out.declared = false;
+    out.supply_net.clear();
+    out.supply_domain.clear();
+    out.supply_role.clear();
+    out.supply_voltage.clear();
+    out.limit_net.clear();
+    out.limit.clear();
+    out.undeclared.clear();
+
+    let Some(intent) = intent else {
+        // No intent file. `declared` stays false and the map stays empty, which
+        // is exactly what the six gated rules read before recording themselves
+        // skipped.
+        return;
+    };
+
+    // `is_empty` is ingest's own "nobody wrote one", and its doc states that a
+    // file with all three sections empty is the same verdict as no file at all.
+    // A file declaring domains but no supply on this block is *not* empty by
+    // that definition, so the distinction this flag exists for survives.
+    out.declared = !intent.is_empty();
+
+    // This walks every extracted net — hundreds of thousands, each costing a
+    // binary search in `name_of` — to reach the hundreds that carry a name.
+    // Not a shortcut: `PortTable` exposes `name_of(NetId)`, `net_of(StrId)`,
+    // `len` and nothing that iterates its rows, and `DesignIntent` keeps every
+    // declared-name column private behind `StrId`-taking accessors. Neither end
+    // of the join can be enumerated, so O(nets) is the only shape reachable
+    // from this signature. Recorded in `docs/SIGNATURE_DEFECTS.md` under
+    // "erc/facts.rs" as the performance entry; resolving it wants either
+    // `ports.rows() -> (&[NetId], &[StrId])` on `topology` or `supply_names()`
+    // on `ingest`, and both are signature changes rather than Phase-4 ones.
+    //
+    // Scalar, and doubly so: the output is a compact that keeps a payload the
+    // predicate computed (the domain, role and voltage the lookup returned),
+    // written across six columns, and the predicate itself is two binary
+    // searches. Neither the payload nor the searches survive if-conversion.
+    let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32, so the count fits");
+    for row in 0..net_count {
+        let net = NetId(row);
+        // Escape valve: heavily biased and so predicted — named nets are
+        // hundreds out of hundreds of thousands — and the taken side is two
+        // binary searches and up to six pushes, which is exactly the expensive
+        // work a branch exists to skip.
+        let Some(name) = ports.name_of(net) else {
+            continue;
+        };
+
+        // Same valve: a declared supply is rarer still than a named net.
+        if let Some((domain, role)) = intent.supply_role(name) {
+            out.supply_net.push(net);
+            out.supply_domain.push(domain);
+            out.supply_role.push(role);
+            // Copied off the domain here so no rule needs the `DesignIntent`
+            // as well as the map.
+            out.supply_voltage.push(intent.domain_voltage(domain));
+        }
+
+        let limits = intent.limits(name);
+        // All-`None` is what `limits_of` already answers for an absent row, so
+        // storing one would be a row that says nothing. Same valve again.
+        if limits.max_drop.is_some()
+            || limits.max_drop_fraction.is_some()
+            || limits.max_overvoltage.is_some()
+            || limits.budget_current_ua.is_some()
+        {
+            out.limit_net.push(net);
+            out.limit.push(limits);
+        }
+    }
+
+    // FAIL-OPEN, KNOWN, AND UNFIXABLE FROM THIS SIGNATURE. `undeclared` is left
+    // empty, so a declared supply the layout never labelled is silently absent
+    // instead of reported. Intent naming VDD and VSS against a layout labelling
+    // only VDD leaves `is_usable` true, the six gated rules run, and every one
+    // of them reports clean about a rail nothing checked — the false-clean this
+    // module's header says it exists to prevent, in the one column meant to
+    // catch it.
+    //
+    // It is not a simplification. The set difference needs the names
+    // `DesignIntent` declared, and every one of its columns is private behind
+    // accessors that take a `StrId` and answer about it; `ports` yields only the
+    // names that *did* resolve, which is the wrong side of the difference. There
+    // is no source of the missing `StrId`s in `(intent, ports, nets, out)`.
+    //
+    // Nor is the count reachable as a proxy: `DesignIntent` publishes
+    // `domain_count` but no supply count, and while its loader refuses a domain
+    // with no supply, a domain that keeps one labelled supply and loses another
+    // is invisible to a per-domain count. `docs/NEED_TESTING.md` records that
+    // this column has no test at all, for the same reason.
+    //
+    // Fix is an enumerating accessor on `DesignIntent` — `supply_names() ->
+    // &[StrId]` is enough, and this transform would then drive the join off it
+    // through the `PortTable::net_of` that already exists, pushing every name
+    // that misses into `undeclared`. That is an `ingest` signature change, not a
+    // Phase-4 one. Recorded in `docs/SIGNATURE_DEFECTS.md` under "erc/facts.rs"
+    // as the correctness entry.
+
+    debug_assert_eq!(
+        out.supply_net.len(),
+        out.supply_voltage.len(),
+        "a supply lost its voltage"
+    );
+    debug_assert_eq!(out.limit_net.len(), out.limit.len(), "a limit lost its net");
+    debug_assert_eq!(
+        out.supply_net.len(),
+        out.supply_domain.len(),
+        "a supply lost its domain"
+    );
+    debug_assert_eq!(
+        out.supply_net.len(),
+        out.supply_role.len(),
+        "a supply lost its role"
+    );
+    debug_assert!(
+        out.supply_net.len() <= nets.net_count() && out.limit_net.len() <= nets.net_count(),
+        "the re-keying produced more rows than there are nets to key them onto"
+    );
+    debug_assert!(
+        out.supply_net.windows(2).all(|pair| pair[0] < pair[1])
+            && out.limit_net.windows(2).all(|pair| pair[0] < pair[1]),
+        "both columns are documented ascending, which walking net ids in order \
+         is what guarantees"
+    );
 }

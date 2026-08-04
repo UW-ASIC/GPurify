@@ -20,8 +20,11 @@
 //! module from depending on the domains it feeds.
 
 use crate::intern::{StrId, StrTable};
+use crate::narrow;
 use gpurify_core::LayerId;
-use gpurify_units::{Dbu, Grid};
+use gpurify_units::{prefix::NANO, Dbu, Grid, GridError, Length, Qty};
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 
 /// Why a deck was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -43,6 +46,14 @@ pub enum DeckError {
 /// A parsed, validated, grid-resolved deck.
 #[derive(Debug, Default)]
 pub struct Deck {
+    /// The grid every limit in [`Self::rules`] was converted against — the one
+    /// [`parse_deck`] was handed, echoed so a consumer of the deck can state a
+    /// limit in nanometres again without being passed the grid a second time.
+    ///
+    /// `Some` for every deck a parse returns. `None` only on a
+    /// default-constructed `Deck`, which holds no rules and so has nothing to
+    /// convert. A deck file does **not** declare its own resolution: limits are
+    /// physical nanometres and the grid comes from the layout.
     pub grid: Option<Grid>,
     pub layers: LayerTable,
     pub rules: RuleTable,
@@ -61,29 +72,160 @@ pub struct LayerTable {
     name: Vec<StrId>,
     /// GDS layer/datatype pair each id maps to.
     stream: Vec<(u16, u16)>,
-    /// Ids sorted by name, for the reverse lookup. Sorted, not hashed — see
-    /// [`crate::intern`].
+    /// Ids sorted by their name's [`StrId`], for the reverse lookup. Sorted,
+    /// not hashed — see [`crate::intern`].
+    ///
+    /// By the id and not by the name's bytes: a name is already a `u32` by the
+    /// time it reaches here, so [`Self::id`] resolves the text to a `StrId`
+    /// once through the string table and then binary-searches this column on
+    /// `u32` comparisons. Ordering by bytes would mean a string compare at
+    /// every probe and would make [`Self::build`] need the string table.
     by_name: Vec<LayerId>,
+    /// Ids sorted by their `(gds_layer, gds_datatype)` pair, then by id, for
+    /// [`Self::of_stream`]. The reverse index of [`Self::stream`] exactly as
+    /// [`Self::by_name`] is of [`Self::name`].
+    ///
+    /// Ties broken by id so a deck that points two names at one stream pair
+    /// still has a total, deterministic order, and so the run of equal pairs
+    /// starts at the lowest id — which is the id `of_stream` answers with.
+    by_stream: Vec<LayerId>,
 }
 
 impl LayerTable {
     pub fn len(&self) -> usize {
-        todo!()
+        debug_assert_eq!(self.name.len(), self.stream.len(), "one stream pair per layer");
+        debug_assert_eq!(self.name.len(), self.by_name.len(), "one name index entry per layer");
+        debug_assert_eq!(self.name.len(), self.by_stream.len(), "one stream index entry per layer");
+        self.name.len()
     }
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.len() == 0
     }
     /// `None` for a name the deck does not define. A rule referencing one is a
     /// deck error, not a new layer.
+    ///
+    /// Two steps, both fail-closed: `strings.get(name)` — never `intern`, this
+    /// must not grow the caller's table — and then a binary search of the
+    /// `by_name` index. A name the string table holds but the deck never
+    /// declared misses the second step.
     pub fn id(&self, strings: &StrTable, name: &str) -> Option<LayerId> {
-        todo!()
+        // `get`, never `intern`: a name the string table has never seen is not a
+        // layer, and growing the caller's table on a lookup would hand back an
+        // id for a layer with no geometry — a rule that then reports clean.
+        let wanted = strings.get(name)?;
+        let at = self
+            .by_name
+            .binary_search_by_key(&wanted, |&LayerId(i)| self.name[usize::from(i)])
+            .ok()?;
+        let found = self.by_name[at];
+        debug_assert_eq!(self.name[found.idx()], wanted, "the index named another layer");
+        Some(found)
     }
     pub fn name(&self, layer: LayerId) -> StrId {
-        todo!()
+        debug_assert!(layer.idx() < self.name.len(), "layer id past the table");
+        self.name[layer.idx()]
     }
     /// Which id a GDS layer/datatype pair maps to.
+    ///
+    /// A binary search of the [`Self::by_stream`] index, mirroring [`Self::id`].
+    /// `layout::gds::Flatten::emit` calls this once per element, so the layer
+    /// count is a constant factor on the per-polygon path; the index takes it
+    /// from linear to `log2(layers)` probes and, unlike a hash, keeps the table
+    /// build order-free and the lookup allocation-free.
+    ///
+    /// `partition_point` rather than `binary_search_by_key`: it lands on the
+    /// *first* id of a run, so a deck pointing two names at one stream pair
+    /// answers with the lower id — the answer the scan this replaced gave, and
+    /// the only one that does not depend on where the search happened to bisect.
     pub fn of_stream(&self, layer: u16, datatype: u16) -> Option<LayerId> {
-        todo!()
+        let wanted = (layer, datatype);
+        let at = self
+            .by_stream
+            .partition_point(|&LayerId(i)| self.stream[usize::from(i)] < wanted);
+        let found = *self.by_stream.get(at)?;
+        // A miss lands on the successor of `wanted`, or past the end. Both are
+        // "the deck does not declare this pair", which is the fail-closed
+        // answer: an undeclared stream carries no geometry into any rule.
+        (self.stream[found.idx()] == wanted).then_some(found)
+    }
+
+    /// The GDS stream pair a layer writes to. The inverse of [`Self::of_stream`].
+    ///
+    /// Reopened in the Testing-Phase: `export::gds::write_store` has to map each
+    /// store row's `LayerId` back to a stream pair, and only the forward
+    /// direction existed. Without this the writer cannot be implemented as
+    /// signed, which blocks the `parse -> write -> parse` law.
+    pub fn stream_of(&self, layer: LayerId) -> (u16, u16) {
+        debug_assert!(layer.idx() < self.stream.len(), "layer id past the table");
+        self.stream[layer.idx()]
+    }
+
+    /// Build a layer table from resolved entries.
+    ///
+    /// Reopened in the Testing-Phase. Every field here is private and
+    /// [`read_deck`] was the only producer, so no `Deck` could be built in
+    /// memory and nothing taking one was reachable from a test — including
+    /// `drc::RuleSet::from_deck`, which is that crate's entire dispatcher.
+    ///
+    /// Entries are `(name, gds_layer, gds_datatype)`, and `LayerId(i)` is
+    /// `entries[i]`. This maintains the sorted index itself, so the invariant
+    /// holds for every table that exists rather than for every table someone
+    /// remembered to sort.
+    ///
+    /// A name appearing twice is a malformed deck and [`parse_deck`] rejects it
+    /// there; here the later entry simply sorts after the earlier one, so the
+    /// index stays total and deterministic rather than depending on which of
+    /// two equal keys the sort happened to move. A *stream pair* appearing
+    /// twice is not rejected anywhere — nothing forbids two names on one GDS
+    /// layer — so the same tie-break carries the by-stream index, and
+    /// [`Self::of_stream`] answers with the lower id.
+    ///
+    /// Implemented rather than deferred to the Implementation-Phase: it is the
+    /// fixture every `drc`, `export` and `engine` test needs before any body
+    /// exists to test.
+    pub fn build(entries: &[(StrId, u16, u16)]) -> Self {
+        let count = u16::try_from(entries.len())
+            .expect("a deck has tens of layers, and LayerId is a u16");
+
+        let name: Vec<StrId> = entries.iter().map(|&(name, _, _)| name).collect();
+        let stream: Vec<(u16, u16)> = entries
+            .iter()
+            .map(|&(_, layer, datatype)| (layer, datatype))
+            .collect();
+
+        let mut by_name: Vec<LayerId> = (0..count).map(LayerId).collect();
+        by_name.sort_unstable_by_key(|&LayerId(i)| (name[usize::from(i)], i));
+
+        let mut by_stream: Vec<LayerId> = (0..count).map(LayerId).collect();
+        by_stream.sort_unstable_by_key(|&LayerId(i)| (stream[usize::from(i)], i));
+
+        // The sorts are what `id` and `of_stream` binary-search, and a table
+        // built unsorted would not fail — it would resolve some names and miss
+        // others, which reads downstream as a rule against a layer with no
+        // geometry, or as a GDS record on a layer the deck never declared.
+        debug_assert!(
+            by_name
+                .windows(2)
+                .all(|pair| name[pair[0].idx()] <= name[pair[1].idx()]),
+            "the by-name index is not ascending, so `id` would miss declared layers"
+        );
+        debug_assert!(
+            by_stream
+                .windows(2)
+                .all(|pair| stream[pair[0].idx()] <= stream[pair[1].idx()]),
+            "the by-stream index is not ascending, so `of_stream` would drop declared layers"
+        );
+        debug_assert_eq!(name.len(), entries.len(), "one row per declared layer");
+        debug_assert_eq!(name.len(), stream.len(), "one stream pair per layer");
+        debug_assert_eq!(name.len(), by_name.len(), "one name index entry per layer");
+        debug_assert_eq!(name.len(), by_stream.len(), "one stream index entry per layer");
+
+        Self {
+            name,
+            stream,
+            by_name,
+            by_stream,
+        }
     }
 }
 
@@ -137,10 +279,16 @@ pub struct RuleTable {
 
 impl RuleTable {
     pub fn layers_of(&self, rule: &RuleSpec) -> &[LayerId] {
-        todo!()
+        let start = rule.layer_start as usize;
+        let end = start + rule.layer_len as usize;
+        debug_assert!(end <= self.layer_ref.len(), "a rule's layer range runs off the table");
+        &self.layer_ref[start..end]
     }
     pub fn params_of(&self, rule: &RuleSpec) -> &[(StrId, ParamValue)] {
-        todo!()
+        let start = rule.param_start as usize;
+        let end = start + rule.param_len as usize;
+        debug_assert!(end <= self.param.len(), "a rule's parameter range runs off the table");
+        &self.param[start..end]
     }
     /// Look up one parameter by interned name.
     ///
@@ -148,7 +296,10 @@ impl RuleTable {
     /// rule at table-build time. A map here would be slower and would
     /// reintroduce iteration-order nondeterminism for nothing.
     pub fn param(&self, rule: &RuleSpec, name: StrId) -> Option<ParamValue> {
-        todo!()
+        self.params_of(rule)
+            .iter()
+            .find(|&&(declared, _)| declared == name)
+            .map(|&(_, value)| value)
     }
 }
 
@@ -167,6 +318,25 @@ pub struct Connectivity {
 }
 
 /// How to recognise a device from geometry.
+///
+/// # Terminal order is the role
+///
+/// A terminal's *role* — gate, source, drain, bulk — is not a column here and
+/// cannot be: `TerminalRole` is a `topology` type and `topology` sits above this
+/// crate. The role is therefore the terminal's **position**, fixed per family:
+///
+/// | [`DeviceKind`] | `terminal[k]`, in order from k = 0 |
+/// |---|---|
+/// | `Mos` | gate, source, drain, bulk |
+/// | `Bjt` | base, emitter, collector, then bulk if a fourth is declared |
+/// | `Resistor`, `Capacitor`, `Diode` | pin 0, pin 1 — symmetric, so the comparator may swap them |
+///
+/// Written down in the Testing-Phase because it was written down nowhere: the
+/// convention existed only in `gpurify-testgen`'s netlist builder and the tests
+/// calibrated against it, and a deck author reading this type had no way to know
+/// which order to state. A recogniser whose terminals are in a different order
+/// extracts a transistor with its source and drain transposed, which LVS reports
+/// as a mismatch in the layout.
 #[derive(Debug, Default)]
 pub struct DeviceRecognition {
     /// One row per recogniser: the marker layer whose polygons each identify
@@ -207,7 +377,514 @@ pub struct ProcessStack {
     pub dielectric_k: Vec<f64>,
 }
 
+/// Parse and validate a deck from memory.
+///
+/// Reopened in the Testing-Phase. [`read_deck`] took a `&Path` and was the only
+/// producer, so `DeckError::OffGrid`, `UnknownLayer`, `MissingParam` and
+/// `DuplicateRule` were all unreachable from a test — every fail-closed
+/// guarantee this module makes was unverifiable.
+///
+/// # Schema
+///
+/// JSON, stated here because it was stated nowhere and a parser whose input
+/// format is undocumented cannot be tested against anything:
+///
+/// ```json
+/// {
+///   "layers": { "<name>": [<gds_layer>, <gds_datatype>] },
+///   "rules":  { "<rule_id>": { "kind": "<kind>",
+///                              "layers": ["<name>", ..],
+///                              "params": { "<param>": <value> } } },
+///   "connectivity":       { "conductors": ["<name>", ..],
+///                           "intra_layer_touch": <bool>,
+///                           "vias": [{ "layer": "<name>",
+///                                      "connects": ["<name>", "<name>"] }] },
+///   "device_recognition": [{ "kind": "mos"|"bjt"|"resistor"|"capacitor"|"diode",
+///                            "marker": "<name>", "model": "<string>",
+///                            "terminals": ["<name>", ..] }],
+///   "pex": { "<name>": { "thickness_nm": <n>, "height_nm": <n>,
+///                        "sheet_res_ohm_sq": <n>, "area_cap_af_um2": <n>,
+///                        "fringe_cap_af_um": <n>, "dielectric_k": <n> } }
+/// }
+/// ```
+///
+/// Every section is optional; an absent one leaves its table empty. Layers take
+/// their [`LayerId`] ascending by name, so two runs over the same text agree on
+/// every id downstream.
+///
+/// ## Parameter values are tagged
+///
+/// [`ParamValue`] is a closed enum and nothing in the deck says which variant a
+/// kind expects, so the *value* carries its own shape rather than being guessed
+/// from its JSON type — a bare `45` cannot be told from a ratio of `45`:
+///
+/// | JSON | becomes |
+/// |---|---|
+/// | `{ "nm": 45 }` | [`ParamValue::Length`], converted against `grid` |
+/// | `{ "ratio": 2.5 }` | [`ParamValue::Ratio`] |
+/// | `{ "count": 4 }` | [`ParamValue::Count`] |
+/// | `{ "layer": "met1" }` | [`ParamValue::Layer`], resolved |
+/// | `true` / `false` | [`ParamValue::Flag`] |
+///
+/// Lengths are **physical nanometres** and convert exactly or not at all, which
+/// is what makes `DeckError::OffGrid` a property of the deck and the grid
+/// together rather than of a rounding mode.
+///
+/// ## What each refusal is
+///
+/// Stated so each is constructible on purpose: `Malformed` for anything that is
+/// not this shape — bad JSON, a value of the wrong type, an unrecognised
+/// `device_recognition.kind`; `UnknownLayer` for any layer name, anywhere,
+/// absent from `"layers"`; `MissingParam` for a rule with no `kind` or no
+/// `layers`; `OffGrid` for a length that is not an exact multiple of the grid;
+/// `DuplicateRule` for a rule id stated twice. Never a skip, in any case.
+///
+/// ## Kinds are not interpreted here
+///
+/// `kind` is interned verbatim. `ingest` does not know the vocabulary and must
+/// not: `gpurify_drc::ruleset::KINDS` and `gpurify_erc::ruleset::KINDS` are the
+/// two lists, and both live above this crate in the module graph.
+///
+/// A row still does not record which domain it belongs to, and both
+/// `from_deck`s read the one [`RuleTable`] — so neither can refuse a kind, since
+/// the other domain's rows are unrecognised to it. Each files the kinds it
+/// spells and steps over the rest. The refusal that keeps a misspelled rule from
+/// reading as a clean design moved up to `gpurify_engine::run::run_checks`,
+/// which is the only layer holding both vocabularies. A deck may therefore hold
+/// rules of both domains.
+///
+/// The two lists are disjoint, which is what makes "a row belongs to exactly one
+/// domain" true. `"antenna"` was once in both, with two mutually exclusive
+/// schemas, so a row spelled that way was filed by both and failed one of them.
+/// The antenna family is `erc`'s and `drc`'s copy is deleted; see
+/// `docs/SIGNATURE_DEFECTS.md` under `## erc`.
+pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
+    let doc: DeckJson =
+        serde_json::from_str(source).map_err(|why| DeckError::Malformed(why.to_string()))?;
+
+    let layers = build_layers(&doc.layers, strings)?;
+    let rules = build_rules(&doc.rules, &layers, grid, strings)?;
+    let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
+    let devices = build_devices(&doc.device_recognition, &layers, strings)?;
+    let stack = build_stack(&doc.pex, &layers, strings)?;
+
+    debug_assert_eq!(devices.kind.len(), devices.marker.len(), "one marker per recogniser");
+    debug_assert_eq!(devices.kind.len(), devices.model.len(), "one model per recogniser");
+    debug_assert_eq!(connectivity.via_cut.len(), connectivity.via_connects.len());
+
+    Ok(Deck {
+        grid: Some(grid),
+        layers,
+        rules,
+        connectivity,
+        devices,
+        stack,
+    })
+}
+
+/// Resolve one layer name, naming what referred to it when it is not declared.
+///
+/// **Decision** — the one place a deck name becomes a [`LayerId`], so
+/// `UnknownLayer` cannot be forgotten at one of the five sections that resolve
+/// names.
+fn layer_of(
+    layers: &LayerTable,
+    strings: &StrTable,
+    referrer: &str,
+    name: &str,
+) -> Result<LayerId, DeckError> {
+    layers
+        .id(strings, name)
+        .ok_or_else(|| DeckError::UnknownLayer(referrer.to_owned(), name.to_owned()))
+}
+
+/// Layer names to a [`LayerTable`], ids ascending by name.
+///
+/// Sorted by the name's *bytes* rather than by its [`StrId`]: an id is the
+/// order the parser happened to intern in, and the doc promises the ids two
+/// runs over the same text agree on. Sorting also puts a repeated name next to
+/// itself, which is how the duplicate is found.
+fn build_layers(declared: &Pairs<(u16, u16)>, strings: &mut StrTable) -> Result<LayerTable, DeckError> {
+    let mut sorted: Vec<&(String, (u16, u16))> = declared.0.iter().collect();
+    sorted.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+
+    for pair in sorted.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            return Err(DeckError::Malformed(format!(
+                "layer {} is declared twice",
+                pair[0].0
+            )));
+        }
+    }
+
+    let entries: Vec<(StrId, u16, u16)> = sorted
+        .iter()
+        .map(|(name, (layer, datatype))| (strings.intern(name), *layer, *datatype))
+        .collect();
+
+    let table = LayerTable::build(&entries);
+    debug_assert_eq!(table.len(), declared.0.len(), "one id per declared layer");
+    Ok(table)
+}
+
+/// The `"rules"` section to a [`RuleTable`], layers resolved and lengths
+/// converted.
+///
+/// **Transform, A-to-B.** Rules keep the order the deck states them in, so a
+/// report's rule order is the deck author's order.
+fn build_rules(
+    declared: &Pairs<RuleJson>,
+    layers: &LayerTable,
+    grid: Grid,
+    strings: &mut StrTable,
+) -> Result<RuleTable, DeckError> {
+    let mut table = RuleTable {
+        spec: Vec::with_capacity(declared.0.len()),
+        ..RuleTable::default()
+    };
+    let mut seen: Vec<StrId> = Vec::with_capacity(declared.0.len());
+
+    for (rule_id, rule) in &declared.0 {
+        let id = strings.intern(rule_id);
+        if seen.contains(&id) {
+            return Err(DeckError::DuplicateRule(rule_id.clone()));
+        }
+        seen.push(id);
+
+        let kind = rule
+            .kind
+            .as_deref()
+            .ok_or_else(|| DeckError::MissingParam(rule_id.clone(), "kind".to_owned()))?;
+        let rule_layers = rule
+            .layers
+            .as_deref()
+            .ok_or_else(|| DeckError::MissingParam(rule_id.clone(), "layers".to_owned()))?;
+
+        let layer_start = table.layer_ref.len();
+        for name in rule_layers {
+            table.layer_ref.push(layer_of(layers, strings, rule_id, name)?);
+        }
+
+        let param_start = table.param.len();
+        for (name, stated) in &rule.params.0 {
+            let value = param_value(stated, rule_id, layers, grid, strings)?;
+            let name = strings.intern(name);
+            table.param.push((name, value));
+        }
+
+        table.spec.push(RuleSpec {
+            id,
+            kind: strings.intern(kind),
+            layer_start: narrow(layer_start),
+            layer_len: narrow(table.layer_ref.len() - layer_start),
+            param_start: narrow(param_start),
+            param_len: narrow(table.param.len() - param_start),
+        });
+    }
+
+    debug_assert_eq!(table.spec.len(), declared.0.len(), "one row per declared rule");
+    Ok(table)
+}
+
+/// One stated parameter to its converted [`ParamValue`].
+fn param_value(
+    stated: &ParamJson,
+    rule_id: &str,
+    layers: &LayerTable,
+    grid: Grid,
+    strings: &StrTable,
+) -> Result<ParamValue, DeckError> {
+    Ok(match *stated {
+        ParamJson::Flag(flag) => ParamValue::Flag(flag),
+        ParamJson::Ratio(ratio) => ParamValue::Ratio(ratio),
+        ParamJson::Count(count) => ParamValue::Count(count),
+        ParamJson::Nm(nm) => ParamValue::Length(to_limit(nm, grid, rule_id)?),
+        ParamJson::Layer(ref name) => {
+            ParamValue::Layer(layer_of(layers, strings, rule_id, name)?)
+        }
+    })
+}
+
+/// A physical nanometre limit to grid units, exactly or not at all.
+///
+/// A limit that rounds is a limit the foundry did not state, so both refusals
+/// here are typed. `NotFinite` is separated from the rest because a `NaN` is
+/// not "off the grid" — it is off everything, and reporting it as an off-grid
+/// limit sends the deck author looking at their resolution.
+fn to_limit(nm: f64, grid: Grid, rule_id: &str) -> Result<Dbu, DeckError> {
+    grid.to_dbu(Qty::<Length, NANO>::new(nm)).map_err(|why| {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the message names the limit the deck stated; a limit too large to \
+                      truncate is already refused, and the digits after the point are not \
+                      what the reader needs to see"
+        )]
+        let stated = nm as i64;
+        match why {
+            GridError::NotFinite => {
+                DeckError::Malformed(format!("rule {rule_id}: limit is not a finite number"))
+            }
+            _ => DeckError::OffGrid(rule_id.to_owned(), stated),
+        }
+    })
+}
+
+/// The `"connectivity"` section, layers resolved.
+fn build_connectivity(
+    declared: &ConnectivityJson,
+    layers: &LayerTable,
+    strings: &StrTable,
+) -> Result<Connectivity, DeckError> {
+    let mut connectivity = Connectivity {
+        conductors: Vec::with_capacity(declared.conductors.len()),
+        via_cut: Vec::with_capacity(declared.vias.len()),
+        via_connects: Vec::with_capacity(declared.vias.len()),
+        intra_layer_touch: declared.intra_layer_touch,
+    };
+
+    for name in &declared.conductors {
+        connectivity
+            .conductors
+            .push(layer_of(layers, strings, "connectivity", name)?);
+    }
+    for via in &declared.vias {
+        connectivity
+            .via_cut
+            .push(layer_of(layers, strings, "connectivity", &via.layer)?);
+        connectivity.via_connects.push((
+            layer_of(layers, strings, "connectivity", &via.connects.0)?,
+            layer_of(layers, strings, "connectivity", &via.connects.1)?,
+        ));
+    }
+
+    Ok(connectivity)
+}
+
+/// The `"device_recognition"` section, as the CSR [`DeviceRecognition`] holds.
+///
+/// Terminal order is the role — see [`DeviceRecognition`]. The deck states the
+/// terminals in that order and this preserves it; nothing here knows what the
+/// positions mean.
+fn build_devices(
+    declared: &[DeviceJson],
+    layers: &LayerTable,
+    strings: &mut StrTable,
+) -> Result<DeviceRecognition, DeckError> {
+    let mut devices = DeviceRecognition::default();
+    if declared.is_empty() {
+        // An absent section leaves the table empty, sentinel included: a
+        // `terminal_start` of `[0]` would claim a recogniser row that the empty
+        // `kind` column does not have.
+        return Ok(devices);
+    }
+
+    devices.terminal_start.push(0);
+    for device in declared {
+        devices.kind.push(match device.kind.as_str() {
+            "mos" => DeviceKind::Mos,
+            "bjt" => DeviceKind::Bjt,
+            "resistor" => DeviceKind::Resistor,
+            "capacitor" => DeviceKind::Capacitor,
+            "diode" => DeviceKind::Diode,
+            other => {
+                return Err(DeckError::Malformed(format!(
+                    "device_recognition: unknown device kind {other}"
+                )))
+            }
+        });
+        devices
+            .marker
+            .push(layer_of(layers, strings, "device_recognition", &device.marker)?);
+        devices.model.push(strings.intern(&device.model));
+        for name in &device.terminals {
+            devices
+                .terminal
+                .push(layer_of(layers, strings, "device_recognition", name)?);
+        }
+        devices.terminal_start.push(narrow(devices.terminal.len()));
+    }
+
+    debug_assert_eq!(
+        devices.terminal_start.len(),
+        devices.kind.len() + 1,
+        "a CSR offset column carries one closing sentinel"
+    );
+    Ok(devices)
+}
+
+/// The `"pex"` section, as a column per parameter indexed by [`LayerId`].
+///
+/// Every column is `layers.len()` long once the section exists at all, because
+/// `pex::stack_row` indexes it directly. A declared layer the section omits
+/// keeps its zero, which is a layer that contributes no capacitance and no
+/// resistance rather than one that indexes a neighbour's.
+fn build_stack(
+    declared: &Pairs<StackJson>,
+    layers: &LayerTable,
+    strings: &StrTable,
+) -> Result<ProcessStack, DeckError> {
+    if declared.0.is_empty() {
+        return Ok(ProcessStack::default());
+    }
+
+    let rows = layers.len();
+    let mut stack = ProcessStack {
+        thickness_nm: vec![0.0; rows],
+        height_nm: vec![0.0; rows],
+        sheet_res_ohm_sq: vec![0.0; rows],
+        area_cap_af_um2: vec![0.0; rows],
+        fringe_cap_af_um: vec![0.0; rows],
+        dielectric_k: vec![0.0; rows],
+    };
+
+    for (name, row) in &declared.0 {
+        let at = layer_of(layers, strings, "pex", name)?.idx();
+        stack.thickness_nm[at] = row.thickness_nm;
+        stack.height_nm[at] = row.height_nm;
+        stack.sheet_res_ohm_sq[at] = row.sheet_res_ohm_sq;
+        stack.area_cap_af_um2[at] = row.area_cap_af_um2;
+        stack.fringe_cap_af_um[at] = row.fringe_cap_af_um;
+        stack.dielectric_k[at] = row.dielectric_k;
+    }
+
+    debug_assert_eq!(stack.dielectric_k.len(), rows, "one stack row per layer");
+    Ok(stack)
+}
+
+/// The key/value pairs of a JSON object, in the order the file states them and
+/// with repeats kept.
+///
+/// `serde_json::Map` is the obvious type and is the wrong one: it collapses a
+/// repeated key to the last value, which would make `DeckError::DuplicateRule`
+/// unreachable and would silently drop one of two rules with the same id.
+struct Pairs<T>(Vec<(String, T)>);
+
+impl<T> Default for Pairs<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Pairs<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct PairVisitor<T>(std::marker::PhantomData<T>);
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for PairVisitor<T> {
+            type Value = Pairs<T>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Pairs<T>, M::Error> {
+                let mut pairs = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some(entry) = map.next_entry::<String, T>()? {
+                    pairs.push(entry);
+                }
+                Ok(Pairs(pairs))
+            }
+        }
+
+        deserializer.deserialize_map(PairVisitor(std::marker::PhantomData))
+    }
+}
+
+/// The deck file, as JSON states it. The schema is on [`parse_deck`].
+///
+/// `deny_unknown_fields` on every struct here: a misspelled `"conectivity"` is
+/// a deck with no connectivity at all, which extracts every shape as its own
+/// net and reports a clean LVS for a chip that is not connected.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct DeckJson {
+    #[serde(default)]
+    layers: Pairs<(u16, u16)>,
+    #[serde(default)]
+    rules: Pairs<RuleJson>,
+    #[serde(default)]
+    connectivity: ConnectivityJson,
+    #[serde(default)]
+    device_recognition: Vec<DeviceJson>,
+    #[serde(default)]
+    pex: Pairs<StackJson>,
+}
+
+/// `kind` and `layers` are `Option` rather than required, so their absence is
+/// `DeckError::MissingParam` naming the rule instead of a serde message naming
+/// a byte offset.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleJson {
+    kind: Option<String>,
+    layers: Option<Vec<String>>,
+    #[serde(default)]
+    params: Pairs<ParamJson>,
+}
+
+/// A parameter value carries its own shape — `45` alone cannot be told from a
+/// ratio of `45`.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ParamJson {
+    Nm(f64),
+    Ratio(f64),
+    Count(u32),
+    Layer(String),
+    /// Untagged, because a flag has nothing to disambiguate: `true` is a flag
+    /// and no other variant is a bare boolean.
+    #[serde(untagged)]
+    Flag(bool),
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ConnectivityJson {
+    #[serde(default)]
+    conductors: Vec<String>,
+    #[serde(default)]
+    intra_layer_touch: bool,
+    #[serde(default)]
+    vias: Vec<ViaJson>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViaJson {
+    layer: String,
+    connects: (String, String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceJson {
+    kind: String,
+    marker: String,
+    model: String,
+    terminals: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct StackJson {
+    #[serde(default)]
+    thickness_nm: f64,
+    #[serde(default)]
+    height_nm: f64,
+    #[serde(default)]
+    sheet_res_ohm_sq: f64,
+    #[serde(default)]
+    area_cap_af_um2: f64,
+    #[serde(default)]
+    fringe_cap_af_um: f64,
+    #[serde(default)]
+    dielectric_k: f64,
+}
+
 /// Read and validate a deck against a layout's grid.
+///
+/// A thin wrapper over [`parse_deck`]: reads the file, and every decision after
+/// that belongs to the parser. Keeping the file read out of the parser is what
+/// makes the parser testable.
 ///
 /// **Transform, generative.** The grid is a parameter because limit conversion
 /// depends on it: the same deck loaded against two grids produces two
@@ -220,46 +897,33 @@ pub fn read_deck(
     grid: Grid,
     strings: &mut StrTable,
 ) -> Result<Deck, DeckError> {
-    todo!()
+    // The path is in the message: a run loads a deck, a layout, a netlist and
+    // an intent file, and "No such file or directory" alone names none of them.
+    let source = std::fs::read_to_string(path)
+        .map_err(|why| DeckError::Io(format!("{}: {why}", path.display())))?;
+    parse_deck(&source, grid, strings)
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.
 ///
-/// These are unit tests rather than integration tests for one reason:
-/// [`LayerTable`] has private fields and no constructor, and [`read_deck`] —
-/// its only producer — takes a path to a file whose schema is not stated
-/// anywhere a test can write against. So a deck cannot be built in memory from
-/// outside this crate, and nothing that takes one can be exercised. That is a
-/// Definition-Phase defect, recorded in `docs/NEED_TESTING.md` rather than
-/// fixed here; signatures are frozen. Building the table from its fields inside
-/// the module that owns them is the workaround, and it costs the round-trip law
-/// nothing.
+/// These stay unit tests: the layout tests beside them need a populated [`Deck`]
+/// and building one is cheapest from inside the module that owns the fields.
+/// They no longer *have* to be — [`LayerTable::build`] was added in the
+/// Testing-Phase and the fixture goes through it, so what these tests exercise
+/// is the constructor every other crate now uses rather than a second one
+/// written here.
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{LayerTable, StrTable};
     use gpurify_core::LayerId;
 
     /// Build a layer table from `(name, gds layer, gds datatype)` rows.
-    ///
-    /// `by_name` is the reverse-lookup index and is ordered by the layer's
-    /// *name bytes*, matching [`crate::intern::StrTable`]'s sorted index — the
-    /// field's doc comment points at it for exactly this reason.
     pub(crate) fn layer_table(strings: &mut StrTable, rows: &[(&str, u16, u16)]) -> LayerTable {
-        let name = rows.iter().map(|&(n, _, _)| strings.intern(n)).collect();
-        let stream = rows.iter().map(|&(_, l, d)| (l, d)).collect();
-
-        let mut order: Vec<usize> = (0..rows.len()).collect();
-        order.sort_unstable_by_key(|&i| rows[i].0);
-        let by_name = order
-            .into_iter()
-            .map(|i| LayerId(u16::try_from(i).expect("a deck has tens of layers")))
+        let entries: Vec<_> = rows
+            .iter()
+            .map(|&(name, layer, datatype)| (strings.intern(name), layer, datatype))
             .collect();
-
-        LayerTable {
-            name,
-            stream,
-            by_name,
-        }
+        LayerTable::build(&entries)
     }
 
     /// The rows every layout test in this crate is written against.
@@ -343,3 +1007,4 @@ pub(crate) mod tests {
         );
     }
 }
+

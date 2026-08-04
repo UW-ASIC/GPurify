@@ -1,208 +1,261 @@
-# GPUVerify
+# GPurify
 
-GPUVerify is a Rust workspace for physical-design verification directly from
-GDSII/OASIS layout data. The public `gdsverify` facade combines:
+Physical verification for integrated circuits — DRC, LVS, ERC and PEX — written
+in Rust, data-oriented, and built around one idea: **a clean result has to mean
+something.**
 
-- DRC — geometric design-rule checking.
-- LVS — layout extraction and comparison with a reference netlist.
-- ERC — layout-derived electrical checks and typed tapeout signoff analyses.
-- PEX — analytical parasitic extraction plus quasi-static numerical solvers.
+The failure this exists to prevent is the false clean. An empty violation table
+is also what a run that never executed produces, and a tool that cannot tell
+those apart will eventually sign off a chip it did not check. Every rule here
+records whether it ran and what it examined, and says why if it stopped. A run
+that could not check everything it was asked to check does not pass, and the exit
+code says so.
 
-The repository currently provides a Rust library API rather than a standalone
-command-line application. The facade package lives in `crates/engine` and
-re-exports the specialized workspace crates under stable module paths.
+## Status
 
-## Status and accuracy boundary
+The implementation is complete — every function has a body, and the suite is
+green (714 tests as of 2026-08-04, plus one `#[ignore]`d doctest).
 
-The checked-in conformance corpus contains 160 independent GDS files covering
-all currently registered DRC families, the LVS comparison matrix, every
-layout-derived ERC heuristic, and all analytical PEX result families. A live
-KLayout 0.30.8 oracle additionally checks the directly equivalent native DRC
-operations.
+It has **not** been run against production silicon data, and it should not be
+used to sign off a tapeout. Specifically:
 
-Analytical PEX is covered by the GDS conformance suite. Quasi-static per-net PEX
-is wired through the same lumped `NetParasitics` API: rectilinear conductors are
-extruded from layout DBU into the deck's 3-D process stack, capacitance is solved
-as one Maxwell BEM system with a substrate reference, and sheet resistance is
-solved as DC FastHenry segments. Fixed via/contact resistance remains a deck
-contribution because it is an interface-device parameter rather than a metal
-volume. Use the checked API for signoff so unsupported geometry or solver
-failure cannot select the compatibility fallback.
+- The PDKs in `pdks/` are mid-migration to the current deck schema.
+  `pdks/README.md` is the authority on what each one actually configures and
+  which rules are unsourced gaps.
+- Performance is *recorded, not gated*. `tests/bench_all.rs` prints a table; no
+  duration fails a build.
+- Some rules ship without a definitive test, because the right answer is a
+  foundry convention rather than something derivable from physics. Those are
+  named, with reasons, in `docs/NEED_TESTING.md`.
+- `cargo-mutants` is the intended acceptance gate for the suite and has not been
+  run at scale yet.
 
-ERC power, reliability, CMP, and ESD/latch-up analyses require explicit
-qualified stimulus/evidence; missing inputs report `NotRun` rather than a false
-clean result.
+There is no licence file. Add one before publishing.
 
-## Workspace layout
+## Getting started
 
-| Path | Purpose |
-| --- | --- |
-| `crates/engine` | Public `gdsverify` facade |
-| `crates/core` | Geometry, exact predicates, hierarchy, GDSII/OASIS and PDK parsing |
-| `crates/drc` | Design-rule engine and rule registry |
-| `crates/lvs` | Connectivity/device extraction and netlist comparison |
-| `crates/erc` | Electrical heuristics and typed signoff analyses |
-| `crates/pex` | Analytical and quasi-static parasitic extraction code |
-| `crates/backend` | CPU/GPU backend selection and telemetry |
-| `pdks` | Example JSON PDK decks |
-| `tests/fixtures` | Standalone conformance GDS corpus and expectations |
-
-## Build
-
-The recommended development environment is the repository's Nix flake:
+The dev shell is the supported environment — it pins the toolchain and supplies
+`clippy`, `cargo-mutants` and the Vulkan libraries the PEX GPU path links
+against:
 
 ```sh
 nix develop
-cargo build --workspace
-```
-
-With an existing stable Rust toolchain, the CPU build only requires:
-
-```sh
-cargo build --workspace
-```
-
-The optional `gpu` feature enables the GPU paths and their native Vulkan/CUDA
-dependencies:
-
-```sh
-cargo build -p gdsverify --features gpu
-```
-
-## Library usage
-
-Load and verify a top-level GDS cell with a JSON deck:
-
-```rust,no_run
-use gdsverify::{load_gds_strict, run_drc, run_pex, Deck};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let deck_json = std::fs::read_to_string("pdks/sky130.json")?;
-    let deck = Deck::from_json(&deck_json)?;
-    let layout = load_gds_strict("design.gds", &deck)?;
-
-    let top_name = layout
-        .top_cells
-        .first()
-        .ok_or("GDS has no top cell")?;
-    let top = layout
-        .cells
-        .get(top_name)
-        .ok_or("top cell was not flattened")?;
-
-    let drc = run_drc(top, &deck);
-    println!("DRC violations: {}", drc.violations.len());
-
-    let pex = run_pex(top, &deck); // detailed analytical report
-    println!("extracted capacitance: {} aF", pex.total_cap());
-    Ok(())
-}
-```
-
-`load_gds_strict` checks the complete GDS envelope, representable geometry, and
-that the GDS database unit matches the deck. `load_gds` is the compatibility
-entry point for legacy DRC inputs that intentionally retain malformed geometry
-for polygon-validity reporting.
-
-For LVS, construct or parse a reference netlist and call `run_lvs`. For ERC,
-call `run_erc` with a `SignoffConfig`; checks without required qualified inputs
-remain blocking as `NotRun`. The facade re-exports the lower-level extraction,
-hierarchy, SPICE/Spectre, result, and backend APIs for more specialized flows.
-
-### Analytical or quasi-static per-net PEX
-
-`run_pex_by_net` is the drop-in dispatcher. It reads the deck-level method:
-
-```json
-{
-  "pex_method": "field_solver"
-}
-```
-
-After connectivity extraction, the same API returns lumped ohms and
-attofarads for either engine:
-
-```rust,no_run
-use gdsverify::{extract_netlist, run_pex_by_net_checked, Deck, GeometryStore};
-
-fn extract(
-    layout: &GeometryStore,
-    deck: &Deck,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let nets = extract_netlist(layout, deck)?;
-    let parasitics = run_pex_by_net_checked(layout, deck, &nets.net_of_poly)?;
-    for (net, rc) in parasitics {
-        println!("net {net}: R={} ohm, C={} aF", rc.r_ohm, rc.cap_af);
-    }
-    Ok(())
-}
-```
-
-`"pex_method": "analytical"` is the default. Call
-`run_pex_by_net_with_accuracy` or its checked variant to override the deck for
-one run. The unchecked functions preserve compatibility by logging a field
-solver failure once and falling back to analytical extraction; the checked
-functions return an extraction diagnostic instead.
-
-## PDK decks
-
-A deck defines:
-
-- GDS layer/datatype mappings.
-- Typed DRC rule instances and limits.
-- Conductive layers and via connectivity.
-- MOS/BJT/resistor/diode/capacitor recognition rules.
-- LVS extraction policy and tolerances.
-- ERC thresholds.
-- Analytical PEX process constants and quasi-static
-  `thickness_nm`/`height_nm`/`dielectric_k` geometry.
-
-Example decks are available under `pdks/`. GDS coordinates are never silently
-rescaled: the file's database unit must agree with `Deck::dbu_nm`.
-
-## Run all conformance tests
-
-The following runs every one of the 160 standalone GDS fixtures:
-
-```sh
-cargo test -p gdsverify \
-  --test fixture_corpus \
-  --test verify_drc \
-  --test verify_lvs \
-  --test verify_erc \
-  --test verify_pex
-```
-
-Cargo reports 11 top-level test functions because the harnesses iterate the
-manifest: 94 DRC + 16 LVS + 23 ERC + 27 analytical PEX cases are executed.
-
-Run all 160 GPUVerify cases and the live KLayout parity subset together:
-
-```sh
-KLAYOUT_BIN=/path/to/klayout \
-  cargo test -p gdsverify \
-  --test fixture_corpus \
-  --test verify_drc \
-  --test verify_lvs \
-  --test verify_erc \
-  --test verify_pex \
-  -- --nocapture
-```
-
-See `tests/fixtures/README.md` for exact coverage, running individual harnesses,
-KLayout scope, and deterministic fixture regeneration.
-
-## Run the complete workspace suite
-
-```sh
+cargo build --release
 cargo test --workspace
 ```
 
-This includes the conformance corpus along with unit, integration, numerical,
-and documentation tests for every crate.
+A plain stable toolchain builds and tests the CPU paths fine, but `cargo clippy`
+will not exist outside the shell, and the workspace lints are part of the
+definition of correct here.
 
-To run only the layout-to-quasi-static PEX wiring and dispatch tests:
+## Usage
+
+```
+gpurify <check> --deck <deck.json> <layout.gds> [options]
+```
+
+| Subcommand | Purpose | Extra input |
+|---|---|---|
+| `drc` | Design rule check | — |
+| `erc` | Electrical rule check | `--intent <file>` for the intent-gated rules |
+| `lvs` | Layout versus schematic | reference netlist, required |
+| `pex` | Parasitic extraction | `--quasistatic <net>…` selects field-solved nets |
+| `all` | Everything | both optional; an absent input marks its check *skipped*, never *passed* |
+
+Shared flags: `--format text|json|gds`, `--output <path>` (default stdout),
+`--threads <n>`, `--check-determinism`, `--strict-layers`.
+
+`--format gds` writes violation markers as a layout you can open in a viewer.
+`--strict-layers` rejects geometry on layers the deck does not describe instead
+of silently dropping it; it defaults on, because a signoff run wants it.
+
+## Determinism is a guarantee, not an aspiration
+
+`--threads` affects speed only. The same inputs must serialise to
+**byte-identical output** at any thread count, and `--check-determinism` runs the
+job twice and fails if they differ.
+
+This is not a nicety. A signoff report that differs from itself between runs
+cannot be diffed against yesterday's, so a reviewer cannot tell a fixed violation
+from a vanished one. The gate exists because the previous implementation had
+exactly this defect: 8 of 27 parasitic reports differed between runs of the same
+binary on the same input. The numbers were right and the file was not
+reproducible, which made it useless anyway.
+
+## The deck
+
+One JSON file describes the process. Exactly five sections, and an unknown key is
+a hard error — a misspelled `"conectivity"` would otherwise be a deck with no
+connectivity at all, which extracts every shape as its own net and reports a
+clean LVS for a chip that is not connected.
+
+```json
+{
+  "layers": { "met1": [68, 20] },
+  "rules": {
+    "met1_min_width": {
+      "kind": "min_width",
+      "layers": ["met1"],
+      "params": { "limit": { "nm": 140 } }
+    }
+  },
+  "connectivity": { "conductors": ["met1"], "intra_layer_touch": true, "vias": [] },
+  "device_recognition": [
+    { "kind": "mos", "marker": "poly", "model": "nfet", "terminals": ["diff", "poly"] }
+  ],
+  "pex": {
+    "met1": { "thickness_nm": 360, "height_nm": 936, "sheet_res_ohm_sq": 0.125,
+              "area_cap_af_um2": 25.6, "fringe_cap_af_um": 40.9, "dielectric_k": 4.1 }
+  }
+}
+```
+
+Three things catch people out, all deliberate:
+
+- The JSON key is the **rule id**; the kind is a field. Two rules of one kind on
+  different layers need distinct ids, and violations are reported by id.
+- `layers` is always an **array**, even at length one.
+- Parameter values are **tagged** — `{"nm": 140}`, never a bare `140`. The shapes
+  a limit can take are a closed set, and a bare `45` cannot be told from a ratio
+  of `45`.
+
+The vocabulary is 24 DRC kinds and 19 ERC kinds, in `drc::ruleset::KINDS` and
+`erc::ruleset::KINDS`. The two lists are disjoint, and a kind in neither is
+refused by the engine rather than skipped.
+
+An absent section leaves its table empty, which has consequences worth knowing: a
+deck with no `pex` stack gives current-carrying layers no sheet resistance, and
+ERC then refuses its whole stage rather than reporting rules it never ran.
+
+## Architecture
+
+```
+units ──┬──────────────────────────────────────────────┐
+        │                                              │
+core ───┼─→ ingest ─→ derived ─→ topology ─→ ┬─ drc ─┐ │
+        │                                    ├─ erc ─┤ │
+        └─→ report ──────────────────────────┼─ lvs ─┼─┴─→ export ─→ engine ─→ cli
+                                             └─ pex ─┘
+```
+
+| Crate | What lives there |
+|---|---|
+| `units` | `Dbu`, `Grid`, `Qty` — the newtypes that stop a coordinate being a bare integer. |
+| `core` | Geometry: the store, exact predicates, exact rectilinear booleans, the spatial index. |
+| `ingest` | Every reader — GDS, OASIS, SPICE/CDL, Spectre, deck, design intent. |
+| `derived` | Derived-layer expressions and the candidate-pair prefilter. |
+| `topology` | Nets, devices and ports — connectivity recovered from geometry. |
+| `report` | Violations, measurements, run records. |
+| `drc` | Geometry rules. 24 kinds. |
+| `erc` | Electrical rules, including antenna and the power-grid solve. 19 kinds. |
+| `lvs` | Graph matching, and nothing else. |
+| `pex` | Parasitic extraction. The only place a GPU appears. |
+| `export` | Every writer — GDS, SPICE, SPEF, DSPF, JSON. |
+| `engine` | Orchestration: load, extract, check, summarise. |
+| `cli` | Argument parsing and rendering. |
+| `testgen` | Fixture generation. Test infrastructure, not the system under test. |
+
+Every reader lives in `ingest` and every writer in `export`, so determinism is
+enforced in one place instead of argued about in eleven.
+
+These are separate crates because the compiler then *enforces* that graph. Merge
+them into modules and nothing stops `core` importing `drc` — the split is the
+layering, not decoration. A consumer who wants the whole tool depends on
+`gpurify` and gets `gpurify::drc`, `gpurify::core` and the rest as re-exports.
+
+## Conventions worth knowing before reading the code
+
+- **Coordinates are `Dbu`, an `i64` newtype — never `i32`.** `MAX_ABS_DBU = 1 << 40`
+  bounds them so `i128` area products cannot overflow.
+- **Fail closed.** An unsupported or unrepresentable input is a typed error. A
+  saturating distance sentinel is *fail-open* for a spacing rule, and that is a
+  bug rather than an optimisation.
+- **The caller owns the memory.** Transforms write into caller-supplied buffers,
+  so a loop over rules allocates nothing per rule and behaviour is a
+  deterministic function of what appears in the signature.
+- **Bulk loops carry their discipline at the call site.** No data-dependent `if`
+  in the body without a comment saying why it survives — the branch predicts
+  well, the taken side is expensive enough to skip, or the array is large enough
+  that speculation was doing the prefetching.
+- **`debug_assert` liberally**: preconditions on entry, and the expected shape of
+  intermediate and final results.
+
+`docs/VOCABULARY.md` defines these terms. Read it before writing code; the words
+are load-bearing and double as skill triggers.
+
+## Testing
+
+Tests are written **against signatures, before implementations exist**. That
+ordering is the point: a test written after the code, by the same author, proves
+only self-consistency. Most of this suite was authored while every function body
+was still `todo!()`, so it could not have been shaped to fit an implementation.
+
+The oracle is **construct-from-answer**. A fixture places a deliberate violation
+at a coordinate the test chose, with a measurement the test computed by hand, and
+asserts *that* rule on *that* layer at *that* point — never "one violation was
+found", because a rule flagging the wrong shape passes a count.
+
+### The fixture corpus
+
+`tests/fixtures/` holds 160 real GDSII cells drawn for a real PDK, each with a
+deliberate defect: 94 DRC, 23 ERC, 16 LVS, 27 PEX. `tests/corpus/` drives every
+one through the ordinary pipeline. Geometry cannot be wrong about itself, so the
+cells are data and are reused freely.
+
+The expectations are not. Two files sit beside the cells and are deliberately
+kept apart:
+
+- **`manifest.json`** — the deleted implementation's own answers. A historical
+  record. Nothing in the suite reads it.
+- **`expectations.json`** — every case re-derived from the geometry and from the
+  rule's frozen doc comment, then *compared* with the manifest, with the
+  comparison recorded in a field rather than folded into the value. Where the two
+  disagree the derived value stands and a `dispute` field names which side is
+  wrong and why.
+
+Each case asserts the count, **that the rule ran and examined a non-empty
+jurisdiction**, and for a positive case the measurement and the report
+coordinate. The middle one is why the corpus was revived: an empty violation
+table is also what a rule that never executed produces, and 45 of the old 94 DRC
+cases passed on exactly that ambiguity. `report::RuleRun` tells the two apart.
+Five cases nobody could derive are marked `underivable` and assert only what does
+follow — dropping the hard ones would be the same failure as trusting them.
+`tests/fixtures/README.md` is the full account.
+
+122 of the 160 pass today. The 38 that do not are implementation defects with
+names, not expectations waiting to be relaxed; `docs/TESTING.md` lists them.
 
 ```sh
-cargo test -p gdsverify-pex --test bridge
+cargo test --workspace                    # everything
+cargo test -p gpurify --test test_all     # end to end, and the 160-case corpus
+cargo test --release --test bench_all     # the timing record — needs --release
+cargo mutants                             # the acceptance gate (slow)
 ```
+
+`bench_all` sweeps three sizes rather than one, because a single size cannot
+distinguish an algorithm that got slower from one that is quadratic. It is a
+test target, so without `--release` you are timing a debug build and the numbers
+mean nothing.
+
+## Documentation
+
+| File | Contents |
+|---|---|
+| `CLAUDE.md` | Project rules and the phase model. Start here. |
+| `docs/VOCABULARY.md` | Shared terms, used exactly. |
+| `docs/CONVENTIONS.md` | The code rubric. |
+| `docs/TESTING.md` | Oracles, test adapters, the three gates. |
+| `docs/NEED_TESTING.md` | What ships without a definitive test, and why. |
+| `docs/SIGNATURE_DEFECTS.md` | Frozen signatures found to be wrong, and their status. |
+| `docs/BULK_MEASUREMENTS.md` | What SIMD, chunking and branchless actually bought — measured, including where the answer was "nothing". |
+| `docs/GPU.md` | Why GPU survives only in quasi-static PEX. |
+| `pdks/README.md` | Per-PDK source, coverage and gaps. |
+| `tests/fixtures/README.md` | The 160-case corpus: where it came from, how each expectation was derived, and every case that disputes the old tree's answer. |
+
+## GPU
+
+There is one GPU path, behind `pex`'s quasi-static `MatVec` seam, built ahead of
+time to SPIR-V from GLSL with no JIT. Everything else is CPU and deliberately so:
+the rest of this workload is branchy pointer-chasing over irregular geometry,
+which is not what a GPU is good at. `docs/GPU.md` makes the argument in full. A
+machine with no Vulkan device takes the CPU path and says which it took.

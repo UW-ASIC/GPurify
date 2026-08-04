@@ -18,11 +18,6 @@
 //! (45 nm would be fine — it is exactly nine grid units. The example has to be
 //! a length the grid cannot express, or it argues for the opposite rule.)
 
-// Definition-Phase only. Every body is `todo!()`, so every parameter is unused
-// and the real warnings drown. Removed in the Implementation-Phase — see the
-// phase table in CLAUDE.md.
-#![allow(unused_variables)]
-
 mod arith;
 mod dbu;
 mod qty;

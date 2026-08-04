@@ -437,7 +437,7 @@ pub fn discrepancies(verdict: &Verdict) -> &[Discrepancy] {
 ///
 /// Comparing A to B and comparing B to A are the same question asked twice, so
 /// their answers must be each other's image under this map. Every field that
-/// names a side is exchanged; `DuplicateName` names no side and is unchanged.
+/// names a side is exchanged.
 #[must_use]
 pub fn flip(discrepancy: &Discrepancy) -> Discrepancy {
     match *discrepancy {
@@ -473,7 +473,11 @@ pub fn flip(discrepancy: &Discrepancy) -> Discrepancy {
             layout_value: ref_value,
             ref_value: layout_value,
         },
-        Discrepancy::DuplicateName { name, nets } => Discrepancy::DuplicateName { name, nets },
+        Discrepancy::DuplicateName { side, name, nets } => Discrepancy::DuplicateName {
+            side: flip_side(side),
+            name,
+            nets,
+        },
         Discrepancy::ClassImbalance {
             layout_nodes,
             ref_nodes,

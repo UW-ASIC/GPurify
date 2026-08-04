@@ -19,6 +19,13 @@ Where an entry blames a frozen signature, the signature itself is recorded in
 Implementation-Phase starts. This file says what is unverified; that one says
 what has to change for it to become verifiable.
 
+**An entry ending in `**Resolved.**` had its blocking signature fixed.** The
+body above the marker is kept as written — it says what the suite currently
+asserts, which is still true and still weaker than it needs to be. The marker
+says what changed and where, so the test that was worked around can now be
+written. `**Unblocked.**` is the weaker form: another crate's fix made the entry
+reachable and nothing here has been rewritten onto it yet.
+
 ---
 
 ## Format
@@ -76,6 +83,10 @@ re-export of one through `gpurify-testgen`. The test is then one line of law,
 `from_str(&to_string(q)) == q`, plus a closed form asserting the emitted text is
 the bare number and carries no dimension tag.
 
+**Resolved.** `serde_json` is already a dev-dependency of `gpurify-units`, so
+the round-trip law and the bare-number closed form are both writable now. This
+entry was stale, not open.
+
 ### `Qty`'s `Debug` and `Display` — units
 
 **Checks.** How a physical quantity prints.
@@ -88,6 +99,11 @@ and prints nothing useful.
 **Would need.** Nothing structural — this resolves itself in the
 Implementation-Phase. Recorded because until it does, an electrical assertion
 failure is unreadable rather than merely red.
+
+**Resolved, in part.** `Display`'s number format is pinned
+(`crates/units/src/qty.rs:164-179`): `f64`'s own shortest round-trip decimal,
+ASCII `u` for micro, and an out-of-table exponent written on the value. The
+unreadable-failure half stands until the bodies exist in Phase 4.
 
 ---
 
@@ -116,6 +132,12 @@ run at all. `offset_into` is verified at zero only.
 type, a `GeometryStoreBuilder` output parameter, or coordinate columns on
 `ValidatedLayer`. Any of the three turns every law in the module's doc comment
 into a test over generated geometry.
+
+**Resolved.** `ValidatedLayer` owns its coordinates as of the Testing-Phase
+(`crates/core/src/view.rs:75-88`), so a result whose geometry is new is
+readable and every law is writable over arbitrary operands. `PartialEq` is
+derived and documented as structural (`:64-72`). `tests/boolean_laws.rs` is now
+narrower than it needs to be rather than as wide as it can be.
 
 ### `index`'s adapter seam cannot use `gpurify-testgen` — core
 
@@ -151,6 +173,10 @@ with and without `with_capacity`.
 Every construct-from-answer test in the workspace that names a shape by position
 rather than by handle depends on the answer.
 
+**Resolved.** The sort is stable and a layer's permutation slice is strictly
+ascending — `crates/core/src/store.rs:130-136`. "The third shape pushed is
+`PolyId(2)`" is a writable assertion.
+
 ---
 
 ## ingest
@@ -170,6 +196,10 @@ actually take.
 **Would need.** A constructor on `LayerTable`, or a `read_deck` variant taking
 `&str` and a documented schema so a test can write the deck inline.
 
+**Resolved.** `LayerTable::build(&[(StrId, u16, u16)])` with a real body, and
+`stream_of(LayerId) -> (u16, u16)` — `crates/ingest/src/deck.rs:118-146` and
+`:108-116`. `by_name` is sorted by `StrId`, so `build` needs no `StrTable`.
+
 ### `Provenance::push` — ingest
 
 **Checks.** Records the hierarchy path and stream properties of one polygon.
@@ -183,6 +213,10 @@ in a unit test inside `provenance.rs`, which is the only place the type identity
 works out.
 **Would need.** `Provenance::intern_path(&mut self, &[StrId]) -> PathId`, or a
 `paths_mut`.
+
+**Resolved.** `Provenance::intern_path(&mut self, &[StrId]) -> PathId`, real
+body, at `crates/ingest/src/provenance.rs:106-124`. A non-`ROOT` `PathId` is
+reachable from outside the crate.
 
 ### `export::gds::write_store` and the `parse -> write -> parse` law — ingest, export
 
@@ -206,6 +240,10 @@ public `LayerTable` constructor or a `read_deck` variant taking `&str`, so the
 writer can be called from an integration test where the two crates agree on the
 type.
 
+**Resolved.** Both halves: `stream_of` gives the writer the direction it needed
+and `LayerTable::build` gives an integration test — which has the right type
+identity — a way to construct the value. The law has a location now.
+
 ### `read_deck`'s validation errors — ingest
 
 **Checks.** `DeckError::OffGrid` for a limit that is not an exact multiple of
@@ -223,6 +261,11 @@ layer. `RuleTable`'s CSR accessors are covered in full, its columns being
 public.
 **Would need.** A documented deck schema and a `read_deck` variant taking
 `&str`. The off-grid case is then one rule and two grids.
+
+**Resolved.** `parse_deck(&str, Grid, &mut StrTable)` with a full JSON schema
+and a clause per variant — `crates/ingest/src/deck.rs:301-356`. `OffGrid`,
+`UnknownLayer`, `MissingParam` and `DuplicateRule` are each reachable from a
+string.
 
 ### `DesignIntent` with anything declared — ingest
 
@@ -242,6 +285,10 @@ the empty-column lookup. The io refusal is covered.
 **Would need.** A documented intent schema and a `read_intent` variant taking
 `&str`, or public columns as `RuleTable` and `Netlist` already have.
 
+**Resolved.** `parse_intent(&str, &mut StrTable)` at
+`crates/ingest/src/intent.rs:110-158`, with `supplies` and `limits` as arrays so
+a repeated net is expressible and therefore refusable.
+
 ### `UnknownLayers::Drop`'s drop count — ingest
 
 **Checks.** The doc comment says dropped rows are reported and never dropped
@@ -258,6 +305,9 @@ names the undeclared stream pair, and
 doc's claim that the two settings are not a correctness switch.
 **Would need.** A dropped-row count on `Layout`, or a `RuleRun`-shaped record
 the reader emits.
+
+**Resolved.** `Layout::dropped: u32` — `crates/ingest/src/layout.rs:28-38`,
+with the variant doc pointing at it (`:73-75`).
 
 ### `oasis::read` — ingest
 
@@ -293,6 +343,11 @@ are covered directly, its columns being public.
 representation for a subcircuit instance. Then a small netlist and its expected
 tables is a straightforward construct-from-answer test.
 
+**Resolved.** Both conventions are stated: `param` is SI base units with SPICE
+scale suffixes expanded at parse (`crates/ingest/src/netlist.rs:107-116`), and
+an `X` card is a row in the new instance table (`:139-173`). The
+construct-from-answer test is now three columns of arithmetic.
+
 ### `Netlist::top` where a subcircuit is instantiated — ingest
 
 **Checks.** That the top cell is the one nothing else instantiates.
@@ -306,6 +361,10 @@ instantiates the other is an ambiguity refused rather than resolved by taking
 the first or the last.
 **Would need.** A device kind or column that names an instantiated `SubcktId`.
 The test is then a two-level hierarchy whose top is decided when it is written.
+
+**Resolved.** The instance table — `instance_of` and `instance_subckt` among
+five columns at `crates/ingest/src/netlist.rs:139-173` — is the cell-to-cell
+edge `top` searches. A two-level hierarchy is buildable.
 
 ---
 
@@ -329,6 +388,10 @@ there, so the test measures the partition rather than the interpretation.
 deliberately straddling the region edge and the expected area written down. The
 decision is a Definition-Phase one; the test is ten lines once it exists.
 
+**Resolved.** The area/clipping reading, decided on evidence rather than
+preference at `crates/derived/src/expr.rs:37-66`: `Inside` is `Intersection`
+under the deck's name, `Outside` is `(operand ∩ universe) − region`.
+
 ### `DerivedExpr::Outside` with a universe that does not contain its operand — derived
 
 **Checks.** Nothing states what happens when the universe is smaller than the
@@ -343,6 +406,11 @@ law are stated in.
 **Would need.** Either a documented truncation rule and a construct-from-answer
 case measuring the truncated area, or a typed error, at which point the test is
 a `matches!` on the variant.
+
+**Resolved, and worth a second opinion.** Documented as deliberate truncation
+rather than an error at `crates/derived/src/expr.rs:60-65`, on the ground that
+the universe is the extent the deck declared. Truncation loses area, which is
+fail-open for any rule consuming the layer.
 
 ### `Evaluator::plan`'s evaluation order — derived
 
@@ -474,6 +542,11 @@ covered.
 polygon on a layer absent from `Connectivity::conductors` — either a documented
 sentinel `NetId`, or a `NetTable::net_of` returning `Option<NetId>`.
 
+**Resolved.** A non-conductor polygon gets `NetId::NONE`
+(`crates/topology/src/net.rs:45`, `:199`), and `bind_ports_into` states that a
+label on such a shape is `OrphanLabel` (`crates/topology/src/port.rs:98`). The
+variant is constructible.
+
 ### The two-thread-count half of the determinism gate — topology
 
 **Checks.** That output is byte-identical across two runs at two thread counts.
@@ -510,6 +583,12 @@ tests fail loudly rather than silently agreeing.
 position-to-role table per family. Until then the convention is defined by the
 testgen builder and this test suite, which is a weaker place for it to live.
 
+**Resolved.** The table is on `TerminalRole` itself
+(`crates/topology/src/device.rs:25`), so `topology` and `lvs` read one source.
+`Diode` is deliberately excluded and named as unresolved at the site: `Pin` is
+interchangeable by definition, and giving a diode pins matches one wired
+backwards.
+
 ---
 
 ## report
@@ -535,6 +614,12 @@ what `assert_only_violation` compares.
 a documented convention that `Measurement`'s `Display` prints raw database units
 and the grid is applied by the writer in `export`.
 
+**Resolved.** Resolution B, doc only: `Display` prints raw database units with
+a `dbu` / `dbu^2` suffix and the grid is applied by whoever holds one —
+`crates/report/src/measure.rs:72-91`, which also pins `Ratio`, `Count` and the
+electrical delegation. The conversion is now `export::json::write_report`'s and
+`cli::format::write_violations`' job, and neither says which unit it emits.
+
 ### `Violations::sort_canonical`'s ordering of the second shape slot — report
 
 **Checks.** Where a one-shape row (`shape_b: None`) sorts against a two-shape
@@ -551,33 +636,29 @@ same place every time. Which place is untested.
 **Would need.** One sentence in the `sort_canonical` doc comment naming which of
 the two comes first. Then it is a two-line construct-from-answer test.
 
+**Resolved.** `None` sorts before `Some`, Rust's derived `Option` order —
+`crates/report/src/violation.rs:96-99`.
+
 ---
 
 ## drc
 
-### `antenna` and `antenna_car` — the ratio itself — drc
+### `antenna` and `antenna_car` — RETIRED, the rules are deleted — drc
 
-**Checks.** Collecting conductor area on a gate's net over that gate's oxide
-area, against a dimensionless limit; and the same per fabrication stage, worst
-stage winning.
-**Missing.** Both transforms need a `NetTable` to ask which shapes sit on a
-gate's net, and `NetTable` has private fields, no constructor and one producer
-(`extract_nets_into`) that takes a `Connectivity` — the entry already recorded
-for `topology`. So no test outside the crate can hand these rules a design where
-a gate has any collector on it, and the number they compute is unreachable.
-`DeviceTable` is not the obstacle: its columns are public and `gate_areas_into`
-is fully tested through them.
-**Verified.** `gate_areas_into`, the shared half of both rules: three
-transistors, two of them on one net, must come back as two rows ascending by net
-with the shared net carrying the sum, and both output buffers cleared even when
-pre-filled. Separately the fail-closed path: a design with no recognised MOS
-devices records `Outcome::Skipped(SkipReason::EmptyLayer)` on both rules rather
-than a clean result, which is the case that would otherwise pass a deck whose
-recognisers never matched. Every path between those two is untested.
-**Would need.** A test-only constructor on `NetTable`, or a
-`Connectivity`-driven route from a testgen layout to an extracted `NetTable`
-that `drc`'s tests can call. Given one, the oracle is closed form: metal area
-over gate area is a ratio of two rectangle areas the generator picked.
+`drc` implemented the antenna family a second time, under `erc`'s deck kind
+names. `crates/drc/src/rules/antenna.rs` and its five tests
+(`crates/drc/tests/antenna_rules.rs`) are deleted; `erc` owns the family. The
+ledger for what is and is not verified about an antenna ratio is now entirely
+under `## erc`, and what `drc`'s copy had that `erc`'s does not is filed in
+`docs/SIGNATURE_DEFECTS.md` under `## the antenna family`.
+
+The one thing worth carrying into this ledger rather than that one:
+`gate_areas_into` was a **tested** transform — three transistors, two of them on
+one net, coming back as two rows ascending by net with the shared net carrying
+the sum, both buffers cleared even when pre-filled — and the test went with the
+file, because the transform it covered no longer exists. It is recoverable at
+`git show 9abb3e2:crates/drc/tests/antenna_rules.rs` and is the test to restore
+when `erc` gains a device-derived gate.
 
 ### `multi_patterning` — `Coloring::Exhausted` — drc
 
@@ -677,6 +758,13 @@ throughout.
 convention already lives. Each turns a set-membership assertion into an
 equality.
 
+**Resolved.** All four, plus the five that conflicted with `testgen::violation`
+and two more aligned in passing. The crate-wide convention — `at` is the
+midpoint of the thing measured — is stated once at
+`crates/drc/src/rules/mod.rs:57`, with `check_off_grid` and `check_angle` named
+as the deliberate vertex exceptions. Per-rule sites are listed in
+`docs/SIGNATURE_DEFECTS.md`.
+
 ---
 
 ## erc
@@ -773,6 +861,11 @@ one reports none (`electrical_limits.rs`).
 **Would need.** A `Grid` parameter on both transforms, or a documented
 convention that `max_density` is stated per database unit of width.
 
+**Resolved.** Both take `grid: Grid` —
+`crates/erc/src/rules/electrical.rs:229` and `:276` — and
+`EmCurrentDensityTable` gained `max_current_per_cut` (`:94`) so a via edge has a
+dimensionally correct limit. The A/m closed form is writable.
+
 ### `check_electromigration`'s temperature derating — erc
 
 **Checks.** The foundry limit scaled by the Arrhenius factor between the edge's
@@ -790,6 +883,35 @@ unverified.
 **Would need.** A temperature input — a per-edge column on `PowerGrid`, or an
 operating-point field on `IntentMap` or `SolveConfig` — plus the `Grid` noted
 above.
+
+**Resolved.** `operating_temperature: Qty<Temperature, {prefix::BASE}>` at
+`crates/erc/src/rules/electrical.rs:276`, supplied by
+`RunInputs::operating_temperature` (`crates/erc/src/ruleset.rs:158`). The
+applied point is distinct from each row's `reference_temperature`; collapsing
+the two makes the derating unity, which is fail-open.
+
+### `AntennaTable::gate` names a layer, not a device — erc
+
+**Checks.** The denominator of every antenna ratio: the oxide area the collected
+charge is referred to.
+**Missing.** The gate is whatever sits on the layer the deck names. A gate is
+really a recognised MOS device — area = the measured `DeviceParam::Area`, net =
+the terminal whose role is `TerminalRole::Gate` — which is exact, canonical, and
+independent of what the deck calls its layers. `erc::Design` already carries the
+`DeviceTable`, so this is a frozen-column problem and not a missing input;
+`docs/SIGNATURE_DEFECTS.md` under `## the antenna family` has the full entry and
+the git path to the deleted implementation. Until it is resolved, no test can
+state an antenna denominator the way `lvs` and the device recognisers state it,
+and a deck drawing its gate on an unnamed layer reads clean.
+**Verified.** The layer-named denominator itself, on a one-micrometre-square
+gate, at exactly four (`antenna_and_density.rs`). Separately, the per-stage
+accumulation: two rule rows over one gate under a two-level stack report exactly
+two and exactly twelve, which is the claim a rule measuring the final stack at
+every stage fails and a rule collecting only the layer a stage names also fails;
+plus the law that a later stage never measures less than an earlier one.
+**Would need.** The gate column replaced by a device-derived gate-area table.
+Given one, the oracle is construct-from-answer: `gate_areas_into`'s deleted test
+restored, plus a netlist whose per-net oxide totals the generator picked.
 
 ### `AntennaElectricalTable`'s diode credit and bonus — erc
 
@@ -852,6 +974,10 @@ intent gate.
 **Would need.** The temperature input above. With it the model is pure
 arithmetic over the row's six coefficients and becomes a closed form.
 
+**Resolved, in part.** The applied temperature is a parameter
+(`crates/erc/src/rules/reliability.rs:169`), so the Arrhenius half of the model
+has its input. What the lifetime model itself asserts is unchanged.
+
 ### `resolve_intent_into` with a non-empty `DesignIntent` — erc, ingest
 
 **Checks.** Re-keying declared supplies and per-net limits from interned names
@@ -869,6 +995,10 @@ which is what every intent-gated rule actually reads.
 **Would need.** A constructor or a `read_intent` variant taking `&str` with a
 documented schema. Until then `IntentMap::undeclared` has no test at all.
 
+**Unblocked.** `ingest::parse_intent` builds a non-empty `DesignIntent` from a
+string (`crates/ingest/src/intent.rs:110-158`). The `erc` tests have not been
+rewritten onto it.
+
 ### `Scratch::shrink` and `SolveScratch::shrink` — erc
 
 **Checks.** Dropping every scratch buffer's capacity, for a long-lived process
@@ -884,6 +1014,11 @@ that matters for a verdict; the memory reclamation is not observable.
 **Would need.** A capacity accessor, or acceptance that this is an
 equivalent-mutant site and an argument recorded at the source.
 
+**Resolved.** Taken as accepted equivalent-mutant sites, per this entry's own
+second option, recorded at the source — `crates/erc/src/lib.rs:205-215` and
+`crates/erc/src/power.rs:346-349`. Deliberately not resolved with a capacity
+accessor.
+
 ### Two deck columns no `erc` test exercises — erc
 
 **Checks.** `HvDomainTable::isolation` and
@@ -897,6 +1032,12 @@ dimensionally unresolved — see the `EmCurrentDensityTable` entry in
 **Verified.** Each column's inert setting, through the tests that set it:
 `isolation: None`, and metal edges only.
 **Would need.** Tests for the first. For the second, the signature fix as well.
+
+**Resolved, for the second.** `EmCurrentDensityTable` now carries its own
+`max_current_per_cut` (`crates/erc/src/rules/electrical.rs:94`) and
+`check_em_current_density` states the per-`EdgeKind` compare (`:200-215`), so
+the dimensional question is closed. Building an `EdgeKind::Via` edge is still a
+coverage gap. The first column is unchanged.
 
 ---
 
@@ -925,6 +1066,10 @@ nonzero count. The other five have no test that calls them.
 recorded for `topology` and `erc`; plus, for `check_topology`, a documented
 `Violation` shape stating the rule id, which layer a graph-structure finding
 reports against, and what `at` means when the finding has no geometry.
+
+**Unblocked.** `NetTable::from_assignment` and `PortTable::build`
+(`crates/topology/src/net.rs:129`, `crates/topology/src/port.rs:72`) both have
+real bodies. The `lvs` tests have not been rewritten onto them.
 
 ### `check_topology`'s violation coordinate — lvs
 
@@ -955,6 +1100,10 @@ the strongest oracle available is the round trip through
 project, and compare against the reference projection of the netlist it came
 from.
 
+**Resolved.** The projection is index-preserving and says so —
+`crates/lvs/src/graph.rs:94-102`: device row `k` is `DeviceId(k)`, net row `k`
+is `NetId(k)`, terminal order preserved, `port_net` ascending.
+
 ### `hierarchical::plan` ordering, and `PlanError::Cyclic` — lvs
 
 **Checks.** Pairs layout cells with reference subcircuits and orders them bottom
@@ -977,6 +1126,12 @@ constructor, to check the order directly. For the cycle, an instance
 representation in `Netlist`: either a `DeviceKind::Subckt(SubcktId)` variant or
 a separate instance table.
 
+**Resolved.** `ComparisonPlan`'s three columns are `pub` and it derives
+`PartialEq, Eq` (`crates/lvs/src/hierarchical.rs:29-45`), so the order is
+directly assertable; and `ingest::Netlist`'s instance table supplies the
+cell-to-cell edge a cycle needs. `hierarchical::run` still takes one graph pair
+for a multi-cell plan, which is a design decision and stays open.
+
 ### `Inconclusive::AmbiguousTop` and `Inconclusive::MissingSubcircuit` — lvs
 
 **Checks.** The two refusals that come from the reference hierarchy rather than
@@ -995,6 +1150,10 @@ showing the same graphs conclude when the cause is removed.
 so "the reference could not be resolved" has somewhere to be reported from. As
 frozen, the two variants are declared but no code path can reach them.
 
+**Unblocked.** Both are properties of the cell-to-cell edge, which
+`ingest::Netlist`'s instance table now carries
+(`crates/ingest/src/netlist.rs:139-173`).
+
 ### `Discrepancy::DuplicateName` — lvs
 
 **Checks.** Two nets carrying the same declared name.
@@ -1009,6 +1168,9 @@ difference that the report blames on that net.
 **Would need.** A `side: Side` field, matching `UnpairedDevice` and
 `UnpairedNet`. Alternatively a documented rule that duplicate names are only
 ever reported for the layout, in which case the test is three lines.
+
+**Resolved.** `side: Side` — `crates/lvs/src/verdict.rs:57-67`. The symmetry
+law's `flip` helper exchanges it like every other side-bearing variant.
 
 ### `Discrepancy::ClassImbalance` — lvs
 
@@ -1026,6 +1188,11 @@ and the three nets it orphaned are reported by index.
 **Would need.** A stated rule for when the general form is used, most plausibly
 "when the class holds more than one node per side and neither side's members can
 be individually attributed".
+
+**Resolved.** The emission rule is stated at `crates/lvs/src/verdict.rs:73-79`:
+only when the class holds more than one node per side. Anything attributable is
+`UnpairedDevice` or `UnpairedNet`, and both forms for one class is a double
+count.
 
 ### `compare::interpret` as an independent decision — lvs
 
@@ -1045,6 +1212,11 @@ pair.
 **Would need.** A test-only constructor on `Partition` taking the two class
 vectors, or a builder that states a partition as a list of classes with their
 layout and reference members.
+
+**Resolved.** `Partition::from_classes(Vec<ClassId>, Vec<ClassId>)` with a real
+body at `crates/lvs/src/refine.rs:143-176`; `class_count` is derived from the
+columns so a caller cannot state one that disagrees. `PartialEq` is hand-written
+over the three value columns (`:48-63`), the scratch being no part of the value.
 
 ---
 
@@ -1070,6 +1242,10 @@ tested; what is untested is the function that would consume them.
 **Would need.** A `Grid` parameter on both, or a documented convention that the
 coefficients are per database unit. Then `testgen::plate_answer` becomes a
 direct oracle and the absolute value is checkable.
+
+**Resolved.** Both take `grid: Grid` — `crates/pex/src/analytical.rs:54-77` and
+`:86-102` — each with a Units paragraph closing the aF/µm²-to-`Dbu` chain.
+`tests/analytical.rs` now carries the worked value alongside the laws.
 
 ### `analytical::extract_devices_into` — pex
 
@@ -1123,6 +1299,13 @@ the counters threaded through a private entry point in
 `quasistatic::extract_into`, matching the `*_observed` pattern the other four
 seams already use.
 
+**Resolved.** Private `CpuMatVec::apply_observed<O: ObserveMatVec>` with
+`MatVec::apply` delegating through `&mut NoObserve` —
+`crates/pex/src/quasistatic/matvec.rs:104-111`, `:127-129`, matching
+`core::index::candidate_pairs_into`. `CpuMatVec::build(&Mesh)` was added
+alongside (`:80-92`) because the seam is inert without a non-empty matrix; its
+body is `todo!()`, the FMM structures being a Phase-4 decision.
+
 ### `gpu::GpuMatVec` and the CPU/GPU differential — pex
 
 **Checks.** That the `f32` device matvec agrees with `CpuMatVec` inside host
@@ -1168,6 +1351,13 @@ byte-identical.
 placement) plus a `Grid` on `build_into`, or an `Option` column in
 `ProcessStack` for the missing-thickness path.
 
+**Resolved, in part.** `build_into` takes `stack: &ProcessStack` and
+`grid: Grid` (`crates/pex/src/quasistatic/mesh.rs:80-102`), which is where the z
+extent, `Mesh::epsilon` and the metres come from.
+`MeshError::MissingThickness` stays unreachable until
+`ProcessStack::thickness_nm` can express absent as against zero — an `ingest`
+edit — and `EmptyConductor` stays unreachable regardless.
+
 ---
 
 ## export
@@ -1188,6 +1378,9 @@ and a wall-clock second.
 **Would need.** The `LayerTable` constructor already asked for in the `ingest`
 entry. Nothing else: the geometry half of the round trip is a two-line extension
 of the existing test.
+
+**Resolved.** `LayerTable::build` and `stream_of`
+(`crates/ingest/src/deck.rs:118-146`, `:108-116`) supply both halves.
 
 ### `write_spef` and `write_dspf` field layout — export
 
@@ -1219,6 +1412,12 @@ survive — stated as a relative tolerance so it fails against either reading of
 "fixed".
 **Would need.** One sentence naming the digit count, after which the table
 becomes a table of expected strings.
+
+**Resolved.** Six digits after the decimal point, never an exponent (`{:.6}`),
+with the sub-`5e-7` collapse named — `crates/export/src/json.rs:61`. Decimal
+places rather than significant figures, because six significant figures would
+round `7654321` to `7654320` and `tests/json_report.rs` searches for that
+literal.
 
 ### The two-thread-count clause of the determinism gate — export
 
@@ -1268,6 +1467,12 @@ failures fires first.
 function, or a grid field on `Deck` populated before conversion), or a `Grid` on
 `Inputs`.
 
+**Resolved.** `Inputs::grid: Option<Grid>` —
+`crates/engine/src/pipeline.rs:21-31` — with the ordering consequence stated on
+`load_into` (`:113-121`): the grid is read before either file, so an absent one
+is `NoGrid` and a present one with two unreadable paths is `Deck`. Both halves
+are now separate tests in `tests/pipeline.rs`.
+
 ### `run_checks`'s DRC and ERC `Ran` path — engine
 
 **Checks.** That a requested check with a deck configuring it executes, reports
@@ -1288,6 +1493,12 @@ crate is tested on is `NotSelected` or `Skipped`.
 as `pub const`s in `drc` and `erc`, or as a documented deck schema. That also
 unblocks `drc`'s own suite, which has the same problem one crate lower.
 
+**Unblocked.** `pub const KINDS` in both dispatchers
+(`crates/drc/src/ruleset.rs:188`, `crates/erc/src/ruleset.rs:20`) and
+`ingest::parse_deck`'s JSON schema (`crates/ingest/src/deck.rs:301-356`) between
+them give a test a deck whose rules dispatch. The parameter *names* per kind are
+still unwritten; see the `erc` `from_deck` entry.
+
 ### `run::run_checks` determinism on a deck that configures rules — engine
 
 **Checks.** Byte-identical `Summary` and `Outputs` across two runs and two
@@ -1303,6 +1514,8 @@ nondeterministic order.
 comments (they are already the dispatcher's contract), or a testgen builder that
 emits a `RuleTable` for a named kind.
 
+**Unblocked.** Same two: `KINDS` and `parse_deck`'s schema.
+
 ### `run::Summary::rules_clean` — engine
 
 **Checks.** How many rules ran and found nothing — the doc calls it evidence the
@@ -1316,6 +1529,11 @@ identical runs.
 **Would need.** A sentence in `Summary::passed`'s doc comment saying whether a
 run in which no rule was clean can pass. It is the one remaining false-clean
 vector at this seam.
+
+**Resolved.** One sentence at `crates/engine/src/run.rs:110-113`: `rules_clean`
+is evidence, not criterion. Not a new decision —
+`tests/summary.rs::selecting_no_check_at_all_is_a_pass_because_nothing_was_denied`
+already fixed it with `rules_clean: 0` and an expected pass.
 
 ### `Summary::passed` against an LVS verdict — engine
 
@@ -1334,6 +1552,29 @@ assert either way without inventing the criterion.
 sentence on `passed()` stating that the LVS verdict is deliberately outside the
 pass criterion and which caller is expected to read it.
 
+**Resolved — the mapping was taken.** `run_lvs` turns every `Discrepancy` of a
+`Verdict::Mismatch` into one `Severity::Error` row of `Outputs::violations`
+(`record_discrepancies`, `crates/engine/src/run.rs:691`), so a mismatch is a
+nonzero `Summary::errors` and fails the run through the criterion that was
+already there. `passed()` is unchanged; its doc
+(`crates/engine/src/run.rs:120-132`) now states the criterion rather than the
+fail-open. The convention for the fields an LVS discrepancy has no value for —
+`layer`, `at`, `shapes` — and the two things it costs are filed under `## engine`
+in `docs/SIGNATURE_DEFECTS.md`.
+
+**Verified.**
+`crates/engine/tests/checks.rs::an_lvs_mismatch_is_an_error_in_the_report_and_fails_the_run`
+— one violation row per discrepancy, every row an error, no warnings, and
+`passed() == false`.
+
+**Still thin in one place.** That test's `Loaded` is hand-assembled, so its
+string table carries none of `run::LVS_RULE_IDS` and the rows name the
+`StrId(u32::MAX)` sentinel. The interning `load_into` does is covered only by its
+own `debug_assert`; nothing renders an LVS violation through `cli::format` or
+`export::json` to prove the id resolves. That needs a fixture pairing a layout
+on disk with a reference netlist that disagrees with it, which the end-to-end
+suite does not have.
+
 ### ERC skipped for want of design intent — engine
 
 **Checks.** `Inputs::intent` absent disables the intent-dependent ERC rules and
@@ -1350,6 +1591,13 @@ answer is unambiguous: a `Loaded` with no reference netlist gives
 **Would need.** A deck carrying ERC rules (blocked as above), plus one sentence
 fixing whether a partially intent-dependent ERC stage is `Ran`-with-skipped-rules
 or `Skipped`.
+
+**Half unblocked.** The deck half is resolved — a deck may now carry both
+domains' rules; see the close-out entry below. The sentence is not: `run_erc`
+returns `StageStatus::Ran` and leaves the gate to the per-rule
+`Outcome::Skipped(SkipReason::NoDesignIntent)`, which is a defensible reading of
+the doc but is still not what the doc says. Reaching it end to end also needs the
+fixture work named in that entry.
 
 ---
 
@@ -1372,6 +1620,10 @@ not block a pass, an error-severity violation fails, a warning alone does not.
 or `main` reduced to one line over it. Not extracted here: signatures are
 frozen.
 
+**Resolved.** `fn exit_code(&Result<Summary, EngineError>) -> ExitCode` with a
+real body at `crates/cli/src/main.rs:36-56` — the resolution this entry names.
+`main`'s doc delegates the criterion to it.
+
 ### `Common::strict_layers` — cli
 
 **Checks.** Reject geometry on layers the deck does not describe rather than
@@ -1385,6 +1637,12 @@ shape the flag exists to prevent, one layer up.
 **Would need.** A `strict_layers: bool` on `Inputs` (it is a load-time decision,
 not a check-time one), or a documented statement that the CLI enforces it itself
 before calling `engine`.
+
+**Resolved.** `Inputs::unknown_layers: UnknownLayers` at
+`crates/engine/src/pipeline.rs:37-47`, with a hand-written `Default` of `Reject`
+(`:50-64`). `UnknownLayers` rather than the `bool` this entry names, because it
+is the exact value `read_layout` takes, so `to_inputs` is a pass-through rather
+than a remap.
 
 ### `--check-determinism` — cli
 
@@ -1415,3 +1673,465 @@ the shape count it examined.
 **Would need.** A sentence in the doc comment saying what `write_violations`
 does with `runs`. If it prints skipped rules, that is the same false-clean
 property `write_summary` already has a test for and it should get one too.
+
+**Resolved.** All four columns' treatment is stated at
+`crates/cli/src/format.rs:11-34`. `lvs` is rendered here because it is forced:
+`write_summary(&Summary, &mut String)` takes no `StrTable` and no `Verdict`, so
+this is the only text function that can print a `Discrepancy`. `parasitics` is
+not rendered — that is export's SPEF and DSPF.
+
+---
+
+# Implementation-Phase close-out
+
+Everything below was found at the final gate, after all thirteen crates had
+been closed out individually. Each is something that ships without a definitive
+test, or a test that ships red, with the reason stated rather than papered over.
+
+`cargo clippy` is **not installed on this machine** (Nix cargo, no rustup). No
+statement anywhere in this section is backed by a clippy run.
+
+### One deck cannot hold rules of two domains — ingest / drc / erc
+
+**Checks.** `ingest::deck::parse_deck` produces one `RuleTable`. `drc::RuleSet::from_deck`
+and `erc::RuleSet::from_deck` each read all of it.
+**Missing.** `RuleSpec` has no domain column, and both `from_deck`s are
+documented fail-closed on a kind they do not recognise. So each sees the other's
+rows and rejects them:
+
+```
+drc  = Err("rule supply_droop: unknown rule kind ir_drop")
+erc  = Err("rule narrow_metal: unknown rule kind min_width")
+```
+
+A deck holding both a DRC rule and an ERC rule cannot be run at all. This was
+recorded as open at `crates/ingest/src/deck.rs:420-425` during the
+Testing-Phase; the gate confirms it empirically.
+
+**What it costs.** `tests/test_all.rs::a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass`
+**is red and stays red.** It needs one fixture that carries a DRC rule (so the
+run has something to do) *and* an intent-gated ERC rule (so `rules_skipped > 0`
+when design intent is withheld), which is exactly the deck that cannot be
+parsed into two rule sets. It is the false-clean test in its most dangerous
+form — a run that could not check everything it was asked to check must not
+report a pass — so making it green some other way would be making it pass for
+the wrong reason. Every fixture in `tests/common/mod.rs` is therefore DRC-only
+with `checks.erc` off, and that restriction is stated in the module doc.
+
+**Would need.** A domain column on `RuleSpec`, or a second table on `Deck`, or
+`from_deck` returning which rows it declined. All three are Definition-Phase
+signature changes, which Phase 4 may not make.
+
+**Resolved, and none of the three was needed.** The refusal moved instead of the
+schema. Both `from_deck`s now skip a row outside their own `KINDS`
+(`crates/drc/src/ruleset.rs:338`, `crates/erc/src/ruleset.rs:731`) and the union
+check lives at `run_checks` (`crates/engine/src/run.rs:234`, called at `:310`
+before `options.checks` is read). A deck holding a DRC rule and an ERC rule is
+parsed and run by both — pinned by
+`crates/engine/tests/checks.rs::one_deck_may_hold_a_drc_rule_and_an_erc_rule`,
+with the refusal itself pinned outside both stage `if`s by
+`a_kind_in_neither_domains_vocabulary_is_refused_whatever_was_selected`. Full
+account, including the two `debug_assert_eq!`s that had to weaken and the
+`"antenna"` name collision the change exposed — since fixed by deleting `drc`'s
+copy of the family — in `docs/SIGNATURE_DEFECTS.md` under `## ingest` and
+`## the antenna family`.
+
+**Still red, for a second reason, and it is now the only one.**
+`a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass` fails at
+`tests/test_all.rs:103` on `rules_skipped > 0`. The blocker above is gone but
+`tests/common/mod.rs` was written around it: every deck it emits holds one
+`min_width` rule and `build_with` sets `checks.erc = false`
+(`tests/common/mod.rs:365`), so no ERC rule is configured and nothing can be
+skipped. `run_erc` does record the intent gate — `resolve_intent_into` over an
+absent `Loaded::intent` and each electrical rule filing
+`Outcome::Skipped(SkipReason::NoDesignIntent)` — so the assertion is right and
+the fixture is what has not caught up.
+
+**Would need.** A second rule in `deck_with_rule`'s `"rules"` object naming an
+intent-gated ERC kind, and `checks.erc` turned on. Not a three-line change: the
+fixture is shared by all eleven tests in the file, so `only_violation`'s
+exactly-one count, `deck_rule_ids`, and the byte-comparison in
+`two_runs_at_two_thread_counts_serialise_to_identical_bytes` all move with it,
+and the module doc at `tests/common/mod.rs:13-20` still states the retired
+restriction. It belongs to whoever owns `tests/`.
+
+### The unknown-kind refusal is at `run_checks`, not at load
+
+**Checks.** A deck naming a kind in neither `drc::ruleset::KINDS` nor
+`erc::ruleset::KINDS` is refused rather than skipped.
+**What changed.** `tests/test_all.rs::a_deck_naming_an_unknown_rule_kind_is_refused_rather_than_skipped`
+asserted `LoadError::Deck(DeckError::Malformed(_))` out of `Run::load`. That is
+unreachable by construction: `parse_deck` is documented to intern a kind
+verbatim and not to interpret it, because both `KINDS` arrays live above
+`ingest` in the module graph, and `LoadError` has no variant for it. The
+assertion now names `EngineError::Drc(DrcError::UnknownKind { .. })` out of
+`Run::execute`, which is where `run_checks`' own doc says the refusal lives.
+The property is unchanged — refused, never skipped, and no check runs — only the
+stage is corrected.
+
+### The domain-edge round trip is at `i32::MAX`, not at `MAX_ABS_DBU`
+
+**Checks.** `tests/test_all.rs::coordinates_at_the_domain_edge_survive_the_file_round_trip`.
+**Missing.** The test's doc says `±MAX_ABS_DBU`. A GDSII coordinate is a signed
+32-bit database unit and `export::gds::write_store` refuses anything wider
+(`crates/export/src/gds.rs:48-56`) rather than truncating it, so no GDSII file
+can carry `2^40` and the fixture cannot write one. `Run::at_domain_edge` draws
+`±i32::MAX`, the edge reachable *through a file*, and says so at the site.
+**Verified.** That the widest coordinate the format holds survives the write and
+the read exactly, present on both signs, with nothing outside it — which is the
+truncation this test exists to catch.
+**Would need.** Nothing, unless a reader that is not GDSII (OASIS) is ever
+implemented, at which point the `2^40` claim becomes testable through it.
+
+### `Run::summary` re-runs the pipeline
+
+**Checks.** The four `StageStatus` fields of a completed run.
+**Missing.** `run_checks` returns the `Summary` and `Run::execute` is documented
+to return `Outputs`, which carries none of the four statuses. Nothing in
+`Outputs` can reconstruct them, and inventing one is the false-clean this suite
+is written against. `Run::summary` therefore re-runs load, extract and check,
+and asserts the re-run agrees with the run it is being asked about.
+**Why it is sound.** The pipeline's determinism is itself gated one test up
+(`two_runs_at_two_thread_counts_serialise_to_identical_bytes`), so the second
+run's summary is the first's or that gate is red.
+**Would need.** `Outputs` carrying the `Summary`, or `execute` returning both —
+a Definition-Phase change either way.
+
+### The scale corpus was overlapping its own blocks
+
+**Not a missing test — a generator bug the gate found.** `testgen::scale_corpus`
+sized each leaf block from the finger geometry alone
+(`block_side = (fingers + 1) * FINGER_PITCH`) while dealing `ceil(nets / blocks)`
+bands of `BAND_PITCH` into it. At 1000 polygons over 62 nets that is 16 bands of
+1000 into a 3200-wide block, so band 8 of one block landed inside the block
+above, a via cut there bridged two combs, and **62 expected nets extracted as
+52**. The module doc's "no two nets share a polygon and none of them touch" —
+the claim the whole corpus-as-oracle rests on — was false at every size the
+benchmark sweeps.
+
+Fixed at `crates/testgen/src/scale.rs` by sizing the block on the taller axis.
+Worth recording because of the direction: an over-joining corpus is wrong toward
+*fewer* nets, which is the fail-open direction for anything that trusts the
+partition, and the three other tests in `tests/bench_all.rs` all passed
+throughout.
+
+`tests/bench_all.rs::net_extraction_stays_canonical_and_records_its_cost` also
+asserted the wrong convention. `NetId` is documented as the **dense rank** of a
+component — `0 .. net_count` ascending by smallest `PolyId` — not the component
+label. The test compared `net_of(poly)` against the minimum `PolyId` itself. It
+now asserts the two halves the rank actually promises: one id per component, and
+the id ordering agreeing with the minimum-`PolyId` ordering.
+
+### `isqrt(1)` is 1, and one test said 0
+
+`crates/core/tests/ops_predicates.rs` swept `isqrt(n² + 1) == n` over `n` from
+zero. At `n == 0` that asks for `isqrt(1) == 0`, and `1` is a perfect square
+whose exact root is `1` — the sibling test in the same file
+(`isqrt_satisfies_its_defining_inequality_for_arbitrary_values`) forbids `r = 0`
+at `v = 1`, so the two contradicted each other at exactly one value. The
+`n > 0` guard already on the line above now covers both neighbour cases, with a
+comment saying why the "above" case needs it and is not an off-by-one.
+
+### Two ERC fixtures contradicted the shapes they were built from
+
+Both were fixture bugs, not rule bugs, and both had been diagnosed during the
+per-crate close-out without being fixed:
+
+- `crates/erc/tests/supply_rules.rs`'s `via_connectivity` built a ragged
+  `Connectivity` — one `via_cut` row against one `via_connects` row per joined
+  layer. `Connectivity` is documented as parallel columns and both
+  `build_connectivity` and `extract_nets_into` assert it, so the two supply
+  tests panicked in `topology` before reaching any ERC code.
+- `crates/erc/tests/topological_rules.rs`'s `contended_output` listed terminals
+  as `[Gate, Drain, Source, Bulk]`. `DeviceSpec::terminals` is "the order the
+  recogniser will report them" and `topology::role_at` maps position 1 to
+  `Source`, so the shared net extracted as the shared *source* and the test was
+  unsatisfiable by any implementation. Now in canonical MOS order.
+
+### Stale prose about `todo!()`
+
+`grep -rn 'todo!()' crates` reports 22 hits and every one is the word inside a
+comment. Many of those sentences assert that some body "is a frozen signature
+over a `todo!()` body until the Implementation-Phase" and explain a workaround
+built around that. The workarounds are harmless; the sentences are now false.
+Correcting them edits frozen doc comments in eleven files for no behavioural
+change, so they were left. A reader should treat any such sentence as
+Testing-Phase archaeology.
+
+---
+
+# Unverified after the end-to-end audit
+
+Appended by the audit in `docs/E2E_AUDIT.md`. Everything below is a claim the
+suite currently makes no check against, or makes one that cannot fail.
+
+## The end-to-end suite is not blind-authored
+
+`tests/test_all.rs` and `tests/bench_all.rs` are the empty blob `e69de29` at
+`8bc3870` **and at `HEAD`**; `tests/common/` and `src/lib.rs` are untracked. All
+fifteen tests were written during the Implementation-Phase, against running
+bodies. `git grep -c '#[test]' 8bc3870` is 677 against 722 in the tree, so 45
+tests in total carry none of the phase's guarantee — sixteen of them added in the
+`ponytail:` sweep and blocker run, thirteen as unit tests inside the files their
+author had just folded. Not misconduct; the instruction was never to *edit* a
+test. But `docs/TESTING.md`'s table reports 678 as one population and it is two.
+
+## The e2e fixture cannot observe four of the five things it checks
+
+`tests/common/mod.rs:262` — one layer, one `min_width` rule, one polygon, one
+violation, `dbu_per_um = 1000`. Therefore:
+
+- **layer resolution is untested.** `found.layer == run.met1` is
+  `LayerId(0) == LayerId(0)`.
+- **grid conversion is untested.** 1 dbu = 1 nm, so every conversion is the
+  identity and `Length(300)` holds whether or not `to_dbu` does anything.
+- **the canonical sort is untested.** One violation row is byte-identical under
+  any ordering; `sort_canonical` appears nowhere in `tests/`.
+- **the condemned width formula is untested.** Every fixture is a rectangle, the
+  one shape class where `min(bbox.width, bbox.height)` and the correct
+  facing-pair scan agree. `crates/drc/src/rules/width.rs`'s module doc exists to
+  condemn that formula for L, T and comb shapes.
+- **the `Summary` under test is a different run's.** `tests/common/mod.rs:193`
+  re-runs `load` / `extract_into` / `run_checks` and returns *that* `Summary`,
+  cross-checking only the violation count.
+
+## Nine subsystems reached by no end-to-end test
+
+`grep -c` over `tests/test_all.rs` and `tests/common/mod.rs` returns 0 for
+`reference: Some`, `intent: Some`, `Verdict`, `Provenance`, `SkipReason`,
+`sort_canonical`, `unknown_layers`, `erc: true`, `pex: true` and
+`engine::run::run`. There is no spacing coverage of any kind. The twenty tests
+three independent clean-room reconstructions wrote and this suite lacks are
+tabulated in `docs/E2E_AUDIT.md` §3; the first three — a spacing violation at a
+hand-computed gap midpoint, a provenance permutation surviving `finish`, and
+deck names sharing one `StrId` space with layout names — were written by all
+three authors independently and are the ones to add first.
+
+## `OffGrid` reports a number that is not off the grid
+
+`tests/common/mod.rs:116` builds the fixture with `"nm": 300.5` on a 1 nm grid.
+`crates/ingest/src/deck.rs:620` does `let stated = nm as i64;` and the variant is
+`OffGrid(String, i64)` (`:37`), so the message a user sees is *"limit 300 nm is
+not an exact multiple of the grid"* — and 300 is an exact multiple of a 1 nm
+grid. `tests/test_all.rs:226` wildcards both fields, so no assertion can see it.
+The fix is the clean-room construction: an integer nm on a coarse grid
+(`dbu_per_um = 200`), with the reported value pinned.
+
+## `"antenna"` was in both `KINDS` arrays — FIXED
+
+One deck row spelled `antenna` was filed by both `from_deck`s, so with
+`drc: true, erc: true` it ran twice and filed two `RuleRun` rows under one rule
+id. `append_stage`'s `debug_assert_eq!(runs.len(), rule_count)`
+(`crates/engine/src/run.rs:490`) counts per stage and did not fire, and
+`tests/test_all.rs:243`,
+`every_rule_in_the_deck_appears_in_the_run_record_exactly_once`, has a fixture of
+one `min_width` rule and so did not either.
+
+Fixed by deleting `drc`'s copy of the family rather than by renaming: the two
+were the same physical check implemented twice. `drc::ruleset::KINDS` is 24 names
+and the two arrays are disjoint. The test hole is still a hole — the fixture is
+still one `min_width` rule — but there is no longer a name for it to catch.
+
+## Electromigration has four independent fail-opens and no test on their product
+
+Each is filed on its own in `docs/SIGNATURE_DEFECTS.md`; the composition is filed
+nowhere and checked nowhere.
+
+- `crates/engine/src/run.rs:170` — sign-off temperature hard-coded to 85 °C.
+  A part signed off at 125 °C derates less than it should.
+- `crates/erc/src/rules/electrical.rs:741` — one temperature for the whole run,
+  no self-heating. Its own doc: "it errs *open*".
+- `crates/erc/src/power.rs:1091` — the current budget spreads uniformly over the
+  rail's attach points, so a hot spot reads cooler than it is.
+- `crates/erc/src/power.rs:1302` — the pad anchor is inferred as the first node
+  of the rail's first shape, which under-reports drop near the true pad.
+
+What is needed is a construct-from-answer test that places a known current
+concentration at a known distance from a known pad at a known corner, and
+asserts the check fires. No such test exists.
+
+## The PEX quasi-static ceilings are breached by ordinary input, not extreme input
+
+- `crates/pex/src/quasistatic/matvec.rs:180` — square-panel shape factor on a
+  rectangle: "low by 3.5% at 2:1, 12.5% at 4:1, 28% at 10:1 and 64% at 100:1",
+  and the side face of a thin layer is a sliver by construction. The comment this
+  replaced claimed ~2% at 4:1 and was wrong, which is on record at the site.
+- `crates/pex/src/quasistatic/matvec.rs:238` — no layered-dielectric Green's
+  function; `Mesh::epsilon` gives one permittivity per panel. Every real stack is
+  layered.
+- `crates/pex/src/quasistatic.rs:376` — half a micrometre of panel edge, chosen
+  here because the frozen `extract_into` takes no `MeshOptions`. Every process
+  this tool targets has features far below that.
+
+The capacitance laws in `crates/pex/tests/` pass around all three, because a law
+that holds for any input holds for a wrong one too. What is missing is a
+closed-form test at a stated aspect ratio and a stated stack.
+
+## `run_pex` reports `Ran` for nets it did not extract
+
+`crates/engine/src/run.rs:867` — a non-empty `quasistatic_nets` produces the
+field-solved network for those nets only; the analytical network for the rest is
+not merged, and the `CapMatrix` is dropped for want of a slot on `Outputs`. The
+stage still reports `Ran`, so "not asked for" and "no parasitics" are the same
+output — against `RuleRun::examined`'s frozen doc, which is explicit that clean
+must mean "this ran and examined N".
+
+## The CLI and the JSON report disagree about an area
+
+`crates/cli/src/format.rs:155` labels an area `dbu^2`;
+`crates/export/src/json.rs:211` squares the grid factor privately and emits
+`nm^2`. On any grid that is not 1 nm per unit the same violation reads two
+different numbers. No test compares the two writers on one violation. Blocked on
+`Grid::to_area` in `gpurify-units`.
+
+`crates/cli/src/format.rs:132` — an LVS verdict prints through `Debug` and stops
+at `StrId(7)`, because `gpurify-lvs` is not a dependency of `gpurify-cli` and
+`gpurify_engine` re-exports `Outputs` without `Verdict`. Untested; nothing in
+`crates/cli/tests` renders a mismatch.
+
+## `Bbox::EMPTY.width()` panics in a debug build
+
+`crates/core/src/bbox.rs:238` calls `Dbu::new_unchecked`, whose
+`debug_assert!(in_domain(raw))` (`crates/units/src/dbu.rs:74`) rejects the `2^41`
+a domain-spanning box produces. The comment at `:231` says `Bbox::EMPTY.width()`
+is already past it. `grep -rn 'EMPTY.width' crates` returns only the comment, so
+no test calls it.
+
+Reached independently from the other side: `Dbu::mul_wide` asserts `in_domain` on
+both *operands* (`crates/units/src/dbu.rs:98-99`) while `Add`/`Sub` are
+documented as legally exceeding `±MAX_ABS_DBU`. `Bbox::area`
+(`crates/core/src/bbox.rs:247`) routes around `mul_wide` on purpose and says why,
+so the area path is safe and the accessor is not. This is the invariant
+`CLAUDE.md` names as load-bearing and it has no test at the boundary.
+
+## `ErcError::UnknownKind`'s doc may be stale, or its check was dropped
+
+Closing the shared-`RuleTable` blocker moved the fail-closed assertion from
+`erc` onto `crates/engine/src/run.rs:290`. `crates/erc/src/lib.rs:90` still
+carries a doc comment claiming that crate fails closed on it, and
+`crates/erc/tests/dispatch.rs`'s
+`a_deck_naming_a_kind_this_crate_does_not_implement_is_refused` was renamed to
+`..._files_no_row`. Either the doc is stale or the check was lost in the move.
+One grep in `engine` settles it; nobody has run it.
+
+## The `ponytail:` grep is not a ledger
+
+`grep -c 'ponytail:'` is 65, of which 5 are prose citing the pass by name rather
+than marking anything. It simultaneously **overcounts** the debt — the marker on
+`crates/pex/src/quasistatic/solve.rs:348` sits on a refutation, not a shortcut —
+and **undercounts** the exemptions: at least fifteen raw bulk loops carry their
+justification as plain prose without the token
+(`crates/core/src/ops.rs:314`, `:335`; `store.rs:211`, `:217`, `:228`;
+`view.rs:340`, `:407`, `:478`; `rects.rs:137`, `:177`, `:185`;
+`boolean.rs:781`, `:799`; `connectivity.rs:76`;
+`crates/drc/src/rules/via.rs:176`, `:205`; `spacing.rs:487`;
+`crates/engine/src/run.rs:779`). The two have never been reconciled, so no grep
+over the tree states the bulk-loop rule's true compliance.
+
+## Mutation testing has still not run, and clippy cannot
+
+`cargo mutants` needs bodies and now has them; it is the first thing to do once
+`tests/test_all.rs` is green. `cargo clippy` is not installed on this machine
+(Nix cargo, no rustup), so `CONVENTIONS.md §7`'s second gate has never been met
+and no statement anywhere in these docs is backed by a clippy run.
+
+---
+
+# Added at the final gate
+
+The gate ran `cargo build --workspace`, `cargo test --workspace
+--no-fail-fast`, and three greps. Build clean, **728 passed / 0 failed / 1
+ignored**. What follows is what the gate could *not* verify.
+
+## The `ponytail:` ledger entries above are stale, and one survivor is unblocked
+
+The two sections above quote 65 markers and 5 prose entries. The tree now
+carries **14**, of which 1 is prose (`crates/lvs/src/graph.rs:243`). The
+`crates/pex/src/quasistatic/solve.rs` refutation still wears a marker but has
+been rewritten to state a real blocker (a `Workspace` field addition), so it is
+no longer the overcount that entry describes. The undercount is untouched: the
+raw bulk loops carrying prose justifications without the token were never
+re-listed after `gpurify_core::bulk` was inlined and deleted, and their line
+numbers have all moved. Nobody has re-derived the bulk-loop rule's true
+compliance against the current tree.
+
+**WITHDRAWN — `crates/drc/src/lib.rs:130` is blocked after all, and this
+section's header is wrong.** The claim below reasoned from the comment's own
+"no signature blocks", which the third spend-down pass disproved:
+`RuleSet::run(&self, Design, &mut Scratch, &mut Violations, &mut Vec<RuleRun>)`
+carries no thread budget and `gpurify_engine::run::run_drc` is not handed
+`&RunOptions` (`crates/engine/src/run.rs:531`), so nothing can tell the
+dispatcher how many workers to use. Defaulting to `available_parallelism`
+instead is worse than not doing it: `crates/cli/src/main.rs` flips
+`RunOptions::threads` between the two `--check-determinism` passes precisely to
+prove output does not depend on how work was divided, and a self-chosen worker
+count would run both passes identically — the gate would compare a run against
+itself and report a guarantee it never exercised. `Scratch`'s public surface is
+`Default` + `shrink`, so a `with_workers` constructor is itself a widening.
+Filed as `## drc, from the ponytail: spend-down pass (second entry)` in
+`docs/SIGNATURE_DEFECTS.md`. **Zero survivors are un-actioned shortcuts**; all
+11 real markers in the tree are filed or structural, and `CLAUDE.md` carries the
+per-site table. The stale original follows:
+
+> **`crates/drc/src/lib.rs:130` is the one survivor that is not blocked.** Its own
+> comment says the upgrade path "no signature blocks": one `Scratch` is one
+> exclusive borrow, so `RuleSet::run` drives all rules on one core. The stated
+> reason it is unspent is that its edit site is `ruleset.rs` rather than that
+> file, which is a scope note, not a blocker. It is a live, un-actioned shortcut
+> and it is the only one.
+
+## `tests/test_all.rs` and `tests/common/` were rewritten and never re-audited
+
+`docs/E2E_AUDIT.md` §1 and §4 audit a version of these files that no longer
+exists. Both are an **empty blob at `HEAD`** — the whole 300-line suite and the
+fixture beneath it are uncommitted. The
+`a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass` failure
+recorded in `CLAUDE.md` is now green, but nothing has checked *how*: the
+fixture, not the test, is what §4 said was wrong, and no audit has confirmed the
+fix went into the fixture rather than into the assertion. §1's finding that four
+of the five things this suite checks are constants of its fixture has not been
+re-tested against the new fixture either.
+
+## Nine of the 728 tests came from workflows this gate did not run
+
+`tests/pdk_decks.rs` (6) and `crates/lvs/tests/terminal_order.rs` (3) are both
+untracked and were authored by concurrent runs. The tally reconciles exactly —
+714 baseline + 1 (`pex::reduce` compact bound) + 4 (`erc::power` profile and
+factorisation) + 6 + 3 = 728 — but the nine carry no audit from this gate and
+are not covered by `docs/TEST_AUDIT.md`.
+
+## The DRC antenna deletion has no test standing where the rules stood
+
+`crates/drc/src/rules/antenna.rs` and `crates/drc/tests/antenna_rules.rs` are
+both deleted, correctly: `"antenna"` was in two `KINDS` lists with two
+incompatible schemas. What is not verified is that a deck row spelled `antenna`
+now reaches `erc` and is *not* silently dropped by `drc`. The test that would
+have caught a regression here went out with the module.
+
+## Two `unsafe` inductions are sound only through an unstated aliasing of `n`
+
+Re-verified mechanically at all 35 sites and all 35 hold. Two are fragile in a
+way no assert or test catches:
+
+- `crates/drc/src/rules/grid.rs:319` (`let verts = xs.len()`) and `:484`
+  (`let interior = tail.len()`) take `n` from the *first* operand of a `zip`, so
+  `zip`'s truncation can only shorten the run. Reading `ys.len()` /
+  `head.len()` instead is UB with no compile error and no failing test.
+- `crates/erc/src/power.rs` has two sites satisfying the capacity precondition
+  through `Vec::new()` freshness rather than an explicit `clear()`. A `push`
+  inserted above either makes `spare_capacity_mut()[..n]` panic rather than
+  corrupt, so it fails safe — but it fails, and nothing states the dependency at
+  the site.
+
+The `debug_assert!(w <= i)` in every compact catches a doubled cursor. It does
+not catch a slice sized from the wrong operand, because the slice is what the
+assert is measured against.
+
+## `cargo clippy` still cannot run, and `cargo mutants` still has not
+
+Unchanged, and now the only two gates in `CONVENTIONS.md §7` that remain unmet.
+`cargo clippy` is not installed (Nix cargo, no rustup); **no clippy result
+anywhere in these docs is backed by a run**, and the claim in `CLAUDE.md` that
+the Definition-Phase was "workspace clippy clean" has been withdrawn rather than
+re-run. `cargo mutants` has bodies and a green suite, which was the stated
+precondition, so it is now the first thing to do.

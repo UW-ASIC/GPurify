@@ -344,18 +344,23 @@ fn isqrt_is_exact_at_perfect_squares_and_rounds_toward_zero_beside_them() {
             dbu(n),
             "the root of {n} squared"
         );
+        // Both neighbour cases need `n > 0`. Below is obvious — `-1` leaves the
+        // domain. Above is the one that reads as an off-by-one and is not: at
+        // `n == 0` the value one above is `1`, itself a perfect square, whose
+        // exact root is `1`. Only from `n == 1` up is `n² + 1` strictly below
+        // `(n + 1)²` and therefore a genuine round-down case.
         if n > 0 {
             assert_eq!(
                 isqrt(DbuArea::new(square - 1)),
                 dbu(n - 1),
                 "one below {n} squared must round down"
             );
+            assert_eq!(
+                isqrt(DbuArea::new(square + 1)),
+                dbu(n),
+                "one above {n} squared must round down"
+            );
         }
-        assert_eq!(
-            isqrt(DbuArea::new(square + 1)),
-            dbu(n),
-            "one above {n} squared must round down"
-        );
     }
 
     // MAX_ABS_DBU squared is the largest area two legal coordinates can make,

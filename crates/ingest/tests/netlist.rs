@@ -57,6 +57,11 @@ fn two_subcircuits(strings: &mut StrTable) -> Netlist {
             SubcktId(1),
             SubcktId(1),
         ],
+
+        // Nothing here instantiates anything: `inv` and `term` are both leaves.
+        // The empty instance table is what a flat netlist looks like, and is
+        // the case `Netlist::top` has to answer with the first subcircuit.
+        ..Netlist::default()
     }
 }
 

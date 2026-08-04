@@ -22,9 +22,6 @@
 //! [`Verdict::Inconclusive`] with the reason. There is no code path from
 //! "gave up" to "matched".
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod checks;
 pub mod compare;
 pub mod graph;

@@ -19,6 +19,16 @@ use gpurify_pex::network::{Parasitic, ParasiticNetwork};
 use gpurify_pex::quasistatic::CapMatrix;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use gpurify_topology::{extract_nets_into, NetId, NetTable};
+use gpurify_units::Grid;
+
+/// The 1 nm grid every case in this crate's tests is stated against.
+///
+/// A function rather than a `const`, because [`Grid::new`] is a `const fn` over
+/// a `todo!()` body until the Implementation-Phase and a `const` would evaluate
+/// it at compile time.
+pub fn grid() -> Grid {
+    Grid::new(1_000).expect("1000 database units per micrometre is a 1 nm grid")
+}
 
 /// Every column of a network, as bytes.
 ///

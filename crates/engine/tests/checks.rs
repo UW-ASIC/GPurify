@@ -13,8 +13,11 @@
 //! reports nothing. `testgen::assertions` does the same, for the same reason.
 
 use gpurify_engine::pipeline::{Extracted, Loaded};
-use gpurify_engine::run::{run_checks, Checks, Outputs, RunOptions, StageStatus, Summary};
-use gpurify_ingest::deck::DeviceKind;
+use gpurify_drc::DrcError;
+use gpurify_engine::run::{
+    run_checks, Checks, EngineError, Outputs, RunOptions, StageStatus, Summary,
+};
+use gpurify_ingest::deck::{DeviceKind, RuleSpec};
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::StrId;
 use gpurify_lvs::refine::TieBreak;
@@ -74,6 +77,9 @@ fn reference_with_one_transistor() -> Netlist {
         param: Vec::new(),
         net_name: vec![StrId(4), StrId(5), StrId(6), StrId(7)],
         net_subckt: vec![SubcktId(0); 4],
+        // One subcircuit instantiating nothing, which is what makes `top`
+        // unambiguous above.
+        ..Netlist::default()
     }
 }
 
@@ -238,6 +244,57 @@ fn lvs_with_a_reference_netlist_runs_and_blames_the_device_the_layout_lacks() {
             .iter()
             .any(|d| matches!(d, Discrepancy::UnpairedDevice { side: Side::Layout, .. })),
         "the layout holds no device at all, so nothing in it can be unpaired: {found:#?}"
+    );
+}
+
+/// Oracle: construct-from-answer. The same mismatch as above, read through the
+/// summary instead of the verdict.
+///
+/// `Summary::passed()` is the one bit a CI job reads, and a comparison that ran
+/// and found two different netlists reaching it as a pass is the fail-open this
+/// mapping closes. The count is known before the call: one row per discrepancy,
+/// every one an error, because a netlist difference is never a warning.
+#[test]
+fn an_lvs_mismatch_is_an_error_in_the_report_and_fails_the_run() {
+    let loaded = Loaded {
+        reference: Some(reference_with_one_transistor()),
+        ..Loaded::default()
+    };
+    let extracted = Extracted::default();
+    let mut out = Outputs::default();
+    let checks = Checks {
+        lvs: true,
+        ..NONE_SELECTED
+    };
+
+    let summary = run_checks(&loaded, &extracted, &options(checks, 1), &mut out)
+        .expect("a reference netlist and an empty layout compare, they do not error");
+
+    let Some(Verdict::Mismatch(found)) = out.lvs.as_ref() else {
+        panic!("the premise of this test is a mismatch, and the verdict is {:?}", out.lvs);
+    };
+    assert_eq!(
+        out.violations.rule.len(),
+        found.len(),
+        "the comparison found {} discrepancies and the report carries {} rows; \
+         a difference that reaches no row is a difference nobody reading the \
+         report will see",
+        found.len(),
+        out.violations.rule.len()
+    );
+    assert_eq!(
+        summary.errors as usize,
+        found.len(),
+        "a netlist difference is never a warning: {summary:?}"
+    );
+    assert_eq!(
+        summary.warnings, 0,
+        "a discrepancy downgraded to a warning would pass the run: {summary:?}"
+    );
+    assert!(
+        !summary.passed(),
+        "two different netlists compared and the run reports a pass, which is \
+         the fail-open the mapping exists to close: {summary:?}"
     );
 }
 
@@ -439,4 +496,71 @@ fn assert_outputs_agree(what: &str, first: &Outputs, second: &Outputs) {
         }
         _ => panic!("{what}: one run extracted parasitics and the other did not"),
     }
+}
+
+/// A `Loaded` whose deck holds one rule row per kind named, and nothing else.
+///
+/// Ids are `rule.0`, `rule.1`, … so a refusal names which row it refused. No
+/// layers and no parameters: the rows never reach a rule set in the test below,
+/// because the union check runs before one is built.
+fn loaded_with_rule_kinds(kinds: &[&str]) -> Loaded {
+    let mut loaded = Loaded::default();
+    for (at, kind) in kinds.iter().enumerate() {
+        let id = loaded.strings.intern(&format!("rule.{at}"));
+        let kind = loaded.strings.intern(kind);
+        loaded.deck.rules.spec.push(RuleSpec {
+            id,
+            kind,
+            layer_start: 0,
+            layer_len: 0,
+            param_start: 0,
+            param_len: 0,
+        });
+    }
+    loaded
+}
+
+/// Oracle: construct-from-answer. One deck holding a DRC row and an ERC row is
+/// accepted, which is the whole point of each rule set stepping over the other's
+/// kinds.
+///
+/// `ingest` produces one `RuleTable` and does not know what a kind means, so
+/// both domains read every row. Before they learned to skip, a deck could hold
+/// one domain's rules or the other's but never both, and every ERC rule was
+/// unreachable through `run_checks`.
+#[test]
+fn one_deck_may_hold_a_drc_rule_and_an_erc_rule() {
+    let loaded = loaded_with_rule_kinds(&["min_width", "antenna_electrical"]);
+
+    run_checks(&loaded, &Extracted::default(), &options(NONE_SELECTED, 1), &mut Outputs::default())
+        .expect("min_width is drc's kind and antenna_electrical is erc's; both are known");
+}
+
+/// Oracle: construct-from-answer, on the fail-closed path. A kind in neither
+/// domain's vocabulary is refused, and refused *before* `options.checks` is
+/// read.
+///
+/// This is the half that the skip above would otherwise have thrown away. It
+/// runs with no check selected on purpose: a misspelled ERC kind must not be
+/// able to hide behind a DRC-only run, so the refusal cannot live inside either
+/// stage's `if`.
+#[test]
+fn a_kind_in_neither_domains_vocabulary_is_refused_whatever_was_selected() {
+    let loaded = loaded_with_rule_kinds(&["min_width", "min_widht"]);
+
+    let error = run_checks(
+        &loaded,
+        &Extracted::default(),
+        &options(NONE_SELECTED, 1),
+        &mut Outputs::default(),
+    )
+    .expect_err("min_widht is nobody's rule kind");
+
+    assert!(
+        matches!(
+            error,
+            EngineError::Drc(DrcError::UnknownKind { ref kind, .. }) if kind == "min_widht"
+        ),
+        "expected the unknown kind to be named, got {error:?}"
+    );
 }

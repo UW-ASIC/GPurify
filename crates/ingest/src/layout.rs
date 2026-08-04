@@ -24,6 +24,17 @@ pub struct Layout {
     pub store: GeometryStore,
     pub provenance: Provenance,
     pub strings: StrTable,
+    /// Polygons the reader dropped because their stream pair is absent from the
+    /// deck's layer table. Zero under [`UnknownLayers::Reject`], which refuses
+    /// the file instead.
+    ///
+    /// Added in the Testing-Phase: `Drop` is documented as "never silent" and
+    /// nothing in the reader's signature carried the count that claim is about,
+    /// so a run against the wrong deck produced a smaller store and said
+    /// nothing. A caller reporting a non-zero value here is what makes the
+    /// difference between running a partial deck on purpose and running one by
+    /// accident.
+    pub dropped: u32,
 }
 
 /// Why a layout could not be read.
@@ -63,7 +74,8 @@ pub enum LayoutError {
 pub enum UnknownLayers {
     /// Reject. The default, and what a signoff run uses.
     Reject,
-    /// Drop, and report how many rows were dropped. Never silent.
+    /// Drop, and report how many rows were dropped in [`Layout::dropped`].
+    /// Never silent.
     Drop,
 }
 
@@ -81,7 +93,44 @@ pub fn read_layout(
     deck: &Deck,
     unknown: UnknownLayers,
 ) -> Result<Layout, LayoutError> {
-    todo!()
+    use std::io::{Read, Seek};
+
+    let mut file = std::fs::File::open(path).map_err(|e| LayoutError::Io(e.to_string()))?;
+
+    // Peek the gzip magic rather than asking a decoder: `MultiGzDecoder::new`
+    // parses the first header eagerly, cannot fail, and has already pulled up
+    // to 32 KiB into a `BufReader` you cannot get back.
+    let mut magic = [0u8; 2];
+    let peeked = file
+        .read(&mut magic)
+        .map_err(|e| LayoutError::Io(e.to_string()))?;
+    file.rewind().map_err(|e| LayoutError::Io(e.to_string()))?;
+
+    let mut bytes = Vec::new();
+    if peeked == 2 && magic == [0x1f, 0x8b] {
+        // `MultiGzDecoder`, never `GzDecoder`. A gzip file is a *series* of
+        // members — `bgzip` and several EDA writers emit many — and `GzDecoder`
+        // stops after the first with a clean `Ok(0)`. That is a silently
+        // partial layout and a clean report over the die area that never
+        // decoded, which is exactly the fail-open case this tree refuses.
+        flate2::read::MultiGzDecoder::new(file)
+            .read_to_end(&mut bytes)
+            .map_err(|e| LayoutError::Io(e.to_string()))?;
+    } else {
+        file.read_to_end(&mut bytes)
+            .map_err(|e| LayoutError::Io(e.to_string()))?;
+    }
+
+    // Detection runs on the decompressed bytes, and a failed decompression
+    // above returned rather than falling through to "try it as GDSII": reading
+    // compressed noise as records produces a plausible short layout.
+    if gds::detect(&bytes) {
+        gds::read(&bytes, deck, unknown)
+    } else if oasis::detect(&bytes) {
+        oasis::read(&bytes, deck, unknown)
+    } else {
+        Err(LayoutError::UnknownFormat)
+    }
 }
 
 /// GDSII.
@@ -90,18 +139,1207 @@ pub fn read_layout(
 /// `u16` space known at compile time, so dispatch is an array index, not a map.
 pub mod gds {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
+    use crate::intern::{StrId, StrTable};
+    use crate::narrow;
+    use crate::provenance::{PathId, PathTable, Provenance};
+    use gpurify_core::{GeometryStore, GeometryStoreBuilder};
+    use gpurify_units::{Dbu, MAX_ABS_DBU};
+
+    /// Every GDSII library opens with a six-byte `HEADER` record, so the magic
+    /// is the record framing itself: length 6, record type 0, data type 2.
+    const MAGIC: [u8; 4] = [0x00, 0x06, 0x00, 0x02];
+
+    // Record tags as they appear on the wire — `(record type << 8) | data type`
+    // — which is also how `LayoutError::UnsupportedRecord` reports one.
+    const HEADER: u16 = 0x0002;
+    const BGNLIB: u16 = 0x0102;
+    const LIBNAME: u16 = 0x0206;
+    const UNITS: u16 = 0x0305;
+    const ENDLIB: u16 = 0x0400;
+    const BGNSTR: u16 = 0x0502;
+    const STRNAME: u16 = 0x0606;
+    const ENDSTR: u16 = 0x0700;
+    const BOUNDARY: u16 = 0x0800;
+    const PATH: u16 = 0x0900;
+    const SREF: u16 = 0x0A00;
+    const AREF: u16 = 0x0B00;
+    const TEXT: u16 = 0x0C00;
+    const LAYER: u16 = 0x0D02;
+    const DATATYPE: u16 = 0x0E02;
+    const WIDTH: u16 = 0x0F03;
+    const XY: u16 = 0x1003;
+    const ENDEL: u16 = 0x1100;
+    const SNAME: u16 = 0x1206;
+    const COLROW: u16 = 0x1302;
+    const NODE: u16 = 0x1500;
+    const STRANS: u16 = 0x1A01;
+    const MAG: u16 = 0x1B05;
+    const ANGLE: u16 = 0x1C05;
+    const REFLIBS: u16 = 0x1F06;
+    const FONTS: u16 = 0x2006;
+    const GENERATIONS: u16 = 0x2202;
+    const ATTRTABLE: u16 = 0x2306;
+    const PATHTYPE: u16 = 0x2102;
+    const ELFLAGS: u16 = 0x2601;
+    const PROPATTR: u16 = 0x2B02;
+    const PROPVALUE: u16 = 0x2C06;
+    const BOX: u16 = 0x2D00;
+    const BOXTYPE: u16 = 0x2E02;
+    const PLEX: u16 = 0x2F03;
+    const BGNEXTN: u16 = 0x3003;
+    const ENDEXTN: u16 = 0x3103;
+    const FORMAT: u16 = 0x3602;
+    const MASK: u16 = 0x3706;
+    const ENDMASKS: u16 = 0x3800;
+    const LIBDIRSIZE: u16 = 0x3902;
+    const SRFNAME: u16 = 0x3A06;
+    const LIBSECUR: u16 = 0x3B02;
+
+    /// `STRANS` bit 0, counted from the most significant: reflect about the X
+    /// axis before rotating.
+    const STRANS_REFLECT: u16 = 0x8000;
+    /// `STRANS` bits 13 and 14: magnification and angle are absolute, i.e. not
+    /// composed with the parent's. Both break the fold in [`Xform::compose`],
+    /// so both are refused rather than approximated.
+    const STRANS_ABSOLUTE: u16 = 0x0006;
+
+    /// A byte offset as [`LayoutError`] states it.
+    ///
+    /// One place so the cast is justified once: an offset is an index into a
+    /// slice already in memory, so it is at most `usize::MAX` and this is
+    /// lossless on every target this tree builds for.
+    const fn offset(at: usize) -> u64 {
+        at as u64
+    }
 
     /// True when the byte prefix is a GDSII header record.
     pub fn detect(prefix: &[u8]) -> bool {
-        todo!()
+        prefix.starts_with(&MAGIC)
     }
 
-    pub fn read(
+    pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
+        let mut library = parse(bytes)?;
+        let (store, provenance, dropped) = flatten(&library, deck, unknown)?;
+        Ok(Layout {
+            store,
+            provenance,
+            // The names the elements interned along the way. Taken rather than
+            // borrowed: the library dies here and the ids in the store's
+            // provenance only mean something against this table.
+            strings: std::mem::take(&mut library.strings),
+            dropped,
+        })
+    }
+
+    // ---------------------------------------------------------------- parsing
+
+    /// One geometry element as the file states it, before any transform.
+    ///
+    /// Ranges into [`Library`]'s flat columns rather than owned vectors: a
+    /// library holds millions of these and a `Vec` per element is three words
+    /// of header before a single coordinate exists.
+    struct Elem {
+        layer: u16,
+        datatype: u16,
+        vert_start: u32,
+        vert_len: u32,
+        prop_start: u32,
+        prop_len: u32,
+    }
+
+    /// One `SREF` or `AREF`: a child cell, its placement, and the array step.
+    ///
+    /// An `SREF` is the one-by-one case with zero steps, so flattening has one
+    /// path rather than two.
+    struct Ref {
+        cell: StrId,
+        /// The child's own transform, whose translation is the array origin.
+        place: Xform,
+        col_step: (i64, i64),
+        row_step: (i64, i64),
+        cols: u32,
+        rows: u32,
+    }
+
+    /// One structure, as ranges into the library's element and reference lists.
+    struct Cell {
+        name: StrId,
+        elem_start: u32,
+        elem_end: u32,
+        ref_start: u32,
+        ref_end: u32,
+    }
+
+    /// An exactly representable instance transform.
+    ///
+    /// Integral magnification, an optional reflection about the X axis, a
+    /// quarter turn, and a translation — the subset the module doc declares.
+    /// It is closed under composition, which is what makes flattening a fold
+    /// rather than a matrix stack: `F` and `R` do not commute, but
+    /// `F·R_q = R_{-q}·F`, so every composite is still one scale, one
+    /// reflection, one quarter turn and one translation.
+    #[derive(Clone, Copy)]
+    struct Xform {
+        mag: i64,
+        flip: bool,
+        quadrant: u8,
+        dx: i64,
+        dy: i64,
+    }
+
+    impl Xform {
+        const IDENTITY: Self = Self {
+            mag: 1,
+            flip: false,
+            quadrant: 0,
+            dx: 0,
+            dy: 0,
+        };
+
+        /// The linear part as the row-major pair `(a, b, c, e)` of
+        /// `x' = a·x + b·y`, `y' = c·x + e·y`.
+        ///
+        /// A uniform: computed once per instance and hoisted above the vertex
+        /// loop, so the `match` and the `if` below are constant across every
+        /// row that loop then walks.
+        fn linear(self) -> (i64, i64, i64, i64) {
+            let (a, b, c, e) = match self.quadrant & 3 {
+                0 => (1, 0, 0, 1),
+                1 => (0, -1, 1, 0),
+                2 => (-1, 0, 0, -1),
+                _ => (0, 1, -1, 0),
+            };
+            // The reflection is the second column negated, because it runs
+            // before the rotation.
+            let s = if self.flip { -1 } else { 1 };
+            (self.mag * a, self.mag * b * s, self.mag * c, self.mag * e * s)
+        }
+
+        /// `self` applied after `child`.
+        fn compose(self, child: Self) -> Self {
+            let (a, b, c, e) = self.linear();
+            Self {
+                mag: self.mag * child.mag,
+                flip: self.flip ^ child.flip,
+                // `F·R_q = R_{-q}·F`, so a reflecting parent reverses the
+                // child's turn as it commutes past it.
+                quadrant: if self.flip {
+                    (self.quadrant + 4 - (child.quadrant & 3)) & 3
+                } else {
+                    (self.quadrant + child.quadrant) & 3
+                },
+                dx: a * child.dx + b * child.dy + self.dx,
+                dy: c * child.dx + e * child.dy + self.dy,
+            }
+        }
+    }
+
+    /// The library as parsed: hierarchy intact, nothing mapped to the deck yet.
+    #[derive(Default)]
+    struct Library {
+        strings: StrTable,
+        cells: Vec<Cell>,
+        /// Cell indices ordered by name, for the `SNAME` lookup. Sorted and
+        /// binary-searched, not hashed — see [`crate::intern`]; a map's
+        /// iteration order is what made the old tree's reports differ between
+        /// runs of the same binary.
+        by_name: Vec<u32>,
+        elems: Vec<Elem>,
+        refs: Vec<Ref>,
+        xs: Vec<i64>,
+        ys: Vec<i64>,
+        props: Vec<(i16, StrId)>,
+    }
+
+    impl Library {
+        /// The cell a name defines, or `None`.
+        fn find(&self, name: StrId) -> Option<u32> {
+            let at = self
+                .by_name
+                .binary_search_by_key(&name, |&i| self.cells[i as usize].name)
+                .ok()?;
+            Some(self.by_name[at])
+        }
+    }
+
+    /// One `(tag, payload)` record and the offset just past it.
+    ///
+    /// Fail closed on both framing errors a stream can have: a header that runs
+    /// off the end, and a length that cannot advance.
+    fn record(bytes: &[u8], at: usize) -> Result<(u16, &[u8], usize), LayoutError> {
+        let head = bytes
+            .get(at..at + 4)
+            .ok_or(LayoutError::Truncated(offset(at)))?;
+        let len = usize::from(u16::from_be_bytes([head[0], head[1]]));
+        let tag = u16::from_be_bytes([head[2], head[3]]);
+        // A record shorter than its own header would leave `at` where it is and
+        // loop forever; an odd length is not a GDSII record at all.
+        if len < 4 || len % 2 != 0 {
+            return Err(LayoutError::Truncated(offset(at)));
+        }
+        let payload = bytes
+            .get(at + 4..at + len)
+            .ok_or(LayoutError::Truncated(offset(at)))?;
+        Ok((tag, payload, at + len))
+    }
+
+    /// A two-byte integer payload.
+    fn word(payload: &[u8], at: usize) -> Result<u16, LayoutError> {
+        let bytes: [u8; 2] = payload
+            .get(..2)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(LayoutError::Truncated(offset(at)))?;
+        Ok(u16::from_be_bytes(bytes))
+    }
+
+    /// A four-byte signed integer payload, widened to the arithmetic width the
+    /// rest of this module works in.
+    fn long(payload: &[u8], at: usize) -> Result<i64, LayoutError> {
+        let bytes: [u8; 4] = payload
+            .get(..4)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(LayoutError::Truncated(offset(at)))?;
+        Ok(i64::from(i32::from_be_bytes(bytes)))
+    }
+
+    /// An ASCII payload, with the NUL the format pads odd names with removed.
+    fn ascii(payload: &[u8]) -> std::borrow::Cow<'_, str> {
+        let end = payload.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        String::from_utf8_lossy(&payload[..end])
+    }
+
+    /// An eight-byte GDSII real: sign, a seven-bit excess-64 base-sixteen
+    /// exponent, and a fifty-six-bit fraction, so the value is
+    /// `± fraction / 2^56 · 16^(exponent − 64)`.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the fraction is 56 bits and f64 carries 53; every value this \
+                  reader accepts is an integral magnification or a quarter turn, \
+                  both exact in f64, and anything else is refused by its caller"
+    )]
+    fn real(payload: &[u8], at: usize) -> Result<f64, LayoutError> {
+        /// `2^56`, the fraction's implied denominator.
+        const SCALE: f64 = 72_057_594_037_927_936.0;
+        let bytes: [u8; 8] = payload
+            .get(..8)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(LayoutError::Truncated(offset(at)))?;
+        let sign = if bytes[0] & 0x80 == 0 { 1.0 } else { -1.0 };
+        let exponent = i32::from(bytes[0] & 0x7f) - 64;
+        let fraction = u64::from_be_bytes([
+            0, bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        Ok(sign * (fraction as f64) / SCALE * 16f64.powi(exponent))
+    }
+
+    /// Append an `XY` payload to the coordinate columns.
+    ///
+    /// Two passes over the same bytes, and they stay two: reaching one would
+    /// need a `Cols` impl reinterpreting a byte slice as eight-byte points, and
+    /// `Cols` is sealed inside `gpurify-core`, plus a two-column `map_into`,
+    /// which does not exist. Both are entries in `docs/SIGNATURE_DEFECTS.md`
+    /// under *ingest*; neither is reachable from this crate. `chunks_exact`
+    /// keeps both passes branchless and the second is served entirely from L1.
+    fn points(xs: &mut Vec<i64>, ys: &mut Vec<i64>, payload: &[u8], at: usize) -> Result<(), LayoutError> {
+        if !payload.len().is_multiple_of(8) {
+            return Err(LayoutError::Truncated(offset(at)));
+        }
+        xs.extend(
+            payload
+                .chunks_exact(8)
+                .map(|p| i64::from(i32::from_be_bytes([p[0], p[1], p[2], p[3]]))),
+        );
+        ys.extend(
+            payload
+                .chunks_exact(8)
+                .map(|p| i64::from(i32::from_be_bytes([p[4], p[5], p[6], p[7]]))),
+        );
+        debug_assert_eq!(xs.len(), ys.len(), "the coordinate columns diverged");
+        Ok(())
+    }
+
+    /// Read the record stream into a [`Library`].
+    ///
+    /// **Transform, generative.** One pass, no hierarchy resolution: every
+    /// record is either consumed into a table, skipped as carrying no geometry,
+    /// or refused. Nothing is approximated, so a construct this reader does not
+    /// implement cannot reach the store as something else.
+    fn parse(bytes: &[u8]) -> Result<Library, LayoutError> {
+        let mut lib = Library::default();
+        // One scratch set for every `PATH` in the library, hoisted above the
+        // record scan so stroking a centreline allocates nothing per element.
+        let mut stroke = Stroke::default();
+        let mut open: Option<usize> = None;
+        let mut at = 0usize;
+
+        // The record scan is a chain — record N's offset is record N−1's offset
+        // plus the length record N−1 declared — so it is not vectorisable, and
+        // its `match` is a state machine, not a data-dependent branch inside a
+        // kernel.
+        loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                ENDLIB => break,
+                // Library metadata. `UNITS` is read and discarded on purpose:
+                // coordinates are database units already and this reader never
+                // rescales them, so the grid is the layout's, not the file's.
+                HEADER | BGNLIB | LIBNAME | UNITS | REFLIBS | FONTS | GENERATIONS | ATTRTABLE
+                | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
+                BGNSTR => {
+                    if open.is_some() {
+                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    }
+                    open = Some(lib.cells.len());
+                    lib.cells.push(Cell {
+                        // Overwritten by the STRNAME that follows; a structure
+                        // that never states one is refused at ENDSTR.
+                        name: StrId(u32::MAX),
+                        elem_start: narrow(lib.elems.len()),
+                        elem_end: narrow(lib.elems.len()),
+                        ref_start: narrow(lib.refs.len()),
+                        ref_end: narrow(lib.refs.len()),
+                    });
+                }
+                STRNAME => {
+                    let index = open.ok_or(LayoutError::UnsupportedRecord(tag, offset(at)))?;
+                    let name = lib.strings.intern(&ascii(payload));
+                    lib.cells[index].name = name;
+                }
+                ENDSTR => {
+                    let index = open.take().ok_or(LayoutError::UnsupportedRecord(tag, offset(at)))?;
+                    if lib.cells[index].name == StrId(u32::MAX) {
+                        return Err(LayoutError::UnsupportedRecord(BGNSTR, offset(at)));
+                    }
+                    lib.cells[index].elem_end = narrow(lib.elems.len());
+                    lib.cells[index].ref_end = narrow(lib.refs.len());
+                }
+                BOUNDARY | BOX => {
+                    if open.is_none() {
+                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    }
+                    at = boundary(&mut lib, bytes, next, at, tag)?;
+                    continue;
+                }
+                // A stroked centreline, and by the time `path` returns it is an
+                // `Elem` like any other — the outline is exact or the element
+                // was refused, so nothing downstream can tell a `PATH` from a
+                // `BOUNDARY`.
+                PATH => {
+                    if open.is_none() {
+                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    }
+                    at = path(&mut lib, &mut stroke, bytes, next, at)?;
+                    continue;
+                }
+                SREF | AREF => {
+                    if open.is_none() {
+                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    }
+                    at = reference(&mut lib, bytes, next, at, tag == AREF)?;
+                    continue;
+                }
+                // A TEXT carries no geometry, so skipping it cannot move a
+                // verdict. What it does carry is a net label, and
+                // `Provenance::label` binds one to a *polygon* — a
+                // point-in-polygon query that belongs to `topology`, and which
+                // no signature here can hand back unbound. Recorded rather than
+                // guessed at; a NODE is the same, an electrical annotation with
+                // no manufactured shape.
+                TEXT | NODE => {
+                    at = skip_element(bytes, next)?;
+                    continue;
+                }
+                _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
+            }
+            at = next;
+        }
+
+        if open.is_some() {
+            return Err(LayoutError::Truncated(offset(at)));
+        }
+
+        lib.by_name = (0..narrow(lib.cells.len())).collect();
+        lib.by_name
+            .sort_unstable_by_key(|&i| (lib.cells[i as usize].name, i));
+
+        debug_assert_eq!(lib.xs.len(), lib.ys.len());
+        debug_assert_eq!(lib.by_name.len(), lib.cells.len());
+        debug_assert!(
+            lib.elems
+                .iter()
+                .all(|e| (e.vert_start + e.vert_len) as usize <= lib.xs.len()),
+            "an element's vertex run leaves the coordinate columns"
+        );
+        Ok(lib)
+    }
+
+    /// The records an element carries whatever kind it is: its stream
+    /// properties, the flags that carry no geometry, and its terminator.
+    /// `Ok(Some(next))` is the `ENDEL`, `Ok(None)` "consumed, keep reading".
+    ///
+    /// One implementation because [`boundary`] and [`path`] state these
+    /// identically — they held a verbatim copy each while the two readers were
+    /// written apart, and a property arm added to one and not the other is a
+    /// polygon whose provenance silently lands on its neighbour.
+    ///
+    /// [`reference`] deliberately does **not** route through this: an `SREF`
+    /// has no `prop_start` range to own the pair, so a property record on one
+    /// would leak into the next element's range. It stays a refusal there.
+    fn element_record(
+        lib: &mut Library,
+        attribute: &mut i16,
+        tag: u16,
+        payload: &[u8],
+        at: usize,
+        next: usize,
+    ) -> Result<Option<usize>, LayoutError> {
+        match tag {
+            PROPATTR => {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "PROPATTR is a signed two-byte integer on the wire"
+                )]
+                {
+                    *attribute = word(payload, at)? as i16;
+                }
+            }
+            PROPVALUE => {
+                let value = lib.strings.intern(&ascii(payload));
+                lib.props.push((*attribute, value));
+            }
+            ELFLAGS | PLEX => {}
+            ENDEL => return Ok(Some(next)),
+            _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
+        }
+        Ok(None)
+    }
+
+    /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset
+    /// past it.
+    fn boundary(
+        lib: &mut Library,
         bytes: &[u8],
+        mut at: usize,
+        start: usize,
+        kind: u16,
+    ) -> Result<usize, LayoutError> {
+        let vert_start = narrow(lib.xs.len());
+        let prop_start = narrow(lib.props.len());
+        let mut layer: Option<u16> = None;
+        let mut datatype: Option<u16> = None;
+        let mut attribute = 0i16;
+        let mut seen_xy = false;
+
+        let end = loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                LAYER => layer = Some(word(payload, at)?),
+                // One arm for both because a BOX's type plays the datatype's
+                // role exactly: it is the second half of the stream pair.
+                DATATYPE | BOXTYPE => datatype = Some(word(payload, at)?),
+                XY => {
+                    points(&mut lib.xs, &mut lib.ys, payload, at)?;
+                    seen_xy = true;
+                }
+                _ => {
+                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
+                        break end;
+                    }
+                }
+            }
+            at = next;
+        };
+
+        // The closing point a BOUNDARY repeats belongs to the file format, not
+        // to the store. One compare per element, not per vertex.
+        let last = lib.xs.len().wrapping_sub(1);
+        let first = vert_start as usize;
+        if lib.xs.len() - first >= 2 && lib.xs[first] == lib.xs[last] && lib.ys[first] == lib.ys[last] {
+            lib.xs.pop();
+            lib.ys.pop();
+        }
+
+        let vert_len = narrow(lib.xs.len()) - vert_start;
+        // Fail closed. An element missing its stream pair or its geometry, or
+        // one with no interior, is refused: there is no representation of it
+        // that is not a guess, and a guess is a moved verdict.
+        let (Some(layer), Some(datatype)) = (layer, datatype) else {
+            return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
+        };
+        if !seen_xy || vert_len < 3 {
+            return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
+        }
+
+        lib.elems.push(Elem {
+            layer,
+            datatype,
+            vert_start,
+            vert_len,
+            prop_start,
+            prop_len: narrow(lib.props.len()) - prop_start,
+        });
+        Ok(end)
+    }
+
+    /// Per-`PATH` scratch: the centreline and the two offset chains it strokes
+    /// into.
+    ///
+    /// A column of `(i64, i64)` rather than two of `i64` because every one of
+    /// these is read as a point — both coordinates in the same expression —
+    /// which is the one case `CONVENTIONS.md` §1 keeps `AoS` for.
+    #[derive(Default)]
+    struct Stroke {
+        /// The centreline as the file states it, with the two end caps applied.
+        pts: Vec<(i64, i64)>,
+        /// One unit direction per segment: `pts.len() - 1` rows.
+        dirs: Vec<(i64, i64)>,
+        /// `dirs` with both ends duplicated, so `ext[i]` is the segment
+        /// arriving at vertex `i` and `ext[i + 1]` the one leaving it.
+        ext: Vec<(i64, i64)>,
+        left: Vec<(i64, i64)>,
+        right: Vec<(i64, i64)>,
+    }
+
+    /// Consume a `PATH` through its `ENDEL`, stroking its centreline into the
+    /// outline the rest of the pipeline sees. Returns the offset past it.
+    ///
+    /// **Transform, A-to-B.** An `n`-point centreline in, a `2n`-point ring
+    /// out: one offset corner per vertex per side.
+    ///
+    /// # What is exact, and what is refused
+    ///
+    /// The outline is exact or the element is refused; there is no rounded
+    /// case, because a rounded outline moves a spacing verdict exactly the way
+    /// a rounded instance transform does. Exact means all four of:
+    ///
+    /// - **every segment axis-parallel and non-degenerate**, so both offset
+    ///   lines are axis-parallel and their intersection is an integer point;
+    /// - **an even width**, so the half-width the offset is by is still a whole
+    ///   database unit;
+    /// - **no vertex that reverses direction**, which has no miter at all — the
+    ///   two offset lines coincide and the join is a cap, a different element;
+    /// - **`PATHTYPE` 0, 2 or 4.** Type 1 is a semicircular cap and no polygon
+    ///   is that shape.
+    ///
+    /// Everything else is a typed refusal, never a store row.
+    fn path(
+        lib: &mut Library,
+        stroke: &mut Stroke,
+        bytes: &[u8],
+        mut at: usize,
+        start: usize,
+    ) -> Result<usize, LayoutError> {
+        let vert_start = narrow(lib.xs.len());
+        let prop_start = narrow(lib.props.len());
+        let mut layer: Option<u16> = None;
+        let mut datatype: Option<u16> = None;
+        let mut attribute = 0i16;
+        let mut seen_xy = false;
+        // The format's defaults: a zero width, flush ends, no extensions.
+        let mut width = 0i64;
+        let mut pathtype = 0u16;
+        let mut begin_ext = 0i64;
+        let mut end_ext = 0i64;
+
+        let end = loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                LAYER => layer = Some(word(payload, at)?),
+                DATATYPE => datatype = Some(word(payload, at)?),
+                WIDTH => width = long(payload, at)?,
+                PATHTYPE => pathtype = word(payload, at)?,
+                BGNEXTN => begin_ext = long(payload, at)?,
+                ENDEXTN => end_ext = long(payload, at)?,
+                XY => {
+                    points(&mut lib.xs, &mut lib.ys, payload, at)?;
+                    seen_xy = true;
+                }
+                _ => {
+                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
+                        break end;
+                    }
+                }
+            }
+            at = next;
+        };
+
+        // The centreline moves out of the coordinate columns and the outline
+        // takes its place: the columns hold what the store will, and a refusal
+        // below leaves no half-written element behind it.
+        let first = vert_start as usize;
+        let (cx, cy) = (&lib.xs[first..], &lib.ys[first..]);
+        let centre = cx.len();
+        debug_assert_eq!(centre, cy.len(), "the coordinate columns diverged");
+        stroke.pts.clear();
+        stroke.pts.reserve(centre);
+        for i in 0..centre {
+            stroke.pts.push((cx[i], cy[i]));
+        }
+        lib.xs.truncate(first);
+        lib.ys.truncate(first);
+
+        let (Some(layer), Some(datatype)) = (layer, datatype) else {
+            return Err(LayoutError::UnsupportedRecord(PATH, offset(start)));
+        };
+        let n = stroke.pts.len();
+        if !seen_xy || n < 2 {
+            return Err(LayoutError::UnsupportedRecord(PATH, offset(start)));
+        }
+        // A zero width has no area to verify. A negative one is GDSII's
+        // "absolute width", which does not compose with an instance
+        // magnification — the same objection `STRANS_ABSOLUTE` is refused for.
+        // An odd width offsets by half a database unit, which is off the grid.
+        if width <= 0 || width % 2 != 0 {
+            return Err(LayoutError::UnsupportedRecord(WIDTH, offset(start)));
+        }
+        let half = width / 2;
+        let (begin_ext, end_ext) = match pathtype {
+            0 => (0, 0),
+            2 => (half, half),
+            4 => (begin_ext, end_ext),
+            _ => return Err(LayoutError::UnsupportedRecord(PATHTYPE, offset(start))),
+        };
+
+        // The adjacent-pair scan, as two offset views of the same column: `tail`
+        // is the segment's start vertex and `head` its end.
+        let (tail, head) = (&stroke.pts[..n - 1], &stroke.pts[1..]);
+        let segments = tail.len();
+        debug_assert_eq!(segments, head.len(), "the offset views diverged");
+
+        // Exactly one of the two deltas is zero on an axis-parallel,
+        // non-degenerate segment. Folded to one flag over the whole centreline
+        // rather than tested per vertex, so the scan carries no branch: `&=` on
+        // `bool` is the non-short-circuiting operator, so the fold is one `and`
+        // per row and no control flow.
+        let mut axis_parallel = true;
+        for i in 0..segments {
+            let (a, b) = (tail[i], head[i]);
+            axis_parallel &= (a.0 == b.0) ^ (a.1 == b.1);
+        }
+        if !axis_parallel {
+            return Err(LayoutError::UnsupportedTransform);
+        }
+
+        stroke.dirs.clear();
+        stroke.dirs.reserve(segments);
+        for i in 0..segments {
+            let (a, b) = (tail[i], head[i]);
+            stroke.dirs.push(((b.0 - a.0).signum(), (b.1 - a.1).signum()));
+        }
+        debug_assert_eq!(stroke.dirs.len(), n - 1, "one direction per segment");
+
+        // A reversal is the one join with no intersection to miter at. Same
+        // shape of check as above — `|=` on `bool` does not short-circuit — and
+        // empty for a two-point centreline.
+        let (prev, curr) = (&stroke.dirs[..segments - 1], &stroke.dirs[1..]);
+        debug_assert_eq!(prev.len(), curr.len(), "the offset views diverged");
+        let mut reverses = false;
+        for i in 0..prev.len() {
+            let (p, c) = (prev[i], curr[i]);
+            reverses |= p.0 * c.0 + p.1 * c.1 < 0;
+        }
+        if reverses {
+            return Err(LayoutError::UnsupportedTransform);
+        }
+
+        // The end caps are the only term that depends on a vertex's *index*, so
+        // they are folded into the centreline here and the corner map below
+        // stays uniform over every row. Extending a segment along its own
+        // direction leaves that direction unchanged, which is why `dirs` is
+        // computed first and stays valid.
+        let (front, back) = (stroke.dirs[0], stroke.dirs[segments - 1]);
+        stroke.pts[0].0 -= begin_ext * front.0;
+        stroke.pts[0].1 -= begin_ext * front.1;
+        stroke.pts[n - 1].0 += end_ext * back.0;
+        stroke.pts[n - 1].1 += end_ext * back.1;
+
+        stroke.ext.clear();
+        stroke.ext.reserve(segments + 2);
+        stroke.ext.push(front);
+        stroke.ext.extend_from_slice(&stroke.dirs);
+        stroke.ext.push(back);
+        debug_assert_eq!(
+            stroke.ext.len(),
+            n + 1,
+            "one arriving and one leaving direction per vertex"
+        );
+
+        // The miter, exact and division-free. With `d` the dot product of the
+        // two unit directions — `1` at a collinear join, `0` at a quarter turn,
+        // and `-1` refused above — the offset corner is
+        // `p + half * (n_in * (1 - d) + n_out)`, which is the intersection of
+        // the two offset lines in both surviving cases: `n_in + n_out` at a
+        // turn, and `n_out` alone where the two normals are the same vector.
+        // `side` is `+1` for the left chain and `-1` for the right, and is a
+        // uniform, so the body is six multiplies and no branch.
+        let corner = |side: i64| {
+            move |(p, pv, cv): ((i64, i64), (i64, i64), (i64, i64))| {
+                let dot = pv.0 * cv.0 + pv.1 * cv.1;
+                let (inx, iny) = (-pv.1 * side, pv.0 * side);
+                let (outx, outy) = (-cv.1 * side, cv.0 * side);
+                (
+                    p.0 + half * (inx * (1 - dot) + outx),
+                    p.1 + half * (iny * (1 - dot) + outy),
+                )
+            }
+        };
+        debug_assert_eq!(stroke.pts.len(), n, "one centreline vertex per corner");
+        debug_assert_eq!(stroke.ext.len(), n + 1, "the offset views diverged");
+
+        let left = corner(1);
+        stroke.left.clear();
+        stroke.left.reserve(n);
+        for i in 0..n {
+            stroke
+                .left
+                .push(left((stroke.pts[i], stroke.ext[i], stroke.ext[i + 1])));
+        }
+
+        let right = corner(-1);
+        stroke.right.clear();
+        stroke.right.reserve(n);
+        for i in 0..n {
+            stroke
+                .right
+                .push(right((stroke.pts[i], stroke.ext[i], stroke.ext[i + 1])));
+        }
+
+        // Right side forward, then left side back. That order is what makes the
+        // ring counter-clockwise, and `core::view` reads a clockwise ring as a
+        // hole — a stroked wire emitted the other way round would subtract
+        // itself from its own layer.
+        lib.xs.extend(stroke.right.iter().map(|p| p.0));
+        lib.xs.extend(stroke.left.iter().rev().map(|p| p.0));
+        lib.ys.extend(stroke.right.iter().map(|p| p.1));
+        lib.ys.extend(stroke.left.iter().rev().map(|p| p.1));
+
+        let vert_len = narrow(lib.xs.len()) - vert_start;
+        debug_assert_eq!(lib.xs.len(), lib.ys.len(), "the coordinate columns diverged");
+        debug_assert_eq!(
+            vert_len as usize,
+            2 * n,
+            "an n-point centreline strokes to one corner per vertex per side"
+        );
+
+        lib.elems.push(Elem {
+            layer,
+            datatype,
+            vert_start,
+            vert_len,
+            prop_start,
+            prop_len: narrow(lib.props.len()) - prop_start,
+        });
+        Ok(end)
+    }
+
+    /// Consume an `SREF` or `AREF` through its `ENDEL`.
+    fn reference(
+        lib: &mut Library,
+        bytes: &[u8],
+        mut at: usize,
+        start: usize,
+        array: bool,
+    ) -> Result<usize, LayoutError> {
+        let mut name: Option<StrId> = None;
+        let mut place = Xform::IDENTITY;
+        let mut cols = 1u32;
+        let mut rows = 1u32;
+        // An SREF states one point, an AREF three. A fourth is not this format.
+        let mut pt = [(0i64, 0i64); 3];
+        let mut points_seen = 0usize;
+
+        let end = loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                SNAME => name = Some(lib.strings.intern(&ascii(payload))),
+                STRANS => {
+                    let flags = word(payload, at)?;
+                    // An absolute magnification or angle does not compose with
+                    // the parent's, so the fold in `Xform::compose` would be
+                    // wrong for it. Refused, never approximated.
+                    if flags & STRANS_ABSOLUTE != 0 {
+                        return Err(LayoutError::UnsupportedTransform);
+                    }
+                    place.flip = flags & STRANS_REFLECT != 0;
+                }
+                MAG => {
+                    let m = real(payload, at)?;
+                    // Non-integral magnification would put a vertex off the
+                    // manufacturing grid, which is a geometry change, not a
+                    // rounding.
+                    if !((1.0..=1e6).contains(&m) && m.fract() == 0.0) {
+                        return Err(LayoutError::UnsupportedTransform);
+                    }
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "checked integral and inside 1..=1e6 on the line above"
+                    )]
+                    {
+                        place.mag = m as i64;
+                    }
+                }
+                ANGLE => {
+                    let degrees = real(payload, at)?;
+                    let quarters = degrees / 90.0;
+                    // Non-orthogonal rotation cannot be represented on an
+                    // integer grid at all.
+                    if quarters.fract() != 0.0 || quarters.abs() > 1e6 {
+                        return Err(LayoutError::UnsupportedTransform);
+                    }
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "checked integral and bounded on the line above"
+                    )]
+                    let quarters = quarters as i64;
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "`rem_euclid(4)` is 0..=3, so neither the sign \
+                                  nor the top 56 bits carry information"
+                    )]
+                    {
+                        place.quadrant = (quarters.rem_euclid(4)) as u8;
+                    }
+                }
+                COLROW => {
+                    let payload: [u8; 4] = payload
+                        .get(..4)
+                        .and_then(|s| s.try_into().ok())
+                        .ok_or(LayoutError::Truncated(offset(at)))?;
+                    cols = u32::from(u16::from_be_bytes([payload[0], payload[1]]));
+                    rows = u32::from(u16::from_be_bytes([payload[2], payload[3]]));
+                }
+                XY => {
+                    if !payload.len().is_multiple_of(8) {
+                        return Err(LayoutError::Truncated(offset(at)));
+                    }
+                    for (slot, p) in pt.iter_mut().zip(payload.chunks_exact(8)) {
+                        *slot = (
+                            i64::from(i32::from_be_bytes([p[0], p[1], p[2], p[3]])),
+                            i64::from(i32::from_be_bytes([p[4], p[5], p[6], p[7]])),
+                        );
+                    }
+                    points_seen = payload.len() / 8;
+                }
+                ELFLAGS | PLEX => {}
+                ENDEL => break next,
+                _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
+            }
+            at = next;
+        };
+
+        let Some(cell) = name else {
+            return Err(LayoutError::UnsupportedRecord(SREF, offset(start)));
+        };
+        let wanted = if array { 3 } else { 1 };
+        if points_seen != wanted {
+            return Err(LayoutError::UnsupportedRecord(SREF, offset(start)));
+        }
+        place.dx = pt[0].0;
+        place.dy = pt[0].1;
+
+        // An AREF states the far corner of the array, not the step, so the step
+        // is exact or the array is not representable — a rounded pitch moves
+        // every instance after the first.
+        let (col_step, row_step) = if array {
+            if cols == 0 || rows == 0 {
+                return Err(LayoutError::UnsupportedTransform);
+            }
+            let step = |far: (i64, i64), n: u32| -> Option<(i64, i64)> {
+                let n = i64::from(n);
+                let (dx, dy) = (far.0 - pt[0].0, far.1 - pt[0].1);
+                (dx % n == 0 && dy % n == 0).then_some((dx / n, dy / n))
+            };
+            (
+                step(pt[1], cols).ok_or(LayoutError::UnsupportedTransform)?,
+                step(pt[2], rows).ok_or(LayoutError::UnsupportedTransform)?,
+            )
+        } else {
+            ((0, 0), (0, 0))
+        };
+
+        lib.refs.push(Ref {
+            cell,
+            place,
+            col_step,
+            row_step,
+            cols,
+            rows,
+        });
+        Ok(end)
+    }
+
+    /// Consume an element whose records carry no geometry, through its `ENDEL`.
+    fn skip_element(bytes: &[u8], mut at: usize) -> Result<usize, LayoutError> {
+        loop {
+            let (tag, _, next) = record(bytes, at)?;
+            at = next;
+            if tag == ENDEL {
+                return Ok(at);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- flattening
+
+    /// The hierarchy walk, and the tables it fills.
+    struct Flatten<'a> {
+        lib: &'a Library,
+        deck: &'a Deck,
+        unknown: UnknownLayers,
+        builder: GeometryStoreBuilder,
+        provenance: Provenance,
+        dropped: u32,
+        /// Which cells are on the current root-to-here chain, for the cycle
+        /// check. A column of `bool`, not a set: cell ids are dense.
+        on_chain: Vec<bool>,
+        /// The instance chain, root first, as `Provenance` wants it.
+        chain: Vec<StrId>,
+        /// Per-polygon scratch, hoisted so nothing allocates per element.
+        rx: Vec<i64>,
+        ry: Vec<i64>,
+        tx: Vec<Dbu>,
+        ty: Vec<Dbu>,
+    }
+
+    /// Resolve the hierarchy into one flat store.
+    ///
+    /// **Transform, A-to-B.** Every top cell — one on a normal layout — is
+    /// walked depth first, and each element it reaches is transformed into the
+    /// root frame once. The store's own layer sort runs last, and its
+    /// permutation is applied to the provenance columns here, which is the
+    /// invariant `crate::ingest`'s module doc names.
+    fn flatten(
+        lib: &Library,
         deck: &Deck,
         unknown: UnknownLayers,
-    ) -> Result<Layout, LayoutError> {
-        todo!()
+    ) -> Result<(GeometryStore, Provenance, u32), LayoutError> {
+        // A scatter, and it fails closed on a name no cell defines.
+        let mut referenced = vec![false; lib.cells.len()];
+        for reference in &lib.refs {
+            let target = lib.find(reference.cell).ok_or_else(|| {
+                LayoutError::MissingCell(lib.strings.resolve(reference.cell).to_owned())
+            })?;
+            referenced[target as usize] = true;
+        }
+
+        let mut walk = Flatten {
+            lib,
+            deck,
+            unknown,
+            builder: GeometryStoreBuilder::with_capacity(lib.elems.len(), lib.xs.len()),
+            provenance: Provenance::default(),
+            dropped: 0,
+            on_chain: vec![false; lib.cells.len()],
+            chain: Vec::new(),
+            rx: Vec::new(),
+            ry: Vec::new(),
+            tx: Vec::new(),
+            ty: Vec::new(),
+        };
+
+        // Fail closed: a library whose every cell is referenced has no root to
+        // walk from, which means a cycle. Reporting an empty store for it would
+        // be a clean report over a layout nobody read.
+        if !lib.cells.is_empty() && referenced.iter().all(|&r| r) {
+            return Err(LayoutError::CyclicHierarchy(
+                lib.strings.resolve(lib.cells[0].name).to_owned(),
+            ));
+        }
+        for (index, &is_referenced) in referenced.iter().enumerate() {
+            if !is_referenced {
+                walk.visit(narrow(index), Xform::IDENTITY)?;
+            }
+        }
+
+        let (store, permutation) = walk.builder.finish(deck.layers.len());
+        debug_assert_eq!(
+            permutation.len(),
+            store.poly_count(),
+            "the store returned a permutation of a different length than its rows"
+        );
+        // The invariant `crate::ingest`'s module doc names, and the one place
+        // it happens: provenance is accumulated in file order and the store is
+        // sorted by layer, so without this every violation names another
+        // shape's cell.
+        walk.provenance.permute(&permutation);
+        Ok((store, walk.provenance, walk.dropped))
+    }
+
+    impl Flatten<'_> {
+        /// Emit one cell's geometry under the accumulated transform, then
+        /// recurse through its references.
+        fn visit(&mut self, cell: u32, at: Xform) -> Result<(), LayoutError> {
+            let lib = self.lib;
+            let index = cell as usize;
+            if self.on_chain[index] {
+                return Err(LayoutError::CyclicHierarchy(
+                    lib.strings.resolve(lib.cells[index].name).to_owned(),
+                ));
+            }
+            self.on_chain[index] = true;
+
+            // The root path is `PathId(0)` by definition, so the common case —
+            // a flat library, where every shape is in the top cell — interns
+            // nothing at all.
+            let path = if self.chain.is_empty() {
+                PathTable::ROOT
+            } else {
+                self.provenance.intern_path(&self.chain)
+            };
+
+            let entry = &lib.cells[index];
+            for elem in &lib.elems[entry.elem_start as usize..entry.elem_end as usize] {
+                self.emit(elem, at, path)?;
+            }
+
+            for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let child = lib.find(reference.cell).ok_or_else(|| {
+                    LayoutError::MissingCell(lib.strings.resolve(reference.cell).to_owned())
+                })?;
+                self.chain.push(reference.cell);
+                for r in 0..reference.rows {
+                    for c in 0..reference.cols {
+                        let placed = Xform {
+                            dx: reference.place.dx
+                                + i64::from(c) * reference.col_step.0
+                                + i64::from(r) * reference.row_step.0,
+                            dy: reference.place.dy
+                                + i64::from(c) * reference.col_step.1
+                                + i64::from(r) * reference.row_step.1,
+                            ..reference.place
+                        };
+                        self.visit(child, at.compose(placed))?;
+                    }
+                }
+                self.chain.pop();
+            }
+
+            self.on_chain[index] = false;
+            Ok(())
+        }
+
+        /// Transform one element into the root frame and push it.
+        fn emit(&mut self, elem: &Elem, at: Xform, path: PathId) -> Result<(), LayoutError> {
+            let lib = self.lib;
+            let start = elem.vert_start as usize;
+            let end = start + elem.vert_len as usize;
+            debug_assert!(end <= lib.xs.len(), "vertex run leaves the column");
+            debug_assert!(at.mag >= 1, "magnification was checked integral and positive");
+
+            let Some(layer) = self.deck.layers.of_stream(elem.layer, elem.datatype) else {
+                match self.unknown {
+                    UnknownLayers::Reject => {
+                        return Err(LayoutError::UnknownLayer(elem.layer, elem.datatype))
+                    }
+                    // Never silent: the count is what a caller reports to tell
+                    // a partial deck run on purpose from one by accident.
+                    UnknownLayers::Drop => {
+                        self.dropped += 1;
+                        return Ok(());
+                    }
+                }
+            };
+
+            let (xs, ys) = (&lib.xs[start..end], &lib.ys[start..end]);
+            // Uniforms, hoisted: the whole transform is four multipliers and
+            // two offsets, so the vertex loops below carry no branch at all.
+            let (a, b, c, e) = at.linear();
+            let (dx, dy) = (at.dx, at.dy);
+            let verts = xs.len();
+            debug_assert_eq!(verts, ys.len(), "the coordinate columns diverged");
+            // A BOUNDARY/BOX is refused below 3 vertices and a PATH strokes to
+            // 2n with n >= 2, so the `[1..]` reversal below cannot slice empty.
+            debug_assert!(verts >= 3, "an element with no interior reached emit");
+
+            self.rx.clear();
+            self.rx.reserve(verts);
+            for i in 0..verts {
+                self.rx.push(a * xs[i] + b * ys[i] + dx);
+            }
+            self.ry.clear();
+            self.ry.reserve(verts);
+            for i in 0..verts {
+                self.ry.push(c * xs[i] + e * ys[i] + dy);
+            }
+            debug_assert_eq!(self.rx.len(), verts);
+            debug_assert_eq!(self.ry.len(), verts);
+
+            // Parse, don't validate: the `±MAX_ABS_DBU` bound every downstream
+            // i128 area product rests on is checked here, once, and never
+            // rechecked. A max-magnitude reduction rather than a per-vertex
+            // test, so the check itself carries no branch.
+            let bound = MAX_ABS_DBU.unsigned_abs();
+            let mut worst = 0u64;
+            for i in 0..verts {
+                worst = worst
+                    .max(self.rx[i].unsigned_abs())
+                    .max(self.ry[i].unsigned_abs());
+            }
+            if worst > bound {
+                // Cold: the offending value is wanted once, on the path that
+                // refuses the file, so the scan for it is not on any hot path.
+                let out = self
+                    .rx
+                    .iter()
+                    .chain(self.ry.iter())
+                    .copied()
+                    .find(|v| v.unsigned_abs() > bound)
+                    .expect("the reduction above found one");
+                return Err(LayoutError::CoordinateOutOfRange(out));
+            }
+
+            self.tx.clear();
+            self.tx.reserve(verts);
+            for i in 0..verts {
+                self.tx.push(Dbu::new_unchecked(self.rx[i]));
+            }
+            self.ty.clear();
+            self.ty.reserve(verts);
+            for i in 0..verts {
+                self.ty.push(Dbu::new_unchecked(self.ry[i]));
+            }
+            debug_assert_eq!(self.tx.len(), self.ty.len());
+
+            // GDSII itself gives a BOUNDARY's vertex order no meaning — the
+            // Feb-87 manual states no winding for it, and a boundary drawn
+            // inside another is not a hole in this format. This store does
+            // read a clockwise ring as a hole, so the order is meaning we add;
+            // whether that is the right model is `docs/SIGNATURE_DEFECTS.md`,
+            // not this line. What this line owes either model is the weaker,
+            // spec-independent invariant the flattener was breaking: *a cell's
+            // rings have the same orientation wherever the cell is placed.*
+            //
+            // `strans` bit 0 is `diag(1,-1)` applied before the rotation, so
+            // `Xform::linear` composes to determinant −1 exactly when `flip` —
+            // rotations are det +1 and `mag >= 1` — and the shoelace sum scales
+            // by that determinant. A mirrored instance of a counter-clockwise
+            // cell therefore arrives clockwise unless the vertex order follows,
+            // and `validate_layer_into` reads it as an orphan hole.
+            //
+            // `[1..]`, not the whole run: `erc::first_vertex` documents vertex
+            // 0 as a shape's canonical report point, so reversing it would move
+            // every per-shape ERC coordinate under a mirror. Rings are stored
+            // open here, so fixing vertex 0 and reversing the rest is the
+            // reversal. `at.flip` is a per-instance uniform, hoisted with
+            // `(a, b, c, e)` above the vertex loops — not a per-row branch.
+            debug_assert_eq!(
+                a * e - b * c < 0,
+                at.flip,
+                "det < 0 iff flip: rotations are det +1 and mag >= 1"
+            );
+            if at.flip {
+                self.tx[1..].reverse();
+                self.ty[1..].reverse();
+            }
+
+            self.builder.push(layer, &self.tx, &self.ty);
+            // Immediately after the push, so the two tables cannot drift: the
+            // permutation applied at the end is only meaningful if row N of one
+            // is row N of the other.
+            let props = elem.prop_start as usize..(elem.prop_start + elem.prop_len) as usize;
+            self.provenance.push(path, &lib.props[props]);
+            Ok(())
+        }
     }
 }
 
@@ -114,16 +1352,56 @@ pub mod gds {
 pub mod oasis {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
 
+    /// The magic string every OASIS file opens with, `%SEMI-OASIS\r\n`.
+    const MAGIC: &[u8] = b"%SEMI-OASIS\r\n";
+
     pub fn detect(prefix: &[u8]) -> bool {
-        todo!()
+        prefix.starts_with(MAGIC)
     }
 
-    pub fn read(
-        bytes: &[u8],
-        deck: &Deck,
-        unknown: UnknownLayers,
-    ) -> Result<Layout, LayoutError> {
-        todo!()
+    /// # Not implemented, and refused rather than half-read
+    ///
+    /// OASIS is recognised and then declined. This is a format that has not
+    /// been written yet, not a shortcut inside one that has: there is no
+    /// ceiling here to raise and no faster version of the code below.
+    ///
+    /// What the format itself settles, and what makes the eventual reader
+    /// safe to land incrementally: **an OASIS record carries no length.** A
+    /// record id is one byte and its operands are self-delimiting, so a record
+    /// the reader does not model cannot be skipped past — there is no way to
+    /// find where the next one starts. Refusal is therefore forced by the
+    /// encoding rather than chosen, and a reader implementing only `START`,
+    /// `CELL`, `RECTANGLE`, `POLYGON` and `PLACEMENT` is not a partial reader
+    /// that drops geometry; it is a total reader over a smaller subset, which
+    /// is exactly the shape `gds` already has. The modal state is fully
+    /// tracked for the records that *are* modelled, because every record before
+    /// an unmodelled one was read.
+    ///
+    /// What still has to be built, in order: the unsigned and signed
+    /// variable-length integer decoder and the seven real types; the modal
+    /// variable block and its "unset is an error" rule; the five point-list
+    /// encodings and the eleven repetition kinds; then `CBLOCK` (raw deflate,
+    /// so its declared uncompressed byte count is the only integrity evidence
+    /// there is and must be checked). Flattening is `gds`'s, which is private
+    /// to that module and would move up to `layout` alongside `Xform` and
+    /// `Library`.
+    pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
+        // The signature is `gds::read`'s, frozen, and both of these are read by
+        // the reader the upgrade path above describes. Discarded here rather
+        // than renamed to `_deck`/`_unknown`, which would put the placeholder
+        // spelling in the rendered docs of a function that will take them.
+        let _ = (deck, unknown);
+        if !detect(bytes) {
+            return Err(LayoutError::UnknownFormat);
+        }
+        let at = u64::try_from(MAGIC.len()).expect("the magic is thirteen bytes");
+        // The first record id after the magic, which is precisely the record
+        // this reader does not support — as is every other one.
+        let id = bytes
+            .get(MAGIC.len())
+            .copied()
+            .ok_or(LayoutError::Truncated(at))?;
+        Err(LayoutError::UnsupportedRecord(u16::from(id), at))
     }
 }
 
@@ -157,14 +1435,24 @@ mod tests {
     const BGNSTR: u16 = 0x0502;
     const STRNAME: u16 = 0x0606;
     const BOUNDARY: u16 = 0x0800;
+    const SREF: u16 = 0x0A00;
     const LAYER: u16 = 0x0D02;
     const DATATYPE: u16 = 0x0E02;
     const XY: u16 = 0x1003;
+    const SNAME: u16 = 0x1206;
+    const STRANS: u16 = 0x1A01;
+    const ANGLE: u16 = 0x1C05;
     const PROPATTR: u16 = 0x2B02;
     const PROPVALUE: u16 = 0x2C06;
     const ENDEL: u16 = 0x1100;
     const ENDSTR: u16 = 0x0700;
     const ENDLIB: u16 = 0x0400;
+
+    /// `STRANS` bit 0, counting from the most significant as the Feb-87 manual
+    /// does: reflect about the X axis before rotating. Spelled here from the
+    /// specification rather than imported from the reader, which is the code
+    /// under test.
+    const REFLECT: u16 = 0x8000;
 
     /// One BOUNDARY element: a stream pair, an open point list closed by
     /// [`gds_library`] when it writes the XY record, and any property records
@@ -222,14 +1510,14 @@ mod tests {
             mantissa *= 16.0;
             exponent -= 1;
         }
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "the mantissa is below one, so the product is below 2^56"
         )]
         let fraction = (mantissa * TWO_POW_56).round() as u64;
         assert!(fraction < 1 << 56, "the fraction overflowed its field");
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "the loops above leave the exponent inside 0..=127"
@@ -248,12 +1536,45 @@ mod tests {
         bytes
     }
 
+    /// One `SREF`: the cell placed, the `STRANS` flag word, the rotation in
+    /// degrees, and where the child's origin lands in the parent.
+    ///
+    /// `angle` is stated in degrees because that is what the record holds; a
+    /// zero writes no `ANGLE` record at all, which is how the format spells the
+    /// default and keeps `gds_real`'s positive-value precondition honest.
+    struct Ref {
+        cell: &'static str,
+        strans: u16,
+        angle: f64,
+        x: i64,
+        y: i64,
+    }
+
+    fn sref(cell: &'static str, strans: u16, angle: f64, x: i64, y: i64) -> Ref {
+        Ref {
+            cell,
+            strans,
+            angle,
+            x,
+            y,
+        }
+    }
+
     /// A one-cell GDSII library holding the given boundaries.
     ///
     /// The UNITS record states a one-micrometre user unit over a one-nanometre
     /// database unit, which is the thousand-database-units-per-micrometre grid
     /// every test in this module works on.
     fn gds_library(cell: &str, elements: &[Boundary]) -> Vec<u8> {
+        gds_hierarchy(&[(cell, elements, &[])])
+    }
+
+    /// A GDSII library of several cells, each holding boundaries and `SREF`s.
+    ///
+    /// The reader takes every cell nothing references as a root, so the
+    /// hierarchy is stated entirely by which names appear in which `SREF` list;
+    /// a caller wanting one root gives exactly one cell no other cell places.
+    fn gds_hierarchy(cells: &[(&str, &[Boundary], &[Ref])]) -> Vec<u8> {
         let mut out = Vec::new();
         record(&mut out, HEADER, &600u16.to_be_bytes());
         record(&mut out, BGNLIB, &[0u8; 24]);
@@ -263,31 +1584,52 @@ mod tests {
         units.extend_from_slice(&gds_real(1e-9));
         record(&mut out, UNITS, &units);
 
-        record(&mut out, BGNSTR, &[0u8; 24]);
-        record(&mut out, STRNAME, &ascii(cell));
-        for element in elements {
-            record(&mut out, BOUNDARY, &[]);
-            record(&mut out, LAYER, &element.layer.to_be_bytes());
-            record(&mut out, DATATYPE, &element.datatype.to_be_bytes());
-            let mut xy = Vec::with_capacity((element.xs.len() + 1) * 8);
-            for (&x, &y) in element.xs.iter().zip(&element.ys) {
-                let x = i32::try_from(x).expect("test coordinates fit a GDSII coordinate");
-                let y = i32::try_from(y).expect("test coordinates fit a GDSII coordinate");
+        for (cell, elements, refs) in cells {
+            record(&mut out, BGNSTR, &[0u8; 24]);
+            record(&mut out, STRNAME, &ascii(cell));
+            for element in *elements {
+                record(&mut out, BOUNDARY, &[]);
+                record(&mut out, LAYER, &element.layer.to_be_bytes());
+                record(&mut out, DATATYPE, &element.datatype.to_be_bytes());
+                let mut xy = Vec::with_capacity((element.xs.len() + 1) * 8);
+                for (&x, &y) in element.xs.iter().zip(&element.ys) {
+                    let x = i32::try_from(x).expect("test coordinates fit a GDSII coordinate");
+                    let y = i32::try_from(y).expect("test coordinates fit a GDSII coordinate");
+                    xy.extend_from_slice(&x.to_be_bytes());
+                    xy.extend_from_slice(&y.to_be_bytes());
+                }
+                // A BOUNDARY's point list closes by repeating its first point.
+                xy.extend_from_within(0..8);
+                record(&mut out, XY, &xy);
+                // Properties follow the geometry and precede ENDEL, one PROPATTR
+                // and one PROPVALUE per pair.
+                for (attribute, value) in &element.props {
+                    record(&mut out, PROPATTR, &attribute.to_be_bytes());
+                    record(&mut out, PROPVALUE, &ascii(value));
+                }
+                record(&mut out, ENDEL, &[]);
+            }
+            // The format's order inside an SREF: the name, then the optional
+            // transform records, then the single point the origin lands on.
+            for reference in *refs {
+                record(&mut out, SREF, &[]);
+                record(&mut out, SNAME, &ascii(reference.cell));
+                if reference.strans != 0 {
+                    record(&mut out, STRANS, &reference.strans.to_be_bytes());
+                }
+                if reference.angle != 0.0 {
+                    record(&mut out, ANGLE, &gds_real(reference.angle));
+                }
+                let x = i32::try_from(reference.x).expect("test coordinates fit a GDSII coordinate");
+                let y = i32::try_from(reference.y).expect("test coordinates fit a GDSII coordinate");
+                let mut xy = Vec::with_capacity(8);
                 xy.extend_from_slice(&x.to_be_bytes());
                 xy.extend_from_slice(&y.to_be_bytes());
+                record(&mut out, XY, &xy);
+                record(&mut out, ENDEL, &[]);
             }
-            // A BOUNDARY's point list closes by repeating its first point.
-            xy.extend_from_within(0..8);
-            record(&mut out, XY, &xy);
-            // Properties follow the geometry and precede ENDEL, one PROPATTR
-            // and one PROPVALUE per pair.
-            for (attribute, value) in &element.props {
-                record(&mut out, PROPATTR, &attribute.to_be_bytes());
-                record(&mut out, PROPVALUE, &ascii(value));
-            }
-            record(&mut out, ENDEL, &[]);
+            record(&mut out, ENDSTR, &[]);
         }
-        record(&mut out, ENDSTR, &[]);
         record(&mut out, ENDLIB, &[]);
         out
     }
@@ -701,6 +2043,189 @@ mod tests {
             assert!(
                 layout.provenance.props_of(PolyId(row)).is_empty(),
                 "row {row} acquired stream properties the file never stated"
+            );
+        }
+    }
+
+    /// The cell every mirroring test below instantiates: a right triangle with
+    /// legs 200 and 100 at the cell origin, wound counter-clockwise.
+    ///
+    /// Chirality is the point. A rectangle is its own mirror image about either
+    /// axis, so a reader that dropped the reflection entirely would reproduce
+    /// one exactly; a triangle with three distinct vertices and no symmetry
+    /// cannot hide a wrong transform, and three vertices is short enough to
+    /// state every expected coordinate in the test that wants it.
+    fn ccw_triangle() -> Boundary {
+        boundary(ROWS[0].1, ROWS[0].2, &[0, 200, 0], &[0, 0, 100])
+    }
+
+    /// The vertices of a store row, as a pair of owned columns, so a test can
+    /// compare against a literal without borrowing the layout twice.
+    fn verts(store: &GeometryStore, row: u32) -> (Vec<i64>, Vec<i64>) {
+        let (xs, ys) = store.poly_verts(PolyId(row));
+        (
+            xs.iter().map(|d| d.raw()).collect(),
+            ys.iter().map(|d| d.raw()).collect(),
+        )
+    }
+
+    /// Oracle: construct-from-answer. `LEAF` is one counter-clockwise triangle;
+    /// `TOP` places it twice, once plain and once under `STRANS 0x8000`. GDSII
+    /// defines bit 0 as a reflection about the X axis applied *before* the
+    /// rotation, so the mirrored copy's coordinates are `(x, −y)` shifted by the
+    /// reference point — which is a determinant of −1 and therefore reverses the
+    /// ring. Both rows' vertices are stated here in full; the winding equality
+    /// is asserted alongside them because it is the property, and the literals
+    /// are only one way of reaching it.
+    #[test]
+    fn a_mirrored_instance_keeps_the_orientation_the_cell_was_drawn_with() {
+        use gpurify_core::ops::{winding_of, Winding};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_hierarchy(&[
+            ("LEAF", &[ccw_triangle()], &[]),
+            (
+                "TOP",
+                &[],
+                &[
+                    sref("LEAF", 0, 0.0, 0, 0),
+                    sref("LEAF", REFLECT, 0.0, 1_000, 0),
+                ],
+            ),
+        ]);
+
+        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(
+            layout.store.poly_count(),
+            2,
+            "one row per placement of the leaf cell"
+        );
+
+        assert_eq!(
+            verts(&layout.store, 0),
+            (vec![0, 200, 0], vec![0, 0, 100]),
+            "the unmirrored placement is the cell as drawn"
+        );
+        // (0,0), (200,0), (0,100) under (x, −y) + (1000, 0) is (1000,0),
+        // (1200,0), (1000,−100), which is clockwise; the reversal that restores
+        // the drawn orientation fixes vertex 0 and turns the rest around.
+        assert_eq!(
+            verts(&layout.store, 1),
+            (vec![1_000, 1_000, 1_200], vec![0, -100, 0]),
+            "the mirrored placement did not come back in the reversed order a \
+             determinant of −1 requires"
+        );
+
+        let (xs, ys) = layout.store.poly_verts(PolyId(0));
+        assert_eq!(winding_of(xs, ys), Some(Winding::CounterClockwise), "the cell as drawn");
+        let (xs, ys) = layout.store.poly_verts(PolyId(1));
+        assert_eq!(
+            winding_of(xs, ys),
+            Some(Winding::CounterClockwise),
+            "a cell's rings must have the same orientation wherever the cell is \
+             placed; clockwise here is read downstream as a hole"
+        );
+    }
+
+    /// Oracle: construct-from-answer, and the answer is the identity. `TOP`
+    /// places `MID` mirrored, `MID` places `LEAF` mirrored, and two reflections
+    /// compose to a rotation — so the doubly nested copy must be the cell as
+    /// drawn, vertex for vertex, including its order. `TOP` also places `LEAF`
+    /// directly so the answer sits in the same store as the thing it answers.
+    ///
+    /// This is the parity path: `Xform::compose` xors the two `flip`s, and any
+    /// fix that reversed per level rather than on the composed transform would
+    /// reverse this ring twice and pass, or once and fail here.
+    #[test]
+    fn a_doubly_mirrored_instance_is_the_cell_as_drawn() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_hierarchy(&[
+            ("LEAF", &[ccw_triangle()], &[]),
+            ("MID", &[], &[sref("LEAF", REFLECT, 0.0, 0, 0)]),
+            (
+                "TOP",
+                &[],
+                &[
+                    sref("LEAF", 0, 0.0, 0, 0),
+                    sref("MID", REFLECT, 0.0, 0, 0),
+                ],
+            ),
+        ]);
+
+        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(layout.store.poly_count(), 2);
+        assert_eq!(
+            verts(&layout.store, 0),
+            (vec![0, 200, 0], vec![0, 0, 100]),
+            "the direct placement is the cell as drawn"
+        );
+        assert_eq!(
+            verts(&layout.store, 1),
+            (vec![0, 200, 0], vec![0, 0, 100]),
+            "two reflections compose to the identity, so the nested copy must \
+             be indistinguishable from the direct one — order included"
+        );
+    }
+
+    /// Oracle: construct-from-answer. `TOP` places `LEAF` four times, each
+    /// mirrored and rotated by one more quarter turn, at origins 2000 apart so
+    /// no two overlap. GDSII applies the reflection first, so the composed
+    /// linear part is `R_q · diag(1, −1)`: `(x, −y)`, `(y, x)`, `(−x, y)`,
+    /// `(−y, −x)`. Every one of those has determinant −1, so every one of the
+    /// four rings reverses — `F·R_q = R_{−q}·F` is where a transform fix most
+    /// easily goes wrong, and a fix that keyed off the quadrant rather than the
+    /// determinant would get two of these four right.
+    ///
+    /// The triangle's area is 10000 whichever way it is placed, and the
+    /// signed area's sign is the winding, so the stated vertices and the
+    /// counter-clockwise assertion are two readings of the same fact.
+    #[test]
+    fn a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise() {
+        use gpurify_core::ops::{winding_of, Winding};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_hierarchy(&[
+            ("LEAF", &[ccw_triangle()], &[]),
+            (
+                "TOP",
+                &[],
+                &[
+                    sref("LEAF", REFLECT, 0.0, 0, 0),
+                    sref("LEAF", REFLECT, 90.0, 2_000, 0),
+                    sref("LEAF", REFLECT, 180.0, 4_000, 0),
+                    sref("LEAF", REFLECT, 270.0, 6_000, 0),
+                ],
+            ),
+        ]);
+
+        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(layout.store.poly_count(), 4);
+
+        // Each row: the drawn triangle through `R_q · diag(1, −1)`, offset by
+        // the reference point, then reversed from vertex 1 on.
+        let expected = [
+            (vec![0, 0, 200], vec![0, -100, 0]),
+            (vec![2_000, 2_100, 2_000], vec![0, 0, 200]),
+            (vec![4_000, 4_000, 3_800], vec![0, 100, 0]),
+            (vec![6_000, 5_900, 6_000], vec![0, 0, -200]),
+        ];
+        for (row, want) in expected.into_iter().enumerate() {
+            let row = u32::try_from(row).expect("four placements");
+            assert_eq!(
+                verts(&layout.store, row),
+                want,
+                "the mirrored placement at quarter turn {row} did not flatten to \
+                 the reflected-then-rotated triangle in reversed order"
+            );
+            let (xs, ys) = layout.store.poly_verts(PolyId(row));
+            assert_eq!(
+                winding_of(xs, ys),
+                Some(Winding::CounterClockwise),
+                "quarter turn {row} came back clockwise, which is read \
+                 downstream as a hole"
             );
         }
     }

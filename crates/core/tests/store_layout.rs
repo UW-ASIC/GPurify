@@ -207,10 +207,12 @@ fn two_builds_of_the_same_pushes_agree_on_every_column() {
 /// that were pushed onto that layer. Over four hundred generated shapes, so it
 /// is a property of the sort rather than of the eight-row fixture above.
 ///
-/// The *order* within a layer is deliberately not asserted. The interface
-/// promises the grouping and the permutation, not stability, and pinning an
-/// unpromised order here would make a correct implementation look wrong. What
-/// the order does have to be is repeatable, and that is the determinism test.
+/// The *order* within a layer is not asserted here, only the membership. The
+/// interface promises more than that as of the Testing-Phase — `finish`'s sort
+/// is stable, so a layer's permutation slice is strictly ascending — and this
+/// assertion is therefore weaker than the contract rather than at odds with it.
+/// Stability itself is a claim about one column, and the determinism test is
+/// what reads it.
 #[test]
 fn regrouping_by_layer_loses_no_row_and_invents_none() {
     let mut rng = Rng::new(31);

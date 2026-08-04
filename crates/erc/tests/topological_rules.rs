@@ -202,6 +202,13 @@ fn a_gate_net_that_a_drain_also_reaches_is_clean() {
 
 /// Two transistors whose drains meet on net two, driven from `gate_a` and
 /// `gate_b`. Passing the same net for both is the multi-finger case.
+///
+/// Terminals are listed in `topology::role_at`'s MOS order — `Gate, Source,
+/// Drain, Bulk` — because `DeviceSpec::terminals` is documented as "the order
+/// the recogniser will report them" and the role written beside each net only
+/// picks the layer. Listing `Drain` second puts the shared net on the *source*,
+/// which makes the test contradict itself: no implementation can both report
+/// one drain-carrying net and flag net two.
 fn contended_output(gate_a: u32, gate_b: u32) -> NetlistSpec {
     NetlistSpec {
         nets: 5,
@@ -210,8 +217,8 @@ fn contended_output(gate_a: u32, gate_b: u32) -> NetlistSpec {
                 "nch",
                 vec![
                     (TerminalRole::Gate, gate_a),
-                    (TerminalRole::Drain, 2),
                     (TerminalRole::Source, 3),
+                    (TerminalRole::Drain, 2),
                     (TerminalRole::Bulk, 3),
                 ],
             ),
@@ -219,8 +226,8 @@ fn contended_output(gate_a: u32, gate_b: u32) -> NetlistSpec {
                 "pch",
                 vec![
                     (TerminalRole::Gate, gate_b),
-                    (TerminalRole::Drain, 2),
                     (TerminalRole::Source, 4),
+                    (TerminalRole::Drain, 2),
                     (TerminalRole::Bulk, 4),
                 ],
             ),

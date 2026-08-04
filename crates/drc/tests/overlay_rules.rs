@@ -60,11 +60,13 @@ fn min_enclosure_table(limit: i64) -> MinEnclosureTable {
 /// of 41 fails it by one. The violation is attributed to the *inner* layer,
 /// which is the shape a designer has to move.
 ///
-/// `check_min_enclosure` reports at the inner shape's lower-left corner. The
-/// generator centres the deficient left margin on the origin, so with a 40-unit
-/// enclosure and a 100-unit inner square that corner is `(20, -50)`.
+/// `check_min_enclosure` reports at the *midpoint of the deficient margin* —
+/// the side `Margins::worst` named — which is the crate-wide convention and
+/// what `testgen::violation` already computes. The generator centres that
+/// margin on the origin, so the expected point comes straight from
+/// `case.expected` with no override.
 #[test]
-fn an_enclosure_one_unit_under_the_limit_is_reported_at_the_inner_shapes_corner() {
+fn an_enclosure_one_unit_under_the_limit_is_reported_on_the_deficient_margin() {
     let case = enclosure_case(40, 41);
     let env = Env::default();
     let mut sink = Sink::default();
@@ -77,13 +79,7 @@ fn an_enclosure_one_unit_under_the_limit_is_reported_at_the_inner_shapes_corner(
         &mut sink.runs,
     );
 
-    assert_only_violation(
-        &sink.out,
-        &Violation {
-            at: point(20, -50),
-            ..case.expected
-        },
-    );
+    assert_only_violation(&sink.out, &case.expected);
     let run = assert_rule_ran(&sink.runs, RULE);
     assert_eq!(run.examined, 1, "examined counts inner shapes");
     assert_eq!(run.violations, 1);
@@ -181,11 +177,11 @@ fn two_sided_enclosure() -> (gpurify_core::GeometryStore, PolyId, PolyId) {
 /// the shape has 60 on the better side of its worse axis and a requirement of
 /// 61 fails it by one.
 ///
-/// The coordinate follows its sibling: `check_asymmetric_enclosure` states only
-/// that it shares [`check_min_enclosure`]'s pairing, and that rule reports at the
-/// inner shape's lower-left corner, which here is `(100, 100)`. That the relaxed
-/// rule does not restate its own convention is a Definition-Phase gap, recorded
-/// in `docs/NEED_TESTING.md`.
+/// The coordinate is the midpoint of the margin `Margins::worst_axis_best_side`
+/// named — the better side of the worse axis, which the rule now restates for
+/// itself. Here that is the right-hand strip, `x` from 200 to 260 and `y` from
+/// 100 to 200, so the point is `(230, 150)`. It is not a corner of either
+/// shape: the whole claim is that this one side is the one to widen.
 #[test]
 fn an_asymmetric_enclosure_one_unit_under_the_requirement_is_reported_on_the_better_side() {
     let (store, inner, outer) = two_sided_enclosure();
@@ -212,7 +208,7 @@ fn an_asymmetric_enclosure_one_unit_under_the_requirement_is_reported_on_the_bet
             rule: RULE,
             layer: A,
             severity: Severity::Error,
-            at: point(100, 100),
+            at: point(230, 150),
             measured: Measurement::Length(dbu(60)),
             limit: Measurement::Length(dbu(61)),
             shapes: (inner, Some(outer)),

@@ -54,10 +54,25 @@ pub enum Discrepancy {
         layout_value: f64,
         ref_value: f64,
     },
-    /// Two nets carry the same declared name.
-    DuplicateName { name: StrId, nets: (u32, u32) },
+    /// Two nets on one side carry the same declared name.
+    ///
+    /// `side` says which netlist the two indices are in. Without it `nets` is
+    /// a pair of numbers in an unstated index space, and a duplicate in the
+    /// schematic reads exactly like one in the layout — which is the fault
+    /// this variant exists to distinguish.
+    DuplicateName {
+        side: Side,
+        name: StrId,
+        nets: (u32, u32),
+    },
     /// The counts in one refinement class differ, which is the general form
     /// the more specific variants above are extracted from.
+    ///
+    /// Emitted only when the class holds more than one node on each side, so
+    /// no individual node can be blamed. A class whose members *can* be
+    /// attributed — anything holding at most one node per side — is reported
+    /// as [`Discrepancy::UnpairedDevice`] or [`Discrepancy::UnpairedNet`]
+    /// instead, and reporting both forms for one class is a double count.
     ClassImbalance {
         layout_nodes: u32,
         ref_nodes: u32,

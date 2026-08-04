@@ -30,9 +30,6 @@
 //! between runs of the same binary because a `HashMap` decided which of two
 //! layers was printed first.
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod analytical;
 pub mod network;
 pub mod quasistatic;

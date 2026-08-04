@@ -8,6 +8,10 @@ gpurify-units = { workspace = true }
 gpurify-core = { workspace = true }
 thiserror = { workspace = true }
 flate2 = { workspace = true }
+# `parse_deck` and `parse_intent` read JSON — the deck and the design intent are
+# the only two text formats in `ingest` that are not a stream of records.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 gpurify-testgen = { workspace = true }

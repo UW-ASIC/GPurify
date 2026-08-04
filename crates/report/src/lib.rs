@@ -20,9 +20,6 @@
 //! [`Violations::sort_canonical`] is where that is established, and it is the
 //! only ordering any consumer may rely on.
 
-// Definition-Phase; see CLAUDE.md
-#![allow(unused_variables, dead_code)]
-
 pub mod measure;
 pub mod violation;
 

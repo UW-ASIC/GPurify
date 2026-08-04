@@ -250,6 +250,9 @@ fn one_subcircuit() -> Netlist {
 
         net_name: vec![VDD, VSS, StrId(32), StrId(33), StrId(34)],
         net_subckt: vec![SubcktId(0); 5],
+        // Flat: the projection under test is per subcircuit, so an instance
+        // here would be a row `from_reference_into` is defined to ignore.
+        ..Netlist::default()
     }
 }
 

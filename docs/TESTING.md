@@ -27,6 +27,80 @@ Measured, not guessed:
 - **Tautology tests** — `assert_eq!(FACTORIES.len(), 19)` — measured the
   manifest, not the code.
 
+**This is history, not an open hole.** The 160 fixture cells survived the
+deletion, and the weakness above was a property of the *assertions*, not of the
+geometry. Both are now closed — see the next section.
+
+---
+
+## The fixture corpus
+
+The 160 cells the old suite ran against are back, asserted through
+`tests/corpus/`. They are not a fourth oracle: they are construct-from-answer
+(DRC/ERC/LVS) and closed form (PEX) applied to layout somebody drew for a real
+PDK rather than to geometry a generator emitted. Both halves are needed — the
+eleven hand-written end-to-end tests would pass on a tool that got every real
+rule wrong, and the 160 would pass on a tool whose JSON writer was not
+deterministic.
+
+**The old tree's answers are still not an oracle.** `manifest.json` is the
+deleted implementation's output and nothing in the suite reads it.
+`expectations.json` re-derives every case from the geometry and the rule's
+frozen doc comment, then records the comparison against the manifest in a
+`corroboration` field rather than folding it into the value. Where the two
+disagree the derived value stands and a `dispute` field names which side is
+wrong. 114 of the 160 agree with the manifest and therefore rest on two
+independent routes to the same number; 27 disagree and say why.
+`tests/fixtures/README.md` is the full account.
+
+### What the corpus closed
+
+| | old suite | now |
+|---|---|---|
+| DRC cases asserting only absence | 45 of 94 | 0 — every case carries `expect_outcome` and `examined_min` |
+| zero-violation cases asserting `examined > 0` | — | 46 of 71 |
+| DRC positive cases checking coordinate *and* measurement | 30 of 94 | all 40 |
+| ERC cases checking a measured value | 0 | all 6 positive cases, plus the layer the finding is reported on |
+| PEX cases checking a value | 0 | 15 closed-form values, 8 deliberate mismatches, 1 per-net pair; the other 3 through the coupling law |
+| LVS cases checking anything but a verdict | 0 | 16 device-and-net counts |
+
+The 25 zero-violation cases whose `examined_min` is 0 are not a residue of the
+old weakness. Each has a stated reason and the reason is checkable: 11 expect
+`Outcome::Refused` (the geometry is unrepresentable, so no rule row exists to
+examine anything), 4 expect `Skipped(NoDesignIntent)`, and 10 run over a
+genuinely empty jurisdiction — a spacing rule on a cell with one shape has
+nothing to pair. Asserting `examined > 0` there would be asserting a falsehood.
+
+Five cases are marked `underivable` and say so in the file: two intent-gated ERC
+rules that need per-net voltages, and three lateral-coupling cases for which
+`StackJson` carries no coefficient. They assert only what does follow — the skip
+status, and the 1/S law *between* the coupling cases, which is exact even when
+no absolute value is.
+
+`strength` grades every case, and a `vacuous` or `blocked` grade is a claim the
+corpus makes about itself rather than a test that quietly passes.
+
+**LVS `expect_match` is still not asserted, and the corpus says why.** No
+reference netlist ships with the fixtures — the sixteen live only inside
+`manifest.json`, which nothing here reads. The device and net counts are
+asserted instead, and they fail on the same three defects a graph mismatch would
+report, one stage earlier and with a readable message.
+
+### Where the corpus is red
+
+Red by construction is over; red by defect is not. 122 of the 160 pass:
+
+| domain | passing | what the rest say |
+|---|---|---|
+| drc | 91 / 94 | `bbox_only_enclosure` (1), `notch_no_outer_merge` (2) — both `dispute: code_wrong`, both fail open |
+| erc | 23 / 23 | — |
+| lvs | 0 / 16 | one gap, three causes: no cell straps `li` to poly/diff, `nwell` is not a conductor so no pmos is recognised, and both diffusion terminals bind to one net |
+| pex | 8 / 27 | `extract_net_into` drops the first node's resistance, so a one-polygon net extracts 0 Ω; `extract_into` emits no `CouplingCap` at all |
+
+These are the Implementation-Phase's work list, not expectations to be relaxed.
+A failing case whose `dispute` reads `code_wrong` is the corpus disagreeing with
+the code and being right.
+
 ---
 
 ## The oracle
@@ -161,9 +235,14 @@ before.
 
 As the Testing-Phase closed: **678 tests**, none `#[ignore]`d, across fourteen
 crates. `cargo test --workspace --no-run` compiles and
-`cargo clippy --workspace --all-targets` is clean. Every one of the 678 panics
-when run, because every body outside `gpurify-testgen` is still `todo!()`. That
-is the phase's expected state.
+`cargo clippy --workspace --all-targets` is clean. Every one of the 678 panicked
+when run, because every body outside `gpurify-testgen` was still `todo!()`. That
+was the phase's expected state; the Implementation-Phase is what turns it green.
+
+The table below counts those 678 and is the Testing-Phase record. It does not
+count the workspace-root targets, which belong to no crate: `tests/test_all.rs`
+carries 11 end-to-end tests plus 5 that drive the 160-case fixture corpus,
+`tests/bench_all.rs` 5, and `tests/pdk_decks.rs` 6.
 
 Each test opens with a comment naming its oracle. The counts below are counts of
 those annotations, not of tests: a few tests name two oracles and a few name

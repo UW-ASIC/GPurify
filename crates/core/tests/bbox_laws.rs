@@ -338,3 +338,45 @@ fn of_polys_into_gives_one_row_per_range_independent_of_its_neighbours() {
     Bbox::of_polys_into(&xs, &ys, &starts, &lens, &mut again);
     assert_eq!(again, out);
 }
+
+/// Oracle: construct-from-answer, on the sentinel rather than on a shape. An
+/// empty box contains no points, so it covers no area, and the only right
+/// answer is zero on every empty box there is.
+///
+/// Asserted here because the guard inside [`Bbox::area`] is one `max` per axis
+/// and the only other thing holding it is a `debug_assert` — absent from
+/// exactly the build where the two unclamped answers do damage. Both are worse
+/// than a wrong number. `EMPTY` inverts *both* spans, and two negatives
+/// multiply back to `+2^82`, bit-identical to a box spanning the whole
+/// coordinate domain: the sentinel comes back wearing the largest real area
+/// there is, and a `min_area` rule passes it. A box empty on one axis only
+/// inverts one span and comes out **negative**, subtracting real area from any
+/// density that sums these.
+#[test]
+fn every_empty_box_covers_no_area_in_both_profiles() {
+    assert_eq!(
+        Bbox::EMPTY.area(),
+        DbuArea::new(0),
+        "the sentinel reported the area of the whole coordinate domain"
+    );
+
+    // Empty on one axis only, in both orders, and at the domain edges — the
+    // cases that come out negative rather than enormous.
+    let x_only = bbox(10, 0, -10, 20);
+    let y_only = bbox(0, 10, 20, -10);
+    let edge = Bbox::EMPTY.include(dbu(MAX_ABS_DBU), dbu(MAX_ABS_DBU));
+    for empty in [x_only, y_only] {
+        assert!(empty.is_empty(), "{empty:?} is the case under test");
+        assert_eq!(
+            empty.area(),
+            DbuArea::new(0),
+            "{empty:?} reported a negative area"
+        );
+    }
+
+    // One point folded into the sentinel is a point, not an empty box — the
+    // fold has to leave the sentinel behind, or every `of_points` result of a
+    // single vertex inherits it.
+    assert!(!edge.is_empty());
+    assert_eq!(edge.area(), DbuArea::new(0));
+}
