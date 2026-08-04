@@ -5,3 +5,13 @@ target/
 # cargo-mutants scratch output
 mutants.out/
 mutants.out.old/
+
+# The 160 per-case fixtures are split out of
+# tests/fixtures/_source/conformance.gds by tests/common/gen_fixtures.rs the
+# first time a test asks for a fixture path. Directory-scoped and anchored, not
+# `*.gds`: the source library and the two hand-authored oracles beside it
+# (manifest.json, expectations.json) stay tracked, and nothing regenerates them.
+/tests/fixtures/drc/
+/tests/fixtures/erc/
+/tests/fixtures/lvs/
+/tests/fixtures/pex/

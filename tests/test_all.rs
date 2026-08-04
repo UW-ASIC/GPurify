@@ -35,7 +35,6 @@ use gpurify::ingest::DeckError;
 use gpurify::report::{Measurement, Outcome, Severity};
 
 mod common;
-mod corpus;
 
 /// Oracle: construct-from-answer. One min-width violation, placed at a
 /// coordinate this test chose, carried through every stage.
@@ -325,12 +324,12 @@ fn a_reported_length_prints_in_nanometres_against_the_runs_grid() {
 /// `RuleRun::outcome` and `RuleRun::examined` are what tell them apart.
 #[test]
 fn every_drc_case_in_the_corpus_agrees_with_its_geometry() {
-    let corpus = corpus::load_corpus();
+    let corpus = common::load_corpus();
     let mut failed = Vec::new();
     for case in &corpus.drc.cases {
-        failed.extend(corpus::check_geometry_case(case));
+        failed.extend(common::check_geometry_case(case));
     }
-    corpus::report("DRC", corpus.drc.cases.len(), &failed);
+    common::report_domain("DRC", corpus.drc.cases.len(), &failed);
 }
 
 /// Oracle: construct-from-answer, on connectivity rather than on shapes.
@@ -345,12 +344,12 @@ fn every_drc_case_in_the_corpus_agrees_with_its_geometry() {
 /// skip is how this suite refuses to accept one.
 #[test]
 fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
-    let corpus = corpus::load_corpus();
+    let corpus = common::load_corpus();
     let mut failed = Vec::new();
     for case in &corpus.erc.cases {
-        failed.extend(corpus::check_geometry_case(case));
+        failed.extend(common::check_geometry_case(case));
     }
-    corpus::report("ERC", corpus.erc.cases.len(), &failed);
+    common::report_domain("ERC", corpus.erc.cases.len(), &failed);
 }
 
 /// Oracle: construct-from-answer. Each LVS cell draws a stated number of
@@ -369,12 +368,12 @@ fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
 /// stage earlier and with a clearer message than a graph mismatch would give.
 #[test]
 fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
-    let corpus = corpus::load_corpus();
+    let corpus = common::load_corpus();
     let mut failed = Vec::new();
     for case in &corpus.lvs.cases {
-        failed.extend(corpus::check_lvs_case(case));
+        failed.extend(common::check_lvs_case(case));
     }
-    corpus::report("LVS", corpus.lvs.cases.len(), &failed);
+    common::report_domain("LVS", corpus.lvs.cases.len(), &failed);
 }
 
 /// Oracle: closed form. Sheet resistance of a known rectangle, parallel-plate
@@ -390,12 +389,12 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
 /// corpus.
 #[test]
 fn every_pex_case_in_the_corpus_agrees_with_its_closed_form() {
-    let corpus = corpus::load_corpus();
+    let corpus = common::load_corpus();
     let mut failed = Vec::new();
     for case in &corpus.pex.cases {
-        failed.extend(corpus::check_pex_case(case));
+        failed.extend(common::check_pex_case(case));
     }
-    corpus::report("PEX", corpus.pex.cases.len(), &failed);
+    common::report_domain("PEX", corpus.pex.cases.len(), &failed);
 }
 
 /// Oracle: law. Lateral coupling goes as 1/S and does not depend on the axis.
@@ -410,7 +409,7 @@ fn every_pex_case_in_the_corpus_agrees_with_its_closed_form() {
 /// This is what keeps those three from being three cases that assert nothing.
 #[test]
 fn lateral_coupling_halves_when_the_gap_doubles_and_ignores_the_axis() {
-    let failed = corpus::check_coupling_laws();
+    let failed = common::check_coupling_laws();
     assert!(
         failed.is_empty(),
         "the coupling cases in the corpus violate a law no extraction may \

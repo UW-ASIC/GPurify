@@ -19,8 +19,10 @@ gpurify-units = { workspace = true }
 
 [dev-dependencies]
 gpurify-testgen = { workspace = true }
-# `tests/corpus/` reads `tests/fixtures/expectations.json`. Both crates are
-# already in the workspace graph, so this adds no new dependency.
+# `tests/common/` reads `tests/fixtures/expectations.json`, and its
+# `gen_fixtures` reads `manifest.json` to split the per-case GDS out of
+# `_source/`. Both crates are already in the workspace graph, so this adds no
+# new dependency.
 serde = { workspace = true }
 serde_json = { workspace = true }
 

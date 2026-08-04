@@ -29,16 +29,20 @@
 //! `--release` matters: a debug build measures the bounds checks, not the
 //! algorithm. `--nocapture` matters because the numbers go to stdout.
 //!
-//! # Red until the Implementation-Phase
+//! # Two tables, not one
 //!
-//! Every body outside `gpurify-testgen` is `todo!()`, so these panic on their
-//! first call like every other test in the workspace. The corpus generation
-//! above the panic is real, which means this file is also the first thing that
-//! will produce a number once Phase 4 starts.
+//! The sweep below prints per *stage* — load, extract, index — against polygon
+//! count. [`every_rule_in_the_deck_is_timed_on_its_own`] prints per *rule*,
+//! against the population that rule examined. They answer different questions
+//! ("is a stage quadratic" versus "which rule is the slow one") and have no
+//! column in common but the duration, so they are two printers rather than one
+//! with a union of columns that serves neither.
 
 use gpurify::core::{GeometryStore, LayerId};
 use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, Loaded};
+use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions};
 use gpurify::ingest::layout::UnknownLayers;
+use gpurify::report::RuleRun;
 use gpurify::topology::NetTable;
 use gpurify::units::Grid;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
@@ -431,6 +435,262 @@ fn real_layout_keeps_the_store_invariants_and_records_its_cost() {
         timing.polygons = polygons;
     }
     report(&timings);
+}
+
+// ---------------------------------------------------------------------------
+// Per rule.
+// ---------------------------------------------------------------------------
+
+/// How many times each rule is run before the total is divided.
+///
+/// The cheap rules on this layout finish in single-digit microseconds, which is
+/// inside the noise of one `Instant::now()` pair. Fifty runs of the same rule
+/// over the same extracted store puts the total safely above the clock's
+/// resolution without making the suite slow — the whole table is 40 × 50 runs
+/// over a 30 KB layout.
+const RULE_ITERS: u32 = 50;
+
+/// One rule's cost, and the population it was paid over.
+struct RuleTiming {
+    /// The deck row id, which is also what a `RuleRun` reports against and what
+    /// a violation names. One key, so a slow row here is grep-able in a report.
+    rule: String,
+    /// `Ran`, `Refused` or `Skipped(..)`, printed rather than assumed. A rule
+    /// that skipped is not a fast rule, and a table that did not say so would
+    /// read as though it were.
+    outcome: String,
+    examined: u64,
+    /// One whole `run_checks` call with this rule as the deck's only row.
+    call: Duration,
+    /// What the same call costs on a deck with no rules at all, under the same
+    /// [`Checks`] this row ran under. Held per row because a DRC row and an ERC
+    /// row do not pay the same shared cost.
+    baseline: Duration,
+}
+
+impl RuleTiming {
+    /// The call, less the cost a deck with no rules at all pays.
+    ///
+    /// **This subtraction is what makes the table readable, and it is why the
+    /// baseline is measured rather than assumed.** `run_checks` does work before
+    /// any rule is dispatched — both rule sets are built from the deck, and ERC
+    /// extracts the power nets — and that cost is paid once per call whatever
+    /// the deck holds. Reporting it against each rule puts a floor under all
+    /// forty rows and buries the one that actually costs something.
+    ///
+    /// Saturating, because a rule cheaper than the run-to-run variation in the
+    /// baseline would otherwise report a negative duration. Such a row prints
+    /// zero, which is the honest reading: below the noise of the shared cost.
+    fn rule_only(&self) -> Duration {
+        self.call.saturating_sub(self.baseline)
+    }
+
+    /// Nanoseconds per examined element, or `None` when the rule examined
+    /// nothing and the ratio would be a division by zero dressed as a speed.
+    fn per_examined_ns(&self) -> Option<f64> {
+        (self.examined > 0).then(|| self.rule_only().as_secs_f64() * 1e9 / self.examined as f64)
+    }
+}
+
+/// Print the per-rule record, slowest first.
+///
+/// Descending by the rule-only column, because the question this table answers
+/// is "which rule is the slow one" and the answer should be line one.
+fn report_rules(timings: &mut [RuleTiming], floors: [(&str, Duration, Duration); 2]) {
+    timings.sort_by(|left, right| right.rule_only().cmp(&left.rule_only()));
+
+    println!("\n  rule                             outcome                   examined          rule   ns/examined      whole call");
+    println!("  --------------------------------------------------------------------------------------------------------------");
+    for timing in timings.iter() {
+        let ratio = timing
+            .per_examined_ns()
+            .map_or_else(|| "-".to_owned(), |value| format!("{value:.1}"));
+        println!(
+            "  {:<32} {:<24} {:>8} {:>13?} {:>13} {:>15?}",
+            timing.rule,
+            timing.outcome,
+            timing.examined,
+            timing.rule_only(),
+            ratio,
+            timing.call
+        );
+    }
+    println!(
+        "\n  {RULE_ITERS} runs per rule over tests/fixtures/_source/conformance.gds, \n  \
+         each one a whole `run_checks` on a deck holding that rule alone. The \n  \
+         `rule` column is `whole call` less the no-rules baseline for that row's \n  \
+         domain:"
+    );
+    for (domain, floor, spread) in floors {
+        println!("    {domain:<4} {floor:?}, which itself moved {spread:?} across three measurements");
+    }
+    println!(
+        "  A `rule` under its domain's spread is the shared cost wobbling, not a \n  \
+         rule; one worth finding is a multiple of it. Recorded, not gated — \n  \
+         nothing here fails on a duration.\n"
+    );
+}
+
+/// Oracle: law, per rule — plus the timing record.
+///
+/// Every deck row runs alone, so a row's cost is its own and not the tail of the
+/// one before it. Isolation is the whole point: a 40-rule deck timed as one
+/// number says a run took 8 ms and nothing about which of the 40 spent it.
+///
+/// The law underneath is that the table is not measuring an empty deck. A rule
+/// that never reached any geometry is fast for a reason that is not speed, and
+/// 40 such rows would print a beautiful table of nothing — the same fail-open
+/// shape `examined > 0` closes on the corpus side.
+#[test]
+fn every_rule_in_the_deck_is_timed_on_its_own() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let deck: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures.join("params.json")).expect("params.json is tracked"),
+    )
+    .expect("params.json parses");
+    let rules = deck["rules"]
+        .as_object()
+        .expect("params.json declares a rules object")
+        .clone();
+
+    let dir = std::env::temp_dir().join(format!("gpurify-bench-rules-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory can be created");
+
+    // One `run_checks` averaged over `RULE_ITERS`, on the whole deck with
+    // `rules` replaced by `rows`. The layer table, the connectivity and the
+    // process stack all stay: a rule stripped of the layers it names cannot run
+    // at all, and neither can ERC without a sheet resistance.
+    let timed_deck = |tag: &str, rows: serde_json::Value, checks: Checks| -> (Duration, Option<RuleRun>) {
+        let mut one = deck.clone();
+        one["rules"] = rows;
+        let deck_path = dir.join(format!("{tag}.json"));
+        std::fs::write(&deck_path, one.to_string()).expect("the scratch directory is writable");
+
+        let inputs = Inputs {
+            layout: fixtures.join("_source/conformance.gds"),
+            deck: deck_path,
+            grid: Some(
+                Grid::new(FIXTURE_DBU_PER_UM).expect("a thousand dbu per micrometre is a grid"),
+            ),
+            reference: None,
+            intent: None,
+            unknown_layers: UnknownLayers::Drop,
+        };
+
+        // Loaded and extracted once, outside the clock. Both are shared by every
+        // rule in a real run, so charging them to each row would time the
+        // pipeline forty times and call it rule cost.
+        let mut loaded = Loaded::default();
+        load_into(&inputs, &mut loaded).expect("the fixture corpus loads");
+        let mut extracted = Extracted::default();
+        extract_into(&loaded, &mut extracted).expect("the fixture corpus extracts");
+
+        let options = RunOptions {
+            checks,
+            lvs: gpurify::lvs::CompareOptions::default(),
+            quasistatic_nets: Vec::new(),
+            threads: Some(1),
+        };
+
+        let mut outputs = Outputs::default();
+        let start = Instant::now();
+        for _ in 0..RULE_ITERS {
+            outputs = Outputs::default();
+            run_checks(&loaded, &extracted, &options, &mut outputs)
+                .unwrap_or_else(|why| panic!("{tag}: {why}"));
+        }
+        let elapsed = start.elapsed();
+        (elapsed / RULE_ITERS, outputs.runs.first().copied())
+    };
+
+    // ERC is selected only for rules ERC owns, and that is not tidiness — it is
+    // what makes 24 of the 40 rows readable. `run_erc` extracts the power nets
+    // before it dispatches anything, costing about 5 ms on this layout whatever
+    // the deck holds, which is a hundred times what a DRC rule costs and swamps
+    // it. A DRC row timed with ERC off has a floor a hundred microseconds high
+    // instead. Each row is therefore compared against the baseline of its own
+    // domain, never the other's.
+    let checks_for = |kind: &str| Checks {
+        drc: true,
+        erc: gpurify::erc::ruleset::KINDS.contains(&kind),
+        lvs: false,
+        pex: false,
+    };
+
+    // The shared cost of a call, measured on a deck that declares no rules at
+    // all. Everything above it in the table is rule work; everything below it is
+    // the pipeline getting to the dispatcher.
+    //
+    // Measured four times: the first is thrown away and the other three are
+    // kept, and every part of that is load-bearing.
+    //
+    // The first is discarded because the first `run_checks` in the process is
+    // cold — measured at 7.9 ms against 5.5 warm, a 45% overshoot that is larger
+    // than any rule in the table except one. Keeping it would inflate the spread
+    // below to 2.4 ms and declare the entire table unreadable.
+    //
+    // The baseline is the **minimum** of the three, not the mean, because it is
+    // a floor being subtracted: the smallest floor ever observed is the one that
+    // cannot over-subtract, and over-subtracting reports a real cost as zero.
+    let empty = || serde_json::Value::Object(serde_json::Map::new());
+    let floor = |checks: Checks| -> (Duration, Duration) {
+        let (_cold, no_rules) = timed_deck("baseline", empty(), checks);
+        assert!(
+            no_rules.is_none(),
+            "a deck with no rules recorded a RuleRun, so the baseline is timing \
+             a rule and every row below it is understated by that rule's cost"
+        );
+        let floors = [
+            timed_deck("baseline", empty(), checks).0,
+            timed_deck("baseline", empty(), checks).0,
+            timed_deck("baseline", empty(), checks).0,
+        ];
+        let least = floors.into_iter().min().expect("three measurements have a minimum");
+        // How far the floor moved while nothing about the deck changed. Carried
+        // out to the printer, because it is the resolution of every other row:
+        // a rule whose subtracted cost is under it is the shared cost wobbling.
+        let spread = floors.into_iter().max().expect("three measurements have a maximum") - least;
+        (least, spread)
+    };
+    let (drc_floor, drc_spread) = floor(checks_for("min_width"));
+    let (erc_floor, erc_spread) = floor(checks_for(gpurify::erc::ruleset::KINDS[0]));
+
+    let mut timings = Vec::with_capacity(rules.len());
+    for (id, spec) in &rules {
+        let kind = spec["kind"].as_str().expect("every deck row states a kind");
+        let checks = checks_for(kind);
+        let rows = serde_json::Value::Object([(id.clone(), spec.clone())].into_iter().collect());
+        let (call, record) = timed_deck(id, rows, checks);
+        timings.push(RuleTiming {
+            rule: id.clone(),
+            outcome: record.map_or_else(|| "NoRecord".to_owned(), |run| format!("{:?}", run.outcome)),
+            examined: record.map_or(0, |run| run.examined),
+            call,
+            baseline: if checks.erc { erc_floor } else { drc_floor },
+        });
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        timings.len(),
+        rules.len(),
+        "params.json declares {} rules and {} were timed",
+        rules.len(),
+        timings.len()
+    );
+    assert!(
+        timings.iter().map(|timing| timing.examined).sum::<u64>() > 0,
+        "all {} rules examined nothing; the table below would be forty rows of a \
+         deck that never reached the layout, which is fast for a reason that is \
+         not speed",
+        timings.len()
+    );
+
+    report_rules(
+        &mut timings,
+        [("drc", drc_floor, drc_spread), ("erc", erc_floor, erc_spread)],
+    );
 }
 
 /// A `GeometryStore` is not `Clone`, so nothing here can duplicate one.
