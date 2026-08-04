@@ -71,7 +71,7 @@
 //!
 //! # `tests/fixtures/klayout/drc_oracle.rb`
 //!
-//! An external-oracle script for KLayout, which is not installed here. Nothing
+//! An external-oracle script for `KLayout`, which is not installed here. Nothing
 //! in this file runs it or depends on it.
 
 mod gen_fixtures;
@@ -1158,16 +1158,17 @@ fn measurement_matches(got: Measurement, want: &ExpectedMeasurement) -> bool {
 /// A reader of CI output should not have to open the corpus to find out that a
 /// failure is a filed defect with a named fix site rather than a surprise.
 fn context_of(case: &GeometryCase) -> String {
+    use std::fmt::Write as _;
     let mut context = format!(" [strength: {}", case.strength);
     if let Some(dispute) = &case.dispute {
-        context.push_str(&format!(", dispute: {dispute}"));
+        let _ = write!(context, ", dispute: {dispute}");
     }
     if let Some(defect) = &case.known_defect {
-        context.push_str(&format!(", known defect: {defect}"));
+        let _ = write!(context, ", known defect: {defect}");
     }
     context.push(']');
     if let Some(note) = &case.note {
-        context.push_str(&format!("\n    derivation: {note}"));
+        let _ = write!(context, "\n    derivation: {note}");
     }
     context
 }
@@ -1455,8 +1456,7 @@ pub fn check_coupling_laws() -> Vec<String> {
     let mut failed = Vec::new();
     let coupling = |id: &str| -> f64 {
         run_case("pex", id, Checks { drc: false, erc: false, lvs: false, pex: true })
-            .map(|run| totals_of(&run).coupling_cap_af)
-            .unwrap_or(f64::NAN)
+            .map_or(f64::NAN, |run| totals_of(&run).coupling_cap_af)
     };
 
     let at_100 = coupling("PEX_SPACING_100");

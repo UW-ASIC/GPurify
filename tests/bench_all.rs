@@ -257,7 +257,7 @@ fn candidate_pair_generation_stays_subquadratic_and_records_its_cost() {
         });
 
         let rows = corpus.store.polys_on_layer(layer);
-        let count = (rows.end - rows.start) as u64;
+        let count = u64::from(rows.end - rows.start);
         let all_pairs = count.saturating_mul(count.saturating_sub(1)) / 2;
         assert!(
             (pairs.len() as u64) <= all_pairs,
@@ -347,13 +347,13 @@ fn real_layout_keeps_the_store_invariants_and_records_its_cost() {
 
     let mut loaded = Loaded::default();
     let ((), timing) = timed("ingest::load[real]", 0, || {
-        load_into(&inputs, &mut loaded).expect("the fixture corpus loads")
+        load_into(&inputs, &mut loaded).expect("the fixture corpus loads");
     });
     timings.push(timing);
 
     let mut extracted = Extracted::default();
     let ((), timing) = timed("engine::extract[real]", 0, || {
-        extract_into(&loaded, &mut extracted).expect("the fixture corpus extracts")
+        extract_into(&loaded, &mut extracted).expect("the fixture corpus extracts");
     });
     timings.push(timing);
 
@@ -488,7 +488,8 @@ impl RuleTiming {
     /// Nanoseconds per examined element, or `None` when the rule examined
     /// nothing and the ratio would be a division by zero dressed as a speed.
     fn per_examined_ns(&self) -> Option<f64> {
-        (self.examined > 0).then(|| self.rule_only().as_secs_f64() * 1e9 / self.examined as f64)
+        (self.examined > 0)
+            .then(|| self.rule_only().as_secs_f64() * 1e9 / f64::from(u32::try_from(self.examined).unwrap_or(u32::MAX)))
     }
 }
 
@@ -497,7 +498,8 @@ impl RuleTiming {
 /// Descending by the rule-only column, because the question this table answers
 /// is "which rule is the slow one" and the answer should be line one.
 fn report_rules(timings: &mut [RuleTiming], floors: [(&str, Duration, Duration); 2]) {
-    timings.sort_by(|left, right| right.rule_only().cmp(&left.rule_only()));
+    // Descending, so `Reverse` rather than a flipped `cmp`.
+    timings.sort_by_key(|timing| core::cmp::Reverse(timing.rule_only()));
 
     println!("\n  rule                             outcome                   examined          rule   ns/examined      whole call");
     println!("  --------------------------------------------------------------------------------------------------------------");
@@ -649,7 +651,11 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
         // How far the floor moved while nothing about the deck changed. Carried
         // out to the printer, because it is the resolution of every other row:
         // a rule whose subtracted cost is under it is the shared cost wobbling.
-        let spread = floors.into_iter().max().expect("three measurements have a maximum") - least;
+        let spread = floors
+            .into_iter()
+            .max()
+            .expect("three measurements have a maximum")
+            .saturating_sub(least);
         (least, spread)
     };
     let (drc_floor, drc_spread) = floor(checks_for("min_width"));
