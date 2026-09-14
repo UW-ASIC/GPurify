@@ -567,3 +567,105 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
         "a channel marker measures W x L"
     );
 }
+
+/// Oracle: construct-from-answer. A BJT's three terminals are named, and the
+/// names follow the recogniser's terminal order rather than the layout.
+///
+/// `role_at` gives `DeviceKind::Bjt` a table of `Base, Emitter, Collector`, so
+/// a recogniser that lists its terminal layers in that order gets those roles
+/// back. This is the whole of BJT support: recognition itself is kind-agnostic,
+/// and the kind is read only to name the terminals.
+#[test]
+fn a_bjt_recogniser_names_its_three_terminals_base_emitter_collector() {
+    const BJT_TERMINALS: [TerminalRole; 3] = [
+        TerminalRole::Base,
+        TerminalRole::Emitter,
+        TerminalRole::Collector,
+    ];
+
+    let spec = NetlistSpec {
+        nets: 3,
+        devices: vec![DeviceSpec {
+            kind: DeviceKind::Bjt,
+            model: "npn".to_owned(),
+            terminals: BJT_TERMINALS
+                .iter()
+                .enumerate()
+                .map(|(index, &role)| (role, u32::try_from(index).expect("three terminals")))
+                .collect(),
+        }],
+    };
+
+    let mut strings = StrTable::default();
+    let case = layout_from_netlist(&spec, Floorplan::default(), &mut strings);
+    let (nets, devices) = recognise(&case, &case.recognition);
+
+    assert_eq!(devices.len(), 1, "one marker polygon is one device");
+
+    let (terminal_nets, roles) = devices.terminals_of(DeviceId(0));
+    assert_eq!(
+        roles,
+        BJT_TERMINALS.as_slice(),
+        "a BJT's terminals are named, not numbered — this is what distinguishes \
+         it from the Pin fallback a kind with no role table receives"
+    );
+
+    let want: Vec<NetId> = (0..3)
+        .map(|index: usize| nets.net_of(case.expected_net_polys[index][0]))
+        .collect();
+    assert_eq!(
+        terminal_nets,
+        want.as_slice(),
+        "each named terminal landed on the net the spec wired it to"
+    );
+}
+
+/// Oracle: construct-from-answer. A resistor's two terminals are `Pin`s, and
+/// the variant is the claim — not the index.
+///
+/// `TerminalRole::Pin` is documented as either end of a symmetric two-terminal
+/// device, interchangeable by definition, so the numbering is deliberately not
+/// asserted: `Pin(0), Pin(1)` and `Pin(1), Pin(2)` are both legal answers and a
+/// test that picked one would be pinning an unpromise. `crates/lvs/tests/graph.rs`
+/// asserts the same shape on the reference side, which is what makes a layout
+/// resistor and a netlist resistor comparable.
+#[test]
+fn a_resistor_recogniser_gives_its_two_terminals_interchangeable_pins() {
+    let spec = NetlistSpec {
+        nets: 2,
+        devices: vec![DeviceSpec {
+            kind: DeviceKind::Resistor,
+            model: "res".to_owned(),
+            terminals: vec![(TerminalRole::Pin(0), 0), (TerminalRole::Pin(1), 1)],
+        }],
+    };
+
+    let mut strings = StrTable::default();
+    let case = layout_from_netlist(&spec, Floorplan::default(), &mut strings);
+    let (nets, devices) = recognise(&case, &case.recognition);
+
+    assert_eq!(devices.len(), 1, "one marker polygon is one device");
+
+    let (terminal_nets, roles) = devices.terminals_of(DeviceId(0));
+    assert_eq!(roles.len(), 2, "a resistor has two terminals");
+    for role in roles {
+        assert!(
+            matches!(role, TerminalRole::Pin(_)),
+            "the resistor was given role {role:?}, and a symmetric two-terminal \
+             device has pins"
+        );
+    }
+
+    let want: Vec<NetId> = (0..2)
+        .map(|index: usize| nets.net_of(case.expected_net_polys[index][0]))
+        .collect();
+    assert_eq!(
+        terminal_nets,
+        want.as_slice(),
+        "the two pins landed on the two nets the spec wired them to"
+    );
+    assert_ne!(
+        terminal_nets[0], terminal_nets[1],
+        "a resistor across one net is a short, not a device"
+    );
+}

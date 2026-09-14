@@ -173,7 +173,9 @@
     { "kind": "mos", "marker": "nsdm", "model": "sky130_fd_pr__nfet_01v8",
       "terminals": ["poly", "diff", "diff"] },
     { "kind": "mos", "marker": "psdm", "model": "sky130_fd_pr__pfet_01v8",
-      "terminals": ["poly", "diff", "diff", "nwell"] }
+      "terminals": ["poly", "diff", "diff", "nwell"] },
+    { "kind": "resistor", "marker": "rpm", "model": "sky130_fd_pr__res_high_po",
+      "terminals": ["poly", "poly"] }
   ],
 
   "pex": {

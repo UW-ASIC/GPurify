@@ -46,10 +46,18 @@ directory is `sky130.nsdm_min_area` at 514 nm: 1027 nm² of area (0.39 %) that
 the rule will pass and the foundry will not. Documented at `ruleset.rs:166-176`
 as a known encoding cost; recorded here as what it is, a fail-open direction.
 
-**`DeviceKind::{Resistor, Capacitor, Diode}` recognise but do not connect.**
-`crates/topology/src/device.rs:477` returns an empty terminal-role table for all
-three, so the six resistor/capacitor/diode recognisers below produce devices
-with no typed terminals. `gf180mcu` and `ihp_sg13g2` are the decks that notice.
+**`DeviceKind::Diode` recognises with the wrong terminal names.**
+`role_at` in `crates/topology/src/device.rs` holds a role table for `Mos` and
+`Bjt` only; `Resistor`, `Capacitor` and `Diode` fall through to
+`TerminalRole::Pin(position)`. For the first two that is the right answer rather
+than a gap — `Pin` is documented as either end of a *symmetric* two-terminal
+device, interchangeable by definition, and both `crates/topology/tests/devices.rs`
+and `crates/lvs/tests/graph.rs` assert the variant while deliberately leaving the
+index open, so a layout resistor and a netlist resistor compare.
+
+A diode is not symmetric, so `Pin` is genuinely wrong there: fixing it needs
+`Anode`/`Cathode` on `TerminalRole` and a third row in the table. `gf180mcu` and
+`ihp_sg13g2` are the decks that carry a diode recogniser.
 
 ---
 
