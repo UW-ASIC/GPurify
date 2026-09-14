@@ -20,7 +20,7 @@
 //! pair scan is exact for any rectilinear polygon, which is the whole input
 //! domain, so there is no approximate path here at all.
 
-use super::{COLUMNS_DIVERGED, mid, ring_segs};
+use super::{COLUMNS_DIVERGED, mid, ring_segs, row_columns};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::ops::{winding_of, Point, Winding};
 use gpurify_core::boolean::union_into;
@@ -79,48 +79,11 @@ pub struct NotchTable {
     pub limit: Vec<Dbu>,
 }
 
-impl MinWidthTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl MaxWidthTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl MinEdgeLengthTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl NotchTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+row_columns! {
+    MinWidthTable { rule, layer, limit },
+    MaxWidthTable { rule, layer, limit },
+    MinEdgeLengthTable { rule, layer, limit },
+    NotchTable { rule, layer, limit },
 }
 
 /// One boundary edge, reduced to the four facts a facing-pair test reads.

@@ -16,7 +16,7 @@
 //! none. The union is exact (`core::boolean`), not a bounding-box
 //! approximation.
 
-use super::{COLUMNS_DIVERGED, centre};
+use super::{COLUMNS_DIVERGED, centre, row_columns};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::boolean::{union_into, BooleanError};
 use gpurify_core::rects::{clipped_area, covered_area, decompose_into};
@@ -100,55 +100,11 @@ pub struct DensityTable {
     pub sense: Vec<LimitSense>,
 }
 
-impl MinAreaTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl MinEnclosedAreaTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl CheesingTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.max_unslotted.len(),
-            "{COLUMNS_DIVERGED}"
-        );
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl DensityTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.window.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.step.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.sense.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+row_columns! {
+    MinAreaTable { rule, layer, limit },
+    MinEnclosedAreaTable { rule, layer, limit },
+    CheesingTable { rule, layer, max_unslotted },
+    DensityTable { rule, layer, window, step, limit, sense },
 }
 
 // ---------------------------------------------------------------------------

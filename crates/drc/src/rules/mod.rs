@@ -106,6 +106,28 @@ use gpurify_units::{Dbu, DbuArea};
 /// table it was.
 pub(crate) const COLUMNS_DIVERGED: &str = "a rule table's columns hold different row counts";
 
+/// Gives a rule table the `len`/`is_empty` pair the dispatcher branches on.
+///
+/// `len` is the first column's length; every other column listed must agree,
+/// checked in debug builds against [`COLUMNS_DIVERGED`]. List only columns that
+/// hold one entry per rule row — [`grid::AngleTable`]'s `allowed` is a CSR
+/// payload whose length is a sum over rows, not a row count, so asserting it
+/// here would fire on a correctly built table.
+macro_rules! row_columns {
+    ($($table:ident { $first:ident $(, $rest:ident)* }),+ $(,)?) => {$(
+        impl $table {
+            pub fn len(&self) -> usize {
+                $(debug_assert_eq!(self.$first.len(), self.$rest.len(), "{COLUMNS_DIVERGED}");)*
+                self.$first.len()
+            }
+            pub fn is_empty(&self) -> bool {
+                self.len() == 0
+            }
+        }
+    )+};
+}
+pub(crate) use row_columns;
+
 /// Midpoint of two coordinates.
 ///
 /// `div_euclid` rather than `/`: it floors on both sides of the origin, so the

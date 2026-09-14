@@ -28,7 +28,7 @@
 //!
 //! [`candidate_pairs_into`]: gpurify_core::index::candidate_pairs_into
 
-use super::{COLUMNS_DIVERGED, gap_midpoint, poly_dist2, ring_segs, seg_bbox};
+use super::{COLUMNS_DIVERGED, gap_midpoint, poly_dist2, ring_segs, row_columns, seg_bbox};
 use crate::rules::width::narrowest_width;
 use crate::{record_run, Design, Scratch};
 use gpurify_core::connectivity::{components_into, ComponentLabel};
@@ -127,88 +127,13 @@ pub struct WideDependentSpacingTable {
     pub limit: Vec<Dbu>,
 }
 
-/// What a divergent rule table means, said once for all six.
-///
-/// A table whose columns hold different row counts answers `len` correctly and
-/// is wrong everywhere else — the row loop would read a limit belonging to
-/// another rule, or index past a column. Restated as a `debug_assert` on every
-/// `len` because `len` is what every transform's row loop is driven by.
-impl MinSpacingTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl MinSpacingDiffTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.a.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.b.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl EolSpacingTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.eol_width.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl PrlSpacingTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.prl_threshold.len(),
-            "{COLUMNS_DIVERGED}"
-        );
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl CornerToCornerTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl WideDependentSpacingTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.width_threshold.len(),
-            "{COLUMNS_DIVERGED}"
-        );
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+row_columns! {
+    MinSpacingTable { rule, layer, limit },
+    MinSpacingDiffTable { rule, a, b, limit },
+    EolSpacingTable { rule, layer, eol_width, limit },
+    PrlSpacingTable { rule, layer, prl_threshold, limit },
+    CornerToCornerTable { rule, layer, limit },
+    WideDependentSpacingTable { rule, layer, width_threshold, limit },
 }
 
 // ---------------------------------------------------------------------------

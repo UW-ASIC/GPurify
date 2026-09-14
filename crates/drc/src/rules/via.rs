@@ -13,7 +13,7 @@
 //! through vias at opposite ends of a chip; those are not redundant, because
 //! the failure being guarded against is one etch defect taking out one cut.
 
-use super::{COLUMNS_DIVERGED, centre, gap_midpoint, poly_dist2};
+use super::{COLUMNS_DIVERGED, centre, gap_midpoint, poly_dist2, row_columns};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::connectivity::components_into;
 use gpurify_core::index::{candidate_pairs_into, SpatialIndex};
@@ -61,32 +61,9 @@ pub struct ViaArraySpacingTable {
     pub limit: Vec<Dbu>,
 }
 
-impl RedundantViaTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.min_count.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.within.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl ViaArraySpacingTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.array_threshold.len(),
-            "{COLUMNS_DIVERGED}"
-        );
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "{COLUMNS_DIVERGED}");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+row_columns! {
+    RedundantViaTable { rule, layer, min_count, within },
+    ViaArraySpacingTable { rule, layer, array_threshold, limit },
 }
 
 /// Check every redundant-via rule.

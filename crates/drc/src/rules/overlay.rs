@@ -20,7 +20,7 @@
 //! every enclosure rule. Skipping it because no host was found is fail-open,
 //! and it is the case that matters most.
 
-use super::{centre, mid, ring_segs};
+use super::{COLUMNS_DIVERGED, centre, mid, ring_segs, row_columns};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_core::ops::{isqrt, Point};
@@ -112,72 +112,12 @@ pub struct MaxDistanceToTapTable {
     pub limit: Vec<Dbu>,
 }
 
-impl MinEnclosureTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.outer.len(), "one outer layer per row");
-        debug_assert_eq!(self.rule.len(), self.inner.len(), "one inner layer per row");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "one limit per row");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl AsymmetricEnclosureTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.outer.len(), "one outer layer per row");
-        debug_assert_eq!(self.rule.len(), self.inner.len(), "one inner layer per row");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.min_one_side.len(),
-            "one requirement per row"
-        );
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl MinExtensionTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "one layer per row");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.reference.len(),
-            "one reference layer per row"
-        );
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "one limit per row");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl OverlapTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.a.len(), "one first layer per row");
-        debug_assert_eq!(self.rule.len(), self.b.len(), "one second layer per row");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "one limit per row");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl MaxDistanceToTapTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.well.len(), "one well layer per row");
-        debug_assert_eq!(self.rule.len(), self.tap.len(), "one tap layer per row");
-        debug_assert_eq!(self.rule.len(), self.limit.len(), "one limit per row");
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+row_columns! {
+    MinEnclosureTable { rule, outer, inner, limit },
+    AsymmetricEnclosureTable { rule, outer, inner, min_one_side },
+    MinExtensionTable { rule, layer, reference, limit },
+    OverlapTable { rule, a, b, limit },
+    MaxDistanceToTapTable { rule, well, tap, limit },
 }
 
 /// How far an outer shape extends past an inner one, per side.

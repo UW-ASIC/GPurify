@@ -30,7 +30,7 @@
 //! so double patterning — most of what this rule actually runs on — always
 //! comes back `Complete` or `Infeasible` and never `Exhausted`.
 
-use super::{COLUMNS_DIVERGED, centre, poly_dist2};
+use super::{COLUMNS_DIVERGED, centre, poly_dist2, row_columns};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::connectivity::components_into;
 use gpurify_core::index::{candidate_pairs_into, SpatialIndex};
@@ -84,20 +84,8 @@ pub struct MultiPatterningTable {
     pub color_spacing: Vec<Dbu>,
 }
 
-impl MultiPatterningTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.rule.len(), self.layer.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), self.colors.len(), "{COLUMNS_DIVERGED}");
-        debug_assert_eq!(
-            self.rule.len(),
-            self.color_spacing.len(),
-            "{COLUMNS_DIVERGED}"
-        );
-        self.rule.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+row_columns! {
+    MultiPatterningTable { rule, layer, colors, color_spacing },
 }
 
 /// How a colouring attempt ended.
