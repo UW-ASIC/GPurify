@@ -1,30 +1,9 @@
 //! Field-solved extraction, for nets the closed forms cannot describe.
 //!
 //! A boundary-element formulation: conductor surfaces are meshed into panels,
-//! each panel carries an unknown charge density, and the potential each panel
-//! sees from all the others gives a dense linear system. Solving it for one
-//! conductor at unit potential and integrating the resulting charge gives one
-//! column of the Maxwell capacitance matrix.
-//!
-//! The system is dense and large, so it is solved iteratively — GMRES — and the
-//! matrix is never formed. The matvec is the entire cost, which is why the
-//! matvec is the seam.
-//!
-//! # The oracles
-//!
-//! Stronger here than anywhere else in the tree, because electrostatics has
-//! closed forms and conservation laws:
-//!
-//! - an isolated sphere of radius `r` has capacitance `4πε₀r`
-//! - a parallel-plate pair approaches `εA/d` as the plate spacing shrinks
-//! - the Maxwell capacitance matrix is **symmetric** — `C[i][j] == C[j][i]` —
-//!   by reciprocity, for any geometry whatsoever
-//! - it is diagonally dominant, and its off-diagonals are non-positive
-//! - the electrostatic energy `½ VᵀCV` is non-negative for every `V`
-//!
-//! The symmetry law is the most useful of these: it holds for arbitrary meshes
-//! and arbitrary conductors, so it catches errors on realistic geometry where
-//! no closed form exists.
+//! and one GMRES solve per conductor at unit potential gives one column of the
+//! Maxwell capacitance matrix. The system is dense and never formed, so the
+//! matvec is the entire cost and the seam.
 
 pub mod gpu;
 pub mod matvec;
@@ -42,9 +21,8 @@ const FEMTOFARADS_PER_FARAD: f64 = 1e15;
 
 /// The Maxwell capacitance matrix for a set of conductors.
 ///
-/// Stored as the full square rather than a triangle: symmetry is a *result* to
-/// be checked, not an assumption to be built in. Storing a triangle would make
-/// the symmetry test vacuous.
+/// The full square, not a triangle: symmetry is a *result* to be checked, and
+/// storing a triangle would make the check vacuous.
 #[derive(Debug, Default)]
 pub struct CapMatrix {
     /// Which net each row and column belongs to.
@@ -56,10 +34,8 @@ pub struct CapMatrix {
 impl CapMatrix {
     pub fn dim(&self) -> usize {
         let n = self.net.len();
-        // The side is the net column, not a square root of the value column:
-        // one net per row *and* column is what the type means. Asserting the
-        // two agree is what makes `get`'s `i * n + j` an addressing fact rather
-        // than an assumption.
+        // The side is the net column, not a square root of the value column;
+        // asserting they agree is what makes `get`'s `i * n + j` sound.
         debug_assert_eq!(
             self.value.len(),
             n * n,
@@ -78,33 +54,18 @@ impl CapMatrix {
 
     /// Largest relative asymmetry, `|C[i][j] − C[j][i]| / |C[i][j]|`.
     ///
-    /// **Decision** — pure, and the headline check on any solve. Exposed
-    /// because it is also worth *reporting*: an asymmetry above the solver's
-    /// tolerance means the answer has not converged, whatever the residual says.
+    /// Above the solver's tolerance means the answer has not converged, whatever
+    /// the residual says.
     pub fn asymmetry(&self) -> f64 {
         let n = self.dim();
-        // A nested scan is the shape of the question, not a shortcut waiting to
-        // be replaced: the mirror of a row-major entry is strided by `n`, and
-        // `n` is the selected-conductor count of one quasi-static run — tens at
-        // the outside.
         let mut worst = 0.0_f64;
         // Poison, carried beside the fold rather than in it. `f64::max` returns
-        // the other operand on a NaN, which is what makes the `0 / 0` two
-        // exactly-zero entries produce — no asymmetry — fold away. That same
-        // property would swallow a NaN or infinite *entry* and report a
-        // poisoned matrix as perfectly symmetric, which is a clean answer for a
-        // matrix nothing could have checked. `x * 0.0` is a signed zero for
-        // every finite `x` and NaN for a NaN or an infinity, so this separates
-        // the two cases branchlessly and fails closed: the sum below is NaN,
-        // and NaN is below no tolerance any caller compares against.
-        //
-        // `x * 0.0` and not the `x - x` this used to spell: the truth tables are
-        // identical — both are the finite/non-finite indicator, `inf - inf`
-        // being NaN just as `inf * 0.0` is — but `x - x` is `clippy::eq_op`,
-        // which is deny-by-default and stopped `gpurify-pex` compiling under
-        // clippy at all, taking `export`, `engine` and `cli` unlinted with it.
-        // The signed zeros are harmless: `-0.0 + 0.0` is `+0.0`, and the fold
-        // starts at `0.0`.
+        // the other operand on a NaN, which usefully folds away the `0 / 0` two
+        // exactly-zero entries produce — but that same property would report a
+        // NaN-poisoned matrix as perfectly symmetric. `x * 0.0` is a signed zero
+        // for every finite `x` and NaN otherwise, so this separates the two
+        // cases and fails closed: the sum is NaN, which is below no tolerance.
+        // `x * 0.0` rather than `x - x`, which is `clippy::eq_op`.
         let mut poison = 0.0_f64;
         for i in 0..n {
             for j in 0..n {
@@ -131,18 +92,13 @@ impl CapMatrix {
             n,
             "one potential per conductor of a {n} by {n} matrix"
         );
-        // `V ᵀ C V` one row at a time. Both folds are strict left folds in
-        // ascending index order — that is what keeps the sum bit-identical
-        // across runs, and it is why neither may be reassociated.
+        // Both folds are strict left folds in ascending index order, which is
+        // what keeps the sum bit-identical across runs.
         let mut total = 0.0_f64;
         for i in 0..n {
             let row = &self.value[i * n..(i + 1) * n];
             debug_assert_eq!(row.len(), potentials.len(), "SoA columns must agree");
             let mut flux = 0.0_f64;
-            // `zip` rather than an index: it carries the trip count of the
-            // shorter half, so there is no bounds check and no panic edge in
-            // the body. The length check above is what makes "shorter half" a
-            // non-question.
             for (c, v) in row.iter().zip(potentials) {
                 flux += c * v;
             }
@@ -152,11 +108,7 @@ impl CapMatrix {
     }
 }
 
-/// What a solve achieved, reported rather than assumed.
-///
-/// The old GPU path computed in `f32` and never checked, on a signoff tool.
-/// Every number here exists so that cannot recur: the achieved residual is
-/// measured in `f64` on the host and travels with the result.
+/// What a solve achieved, measured in `f64` on the host.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Accuracy {
     /// Relative residual actually reached, in `f64`.
@@ -164,9 +116,7 @@ pub struct Accuracy {
     /// Residual that was asked for.
     pub tolerance: f64,
     pub iterations: u32,
-    /// Which adapter did the matvec. Recorded so a run's numbers can be
-    /// attributed, and so a CI job with no device can assert the fallback was
-    /// taken rather than silently passing.
+    /// Which adapter actually did the matvec.
     pub backend: matvec::Backend,
     /// [`CapMatrix::asymmetry`] of the result.
     pub asymmetry: f64,
@@ -174,16 +124,8 @@ pub struct Accuracy {
 
 /// Extract selected nets by field solve.
 ///
-/// **Transform, A-to-B.** Caller owns both outputs. Nets are meshed in
-/// ascending [`NetId`] order and the system assembled in that order, so the
-/// matrix is a deterministic function of the geometry alone.
-///
-/// Returns the accuracy alongside the network. A caller that ignores it is
-/// asserting the answer is good without having looked, which is exactly what
-/// went wrong before.
-///
-/// `grid` is the run's grid, handed down to [`mesh::build_into`]: the solve
-/// works in SI and the geometry is in grid units.
+/// Nets are meshed in ascending [`NetId`] order and the system assembled in that
+/// order, so the matrix is a deterministic function of the geometry alone.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -199,27 +141,22 @@ pub fn extract_into(
 
     matrix.net.clear();
     matrix.value.clear();
-    // All five columns — see `ParasiticNetwork::clear`, which
-    // `analytical::extract_into` opens with for the same reason.
     out.clear();
 
-    // "Nets are meshed in ascending `NetId` order and the system assembled in
-    // that order" — so the order is established here, once, and everything
-    // below inherits it: the mesh's conductor bands, the matrix rows, and the
-    // node column, whose invariant is that its net ranges ascend. Duplicates
-    // are deliberately *not* dropped: two conductors over one net is a singular
-    // system, which the solver refuses by name, where a silent dedup would
-    // return a matrix one row smaller than the caller asked for.
+    // The ascending order everything below inherits: the mesh's conductor bands,
+    // the matrix rows, and the node column. Duplicates are deliberately *not*
+    // dropped — two conductors over one net is a singular system, which the
+    // solver refuses by name, where a silent dedup would return a matrix one row
+    // smaller than the caller asked for.
     let mut order = selected.to_vec();
     order.sort_unstable();
 
     let mut mesh = mesh::Mesh::default();
     let meshing = mesh_options(store, nets, &order, stack, grid);
     mesh::build_into(store, nets, &order, stack, meshing, grid, &mut mesh)
-        // The frozen return type is `solve::SolveError`, which has no variant
-        // for a mesh that could not be built — see the note on `mesh_options`.
+        // `solve::SolveError` has no variant for a mesh that could not be built.
         // Fail closed anyway: a refusal at iteration zero is wrong about *why*,
-        // and an empty clean matrix would be wrong about *whether*.
+        // where an empty clean matrix would be wrong about *whether*.
         .map_err(|_| solve::SolveError::Breakdown(0))?;
 
     let n = order.len();
@@ -231,17 +168,10 @@ pub fn extract_into(
     matrix.net.extend_from_slice(&order);
     matrix.value.resize(n * n, 0.0);
 
-    // The adapter is selected, never assumed: probe for a device, ask
-    // `matvec::select` whether this problem is above that device's own measured
-    // crossover, and upload only if it is. Three fail-closed steps, all landing
-    // on the host `f64` reference adapter — a probe that found a device it
-    // could not use, a panel count below the crossover, and an upload that
-    // refused. `Accuracy::backend` is read off the adapter that actually ran,
-    // so the attribution is honest whichever arm was taken.
-    //
-    // `Device::find`'s `Err` is discarded rather than mapped: the frozen return
-    // type is `solve::SolveError`, which has no variant for a device, and a
-    // solve that ran correctly on the host is not a failure to report.
+    // Three fail-closed steps, all landing on the host `f64` adapter: a probe
+    // that found no usable device, a panel count below the crossover, and an
+    // upload that refused. `Device::find`'s `Err` is discarded because a solve
+    // that ran correctly on the host is not a failure to report.
     let device = gpu::Device::find().ok().flatten();
     let accelerated = match matvec::select(panels, device.as_ref()) {
         matvec::Backend::GpuF32 => device
@@ -250,11 +180,9 @@ pub fn extract_into(
         matvec::Backend::Cpu => None,
     };
 
-    // The host adapter is built either way, and that is the whole of contract
-    // item 4: it is the *accurate* operator, the one `solve::refine` forms its
-    // residual with, and without it a device solve's residual would carry the
-    // device's own `f32` error and stall two decades above the tolerance. The
-    // build is a `sqrt` and a divide per panel, once — nothing next to a matvec.
+    // The host adapter is built either way: it is the *accurate* operator
+    // `solve::refine` forms its residual with, and without it a device solve's
+    // residual would carry the device's own `f32` error.
     let host = matvec::CpuMatVec::build(&mesh);
     let (residual, iterations, backend) = match accelerated {
         Some(operator) => columns_into(&host, &operator, &mesh, options, matrix)?,
@@ -263,29 +191,24 @@ pub fn extract_into(
 
     debug_assert_eq!(matrix.value.len(), n * n, "the matrix is square at {n}");
 
-    // One node per net. A field solve is over whole conductors, so it has no
-    // branch points to split at, and the net's lowest layer is the one a writer
-    // anchors it to — a property of the geometry, so it is deterministic.
+    // One node per net: a field solve is over whole conductors, so it has no
+    // branch points to split at. The net's lowest layer is the anchor, which is
+    // a property of the geometry and so deterministic.
     out.node_net.extend_from_slice(&order);
     for &net in &order {
         let polys = nets.polys_of(net);
         debug_assert!(!polys.is_empty(), "net {net:?} was meshed with no geometry");
         let mut low = LayerId(u16::MAX);
         for &poly in polys {
-            // A gather, not a branch: `min` is the branchless comparator and
-            // the layer lookup is a data-dependent address.
             low = low.min(store.poly_layer(poly));
         }
         out.node_layer.push(low);
     }
     debug_assert_eq!(out.node_layer.len(), n, "one node per selected net");
 
-    // The Maxwell matrix as a network. Row sum is the charge on a net when
-    // every net is at one volt, which is its capacitance to ground; the
-    // negated off-diagonal is the coupling, emitted once per pair by the lower
-    // node. Pushed by ascending `from`, ground before coupling and coupling by
-    // ascending `to`, which is canonical order already — `sort_canonical` is
-    // the guarantee, not the mechanism.
+    // The Maxwell matrix as a network: the row sum is the net's capacitance to
+    // ground, the negated off-diagonal is the coupling, emitted once per pair by
+    // the lower node. The push order is canonical already.
     for row in 0..n {
         let from = NodeId(u32::try_from(row).expect("a node index is a u32"));
         // Strict left fold in ascending index order: the row sum is a reported
@@ -318,21 +241,9 @@ pub fn extract_into(
 
 /// Solve one column per conductor into an already-sized [`CapMatrix`].
 ///
-/// **Transform, A-to-B.** Caller owns `matrix`, whose `net` column is filled
-/// and whose `value` column is already `n × n`. Returns the worst residual over
-/// the columns, the total iteration count, and the backend read off the adapter
-/// that ran — never a name chosen by the caller.
-///
-/// Generic over the seam, which is the point of the seam being where it is:
-/// every decision above the multiply — the iteration strategy, the residual,
-/// the refusal of a non-finite entry — happens once here, in `f64`, for both
-/// adapters. An adapter multiplies, so that is all an adapter can get wrong.
-///
-/// Two adapters, not one. `accurate` is the `f64` host reference and is what the
-/// residual is formed with; `fast` is whichever adapter was selected and is what
-/// the correction equation is solved with. On the host path they are the same
-/// value. The reported [`matvec::Backend`] is `fast`'s — it is the adapter that
-/// did the expensive work, and it is what a run's numbers are attributed to.
+/// Returns the worst residual, the total iteration count, and the backend read
+/// off the adapter that ran. `accurate` is the `f64` host reference the residual
+/// is formed with; `fast` solves the correction equation.
 fn columns_into<A: matvec::MatVec, F: matvec::MatVec>(
     accurate: &A,
     fast: &F,
@@ -361,15 +272,11 @@ fn columns_into<A: matvec::MatVec, F: matvec::MatVec>(
     let mut residual = 0.0_f64;
     let mut iterations = 0_u32;
 
-    // One solve per conductor: unit potential on it, ground on the rest, and
-    // the charge that answer puts on conductor `row` is `C[row][column]`. The
-    // loop is over conductors, not rows — the bulk work is inside it.
+    // One solve per conductor: unit potential on it, ground on the rest, and the
+    // charge that answer puts on conductor `row` is `C[row][column]`.
     for column in 0..n {
         let owner = u32::try_from(column).expect("a conductor index is a u32 in the mesh");
-        // One collocation row per panel, refilled into the caller-owned buffer
-        // rather than reallocated per column. `f64::from(bool)` is the
-        // branchless form of "one volt on the driven conductor, ground on the
-        // rest" — no `if`, and the body is a function of its own row.
+        // One volt on the driven conductor, ground on the rest.
         potential.clear();
         potential.reserve(panels);
         for panel in &mesh.panel {
@@ -377,9 +284,8 @@ fn columns_into<A: matvec::MatVec, F: matvec::MatVec>(
         }
         debug_assert_eq!(potential.len(), panels, "one collocation row per panel");
 
-        // A fixed zero initial guess, not the previous column's answer: the
-        // matrix has to be a function of the geometry alone, and a warm start
-        // would make column `c` depend on column `c - 1`'s round-off.
+        // A fixed zero initial guess, not the previous column's answer: a warm
+        // start would make column `c` depend on column `c - 1`'s round-off.
         charge.fill(0.0);
         let converged =
             solve::refine(accurate, fast, &potential, options, &mut charge, &mut workspace)?;
@@ -397,18 +303,14 @@ fn columns_into<A: matvec::MatVec, F: matvec::MatVec>(
             let end = subscript(mesh.conductor_start[row + 1]);
             debug_assert!(start <= end && end <= panels, "band {row} is {start}..{end}");
             // The solve's unknown is the panel's *total* charge, not its charge
-            // density — see `matvec::CpuMatVec::apply_observed`, where that is
-            // what makes `P` symmetric and the self-potential coefficient
-            // `√A`-scaled. So the conductor's charge is the plain band sum; an
+            // density, so the conductor's charge is the plain band sum. An
             // `area` weight here would reintroduce the `diag(A)` factor the
-            // operator was built to keep out and cost reciprocity.
+            // operator was built to keep out, and cost reciprocity.
             let mut total = 0.0_f64;
             for &q in &charge[start..end] {
                 total += q;
             }
-            // Surviving `if`: false in every converged run, so it predicts
-            // perfectly, and it is per conductor pair rather than per panel.
-            // Fail closed — a non-finite entry reaching `CapMatrix` is a
+            // Fail closed: a non-finite entry reaching `CapMatrix` is a
             // capacitance a report would print.
             if !total.is_finite() {
                 return Err(solve::SolveError::NonFinite(iterations));
@@ -420,13 +322,8 @@ fn columns_into<A: matvec::MatVec, F: matvec::MatVec>(
     Ok((residual, iterations, fast.backend()))
 }
 
-/// Refuse rather than mesh beyond this many panels.
-///
-/// The matvec is dense, so an iteration costs `panels²`: a million of them is a
-/// solve that runs for a week, and saying so is what
-/// [`mesh::MeshOptions::max_panels`] is for. [`mesh_options`] coarsens the panel
-/// edge to stay under this, so the limit is reached by a selection with more
-/// faces than the budget allows rather than by the resolution chosen here.
+/// Refuse rather than mesh beyond this many panels: the matvec is dense, so an
+/// iteration costs `panels²`.
 const MAX_PANELS: u32 = 1 << 20;
 
 /// What [`nm_to_dbu`] answers for a length the process stack does not state.
@@ -435,52 +332,18 @@ const MAX_PANELS: u32 = 1 << 20;
 /// undescribed layer must not be the smallest feature in the process.
 const UNSTATED: i64 = i64::MAX;
 
-/// How finely [`extract_into`] meshes.
+/// How finely [`extract_into`] meshes: the panel edge is the smallest length the
+/// stack states, so the mesh moves with the PDK.
 ///
-/// **Decision** — pure: the process stack, the geometry about to be solved and
-/// the run's grid in, one [`mesh::MeshOptions`] out.
+/// Two fail-closed clamps on top: the edge is coarsened until the *estimated*
+/// panel count fits [`MAX_PANELS`] — an estimate, so
+/// [`mesh::MeshError::TooManyPanels`] is still live above it — and it floors at
+/// one database unit, a zero edge cutting a face into no panels.
 ///
-/// The resolution is read off the process rather than off a constant. A
-/// boundary element resolves a field across its own edge, so the length that
-/// decides the edge is the smallest one the stack states — a layer's thickness,
-/// which is how tall a conductor's side face is, or a dielectric gap, which is
-/// the distance the field between two layers falls off over. Meshing at that
-/// length puts at least one panel across every feature the process has, and the
-/// number moves with the PDK: a 30 nm metal is meshed at 30 nm and a 5 µm
-/// redistribution layer at 5 µm, where a fixed half-micrometre under-resolved
-/// the first and charged the second for panels it did not need.
-///
-/// Two clamps sit on top, both in the fail-closed direction:
-///
-/// - the edge is coarsened until the *estimated* panel count fits
-///   [`MAX_PANELS`], so a fine process over a large selection is answered
-///   coarsely instead of refused. An estimate is not a guarantee — it is a
-///   surface area over a panel area, and a face smaller than a panel still
-///   costs one — so [`mesh::MeshError::TooManyPanels`] is still live above it,
-///   and still refuses rather than truncating.
-/// - the edge floors at one database unit. A zero edge cuts a face into no
-///   panels, which is the fail-open direction for this knob.
-///
-/// Proximity refinement is set to the panel edge itself: a conductor nearer a
-/// foreign conductor than one panel is wide sits in that conductor's near
-/// field, where the centroid approximation in [`matvec`] is at its worst, and
-/// halving the edge there is where the refinement buys the most. It costs the
-/// O(n²) solid scan in [`mesh::build_into`], which is over the selection's
-/// polygons and not over the layout.
-///
-/// The scan for the finest feature is over the whole stack rather than over the
-/// layers the selection happens to occupy, so one thin barrier row meshes a
-/// coarse selection at the barrier's scale. That is the direction to be wrong
-/// in: an over-meshed run is slow and still bounded by the two clamps above,
-/// where an under-meshed one is a capacitance a report prints. It is also why
-/// the resolution is not clamped against `solve::Options` — a mesh too fine for
-/// the iteration budget comes back as `solve::SolveError::NotConverged`, which
-/// is a refusal and not a number.
-///
-/// The caller still cannot tune any of this: `extract_into` is frozen carrying
-/// `solve::Options` and no [`mesh::MeshOptions`], so the accuracy knob is
-/// reachable only by editing here. Filed in `docs/SIGNATURE_DEFECTS.md` under
-/// "pex quasistatic".
+/// The finest-feature scan covers the whole stack rather than the layers the
+/// selection occupies, so one thin barrier row over-meshes a coarse selection.
+/// An over-meshed run is slow and bounded; an under-meshed one is a capacitance
+/// a report prints.
 fn mesh_options(
     store: &GeometryStore,
     nets: &NetTable,
@@ -496,9 +359,7 @@ fn mesh_options(
     let surface = surface_area(store, nets, selected, thickest_layer(stack, grid));
     debug_assert!(surface >= 0, "a surface area is non-negative");
 
-    // The budget is a floor, not a target: it is the finest edge that still
-    // fits, so the coarser of the two wins and a process finer than the budget
-    // allows is meshed at the budget.
+    // The budget is a floor, not a target: the coarser of the two wins.
     let max_edge = feature.max(budget_edge(surface)).clamp(1, MAX_ABS_DBU);
     debug_assert!(
         (1..=MAX_ABS_DBU).contains(&max_edge),
@@ -512,30 +373,20 @@ fn mesh_options(
     }
 }
 
-/// The smallest length the process stack states, in database units.
+/// The smallest length the process stack states, in database units: every
+/// layer's thickness and every positive interlayer gap.
 ///
-/// Every layer's thickness, and every positive gap between one layer's ceiling
-/// and another's floor. A non-positive gap is two layers that coincide or
-/// overlap — a stack stating one height for several layers has as many of those
-/// as it has pairs — and is dropped by [`nm_to_dbu`] along with every unstated
-/// row.
-///
-/// [`UNSTATED`] when the stack states nothing usable, which is a stack
-/// [`mesh::build_into`] refuses by name for every polygon it is handed. Not a
-/// bulk loop: a stack holds one row per layer of a PDK, so the pair scan is tens
-/// against tens, and it is the same shape `mesh::extrusion_table` is written in.
+/// [`UNSTATED`] when the stack states nothing usable.
 fn finest_feature(stack: &ProcessStack, grid: Grid) -> i64 {
-    // The rows both columns agree on: a gap needs a floor and a ceiling, and a
-    // stack whose columns disagree states neither past the shorter of them.
+    // The rows both columns agree on: a gap needs a floor and a ceiling.
     let rows = stack.thickness_nm.len().min(stack.height_nm.len());
 
     let mut finest = UNSTATED;
     for a in 0..rows {
         finest = finest.min(nm_to_dbu(stack.thickness_nm[a], grid));
         let ceiling = stack.height_nm[a] + stack.thickness_nm[a];
-        // Ordered pairs, both ways round: of any two layers exactly one sits
-        // above the other, and the reversed pair's gap is negative and dropped.
-        // `b == a` is the layer's own negated thickness, dropped the same way.
+        // Ordered pairs, both ways round: the reversed pair's gap is negative
+        // and dropped, as is `b == a`.
         for b in 0..rows {
             finest = finest.min(nm_to_dbu(stack.height_nm[b] - ceiling, grid));
         }
@@ -543,20 +394,13 @@ fn finest_feature(stack: &ProcessStack, grid: Grid) -> i64 {
     finest
 }
 
-/// The largest thickness the stack states, in database units, or zero when it
-/// states none.
-///
-/// Bounds the side-face term of [`surface_area`] only. An overestimate coarsens
-/// the mesh, which is the direction a budget may safely be wrong in; an
-/// underestimate would let the panel count past the limit and turn an answer
-/// into a refusal.
+/// The largest thickness the stack states, in database units, or zero.
 fn thickest_layer(stack: &ProcessStack, grid: Grid) -> i64 {
     let mut thickest = 0;
     for &nm in &stack.thickness_nm {
         let stated = nm_to_dbu(nm, grid);
-        // Not a bulk loop — one row per layer of a PDK — so the branch costs
-        // nothing and says what it means: a layer the stack does not describe
-        // has no thickness that could be the largest one.
+        // A layer the stack does not describe has no thickness that could be the
+        // largest one.
         if stated != UNSTATED {
             thickest = thickest.max(stated);
         }
@@ -570,10 +414,8 @@ fn thickest_layer(stack: &ProcessStack, grid: Grid) -> i64 {
 
 /// The surface area of the selected conductors, in database units squared.
 ///
-/// **Decision** — pure, and an estimate on purpose: a polygon is boxed and
-/// extruded to `thickness`, so the answer is `2wh + 2(w + h)t` per polygon,
-/// which is what [`mesh::build_into`] will actually panel if every polygon were
-/// its own bounding box. It bounds a panel count, not a capacitance.
+/// An estimate — each polygon is boxed and extruded — because it bounds a panel
+/// count, not a capacitance.
 fn surface_area(
     store: &GeometryStore,
     nets: &NetTable,
@@ -585,10 +427,6 @@ fn surface_area(
 
     let mut surface = 0_i128;
     for &net in selected {
-        // Bulk: one row per polygon of the selection, mapped to a face area and
-        // summed. No data-dependent branch in the body — `max(0)` is the
-        // branchless form of "an empty box contributes no area" — and the loop
-        // bound is the net's polygon range rather than a predicate on the row.
         // `|w|, |h| <= 2^41` and a selection is far under `2^24` polygons, so
         // the accumulator cannot approach `i128`'s range.
         for &poly in nets.polys_of(net) {
@@ -604,9 +442,8 @@ fn surface_area(
 
 /// The finest panel edge whose estimated panel count still fits [`MAX_PANELS`].
 ///
-/// **Decision** — pure. A panel of edge `e` covers `e²`, and proximity
-/// refinement may quarter that, so a surface of `S` costs at most `4S / e²`
-/// panels: the edge that fits the budget is `2 √(S / MAX_PANELS)`, rounded up.
+/// A panel of edge `e` covers `e²` and proximity refinement may quarter that, so
+/// the edge that fits is `2 √(S / MAX_PANELS)`, rounded up.
 fn budget_edge(surface: i128) -> i64 {
     debug_assert!(surface >= 0, "a surface area is non-negative");
 
@@ -629,19 +466,14 @@ fn budget_edge(surface: i128) -> i64 {
     units.clamp(1, MAX_ABS_DBU)
 }
 
-/// A length the process stack states, in nanometres, as a count of database
-/// units — or [`UNSTATED`] when the stack does not state it.
+/// A length the stack states, in nanometres, as a count of database units — or
+/// [`UNSTATED`] when the stack does not state it.
 ///
-/// Rounded down rather than exact. [`Grid::to_dbu`] refuses a length that is not
-/// a whole number of database units, which is right for a deck's spacing limit —
-/// a rounded limit is a rule quietly relaxed — and wrong for a mesh resolution,
-/// where the number is a target and refusing a 33.5 nm layer would refuse the
-/// run. Down rather than to nearest, so the mesh is never coarser than the
-/// feature it is resolving.
+/// Rounded down rather than refused as [`Grid::to_dbu`] would: this is a mesh
+/// target, not a deck limit, and down keeps the mesh no coarser than the
+/// feature.
 fn nm_to_dbu(nm: f64, grid: Grid) -> i64 {
-    // Negated, so a `NaN` lands here rather than passing: a length the stack
-    // does not state is not a length to mesh at, and neither is a gap between
-    // two layers that overlap.
+    // Negated, so a `NaN` lands here rather than passing.
     if !(nm > 0.0) {
         return UNSTATED;
     }
@@ -653,8 +485,7 @@ fn nm_to_dbu(nm: f64, grid: Grid) -> i64 {
         reason = "saturating out of f64, then clamped into the coordinate domain"
     )]
     let units = (nm * per_um / 1_000.0).floor() as i64;
-    // Floored at one: a feature thinner than a database unit is still a
-    // feature, and a panel edge of zero cuts a face into no panels at all.
+    // Floored at one: a panel edge of zero cuts a face into no panels at all.
     units.clamp(1, MAX_ABS_DBU)
 }
 

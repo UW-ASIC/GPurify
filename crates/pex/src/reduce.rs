@@ -1,16 +1,7 @@
-//! Network reduction.
+//! Network reduction to a requested [`Order`].
 //!
-//! Extraction produces one node per geometric branch point, which is more
-//! detail than any simulator wants. Reduction collapses that to a requested
-//! order while preserving the network's behaviour at its terminals.
-//!
-//! # Preserving what, exactly
-//!
-//! "Behaviour at the terminals" has a precise meaning, and it is the oracle for
-//! this module: total capacitance on each net is invariant, and the driving
-//! point resistance between any two terminals is invariant. Both are checkable
-//! against the unreduced network without any reference implementation, and both
-//! are laws rather than opinions.
+//! Invariant across every order: total capacitance on each net, and the driving
+//! point resistance between any two terminals.
 
 use gpurify_units::Qty;
 
@@ -19,29 +10,16 @@ use crate::network::{cap_ff, NodeId, Parasitic, ParasiticNetwork};
 /// How far to reduce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Order {
-    /// Keep every node. Reduction becomes a no-op, which is the identity case
-    /// every invariant test starts from.
+    /// Keep every node; reduction is a no-op.
     Full,
-    /// One lumped R and C per net. The smallest useful form.
+    /// One lumped R and C per net.
     Lumped,
     /// Keep terminals and branch points, collapse series and parallel chains.
-    /// The usual choice.
     Reduced,
 }
 
-/// One element as a row, exactly the three element columns of
-/// [`ParasiticNetwork`] zipped.
-///
-/// Reduction rewrites `from`/`to`/`value` together — a series collapse changes
-/// all three of one row at once — so the working form inside this module is the
-/// row, and the `SoA` columns are rebuilt from it on the way out.
+/// One element as a row: [`ParasiticNetwork`]'s three element columns zipped.
 type Row = (NodeId, Option<NodeId>, Parasitic);
-
-// ---------------------------------------------------------------------------
-// Row-level decisions. All pure, all total, and none of them carries a
-// data-dependent `if`: a `match` over a four-variant tag is the branchless
-// catalogue's "index a small table by the value", not a branch.
-// ---------------------------------------------------------------------------
 
 /// Ohms on a resistive element, zero on any other kind.
 #[inline]
@@ -52,44 +30,34 @@ fn ohms(value: Parasitic) -> f64 {
     }
 }
 
-/// A resistor is the one element kind reduction rewrites, and it needs two
-/// nodes to be one. `&` rather than `&&`: both sides are a tag test.
+/// A resistive element with two nodes, the one kind reduction rewrites.
 #[inline]
 fn is_resistor(row: Row) -> bool {
     row.1.is_some() & matches!(row.2, Parasitic::Resistance(_))
 }
 
-/// A capacitance to ground, which is the kind [`Order::Lumped`] folds per net.
+/// A capacitance to ground.
 #[inline]
 fn is_ground_cap(row: Row) -> bool {
     row.1.is_none() & matches!(row.2, Parasitic::GroundCap(_))
 }
 
-/// The unordered node pair an element stands between.
-///
-/// A resistor is symmetric, so `(a, b)` and `(b, a)` are one edge and must hash
-/// to one merge group. A ground element has no far node and keys on its own.
+/// The unordered node pair an element stands between: a resistor is symmetric,
+/// so `(a, b)` and `(b, a)` must land in one merge group.
 #[inline]
 fn pair_key(from: NodeId, to: Option<NodeId>) -> (u32, u32) {
     let far = to.map_or(from.0, |node| node.0);
     (from.0.min(far), from.0.max(far))
 }
 
-/// The end of `row` that is not `node`.
-///
-/// A self-loop returns `node` itself, which is what makes the caller's
-/// `near == far` guard catch it.
+/// The end of `row` that is not `node`; a self-loop returns `node` itself, which
+/// is what the caller's `near == far` guard catches.
 #[inline]
 fn far_end(row: Row, node: u32) -> u32 {
     let near = row.0 .0;
     let far = row.1.map_or(near, |other| other.0);
-    // Select, not a branch: two loaded values indexed by the comparison.
     [near, far][usize::from(near == node)]
 }
-
-// ---------------------------------------------------------------------------
-// Column plumbing.
-// ---------------------------------------------------------------------------
 
 /// The element columns as rows.
 fn rows_of(network: &ParasiticNetwork) -> Vec<Row> {
@@ -108,20 +76,11 @@ fn rows_of(network: &ParasiticNetwork) -> Vec<Row> {
 /// Write `rows` into `out`'s element columns, carrying `src`'s node columns
 /// across unchanged.
 ///
-/// **Transform, A-to-B.** `out` is caller-owned and fully overwritten, so a
-/// buffer that already holds a result gives the same bytes as a fresh one.
-///
-/// # Node ids are stable, by contract
-///
-/// Nodes are copied, never renumbered or compacted: a collapsed node survives in
-/// the node columns with no element on it. That is interface, not laziness.
-/// [`reduce_into`] takes `terminals: &[NodeId]` from the caller and the reduced
-/// network is read back through those same ids, so a permutation over the node
-/// columns would silently redirect every terminal a simulator connects to. It is
-/// also what preserves [`ParasiticNetwork`]'s node-order invariant — one
-/// contiguous ascending range per net — which a compaction would have to rebuild
-/// rather than inherit. The cost is bounded: one dead `NetId`/`LayerId` pair per
-/// collapsed node, no element rows.
+/// Node ids are stable by contract: nodes are copied, never renumbered, so a
+/// collapsed node survives with no element on it. [`reduce_into`] takes
+/// `terminals: &[NodeId]` from the caller and the result is read back through
+/// those same ids, so renumbering would redirect every terminal a simulator
+/// connects to — and it preserves [`ParasiticNetwork`]'s node-order invariant.
 fn fill_from_rows(src: &ParasiticNetwork, rows: &[Row], out: &mut ParasiticNetwork) {
     debug_assert_eq!(
         src.node_net.len(),
@@ -134,9 +93,6 @@ fn fill_from_rows(src: &ParasiticNetwork, rows: &[Row], out: &mut ParasiticNetwo
     out.node_layer.clear();
     out.node_layer.extend_from_slice(&src.node_layer);
 
-    // One pass writing three columns, rather than three passes writing one each.
-    // Every push is unconditional and the capacity is reserved above it, so the
-    // grow path is dead code rather than a branch in the loop.
     out.from.clear();
     out.from.reserve(rows.len());
     out.to.clear();
@@ -155,12 +111,9 @@ fn fill_from_rows(src: &ParasiticNetwork, rows: &[Row], out: &mut ParasiticNetwo
     debug_assert_eq!(out.node_net.len(), src.node_net.len());
 }
 
-/// How many node slots the element columns can address.
-///
-/// The node columns are the declaration; this is the check. An element naming a
-/// node the table never declared is a malformed network, and sizing the working
-/// arrays by the larger of the two is what stops that becoming an out-of-bounds
-/// index in release instead of a diagnosable assert in debug.
+/// How many node slots the element columns can address: the max of declared and
+/// reached, so a malformed network is a diagnosable assert rather than an
+/// out-of-bounds index in release.
 fn node_span(network: &ParasiticNetwork) -> usize {
     let declared = network.node_net.len();
     debug_assert_eq!(
@@ -184,26 +137,17 @@ fn node_span(network: &ParasiticNetwork) -> usize {
 
 /// Copy `src` into `out`, keeping only what `decide` marks live, in order.
 ///
-/// **Transform, A-to-B.** `out` is caller-owned, cleared and refilled.
-///
-/// `decide` returns the payload *and* the predicate, always both — the store is
-/// unconditional and the write index carries the decision, which is the
-/// memory-for-branches trade. Building a payload for a row that turns out dead
-/// is the price, and it buys a body with no data-dependent branch.
-///
-/// This module compacts four times, and one of the four emits a keyed payload
-/// rather than the row itself, so the write-index induction — and the one
-/// unchecked store resting on it — is written down here and nowhere else. `T`
-/// and `U` are `Copy` because rejected slots are left uninitialised: a
-/// droppable `U` would leak them.
+/// `decide` returns the payload *and* the predicate: the store is unconditional
+/// and the write index carries the decision. `T` and `U` are `Copy` because
+/// rejected slots are left uninitialised, and a droppable `U` would leak them.
 fn compact_into<T: Copy, U: Copy>(
     src: &[T],
     out: &mut Vec<U>,
     decide: impl Fn(usize, T) -> (U, bool),
 ) {
     let n = src.len();
-    // Reserved for the whole input rather than the survivors — what lets the
-    // store below be unconditional.
+    // Reserved for the whole input rather than the survivors, which is what
+    // lets the store below be unconditional.
     out.clear();
     out.reserve(n);
     let dst = &mut out.spare_capacity_mut()[..n];
@@ -230,47 +174,28 @@ fn compact_into<T: Copy, U: Copy>(
 /// Drop the rows `keep` marks dead, preserving order.
 fn compact_rows(rows: &[Row], keep: &[bool], out: &mut Vec<Row>) {
     debug_assert_eq!(rows.len(), keep.len(), "the row and keep columns must agree");
-    // Slicing rather than zipping: a `keep` shorter than `rows` would make `zip`
-    // stop early and emit a silently-short result, which is the fail-open shape
-    // this project treats as a defect. The slice panics instead, in every
-    // profile, once, outside the loop.
+    // Sliced rather than zipped: a short `keep` would make `zip` stop early and
+    // emit a silently-short result. The slice panics instead, in every profile.
     let keep = &keep[..rows.len()];
     compact_into(rows, out, |i, row| (row, keep[i]));
 }
 
-// ---------------------------------------------------------------------------
-// The three reductions, as row transforms.
-// ---------------------------------------------------------------------------
-
 /// Merge every group of resistors sharing a node pair into one, conductances
 /// added; pass every other element through untouched.
 fn merge_parallel_rows(rows: &[Row], out: &mut Vec<Row>) {
-    // The key is materialised as a column rather than recomputed. `sort_by_key`
-    // calls its key function once per *comparison*, and the run walk below
-    // compared two recomputed keys per element per group; both now read one
-    // already-built `(u32, u32)`.
-    //
-    // Compacting the resistors and keying them is one pass: the store is
-    // unconditional and the write index carries the predicate, so building the
-    // key for a row that turns out not to be a resistor costs two `min`/`max`
-    // and no branch.
     let mut keyed: Vec<((u32, u32), Row)> = Vec::new();
     compact_into(rows, &mut keyed, |_, row| {
         ((pair_key(row.0, row.1), row), is_resistor(row))
     });
     let resistive = keyed.len();
 
-    // Stable, so equal pairs stay in element order and the conductance sum
-    // below is the same `f64` on every run. An unstable sort here would make
-    // the summation order an implementation detail of the sort.
+    // Stable, so equal pairs stay in element order and the conductance sum below
+    // is the same `f64` on every run.
     keyed.sort_by_key(|&(key, _)| key);
 
     out.clear();
     out.reserve(rows.len());
 
-    // A run walk over the sorted key column locates the groups; the fold inside
-    // each group is a strict ascending left fold, which is what the determinism
-    // gate depends on.
     let mut start = 0;
     while start < keyed.len() {
         let key = keyed[start].0;
@@ -280,18 +205,16 @@ fn merge_parallel_rows(rows: &[Row], out: &mut Vec<Row>) {
         }
         debug_assert!(end > start);
 
-        // Left to right in ascending index order, deliberately: a reassociated
-        // `f64` sum is a different `f64`, and the reduced network is compared
-        // bit for bit across runs.
+        // Ascending index order, deliberately: a reassociated `f64` sum is a
+        // different `f64`, and the reduced network is compared bit for bit.
         let mut conductance = 0.0_f64;
         for &(_, row) in &keyed[start..end] {
             conductance += 1.0 / ohms(row.2);
         }
 
-        // A group of one keeps its exact value. `1.0 / (1.0 / r)` is not the
+        // A group of one keeps its exact value: `1.0 / (1.0 / r)` is not the
         // identity on every `f64`, and a merge that perturbs a resistor it did
-        // not merge is not idempotent. A branch rather than a select because
-        // the taken side is a division.
+        // not merge is not idempotent.
         let value = if end - start == 1 {
             keyed[start].1 .2
         } else {
@@ -309,63 +232,55 @@ fn merge_parallel_rows(rows: &[Row], out: &mut Vec<Row>) {
     debug_assert!(out.len() <= rows.len());
 }
 
-/// Collapse every eliminable node, rewriting the surviving resistor of each
-/// pair in place and marking the absorbed one dead in `keep`.
+/// Collapse every eliminable node, rewriting the surviving resistor of each pair
+/// in place and marking the absorbed one dead in `keep`.
 ///
-/// A node is eliminable when it has exactly two resistive incidences, carries
-/// nothing else at all, and is not in `protected`. Capacitance makes a node
-/// electrically observable; a terminal is what a simulator connects to. Either
-/// one and the node stays.
+/// Eliminable means exactly two resistive incidences, nothing else, and not in
+/// `protected`: capacitance makes a node electrically observable, and a terminal
+/// is what a simulator connects to.
 fn collapse_series_rows(rows: &mut [Row], keep: &mut [bool], nodes: usize, protected: &[NodeId]) {
     debug_assert_eq!(rows.len(), keep.len());
     debug_assert!(keep.iter().all(|&live| live), "keep starts all-live");
 
     let mut res_degree = vec![0_u32; nodes];
     let mut blocked = vec![false; nodes];
-    // Two incidence slots per node, plus one scratch slot every store that must
-    // not land anywhere real is aimed at.
+    // Two incidence slots per node, plus one dump slot for stores that must not
+    // land anywhere real.
     let dump = 2 * nodes;
     let mut incidence = vec![u32::MAX; dump + 1];
 
     // An incidence slot holds a row index as a `u32` and reserves `u32::MAX` as
     // its empty sentinel, so the element column must be *shorter* than
     // `u32::MAX` — at exactly that length the last row is indistinguishable from
-    // an unfilled slot. Checked once here, above the loop, so the trip count
-    // below carries the bound instead of a cast inside the body.
+    // an unfilled slot.
     let element_count = u32::try_from(rows.len()).expect("element counts fit in u32");
     assert!(
         element_count < u32::MAX,
         "an element column must be shorter than the u32::MAX incidence sentinel"
     );
 
-    // Scatter-accumulate: the output index is the node id, so this vectorises
-    // only with lane-conflict detection and stays scalar. The body carries no
-    // data-dependent branch and reads only its own row.
     for (index, &row) in (0..element_count).zip(rows.iter()) {
         let (from, to, _) = row;
         let resistive = is_resistor(row);
         let near = from.0 as usize;
-        // A ground element has no far node. Aiming the second update at the
-        // near node keeps both stores unconditional, and the node it lands on
-        // is blocked by this same element anyway.
+        // A ground element has no far node; aiming the second update at the near
+        // node keeps both stores unconditional, and that node is blocked by this
+        // same element anyway.
         let far = to.unwrap_or(from).0 as usize;
 
         let step = u32::from(resistive);
         res_degree[near] += step;
         res_degree[far] += step;
-        // A row whose two ends are the same node contributes two incidences to
-        // one node but only ever fills one of its two slots, so a bare self-loop
-        // resistor would leave a node at degree two with slot zero still
-        // `u32::MAX` — a debug assert in debug and an out-of-bounds index in
-        // release. It is also electrically nothing: a short across no distance.
-        // Blocking the node it sits on is both the fix and the right answer.
-        // `|`, not `||`: both sides are already values.
+        // A self-loop fills only one of its node's two slots, so it would leave
+        // a degree-two node with slot zero still `u32::MAX` — an out-of-bounds
+        // index in release. It is also electrically nothing, so blocking the
+        // node is the right answer as well as the fix.
         let loop_back = near == far;
         blocked[near] |= !resistive | loop_back;
         blocked[far] |= !resistive | loop_back;
 
-        // Only a node of degree exactly two is ever eliminated, so only its two
-        // slots are ever read. A third incidence overwrites slot one of a node
+        // Only a degree-exactly-two node is ever eliminated, so only its two
+        // slots are ever read; a third incidence overwrites slot one of a node
         // nobody will look at. Non-resistive rows go to the dump slot.
         let near_slot = 2 * near + usize::from(res_degree[near] >= 2);
         let far_slot = 2 * far + usize::from(res_degree[far] >= 2);
@@ -373,41 +288,27 @@ fn collapse_series_rows(rows: &mut [Row], keep: &mut [bool], nodes: usize, prote
         incidence[[dump, far_slot][usize::from(resistive)]] = index;
     }
 
-    // Terminal membership as a node-indexed mask, built once. It was
-    // `protected.contains(&node_id)` inside the elimination loop, which is a
-    // linear scan per node — O(nodes x terminals), and terminals is every pin of
-    // the net. `protected` is a handful of ids, not bulk data, so the build is a
-    // plain loop and the lookup below is one load.
     let mut is_terminal = vec![false; nodes];
     for &NodeId(node) in protected {
         // A terminal naming a node the element columns never reach is a caller
-        // error, not something to index on. `contains` could not match it
-        // either, so ignoring it is the behaviour that was already there.
+        // error, not something to index on.
         if let Some(slot) = is_terminal.get_mut(node as usize) {
             *slot = true;
         }
     }
 
-    // Chain elimination. Each step rewrites an edge a later step reads, so
-    // `simd-loops` triage classifies it as a chain, not a map — there are no
-    // lanes to fill, and no vector form of this loop exists to upgrade to. One
-    // pass suffices: the rewrite replaces two edges at a node with one, so every
-    // node's degree is invariant under it, and a node eliminable at the start
-    // stays eliminable until it is peeled.
+    // One pass suffices: the rewrite replaces two edges at a node with one, so
+    // every node's degree is invariant under it, and a node eliminable at the
+    // start stays eliminable until it is peeled.
     for node in 0..nodes {
         let node_id = NodeId(u32::try_from(node).expect("node counts fit in u32"));
         let eliminable = res_degree[node] == 2 && !blocked[node] && !is_terminal[node];
-        // Branch, not a select: the taken side is two gathers, a rewrite and an
-        // incidence fixup, and on a real network most nodes are branch points
-        // or carry charge, so the not-taken side dominates and predicts well.
         if !eliminable {
             continue;
         }
 
         // Kept in both widths: `u32` is what the incidence slots store and what
-        // the fixup below writes back, `usize` is what indexes `rows` and
-        // `keep`. Narrowing the `usize` again would be a cast that cannot
-        // truncate but does not say so; carrying the original is free.
+        // the fixup below writes back, `usize` is what indexes `rows`/`keep`.
         let (first_slot, second_slot) = (incidence[2 * node], incidence[2 * node + 1]);
         let first = first_slot as usize;
         let second = second_slot as usize;
@@ -420,8 +321,8 @@ fn collapse_series_rows(rows: &mut [Row], keep: &mut [bool], nodes: usize, prote
         let near = far_end(rows[first], node_id.0);
         let far = far_end(rows[second], node_id.0);
         // Two resistors closing a loop back onto one node would collapse to a
-        // self-loop, which is not an element a simulator can read. Leave them;
-        // the parallel merge finishes the job.
+        // self-loop, which no simulator can read; the parallel merge finishes
+        // the job.
         if near == far {
             continue;
         }
@@ -436,8 +337,8 @@ fn collapse_series_rows(rows: &mut [Row], keep: &mut [bool], nodes: usize, prote
         keep[second] = false;
 
         // `far` reached this node through `second`; it now reaches `near`
-        // through `first`. A node of degree above two holds stale slots that
-        // are never read, so a miss here is correct and costs nothing.
+        // through `first`. A node of degree above two holds stale slots that are
+        // never read, so a miss here is correct.
         let base = 2 * far as usize;
         let (dead, live) = (second_slot, first_slot);
         for slot in [base, base + 1] {
@@ -446,19 +347,16 @@ fn collapse_series_rows(rows: &mut [Row], keep: &mut [bool], nodes: usize, prote
     }
 }
 
-/// One resistor and one ground capacitance per net.
+/// One resistor and one ground capacitance per net: the total series resistance
+/// between the first and last node, the total ground capacitance on the first.
 ///
-/// The net's total series resistance stands between its first and last node;
-/// its total ground capacitance sits on its first node. Coupling capacitance is
-/// between two nets and is not a per-net quantity, so it passes through as it
-/// stands — which is also what keeps total capacitance invariant across this
-/// order.
+/// Coupling is not a per-net quantity, so it passes through untouched — which is
+/// what keeps total capacitance invariant across this order.
 fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     let nodes = network.node_net.len();
     if nodes == 0 {
-        // No node column, so no net to lump onto. An element here would name a
-        // node that does not exist; that is the caller's malformed network, and
-        // the assert says so rather than a scatter panicking on a raw index.
+        // No node column, so no net to lump onto: an element here would name a
+        // node that does not exist.
         debug_assert!(
             network.value.is_empty(),
             "{} elements over an empty node column",
@@ -468,10 +366,9 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
         return;
     }
 
-    // The node-order invariant (see `ParasiticNetwork`): every net occupies one
-    // contiguous ascending range of `node_net`. Detecting the runs is an
-    // adjacent-pair scan over two offset views of one column, with no wrap edge
-    // because a column is not a ring.
+    // Rests on the node-order invariant (see `ParasiticNetwork`): every net
+    // occupies one contiguous ascending range of `node_net`, so an adjacent-pair
+    // scan finds the run boundaries.
     let mut fresh: Vec<bool> = Vec::with_capacity(nodes - 1);
     for (previous, current) in network.node_net[..nodes - 1]
         .iter()
@@ -482,7 +379,7 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     debug_assert_eq!(fresh.len(), nodes - 1);
 
     // Node zero opens the first run, so the run count is one more than the
-    // number of boundaries. `count += boundary`, not an `if`.
+    // number of boundaries.
     let mut boundaries = 0_usize;
     for &boundary in &fresh {
         boundaries += usize::from(boundary);
@@ -494,10 +391,6 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     let mut first_node = vec![NodeId(0); nets];
     let mut last_node = vec![NodeId(0); nets];
 
-    // The rank of each node among the runs: a prefix sum, which `simd-loops`
-    // triage classifies as a chain — row N's rank is row N-1's rank plus a bit.
-    // There are no lanes to fill, so it stays one scan; the body carries no
-    // branch and allocates nothing, both arrays having been sized above.
     let mut rank = 0_u32;
     for index in 1..nodes {
         let boundary = fresh[index - 1];
@@ -507,9 +400,7 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
         let id = NodeId(u32::try_from(index).expect("node counts fit in u32"));
         let slot = rank as usize;
         // Runs are contiguous and ascending, so the node that opens a run is its
-        // first and every later store into the same slot lands on its last. Both
-        // stores are unconditional; the boundary flag selects the value, not the
-        // control flow.
+        // first and every later store into the same slot lands on its last.
         first_node[slot] = [first_node[slot], id][usize::from(boundary)];
         last_node[slot] = id;
     }
@@ -519,9 +410,6 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     let mut cap_sum = vec![0.0_f64; nets];
     let mut res_sum = vec![0.0_f64; nets];
 
-    // Scatter-accumulate by net slot — the same shape as the degree tally in
-    // `collapse_series_rows`, and scalar for the same reason. The body is
-    // branchless: the predicate scales the addend rather than guarding it.
     for ((&from, &to), &value) in network
         .from
         .iter()
@@ -541,18 +429,14 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     });
     debug_assert!(others.len() <= all.len());
 
-    // A payload-carrying compact: the predicate is over the accumulated sums but
-    // the row emitted is built here. `out` is sized for every candidate up front
-    // and the store is unconditional, so the write index carries the decision
-    // instead of a branch — the memory-for-branches trade.
+    // A payload-carrying compact: `out` is sized for every candidate up front
+    // and the store is unconditional, so the write index carries the decision.
     out.clear();
     out.resize(2 * nets, (NodeId(0), None, Parasitic::GroundCap(Qty::new(0.0))));
     let mut written = 0_usize;
     for slot in 0..nets {
         // Zero is not an element: a zero-ohm resistor is a short and a zero
-        // capacitor is absent. Emitting either would put a value a simulator
-        // reads as a fault into an otherwise clean reduction. `&`, not `&&`:
-        // both sides are a compare over already-loaded values.
+        // capacitor is absent, and either would read to a simulator as a fault.
         let resistive = (res_sum[slot] > 0.0) & (first_node[slot] != last_node[slot]);
         out[written] = (
             first_node[slot],
@@ -574,11 +458,7 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     out.extend_from_slice(&others);
 }
 
-/// Reduce a network.
-///
-/// **Transform, A-to-B.** Caller owns `out`. Not in-place: the unreduced
-/// network is what the invariant tests compare against, so destroying it would
-/// destroy the only check this module has.
+/// Reduce a network to `order`, leaving `network` intact.
 pub fn reduce_into(
     network: &ParasiticNetwork,
     terminals: &[NodeId],
@@ -593,15 +473,10 @@ pub fn reduce_into(
     debug_assert_eq!(network.from.len(), network.to.len());
     debug_assert_eq!(network.from.len(), network.value.len());
 
-    // The module's own invariant, checked through the function that states it
-    // rather than through a third copy of its fold. Same reduce, same ascending
-    // order, so `before` and `after` are comparable to the last bit — which is
-    // the whole point of asserting on them.
     let before = total_capacitance(network).raw();
 
     match order {
-        // Identity, byte for byte — including element order, which is why this
-        // copies rather than routing through a sort.
+        // Identity, byte for byte, including element order.
         Order::Full => {
             let rows = rows_of(network);
             fill_from_rows(network, &rows, out);
@@ -617,8 +492,7 @@ pub fn reduce_into(
             compact_rows(&merged, &keep, &mut survivors);
 
             // A collapse can leave two chains ending on the same pair, so the
-            // merge runs again on its output. It is idempotent, so a network
-            // with nothing left to merge pays one pass and changes no value.
+            // merge runs again on its output; it is idempotent.
             merge_parallel_rows(&survivors, &mut merged);
             fill_from_rows(network, &merged, out);
             out.sort_canonical();
@@ -639,12 +513,10 @@ pub fn reduce_into(
     debug_assert_eq!(out.node_net.len(), network.node_net.len());
 }
 
-/// Collapse chains of resistors in series.
+/// Collapse chains of resistors in series, resistances adding.
 ///
-/// **Decision-shaped, applied as a transform.** Series resistance adds; that is
-/// the whole rule and its oracle. Only collapses a node with exactly two
-/// resistive neighbours and no capacitance, because a node with capacitance is
-/// electrically observable and removing it changes behaviour.
+/// Only a node with exactly two resistive neighbours and no capacitance, which
+/// would make it electrically observable.
 pub fn collapse_series_into(network: &ParasiticNetwork, out: &mut ParasiticNetwork) {
     debug_assert_eq!(network.from.len(), network.value.len());
 
@@ -658,10 +530,9 @@ pub fn collapse_series_into(network: &ParasiticNetwork, out: &mut ParasiticNetwo
     fill_from_rows(network, &survivors, out);
 }
 
-/// Merge resistors in parallel between the same node pair.
+/// Merge resistors in parallel between the same node pair, conductances adding.
 ///
-/// Conductances add. Emitted once per node pair, ordered by `(from, to)`, so
-/// the merge order is fixed and the summation is bit-reproducible.
+/// Emitted once per node pair, ordered by `(from, to)`, so the sum reproduces.
 pub fn merge_parallel_into(network: &ParasiticNetwork, out: &mut ParasiticNetwork) {
     debug_assert_eq!(network.from.len(), network.value.len());
 
@@ -672,10 +543,7 @@ pub fn merge_parallel_into(network: &ParasiticNetwork, out: &mut ParasiticNetwor
     fill_from_rows(network, &merged, out);
 }
 
-/// Total capacitance, before and after.
-///
-/// **Decision** — pure, and the invariant that gates this whole module. Exposed
-/// rather than kept private precisely so the check is cheap to write.
+/// Total capacitance over every element of a network.
 pub fn total_capacitance(
     network: &ParasiticNetwork,
 ) -> gpurify_units::Qty<gpurify_units::Capacitance, { gpurify_units::prefix::FEMTO }> {
@@ -685,10 +553,9 @@ pub fn total_capacitance(
         "the element columns must stay parallel"
     );
 
-    // A strict left fold in element order, which is canonical — that is what
-    // makes this sum the same `f64` on every run. Coupling counts once, however
-    // many nets it touches; `net_capacitance` is the per-net view that counts it
-    // on both.
+    // A strict left fold in canonical element order, which is what makes this
+    // sum the same `f64` on every run. Coupling counts once here, however many
+    // nets it touches; `net_capacitance` is the per-net view that counts both.
     let mut femtofarads = 0.0_f64;
     for &value in &network.value {
         femtofarads += cap_ff(value);
@@ -705,26 +572,8 @@ pub fn total_capacitance(
 mod tests {
     use super::compact_into;
 
-    /// The two ends of the write-index induction the unchecked store rests on.
-    ///
-    /// Every compact in this workspace stores unconditionally at `w` and lets
-    /// `w += usize::from(live)` carry the predicate, so soundness is the single
-    /// claim `w <= i < n`. Its two boundaries are the only ones a wrong step can
-    /// hide behind: reject-everything pins `w` at 0 for all `n` iterations, and
-    /// accept-everything pins `w == i` at every step, which is where a `w`
-    /// advancing by more than one first writes past the reserved slice. In
-    /// between, `w` is slack and an off-by-one has room to go unnoticed.
-    ///
-    /// Oracle: construct-from-answer. Rejecting everything must yield nothing;
-    /// accepting everything must yield the input unchanged, and *in order* — a
-    /// cursor that skipped or doubled would misplace an element rather than
-    /// merely miscount. Swept across lengths so that the empty case, the
-    /// single-element case and a length past any small reserve are all covered;
-    /// in debug the `debug_assert!(w <= i)` inside the compact runs on each.
-    ///
-    /// This tests the module's own `compact_into` because it is the one place in
-    /// the workspace where the induction is written as a function rather than
-    /// inlined at a site.
+    /// The two ends of the write-index induction the unchecked store rests on:
+    /// reject-everything pins `w` at 0, accept-everything pins `w == i`.
     #[test]
     fn a_compact_that_rejects_all_and_one_that_accepts_all_bound_the_write_index() {
         let mut out: Vec<u32> = Vec::new();

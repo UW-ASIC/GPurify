@@ -1,62 +1,16 @@
-//! The `f32` device adapter, and the contract it must meet to exist.
+//! The `f32` device adapter.
 //!
-//! This is the only GPU code in the workspace. Everything else that ran on a
-//! device in the old tree was an advisory prefilter — flag candidates, then
-//! check them exactly on the CPU anyway — which pays the whole transfer cost to
-//! save part of the work, on kernels doing one integer modulo per element. No
-//! amount of tuning clears that ceiling, so those are gone.
+//! Six rules from `docs/GPU.md` that this adapter does not ship without; if any
+//! fails, the CPU adapter is the answer and saying so is a complete result.
 //!
-//! # The contract
-//!
-//! From `docs/GPU.md`. This adapter does not ship unless all six hold, and if
-//! any fails the CPU adapter is the answer and saying so is a complete result.
-//!
-//! 1. **Persistent buffers.** Allocated once per solve, reused across every
-//!    iteration. No allocation inside the iteration loop. — [`GpuMatVec::upload`]
-//!    allocates all four and records the command buffer once; [`MatVec::apply`]
-//!    allocates nothing.
-//! 2. **Async submission.** No host wait between dependent dispatches. The old
-//!    path called `.wait(None)` after every dispatch, so a 50–100 iteration
-//!    GMRES became 50–100 round trips — that alone is why it measured ~1000×
-//!    slower than the CPU. — one dispatch per `apply` and one fence, at the end,
-//!    where the potential vector is genuinely needed.
-//! 3. **Batched dispatch.** The far-field batch is one dispatch, not one per
-//!    block. — the whole matvec is one dispatch; there is no far field, because
-//!    this adapter is direct P2P and the FMM is still filed.
-//! 4. **`f64` residual.** Accuracy is bounded by a host `f64` residual check
-//!    and the achieved value is reported. The old path computed in `f32` and
-//!    never re-verified, on a signoff tool. — `solve::refine` takes **two**
-//!    operators, and `quasistatic::columns_into` always passes the host
-//!    `CpuMatVec` as the accurate one. See below.
-//! 5. **Equality tests that actually run.** Not `#[ignore]`d. — `crates/pex/tests/gpu.rs`,
-//!    every one of which runs on a machine with no device and asserts the
-//!    fallback, and asserts agreement with [`super::matvec::CpuMatVec`] on one
-//!    with a device.
-//! 6. **A measured crossover.** Selected only above the size it was benchmarked
-//!    to win at. Automatic, never a flag. — [`Device::crossover`], measured by
-//!    `crates/pex/benches` and recorded there.
-//!
-//! ## Item 4 was open, and closing it is what made this adapter usable
-//!
-//! `solve::refine` used to take one operator, so the `A x` inside
-//! `solve::residual` went through the same adapter as the inner solve. Under a
-//! `GpuF32` adapter the residual then carried that adapter's own error and no
-//! amount of iteration removed it. **Measured, the first time this adapter ran a
-//! real solve**: the residual stalled at `7.87e-7` against a `1e-10` tolerance
-//! and the solve returned `SolveError::NotConverged` after 400 iterations.
-//!
-//! That was fail-*closed* — a refusal, not a quietly `f32`-accurate capacitance
-//! — and it also made the device useless, because every solve above the
-//! crossover refused. `docs/GPU.md` specifies the fix in as many words: the
-//! matvec runs on the GPU in `f32`, the residual and the correction are computed
-//! on the host in `f64`. `refine` now takes both operators and
-//! `quasistatic::columns_into` builds the host adapter unconditionally to be the
-//! accurate one. The same solve reaches `1e-10`.
-//!
-//! It costs one `f64` matvec per refinement pass and needs more iterations than
-//! the host path for the same tolerance — about 440 against 400 on the corpus's
-//! two-conductor fixture. More iterations of a much cheaper kind is what
-//! mixed-precision refinement *is*.
+//! 1. Buffers allocated once per solve, never inside the iteration loop.
+//! 2. No host wait between dependent dispatches.
+//! 3. One dispatch per matvec, not one per block.
+//! 4. Accuracy bounded by a host `f64` residual, and the achieved value
+//!    reported: `solve::refine` takes two operators and the accurate one is
+//!    always the host `CpuMatVec`.
+//! 5. Equality tests against the host adapter that actually run.
+//! 6. A measured crossover, selected automatically and never by a flag.
 
 use std::sync::Arc;
 
@@ -90,48 +44,30 @@ use super::matvec::{Backend, MatVec};
 use super::mesh::Mesh;
 use super::matvec::FOUR_PI_EPS0;
 
-/// The compiled P2P Laplace kernel.
+/// The compiled P2P Laplace kernel: ahead-of-time SPIR-V from
+/// `shaders/p2p_laplace.comp`, committed beside it.
 ///
-/// Ahead-of-time SPIR-V, compiled from `shaders/p2p_laplace.comp` by `glslc` and
-/// committed beside it — `docs/GPU.md`: "no runtime shader compilation, so a
-/// shader that does not compile is a build failure rather than a surprise on a
-/// customer's machine."
-///
-/// Committed rather than generated by a build script on purpose.
-/// `vulkano-shaders` pulls in `shaderc-sys`, which needs either a system
-/// `libshaderc` or `cmake` to build one, and neither is present outside
-/// `nix develop` — so a build-script version would make `cargo test` outside the
-/// dev shell fail to compile, on every crate downstream of `pex`. The
-/// regeneration command is in the shader's own header, and
-/// `the_committed_spirv_is_the_module_the_adapter_expects` checks the blob is
-/// the module this file binds against rather than a stale one.
+/// Committed rather than built by a build script because `vulkano-shaders` pulls
+/// in `shaderc-sys`, which needs `libshaderc` or `cmake` — neither present
+/// outside `nix develop`. Regeneration command in the shader's own header.
 const P2P_LAPLACE_SPV: &[u8] = include_bytes!("../../shaders/p2p_laplace.spv");
 
 /// Threads per workgroup, and the `local_size_x` the shader was compiled for.
-///
-/// The two must agree: the dispatch below rounds the panel count up by this, and
-/// a shader compiled for a different size would leave a tail unwritten or run
-/// past the buffer. [`Device::find`] rejects a device whose limits cannot run it.
+/// The two must agree, or a tail is left unwritten.
 const WORKGROUP: u32 = 64;
 
-/// A usable compute device.
-///
-/// `None` everywhere it appears means no device, or one that does not meet the
-/// requirements. That is an ordinary outcome, not an error: the CPU adapter
-/// produces the same answers.
+/// A usable compute device. `None` means no device, or one that does not meet
+/// the requirements, which is an ordinary outcome rather than an error.
 #[derive(Debug)]
 pub struct Device {
-    /// The compute queue every dispatch is submitted on. Owns the logical
+    /// The compute queue every dispatch is submitted on; it owns the logical
     /// device, which is why no separate handle is kept.
     queue: Arc<Queue>,
-    /// AOT-compiled, built once here rather than per solve: pipeline creation
-    /// is milliseconds and a solve is one `upload` away from being hot.
     pipeline: Arc<ComputePipeline>,
     memory: Arc<StandardMemoryAllocator>,
     descriptors: Arc<StandardDescriptorSetAllocator>,
     commands: Arc<StandardCommandBufferAllocator>,
-    /// Panel count above which this device beat the host. A *property of the
-    /// device*, so it lives on the value rather than in a constant.
+    /// Panel count above which this device beat the host.
     crossover: usize,
 }
 
@@ -148,11 +84,6 @@ pub enum DeviceError {
 }
 
 /// Why one physical device was passed over, or `None` if it is usable.
-///
-/// **Decision** — one physical device in, one optional reason out, pure apart
-/// from the property reads. Separate from [`Device::find`] so the enumeration
-/// loop reads as "the first device with no complaint against it", and so the
-/// complaint can be reported rather than discarded when *every* device has one.
 fn unusable(physical: &PhysicalDevice) -> Option<String> {
     let properties = physical.properties();
     let name = &properties.device_name;
@@ -172,9 +103,7 @@ fn unusable(physical: &PhysicalDevice) -> Option<String> {
         ));
     }
     // `shader_float64` is deliberately *not* required: the `f32` matvec inside
-    // host `f64` refinement is the whole design, and demanding `f64` on the
-    // device would reject the development target for a feature this path does
-    // not use.
+    // host `f64` refinement is the whole design.
     if !physical
         .queue_family_properties()
         .iter()
@@ -188,30 +117,17 @@ fn unusable(physical: &PhysicalDevice) -> Option<String> {
 impl Device {
     /// Find a device meeting the requirements.
     ///
-    /// Returns `Ok(None)` when there is simply no device — the common case on
-    /// CI and on many desktops, and not a failure. `Err` is reserved for a
-    /// device that exists but is unusable, which is worth telling someone about.
-    ///
-    /// The split is exactly that, and it is the whole of the return type's
-    /// meaning: **no loader, or an instance with zero physical devices, is
-    /// `Ok(None)`** — "no GPU here". A physical device that exists and is then
-    /// *rejected* is `Err(MissingFeature)`, carrying which requirement it missed
-    /// and both numbers — "a GPU is here and this is why it did not run."
-    ///
-    /// `TRANSFER` is implied by `COMPUTE` and `GRAPHICS` is not needed, so the
-    /// queue search asks for `COMPUTE` and nothing else.
+    /// `Ok(None)` is "no GPU here" — no loader, or zero physical devices — and
+    /// is not a failure. `Err(MissingFeature)` is "a GPU is here and this is why
+    /// it did not run".
     pub fn find() -> Result<Option<Self>, DeviceError> {
-        // No loader at all. Ordinary — a headless container has none — and
-        // `Ok(None)` rather than `Err`: the probe succeeded, it found nothing.
+        // No loader at all: the probe succeeded, it found nothing.
         let Ok(library) = VulkanLibrary::new() else {
             return Ok(None);
         };
         let Ok(instance) = Instance::new(
             library,
             InstanceCreateInfo {
-                // MoltenVK and other portability drivers are not conformant and
-                // are enumerated only when asked for. Costs nothing where none
-                // is present.
                 flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
                 ..Default::default()
             },
@@ -222,9 +138,8 @@ impl Device {
             return Ok(None);
         };
 
-        // The first complaint, kept so that "a GPU is here and none of them
-        // would run" can be reported rather than silently downgraded to "no GPU
-        // here". Fail closed: a rejected device is `Err`.
+        // The first complaint, kept so "a GPU is here and none of them would
+        // run" is not silently downgraded to "no GPU here".
         let mut complaint = None;
         for physical in devices {
             match unusable(&physical) {
@@ -234,7 +149,6 @@ impl Device {
         }
         match complaint {
             Some(why) => Err(DeviceError::MissingFeature(why)),
-            // Zero physical devices. The probe ran and found nothing.
             None => Ok(None),
         }
     }
@@ -288,10 +202,8 @@ impl Device {
 
     /// Compile [`P2P_LAPLACE_SPV`] into a compute pipeline.
     ///
-    /// The descriptor set layout is *derived from the module's own reflection*
-    /// rather than written out here, so the four bindings this file writes and
-    /// the four the shader declares cannot drift apart silently: a mismatch is a
-    /// validation error at set-creation time.
+    /// The descriptor set layout comes from the module's own reflection rather
+    /// than being written out here, so the bindings cannot drift apart silently.
     fn build_pipeline(device: &Arc<VkDevice>) -> Result<Arc<ComputePipeline>, DeviceError> {
         let words = spirv_words(P2P_LAPLACE_SPV)
             .ok_or_else(|| DeviceError::MissingFeature(BAD_SPIRV.to_owned()))?;
@@ -331,11 +243,7 @@ impl Device {
         })
     }
 
-    /// Panel count above which this device beat the host, measured on the scale
-    /// corpus.
-    ///
-    /// A property of the device, not a constant: the crossover on a laptop
-    /// integrated part and on a discrete card are not the same number.
+    /// Panel count above which this device beat the host.
     pub fn crossover(&self) -> usize {
         debug_assert!(
             self.crossover > 0,
@@ -347,33 +255,12 @@ impl Device {
 
 /// The panel count above which the device was measured to win.
 ///
-/// **Measured, not assumed** — `docs/GPU.md` contract item 6, and the one item
-/// that cannot be met by reading the code.
-/// `crates/pex/tests/gpu.rs::the_crossover_is_measured_rather_than_assumed` is
-/// what produced this table and what re-measures it, on an RTX 4060 Laptop
-/// (driver 595.71.05) against an i9-14900HX, one matvec averaged over
-/// `2^22 / n` repeats after a warm-up:
-///
-/// | panels | host µs | device µs | winner |
-/// |---:|---:|---:|---|
-/// | 64 | 11.1 | 216.8 | host |
-/// | 256 | 410.7 | 254.9 | device, 1.6× |
-/// | 512 | 1959.5 | 398.1 | device, 4.9× |
-/// | 1024 | 4148.3 | 353.0 | device, 11.8× |
-/// | 2048 | 11441.1 | 738.9 | device, 15.5× |
-/// | 4096 | 45722.4 | 2762.8 | device, 16.6× |
-/// | 8192 | 183065.7 | 8286.6 | device, 22.1× |
-///
-/// `--release`, deliberately: the same sweep in a debug build gives the same
-/// crossover but a 66× figure at 8192, because it is timing an unoptimised host
-/// fold. A crossover measured against a debug host would be too *low*, which is
-/// the fail-open direction — it routes a signoff number onto the `f32` path
-/// below the size where that path was actually seen to win.
-///
-/// 256 rather than something between 64 and 256: it is the first *sampled* count
-/// at which the device won, and rounding the claim down to an unmeasured size
-/// would be exactly the invention this constant exists to avoid. Below it the
-/// host runs, which costs throughput and nothing else.
+/// Measured in `--release` by
+/// `crates/pex/tests/gpu.rs::the_crossover_is_measured_rather_than_assumed` on
+/// an RTX 4060 Laptop against an i9-14900HX: host wins at 64 panels, device wins
+/// 1.6× at 256 and 22× at 8192. 256 is the first *sampled* count at which the
+/// device won; rounding down to an unmeasured size is the invention this
+/// constant exists to avoid.
 ///
 /// ponytail: one number for every device, measured on one part. The ceiling: a
 /// part slower than this one is selected below its own crossover and loses
@@ -383,9 +270,7 @@ impl Device {
 /// is called once per run.
 ///
 /// `> 0` is load-bearing and `matvec::select` asserts it: a crossover of zero
-/// would select the device at every size including the empty problem, which is
-/// the fail-open reading of the sentinel and the one thing `docs/GPU.md`
-/// contract item 6 forbids.
+/// would select the device at every size including the empty problem.
 const MEASURED_CROSSOVER: usize = 256;
 
 const BAD_SPIRV: &str =
@@ -397,13 +282,8 @@ const SPIRV_MAGIC: u32 = 0x0723_0203;
 
 /// Reinterpret a committed SPIR-V blob as the `u32` words vulkano wants.
 ///
-/// **Decision** — bytes in, words out, pure. `None` for anything that is not
-/// SPIR-V, which is the fail-closed answer: a truncated or wrong-endian blob
-/// would otherwise reach `ShaderModule::new` and be undefined behaviour there.
-///
-/// A copy, not a cast. `include_bytes!` gives a `&[u8]` with only byte
-/// alignment, so `bytemuck`-style reinterpretation is not sound for it; the blob
-/// is two kilobytes and this runs once per process.
+/// `None` for anything that is not SPIR-V: a truncated or wrong-endian blob
+/// reaching `ShaderModule::new` is undefined behaviour there.
 fn spirv_words(bytes: &[u8]) -> Option<Vec<u32>> {
     if !bytes.len().is_multiple_of(4) || bytes.len() < 4 {
         return None;
@@ -415,73 +295,40 @@ fn spirv_words(bytes: &[u8]) -> Option<Vec<u32>> {
     (words[0] == SPIRV_MAGIC).then_some(words)
 }
 
-/// Device-resident `f32` matvec.
+/// Device-resident `f32` matvec: panel data stays on the device for the solve's
+/// lifetime and only the vectors cross the bus.
 ///
-/// **Five questions.** In: a mesh, uploaded once. Out: `y := A x` per call.
-/// How many: one per solve, called once per GMRES iteration. Access pattern:
-/// panel data is device-resident for the solve's lifetime and only the vectors
-/// cross the bus — which is the difference between this and the old path, where
-/// the input vector was re-uploaded on every call despite the matrix already
-/// being resident. Lifetime: one solve. Parallelisable: it is the parallelism.
-///
-/// Multiplies in `f32`. That is safe only because
-/// [`super::solve::refine`] wraps it in host `f64` refinement and the achieved
-/// residual is measured, never assumed.
+/// Multiplies in `f32`, which is safe only because [`super::solve::refine`]
+/// wraps it in host `f64` refinement and the achieved residual is measured.
 #[derive(Debug)]
 pub struct GpuMatVec<'d> {
     device: &'d Device,
-    /// Panels. The dispatch and both vectors are sized from it, and it is the
-    /// `n` the shader is handed as a push constant.
+    /// Panels, and the `n` the shader is handed as a push constant.
     panels: usize,
-    /// The two vectors, host-visible so a matvec is a write, a submit and a
-    /// read rather than a staging copy either side.
+    /// The two vectors, host-visible so a matvec is a write, a submit and a read
+    /// rather than a staging copy either side.
     charge: Subbuffer<[f32]>,
     potential: Subbuffer<[f32]>,
-    /// Recorded once in [`Self::upload`] and replayed by every [`MatVec::apply`].
-    /// This is contract item 1 in its strongest form: not merely "no allocation
-    /// in the loop" but no *recording* in it either. The panel buffers are held
-    /// alive by it and by the descriptor set, which is why they have no fields
-    /// of their own.
+    /// Recorded once in [`Self::upload`] and replayed by every
+    /// [`MatVec::apply`], so nothing is allocated *or recorded* in the loop. It
+    /// and the descriptor set hold the panel buffers alive, which is why those
+    /// have no fields of their own.
     command: Arc<PrimaryAutoCommandBuffer>,
 }
 
 impl<'d> GpuMatVec<'d> {
-    /// Upload a mesh and allocate every buffer the solve will use.
+    /// Upload a mesh and allocate every buffer the solve will use, so
+    /// [`MatVec::apply`] allocates nothing.
     ///
-    /// Everything that can be allocated is allocated here, so [`MatVec::apply`]
-    /// contains no allocation and no host synchronisation beyond the single
-    /// fence on the result.
+    /// The panel table is built here rather than read from the mesh: the kernel
+    /// wants a centroid, an effective radius and a coefficient, which is
+    /// `CpuMatVec::build`'s reduction, narrowed to `f32`.
     ///
-    /// # The panel table is built here, not read from the mesh
-    ///
-    /// The kernel reads a centroid, an effective radius and a Green's-function
-    /// coefficient, and a [`Mesh`] carries a centroid, an *area* and a
-    /// permittivity. The reduction is `super::matvec::CpuMatVec::build`'s, done
-    /// once here for the same reason it is done once there: the `sqrt` and the
-    /// divide are per panel, not per pair.
-    ///
-    /// Narrowed to `f32` on the way, which is the whole design and is why
-    /// [`Backend::GpuF32`] exists to attribute the difference.
-    ///
-    /// # Centres are stored relative to the mesh's own centroid
-    ///
-    /// The kernel reads centres only as *differences*, so a common translation
-    /// is exactly cancelled by the maths and catastrophically not cancelled by
-    /// the narrowing. A layout sitting at `x ≈ 1e-3` m with panels `1e-8` m
-    /// apart loses five of `f32`'s seven digits to the subtraction before the
-    /// kernel has done any arithmetic at all — and the near-field pairs, which
-    /// are the ones with the largest coefficients, are exactly the pairs whose
-    /// differences are smallest.
-    ///
-    /// Subtracting the centroid first is exact in the model and costs one pass
-    /// over the panels at upload.
-    ///
-    /// **It changes nothing on this corpus, and that is expected**: the scale
-    /// fixtures are drawn near the origin, so their centres carry no large
-    /// common offset to lose. Measured either way, the refinement trace is
-    /// identical to three digits. It is here for the layout that is not near the
-    /// origin, which is every real one — and it is cheap enough that waiting for
-    /// a fixture that exhibits the problem would be waiting to be wrong.
+    /// Centres are stored relative to the mesh's own centroid. The kernel reads
+    /// them only as differences, so a common translation cancels in the maths
+    /// and catastrophically does not cancel in the narrowing: a layout at
+    /// `x ≈ 1e-3` m with panels `1e-8` m apart loses five of `f32`'s seven
+    /// digits before the kernel has done any arithmetic.
     pub fn upload(device: &'d Device, mesh: &Mesh) -> Result<Self, DeviceError> {
         debug_assert_eq!(
             mesh.panel.len(),
@@ -490,16 +337,13 @@ impl<'d> GpuMatVec<'d> {
         );
         let panels = mesh.panel.len();
         if panels == 0 {
-            // An empty problem has no dispatch to record and no buffer to
-            // allocate — `Buffer::from_iter` refuses a zero-length slice — and
-            // a device is never selected for one anyway, because `select`
-            // compares against a crossover that is positive by construction.
+            // `Buffer::from_iter` refuses a zero-length slice, and `select`
+            // never routes an empty problem here anyway.
             return Err(DeviceError::NoDevice);
         }
 
-        // Every buffer this solve will use, sized before any of them is
-        // allocated, so the memory check below is against the whole solve rather
-        // than against whichever allocation happened to fail first.
+        // Sized before any of them is allocated, so the check below is against
+        // the whole solve rather than whichever allocation failed first.
         let bytes = (panels as u64) * (4 * 4 + 4 + 4 + 4);
         let limit = u64::from(
             device
@@ -516,10 +360,8 @@ impl<'d> GpuMatVec<'d> {
             });
         }
 
-        // The origin every centre is stored relative to — see this function's
-        // doc comment. Summed in `f64` and in ascending panel order, so it is a
-        // deterministic function of the mesh and two uploads of one mesh place
-        // the panels identically.
+        // Summed in `f64` in ascending panel order, so two uploads of one mesh
+        // place the panels identically.
         let mut origin = [0.0_f64; 3];
         for panel in &mesh.panel {
             for (sum, &coordinate) in origin.iter_mut().zip(&panel.centre) {
@@ -532,10 +374,8 @@ impl<'d> GpuMatVec<'d> {
             *slot /= count;
         }
 
-        // The five panel columns, packed as the shader declares them: a `vec4`
-        // of centroid and radius, and a scalar coefficient. Built by iterator so
-        // `from_iter` writes straight into mapped memory with no intermediate
-        // `Vec`.
+        // Packed as the shader declares: a `vec4` of centroid and radius, and a
+        // scalar coefficient.
         let posr = Buffer::from_iter(
             device.memory.clone(),
             BufferCreateInfo {
@@ -548,10 +388,6 @@ impl<'d> GpuMatVec<'d> {
                 ..Default::default()
             },
             mesh.panel.iter().map(|panel| {
-                // The `f32` narrowing is this adapter's whole purpose, stated
-                // once here rather than four times: `Backend::GpuF32` is what
-                // attributes the difference, and `solve::refine`'s `f64`
-                // residual is what bounds it.
                 #[expect(
                     clippy::cast_possible_truncation,
                     reason = "narrowing to f32 is the adapter; Backend::GpuF32 attributes it"
@@ -560,8 +396,8 @@ impl<'d> GpuMatVec<'d> {
                     (panel.centre[0] - origin[0]) as f32,
                     (panel.centre[1] - origin[1]) as f32,
                     (panel.centre[2] - origin[2]) as f32,
-                    // `√A / (4 ln(1 + √2))`, the radius at which a point charge
-                    // reproduces this panel's own centroid potential — and the
+                    // `√A / (4 ln(1 + √2))`: the radius at which a point charge
+                    // reproduces this panel's own centroid potential, and the
                     // softening that keeps the diagonal off zero.
                     (panel.area.sqrt() / super::matvec::SELF_POTENTIAL_SHAPE) as f32,
                 ]
@@ -606,9 +442,8 @@ impl<'d> GpuMatVec<'d> {
         )
         .map_err(allocation_refused)?;
 
-        // Read back every call, so it is host-visible on the *random access*
-        // filter rather than the write-combined one: a write-combined mapping
-        // reads at bus speed.
+        // Read back every call, so host-visible on the *random access* filter:
+        // a write-combined mapping reads at bus speed.
         let potential = Buffer::from_iter(
             device.memory.clone(),
             BufferCreateInfo {
@@ -657,11 +492,8 @@ impl<'d> GpuMatVec<'d> {
         })
     }
 
-    /// Record the one dispatch this solve replays.
-    ///
-    /// Contract item 3 — one dispatch, not one per block — and item 1 in its
-    /// strongest form: the command buffer is built once, so `apply` neither
-    /// allocates nor records.
+    /// Record the one dispatch this solve replays, so `apply` neither allocates
+    /// nor records.
     fn record(
         device: &Device,
         descriptor: &Arc<DescriptorSet>,
@@ -674,8 +506,7 @@ impl<'d> GpuMatVec<'d> {
         let mut builder = AutoCommandBufferBuilder::primary(
             device.commands.clone(),
             device.queue.queue_family_index(),
-            // Replayed once per GMRES iteration, so it must not be
-            // one-time-submit.
+            // Replayed once per GMRES iteration, so not one-time-submit.
             CommandBufferUsage::MultipleSubmit,
         )
         .map_err(|why| DeviceError::MissingFeature(format!("command buffer: {why}")))?;
@@ -711,11 +542,10 @@ impl<'d> GpuMatVec<'d> {
     }
 }
 
-/// An allocation the driver refused, as an [`DeviceError::OutOfMemory`].
+/// An allocation the driver refused, as a [`DeviceError::OutOfMemory`].
 ///
-/// The needed and available figures the variant asks for are not recoverable
-/// from a vulkano allocation error, so both are reported as zero and the
-/// message carries the driver's own words. Better than inventing two numbers.
+/// The needed and available figures are not recoverable from a vulkano
+/// allocation error, so both are reported as zero rather than invented.
 fn allocation_refused<E: std::fmt::Display>(why: E) -> DeviceError {
     debug_assert!(false, "the device refused an allocation: {why}");
     DeviceError::OutOfMemory {
@@ -729,27 +559,22 @@ impl MatVec for GpuMatVec<'_> {
         self.panels
     }
 
-    /// `y := A x`, with `x` converted to `f32` on upload and `y` widened back
-    /// on readback.
-    ///
-    /// One fence, at the end, where the result is genuinely needed.
+    /// `y := A x`, with `x` narrowed to `f32` on upload and `y` widened back on
+    /// readback.
     ///
     /// # Panics
     ///
-    /// On a device lost mid-solve, and on a vector of the wrong length. Both are
-    /// stated as panics rather than as a quiet return because `y` is fully
-    /// overwritten by contract: a body that returned without writing would hand
-    /// GMRES the previous iteration's vector and let a solve "converge" on
-    /// nothing. [`MatVec::apply`] returns `()`, so there is no other channel —
-    /// which is also why [`DeviceError::Lost`] has no reachable return site, and
-    /// is filed under "pex quasistatic/gpu.rs".
+    /// On a device lost mid-solve, and on a vector of the wrong length. Panics
+    /// rather than returning quietly because `y` is fully overwritten by
+    /// contract: returning without writing would hand GMRES the previous
+    /// iteration's vector and let a solve "converge" on nothing.
     fn apply(&self, x: &[f64], y: &mut [f64]) {
         assert_eq!(x.len(), self.panels, "one charge per panel");
         assert_eq!(y.len(), self.panels, "one potential per panel");
 
         {
-            // Narrowed on the way down. The scope ends the mapping before the
-            // submit, which is what makes the write visible to the device.
+            // The scope ends the mapping before the submit, which is what makes
+            // the write visible to the device.
             let mut charge = self
                 .charge
                 .write()
@@ -765,9 +590,8 @@ impl MatVec for GpuMatVec<'_> {
             }
         }
 
-        // One submit and one fence, at the end, where the result is genuinely
-        // needed. The old path's `.wait(None)` after every dispatch is what made
-        // a 50–100 iteration GMRES 50–100 round trips.
+        // One submit and one fence, at the end: a wait after every dispatch
+        // would make a 100-iteration GMRES 100 round trips.
         vulkano::sync::now(self.device.queue.device().clone())
             .then_execute(self.device.queue.clone(), self.command.clone())
             .expect("the command buffer was recorded for this queue family")
@@ -791,10 +615,8 @@ impl MatVec for GpuMatVec<'_> {
     }
 
     fn backend(&self) -> Backend {
-        // Answerable without a device: this adapter is the `f32` device path,
-        // whatever it is or is not able to do today. `Accuracy::backend` is how
-        // a run's numbers are attributed, and an adapter that misnames itself
-        // makes every attribution downstream a lie.
+        // Answerable without a device: an adapter that misnames itself makes
+        // every attribution downstream a lie.
         Backend::GpuF32
     }
 }
@@ -803,16 +625,8 @@ impl MatVec for GpuMatVec<'_> {
 mod tests {
     use super::*;
 
-    /// Oracle: the file format. A wrong or truncated blob reaching
-    /// `ShaderModule::new` is undefined behaviour, and `include_bytes!` will
-    /// happily embed anything that is on disk — so the two ways a wrong file
-    /// gets there, a bad magic number and a length that is not a whole number of
-    /// words, are checked before it does.
-    ///
-    /// This is also the staleness guard the committed SPIR-V needs. It cannot
-    /// tell a stale module from a current one — that would need shaderc, which
-    /// is exactly the dependency the blob exists to avoid — but it does say the
-    /// blob is a SPIR-V compute module rather than a leftover or an empty file.
+    /// The two ways a wrong file reaches the `unsafe` `ShaderModule::new`: a bad
+    /// magic number, and a length that is not a whole number of words.
     #[test]
     fn the_committed_spirv_is_a_whole_number_of_words_beginning_with_the_magic() {
         assert_eq!(
@@ -828,9 +642,7 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer, both directions. Anything that is not
-    /// SPIR-V is refused, and refusing is what keeps it away from the `unsafe`
-    /// block in `build_pipeline`.
+    /// Anything that is not SPIR-V is refused rather than reinterpreted.
     #[test]
     fn a_blob_that_is_not_spirv_is_refused_rather_than_reinterpreted() {
         assert!(spirv_words(&[]).is_none(), "an empty file is not a module");
@@ -849,10 +661,9 @@ mod tests {
         );
     }
 
-    /// Oracle: the contract. `WORKGROUP` is the number the shader was compiled
-    /// for and the number the dispatch rounds up by, and the two are the same
-    /// constant precisely so they cannot drift. If the shader is recompiled at a
-    /// different `local_size_x`, this is the line to change.
+    /// `WORKGROUP` is both what the shader was compiled for and what the
+    /// dispatch rounds up by; recompiling at a different `local_size_x` changes
+    /// this line.
     #[test]
     fn the_dispatch_covers_every_panel_and_no_more_than_one_group_of_slack() {
         for panels in [1_u32, 63, 64, 65, 127, 128, 4_097] {

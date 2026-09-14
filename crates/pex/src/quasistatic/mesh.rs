@@ -1,8 +1,4 @@
 //! Panel meshing: conductor surfaces to boundary elements.
-//!
-//! The mesh is the whole input to the solve, so its quality bounds the answer's
-//! accuracy and its size bounds the cost. Both are decided here, and both are
-//! reported rather than left implicit.
 
 use gpurify_core::{Bbox, GeometryStore, LayerId};
 use gpurify_ingest::deck::ProcessStack;
@@ -12,31 +8,19 @@ use std::cmp::Ordering;
 
 /// A flat rectangular boundary element.
 ///
-/// `AoS`: the matvec reads every field of a panel together when evaluating an
-/// influence, and panels are stored in spatial tree order so that read is
-/// contiguous. This is one of the few places in the tree where `AoS` wins, and it
-/// wins because of the access pattern, not by default.
+/// `AoS`: the matvec reads every field of a panel together, in spatial order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Panel {
-    /// Centroid, in metres. The solve works in SI, not in grid units — the
-    /// conversion happens once, here, against the run's grid.
+    /// Centroid, in metres: the solve works in SI, not in grid units.
     pub centre: [f64; 3],
     /// Outward normal, unit length.
     pub normal: [f64; 3],
     pub area: f64,
-    /// Which conductor this panel belongs to. Charge is integrated per
-    /// conductor to give a matrix column.
+    /// Which conductor this panel belongs to.
     pub conductor: u32,
 }
 
-/// The meshed problem.
-///
-/// **Five questions.** In: geometry for the selected nets and the layer stack.
-/// Out: panels in spatial order, plus the conductor each belongs to. How many:
-/// thousands to hundreds of thousands. Access pattern: sequential in tree
-/// order, every field together. Lifetime: one solve. Parallelisable: meshing
-/// per conductor is; the spatial sort at the end is what makes panel order
-/// canonical.
+/// The meshed problem: panels in spatial order, banded by conductor.
 #[derive(Debug, Default)]
 pub struct Mesh {
     pub panel: Vec<Panel>,
@@ -44,8 +28,7 @@ pub struct Mesh {
     /// conductor `c`, after the canonical sort.
     pub conductor_start: Vec<u32>,
     pub conductor_net: Vec<NetId>,
-    /// Relative permittivity above each panel. Layered dielectrics change the
-    /// Green's function, so this travels with the mesh.
+    /// Relative permittivity above each panel.
     pub epsilon: Vec<f64>,
 }
 
@@ -55,10 +38,9 @@ pub struct MeshOptions {
     /// Largest panel edge, in database units. The accuracy knob.
     pub max_edge: Dbu,
     /// Refine panels within this distance of another conductor, where the field
-    /// varies fastest and a uniform mesh is worst.
+    /// varies fastest.
     pub proximity_refine: Dbu,
-    /// Refuse rather than mesh beyond this many panels. A solve that would take
-    /// a week should say so, not start.
+    /// Refuse rather than mesh beyond this many panels.
     pub max_panels: u32,
 }
 
@@ -74,20 +56,9 @@ pub enum MeshError {
 
 /// Mesh the selected nets.
 ///
-/// **Transform, A-to-B.** Caller owns `out`. Panels are emitted per conductor
-/// in ascending [`NetId`] order and then sorted into spatial tree order by a
-/// key derived only from position, so the mesh is a deterministic function of
-/// the geometry — no thread count, no insertion order.
-///
-/// # The two inputs added in the Testing-Phase
-///
-/// As frozen this took neither `stack` nor `grid`, and so could produce neither
-/// of the two things it promises. `stack` is where a layer's `thickness_nm` and
-/// `height_nm` come from — a `GeometryStore` is two-dimensional, so without them
-/// there is no z extent to panel and no way to raise
-/// [`MeshError::MissingThickness`] — and it is the only source of the
-/// `dielectric_k` that fills [`Mesh::epsilon`]. `grid` is what turns `Dbu` into
-/// the metres [`Panel::centre`] and [`Panel::area`] are documented to be in.
+/// Panels are emitted per conductor in ascending [`NetId`] order and sorted into
+/// spatial order by a key derived only from position, so the mesh is a
+/// deterministic function of the geometry.
 pub fn build_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -101,9 +72,8 @@ pub fn build_into(
         options.max_edge.raw() > 0,
         "a panel edge limit of zero cuts a face into no panels"
     );
-    // Hoisted out of `near_another_conductor`'s inner loop: `Bbox::within`
-    // debug-asserts this itself, and a panic edge inside an O(n^2) loop body is
-    // both a branch and a barrier to vectorisation.
+    // Hoisted out of `near_another_conductor`'s inner loop, where `Bbox::within`
+    // asserts the same thing per row.
     debug_assert!(
         options.proximity_refine.raw() >= 0,
         "a refinement distance is non-negative"
@@ -115,8 +85,7 @@ pub fn build_into(
     out.conductor_net.clear();
     out.epsilon.clear();
 
-    // One database unit, in metres. `Grid::to_length` hands back nanometres and
-    // the solve works in SI, so the scale is applied once, here.
+    // One database unit, in metres: the solve works in SI.
     #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
     let metre = 1e-6 / grid.dbu_per_um() as f64;
     #[expect(
@@ -125,11 +94,6 @@ pub fn build_into(
     )]
     let edge = options.max_edge.raw() as f64 * metre;
 
-    // Extruding a layer is a function of the layer alone, so it is a uniform:
-    // evaluated once per layer of the stack, above the polygon loops, rather
-    // than once per polygon inside them. That is also what turns the per-polygon
-    // step below from a fallible map into a plain gather plus one branchless
-    // fold.
     let mut extrusion: Vec<Extrusion> = Vec::new();
     extrusion_table(stack, &mut extrusion);
     let table = &extrusion[..];
@@ -139,47 +103,41 @@ pub fn build_into(
         "the sentinel row must fail the same test an undescribed layer does"
     );
 
-    // Pass one: every selected conductor's polygons as solids. Separate from
-    // the meshing pass because proximity refinement asks a solid about every
-    // *other* conductor, which is not a question the first solid can answer.
+    // Pass one: every selected conductor's polygons as solids. Separate from the
+    // meshing pass because proximity refinement asks a solid about every *other*
+    // conductor.
     let mut solid: Vec<Solid> = Vec::new();
     for (index, &net) in selected.iter().enumerate() {
         let conductor = u32::try_from(index).expect("a selection is indexed by a u32 conductor");
         let polys = nets.polys_of(net);
-        // Fail closed: a selected net with no geometry would otherwise leave an
-        // empty band, and an empty band reads as "this conductor stores no
+        // Fail closed: an empty band would read as "this conductor stores no
         // charge" rather than "this conductor was never meshed".
         if polys.is_empty() {
             return Err(MeshError::EmptyConductor);
         }
 
-        // The smallest layer id in this conductor that the process stack does
-        // not describe, or `u32::MAX` when it describes them all. Checked as its
-        // own fold rather than inside the emit below, so the fault is named
-        // before a single solid is written and the emit carries no branch.
+        // The smallest layer id in this conductor the stack does not describe,
+        // or `u32::MAX` when it describes them all. Its own fold, so the fault
+        // is named before a single solid is written.
         let mut undescribed = u32::MAX;
         for &poly in polys {
             let layer = store.poly_layer(poly);
-            // Clamped gather, not a bounds branch — `/branchless`'s
-            // `i = min(i, n - 1)`. A layer past the stack lands on the sentinel
-            // row, which fails `epsilon > 0` exactly as a malformed row does.
+            // A layer past the stack lands on the sentinel row, which fails
+            // `epsilon > 0` exactly as a malformed row does.
             let described = table[layer.idx().min(sentinel)].epsilon > 0.0;
             // All ones when the layer is described, so `|` lifts it above every
             // real layer id and the fold stays a `min`.
             undescribed =
                 undescribed.min(u32::from(layer.0) | 0u32.wrapping_sub(u32::from(described)));
         }
-        // Fail closed: a `GeometryStore` is two-dimensional, so a layer the
-        // stack does not describe has no z extent to panel and no permittivity
-        // to carry, and a conductor meshed as a sheet holds charge on no side.
+        // Fail closed: an undescribed layer has no z extent to panel and no
+        // permittivity, and a conductor meshed as a sheet holds charge on no
+        // side.
         if undescribed != u32::MAX {
             let layer = u16::try_from(undescribed).expect("the id came from a LayerId");
             return Err(MeshError::MissingThickness(LayerId(layer)));
         }
 
-        // Appended straight to `solid`: the scratch band this used to map into
-        // existed only because a map's destination is cleared before it is
-        // filled. One reserve, one pass, no copy.
         let before = solid.len();
         solid.reserve(polys.len());
         for &poly in polys {
@@ -195,10 +153,6 @@ pub fn build_into(
     }
     debug_assert!(
         {
-            // `&=` and not `iter().all`: `solid` is one row per polygon of the
-            // selected nets, so this is a bulk loop like any other and `all`'s
-            // early exit is the data-dependent branch the discipline removes.
-            // Same shape as the entry assert in `matvec::CpuMatVec::build`.
             let mut ok = true;
             for s in &solid {
                 ok &= s.epsilon > 0.0;
@@ -218,8 +172,6 @@ pub fn build_into(
     for index in 0..selected.len() {
         let conductor = u32::try_from(index).expect("a selection is indexed by a u32 conductor");
         // The solids were pushed in conductor order, so one band is one run.
-        // The compare is a loop bound, not a body branch: it fails once per
-        // conductor, which is tens of times per run.
         while next < solid.len() && solid[next].conductor == conductor {
             let here = solid[next];
             let lo = [
@@ -237,8 +189,7 @@ pub fn build_into(
                 here.z[1],
             ];
             // Halving is the refinement: the field varies fastest beside another
-            // conductor, so a panel there gets half the edge and a quarter the
-            // area. Branchless — the predicate is the divisor.
+            // conductor, so a panel there gets half the edge.
             let near = near_another_conductor(&solid, here, options.proximity_refine);
             let edge_here = edge / f64::from(1 + u8::from(near));
             mesh_box(
@@ -257,13 +208,9 @@ pub fn build_into(
     }
     debug_assert_eq!(next, solid.len(), "a solid belongs to no conductor");
 
-    // Spatial order, within each band and not across them: the CSR says a
+    // Spatial order within each band and not across them: the CSR says a
     // conductor's panels are contiguous, so a global sort would be a different
-    // interface. The key is a Morton code of the centroid against the mesh's own
-    // centroid bounds, so the order is a function of the geometry — no thread
-    // count, no insertion order — and panels adjacent in the column are adjacent
-    // in all three axes at once, which is the locality the matvec's near-field
-    // blocking reads.
+    // interface.
     let mut key: Vec<u64> = Vec::new();
     morton_keys(&scratch, &mut key);
     debug_assert_eq!(key.len(), scratch.len(), "one sort key per panel");
@@ -282,10 +229,6 @@ pub fn build_into(
         });
     }
 
-    // Two gathers fused into one pass over `order`: each output row is the
-    // permutation applied to its own input row, so the two columns are written
-    // in lockstep from one indexed load. A data-dependent *address* is not a
-    // branch. Both columns were cleared above and are refilled here.
     out.panel.reserve(order.len());
     out.epsilon.reserve(order.len());
     for &row in &order {
@@ -316,9 +259,6 @@ pub fn build_into(
 
 /// One conductor polygon as a solid: its footprint in grid units, its z extent
 /// in metres, and the permittivity above it.
-///
-/// `AoS`: meshing reads every field of one solid together and never scans a
-/// single column, which is [`Panel`]'s argument exactly.
 #[derive(Debug, Clone, Copy)]
 struct Solid {
     bbox: Bbox,
@@ -329,10 +269,6 @@ struct Solid {
 }
 
 /// One layer's z extent, in metres, and the permittivity above it.
-///
-/// A named struct rather than a tuple because it is gathered per polygon and
-/// the two fields read very differently: `epsilon` doubles as the row's
-/// validity, and `.1 > 0.0` at that site would say nothing about why.
 #[derive(Debug, Clone, Copy)]
 struct Extrusion {
     /// Bottom and top of the layer, in metres.
@@ -344,28 +280,18 @@ struct Extrusion {
 
 /// What a layer the process stack does not describe extrudes to.
 ///
-/// `NaN` rather than zero: every reader of the table tests `epsilon > 0.0`,
-/// which `NaN` fails, and a `NaN` that escapes the check poisons a panel rather
-/// than quietly producing one of no thickness.
+/// `NaN` rather than zero: every reader tests `epsilon > 0.0`, which `NaN`
+/// fails, and a `NaN` that escapes the check poisons a panel rather than quietly
+/// producing one of no thickness.
 const UNDESCRIBED: Extrusion = Extrusion {
     z: [f64::NAN; 2],
     epsilon: f64::NAN,
 };
 
 /// Every layer the process stack describes, plus one sentinel row standing for
-/// every layer it does not.
-///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled. Not a bulk
-/// loop: a stack has tens of rows, one per layer of a PDK. It exists so the
-/// per-polygon lookup in [`build_into`] is a clamped gather with no branch and
-/// no repeated `Vec::get`.
-///
-/// Fail closed on all three columns: a [`GeometryStore`] is two-dimensional, so
-/// a layer with no thickness has no z extent to panel, and a conductor meshed
-/// as a sheet carries charge on no side at all.
+/// every layer it does not, so the per-polygon lookup is a clamped gather.
 fn extrusion_table(stack: &ProcessStack, out: &mut Vec<Extrusion>) {
-    // The rows all three columns agree on. A stack whose columns disagree
-    // describes no layer past the shortest of them.
+    // The rows all three columns agree on.
     let rows = stack
         .thickness_nm
         .len()
@@ -377,15 +303,13 @@ fn extrusion_table(stack: &ProcessStack, out: &mut Vec<Extrusion>) {
     for row in 0..rows {
         out.push(extrude(stack, row));
     }
-    // The sentinel, at index `rows`: a clamped gather lands here for any layer
-    // id the stack is too short to describe.
+    // The sentinel: a clamped gather lands here for any layer the stack is too
+    // short to describe.
     out.push(UNDESCRIBED);
     debug_assert_eq!(out.len(), rows + 1, "one row per layer, plus the sentinel");
 }
 
 /// One row of the process stack as a z extent and a permittivity.
-///
-/// **Decision** — pure, small data in, one value out.
 fn extrude(stack: &ProcessStack, row: usize) -> Extrusion {
     debug_assert!(
         row < stack.thickness_nm.len()
@@ -397,8 +321,7 @@ fn extrude(stack: &ProcessStack, row: usize) -> Extrusion {
     let height = stack.height_nm[row];
     let epsilon = stack.dielectric_k[row];
 
-    // Negated, so a `NaN` is refused rather than accepted: a thickness that is
-    // not a positive number is a deck that cannot state where this layer is.
+    // Negated, so a `NaN` is refused rather than accepted.
     if !(thickness > 0.0) || !height.is_finite() || !(epsilon > 0.0) {
         return UNDESCRIBED;
     }
@@ -410,19 +333,14 @@ fn extrude(stack: &ProcessStack, row: usize) -> Extrusion {
 
 /// Whether a solid sits within `distance` of a conductor other than its own.
 fn near_another_conductor(solid: &[Solid], of: Solid, distance: Dbu) -> bool {
-    // Surviving `if`: the knob is off or on for a whole run, so the predictor
-    // sees one outcome, and the taken side is the O(n^2) scan below — row two of
-    // the escape-valve list, twice over.
     if distance.raw() == 0 {
         return false;
     }
-    // Every solid against every other, O(n^2) in the polygons of the selected
-    // nets — tens to thousands, not the whole layout. The indexed version is
-    // blocked, not deferred: `core::index::SpatialIndex::build_into` is frozen
-    // at `(&GeometryStore, LayerId)`, and a solid column is neither — it spans
-    // layers and its rows are not the store's. Recorded in
-    // `docs/SIGNATURE_DEFECTS.md` as `index: no build-from-bbox-column seam`.
-    // No early exit and no branch in the body: `|=` and `&`, not `||` and `&&`.
+    // O(n^2) in the polygons of the selected nets — tens to thousands, not the
+    // whole layout. `SpatialIndex::build_into` is frozen at
+    // `(&GeometryStore, LayerId)` and a solid column is neither, so the indexed
+    // version is blocked: `docs/SIGNATURE_DEFECTS.md`,
+    // `index: no build-from-bbox-column seam`.
     let mut near = false;
     for other in solid {
         near |= (other.conductor != of.conductor) & of.bbox.within(other.bbox, distance);
@@ -457,9 +375,9 @@ fn cuts(width: f64, edge: f64) -> u32 {
 
 /// Panel one axis-aligned box into `out`, six faces cut at `edge`.
 ///
-/// **Transform, A-to-B.** `remaining` is the caller's panel budget, decremented
-/// per face *before* anything is emitted, so a mesh that would exceed the limit
-/// is refused rather than half-built.
+/// `remaining` is the caller's panel budget, decremented per face *before*
+/// anything is emitted, so a mesh over the limit is refused rather than
+/// half-built.
 fn mesh_box(
     lo: [f64; 3],
     hi: [f64; 3],
@@ -474,11 +392,8 @@ fn mesh_box(
     for (axis, sign) in FACES {
         let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
         let (wu, wv) = (hi[u] - lo[u], hi[v] - lo[v]);
-        // Surviving `if`: six faces per box is not a bulk loop, and the taken
-        // side is the whole nested emission below. A degenerate footprint — a
-        // zero-width derived shape — has faces of no area, and a panel of no
-        // area carries no charge and would fail `area > 0` downstream. Negated
-        // so a `NaN` extent is skipped rather than meshed.
+        // A degenerate footprint has faces of no area, and a panel of no area
+        // carries no charge. Negated so a `NaN` extent is skipped, not meshed.
         if !(wu > 0.0 && wv > 0.0) {
             continue;
         }
@@ -494,13 +409,9 @@ fn mesh_box(
         let area = du * dv;
         let mut normal = [0.0; 3];
         normal[axis] = sign;
-        // The face plane: the box centre on this axis, pushed to whichever end
-        // the sign names. Unit normal by construction — one component is +/-1
-        // and the other two are zero.
+        // The box centre on this axis, pushed to whichever end the sign names.
         let plane = (lo[axis] + hi[axis]).mul_add(0.5, sign * (hi[axis] - lo[axis]) * 0.5);
 
-        // No data-dependent branch in the body, and the whole face's allocation
-        // is reserved above the loop, so nothing here grows element-wise.
         for iu in 0..nu {
             for iv in 0..nv {
                 let mut centre = [0.0; 3];
@@ -522,40 +433,26 @@ fn mesh_box(
     Ok(())
 }
 
-/// Bits per axis in a Morton key. Three of them fit a `u64` with one to spare,
-/// so a mesh is quantised to a 2M-cell grid per axis — finer than any panel
-/// count this module will admit, and the tiebreak below covers what collides.
+/// Bits per axis in a Morton key: three of these fit a `u64` with one to spare.
 const MORTON_BITS: u32 = 21;
 
 /// The largest value one axis of a Morton key can hold.
 const MORTON_MAX: u64 = (1 << MORTON_BITS) - 1;
 
 /// [`MORTON_MAX`] as the quantiser's multiplier, written out because `f64::from`
-/// is not `const` and a cast would be. Exact: `2^21 - 1` needs 21 significant
-/// bits and an `f64` carries 53.
+/// is not `const`. Exact: `2^21 - 1` needs 21 bits and an `f64` carries 53.
 const MORTON_SPAN: f64 = 2_097_151.0;
 
 const _: () = assert!(MORTON_MAX == 2_097_151, "MORTON_SPAN is not MORTON_MAX");
 
 /// A Morton (Z-order) sort key per panel.
 ///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled. The bounds
-/// the key is quantised against are a reduction over the same panels, so the
-/// key is a function of the geometry and nothing else — the property the sort's
-/// determinism rests on.
-///
-/// Z-order rather than the lexicographic z-then-y-then-x this replaced: a
-/// lexicographic order is contiguous along one axis and arbitrarily far apart
-/// along the other two, so the matvec's near-field block for a panel straddles
-/// the whole column. Interleaving the bits makes a run of the column a compact
-/// box in space instead of a row of one.
+/// Quantised against bounds reduced from the same panels, so the key is a
+/// function of the geometry and nothing else.
 fn morton_keys(panel: &[(Panel, f64)], out: &mut Vec<u64>) {
-    // Ascending left fold over the centroids: the bounds decide the key, the key
-    // decides the order, and two runs of one geometry must agree bit for bit.
+    // Ascending left fold: the bounds decide the key, the key decides the order.
     let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
     for &(p, _) in panel {
-        // Three axes, a fixed trip count the compiler unrolls. `min`/`max` are
-        // the branchless form of the compare they replace.
         #[expect(
             clippy::needless_range_loop,
             reason = "`axis` addresses three arrays at once — both rows of `bounds` and \
@@ -570,13 +467,11 @@ fn morton_keys(panel: &[(Panel, f64)], out: &mut Vec<u64>) {
     }
     let lo = bounds[0];
 
-    // Uniforms, hoisted above the map: three spans for the whole column.
     let scale: [f64; 3] = std::array::from_fn(|axis| {
         let span = bounds[1][axis] - lo[axis];
-        // Not a bulk branch: three axes per mesh. A degenerate axis — one layer
-        // of panels all at the same z, or an empty mesh — has no span to divide
-        // by, and a scale of zero collapses that axis of the key rather than
-        // handing the quantiser an infinity.
+        // A degenerate axis — one layer of panels all at the same z, or an empty
+        // mesh — has no span to divide by, and a scale of zero collapses that
+        // axis rather than handing the quantiser an infinity.
         if span > 0.0 {
             MORTON_SPAN / span
         } else {
@@ -584,7 +479,6 @@ fn morton_keys(panel: &[(Panel, f64)], out: &mut Vec<u64>) {
         }
     });
 
-    // Caller-owned: cleared, reserved once, refilled to one key per panel.
     out.clear();
     out.reserve(panel.len());
     for &(p, _) in panel {
@@ -600,9 +494,8 @@ fn morton_keys(panel: &[(Panel, f64)], out: &mut Vec<u64>) {
 /// One coordinate as a `MORTON_BITS`-wide integer.
 ///
 /// The clamp *is* the cast: `f64 as u64` saturates at both ends and maps `NaN`
-/// to zero, so no branch is needed. The panel column has no `NaN` centroid, but
-/// a sort key has to be total whether or not that holds — an unordered key is a
-/// non-deterministic mesh, and determinism here is interface.
+/// to zero, so the key stays total. An unordered key is a non-deterministic
+/// mesh.
 fn quantise(value: f64, lo: f64, scale: f64) -> u64 {
     #[expect(
         clippy::cast_possible_truncation,
@@ -620,10 +513,6 @@ const fn morton3(x: u64, y: u64, z: u64) -> u64 {
 }
 
 /// Spread the low `MORTON_BITS` of `v` so bit `i` lands at bit `3 * i`.
-///
-/// Five shift-and-mask steps, each halving the distance a bit still has to
-/// travel: branchless, constant time, and the reason the key costs nothing next
-/// to the comparison sort that consumes it.
 const fn spread3(v: u64) -> u64 {
     let mut x = v & MORTON_MAX;
     x = (x | x << 32) & 0x001f_0000_0000_ffff;
@@ -634,12 +523,9 @@ const fn spread3(v: u64) -> u64 {
     x
 }
 
-/// Spatial order over two panels, from their centroids and nothing else.
+/// Spatial order over two panels, the tiebreak under [`morton_keys`].
 ///
-/// The tiebreak under [`morton_keys`], not the primary order: two panels whose
-/// centroids quantise into one cell of the key are separated here, so the sort
-/// stays a total order derived only from position. `total_cmp`, so two runs
-/// cannot disagree about a signed zero.
+/// `total_cmp`, so two runs cannot disagree about a signed zero.
 fn spatial_cmp(a: Panel, b: Panel) -> Ordering {
     a.centre[2]
         .total_cmp(&b.centre[2])
@@ -648,17 +534,10 @@ fn spatial_cmp(a: Panel, b: Panel) -> Ordering {
 }
 
 /// Surface area of one conductor, summed from its panels.
-///
-/// **Decision** — pure, and the first thing a meshing test checks: the panels
-/// must tile the conductor exactly, so their areas must sum to the analytic
-/// surface area of the shape. A mesh that loses area loses charge, and a solve
-/// on it is wrong in a way no residual reveals.
 pub fn conductor_area(mesh: &Mesh, conductor: u32) -> f64 {
     let row = conductor as usize;
-    // Fail closed: a conductor past the CSR indexes out of bounds and panics in
-    // every profile. Returning zero for it would make "this conductor has no
-    // surface" and "this conductor is not in this mesh" read the same, and a
-    // zero area is a conductor that stores no charge.
+    // Fail closed: returning zero for a conductor past the CSR would make "no
+    // surface" and "not in this mesh" read the same.
     let (from, to) = (
         mesh.conductor_start[row] as usize,
         mesh.conductor_start[row + 1] as usize,
@@ -666,9 +545,7 @@ pub fn conductor_area(mesh: &Mesh, conductor: u32) -> f64 {
     debug_assert!(from <= to, "a CSR band runs backwards");
     debug_assert!(to <= mesh.panel.len(), "a CSR band leaves the panel column");
 
-    // Ascending left fold: the sum is the oracle a meshing test compares
-    // against an analytic surface area, so it has to be the same sum on every
-    // run.
+    // Ascending left fold, so the sum is the same on every run.
     let mut area = 0.0_f64;
     for panel in &mesh.panel[from..to] {
         area += panel.area;
@@ -677,16 +554,13 @@ pub fn conductor_area(mesh: &Mesh, conductor: u32) -> f64 {
     area
 }
 
-/// The Morton key is bit arithmetic with no coverage in `tests/quasistatic.rs`:
-/// that suite gates on two runs agreeing byte for byte, which a wrong key
-/// satisfies perfectly. These are the checks that do not.
+/// The Morton key is bit arithmetic that a byte-for-byte determinism gate cannot
+/// see: a wrong key satisfies it perfectly.
 #[cfg(test)]
 mod tests {
     use super::{morton3, quantise, spread3, MORTON_BITS, MORTON_MAX, MORTON_SPAN};
 
-    /// Spreading is the inverse of taking every third bit, and it puts bit `i`
-    /// at bit `3 * i` — stated against a scan rather than against a second copy
-    /// of the same five masks.
+    /// Spreading puts bit `i` at bit `3 * i`.
     #[test]
     fn spreading_moves_bit_i_to_bit_three_i() {
         for i in 0..MORTON_BITS {
@@ -711,8 +585,7 @@ mod tests {
     }
 
     /// The three axes occupy disjoint bit positions, so a key can be taken apart
-    /// again. A key that lost an axis would still sort deterministically, which
-    /// is exactly why the determinism gate cannot see this.
+    /// again.
     #[test]
     fn a_key_keeps_all_three_axes_in_disjoint_bits() {
         let (x, y, z) = (0b1011, 0b0110, 0b1101);
