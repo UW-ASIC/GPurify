@@ -1,17 +1,5 @@
-//! Bottom-up hierarchical comparison.
-//!
-//! Comparing a full chip flat is quadratic in a way that does not finish.
-//! Instead cells are compared in dependency order, deepest first; a cell that
-//! matches becomes an opaque device with pins at its parent's level, so the
-//! parent's graph is small. A cell that does *not* match is flattened into its
-//! parent and compared there, because the difference may be one the parent's
-//! context resolves.
-//!
-//! # Flattening a failure is not hiding it
-//!
-//! A cell that fails and is then flattened still reports its own failure. The
-//! flattening is so the parent's comparison is not derailed by it, not so the
-//! result is quieter.
+//! Bottom-up hierarchical comparison: cells in dependency order, deepest first.
+//! A failed cell is flattened into its parent and still reports its own failure.
 
 use crate::compare::{compare, CompareOptions};
 use crate::graph::{narrow, LayoutGraph, RefGraph};
@@ -20,26 +8,15 @@ use crate::verdict::{Inconclusive, Verdict};
 use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::StrId;
 
-/// The order cells are compared in, and which pair with which.
-///
-/// **Five questions.** In: the reference hierarchy and the layout's instance
-/// tree. Out: an ordered list of cell pairings. How many: hundreds to thousands
-/// of cells. Access pattern: built once, walked once in order. Lifetime: one
-/// run. Parallelisable: cells at the same depth are independent, which is the
-/// point of computing the order up front rather than recursing.
-///
-/// The three columns are parallel and the same length: row `i` pairs
-/// `layout_cell[i]` with `ref_subckt[i]` at `depth[i]`. They are public because
-/// the order *is* the output — [`plan`]'s doc calls it table-testable, and with
-/// the columns private the only thing a caller could read was the `Result`.
+/// The order cells are compared in: row `i` pairs `layout_cell[i]` with
+/// `ref_subckt[i]` at `depth[i]`.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ComparisonPlan {
     /// Cells in evaluation order, deepest first.
     pub layout_cell: Vec<StrId>,
     pub ref_subckt: Vec<SubcktId>,
-    /// Depth of each entry, so same-depth runs can be dispatched together.
-    /// Non-decreasing is *not* the invariant — deepest first means `depth` is
-    /// non-increasing along the table.
+    /// Depth of each entry. Deepest first, so `depth` is non-increasing along the
+    /// table — *not* non-decreasing.
     pub depth: Vec<u32>,
 }
 
@@ -53,9 +30,6 @@ pub enum PlanError {
 }
 
 /// Pair cells by name and order them bottom-up.
-///
-/// **Decision** — pure, two hierarchies in, an order out. Table-testable
-/// independently of any geometry, which is why it is separate from the run.
 pub fn plan(
     netlist: &Netlist,
     layout_cells: &[StrId],
@@ -68,8 +42,7 @@ pub fn plan(
     );
     let rows = narrow(layout_cells.len());
 
-    // Cleared before either refusal, so a plan that was not built is empty
-    // rather than holding the previous run's order.
+    // Cleared before either refusal, so a plan that was not built is empty.
     out.layout_cell.clear();
     out.ref_subckt.clear();
     out.depth.clear();
@@ -78,13 +51,11 @@ pub fn plan(
     hierarchy_depths(netlist, &mut subckt_depth)?;
     debug_assert_eq!(subckt_depth.len(), subckts, "one depth per subcircuit");
 
-    // Pair by name. The miss rides in the value as `NO_SUBCKT` rather than
-    // breaking the scan, so the refusal is one check after a branchless pass.
+    // Pair by name; a miss rides in the value as `NO_SUBCKT` rather than breaking
+    // the scan.
     let names = &netlist.subckt_name[..];
 
-    // Sorted once, searched once per cell: the pairing is O(cells log
-    // subcircuits), not O(cells x subcircuits). `row` is part of the key, so the
-    // order is total and an unstable sort is still the same order every run.
+    // `row` is part of the key, so an unstable sort is deterministic.
     let mut by_name: Vec<u32> = (0..narrow(subckts)).collect();
     by_name.sort_unstable_by_key(|&row| (names[row as usize], row));
     debug_assert_eq!(by_name.len(), subckts, "one index entry per subcircuit");
@@ -93,19 +64,12 @@ pub fn plan(
         "the by-name index is unsorted, so a pairing that exists could be missed"
     );
 
-    // One binary search per cell, so the body is a search and not a lane: at
-    // hundreds to thousands of cells with a `partition_point` inside, scalar is
-    // the answer and there is nothing to vectorise. The two branches it does
-    // carry are named at `first_subckt_named`.
     let mut resolved: Vec<u32> = Vec::with_capacity(layout_cells.len());
     for &cell in layout_cells {
         resolved.push(first_subckt_named(names, &by_name, cell));
     }
     debug_assert_eq!(resolved.len(), layout_cells.len(), "one pairing per cell");
 
-    // Counted branchlessly — `bool` is 0 or 1, so the miss rides in the addend
-    // and the scan has no early exit for the refusal to depend on the order of.
-    // A `u32` accumulator is wide enough because `rows` is one.
     let mut unpaired = 0u32;
     for &subckt in &resolved {
         unpaired += u32::from(subckt == NO_SUBCKT);
@@ -115,19 +79,13 @@ pub fn plan(
         return Err(PlanError::Unpairable);
     }
 
-    // Deepest first. Stable, so cells of equal depth keep the caller's order —
-    // "deepest first" says nothing about a tie, and settling one by sort
-    // instability would make the plan differ between two runs of the same
-    // input.
+    // Stable: "deepest first" says nothing about a tie, and settling one by sort
+    // instability would make the plan differ between runs.
     let mut perm: Vec<u32> = (0..rows).collect();
     perm.sort_by_key(|&row| {
         std::cmp::Reverse(subckt_depth[resolved[row as usize] as usize])
     });
 
-    // Three gathers over the same permutation, fused into one pass: `resolved`
-    // is then read once per row instead of twice, and `perm` is walked once
-    // instead of three times. Every address here is data-dependent and every
-    // store is unconditional — a gather is not a branch.
     debug_assert_eq!(resolved.len(), layout_cells.len(), "one pairing per cell");
     debug_assert!(
         out.layout_cell.is_empty() && out.ref_subckt.is_empty() && out.depth.is_empty(),
@@ -157,25 +115,15 @@ pub fn plan(
 /// name resolution stays one pass with no early exit.
 const NO_SUBCKT: u32 = u32::MAX;
 
-/// The first row of `names` holding `want`, or [`NO_SUBCKT`].
-///
-/// **Decision** — a name column, that column's `(name, row)` order, and a name
-/// in; a row out. `by_name` is [`plan`]'s sort, so this is a binary search:
-/// O(log subcircuits) per cell rather than a scan of the whole column.
-///
-/// *First* survives the change because `row` is the tie-break in the key, so
-/// every row carrying a duplicated name sorts in row order and the search lands
-/// on the lowest of them.
+/// The first row of `names` holding `want`, or [`NO_SUBCKT`]. `by_name` must be
+/// [`plan`]'s `(name, row)` sort, whose row tie-break is what makes this land on
+/// the *lowest* row carrying a duplicated name.
 fn first_subckt_named(names: &[StrId], by_name: &[u32], want: StrId) -> u32 {
     debug_assert_eq!(names.len(), by_name.len(), "one index entry per subcircuit");
     // `(want, 0)` sorts below every row that carries `want`, so the partition
     // point is that name's first row and not an arbitrary one of its rows.
     let at = by_name.partition_point(|&row| (names[row as usize], row) < (want, 0));
     debug_assert!(at <= by_name.len(), "partition point left the index");
-    // The two branches are the search's landing check, outside any lane: `at`
-    // is past the end only for a name above every subcircuit's, and the name
-    // compare is a hit on every cell of a hierarchy the layout came from. Both
-    // predict, and the miss is the refusal path `plan` counts afterwards.
     match by_name.get(at) {
         Some(&row) if names[row as usize] == want => row,
         _ => NO_SUBCKT,
@@ -184,18 +132,9 @@ fn first_subckt_named(names: &[StrId], by_name: &[u32], want: StrId) -> u32 {
 
 /// Longest distance from an uninstantiated cell down to each subcircuit.
 ///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled with one
-/// depth per subcircuit.
-///
-/// Measured downward from the top rather than upward from the leaves because
-/// the plan is ordered by it descending, and `depth(callee) >= depth(caller) +
-/// 1` is exactly the guarantee that a child is compared before its parent. A
-/// cell nothing instantiates is depth zero.
-///
-/// Relaxation rather than a marked traversal: the fixpoint of a longest path
-/// over `subckts` nodes is reached within `subckts` passes over the instance
-/// table, so a depth still moving after that is a cycle. One test, no visited
-/// colours and no second traversal to keep in step with the first.
+/// `depth(callee) >= depth(caller) + 1` is exactly the guarantee that a child is
+/// compared before its parent. The fixpoint is reached within `subckts` passes,
+/// so a depth still moving after that is a cycle.
 fn hierarchy_depths(netlist: &Netlist, out: &mut Vec<u32>) -> Result<(), PlanError> {
     let subckts = netlist.subckt_count();
     out.clear();
@@ -215,9 +154,7 @@ fn hierarchy_depths(netlist: &Netlist, out: &mut Vec<u32>) -> Result<(), PlanErr
         moving = relax_depths(callers, callees, out);
         pass += 1;
     }
-    // Fail closed: still moving at the bound means no bottom-up order exists,
-    // and an order built anyway would compare a parent against a child that had
-    // not been abstracted yet.
+    // Fail closed: still moving at the bound means no bottom-up order exists.
     if moving {
         return Err(PlanError::Cyclic);
     }
@@ -229,11 +166,6 @@ fn hierarchy_depths(netlist: &Netlist, out: &mut Vec<u32>) -> Result<(), PlanErr
 }
 
 /// One relaxation pass over the instance edges. Returns whether a depth moved.
-///
-/// `callee` supplies the write *address*, so this is a scatter: two instances
-/// naming the same child write the same slot, and a data-dependent output index
-/// is what makes the shape unvectorisable without lane-conflict detection.
-/// `Netlist::top` has the same shape.
 fn relax_depths(callers: &[SubcktId], callees: &[SubcktId], depth: &mut [u32]) -> bool {
     let cells = depth.len();
     let mut moved = 0u32;
@@ -243,9 +175,7 @@ fn relax_depths(callers: &[SubcktId], callees: &[SubcktId], depth: &mut [u32]) -
             parent < cells && child < cells,
             "instance edge {parent} -> {child} leaves the {cells} subcircuits"
         );
-        // `max` rather than `if want > depth[child]`: the store is
-        // unconditional and the comparison is carried by the value. Saturating
-        // because a cycle is detected by the pass bound, not by a wrap.
+        // Saturating because a cycle is detected by the pass bound, not by a wrap.
         let want = depth[parent].saturating_add(1);
         let was = depth[child];
         let now = was.max(want);
@@ -265,18 +195,9 @@ pub struct CellResult {
     pub flattened: bool,
 }
 
-/// Run a planned hierarchical comparison.
-///
-/// **Transform, A-to-B.** Caller owns `out`. Cells are compared in plan order;
-/// a matched cell is abstracted into its parent, a failed one is flattened, and
-/// both facts are recorded per cell.
-///
-/// # One graph pair, so one comparison
-///
-/// The signature carries a single `(layout, reference)` pair, so a plan of more
-/// than one cell has no per-cell graph to compare. Those runs report every cell
-/// as [`Inconclusive::UncomparedCell`] rather than repeating one comparison's
-/// verdict across every row — see that variant, and the body.
+/// Run a planned hierarchical comparison, refilling `out`. A plan of more than
+/// one cell has no per-cell graph to compare and reports every cell as
+/// [`Inconclusive::UncomparedCell`].
 pub fn run(
     plan: &ComparisonPlan,
     layout: &LayoutGraph,
@@ -291,44 +212,26 @@ pub fn run(
     );
     debug_assert_eq!(plan.layout_cell.len(), plan.depth.len());
 
-    // Refilled, not appended to: a run into a reused buffer that appended would
-    // report every cell of the previous run a second time.
+    // Refilled, not appended to.
     out.clear();
     out.reserve(plan.layout_cell.len());
 
-    // One refinement state for the whole run. Reusing it across cells is the
-    // allocation `compare`'s `scratch` parameter exists to avoid.
+    // One refinement state for the whole run.
     let mut scratch = Partition::default();
 
-    // The signature hands `run` one pair of graphs and no way to fetch another,
-    // so `ref_subckt` selects nothing and there is exactly one comparison to be
-    // had however many cells the plan holds. Abstracting a matched cell into its
-    // parent, and flattening a failed one into it, both need a per-cell graph
-    // source and a parent graph to write; neither is a parameter here, and the
-    // gap is filed under `## lvs` in `docs/SIGNATURE_DEFECTS.md`.
-    //
-    // A single-cell plan is the one shape where the pair the caller handed in
-    // unambiguously belongs to the cell the plan names, because there is one
-    // candidate. Past that, `RefGraph` carries no `SubcktId` and so cannot be
-    // checked against `ref_subckt[i]`, which makes *every* row an attribution
-    // nothing supports — this used to run the same comparison per row and hand
-    // out N `Match`es for one, so N − 1 cells got a clean verdict they were
-    // never entitled to. `Inconclusive::UncomparedCell` is what those rows say
-    // now. Uniform, hoisted: it is one property of the plan, not of a cell.
+    // A single-cell plan is the one shape where the caller's pair unambiguously
+    // belongs to the cell the plan names; repeating it across rows would hand out
+    // N `Match`es for one comparison.
     let single = plan.layout_cell.len() == 1;
 
-    // Not a bulk loop: one iteration is a whole graph comparison.
     for &cell in &plan.layout_cell {
         let verdict = if single {
             compare(layout, reference, options, &mut scratch)
         } else {
             Verdict::Inconclusive(Inconclusive::UncomparedCell(cell))
         };
-        // A cell that did not match cannot stand in for itself as an opaque
-        // device at its parent's level, so it is flattened there instead.
         // `Inconclusive` counts as "did not match": abstracting away a cell the
-        // run could not conclude about is the one path from "gave up" to
-        // "matched" this crate does not have.
+        // run could not conclude about is a path from "gave up" to "matched".
         let flattened = !matches!(verdict, Verdict::Match);
         out.push(CellResult {
             cell,
