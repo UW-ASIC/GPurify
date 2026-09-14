@@ -1,8 +1,4 @@
-//! Command line surface.
-//!
-//! Usage-driven: the shape below is what someone running a signoff check
-//! actually types, not a mirror of the library's structure. Where the two
-//! disagree, this follows the usage and translates.
+//! Command line surface: `Args`, the parser, and the translation into `engine`.
 
 use std::path::PathBuf;
 
@@ -13,11 +9,7 @@ pub struct Args {
     pub common: Common,
 }
 
-/// Which check to run.
-///
-/// A subcommand rather than a flag, because the required inputs differ: `lvs`
-/// needs a reference netlist and the others do not, and a subcommand can say so
-/// in its own usage line instead of failing at runtime.
+/// Which check to run, and the inputs that check alone accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Design rule check.
@@ -28,12 +20,11 @@ pub enum Command {
     Lvs { reference: PathBuf },
     /// Parasitic extraction.
     Pex {
-        /// Nets to solve by field solve rather than closed form. Everything
-        /// else is analytical.
+        /// Nets to solve by field solve rather than closed form.
         quasistatic: Vec<String>,
     },
-    /// Everything at once. Optional inputs disable their checks, and the
-    /// summary reports each as skipped rather than passed.
+    /// Everything at once. A missing optional input leaves its check selected
+    /// and reported as skipped, rather than dropping it from the summary.
     All {
         reference: Option<PathBuf>,
         intent: Option<PathBuf>,
@@ -48,24 +39,20 @@ pub struct Common {
     pub format: Format,
     /// Where output goes. `None` is stdout.
     pub output: Option<PathBuf>,
-    /// Worker threads. Speed only — output must be byte-identical at any
-    /// value, and `--check-determinism` is how you confirm that.
+    /// Worker threads. Speed only: output is byte-identical at any value.
     pub threads: Option<usize>,
     /// Run twice, at one thread and at many, and fail if the outputs differ.
-    /// Exposed on the command line because it is the determinism gate, and a
-    /// gate nobody can run is not a gate.
     pub check_determinism: bool,
     /// Reject geometry on layers the deck does not describe, rather than
-    /// dropping it. On by default; a signoff run wants it.
+    /// dropping it. On by default.
     pub strict_layers: bool,
     /// Database units per micrometre, from `--grid`.
     ///
-    /// `None` is the absence of the flag, and it stops the run at
+    /// `None` is the absence of the flag and stops the run at
     /// [`LoadError::NoGrid`](gpurify_ingest::layout::LoadError) before a file is
-    /// opened. That is deliberate and must stay: a deck file does **not** declare
-    /// a resolution — `read_deck` is *handed* one — so defaulting a value here
-    /// would silently reinterpret every limit in the deck, turning a loud dead
-    /// binary into a quiet wrong one. Absent means absent.
+    /// opened. A deck does not declare a resolution — `read_deck` is *handed*
+    /// one — so a default here would silently reinterpret every limit in the
+    /// deck. Absent means absent.
     pub grid: Option<u32>,
 }
 
@@ -87,25 +74,15 @@ pub enum Format {
 impl Format {
     /// True for the formats whose body is the parasitic network rather than the
     /// violation table.
-    ///
-    /// Only `pex` and `all` fill [`Outputs::parasitics`](gpurify_engine::Outputs),
-    /// so asking any other check for one is a usage error caught before a file
-    /// is read — not an empty netlist written after a run that had nothing to
-    /// put in it.
     pub fn is_parasitic(self) -> bool {
         matches!(self, Format::Spef | Format::Dspf)
     }
 }
 
-/// Parse and validate.
+/// Parse and validate a command line into [`Args`].
 ///
-/// **Decision** — pure, argv in, either [`Args`] or a message out. Pure so the
-/// whole surface is table-testable without a process: a list of argument
-/// vectors and their expected parses, including every rejection.
-///
-/// `argv` **excludes the program name**: `argv[0]` is the subcommand, so a
-/// caller passes `std::env::args().skip(1)` and a test passes the arguments it
-/// means. An empty slice is a usage error, not a default run.
+/// `argv` **excludes the program name**: `argv[0]` is the subcommand. An empty
+/// slice is a usage error, not a default run.
 pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
     let (subcommand, rest) = argv.split_first().ok_or_else(|| {
         ArgError::Usage("expected a subcommand: drc, erc, lvs, pex or all".to_string())
@@ -118,19 +95,13 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
     let mut threads: Option<usize> = None;
     let mut grid: Option<u32> = None;
     let mut check_determinism = false;
-    // On by default. Dropping geometry from a layer the deck never described
-    // is the fail-open case, so it takes an explicit `--no-strict-layers`.
+    // On by default: dropping geometry from a layer the deck never described is
+    // the fail-open case, so turning it off takes an explicit flag.
     let mut strict_layers = true;
     let mut intent: Option<&str> = None;
     let mut reference: Option<&str> = None;
     let mut quasistatic: Vec<String> = Vec::new();
 
-    // An index walk, and permanently so: the bulk-loop discipline scopes to
-    // thousands of homogeneous rows, and argv is tens of heterogeneous tokens
-    // whose meanings differ per token. An option also consumes the token after
-    // it, so `taken` carries state from one iteration to the next — the chain
-    // dependency `/simd-loops` triage names as the blocker. Not debt.
-    //
     // Every option a subcommand has no field for is accepted here and refused
     // below, so the refusal message can name the subcommand.
     let mut index = 0;
@@ -157,11 +128,6 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
                 })?);
                 taken = 2;
             }
-            // Optional, not required, and that is the whole grammar decision:
-            // making it required would invalidate every command line that
-            // already parses, while defaulting it would reinterpret the deck.
-            // Absent keeps exactly the behaviour this binary had — a refusal at
-            // load — and supplying it is what makes any stage reachable at all.
             "--grid" => {
                 let raw = value(rest, index)?;
                 grid = Some(raw.parse().ok().filter(|per_um| *per_um > 0).ok_or_else(|| {
@@ -190,19 +156,14 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
             _ if token.starts_with('-') => {
                 return Err(ArgError::Usage(format!("unknown option {token}")));
             }
-            // An empty positional is refused for the same reason `value` refuses
-            // an empty option value, and separately: it would satisfy the
-            // `layout.ok_or_else` below and reach `Inputs::layout` as a path
-            // that names no file, which `to_inputs` already debug-asserts
-            // against.
+            // An empty positional would satisfy the `layout.ok_or_else` below
+            // and reach `Inputs::layout` as a path that names no file.
             "" => {
                 return Err(ArgError::Usage(
                     "the layout file was given as an empty path".to_string(),
                 ))
             }
             positional => {
-                // Branchy on purpose: the taken side returns, and one token
-                // per command line is not a loop the predictor can miss on.
                 if layout.replace(positional).is_some() {
                     return Err(ArgError::Usage(format!(
                         "one layout file, but a second was given: {positional}"
@@ -265,14 +226,12 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
         other => return Err(ArgError::UnknownCommand(other.to_string())),
     };
 
-    // GDS output is violation markers. The two checks that produce none would
-    // write an empty layout, which reads in a viewer exactly like a clean run.
+    // GDS output is violation markers, and SPEF/DSPF are the parasitic network.
+    // A check that produces neither would write an empty file, which reads
+    // exactly like a clean run.
     if format == Format::Gds && matches!(command, Command::Lvs { .. } | Command::Pex { .. }) {
         return Err(ArgError::FormatMismatch("gds"));
     }
-    // The mirror of it: SPEF and DSPF are the parasitic network, and only `pex`
-    // and `all` extract one. Writing an empty netlist for a check that never
-    // ran extraction is the same false clean read from the other end.
     if format.is_parasitic() && !matches!(command, Command::Pex { .. } | Command::All { .. }) {
         return Err(ArgError::FormatMismatch(match format {
             Format::Spef => "spef",
@@ -286,9 +245,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
         ))
     })?;
     let deck = deck.ok_or_else(|| ArgError::Usage("--deck <deck> is required".to_string()))?;
-    // The guarantee `to_inputs` opens by asserting. Stated at the producing end
-    // too, because a consumer asserting what its producer never promised is a
-    // panic waiting on an input nobody tried.
+    // The guarantee `to_inputs` opens by asserting.
     debug_assert!(!layout.is_empty() && !deck.is_empty());
 
     Ok(Args {
@@ -306,14 +263,11 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
     })
 }
 
-/// The token after the option at `index`, or the usage error naming what was
-/// left off the end of the command line.
+/// The token after the option at `index`, or a usage error.
 ///
-/// The empty string is refused here rather than at each call site: every option
-/// on this command line names a path or a net, and neither has an empty
-/// spelling. `--deck ""` would otherwise reach `engine` as a path that opens
-/// nothing, and `--quasistatic ""` as a net name that matches nothing and so
-/// silently field-solves one net fewer than was asked for.
+/// The empty string is refused: every option here names a path or a net, and
+/// neither has an empty spelling, so `--quasistatic ""` would silently
+/// field-solve one net fewer than was asked for.
 fn value(rest: &[String], index: usize) -> Result<&str, ArgError> {
     debug_assert!(index < rest.len());
     let token = rest
@@ -330,9 +284,8 @@ fn value(rest: &[String], index: usize) -> Result<&str, ArgError> {
     }
 }
 
-/// One name, one variant. An unknown name is a usage error rather than a silent
-/// fall back to text — a run asked for JSON and given text is a run whose output
-/// nothing downstream can read.
+/// One `--format` name to its variant; an unknown name is a usage error rather
+/// than a silent fall back to text.
 fn format_named(name: &str) -> Result<Format, ArgError> {
     match name {
         "text" => Ok(Format::Text),
@@ -359,10 +312,6 @@ pub enum ArgError {
 }
 
 /// Translate the parsed arguments into what `engine` wants.
-///
-/// **Decision** — pure. Separate from [`parse`] so the mapping from a
-/// convenient command line to a precise library call is testable on its own,
-/// and so the two can differ without one deforming the other.
 pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOptions) {
     debug_assert!(
         !args.common.layout.as_os_str().is_empty() && !args.common.deck.as_os_str().is_empty(),
@@ -375,9 +324,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
         lvs: false,
         pex: false,
     };
-    // One match, because all four outputs are the same decision: the
-    // subcommand names both the check to select and the inputs it may carry.
-    // `All` selects LVS whether or not a reference was given — the run then
+    // `All` selects LVS whether or not a reference was given: the run then
     // reports it Skipped, where dropping the check would leave a summary that
     // never mentions LVS at all.
     let (checks, reference, intent, quasistatic_nets) = match &args.command {
@@ -418,9 +365,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
     let inputs = gpurify_engine::Inputs {
         layout: args.common.layout.clone(),
         deck: args.common.deck.clone(),
-        // Supplied by `--grid`, and `None` when the flag is absent. `Grid::new`
-        // refuses a zero, which the parser has already excluded, so the
-        // `and_then` keeps the absence and cannot invent a resolution.
+        // `Grid::new` refuses a zero, which the parser has already excluded.
         grid: args.common.grid.map(|per_um| {
             gpurify_units::Grid::new(i64::from(per_um))
                 .expect("the parser refuses a non-positive resolution, so this cannot fail")
@@ -450,39 +395,6 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
 }
 
 /// The command line, table-tested.
-///
-/// [`parse`] and [`to_inputs`] are private to the binary, so their tests live
-/// here rather than in `tests/` — there is no library target to reach them
-/// through. Every case below is **construct-from-answer**: an argument vector
-/// whose correct parse is decided before the parser runs, which is the whole
-/// reason the Definition-Phase made these two functions pure.
-///
-/// # The grammar these tests fix
-///
-/// The frozen signatures name the fields but not their spelling on the command
-/// line, so the spelling is settled here and the Implementation-Phase conforms
-/// to it:
-///
-/// ```text
-/// gpurify <check> <layout> --deck <deck> [options]
-///
-/// checks    drc | erc | lvs | pex | all
-/// shared    --deck <path>              required
-///           --format text|json|gds     default text
-///           --output <path>            default stdout
-///           --threads <n>              default: unset
-///           --check-determinism        default off
-///           --strict-layers            default on
-///           --no-strict-layers         turns it off
-/// erc, all  --intent <path>            optional
-/// lvs       --reference <path>         required
-/// all       --reference <path>         optional
-/// pex       --quasistatic <net>        repeatable
-/// ```
-///
-/// `argv` here is the arguments **without** the program name: `argv[0]` is the
-/// subcommand. The signature says only "argv in", so that is a choice, and it
-/// is recorded here because nothing else in the tree states it.
 #[cfg(test)]
 mod tests {
     use super::{parse, to_inputs, ArgError, Args, Command, Format};
@@ -490,8 +402,7 @@ mod tests {
     use gpurify_testgen::Rng;
     use std::path::{Path, PathBuf};
 
-    /// The shortest command line that parses, as a starting point for the
-    /// tests that vary one thing about it.
+    /// The shortest command line that parses.
     const BASE: &[&str] = &["drc", "top.gds", "--deck", "rules.json"];
 
     fn owned(argv: &[&str]) -> Vec<String> {
@@ -512,9 +423,7 @@ mod tests {
         }
     }
 
-    /// `Args` and `Command` carry no `PartialEq`, so a table test names the
-    /// variant rather than comparing values. Recorded in the return value as a
-    /// Definition-Phase gap.
+    /// The variant's name, so a table test can compare without `PartialEq`.
     fn command_name(command: &Command) -> &'static str {
         match command {
             Command::Drc => "drc",
@@ -532,9 +441,7 @@ mod tests {
         argv
     }
 
-    /// Oracle: construct-from-answer. Each row is an argument vector and the
-    /// subcommand it must select; the shared flags must survive every one of
-    /// them, which is the claim that justifies one binary rather than four.
+    /// The shared flags must survive every subcommand.
     #[test]
     fn every_subcommand_selects_its_own_command_and_keeps_the_shared_flags() {
         let cases: [(&[&str], &str); 5] = [
@@ -562,10 +469,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The defaults are part of the interface —
-    /// a run that says nothing about output gets text on stdout, one unstated
-    /// thread count, no determinism re-run, and strict layer checking, which
-    /// the doc comment on `Common` calls what a signoff run wants.
+    /// The defaults are part of the interface.
     #[test]
     fn the_defaults_are_text_on_stdout_with_strict_layers_on() {
         let args = parse_ok(BASE);
@@ -580,13 +484,7 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer, and the reason `--grid` exists.
-    ///
-    /// A deck file does **not** declare a resolution — `read_deck` is *handed*
-    /// one — so before this flag there was no way to supply it and every run of
-    /// this binary stopped at `LoadError::NoGrid` before a file was opened.
-    /// Measured at the time: no CLI invocation could reach the LVS stage, or any
-    /// other.
+    /// The parsed resolution must reach `Inputs`, or the flag is decoration.
     #[test]
     fn a_stated_grid_reaches_the_inputs_that_carry_it() {
         let args = parse_ok(&["drc", "top.gds", "--deck", "rules.json", "--grid", "1000"]);
@@ -599,11 +497,8 @@ mod tests {
         );
     }
 
-    /// Oracle: the fail-closed half, and the one that must never be traded for
-    /// convenience. Absent means **absent**: a defaulted grid would silently
-    /// reinterpret every limit in the deck — a 100 nm rule read against the
-    /// wrong resolution is a different rule — turning a loud dead binary into a
-    /// quiet wrong one. So the flag is optional and its absence still refuses.
+    /// The fail-closed half: a defaulted grid would reinterpret every limit in
+    /// the deck, so absent means absent.
     #[test]
     fn no_grid_flag_leaves_the_resolution_absent_rather_than_defaulted() {
         let args = parse_ok(BASE);
@@ -616,9 +511,8 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer. A resolution is a positive count of
-    /// database units per micrometre. Zero is what `Grid::new` refuses, and the
-    /// parser refuses it first so the conversion in `to_inputs` cannot fail.
+    /// The parser refuses a non-positive resolution before `to_inputs` converts
+    /// it, so that conversion cannot fail.
     #[test]
     fn a_grid_that_is_not_a_positive_count_is_refused() {
         for bad in ["0", "-4", "eleven", "1.5"] {
@@ -632,8 +526,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. Every shared flag, given explicitly, and
-    /// the value it must land on.
+    /// Every shared flag, given explicitly, and the value it must land on.
     #[test]
     fn every_shared_flag_reaches_the_field_it_names() {
         let args = parse_ok(&[
@@ -655,9 +548,7 @@ mod tests {
         assert!(args.common.check_determinism);
     }
 
-    /// Oracle: construct-from-answer. Three names, three variants, and no
-    /// fourth name — an unrecognised format is a usage error rather than a
-    /// silent fall back to text.
+    /// An unrecognised format is a usage error, not a fall back to text.
     #[test]
     fn each_format_name_maps_to_its_variant_and_no_other_name_is_accepted() {
         let cases = [
@@ -675,9 +566,7 @@ mod tests {
         ));
     }
 
-    /// Oracle: construct-from-answer. `strict_layers` defaults on, so the
-    /// interesting case is turning it off, and both spellings must reach the
-    /// field rather than one of them being quietly ignored.
+    /// Both spellings must reach the field.
     #[test]
     fn strict_layers_stays_on_until_it_is_explicitly_turned_off() {
         assert!(parse_ok(BASE).common.strict_layers);
@@ -689,9 +578,8 @@ mod tests {
         assert!(!turned_off.common.strict_layers);
     }
 
-    /// Oracle: construct-from-answer. The optional input each subcommand
-    /// accepts lands on that subcommand's own field, and its absence is
-    /// `None` rather than a default path.
+    /// An optional input lands on its own subcommand's field, and its absence
+    /// is `None` rather than a default path.
     #[test]
     fn each_subcommands_own_inputs_land_on_its_own_fields() {
         let erc = parse_ok(&[
@@ -729,9 +617,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. Repeated options accumulate in the order
-    /// given, because the order is what the caller wrote and reordering it
-    /// would make two equivalent command lines produce different run options.
+    /// Repeated options accumulate in the order given.
     #[test]
     fn pex_collects_every_quasistatic_net_in_the_order_given() {
         let args = parse_ok(&[
@@ -754,10 +640,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. `lvs` without a reference is its own
-    /// error, not a generic usage message, because the caller can act on it —
-    /// and the contrasting half is that `all` without one is legal, since it
-    /// reports LVS as skipped rather than refusing the whole run.
+    /// `lvs` without a reference is its own error; `all` without one is legal.
     #[test]
     fn lvs_without_a_reference_is_missing_reference_but_all_without_one_is_legal() {
         assert!(matches!(
@@ -775,9 +658,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. `all` takes both optional inputs and
-    /// must carry both through; dropping one would turn a requested check into
-    /// a skipped one without saying so.
+    /// `all` carries both optional inputs through.
     #[test]
     fn all_carries_both_optional_inputs_when_they_are_given() {
         let args = parse_ok(&[
@@ -799,8 +680,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. GDS output is violation markers, so the
-    /// two checks that produce no markers refuse it rather than writing an
+    /// A check that produces no markers refuses GDS rather than writing an
     /// empty layout that reads as a clean result.
     #[test]
     fn gds_output_is_refused_for_the_checks_that_produce_no_markers() {
@@ -839,9 +719,7 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The unknown subcommand comes back in the
-    /// error so a script can log what was typed, and the message names the
-    /// alternatives so a person does not have to find the usage text.
+    /// The unknown subcommand comes back in the error, alongside the valid ones.
     #[test]
     fn an_unknown_subcommand_is_named_back_alongside_the_valid_ones() {
         let error = parse_err(&["dcr", "top.gds", "--deck", "rules.json"]);
@@ -858,10 +736,8 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. Every rejection the parser owns, in one
-    /// table. The last three are the fail-closed cases: an option a subcommand
-    /// has no field for is refused rather than accepted and dropped, which is
-    /// the silent-loss failure this workspace is built against.
+    /// Every rejection the parser owns. The last three are the fail-closed
+    /// cases: an option a subcommand has no field for is refused, not dropped.
     #[test]
     fn every_malformed_command_line_is_a_usage_error() {
         let cases: &[&[&str]] = &[
@@ -917,11 +793,8 @@ mod tests {
         }
     }
 
-    /// Oracle: law. Options are a set, not a sequence: permuting them must not
-    /// change the parse. The permutations come from the seeded generator so
-    /// this covers arrangements nobody would think to write into a table, and
-    /// the positional layout moves with them, which is what pins down how a
-    /// bare token is told apart from an option's value.
+    /// Options are a set, not a sequence: permuting them must not change the
+    /// parse, and the positional moves with them.
     #[test]
     fn permuting_the_options_does_not_change_the_parse() {
         let groups: [&[&str]; 7] = [
@@ -960,9 +833,7 @@ mod tests {
         }
     }
 
-    /// Oracle: determinism. `parse` is documented pure, so the same argument
-    /// vector gives the same answer twice. Compared through `Debug` because
-    /// `Args` carries no `PartialEq`.
+    /// The same argv gives the same answer twice.
     #[test]
     fn parsing_the_same_argv_twice_gives_the_same_answer() {
         let argv = [
@@ -982,9 +853,7 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    /// Oracle: construct-from-answer. One row per subcommand, and the set of
-    /// checks it must select. `all` selects all four **including LVS**, which
-    /// is the case the next test turns on.
+    /// One row per subcommand, and the set of checks it must select.
     #[test]
     fn each_subcommand_selects_only_its_own_check() {
         let none = Checks {
@@ -1022,10 +891,8 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The case the plan singles out: `all`
-    /// without `--reference` must still **select** LVS and leave the path
-    /// `None`, so the run reports it as skipped. Dropping the check instead
-    /// would produce a summary that never mentions LVS at all.
+    /// `all` without `--reference` still selects LVS, so the run reports it
+    /// skipped rather than omitting it from the summary.
     #[test]
     fn all_without_a_reference_still_selects_lvs_so_the_run_reports_it_skipped() {
         let (inputs, options) = to_inputs(&parse_ok(&["all", "top.gds", "--deck", "rules.json"]));
@@ -1041,9 +908,8 @@ mod tests {
         assert_eq!(options.checks, Checks::ALL);
     }
 
-    /// Oracle: construct-from-answer. Layout and deck reach `Inputs` from
-    /// every subcommand; the optional inputs reach it only from the
-    /// subcommands that accept them, and their absence stays absent.
+    /// Layout and deck reach `Inputs` from every subcommand; an optional input
+    /// reaches it only from the subcommands that accept it.
     #[test]
     fn the_paths_on_the_command_line_are_the_paths_in_inputs() {
         let (erc, _) = to_inputs(&parse_ok(&[
@@ -1093,9 +959,8 @@ mod tests {
         assert_eq!(all.intent.as_deref(), Some(Path::new("intent.json")));
     }
 
-    /// Oracle: construct-from-answer. The two `RunOptions` fields the command
-    /// line feeds, and what they must hold when the command line is silent
-    /// about them.
+    /// The two `RunOptions` fields the command line feeds, including what they
+    /// hold when it is silent about them.
     #[test]
     fn the_thread_count_and_the_quasistatic_nets_reach_the_run_options() {
         let (_, threaded) = to_inputs(&parse_ok(&[
