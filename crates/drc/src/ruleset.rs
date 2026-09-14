@@ -32,6 +32,36 @@ use crate::rules::width::{MaxWidthTable, MinEdgeLengthTable, MinWidthTable, Notc
 use crate::rules::{area, grid, overlay, patterning, spacing, via, width};
 use crate::{Design, DrcError, Scratch};
 
+/// Files a deck row into its table: check the layer count, parse the
+/// parameters, then push one value into each column.
+///
+/// Each entry reads `<index> "<kind>" <table> [<layers>] { <column>: <value> }`,
+/// and the index's name is asserted against [`KINDS`] exactly as a hand-written
+/// arm did — filing a row one table over is the failure this dispatcher exists
+/// to prevent, and it is invisible in the output.
+///
+/// **Every value is parsed before any column is pushed.** A row that fails
+/// parsing must not leave one column longer than its siblings; that is the
+/// invariant `row_columns!` asserts on every `len`.
+///
+/// Kinds whose arm does more than this — a CSR run, a derived column, a
+/// narrowing cast — are written out after `@rest` and are spliced in unchanged.
+macro_rules! deck_arms {
+    ($set:ident, $spec:ident, $kind:ident, $layers:ident,
+     $($n:literal $name:literal $table:ident [$count:literal] { $($col:ident : $val:expr),+ $(,)? })+
+     @rest $($rest:tt)*) => {
+        match $kind {
+            $($n => {
+                debug_assert_eq!(KINDS[$kind], $name);
+                $layers($spec, $count)?;
+                let ($($col,)+) = ($($val,)+);
+                $($set.$table.$col.push($col);)+
+            })+
+            $($rest)*
+        }
+    };
+}
+
 /// Runs one transform per **non-empty** table, in the order written.
 ///
 /// The emptiness guard is the point, not an optimisation: a kind the deck does
@@ -339,120 +369,28 @@ impl RuleSet {
             // row one table over is the failure mode this dispatcher exists to
             // make impossible, and it is invisible in the output: the run would
             // report the wrong rule's id against a measurement it never took.
-            match kind {
-                0 => {
-                    debug_assert_eq!(KINDS[kind], "min_width");
-                    layers(spec, 1)?;
-                    let limit = length(spec, "limit")?;
-                    set.min_width.rule.push(spec.id);
-                    set.min_width.layer.push(layer(spec, 0));
-                    set.min_width.limit.push(limit);
-                }
-                1 => {
-                    debug_assert_eq!(KINDS[kind], "max_width");
-                    layers(spec, 1)?;
-                    let limit = length(spec, "limit")?;
-                    set.max_width.rule.push(spec.id);
-                    set.max_width.layer.push(layer(spec, 0));
-                    set.max_width.limit.push(limit);
-                }
-                2 => {
-                    debug_assert_eq!(KINDS[kind], "min_edge_length");
-                    layers(spec, 1)?;
-                    let limit = length(spec, "limit")?;
-                    set.min_edge_length.rule.push(spec.id);
-                    set.min_edge_length.layer.push(layer(spec, 0));
-                    set.min_edge_length.limit.push(limit);
-                }
-                3 => {
-                    debug_assert_eq!(KINDS[kind], "notch");
-                    layers(spec, 1)?;
-                    let limit = length(spec, "limit")?;
-                    set.notch.rule.push(spec.id);
-                    set.notch.layer.push(layer(spec, 0));
-                    set.notch.limit.push(limit);
-                }
-                4 => {
-                    debug_assert_eq!(KINDS[kind], "min_spacing");
-                    layers(spec, 1)?;
-                    let limit = length(spec, "limit")?;
-                    set.min_spacing.rule.push(spec.id);
-                    set.min_spacing.layer.push(layer(spec, 0));
-                    set.min_spacing.limit.push(limit);
-                }
-                5 => {
-                    debug_assert_eq!(KINDS[kind], "min_spacing_diff");
-                    layers(spec, 2)?;
-                    let limit = length(spec, "limit")?;
-                    set.min_spacing_diff.rule.push(spec.id);
-                    set.min_spacing_diff.a.push(layer(spec, 0));
-                    set.min_spacing_diff.b.push(layer(spec, 1));
-                    set.min_spacing_diff.limit.push(limit);
-                }
-                6 => {
-                    debug_assert_eq!(KINDS[kind], "eol_spacing");
-                    layers(spec, 1)?;
-                    let eol_width = length(spec, "eol_width")?;
-                    let limit = length(spec, "limit")?;
-                    set.eol_spacing.rule.push(spec.id);
-                    set.eol_spacing.layer.push(layer(spec, 0));
-                    set.eol_spacing.eol_width.push(eol_width);
-                    set.eol_spacing.limit.push(limit);
-                }
-                7 => {
-                    debug_assert_eq!(KINDS[kind], "prl_spacing");
-                    layers(spec, 1)?;
-                    let prl_threshold = length(spec, "prl_threshold")?;
-                    let limit = length(spec, "limit")?;
-                    set.prl_spacing.rule.push(spec.id);
-                    set.prl_spacing.layer.push(layer(spec, 0));
-                    set.prl_spacing.prl_threshold.push(prl_threshold);
-                    set.prl_spacing.limit.push(limit);
-                }
-                8 => {
-                    debug_assert_eq!(KINDS[kind], "corner_to_corner");
-                    layers(spec, 1)?;
-                    let limit = length(spec, "limit")?;
-                    set.corner_to_corner.rule.push(spec.id);
-                    set.corner_to_corner.layer.push(layer(spec, 0));
-                    set.corner_to_corner.limit.push(limit);
-                }
-                9 => {
-                    debug_assert_eq!(KINDS[kind], "wide_dependent_spacing");
-                    layers(spec, 1)?;
-                    let width_threshold = length(spec, "width_threshold")?;
-                    let limit = length(spec, "limit")?;
-                    set.wide_dependent_spacing.rule.push(spec.id);
-                    set.wide_dependent_spacing.layer.push(layer(spec, 0));
-                    set.wide_dependent_spacing
-                        .width_threshold
-                        .push(width_threshold);
-                    set.wide_dependent_spacing.limit.push(limit);
-                }
-                10 => {
-                    debug_assert_eq!(KINDS[kind], "min_area");
-                    layers(spec, 1)?;
-                    let limit = square(spec, "limit")?;
-                    set.min_area.rule.push(spec.id);
-                    set.min_area.layer.push(layer(spec, 0));
-                    set.min_area.limit.push(limit);
-                }
-                11 => {
-                    debug_assert_eq!(KINDS[kind], "min_enclosed_area");
-                    layers(spec, 1)?;
-                    let limit = square(spec, "limit")?;
-                    set.min_enclosed_area.rule.push(spec.id);
-                    set.min_enclosed_area.layer.push(layer(spec, 0));
-                    set.min_enclosed_area.limit.push(limit);
-                }
-                12 => {
-                    debug_assert_eq!(KINDS[kind], "cheesing");
-                    layers(spec, 1)?;
-                    let max_unslotted = square(spec, "max_unslotted")?;
-                    set.cheesing.rule.push(spec.id);
-                    set.cheesing.layer.push(layer(spec, 0));
-                    set.cheesing.max_unslotted.push(max_unslotted);
-                }
+            deck_arms! { set, spec, kind, layers,
+                0 "min_width" min_width [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
+                1 "max_width" max_width [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
+                2 "min_edge_length" min_edge_length [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
+                3 "notch" notch [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
+                4 "min_spacing" min_spacing [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
+                5 "min_spacing_diff" min_spacing_diff [2] { rule: spec.id, a: layer(spec, 0), b: layer(spec, 1), limit: length(spec, "limit")? }
+                6 "eol_spacing" eol_spacing [1] { rule: spec.id, layer: layer(spec, 0), eol_width: length(spec, "eol_width")?, limit: length(spec, "limit")? }
+                7 "prl_spacing" prl_spacing [1] { rule: spec.id, layer: layer(spec, 0), prl_threshold: length(spec, "prl_threshold")?, limit: length(spec, "limit")? }
+                8 "corner_to_corner" corner_to_corner [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
+                9 "wide_dependent_spacing" wide_dependent_spacing [1] { rule: spec.id, layer: layer(spec, 0), width_threshold: length(spec, "width_threshold")?, limit: length(spec, "limit")? }
+                10 "min_area" min_area [1] { rule: spec.id, layer: layer(spec, 0), limit: square(spec, "limit")? }
+                11 "min_enclosed_area" min_enclosed_area [1] { rule: spec.id, layer: layer(spec, 0), limit: square(spec, "limit")? }
+                12 "cheesing" cheesing [1] { rule: spec.id, layer: layer(spec, 0), max_unslotted: square(spec, "max_unslotted")? }
+                14 "min_enclosure" min_enclosure [2] { rule: spec.id, outer: layer(spec, 0), inner: layer(spec, 1), limit: length(spec, "limit")? }
+                15 "asymmetric_enclosure" asymmetric_enclosure [2] { rule: spec.id, outer: layer(spec, 0), inner: layer(spec, 1), min_one_side: length(spec, "min_one_side")? }
+                16 "min_extension" min_extension [2] { rule: spec.id, layer: layer(spec, 0), reference: layer(spec, 1), limit: length(spec, "limit")? }
+                17 "overlap" overlap [2] { rule: spec.id, a: layer(spec, 0), b: layer(spec, 1), limit: length(spec, "limit")? }
+                18 "max_distance_to_tap" max_distance_to_tap [2] { rule: spec.id, well: layer(spec, 0), tap: layer(spec, 1), limit: length(spec, "limit")? }
+                19 "off_grid" off_grid [0] { rule: spec.id, pitch: length(spec, "pitch")? }
+
+                @rest
                 13 => {
                     debug_assert_eq!(KINDS[kind], "density");
                     layers(spec, 1)?;
@@ -473,59 +411,6 @@ impl RuleSet {
                     } else {
                         LimitSense::Minimum
                     });
-                }
-                14 => {
-                    debug_assert_eq!(KINDS[kind], "min_enclosure");
-                    layers(spec, 2)?;
-                    let limit = length(spec, "limit")?;
-                    set.min_enclosure.rule.push(spec.id);
-                    set.min_enclosure.outer.push(layer(spec, 0));
-                    set.min_enclosure.inner.push(layer(spec, 1));
-                    set.min_enclosure.limit.push(limit);
-                }
-                15 => {
-                    debug_assert_eq!(KINDS[kind], "asymmetric_enclosure");
-                    layers(spec, 2)?;
-                    let min_one_side = length(spec, "min_one_side")?;
-                    set.asymmetric_enclosure.rule.push(spec.id);
-                    set.asymmetric_enclosure.outer.push(layer(spec, 0));
-                    set.asymmetric_enclosure.inner.push(layer(spec, 1));
-                    set.asymmetric_enclosure.min_one_side.push(min_one_side);
-                }
-                16 => {
-                    debug_assert_eq!(KINDS[kind], "min_extension");
-                    layers(spec, 2)?;
-                    let limit = length(spec, "limit")?;
-                    set.min_extension.rule.push(spec.id);
-                    set.min_extension.layer.push(layer(spec, 0));
-                    set.min_extension.reference.push(layer(spec, 1));
-                    set.min_extension.limit.push(limit);
-                }
-                17 => {
-                    debug_assert_eq!(KINDS[kind], "overlap");
-                    layers(spec, 2)?;
-                    let limit = length(spec, "limit")?;
-                    set.overlap.rule.push(spec.id);
-                    set.overlap.a.push(layer(spec, 0));
-                    set.overlap.b.push(layer(spec, 1));
-                    set.overlap.limit.push(limit);
-                }
-                18 => {
-                    debug_assert_eq!(KINDS[kind], "max_distance_to_tap");
-                    layers(spec, 2)?;
-                    let limit = length(spec, "limit")?;
-                    set.max_distance_to_tap.rule.push(spec.id);
-                    set.max_distance_to_tap.well.push(layer(spec, 0));
-                    set.max_distance_to_tap.tap.push(layer(spec, 1));
-                    set.max_distance_to_tap.limit.push(limit);
-                }
-                19 => {
-                    debug_assert_eq!(KINDS[kind], "off_grid");
-                    // No layer: the mask lattice is a property of the process.
-                    layers(spec, 0)?;
-                    let pitch = length(spec, "pitch")?;
-                    set.off_grid.rule.push(spec.id);
-                    set.off_grid.pitch.push(pitch);
                 }
                 20 => {
                     debug_assert_eq!(KINDS[kind], "angle");
