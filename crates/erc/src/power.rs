@@ -1,62 +1,24 @@
 //! Resistive networks extracted from layout, and the DC solve over them.
 //!
-//! Four rules need to know what current flows where and what voltage a node
-//! actually sits at. None of them can answer that from geometry alone: a wire
-//! is a resistor, a supply pad is a boundary condition, and the answer is a
-//! linear system. This module builds the system and solves it **once**, so IR
-//! drop, EM current density, electromigration and reliability read one solution
-//! instead of solving four times.
-//!
-//! # Two networks, one type
-//!
-//! [`PowerGrid`] is used twice, for two questions that turn out to be the same
-//! network with different boundary conditions:
-//!
-//! - The **supply grid** — every polygon on a declared supply net, driven by
-//!   the pads and loaded by the devices. Solved for node voltages and branch
-//!   currents by [`solve_into`].
-//! - A **per-net network** — one net's polygons, tapped at each device attach
-//!   point, with no sources at all. Probed for effective resistance between
-//!   terminal pairs by [`effective_resistance_into`]. Those live in
-//!   [`NetNetworks`], which is the same columns with a CSR row per net.
-//!
-//! One type, because a second would be the same fields with different names and
-//! the solver would need writing twice.
-//!
-//! # What the model is, and is not
+//! [`PowerGrid`] serves two questions with one type: the **supply grid** (every
+//! polygon on a declared supply net, driven by pads and loaded by devices,
+//! solved by [`solve_into`]) and a **per-net network** (one net's polygons
+//! tapped at each device attach point, probed by [`effective_resistance_into`],
+//! stored CSR-per-net in [`NetNetworks`]).
 //!
 //! A polygon becomes a chain of resistors along its long bounding-box axis,
-//! tapped wherever something connects to it: an overlap with a same-net polygon
-//! on another layer, a device terminal, a supply pad. Segment resistance is the
-//! layer's sheet resistance times the squares of conductor the segment spans,
-//! and the squares come from the polygon's own cross-section — `∫ ds / w(s)`
-//! over [`ChainProfile`], where `w(s)` is the metal a vertical cut at `s`
-//! actually finds. Only the *axis* is a bounding-box question; the width never
-//! is. On a rectangle that integral is the length-to-width ratio and nothing
-//! changes.
+//! tapped wherever something connects to it. Segment resistance is the layer's
+//! sheet resistance times `∫ ds / w(s)` over [`ChainProfile`], where `w(s)` is
+//! the metal a vertical cut at `s` actually finds — only the *axis* is a
+//! bounding-box question, never the width. Every shape also carries a tap at its
+//! own centre, so a shape nothing connects to still has a node and an
+//! unreachable island is reported rather than silently absent. A shape's nodes
+//! come out ascending along its chain, which is what makes the segment between
+//! two taps one adjacent pair.
 //!
-//! A tap sits at the centre of the two shapes' overlapping bounding boxes,
-//! projected onto the host's long axis, and every shape carries one at its own
-//! centre besides — so a shape nothing connects to still has a node, and an
-//! island the pads do not reach is reported rather than silently absent. A
-//! shape's nodes come out ascending along its chain, which is what makes the
-//! segment between two taps one adjacent pair.
-//!
-//! The model is one-dimensional, and that is a statement about the physics it
-//! keeps rather than a shortcut. Current is taken to have spread across the
-//! whole cross-section at every point along the chain, so the transverse
-//! resistance *within* a cut is not modelled: the vertical arm of an L costs
-//! almost nothing along a horizontal chain, because the profile there is a
-//! hundred units of metal and the chain crosses ten of them. A two-dimensional
-//! solve is the only thing that answers that, and it is a different module —
-//! a mesh per polygon rather than a chain per polygon, with the same
-//! [`PowerGrid`] coming out the far end.
-//!
-//! What the one-dimensional model does keep is the two properties the physics
-//! tests assert. Effective resistance on this network is Rayleigh-monotone —
-//! widening a polygon widens `w(s)` at every `s`, which can only lower it — and
-//! it is exact on a rectangle, which is what the closed-form oracles measure
-//! against.
+//! The model is one-dimensional: current is taken to have spread across the
+//! whole cross-section at every point along the chain, so transverse resistance
+//! *within* a cut is not modelled. A 2-D mesh per polygon is the upgrade.
 
 use crate::centre;
 use crate::facts::IntentMap;
@@ -73,26 +35,22 @@ use std::collections::BinaryHeap;
 
 /// Microamps through one ohm per millivolt across it.
 ///
-/// [`PowerGrid`] states voltages in millivolts, currents in microamps and
-/// resistances in ohms, so the conductance a Laplacian in those units wants is
-/// `1000 / R` and not `1 / R`. Written down once: getting it wrong scales every
-/// drop by a million and still satisfies every law-shaped test, because
-/// Kirchhoff and linearity are both scale-invariant.
+/// [`PowerGrid`] is millivolts, microamps and ohms, so the conductance a
+/// Laplacian in those units wants is `1000 / R` and not `1 / R`. Getting it
+/// wrong scales every drop by a million and still satisfies every law-shaped
+/// test, because Kirchhoff and linearity are both scale-invariant.
 const UA_PER_MV_OHM: f64 = 1_000.0;
 
 /// A node held at a fixed potential has no unknown index.
 ///
-/// `u32::MAX` rather than an `Option<u32>`: the value is loaded once per edge
-/// endpoint in the assembly loop, and a niche-free sentinel is what lets that
-/// loop clamp instead of branch.
+/// A sentinel rather than `Option<u32>`: the assembly loop clamps on it instead
+/// of branching.
 const NOT_AN_UNKNOWN: u32 = u32::MAX;
 
 /// Why a network could not be built or solved.
 ///
-/// Fail closed, every variant. A grid that cannot be solved produces this, not
-/// a zero-drop solution — a solver that quietly returns the initial guess
-/// reports every node at nominal voltage, which is a clean IR-drop result and a
-/// lie.
+/// Fail closed, every variant: a grid that cannot be solved produces this, not
+/// a zero-drop solution that reads as a clean IR-drop result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PowerError {
     /// No node is held at a fixed voltage, so the system is singular: any
@@ -121,9 +79,6 @@ pub enum PowerError {
 }
 
 /// The process data an extraction needs, borrowed.
-///
-/// `Copy` and public, so this is four bytes and two references standing in for
-/// three parameters — all data flow still visible, nothing hidden.
 #[derive(Debug, Clone, Copy)]
 pub struct Process<'a> {
     /// The layout's manufacturing grid. Needed only where a physical length
@@ -138,9 +93,8 @@ pub struct Process<'a> {
 
 /// What kind of conductor an edge models.
 ///
-/// Closed and small: the two differ in how their limit is stated. A metal
-/// segment is limited by current per unit width; a via is limited by current
-/// per cut, and its cut count is the only thing that scales it.
+/// The two differ in how their limit is stated: metal by current per unit
+/// width, a via by current per cut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeKind {
     Metal,
@@ -149,19 +103,8 @@ pub enum EdgeKind {
 
 /// A resistive network over layout, `SoA`.
 ///
-/// **Five questions.** In: polygons on conducting layers, plus the supplies and
-/// loads intent declared. Out: nodes and edges. How many: one node per polygon
-/// tap and one edge per segment, so a full-chip supply grid is millions of
-/// each; a per-net network is tens. Access pattern: built once, then scanned
-/// edge-major by the matrix assembly and node-major by every consumer of the
-/// result — so nodes and edges are separate column groups and neither carries a
-/// pointer to the other. Lifetime: whole run for the supply grid, one row of
-/// [`NetNetworks`] for a per-net probe. Parallelisable: extraction is, per net;
-/// the solve is a sparse mat-vec, which is.
-///
-/// Fixed-voltage nodes are **not** an `Option` column. They are a separate
-/// sorted list of node indices, so the solve iterates the pads that exist
-/// instead of branching on a `None` at every one of a million nodes.
+/// Fixed-voltage nodes are **not** an `Option` column: they are a separate
+/// ascending list of node indices, so the solve iterates the pads that exist.
 #[derive(Debug, Default)]
 pub struct PowerGrid {
     /// The net each node belongs to. Several nodes share a net — that is the
@@ -203,8 +146,7 @@ pub struct PowerGrid {
 impl PowerGrid {
     pub fn node_count(&self) -> usize {
         // The columns are public and pushed one at a time, so "six values in
-        // step" is a caller invariant with no constructor to enforce it. This
-        // is where a test grid that pushed five of them is caught.
+        // step" is a caller invariant with no constructor to enforce it.
         debug_assert_eq!(self.node_at.len(), self.node_net.len(), "one point per node");
         debug_assert_eq!(
             self.node_poly.len(),
@@ -270,9 +212,8 @@ impl PowerGrid {
             self.source_node.len(),
             "one voltage per pad"
         );
-        // The column's doc comment promises ascending, and a binary search over
-        // an unsorted column silently reports a pad as an unknown — which is a
-        // node the solve then moves off its boundary condition.
+        // A binary search over an unsorted column silently reports a pad as an
+        // unknown, which is a node the solve then moves off its boundary.
         debug_assert!(
             self.source_node.windows(2).all(|w| w[0] < w[1]),
             "the pad column is ascending and names each node once"
@@ -284,16 +225,8 @@ impl PowerGrid {
 
 /// One net's resistor network, per net, CSR.
 ///
-/// **Five questions.** In: the polygons of every net with at least two device
-/// attach points. Out: nodes, edges and the terminal list of each. How many:
-/// one row per such net — far fewer than the net count, because a net with one
-/// terminal has nothing to measure between. Access pattern: one net's row is
-/// read whole by one probe, and the rows are independent. Lifetime: whole run.
-/// Parallelisable: fully, one worker per row.
-///
 /// Existence-based twice over: a net with fewer than two terminals has no row,
-/// and a node that is not a terminal is simply absent from `terminal` rather
-/// than carrying a `false`.
+/// and a node that is not a terminal is simply absent from `terminal`.
 #[derive(Debug, Default)]
 pub struct NetNetworks {
     /// The net each row belongs to, ascending. Binary search for the reverse
@@ -323,8 +256,7 @@ pub struct NetNetworks {
 impl NetNetworks {
     pub fn len(&self) -> usize {
         // `Default` has no offset columns at all, so the `rows + 1` shape is
-        // asserted only once there is a row — the same argument
-        // `NetTable::net_count` makes with its `saturating_sub`.
+        // asserted only once there is a row.
         debug_assert!(
             self.net.is_empty() || self.node_start.len() == self.net.len() + 1,
             "one node offset per row plus the end"
@@ -395,11 +327,9 @@ impl NetNetworks {
 
 /// One row's run in a CSR offset column.
 ///
-/// Fail closed the way `topology`'s own `csr_run` does: the column carries
-/// `rows + 1` offsets, so a row past the table indexes out of bounds and panics
-/// in **every** profile. Clamping would make "this row carries nothing" and
-/// "this row does not exist" read the same, and a probe that reads the second as
-/// the first reports a net clean that it never measured.
+/// Fail closed: a row past the table panics in **every** profile. Clamping would
+/// make "carries nothing" and "does not exist" read the same, and a probe that
+/// confuses them reports a net clean that it never measured.
 fn csr_run(start: &[u32], row: u32) -> (usize, usize) {
     let (from, to) = (start[row as usize] as usize, start[row as usize + 1] as usize);
     debug_assert!(from <= to, "a CSR run runs backwards");
@@ -408,9 +338,9 @@ fn csr_run(start: &[u32], row: u32) -> (usize, usize) {
 
 /// How hard the solver tries.
 ///
-/// Both fields matter to a verdict, so neither is a hidden constant:
-/// a loose tolerance under-reports drop, and an iteration cap hit silently is
-/// [`PowerError::NotConverged`] rather than a partial answer.
+/// Both fields matter to a verdict, so neither is a hidden constant: a loose
+/// tolerance under-reports drop, and a cap hit is [`PowerError::NotConverged`]
+/// rather than a partial answer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveConfig {
     /// Stop when the residual falls to this fraction of the initial residual.
@@ -419,8 +349,8 @@ pub struct SolveConfig {
 }
 
 impl Default for SolveConfig {
-    /// `1e-10` over twenty thousand iterations: tight enough that the tolerance
-    /// is far below any limit a deck states, so a verdict never turns on it.
+    /// Tight enough that the tolerance is far below any limit a deck states, so
+    /// a verdict never turns on it.
     fn default() -> Self {
         Self {
             relative_tolerance: 1e-10,
@@ -432,15 +362,11 @@ impl Default for SolveConfig {
 /// The solved state of a [`PowerGrid`], `SoA` and parallel to it.
 ///
 /// Row `i` of `node_voltage` is node `i` of the grid; row `i` of
-/// `branch_current` is edge `i`. That correspondence is the interface — the old
-/// tree carried an index field in each row to re-establish it, and validated
-/// the index on every read.
+/// `branch_current` is edge `i`. That correspondence is the interface.
 #[derive(Debug, Default)]
 pub struct PowerSolution {
     pub node_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
-    /// Nominal minus solved, so a positive drop is a loss. Stored rather than
-    /// recomputed because every consumer wants it and the subtraction is where
-    /// a sign error would hide.
+    /// Nominal minus solved, so a positive drop is a loss.
     pub node_drop: Vec<Qty<Voltage, { prefix::MILLI }>>,
     /// Positive is from `edge_from` towards `edge_to`.
     pub branch_current: Vec<Qty<Current, { prefix::MICRO }>>,
@@ -452,15 +378,10 @@ impl PowerSolution {
     /// True when every value is finite and the columns match the grid.
     ///
     /// The precondition of every rule that reads a solution. A `NaN` voltage
-    /// compares false against every limit and therefore passes it, which is the
-    /// fail-open mode this crate exists to avoid.
+    /// compares false against every limit and therefore passes it.
     pub fn is_consistent_with(&self, grid: &PowerGrid) -> bool {
-        // Each column folds with `&=` rather than an early `return false`: the
-        // predicate is `is_finite`, which is true for every row of a healthy
-        // solution and false for every row of a broken one, so the branch would
-        // be taken zero times or n times and buys nothing over the unconditional
-        // and. Each loop runs over its own column's length, so a column shorter
-        // than the grid cannot make one of them read past its own end.
+        // Each loop runs over its own column's length, so a column shorter than
+        // the grid cannot make one of them read past its own end.
         let mut finite = true;
         for i in 0..self.node_voltage.len() {
             finite &= self.node_voltage[i].is_finite();
@@ -472,9 +393,6 @@ impl PowerSolution {
             finite &= self.branch_current[i].is_finite();
         }
 
-        // `&` throughout, not `&&`: three already-loaded lengths and one folded
-        // flag with no side effect, so short-circuiting would buy a branch
-        // rather than save work.
         (self.node_voltage.len() == grid.node_count())
             & (self.node_drop.len() == grid.node_count())
             & (self.branch_current.len() == grid.edge_count())
@@ -485,44 +403,13 @@ impl PowerSolution {
 
 /// The linear-solve workspace.
 ///
-/// **Five questions.** In: nothing — it is storage. Out: nothing that outlives
-/// a solve. How many: one, in [`crate::Scratch`], shared by the grid solve and
-/// every per-net probe. Access pattern: the CSR columns are streamed once per
-/// mat-vec and the four vectors are read and written every iteration, so they
-/// are separate `f64` columns and never interleaved. Lifetime: phase.
-/// Parallelisable: the mat-vec is; the dot products reduce.
-///
-/// Private fields: which vectors a conjugate-gradient iteration needs is an
-/// implementation question, and freezing it into this crate's interface would
-/// mean a preconditioner change is a signature change.
-///
 /// [`solve_into`] uses conjugate gradients preconditioned by an **incomplete
 /// Cholesky factorisation with zero fill**. Once the pads are eliminated the
-/// matrix is a symmetric positive-definite M-matrix — positive diagonal,
-/// non-positive off-diagonals, and diagonally dominant with strict dominance in
-/// every row that touches a pad — which is exactly the class Meijerink and van
-/// der Vorst proved IC(0) exists for. So the factorisation is not a gamble that
-/// happens to work on grids; it is guaranteed by the shape of the network, and
-/// [`factorise_into`]'s `false` return is a rounding failure rather than a
-/// structural one. It falls back to the diagonal when that happens, so a
-/// breakdown costs iterations and never an answer.
-///
-/// Zero fill is what makes this the upgrade rather than a trade. A direct
-/// sparse Cholesky of a grid Laplacian buys iteration count with fill-in that a
-/// minimum-degree ordering does not bound — this solve's memory would stop
-/// being a function of the edge count, which is the property a full-chip grid
-/// is sized against. IC(0) keeps the sparsity pattern of the matrix exactly:
-/// one extra `f64` and one extra `u32` per off-diagonal, and the iteration
-/// count drops because the preconditioner now carries the connectivity instead
-/// of only the row sums. Measured on a forty-by-forty grid Laplacian anchored
-/// at one corner, to the default `1e-10`: **193 iterations on the diagonal, 60
-/// on the factor**, at one factorisation and two triangular solves per
-/// iteration against a mat-vec over the same sparsity.
-///
-/// The probe path took the direct branch and is already a complete
-/// factorisation: [`effective_resistance_into`] Kron-eliminates the interior
-/// and inverts what is left, because there the matrix is sized by the terminal
-/// count and the fill is bounded by construction.
+/// matrix is a symmetric positive-definite M-matrix, which is the class IC(0)
+/// is guaranteed to exist for — so a breakdown in [`factorise_into`] is a
+/// rounding failure, and it falls back to the diagonal rather than to no
+/// answer. Zero fill keeps the sparsity pattern of the matrix exactly, so the
+/// solve's memory stays a function of the edge count.
 #[derive(Debug, Default)]
 pub struct SolveScratch {
     /// The reduced Laplacian in CSR: `row_start`, column indices, values.
@@ -595,42 +482,29 @@ pub struct SolveScratch {
 }
 
 impl SolveScratch {
-    /// Drop every buffer's capacity. Same reason as [`crate::Scratch::shrink`],
-    /// and the same equivalent-mutant argument: nothing here exposes a capacity,
-    /// so no test can tell this body from an empty one.
+    /// Drop every buffer's capacity.
     pub fn shrink(&mut self) {
         // Accepted equivalent-mutant site, per `docs/SIGNATURE_DEFECTS.md`:
         // every field is private and neither length nor capacity is exposed, so
-        // no test can tell this body from an empty one. Recorded here rather
-        // than resolved with a capacity accessor, which would widen the
-        // interface of a type whose doc says which buffers exist is an
-        // implementation question.
+        // no test can tell this body from an empty one.
         *self = Self::default();
     }
 }
 
 /// The end of a linked list, and "this node is not a terminal".
 ///
-/// Same value as [`NOT_AN_UNKNOWN`] and deliberately a second name: that one
-/// means "held at a fixed potential", which is a statement about the solve, and
-/// this one means "there is nothing here", which is a statement about a list.
+/// Same value as [`NOT_AN_UNKNOWN`], deliberately a second name: that one is a
+/// statement about the solve, this one about a list.
 const NONE: u32 = u32::MAX;
 
 /// The graph a Kron elimination edits in place.
 ///
-/// **Five questions.** In: one row's edges as conductances. Out: the same
-/// network with every interior node eliminated, which is a graph over the
-/// terminals alone. How many: one per probe, reused across probes. Access
-/// pattern: a vertex's incidence list is walked whole, several times, and grows
-/// as its neighbours are eliminated — so it is a linked pool rather than CSR,
-/// which is the one place in this crate where a run cannot be sized in advance.
-/// Lifetime: phase. Parallelisable: no — the elimination is a chain, each step
-/// reading the graph the previous step left.
-///
-/// Half-edge pool: edge `e` occupies slots `2e` and `2e + 1`, so a half-edge's
-/// twin is `h ^ 1` and no back-pointer is stored. A killed half-edge keeps its
-/// link and carries a zero conductance; [`ElimGraph::refresh`] unlinks it on the
-/// next walk, so removal never searches a list backwards.
+/// A linked pool rather than CSR: a vertex's incidence list grows as its
+/// neighbours are eliminated, so the run cannot be sized in advance. Half-edge
+/// pool: edge `e` occupies slots `2e` and `2e + 1`, so a half-edge's twin is
+/// `h ^ 1` and no back-pointer is stored. A killed half-edge keeps its link and
+/// carries a zero conductance; [`ElimGraph::refresh`] unlinks it on the next
+/// walk, so removal never searches a list backwards.
 #[derive(Debug, Default)]
 struct ElimGraph {
     /// Head half-edge of each vertex's list, or [`NONE`].
@@ -658,9 +532,6 @@ struct ElimGraph {
 
 impl ElimGraph {
     /// Empty the graph and size it for `vertices`, keeping every allocation.
-    ///
-    /// **Transform, in-place.** The pool is cleared rather than dropped, which
-    /// is what makes a loop over the rows of a [`NetNetworks`] allocate once.
     fn reset(&mut self, vertices: usize) {
         self.head.clear();
         self.head.resize(vertices, NONE);
@@ -695,10 +566,6 @@ impl ElimGraph {
     }
 
     /// Unlink every dead half-edge of one vertex, and return its live degree.
-    ///
-    /// **Transform, in-place.** This walks one vertex's incidence list, which is
-    /// the graph's degree — tens of entries — and the walk is a chain: the next
-    /// address is not known until the current entry has been read.
     fn refresh(&mut self, v: u32) -> u32 {
         let mut live = 0u32;
         let mut prev = NONE;
@@ -709,11 +576,6 @@ impl ElimGraph {
                 || !self.alive[self.dst[h as usize] as usize]
                 || self.dst[h as usize] == v;
             if dead {
-                // Surviving `if`: a list walk is a chain, so this is not a bulk
-                // loop and there are no lanes to keep uniform. Whether the
-                // predecessor is the head slot or a `next` slot is a genuine
-                // fork, and writing it branchlessly would mean storing through
-                // an address that does not exist on the first iteration.
                 if prev == NONE {
                     self.head[v as usize] = after;
                 } else {
@@ -730,21 +592,17 @@ impl ElimGraph {
 
     /// Kron-eliminate one vertex: its neighbours inherit its conductance.
     ///
-    /// **Transform, in-place.** Every pair of neighbours `(i, j)` gains
-    /// `g_i g_j / d`, where `d` is the vertex's total conductance — the Schur
-    /// complement of the Laplacian on that one row, which leaves every effective
-    /// resistance between the surviving vertices exactly unchanged.
-    ///
-    /// Returns the neighbours whose degree changed, in `self.fringe`.
+    /// Every pair of neighbours `(i, j)` gains `g_i g_j / d`, where `d` is the
+    /// vertex's total conductance — the Schur complement of the Laplacian on
+    /// that row, which leaves every effective resistance between the survivors
+    /// exactly unchanged. Returns the changed neighbours in `self.fringe`.
     fn eliminate(&mut self, v: u32) {
         debug_assert!(self.alive[v as usize], "a vertex is eliminated once");
         self.epoch += 1;
         let epoch = self.epoch;
         self.fringe.clear();
 
-        // Gather, deduplicate and unhook in one walk over one vertex's incidence
-        // list, which is a chain — the next address comes out of the current
-        // entry.
+        // Gather, deduplicate and unhook in one walk over the incidence list.
         let mut h = self.head[v as usize];
         while h != NONE {
             let u = self.dst[h as usize];
@@ -783,8 +641,7 @@ impl ElimGraph {
             let (a, ga) = self.fringe[i];
             // Index `a`'s live neighbours, so the pair loop below adds into an
             // edge that already exists instead of growing a parallel strand per
-            // elimination — which is what stops the pool from growing
-            // quadratically on a long chain.
+            // elimination — which stops the pool growing quadratically.
             self.refresh(a);
             self.epoch += 1;
             let epoch = self.epoch;
@@ -798,9 +655,6 @@ impl ElimGraph {
             for j in i + 1..self.fringe.len() {
                 let (b, gb) = self.fringe[j];
                 let delta = ga * gb / total;
-                // Surviving `if`: over one vertex's fringe — its degree, tens of
-                // entries — and the taken side grows the pool, which is the
-                // expensive side a branch exists to skip.
                 if self.stamp[b as usize] == epoch {
                     let e = self.slot[b as usize] as usize;
                     self.g[e] += delta;
@@ -815,21 +669,17 @@ impl ElimGraph {
 
 /// Invert a dense symmetric positive-definite matrix, by Cholesky.
 ///
-/// **Transform, A-to-B.** `a` is `n × n` row-major and is consumed — the
-/// factor overwrites its lower triangle. Caller owns `out`, which is cleared
-/// and refilled with the `n × n` inverse.
+/// `a` is `n × n` row-major and is consumed — the factor overwrites its lower
+/// triangle. `out` is cleared and refilled with the `n × n` inverse.
 ///
 /// `false` is the fail-closed exit: a grounded Laplacian of a connected
 /// component is positive definite, so a pivot that is not positive and finite
-/// means the numbers stopped being a network, and returning a partial inverse
-/// would report a resistance computed from them.
+/// means the numbers stopped being a network.
 fn cholesky_inverse_into(a: &mut [f64], n: usize, out: &mut Vec<f64>) -> bool {
     debug_assert_eq!(a.len(), n * n, "a dense matrix is n by n");
     out.clear();
     out.resize(n * n, 0.0);
 
-    // `n` is the terminal count of one net — tens — which is the whole point of
-    // eliminating the interior first.
     for j in 0..n {
         let mut d = a[j * n + j];
         for k in 0..j {
@@ -873,8 +723,6 @@ fn cholesky_inverse_into(a: &mut [f64], n: usize, out: &mut Vec<f64>) -> bool {
 }
 
 /// One sparse mat-vec: `out[i]` is row `i` of the assembled matrix times `v`.
-///
-/// **Transform, A-to-B.** Caller owns `out`, which is written row for row.
 fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64]) {
     debug_assert_eq!(
         row_start.len(),
@@ -889,12 +737,6 @@ fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64
         "a CSR column names an unknown the vector does not have"
     );
 
-    // A segmented reduce: the outer loop walks the row boundaries, the inner one
-    // folds one row's range. `value` and `col` are indexed over the same range,
-    // and the two are the same length by the assert above, so the agreement
-    // check belongs there and not once per row. `v[c]` is a gather — a
-    // data-dependent *address*, not a branch — and the column bound was checked
-    // above, once, for the whole CSR.
     for (i, row) in out.iter_mut().enumerate() {
         let (from, to) = (row_start[i] as usize, row_start[i + 1] as usize);
         let mut acc = 0.0f64;
@@ -907,8 +749,8 @@ fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64
 
 /// The Euclidean norm of a residual, folded left in ascending index order.
 ///
-/// The order is interface, not implementation: it is what makes a residual —
-/// and therefore a converged-or-not verdict — the same bits on every run.
+/// The order is interface: it makes a converged-or-not verdict the same bits on
+/// every run.
 fn norm(v: &[f64]) -> f64 {
     let mut acc = 0.0f64;
     for &x in v {
@@ -919,17 +761,15 @@ fn norm(v: &[f64]) -> f64 {
 
 /// Assemble a Laplacian into `scratch`'s CSR columns, and its inverse diagonal.
 ///
-/// **Transform, A-to-B.** `scratch.branch` is `(unknown_a, unknown_b,
-/// conductance)` already in *unknown* space, with [`NOT_AN_UNKNOWN`] naming an
-/// endpoint held at a fixed potential. Such an endpoint still loads the diagonal
-/// — a pad is a conductance to a boundary condition, not an open — but
-/// contributes no off-diagonal, and that is precisely the elimination that
-/// leaves the system symmetric positive definite.
+/// `scratch.branch` is `(unknown_a, unknown_b, conductance)` already in
+/// *unknown* space, with [`NOT_AN_UNKNOWN`] naming an endpoint held at a fixed
+/// potential. Such an endpoint still loads the diagonal — a pad is a
+/// conductance to a boundary condition, not an open — but contributes no
+/// off-diagonal, which is the elimination that leaves the system SPD.
 ///
-/// Duplicate columns within a row are left duplicated. A multi-edge is two
-/// conductances in parallel, a CSR mat-vec sums a row's entries, so accumulating
-/// them costs nothing — and merging them by assignment is the bug the
-/// parallel-strand tests exist to catch.
+/// Duplicate columns within a row are left duplicated: a multi-edge is two
+/// conductances in parallel and a CSR mat-vec sums a row's entries, so merging
+/// them by assignment is a bug.
 fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
     let width = u32::try_from(unknowns).expect("an unknown index is a u32");
     let SolveScratch {
@@ -943,29 +783,23 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
         ..
     } = scratch;
 
-    // The write cursor and the diagonal accumulator are `scratch` columns, so a
-    // loop over grids — or the per-terminal loop inside a probe — assembles from
-    // one allocation each. Both carry one extra slot past the last row, which is
-    // where a pad endpoint's contribution lands so the fill loop can clamp
-    // instead of branch.
+    // Both carry one extra slot past the last row, which is where a pad
+    // endpoint's contribution lands so the fill loop can clamp instead of
+    // branch.
     cursor.clear();
     cursor.resize(unknowns + 1, 0);
     diag.clear();
     diag.resize(unknowns + 1, 0.0);
 
-    // Pass one: how many off-diagonals each row carries. Scatter-accumulate, so
-    // the output index is data-dependent and the loop cannot vectorise without
-    // lane-conflict detection — here and in the fill below.
+    // Pass one: how many off-diagonals each row carries. A pad endpoint clamps
+    // into the bin past the last row and `both` is zero for it.
     for &(a, b, _) in branch.iter() {
-        // Branchless: a pad endpoint clamps into the bin past the last row and
-        // `both` is zero for it, so nothing is counted and no branch guards it.
         let both = u32::from((a != NOT_AN_UNKNOWN) & (b != NOT_AN_UNKNOWN));
         cursor[a.min(width) as usize] += both;
         cursor[b.min(width) as usize] += both;
     }
 
-    // Pass two: offsets. A prefix sum is a chain — row `i`'s offset is row
-    // `i - 1`'s plus its length — so it is serial by construction.
+    // Pass two: offsets.
     row_start.clear();
     row_start.reserve(unknowns + 1);
     let mut running = 0u32;
@@ -985,8 +819,6 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
     col.resize(nnz + 1, 0);
     value.clear();
     value.resize(nnz + 1, 0.0);
-    // A scatter for the same reason as the two passes around it: both stores are
-    // indexed by `row_start[i]`, a data-dependent address.
     for i in 0..unknowns {
         col[row_start[i] as usize] = u32::try_from(i).expect("an unknown index is a u32");
         cursor[i] = row_start[i] + 1;
@@ -1018,7 +850,6 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
 
     inv_diag.clear();
     inv_diag.reserve(unknowns);
-    // One store is a scatter to `row_start[i]` and the other a push.
     for i in 0..unknowns {
         debug_assert!(
             diag[i] > 0.0 && diag[i].is_finite(),
@@ -1042,22 +873,17 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
 
 /// Factor the assembled matrix incompletely, with zero fill.
 ///
-/// **Transform, A-to-B.** Reads `scratch`'s CSR columns and writes its `l_*`
-/// columns: the strictly lower triangle, each row's columns ascending and its
-/// duplicates merged, plus the factor's own diagonal.
+/// Writes `scratch`'s `l_*` columns: the strictly lower triangle, each row's
+/// columns ascending and its duplicates merged, plus the factor's diagonal.
 ///
 /// An **empty** factor is the fail-closed exit, and the caller's signal to
-/// precondition with the diagonal alone. A non-positive pivot on an M-matrix
-/// can only come from rounding — see [`SolveScratch`] for why the factorisation
-/// exists at all — so that is the arithmetic saying it lost the property, not
-/// the network. Empty rather than a flag, because a half-built factor is a
-/// matrix that is *not* positive definite, and preconditioning with one turns
-/// conjugate gradients from a slow recurrence into a divergent one.
+/// precondition with the diagonal alone. Empty rather than a flag, because a
+/// half-built factor is *not* positive definite and preconditioning with one
+/// makes conjugate gradients diverge.
 ///
-/// Duplicate columns are merged here and nowhere else. [`assemble_into`] leaves
-/// a multi-edge as two entries because a mat-vec sums a row and summing is
-/// exactly right there; a factorisation *indexes* into the row, so two entries
-/// naming one column would make the merge below skip one of them.
+/// Duplicate columns are merged here and nowhere else: [`assemble_into`] leaves
+/// a multi-edge as two entries because a mat-vec sums a row, but a
+/// factorisation *indexes* into the row and would skip one of them.
 fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
     let SolveScratch {
         row_start,
@@ -1077,7 +903,7 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
     );
 
     // Pass one: the pattern. One row at a time, so the sort is over that row's
-    // own degree — four or five entries on a grid — and never over the matrix.
+    // own degree and never over the matrix.
     l_start.clear();
     l_start.reserve(unknowns + 1);
     l_col.clear();
@@ -1089,19 +915,12 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
         row_stage.clear();
         for k in row_start[i] as usize..row_start[i + 1] as usize {
             let c = col[k];
-            // Surviving `if`: over one row's entries, and the taken side is a
-            // push that grows a buffer — the expensive side a branch is for.
-            // Half a symmetric matrix's entries are rejected here, so this is
-            // the 50% selectivity a branch is worst at; it is also four
-            // iterations, which is below where the predictor matters.
             if (c as usize) < i {
                 row_stage.push((c, value[k]));
             }
         }
         row_stage.sort_unstable_by_key(|&(c, _)| c);
-        // Merge the run of each column into one entry. A dedupe is a chain —
-        // whether row N opens an entry depends on row N − 1 — so this is serial
-        // by shape, over one row's degree.
+        // Merge the run of each column into one entry.
         for &(c, v) in row_stage.iter() {
             let fresh = l_col.len() == l_start[i] as usize || *l_col.last().expect("non-empty") != c;
             l_col.resize(l_col.len() + usize::from(fresh), c);
@@ -1120,10 +939,9 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
         "a factor row is ascending, deduplicated and strictly lower"
     );
 
-    // Pass two: the factorisation. Row `i` needs rows `0 ..= i - 1` finished,
-    // so this is a chain and no reordering of it is legal. Each inner sparse
-    // dot is a two-pointer merge of two ascending column lists, which is what
-    // the pass above sorted for.
+    // Pass two: the factorisation. Row `i` needs rows `0 ..= i - 1` finished, so
+    // no reordering is legal. Each inner sparse dot is a two-pointer merge of
+    // two ascending column lists, which is what the pass above sorted for.
     for i in 0..unknowns {
         let (from, to) = (l_start[i] as usize, l_start[i + 1] as usize);
         let mut d = value[row_start[i] as usize];
@@ -1134,10 +952,6 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
             let q_end = l_start[j + 1] as usize;
             while p < t && q < q_end {
                 let (cp, cq) = (l_col[p], l_col[q]);
-                // Branchless on the product, branchy on the advance: the two
-                // cursors move by a comparison that has no arithmetic behind
-                // it, and multiplying by the equality mask is what removes the
-                // conditional accumulate.
                 let hit = f64::from(u8::from(cp == cq));
                 s -= l_val[p] * l_val[q] * hit;
                 p += usize::from(cp <= cq);
@@ -1167,16 +981,9 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
 
 /// Apply the preconditioner: `z = M⁻¹ r`.
 ///
-/// **Transform, A-to-B.** Caller owns `z`, which is written row for row.
-///
 /// One forward and one back substitution through the incomplete factor, or the
-/// diagonal alone when [`factorise_into`] left the factor empty. The branch is
-/// once per apply, over the whole vector, which is the vector-wide test rather
-/// than a per-row one.
-///
-/// Both substitutions are sequential by construction and run in a fixed
-/// direction, so `z` is the same bits on every run of the same design — which
-/// is what makes `rz` below, and therefore every node voltage, reproducible.
+/// diagonal alone when [`factorise_into`] left the factor empty. Both run in a
+/// fixed direction, so `z` is the same bits on every run of the same design.
 fn precondition(
     factor: (&[u32], &[u32], &[f64], &[f64]),
     inv_diag: &[f64],
@@ -1189,8 +996,7 @@ fn precondition(
     debug_assert_eq!(inv_diag.len(), unknowns, "SoA columns must agree");
 
     // The fallback is an empty factor: `factorise_into` cleared the pattern and
-    // never filled it, so there is no `factored` flag to carry and no branch
-    // inside either substitution.
+    // never filled it.
     if l_diag.is_empty() {
         for i in 0..unknowns {
             z[i] = r[i] * inv_diag[i];
@@ -1200,7 +1006,7 @@ fn precondition(
 
     debug_assert_eq!(l_diag.len(), unknowns, "one pivot per unknown");
     // Forward: `L y = r`, ascending, each row folding the entries left of its
-    // diagonal. A gather off `z` — a data-dependent address, not a branch.
+    // diagonal.
     for i in 0..unknowns {
         let mut s = r[i];
         for t in l_start[i] as usize..l_start[i + 1] as usize {
@@ -1208,10 +1014,9 @@ fn precondition(
         }
         z[i] = s / l_diag[i];
     }
-    // Back: `Lᵀ z = y`, descending. Column-oriented, because the transpose of a
-    // row-CSR lower triangle is an upper triangle no column index reaches
-    // directly — so row `i`'s finished value is scattered back over the rows
-    // above it instead of gathered from them.
+    // Back: `Lᵀ z = y`, descending. Column-oriented: the transpose of a row-CSR
+    // lower triangle is an upper triangle no column index reaches directly, so
+    // row `i`'s value is scattered back over the rows above it.
     for i in (0..unknowns).rev() {
         let v = z[i] / l_diag[i];
         z[i] = v;
@@ -1223,12 +1028,9 @@ fn precondition(
 
 /// Solve the assembled system for `scratch.x`, in place, from the guess it holds.
 ///
-/// **Transform, in-place.** Conjugate gradients preconditioned by the
-/// incomplete Cholesky factor [`SolveScratch`]'s doc comment names, and by the
-/// diagonal alone when that factorisation breaks down. Returns the iteration
-/// count and the residual as a fraction of the initial one; the caller records
-/// both, because a solve that stopped early is a verdict a reader has to be
-/// able to see.
+/// Conjugate gradients preconditioned by the incomplete Cholesky factor, or by
+/// the diagonal alone when that breaks down. Returns the iteration count and the
+/// residual as a fraction of the initial one.
 fn conjugate_gradient(
     scratch: &mut SolveScratch,
     config: SolveConfig,
@@ -1241,8 +1043,8 @@ fn conjugate_gradient(
         "a non-positive tolerance never stops the iteration"
     );
 
-    // Once per solve, above the iteration: the factor is a function of the
-    // matrix, and nothing in the loop below writes the matrix.
+    // Once per solve: the factor is a function of the matrix, and nothing in the
+    // loop below writes the matrix.
     factorise_into(scratch, unknowns);
     scratch.z.clear();
     scratch.z.resize(unknowns, 0.0);
@@ -1276,11 +1078,8 @@ fn conjugate_gradient(
     p.clear();
     p.extend_from_slice(z);
 
-    // Every vector below is `unknowns` long, and stays that way for the whole
-    // iteration — nothing inside the loop resizes one. So the column-agreement
-    // check goes here, once, above the loop that would otherwise re-establish a
-    // fact fixed before it started. Its absence is what once let a release build
-    // fold 1000 rows against 999 and report success.
+    // Every vector below is `unknowns` long and stays that way, so the
+    // column-agreement check goes here rather than inside the loop.
     debug_assert_eq!(x.len(), unknowns, "SoA columns must agree");
     debug_assert_eq!(r.len(), unknowns, "SoA columns must agree");
     debug_assert_eq!(p.len(), unknowns, "SoA columns must agree");
@@ -1289,8 +1088,7 @@ fn conjugate_gradient(
     debug_assert_eq!(z.len(), unknowns, "SoA columns must agree");
 
     // Left fold, ascending: `rz` decides `alpha`, which decides the solution, so
-    // reassociating it would make two runs of the same design disagree in the
-    // last bits of every node voltage.
+    // reassociating it would make two runs of one design disagree.
     let mut rz = 0.0f64;
     for i in 0..unknowns {
         rz += r[i] * z[i];
@@ -1306,19 +1104,12 @@ fn conjugate_gradient(
         for i in 0..unknowns {
             pap += p[i] * ap[i];
         }
-        // Surviving `if`: once per iteration over the whole vector, not once per
-        // row — one branch per `unknowns` elements, which is the vector-wide
-        // test the branchless skill blesses. The matrix is positive definite, so
-        // a non-positive `p·Ap` means the iteration has reached the
-        // floating-point floor; stopping here leaves the convergence test below
-        // to decide whether what it reached is good enough.
+        // The matrix is positive definite, so a non-positive `p·Ap` means the
+        // iteration reached the floating-point floor; stopping here leaves the
+        // convergence test below to decide whether that is good enough.
         if !(pap > 0.0) {
             break;
         }
-        // Two axpys, a fold and a preconditioned direction update. `alpha` and
-        // `beta` are uniforms hoisted above their loops, every row is a function
-        // of its own inputs alone, and the two folds are left folds in ascending
-        // order for the reason `rz` above is.
         let alpha = rz / pap;
         for i in 0..unknowns {
             x[i] += alpha * p[i];
@@ -1326,8 +1117,6 @@ fn conjugate_gradient(
         for i in 0..unknowns {
             r[i] -= alpha * ap[i];
         }
-        // One preconditioner apply per iteration, then the fold that decides
-        // `beta` — a left fold in ascending order for the reason `rz` above is.
         precondition((l_start, l_col, l_val, l_diag), inv_diag, r, z);
         let mut next = 0.0f64;
         for i in 0..unknowns {
@@ -1357,10 +1146,8 @@ fn conjugate_gradient(
 
 /// A grid and its solution, borrowed together.
 ///
-/// The four electrical rules read both or neither, and pairing them in one
-/// `Copy` bundle is what makes `Option<Solved>` say the useful thing: **there
-/// is no solved grid**, so record skipped. A grid without a solution and a
-/// solution without a grid are both states no caller should be able to build.
+/// The four electrical rules read both or neither, so `Option<Solved>` says
+/// "there is no solved grid" and the rules record themselves skipped.
 #[derive(Debug, Clone, Copy)]
 pub struct Solved<'a> {
     pub grid: &'a PowerGrid,
@@ -1369,51 +1156,18 @@ pub struct Solved<'a> {
 
 /// Did a stated current budget fail to reach the solve?
 ///
-/// **Decision** — a grid and the intent it was built from in, one `bool` out,
-/// pure. True when some net this run declares as a supply states a non-zero
-/// `budget_current_ua` and carries **no load at all** across its nodes.
+/// True when some net declared as a supply states a non-zero
+/// `budget_current_ua` and carries **no load at all** across its nodes. Exact,
+/// not a heuristic: [`extract_into`] spreads `sign * budget_current_ua` over
+/// the rail's attach points, so the net's `node_load` sums to the signed budget
+/// whenever the budget was read and to exactly `0.0` whenever it was not.
+/// `-0.0 == 0.0`, so a ground rail's negative shares use the same compare.
 ///
-/// That is an exact detector, not a heuristic. [`extract_into`]'s fourth pass
-/// writes `sign * budget_current_ua` spread over the rail's attach points, so
-/// the net's `node_load` column sums to the signed budget whenever the budget
-/// was read — and to exactly `0.0` whenever it was not. `-0.0 == 0.0`, so a
-/// ground rail's negative shares are covered by the same compare.
-///
-/// # Why a true answer means the input was un-modellable
-///
-/// Attach points come from [`DeviceTable::devices_on`], which is **terminal**
-/// based: a rail counts a device only where one of its terminals lands. A
-/// supply rail fed from off-chip through a pad has none — the current enters
-/// from outside the extracted netlist — so the ordinary shape of a real supply
-/// rail is a stated budget the model cannot place.
-///
-/// No number can be substituted for it, and that is settled rather than
-/// unexplored. Injecting at the inferred pad anchor is refuted by construction:
-/// [`solve_into`] eliminates pad nodes from the unknowns and builds its
-/// right-hand side over the unknowns only, so a pad node's `node_load` is never
-/// read and the solve is all zeros either way. Spreading the budget over the
-/// rail's own taps fabricates load positions, and a uniform spread reads
-/// *lower* per edge than a concentrated distal draw on every edge but one —
-/// more fail-open on exactly the distal segments an EM check is for. And the
-/// three inputs that produce an empty attach list — a pad-fed rail whose loads
-/// are outside the extraction, loads that are drawn but whose devices went
-/// unrecognised, and a genuinely unloaded net — are indistinguishable from
-/// everything reachable here.
-///
-/// So the branch-current rules refuse rather than report a verdict over a grid
-/// carrying no current: a zero current passes every density limit, every Blech
-/// product and every drop limit silently, which is the false-clean this crate
-/// exists to prevent.
-///
-/// A pad-marker layer on `Connectivity` does **not** close this, and the note in
-/// `docs/SIGNATURE_DEFECTS.md` that said it would is withdrawn. A pad names
-/// where current *enters*; every branch current is fixed by where it *leaves*,
-/// so with the pad known and the loads still unknown the right-hand side is
-/// still all zeros. What would close it is a per-terminal current column on
-/// `DeviceTable` fed by a per-instance power file — a new `ingest` reader, and
-/// still no help for loads outside the extraction.
-///
-/// [`DeviceTable::devices_on`]: gpurify_topology::DeviceTable::devices_on
+/// Attach points are **terminal** based, so a rail fed from off-chip through a
+/// pad has none. No number can be substituted: the branch-current rules refuse
+/// rather than report a verdict over a grid carrying no current, because a zero
+/// current passes every density limit, Blech product and drop limit silently.
+/// Closing it needs a per-terminal current column on `DeviceTable`.
 pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
     debug_assert_eq!(
         grid.node_load.len(),
@@ -1421,24 +1175,11 @@ pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
         "one load per node, or the fold below reads another node's current"
     );
 
-    // Summed per budgeted supply rather than scattered into a column indexed by
-    // `NetId`. A column is sized by the largest supply's *id*, not by how many
-    // supplies there are, so it allocates and zeroes `net_count` f64s on every
-    // call to hold the handful of accumulators actually read — and this runs
-    // three times per ERC run. Declared supplies are tens, of which ones state a
-    // budget, so the fold below is cheaper than the allocation it replaces.
-    //
-    // `any` short-circuits: the first discarded budget refuses the row, so the
-    // remaining nets are never summed. A design stating no budget at all — the
-    // common case — never touches the grid.
-    //
-    // Walked over `limit_net` rather than `supply_net`, and that is deliberate.
-    // `parse_intent` does not require a net carrying a `limits` entry to be a
-    // declared supply, and only supplies are given grid nodes — so a budget
-    // stated on a non-supply net was checked by nothing and reported clean,
-    // which is the same false-clean as a discarded one. The same compare catches
-    // it, its load being zero for want of any node at all. It also drops a
-    // `limits_of` binary search per supply.
+    // Walked over `limit_net` rather than `supply_net`: `parse_intent` does not
+    // require a net carrying a `limits` entry to be a declared supply, and only
+    // supplies are given grid nodes — so a budget stated on a non-supply net was
+    // checked by nothing. The same compare catches it, its load being zero for
+    // want of any node at all.
     intent
         .limit_net
         .iter()
@@ -1450,16 +1191,9 @@ pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
 }
 
 /// Total load on one net, over every node of the grid.
-///
-/// Split out of [`discarded_budget`] so the bulk pass stands on its own: it is
-/// the only part of that function that is bulk, and it is called once per
-/// budgeted supply rather than once per call.
 fn load_on(grid: &PowerGrid, net: NetId) -> f64 {
-    // No data-dependent branch in the body: the compare is a mask and the
-    // multiply keeps every off-net term at exactly zero, so this is one
-    // contiguous pass over two columns with nothing to mispredict. `-0.0` sums
-    // to `-0.0`, and `-0.0 == 0.0`, so a ground rail's negative shares compare
-    // the same as a power rail's positive ones.
+    // `-0.0` sums to `-0.0`, and `-0.0 == 0.0`, so a ground rail's negative
+    // shares compare the same as a power rail's positive ones.
     (0..grid.node_count())
         .map(|node| {
             f64::from(u8::from(grid.node_net[node] == net)) * grid.node_load[node].raw()
@@ -1467,34 +1201,21 @@ fn load_on(grid: &PowerGrid, net: NetId) -> f64 {
         .sum()
 }
 
-/// Build the supply grid from layout.
-///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled.
+/// Build the supply grid from layout. Caller owns `out`, cleared and refilled.
 ///
 /// Only nets [`IntentMap`] declares as supplies get nodes: a signal net has no
-/// nominal voltage to measure a drop from, and inventing one would produce a
-/// number that looks like a verdict. A run with no declared supplies produces
-/// an empty grid, and the caller then passes `None` for [`Solved`] — which is
-/// how four rules come to report themselves skipped rather than clean.
+/// nominal voltage to measure a drop from. A run with no declared supplies
+/// produces an empty grid and the caller passes `None` for [`Solved`], which is
+/// how four rules report themselves skipped rather than clean.
 ///
-/// Load currents come from each net's declared budget, spread over the device
-/// attach points on that net.
+/// `node_poly` names the same polygon once per tap; every consumer reads it
+/// positionally, and none assumes a node and a polygon are the same thing.
 ///
-/// A polygon becomes a chain of resistors tapped where things land on it, so
-/// the metal between two taps carries the resistance it has. `node_poly` names
-/// the same polygon once per tap; every consumer reads it positionally, and none
-/// of them assumes a node and a polygon are the same thing.
-///
-/// The budget spreads **uniformly** over the rail's attach points. That is the
-/// whole of what design intent says — [`IntentMap`] carries one
-/// `budget_current_ua` per net and no per-instance column — so it is a
-/// limitation of the input and not a choice made here: a hot spot reads cooler
-/// than it is wherever the real draw is concentrated, and nothing in this
-/// transform's parameters can tell where that is. Closing it needs a
-/// per-instance power file read by `ingest` into a per-terminal current column
-/// on [`DeviceTable`], which `extract_into` would sum per attach point instead
-/// of dividing. Recorded as a missing input in `docs/SIGNATURE_DEFECTS.md`;
-/// only `node_load` moves when it arrives.
+/// The budget spreads **uniformly** over the rail's attach points, because
+/// [`IntentMap`] carries one `budget_current_ua` per net and no per-instance
+/// column. A hot spot therefore reads cooler than it is wherever the real draw
+/// is concentrated; closing it needs a per-terminal current column on
+/// [`DeviceTable`]. Recorded in `docs/SIGNATURE_DEFECTS.md`.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -1530,9 +1251,9 @@ pub fn extract_into(
     out.edge_layer.clear();
     out.edge_kind.clear();
 
-    // Uniforms, hoisted and fallible, before a single row is written: a missing
-    // sheet resistance is a refusal, never a default, and finding that out in
-    // the middle of a million edges would mean a half-built grid.
+    // Fallible before a single row is written: a missing sheet resistance is a
+    // refusal, never a default, and finding out mid-fill leaves a half-built
+    // grid.
     let conductor = conductor_mask(process.connectivity, store.layer_count());
     let sheet = sheet_resistances(process, store.layer_count())?;
 
@@ -1544,10 +1265,8 @@ pub fn extract_into(
     let mut supply_start: Vec<u32> = vec![0];
     let mut kept: Vec<PolyId> = Vec::new();
     for supply in 0..intent.supply_net.len() {
-        // Branchless compact: reserve for the whole input rather than for the
-        // survivors, store unconditionally, and let the write cursor carry the
-        // decision. That over-reservation is the memory-for-branches trade, and
-        // it is what makes the store unconditional and therefore uncheckable.
+        // Branchless compact: reserve for the whole input, store
+        // unconditionally, and let the write cursor carry the decision.
         let candidate = nets.polys_of(intent.supply_net[supply]);
         kept.clear();
         kept.reserve(candidate.len());
@@ -1583,7 +1302,6 @@ pub fn extract_into(
     // needed before any node exists, because a connection is what says *where* a
     // shape is tapped and therefore where its chain is cut.
     let mut shape_of_poly = vec![NONE; store.poly_count()];
-    // A scatter onto the store's polygon column.
     for (index, &poly) in shape.iter().enumerate() {
         shape_of_poly[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
     }
@@ -1594,10 +1312,7 @@ pub fn extract_into(
     };
     let mut metal: Vec<(u32, u32, LayerId)> = Vec::new();
     let mut via: Vec<(u32, u32, LayerId)> = Vec::new();
-    // The same branchless compact twice, over the two connection lists. These
-    // two are the bulk pair — millions of rows on a full chip, where the
-    // unconditional store is what keeps a bounds check and its panic edge out of
-    // the loop.
+    // The same branchless compact twice, over the two connection lists.
     metal.reserve(links.metal.len());
     let slots = &mut metal.spare_capacity_mut()[..links.metal.len()];
     let mut w = 0usize;
@@ -1666,13 +1381,8 @@ pub fn extract_into(
     }
 
     // Pass four: where the devices draw, as one more tap apiece. The share each
-    // one takes needs the count for its whole rail, so the requests are collected
+    // takes needs the count for its whole rail, so the requests are collected
     // here and scattered onto the node column once the nodes exist.
-    //
-    // The budget spreads uniformly over the rail's attach points, because a
-    // net-level budget is all design intent states. That makes a hot spot read
-    // cooler than it is wherever the real draw is concentrated; a per-instance
-    // power file would fix it, and `ingest` has no reader for one.
     let mut attach: Vec<u32> = Vec::new();
     let mut load: Vec<(u32, Qty<Current, { prefix::MICRO }>)> = Vec::new();
     let mut index = TapIndex::default();
@@ -1682,17 +1392,11 @@ pub fn extract_into(
             supply_start[supply + 1] as usize,
         );
         attach.clear();
-        // Surviving `if`: once per declared supply — tens of them, not bulk. A
-        // supply this block does not route has nothing to attach to.
+        // A supply this block does not route has nothing to attach to.
         if to == from {
             continue;
         }
-        // One grid per rail, queried once per device terminal on it: the scan it
-        // replaces was a distance test per shape per terminal, which on a rail
-        // with a thousand of each is a million of them.
         TapIndex::build_into(store, &shape[from..to], &mut index);
-        // Loops over one net's devices and one device's terminals: tens of
-        // iterations each, not bulk.
         for &device in devices.devices_on(net) {
             let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
             let host_index = from + index.nearest(marker) as usize;
@@ -1707,19 +1411,10 @@ pub fn extract_into(
             let here = on.iter().filter(|&&n| n == net).count();
             attach.resize(attach.len() + here, request);
         }
-        // No `attach.is_empty()` guard, deliberately. The one that stood here
-        // claimed "a rail nothing attaches to draws nothing", and that is the
-        // fail-open this whole path was built on: a rail with no *device
-        // terminal* is the ordinary shape of a supply fed from off-chip through
-        // a pad, which draws everything. It was also dead code — the share it
-        // guarded is only ever stored by the loop below, which iterates once per
-        // attach point and so zero times, and `Qty::new` stores an `f64` without
-        // validating it. Deleting it changes no column this transform writes.
-        //
-        // What replaces it is `discarded_budget`, read by the rules rather than
-        // here: this transform's only error channel is `PowerError`, and
-        // `engine::run` turns any `Err` from it into a refusal of the *whole*
-        // ERC stage, which would take some thirty geometry rules down with it.
+        // No `attach.is_empty()` guard, deliberately: a rail with no device
+        // terminal is the ordinary shape of a supply fed from off-chip, which
+        // draws everything. `discarded_budget` reports that to the rules
+        // instead, because an `Err` here would refuse the whole ERC stage.
         //
         // A ground node's load is negative by the column's own convention: it
         // injects into the rail rather than drawing from it.
@@ -1734,8 +1429,6 @@ pub fn extract_into(
         let share = Qty::new(
             sign * intent.limits_of(net).budget_current_ua.unwrap_or(0.0) / attach.len() as f64,
         );
-        // One rail's shares append to a list every rail extends, so this appends
-        // rather than refills. Tens of attach points.
         for &request in &attach {
             load.push((request, share));
         }
@@ -1751,11 +1444,6 @@ pub fn extract_into(
         "SoA columns must agree: one chain position per node"
     );
 
-    // Five gathers off the same node column. Each is one indexed load into a
-    // table closed over above the loop, which is a data-dependent *address* and
-    // not a branch, so the bodies stay uniform. The destinations were emptied by
-    // this function's prologue and are reserved here, so nothing reallocates
-    // mid-fill.
     out.node_poly.reserve(nodes);
     for i in 0..nodes {
         out.node_poly.push(shape[taps.node_shape[i] as usize]);
@@ -1782,45 +1470,31 @@ pub fn extract_into(
 
     out.node_load.clear();
     out.node_load.resize(out.node_poly.len(), Qty::new(0.0));
-    // Scatter-accumulate onto a node column indexed by the attach list: the
-    // output index is data-dependent, so two rows can land on one node and the
-    // loop is serial in whatever order they do.
+    // Two rows can land on one node, so this accumulates rather than stores.
     for &(request, share) in &load {
         let node = taps.req_node[request as usize] as usize;
         out.node_load[node] = out.node_load[node] + share;
     }
 
-    // Where the rail is anchored. No input this transform takes carries a pad
-    // marker — `Connectivity` names conductors and cuts and nothing else — so
-    // the anchor is inferred, and the inference is the *stack*: supply enters a
-    // die from the top, through bumps or bond pads on the highest metal, and
-    // spreads down through the vias from there. So the anchor is the centre tap
-    // of the rail's widest shape on its highest conducting layer.
-    //
-    // Every part of that is a physical prior rather than a scan artefact, which
-    // is what the shape that stood here before — the first tap of whichever
-    // polygon the reader happened to emit first — was not. The residual error
-    // is one anchor where a real rail has many, and that direction is the safe
-    // one: fewer anchors means a longer path to every load, so drop is
-    // over-reported rather than under-reported. A pad-marker layer on
-    // `Connectivity` is what closes it, and is recorded as missing in
-    // `docs/SIGNATURE_DEFECTS.md`.
+    // Where the rail is anchored. No input carries a pad marker, so the anchor
+    // is inferred from the stack: supply enters a die from the top, so it is the
+    // centre tap of the rail's widest shape on its highest conducting layer.
+    // The residual error is one anchor where a real rail has many, which
+    // over-reports drop rather than under-reporting it. A pad-marker layer on
+    // `Connectivity` closes it; recorded in `docs/SIGNATURE_DEFECTS.md`.
     for supply in 0..intent.supply_net.len() {
         let (from, to) = (
             supply_start[supply] as usize,
             supply_start[supply + 1] as usize,
         );
-        // Surviving `if`: once per declared supply. A rail with no shape has no
-        // node and therefore no pad; anchoring at one that does not exist would
-        // name a node the grid does not have.
+        // A rail with no shape has no node and therefore no pad.
         if to == from {
             continue;
         }
-        // A max-fold over one rail's shapes, keyed so that every tie is broken
-        // by data rather than by order: highest metal first, then the widest
-        // piece of it, then the lowest shape index. `height_nm` is `f64` and a
-        // missing layer reads as the substrate, which loses to every layer the
-        // stack does name.
+        // Keyed so every tie is broken by data rather than by order: highest
+        // metal, then the widest piece of it, then the lowest shape index. A
+        // missing `height_nm` reads as the substrate, which loses to every layer
+        // the stack does name.
         let mut anchor = from;
         let mut best = (f64::NEG_INFINITY, i128::MIN);
         for (offset, &poly) in shape[from..to].iter().enumerate() {
@@ -1832,20 +1506,15 @@ pub fn extract_into(
                 .copied()
                 .unwrap_or(0.0);
             let key = (height, host.area().raw());
-            // Surviving `if`: over one rail's shapes, and the taken side is two
-            // stores against a fold that has to keep the *index* as well as the
-            // key — a blend would cost the same and read worse.
             if key > best {
                 best = key;
                 anchor = from + offset;
             }
         }
 
-        // The centre tap, not an end tap: every shape carries one at its own
-        // centre by construction (pass three pushes it first), and the centre
-        // is what minimises the worst-case distance from the inferred anchor to
-        // wherever the real pad sits. The chain is ascending in `node_along`,
-        // so this is a binary search over tens of entries.
+        // The centre tap: every shape carries one by construction (pass three
+        // pushes it first), and the centre minimises the worst-case distance to
+        // wherever the real pad sits. The chain is ascending in `node_along`.
         let host = store.poly_bbox(shape[anchor]);
         let middle = tap_on(host, host);
         let (lo, hi) = taps.chain_of(u32::try_from(anchor).expect("a shape index is a u32"));
@@ -1857,17 +1526,14 @@ pub fn extract_into(
         out.source_voltage.push(intent.supply_voltage[supply]);
     }
 
-    // Pass six: the edges. A shape's own chain first — the resistance the
-    // collapsed model spent as zero — then one edge per connection, whose two
-    // taps are the same physical point and whose length is therefore the floor.
-    // One profile, rebuilt per shape from one set of allocations.
+    // Pass six: the edges. A shape's own chain first, then one edge per
+    // connection, whose two taps are the same physical point and whose length is
+    // therefore the floor.
     let mut profile = ChainProfile::default();
     for (index, &poly) in shape.iter().enumerate() {
         let layer = store.poly_layer(poly);
         profile.build(store, poly);
         let (from, to) = taps.chain_of(u32::try_from(index).expect("a shape index is a u32"));
-        // Adjacent pairs of one shape's chain, seven output columns apiece,
-        // which is tens of taps at most.
         for node in from..to.saturating_sub(1) {
             let (a, b) = (taps.node_along[node], taps.node_along[node + 1]);
             // The taps of one chain are strictly ascending, so the span is at
@@ -1892,9 +1558,6 @@ pub fn extract_into(
         }
     }
 
-    // Seven output columns per edge. The body carries no data-dependent branch:
-    // the two edge kinds were split into two tables by `connections_into`, and
-    // `min`/`max` are branchless.
     for (link, &(a, b, layer)) in metal.iter().enumerate() {
         let (host_a, host_b) = (store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
         let width = conductor_width(host_a, host_b);
@@ -1904,8 +1567,7 @@ pub fn extract_into(
         );
         let (node_a, node_b) = (taps.req_node[ra], taps.req_node[rb]);
         // The two taps are the same physical point — the shapes touch — so this
-        // is the floor, and every square of metal between them is now carried by
-        // the two chains rather than by this one edge.
+        // is the floor; the metal between them is carried by the two chains.
         let length = run_length(
             out.node_at[node_a as usize],
             out.node_at[node_b as usize],
@@ -1942,11 +1604,9 @@ pub fn extract_into(
         out.source_voltage.len(),
         "one voltage per pad"
     );
-    // The shape ranges of two supplies are disjoint and ascending, and nodes
-    // are numbered by shape and then along the chain, so wherever inside its
-    // own range a rail's anchor lands, it lands below every node of the rail
-    // after it. This is the property `PowerGrid::fixed_voltage` binary-searches
-    // on and `solve_into` eliminates against.
+    // Two supplies' shape ranges are disjoint and ascending and nodes are
+    // numbered by shape, so each rail's anchor lands below every node of the
+    // rail after it. `PowerGrid::fixed_voltage` binary-searches on this.
     debug_assert!(
         out.source_node.windows(2).all(|w| w[0] < w[1]),
         "supplies were walked ascending, so their anchors are ascending"
@@ -1969,26 +1629,10 @@ pub fn extract_into(
 
 /// A uniform grid over one net's tap points, for nearest-tap queries.
 ///
-/// **Five questions.** In: the tap centre of every conducting shape of one net.
-/// Out: bucket offsets and a candidate-index list. How many: one per net,
-/// rebuilt from one set of allocations. Access pattern: built once, queried once
-/// per device terminal on that net, always by expanding rings around the query
-/// cell — so it is CSR by bucket, like [`gpurify_core::index::SpatialIndex`] and
-/// for the same reason. Lifetime: phase. Parallelisable: the queries are.
-///
-/// A grid of its own rather than that `SpatialIndex`: this indexes one net's
-/// shapes *across* layers and answers a nearest-point query, where that one
-/// indexes one layer of the whole store and answers a within-distance pair
-/// query. Same structure, different question, and neither interface expresses
-/// the other's.
-///
-/// `rules::supply::TapGrid` is the crate's other copy of the bucket-grid
-/// skeleton and is deliberately left separate: it files *segments* into every
-/// cell they overlap and answers a squared distance, where this files one point
-/// per row and answers which row won, so only the extent fold, the cell-size
-/// choice and the prefix sum are shared — about twenty lines against two
-/// different `Cols` items, two different fill rules and two different
-/// termination rules. A generic over all of that is more code than it deletes.
+/// CSR by bucket, queried by expanding rings around the query cell. Distinct
+/// from [`gpurify_core::index::SpatialIndex`] and from `rules::supply::TapGrid`:
+/// this indexes one net's shapes *across* layers and answers a nearest-point
+/// query, where those answer within-distance pair queries over segments.
 #[derive(Debug, Default)]
 struct TapIndex {
     /// Tap centre of each candidate, in candidate order.
@@ -2008,10 +1652,7 @@ struct TapIndex {
 }
 
 impl TapIndex {
-    /// Build over one net's conducting shapes.
-    ///
-    /// **Transform, A-to-B.** Caller owns the index; it is cleared and refilled,
-    /// so a loop over nets builds from one set of allocations.
+    /// Build over one net's conducting shapes, clearing and refilling.
     fn build_into(store: &GeometryStore, candidate: &[PolyId], out: &mut Self) {
         debug_assert!(
             candidate.windows(2).all(|w| w[0] < w[1]),
@@ -2026,10 +1667,8 @@ impl TapIndex {
 
     /// Bucket the tap column this index already holds.
     ///
-    /// **Transform, in-place.** Split from [`TapIndex::build_into`] so the ring
-    /// search can be exercised against a brute-force scan without a
-    /// [`GeometryStore`] to build one from — the query is the part with a
-    /// termination rule, and a termination rule is what a test has to pin.
+    /// Split from [`TapIndex::build_into`] so the ring search can be exercised
+    /// against a brute-force scan without a [`GeometryStore`].
     fn grid(&mut self) {
         let out = self;
         out.bucket_start.clear();
@@ -2044,9 +1683,6 @@ impl TapIndex {
             return;
         }
 
-        // The extent fold. `union` is four `min`/`max` on `Dbu`, which is exact
-        // integer arithmetic, so the accumulator carries no rounding and the
-        // order it folds in cannot change the answer.
         let mut bounds = Bbox::EMPTY;
         for i in 0..out.at.len() {
             let p = out.at[i];
@@ -2078,8 +1714,6 @@ impl TapIndex {
 
         let buckets = out.nx as usize * out.ny as usize;
         out.bucket_start.resize(buckets + 1, 0);
-        // A counting sort is scatter-accumulate on the count and on the fill,
-        // and a prefix sum is a chain, so all three passes are serial by shape.
         for index in 0..out.at.len() {
             let b = out.bucket_of(out.at[index]) as usize;
             out.bucket_start[b + 1] += 1;
@@ -2125,10 +1759,9 @@ impl TapIndex {
 
     /// Which candidate a device attaches to: the one whose tap is nearest.
     ///
-    /// **Decision** — small data in, one index out, pure. Returns the index
-    /// within the candidate list, and on a tie the lowest; the list is ascending
-    /// by [`PolyId`], so the answer is a function of the layout and not of the
-    /// order the rings were walked in.
+    /// Returns the index within the candidate list, and on a tie the lowest; the
+    /// list is ascending by [`PolyId`], so the answer is a function of the layout
+    /// and not of the order the rings were walked in.
     ///
     /// # Panics
     ///
@@ -2171,11 +1804,10 @@ impl TapIndex {
                     // so the squares and their sum sit far inside an `i128`.
                     // Exact, so a tie is a tie rather than a rounding.
                     let distance = dx * dx + dy * dy;
-                    // Branchless: `min` on the distance, a mask blend on the
-                    // winner. The comparison is on the pair, so an equal distance
-                    // is broken by the lower index and the ring order never
-                    // decides one — and a winning pair is never *further*, so
-                    // `min` agrees with the blend.
+                    // The comparison is on the pair, so an equal distance is
+                    // broken by the lower index and the ring order never decides
+                    // one; a winning pair is never *further*, so `min` agrees
+                    // with the blend.
                     let closer = u32::from((distance, index) < best).wrapping_neg();
                     best = (
                         distance.min(best.0),
@@ -2186,10 +1818,9 @@ impl TapIndex {
             };
 
             // Everything at Chebyshev distance exactly `radius` from the query
-            // cell: the block's border. A row that is not itself part of the
-            // border contributes its two end cells and nothing between them —
-            // named outright rather than strided, because a row clipped by the
-            // grid edge no longer has its ends a stride apart.
+            // cell. A row that is not itself part of the border contributes its
+            // two end cells and nothing between them, named outright because a
+            // row clipped by the grid edge has its ends less than a stride apart.
             let last_col = i64::from(self.nx - 1);
             for row in lo_y.max(0)..=hi_y.min(i64::from(self.ny - 1)) {
                 if row == lo_y || row == hi_y {
@@ -2228,8 +1859,6 @@ impl TapIndex {
                 && lo_y <= 0
                 && hi_x >= i64::from(self.nx - 1)
                 && hi_y >= i64::from(self.ny - 1);
-            // Surviving `if`: once per ring — a handful of rings per query, not
-            // per tap — and the taken side leaves the loop.
             if covered || (slack >= 0 && best.0 <= i128::from(slack) * i128::from(slack)) {
                 break;
             }
@@ -2245,10 +1874,6 @@ impl TapIndex {
 }
 
 /// Which layers carry current, as one byte per layer.
-///
-/// A dense mask rather than a scan of `conductors` per polygon: the list is
-/// short and read once per shape, so the load is what makes "is this shape a
-/// conductor" a byte and not a search.
 fn conductor_mask(connectivity: &Connectivity, layers: usize) -> Vec<bool> {
     let bound = connectivity
         .conductors
@@ -2266,10 +1891,9 @@ fn conductor_mask(connectivity: &Connectivity, layers: usize) -> Vec<bool> {
 
 /// Sheet resistance of every layer that will carry current, indexed by layer.
 ///
-/// Fail closed, and once: a layer with no sheet resistance, or one that is zero,
-/// negative or non-finite, is [`PowerError::NoSheetResistance`]. A default would
-/// be a guess, and a guessed conductor is a guessed verdict — a zero sheet
-/// resistance in particular shorts a whole rail and makes a bad grid read clean.
+/// Fail closed: a missing, zero, negative or non-finite sheet resistance is
+/// [`PowerError::NoSheetResistance`]. A zero in particular shorts a whole rail
+/// and makes a bad grid read clean.
 fn sheet_resistances(process: Process<'_>, layers: usize) -> Result<Vec<f64>, PowerError> {
     let carrying = process
         .connectivity
@@ -2300,11 +1924,9 @@ fn sheet_resistances(process: Process<'_>, layers: usize) -> Result<Vec<f64>, Po
 
 /// Every connection between two conductor polygons, split by kind.
 ///
-/// **Transform, A-to-B, dispatcher.** Two tables rather than one with a kind
-/// column, because the resistance of the two is a different formula: keeping
-/// them together would put a `match` on the kind inside the loop that computes
-/// millions of them, which is the data-dependent branch `docs/CONVENTIONS.md`
-/// §2 says to split away instead.
+/// Two tables rather than one with a kind column: the resistance of the two is a
+/// different formula, so a kind column would put a `match` inside the loop that
+/// computes millions of them.
 #[derive(Debug, Default)]
 struct Connections {
     /// Touching pairs on one conductor layer, with that layer.
@@ -2325,18 +1947,13 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
 
     let mut pairs: Vec<(u32, u32)> = Vec::new();
 
-    // Hoisted uniform: whether touching shapes on one layer connect is a
-    // deck-wide fact, so it selects the list to walk rather than guarding a row.
+    // Whether touching shapes on one layer connect is a deck-wide fact, so it
+    // selects the list to walk rather than guarding a row.
     let touching: &[LayerId] = if connectivity.intra_layer_touch {
         &connectivity.conductors
     } else {
         &[]
     };
-    // The outer loops are over layers and via rows — tens of iterations. The
-    // inner ones are the bulk pass: the layer is a uniform hoisted above the
-    // loop, so tagging is one store per pair and each layer's pairs append to
-    // the list every layer before it extended. The staging buffer these used to
-    // fill and then copy out of bought nothing once the copy was written here.
     for &layer in touching {
         intra_layer_edges_into(store, layer, &mut pairs);
         out.metal.reserve(pairs.len());
@@ -2352,19 +1969,9 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
 
 /// Every shape's taps, sorted along its chain and deduplicated.
 ///
-/// **Five questions.** In: one network's conducting shapes, plus a tap request
-/// per connection end and per device attach point. Out: one node per distinct
-/// tap, and the node each request resolved to. How many: a few nodes per shape,
-/// so a supply grid is a small multiple of its polygon count. Access pattern:
-/// pushed in request order, sorted once, then read back positionally by every
-/// edge emitter — so the request columns and the node columns are separate
-/// groups joined by `req_node` and nothing points at anything. Lifetime: phase,
-/// one allocation set reused across nets. Parallelisable: per net.
-///
-/// This is what makes a polygon a *chain* rather than a point. A shape tapped
-/// near one end has the metal between its taps modelled as the resistance it
-/// is; collapsing it to one node modelled that metal as zero, which under-reports
-/// every drop measured across it.
+/// This is what makes a polygon a *chain* rather than a point: the metal between
+/// two taps is modelled as the resistance it is. The request columns and the
+/// node columns are separate groups joined by `req_node`.
 #[derive(Debug, Default)]
 struct TapTable {
     /// Request columns, in the order the caller pushed them: which shape, and
@@ -2410,9 +2017,9 @@ impl TapTable {
 
     /// Resolve every request to a node.
     ///
-    /// **Transform, A-to-B.** Sorts the requests by `(shape, along)` and gives
-    /// one node to each distinct pair, so a shape's nodes come out ascending
-    /// along its chain and `chain_start` carries `shapes + 1` offsets.
+    /// Sorts by `(shape, along)` and gives one node to each distinct pair, so a
+    /// shape's nodes come out ascending along its chain and `chain_start`
+    /// carries `shapes + 1` offsets.
     fn finish(&mut self, shapes: usize) {
         debug_assert_eq!(
             self.req_along.len(),
@@ -2428,8 +2035,7 @@ impl TapTable {
         self.order
             .extend(0..u32::try_from(self.req_shape.len()).expect("a tap request is a u32"));
         // The index is the last key, so the sort is total and the elimination
-        // order below cannot depend on which equal pair the sort happened to
-        // leave first — determinism is a gate here, not a nicety.
+        // order cannot depend on which equal pair the sort left first.
         let (shape, along) = (&self.req_shape, &self.req_along);
         self.order
             .sort_unstable_by_key(|&i| (shape[i as usize], along[i as usize], i));
@@ -2438,9 +2044,6 @@ impl TapTable {
         self.req_node.resize(self.req_shape.len(), NONE);
         self.node_shape.clear();
         self.node_along.clear();
-        // A dedupe is a chain — whether row N opens a node depends on row N − 1 —
-        // and the store is a scatter through the permutation, so this loop is
-        // serial on both counts.
         for &request in &self.order {
             let (s, a) = (
                 self.req_shape[request as usize],
@@ -2455,7 +2058,6 @@ impl TapTable {
                 u32::try_from(self.node_shape.len() - 1).expect("a node index is a u32");
         }
 
-        // Offsets. A prefix sum is a chain, so this one is serial too.
         self.chain_start.clear();
         self.chain_start.resize(shapes + 1, 0);
         for &s in &self.node_shape {
@@ -2496,9 +2098,8 @@ impl TapTable {
 
 /// Which axis a polygon's resistor chain runs along: `true` for x.
 ///
-/// **Decision** — one box in, one bit out. The long bounding-box axis, because
-/// that is the direction current runs down a route; a square shape is a tie and
-/// takes x, so the answer is a function of the box and not of a scan order.
+/// The long bounding-box axis, because that is the direction current runs down a
+/// route; a square shape ties and takes x.
 fn chain_is_horizontal(host: Bbox) -> bool {
     host.width().raw() >= host.height().raw()
 }
@@ -2506,16 +2107,14 @@ fn chain_is_horizontal(host: Bbox) -> bool {
 /// Where a connection to `other` lands on `host`, as a coordinate on `host`'s
 /// long axis.
 ///
-/// **Decision** — two boxes in, one coordinate out, pure. The centre of the two
-/// boxes' overlap, which is the point the module doc calls the tap; boxes that
-/// only touch have no overlap, and then the other box's centre clamped into
-/// `host` is the same point in the limit.
+/// The centre of the two boxes' overlap. Boxes that only touch have no overlap,
+/// and then the other box's centre clamped into `host` is the same point in the
+/// limit.
 fn tap_on(host: Bbox, other: Bbox) -> Dbu {
     let landed = match host.intersection(other) {
         Some(shared) => centre(shared),
-        // Surviving `if` — a `match` on an `Option`, once per connection rather
-        // than per row of one. Two boxes that share only a corner have an empty
-        // intersection, and their tap is still a real point on `host`.
+        // Two boxes sharing only a corner have an empty intersection, and their
+        // tap is still a real point on `host`.
         None => centre(other),
     };
     let (lo, hi, along) = if chain_is_horizontal(host) {
@@ -2528,9 +2127,8 @@ fn tap_on(host: Bbox, other: Bbox) -> Dbu {
 
 /// The node position of a tap sitting at `along` on `host`'s long axis.
 ///
-/// **Decision** — a box and a coordinate in, one point out. Across the chain the
-/// node sits at the conductor's centre line, which is what makes the model
-/// one-dimensional: a polygon is a chain along its length, not a sheet.
+/// Across the chain the node sits at the conductor's centre line, which is what
+/// makes the model one-dimensional: a polygon is a chain, not a sheet.
 fn tap_point(host: Bbox, along: Dbu) -> Point {
     let middle = centre(host);
     if chain_is_horizontal(host) {
@@ -2548,26 +2146,14 @@ fn tap_point(host: Bbox, along: Dbu) -> Point {
 
 /// The conductor's cross-section along one shape's chain, exactly.
 ///
-/// **Five questions.** In: one rectilinear polygon and the axis its chain runs
-/// along. Out: a piecewise-constant width profile — slab cuts ascending, and
-/// the covered cross-section between each adjacent pair. How many: one per
-/// shape, rebuilt from one set of allocations by the loop over shapes. Access
-/// pattern: built once, then swept once per chain segment, ascending, so the
-/// two columns are read in step and neither is indexed randomly. Lifetime:
-/// phase. Parallelisable: per shape.
+/// A piecewise-constant width profile: slab cuts ascending, and the covered
+/// cross-section between each adjacent pair. This is what stops a bounding box
+/// standing in for a route — an L of `100 × 100` on ten-wide arms profiles to
+/// `9.1` squares and boxes to `1.0`, and under-reporting resistance by that
+/// factor is fail-open for all four rules that read a solved grid. A rectangle
+/// profiles to one slab of its own short dimension.
 ///
-/// This is what stops a bounding box standing in for a route. An L-shaped
-/// polygon has a square box, so its short box dimension is as long as the
-/// route: `100 × 100` outline on ten-wide arms profiles to `9.1` squares and
-/// boxes to `1.0`. Under-reporting resistance by that factor under-reports
-/// every drop measured through it, which is fail-open for all four rules that
-/// read a solved grid. A rectangle profiles to one slab of its own short
-/// dimension, so the model over a rectangle is exactly what it always was.
-///
-/// The model stays one-dimensional: `w(s)` is the metal available at `s`, and
-/// current is assumed to have spread across all of it. Transverse resistance
-/// within a slab is still not modelled, which is why the vertical arm of that L
-/// costs almost nothing along the horizontal chain.
+/// Still one-dimensional: transverse resistance within a slab is not modelled.
 #[derive(Debug, Default)]
 struct ChainProfile {
     /// Slab boundaries along the chain axis, ascending and deduplicated.
@@ -2589,25 +2175,16 @@ struct ChainProfile {
 }
 
 impl ChainProfile {
-    /// Profile one shape.
+    /// Profile one shape, clearing and refilling.
     ///
-    /// **Transform, A-to-B.** Caller owns the profile; it is cleared and
-    /// refilled, so the loop over a rail's shapes builds from one set of
-    /// allocations.
-    ///
-    /// A vertical-slab sweep against an active-edge list, so a polygon of `V`
-    /// vertices costs `O(V log V)` for the two sorts plus `O(V + C)` for the
-    /// sweep, where `C` is its own crossing count. The per-slab rescan of every
-    /// edge that the same shape written directly would cost is what the active
-    /// list removes.
+    /// A vertical-slab sweep against an active-edge list: `O(V log V)` for the
+    /// two sorts plus `O(V + C)` for the sweep.
     fn build(&mut self, store: &GeometryStore, poly: PolyId) {
         let host = store.poly_bbox(poly);
         let (xs, ys) = store.poly_verts(poly);
         debug_assert_eq!(xs.len(), ys.len(), "a ring's coordinate columns are parallel");
         debug_assert!(xs.len() >= 3, "a validated ring has at least three vertices");
 
-        // Which axis is the chain and which is across it: a uniform, chosen
-        // once above every loop below rather than tested per vertex.
         let (along, across) = if chain_is_horizontal(host) {
             (xs, ys)
         } else {
@@ -2620,8 +2197,7 @@ impl ChainProfile {
         self.cut.sort_unstable();
         self.cut.dedup();
 
-        // One edge per vertex, the wrap edge as a scalar fixup after the pair
-        // scan. `min`/`max` on `Dbu` is branchless, so the body is uniform.
+        // One edge per vertex, the wrap edge as a fixup after the pair scan.
         self.edge.clear();
         self.edge.reserve(n);
         for k in 0..n - 1 {
@@ -2684,16 +2260,12 @@ impl ChainProfile {
     /// One chain segment: the squares of conductor between two taps, and the
     /// narrowest cross-section anywhere along it.
     ///
-    /// **Decision** — a profile and two coordinates in, two values out, pure.
-    /// The squares are `∫ ds / w(s)`, which is the resistance of a
-    /// one-dimensional conductor of varying width and reduces to `L / W` on the
-    /// single slab a rectangle profiles to. The narrowest slab is what a current
-    /// density divides by: the density peaks where the metal is thinnest, so
-    /// taking the mean instead would report the peak as lower than it is.
+    /// The squares are `∫ ds / w(s)`, which reduces to `L / W` on the single slab
+    /// a rectangle profiles to. The narrowest slab is what a current density
+    /// divides by: the density peaks where the metal is thinnest, so taking the
+    /// mean would report the peak as lower than it is.
     ///
-    /// Folded left over ascending slabs, so the sum is the same bits on every
-    /// run. Costs one pass over this shape's own slabs — its vertex count, not
-    /// the network's.
+    /// Folded left over ascending slabs, so the sum is the same bits every run.
     fn segment(&self, from: Dbu, to: Dbu) -> (f64, Dbu) {
         debug_assert!(from.raw() < to.raw(), "a chain segment runs forwards");
         debug_assert!(
@@ -2715,10 +2287,8 @@ impl ChainProfile {
             )]
             let ratio = overlap as f64 / w as f64;
             squares += ratio;
-            // Branchless: a slab this segment does not touch blends in as
-            // `i64::MAX`, which loses every `min`. The mask is the smear from
-            // the catalogue rather than an `if`, because this runs once per
-            // slab per segment.
+            // A slab this segment does not touch blends in as `i64::MAX`, which
+            // loses every `min`.
             let mask = i64::from(overlap > 0).wrapping_neg();
             narrow = narrow.min((w & mask) | (i64::MAX & !mask));
         }
@@ -2741,11 +2311,9 @@ fn conductor_width(a: Bbox, b: Bbox) -> Dbu {
 
 /// The length of the segment between two taps.
 ///
-/// Manhattan, because routing is, and because the sum of two `Dbu` differences
-/// is exact where a Euclidean distance would need a root. Floored at one
-/// database unit: a zero length makes the Blech product zero, and a segment
-/// below the Blech limit is *exempt* from electromigration, so a zero-length
-/// segment would exempt itself.
+/// Manhattan, because routing is. Floored at one database unit: a zero length
+/// makes the Blech product zero, and a segment below the Blech limit is *exempt*
+/// from electromigration, so a zero-length segment would exempt itself.
 fn run_length(from: Point, to: Point) -> Dbu {
     let span = (from.x.raw() - to.x.raw()).abs() + (from.y.raw() - to.y.raw()).abs();
     Dbu::new_unchecked(span.max(1))
@@ -2754,10 +2322,8 @@ fn run_length(from: Point, to: Point) -> Dbu {
 /// How long a via is: the height the process stack puts between its two
 /// conductors, floored at one database unit.
 ///
-/// The floor is the point. A zero length makes the Blech product zero, a zero
-/// Blech product is below every limit, and a segment below the Blech limit is
-/// *exempt* from electromigration — so a via with no length would exempt itself,
-/// which is fail-open.
+/// The floor is the point: a zero length makes the Blech product zero, and a
+/// segment below the Blech limit is *exempt* from electromigration.
 fn via_length(process: Process<'_>, lower: LayerId, upper: LayerId) -> Dbu {
     let height = |layer: LayerId| {
         process
@@ -2794,13 +2360,11 @@ fn squares(length: Dbu, width: Dbu) -> f64 {
 
 /// Build one resistor network per net that has at least two device terminals.
 ///
-/// **Transform, A-to-B, gatherer.** Caller owns `out`, cleared and refilled.
-/// Rows are emitted ascending by [`NetId`] so the result is deterministic
-/// regardless of how the work was partitioned.
+/// Caller owns `out`, cleared and refilled. Rows are emitted ascending by
+/// [`NetId`], so the result does not depend on how the work was partitioned.
 ///
-/// Independent of design intent entirely: this is geometry and sheet
-/// resistance, both of which the process supplies. That is why point-to-point
-/// resistance always runs.
+/// Independent of design intent: geometry and sheet resistance only, which is
+/// why point-to-point resistance always runs.
 pub fn extract_nets_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -2837,8 +2401,7 @@ pub fn extract_nets_into(
     for net in 0..nets.net_count() {
         let id = NetId(u32::try_from(net).expect("a net id is a u32"));
         // The same branchless compact `extract_into` runs over a supply's
-        // polygons: reserve for the whole input, store unconditionally, and let
-        // the write cursor carry the decision.
+        // polygons.
         let polys = nets.polys_of(id);
         kept.clear();
         kept.reserve(polys.len());
@@ -2860,8 +2423,6 @@ pub fn extract_nets_into(
         unsafe { kept.set_len(w) };
         debug_assert!(kept.len() <= polys.len(), "a compact cannot grow its input");
 
-        // A scatter — the output index is data-dependent — over one net's
-        // shapes rather than over the store.
         for (index, &poly) in kept.iter().enumerate() {
             shape_in_row[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
         }
@@ -2869,10 +2430,9 @@ pub fn extract_nets_into(
         candidate_start.push(u32::try_from(candidate.len()).expect("a shape index is a u32"));
     }
 
-    // Connections, bucketed by net. Sorting is what makes the emitted rows a
-    // function of the layout rather than of the order the layer scans ran in;
-    // both endpoints of a connection are the same net, so keying on one of them
-    // is enough.
+    // Connections, bucketed by net. Sorting makes the emitted rows a function of
+    // the layout rather than of the order the layer scans ran in; both endpoints
+    // of a connection are the same net, so keying on one is enough.
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
     let by_net = |&(a, b, layer): &(u32, u32, LayerId)| {
@@ -2884,8 +2444,6 @@ pub fn extract_nets_into(
     let mut terminal: Vec<u32> = Vec::new();
     let mut index = TapIndex::default();
     let mut taps = TapTable::default();
-    // One profile for the whole run, rebuilt per shape from one set of
-    // allocations.
     let mut profile = ChainProfile::default();
     for net in 0..nets.net_count() {
         let id = NetId(u32::try_from(net).expect("a net id is a u32"));
@@ -2902,9 +2460,8 @@ pub fn extract_nets_into(
         let via = net_slice(&links.via, key, nets);
 
         // Every shape carries a tap at its own centre first, so a shape nothing
-        // connects to still has a node; then one per connection end, which is
-        // what cuts each shape's chain where something actually lands on it.
-        // Three times: `push` writes both tap columns at once.
+        // connects to still has a node; then one per connection end, which cuts
+        // each shape's chain where something actually lands on it.
         for local in 0..shapes {
             let host = store.poly_bbox(candidate[from + local]);
             taps.push(
@@ -2925,13 +2482,9 @@ pub fn extract_nets_into(
             taps.push(shape_in_row[b as usize], tap_on(host_b, host_a));
         }
 
-        // Loops over one net's devices and one device's terminals: tens of
-        // iterations, not bulk. A net with no conducting shape has nothing to
-        // attach to, which is why the range guards the scan.
+        // A net with no conducting shape has nothing to attach to.
         let mut attach: Vec<u32> = Vec::new();
         if shapes > 0 {
-            // One grid per net, queried once per device on it, rebuilt from the
-            // allocations the previous net left.
             TapIndex::build_into(store, &candidate[from..to], &mut index);
             for &device in devices.devices_on(id) {
                 let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
@@ -2948,17 +2501,14 @@ pub fn extract_nets_into(
         }
         taps.finish(shapes);
 
-        // A gather through the request map, then a sort. Both are over one net's
-        // devices — tens of them.
         for &request in &attach {
             terminal.push(taps.req_node[request as usize]);
         }
         terminal.sort_unstable();
         terminal.dedup();
 
-        // Surviving `if`: once per net. A net with fewer than two attach points
-        // has no pair to measure, so it has no row at all — reporting it clean
-        // would be a claim about nothing.
+        // A net with fewer than two attach points has no pair to measure, so it
+        // has no row at all — reporting it clean would be a claim about nothing.
         if terminal.len() < 2 {
             continue;
         }
@@ -2966,8 +2516,6 @@ pub fn extract_nets_into(
         let base = u32::try_from(out.node_poly.len()).expect("a node index is a u32");
         out.net.push(id);
         out.terminal.extend_from_slice(&terminal);
-        // Two output columns per node, both appended to a table every net
-        // extends.
         for node in 0..taps.node_shape.len() {
             let poly = candidate[from + taps.node_shape[node] as usize];
             out.node_poly.push(poly);
@@ -2975,18 +2523,14 @@ pub fn extract_nets_into(
                 .push(tap_point(store.poly_bbox(poly), taps.node_along[node]));
         }
 
-        // Each shape's own chain, which is the resistance the collapsed
-        // one-node-per-polygon model spent as zero.
         for local in 0..shapes {
             let poly = candidate[from + local];
             let layer = store.poly_layer(poly);
             profile.build(store, poly);
             let (lo, hi) = taps.chain_of(u32::try_from(local).expect("a shape index is a u32"));
             for node in lo..hi.saturating_sub(1) {
-                // The metal the segment actually has, exactly as
-                // `extract_into` spends it — the two networks are the same
-                // model, and a bounding box in one of them would make a probe
-                // and a drop disagree about the same wire.
+                // The metal the segment actually has, exactly as `extract_into`
+                // spends it: the two networks are the same model.
                 let (squares, _) =
                     profile.segment(taps.node_along[node], taps.node_along[node + 1]);
                 out.edge_from
@@ -2998,10 +2542,6 @@ pub fn extract_nets_into(
             }
         }
 
-        // Three output columns per edge. The body carries no data-dependent
-        // branch — the two kinds were split into two tables by
-        // `connections_into`, and the `min`/`max` inside the geometry helpers
-        // are branchless.
         for (link, &(a, b, layer)) in metal.iter().enumerate() {
             let (host_a, host_b) = (store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
             let (ra, rb) = (
@@ -3009,9 +2549,8 @@ pub fn extract_nets_into(
                 metal_req as usize + 2 * link + 1,
             );
             let (node_a, node_b) = (taps.req_node[ra], taps.req_node[rb]);
-            // The two taps are the same physical point — the shapes touch — so
-            // the length is the floor, and the metal between them is carried by
-            // the two chains above rather than by this edge.
+            // The two taps are the same physical point, so the length is the
+            // floor; the metal between them is carried by the two chains above.
             let length = run_length(
                 out.node_at[(base + node_a) as usize],
                 out.node_at[(base + node_b) as usize],
@@ -3027,7 +2566,7 @@ pub fn extract_nets_into(
             out.edge_from.push(taps.req_node[ra]);
             out.edge_to.push(taps.req_node[rb]);
             // One square of the cut layer, per cut, exactly as `extract_into`
-            // spends it — the two networks are the same model.
+            // spends it.
             out.edge_resistance.push(Qty::new(sheet[cut.idx()]));
         }
 
@@ -3072,9 +2611,8 @@ pub fn extract_nets_into(
 
 /// One net's run of a connection list already sorted by net.
 ///
-/// `partition_point` twice rather than a linear scan: the list is millions of
-/// rows and the loop that calls this runs once per net, so a scan would be the
-/// quadratic pass `docs/CONVENTIONS.md` §2 names by example.
+/// `partition_point` twice rather than a linear scan, which over millions of
+/// rows once per net would be quadratic.
 fn net_slice<'a>(
     links: &'a [(u32, u32, LayerId)],
     net: u32,
@@ -3088,14 +2626,13 @@ fn net_slice<'a>(
 
 /// Solve the grid for node voltages and branch currents.
 ///
-/// **Transform, A-to-B.** Caller owns both `out` and `scratch`; `out` is
-/// cleared and refilled to the grid's node and edge counts, and `scratch`
+/// `out` is cleared and refilled to the grid's node and edge counts; `scratch`
 /// survives the call so a loop over grids allocates once.
 ///
 /// Fixed-voltage nodes are eliminated before the iteration rather than
-/// constrained inside it, which is what leaves a symmetric positive-definite
-/// system. Every unanchored island is rejected first, because CG on a singular
-/// system converges to *a* solution and the drop it reports is meaningless.
+/// constrained inside it, which leaves a symmetric positive-definite system.
+/// Unanchored islands are rejected first, because CG on a singular system
+/// converges to *a* solution whose drop is meaningless.
 pub fn solve_into(
     grid: &PowerGrid,
     config: SolveConfig,
@@ -3124,9 +2661,7 @@ pub fn solve_into(
     out.relative_residual = 0.0;
 
     // Non-finite inputs first: a `NaN` load reaches every column downstream and
-    // makes every check after this one pass. Each check is a whole-column fold
-    // followed, only on the cold path, by a scan that names the row — one
-    // branch per column instead of one per element.
+    // makes every check after this one pass.
     debug_assert_eq!(
         grid.node_nominal.len(),
         grid.node_load.len(),
@@ -3175,15 +2710,12 @@ pub fn solve_into(
         ));
     }
 
-    // No pad at all, which includes the empty grid. Refusing here is what stops
-    // a caller building a `Solved` over nothing and reporting four rules clean
-    // against it; a grid with no supplies is `None`, not an empty solution.
+    // No pad at all, which includes the empty grid. Refusing here stops a caller
+    // building a `Solved` over nothing and reporting four rules clean against it.
     if grid.source_node.is_empty() {
         return Err(PowerError::Unanchored);
     }
 
-    // The edge-pair view, the component labels and the reached mark are all
-    // `scratch` columns, so a loop over grids allocates none of them per solve.
     let SolveScratch {
         pairs,
         labels,
@@ -3208,8 +2740,6 @@ pub fn solve_into(
     for &pad in &grid.source_node {
         reached[labels[pad as usize].0 as usize] = true;
     }
-    // `reached[label]` is a gather — a data-dependent address, not a branch — so
-    // the fold stays one unconditional and per node.
     let mut anchored = true;
     for i in 0..labels.len() {
         anchored &= reached[labels[i].0 as usize];
@@ -3237,11 +2767,8 @@ pub fn solve_into(
     scratch.node_of_unknown.clear();
     scratch.node_of_unknown.resize(nodes + 1, 0);
     let mut unknowns = 0u32;
-    // Serial by construction. A running index is a chain — row N's value is row
-    // N − 1's plus a predicate — so no reordering of this loop is legal. The
-    // body itself is branchless: `NOT_AN_UNKNOWN` is all ones, so a pad's index
-    // is the running one smeared to the sentinel, the inverse map always stores,
-    // and only the cursor carries the decision.
+    // `NOT_AN_UNKNOWN` is all ones, so a pad's index is the running one smeared
+    // to the sentinel and only the cursor carries the decision.
     for (node, &pad) in is_pad.iter().enumerate() {
         scratch.unknown_of_node[node] = unknowns | u32::from(pad).wrapping_neg();
         scratch.node_of_unknown[unknowns as usize] =
@@ -3258,18 +2785,15 @@ pub fn solve_into(
 
     // Node voltages start where every drop is measured from: pads at their fixed
     // voltage, unknowns at their domain's nominal. Not merely a warm start — the
-    // residual then measures the interconnect loss alone, so `relative_tolerance`
-    // is a fraction of the *drop* rather than of the supply, and doubling every
-    // load doubles the Krylov space exactly, which is the linearity the law
-    // tests assert.
+    // residual then measures the interconnect loss alone, so
+    // `relative_tolerance` is a fraction of the *drop* rather than of the supply.
     out.node_voltage.extend_from_slice(&grid.node_nominal);
-    // A scatter onto the node column, over the pads — tens of them.
     for (pad, &node) in grid.source_node.iter().enumerate() {
         out.node_voltage[node as usize] = grid.source_voltage[pad];
     }
 
-    // Two gathers through the inverse map, so the solver's vectors are in
-    // unknown space and the node space never enters the iteration.
+    // Through the inverse map, so the solver's vectors are in unknown space and
+    // the node space never enters the iteration.
     scratch.x.clear();
     scratch.x.reserve(unknowns);
     for i in 0..unknowns {
@@ -3286,9 +2810,8 @@ pub fn solve_into(
     }
 
     // A conductance to a fixed potential moves `g * v` across to the right-hand
-    // side. Scatter-accumulate, so the output index is data-dependent and the
-    // loop is serial; branchless, so the slot past the last unknown absorbs
-    // whatever a pad-ended row would have written.
+    // side. The slot past the last unknown absorbs whatever a pad-ended row
+    // would have written.
     scratch.rhs.push(0.0);
     for edge in 0..edges {
         let (from, to) = (
@@ -3310,8 +2833,6 @@ pub fn solve_into(
     }
     scratch.rhs.truncate(unknowns);
 
-    // The branch view is a `scratch` column too, so this writes into the buffer
-    // `assemble_into` is about to read and neither allocates.
     let SolveScratch {
         branch,
         unknown_of_node,
@@ -3339,9 +2860,8 @@ pub fn solve_into(
     assemble_into(scratch, unknowns);
     let (iterations, relative_residual) = conjugate_gradient(scratch, config)?;
 
-    // Scatter the solved unknowns onto their nodes; the pads keep the exact
-    // voltage they were fixed at, which is the boundary condition and not an
-    // approximation to it.
+    // The pads keep the exact voltage they were fixed at, which is the boundary
+    // condition and not an approximation to it.
     for unknown in 0..unknowns {
         out.node_voltage[scratch.node_of_unknown[unknown] as usize] =
             Qty::new(scratch.x[unknown]);
@@ -3369,8 +2889,6 @@ pub fn solve_into(
             .zip(solved)
             .map(|(&nominal, &v)| nominal - v),
     );
-    // Ohm across each branch. The two endpoint reads are gathers, and the
-    // reciprocal is one division per edge — a uniform per row, not per lane.
     branch_current.clear();
     branch_current.reserve(edges);
     for i in 0..grid.edge_from.len() {
@@ -3406,21 +2924,14 @@ pub fn solve_into(
 
 /// Effective resistance between every terminal pair of one net's network.
 ///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled with
-/// `(terminal_a, terminal_b, resistance)` for every pair with `a < b` that lies
-/// in one connected component, ascending. A pair split across components has no
-/// interconnect path at all and is absent rather than reported as infinite.
+/// `out` is cleared and refilled with `(terminal_a, terminal_b, resistance)` for
+/// every pair with `a < b` in one connected component, ascending. A pair split
+/// across components is absent rather than reported as infinite.
 ///
-/// Non-terminal nodes are Kron-eliminated in minimum-degree order, and what is
-/// left is a graph over the terminals alone — tens of them, where the tap count
-/// is thousands. That graph is grounded per component and inverted directly, so
-/// every pair of one component is answered by one factorisation and the probe
-/// carries no tolerance at all: effective resistance is exactly invariant under
-/// the elimination, so the number is the network's and not a solver setting's.
-///
-/// Cost is the elimination's fill-in plus a `k × k` inverse, where `k` is the
-/// component's terminal count. Upgrade to a nested-dissection ordering if a net
-/// ever has enough terminals for that inverse to dominate the fill.
+/// Non-terminal nodes are Kron-eliminated in minimum-degree order, leaving a
+/// graph over the terminals alone; that is grounded per component and inverted
+/// directly, so the probe carries no tolerance at all. Cost is the fill-in plus
+/// a `k × k` inverse; upgrade to nested dissection if that ever dominates.
 pub fn effective_resistance_into(
     networks: &NetNetworks,
     row: u32,
@@ -3453,8 +2964,8 @@ pub fn effective_resistance_into(
         "an edge names a node the row does not have"
     );
 
-    // Fail closed exactly as `solve_into` does. The index named is the edge's
-    // index *within the row*, which is what `edges_of` hands the caller.
+    // Fail closed as `solve_into` does. The index named is the edge's index
+    // *within the row*, which is what `edges_of` hands the caller.
     let mut sound = true;
     for &r in edge_resistance {
         sound &= (r.raw() > 0.0) & r.is_finite();
@@ -3469,10 +2980,6 @@ pub fn effective_resistance_into(
         ));
     }
 
-    // Every buffer below is a `scratch` column, so a loop over the rows of a
-    // `NetNetworks` allocates nothing per probe. One destructure rather than a
-    // field path each time: the elimination reads the terminal map while writing
-    // the graph, which is two fields of one `&mut` and nothing wider.
     let SolveScratch {
         pairs,
         labels,
@@ -3502,7 +3009,6 @@ pub fn effective_resistance_into(
     let terminals = terminal.len();
     terminal_of_node.clear();
     terminal_of_node.resize(nodes, NONE);
-    // A scatter onto the node column, over the row's terminals — tens.
     for (index, &t) in terminal.iter().enumerate() {
         terminal_of_node[t as usize] = u32::try_from(index).expect("a terminal index is a u32");
     }
@@ -3511,13 +3017,9 @@ pub fn effective_resistance_into(
     // terminals alone, so everything after this is sized by the terminal count
     // and the tap count never enters again.
     elim.reset(nodes);
-    // `link` appends to two linked lists, which is a scatter and a growth, so
-    // this loop is serial in the order the edges arrive.
     for edge in 0..edge_from.len() {
         let (a, b) = (edge_from[edge], edge_to[edge]);
-        // Surviving `if`: a self loop carries no current and loads no node, so
-        // the Laplacian it would build is the one it already has. The taken side
-        // grows the pool, which is the expensive side.
+        // A self loop carries no current and loads no node.
         if a != b {
             elim.link(a, b, 1.0 / edge_resistance[edge].raw());
         }
@@ -3530,9 +3032,8 @@ pub fn effective_resistance_into(
             elim.queue.push(Reverse((degree, v)));
         }
     }
-    // Minimum degree, cheapest vertex first, with the queue lazily invalidated:
-    // a popped entry whose degree no longer matches is re-queued at its current
-    // one rather than searched for and edited in place.
+    // Minimum degree, cheapest first, queue lazily invalidated: a popped entry
+    // whose degree no longer matches is re-queued at its current one.
     while let Some(Reverse((degree, v))) = elim.queue.pop() {
         if !elim.alive[v as usize] {
             continue;
@@ -3558,8 +3059,8 @@ pub fn effective_resistance_into(
         "an interior tap survived the elimination"
     );
 
-    // Read the reduced Laplacian off the surviving graph. Row-major, `k × k`,
-    // and symmetric by construction — each edge is walked from both ends.
+    // Row-major, `k × k`, symmetric by construction — each edge is walked from
+    // both ends.
     dense.clear();
     dense.resize(terminals * terminals, 0.0);
     for (i, &t) in terminal.iter().enumerate() {
@@ -3576,8 +3077,7 @@ pub fn effective_resistance_into(
     }
 
     // One dense solve per component: ground its lowest-numbered terminal and
-    // invert what is left. `k` is tens, so the inverse is the whole answer for
-    // every pair in that component at once.
+    // invert what is left.
     probe.clear();
     probe.resize(terminals * terminals, 0.0);
     done.clear();
@@ -3619,9 +3119,6 @@ pub fn effective_resistance_into(
         // as zero throughout — which is what makes `R(ground, b) = X_bb`.
         for p in 0..group.len() {
             for q in p + 1..group.len() {
-                // 1.0 for a kept terminal, 0.0 for the grounded one — the mask
-                // that makes `R(ground, b) = X_bb` fall out of the same
-                // expression instead of a branch.
                 let keep = f64::from(u32::from(p != 0));
                 let (pi, qi) = (p.max(1) - 1, q - 1);
                 let xaa = inverse[pi * unknowns + pi] * keep;
@@ -3633,14 +3130,12 @@ pub fn effective_resistance_into(
         }
     }
 
-    // Every pair, `a < b`, ascending — which the ascending terminal column makes
-    // the natural nesting. Tens of terminals, so this is not a bulk loop.
+    // Every pair, `a < b`, ascending.
     for (i, &a) in terminal.iter().enumerate() {
         for (j, &b) in terminal.iter().enumerate().skip(i + 1) {
-            // Surviving `if`: a pair split across components has no
-            // interconnect path, and the interface says absent rather than
-            // infinite — an infinity in a report column compares below every
-            // limit and reads as a pass.
+            // A pair split across components has no interconnect path, and the
+            // interface says absent rather than infinite — an infinity compares
+            // below every limit and reads as a pass.
             if labels[a as usize] != labels[b as usize] {
                 continue;
             }
@@ -3682,11 +3177,11 @@ mod tests {
         builder.finish(1).0
     }
 
-    /// Oracle: closed form. A rectangle is one slab of its own short dimension,
-    /// so the whole-shape integral is the length-to-width ratio the model has
-    /// always spent on it. That is what makes this change invisible to every
-    /// closed-form test in the suite — and what makes those tests unable to see
-    /// it go wrong, which is why this one is here.
+    /// A rectangle is one slab of its own short dimension, so the whole-shape
+    /// integral is the length-to-width ratio the model has always spent on it.
+    /// That is what makes this change invisible to every closed-form test in
+    /// the suite — and what makes those tests unable to see it go wrong, which
+    /// is why this one is here.
     #[test]
     fn a_rectangle_profiles_to_its_own_length_over_its_own_width() {
         let store = shape(&[0, 400, 400, 0], &[0, 0, 10, 10]);
@@ -3706,12 +3201,12 @@ mod tests {
         );
     }
 
-    /// Oracle: closed form. An L of `100 x 100` on ten-wide arms holds a hundred
-    /// units of metal across the first ten of its span and ten across the
-    /// remaining ninety, so `∫ ds / w(s)` is `10/100 + 90/10 = 9.1` squares. Its
-    /// bounding box is square, so the model this replaced spent `100/100 = 1` —
-    /// a resistance nine times low, which is a drop nine times low, which is
-    /// fail-open for all four rules that read a solved grid.
+    /// An L of `100 x 100` on ten-wide arms holds a hundred units of metal
+    /// across the first ten of its span and ten across the remaining ninety, so
+    /// `∫ ds / w(s)` is `10/100 + 90/10 = 9.1` squares. Its bounding box is
+    /// square, so the model this replaced spent `100/100 = 1` — a resistance
+    /// nine times low, which is a drop nine times low, which is fail-open for
+    /// all four rules that read a solved grid.
     #[test]
     fn an_l_route_costs_the_squares_its_arms_have_and_not_its_bounding_box() {
         let store = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -3730,11 +3225,11 @@ mod tests {
         );
     }
 
-    /// Oracle: law. Rayleigh monotonicity, checked where it is produced rather
-    /// than where it is observed: widening a polygon widens `w(s)` at every `s`
-    /// it covers, so no segment of it can cost more squares than it did. The
-    /// bounding-box model did **not** have this property — widening the short
-    /// arm of an L past its long one flips the chain axis.
+    /// Rayleigh monotonicity, checked where it is produced rather than where it
+    /// is observed: widening a polygon widens `w(s)` at every `s` it covers, so
+    /// no segment of it can cost more squares than it did. The bounding-box
+    /// model did **not** have this property — widening the short arm of an L
+    /// past its long one flips the chain axis.
     #[test]
     fn widening_a_shape_can_only_lower_the_squares_a_segment_costs() {
         let narrow = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -3755,12 +3250,12 @@ mod tests {
         }
     }
 
-    /// Oracle: law. The defining property of an incomplete factorisation with
-    /// zero fill: `L Lᵀ` agrees with the matrix **exactly** wherever the matrix
-    /// is non-zero, and differs from it only where the pattern has a hole. A
-    /// factor that fails this is not a preconditioner for this matrix, and
-    /// conjugate gradients preconditioned by one is a recurrence with no reason
-    /// to converge — which the suite would see as a tolerance failure on some
+    /// The defining property of an incomplete factorisation with zero fill: `L
+    /// Lᵀ` agrees with the matrix **exactly** wherever the matrix is non-zero,
+    /// and differs from it only where the pattern has a hole. A factor that
+    /// fails this is not a preconditioner for this matrix, and conjugate
+    /// gradients preconditioned by one is a recurrence with no reason to
+    /// converge — which the suite would see as a tolerance failure on some
     /// design and not on the ones it has.
     ///
     /// A four-node cycle with one pad, which is the smallest network that has a
@@ -3856,12 +3351,11 @@ mod tests {
         index
     }
 
-    /// Oracle: law. The ring search must return what an exhaustive scan returns,
-    /// for every query, or a device attaches to the wrong node and every drop
-    /// measured through it is measured from the wrong place. Swept over
-    /// degenerate aspect ratios and over markers well outside the extent,
-    /// because those are what the clamped query cell and the slack test exist
-    /// for.
+    /// The ring search must return what an exhaustive scan returns, for every
+    /// query, or a device attaches to the wrong node and every drop measured
+    /// through it is measured from the wrong place. Swept over degenerate
+    /// aspect ratios and over markers well outside the extent, because those
+    /// are what the clamped query cell and the slack test exist for.
     #[test]
     fn the_ring_search_agrees_with_an_exhaustive_scan() {
         let mut state = 0x2545_F491_4F6C_DD1Du64;

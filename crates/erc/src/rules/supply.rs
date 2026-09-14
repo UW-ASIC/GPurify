@@ -1,18 +1,8 @@
 //! Supply, substrate and pad integrity — topological, but geometry-aware.
 //!
-//! Five kinds. Like [`crate::rules::topology`] they need no design intent, but
-//! unlike those four they read marker geometry as well as the net graph: a tie
-//! is a distance, a pad is a marker layer, a soft connection is a path through
-//! a layer the deck names as resistive.
-//!
-//! # Why none of these asks "is this net VDD"
-//!
-//! Because that is a design-intent question, and these rules always run. A
-//! supply short here is *an n-type tie and a p-type tie on one conductor* —
-//! true of any CMOS process, provable from the deck's tap markers, and correct
-//! without anyone declaring a net name. The version that compares net names
-//! against a supply list lives in [`crate::rules::reliability`], where it is
-//! gated on intent and says so.
+//! Five kinds. None of these asks "is this net VDD": that is a design-intent
+//! question and these rules always run. A supply short here is *an n-type tie
+//! and a p-type tie on one conductor*, provable from the deck's tap markers.
 
 use crate::facts::{NetFacts, RoleMask};
 use crate::ruleset::RuleHead;
@@ -29,55 +19,33 @@ use gpurify_topology::NetId;
 use gpurify_units::{Dbu, DbuArea};
 
 /// One conductor carrying two ties of opposite type.
-///
-/// An n-well tie and a p-substrate tie on the same extracted net is a rail
-/// short: the well sits at the substrate's potential, every device on it is
-/// mis-biased, and on a real die it is a hole in the power plane. The deck
-/// names the two tap markers and the rule needs nothing else — no net names, no
-/// device polarity enum, no heuristic about which drain is an output. The old
-/// implementation had all three, and its comment admitted it was tuned to one
-/// conformance case.
 #[derive(Debug, Default)]
 pub struct SupplyShortTable {
     pub head: RuleHead,
-    /// The two ties whose sharing one net is the short: `nwell_tap` and
-    /// `psub_tap` on a standard CMOS deck. Named, not inferred.
+    /// The two ties whose sharing one net is the short.
     pub tap_a: Vec<LayerRef>,
     pub tap_b: Vec<LayerRef>,
 }
 
 /// Two parts of a net joined only through a resistive body.
 ///
-/// A net that is one net in the extraction but two conductors in the silicon,
-/// bridged by a well or the substrate. It passes LVS and it does not work: the
-/// bridge is kilohms, so the two halves are at different potentials under any
-/// load.
-///
 /// The test is a partition, not a distance: remove the soft layers' shapes from
 /// the net's connectivity and ask whether it falls into more than one
-/// component. That makes it exact and independent of how far apart the halves
-/// are, where the old bounding-box pairwise version was neither.
+/// component.
 #[derive(Debug, Default)]
 pub struct SoftConnectionTable {
     pub head: RuleHead,
     /// `soft[soft_start[i] .. soft_start[i + 1]]` are row `i`'s resistive
-    /// layers — well, substrate, unsilicided poly. CSR.
+    /// layers.
     pub soft_start: Vec<u32>,
     pub soft: Vec<LayerRef>,
 }
 
 /// A point in a tied region too far from the nearest tie.
-///
-/// Substrate and well resistance is distributed, so a tie at one corner does
-/// not hold a large region at potential; foundries state a maximum distance
-/// from any point to a tap. The measurement is a distance, exact in [`Dbu`],
-/// and it is the one rule here whose limit a grid conversion has to make
-/// representable.
 #[derive(Debug, Default)]
 pub struct MissingTieTable {
     pub head: RuleHead,
-    /// The region that must be tied throughout: a well, an active area, a
-    /// substrate region.
+    /// The region that must be tied throughout.
     pub region: Vec<LayerRef>,
     /// What counts as a tie.
     pub tap: Vec<LayerRef>,
@@ -85,43 +53,26 @@ pub struct MissingTieTable {
     pub max_distance: Vec<Dbu>,
 }
 
-/// A gate held at a rail with nothing able to drive it.
-///
-/// The net carries a gate terminal and a source terminal but no drain, so
-/// nothing in the design can change its state. Often deliberate — an unused
-/// input tied off is correct practice — which is why the severity is a column:
-/// a deck decides whether this is an error or a note.
+/// A gate held at a rail with nothing able to drive it: the net carries a gate
+/// and a source terminal but no drain.
 #[derive(Debug, Default)]
 pub struct TieHighLowTable {
     pub head: RuleHead,
 }
 
 /// A pad reaching no protection device.
-///
-/// Every net that reaches a bond pad must also reach a clamp, or the first
-/// discharge into that pin goes through a gate oxide. The pad is a marker layer
-/// the PDK provides; the clamps are model names the deck lists. The old
-/// implementation had neither and guessed at "metal touching the cell boundary"
-/// instead, which flags every abutted standard cell in a row.
 #[derive(Debug, Default)]
 pub struct EsdTopologicalTable {
     pub head: RuleHead,
     /// The marker layer whose polygons are bond pads or I/O.
     pub pad: Vec<LayerId>,
     /// `clamp_model[clamp_start[i] .. clamp_start[i + 1]]` are the interned
-    /// model names that count as protection for row `i`. CSR.
+    /// model names that count as protection for row `i`.
     pub clamp_start: Vec<u32>,
     pub clamp_model: Vec<StrId>,
 }
 
 /// Flag every net carrying both taps.
-///
-/// **Transform.** Per rule row: evaluate the two tap layers, mark each tap's
-/// net in a per-net slot of `scratch` with which tap it was, and report every
-/// net marked with both. Two passes for the kernel rule's reason — the second
-/// reads what the first wrote, so they cannot be one.
-///
-/// `examined` is the number of tap polygons across both layers.
 pub fn check_supply_short(
     design: Design<'_>,
     table: &SupplyShortTable,
@@ -160,16 +111,12 @@ pub fn check_supply_short(
         );
         let examined = u64::from(a_rows.end - a_rows.start) + u64::from(b_rows.end - b_rows.start);
 
-        // Branchless: `NetId::NONE` is `u32::MAX`, so `min` routes a tap drawn
-        // on a non-conducting layer into the trash slot the second pass never
-        // reads, rather than guarding the store with an `if`.
+        // `NetId::NONE` is `u32::MAX`, so `min` routes a tap drawn on a
+        // non-conducting layer into the trash slot the second pass never reads.
         //
-        // Guarded on `extracted`, which is a hoisted uniform and not a per-row
-        // test: `NetTable::net_of` fails closed by *panicking* on a polygon its
-        // table never saw, and a run handed `NetTable::default()` has seen none
-        // of them. No net means no net carrying both taps, so the marking pass
-        // has nothing to write — and `examined` is still the tap polygons,
-        // because they were looked at either way.
+        // Guarded on `extracted`: `NetTable::net_of` fails closed by *panicking*
+        // on a polygon its table never saw, and a run handed
+        // `NetTable::default()` has seen none of them.
         if extracted {
             for row in a_rows {
                 let slot = design.nets.net_of(PolyId(row)).idx().min(nets);
@@ -181,8 +128,6 @@ pub fn check_supply_short(
             }
         }
 
-        // Pass two, and it is a separate pass for the kernel rule's reason: it
-        // reads what pass one wrote.
         let marks = &scratch.net_marks[..nets];
         debug_assert_eq!(net_index.len(), marks.len(), "SoA columns must agree");
         let n = net_index.len();
@@ -198,9 +143,8 @@ pub fn check_supply_short(
             let row = (net_index[i], marks[i]);
             let p = marks[i] == 3;
             // `w <= i` by induction: `bool` is 0 or 1, so `w` advances by at
-            // most one per iteration and starts equal to `i` at zero. Rejected
-            // slots stay uninit and are truncated away by `set_len(w)`;
-            // `(u32, u32)` has no `Drop`.
+            // most one per iteration. Rejected slots stay uninit and are
+            // truncated away by `set_len(w)`.
             debug_assert!(w <= i);
             // SAFETY: `w <= i < n == slots.len()`, from the induction above.
             unsafe { slots.get_unchecked_mut(w) }.write(row);
@@ -229,16 +173,8 @@ pub fn check_supply_short(
 
 /// Flag every net that falls apart once the resistive layers are removed.
 ///
-/// **Transform.** Per rule row: build the net's connectivity edge list from
-/// hard conductors only, label components with `core::connectivity`, and report
-/// any net whose polygons carry more than one label. The edge list and the
-/// labels are `scratch` buffers, so a design with a hundred thousand nets
-/// allocates twice, not two hundred thousand times.
-///
 /// The violation names the two shapes on either side of the bridge, so a viewer
 /// lands on the gap rather than on the net as a whole.
-///
-/// `examined` is the number of nets touching at least one soft layer.
 pub fn check_soft_connection(
     design: Design<'_>,
     table: &SoftConnectionTable,
@@ -268,8 +204,6 @@ pub fn check_soft_connection(
         let rule = table.head.rule[row];
         let span = table.soft_start[row] as usize..table.soft_start[row + 1] as usize;
 
-        // Deck-sized: a row names a well, a substrate and an unsilicided poly,
-        // so this is three layers and not bulk.
         is_soft.clear();
         is_soft.resize(layers, false);
         soft_layers.clear();
@@ -279,10 +213,8 @@ pub fn check_soft_connection(
                 // Fail closed: a layer the store's table does not have indexes
                 // out of bounds and panics here, in every profile.
                 Some(base) => {
-                    // `is_soft` is idempotent under a deck that names one layer
-                    // twice; the row-range list is not, and a duplicate would
-                    // make pass one walk the same polygons again for no mark it
-                    // has not already set.
+                    // `is_soft` is idempotent under a deck naming one layer
+                    // twice; the row-range list is not.
                     let fresh = !is_soft[base.idx()];
                     is_soft[base.idx()] = true;
                     if fresh {
@@ -297,20 +229,9 @@ pub fn check_soft_connection(
             continue;
         }
 
-        // Pass one: which nets touch a soft layer at all. A scatter again, with
-        // `check_supply_short`'s trash slot.
-        //
-        // Reached through `polys_on_layer` per soft layer, so it walks the three
-        // rows ranges a deck row names — a well, a substrate, an unsilicided
-        // poly — rather than every polygon in the store, and the layer test *is*
-        // the row range rather than a gather into `is_soft` per polygon. The
-        // outer loop is deck-sized and the mark is unconditional.
-        //
-        // Guarded on `extracted`, a hoisted uniform: `NetTable::net_of` fails
-        // closed by *panicking* on a polygon its table never saw, and a run
-        // handed `NetTable::default()` has seen none of them. With no nets,
-        // nothing touches a soft layer *on a net*, which is the only sense this
-        // rule has.
+        // Which nets touch a soft layer at all, walked through `polys_on_layer`
+        // per soft layer so the layer test *is* the row range. Guarded on
+        // `extracted` for the same reason as `check_supply_short`.
         scratch.net_marks.clear();
         scratch.net_marks.resize(nets + 1, 0);
         if extracted {
@@ -322,7 +243,6 @@ pub fn check_soft_connection(
             }
         }
 
-        // Pass two, separate for the kernel rule's reason.
         let touched = &scratch.net_marks[..nets];
         debug_assert_eq!(net_index.len(), touched.len(), "SoA columns must agree");
         let n = net_index.len();
@@ -337,7 +257,7 @@ pub fn check_soft_connection(
             let p = touched[i] == 1;
             // `w <= i` by induction: `bool` is 0 or 1, so `w` advances by at
             // most one per iteration. Rejected slots stay uninit and are
-            // truncated away by `set_len(w)`; `(u32, u32)` has no `Drop`.
+            // truncated away by `set_len(w)`.
             debug_assert!(w <= i);
             // SAFETY: `w <= i < n == slots.len()`, from the induction above.
             unsafe { slots.get_unchecked_mut(w) }.write(row);
@@ -352,9 +272,8 @@ pub fn check_soft_connection(
 
         for &(net, _) in &soft_nets {
             let net = NetId(net);
-            // The net's conductors with the resistive body removed. That
-            // removal is the whole rule: what is left is what the silicon
-            // actually holds at one potential.
+            // The net's conductors with the resistive body removed: what is
+            // left is what the silicon actually holds at one potential.
             let polys = design.nets.polys_of(net);
             let n = polys.len();
             hard.clear();
@@ -363,12 +282,10 @@ pub fn check_soft_connection(
 
             let mut w = 0usize;
             for (i, &poly) in polys.iter().enumerate() {
-                // The `is_soft` load is a gather — a data-dependent *address*,
-                // not a branch.
                 let p = !is_soft[design.store.poly_layer(poly).idx()];
                 // `w <= i` by induction: `bool` is 0 or 1, so `w` advances by
                 // at most one per iteration. Rejected slots stay uninit and are
-                // truncated away by `set_len(w)`; `PolyId` has no `Drop`.
+                // truncated away by `set_len(w)`.
                 debug_assert!(w <= i);
                 // SAFETY: `w <= i < n == slots.len()`, from the induction above.
                 unsafe { slots.get_unchecked_mut(w) }.write(poly);
@@ -395,18 +312,11 @@ pub fn check_soft_connection(
                 .extend(hard.iter().map(|&p| design.store.poly_bbox(p)));
             debug_assert_eq!(scratch.boxes.len(), hard.len(), "one box per hard conductor");
 
-            // Adjacency over one net's hard conductors, and the pair it keeps is
-            // the pair that shares a *point*, not the pair whose boxes overlap:
-            // a box is a superset of the shape inside it, so joining two
-            // conductors that only share a box merges two components into one
-            // and *under*-reports the bridge this rule exists to find. That is
-            // fail-open, and it is the same discipline `topology` applies to
-            // every pair its own bounding-box prune keeps.
-            //
-            // The box test survives as the prune in front of the exact one, and
-            // an x-order sweep is what keeps the scan off O(k²): with the
-            // conductors in ascending `xlo`, the first one starting past `a`'s
-            // right edge ends `a`'s row, because so does every one after it.
+            // The pair kept is the pair that shares a *point*, not the pair
+            // whose boxes overlap: joining two conductors that only share a box
+            // merges two components and *under*-reports the bridge. The box test
+            // survives as the prune in front of the exact one, and an x-order
+            // sweep keeps the scan off O(k²).
             let node_count = u32::try_from(hard.len()).expect("a net's polygons fit a u32");
             order.clear();
             order.extend(0..node_count);
@@ -424,15 +334,10 @@ pub fn check_soft_connection(
                 let box_a = scratch.boxes[a as usize];
                 for &b in &order[i + 1..] {
                     let box_b = scratch.boxes[b as usize];
-                    // Surviving `if`: the sweep's exit, so it is not taken for
-                    // any pair but the one that ends the row and predicts at
-                    // ~100%, and the side it skips is the rest of the scan.
                     if box_b.xlo > box_a.xhi {
                         break;
                     }
-                    // Surviving `if`, and `&&` rather than `&`: the exact test
-                    // is two ring walks, which is the expensive side a branch
-                    // exists to skip.
+                    // `&&` rather than `&`: the exact test is two ring walks.
                     if box_a.overlaps(box_b) && polys_meet(design.store, hard[a as usize], hard[b as usize])
                     {
                         scratch.edges.push((a, b));
@@ -444,13 +349,10 @@ pub fn check_soft_connection(
             debug_assert_eq!(scratch.labels.len(), hard.len(), "one label per conductor");
 
             // The lowest-numbered conductor on the far side of the bridge, or
-            // `u32::MAX` when there is no far side. Branchless: a row that
-            // agrees with the first label is smeared to `u32::MAX` and loses
-            // the `min`, so no `if` decides the answer.
+            // `u32::MAX` when there is no far side: a row agreeing with the
+            // first label is smeared to `u32::MAX` and loses the `min`.
             let near = scratch.labels[0];
             let mut far = u32::MAX;
-            // The counter rides in the iterator rather than beside it, so the
-            // body stays three arithmetic ops with no bounds check and no cast.
             for (idx, &label) in (0u32..).zip(&scratch.labels) {
                 let same = u32::from(label == near).wrapping_neg();
                 far = far.min(idx | same);
@@ -460,7 +362,6 @@ pub fn check_soft_connection(
                 "the far side of a bridge is one of this net's own conductors"
             );
 
-            // Surviving `if`: one test per net, and the taken side is a push.
             if far != u32::MAX {
                 let far_poly = hard[far as usize];
                 out.push(Violation {
@@ -468,8 +369,6 @@ pub fn check_soft_connection(
                     layer: design.store.poly_layer(first_poly),
                     severity: table.head.severity[row],
                     at: first_vertex(design.store, first_poly),
-                    // The net is one conductor in the extraction and two in the
-                    // silicon; one is the limit.
                     measured: Measurement::Count(2),
                     limit: Measurement::Count(1),
                     shapes: (first_poly, Some(far_poly)),
@@ -484,17 +383,9 @@ pub fn check_soft_connection(
 
 /// Flag every point of a region further than `max_distance` from a tap.
 ///
-/// **Transform.** Per rule row: index the taps once, then for each region
-/// polygon find the furthest point of the region from every tap. The reported
-/// point is that furthest point, and the measurement is its distance — not the
-/// corner-sampling approximation the old implementation used, which missed a
-/// long thin region entirely because all four of its corners were near a tap.
-///
-/// Distances are exact: `core::ops::point_seg_dist2` in [`DbuArea`], compared
-/// against the squared limit, so no square root and no rounding enters a
-/// verdict.
-///
-/// `examined` is the number of region polygons.
+/// The reported point is *the* furthest point of the region, not a corner
+/// sample. Distances are exact: `point_seg_dist2` in [`DbuArea`] against the
+/// squared limit, so no square root enters a verdict.
 ///
 /// [`DbuArea`]: gpurify_units::DbuArea
 pub fn check_missing_tie(
@@ -510,9 +401,6 @@ pub fn check_missing_tie(
     debug_assert_eq!(table.tap.len(), rows, "one tap layer per rule row");
     debug_assert_eq!(table.max_distance.len(), rows, "one limit per rule row");
 
-    // The taps' edges, the grid over them and the search's cell stack: one flat
-    // column per rule row, hoisted above the row loop so a deck configuring the
-    // rule twice allocates once.
     let mut taps: Vec<Seg> = Vec::new();
     let mut grid = TapGrid::default();
     let mut stack: Vec<Cell> = Vec::new();
@@ -521,8 +409,7 @@ pub fn check_missing_tie(
         let before = out.len();
         let rule = table.head.rule[row];
         // The region alone has to be a base layer: it is what the violation
-        // names, and a derived one hands out no `PolyId` to name. The tap is
-        // only ever measured *to*, so it may be either.
+        // names. The tap is only ever measured *to*, so it may be either.
         let Some(region) = base_layer(table.region[row]) else {
             record_run(runs, out, before, rule, Outcome::Refused, 0);
             continue;
@@ -539,9 +426,7 @@ pub fn check_missing_tie(
 
         let limit = table.max_distance[row];
         debug_assert!(limit.raw() >= 0, "a tap distance is non-negative");
-        // Squared, so no square root enters a verdict. `mul_wide` is the only
-        // route from coordinates to an area and it asserts both operands are
-        // inside the domain `MAX_ABS_DBU` bounds the `i128` product with.
+        // Squared, so no square root enters a verdict.
         let limit2 = limit.mul_wide(limit);
 
         // Holes are pushed too: a ring-shaped tap ties the region along its
@@ -556,28 +441,17 @@ pub fn check_missing_tie(
             }
         }
 
-        // Coincident edges measure the same distance as each other, so keeping
-        // one of each is exact and it is what keeps a bucket shallow: abutting
-        // taps share their common edge, and every one of those duplicates would
-        // otherwise be a full `point_seg_dist2` on every probe that reaches its
-        // bucket. Sorted by endpoint, which is also what makes the grid's
-        // contents independent of the order the store hands out polygons.
-        // Keyed on the endpoint pair in ascending order, not on the segment as
-        // drawn: an edge two abutting taps share appears once in each ring and
-        // the two windings run it in opposite directions, and
-        // `point_seg_dist2` cannot tell them apart either.
+        // Coincident edges measure the same distance, so keeping one of each is
+        // exact and keeps a bucket shallow. Keyed on the endpoint pair in
+        // ascending order, not on the segment as drawn: an edge two abutting
+        // taps share is run in opposite directions by the two windings.
         taps.sort_unstable_by_key(undirected);
         taps.dedup_by_key(|s| undirected(s));
 
-        // Index the taps once per rule row, which is what makes the search below
-        // ask a bounded number of segments per probe rather than the whole
-        // column.
         TapGrid::build_into(&taps, &mut grid);
 
-        // A region measured against no taps at all is untied everywhere, and the
-        // sentinel is the whole answer. Hoisted to one uniform rather than
-        // carried through the search's arithmetic, where `MAX_ABS_DBU` would
-        // defeat every bound it has.
+        // A region measured against no taps at all is untied everywhere, and
+        // the sentinel is the whole answer.
         let tapped = !taps.is_empty();
 
         let region_rows = design.store.polys_on_layer(region);
@@ -592,26 +466,18 @@ pub fn check_missing_tie(
             };
 
             // A region with no tap on the layer at all measures the sentinel,
-            // whose root is `MAX_ABS_DBU` — the largest representable distance,
-            // so an untied region is reported rather than passed. Fail closed.
-            //
-            // Surviving `if`: `tapped` is a uniform, hoisted above the row loop,
-            // not a test on this row's data.
+            // whose root is `MAX_ABS_DBU`, so it is reported rather than passed.
             let (at, worst) = if tapped {
-                // `limit2` goes in as the floor the search starts from, not just
-                // as the test applied to its answer. The rule asks whether any
-                // point breaks the limit and how far the worst one is; on a
-                // region that breaks it nowhere the second half is never read,
-                // and a search that starts at the limit proves the first half
-                // without descending. See `furthest_from_taps`.
+                // `limit2` goes in as the floor the search starts from, not as a
+                // test applied to its answer: on a region that breaks the limit
+                // nowhere the exact maximum is never read, and a search starting
+                // at the limit proves that without descending.
                 furthest_from_taps(xs, ys, design.store.poly_bbox(poly), limit2, &grid, &mut stack)
             } else {
                 (Point { x: x0, y: y0 }, NO_TAP_IN_RANGE)
             };
             debug_assert!(worst.raw() >= 0, "a squared distance is non-negative");
 
-            // Surviving `if`: one test per region polygon, and the taken side is
-            // a push into eight columns.
             if worst > limit2 {
                 let measured = isqrt(worst);
                 debug_assert!(
@@ -635,12 +501,6 @@ pub fn check_missing_tie(
 }
 
 /// Flag every net that is a gate and a source and not a drain.
-///
-/// **Transform.** One pass over [`NetFacts::role`]: the mask contains
-/// `GATE | SOURCE` and does not contain `DRAIN`. Three bit tests per net, no
-/// branch, no lookup.
-///
-/// `examined` is the number of nets carrying at least one gate terminal.
 pub fn check_tie_high_low(
     design: Design<'_>,
     facts: &NetFacts,
@@ -653,9 +513,6 @@ pub fn check_tie_high_low(
     let nets = design.nets.net_count();
     debug_assert_eq!(facts.role.len(), nets, "one role mask per extracted net");
 
-    // Hoisted uniforms, above the fold rather than rebuilt per net. Not `const`
-    // items: `RoleMask::union` is a frozen `const fn` whose body this module
-    // does not own, and a `const` would evaluate it at compile time.
     let held = RoleMask::GATE.union(RoleMask::SOURCE);
     let driven = RoleMask::DRAIN;
 
@@ -674,8 +531,6 @@ pub fn check_tie_high_low(
         }
         debug_assert!(examined <= nets as u64, "more gate nets than nets");
 
-        // Three bit tests per net and no branch: `&`, not `&&`, because both
-        // operands are already-loaded bytes with no side effect.
         debug_assert_eq!(net_index.len(), facts.role.len(), "SoA columns must agree");
         let n = net_index.len();
 
@@ -691,7 +546,7 @@ pub fn check_tie_high_low(
             let p = mask.contains(held) & !mask.intersects(driven);
             // `w <= i` by induction: `bool` is 0 or 1, so `w` advances by at
             // most one per iteration. Rejected slots stay uninit and are
-            // truncated away by `set_len(w)`; `(u32, RoleMask)` has no `Drop`.
+            // truncated away by `set_len(w)`.
             debug_assert!(w <= i);
             // SAFETY: `w <= i < n == slots.len()`, from the induction above.
             unsafe { slots.get_unchecked_mut(w) }.write((net, mask));
@@ -710,8 +565,6 @@ pub fn check_tie_high_low(
             &flagged,
             rule,
             table.head.severity[row],
-            // No drain reaches this net, and one is what it would take to drive
-            // it.
             Measurement::Count(0),
             Measurement::Count(1),
             out,
@@ -721,13 +574,6 @@ pub fn check_tie_high_low(
 }
 
 /// Flag every pad net reaching none of the listed clamp models.
-///
-/// **Transform.** Per rule row: collect the nets under the pad markers, then
-/// walk each such net's devices and test their model against the row's clamp
-/// list. The list is two or three interned ids, so the test is a linear scan
-/// over `u32` and not a set.
-///
-/// `examined` is the number of distinct pad nets.
 pub fn check_esd_topological(
     design: Design<'_>,
     table: &EsdTopologicalTable,
@@ -745,8 +591,6 @@ pub fn check_esd_topological(
     let nets = design.nets.net_count();
     let extracted = nets != 0;
     let net_index = ascending(nets);
-    // No `Scratch` in this signature, so both buffers are local — hoisted above
-    // the row loop, which is where the reuse is.
     let mut on_a_pad: Vec<u32> = Vec::new();
     let mut pad_nets: Vec<(u32, u32)> = Vec::new();
 
@@ -756,10 +600,8 @@ pub fn check_esd_topological(
         let clamps = &table.clamp_model[table.clamp_start[row] as usize
             ..table.clamp_start[row + 1] as usize];
 
-        // Pass one: which nets a pad marker lands on. A scatter, with
-        // `check_supply_short`'s trash slot for a marker on no conductor, and
-        // its `extracted` guard for the same reason — `NetTable::net_of` fails
-        // closed by *panicking* on a polygon its table never saw.
+        // Which nets a pad marker lands on, with `check_supply_short`'s trash
+        // slot and its `extracted` guard, for the same reasons.
         on_a_pad.clear();
         on_a_pad.resize(nets + 1, 0);
         if extracted {
@@ -769,8 +611,8 @@ pub fn check_esd_topological(
             }
         }
 
-        // Pass two, separate for the kernel rule's reason. The kept count is the
-        // number of *distinct* pad nets, which is what `examined` claims.
+        // The kept count is the number of *distinct* pad nets, which is what
+        // `examined` claims.
         let on_pad = &on_a_pad[..nets];
         debug_assert_eq!(net_index.len(), on_pad.len(), "SoA columns must agree");
         let n = net_index.len();
@@ -785,7 +627,7 @@ pub fn check_esd_topological(
             let p = on_pad[i] == 1;
             // `w <= i` by induction: `bool` is 0 or 1, so `w` advances by at
             // most one per iteration. Rejected slots stay uninit and are
-            // truncated away by `set_len(w)`; `(u32, u32)` has no `Drop`.
+            // truncated away by `set_len(w)`.
             debug_assert!(w <= i);
             // SAFETY: `w <= i < n == slots.len()`, from the induction above.
             unsafe { slots.get_unchecked_mut(w) }.write(row);
@@ -800,17 +642,12 @@ pub fn check_esd_topological(
 
         for &(net, _) in &pad_nets {
             let net = NetId(net);
-            // A linear scan over two or three interned ids, as the rule's doc
-            // comment states, over the handful of devices on one net. Neither
-            // is bulk, and the search exits on the first clamp it reaches.
             let protected = design
                 .devices
                 .devices_on(net)
                 .iter()
                 .any(|&device| clamps.contains(&design.devices.model[device.0 as usize]));
 
-            // Surviving `if`: one test per pad net, and the taken side is a push
-            // into eight columns.
             if !protected {
                 let Some(&poly) = design.nets.polys_of(net).first() else {
                     continue;
@@ -820,8 +657,6 @@ pub fn check_esd_topological(
                     layer: design.store.poly_layer(poly),
                     severity: table.head.severity[row],
                     at: first_vertex(design.store, poly),
-                    // No listed clamp model reaches this pad, and one is what it
-                    // takes to keep a discharge out of a gate oxide.
                     measured: Measurement::Count(0),
                     limit: Measurement::Count(1),
                     shapes: (poly, None),
@@ -836,21 +671,11 @@ pub fn check_esd_topological(
 
 /// One layer of tap geometry, however the deck named it.
 ///
-/// **Transform, dispatcher.** The two spellings of a layer reference reach
-/// geometry by different routes and neither is the other's special case, so the
-/// choice is made once, here, rather than inside the measurement loop.
+/// A tap is only ever measured *to*, so it needs no [`PolyId`] and a derived tap
+/// is usable here.
 ///
-/// A tap is only ever measured *to*, so unlike every other layer in this module
-/// it needs no [`PolyId`]: a derived tap — `nsdm AND diff` on a standard CMOS
-/// deck, which is how a real deck spells one — is usable, and this is the one
-/// rule here that can take it. `scratch` is the caller's [`Scratch::layer_b`],
-/// the buffer that field exists for, so a base layer is validated into an
-/// allocation the run already owns.
-///
-/// `None` is a refusal, never an empty layer: a name the evaluator does not
-/// hold, or geometry `core::view` will not represent, both mean the rule could
-/// not read its taps — and a region measured against no taps at all is reported
-/// clean by exactly the arithmetic that would report it correctly.
+/// `None` is a refusal, never an empty layer: a rule that could not read its
+/// taps must not report the region clean.
 fn tap_geometry<'a>(
     store: &GeometryStore,
     derived: &'a Evaluator,
@@ -868,9 +693,6 @@ fn tap_geometry<'a>(
 
 /// One segment's endpoints in ascending order — its identity ignoring which way
 /// round it was drawn.
-///
-/// A distance to a segment does not depend on its direction, so this is the key
-/// two coincident tap edges have to agree on before one of them can be dropped.
 fn undirected(s: &Seg) -> (i64, i64, i64, i64) {
     let (p, q) = (
         (s.a.x.raw(), s.a.y.raw()),
@@ -881,10 +703,6 @@ fn undirected(s: &Seg) -> (i64, i64, i64, i64) {
 }
 
 /// Append one ring's closed edges to a segment column.
-///
-/// **Transform, gatherer.** Caller owns `out` and this appends rather than
-/// refilling, because one tap polygon contributes an outer boundary and every
-/// hole it has.
 fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
     let (xs, ys) = ring.coords();
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
@@ -896,15 +714,12 @@ fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
 }
 
 /// The closed edge from vertex `i` of a ring to the next one, wrapping.
-///
-/// **Decision** — a ring and an index in, one segment out.
 #[inline]
 fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
     debug_assert!(i < xs.len(), "a ring edge starts at one of the ring's vertices");
-    // Branchless wrap, the catalogue's `i++; if i >= n { i = 0 }` row: the
-    // subtraction is by zero for every vertex but the last, which is what puts
-    // the ring's closing edge in the same pass with no fixup after it.
+    // Branchless wrap: the subtraction is by zero for every vertex but the
+    // last, which puts the ring's closing edge in the same pass.
     let next = (i + 1) - xs.len() * usize::from(i + 1 == xs.len());
     Seg {
         a: Point { x: xs[i], y: ys[i] },
@@ -917,52 +732,35 @@ fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
 
 /// Whether two of the store's polygons share at least one point.
 ///
-/// **Decision** — two rows in, one bool out. The bounding-box prune upstream
-/// answers "these two boxes touch", and a box is a superset of the shape inside
-/// it: joining two conductors that share only a bounding box merges two
-/// components into one and is fail-**open** for
-/// [`check_soft_connection`], whose whole verdict is the component count. So
-/// every pair the prune keeps is re-tested exactly.
+/// Every pair the upstream bounding-box prune keeps is re-tested exactly:
+/// joining two conductors that share only a box merges two components into one,
+/// which is fail-**open** for [`check_soft_connection`].
 ///
 /// Two rings whose boundaries do not meet are either nested or disjoint, so one
 /// vertex of each decides the rest.
-///
-/// This is [`gpurify_topology`]'s own `polys_intersect` predicate, which is
-/// private to that crate. Restated rather than reached for, because widening
-/// another crate's interface is a Definition-Phase change and this is not that
-/// phase; the shared primitive underneath both is `core::ops`.
 fn polys_meet(store: &GeometryStore, a: PolyId, b: PolyId) -> bool {
     let (ax, ay) = store.poly_verts(a);
     let (bx, by) = store.poly_verts(b);
     debug_assert_eq!(ax.len(), ay.len(), "the store's columns are parallel");
     debug_assert_eq!(bx.len(), by.len(), "the store's columns are parallel");
 
-    // A run with under three vertices bounds no area and so shares no point
-    // with anything. Guarded rather than asserted because the probes below read
-    // vertex zero, and `ingest` is allowed to carry a degenerate run.
+    // A run with under three vertices bounds no area. Guarded rather than
+    // asserted because the probes below read vertex zero, and `ingest` is
+    // allowed to carry a degenerate run.
     if ax.len() < 3 || bx.len() < 3 {
         return false;
     }
 
-    // `||`, not `|`: each containment walk is a full pass over a ring, which is
-    // the "taken side is expensive" escape valve.
     rings_meet(ax, ay, bx, by)
         || point_in_region(bx, by, Point { x: ax[0], y: ay[0] })
         || point_in_region(ax, ay, Point { x: bx[0], y: by[0] })
 }
 
 /// Whether any edge of one ring meets any edge of the other, touching included.
-///
-/// **Decision** — two rings in, one bool out. O(n×m) over two rings' edges,
-/// reached only after a bounding-box prune has rejected everything far apart,
-/// and a layout polygon carries a handful of vertices.
 fn rings_meet(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
     for i in 0..ax.len() {
         let edge = ring_edge(ax, ay, i);
         for j in 0..bx.len() {
-            // Surviving `if`: the exit of a search. It is not taken for any edge
-            // pair but the one that answers the question, so it predicts at
-            // ~100%, and the side it skips is the rest of the scan.
             if segments_intersect(edge, ring_edge(bx, by, j)) {
                 return true;
             }
@@ -973,21 +771,15 @@ fn rings_meet(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
 
 /// Whether a point lies in a closed ring, boundary included.
 ///
-/// **Decision** — a ring and a point in, one bool out. An even-odd ray cast
-/// towards `+x`, exact in `i128`, with the boundary answered first so a point on
-/// an edge is *in* the region rather than in whichever half the crossing rule
-/// happened to put it. That matters here because
+/// An even-odd ray cast towards `+x`, exact in `i128`, with the boundary
+/// answered first so a point on an edge is *in* the region:
 /// [`check_missing_tie`]'s maximum is often attained exactly on a region edge.
 ///
-/// Not a bulk loop: a layout polygon carries a handful of vertices.
-///
 /// Deliberately not folded with `topology::inside_ring`, whose boundary answer
-/// is the opposite one for the opposite reason; the argument is written out
-/// there.
+/// is the opposite one for the opposite reason.
 fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
-    // Under three vertices there is no region to be in. One test per call,
-    // hoisted above both folds.
+    // Under three vertices there is no region to be in.
     if xs.len() < 3 {
         return false;
     }
@@ -996,17 +788,13 @@ fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
     let mut inside = false;
     for i in 0..xs.len() {
         let edge = ring_edge(xs, ys, i);
-        // Surviving `if`: the exit of a search, not taken for any edge but the
-        // one that answers the question, and the side it skips is the rest of
-        // the walk.
         if point_seg_dist2(p, edge) == zero {
             return true;
         }
 
-        // The half-open crossing rule, then the side test, both branchless. A
-        // vertex that does not straddle the ray contributes `false` whatever
-        // the side test says, and a zero `dy` makes the signed product zero,
-        // which is not negative.
+        // The half-open crossing rule, then the side test: a vertex that does
+        // not straddle the ray contributes `false` whatever the side test says,
+        // and a zero `dy` makes the signed product zero, which is not negative.
         let dy = i128::from(edge.b.y.raw() - edge.a.y.raw());
         let dx = i128::from(edge.b.x.raw() - edge.a.x.raw());
         let lhs = i128::from(p.x.raw() - edge.a.x.raw()) * dy;
@@ -1019,14 +807,12 @@ fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
 
 /// The smallest integer at least the square root of a non-negative area.
 ///
-/// **Decision** — one area in, one length out. [`gpurify_core::ops::isqrt`]
-/// rounds *toward zero*, which is the right rounding for a reported measurement
-/// and the wrong one for a bound: an upper bound rounded down prunes away the
-/// maximum it was supposed to protect.
+/// [`gpurify_core::ops::isqrt`] rounds *toward zero*, which is the wrong
+/// rounding for a bound: an upper bound rounded down prunes away the maximum it
+/// was supposed to protect.
 fn isqrt_ceil(area: i128) -> i64 {
     debug_assert!(area >= 0, "a negative area has no real square root");
     let root = area.isqrt();
-    // Branchless round-up, the catalogue's `if p { n += 1 }` row.
     let root = root + i128::from(root * root != area);
     debug_assert!(
         root <= i128::from(i64::MAX),
@@ -1041,36 +827,26 @@ fn isqrt_ceil(area: i128) -> i64 {
 }
 
 /// Segments a [`TapGrid`] bucket should hold before another bucket is worth the
-/// ring walk that reaching it costs.
-///
-/// Tuned by measurement, not derived: the conformance corpus's 77 tap edges over
-/// a one-per-bucket table spent most of a nearest-tap query on grid bookkeeping
-/// rather than on distances.
+/// ring walk that reaching it costs. Tuned by measurement, not derived.
 const BUCKET_TARGET: i64 = 16;
 
 /// Whether no point of a cell can be further from a tap than the best found.
 ///
-/// The bound is `sqrt(d2) + reach <= sqrt(worst)`, and it is tested with the
-/// right-hand root hoisted into `worst_root` and the left one never taken:
-/// `sqrt(d2) <= worst_root - reach` squares to one multiply. `worst_root` is
-/// `isqrt`'s floor, so the slack it loses is under one database unit and it
-/// loses it on the safe side — the test refuses to prune slightly too often,
-/// never slightly too rarely.
+/// The bound is `sqrt(d2) + reach <= sqrt(worst)`, tested as
+/// `sqrt(d2) <= worst_root - reach` squared. `worst_root` is `isqrt`'s floor, so
+/// it loses under one database unit of slack and loses it on the safe side: the
+/// test prunes slightly too rarely, never slightly too often.
 ///
-/// Branchless: `&`, not `&&`. A negative slack squares to a positive number
-/// that would pass the second test, and the sign test is one comparison, so
-/// there is nothing here worth a branch.
+/// The sign test is not optional — a negative slack squares to a positive number
+/// that would pass the second test.
 #[inline]
 fn prunes(worst_root: i64, reach: i64, d2: DbuArea) -> bool {
     let slack = i128::from(worst_root - reach);
     (slack >= 0) & (d2.raw() <= slack * slack)
 }
 
-/// One axis-aligned block of integer points, closed on both ends.
-///
-/// The unit of work in [`furthest_from_taps`]'s search. `i64` rather than
-/// [`Dbu`], because a cell is an interval over the coordinate domain rather than
-/// a coordinate, and its midpoint arithmetic is not a coordinate operation.
+/// One axis-aligned block of integer points, closed on both ends: the unit of
+/// work in [`furthest_from_taps`]'s search.
 #[derive(Debug, Clone, Copy)]
 struct Cell {
     xlo: i64,
@@ -1078,18 +854,11 @@ struct Cell {
     xhi: i64,
     yhi: i64,
     /// The tap nearest this cell's parent probe, as an index into
-    /// [`TapGrid::segs`]. Inherited by the children, so the search carries its
-    /// own answer downward — [`furthest_from_taps`] says why one remembered tap
-    /// is worth a whole grid query.
+    /// [`TapGrid::segs`], inherited by the children.
     hint: u32,
 }
 
 /// The nearest tap to some point: how far, and which one.
-///
-/// The two travel together because [`furthest_from_taps`] needs both — the
-/// distance to compare, and the tap to hand its children as their starting
-/// bound. Returning the distance alone is what made the search re-derive the
-/// second half a hundred thousand times.
 #[derive(Debug, Clone, Copy)]
 struct Nearest {
     dist2: DbuArea,
@@ -1105,9 +874,6 @@ impl Nearest {
     };
 
     /// Fold one candidate in, keeping whichever is nearer.
-    ///
-    /// The catalogue's bit-blend: the index rides the same comparison the
-    /// distance does, so naming the winner costs no branch and no second pass.
     #[inline]
     fn keep(&mut self, other: Self) {
         let mask = u32::from(other.dist2 < self.dist2).wrapping_neg();
@@ -1118,24 +884,13 @@ impl Nearest {
 
 /// A uniform grid over one rule row's tap edges.
 ///
-/// **Five questions.** In: the tap segment column. Out: bucket offsets and the
-/// segments grouped by bucket. How many: one per rule row, rebuilt from one
-/// hoisted allocation. Access pattern: built once, probed many times, always
-/// outward from the probe's own cell — so CSR, like
-/// [`gpurify_core::index::SpatialIndex`]. Lifetime: phase. Parallelisable: the
-/// probes are independent.
+/// Not `core::index::SpatialIndex`: that builds over a store *layer* and this
+/// rule's taps may be derived. Segments rather than boxes because the distance a
+/// probe wants is to the tap's edge.
 ///
-/// Not `core::index::SpatialIndex` itself: that one builds over a store *layer*
-/// and indexes polygon rows, and this rule's taps may be a derived layer, which
-/// has no rows in a store and hands out no [`PolyId`]. Segments rather than
-/// boxes for the same reason the measurement is exact — the distance a probe
-/// wants is to the tap's edge, not to a box around it.
-///
-/// A segment is filed under *every* cell its bounding box overlaps, not just the
-/// one holding an endpoint. That is what makes the ring search's stopping rule
-/// sound for a tap edge far longer than a cell — the alternative, one cell per
-/// segment plus a global maximum-extent margin, is fail-open the moment one long
-/// edge widens the margin past anything useful.
+/// A segment is filed under *every* cell its bounding box overlaps, which is
+/// what makes the ring search's stopping rule sound for a tap edge far longer
+/// than a cell.
 #[derive(Debug)]
 struct TapGrid {
     origin: Point,
@@ -1144,9 +899,7 @@ struct TapGrid {
     ny: i64,
     /// `start[b] .. start[b + 1]` indexes `segs`.
     start: Vec<u32>,
-    /// The segments themselves, duplicated into every bucket they touch. Stored
-    /// rather than indexed: a bucket scan is then one contiguous fold with no
-    /// gather.
+    /// The segments themselves, duplicated into every bucket they touch.
     segs: Vec<Seg>,
     /// Build scratch: per-segment extents for the cell-size choice, and the
     /// per-bucket write cursor of the counting sort.
@@ -1154,9 +907,7 @@ struct TapGrid {
     cursor: Vec<u32>,
 }
 
-/// The empty grid. Hand-written because [`Point`] carries no `Default` — a
-/// coordinate has no neutral value, which is exactly the invariant that keeps a
-/// zero from being mistaken for one.
+/// The empty grid. Hand-written because [`Point`] carries no `Default`.
 impl Default for TapGrid {
     fn default() -> Self {
         Self {
@@ -1178,10 +929,8 @@ impl Default for TapGrid {
 impl TapGrid {
     /// Build over one row's tap edges.
     ///
-    /// **Transform.** Caller owns the grid; it is cleared and refilled, so a
-    /// deck configuring the rule twice allocates once. An empty tap column
-    /// leaves an empty grid, which [`TapGrid::nybucket`]'s caller must not
-    /// probe — [`check_missing_tie`] hoists that to one `tapped` uniform.
+    /// An empty tap column leaves an empty grid, which [`TapGrid::nybucket`]'s
+    /// caller must not probe.
     fn build_into(taps: &[Seg], out: &mut Self) {
         out.start.clear();
         out.segs.clear();
@@ -1205,19 +954,11 @@ impl TapGrid {
         let span_y = extent.yhi.raw() - extent.ylo.raw() + 1;
         debug_assert!(span_x >= 1 && span_y >= 1, "a real extent is not the EMPTY sentinel");
 
-        // Cell size by `core::index::SpatialIndex`'s recipe and for its reasons:
-        // the median segment extent, so half the column files into a single
-        // cell, then widened until the bucket table is O(segments) whatever the
-        // aspect ratio — a 1 nm-tall, 1 mm-wide tap must not ask for a million
-        // buckets per edge.
-        //
-        // Departing from it in one place: `SpatialIndex` aims at one row per
-        // bucket, and this grid is asked for a *nearest*, which pays a ring walk
-        // per query rather than one lookup. A bucket holding a handful of
-        // segments amortises that walk over a fold the machine likes; a bucket
-        // holding one segment spends more on the walk than on the distance. So
-        // the side count is taken over `taps.len() / BUCKET_TARGET`, which keeps
-        // the table O(segments) while making each bucket worth entering.
+        // Cell size by `core::index::SpatialIndex`'s recipe: the median segment
+        // extent, widened until the bucket table is O(segments) whatever the
+        // aspect ratio. The side count is taken over `taps.len() /
+        // BUCKET_TARGET` rather than over `taps.len()`, because a nearest query
+        // pays a ring walk and a one-segment bucket is not worth entering.
         out.extents.clear();
         out.extents.reserve(taps.len());
         out.extents.extend(taps.iter().map(|s| {
@@ -1254,9 +995,7 @@ impl TapGrid {
         out.start.clear();
         out.start.resize(buckets + 1, 0);
 
-        // A counting sort: a scatter-accumulate, then a prefix sum, then a
-        // scatter — the same shape `SpatialIndex::build_into` uses, one file
-        // over.
+        // A counting sort: scatter-accumulate, prefix sum, scatter.
         for seg in taps {
             let (x0, y0, x1, y1) = out.cells_of(*seg);
             for cy in y0..=y1 {
@@ -1323,18 +1062,12 @@ impl TapGrid {
     }
 
     /// One filed tap edge.
-    ///
-    /// Every index this grid hands out is one of its own, so the cast is a fact
-    /// about `segs` rather than a claim about the caller.
     #[inline]
     fn tap(&self, at: u32) -> Seg {
         self.segs[usize::try_from(at).expect("a filed-segment index fits a usize")]
     }
 
-    /// The nearest tap in one cell.
-    ///
-    /// [`Nearest::NONE`] when the cell is empty, which loses every `keep` it
-    /// takes part in and is never read by a caller that found nothing.
+    /// The nearest tap in one cell, or [`Nearest::NONE`] when it is empty.
     #[inline]
     fn nybucket(&self, cx: i64, cy: i64, p: Point) -> Nearest {
         let b = self.bucket(cx, cy);
@@ -1342,14 +1075,8 @@ impl TapGrid {
             usize::try_from(self.start[b]).expect("a bucket offset fits a usize"),
             usize::try_from(self.start[b + 1]).expect("a bucket offset fits a usize"),
         );
-        // `point_seg_dist2`'s domain preconditions are `debug_assert`s and are
-        // the only panic edge in this loop; they cannot fire on geometry
-        // `ingest` built, which checked every coordinate against the same bound
-        // once.
         let bucket = &self.segs[lo..hi];
         let mut best = Nearest::NONE;
-        // The counter rides in the iterator rather than beside it, so the body
-        // stays the fold with no bounds check and no cast.
         for (tap, &seg) in (self.start[b]..).zip(bucket) {
             best.keep(Nearest {
                 dist2: point_seg_dist2(p, seg),
@@ -1359,17 +1086,12 @@ impl TapGrid {
         best
     }
 
-    /// The nearest tap edge to `p`.
+    /// The nearest tap edge to `p`, exactly.
     ///
-    /// **Decision** — one point in, one [`Nearest`] out. Exact: rings of cells
-    /// are scanned outward from `p`'s own cell and the scan stops only once the
-    /// best found is closer than the nearest point of any cell not yet scanned,
-    /// which is `r × cell_size` away because a segment is filed under every cell
-    /// it overlaps.
-    ///
-    /// Naming the tap is what makes this affordable to *not* call — see
-    /// [`furthest_from_taps`], which asks it a few thousand times and answers a
-    /// hundred thousand probes from the taps it returned.
+    /// Rings of cells are scanned outward from `p`'s own cell, stopping once the
+    /// best found is closer than the nearest point of any unscanned cell, which
+    /// is `r × cell_size` away because a segment is filed under every cell it
+    /// overlaps.
     fn nearest2(&self, p: Point) -> Nearest {
         debug_assert!(self.nx >= 1 && self.ny >= 1, "an empty grid has no nearest tap");
         let (px, py) = (self.axis_x(p.x.raw()), self.axis_y(p.y.raw()));
@@ -1385,9 +1107,8 @@ impl TapGrid {
             let (x0, x1) = (px - r, px + r);
             let (y0, y1) = (py - r, py + r);
             for cy in y0.max(0)..=y1.min(self.ny - 1) {
-                // Four `if`s per row of one ring, all on grid indices and none
-                // on bulk data: the ring's top and bottom rows are scanned
-                // whole, the rows between contribute only their two ends.
+                // The ring's top and bottom rows are scanned whole; the rows
+                // between contribute only their two ends.
                 if (cy == y0) | (cy == y1) {
                     for cx in x0.max(0)..=x1.min(self.nx - 1) {
                         best.keep(self.nybucket(cx, cy, p));
@@ -1426,59 +1147,26 @@ impl TapGrid {
 /// The point of one region polygon furthest from any tap, and that distance
 /// squared — resolved only above `floor`.
 ///
-/// **Decision** — one ring, its bounding box, a floor and a tap grid in, one
-/// point and one squared distance out. `stack` is caller-owned scratch, cleared
-/// on entry, so a layer of a hundred thousand regions allocates once.
+/// The returned distance is the true maximum whenever that maximum exceeds
+/// `floor`, and is `floor` itself otherwise. Pass `DbuArea::new(-1)` for the
+/// unconditional maximum.
 ///
-/// **What `floor` buys, and what it costs.** The returned distance is the true
-/// maximum whenever that maximum exceeds `floor`, and is `floor` itself
-/// otherwise — the search declines to distinguish between maxima at or below it.
-/// That is exactly the distinction [`check_missing_tie`] does not make either:
-/// it asks `worst > limit2` and reads the distance only on the side where the
-/// answer is yes. Passing the limit in rather than applying it after is what
-/// turns a region that is comfortably tied from a full descent into a handful of
-/// pruned cells, and on the conformance corpus 43 of the 45 regions are that
-/// case. Pass `DbuArea::new(-1)` for the unconditional maximum.
+/// Branch and bound over the region's *integer points*, seeded from the
+/// vertices. A search over the vertices alone is not enough: it misses the
+/// maximum on a long thin region with a tap at each end, and on a wide region
+/// tapped only at its corners, which is fail-**open** for a tie rule.
 ///
-/// This is the rule's whole claim — [`check_missing_tie`]'s doc comment says
-/// *the* furthest point — and a search over the region's vertices alone does not
-/// make it. Vertices are exact where the maximum sits on a corner, which is the
-/// rectangle, the L and the ring; they miss it on the two cases a real layout
-/// actually fails on, a long thin region with a tap at each end and a wide
-/// region tapped only at its corners. Missing a maximum is a missed violation,
-/// which is fail-**open** for a tie rule.
+/// A cell is pruned when the furthest a point of it could be from a tap is no
+/// further than the best already found — `nearest2` is 1-Lipschitz, so that
+/// bound is the probe's own distance plus its reach into the cell, and both
+/// terms round on the side that never makes the bound optimistic. Surviving
+/// cells are quartered; single points cannot be, and dropping them terminates
+/// the search at a resolution of one database unit.
 ///
-/// So: branch and bound over the region's integer points, seeded from the
-/// vertices. A cell is pruned when the furthest a point of it could possibly be
-/// from a tap is no further than the best already found — `nearest2` is
-/// 1-Lipschitz, so that bound is the probe's own distance plus the probe's reach
-/// into its cell, and both terms round on the side that never makes the bound
-/// optimistic. A cell that survives is quartered. Single points cannot be
-/// quartered, and dropping them is what terminates the search: `Dbu` is an
-/// integer, so the resolution floor is one database unit and the answer is exact
-/// over every point the report could name.
-///
-/// **What a probe costs, and why it is usually not a grid query.** `nearest2` is
-/// exact and therefore expensive — it walks rings of cells until it can prove
-/// nothing unscanned is closer. The search does not need that. Both uses it
-/// makes of a probe's distance want only an *upper* bound on it:
-///
-/// - a cell is pruned when `f(probe) + reach` cannot beat `worst`, and
-///   over-stating `f(probe)` only makes the prune more cautious;
-/// - a probe can improve `worst` only if `f(probe) > worst`, and an upper bound
-///   that already loses says so.
-///
-/// The distance to *any single* tap is such a bound. Each cell therefore carries
-/// the tap that was nearest to its parent, one `point_seg_dist2` re-establishes
-/// the bound for the child, and the exact query runs only on the probes that
-/// bound cannot dismiss — 5 811 of 113 217 cells on the conformance corpus. Only
-/// the exact query ever writes `worst`, so the reported measurement is
-/// unchanged.
-///
-/// **Cost.** Set by the *shape* of the maximum, not by the region's size: an
-/// isolated maximum — every shape a layout is mostly made of — prunes within a
-/// few cells of the seed, and only a maximum spread along a ridge forces the
-/// descent to the floor.
+/// Both uses of a probe's distance want only an *upper* bound on it, so each
+/// cell inherits the tap nearest its parent and the exact query runs only on the
+/// probes that bound cannot dismiss. Only the exact query ever writes `worst`,
+/// so the reported measurement is unchanged.
 fn furthest_from_taps(
     xs: &[Dbu],
     ys: &[Dbu],
@@ -1491,12 +1179,7 @@ fn furthest_from_taps(
     debug_assert!(!xs.is_empty(), "the caller guarded the empty run");
 
     // Seeded from the region's own vertices, which are in the region by
-    // definition and so need no containment test. On the shapes a layout is
-    // mostly made of the answer is already here, and a strong seed is what makes
-    // the search below prune at its first few cells instead of descending.
-    //
-    // Not a bulk loop: a layout polygon carries a handful of vertices, and it is
-    // the fold inside `nearest2` that is bulk.
+    // definition and so need no containment test.
     let mut best = Nearest {
         dist2: DbuArea::new(-1),
         tap: 0,
@@ -1508,26 +1191,20 @@ fn furthest_from_taps(
             y: ys[vertex],
         };
         let found = grid.nearest2(here);
-        // Surviving `if`: not a bulk loop, for the reason above, and the taken
-        // side is two stores. Not `Nearest::keep`, which folds toward the
-        // *nearest* tap; this loop wants the furthest vertex.
+        // Not `Nearest::keep`, which folds toward the *nearest* tap; this loop
+        // wants the furthest vertex.
         if found.dist2 > best.dist2 {
             best = found;
             at = here;
         }
     }
 
-    // The incumbent starts at the caller's floor when no vertex already clears
-    // it. That is the whole of the floor's effect: a cell is pruned against the
-    // incumbent, so on a region whose maximum is under the floor the first few
-    // cells prune and the descent never happens. `at` still names the furthest
-    // *vertex*, which is a point of the region and a legal report point, and it
-    // is read only when `worst` came back above the floor — by which time the
-    // search has written both.
+    // The incumbent starts at the caller's floor when no vertex clears it: a
+    // cell is pruned against the incumbent, so on a region whose maximum is
+    // under the floor the first few cells prune and the descent never happens.
+    // `at` still names the furthest *vertex*, a legal report point, and it is
+    // read only when `worst` came back above the floor.
     let mut worst = best.dist2.max(floor);
-    // The prune below compares lengths, not areas, and `worst` moves a handful
-    // of times against a great many comparisons — so its root is carried beside
-    // it rather than taken per cell.
     let mut worst_root = isqrt(worst).raw();
 
     stack.clear();
@@ -1550,9 +1227,8 @@ fn furthest_from_taps(
             y: Dbu::new_unchecked(cy),
         };
 
-        // The inherited tap, which is one real tap and so an upper bound on the
-        // distance to the nearest. This is the whole probe for all but a handful
-        // of cells.
+        // The inherited tap is one real tap and so an upper bound on the
+        // distance to the nearest.
         let mut probe = Nearest {
             dist2: point_seg_dist2(here, grid.tap(cell.hint)),
             tap: cell.hint,
@@ -1564,11 +1240,8 @@ fn furthest_from_taps(
         let ry = i128::from((cell.yhi - cy).max(cy - cell.ylo));
         let reach = isqrt_ceil(rx * rx + ry * ry);
 
-        // Surviving `if`: the exact query, whose taken side is a ring walk over
-        // the grid. One test covers both reasons to want one — this cell is
-        // about to be quartered on a bound the inherited tap inflated, or this
-        // probe might beat `worst` — because a probe that beats `worst` cannot
-        // prune, so the second reason lies inside the first.
+        // One test covers both reasons to want the exact query: a probe that
+        // beats `worst` cannot prune, so that reason lies inside this one.
         if !prunes(worst_root, reach, probe.dist2) {
             let exact = grid.nearest2(here);
             debug_assert!(
@@ -1577,8 +1250,6 @@ fn furthest_from_taps(
             );
             probe = exact;
 
-            // `&&`, not `&`: the containment walk is a pass over the region's
-            // ring and is the expensive side a branch exists to skip.
             if exact.dist2 > worst && point_in_region(xs, ys, here) {
                 worst = exact.dist2;
                 worst_root = isqrt(worst).raw();
@@ -1586,25 +1257,21 @@ fn furthest_from_taps(
             }
         }
 
-        // Surviving `if`: the prune, which is the whole point of the search and
-        // is taken for the overwhelming majority of cells. `probe` is the exact
-        // nearest whenever the first test failed, so which cells survive here
-        // does not depend on the hint at all.
+        // `probe` is the exact nearest whenever the test above failed, so which
+        // cells survive here does not depend on the hint.
         if prunes(worst_root, reach, probe.dist2) {
             continue;
         }
 
         // A single integer point cannot be quartered and has already been
-        // probed. Dropping it terminates the search; every other cell shrinks on
-        // at least one axis per split.
+        // probed; dropping it terminates the search.
         let splits_x = cx < cell.xhi;
         let splits_y = cy < cell.yhi;
         if !splits_x && !splits_y {
             continue;
         }
 
-        // Four tests per surviving cell, on cell geometry rather than on bulk
-        // data: a cell one unit wide or one unit tall quarters into two.
+        // A cell one unit wide or one unit tall quarters into two.
         stack.push(Cell {
             xlo: cell.xlo,
             ylo: cell.ylo,
@@ -1648,8 +1315,6 @@ fn furthest_from_taps(
 /// The fold seed for "no tap is in range".
 ///
 /// The largest area [`gpurify_core::ops::isqrt`] accepts, so a region with no
-/// taps at all measures `MAX_ABS_DBU` away from one — the largest representable
-/// distance — and is reported rather than passed. A saturating sentinel is
-/// fail-*open* for a spacing rule; this is the same sentinel pointed the other
-/// way, and it is why it is the seed of a `min` rather than of a `max`.
+/// taps at all measures `MAX_ABS_DBU` from one and is reported rather than
+/// passed.
 const NO_TAP_IN_RANGE: DbuArea = DbuArea::new(1i128 << 80);

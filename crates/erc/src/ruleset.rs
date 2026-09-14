@@ -13,14 +13,9 @@ use gpurify_units::{prefix, Dbu, Grid, Qty, Temperature};
 
 /// Every rule kind this crate implements, as the deck spells it.
 ///
-/// The list is here rather than spread over nineteen files because it is the
-/// deck's contract: a kind present in it must have a table and a transform, and
-/// a kind absent from it belongs to another domain — the deck's one rule table
-/// feeds every domain, so [`RuleSet::from_deck`] steps over what it does not
-/// spell. Fail closed still holds, one layer up: the engine refuses a kind that
-/// is in neither this array nor `gpurify_drc::ruleset::KINDS`. Adding a kind means
-/// touching this array, [`RuleSet`], and [`RuleSet::run`] — three places the
-/// compiler names.
+/// A kind absent from this array belongs to another domain and is stepped over
+/// by [`RuleSet::from_deck`]; the engine is what refuses a kind that is in
+/// neither this array nor `gpurify_drc::ruleset::KINDS`.
 pub const KINDS: [&str; 19] = [
     "antenna",
     "antenna_electrical",
@@ -44,22 +39,9 @@ pub const KINDS: [&str; 19] = [
 ];
 
 /// The two columns every rule table has.
-///
-/// Discovered by repetition, not anticipated: all nineteen tables need the
-/// deck's id to report against and the severity to report at, and neither has
-/// anything to do with what the rule measures. Embedding one struct rather than
-/// repeating two fields nineteen times also puts `len` in one place, which is
-/// what the dispatcher branches on.
-///
-/// **Five questions.** In: rule rows from the deck. Out: the same, column-wise.
-/// How many: one row per configured rule, so tens per table at most. Access
-/// pattern: read once per rule row at the top of a transform, then again when a
-/// violation is pushed. Lifetime: whole run, read-only after
-/// [`RuleSet::from_deck`]. Parallelisable: read-only.
 #[derive(Debug, Default)]
 pub struct RuleHead {
-    /// The deck's id for this rule, interned. What a human greps the report
-    /// for, and what [`RuleRun`] is attributed to.
+    /// The deck's id for this rule, interned; what [`RuleRun`] is attributed to.
     pub rule: Vec<StrId>,
     pub severity: Vec<Severity>,
 }
@@ -76,26 +58,14 @@ impl RuleHead {
 
     /// True when the deck configured no row of this kind.
     ///
-    /// The dispatcher's condition: a run is one transform per **non-empty**
-    /// table, and an empty one produces no [`RuleRun`] at all. That is the
-    /// correct silence — the deck did not ask for this rule, so nothing claims
-    /// it was checked.
+    /// An empty table produces no [`RuleRun`] at all: the deck did not ask for
+    /// this rule, so nothing claims it was checked.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
 /// Every configured rule, one table per kind.
-///
-/// **Five questions.** In: a [`Deck`]. Out: nineteen `SoA` tables. How many:
-/// one per run. Access pattern: each table is read exactly once, front to back,
-/// by its own transform. Lifetime: whole run, immutable after construction.
-/// Parallelisable: the tables are disjoint, so the nineteen transforms are
-/// independent given per-worker scratch and violation tables.
-///
-/// The fields are public. This is a bag of tables, not a module with an
-/// invariant to protect — accessors would be nineteen pass-throughs, and the
-/// deletion test says they earn nothing.
 #[derive(Debug, Default)]
 pub struct RuleSet {
     pub floating_gate: topology::FloatingGateTable,
@@ -124,46 +94,24 @@ pub struct RuleSet {
 }
 
 /// Everything one run reads, borrowed.
-///
-/// `Copy`, public fields, and every one of them is a parameter of some
-/// transform below — this is the dispatcher's argument list written down once
-/// instead of nine times.
 #[derive(Debug, Clone, Copy)]
 pub struct RunInputs<'a> {
     pub design: Design<'a>,
     /// Per-net role masks from [`crate::classify_nets_into`].
     pub facts: &'a NetFacts,
-    /// Design intent re-keyed onto nets. Carries its own "nothing was
-    /// declared" flag, which is what six of these rules read first.
+    /// Design intent re-keyed onto nets.
     pub intent: &'a IntentMap,
     /// Per-net resistor networks from [`crate::power::extract_nets_into`].
     pub networks: &'a NetNetworks,
-    /// The solved supply grid, or `None` when intent declared no supplies and
-    /// therefore no grid was built. Four rules read this and record themselves
-    /// skipped on `None`.
+    /// The solved supply grid, or `None` when intent declared no supplies. Four
+    /// rules record themselves skipped on `None`.
     pub power: Option<Solved<'a>>,
-    /// The die boundary. Density is a fraction of an area, and the denominator
-    /// has to come from somewhere the layout does not state: empty space inside
-    /// the die is checked, empty space outside it is not there.
+    /// The die boundary — the denominator of every density fraction.
     pub die: Bbox,
-    /// The run's manufacturing grid. Read by the two rules whose limit is
-    /// stated in physical units against a [`Dbu`] conductor width —
-    /// [`check_em_current_density`] and [`check_electromigration`] — and by
-    /// nothing else, because every other measurement in this crate is exact in
-    /// database units or already a [`Qty`].
-    ///
-    /// [`Dbu`]: gpurify_units::Dbu
-    /// [`Qty`]: gpurify_units::Qty
-    /// [`check_em_current_density`]: electrical::check_em_current_density
-    /// [`check_electromigration`]: electrical::check_electromigration
+    /// The run's manufacturing grid.
     pub grid: Grid,
     /// The temperature the design is signed off at, absolute. The *applied*
-    /// point, distinct from each rule row's characterisation temperature, and
-    /// the input [`check_electromigration`] and [`check_reliability`] derate
-    /// against.
-    ///
-    /// [`check_electromigration`]: electrical::check_electromigration
-    /// [`check_reliability`]: reliability::check_reliability
+    /// point, distinct from each rule row's characterisation temperature.
     pub operating_temperature: Qty<Temperature, { prefix::BASE }>,
 }
 
@@ -177,12 +125,8 @@ fn narrow(len: usize) -> u32 {
 
 /// Close one CSR row: the leading zero on the first row, the running end after
 /// every row. `start.len()` is therefore `rows + 1` for a non-empty table and
-/// `0` for an untouched one, which is the shape every `*_start` column here is
-/// read with.
+/// `0` for an untouched one.
 fn close_csr(start: &mut Vec<u32>, end: usize) {
-    // Not a data-dependent branch over bulk data: `start` is empty exactly once
-    // per table per run, and the taken side is a push the other side must not
-    // repeat.
     if start.is_empty() {
         start.push(0);
     }
@@ -195,36 +139,11 @@ fn close_csr(start: &mut Vec<u32>, end: usize) {
 
 /// One deck row, and the lookups every arm of [`RuleSet::from_deck`] needs.
 ///
-/// **Decision.** Small data in, one value or one typed error out — the whole
-/// point of pulling it out of the dispatcher is that the nineteen arms below
-/// then read as a list of what each kind takes, which is the deck's parameter
-/// schema written where the columns it fills already are.
-///
-/// # The schema
-///
-/// A parameter is spelled exactly as the column it fills, so a reader of a
-/// table's doc comment already knows the deck's name for every field. The
-/// physical parameters arrive as [`ParamValue::Ratio`] — a bare `f64` — because
-/// that is the only shape the deck carries a non-length number in, so each one
-/// has a unit fixed here and nowhere else:
-///
-/// | Column type | Unit the deck states it in |
-/// |---|---|
-/// | [`Resistance`] | ohms |
-/// | [`Voltage`] | millivolts |
-/// | [`Current`] (`esd_latchup`) | milliamps |
-/// | [`Current`] (`electromigration`, `em_current_density`) | microamps |
-/// | [`CurrentDensity`] | amps per metre |
-/// | [`Temperature`] | kelvin, absolute |
-/// | lifetime | hours |
-///
-/// These are the prefixes the columns themselves carry, so the conversion is
-/// the identity and no rounding enters a limit.
-///
-/// [`Resistance`]: gpurify_units::Resistance
-/// [`Voltage`]: gpurify_units::Voltage
-/// [`Current`]: gpurify_units::Current
-/// [`CurrentDensity`]: gpurify_units::CurrentDensity
+/// A parameter is spelled exactly as the column it fills. Physical parameters
+/// arrive as [`ParamValue::Ratio`] and are read in the unit their column
+/// already carries — ohms, millivolts, microamps (milliamps for `esd_latchup`),
+/// amps per metre, kelvin absolute, hours — so the conversion is the identity
+/// and no rounding enters a limit.
 #[derive(Clone, Copy)]
 struct Row<'a> {
     rules: &'a RuleTable,
@@ -284,8 +203,8 @@ impl Row<'_> {
         })
     }
 
-    /// A distance, strictly positive. A zero spacing or window limit is not a
-    /// limit — it passes everything or flags everything, depending on the sense.
+    /// A distance, strictly positive: a zero spacing or window limit passes
+    /// everything or flags everything, which is not a limit.
     fn length(&self, param: &'static str) -> Result<Dbu, ErcError> {
         match self.need(param)? {
             ParamValue::Length(value) => self.positive_dbu(value, param),
@@ -301,8 +220,7 @@ impl Row<'_> {
         }
     }
 
-    /// A distance that may be either sign — a CMP thickness sensitivity, where
-    /// dishing and erosion pull opposite ways.
+    /// A distance that may be either sign, such as a CMP thickness sensitivity.
     fn signed_length(&self, param: &'static str) -> Result<Dbu, ErcError> {
         match self.need(param)? {
             ParamValue::Length(value) => Ok(value),
@@ -318,8 +236,7 @@ impl Row<'_> {
     }
 
     /// A finite `f64`. Infinity and NaN are refused here rather than compared
-    /// against later: an infinite limit passes every measurement silently,
-    /// which is the fail-open shape this crate exists to refuse.
+    /// against later: an infinite limit passes every measurement silently.
     fn number(&self, param: &'static str) -> Result<f64, ErcError> {
         match self.need(param)? {
             ParamValue::Ratio(value) if value.is_finite() => Ok(value),
@@ -335,8 +252,7 @@ impl Row<'_> {
         }
     }
 
-    /// A finite, strictly positive `f64` — every limit, exponent, lifetime and
-    /// absolute temperature in this crate.
+    /// A finite, strictly positive `f64`.
     fn positive(&self, param: &'static str) -> Result<f64, ErcError> {
         let value = self.number(param)?;
         (value > 0.0).then_some(value).ok_or_else(|| ErcError::NonPositiveLimit {
@@ -389,21 +305,9 @@ impl Row<'_> {
 
     /// Push the row's head, at the severity the deck asked for.
     ///
-    /// [`Severity`] is a pair, and [`ParamValue::Flag`] is the shape that
-    /// spells one: `warning = true` on any row of any kind demotes it to
-    /// [`Severity::Warning`], and the flag's absence leaves it at
-    /// [`Severity::Error`]. That default is the safe half — a deck author who
-    /// wanted a note gets a louder report than asked for, where the reverse
-    /// hides a real failure behind one.
-    ///
-    /// It is read here rather than in each of the nineteen arms because
-    /// severity is what [`RuleHead`] exists to carry and has nothing to do with
-    /// what any rule measures; every arm calls this, so every kind takes the
-    /// flag.
-    ///
-    /// The flag is parsed *before* either column is pushed, so a row spelling
-    /// `warning` as a number leaves no half-written head behind — the same
-    /// discipline every arm of [`RuleSet::from_deck`] keeps.
+    /// `warning = true` demotes the row to [`Severity::Warning`]; absent leaves
+    /// it at [`Severity::Error`], which is the safe default. Parsed *before*
+    /// either column is pushed, so a bad flag leaves no half-written head.
     fn head(&self, head: &mut RuleHead) -> Result<(), ErcError> {
         let severity = if self.flag("warning", false)? {
             Severity::Warning
@@ -419,20 +323,10 @@ impl Row<'_> {
 impl RuleSet {
     /// Build the tables from a deck.
     ///
-    /// **Transform, dispatcher.** This is the one place a rule kind is matched
-    /// against a string, and it happens once per rule row at load time. After
-    /// it, every loop in this crate is uniform over one table.
-    ///
     /// Fails closed on anything it does not understand *in a row it owns*: a
-    /// missing parameter, a non-positive limit. A deck with one bad rule is not
-    /// partially usable, because a caller cannot tell a rule that was dropped
-    /// from a rule that found nothing. A row whose kind is not in [`KINDS`] is
-    /// not this crate's to understand — it is `drc`'s — and is stepped over;
-    /// see [`KINDS`] for where the refusal lives instead.
-    ///
-    /// Allocating rather than `_into`: called once per run, against a deck of
-    /// hundreds of rows. The `_into` form exists for transforms called in a
-    /// loop, and this one is not.
+    /// deck with one bad rule is not partially usable, because a caller cannot
+    /// tell a rule that was dropped from a rule that found nothing. A row whose
+    /// kind is not in [`KINDS`] belongs to another domain and is stepped over.
     #[allow(
         clippy::too_many_lines,
         reason = "nineteen kinds listed once is the deck's parameter schema; splitting it \
@@ -440,17 +334,9 @@ impl RuleSet {
     )]
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, ErcError> {
         let mut set = Self::default();
-        // A sorted side copy of the ids already filed. Sorted rather than in
-        // deck order because the only question asked of it is membership, and
-        // a binary search answers that in `log n` compares where a scan of
-        // everything filed so far is `n` — the same table, the same one
-        // allocation, reserved once for the whole deck.
+        // A sorted side copy of the ids already filed, for the duplicate check.
         let mut seen: Vec<StrId> = Vec::with_capacity(deck.rules.spec.len());
 
-        // Not a bulk loop: a deck carries tens to low hundreds of rules, this
-        // runs once at load, and every iteration dispatches on a string and may
-        // return early with a typed error — cold, and a chain, on both counts
-        // outside `/simd-loops` triage.
         for spec in &deck.rules.spec {
             let row = Row {
                 rules: &deck.rules,
@@ -458,10 +344,9 @@ impl RuleSet {
                 spec,
             };
 
-            // The first duplicate *in deck order* is the one refused, which is
-            // what keeps the error message the same whatever `seen` is sorted
-            // by: the search decides whether this row has been seen, never
-            // which row it collides with.
+            // The first duplicate *in deck order* is the one refused: `seen`
+            // decides whether this row was seen, never which row it collides
+            // with.
             match seen.binary_search(&spec.id) {
                 Ok(_) => return Err(ErcError::DuplicateRule(row.name())),
                 Err(at) => {
@@ -475,21 +360,14 @@ impl RuleSet {
             }
 
             // Every arm reads its parameters *before* touching a table, so a
-            // refused row leaves no half-written column behind. The set is
-            // dropped on the error path either way; the discipline is what
-            // keeps the debug assertions at the end meaningful.
+            // refused row leaves no half-written column behind.
             match strings.resolve(spec.kind) {
                 "antenna" => {
                     let layers = row.layers_from(2)?;
                     let max_ratio = row.positive("max_ratio")?;
-                    // One measure for the row's whole collecting set. The
-                    // column is per collector because a stage can mix them, but
-                    // a deck row carries one value per parameter name and
-                    // `ParamValue` has no sequence variant, so one
-                    // `sidewall_thickness` is the most a row can state and it
-                    // is applied to every collector. Mixing them means one deck
-                    // row per measure until `ingest` can spell a list; recorded
-                    // in `docs/SIGNATURE_DEFECTS.md`.
+                    // One measure for the row's whole collecting set: a deck row
+                    // can state only one `sidewall_thickness`, so it applies to
+                    // every collector. Mixing measures means one row per measure.
                     let measure = match row.opt_length("sidewall_thickness")? {
                         Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
                         None => antenna::AntennaMeasure::Area,
@@ -534,9 +412,8 @@ impl RuleSet {
                     let include_partial_windows = row.flag("include_partial_windows", true)?;
                     let cmp = match row.find("cmp_target_density") {
                         None => None,
-                        // The four coefficients are one model: a deck stating
-                        // some of them has stated none of them, and guessing the
-                        // rest is a thickness verdict nobody characterised.
+                        // The four coefficients are one model: guessing the rest
+                        // is a thickness verdict nobody characterised.
                         Some(_) => Some(antenna::CmpModel {
                             target_density: row.fraction("cmp_target_density")?,
                             nominal_thickness: row.length("cmp_nominal_thickness")?,
@@ -544,9 +421,8 @@ impl RuleSet {
                             max_abs_thickness_delta: row.length("cmp_max_abs_thickness_delta")?,
                         }),
                     };
-                    // Fail closed. A row bounding nothing reports clean over
-                    // every window forever, which is the empty-clean-result
-                    // failure this crate is shaped against.
+                    // Fail closed: a row bounding nothing reports clean over
+                    // every window forever.
                     if min_density.is_none()
                         && max_density.is_none()
                         && max_neighbour_delta.is_none()
@@ -619,14 +495,10 @@ impl RuleSet {
                     table.min_guard_ring_width.push(min_guard_ring_width);
                     table.max_tap_distance.push(max_tap_distance);
                     // The clamp list is empty and cannot be otherwise from a
-                    // deck: a clamp is a device *model name*, `ParamValue`
-                    // carries no string, and no other variant identifies a
-                    // device. The guard-ring half of the rule needs no clamp
-                    // and runs; the discharge-path half then finds no path from
-                    // any pad and flags all of them, so a deck-configured
-                    // `esd_latchup` row is loud rather than silently clean.
-                    // Blocked on `ParamValue::Name(StrId)` in `ingest`;
-                    // recorded in `docs/SIGNATURE_DEFECTS.md`.
+                    // deck: a clamp is a device model *name* and `ParamValue`
+                    // carries no string. The discharge-path half then finds no
+                    // path from any pad and flags all of them, so the row is
+                    // loud rather than silently clean.
                     close_csr(&mut table.clamp_start, table.clamp_model.len());
                 }
                 "esd_topological" => {
@@ -674,8 +546,7 @@ impl RuleSet {
                     row.layers(0)?;
                     let max_drivers = row.count("max_drivers")?;
                     // Zero permitted drivers flags every driven net in the
-                    // design, which is a rule nobody can satisfy rather than a
-                    // limit.
+                    // design, which is a rule nobody can satisfy.
                     if max_drivers == 0 {
                         return Err(ErcError::NonPositiveLimit {
                             rule: row.name(),
@@ -702,9 +573,8 @@ impl RuleSet {
                     let reference_temperature = Qty::new(row.positive("reference_temperature")?);
                     let activation_energy_ev = row.positive("activation_energy_ev")?;
                     let max_abs_voltage = Qty::new(row.positive("max_abs_voltage")?);
-                    // A fraction, and a positive one: a duty cycle of zero says
-                    // the net is never stressed, so the predicted lifetime is
-                    // infinite and the rule can never fire.
+                    // A duty cycle of zero makes the predicted lifetime infinite,
+                    // so the rule could never fire.
                     let duty_cycle = row.fraction("duty_cycle")?;
                     if duty_cycle <= 0.0 {
                         return Err(ErcError::NonPositiveLimit {
@@ -715,13 +585,8 @@ impl RuleSet {
                     let table = &mut set.reliability;
                     row.head(&mut table.head)?;
                     table.required_lifetime_hours.push(required_lifetime_hours);
-                    // The mechanism's name is the rule's own id. It is a report
-                    // label and nothing indexes on it, `ParamValue` carries no
-                    // string to state a separate one, and a deck already spells
-                    // these rows `bti.nmos` — so the id is the label a reader
-                    // would have written anyway. A mechanism named apart from
-                    // the rule wants the same `ParamValue::Name(StrId)` the
-                    // clamp lists do; recorded in `docs/SIGNATURE_DEFECTS.md`.
+                    // The mechanism's name is the rule's own id: `ParamValue`
+                    // carries no string to state a separate one.
                     table.mechanism.push(spec.id);
                     table.reference_lifetime_hours.push(reference_lifetime_hours);
                     table.reference_stress.push(reference_stress);
@@ -758,23 +623,13 @@ impl RuleSet {
                     table.layer.extend_from_slice(layers);
                     close_csr(&mut table.layer_start, table.layer.len());
                 }
-                // One deck feeds every domain, so a kind this crate does not
-                // spell is another domain's row — `drc`'s — and stepping over
-                // it is what lets a deck hold both. That is only half of fail
-                // closed: the other half is `engine::run::run_checks`, which
-                // refuses a kind that is in neither [`KINDS`] nor
-                // `gpurify_drc::ruleset::KINDS` before either rule set is
-                // built. A typo is still the run's failure; it is refused at
-                // the one layer that holds both vocabularies rather than at the
-                // first one to read the row.
+                // Another domain's row. The other half of fail closed is
+                // `engine::run::run_checks`, which refuses a kind in neither
+                // [`KINDS`] nor `gpurify_drc::ruleset::KINDS`.
                 _ => {}
             }
         }
 
-        // Every row this crate *spells* is filed. Rows belonging to another
-        // domain are skipped above and so are excluded from the count, which is
-        // the only thing that changed when one deck started feeding two
-        // domains: a `KINDS` name with no arm above still trips this.
         debug_assert_eq!(
             set.len(),
             deck.rules
@@ -788,12 +643,8 @@ impl RuleSet {
         Ok(set)
     }
 
-    /// How many rule rows are configured across every table.
-    ///
-    /// The number of [`RuleRun`] rows a run must produce. A test comparing this
-    /// against `runs.len()` after [`RuleSet::run`] is what catches a transform
-    /// that returned early without recording itself — the exact shape of the
-    /// false-clean failure.
+    /// How many rule rows are configured across every table — the number of
+    /// [`RuleRun`] rows a run must produce.
     pub fn len(&self) -> usize {
         self.heads().iter().map(|head| head.len()).sum()
     }
@@ -803,11 +654,6 @@ impl RuleSet {
     }
 
     /// The nineteen heads, in field order.
-    ///
-    /// Not bulk data — nineteen references, the same nineteen every run — so
-    /// it is one fixed-size array, and that array is what keeps
-    /// [`RuleSet::len`] from being nineteen additions a new kind can be left
-    /// out of.
     fn heads(&self) -> [&RuleHead; KINDS.len()] {
         [
             &self.floating_gate.head,
@@ -835,10 +681,8 @@ impl RuleSet {
     /// Every parallel and CSR column against the head it belongs to.
     ///
     /// A `*_start` column is `rows + 1` long once anything is in it, and a
-    /// column parallel to a CSR body is as long as that body. Both are
-    /// invariants the nineteen transforms index on without rechecking, so this
-    /// is where they are checked — once, at the end of the one function that
-    /// writes them.
+    /// column parallel to a CSR body is as long as that body. The transforms
+    /// index on both without rechecking.
     fn debug_assert_shape(&self) {
         let csr = |head: &RuleHead, start: &[u32], body: usize| {
             debug_assert_eq!(
@@ -951,20 +795,12 @@ impl RuleSet {
 
     /// Run every non-empty table's transform once.
     ///
-    /// **Transform, dispatcher.** Caller owns `scratch`, `out` and `runs`; all
-    /// three are appended to, not cleared, so a caller may accumulate several
-    /// cells into one report. Nothing here allocates per rule row.
-    ///
-    /// Order is the field order above — topological rules first, then the
-    /// geometric ones, then the electrical ones. It is not load-bearing:
-    /// `Violations::sort_canonical` establishes the report order, and `runs` is
-    /// sorted by rule id by the caller. Stating it anyway, because a test that
-    /// reads `runs` positionally would otherwise depend on something no one
-    /// promised.
+    /// `scratch`, `out` and `runs` are appended to, not cleared, so a caller
+    /// may accumulate several cells into one report. Order is not load-bearing:
+    /// `Violations::sort_canonical` establishes the report order.
     ///
     /// Every configured rule row produces exactly one [`RuleRun`], including
-    /// the ones that could not run. A transform that returns without recording
-    /// is the defect this crate is shaped to prevent.
+    /// the ones that could not run.
     pub fn run(
         &self,
         inputs: RunInputs<'_>,
@@ -993,12 +829,8 @@ impl RuleSet {
 
         let before = runs.len();
 
-        // Nineteen branches, one per table, on a length that is constant for
-        // the whole run — memorised by the predictor and hoisted out of every
-        // loop below it. This is the dispatcher's condition, not a
-        // data-dependent branch over bulk data: an unconfigured kind must
-        // produce no `RuleRun` at all, and that silence is a different claim
-        // from a skip.
+        // An unconfigured kind must produce no `RuleRun` at all: that silence
+        // is a different claim from a skip.
         if !self.floating_gate.head.is_empty() {
             topology::check_floating_gate(
                 inputs.design,
@@ -1129,11 +961,6 @@ impl RuleSet {
             );
         }
 
-        // The invariant the whole crate is shaped around, asserted where every
-        // rule's row lands: one `RuleRun` per configured rule row, appended to
-        // whatever the caller already had. A transform that returned early
-        // without recording itself is a false-clean result, and this is the
-        // cheapest place to catch it.
         debug_assert_eq!(
             runs.len(),
             before + self.len(),
