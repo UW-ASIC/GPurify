@@ -154,6 +154,43 @@ fn main() -> std::process::ExitCode {
             }
             // Refused above, before anything was read.
             args::Format::Gds => unreachable!("--format gds is refused before the run starts"),
+            args::Format::Spef | args::Format::Dspf => {
+                // `args` refuses these for every check that does not extract,
+                // so `None` here is a `pex` run that produced no network rather
+                // than a wrong `--format`. Refused rather than written empty:
+                // an empty netlist is a design with no parasitics, which is the
+                // one answer that is never true.
+                let Some(network) = &outputs.parasitics else {
+                    eprintln!(
+                        "--format {} asked for a parasitic network, but extraction \
+                         produced none, and an empty netlist would read as a design \
+                         with no parasitics",
+                        if args.common.format == args::Format::Spef { "spef" } else { "dspf" }
+                    );
+                    return ExitCode::FAILURE;
+                };
+                let header = gpurify_export::Header {
+                    tool_version: env!("CARGO_PKG_VERSION"),
+                    deck_path: inputs.deck.display().to_string(),
+                    layout_path: inputs.layout.display().to_string(),
+                    // Never from the clock, for `json`'s reason.
+                    timestamp: None,
+                };
+                let write = if args.common.format == args::Format::Spef {
+                    gpurify_export::parasitic::write_spef
+                } else {
+                    gpurify_export::parasitic::write_dspf
+                };
+                if let Err(error) = write(
+                    network,
+                    &extracted.ports,
+                    &loaded.strings,
+                    &header,
+                    &mut text,
+                ) {
+                    return fail(&error);
+                }
+            }
         }
         debug_assert!(!text.is_empty(), "a finished run rendered nothing at all");
 

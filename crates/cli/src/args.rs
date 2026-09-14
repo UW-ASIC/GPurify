@@ -78,6 +78,23 @@ pub enum Format {
     Json,
     /// Violation markers as GDS, for a layout viewer.
     Gds,
+    /// The extracted parasitic network as SPEF, for a timing tool.
+    Spef,
+    /// The same network as DSPF, for a circuit simulator.
+    Dspf,
+}
+
+impl Format {
+    /// True for the formats whose body is the parasitic network rather than the
+    /// violation table.
+    ///
+    /// Only `pex` and `all` fill [`Outputs::parasitics`](gpurify_engine::Outputs),
+    /// so asking any other check for one is a usage error caught before a file
+    /// is read — not an empty netlist written after a run that had nothing to
+    /// put in it.
+    pub fn is_parasitic(self) -> bool {
+        matches!(self, Format::Spef | Format::Dspf)
+    }
 }
 
 /// Parse and validate.
@@ -251,7 +268,16 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
     // GDS output is violation markers. The two checks that produce none would
     // write an empty layout, which reads in a viewer exactly like a clean run.
     if format == Format::Gds && matches!(command, Command::Lvs { .. } | Command::Pex { .. }) {
-        return Err(ArgError::FormatMismatch);
+        return Err(ArgError::FormatMismatch("gds"));
+    }
+    // The mirror of it: SPEF and DSPF are the parasitic network, and only `pex`
+    // and `all` extract one. Writing an empty netlist for a check that never
+    // ran extraction is the same false clean read from the other end.
+    if format.is_parasitic() && !matches!(command, Command::Pex { .. } | Command::All { .. }) {
+        return Err(ArgError::FormatMismatch(match format {
+            Format::Spef => "spef",
+            _ => "dspf",
+        }));
     }
 
     let layout = layout.ok_or_else(|| {
@@ -304,16 +330,18 @@ fn value(rest: &[String], index: usize) -> Result<&str, ArgError> {
     }
 }
 
-/// Three names, three variants. A fourth name is a usage error rather than a
-/// silent fall back to text — a run asked for JSON and given text is a run
-/// whose output nothing downstream can read.
+/// One name, one variant. An unknown name is a usage error rather than a silent
+/// fall back to text — a run asked for JSON and given text is a run whose output
+/// nothing downstream can read.
 fn format_named(name: &str) -> Result<Format, ArgError> {
     match name {
         "text" => Ok(Format::Text),
         "json" => Ok(Format::Json),
         "gds" => Ok(Format::Gds),
+        "spef" => Ok(Format::Spef),
+        "dspf" => Ok(Format::Dspf),
         other => Err(ArgError::Usage(format!(
-            "unknown --format {other}; expected text, json or gds"
+            "unknown --format {other}; expected text, json, gds, spef or dspf"
         ))),
     }
 }
@@ -326,8 +354,8 @@ pub enum ArgError {
     UnknownCommand(String),
     #[error("lvs requires a reference netlist (--reference)")]
     MissingReference,
-    #[error("--format gds is only meaningful for checks that produce markers")]
-    FormatMismatch,
+    #[error("--format {0} is not something this check produces")]
+    FormatMismatch(&'static str),
 }
 
 /// Translate the parsed arguments into what `engine` wants.
@@ -800,7 +828,7 @@ mod tests {
         ];
         for argv in refused {
             assert!(
-                matches!(parse_err(argv), ArgError::FormatMismatch),
+                matches!(parse_err(argv), ArgError::FormatMismatch(_)),
                 "{argv:?} should be a format mismatch"
             );
         }
