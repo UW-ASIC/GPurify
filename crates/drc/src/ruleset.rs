@@ -1,17 +1,9 @@
 //! The rule set: every kind's table, the deck builder, and the dispatcher.
 //!
-//! This is the file the dispatcher pattern is *for*. A deck's rules arrive as a
-//! flat [`RuleTable`] of [`RuleSpec`] rows whose kind is an interned string;
-//! [`RuleSet::from_deck`] matches that string once per rule and files the row
-//! into the table for its kind. After that the kind is gone — it is encoded in
-//! *which table the row is in*, and the transform over that table needs no tag,
-//! no vtable and no match.
-//!
-//! Everything downstream is therefore uniform: [`RuleSet::run`] is a fixed list
-//! of calls, one per table, each a straight-line loop over rows that all take
-//! the same parameters. The cost of a rule kind is paid once at load; the run
-//! pays nothing for kinds the deck does not use, because their tables are
-//! empty and their transforms are never called.
+//! A deck's rules arrive as a flat [`RuleTable`] of [`RuleSpec`] rows whose
+//! kind is an interned string; [`RuleSet::from_deck`] matches that string once
+//! per rule and files the row into the table for its kind. After that the kind
+//! is encoded in *which table the row is in*, so no transform needs a tag.
 //!
 //! [`RuleTable`]: gpurify_ingest::deck::RuleTable
 //! [`RuleSpec`]: gpurify_ingest::deck::RuleSpec
@@ -35,17 +27,11 @@ use crate::{Design, DrcError, Scratch};
 /// Files a deck row into its table: check the layer count, parse the
 /// parameters, then push one value into each column.
 ///
-/// Each entry reads `<index> "<kind>" <table> [<layers>] { <column>: <value> }`,
-/// and the index's name is asserted against [`KINDS`] exactly as a hand-written
-/// arm did — filing a row one table over is the failure this dispatcher exists
-/// to prevent, and it is invisible in the output.
-///
-/// **Every value is parsed before any column is pushed.** A row that fails
-/// parsing must not leave one column longer than its siblings; that is the
-/// invariant `row_columns!` asserts on every `len`.
-///
-/// Kinds whose arm does more than this — a CSR run, a derived column, a
-/// narrowing cast — are written out after `@rest` and are spliced in unchanged.
+/// Each entry reads `<index> "<kind>" <table> [<layers>] { <column>: <value> }`.
+/// Every value is parsed before any column is pushed: a row that fails parsing
+/// must not leave one column longer than its siblings, which is the invariant
+/// `row_columns!` asserts on every `len`. Kinds needing more than this are
+/// written out after `@rest`.
 macro_rules! deck_arms {
     ($set:ident, $spec:ident, $kind:ident, $layers:ident,
      $($n:literal $name:literal $table:ident [$count:literal] { $($col:ident : $val:expr),+ $(,)? })+
@@ -64,11 +50,9 @@ macro_rules! deck_arms {
 
 /// Runs one transform per **non-empty** table, in the order written.
 ///
-/// The emptiness guard is the point, not an optimisation: a kind the deck does
-/// not configure must produce no [`RuleRun`] at all, and that silence is a
-/// different claim from a skip. Each guard is also constant for the whole run
-/// rather than data-dependent, so the predictor memorises every one of them on
-/// the first deck and none of them sits inside a loop over shapes.
+/// The emptiness guard is not an optimisation: a kind the deck does not
+/// configure must produce no [`RuleRun`] at all, and that silence is a
+/// different claim from a skip.
 macro_rules! dispatch {
     ($self:ident, $design:ident, $scratch:ident, $out:ident, $runs:ident,
      $($table:ident => $check:path),+ $(,)?) => {$(
@@ -84,20 +68,9 @@ use gpurify_units::Dbu;
 
 /// Every DRC rule the deck configures, filed by kind.
 ///
-/// **Five questions.** In: a [`Deck`] and the run's [`StrTable`]. Out: itself,
-/// twenty-four `SoA` tables. How many: exactly one per run. Access pattern: each
-/// table is read once, front to back, by its own transform — so the twenty-four
-/// fields are never read together and there is nothing to gain from packing
-/// them. Lifetime: the whole run, built once, never mutated. Parallelisable:
-/// the tables are independent of one another; see [`Scratch`]'s ponytail note
-/// for why the dispatcher does not yet exploit that.
-///
-/// Twenty-four distinct field types rather than one `Vec<Rule>` with a kind tag.
-/// That is the whole architecture in one struct: passing a [`MinWidthTable`] to
-/// [`check_notch`](crate::rules::width::check_notch) does not compile, so the
-/// dispatcher below cannot be wired up wrong in a way that produces plausible
-/// output. A tag-and-match design would compile and would report the wrong
-/// rule id on every violation.
+/// Twenty-four distinct field types rather than one `Vec<Rule>` with a kind
+/// tag, so the dispatcher below cannot be wired up wrong in a way that still
+/// compiles and reports the wrong rule id.
 #[derive(Debug, Default)]
 pub struct RuleSet {
     pub min_width: MinWidthTable,
@@ -135,41 +108,15 @@ pub struct RuleSet {
 impl RuleSet {
     /// File every rule in the deck into the table for its kind.
     ///
-    /// **Transform, dispatcher — and the only place in this crate that branches
-    /// on a rule kind.** One match per
-    /// [`RuleSpec`](gpurify_ingest::deck::RuleSpec), at load, over an interned
-    /// [`StrId`](gpurify_ingest::StrId): the kind names are looked up in
-    /// `strings` once each up front, so the match is on `u32` equality and not
-    /// on text.
-    ///
-    /// The kind names it matches are [`KINDS`], which is this crate's whole
-    /// vocabulary and is stated there rather than here so a deck author, a deck
-    /// parser and a test read it from one place. A kind absent from that array
-    /// belongs to another domain and is stepped over, because the deck's one
-    /// rule table feeds every domain. It is *not* dropped silently: the engine
-    /// refuses a kind that is in neither this array nor
-    /// `gpurify_erc::ruleset::KINDS` before it builds either rule set, so the
-    /// only rows reaching here are rows some domain implements.
-    ///
-    /// `strings` is borrowed, not mutated. A kind or parameter name the table
-    /// does not already contain cannot name anything the deck defined, so
-    /// `StrTable::get` is the right call and interning here would grow the
-    /// table with names that are by definition unused.
-    ///
-    /// # Fail closed
-    ///
-    /// Rejects rather than skips, in every case a row is this crate's: a
+    /// Rejects rather than skips any row this crate's [`KINDS`] spells: a
     /// missing or mistyped parameter, the wrong number of layers, a
-    /// non-positive limit, a duplicate rule id. A deck with one rule this
-    /// crate silently ignored
-    /// produces a report that looks complete and is not, which is the failure
-    /// mode the whole tree is built against. Partial construction is not
-    /// offered, because a partially-loaded deck has no meaningful verdict.
+    /// non-positive limit, a duplicate rule id. A kind absent from [`KINDS`]
+    /// belongs to another domain and is stepped over — the engine refuses a
+    /// kind in neither this array nor `gpurify_erc::ruleset::KINDS` before
+    /// either rule set is built, so that skip is not a silent drop.
     ///
-    /// The layer resolution and grid conversion are already done — `ingest`
-    /// produced [`ParamValue::Length`](gpurify_ingest::deck::ParamValue::Length)
-    /// in [`Dbu`](gpurify_units::Dbu) against the run's grid, or refused the
-    /// deck. Nothing here parses text or touches a grid.
+    /// Layer resolution and grid conversion are already done by `ingest`;
+    /// nothing here parses text or touches a grid.
     #[allow(
         clippy::too_many_lines,
         reason = "one arm per rule kind, in KINDS order; splitting it would put \
@@ -177,51 +124,13 @@ impl RuleSet {
                   is the one thing a reader checking this file needs to compare"
     )]
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
-        // The deck's *parameter* vocabulary, which the Definition-Phase left
-        // open (docs/NEED_TESTING.md, "RuleSet::from_deck and the whole
-        // DrcError family"). Chosen here, and named after the column each
-        // value lands in so a deck author reading a table's fields has read the
-        // deck schema:
-        //
-        //   kind                     layers            parameters
-        //   min_width                [layer]           limit
-        //   max_width                [layer]           limit
-        //   min_edge_length          [layer]           limit
-        //   notch                    [layer]           limit
-        //   min_spacing              [layer]           limit
-        //   min_spacing_diff         [a, b]            limit
-        //   eol_spacing              [layer]           eol_width, limit
-        //   prl_spacing              [layer]           prl_threshold, limit
-        //   corner_to_corner         [layer]           limit
-        //   wide_dependent_spacing   [layer]           width_threshold, limit
-        //   min_area                 [layer]           limit
-        //   min_enclosed_area        [layer]           limit
-        //   cheesing                 [layer]           max_unslotted
-        //   density                  [layer]           window, step, limit, maximum
-        //   min_enclosure            [outer, inner]    limit
-        //   asymmetric_enclosure     [outer, inner]    min_one_side
-        //   min_extension            [layer, ref]      limit
-        //   overlap                  [a, b]            limit
-        //   max_distance_to_tap      [well, tap]       limit
-        //   off_grid                 []                pitch
-        //   angle                    []                angle (one per allowed direction)
-        //   redundant_via            [layer]           min_count, within
-        //   via_array_spacing        [layer]           array_threshold, limit
-        //   multi_patterning         [layer]           colors, color_spacing
-        //
         // The three area limits — `min_area`, `min_enclosed_area`, `cheesing`
-        // — are stated as the **side of the equivalent square**, a
-        // `ParamValue::Length` squared by `square` below, because
-        // `gpurify_ingest::deck::ParamValue` has no area variant and lengths
-        // are the only thing `ingest` converts against the grid.
-        //
-        // Not a shortcut this file can spend: the fix is a `ParamValue::Area`
-        // carrying a `DbuArea`, converted in `ingest` against `grid²`, which is
-        // a variant on a frozen enum in another crate. Filed under `## drc` in
-        // `docs/SIGNATURE_DEFECTS.md`, together with the direction it errs —
-        // a real PDK area (0.088 µm² of metal) has no integer square root, so
-        // the deck author rounds, and the rounding that reports nothing is
-        // *down* for the two minima and *up* for `cheesing`.
+        // — are stated by the deck as the *side of the equivalent square*,
+        // squared by `square` below, because `ParamValue` has no area variant.
+        // A real PDK area has no integer square root, so the deck author
+        // rounds: the rounding that reports nothing is *down* for the two
+        // minima and *up* for `cheesing`. Filed under `## drc` in
+        // `docs/SIGNATURE_DEFECTS.md`.
         let rules = &deck.rules;
 
         // Every kind name resolved once, so the per-row match below is `u32`
@@ -232,8 +141,7 @@ impl RuleSet {
         let name_of = |id: StrId| strings.resolve(id).to_owned();
 
         // Duplicates first, before a single row is filed: two rows sharing an
-        // id produce two `RuleRun` rows attributable to nothing, which is what
-        // makes every count this crate reports readable.
+        // id produce two `RuleRun` rows attributable to nothing.
         let mut ids: Vec<StrId> = rules.spec.iter().map(|spec| spec.id).collect();
         ids.sort_unstable();
         if let Some(pair) = ids.windows(2).find(|pair| pair[0] == pair[1]) {
@@ -242,8 +150,8 @@ impl RuleSet {
 
         let value = |spec: &RuleSpec, param: &'static str| -> Result<ParamValue, DrcError> {
             // `get`, never `intern`: a parameter name the table has never seen
-            // cannot be one the deck spelled, and growing the caller's table on
-            // a lookup would hand back an id that matches nothing.
+            // cannot be one the deck spelled, and interning here would hand
+            // back an id that matches nothing.
             strings
                 .get(param)
                 .and_then(|interned| rules.param(spec, interned))
@@ -349,26 +257,14 @@ impl RuleSet {
 
         let mut set = Self::default();
 
-        // A deck has hundreds of rule rows read once each: cold, not bulk. The
-        // `if`s below are all on one row's own parameters at load time, not on
-        // anything a check iterates.
         for spec in &rules.spec {
-            // One deck feeds every domain, so a kind this crate does not spell
-            // is another domain's row — `erc`'s — and stepping over it is what
-            // lets a deck hold both. That is only half of fail closed: the
-            // other half is `engine::run::run_checks`, which refuses a kind
-            // that is in neither [`KINDS`] nor `gpurify_erc::ruleset::KINDS`
-            // before either rule set is built. A typo is still the run's
-            // failure; it is refused at the one layer that holds both
-            // vocabularies rather than at the first one to read the row.
+            // A kind this crate does not spell is another domain's row;
+            // `engine::run::run_checks` is what refuses a kind no domain
+            // spells, so this skip is not a silent drop.
             let Some(kind) = kind_id.iter().position(|&name| name == Some(spec.kind)) else {
                 continue;
             };
 
-            // Each arm asserts the name of the index it files under. Filing a
-            // row one table over is the failure mode this dispatcher exists to
-            // make impossible, and it is invisible in the output: the run would
-            // report the wrong rule's id against a measurement it never took.
             deck_arms! { set, spec, kind, layers,
                 0 "min_width" min_width [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
                 1 "max_width" max_width [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
@@ -397,9 +293,8 @@ impl RuleSet {
                     let window = length(spec, "window")?;
                     let step = length(spec, "step")?;
                     let limit = ratio_of(spec, "limit")?;
-                    // Stated, never defaulted: a density rule whose sense the
-                    // deck left out is two rules, and guessing picks the one
-                    // that reports nothing.
+                    // Stated, never defaulted: guessing the sense picks the
+                    // reading that reports nothing.
                     let maximum = flag(spec, "maximum")?;
                     set.density.rule.push(spec.id);
                     set.density.layer.push(layer(spec, 0));
@@ -432,8 +327,7 @@ impl RuleSet {
                             });
                         };
                         // A direction is periodic in a full turn, so the
-                        // reduction is exact and it is what keeps the cast to
-                        // the error's `i32` faithful.
+                        // reduction is exact and keeps the `i32` cast faithful.
                         let degrees = i32::try_from(degrees % 360).expect("under a full turn");
                         let direction = grid::Direction::from_degrees(degrees).ok_or_else(|| {
                             DrcError::UnrepresentableAngle {
@@ -507,10 +401,9 @@ impl RuleSet {
                         .push(u8::try_from(colors).expect("checked against the ceiling"));
                     set.multi_patterning.color_spacing.push(color_spacing);
                 }
-                // `kind_id` came from `KINDS`, so `position` cannot return an
-                // index past it. Fail closed anyway rather than panic: a
-                // twenty-fifth name added to `KINDS` with no arm here would
-                // otherwise be filed nowhere and reported as checked.
+                // Unreachable via `KINDS`, but fail closed rather than panic: a
+                // twenty-fifth name with no arm here would otherwise be filed
+                // nowhere and reported as checked.
                 _ => {
                     return Err(DrcError::UnknownKind {
                         rule: name_of(spec.id),
@@ -520,10 +413,8 @@ impl RuleSet {
             }
         }
 
-        // Every row this crate *spells* is filed. Rows belonging to another
-        // domain are skipped above and so are excluded from the count, which is
-        // the only thing that changed when one deck started feeding two
-        // domains: a `KINDS` name with no arm below still trips this.
+        // Every row this crate spells is filed; other domains' rows are skipped
+        // above and excluded from the count.
         debug_assert_eq!(
             set.rule_count(),
             rules
@@ -538,14 +429,8 @@ impl RuleSet {
 
     /// How many rule rows the set holds, across every table.
     ///
-    /// The number [`RuleSet::run`] will produce [`RuleRun`] rows for, so a
-    /// caller can assert the run accounted for every rule it loaded. That
-    /// equality is the crate's top-level invariant and this is what makes it
-    /// checkable without reaching into twenty-four fields.
+    /// The number of [`RuleRun`] rows [`RuleSet::run`] will produce.
     pub fn rule_count(&self) -> usize {
-        // Twenty-four named fields, not a loop: there is no collection here to
-        // iterate, and the compiler names this line when a twenty-fifth
-        // table arrives.
         self.min_width.len()
             + self.max_width.len()
             + self.min_edge_length.len()
@@ -578,29 +463,14 @@ impl RuleSet {
 
     /// Run every configured rule.
     ///
-    /// **Transform, dispatcher.** One call per non-empty table, in the fixed
-    /// order the fields are declared in. `out` and `runs` are cleared here —
-    /// the one place they are, since the transforms themselves append — and
-    /// `runs` gains exactly [`RuleSet::rule_count`] rows.
+    /// `out` and `runs` are cleared here — the one place they are, since the
+    /// transforms themselves append — and `runs` gains exactly
+    /// [`RuleSet::rule_count`] rows, left in dispatch order.
     ///
-    /// # Ordering
-    ///
-    /// The dispatch order is fixed but is *not* the output order. Violations
-    /// are canonically sorted afterwards by
-    /// [`Violations::sort_canonical`](gpurify_report::Violations::sort_canonical),
-    /// which is what makes the report independent of this order and therefore
-    /// of any future decision to run the tables in parallel. `runs` is left in
-    /// dispatch order, which is deterministic for a given [`RuleSet`] because
-    /// the tables are built in deck order.
-    ///
-    /// # Infallible on purpose
-    ///
-    /// There is no `Result`. Geometry a rule cannot handle is that rule's
+    /// Infallible: geometry a rule cannot handle is that rule's
     /// [`Outcome::Refused`](gpurify_report::Outcome::Refused) row, not the
-    /// run's failure: one unrepresentable polygon on one layer must not
-    /// suppress the verdict of the other twenty-three rules. Everything that
-    /// *could* fail the whole run already failed in
-    /// [`RuleSet::from_deck`].
+    /// run's failure. Everything that could fail the whole run already failed
+    /// in [`RuleSet::from_deck`].
     pub fn run(
         &self,
         design: Design<'_>,
@@ -609,8 +479,7 @@ impl RuleSet {
         runs: &mut Vec<RuleRun>,
     ) {
         // The one place either container is cleared. Column by column because
-        // the table is `SoA` and has no `clear`; capacity is kept, which is the
-        // point of the caller owning the buffers.
+        // the table is `SoA` and has no `clear`; capacity is kept.
         out.rule.clear();
         out.layer.clear();
         out.severity.clear();
@@ -657,9 +526,8 @@ impl RuleSet {
             multi_patterning => patterning::check_multi_patterning,
         }
 
-        // The crate's top-level invariant, asserted where it is produced: one
-        // run row per configured rule row. A missing line above is silent in
-        // the violation table and is exactly what this catches.
+        // One run row per configured rule row. A missing line above is silent
+        // in the violation table and is exactly what this catches.
         debug_assert_eq!(
             runs.len(),
             expected,
@@ -670,24 +538,9 @@ impl RuleSet {
 
 /// Every rule kind this crate implements, as the deck spells it.
 ///
-/// **This is the deck's vocabulary and it is stated nowhere else.**
-/// `RuleSet::from_deck` matches `RuleSpec::kind` against these names, so a
-/// deck author, a deck parser and a test all need them, and until they were
-/// public the only copy lived in this crate's test module. It is also half of
-/// the engine's union check: a kind absent from this array *and* from
-/// `gpurify_erc::ruleset::KINDS` is refused before any rule set is built —
-/// never a silent skip.
-///
 /// Order matches the field order of [`RuleSet`], so a failure naming index `i`
-/// names `KINDS[i]`.
-///
-/// The antenna family is **not** here. It was, and it was also in
-/// `gpurify_erc::ruleset::KINDS`, so one deck row spelled `antenna` was filed by
-/// both `from_deck`s and failed one of them. The family belongs to `erc`: an
-/// antenna ratio accumulates the collecting area of everything electrically
-/// joined to a gate at the stage that layer is etched, which is a net question
-/// with a layer cut-off and not a geometry question. This crate stays pure
-/// geometry, and the two `KINDS` arrays are now disjoint.
+/// names `KINDS[i]`. Disjoint from `gpurify_erc::ruleset::KINDS`: one deck row
+/// must be filed by exactly one domain.
 pub const KINDS: [&str; 24] = [
     "min_width",
     "max_width",
@@ -715,20 +568,8 @@ pub const KINDS: [&str; 24] = [
     "multi_patterning",
 ];
 
-/// The rule-dispatch adapter test.
-///
-/// `docs/TESTING.md` names rule dispatch as a seam that needs one: "clean"
-/// meaning *this rule ran and examined N shapes* is not observable in the
-/// violation table, and in this crate the observation is the [`RuleRun`] row. So
-/// the property under test is the one a missing line in the dispatcher breaks
-/// and nothing else in the suite catches — **every table holding a row produces
-/// exactly one run row attributable to it**. A rule kind wired up nowhere is
-/// silent, and silence is what a clean design looks like.
-///
-/// These are unit tests rather than integration tests because the fixture below
-/// is the dispatcher's own inventory: it has to name all twenty-four fields, and
-/// it belongs beside the struct it enumerates so the compiler points here when a
-/// twenty-fifth arrives.
+/// The rule-dispatch adapter test: every table holding a row produces exactly
+/// one run row attributable to it.
 #[cfg(test)]
 mod tests {
     use super::RuleSet;
@@ -757,12 +598,6 @@ mod tests {
     }
 
     /// Geometry chosen so no rule has an empty population to look at.
-    ///
-    /// Two facing stripes give the spacing family its pairs and the overlay
-    /// family its hosts; a short-ended pair gives the end-of-line rule an edge
-    /// that qualifies; a diagonally offset pair gives corner-to-corner its only
-    /// legal input; and the ring gives the enclosed-area rule a hole, which is
-    /// the one population a layer of simple shapes does not contain.
     fn populated_design() -> GeometryStore {
         let mut layout = LayoutBuilder::new(2);
         layout.rect(A, 0, 0, 200, 1_000);
@@ -780,9 +615,6 @@ mod tests {
     }
 
     /// One row in every one of the twenty-four tables, each with a distinct id.
-    ///
-    /// The limits are deliberately loose: what is under test here is dispatch,
-    /// not measurement, and every measurement has its own test in `tests/`.
     #[allow(
         clippy::too_many_lines,
         reason = "one statement group per rule kind; splitting it would hide the \
@@ -938,12 +770,6 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The deck was built with exactly one row in
-    /// each of the twenty-four tables, so the run must produce twenty-four run
-    /// rows, one per id, with nothing repeated and nothing missing. A rule kind
-    /// the dispatcher forgets to call produces no row and no violation, which
-    /// is indistinguishable from a clean design in every other test in this
-    /// crate.
     #[test]
     fn every_configured_rule_produces_exactly_one_attributable_run_row() {
         let fixture = Fixture::new();
@@ -971,16 +797,6 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer. The geometry above was chosen so every
-    /// geometric rule has a nonzero population — polygons, pairs, holes, edges,
-    /// vertices, windows — so each must report `Ran` over a nonzero `examined`.
-    /// A rule whose layer lookup returned the wrong range reports `Ran` with
-    /// zero, which is the shape of a false-clean result and is what this
-    /// assertion exists to reject.
-    ///
-    /// There is no exception left. There was one — the antenna family referred
-    /// collected charge to a gate this fixture has no device for — and it went
-    /// with the family, to `erc`.
     #[test]
     fn every_geometric_rule_ran_over_a_population_it_could_measure() {
         let fixture = Fixture::new();
@@ -1006,11 +822,6 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. `run` owns the clearing of both output
-    /// containers — the transforms themselves only append — so rows left over
-    /// from an earlier run must not survive into this one. A run that appended
-    /// instead would report the previous design's violations against this
-    /// design's rules.
     #[test]
     fn a_run_clears_the_outputs_it_was_handed() {
         let fixture = Fixture::new();
@@ -1038,10 +849,6 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer. An empty set holds no rules and produces
-    /// no run rows — which is the one case where an empty `runs` is correct, and
-    /// is why `rule_count` is the number every other assertion compares against
-    /// rather than a constant.
     #[test]
     fn an_empty_rule_set_holds_nothing_and_dispatches_nothing() {
         let fixture = Fixture::new();
@@ -1058,9 +865,6 @@ mod tests {
         assert!(out.rule.is_empty());
     }
 
-    /// Oracle: construct-from-answer. `rule_count` sums across every table, so
-    /// adding a second row to one table moves it by one and `is_empty` stops
-    /// being true the moment any table holds anything.
     #[test]
     fn the_rule_count_is_the_sum_across_every_table() {
         let mut set = RuleSet::default();

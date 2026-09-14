@@ -1,24 +1,13 @@
 //! Overlay family: how two layers must sit relative to each other.
 //!
-//! Enclosure, extension and overlap are all the same question asked from
-//! different sides — given a shape on layer A and a shape on layer B that
-//! interact, is there enough of A around, past, or under B. They share a file
-//! because they share the pairing step and the failure mode that goes with it.
+//! **Best host, not first host.** An inner shape may sit inside several outer
+//! shapes at once; the rule is satisfied if the *best* host satisfies it,
+//! because after the layers are merged there is only one host and it is the
+//! union. Taking the first host also depends on polygon order, so it is
+//! nondeterministic as well as wrong.
 //!
-//! # Best host, not first host
-//!
-//! An inner shape may sit inside several outer shapes at once: a via under a
-//! wide pad that a narrow wire also clips the corner of. The rule is satisfied
-//! if the *best* host satisfies it, because after the layers are merged there
-//! is only one host and it is the union. Taking the first host found, or the
-//! worst, fails a via whose pad encloses it perfectly — and which host is
-//! "first" depends on polygon order, so that variant is also nondeterministic.
-//!
-//! # An unhosted inner shape is zero enclosure, not skipped
-//!
-//! A via with no metal under it at all has an enclosure of zero and violates
-//! every enclosure rule. Skipping it because no host was found is fail-open,
-//! and it is the case that matters most.
+//! **An unhosted inner shape is zero enclosure, not skipped.** A via with no
+//! metal under it violates every enclosure rule; skipping it is fail-open.
 
 use super::{COLUMNS_DIVERGED, centre, mid, ring_segs, row_columns};
 use crate::{record_run, Design, Scratch};
@@ -47,26 +36,21 @@ pub struct MinEnclosureTable {
 
 /// Asymmetric enclosure: at least the limit on **one** side of each axis.
 ///
-/// The relaxed form a foundry allows where lithographic overlay error is
-/// directional: a via needs a landing pad on one side of each axis, not a
-/// symmetric collar. Passes when
-/// `max(left, right) >= limit && max(top, bottom) >= limit`.
+/// Passes when `max(left, right) >= limit && max(top, bottom) >= limit`.
 #[derive(Debug, Default)]
 pub struct AsymmetricEnclosureTable {
     pub rule: Vec<StrId>,
     pub outer: Vec<LayerId>,
     pub inner: Vec<LayerId>,
-    /// Required on one side of each axis. Deliberately *not* named `limit`: the
-    /// number means something weaker than the one in [`MinEnclosureTable`], and
-    /// a reader who transposes the two rules should notice.
+    /// Required on one side of each axis. Deliberately *not* named `limit`: it
+    /// means something weaker than [`MinEnclosureTable`]'s.
     pub min_one_side: Vec<Dbu>,
 }
 
 /// Minimum extension: one layer must run past another by at least the limit.
 ///
-/// The poly endcap over diffusion is the canonical case — the gate must extend
-/// beyond the channel or the transistor leaks around its end. Measured only
-/// where the two shapes actually overlap, and on each side the layer protrudes.
+/// Measured only where the two shapes actually overlap, and on each side the
+/// layer protrudes.
 #[derive(Debug, Default)]
 pub struct MinExtensionTable {
     pub rule: Vec<StrId>,
@@ -79,28 +63,22 @@ pub struct MinExtensionTable {
 
 /// Minimum overlap: two layers that meet must share at least this much.
 ///
-/// Distinct from enclosure, which requires containment. Overlap only requires a
-/// large enough intersection, so a wire crossing a strap satisfies it without
-/// either shape containing the other. Measured on the exact boolean
-/// intersection, not on bounding boxes — a bounding-box intersection
-/// over-reports for any non-convex shape, and the old tree's `lvs` evaluator
-/// did exactly that on the path feeding device recognition.
+/// Distinct from enclosure: a wire crossing a strap satisfies it without either
+/// shape containing the other.
 #[derive(Debug, Default)]
 pub struct OverlapTable {
     pub rule: Vec<StrId>,
     pub a: Vec<LayerId>,
     pub b: Vec<LayerId>,
-    /// The smaller side of the intersection rectangle must be at least this.
-    /// A limit on *area* would pass a long thin sliver, which does not conduct.
+    /// The smaller side of the intersection rectangle must be at least this; a
+    /// limit on *area* would pass a long thin sliver, which does not conduct.
     pub limit: Vec<Dbu>,
 }
 
 /// Maximum distance to a well tie: every point of a well must be within reach
 /// of a tap.
 ///
-/// A latch-up rule rather than a lithographic one. An untied well floats, its
-/// junction forward-biases, and the parasitic thyristor fires — so the
-/// constraint is on the *farthest* point of the well, not on the average.
+/// The constraint is on the *farthest* point of the well, not on the average.
 #[derive(Debug, Default)]
 pub struct MaxDistanceToTapTable {
     pub rule: Vec<StrId>,
@@ -122,15 +100,10 @@ row_columns! {
 
 /// How far an outer shape extends past an inner one, per side.
 ///
-/// **Decision** — two boxes in, four distances out, pure and table-testable,
-/// and the one place the sign convention is written down: each field is
-/// positive when the outer shape extends past the inner on that side, negative
-/// when the inner sticks out. Negative is not an error here; it is what an
-/// unhosted or overhanging shape measures, and clamping it to zero would hide
-/// how badly the rule failed.
-///
-/// `AoS` because all four are read together by both enclosure rules and never
-/// scanned one at a time.
+/// The one place the sign convention is written down: positive when the outer
+/// shape extends past the inner on that side, negative when the inner sticks
+/// out. Negative is not an error — it is what an unhosted or overhanging shape
+/// measures, and clamping it to zero would hide how badly the rule failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Margins {
     pub left: Dbu,
@@ -141,11 +114,8 @@ pub struct Margins {
 
 /// Which of the four margins a reduction named.
 ///
-/// Not in any frozen signature: it exists so a transform can report *at* the
-/// side its reduction chose, which is the crate's midpoint convention applied
-/// to a margin. Carrying it out of the reduction is what keeps the choice and
-/// the number from drifting — re-deriving "which side was that" from the value
-/// alone ties on a symmetric shape and picks by accident.
+/// Carried out of the reduction rather than re-derived: re-deriving "which side
+/// was that" from the value alone ties on a symmetric shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
     Left,
@@ -155,10 +125,6 @@ enum Side {
 }
 
 /// The smaller of two sides, the first of them on a tie.
-///
-/// Surviving `if`: two scalars in a decision, not a loop body, and the two arms
-/// are whole tuples rather than blendable values — LLVM builds it as a pair of
-/// `cmov`s. Same call [`Bbox::intersection`] makes for the same reason.
 const fn lesser(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
     if a.0.raw() <= b.0.raw() {
         a
@@ -177,22 +143,18 @@ const fn greater(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
 }
 
 impl Margins {
-    /// The worst side. What [`check_min_enclosure`] compares.
+    /// The worst side — what [`check_min_enclosure`] compares.
     pub const fn worst(self) -> Dbu {
         self.worst_sided().0
     }
 
-    /// The better side of each axis, then the worse of those two. What
-    /// [`check_asymmetric_enclosure`] compares:
-    /// `min(max(left, right), max(bottom, top))`.
+    /// `min(max(left, right), max(bottom, top))` — what
+    /// [`check_asymmetric_enclosure`] compares.
     pub const fn worst_axis_best_side(self) -> Dbu {
         self.worst_axis_best_side_sided().0
     }
 
     /// [`Margins::worst`], and which side it was.
-    ///
-    /// The public reduction is this one's first field, so the value a rule
-    /// compares and the side it reports at cannot disagree.
     const fn worst_sided(self) -> (Dbu, Side) {
         lesser(
             lesser((self.left, Side::Left), (self.right, Side::Right)),
@@ -209,15 +171,11 @@ impl Margins {
     }
 }
 
-/// The midpoint of the strip between the two boxes on one side.
+/// The midpoint of the strip between the two boxes on one side — this family's
+/// report point.
 ///
-/// **Decision** — two boxes and a side in, one coordinate out, and the one
-/// place this family's report point is written down. Along the named axis it is
-/// the middle of the gap between the two edges, which is `rules`' midpoint
-/// convention. Across it, the range the two boxes share: for an enclosure that
-/// is the inner shape's own span, for an extension it is the overhanging stub's.
-/// Either way it is a point a viewer can jump to and see the defect, rather than
-/// a corner that may be fine.
+/// Along the named axis, the middle of the gap between the two edges; across
+/// it, the range the two boxes share.
 fn strip_midpoint(inner: Bbox, outer: Bbox, side: Side) -> Point {
     let cross_x = mid(inner.xlo.max(outer.xlo), inner.xhi.min(outer.xhi));
     let cross_y = mid(inner.ylo.max(outer.ylo), inner.yhi.min(outer.yhi));
@@ -243,31 +201,24 @@ fn strip_midpoint(inner: Bbox, outer: Bbox, side: Side) -> Point {
 
 /// A margin no real host can produce, and the seed of every host reduction.
 ///
-/// Below `-2 * MAX_ABS_DBU`, which is the most negative margin two in-domain
-/// boxes can have, so it loses to every real host without a special case. It is
-/// also what a *non-containing* host folds in as, which is what makes that
-/// rejection branchless.
+/// Below `-2 * MAX_ABS_DBU`, the most negative margin two in-domain boxes can
+/// have, so it loses to every real host without a special case. A
+/// *non-containing* host folds in as this too.
 const UNHOSTED: i64 = -(1 << 42);
 
 /// A squared distance that stands for "no tap in reach".
 ///
-/// `MAX_ABS_DBU` squared: the largest distance the coordinate domain can
-/// express, and a perfect square, so [`ceil_sqrt`] returns `MAX_ABS_DBU`
-/// exactly rather than one past the domain. Fail **closed** — this rule is
-/// violated *above* its limit, so a saturating distance over-reports rather
-/// than silently passing an untied well.
+/// `MAX_ABS_DBU` squared — a perfect square, so [`ceil_sqrt`] returns
+/// `MAX_ABS_DBU` exactly rather than one past the domain. Fail **closed**: the
+/// rule is violated *above* its limit, so a saturating distance over-reports
+/// rather than silently passing an untied well.
 const OUT_OF_REACH: i128 = 1 << 80;
 
 /// Squared distance from a point to the nearest point of a box.
 ///
-/// No assert: this is called from inside the nearest-tap fold, where a panic
-/// edge would pin the loop to one element per iteration and block
-/// vectorisation. Every operand is a `Dbu` and so already inside
-/// the domain the `i128` product is bounded by — the differences reach `2^41`
-/// and the sum of their squares `2^83`, which `i128` holds with room.
+/// No assert: every operand is a `Dbu`, so the differences reach `2^41` and the
+/// sum of their squares `2^83`, which `i128` holds with room.
 fn point_box_dist2(x: Dbu, y: Dbu, b: Bbox) -> i128 {
-    // Branchless: the larger of the two one-sided overhangs and zero is the
-    // whole clamp, with no branch on which side of the box the point falls.
     let dx = i128::from((b.xlo.raw() - x.raw()).max(x.raw() - b.xhi.raw()).max(0));
     let dy = i128::from((b.ylo.raw() - y.raw()).max(y.raw() - b.yhi.raw()).max(0));
     dx * dx + dy * dy
@@ -276,10 +227,9 @@ fn point_box_dist2(x: Dbu, y: Dbu, b: Bbox) -> i128 {
 /// The distance whose square is `d2`, rounded **up**.
 ///
 /// Up, not toward zero as [`isqrt`] alone would: an exceeded limit has to read
-/// as exceeded in the report a human acts on. For an integer limit the two
-/// agree exactly — `d2 > limit²` iff `ceil(sqrt(d2)) > limit` — so rounding
-/// this way is what lets the comparison happen on the number that is printed
-/// instead of on a square nobody sees.
+/// as exceeded in the report a human acts on. For an integer limit
+/// `d2 > limit²` iff `ceil(sqrt(d2)) > limit`, so the comparison can happen on
+/// the number that is printed.
 fn ceil_sqrt(d2: i128) -> Dbu {
     debug_assert!(
         (0..=OUT_OF_REACH).contains(&d2),
@@ -296,15 +246,9 @@ fn ceil_sqrt(d2: i128) -> Dbu {
 
 /// The half-open range of `pairs` whose first element is `a`.
 ///
-/// **Decision.** `pairs` is strictly ascending and `a` walks the same layer
-/// ascending, so the cursor only moves forward: the whole walk over a layer is
-/// one pass over the pair list rather than a binary search per shape.
-///
-/// The cursor survives across calls, so the two loops here are one merge cut
-/// into per-shape slices. Every step of either loop consumes a pair, so the two
-/// of them together cost one pass over `pairs` per layer however the calls are
-/// cut up: amortised O(1) here, O(pairs) over the walk. A binary search per
-/// shape would be the slower rewrite, not the faster one.
+/// `pairs` is strictly ascending and `a` walks the same layer ascending, so the
+/// cursor only ever moves forward and survives across calls: one pass over the
+/// pair list per layer, amortised O(1) here.
 fn run_of(pairs: &[(PolyId, PolyId)], cursor: &mut usize, a: PolyId) -> (usize, usize) {
     debug_assert!(*cursor <= pairs.len(), "the cursor is inside the pair list");
     while *cursor < pairs.len() && pairs[*cursor].0 < a {
@@ -320,32 +264,15 @@ fn run_of(pairs: &[(PolyId, PolyId)], cursor: &mut usize, a: PolyId) -> (usize, 
 
 /// Validate both operands, then prune their cross-layer pairs into `scratch`.
 ///
-/// **Transform, gatherer**, shared by all five rules in this file: they differ
-/// in what they measure, not in how they reach the pairs.
+/// Validation is the fail-closed gate: geometry this tool does not represent
+/// exactly is a refusal for the rule row, never a clean one.
 ///
-/// Validation is the fail-closed gate and its result is deliberately not read
-/// afterwards — geometry this tool does not represent exactly is a refusal for
-/// the rule row, never a clean one, and that is the whole of what the two
-/// `ValidatedLayer` buffers are for here.
-///
-/// # Known fail-open: the measurements are taken on bounding boxes
-///
-/// **This is a correctness gap, not a simplification, and it is filed in
-/// `docs/SIGNATURE_DEFECTS.md`.** A box margin is exact for the rectangles a
-/// real via, pad, tap or endcap is, and it *overstates* the enclosure a
-/// non-convex host gives — so an L-shaped pad that leaves a via's corner
-/// uncovered reads as a clean enclosure. Overstating a minimum is the fail-open
-/// direction, which is the defect class `docs/VOCABULARY.md` §3 names.
-///
-/// It is not fixed here because it cannot be. The exact confirmation is
-/// `ops::point_in_ring` against the host's rings, `point_in_ring` takes a
-/// `core::view::RingRef`, and the only route to one is
-/// `ValidatedLayer::get(store, idx)` on a *validated* index. Nothing maps the
-/// [`PolyId`] a pair carries — a store row — to that index, and `RingRef`'s
-/// fields are private with no constructor, so neither half can be reached from
-/// this crate. Closing it is `ValidatedLayer::provenance(&self) -> &[PolyId]`
-/// in `core`, which is a widened interface and therefore a bug report rather
-/// than a commit.
+/// **Known fail-open, filed in `docs/SIGNATURE_DEFECTS.md`:** the measurements
+/// are taken on bounding boxes. A box margin *overstates* the enclosure a
+/// non-convex host gives, so an L-shaped pad leaving a via's corner uncovered
+/// reads as clean. Closing it needs
+/// `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core` to map a pair's
+/// [`PolyId`] to a validated index; that is a widened interface.
 fn pair_layers(
     design: Design<'_>,
     a: LayerId,
@@ -381,21 +308,12 @@ fn pair_layers(
 
 /// Whether two axis-aligned segments cross at a point interior to both.
 ///
-/// **Decision** — pure, two segments in, one `bool` out.
-///
-/// *Proper* crossing, and the strictness is the whole content: a T-junction,
-/// two collinear overlapping segments and two segments sharing an endpoint are
+/// *Proper* crossing: a T-junction, collinear overlap and a shared endpoint are
 /// all boundary contact, which is what an inner shape touching its host's edge
-/// from the inside looks like. Only a genuine transversal crossing says one
-/// shape's boundary passes through the other's.
-///
-/// Rectilinear only, which is this crate's whole input domain: a crossing needs
-/// one horizontal segment and one vertical one, so two parallel segments return
-/// `false` and no arbitrary-angle arithmetic is reachable from here.
+/// from the inside looks like.
 fn segments_cross(a: (Point, Point), b: (Point, Point)) -> bool {
-    // Branchless: both orderings are tested and the pair that is not
-    // horizontal-and-vertical fails its own guard, so there is no jump and no
-    // question of which operand came in which role.
+    // Both orderings are tested; the one that is not horizontal-and-vertical
+    // fails its own guard.
     crosses_hv(a, b) | crosses_hv(b, a)
 }
 
@@ -410,48 +328,27 @@ fn crosses_hv(h: (Point, Point), v: (Point, Point)) -> bool {
 
 /// Whether the ring of `inner` lies entirely within the ring of `host`.
 ///
-/// **Decision** — two store rows in, one `bool` out, pure.
+/// Two conditions, and both are needed: one vertex of `inner` is inside or on
+/// `host`, and no edge of `inner` properly crosses an edge of `host`. A vertex
+/// test alone is not enough — a bar whose two ends sit in the two arms of a U
+/// has every vertex inside the host and spans the opening.
 ///
-/// Two conditions, and both are needed:
-///
-///  - one vertex of `inner` is inside or on `host`, and
-///  - no edge of `inner` properly crosses an edge of `host`.
-///
-/// Together they are exact for rings that do not cross: if the boundaries never
-/// pass through each other then `inner` is wholly inside `host` or wholly
-/// outside it, and the anchor vertex says which. A vertex test alone is not
-/// enough — a bar whose two ends sit in the two arms of a U has every vertex
-/// inside the host and spans the opening, which is the case
-/// `a_bar_bridging_a_hosts_opening_is_not_enclosed_though_its_corners_are` is
-/// written for.
-///
-/// # What it does not see
-///
-/// Holes. A store row is one ring, and a polygon-with-hole is several rows that
-/// `validate_layer_into` binds together — so a host hole lying strictly inside
-/// `inner` crosses nothing, puts no vertex outside, and reads as contained. That
-/// is an inner shape sitting over a void in its host, and it is still fail-open.
-/// Closing it needs the *validated* host rather than its outer ring, and the
-/// route from a store [`PolyId`] to a `PolygonRef` does not exist — the same gap
-/// `pair_layers` records. Narrower than the bounding box it replaces by every
-/// shape that is not a rectangle, and filed rather than papered over.
+/// **Does not see holes**, since a store row is one ring: a host hole lying
+/// strictly inside `inner` crosses nothing and reads as contained. Fail-open,
+/// and the same missing provenance route `pair_layers` records.
 fn ring_contains_ring(store: &gpurify_core::GeometryStore, host: PolyId, inner: PolyId) -> bool {
     let (xs, ys) = store.poly_verts(inner);
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
     debug_assert!(xs.len() >= 3, "a stored ring has at least three vertices");
 
-    // Boundary-inclusive, which is what makes an inner shape flush against its
-    // host's edge contained rather than unhosted.
+    // Boundary-inclusive: an inner shape flush against its host's edge is
+    // contained, not unhosted.
     let anchor = Point { x: xs[0], y: ys[0] };
     if !store.poly_contains_point(host, anchor) {
         return false;
     }
 
     let (hxs, hys) = store.poly_verts(host);
-    // Not a bulk loop: one candidate pair's two rings, single-digit vertex
-    // counts on real geometry. The early return is the escape valve — the
-    // taken side is the rest of a quadratic scan, and skipping it is exactly
-    // what a branch is for.
     for si in ring_segs(xs, ys) {
         for sh in ring_segs(hxs, hys) {
             if segments_cross((si.a, si.b), (sh.a, sh.b)) {
@@ -462,27 +359,16 @@ fn ring_contains_ring(store: &gpurify_core::GeometryStore, host: PolyId, inner: 
     true
 }
 
-/// Enclosure margins of `inner` within `outer`.
+/// Enclosure margins of `inner` within `outer`, on bounding boxes.
 ///
-/// **Decision.** Bounding boxes, which is exact when the host is a rectangle
-/// and optimistic otherwise — a non-convex host's box is larger than the host,
-/// so this can *overstate* the enclosure.
-///
-/// The transforms below no longer trust that on its own:
-/// [`ring_contains_ring`] confirms containment exactly before a candidate is
-/// allowed to host, so a shape stranded in a concave host's notch now measures
-/// zero rather than a comfortable pass. What is *not* yet exact is the margin of
-/// a genuinely contained shape in a concave host — the box's far side may be
-/// further away than the host's material is — and that remains optimistic. See
-/// `docs/SIGNATURE_DEFECTS.md`.
+/// Exact when the host is a rectangle, optimistic otherwise:
+/// [`ring_contains_ring`] confirms containment before a candidate may host, but
+/// the *margin* of a genuinely contained shape in a concave host can still
+/// overstate. See `docs/SIGNATURE_DEFECTS.md`.
 pub fn margins(inner: Bbox, outer: Bbox) -> Margins {
-    // No assert, and by decision rather than omission: this runs once per
-    // candidate host inside the best-host fold, where a panic edge would pin
-    // the loop to one element per iteration, and there is nothing left to check
-    // that the operands' own type does not already guarantee. `Sub` is the
-    // same reason — a margin legally reaches `+/-2^41`, one bit past the
-    // coordinate domain, and `Sub` documents that difference as legal where
-    // `Dbu::new_unchecked` would assert on it.
+    // `Sub` rather than a checked constructor: a margin legally reaches
+    // `+/-2^41`, one bit past the coordinate domain, which `Sub` documents as
+    // legal and `Dbu::new_unchecked` would assert on.
     Margins {
         left: inner.xlo - outer.xlo,
         right: outer.xhi - inner.xhi,
@@ -493,12 +379,8 @@ pub fn margins(inner: Bbox, outer: Bbox) -> Margins {
 
 /// One enclosure rule row, under whichever reduction the table's rule uses.
 ///
-/// **Transform**, and the whole of both enclosure rules: they differ in one
-/// function — [`Margins::worst`] against [`Margins::worst_axis_best_side`] —
-/// and in nothing else, so this is compression of two identical bodies rather
-/// than an abstraction invented for a third that might arrive. Generic and not
-/// a `fn` pointer: the reduction is called once per candidate host, inside the
-/// fold, and an indirect call there would block inlining on the hot path.
+/// Generic rather than a `fn` pointer: the reduction is called once per
+/// candidate host, inside the fold.
 fn check_enclosure_rows<R>(
     design: Design<'_>,
     rules: &[StrId],
@@ -516,8 +398,6 @@ fn check_enclosure_rows<R>(
     debug_assert_eq!(rules.len(), inners.len(), "one inner layer per rule row");
     debug_assert_eq!(rules.len(), limits.len(), "one limit per rule row");
 
-    // Tens of rows, read once each: cold, and not the bulk loop. Every value
-    // pulled out of a row here is a uniform over the shape loop below.
     for row in 0..rules.len() {
         let rule = rules[row];
         let inner_layer = inners[row];
@@ -536,38 +416,24 @@ fn check_enclosure_rows<R>(
         let mut cursor = 0usize;
 
         // One fold per inner shape over that shape's own run of the pair list,
-        // cut out by a cursor that carries from row N-1 into row N. Not a
-        // scatter: at most one violation per inner shape, asserted below.
+        // cut out by a cursor that carries from row N-1 into row N.
         for shape in shapes {
             let inner = PolyId(shape);
             let inner_box = design.store.poly_bbox(inner);
             let (lo, hi) = run_of(&scratch.pairs, &mut cursor, inner);
 
-            // Best host, not first host: after the outer layer is merged there
-            // is only one host and it is the union, so the rule is satisfied by
-            // whichever candidate gives the most. `Reverse` on the row breaks a
-            // tie toward the lowest, so the reported host does not depend on
+            // Best host, not first host. `Reverse` on the row breaks a tie
+            // toward the lowest, so the reported host does not depend on
             // polygon order.
-            //
-            // A single column, so there is no column agreement to assert. The
-            // trip count is the slice's own length, hoisted above the loop, so
-            // the indexed read carries no panic edge; the fold runs strictly
-            // left to right, as every reduction in this tree does.
             let candidates = &scratch.pairs[lo..hi];
             let mut acc = (UNHOSTED, Reverse(u32::MAX));
             for &(_, candidate) in candidates {
                 let host_box = design.store.poly_bbox(candidate);
                 // A candidate that does not contain the inner shape folds in as
-                // the sentinel and loses to every real host. Only containing
-                // hosts count — a margin measured against a host that clips the
-                // shape is not an enclosure.
-                //
-                // The box test is a *prune*, not the answer: box containment is
-                // necessary for real containment, so a candidate it rejects
-                // cannot host, and `&&` short-circuits the ring scan away for
-                // it. The surviving branch is the expensive-taken-side valve —
-                // the taken side is a ring-against-ring scan, and skipping it on
-                // a candidate whose box already misses is what a branch is for.
+                // the sentinel and loses to every real host: a margin measured
+                // against a host that clips the shape is not an enclosure.
+                // The box test is a *prune* — box containment is necessary for
+                // real containment, so `&&` short-circuits the ring scan away.
                 let keep = i64::from(
                     host_box.contains(inner_box)
                         && ring_contains_ring(design.store, candidate, inner),
@@ -579,16 +445,9 @@ fn check_enclosure_rows<R>(
 
             // An unhosted inner shape is zero enclosure, not skipped, and the
             // clamp's lower bound is the whole of that rule: a containing
-            // host's reduction is never negative, and the sentinel is far below
-            // zero. `clamp` rather than `max(0).min(..)`: both bounds are
-            // constants with `0 <= MAX_ABS_DBU`, so its ordering assert folds
-            // away and it lowers to the same `smax`/`smin` pair.
+            // host's reduction is never negative and the sentinel is far below.
             let measured = Measurement::Length(Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)));
 
-            // Surviving `if`: the taken side pushes eight columns and
-            // re-derives a coordinate, and on a design under signoff it is
-            // taken on a fraction of a percent of shapes. Skipping expensive
-            // work is what a branch is for.
             if measured.violates(limit, LimitSense::Minimum) {
                 let hosted = best >= 0;
                 let at = if hosted {
@@ -619,18 +478,9 @@ fn check_enclosure_rows<R>(
 
 /// Check every minimum-enclosure rule.
 ///
-/// **Transform.** For each inner shape, finds every containing outer shape,
-/// takes the best [`Margins::worst`] among them, and compares. One violation
-/// per offending inner shape, with the best achievable margin as the
-/// measurement — so the number in the report is what the layout actually has,
-/// not what the first candidate host happened to give.
-///
-/// Reported at the midpoint of the deficient margin: the middle of the strip
-/// between the inner shape's edge and the host's on the side [`Margins::worst`]
-/// named. That is the crate's convention (module doc), and it points at the
-/// side that failed rather than at a corner that may be fine.
-///
-/// `examined` counts inner shapes.
+/// One violation per offending inner shape, with the best achievable margin as
+/// the measurement, reported at the midpoint of the strip on the side
+/// [`Margins::worst`] named. `examined` counts inner shapes.
 pub fn check_min_enclosure(
     design: Design<'_>,
     table: &MinEnclosureTable,
@@ -660,10 +510,7 @@ pub fn check_min_enclosure(
 /// Check every asymmetric-enclosure rule.
 ///
 /// Same pairing as [`check_min_enclosure`], reduced with
-/// [`Margins::worst_axis_best_side`], and reported the same way: at the
-/// midpoint of the margin that reduction named — the better side of the worse
-/// axis, which is the one side a designer has to widen. `examined` counts inner
-/// shapes.
+/// [`Margins::worst_axis_best_side`]. `examined` counts inner shapes.
 pub fn check_asymmetric_enclosure(
     design: Design<'_>,
     table: &AsymmetricEnclosureTable,
@@ -693,11 +540,8 @@ pub fn check_asymmetric_enclosure(
 /// Check every minimum-extension rule.
 ///
 /// Only pairs that overlap are judged — a layer that does not meet the
-/// reference at all is not failing to extend past it, it is somewhere else. The
-/// measurement is the smallest protrusion across the sides where the layer does
-/// protrude.
-///
-/// `examined` counts overlapping shape pairs.
+/// reference is not failing to extend past it. `examined` counts overlapping
+/// shape pairs.
 pub fn check_min_extension(
     design: Design<'_>,
     table: &MinExtensionTable,
@@ -705,10 +549,7 @@ pub fn check_min_extension(
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    // Hoisted above the row loop and cleared per row by `compact_into` itself:
-    // one allocation for the whole call, whatever the row count, which is the
-    // "nothing allocates per iteration" rule applied to the only buffer this
-    // transform needs and `Scratch` does not carry.
+    // Hoisted above the row loop: one allocation for the whole call.
     let mut failing: Vec<(PolyId, PolyId)> = Vec::new();
 
     for row in 0..table.len() {
@@ -732,29 +573,11 @@ pub fn check_min_extension(
 
         // The prune at distance zero is `Bbox::overlaps` exactly, so the pair
         // list *is* the overlapping pairs and nothing further has to filter it.
-        // A layer that never meets the reference contributes no pair and is not
-        // failing to extend past it — it is somewhere else.
         let examined = scratch.pairs.len() as u64;
 
-        // Two passes over the pair list, and splitting them is what lets the
-        // bulk one be branchless. Unlike the two segmented rules in this file
-        // there is nothing per-shape to fold here — one pair measures one
-        // protrusion — so the whole measurement is a filter over bulk data.
-        //
-        // The body reads two `poly_bbox` rows, which are gathers and so
-        // addresses rather than branches; the selects inside
-        // `smallest_protrusion` and `Measurement::violates` are over four sides
-        // and two enum tags, both uniform across the run, and lower to `cmov`.
-        // `violates`' two `debug_assert`s are the only tolerated panic edge in
-        // this body: they ask `Measurement::is_finite`, which is `true` by
-        // construction for the `Length` variant both operands are, and they are
-        // compiled out of every profile where the store being unconditional is
-        // worth anything.
-        //
-        // A single column, so there is no column agreement to assert. The
-        // buffer is reserved for the whole input rather than for the survivors:
-        // that over-reservation is the memory-for-branches trade, and it is
-        // what lets the commit below be unconditional.
+        // Two passes: a branchless compact, then a report over the survivors.
+        // The buffer is reserved for the whole input rather than for the
+        // survivors, which is what lets the commit below be unconditional.
         let pairs = &scratch.pairs[..];
         let n = pairs.len();
         failing.clear();
@@ -769,8 +592,7 @@ pub fn check_min_extension(
         for (i, &(line, reference)) in pairs.iter().enumerate() {
             // Roles reversed against enclosure: the reference plays the inner
             // shape and the extending layer the outer one, so a positive margin
-            // is exactly a protrusion and the sign convention is reused rather
-            // than restated.
+            // is exactly a protrusion.
             let (protrusion, _) = smallest_protrusion(margins(
                 design.store.poly_bbox(reference),
                 design.store.poly_bbox(line),
@@ -783,10 +605,8 @@ pub fn check_min_extension(
             // a `Drop` to run on them.
             debug_assert!(w <= i);
             // Unchecked, and slicing to `[..n]` is not enough to earn it here:
-            // `w`'s step is data-dependent, so LLVM gets no affine recurrence
-            // for it and cannot prove `w <= i`. It emits a live `cmp/jae` to a
-            // panic edge instead, which pins the loop to one element per
-            // iteration. Measured 1.19x at 8k, 1.18x at 200k, 1.06x at 4M —
+            // `w`'s step is data-dependent, so LLVM cannot prove `w <= i` and
+            // emits a live panic edge instead. Measured 1.19x at 8k —
             // `docs/BULK_MEASUREMENTS.md` §4.
             //
             // SAFETY: `w <= i < n == slots.len()`, from the induction above.
@@ -804,11 +624,8 @@ pub fn check_min_extension(
             "a filter over the pair list keeps a subset of it"
         );
 
-        // Pass two, over the survivors only: eight columns and a re-derived
-        // coordinate per row, on a fraction of a percent of the pairs under
-        // signoff. `compact_into` preserves input order, so the violation order
-        // is the pair order it always was — which is what `export` reproduces
-        // byte for byte.
+        // Pass two, over the survivors only. The compact preserves input order,
+        // so the violation order is the pair order.
         for &(line, reference) in &failing {
             let line_box = design.store.poly_bbox(line);
             let ref_box = design.store.poly_bbox(reference);
@@ -839,13 +656,13 @@ pub fn check_min_extension(
 
 /// The smallest side the layer actually protrudes on, and which side that is.
 ///
-/// **Decision.** A margin of zero or less is not a side the layer sticks out
-/// on, so it does not bound the extension. A shape that protrudes nowhere
-/// extends by zero and violates every positive limit, which is the fail-closed
-/// answer for a poly endcap swallowed by its own diffusion.
+/// A margin of zero or less is not a side the layer sticks out on, so it does
+/// not bound the extension. A shape that protrudes nowhere extends by zero and
+/// violates every positive limit — the fail-closed answer for a poly endcap
+/// swallowed by its own diffusion.
 fn smallest_protrusion(m: Margins) -> (Dbu, Side) {
-    // Four sides is not bulk data. `min_by_key` keeps the first of a tie, so
-    // the reported side is a function of the geometry and of nothing else.
+    // `min_by_key` keeps the first of a tie, so the reported side is a function
+    // of the geometry and of nothing else.
     [
         (m.left, Side::Left),
         (m.right, Side::Right),
@@ -858,14 +675,11 @@ fn smallest_protrusion(m: Margins) -> (Dbu, Side) {
     .unwrap_or((Dbu::new_unchecked(0), Side::Left))
 }
 
-/// Check every overlap rule.
+/// Check every overlap rule: the smaller dimension of each intersection figure
+/// against the limit, reported inside that figure.
 ///
-/// The exact intersection of the two merged layers, then the smaller dimension
-/// of each resulting figure against the limit. One violation per insufficient
-/// intersection, reported inside it.
-///
-/// `examined` counts intersection figures. `Outcome::Refused` if either
-/// operand will not merge exactly.
+/// `examined` counts intersection figures. `Outcome::Refused` if either operand
+/// will not merge exactly.
 pub fn check_overlap(
     design: Design<'_>,
     table: &OverlapTable,
@@ -879,9 +693,6 @@ pub fn check_overlap(
         let limit = Measurement::Length(table.limit[row]);
         let before = out.len();
 
-        // `Outcome::Refused` if either operand will not merge exactly: that is
-        // what `pair_layers`' validation decides, and it is the only reading
-        // under which an empty violation table means "clean" here.
         if pair_layers(design, layer, table.b[row], Dbu::new_unchecked(0), scratch).is_err() {
             record_run(runs, out, before, rule, Outcome::Refused, 0);
             continue;
@@ -889,20 +700,12 @@ pub fn check_overlap(
 
         // One figure per overlapping pair, and every pair here overlaps.
         //
-        // **Known fail-open, filed in `docs/SIGNATURE_DEFECTS.md`.** The figure
-        // is the pair's box intersection, not the exact boolean one
-        // [`OverlapTable`]'s own doc promises. Exact for the rectangles a wire
-        // crossing a strap is; for a non-convex operand the box meet is larger
-        // than the real one, so a too-small overlap reads as a passing one.
-        // That is the same over-reporting the doc on `OverlapTable` says the old
-        // tree's `lvs` evaluator did on the path feeding device recognition.
-        //
-        // It is not fixed here because it cannot be. The exact route is
-        // `boolean::intersection_into` over the two merged layers; its output is
-        // a `ValidatedLayer` whose `ring_poly` provenance is private, so a figure
-        // could not name the two shapes `Violation::shapes` promises. Closing it
-        // is `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core` — a
-        // widened interface, and so a bug report rather than a commit.
+        // **Known fail-open, filed in `docs/SIGNATURE_DEFECTS.md`:** the figure
+        // is the pair's box intersection, not the exact boolean one. For a
+        // non-convex operand the box meet is larger, so a too-small overlap
+        // reads as passing. The exact route needs
+        // `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core` so a figure
+        // can still name the two shapes `Violation::shapes` promises.
         let examined = scratch.pairs.len() as u64;
         for &(a, b) in &scratch.pairs {
             let Some(figure) = design
@@ -910,8 +713,7 @@ pub fn check_overlap(
                 .poly_bbox(a)
                 .intersection(design.store.poly_bbox(b))
             else {
-                // Unreachable: the prune at distance zero is `Bbox::overlaps`,
-                // which is exactly the pairs whose meet is non-empty.
+                // Unreachable: the prune at distance zero is `Bbox::overlaps`.
                 debug_assert!(false, "a pruned pair has a non-empty box intersection");
                 continue;
             };
@@ -922,7 +724,6 @@ pub fn check_overlap(
             debug_assert!(smaller >= 0, "a non-empty figure has non-negative sides");
             let measured = Measurement::Length(Dbu::new_unchecked(smaller.min(MAX_ABS_DBU)));
 
-            // Surviving `if`: same escape valve as the rules above.
             if measured.violates(limit, LimitSense::Minimum) {
                 out.push(Violation {
                     rule,
@@ -947,13 +748,8 @@ pub fn check_overlap(
 /// Check every maximum-distance-to-tap rule.
 ///
 /// Measures from the *corners* of each well shape, since the farthest point of
-/// a rectilinear region from any finite point set is always a vertex. A well
-/// violates if any of its corners is farther than the limit from every tap.
-///
-/// Distance is to the nearest point of the tap shape, not to its centre. The
-/// old tree used the centre, which understates reach for a large tap strap and
-/// therefore *over*-reports — a rare direction for a bug in this tree, but
-/// still a wrong number in a report a human acts on.
+/// a rectilinear region from any finite point set is always a vertex. Distance
+/// is to the nearest point of the tap shape, not to its centre.
 ///
 /// `examined` counts well shapes. `Outcome::Skipped(SkipReason::EmptyLayer)`
 /// when the well layer is empty; a well layer with no taps at all is **not**
@@ -976,8 +772,7 @@ pub fn check_max_distance_to_tap(
         let examined = u64::from(wells.end - wells.start);
         if examined == 0 {
             // Nothing to judge, which is a different claim from judged-and-
-            // clean. A well layer with no *taps* is not this case: that is
-            // every well untied, and it is reported below on every one of them.
+            // clean. A layer with no *taps* is not this case.
             record_run(
                 runs,
                 out,
@@ -989,9 +784,8 @@ pub fn check_max_distance_to_tap(
             continue;
         }
 
-        // Pruned at the limit, so a well with no tap in reach comes back with
-        // an empty run and measures the out-of-reach sentinel. That
-        // over-reports the distance, and over-reporting is the fail-closed
+        // Pruned at the limit, so a well with no tap in reach measures the
+        // out-of-reach sentinel — over-reporting, which is the fail-closed
         // direction for a rule violated *above* its limit.
         if pair_layers(design, well_layer, table.tap[row], reach, scratch).is_err() {
             record_run(runs, out, before, rule, Outcome::Refused, 0);
@@ -999,41 +793,26 @@ pub fn check_max_distance_to_tap(
         }
 
         let mut cursor = 0usize;
-        // One nearest-tap fold per well over that well's own run of the pair
-        // list, cut out by a cursor that carries from row N-1 into row N. Not a
-        // scatter: at most one violation per well shape, asserted below.
         for well_row in wells {
             let well = PolyId(well_row);
             let (lo, hi) = run_of(&scratch.pairs, &mut cursor, well);
             let (xs, ys) = design.store.poly_verts(well);
             debug_assert_eq!(xs.len(), ys.len(), "a polygon's columns are parallel");
 
-            // Hoisted above the vertex loop: the run of taps in reach is the
-            // same for every corner of this well. A single column, so there is
-            // no column agreement to assert.
+            // The run of taps in reach is the same for every corner of this
+            // well.
             let taps = &scratch.pairs[lo..hi];
 
-            // From the *corners*: the farthest point of a rectilinear region
-            // from any finite point set is always a vertex, so a handful of
-            // vertices decide the answer and the interior never has to be
-            // sampled. Not bulk — the row count is in the tap fold inside.
             let mut worst = (i128::MIN, 0usize);
             for (vertex, (&x, &y)) in xs.iter().zip(ys).enumerate() {
                 // To the nearest point of the tap, not to its centre: a centre
-                // measurement understates the reach of a wide tap strap and
-                // therefore over-reports, which is a wrong number in a report a
-                // human acts on even though it errs the safe way.
-                //
-                // Strictly left to right, and the trip count is the slice's own
-                // length, so the indexed read carries no panic edge.
+                // measurement understates the reach of a wide tap strap.
                 let mut nearest = OUT_OF_REACH;
                 for &(_, tap) in taps {
                     nearest = nearest.min(point_box_dist2(x, y, design.store.poly_bbox(tap)));
                 }
-                // Surviving `if`: four to twenty iterations over one polygon's
-                // vertices, not a bulk loop, and the arms are a tuple rather
-                // than a blendable value. Strict, so a tie keeps the first
-                // vertex and the reported corner does not depend on the fold.
+                // Strict, so a tie keeps the first vertex and the reported
+                // corner does not depend on the fold.
                 if nearest > worst.0 {
                     worst = (nearest, vertex);
                 }
@@ -1041,7 +820,6 @@ pub fn check_max_distance_to_tap(
             debug_assert!(worst.1 < xs.len(), "the farthest corner is one of them");
 
             let measured = Measurement::Length(ceil_sqrt(worst.0));
-            // Surviving `if`: same escape valve as the rules above.
             if measured.violates(limit, LimitSense::Maximum) {
                 out.push(Violation {
                     rule,
