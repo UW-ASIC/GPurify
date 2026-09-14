@@ -1,46 +1,9 @@
 //! Layouts containing exactly one deliberate violation, at a known coordinate,
 //! with a known measurement.
 //!
-//! The oracle is construct-from-answer. Nothing here runs a rule; the geometry
-//! is placed so that only one answer is arithmetically available, and the
-//! [`Violation`] that comes back is that answer written down.
-//!
-//! # This module fixes the reported coordinate
-//!
-//! A rule could report a spacing violation at either shape's edge, at the gap's
-//! midpoint, or at a corner, and every one of those is defensible. The suite
-//! cannot assert on a coordinate until one of them is chosen, so it is chosen
-//! here: **`at` is the midpoint of the thing being measured** — the middle of a
-//! gap, the centre of an area, the midpoint of an edge, the middle of an
-//! overlap. Each variant below says which. The Implementation-Phase satisfies
-//! that; a rule reporting a different point is failing a test, not revealing a
-//! bad test.
-//!
-//! # Which of the twenty-six rules each shape serves
-//!
-//! Eighteen shapes rather than twenty-six because several rules measure the
-//! same configuration and differ only in which limit they apply to it.
-//!
-//! | Shape | Rules |
-//! |---|---|
-//! | [`ShapeKind::Width`] | `min_width`, `max_width`, `cheesing` |
-//! | [`ShapeKind::EdgeLength`] | `min_edge_length` |
-//! | [`ShapeKind::Spacing`] | `min_spacing`, `min_spacing_diff`, `prl_spacing`, `wide_dependent_spacing`, `via_array_spacing` |
-//! | [`ShapeKind::Notch`] | `notch` |
-//! | [`ShapeKind::EndOfLine`] | `eol_spacing` |
-//! | [`ShapeKind::CornerToCorner`] | `corner_to_corner` |
-//! | [`ShapeKind::Area`] | `min_area` |
-//! | [`ShapeKind::EnclosedArea`] | `min_enclosed_area` |
-//! | [`ShapeKind::Enclosure`] | `min_enclosure`, `asymmetric_enclosure` |
-//! | [`ShapeKind::Extension`] | `min_extension` |
-//! | [`ShapeKind::Overlap`] | `overlap` |
-//! | [`ShapeKind::Separation`] | `max_distance_to_tap` |
-//! | [`ShapeKind::OffGrid`] | `off_grid` |
-//! | [`ShapeKind::Angle`] | `angle` |
-//! | [`ShapeKind::Density`] | `density` |
-//! | [`ShapeKind::Antenna`] | `antenna`, `antenna_electrical` |
-//! | [`ShapeKind::ViaArray`] | `redundant_via` |
-//! | [`ShapeKind::OddCycle`] | `multi_patterning` |
+//! This module fixes the reported coordinate convention: `at` is the midpoint
+//! of the thing being measured — the middle of a gap, the centre of an area,
+//! the midpoint of an edge. Each variant of [`ShapeKind`] says which.
 
 use gpurify_core::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
@@ -53,24 +16,19 @@ use crate::shapes::{
 
 /// A measured quantity in the plain integers this crate computes in.
 ///
-/// [`Measurement`] wraps `Dbu` and `DbuArea`, whose accessors are frozen
-/// signatures with `todo!()` bodies until the Implementation-Phase — so a
-/// generator handed a `Measurement` could not read the number back out of it.
-/// This is the same set of cases in types the generator can do arithmetic on,
-/// and [`Amount::measurement`] is the one-way conversion.
+/// The same cases as [`Measurement`] in types the generator can do arithmetic
+/// on; [`Amount::measurement`] is the one-way conversion.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Amount {
     /// A distance in database units.
     Length(i64),
     /// An area in database units squared.
     Area(i128),
-    /// Dimensionless: an antenna ratio, a density fraction, an angle in
-    /// degrees.
+    /// Dimensionless: an antenna ratio, a density fraction, an angle in degrees.
     Ratio(f64),
     /// A count of things.
     Count(u32),
-    /// Millivolts, microamps, ohms — the fixed prefixes `report::measure`
-    /// chose so a report column has one scale.
+    /// The fixed prefixes `report::measure` chose so a column has one scale.
     Millivolts(f64),
     Microamps(f64),
     Ohms(f64),
@@ -93,11 +51,8 @@ impl Amount {
         }
     }
 
-    /// # Panics
-    ///
-    /// When the amount is not a length. A generator asked to realise a spacing
-    /// of "3.5 ohms" has been handed a test that does not mean anything, and
-    /// saying so loudly beats building geometry that ignores half the request.
+    /// Panics when the amount is not a length: a request in the wrong
+    /// dimension is refused rather than partly honoured.
     fn length(self, what: &str) -> i64 {
         match self {
             Self::Length(v) => v,
@@ -105,9 +60,6 @@ impl Amount {
         }
     }
 
-    /// # Panics
-    ///
-    /// When the amount is not an area.
     fn area(self, what: &str) -> i128 {
         match self {
             Self::Area(v) => v,
@@ -115,9 +67,6 @@ impl Amount {
         }
     }
 
-    /// # Panics
-    ///
-    /// When the amount is not a ratio.
     fn ratio(self, what: &str) -> f64 {
         match self {
             Self::Ratio(v) => v,
@@ -125,9 +74,6 @@ impl Amount {
         }
     }
 
-    /// # Panics
-    ///
-    /// When the amount is not a count.
     fn count(self, what: &str) -> u32 {
         match self {
             Self::Count(v) => v,
@@ -147,20 +93,15 @@ pub struct ViolationShape {
 
 /// The geometric configuration to realise.
 ///
-/// Every field is a *secondary* dimension — one the measurement does not pin
-/// down. The measured quantity itself comes from `measured`, so a caller states
-/// the number the rule must report and this decides everything else.
+/// Every field is a secondary dimension the measurement does not pin down; the
+/// measured quantity itself comes from `measured`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeKind {
     /// A rectangle `measured` wide and `run` long. `at` is its centre.
-    ///
-    /// Two shapes' worth of rules use this: a width limit measured across the
-    /// narrow span, and `cheesing`, where a large `run` makes an unslotted
-    /// plate.
     Width { layer: LayerId, run: i64 },
 
-    /// A rectangle whose bottom edge is exactly `measured` long, standing
-    /// `body` tall. `at` is the midpoint of that edge.
+    /// A rectangle with a `measured`-long bottom edge, `body` tall. `at` is
+    /// the midpoint of that edge.
     EdgeLength { layer: LayerId, body: i64 },
 
     /// Two `extent`-sided squares on one layer, facing across a gap of
@@ -168,19 +109,15 @@ pub enum ShapeKind {
     Spacing { layer: LayerId, extent: i64 },
 
     /// A U whose internal gap is `measured`. `at` is the centre of the notch
-    /// void, which is inside the polygon's bounding box and outside the
-    /// polygon — the coordinate a viewer needs and a bounding-box
-    /// implementation cannot produce.
+    /// void, which is inside the bounding box and outside the polygon.
     Notch {
         layer: LayerId,
         arm: i64,
         thickness: i64,
     },
 
-    /// A line `width` wide whose end faces a wide neighbour across
-    /// `measured`. `at` is the midpoint of the gap. Distinct from
-    /// [`ShapeKind::Spacing`] because the rule's limit applies only to the
-    /// narrow end, which is a property of the shape and not of the gap.
+    /// A line `width` wide whose end faces a wide neighbour across `measured`.
+    /// `at` is the midpoint of the gap.
     EndOfLine {
         layer: LayerId,
         width: i64,
@@ -190,9 +127,8 @@ pub enum ShapeKind {
     /// Two `size`-sided squares whose nearest corners are `legs` apart on the
     /// two axes. `at` is the midpoint of the corner-to-corner segment.
     ///
-    /// `legs` must be a Pythagorean pair for `measured`: an exact diagonal
-    /// distance between integer coordinates exists only then, and a test
-    /// asserting on a rounded one is asserting on the rounding.
+    /// `legs` must be a Pythagorean pair for `measured`: only then is the
+    /// diagonal distance exact between integer coordinates.
     CornerToCorner {
         layer: LayerId,
         size: i64,
@@ -236,8 +172,7 @@ pub enum ShapeKind {
     },
 
     /// A shape on `a` and a shape on `b`, `measured` apart. `at` is the
-    /// midpoint of the gap. The cross-layer twin of [`ShapeKind::Spacing`],
-    /// for the rule that asks how far a device is from its nearest tap.
+    /// midpoint of the gap — the cross-layer twin of [`ShapeKind::Spacing`].
     Separation {
         a: LayerId,
         b: LayerId,
@@ -245,17 +180,15 @@ pub enum ShapeKind {
     },
 
     /// A `size` square whose lower-left corner sits `measured` off a `grid`
-    /// multiple. `at` is that corner — the offending vertex, not the shape's
-    /// centre, because there is nothing else to point at.
+    /// multiple. `at` is that corner: the offending vertex, not the centre.
     OffGrid {
         layer: LayerId,
         size: i64,
         grid: i64,
     },
 
-    /// A right triangle whose hypotenuse rises `run.1` over `run.0`, making an
-    /// angle of `measured` degrees. `at` is the vertex the offending edge
-    /// leaves from.
+    /// A right triangle whose hypotenuse rises `run.1` over `run.0` at
+    /// `measured` degrees. `at` is the vertex that edge leaves from.
     Angle { layer: LayerId, run: (i64, i64) },
 
     /// A `window`-sided window holding `filled` squares of side `cell`, so the
@@ -276,17 +209,15 @@ pub enum ShapeKind {
     },
 
     /// `measured` cut squares of side `size` in a row at `pitch`. `at` is the
-    /// centre of the first cut. One cut is the `redundant_via` violation; two
-    /// at a short pitch is the array-spacing one.
+    /// centre of the first cut.
     ViaArray {
         cut: LayerId,
         size: i64,
         pitch: i64,
     },
 
-    /// Three `size` squares, pairwise within `gap` on both axes — an odd cycle
-    /// in the conflict graph, so no two-colouring exists. `at` is the centre of
-    /// the first square. `measured` is the cycle length, three.
+    /// Three `size` squares pairwise within `gap` — an odd conflict cycle, so
+    /// no two-colouring exists. `at` is the first square's centre.
     OddCycle {
         layer: LayerId,
         size: i64,
@@ -298,26 +229,19 @@ pub enum ShapeKind {
 #[derive(Debug)]
 pub struct ViolationCase {
     pub store: GeometryStore,
-    /// Resolves the handles below, for a test that wants to name a shape the
-    /// expected violation does not.
+    /// Resolves handles to the ids the store gave them.
     pub ids: Ids,
     /// The one violation the rule must report.
     pub expected: Violation,
-    /// Every shape in the layout. A `RuleRun::examined` assertion is written
-    /// against this: a rule that reports the violation but examined fewer
-    /// shapes than exist has pruned something it should not have.
+    /// Every shape in the layout, the floor a `RuleRun::examined` assertion is
+    /// written against.
     pub shapes: u32,
 }
 
 /// Build a layout whose only violation is the stated one.
 ///
-/// # Panics
-///
-/// When the measurement cannot be realised exactly on an integer grid — an odd
-/// gap, an area that does not divide by the requested width, a corner distance
-/// that is not the hypotenuse of the stated legs. Every one of those is a test
-/// asking for a coordinate that does not exist, and rounding it would make the
-/// expected answer a fiction.
+/// A measurement that cannot be realised exactly on an integer grid is refused,
+/// not rounded: a rounded expectation is a fiction.
 #[must_use]
 pub fn layout_with_violation(
     kind: ViolationShape,
@@ -387,14 +311,8 @@ fn layer_count(kind: ShapeKind) -> usize {
     primary.max(secondary) + 1
 }
 
-/// Half of an even span.
-///
-/// # Panics
-///
-/// When the span is not positive and even. Everything this module centres on a
-/// coordinate needs an exact midpoint, and there is no integer midpoint of an
-/// odd span — so the alternative is an expected coordinate off by half a unit,
-/// which is exactly the class of silent error the suite exists to catch.
+/// Half of an even span. An odd span has no integer midpoint, so it is refused
+/// rather than reported half a unit off.
 fn half(span: i64, what: &str) -> i64 {
     assert!(
         span > 0 && span % 2 == 0,
@@ -405,10 +323,8 @@ fn half(span: i64, what: &str) -> i64 {
 
 #[allow(
     clippy::too_many_lines,
-    reason = "one arm per rule-shape family; splitting the match would spread \
-              eighteen four-line constructions over eighteen functions and make \
-              the coordinate conventions harder to read side by side, which is \
-              the one thing a reader of this file comes for"
+    reason = "one arm per rule-shape family; the coordinate conventions are \
+              only readable side by side"
 )]
 fn build(
     layout: &mut LayoutBuilder,
@@ -448,8 +364,8 @@ fn build(
         } => {
             let gap = measured.length("a notch");
             let g = half(gap, "the notch");
-            // The void spans y from y0 + thickness to y0 + arm, so its centre is
-            // y0 + (thickness + arm) / 2 and centring it on `ay` fixes y0.
+            // The void spans y0 + thickness to y0 + arm, so centring its
+            // midpoint on `ay` fixes y0.
             let y0 = ay - half(thickness + arm, "the notch void span");
             let x0 = ax - g - thickness;
             (
@@ -533,8 +449,8 @@ fn build(
             let enc = measured.length("an enclosure");
             let e = half(enc, "the enclosure");
             assert!(inner_size > 0, "the inner square side must be positive");
-            // The deficient margin is on the left, centred on `at`; every other
-            // side clears by a full inner width so only one margin is short.
+            // Only the left margin is deficient; every other side clears by a
+            // full inner width.
             let left = ax + e;
             let bottom = ay - inner_size / 2;
             let top = bottom + inner_size;
@@ -631,8 +547,7 @@ fn build(
                 "{filled} cells of side {cell} in a {window} window is {} of it, not {fraction}",
                 covered / window_area
             );
-            // Row-major inside the window, one clear unit between cells so they
-            // stay distinct polygons.
+            // One clear unit between cells so they stay distinct polygons.
             let per_row = window / (cell + 1);
             assert!(per_row > 0, "a {cell} cell does not fit a {window} window");
             let corner = half(window, "the window");
@@ -702,10 +617,8 @@ fn build(
             assert!(size > 0 && gap > 0, "size and gap are positive");
             let s = half(size, "the square side");
             let step = size + gap;
-            // Three squares at the corners of an L. The two axis-aligned pairs
-            // are `gap` apart by construction, and the diagonal pair is `gap`
-            // apart on both axes — so all three conflict and no two-colouring
-            // exists.
+            // Three squares at the corners of an L: all three pairs are within
+            // `gap`, so no two-colouring exists.
             let a = layout.rect(layer, ax - s, ay - s, ax + s, ay + s);
             let b = layout.rect(layer, ax - s + step, ay - s, ax + s + step, ay + s);
             layout.rect(layer, ax - s, ay - s + step, ax + s, ay + s + step);
@@ -717,8 +630,7 @@ fn build(
 /// The area of a square of the given side, as an `f64`.
 #[allow(
     clippy::cast_precision_loss,
-    reason = "a layout dimension is far below 2^53, so the square is exact to \
-              well past the tolerances used against it"
+    reason = "a layout dimension is far below 2^53, so the square is exact"
 )]
 fn cell_area(side: i64) -> f64 {
     (side as f64) * (side as f64)
@@ -728,10 +640,7 @@ fn cell_area(side: i64) -> f64 {
 mod tests {
     use super::{half, Amount};
 
-    /// Oracle: closed form. The midpoint of an even span is exact, and an odd
-    /// span has none — the generator must refuse the second rather than round
-    /// it, because a rounded expected coordinate is a test that cannot fail
-    /// for the right reason.
+    /// An odd span has no integer midpoint and is refused.
     #[test]
     fn half_refuses_a_span_with_no_integer_midpoint() {
         assert_eq!(half(40, "a gap"), 20);
@@ -739,10 +648,7 @@ mod tests {
         assert!(std::panic::catch_unwind(|| half(0, "a gap")).is_err());
     }
 
-    /// Oracle: construct-from-answer. An `Amount` must survive the trip into a
-    /// `Measurement` unchanged for the geometric cases, which are the ones
-    /// every DRC assertion compares on. The electrical cases cannot be checked
-    /// here: `Qty`'s comparison is a frozen signature with a `todo!()` body.
+    /// A geometric `Amount` survives the trip into a `Measurement` unchanged.
     #[test]
     fn geometric_amounts_convert_to_the_measurement_they_name() {
         use gpurify_report::Measurement;
@@ -756,9 +662,7 @@ mod tests {
         ));
     }
 
-    /// Oracle: construct-from-answer. Asking for a spacing in ohms is a broken
-    /// test, and the generator says so instead of building something that
-    /// ignores half the request.
+    /// An amount of the wrong dimension is refused, not partly honoured.
     #[test]
     fn an_amount_of_the_wrong_dimension_is_refused() {
         assert!(std::panic::catch_unwind(|| Amount::Ohms(3.5).length("a spacing")).is_err());

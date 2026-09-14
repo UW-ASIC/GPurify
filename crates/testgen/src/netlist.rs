@@ -1,37 +1,10 @@
 //! Layouts emitted from a netlist, so extraction has to give the netlist back.
 //!
-//! This is the oracle for `topology`, and it is the strongest one available
-//! there: there is no closed form for "which shapes are the same conductor",
-//! but there is a layout that was *built* from a known answer, and net
-//! extraction run over it must reproduce that answer exactly.
-//!
-//! # The layout it emits
-//!
-//! A rail-and-stub floorplan, chosen because every adjacency in it is decided
-//! by construction rather than by luck:
-//!
-//! - Net `n` is a horizontal rail on the rail layer, in its own y band. Bands
-//!   are pitched far enough apart that no two rails touch, so two nets can
-//!   never merge.
-//! - A device is a column. Its terminal `k` is a stub on that terminal's own
-//!   layer, sitting in the device's column and inside the y band of the net it
-//!   belongs to, overlapping the rail there.
-//! - A via cut sits where each stub meets its rail, on the cut layer for that
-//!   terminal layer. That is the only thing joining the two, so a via-edge bug
-//!   splits a net rather than producing a subtly wrong shape.
-//! - The device's marker polygon spans the whole column, overlapping every one
-//!   of its own stubs and none of any other device's, because columns do not
-//!   share x.
-//!
-//! # One layer per terminal role
-//!
-//! `DeviceRecognition` names terminals as a list of layers, so terminal `k` of
-//! a recogniser is whatever lies on `terminal[start + k]`. A gate and a source
-//! therefore have to be on different layers, and this builder gives every
-//! distinct [`TerminalRole`] in the spec its own conductor layer and its own
-//! cut layer. That is what a real PDK does; it is stated here because it is
-//! also the reason the layer table this builder produces is wider than a reader
-//! might expect.
+//! A rail-and-stub floorplan: net `n` is a rail in its own y band, a device is
+//! a column of stubs, and each stub reaches its rail only through a via cut.
+//! Bands never touch and columns never share x, so every adjacency is decided
+//! by construction. Every distinct [`TerminalRole`] gets its own conductor and
+//! cut layer, because `DeviceRecognition` identifies terminal `k` by layer.
 
 use gpurify_core::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
@@ -46,25 +19,19 @@ pub struct DeviceSpec {
     pub kind: DeviceKind,
     /// Model name, interned into the caller's table.
     pub model: String,
-    /// Terminals, in the order the recogniser will report them. The `u32` is a
-    /// net index into [`NetlistSpec::nets`].
+    /// Terminals in recogniser order; the `u32` indexes [`NetlistSpec::nets`].
     pub terminals: Vec<(TerminalRole, u32)>,
 }
 
 /// The structure the layout must extract back to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetlistSpec {
-    /// How many nets exist. Every one gets a rail, including nets nothing
-    /// attaches to — a floating net is a real extraction result and dropping it
-    /// is the bug `erc`'s floating-net rule is looking for.
+    /// How many nets exist. Every one gets a rail, floating nets included.
     pub nets: u32,
     pub devices: Vec<DeviceSpec>,
 }
 
-/// Which layer is which in an emitted layout.
-///
-/// Layer ids are dense and assigned here, so a test reads them from this rather
-/// than counting.
+/// Which layer is which in an emitted layout. Layer ids are dense.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetlistLayers {
     /// The layer every net's rail is on.
@@ -76,16 +43,12 @@ pub struct NetlistLayers {
     pub roles: Vec<TerminalRole>,
     pub role_layer: Vec<LayerId>,
     pub cut_layer: Vec<LayerId>,
-    /// Total layers in the table, for anything that needs the count.
+    /// Total layers in the table.
     pub count: usize,
 }
 
 impl NetlistLayers {
     /// The conductor layer carrying a role's stubs.
-    ///
-    /// # Panics
-    ///
-    /// When the role was not in the spec.
     #[must_use]
     pub fn layer_of(&self, role: TerminalRole) -> LayerId {
         let index = self
@@ -102,12 +65,9 @@ impl NetlistLayers {
 pub struct ExpectedDevice {
     pub kind: DeviceKind,
     pub model: StrId,
-    /// The marker polygon. `topology::device` assigns one device per marker
-    /// polygon and orders devices by it, so this is also what fixes the
-    /// expected `DeviceId` ordering.
+    /// The marker polygon, which also fixes the expected `DeviceId` ordering.
     pub marker: PolyId,
-    /// Terminals in spec order: the role, and the index into
-    /// [`NetlistCase::expected_net_polys`] of the net it lands on.
+    /// Terminals in spec order, indexing [`NetlistCase::expected_net_polys`].
     pub terminals: Vec<(TerminalRole, u32)>,
 }
 
@@ -121,20 +81,14 @@ pub struct NetlistCase {
     pub connectivity: Connectivity,
     /// What `topology::device::recognise_into` needs.
     pub recognition: DeviceRecognition,
-    /// The answer for nets: `expected_net_polys[n]` is every polygon on net
-    /// `n`, ascending by [`PolyId`], which is the order `NetTable::polys_of`
-    /// states its result in.
+    /// `expected_net_polys[n]` is every polygon on net `n`, ascending by
+    /// [`PolyId`] — the order `NetTable::polys_of` states its result in.
     pub expected_net_polys: Vec<Vec<PolyId>>,
     /// The answer for devices, in spec order.
     pub expected_devices: Vec<ExpectedDevice>,
 }
 
 /// How far apart the floorplan's features sit.
-///
-/// Public because a test that wants a dense layout and a test that wants a
-/// sparse one are asking different questions of the spatial index, and neither
-/// should have to rebuild this module to get it. The defaults are the ones the
-/// invariants above were reasoned about with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Floorplan {
     /// Height of a net's rail.
@@ -164,11 +118,6 @@ impl Default for Floorplan {
 }
 
 /// Emit a layout realising `spec`.
-///
-/// # Panics
-///
-/// When the spec names a net index that does not exist, when the floorplan's
-/// pitches do not clear its features, or when a device has no terminals.
 #[must_use]
 pub fn layout_from_netlist(
     spec: &NetlistSpec,
@@ -219,8 +168,8 @@ pub fn layout_from_netlist(
         let x = plan.column_pitch * column + plan.column_pitch / 2;
         emit_column(&mut layout, spec, &layers, plan, x, device, &mut net_handles);
 
-        // The marker spans the column across every band, so it overlaps this
-        // device's stubs and, because columns do not share x, no other's.
+        // Spans the column across every band, so it overlaps this device's
+        // stubs and, because columns do not share x, no other's.
         let top = i64::from(spec.nets) * plan.band_pitch;
         markers.push(layout.rect(layers.marker, x, 0, x + plan.column_width, top));
     }
@@ -253,12 +202,9 @@ pub fn layout_from_netlist(
             .iter()
             .map(|&role| (layers.rail, role))
             .collect(),
-        // Off, deliberately. Every join in this layout is via-mediated, so a
-        // broken via edge splits a net instead of being masked by shapes that
-        // happen to touch.
+        // Off deliberately: every join here is via-mediated, so a broken via
+        // edge splits a net rather than being masked by touching shapes.
         intra_layer_touch: false,
-        // No text: this generator draws geometry, and a label pairing with no
-        // `TEXT` to pair binds nothing.
         ..Connectivity::default()
     };
 
@@ -277,10 +223,6 @@ pub fn layout_from_netlist(
 
 /// Emit one device's column: a stub per terminal, and the cut joining each stub
 /// to the rail it lands on.
-///
-/// # Panics
-///
-/// When a terminal names a net the spec does not have.
 fn emit_column(
     layout: &mut LayoutBuilder,
     spec: &NetlistSpec,
@@ -302,8 +244,8 @@ fn emit_column(
             .position(|&r| r == role)
             .expect("every role in the spec was assigned a layer");
         let y = i64::from(net) * plan.band_pitch;
-        // The stub sits inside the rail's band and overlaps the rail, so the
-        // cut between them has material on both sides.
+        // Inside the rail's band and overlapping it, so the cut between them
+        // has material on both sides.
         let stub = layout.rect(
             layers.role_layer[slot],
             x,
@@ -336,8 +278,7 @@ fn assign_layers(spec: &NetlistSpec) -> NetlistLayers {
         }
     }
 
-    // Rail 0, marker 1, then the roles' conductors and cuts interleaved so a
-    // reader can see which cut belongs to which conductor.
+    // Rail 0, marker 1, then each role's conductor and cut interleaved.
     let mut next = 2u16;
     let mut role_layer = Vec::with_capacity(roles.len());
     let mut cut_layer = Vec::with_capacity(roles.len());
@@ -357,8 +298,7 @@ fn assign_layers(spec: &NetlistSpec) -> NetlistLayers {
     }
 }
 
-/// The recogniser table for the emitted layout: one row per device, because
-/// every device gets its own marker polygon and its own terminal layer set.
+/// The recogniser table for the emitted layout: one row per device.
 fn recognition_of(
     spec: &NetlistSpec,
     layers: &NetlistLayers,
@@ -419,11 +359,8 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. Every distinct role gets its own
-    /// conductor and its own cut, and no two layers collide. If they did, two
-    /// terminals would land on one layer and the recogniser could not tell a
-    /// gate from a source — which would make an LVS test pass while the
-    /// extraction was scrambled.
+    /// Every role gets a distinct conductor and cut layer, so the recogniser
+    /// can tell a gate from a source.
     #[test]
     fn every_role_gets_a_distinct_conductor_and_cut_layer() {
         let layers = assign_layers(&two_transistors());
@@ -439,10 +376,7 @@ mod tests {
         assert_eq!(layers.count, all.len());
     }
 
-    /// Oracle: law. Layer ids index a dense table, so the assigned ids must
-    /// cover `0..count` with no gaps — a gap means a store built for `count`
-    /// layers has a range nothing writes into, and `polys_on_layer` starts
-    /// answering about the wrong layer.
+    /// Assigned ids cover `0..count` with no gaps.
     #[test]
     fn assigned_layer_ids_are_dense() {
         let layers = assign_layers(&two_transistors());

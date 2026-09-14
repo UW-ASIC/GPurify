@@ -1,20 +1,8 @@
 //! Graphs whose connected components are known before anything runs.
 //!
-//! The oracle is construct-from-answer. Nodes are dealt into components of
-//! stated sizes, every edge is drawn *within* a component and none across, and
-//! each component is given a spanning tree first — so the partition is a fact
-//! about how the graph was built, not a claim about what a union-find returned.
-//!
-//! Two details make this a real test rather than a warm-up:
-//!
-//! - **The component of a node is not a function of its index.** Nodes are
-//!   dealt by a shuffled assignment, so component `k` is scattered through the
-//!   index space. An implementation that labels by block, or that happens to
-//!   work only when components are contiguous, fails here.
-//! - **The edge list is shuffled.** `core::connectivity` promises a canonical
-//!   label — the minimum node index in the component — regardless of edge
-//!   order, and shuffling is what turns that promise into something a test can
-//!   fail.
+//! Node-to-component assignment and the edge list are both shuffled, so a
+//! component is never a contiguous block of indices and no test depends on
+//! edge order.
 
 use crate::Rng;
 use gpurify_core::connectivity::ComponentLabel;
@@ -22,33 +10,20 @@ use gpurify_core::connectivity::ComponentLabel;
 /// A graph and its partition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphCase {
-    /// Nodes, numbered `0..node_count`. Every one appears in some component,
-    /// including the singletons — an isolated node is a component of one and
-    /// is exactly the case a label-propagation bug drops.
+    /// Nodes, numbered `0..node_count`. A singleton is a component of one.
     pub node_count: u32,
-    /// Undirected edges, in shuffled order and with both endpoint orders
-    /// occurring.
+    /// Undirected edges, shuffled, with both endpoint orders occurring.
     pub edges: Vec<(u32, u32)>,
-    /// The answer: `expected[n]` is the minimum node index in `n`'s component,
-    /// which is the label `core::connectivity` is specified to produce.
+    /// `expected[n]` is the minimum node index in `n`'s component.
     pub expected: Vec<ComponentLabel>,
-    /// The members of each component, ascending, in the order the sizes were
-    /// requested. Useful where a test wants the partition as sets rather than
-    /// as labels.
+    /// The members of each component, ascending, in the requested size order.
     pub components: Vec<Vec<u32>>,
 }
 
 /// Build a graph with the stated component sizes.
 ///
 /// `extra_edges` are added *within* components on top of the spanning tree, so
-/// they create cycles and redundant unions without changing the answer. Zero is
-/// a legal value and gives a forest of trees.
-///
-/// # Panics
-///
-/// When `sizes` is empty or contains a zero — a component with no nodes is not
-/// a component, and accepting one would let a caller state a partition that
-/// does not exist.
+/// they create cycles without changing the answer.
 #[must_use]
 pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> GraphCase {
     assert!(!sizes.is_empty(), "a partition needs at least one component");
@@ -63,8 +38,7 @@ pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> G
         .try_fold(0u32, u32::checked_add)
         .expect("the component sizes overflow the node index space");
 
-    // Deal component ids to nodes. Shuffling the deal is what stops a
-    // component from being a contiguous block of indices.
+    // Shuffling the deal stops a component being a contiguous index block.
     let mut owner: Vec<u32> = Vec::with_capacity(node_count as usize);
     for (component, &size) in sizes.iter().enumerate() {
         #[allow(
@@ -85,10 +59,8 @@ pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> G
         components[component as usize].push(node as u32);
     }
 
-    // A spanning tree per component: node `i` of a component joins a uniformly
-    // chosen earlier member. That is enough to make the component connected,
-    // and it is the minimum that is enough — anything denser would hide a
-    // union-find that merges too eagerly.
+    // A spanning tree per component: node `i` joins a uniformly chosen earlier
+    // member. The sparsest edge set that still connects it.
     let mut edges: Vec<(u32, u32)> = Vec::new();
     for members in &components {
         for i in 1..members.len() {
@@ -102,7 +74,6 @@ pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> G
     }
 
     // Redundant edges, drawn within a component so the partition is unchanged.
-    // These are the `redundant` unions the observer at the seam counts.
     for _ in 0..extra_edges {
         #[allow(
             clippy::cast_possible_truncation,
@@ -123,9 +94,8 @@ pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> G
         edges.push((members[a], members[b]));
     }
 
-    // Half the edges get their endpoints transposed. `components_into` takes an
-    // undirected edge list, and a test that only ever passes ascending pairs
-    // does not check that.
+    // Half the edges get their endpoints transposed: the edge list is
+    // undirected and must not be assumed ascending.
     for edge in &mut edges {
         if rng.unit() < 0.5 {
             *edge = (edge.1, edge.0);
@@ -154,10 +124,7 @@ mod tests {
     use super::graph_with_partition;
     use crate::Rng;
 
-    /// Oracle: construct-from-answer, checked against itself. The generator's
-    /// own claim is that no edge crosses a component and that every component
-    /// is connected; if that were false the "answer" it hands out would be
-    /// wrong and every test built on it would be measuring nothing.
+    /// No edge crosses a component and every component is connected.
     #[test]
     fn no_edge_crosses_a_component_and_every_component_is_connected() {
         let mut rng = Rng::new(42);
@@ -170,9 +137,7 @@ mod tests {
             );
         }
 
-        // Connectivity by a plain flood fill over an adjacency list. Not the
-        // union-find under test — a second, independent walk, which is what
-        // makes it evidence.
+        // Flood fill, not the union-find under test: an independent walk.
         let mut adjacency = vec![Vec::new(); case.node_count as usize];
         for &(a, b) in &case.edges {
             adjacency[a as usize].push(b);
@@ -197,8 +162,7 @@ mod tests {
         }
     }
 
-    /// Oracle: law. The label of a node is the minimum index in its component,
-    /// by definition, and the generator must state exactly that.
+    /// A node's label is the minimum index in its component.
     #[test]
     fn every_label_is_the_minimum_index_of_its_component() {
         let mut rng = Rng::new(9);
@@ -211,8 +175,7 @@ mod tests {
         }
     }
 
-    /// Oracle: determinism. Two draws from the same seed give the same graph,
-    /// including the shuffled edge order.
+    /// One seed gives one graph, edge order included.
     #[test]
     fn one_seed_gives_one_graph() {
         let first = graph_with_partition(&mut Rng::new(2024), &[4, 9, 2], 6);

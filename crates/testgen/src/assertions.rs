@@ -1,32 +1,12 @@
-//! Assertions with failure messages worth reading, and the two the old suite
-//! was missing.
-//!
-//! # Why "clean" needs a helper
-//!
-//! Forty-five of the previous suite's ninety-four DRC cases asserted only that
-//! nothing was found, so a rule that never executed passed every one of them.
-//! [`assert_clean`] is the replacement: it asserts the rule *ran*, that it
-//! examined a nonzero number of shapes, and only then that it found nothing.
-//! Those are three different claims and an empty violation table is evidence
-//! for exactly one of them.
-//!
-//! # Why float comparison needs a helper
-//!
-//! A bare `==` on an `f64` is a test that fails for reasons unrelated to the
-//! logic, and a tolerance chosen by feel is a test that cannot fail at all.
-//! [`assert_close`] and [`assert_close_relative`] take the tolerance as an
-//! argument and print it, so the number is in the test and in the failure.
+//! Assertions over violation tables, rule runs and float comparisons.
 
 use gpurify_ingest::StrId;
 use gpurify_report::{Outcome, RuleRun, Violation, Violations};
 
 /// Assert two `f64` agree to an absolute tolerance.
 ///
-/// # Panics
-///
-/// When they do not, or when either is not finite. A `NaN` compares false
-/// against everything, so an unguarded comparison against one passes silently
-/// in the direction that matters.
+/// Both must be finite: a `NaN` compares false against everything, so an
+/// unguarded comparison against one passes silently.
 pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {
     assert!(
         actual.is_finite() && expected.is_finite(),
@@ -41,15 +21,8 @@ pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {
 
 /// Assert two `f64` agree to a tolerance relative to the expected magnitude.
 ///
-/// The right form wherever the expected value's scale is set by the test's
-/// inputs rather than fixed — a capacitance in femtofarads and a resistance in
-/// ohms cannot share an absolute tolerance and mean the same thing.
-///
-/// # Panics
-///
-/// When they do not agree, when either is not finite, or when `expected` is
-/// zero — a relative tolerance around zero admits every value, which is a test
-/// that cannot fail. Use [`assert_close`] there.
+/// `expected` must not be zero: a relative tolerance around zero admits every
+/// value. Use [`assert_close`] there.
 pub fn assert_close_relative(what: &str, actual: f64, expected: f64, tolerance: f64) {
     assert!(
         actual.is_finite() && expected.is_finite(),
@@ -69,15 +42,8 @@ pub fn assert_close_relative(what: &str, actual: f64, expected: f64, tolerance: 
 
 /// Assert a rule ran and looked at something, returning its record.
 ///
-/// The `examined` floor is the load-bearing half. `Outcome::Ran` with zero
-/// shapes is legitimate — an empty layer — but it is not evidence that the
-/// rule's logic executed, and a test that accepted it would pass against a
-/// rule whose layer lookup returned the wrong range.
-///
-/// # Panics
-///
-/// When the rule has no record, has more than one, did not run, or examined
-/// nothing.
+/// The `examined > 0` floor is load-bearing: `Outcome::Ran` over an empty layer
+/// is not evidence the rule's logic executed.
 #[must_use]
 pub fn assert_rule_ran(runs: &[RuleRun], rule: StrId) -> RuleRun {
     let matching: Vec<&RuleRun> = runs.iter().filter(|r| r.rule == rule).collect();
@@ -106,14 +72,8 @@ pub fn assert_rule_ran(runs: &[RuleRun], rule: StrId) -> RuleRun {
 
 /// Assert a rule ran, examined shapes, and found nothing.
 ///
-/// **The only acceptable form of a clean assertion.** Asserting an empty
-/// violation table on its own is satisfied by a rule that never executed,
-/// which is how half the previous DRC suite came to pass without checking
-/// anything.
-///
-/// # Panics
-///
-/// When the rule did not run, examined nothing, or reported a violation.
+/// The only acceptable form of a clean assertion: an empty violation table on
+/// its own is also satisfied by a rule that never executed.
 pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
     let run = assert_rule_ran(runs, rule);
     assert!(
@@ -137,14 +97,7 @@ pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
 
 /// Assert a violation table holds exactly one row, and that it is this one.
 ///
-/// Every field is compared, coordinate and measurement included. A test that
-/// compared only the count would pass against a rule flagging the wrong shape
-/// at the wrong place with the wrong number, which is what the previous
-/// ERC, LVS and PEX suites did.
-///
-/// # Panics
-///
-/// When the table does not hold exactly that row.
+/// Every field is compared, coordinate and measurement included.
 pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
     assert!(
         violations.rule.len() == 1,
@@ -156,14 +109,6 @@ pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
 }
 
 /// Assert a table contains this violation, and return which row it is.
-///
-/// For the cases where a deliberate violation coexists with findings a test
-/// does not care about. Prefer [`assert_only_violation`] where the layout was
-/// built to contain one thing.
-///
-/// # Panics
-///
-/// When no row matches.
 #[must_use]
 pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> usize {
     let found = (0..violations.rule.len()).find(|&i| row_matches(violations, i, expected));
@@ -178,13 +123,8 @@ pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> us
 
 /// Assert two violation tables are equal row for row, in order.
 ///
-/// Order matters because `Violations::sort_canonical` makes it part of the
-/// interface: two tables holding the same rows in a different order is a
-/// determinism failure, not a formatting detail.
-///
-/// # Panics
-///
-/// When the lengths differ or any row differs, naming the first row that does.
+/// Order is part of the interface: `Violations::sort_canonical` makes two
+/// tables with the same rows in a different order a determinism failure.
 pub fn assert_violations_eq(actual: &Violations, expected: &Violations) {
     assert!(
         actual.rule.len() == expected.rule.len(),
@@ -200,17 +140,6 @@ pub fn assert_violations_eq(actual: &Violations, expected: &Violations) {
 }
 
 /// Assert a run produced byte-identical output twice.
-///
-/// The determinism gate. Anything writing bytes gets one of these, and where a
-/// thread count is a parameter it is run at two values — an output that agrees
-/// with itself at one thread count and not at two is exactly the defect that
-/// made eight of twenty-seven parasitic reports differ between runs of the
-/// same binary.
-///
-/// # Panics
-///
-/// When the two differ, naming the first differing offset and its
-/// neighbourhood.
 pub fn assert_bytes_identical(what: &str, first: &[u8], second: &[u8]) {
     if first == second {
         return;
@@ -235,11 +164,8 @@ pub fn assert_bytes_identical(what: &str, first: &[u8], second: &[u8]) {
 
 /// Read one row back out of a table.
 ///
-/// `Violations::get` would be the obvious call, but it is a frozen signature
-/// with a `todo!()` body until the Implementation-Phase, and an assertion
-/// helper that panics before it can report anything is worse than no helper.
-/// Reading the public columns directly costs eight lines and works in both
-/// phases.
+/// Reads the public columns rather than `Violations::get`, whose body is still
+/// `todo!()` — an assertion helper must not panic before it can report.
 fn row(violations: &Violations, index: usize) -> Violation {
     Violation {
         rule: violations.rule[index],
@@ -263,8 +189,7 @@ fn row_matches(violations: &Violations, index: usize, expected: &Violation) -> b
         && actual.shapes == expected.shapes
 }
 
-/// Compare one row field by field, so the failure names the field rather than
-/// printing two structs and leaving the reader to diff them.
+/// Compare one row field by field, so the failure names the field.
 fn assert_violation_row(violations: &Violations, index: usize, expected: &Violation) {
     let actual = row(violations, index);
     assert!(
@@ -328,9 +253,7 @@ fn describe(violations: &Violations, rows: &[usize]) -> String {
 mod tests {
     use super::{assert_bytes_identical, assert_close, assert_close_relative};
 
-    /// Oracle: closed form. The tolerance is the contract, so both sides of it
-    /// are checked: inside passes, outside fails. A helper that only ever
-    /// passed would be a test that cannot fail.
+    /// Inside the tolerance passes, outside fails.
     #[test]
     fn absolute_tolerance_is_the_boundary_it_says_it_is() {
         assert_close("a length", 1.000_5, 1.0, 1e-3);
@@ -340,9 +263,7 @@ mod tests {
         );
     }
 
-    /// Oracle: closed form. A relative tolerance scales with the expected
-    /// magnitude, which is the whole reason it exists — and it refuses zero,
-    /// where it would admit everything.
+    /// A relative tolerance scales, and refuses zero.
     #[test]
     fn relative_tolerance_scales_with_magnitude_and_refuses_zero() {
         assert_close_relative("a resistance", 1_000.5, 1_000.0, 1e-3);
@@ -356,8 +277,7 @@ mod tests {
         .is_err());
     }
 
-    /// Oracle: determinism. Identical bytes pass; a single differing byte does
-    /// not, wherever it sits.
+    /// A single differing byte fails.
     #[test]
     fn byte_comparison_catches_a_single_differing_byte() {
         let base: Vec<u8> = (0..200u32).map(|b| (b % 251) as u8).collect();

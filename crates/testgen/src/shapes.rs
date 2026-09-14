@@ -1,43 +1,15 @@
 //! Geometry builders: exact rectilinear shapes, and the store they go into.
 //!
-//! # Why everything here speaks `i64`
-//!
-//! [`Dbu`] is a newtype whose accessor `raw` is a frozen signature with a
-//! `todo!()` body until the Implementation-Phase, so this crate cannot read a
-//! coordinate back out of one. It therefore computes in plain `i64`, where the
-//! arithmetic is visible and checkable, and wraps at the last moment through
-//! [`dbu`]. The range check `Dbu::new` performs is done by [`dbu`] instead, so
-//! a builder that walks off the coordinate domain fails here rather than
-//! producing geometry the tool would refuse.
-//!
-//! # Winding
-//!
-//! Every outer boundary produced here is counter-clockwise and every hole is
-//! clockwise, which is the canonical winding `core::view` establishes. A
-//! builder emitting the other direction would make a validation test pass for
-//! the wrong reason.
-//!
-//! # The oracle these serve
-//!
-//! Closed form. The area of every shape below is written in its doc comment as
-//! a formula in its parameters, computed by hand, and returned alongside the
-//! geometry where a caller needs it. [`l_shape`] and [`plus_shape`] exist
-//! specifically because their bounding box lies about them: an implementation
-//! that measures the box instead of the polygon passes on rectangles and fails
-//! on these.
+//! Coordinates are computed in plain `i64` and wrapped through [`dbu`] at the
+//! last moment. Every outer boundary is counter-clockwise and every hole is
+//! clockwise, the canonical winding `core::view` establishes.
 
 use gpurify_core::ops::Point;
 use gpurify_core::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
 
-/// Wrap an `i64` as a coordinate, checking the domain.
-///
-/// # Panics
-///
-/// When `value` is outside `±MAX_ABS_DBU`. That bound is what keeps every
-/// `i128` area product from overflowing, so a generator that exceeds it is
-/// building input the tool is entitled to reject — a bug in the test, not a
-/// finding about the code.
+/// Wrap an `i64` as a coordinate. `MAX_ABS_DBU` is the bound that keeps every
+/// `i128` area product from overflowing.
 #[must_use]
 pub fn dbu(value: i64) -> Dbu {
     assert!(
@@ -62,15 +34,8 @@ pub fn area(value: i128) -> DbuArea {
     DbuArea::new(value)
 }
 
-/// A rectangle, counter-clockwise from its lower-left corner.
-///
-/// Area is `(xhi - xlo) * (yhi - ylo)`.
-///
-/// # Panics
-///
-/// When the rectangle is empty or inverted. A zero-width shape is legal as a
-/// *derived* result but is not something a generator should be emitting, and
-/// silently accepting one hides the builder bug that produced it.
+/// A rectangle, counter-clockwise from its lower-left corner. Empty or inverted
+/// is legal as a derived result but a bug in a generator, so it is refused.
 #[must_use]
 pub fn rect(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -91,16 +56,8 @@ pub fn hole(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> (Vec<i64>, Vec<i64>) {
 }
 
 /// An L, with both arms of length `arm` and both of width `thickness`, the
-/// inner corner at `(x, y)`.
-///
-/// **Area is `thickness * (2 * arm - thickness)`,** which is strictly less than
-/// the `arm * arm` of its bounding box for every `thickness < arm`. That gap is
-/// the point of this shape.
-///
-/// # Panics
-///
-/// When `thickness` is not strictly between zero and `arm` — outside that the
-/// shape is a rectangle or is self-overlapping, and neither is an L.
+/// inner corner at `(x, y)`. Outside `0 < thickness < arm` it would be a
+/// rectangle or self-overlapping.
 #[must_use]
 pub fn l_shape(x: i64, y: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -113,7 +70,8 @@ pub fn l_shape(x: i64, y: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<i64>)
     )
 }
 
-/// Closed-form area of [`l_shape`].
+/// Closed-form area of [`l_shape`]: `thickness * (2 * arm - thickness)`,
+/// strictly below the `arm * arm` of its bounding box.
 #[must_use]
 pub fn l_shape_area(arm: i64, thickness: i64) -> i128 {
     i128::from(thickness) * (2 * i128::from(arm) - i128::from(thickness))
@@ -122,16 +80,8 @@ pub fn l_shape_area(arm: i64, thickness: i64) -> i128 {
 /// A plus sign centred on `(cx, cy)`: two bars of width `thickness`, each
 /// `2 * arm` long, crossing at the centre.
 ///
-/// **Area is `4 * arm * thickness - thickness * thickness`** — the two bars
-/// less their double-counted intersection. Twelve vertices, four reflex
-/// corners, and a bounding box of `2 * arm` square that overstates it.
-///
-/// # Panics
-///
-/// When `thickness` is not strictly between zero and `2 * arm`, or when
-/// `thickness` is odd — an odd bar cannot be centred on an integer coordinate
-/// without one side being wider than the other, which would make the closed
-/// form above wrong.
+/// An odd `thickness` has no integer centre line, which breaks the closed form,
+/// so it is refused.
 #[must_use]
 pub fn plus_shape(cx: i64, cy: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -172,30 +122,18 @@ pub fn plus_shape(cx: i64, cy: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<
     )
 }
 
-/// Closed-form area of [`plus_shape`].
+/// Closed-form area of [`plus_shape`]: the two bars less their double-counted
+/// intersection.
 #[must_use]
 pub fn plus_shape_area(arm: i64, thickness: i64) -> i128 {
     4 * i128::from(arm) * i128::from(thickness) - i128::from(thickness) * i128::from(thickness)
 }
 
-/// A U, opening upwards: two uprights of width `thickness` and height `arm`,
-/// joined by a base of height `thickness`, with a gap of exactly `gap` between
-/// the uprights.
-///
-/// The gap is a *notch* — an internal spacing within one polygon, which is a
-/// different measurement from the spacing between two polygons and is the
-/// reason the two rules exist separately.
-///
-/// **Area is `thickness * (2 * arm + gap)`.** The base contributes
-/// `(2 * thickness + gap) * thickness` and each upright another
-/// `thickness * (arm - thickness)`, which is what those terms sum to. The
-/// lower-left corner is at `(x, y)` and the overall width is
+/// A U opening upwards, lower-left corner at `(x, y)`, overall width
 /// `2 * thickness + gap`.
 ///
-/// # Panics
-///
-/// When `gap` or `thickness` is not positive, or `thickness` is not below
-/// `arm`.
+/// The gap is a notch: an internal spacing within one polygon, a different
+/// measurement from the spacing between two polygons.
 #[must_use]
 pub fn u_shape(x: i64, y: i64, arm: i64, thickness: i64, gap: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(gap > 0, "a U needs a positive gap, got {gap}");
@@ -228,47 +166,32 @@ pub fn u_shape(x: i64, y: i64, arm: i64, thickness: i64, gap: i64) -> (Vec<i64>,
     )
 }
 
-/// Closed-form area of [`u_shape`].
+/// Closed-form area of [`u_shape`]: `thickness * (2 * arm + gap)`.
 #[must_use]
 pub fn u_shape_area(arm: i64, thickness: i64, gap: i64) -> i128 {
     i128::from(thickness) * (2 * i128::from(arm) + i128::from(gap))
 }
 
-/// Accumulates shapes and hands back a store plus the identity of every shape
-/// in it.
+/// Accumulates shapes and hands back a store plus the identity of every shape.
 ///
-/// # Why this type exists
-///
-/// [`GeometryStoreBuilder::finish`] sorts rows by layer and returns the
-/// permutation, so the [`PolyId`] a shape ends up with is not the order it was
-/// pushed in. Every construct-from-answer builder in this crate needs to name
-/// the shape it deliberately made wrong, which means every one of them would
-/// otherwise invert that permutation itself. Inverting it once, here, is the
-/// difference between an oracle and eighteen chances to get an off-by-one into
-/// the expected answer.
-///
-/// A push returns an opaque [`Handle`]; [`LayoutBuilder::finish`] returns the
-/// store and a [`Ids`] that resolves handles to [`PolyId`].
+/// [`GeometryStoreBuilder::finish`] sorts rows by layer, so a shape's [`PolyId`]
+/// is not its push order; a push returns a [`Handle`] that [`Ids`] resolves.
 #[derive(Debug)]
 pub struct LayoutBuilder {
     builder: GeometryStoreBuilder,
     layer_count: usize,
     pushed: u32,
-    /// Reused coordinate scratch, so a thousand-shape corpus allocates twice.
+    /// Reused coordinate scratch.
     xs: Vec<Dbu>,
     ys: Vec<Dbu>,
 }
 
-/// A shape that has been pushed but not yet identified.
-///
-/// Opaque on purpose: it is a pre-sort row index, which is meaningless to
-/// anything but [`Ids`], and letting it be read as a number invites the exact
-/// confusion this type prevents.
+/// A shape that has been pushed but not yet identified: a pre-sort row index,
+/// opaque because it is meaningless to anything but [`Ids`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Handle(u32);
 
-/// Resolves the handles a [`LayoutBuilder`] issued to the ids the store gave
-/// them.
+/// Resolves [`LayoutBuilder`] handles to the ids the store gave them.
 #[derive(Debug, Default)]
 pub struct Ids {
     /// `id[handle] == PolyId`, the inverse of the builder's permutation.
@@ -276,18 +199,13 @@ pub struct Ids {
 }
 
 impl Ids {
-    /// The store row a handle became.
-    ///
-    /// # Panics
-    ///
-    /// When the handle came from a different builder.
+    /// The store row a handle became. Panics on a handle from another builder.
     #[must_use]
     pub fn of(&self, handle: Handle) -> PolyId {
         self.id[handle.0 as usize]
     }
 
-    /// Resolve several handles and sort the result ascending, which is the
-    /// order every table in this workspace states its polygon lists in.
+    /// Resolve several handles, sorted ascending.
     #[must_use]
     pub fn sorted(&self, handles: &[Handle]) -> Vec<PolyId> {
         let mut ids: Vec<PolyId> = handles.iter().map(|&h| self.of(h)).collect();
@@ -299,10 +217,8 @@ impl Ids {
 impl LayoutBuilder {
     /// Start a layout over a layer table of `layer_count` layers.
     ///
-    /// The count comes from the caller rather than from the geometry because
-    /// that is what `GeometryStoreBuilder::finish` requires: a layer with no
-    /// shapes still needs an empty range, so a rule naming it reports "no
-    /// violations" rather than failing to find the layer.
+    /// The count comes from the caller, not the geometry: a layer with no
+    /// shapes still needs an empty range, or a rule naming it cannot find it.
     #[must_use]
     pub fn new(layer_count: usize) -> Self {
         Self {
@@ -315,11 +231,6 @@ impl LayoutBuilder {
     }
 
     /// Push a coordinate run as one polygon on `layer`.
-    ///
-    /// # Panics
-    ///
-    /// When the two runs differ in length, or the run has fewer than three
-    /// vertices.
     pub fn push(&mut self, layer: LayerId, xs: &[i64], ys: &[i64]) -> Handle {
         assert_eq!(xs.len(), ys.len(), "coordinate columns must be parallel");
         assert!(xs.len() >= 3, "a polygon needs at least three vertices");
@@ -333,18 +244,17 @@ impl LayoutBuilder {
         handle
     }
 
-    /// Push a shape produced by one of the free functions above.
+    /// Push a shape from one of the free functions above.
     pub fn shape(&mut self, layer: LayerId, shape: &(Vec<i64>, Vec<i64>)) -> Handle {
         self.push(layer, &shape.0, &shape.1)
     }
 
-    /// Push a rectangle. The overwhelmingly common case, so it is one call.
+    /// Push a rectangle.
     pub fn rect(&mut self, layer: LayerId, xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Handle {
         self.shape(layer, &rect(xlo, ylo, xhi, yhi))
     }
 
-    /// How many shapes have been pushed. The floor a `RuleRun::examined`
-    /// assertion is written against.
+    /// How many shapes have been pushed.
     #[must_use]
     pub fn len(&self) -> u32 {
         self.pushed
@@ -379,17 +289,9 @@ impl LayoutBuilder {
 
 /// Two rectangles of side `size` facing each other across an exact gap.
 ///
-/// **The oracle is construct-from-answer, and this is also where the reported
-/// coordinate convention is fixed:** `at` is the midpoint of the gap, on the
-/// line joining the two facing edges. A spacing rule must report that point.
-/// The Implementation-Phase satisfies this test; it does not get to choose a
-/// different point and call the test wrong.
-///
-/// # Panics
-///
-/// When `gap` is not positive and even. An odd gap has no integer midpoint, so
-/// the expected coordinate would be a rounding and the test would be asserting
-/// on a choice rather than on a fact.
+/// Fixes the reported coordinate convention: `at` is the midpoint of the gap,
+/// on the line joining the two facing edges, and a spacing rule must report it.
+/// An odd gap has no integer midpoint, so it is refused rather than rounded.
 pub fn spaced_pair(
     layout: &mut LayoutBuilder,
     layer: LayerId,
@@ -409,23 +311,10 @@ pub fn spaced_pair(
 /// One layer of pseudo-random rectilinear geometry at an exactly known
 /// coverage.
 ///
-/// # What makes the answer known
-///
-/// The region is tiled into `cell`-sided cells and a shape is placed in a cell
-/// with probability `density`. Every shape is a square of the same side, and
-/// the side is chosen so `side^2 / cell^2` is `density` as closely as an
-/// integer allows — so the covered area is `shapes * side^2` **exactly**, with
-/// no overlap correction, because a shape is jittered only within the margin
-/// that keeps it clear of every neighbouring cell.
-///
-/// That clearance is not decoration. Shapes that touched would merge under net
-/// extraction and the polygon count would stop being the shape count, which is
-/// the number half the assertions in the suite are written against.
-///
-/// # Panics
-///
-/// When `density` is outside `0.0..=1.0`, or `cells` is zero, or `cell` is too
-/// small to hold a shape and its clearance.
+/// A square of side `cell * sqrt(density)` is placed in each `cell`-sided cell
+/// with probability `density`, jittered only within the margin that keeps it
+/// clear of every neighbour — so the covered area is exactly `shapes * side^2`
+/// and no two shapes merge.
 pub fn random_rectilinear_layer(
     layout: &mut LayoutBuilder,
     rng: &mut crate::Rng,
@@ -486,7 +375,7 @@ pub fn random_rectilinear_layer(
 /// The shape of a [`random_rectilinear_layer`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RandomLayerSpec {
-    /// Cells along each axis. The region is `cells * cell` square.
+    /// Cells along each axis; the region is `cells * cell` square.
     pub cells: u32,
     /// Side of one cell, in database units.
     pub cell: i64,
@@ -497,12 +386,11 @@ pub struct RandomLayerSpec {
 /// What [`random_rectilinear_layer`] produced, with the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RandomLayer {
-    /// Shapes emitted. Each is one polygon and stays one polygon: none of them
-    /// touch.
+    /// Shapes emitted. Each stays one polygon: none of them touch.
     pub shapes: u32,
     /// Side of every shape.
     pub side: i64,
-    /// Total covered area, exact — the shapes are disjoint, so it is a sum.
+    /// Total covered area, exact: the shapes are disjoint.
     pub covered: i128,
     /// Side of the square region the shapes lie in.
     pub extent: i64,
@@ -512,11 +400,7 @@ pub struct RandomLayer {
 mod tests {
     use super::{l_shape, l_shape_area, plus_shape, plus_shape_area, u_shape, u_shape_area};
 
-    /// Oracle: closed form. Shoelace over the emitted run must agree with the
-    /// formula in the doc comment. This tests the *generator*, which is the
-    /// only thing in this workspace that has to be right before the
-    /// Implementation-Phase — an L whose area formula is wrong would make a
-    /// correct `min_area` implementation look broken.
+    /// Twice the signed area of a run; positive is counter-clockwise.
     fn shoelace(shape: &(Vec<i64>, Vec<i64>)) -> i128 {
         let (xs, ys) = shape;
         let n = xs.len();
@@ -555,9 +439,7 @@ mod tests {
         }
     }
 
-    /// Oracle: law. A bounding box overstates every non-convex shape here, and
-    /// that gap is the reason these shapes exist. A generator whose L happened
-    /// to be a rectangle would silently weaken every rule that uses it.
+    /// A bounding box overstates every non-convex shape here.
     #[test]
     fn non_convex_shapes_are_smaller_than_their_bounding_box() {
         assert!(l_shape_area(100, 30) < 100 * 100);

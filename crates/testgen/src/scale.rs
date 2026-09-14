@@ -1,31 +1,10 @@
-//! The scale corpus: one generator that is both the benchmark input and an
-//! oracle.
+//! Geometry at any size whose net partition and per-layer area are known by
+//! construction, so one corpus serves both the benchmark and the assertion.
 //!
-//! It is one tool rather than two on purpose. A benchmark corpus nobody knows
-//! the right answer for measures speed and nothing else, and a correctness
-//! corpus too small to be slow never exercises the paths that break under load.
-//! This produces geometry at any size, with the net partition and the per-layer
-//! covered area known by construction, so the same input serves the timing run
-//! and the assertion.
-//!
-//! # The floorplan
-//!
-//! A comb per net: a rail on the lower conductor layer, `fingers` stubs on the
-//! upper one, and a cut joining each stub to the rail. Nets sit in disjoint y
-//! bands and blocks sit in disjoint regions, so **no two nets share a polygon
-//! and none of them touch.** That is what makes the partition a fact rather
-//! than a hope, and it is why `intra_layer_touch` is off: every join here is
-//! via-mediated, so a via bug splits a net loudly instead of hiding behind
-//! shapes that happen to abut.
-//!
-//! # What hierarchy depth does
-//!
-//! Blocks are placed by recursively quartering a region, with the gap at each
-//! level scaled by that level. A depth of one is a single block; a depth of
-//! four is sixty-four blocks with empty space at four different scales. That
-//! spread is the point: `core::index` builds a uniform grid whose cell size
-//! comes from the median bounding-box extent, and a corpus with one spatial
-//! scale would never show the degradation its own doc comment warns about.
+//! A comb per net — a rail, `fingers` stubs and a cut per stub — with nets in
+//! disjoint y bands and blocks in disjoint regions, so no two nets touch.
+//! Blocks are placed by recursively quartering a region with the gap scaled by
+//! level, which gives the corpus more than one spatial scale.
 
 use gpurify_core::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
@@ -38,9 +17,7 @@ use crate::Rng;
 pub struct ScaleSpec {
     /// Fixes the whole corpus. Two runs at one seed are byte-identical.
     pub seed: u64,
-    /// Total polygons, across every layer. Rounded down to what the comb
-    /// geometry can express exactly — see [`ScaleCorpus::polygons`] for what
-    /// was actually emitted.
+    /// Total polygons, rounded down to what a whole comb expresses.
     pub polygons: u32,
     /// Electrically distinct nets. Each becomes one comb.
     pub nets: u32,
@@ -67,21 +44,20 @@ impl ScaleLayers {
     const CUT: LayerId = LayerId(2);
 }
 
-/// A corpus, with everything about it that is known without running anything.
+/// A corpus and everything known about it without running anything.
 #[derive(Debug)]
 pub struct ScaleCorpus {
     pub store: GeometryStore,
     pub ids: Ids,
     pub layers: ScaleLayers,
     pub connectivity: Connectivity,
-    /// The answer: `expected_net_polys[n]` is every conductor polygon on net
-    /// `n`, ascending. Cuts are not conductors and are not listed.
+    /// `expected_net_polys[n]` is every conductor polygon on net `n`,
+    /// ascending. Cuts are not conductors and are not listed.
     pub expected_net_polys: Vec<Vec<PolyId>>,
-    /// Covered area per layer, exact — shapes on one layer never overlap.
-    /// Indexed by `LayerId`.
+    /// Covered area per layer, indexed by `LayerId`. Exact: shapes on one
+    /// layer never overlap.
     pub layer_area: [i128; ScaleLayers::COUNT],
-    /// Polygons actually emitted, which is what the requested count was rounded
-    /// down to.
+    /// Polygons actually emitted.
     pub polygons: u32,
     /// Fingers per net.
     pub fingers: u32,
@@ -108,12 +84,6 @@ const CUT_SIZE: i64 = 80;
 const BLOCK_GAP: i64 = 4_000;
 
 /// Build the corpus.
-///
-/// # Panics
-///
-/// When `nets` is zero, when `hierarchy_depth` is zero, or when `polygons` is
-/// below `3 * nets` — a comb needs a rail, at least one finger and that
-/// finger's cut, so fewer polygons than that cannot express the requested nets.
 #[must_use]
 pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
     assert!(spec.nets > 0, "a corpus needs at least one net");
@@ -125,37 +95,27 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
         spec.nets
     );
 
-    // A comb is 1 + 2 * fingers polygons. Round down; the corpus reports what
-    // it emitted rather than silently missing the request.
+    // A comb is 1 + 2 * fingers polygons; round down and report what was
+    // emitted rather than silently missing the request.
     let fingers = (spec.polygons / spec.nets - 1) / 2;
     let mut rng = Rng::new(spec.seed);
 
-    // Leaves are `4^(depth-1)` — the property `tile`'s own test states — and the
-    // band stack has to be sized before the block side is chosen, so the count
-    // is computed here rather than read back off `origins.len()`.
+    // Leaves are `4^(depth-1)`. Computed here rather than read off
+    // `origins.len()` because the band stack is sized before `tile` runs.
     let blocks = 4u32.pow(u32::from(spec.hierarchy_depth) - 1);
     let bands = spec.nets.div_ceil(blocks);
 
-    // The block side has to cover the taller of the two axes. The horizontal
-    // need is the rail and its fingers; the vertical need is the whole band
-    // stack dealt to one block, which the round-robin above makes
-    // `ceil(nets / blocks)` bands of `BAND_PITCH` each.
-    //
-    // Sizing on the horizontal need alone is what the module doc's "no two nets
-    // touch" claim rested on and did not get: at 1000 polygons over 62 nets the
-    // stack is 16 bands of 1000 against a block side of 3200, so band 8 of one
-    // block landed inside the block above it, a cut there bridged two combs,
-    // and ten pairs of nets extracted as one. The corpus was wrong, not the
-    // extractor — and being wrong in the direction of *fewer* nets is the
-    // fail-open direction for anything that trusts the partition.
+    // The block side must cover the taller axis: the rail with its fingers
+    // horizontally, and the whole `ceil(nets / blocks)`-band stack vertically.
+    // Sizing on the horizontal need alone lets a tall stack overrun into the
+    // block above, where a cut bridges two combs and two nets extract as one.
     let block_side = i64::from(fingers + 1) * FINGER_PITCH;
     let block_side = block_side.max(i64::from(bands) * BAND_PITCH);
     let (extent, origins) = tile(spec.hierarchy_depth, block_side, BLOCK_GAP);
     debug_assert_eq!(origins.len(), blocks as usize, "one origin per leaf block");
 
-    // Deal nets to blocks round-robin, then shuffle, so a net's index says
-    // nothing about where it is. An extractor that works only when a net's
-    // polygons are adjacent in the store fails here.
+    // Round-robin then shuffle, so a net's index says nothing about where it
+    // is and adjacency in the store cannot be relied on.
     let mut block_of_net: Vec<u32> = (0..spec.nets).map(|n| n % blocks).collect();
     rng.shuffle(&mut block_of_net);
 
@@ -222,9 +182,8 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
             conductors: vec![ScaleLayers::LOWER, ScaleLayers::UPPER],
             via_cut: vec![ScaleLayers::CUT],
             via_connects: vec![(ScaleLayers::LOWER, ScaleLayers::UPPER)],
+            // Off deliberately: every join here is via-mediated.
             intra_layer_touch: false,
-            // No text: this generator draws geometry, and a label pairing with
-            // no `TEXT` to pair binds nothing.
             ..Connectivity::default()
         },
         expected_net_polys,
@@ -238,9 +197,8 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
 
 /// Recursively quarter a region, returning its side and every leaf origin.
 ///
-/// The gap at each level is `pad * level`, so the empty space between two
-/// depth-3 blocks is wider than between two depth-2 blocks. That is what gives
-/// the corpus more than one spatial scale.
+/// The gap at each level is `pad * level`, which is what spreads the corpus
+/// over more than one spatial scale.
 fn tile(depth: u8, leaf: i64, pad: i64) -> (i64, Vec<(i64, i64)>) {
     if depth <= 1 {
         return (leaf, vec![(0, 0)]);
@@ -262,9 +220,7 @@ fn tile(depth: u8, leaf: i64, pad: i64) -> (i64, Vec<(i64, i64)>) {
 mod tests {
     use super::tile;
 
-    /// Oracle: closed form. Quartering `d` times gives `4^(d-1)` leaves. A
-    /// generator that lost a quadrant would still produce a plausible corpus
-    /// and silently shrink every benchmark by a factor of four.
+    /// Quartering `d` times gives `4^(d-1)` leaves.
     #[test]
     fn tiling_depth_gives_four_to_the_power_of_its_levels() {
         for depth in 1..=5u8 {
@@ -273,10 +229,8 @@ mod tests {
         }
     }
 
-    /// Oracle: law. Leaf origins are distinct and every leaf, placed at its
-    /// origin with the leaf side, lies inside the reported extent. Both are
-    /// what "the corpus occupies this square and its blocks do not overlap"
-    /// means, and either failing would make the covered-area answer wrong.
+    /// Leaf origins are distinct and every leaf lies inside the reported
+    /// extent.
     #[test]
     fn leaves_are_distinct_and_inside_the_reported_extent() {
         let leaf = 1_000;
@@ -294,9 +248,8 @@ mod tests {
         }
     }
 
-    /// Oracle: law. Two leaves never overlap, whatever the depth — the
-    /// separation between any two origins is at least the leaf side on one
-    /// axis. This is the property the per-net partition rests on.
+    /// Two leaves never overlap, whatever the depth — the property the per-net
+    /// partition rests on.
     #[test]
     fn no_two_leaves_overlap() {
         let leaf = 500;
