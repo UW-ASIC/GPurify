@@ -1,26 +1,10 @@
-//! Exact geometric predicates and measurements.
-//!
-//! Everything here is integer-exact. No coordinate is ever converted to
-//! floating point: a predicate that is *usually* right is worse than useless in
-//! a signoff tool, because the cases it gets wrong are exactly the degenerate
-//! ones a layout is full of.
-//!
-//! The previous implementation's mutation run left 32 survivors concentrated in
-//! this file — 11 in `segments_intersect`, 9 in the self-intersection check, 6
-//! in point-in-polygon. Those are genuine gaps in genuine predicates, not
-//! equivalents, which is why the test plan names every function here
-//! individually and why they are all pure and table-testable.
+//! Exact geometric predicates and measurements: integer-only, never floating
+//! point.
 
 use crate::view::RingRef;
 use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// A coordinate pair, passed by value to a predicate.
-///
-/// `AoS`, unlike the storage columns, and deliberately: a predicate reads both
-/// fields together, and the alternative — eight positional `Dbu` arguments —
-/// makes transposing an x and a y a silent wrong answer rather than a type
-/// error. Storage stays `SoA`; a caller builds one of these from two slice
-/// reads and the compiler keeps it in registers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Point {
     pub x: Dbu,
@@ -39,8 +23,7 @@ pub struct Seg {
 pub enum Orientation {
     Clockwise,
     CounterClockwise,
-    /// All three points are collinear. The case every mutation survivor in the
-    /// old tree lived in.
+    /// All three points are collinear.
     Collinear,
 }
 
@@ -54,8 +37,7 @@ pub enum Winding {
 }
 
 /// Whether a coordinate is inside the legal domain — the bound every `i128`
-/// product below rests on. Restated here rather than reached for through
-/// `Dbu`, whose own copy is private.
+/// product below rests on.
 #[inline]
 fn in_domain(c: Dbu) -> bool {
     c.raw().unsigned_abs() <= MAX_ABS_DBU.unsigned_abs()
@@ -64,15 +46,12 @@ fn in_domain(c: Dbu) -> bool {
 /// Twice the signed area of the triangle `(a, b, c)`: the cross product of
 /// `b - a` and `c - a`.
 ///
-/// This is the one place [`Dbu::mul_wide`] cannot be used. Its operands are
-/// coordinate *differences*, which reach `2^41` and so leave the coordinate
-/// domain `mul_wide` asserts on, legally. The product needs 83 bits, so `i64`
-/// would silently wrap and `i128` is the narrowest type that holds it.
+/// Not [`Dbu::mul_wide`]: the operands are coordinate *differences*, which
+/// legally reach `2^41` and leave the domain `mul_wide` asserts on. The product
+/// needs 83 bits, so `i64` would silently wrap.
 ///
-/// No assert: this is called from inside the ray-cast loop in
-/// [`point_in_ring`], where a panic edge is an implicit data-dependent branch
-/// that blocks vectorisation. The callers assert their columns instead, once
-/// per column rather than once per vertex.
+/// No assert: callers assert their columns once, rather than once per vertex
+/// inside the ray-cast loop.
 #[inline]
 fn cross(a: Point, b: Point, c: Point) -> i128 {
     let ux = i128::from(b.x.raw() - a.x.raw());
@@ -94,20 +73,14 @@ fn in_seg_bbox(s: Seg, p: Point) -> bool {
         & (p.y <= s.a.y.max(s.b.y))
 }
 
-/// How far `v` lies outside the closed interval spanned by `a` and `b`, signed.
-/// Zero when it lies within. The one-dimensional half of a clamp-to-box
-/// distance, written with `clamp` so no branch survives.
+/// How far `v` lies outside the closed interval spanned by `a` and `b`, signed;
+/// zero when it lies within.
 #[inline]
 fn gap_outside(v: Dbu, a: Dbu, b: Dbu) -> i128 {
     i128::from(v.raw().clamp(a.min(b).raw(), a.max(b).raw()) - v.raw())
 }
 
 /// Orientation of the triple `(a, b, c)`.
-///
-/// **Decision** — pure, six values in, one out, the foundation of every other
-/// predicate here. Computed as a cross product in `i128`: the operands are
-/// differences of coordinates bounded by `MAX_ABS_DBU`, so the product needs
-/// 81 bits and `i64` would silently wrap.
 pub fn orientation(a: Point, b: Point, c: Point) -> Orientation {
     debug_assert!(in_domain(a.x) && in_domain(a.y), "a is off the coordinate domain");
     debug_assert!(in_domain(b.x) && in_domain(b.y), "b is off the coordinate domain");
@@ -122,19 +95,15 @@ pub fn orientation(a: Point, b: Point, c: Point) -> Orientation {
 
 /// Whether two closed segments share at least one point.
 ///
-/// Inclusive of endpoints and handling the collinear-overlap case, because
-/// shapes in a real layout touch constantly and "they only touch" is not a
-/// reason to report no intersection.
+/// Inclusive of endpoints and handling the collinear-overlap case: shapes in a
+/// real layout touch constantly, and "they only touch" is not a reason to
+/// report no intersection.
 ///
-/// No domain assert, for [`cross`]'s reason and not by omission: this is called
-/// from inside the sweep loop in [`self_intersects`], where a panic edge is an
-/// implicit branch in the loop body. The callers assert their columns —
-/// [`self_intersects`] and [`seg_seg_dist2`] both do — so the precondition is
-/// checked once per column rather than once per pair.
+/// No domain assert, for [`cross`]'s reason: callers assert their columns once
+/// per column rather than once per pair.
 pub fn segments_intersect(p: Seg, q: Seg) -> bool {
     // Each endpoint's side of the *other* segment's line, as a sign in
-    // `{-1, 0, 1}`. Taking the signum first is what lets the two tests below be
-    // written as arithmetic rather than as nested comparisons.
+    // `{-1, 0, 1}`.
     let d1 = cross(q.a, q.b, p.a).signum();
     let d2 = cross(q.a, q.b, p.b).signum();
     let d3 = cross(p.a, p.b, q.a).signum();
@@ -147,10 +116,7 @@ pub fn segments_intersect(p: Seg, q: Seg) -> bool {
     let proper = (d1 * d2 < 0) & (d3 * d4 < 0);
 
     // Everything else two closed segments can share: an endpoint of one on the
-    // other. This is the collinear-overlap and shared-endpoint case, and it is
-    // why shapes that only touch still report as intersecting. `|`, not `||`:
-    // all four operands are two comparisons and a min/max, so short-circuiting
-    // would buy a branch rather than save work.
+    // other — the collinear-overlap and shared-endpoint case.
     proper
         | ((d1 == 0) & in_seg_bbox(q, p.a))
         | ((d2 == 0) & in_seg_bbox(q, p.b))
@@ -177,15 +143,9 @@ pub fn point_in_ring(ring: RingRef<'_>, p: Point) -> bool {
         return false;
     }
 
-    // One pass over both columns, carrying the previous vertex in two locals.
-    // Seeding them with the last vertex makes the ring's closing edge the first
-    // iteration rather than a fixup afterwards. Zipped rather than indexed so
-    // neither column carries a bounds check into the body.
-    //
-    // The body is branchless. `crossings` is an even-odd ray cast towards +x
-    // and `boundary` is the on-edge test; the on-edge answer is accumulated
-    // rather than returned early, because an early return is a data-dependent
-    // branch inside a bulk loop.
+    // Seeded with the last vertex so the ring's closing edge is the first
+    // iteration rather than a fixup afterwards. `crossings` is an even-odd ray
+    // cast towards +x; `boundary` is the on-edge test.
     let mut crossings = 0u32;
     let mut boundary = 0u32;
     let mut ax = xs[n - 1];
@@ -212,16 +172,10 @@ pub fn point_in_ring(ring: RingRef<'_>, p: Point) -> bool {
     }
 
     debug_assert!(crossings <= 1 && boundary <= 1, "both accumulators are parities");
-    // Boundary counts as inside: a via landing exactly on a conductor edge is
-    // connected, and the alternative loses that connection silently.
     (boundary | crossings) != 0
 }
 
 /// One edge of a closed run, carrying the x-interval the sweep orders it on.
-///
-/// `AoS`, for [`Point`]'s reason and one more: the sweep reads every field of
-/// the same edge in the same iteration, which is the one case that argues for
-/// keeping a row together.
 #[derive(Debug, Clone, Copy)]
 struct SweptEdge {
     /// Leftmost x. The sort key, and what the binary search compares against.
@@ -237,11 +191,6 @@ struct SweptEdge {
 
 /// The edge from vertex `from` to vertex `to`, with its x-interval ordered so
 /// the sweep can sort on `xlo` and stop on `xhi`.
-///
-/// `min`/`max` rather than a compare-and-swap of the two points: the interval
-/// is all the sweep orders on, and the segment itself is direction-free —
-/// [`segments_intersect`] is invariant under swapping either segment's
-/// endpoints.
 fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptEdge {
     let a = Point {
         x: xs[from],
@@ -259,31 +208,16 @@ fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptE
     }
 }
 
-/// Whether a coordinate run crosses itself.
+/// Whether a coordinate run crosses itself; the guarantee
+/// [`crate::PolygonRef`] is built on.
 ///
-/// The guarantee [`crate::PolygonRef`] is built on, so this is the one place
-/// simplicity is established.
-///
-/// **Transform, reducer.** In: two parallel coordinate columns. Out: one bool.
-/// One edge column, phase-lifetime, is built and dropped inside — the
-/// signature owns no scratch to hand it, and it is `n` rows of 56 bytes.
-///
-/// Edges are swept left to right rather than scanned all against all. Sorted
-/// by leftmost x, each edge is tested only against the run of later edges
-/// whose x-interval can still reach it, and one binary search per edge finds
-/// where that run ends. The pairs this drops are exactly the pairs whose
-/// x-intervals are disjoint, and two segments with disjoint x-intervals share
-/// no point — so the verdict is identical to the all-pairs scan, term for
-/// term. Cost is `O(n log n)` plus one [`segments_intersect`] per
-/// x-overlapping non-adjacent pair.
-///
-/// A status-structure sweep (Shamos–Hoey) would drop that second term as well,
-/// by testing only pairs that become neighbours in the sweep order. Its
-/// neighbour argument does not survive the degeneracies rectilinear layout is
-/// made of — coincident endpoints, collinear overlaps, a whole column of
-/// vertical edges at one x — and the way it fails there is a *missed*
-/// crossing, which is a self-intersecting polygon validated as clean. Pruning
-/// by x-interval cannot miss one, so that is what this does.
+/// Edges are swept left to right, each tested only against later edges whose
+/// x-interval can still reach it. The dropped pairs are exactly those with
+/// disjoint x-intervals, which share no point, so the verdict is identical to
+/// the all-pairs scan. A status-structure sweep (Shamos–Hoey) would be cheaper
+/// but its neighbour argument does not survive the degeneracies rectilinear
+/// layout is made of, and it fails by *missing* a crossing — a
+/// self-intersecting polygon validated as clean.
 pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
     debug_assert_eq!(xs.len(), ys.len(), "a coordinate run's columns are parallel");
     debug_assert!(
@@ -297,9 +231,9 @@ pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
     if n < 4 {
         return false;
     }
-    // The id space, and the cyclic-adjacency distance in one. Fails closed: a
-    // run this long is a caller bug, and truncating the id would silently
-    // exempt real crossings from the adjacency test.
+    // The id space, and the cyclic-adjacency distance in one. Fails closed:
+    // truncating the id would silently exempt real crossings from the
+    // adjacency test.
     let last = u32::try_from(n - 1).expect("a coordinate run is under 2^32 vertices");
 
     // A closed run has one edge per vertex, with the closing edge lifted out
@@ -324,10 +258,8 @@ pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
     let mut found = false;
     for (i, &e) in edges.iter().enumerate() {
         let rest = &edges[i + 1..];
-        // Sorted ascending by `xlo`, so the partners whose x-interval can
-        // still reach `e`'s are a prefix of `rest`, and one binary search ends
-        // it. This is the whole of the sweep: the all-pairs scan read the rest
-        // of the ring here.
+        // Sorted ascending by `xlo`, so the partners whose x-interval can still
+        // reach `e`'s are a prefix of `rest`.
         let window = rest.partition_point(|o| o.xlo <= e.xhi);
         debug_assert!(
             window == 0 || rest[window - 1].xlo <= e.xhi,
@@ -338,11 +270,6 @@ pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
             "the window ends at the first edge that starts past this one"
         );
 
-        // `&` and `|`, not `&&` and `||`: every operand is a comparison or
-        // two, so short-circuiting would buy a branch rather than save work.
-        // The or-accumulation is unconditional for the same reason — an early
-        // `break` on the first hit is a data-dependent branch, and the window
-        // is already the pruned run.
         for &o in &rest[..window] {
             let apart = e.id.abs_diff(o.id);
             let adjacent = (apart == 1) | (apart == last);
@@ -372,15 +299,8 @@ pub fn area2(xs: &[Dbu], ys: &[Dbu]) -> DbuArea {
     }
 
     // The shoelace as two folds over offset views of the same columns, with the
-    // ring's closing edge as one scalar fixup outside. Each term is
-    // `Dbu::mul_wide`, the only route from coordinates to an area, and the
-    // reason `MAX_ABS_DBU` is what it is: a term is at most `2^80`, so a
-    // million-vertex ring still sums inside `i128` with 27 bits spare.
-    //
-    // Zipped, not indexed: the two views are the same length by construction
-    // and zipping is what keeps a bounds check out of either body. Both folds
-    // run strictly left to right, in ascending index order — `i128` addition
-    // is exact, so that is here for the reader rather than for the bits.
+    // ring's closing edge as one scalar fixup outside. Each term is at most
+    // `2^80`, so a million-vertex ring still sums inside `i128`.
     let (fx, fy) = (&xs[..n - 1], &ys[1..]);
     debug_assert_eq!(fx.len(), fy.len(), "the shoelace's offset views are parallel");
     let mut forward = DbuArea::new(0);
@@ -399,12 +319,8 @@ pub fn area2(xs: &[Dbu], ys: &[Dbu]) -> DbuArea {
     (forward - backward) + closing
 }
 
-/// Winding direction, from the sign of [`area2`].
-///
-/// `None` for a degenerate run with zero signed area.
-///
-/// The parallel-columns and domain preconditions are [`area2`]'s, asserted
-/// there on the way in; restating them would double the check on the one call.
+/// Winding direction, from the sign of [`area2`]; `None` for a degenerate run
+/// with zero signed area.
 pub fn winding_of(xs: &[Dbu], ys: &[Dbu]) -> Option<Winding> {
     match area2(xs, ys).raw().signum() {
         1 => Some(Winding::CounterClockwise),
@@ -428,12 +344,10 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let vx = i128::from(seg.b.x.raw() - seg.a.x.raw());
     let vy = i128::from(seg.b.y.raw() - seg.a.y.raw());
 
-    // Axis-aligned, including the degenerate segment that is a point. The
-    // nearest point is then `p` clamped into the segment's bounding box, so the
-    // answer is a sum of two squares with no division and no intermediate wider
-    // than `2^83`. Every shape this tree accepts is rectilinear
-    // (`ValidityError::NotRectilinear` is how the other kind leaves), so this is
-    // the path production takes and the only one whose overflow bound matters.
+    // Axis-aligned, including the degenerate segment that is a point: the
+    // nearest point is `p` clamped into the segment's box, so the answer is a
+    // sum of two squares with no division. Every shape this tree accepts is
+    // rectilinear, so this is the path production takes.
     if (vx == 0) | (vy == 0) {
         let dx = gap_outside(p.x, seg.a.x, seg.b.x);
         let dy = gap_outside(p.y, seg.a.y, seg.b.y);
@@ -449,9 +363,6 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     debug_assert!(len2 > 0, "a zero-length segment is axis-aligned and took the branch above");
 
     // Foot before `a`, or past `b`: the answer is that endpoint's own distance.
-    // These stay branches rather than a blend because the third case below
-    // divides by `len2` and would need its own guard anyway, and because this
-    // is a decision over six scalars, not a loop over bulk data.
     if along <= 0 {
         return DbuArea::new(wx * wx + wy * wy);
     }
@@ -466,21 +377,16 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let drop = cross(seg.a, seg.b, p).unsigned_abs();
     let scale = len2.unsigned_abs();
 
-    // Rounded away from zero, not truncated. A zero result has to mean "`p` is
-    // on the segment" and nothing else: `seg_seg_dist2` is defined against
-    // `segments_intersect` on exactly that equivalence, and truncation reports
-    // zero for every drop under one unit. The rounding is invisible on
-    // rectilinear input, which never reaches this line.
+    // Rounded away from zero, not truncated: a zero result has to mean "`p` is
+    // on the segment" and nothing else, and truncation reports zero for every
+    // drop under one unit.
     let dist2 = match drop.checked_mul(drop) {
         Some(num) => num / scale + u128::from(num % scale != 0),
-        // `cross²` reaches 166 bits at the top of the coordinate domain and
-        // `u128` holds 128, so the square is formed and divided at 256 bits
-        // instead. Same value, one slow path wider.
+        // `cross²` reaches 166 bits at the top of the coordinate domain, so the
+        // square is formed and divided at 256 bits instead.
         None => ceil_sq_div(drop, scale),
     };
 
-    // `drop` is `|v|` times the perpendicular distance, so the quotient is
-    // that distance squared, and both points are in domain.
     debug_assert!(
         dist2 <= 1u128 << 84,
         "a squared distance between two in-domain points"
@@ -495,17 +401,11 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
 
 /// `ceil(a² / d)` exactly, for `d > 0` and any `a`.
 ///
-/// The widening [`point_seg_dist2`]'s perpendicular drop needs and `i128`
-/// cannot hold: `a` reaches `2^83` at the corners of the coordinate domain, so
-/// `a²` reaches 166 bits. The square is formed as a 256-bit pair and divided
-/// by restoring shift-and-subtract — 256 fixed steps, no data-dependent branch
-/// in the body, the subtraction carried by a mask rather than an `if`.
-///
-/// Not fast, and it does not have to be: reaching it needs an oblique edge
-/// spanning most of the domain, and every shape this tree admits is
-/// rectilinear. It has to be *exact*, which is the whole point — what it
-/// replaces was a hardcoded zero, and zero is the answer that means "`p` is on
-/// the segment".
+/// `a` reaches `2^83` at the corners of the coordinate domain, so `a²` reaches
+/// 166 bits and is formed as a 256-bit pair, divided by restoring
+/// shift-and-subtract. Slow, and only reachable from an oblique edge spanning
+/// most of the domain; it has to be exact because zero is the answer that means
+/// "`p` is on the segment".
 fn ceil_sq_div(a: u128, d: u128) -> u128 {
     /// Low half of a `u128`, the split the schoolbook square below works in.
     const HALF: u128 = u64::MAX as u128;
@@ -521,9 +421,7 @@ fn ceil_sq_div(a: u128, d: u128) -> u128 {
     let lo = (ll & HALF) | (mid << 64);
     let hi = hh + (hl >> 64) + (hl >> 64) + (mid >> 64);
 
-    // The quotient is `(a/|v|)²`, a squared length, so it fits one word. That
-    // is the same `MAX_ABS_DBU` bound every `i128` product in this file rests
-    // on, restated where it is load-bearing.
+    // The quotient is `(a/|v|)²`, a squared length, so it fits one word.
     debug_assert!(hi < d, "a squared perpendicular drop fits 128 bits");
 
     let mut rem: u128 = 0;
@@ -547,11 +445,6 @@ fn ceil_sq_div(a: u128, d: u128) -> u128 {
 }
 
 /// Integer square root, rounding toward zero.
-///
-/// The one place a squared distance becomes a reported measurement. An
-/// off-by-one here broke three tests in the old tree and survived one mutation,
-/// so the test plan names its boundary cases explicitly: perfect squares, and
-/// the values either side of them.
 pub fn isqrt(value: DbuArea) -> Dbu {
     let raw = value.raw();
     debug_assert!(raw >= 0, "a negative area has no real square root");
@@ -560,9 +453,8 @@ pub fn isqrt(value: DbuArea) -> Dbu {
         "area past the 2^80 ceiling MAX_ABS_DBU exists to set"
     );
 
-    // `max(0)` rather than an `abs`: the root of a signed area is a length, and
-    // a negative one is a caller bug the assert above names. Zero is the
-    // fail-closed answer — a reported distance of zero over-reports.
+    // `max(0)` rather than `abs`: zero is the fail-closed answer, because a
+    // reported distance of zero over-reports.
     let root = raw.max(0).isqrt();
     debug_assert!(
         root <= i128::from(MAX_ABS_DBU),
@@ -577,9 +469,8 @@ pub fn isqrt(value: DbuArea) -> Dbu {
     Dbu::new_unchecked(clamped)
 }
 
-/// Squared distance between two closed segments.
-///
-/// The primitive under every spacing rule. Zero when they touch or cross.
+/// Squared distance between two closed segments; zero when they touch or
+/// cross.
 pub fn seg_seg_dist2(p: Seg, q: Seg) -> DbuArea {
     // Zero when they touch or cross, and only then. This branch is what makes
     // that exact rather than a rounding artefact of the drops below.
@@ -588,7 +479,7 @@ pub fn seg_seg_dist2(p: Seg, q: Seg) -> DbuArea {
     }
 
     // Disjoint segments take their nearest approach at an endpoint of one of
-    // them, so four point-to-segment drops decide it. Four is not bulk.
+    // them.
     let d = point_seg_dist2(p.a, q)
         .min(point_seg_dist2(p.b, q))
         .min(point_seg_dist2(q.a, p))

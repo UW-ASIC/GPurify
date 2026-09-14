@@ -1,35 +1,5 @@
-//! Borrowed validated geometry.
-//!
-//! Exact boolean operations need guarantees the raw store does not make: rings
-//! are simple, holes lie inside their outer boundary, winding is canonical.
-//! Establishing those is a pass; re-establishing them per rule was 43% of a
-//! signoff run in the old implementation.
-//!
-//! So validation happens once per layer into a [`ValidatedLayer`], and
-//! [`PolygonRef`] is a *borrowed* handle into it. There is no owned polygon
-//! type.
-//!
-//! # Why the coordinates are copied
-//!
-//! A [`ValidatedLayer`] carries its own coordinate columns rather than spans
-//! into the [`GeometryStore`] it was validated from. Spans were the original
-//! design and they cannot express the output of a boolean: two rectangles that
-//! partially overlap union into an L whose vertices exist in no store row, so
-//! `union_into` had no legal value to write. Owning the columns is what makes
-//! `core::boolean`'s four transforms — and therefore every derived layer —
-//! representable at all.
-//!
-//! The cost is one copy of one layer's coordinates per validation. It is paid
-//! once into a buffer the caller hoists and refills, and it buys back locality:
-//! a validated layer's rings are contiguous in validation order rather than
-//! scattered across the store's per-layer range.
-//!
-//! # The weakness, stated plainly
-//!
-//! An owned refined type cannot exist without having been validated. A borrowed
-//! view can, if someone constructs one over rows that were never checked. The
-//! only defence is that [`PolygonRef`]'s fields are private and its sole
-//! constructors are [`validate_layer_into`] and `core::boolean`.
+//! Borrowed validated geometry: simple rings, canonical winding, holes bound to
+//! their outer boundary, established once per layer.
 
 use crate::bbox::Bbox;
 use crate::ids::{LayerId, PolyId, RingId};
@@ -38,11 +8,8 @@ use crate::ops::{point_in_ring, self_intersects, winding_of, Point, Winding};
 use crate::store::GeometryStore;
 use gpurify_units::{Dbu, DbuArea};
 
-/// Why a polygon could not be validated.
-///
-/// Fail closed: an unvalidatable shape is an error, never a silently skipped
-/// row. The old implementation dropped a hole with no containing outer ring
-/// without a word, which removes area from a verification result.
+/// Why a polygon could not be validated. An unvalidatable shape is an error,
+/// never a silently skipped row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ValidityError {
     #[error("polygon {0:?} has fewer than three distinct vertices")]
@@ -57,39 +24,25 @@ pub enum ValidityError {
 
 /// One layer's geometry, validated and grouped into outer-plus-holes polygons.
 ///
-/// **Five questions.** In: a [`GeometryStore`] and a [`LayerId`], or the result
-/// of a boolean. Out: coordinate columns plus ring and polygon spans over them.
-/// How many: one per layer per run, reused across every rule on that layer.
-/// Access pattern: `SoA`; a boolean walks rings, a containment test walks
-/// polygons, a prune walks `poly_bbox` alone. Lifetime: phase — this is a
-/// reusable buffer, cleared and refilled per layer, never reallocated.
-/// Parallelisable: validation of distinct polygons is independent.
-///
-/// # Equality
-///
-/// [`PartialEq`] is **structural**: same layer tag, same coordinates, same
-/// rings, in the same order. That is stronger than region equality — the same
-/// region decomposed into different polygons compares unequal — so it is the
-/// right tool for determinism and for "these two runs agree", and the wrong one
-/// for "these two layers cover the same area". Region equality has no canonical
-/// form to compare against and goes through area and per-polygon fingerprints.
+/// [`PartialEq`] is *structural* — same layer tag, same coordinates, same rings
+/// in the same order — which is stronger than region equality: the same region
+/// decomposed into different polygons compares unequal.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ValidatedLayer {
     /// Which layer this was built from, or `None` for a boolean result, which
-    /// belongs to no single input layer. A mismatched pairing is catchable.
+    /// belongs to no single input layer.
     layer: Option<LayerId>,
     /// Validated vertex coordinates, one contiguous run per ring. Owned rather
     /// than borrowed from the store because a boolean produces vertices no
-    /// store row holds — see the module doc.
+    /// store row holds.
     verts_x: Vec<Dbu>,
     verts_y: Vec<Dbu>,
     /// One row per ring: its coordinate run, its winding, and the store row it
     /// came from.
     ///
-    /// `ring_poly` is provenance, not identity. For a ring a boolean produced
-    /// it is the lowest [`PolyId`] among the input polygons that contributed an
-    /// edge to it, which is deterministic and lets a rule on a derived layer
-    /// still blame a violation on real geometry.
+    /// `ring_poly` is provenance, not identity: for a ring a boolean produced
+    /// it is the lowest [`PolyId`] among the inputs that contributed an edge to
+    /// it.
     ring_vert_start: Vec<u32>,
     ring_vert_len: Vec<u32>,
     ring_poly: Vec<PolyId>,
@@ -98,9 +51,6 @@ pub struct ValidatedLayer {
     /// into the ring columns. Ring 0 of every span is the outer boundary.
     poly_ring_start: Vec<u32>,
     poly_ring_len: Vec<u32>,
-    /// Precomputed per polygon, for the same reason
-    /// [`GeometryStore::poly_bbox`] is: a pairwise prune reads nothing else,
-    /// and a derived layer has no store column to read it from.
     poly_bbox: Vec<Bbox>,
 }
 
@@ -115,22 +65,14 @@ impl ValidatedLayer {
         self.len() == 0
     }
 
-    /// Borrow one validated polygon.
-    ///
-    /// Takes the store as a parameter rather than holding a reference, so
-    /// `ValidatedLayer` stays a plain owned buffer the caller can keep across
-    /// runs and refill. The coordinates come from this layer's own columns; the
-    /// store is what resolves `ring_poly` provenance and catches a layer paired
-    /// with the wrong store.
+    /// Borrow one validated polygon; the `store` parameter exists only to catch
+    /// a layer paired with the wrong store.
     pub fn get<'a>(&'a self, store: &'a GeometryStore, idx: u32) -> PolygonRef<'a> {
         debug_assert!(
             (idx as usize) < self.len(),
             "polygon {idx} is past the end of a {}-polygon layer",
             self.len()
         );
-        // The pairing check the `store` parameter exists for: a ring's
-        // provenance names a row of *this* store, so a layer validated from a
-        // different one is caught here rather than by a wrong report later.
         debug_assert!(
             self.ring_poly[self.poly_ring_start[idx as usize] as usize].idx() < store.poly_count(),
             "this layer's provenance does not name a row of this store"
@@ -139,23 +81,13 @@ impl ValidatedLayer {
     }
 
     /// The bounding-box column, one row per polygon, in `get` index order.
-    ///
-    /// The slice a pairwise prune actually scans — the counterpart of
-    /// [`GeometryStore::layer_bboxes`] for a layer that may have been produced
-    /// by a boolean and so has no rows in any store.
     pub fn bboxes(&self) -> &[Bbox] {
         debug_assert_eq!(self.poly_bbox.len(), self.poly_ring_start.len());
         &self.poly_bbox
     }
 
-    /// Every ring of one polygon, outer first, without a store.
-    ///
-    /// `pub(crate)`, for `core::boolean` alone. [`get`](Self::get)'s `store`
-    /// parameter is vestigial for coordinates — `docs/SIGNATURE_DEFECTS.md`
-    /// records it as surviving only for provenance and pairing — and a boolean
-    /// reads neither. Handing `get` an empty scratch store to satisfy the frozen
-    /// signature would defeat the pairing check for every real caller, so the
-    /// one caller that has no store takes this route instead.
+    /// Every ring of one polygon, outer first, without a store: the route for
+    /// `core::boolean`, which has no store to satisfy [`get`](Self::get) with.
     pub(crate) fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
         debug_assert!(
             (idx as usize) < self.len(),
@@ -169,10 +101,6 @@ impl ValidatedLayer {
     }
 
     /// Borrow one ring by its index into this layer's ring columns.
-    ///
-    /// Private: a ring index is meaningless outside the polygon that owns it,
-    /// and [`PolygonRef::outer`] / [`PolygonRef::holes`] are the two ways a
-    /// caller reaches one.
     fn ring(&self, ring: u32) -> RingRef<'_> {
         let start = self.ring_vert_start[ring as usize] as usize;
         let len = self.ring_vert_len[ring as usize] as usize;
@@ -188,13 +116,6 @@ impl ValidatedLayer {
 
 /// A polygon that is known valid: simple rings, canonical winding, holes
 /// contained by their outer boundary.
-///
-/// Downstream takes this and never re-derives what it guarantees. Constructible
-/// only through [`ValidatedLayer::get`].
-///
-/// No store reference is kept. Every coordinate this hands out comes from the
-/// layer's own columns, so holding one would be a borrow nothing reads — the
-/// store `get` takes is spent on the pairing check there and goes no further.
 #[derive(Debug, Clone, Copy)]
 pub struct PolygonRef<'a> {
     layer: &'a ValidatedLayer,
@@ -212,7 +133,7 @@ impl<'a> PolygonRef<'a> {
         self.layer.ring(ring)
     }
 
-    /// The holes. Empty for a simply-connected polygon, which is most of them.
+    /// The holes. Empty for a simply-connected polygon.
     pub fn holes(self) -> impl Iterator<Item = RingRef<'a>> + 'a {
         let layer = self.layer;
         let start = layer.poly_ring_start[self.idx as usize];
@@ -221,37 +142,22 @@ impl<'a> PolygonRef<'a> {
         (start + 1..start + len).map(move |ring| layer.ring(ring))
     }
 
-    /// O(1): read out of the layer's own `poly_bbox` column, not recomputed
-    /// from the vertices.
+    /// The polygon's bounding box.
     pub fn bbox(self) -> Bbox {
         self.layer.poly_bbox[self.idx as usize]
     }
 
-    /// The store row to blame a finding on.
-    ///
-    /// Provenance, not identity — the field's own documentation. For a polygon
-    /// validated straight off a layer this *is* its [`PolyId`]; for one a
-    /// boolean produced it is the lowest [`PolyId`] among the inputs that
-    /// contributed an edge to the outer ring, which is deterministic.
-    ///
-    /// It exists because a rule that works on merged geometry still has to name
-    /// a shape a human can find in the layout. `drc::rules::width` merges a
-    /// layer's touching outers before measuring a notch — a notch across a
-    /// fractured figure belongs to no single store row — and reports the
-    /// violation against this.
+    /// The store row to blame a finding on: provenance, not identity. For a
+    /// boolean result it is the lowest contributing [`PolyId`].
     pub fn provenance(self) -> PolyId {
         let ring = self.layer.poly_ring_start[self.idx as usize] as usize;
         self.layer.ring_poly[ring]
     }
 
     /// Signed area of the outer boundary minus the holes.
-    ///
-    /// `DbuArea` and exact: this feeds `min_area` and density, where a rounded
-    /// answer changes a verdict.
     pub fn area(self) -> gpurify_units::DbuArea {
         // A hole winds clockwise, so its doubled area is already negative and
-        // the subtraction is a sum. A polygon's ring count is a handful, not
-        // bulk data.
+        // the subtraction is a sum.
         let doubled = self
             .holes()
             .fold(self.outer().area2(), |total, hole| total + hole.area2());
@@ -277,8 +183,6 @@ pub struct RingRef<'a> {
 
 impl<'a> RingRef<'a> {
     /// The two coordinate columns, parallel and of equal length.
-    ///
-    /// Slices, not points, so an edge scan can vectorise.
     pub fn coords(self) -> (&'a [gpurify_units::Dbu], &'a [gpurify_units::Dbu]) {
         debug_assert_eq!(self.xs.len(), self.ys.len(), "columns are parallel");
         (self.xs, self.ys)
@@ -288,8 +192,7 @@ impl<'a> RingRef<'a> {
         self.winding
     }
 
-    /// Twice the signed area. Doubled to stay exact in integers — the halving
-    /// is the only place a rounding could enter, so it does not happen here.
+    /// Twice the signed area, doubled to stay exact in integers.
     pub fn area2(self) -> gpurify_units::DbuArea {
         let doubled = crate::ops::area2(self.xs, self.ys);
         debug_assert_eq!(
@@ -308,22 +211,13 @@ impl<'a> RingRef<'a> {
 /// the row count.
 const NOT_OUTER: u32 = u32::MAX;
 
-/// Validate every polygon on one layer.
-///
-/// **Transform, A-to-B.** Caller owns `out`, which is cleared and refilled;
-/// hoisting it above a per-layer loop is the point. All data flow is in the
-/// signature.
-///
-/// The layer's coordinates are copied into `out`'s own columns, so a
-/// `ValidatedLayer` is readable without the store and a boolean over one can
-/// write vertices the store does not hold. `out.bboxes()` is filled here too.
+/// Validate every polygon on one layer into `out`, which is cleared and
+/// refilled.
 ///
 /// Fails on the first invalid polygon rather than accumulating: a deck run
 /// against geometry the tool cannot represent is not partially meaningful.
-///
-/// Rectilinear only. Arbitrary-angle input is [`ValidityError::NotRectilinear`],
-/// not an approximation — the previous general-angle path failed open in three
-/// places and silently dropped area.
+/// Rectilinear only — arbitrary-angle input is
+/// [`ValidityError::NotRectilinear`], not an approximation.
 pub fn validate_layer_into(
     store: &GeometryStore,
     layer: LayerId,
@@ -339,9 +233,6 @@ pub fn validate_layer_into(
     out.reset(Some(layer));
 
     // Pass one: shape validation, splitting the layer's rows by winding.
-    //
-    // Every `if` inside `classify_ring` is a rejection that is not taken on
-    // valid input, so all of them predict at ~100%.
     let rows_len = (rows.end - rows.start) as usize;
     let first = rows.start as usize;
     let mut outers: Vec<PolyId> = Vec::with_capacity(rows_len);
@@ -371,16 +262,9 @@ pub fn validate_layer_into(
     debug_assert_eq!(outer_slot.len(), rows_len, "one role per row on the layer");
 
     // Pass two: bind each hole to the innermost outer boundary containing it.
-    //
-    // Indexed rather than pairwise. `index::candidate_pairs_into` at a distance
-    // of zero is every pair on this layer whose boxes touch, and containment
-    // implies touching, so every (hole, outer) pair a full scan would have
-    // considered is in that list. A pair the index somehow lost surfaces as
-    // `OrphanHole` or as a wider container, both of which the assertions below
-    // catch — the direction this can fail in is closed.
+    // `candidate_pairs_into` at distance zero is every pair whose boxes touch,
+    // and containment implies touching, so no (hole, outer) pair is lost.
     let mut owned: Vec<(usize, PolyId)> = Vec::with_capacity(holes.len());
-    // A layer of outer boundaries only is the common case, and it pays nothing:
-    // no holes, no index, no pairs.
     if !holes.is_empty() {
         let mut index = SpatialIndex::default();
         SpatialIndex::build_into(store, layer, &mut index);
@@ -388,14 +272,9 @@ pub fn validate_layer_into(
         candidate_pairs_into(store, &index, Dbu::new_unchecked(0), &mut pairs);
 
         // Drop every pair that cannot be a containment: two outers, two holes,
-        // or an outer whose box does not enclose the other's. Both `contains`
-        // calls are evaluated and blended rather than selected on `a_outer` —
-        // eight integer compares are cheaper than the branch they replace, and
-        // the blend is what leaves the store below unconditional.
-        //
-        // `nested` is reserved for the whole input, not for the survivors: that
-        // over-reservation is the memory-for-branches trade that lets `w` carry
-        // the predicate instead of a jump.
+        // or an outer whose box does not enclose the other's. `nested` is
+        // reserved for the whole input, not the survivors, so the store below
+        // stays unconditional.
         let mut nested: Vec<(PolyId, PolyId)> = Vec::with_capacity(pairs.len());
         let out = &mut nested.spare_capacity_mut()[..pairs.len()];
         let mut w = 0usize;
@@ -410,12 +289,6 @@ pub fn validate_layer_into(
             // `usize::from(keep)`, which is zero or one because Rust guarantees
             // a `bool` is 0 or 1. So `w` can never outrun `i`.
             debug_assert!(w <= i);
-            // The store must be *unchecked*: `w`'s step is data-dependent, so
-            // LLVM gets no affine recurrence for it, cannot prove `w <= i`, and
-            // emits a live `cmp/jae` to a panic edge — an implicit branch in
-            // the loop. Measured 1.19x at 8k / 1.18x at 200k / 1.06x at 4M,
-            // `docs/BULK_MEASUREMENTS.md` §4.
-            //
             // SAFETY: `w <= i < pairs.len() == out.len()`, from the induction
             // above. Slots the predicate rejected stay uninitialised and are
             // never read, because `set_len(w)` truncates them away, and
@@ -432,20 +305,13 @@ pub fn validate_layer_into(
             "the containment candidates are a subset of the touching pairs"
         );
 
-        // A scatter: the write index is the hole's row, a function of the
-        // pair's contents, so this is neither elementwise nor a fold and the
-        // rows are not independent.
-        //
         // `best_area` starts above any real box area — the whole coordinate
         // domain squared is `2^82` — so "no container yet" and "a wider
-        // container" are the same comparison and there is no second sentinel to
-        // test in the hot path.
+        // container" are the same comparison, with no second sentinel.
         let mut best_area = vec![DbuArea::new(i128::MAX); rows_len];
         let mut best_slot = vec![NOT_OUTER; rows_len];
         for &(a, b) in &nested {
-            // Which of the pair is the outer. Both slots are loaded
-            // unconditionally so neither side of the choice hides a load, which
-            // leaves three register selects LLVM lowers to `cmov`.
+            // Which of the pair is the outer.
             let a_slot = outer_slot[a.idx() - first];
             let b_slot = outer_slot[b.idx() - first];
             let a_is_hole = a_slot == NOT_OUTER;
@@ -467,16 +333,12 @@ pub fn validate_layer_into(
                 x: hole_xs[0],
                 y: hole_ys[0],
             };
-            // Guards the expensive side: a point-in-ring walk costs a pass over
-            // the outer's vertices, and the box test in the compact above is
-            // what keeps it off nearly every pair.
             if !point_in_ring(ring, probe) {
                 continue;
             }
             // Innermost wins: under nesting, the smallest containing box is the
             // boundary the hole actually punctures. Strict `<`, and the pairs
-            // arrive ascending, so a tie keeps the lower store row — the same
-            // choice the pairwise scan made.
+            // arrive ascending, so a tie keeps the lower store row.
             let area = store.poly_bbox(outer).area();
             let row = hole.idx() - first;
             if area < best_area[row] {
@@ -507,10 +369,6 @@ pub fn validate_layer_into(
     );
 
     // Pass three: emit, one contiguous ring span per polygon, outer first.
-    //
-    // Each iteration appends a data-dependent *number* of rings, and the inner
-    // walk over `owned` is a merge against a cursor that carries across
-    // iterations — a chain, so this neither vectorises nor partitions.
     let mut cursor = 0usize;
     for (slot, &outer) in outers.iter().enumerate() {
         let span_start = u32::try_from(out.ring_vert_start.len()).expect("rings fit a u32");
@@ -545,9 +403,6 @@ pub fn validate_layer_into(
 
 impl ValidatedLayer {
     /// Empty the buffer for reuse, keeping every column's capacity.
-    ///
-    /// `clear`, never a fresh `Vec`: hoisting one `ValidatedLayer` above a loop
-    /// over layers is the reason this type is caller-owned.
     fn reset(&mut self, layer: Option<LayerId>) {
         self.layer = layer;
         self.verts_x.clear();
@@ -579,10 +434,9 @@ impl ValidatedLayer {
 
 /// Validate one coordinate run and report the direction it winds.
 ///
-/// **Decision** — one ring in, one winding or one typed refusal out. The check
-/// order is part of the answer, not an implementation detail: a bowtie is both
-/// non-simple and non-rectilinear, and "it crosses itself" is the finding that
-/// names what is actually wrong with it.
+/// The check order is part of the answer: a bowtie is both non-simple and
+/// non-rectilinear, and "it crosses itself" is the finding that names what is
+/// actually wrong with it.
 fn classify_ring(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Result<Winding, ValidityError> {
     debug_assert_eq!(xs.len(), ys.len(), "the store's columns are parallel");
     let n = xs.len();
@@ -590,13 +444,8 @@ fn classify_ring(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Result<Winding, Validi
         return Err(ValidityError::Degenerate(poly));
     }
 
-    // One pass over the ring's edges, strictly ascending. Seeding with the last
-    // vertex is what puts the closing edge in the same pass with no fixup
-    // outside it, and the body carries two independent flags rather than a
-    // branch: `distinct` fails on a zero-length edge, `rectilinear` on a
-    // diagonal one. `&=` on `bool` is `BitAndAssign`, not `&&`, so neither flag
-    // short-circuits into a jump. The columns were asserted parallel above, so
-    // `n` drives both.
+    // Seeded with the last vertex so the closing edge is in the same pass.
+    // `distinct` fails on a zero-length edge, `rectilinear` on a diagonal one.
     let (mut px, mut py) = (xs[n - 1], ys[n - 1]);
     let (mut distinct, mut rectilinear) = (true, true);
     for i in 0..n {
@@ -624,10 +473,8 @@ fn classify_ring(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Result<Winding, Validi
     winding_of(xs, ys).ok_or(ValidityError::Degenerate(poly))
 }
 
-/// Which ring of a polygon a [`RingId`] refers to.
-///
-/// `RingId(0)` is always the outer boundary. Kept as a free function rather
-/// than a method so it reads at the call site without borrowing anything.
+/// Whether a [`RingId`] names a polygon's outer boundary, which is always
+/// `RingId(0)`.
 pub const fn is_outer(ring: RingId) -> bool {
     ring.0 == 0
 }

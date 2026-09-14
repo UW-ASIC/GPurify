@@ -1,8 +1,4 @@
 //! Spatial index and candidate-pair generation.
-//!
-//! This is the module that stops every pairwise rule being O(n²), and it is the
-//! module whose mistakes are invisible. It carries a test adapter for that
-//! reason — see [`crate::observe`] for why "cheap" is not the standard.
 
 use crate::bbox::Bbox;
 use crate::ids::{LayerId, PolyId};
@@ -12,28 +8,11 @@ use gpurify_units::{Dbu, MAX_ABS_DBU};
 
 /// A two-level uniform grid over one layer's bounding boxes.
 ///
-/// **Five questions.** In: a bounding-box column. Out: bucket offsets and a
-/// row-id list, one pair per level. How many: one per layer per run. Access
-/// pattern: built once, scanned many times, always in bucket order — so it is
-/// CSR, not a map of vectors. Lifetime: phase; cleared and rebuilt per layer
-/// from one reusable allocation. Parallelisable: bucket counting is a
-/// histogram, and the scan over buckets partitions cleanly.
-///
-/// A grid rather than a tree because layout geometry is close to uniformly
-/// dense at the scale that matters, and a grid's build is a counting sort with
-/// no pointer chasing.
-///
-/// **Two levels rather than one.** A box is filed under every cell it overlaps,
-/// so a single grid sized to the median box files one reticle-sized shape under
-/// `(span / cell)²` buckets — memory quadratic in the ratio of the largest
-/// shape to the median, and a layer mixing a few huge shapes with a million
-/// contacts is an ordinary layer, not a pathological one. Each level's cell is
-/// therefore at least as wide as the widest box that level holds, which caps a
-/// box at two cells per axis and the whole index at `4n` filings whatever the
-/// mix of scales. The fine level takes everything up to the median extent
-/// widened for aspect ratio; the coarse level takes the rest at a cell of the
-/// maximum extent, and is not built at all when nothing is that large — which
-/// is the common case, and why the single-scale layer pays nothing for this.
+/// A box is filed under every cell it overlaps, so each level's cell is at
+/// least as wide as the widest box that level holds. That caps a box at two
+/// cells per axis and the whole index at `4n` filings whatever the mix of
+/// scales; a single level sized to the median would be quadratic in the ratio
+/// of the largest shape to the median.
 #[derive(Debug, Default)]
 pub struct SpatialIndex {
     layer: Option<LayerId>,
@@ -45,9 +24,6 @@ pub struct SpatialIndex {
 }
 
 /// One level: a CSR bucket table over the subset of a layer that belongs to it.
-///
-/// The two levels share an `extent`, so a query window means the same region in
-/// both and only the cell size differs.
 #[derive(Debug, Default)]
 struct Grid {
     cell_size: Dbu,
@@ -72,12 +48,8 @@ fn axis_cells(span: i64, cell: i64) -> u32 {
     // `i64::div_ceil` is still unstable; both operands are positive here.
     let cells = (span + cell - 1) / cell;
     debug_assert!(cells >= 1, "grid axis {cells}");
-    // Checked in every profile, not just debug. The bound is not local — the
-    // caller picks `cell` no smaller than `span / side`, so `cells <= side + 1`
-    // and `side` is `isqrt(4 * rows + 64)` — and a truncation here would not
-    // fail loudly: `nx` is the stride of the bucket table, so a wrapped axis
-    // count silently misfiles rows and loses pairs, which is the fail-open
-    // direction. One divide already costs more than the compare.
+    // Checked in every profile: `nx` is the stride of the bucket table, so a
+    // wrapped axis count silently misfiles rows and loses pairs.
     u32::try_from(cells).expect("more grid cells on one axis than a u32 holds")
 }
 
@@ -93,21 +65,15 @@ fn cell_span(lo: i64, hi: i64, origin: i64, cell: i64, cells: u32) -> (u32, u32)
     let first_cell = ((lo - origin).max(0) / cell).min(last);
     let final_cell = ((hi - origin).max(0) / cell).min(last);
     debug_assert!(first_cell <= final_cell);
-    // Both are clamped into `0 ..= last` two lines up and `last` came from a
-    // `u32`, so neither conversion can fail; `try_from` is how that clamp is
-    // said out loud rather than asserted somewhere else.
     (
         u32::try_from(first_cell).expect("the clamp bounds this by `cells - 1`"),
         u32::try_from(final_cell).expect("the clamp bounds this by `cells - 1`"),
     )
 }
 
-/// The uniforms one level's two filing passes share, hoisted above both.
-///
-/// One struct rather than six loose locals because the two passes have to agree
-/// *exactly*: a row counted by one and skipped by the other corrupts the write
-/// cursors, and the only way to guarantee that is for both to ask the same
-/// function.
+/// The uniforms one level's two filing passes share. Both passes must agree
+/// exactly: a row counted by one and skipped by the other corrupts the write
+/// cursors.
 struct Level {
     ox: i64,
     oy: i64,
@@ -122,10 +88,6 @@ impl Level {
     /// `None` when `b`'s extent belongs to the other level.
     fn footprint(&self, b: Bbox) -> Option<(u32, u32, u32, u32)> {
         let ext = box_extent(b);
-        // Not a bulk branch: the taken side runs a nested cell loop and a
-        // scatter, which is the expensive-taken-side escape valve, and the
-        // predicate is a box's size against a constant so it predicts with
-        // whatever grain the layer's size distribution has.
         if ext < self.min_ext || ext > self.cell {
             return None;
         }
@@ -140,12 +102,8 @@ impl Level {
 }
 
 impl SpatialIndex {
-    /// Build over one layer.
-    ///
-    /// **Transform, dispatcher.** Caller owns the index and it is cleared and
-    /// refilled, so a loop over layers reuses one allocation. The dispatch is
-    /// on box extent: each row goes to exactly one level, and each level is a
-    /// uniform transform over the rows it kept.
+    /// Build over one layer into a caller-owned index, which is cleared and
+    /// refilled. Each row goes to exactly one level, dispatched on box extent.
     pub fn build_into(store: &GeometryStore, layer: LayerId, out: &mut Self) {
         let bboxes = store.layer_bboxes(layer);
         let rows = store.polys_on_layer(layer);
@@ -160,15 +118,12 @@ impl SpatialIndex {
         out.coarse.clear();
 
         let n = bboxes.len();
-        // Most of a PDK's layer table is empty, so this is the common case and
-        // it is an answer, not an error: no rows, no buckets, no pairs.
+        // An empty layer is an answer, not an error: no rows, no buckets, no
+        // pairs.
         if n == 0 {
             return;
         }
 
-        // A strict left fold in ascending row order. `union` is a per-coordinate
-        // min/max, so the body carries no data-dependent branch and the whole
-        // accumulator is one vectorisable chain.
         let mut extent = Bbox::EMPTY;
         for &b in bboxes {
             extent = Bbox::union(extent, b);
@@ -194,8 +149,7 @@ impl SpatialIndex {
         }
         debug_assert_eq!(extents.len(), n, "one extent per bounding box");
 
-        // Read before `select_nth_unstable` below reorders the column. `max` is
-        // a `cmov`, not a branch, so the fold is flat whatever the size mix.
+        // Read before `select_nth_unstable` below reorders the column.
         let mut widest = 0i64;
         for &e in &extents {
             widest = widest.max(e);
@@ -203,8 +157,6 @@ impl SpatialIndex {
 
         let mid = n / 2;
         extents.select_nth_unstable(mid);
-        // `n` is a layer's row count and rows are addressed by `u32` ids, so
-        // the conversion is total; spelling it `try_from` is what says so.
         let rows_i64 = i64::try_from(n).expect("a layer's row count fits an i64");
         let side = (4 * rows_i64 + 64).isqrt().max(1);
         let fine_cell = extents[mid]
@@ -214,9 +166,8 @@ impl SpatialIndex {
         debug_assert!(widest >= extents[mid], "the maximum is not below the median");
 
         Grid::build_into(bboxes, rows.start, extent, fine_cell, 0, &mut out.fine);
-        // Not a bulk branch: one test per layer, and the taken side is a whole
-        // second build. Skipping it is the common case — a layer whose widest
-        // box already fits the fine cell needs no second level at all.
+        // A layer whose widest box already fits the fine cell needs no second
+        // level at all.
         if widest > fine_cell {
             Grid::build_into(
                 bboxes,
@@ -231,9 +182,6 @@ impl SpatialIndex {
         debug_assert!(!out.fine.rows.is_empty(), "the median box is always fine");
         let filed = out.fine.rows.len() + out.coarse.rows.len();
         debug_assert!(filed >= n, "every row is filed under at least one cell");
-        // The whole point of the second level: a box never spans more than two
-        // cells per axis of the level that holds it, so filing is linear in the
-        // row count and independent of the ratio of largest box to median.
         debug_assert!(
             filed <= 4 * n,
             "{filed} filings for {n} rows, so some box spans more than 2x2 cells"
@@ -265,10 +213,8 @@ impl Grid {
     /// File every box whose extent lies in `min_ext ..= cell` into a CSR bucket
     /// table over `extent` at that cell size.
     ///
-    /// **Transform.** `out` is caller-owned, cleared and refilled. The caller
-    /// picks `cell` so that no member box is wider than it, which is what bounds
-    /// a box to a 2x2 cell footprint; the assertion in the counting loop is that
-    /// contract, checked.
+    /// The caller picks `cell` so that no member box is wider than it, which is
+    /// what bounds a box to a 2x2 cell footprint.
     fn build_into(
         bboxes: &[Bbox],
         first_row: u32,
@@ -298,24 +244,10 @@ impl Grid {
             ny,
         };
 
-        // Both loops are scatter-accumulate: the output index is a function of
-        // the row's coordinates, so neither vectorises without lane-conflict
-        // detection.
-        //
-        // The histogram is single-threaded, and not because nobody got to it.
-        // The parallel form — per-thread counts merged before the prefix sum —
-        // needs `rayon`, and `gpurify-core` sits at the base of the module graph
-        // with exactly two dependencies, `gpurify-units` and `thiserror`. Adding
-        // a third there is a manifest decision above a body, and it is filed in
-        // `docs/SIGNATURE_DEFECTS.md` with the same blocker in `lvs::graph` and
-        // `erc::Scratch`.
-        //
         // A box is filed under *every* cell it overlaps, not just the one
         // holding a corner. That is what makes the bucket test in `gather_level`
-        // sound — the alternative, one cell per box plus a global
-        // maximum-extent margin, is fail-open the moment one reticle-sized
-        // shape widens the margin past anything useful. The level split is what
-        // keeps "every cell it overlaps" bounded at four.
+        // sound; one cell per box plus a global maximum-extent margin is
+        // fail-open the moment one reticle-sized shape widens the margin.
         let mut members = 0usize;
         for &b in bboxes {
             let Some((c0, c1, r0, r1)) = level.footprint(b) else {
@@ -338,8 +270,6 @@ impl Grid {
             return;
         }
 
-        // A prefix sum is a chain — row `b` reads what row `b - 1` wrote — so
-        // it is loop-carried by construction and does not vectorise.
         for b in 1..=buckets {
             out.bucket_start[b] += out.bucket_start[b - 1];
         }
@@ -351,14 +281,7 @@ impl Grid {
         // `bucket_start[b]` doubles as bucket `b`'s write cursor, so no second
         // offset array is allocated. Rows are filed in ascending order, which
         // is what lets `gather_level` find the `b > a` suffix by binary search.
-        // Counting up in the id domain rather than `enumerate` + a narrowing
-        // cast: `first_row .. first_row + bboxes.len()` is the layer's own row
-        // range, so the id is exact by construction and no cast appears in the
-        // body of a scatter.
         for (poly, &b) in (first_row..).zip(bboxes) {
-            // The same `footprint` call as the counting loop, which is the
-            // point of the shared function: a row counted there and skipped
-            // here, or the reverse, corrupts the cursors.
             let Some((c0, c1, r0, r1)) = level.footprint(b) else {
                 continue;
             };
@@ -390,8 +313,7 @@ impl Grid {
         self.bucket_start.len().saturating_sub(1)
     }
 
-    /// Grid shape, derived rather than stored: `extent` and `cell_size` already
-    /// fix it, and a second copy is a second thing to keep in step.
+    /// Grid shape, derived from `extent` and `cell_size`.
     fn dims(&self) -> (u32, u32) {
         let cell = self.cell_size.raw();
         let nx = axis_cells(self.extent.xhi.raw() - self.extent.xlo.raw() + 1, cell);
@@ -415,40 +337,28 @@ impl Grid {
     }
 }
 
-/// What crossing the prune seam did.
-///
-/// Not derivable from the output: a prune that wrongly rejects a pair returns a
-/// shorter list that is still perfectly well-formed. The property worth testing
-/// is *no rejected pair would have passed the exact predicate*, and it is only
-/// expressible with this.
+/// Seam reporting what the prune did, which the output does not record: a
+/// prune that wrongly rejects a pair returns a shorter but well-formed list.
 pub trait ObservePairs: Observer {
     /// A pair was emitted as a candidate.
     fn emitted(&mut self, a: PolyId, b: PolyId);
-    /// A pair was rejected by the prune. The argument of the whole seam.
+    /// A pair was rejected by the prune.
     fn rejected(&mut self, a: PolyId, b: PolyId);
     /// A whole bucket was skipped without examining its rows.
     fn bucket_skipped(&mut self, bucket: u32, rows: u32);
 }
 
-/// The null adapter. Empty bodies on a zero-sized type, so the whole seam folds
-/// away behind `ENABLED == false`; the parameters are named out because there is
-/// nothing to name them for.
 impl ObservePairs for NoObserve {
     fn emitted(&mut self, _a: PolyId, _b: PolyId) {}
     fn rejected(&mut self, _a: PolyId, _b: PolyId) {}
     fn bucket_skipped(&mut self, _bucket: u32, _rows: u32) {}
 }
 
-/// Every pair of polygons on one layer within `distance` of each other.
+/// Every pair of polygons on one layer within `distance` of each other, with
+/// `a < b` and in ascending order.
 ///
-/// **Transform, gatherer.** Caller owns `out`, cleared and refilled. Pairs are
-/// emitted with `a < b` and in ascending order, so the result is deterministic
-/// regardless of how the index was built — a requirement, not a nicety, since
-/// output ordering is gated.
-///
-/// The result is a *superset*: a pair here may still fail the exact check. A
-/// pair absent from here is never checked again by anyone, which is the whole
-/// risk this module carries.
+/// The result is a *superset*: a pair here may still fail the exact check, but
+/// a pair absent from here is never checked again by anyone.
 pub fn candidate_pairs_into(
     store: &GeometryStore,
     index: &SpatialIndex,
@@ -459,10 +369,6 @@ pub fn candidate_pairs_into(
 }
 
 /// [`candidate_pairs_into`] with the seam exposed.
-///
-/// Private: the observer is a test concern and does not belong in this module's
-/// interface. Adapter tests are therefore unit tests in this crate — the
-/// deliberate trade recorded in [`crate::observe`].
 fn candidate_pairs_observed<O: ObservePairs>(
     store: &GeometryStore,
     index: &SpatialIndex,
@@ -471,14 +377,9 @@ fn candidate_pairs_observed<O: ObservePairs>(
     observer: &mut O,
 ) {
     out.clear();
-    // An index that was never built is not an empty layer: `build_into` always
-    // names the layer it indexed, so `None` here means a caller queried a
-    // `default()`. Returning an empty list for it would report a clean check
-    // that never ran — the fail-open shape `docs/VOCABULARY.md` §3 names — so
-    // this is an `expect` and not a `debug_assert`: the signature has no error
-    // channel, and a release build that answers the query anyway is the exact
-    // defect the comment above describes. One predictable test per query call,
-    // not per pair.
+    // An index that was never built is not an empty layer: `None` means a
+    // caller queried a `default()`, and an empty list would report a clean
+    // check that never ran. `expect`, not `debug_assert`, in every profile.
     let layer = index.layer.expect(
         "an index that was never built cannot answer a query: an empty pair \
          list would read as a spacing check that ran and found nothing",
@@ -498,20 +399,9 @@ fn candidate_pairs_observed<O: ObservePairs>(
 /// Gather every row `index` can reach from each row of `layer`, then prune the
 /// result with the exact box predicate.
 ///
-/// **Transform, gatherer.** The one implementation both pair queries are
-/// spellings of; `SAME` is [`gather_near`]'s const parameter and says `index`
-/// holds `layer`'s own rows, so a pair is emitted once with `a < b`.
-///
-/// No scratch buffer. The gather writes the raw superset straight into `out`
-/// and the compact runs over it in place: the write cursor `w` never outruns
-/// the read cursor `i`, so a row is only ever overwritten after it has been
-/// read. `out` is the caller's, reused across calls, and it was already sized
-/// for the whole input rather than the survivors — the memory-for-branches
-/// trade the compact needs — so the second allocation bought nothing.
-///
-/// The gather appends a data-dependent number of pairs per row; the elementwise
-/// part of the transform is the branchless compact below, and that is where the
-/// exact predicate lives.
+/// `SAME` says `index` holds `layer`'s own rows, so a pair is emitted once with
+/// `a < b`. The gather writes the raw superset straight into `out` and the
+/// compact runs over it in place.
 fn prune_pairs<const SAME: bool, O: ObservePairs>(
     store: &GeometryStore,
     index: &SpatialIndex,
@@ -533,16 +423,14 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
     );
     let examined = out.len();
 
-    // Replayed before the compact rather than after, because the compact is now
-    // what destroys the examined list. The observer reads it as a shared slice,
-    // so it still cannot reach the answer.
+    // Before the compact, which destroys the examined list.
     if O::ENABLED {
         report_prune(store, out, distance, observer);
     }
 
-    // The branchless compact, in place over the examined pairs. Survivors move
-    // down into slots already read this pass, so no second buffer is needed and
-    // no store is conditional; the predicate lives in the *index* `w`.
+    // Branchless compact, in place: survivors move down into slots already read
+    // this pass, so the predicate lives in the *index* `w` and no store is
+    // conditional.
     let kept = {
         let pairs = out.as_mut_slice();
         debug_assert_eq!(pairs.len(), examined, "the compact reads what the gather wrote");
@@ -556,12 +444,6 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
             // why reading `pairs[i]` before the store is sound: slot `i` is
             // still its own until some later iteration lands on it.
             debug_assert!(w <= i);
-            // The store is unchecked because `w`'s step is data-dependent: LLVM
-            // gets no affine recurrence for it, cannot prove `w <= i`, and emits
-            // a live `cmp/jae` to a panic edge that pins the loop to one element
-            // per iteration. Unchecked over checked measures 1.19x at 8k, 1.18x
-            // at 200k, 1.06x at 4M — `docs/BULK_MEASUREMENTS.md` §4.
-            //
             // SAFETY: `w <= i < examined == pairs.len()`, from the induction.
             unsafe { *pairs.get_unchecked_mut(w) = (a, b) };
             w += usize::from(p);
@@ -580,14 +462,8 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
 
 /// Replay the exact predicate over the examined pairs, for the observer only.
 ///
-/// A separate pass rather than the observer threaded into the compact loop. The
-/// whole call sits behind `O::ENABLED`, so a production build never codegens it,
-/// and the compact keeps its unconditional store — an `observer.emitted(..)`
-/// inside it would be the data-dependent branch that store exists to avoid.
-/// Running it beside the compact rather than inside it is also what makes the
-/// observed and unobserved answers identical by construction: it takes the
-/// examined pairs as a shared slice, so the compact is the same loop either way
-/// and neither pass can see the other's decisions.
+/// A separate pass, so the compact is the same loop observed or not and the two
+/// answers are identical by construction.
 fn report_prune<O: ObservePairs>(
     store: &GeometryStore,
     raw: &[(PolyId, PolyId)],
@@ -608,12 +484,8 @@ fn report_prune<O: ObservePairs>(
 /// `out` paired with `a`.
 ///
 /// `SAME` says the index holds `a`'s own layer, so a pair is emitted once with
-/// `a < b`; it is a const parameter rather than a flag because it decides a test
-/// inside the innermost loop and must vanish at monomorphisation.
-///
-/// Both levels are walked. A row lives in exactly one of them, so no pair is
-/// produced twice by the split, and the bucket ids handed to the observer are
-/// offset so the two levels' buckets stay distinguishable.
+/// `a < b`. Both levels are walked; a row lives in exactly one of them, so the
+/// split produces no pair twice.
 fn gather_near<const SAME: bool, O: ObservePairs>(
     index: &SpatialIndex,
     distance: Dbu,
@@ -623,12 +495,9 @@ fn gather_near<const SAME: bool, O: ObservePairs>(
     observer: &mut O,
 ) {
     gather_level::<SAME, O>(&index.fine, 0, distance, a, a_box, out, observer);
-    // The offset exists only so the two levels' bucket ids stay distinguishable
-    // *to the observer*, and `gather_level` reads it only under `O::ENABLED` —
-    // so a production build folds this to a constant zero and pays neither the
-    // conversion nor its panic edge. The checked form is what keeps a level
-    // with more buckets than a `u32` holds from silently aliasing its ids onto
-    // the fine level's.
+    // The offset only keeps the two levels' bucket ids distinguishable to the
+    // observer; checked so a level with more buckets than a `u32` holds cannot
+    // silently alias its ids onto the fine level's.
     let coarse_base = if O::ENABLED {
         u32::try_from(index.fine.bucket_count()).expect("a level's bucket ids fit a u32")
     } else {
@@ -639,19 +508,10 @@ fn gather_near<const SAME: bool, O: ObservePairs>(
 
 /// [`gather_near`] against one level.
 ///
-/// The bucket walk is single-threaded, and the level that could change that is
-/// not this one: the parallel axis is [`prune_pairs`]'s outer row loop, where
-/// each `a` writes only its own pairs and the transform is already a gatherer.
-/// Same blocker as the build histogram — `gpurify-core` depends on
-/// `gpurify-units` and `thiserror` and nothing else, so there is no `rayon` here
-/// to write it against, and the manifest change is filed in
-/// `docs/SIGNATURE_DEFECTS.md` rather than made from inside a body.
-///
-/// Nothing else in this walk is left on the table. The duplicate filings a box
-/// gets from spanning up to 2x2 cells cannot be collapsed by emitting from one
-/// "home" cell only: the home cell can fall outside the query window while
-/// another filed cell falls inside it, so the dedup in [`prune_pairs`] is the
-/// cheap end of that trade and not a shortcut.
+/// The duplicate filings a box gets from spanning up to 2x2 cells cannot be
+/// collapsed by emitting from one "home" cell only: the home cell can fall
+/// outside the query window while another filed cell falls inside it, so the
+/// dedup in [`prune_pairs`] is what removes them.
 fn gather_level<const SAME: bool, O: ObservePairs>(
     grid: &Grid,
     bucket_base: u32,
@@ -661,9 +521,7 @@ fn gather_level<const SAME: bool, O: ObservePairs>(
     out: &mut Vec<(PolyId, PolyId)>,
     observer: &mut O,
 ) {
-    // Not a bulk branch: a level is empty or not for the whole run, so this
-    // predicts perfectly, and `dims` on an unbuilt level would read the EMPTY
-    // sentinel as a span.
+    // `dims` on an unbuilt level would read the EMPTY sentinel as a span.
     if grid.rows.is_empty() {
         return;
     }
@@ -689,19 +547,12 @@ fn gather_level<const SAME: bool, O: ObservePairs>(
             let end = grid.bucket_start[bucket + 1] as usize;
             debug_assert!(start <= end && end <= grid.rows.len());
 
-            // Not a bulk branch — one test per bucket, and the taken side scans
-            // every row in it, which is the escape valve the branchless rubric
-            // names. `pad` is a whole-cell bound, so this is what narrows the
-            // window back to the cells `a_box` grown by `distance` really
-            // reaches. Rejecting a bucket wrongly loses every pair inside it
-            // silently, which is exactly what `bucket_skipped` exists to expose.
+            // `pad` is a whole-cell bound, so this narrows the window back to
+            // the cells `a_box` grown by `distance` really reaches. Rejecting a
+            // bucket wrongly loses every pair inside it silently, which is what
+            // `bucket_skipped` exists to expose.
             if !grid.cell_bbox(c, r).within(a_box, distance) {
                 if O::ENABLED {
-                    // Both conversions are inside the seam, so a production
-                    // build folds them away with the call. `end - start` is a
-                    // difference of two `bucket_start` entries, which are
-                    // already `u32`; `bucket` is a bucket index, bounded by the
-                    // same `u32` the offset above is checked against.
                     let id =
                         bucket_base + u32::try_from(bucket).expect("a bucket id fits a u32");
                     let rows =
@@ -712,11 +563,9 @@ fn gather_level<const SAME: bool, O: ObservePairs>(
             }
 
             let seg = &grid.rows[start..end];
-            // Rows inside a bucket are ascending, so `b > a` is a suffix: one
-            // branchless binary search for the boundary instead of a
-            // data-dependent test per row. `a` files itself under this bucket
-            // too, and the same bound is what drops the self-pair. Const-folded
-            // away entirely for the cross-layer form, where every row counts.
+            // Rows inside a bucket are ascending, so `b > a` is a suffix. `a`
+            // files itself under this bucket too, and the same bound is what
+            // drops the self-pair.
             let from = if SAME {
                 seg.partition_point(|&row| row <= a.0)
             } else {
@@ -728,10 +577,6 @@ fn gather_level<const SAME: bool, O: ObservePairs>(
 }
 
 /// Every pair between two *different* layers within `distance`.
-///
-/// Separate from the same-layer form because the same-layer form can emit only
-/// `a < b` and skip half the work, and folding both into one function would
-/// mean a branch on layer equality inside the innermost loop.
 pub fn cross_layer_pairs_into(
     store: &GeometryStore,
     a_index: &SpatialIndex,
@@ -751,9 +596,7 @@ fn cross_layer_pairs_observed<O: ObservePairs>(
     observer: &mut O,
 ) {
     out.clear();
-    // Same fail-open shape as the same-layer form, closed the same way: `None`
-    // is an index nobody built, and an empty pair list for one reads as a clean
-    // cross-layer check. Both are unwrapped in release, not just in debug.
+    // Same fail-open shape as the same-layer form, closed the same way.
     let a_layer = a_index.layer.expect(
         "an index that was never built cannot answer a query: an empty pair \
          list would read as a cross-layer check that ran and found nothing",
@@ -772,23 +615,14 @@ fn cross_layer_pairs_observed<O: ObservePairs>(
     debug_assert!(distance.raw() >= 0, "a spacing distance is never negative");
     debug_assert!(distance.raw() <= MAX_ABS_DBU);
 
-    // `a_layer`'s rows queried against `b`'s index — the one asymmetry between
-    // the two forms, and the reason `prune_pairs` takes the layer and the index
-    // separately rather than deriving one from the other.
+    // `a_layer`'s rows queried against `b`'s index, which is why `prune_pairs`
+    // takes the layer and the index separately.
     prune_pairs::<false, O>(store, b_index, a_layer, distance, out, observer);
 }
 
-// The adapter tests. They live here, inside the crate, because
-// `candidate_pairs_observed` is private — the observer is a test concern and
-// widening the module's interface to reach it from `tests/` would defeat the
-// point of the seam. That trade is recorded in [`crate::observe`].
-//
-// They also build their own geometry rather than using `gpurify-testgen`.
-// `testgen` depends on this crate, so the copy of `gpurify-core` it links
-// against is a *different* crate instance from the one under test here, and its
-// `LayerId` is a different type. That is a property of the dev-dependency
-// cycle, not a choice: the integration tests in `tests/` use the generator
-// normally, and only this file, on the private side of the seam, cannot.
+// Adapter tests: they live here because `candidate_pairs_observed` is private,
+// and they build their own geometry because `gpurify-testgen` depends on this
+// crate, so its `gpurify-core` is a different crate instance.
 #[cfg(test)]
 mod tests {
     use super::{candidate_pairs_observed, cross_layer_pairs_observed, ObservePairs, SpatialIndex};
@@ -800,10 +634,7 @@ mod tests {
     const A: LayerId = LayerId(0);
     const B: LayerId = LayerId(1);
 
-    /// Records every decision the prune made. `ENABLED` is `true`, which is the
-    /// whole difference between this adapter and [`crate::NoObserve`]: the
-    /// bodies below are reachable only because the gate constant folds the
-    /// other way.
+    /// Records every decision the prune made.
     #[derive(Debug, Default)]
     struct Recorder {
         emitted: Vec<(PolyId, PolyId)>,
@@ -829,10 +660,7 @@ mod tests {
         }
     }
 
-    /// A deterministic scatter over a lattice: cell `n` is occupied when the
-    /// hash's low bit says so, and the shape inside it is offset by the rest of
-    /// the hash. No generator and no state — the same corpus every run, on every
-    /// platform, derived arithmetically from the seed.
+    /// Deterministic scatter: the same corpus every run, derived from the seed.
     fn hash(mut value: u64) -> u64 {
         value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
         value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -858,9 +686,8 @@ mod tests {
                     if draw & 1 == 0 {
                         continue;
                     }
-                    // Two sizes, so the layer has more than one spatial scale
-                    // and the grid's median-extent cell sizing has something to
-                    // decide.
+                    // Two sizes, so the grid's median-extent cell sizing has
+                    // something to decide.
                     let side = if draw & 2 == 0 { 80 } else { 200 };
                     let room = 400 - side;
                     let jitter_x = i64::try_from((draw >> 8) % room).expect("below room");
@@ -889,8 +716,7 @@ mod tests {
         Dbu::new_unchecked(value)
     }
 
-    /// The exact predicate the prune is approximating, over one layer, by an
-    /// `O(n^2)` scan. Obviously right, and independent of the index.
+    /// The exact predicate the prune is approximating, by an `O(n^2)` scan.
     fn exact_same_layer(
         store: &GeometryStore,
         layer: LayerId,
@@ -909,12 +735,8 @@ mod tests {
         out
     }
 
-    /// Oracle: adapter. **The property the seam exists for.** A prune that
-    /// wrongly rejects a pair returns a shorter list that is still perfectly
-    /// well-formed, so no assertion on the return value can see the mistake.
-    /// Here every rejection is recorded and re-run through the exact predicate:
-    /// if the predicate would have accepted it, the prune failed open, and a
-    /// spacing rule downstream silently passes a shape the foundry rejects.
+    /// Every rejection is re-run through the exact predicate: if the predicate
+    /// would have accepted it, the prune failed open.
     #[test]
     fn no_rejected_pair_would_have_passed_the_exact_predicate() {
         let store = corpus(91, 12);
@@ -940,12 +762,8 @@ mod tests {
         }
     }
 
-    /// Oracle: adapter, plus an `O(n^2)` scan. Rejections account for only part
-    /// of the work: whole buckets are skipped without their rows ever reaching
-    /// the pair predicate, and a bucket skipped wrongly is invisible in both the
-    /// output and the rejection log. So completeness is asserted end to end —
-    /// every pair the exact predicate accepts is emitted — and the emitted log
-    /// is tied to the returned list, which is what callers actually see.
+    /// A wrongly skipped bucket is invisible in both the output and the
+    /// rejection log, so completeness is asserted against the `O(n^2)` scan.
     #[test]
     fn the_prune_emits_every_pair_the_exact_predicate_accepts() {
         let store = corpus(92, 12);
@@ -977,10 +795,8 @@ mod tests {
         }
     }
 
-    /// Oracle: adapter. The cross-layer form is a separate function with a
-    /// separate loop, so it is a separate chance to reject a pair that should
-    /// have survived. The same two claims, over the pairing that cannot halve
-    /// its work with `a < b`.
+    /// The cross-layer form is a separate loop, so it is a separate chance to
+    /// reject a pair that should have survived.
     #[test]
     fn the_cross_layer_prune_rejects_nothing_the_exact_predicate_accepts() {
         let store = corpus(93, 10);
@@ -1021,10 +837,7 @@ mod tests {
         assert!(!out.is_empty(), "no cross-layer pair was ever emitted");
     }
 
-    /// Oracle: law. The observer changes what is recorded, never what is
-    /// returned. If installing an adapter altered the answer, every assertion
-    /// made through one would be about a different function from the one that
-    /// ships — the failure a seam has to rule out before it is worth anything.
+    /// The observer changes what is recorded, never what is returned.
     #[test]
     fn installing_an_observer_does_not_change_the_pairs_that_come_back() {
         let store = corpus(94, 10);

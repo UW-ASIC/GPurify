@@ -1,34 +1,5 @@
-//! Exact rectilinear boolean operations.
-//!
-//! **Rectilinear only, by decision.** The previous implementation dispatched
-//! arbitrary-angle input to a general arrangement solver that failed *open* in
-//! three places: a hole with no containing outer ring was silently dropped, a
-//! `Ring` that failed to construct from a split-produced sliver was skipped
-//! with `Err(_) => {}`, and shared boundary edges were skipped on an unproven
-//! "the rest will close correctly" argument. Each of those removes area from a
-//! verification result without saying so.
-//!
-//! So: non-rectilinear input is [`BooleanError::NotRectilinear`], and a caller
-//! that cannot proceed reports that rather than a clean result.
-//!
-//! # Where a result lives
-//!
-//! `out` is a [`ValidatedLayer`], which owns its coordinate columns. A union of
-//! two partially overlapping rectangles is an L whose vertices exist in no
-//! store row, and those vertices are written into `out`'s columns; `out.layer`
-//! is `None`, because a result belongs to no single input layer. Reading one
-//! back needs no store beyond the one the operands were validated from.
-//!
-//! # Testing
-//!
-//! This module has the strongest oracle in the tree, because the laws are
-//! unconditional and independent of any implementation:
-//!
-//! - `(a − b) ∪ (a ∩ b) == a`
-//! - `a ∩ b ⊆ a` and `a ∪ b ⊇ a`
-//! - union and intersection are commutative; self-union is idempotent
-//! - `area(a ∪ b) + area(a ∩ b) == area(a) + area(b)`
-//! - the result is invariant under translation of both inputs
+//! Exact rectilinear boolean operations. Non-rectilinear input is
+//! [`BooleanError::NotRectilinear`], never an approximation.
 
 use core::cmp::Ordering;
 
@@ -46,15 +17,10 @@ pub enum BooleanError {
     Validity(#[from] ValidityError),
 }
 
-/// Union of two validated layers.
+/// Union of two validated layers into `out`, which is cleared and refilled.
 ///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled, so a chain
-/// of booleans in a derived-layer expression reuses two buffers by swapping
-/// rather than allocating per node.
-///
-/// Both inputs and the output are [`ValidatedLayer`], so a result is
-/// immediately usable as the next operand with no revalidation — the property
-/// that makes a derived-layer expression tree cheap.
+/// The output is itself a [`ValidatedLayer`], so a result is immediately usable
+/// as the next operand with no revalidation.
 pub fn union_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -63,6 +29,8 @@ pub fn union_into(
     combine_into(a, b, out, |in_a, in_b| in_a | in_b)
 }
 
+/// Intersection of two validated layers into `out`, which is cleared and
+/// refilled.
 pub fn intersection_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -71,11 +39,8 @@ pub fn intersection_into(
     combine_into(a, b, out, |in_a, in_b| in_a & in_b)
 }
 
-/// `a` minus `b`.
-///
-/// Not commutative, and the only one of the three where operand order is a
-/// silent-wrong-answer risk rather than a compile error. Named `subtraction`
-/// rather than `difference` because "difference" reads as symmetric.
+/// `a` minus `b` into `out`, which is cleared and refilled. Not commutative:
+/// operand order is a silent-wrong-answer risk.
 pub fn subtraction_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -113,9 +78,8 @@ pub fn offset_into(
     let mut region = Slabs::default();
     occupancy(&edges, &xs, &mut sweep, &mut region);
 
-    // Three cases, and only the sign of `amt` selects between them — a uniform,
-    // hoisted above every loop below, not a per-row branch. The empty operand
-    // falls out of the first: it has no slab, so every case emits nothing.
+    // The empty operand falls out of the first case: it has no slab, so every
+    // case emits nothing.
     if amt == 0 || xs.len() < 2 {
         return emit(&xs, &region, &mut sweep, out);
     }
@@ -131,13 +95,9 @@ pub fn offset_into(
 
     // Erosion is the complement of the dilation of the complement. The
     // complement is only representable over a bounded universe, so the universe
-    // is the operand's own bounding box grown by `|amt| + 1`: every point of
-    // the true complement that this one omits lies more than `|amt|` away from
-    // every point of the operand, so it cannot reach the operand under a
-    // dilation by `|amt|`, and the final subtraction is from the operand
-    // itself. Deriving shrink this way rather than from a separate erosion
-    // kernel is what keeps it from being a second implementation that can
-    // disagree with grow.
+    // is the operand's bounding box grown by `|amt| + 1`: every point of the
+    // true complement that this one omits lies more than `|amt|` away from the
+    // operand and cannot reach it under a dilation by `|amt|`.
     let reach = -amt;
     let margin = reach + 1;
     let (mut ylo, mut yhi) = (i64::MAX, i64::MIN);
@@ -182,11 +142,6 @@ pub fn offset_into(
 }
 
 /// `p` minus `q`, both swept over the same axis.
-///
-/// **Transform, A-to-B.** The erosion above is two of these back to back — the
-/// complement of the operand, then the operand minus what the dilated
-/// complement reached — and running them through one function is what keeps the
-/// two sweeps from drifting apart.
 fn difference_over(
     axis: &[i64],
     p: &[VEdge],
@@ -201,33 +156,18 @@ fn difference_over(
     combine_slabs(axis.len(), &sp, &sq, |in_p, in_q| in_p & !in_q, sweep, out);
 }
 
-// ---------------------------------------------------------------------------
-// The one implementation the four transforms above are spellings of.
-//
-// A left-to-right sweep over the operands' distinct x-coordinates. Every edge
-// is axis-aligned, so between two consecutive x the occupied set is a constant
+// The one implementation the four transforms above are spellings of: a
+// left-to-right sweep over the operands' distinct x-coordinates. Every edge is
+// axis-aligned, so between two consecutive x the occupied set is a constant
 // list of y-intervals, and a set operation is that list combined interval by
-// interval — exact, canonical, and with no arrangement solver to fail open in.
-//
-// The sweep carries one running y-map per operand: a sorted list of the
-// coordinates where the nonzero-winding count changes, with the entries that
-// cancel dropped as they cancel. So the state is the active boundary, not the
-// grid: `O(V + F)` memory for `V` distinct coordinates and `F` edges crossing
-// the current cut, where a dense cell grid over the same coordinates would be
-// `O(V^2)` and unusable on a full-chip layer.
-//
-// The boundary of the combined region comes straight off the slab lists —
-// vertical segments where two adjacent slabs disagree, horizontal ones at each
-// slab's interval ends, both grouped into maximal runs — and feeds `link` and
-// `emit` unchanged.
-// ---------------------------------------------------------------------------
+// interval. The running y-map holds only the coordinates where the
+// nonzero-winding count changes, so the state is the active boundary rather
+// than a dense grid.
 
 /// Every ring of one operand, flattened.
 ///
 /// `start` is a CSR offset array of length `ring count + 1`, so ring `r` owns
-/// `xs[start[r] .. start[r + 1]]`. Flat columns rather than a `Vec<Vec<_>>` for
-/// the reason the rest of this crate gives: the nested form is one allocation
-/// per ring on a path that runs per boolean per node of an expression tree.
+/// `xs[start[r] .. start[r + 1]]`.
 #[derive(Default)]
 struct Rings {
     xs: Vec<i64>,
@@ -239,7 +179,7 @@ struct Rings {
 /// winding it contributes to every cut to its right.
 ///
 /// Horizontal edges cross no horizontal ray and contribute nothing, so they are
-/// never collected. `AoS`: the sweep reads all four fields of one edge together.
+/// never collected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VEdge {
     x: i64,
@@ -249,7 +189,7 @@ struct VEdge {
 }
 
 /// One boundary segment of a result region, directed so the interior is on its
-/// left. `AoS`: linking reads all four fields of one segment together.
+/// left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Seg {
     sx: i64,
@@ -262,7 +202,7 @@ struct Seg {
 ///
 /// Slab `c` spans `x[c] ..= x[c + 1]` of whichever axis it was swept over and
 /// owns `ivals[start[c] .. start[c + 1]]`, ascending and disjoint, each
-/// half-open in y. The axis is not stored here: a slab list is only ever read
+/// half-open in y. The axis is not stored: a slab list is only ever read
 /// against the axis it was produced over, and two operands share one.
 #[derive(Default)]
 struct Slabs {
@@ -291,9 +231,7 @@ impl Slabs {
     }
 }
 
-/// Every buffer the sweep reuses, grouped by lifetime: one set per call, each
-/// cleared where it is filled, so a chain of booleans allocates a fixed handful
-/// of times rather than once per slab.
+/// Every buffer the sweep reuses, each cleared where it is filled.
 #[derive(Default)]
 struct Sweep {
     /// `push_ring`'s raw coordinate columns and its two rectilinearity masks.
@@ -328,13 +266,10 @@ struct Sweep {
     col_y: Vec<Dbu>,
 }
 
-/// Clamp to the legal coordinate domain.
-///
-/// Only reachable from [`offset_into`], where growing a shape already at
-/// `±MAX_ABS_DBU` would leave it. Clamping rather than erroring is the same
-/// call [`crate::Bbox::EMPTY`] makes: the domain edge dominates the whole legal
-/// coordinate space, so a shape pushed against it is at the edge of what the
-/// tool can represent, not outside it.
+/// Clamp to the legal coordinate domain, for a shape [`offset_into`] grew past
+/// `±MAX_ABS_DBU`. Clamped rather than refused: the domain edge dominates the
+/// whole legal coordinate space, so a shape pushed against it is at the edge of
+/// what the tool can represent, not outside it.
 fn clamp_dbu(value: i64) -> i64 {
     value.clamp(-MAX_ABS_DBU, MAX_ABS_DBU)
 }
@@ -358,12 +293,8 @@ fn ring_mark(len: usize) -> u32 {
     u32::try_from(len).expect("a layer's vertex count is a u32 index space")
 }
 
-/// Copy one validated ring into the flat columns, refusing arbitrary angles.
-///
-/// The rectilinearity test is `(x0 != x1) & (y0 != y1)` over every edge. It is
-/// accumulated as two per-axis masks and one branchless fold over them, with
-/// the ring's wrap edge as the one scalar fixup outside, so the early return
-/// happens once per call, above every loop, instead of inside one.
+/// Copy one validated ring into the flat columns, refusing arbitrary angles:
+/// an edge with `(x0 != x1) & (y0 != y1)` is skew.
 fn push_ring(
     ring: RingRef<'_>,
     sweep: &mut Sweep,
@@ -400,8 +331,7 @@ fn push_ring(
     );
 
     // The adjacent-pair scan, one output row per edge but the wrap edge, which
-    // is the scalar fixup below. One loop rather than two: the two masks are
-    // written from disjoint columns, so neither depends on the other.
+    // is the scalar fixup below.
     sweep.ring_dx.clear();
     sweep.ring_dx.reserve(n - 1);
     sweep.ring_dy.clear();
@@ -413,15 +343,11 @@ fn push_ring(
 
     let (dx, dy) = (&sweep.ring_dx[..], &sweep.ring_dy[..]);
     debug_assert_eq!(dx.len(), dy.len(), "the two masks stay parallel");
-    // Branchless: `|=` and `&` on `bool` do not short-circuit, so the fold is
-    // an unconditional two-input `or` per edge with no branch to mispredict.
     let mut skew = false;
     for i in 0..dx.len() {
         skew |= dx[i] & dy[i];
     }
     let wrap = (sweep.ring_x[n - 1] != sweep.ring_x[0]) & (sweep.ring_y[n - 1] != sweep.ring_y[0]);
-    // Escape valve: the taken side abandons the whole transform, and it is
-    // taken at most once per call rather than once per vertex.
     if skew | wrap {
         return Err(BooleanError::NotRectilinear);
     }
@@ -443,9 +369,8 @@ fn collect_rings(
     rings.start.clear();
     rings.start.push(0);
 
-    // `poly_rings` rather than `get`: these four frozen signatures carry no
-    // store, and `get`'s exists only to check a layer against the store it was
-    // validated from. An empty scratch store would silence that check for every
+    // `poly_rings` rather than `get`: this module has no store, and handing
+    // `get` an empty scratch one would silence its pairing check for every
     // caller that does have one.
     let polys = u32::try_from(layer.len()).expect("a layer's polygon count is a u32 index space");
     for idx in 0..polys {
@@ -470,9 +395,7 @@ fn collect_rings(
 /// Every vertical edge of one operand, ascending in x.
 ///
 /// A downward edge counts `+1` and an upward one `-1`, so the winding at a
-/// point is the signed count of the edges at or left of it that span its y —
-/// the ray-crossing rule read from the left, which is what turns the sweep into
-/// a running sum rather than a per-point query.
+/// point is the signed count of the edges at or left of it that span its y.
 fn vedges_into(rings: &Rings, out: &mut Vec<VEdge>) {
     out.clear();
     out.reserve(rings.xs.len());
@@ -485,9 +408,6 @@ fn vedges_into(rings: &Rings, out: &mut Vec<VEdge>) {
         let n = hi - lo;
         for i in 0..n {
             let (a, b) = (lo + i, lo + (i + 1) % n);
-            // Escape valve: the taken side is a push. Half of a rectilinear
-            // ring's edges are horizontal, so the two sides alternate perfectly
-            // and the predictor has it.
             if rings.xs[a] != rings.xs[b] {
                 continue;
             }
@@ -496,8 +416,8 @@ fn vedges_into(rings: &Rings, out: &mut Vec<VEdge>) {
                 x: rings.xs[a],
                 ylo: y0.min(y1),
                 yhi: y0.max(y1),
-                // Branchless: a zero-length edge writes `+1` and `-1` at one y
-                // and cancels itself whatever this says.
+                // A zero-length edge writes `+1` and `-1` at one y and cancels
+                // itself whatever this says.
                 delta: 1 - 2 * i32::from(y1 > y0),
             });
         }
@@ -517,7 +437,7 @@ fn merge_deltas(base: &[(i64, i32)], add: &[(i64, i32)], out: &mut Vec<(i64, i32
 
     let (mut i, mut j) = (0usize, 0usize);
     while i < base.len() || j < add.len() {
-        // Branchless: the sentinel makes the exhausted side lose every compare.
+        // The sentinel makes the exhausted side lose every compare.
         let left = base.get(i).map_or(i64::MAX, |&(y, _)| y);
         let right = add.get(j).map_or(i64::MAX, |&(y, _)| y);
         let y = left.min(right);
@@ -550,9 +470,8 @@ fn intervals_into(ymap: &[(i64, i32)], out: &mut Vec<(i64, i64)>) {
     for &(y, delta) in ymap {
         let was = sum;
         sum += delta;
-        // Escape valve: an interval opens or closes once per interval, not once
-        // per entry, so the taken side is the rare one. `ymap` holds no zero
-        // delta, so `was == 0` implies the sum just left zero.
+        // `ymap` holds no zero delta, so `was == 0` implies the sum just left
+        // zero.
         if was == 0 {
             open = y;
         } else if sum == 0 {
@@ -565,11 +484,9 @@ fn intervals_into(ymap: &[(i64, i32)], out: &mut Vec<(i64, i64)>) {
 
 /// Occupancy of every x-slab, by the nonzero-winding rule.
 ///
-/// **Transform, A-to-B.** `edges` ascending in x, `xs` the distinct x of the
-/// axis being swept — which must contain every edge's x, and may contain more,
-/// because two operands are always swept over one shared axis. Extra lines only
-/// split a slab into two with the same occupancy, which [`segments`] merges
-/// back into one run.
+/// `xs` must contain every edge's x and may contain more, because two operands
+/// are swept over one shared axis; extra lines only split a slab into two with
+/// the same occupancy, which [`segments`] merges back into one run.
 fn occupancy(edges: &[VEdge], xs: &[i64], sweep: &mut Sweep, out: &mut Slabs) {
     debug_assert!(
         edges.windows(2).all(|pair| pair[0].x <= pair[1].x),
@@ -592,9 +509,6 @@ fn occupancy(edges: &[VEdge], xs: &[i64], sweep: &mut Sweep, out: &mut Slabs) {
             sweep.pending.push((edge.yhi, -edge.delta));
             next += 1;
         }
-        // Escape valve: a cut with no edge on it is the common case once the
-        // axis is shared between two operands, and the taken side is a sort
-        // plus a full merge of the running map.
         if !sweep.pending.is_empty() {
             sweep.pending.sort_unstable();
             merge_deltas(&sweep.ymap, &sweep.pending, &mut sweep.merged);
@@ -621,10 +535,8 @@ fn covers(ivals: &[(i64, i64)], y: i64) -> bool {
     (after > 0) && (ivals[after - 1].1 > y)
 }
 
-/// Every endpoint of two interval lists, ascending and deduplicated.
-///
-/// The values at which either list can change, and therefore the only y at
-/// which a combination of the two can start or stop a run.
+/// Every endpoint of two interval lists, ascending and deduplicated: the only y
+/// at which a combination of the two can start or stop a run.
 fn endpoints(a: &[(i64, i64)], b: &[(i64, i64)], out: &mut Vec<i64>) {
     out.clear();
     out.reserve(2 * (a.len() + b.len()));
@@ -635,10 +547,8 @@ fn endpoints(a: &[(i64, i64)], b: &[(i64, i64)], out: &mut Vec<i64>) {
     sort_dedup(out);
 }
 
-/// Apply a set operation slab by slab.
-///
-/// **Transform, A-to-B.** Both operands must have been swept over one axis, so
-/// slab `c` of each names the same x-range.
+/// Apply a set operation slab by slab; both operands must have been swept over
+/// one axis, so slab `c` of each names the same x-range.
 fn combine_slabs(
     lines: usize,
     a: &Slabs,
@@ -680,10 +590,10 @@ fn combine_slabs(
 
 /// Every vertical edge of a region grown by an exact L-infinity square kernel.
 ///
-/// **Transform, A-to-B.** A dilation distributes over union, and a slab list is
-/// a union of axis-aligned rectangles, so growing each rectangle by `amount` on
-/// all four sides and re-sweeping the result is the whole operation. That is
-/// what keeps grow and the erosion that is built out of it on one code path.
+/// A dilation distributes over union, and a slab list is a union of
+/// axis-aligned rectangles, so growing each rectangle by `amount` on all four
+/// sides and re-sweeping the result is the whole operation. That is what keeps
+/// grow and the erosion built out of it on one code path.
 fn grown_edges_into(xs: &[i64], region: &Slabs, amount: i64, out: &mut Vec<VEdge>) {
     debug_assert!(amount > 0, "a dilation grows; the caller picks the case");
     debug_assert_eq!(
@@ -728,12 +638,12 @@ fn grown_edges_into(xs: &[i64], region: &Slabs, amount: i64, out: &mut Vec<VEdge
 
 /// Every boundary segment of a slab list, directed interior-on-the-left.
 ///
-/// **Transform, A-to-B.** A segment exists where two adjacent slabs disagree
-/// (vertical) or where a slab's occupancy starts or stops (horizontal), and
-/// maximal runs of agreeing direction are emitted as one segment, so the L that
-/// two rectangles union into comes back as six vertices rather than as one per
-/// coordinate it happens to cross. Interior-on-the-left is what makes an outer
-/// boundary counter-clockwise and a hole clockwise with no post-hoc reversal.
+/// A segment exists where two adjacent slabs disagree (vertical) or where a
+/// slab's occupancy starts or stops (horizontal), and maximal runs of agreeing
+/// direction are emitted as one segment, so the L that two rectangles union
+/// into comes back as six vertices rather than as one per coordinate it happens
+/// to cross. Interior-on-the-left is what makes an outer boundary
+/// counter-clockwise and a hole clockwise with no post-hoc reversal.
 fn segments(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
     let slabs = xs.len().saturating_sub(1);
     debug_assert_eq!(region.count(), slabs, "one interval run per slab");
@@ -878,15 +788,15 @@ fn tail_of(seg: Seg) -> (i64, i64) {
 
 /// Which segment continues the walk from each segment's tail.
 ///
-/// **Transform, A-to-B.** One output row per input row, each a function of its
-/// own segment and the two orders, so any row order is legal and the pass is a
-/// kernel. Splitting it out of the walk below is what leaves that walk nothing
-/// but a `next[cur]` load: the search used to sit *inside* the chain, one binary
-/// probe plus a scan per step with the answer feeding the next probe, so no
-/// prefetch could run ahead of it. Here it is a single linear merge of the
-/// segments ordered by head against the same segments ordered by tail, and both
-/// cursors advance in step because a boundary vertex's in-degree equals its
-/// out-degree — the merge never searches for its counterpart group.
+/// One output row per input row, each a function of its own segment and the two
+/// orders, so any row order is legal and the pass is a kernel. Splitting it out
+/// of the walk below is what leaves that walk nothing but a `next[cur]` load:
+/// the search used to sit *inside* the chain, one binary probe plus a scan per
+/// step with the answer feeding the next probe, so no prefetch could run ahead
+/// of it. Here it is a single linear merge of the segments ordered by head
+/// against the same segments ordered by tail, and both cursors advance in step
+/// because a boundary vertex's in-degree equals its out-degree — the merge
+/// never searches for its counterpart group.
 ///
 /// Every vertex of an interior-on-the-left boundary has degree two or degree
 /// four and never three. At degree two there is one candidate and the walk is
@@ -979,13 +889,12 @@ fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, ne
 
 /// Walk the successor permutation into closed rings.
 ///
-/// **Transform, A-to-B.** Output is flat coordinate columns plus a CSR offset
-/// array, one entry per ring. `next` is a permutation, so this is a cycle
-/// decomposition, and the only loop-carried dependency left is the `next[cur]`
-/// load itself — `/simd-loops` triage classifies that as a chain, and it is one
-/// no layout change removes: a cycle's length is not known until it has been
-/// walked. Distinct cycles are independent of each other, so this is the pass to
-/// hand to a tasker if ring counts ever justify one.
+/// Output is flat coordinate columns plus a CSR offset array, one entry per
+/// ring. `next` is a permutation, so this is a cycle decomposition, and the
+/// `next[cur]` load is a loop-carried chain no layout change removes: a
+/// cycle's length is not known until it has been walked. Distinct cycles are
+/// independent, so this is the pass to hand to a tasker if ring counts ever
+/// justify one.
 fn link(
     segs: &[Seg],
     next: &[u32],
@@ -1058,12 +967,12 @@ fn link(
 
 /// Trace, link, and validate the result into `out`.
 ///
-/// **Transform, A-to-B.** The rings go through a one-layer `GeometryStore` and
-/// [`validate_layer_into`] rather than into `out`'s columns directly, because
-/// that is the only route this module has to them — see `collect_rings` — and
-/// because grouping outer boundaries with the holes they contain is work
-/// `view` already owns. Doing it here would be a second implementation of
-/// containment that can disagree with the first.
+/// The rings go through a one-layer `GeometryStore` and [`validate_layer_into`]
+/// rather than into `out`'s columns directly, because that is the only route
+/// this module has to them — see `collect_rings` — and because grouping outer
+/// boundaries with the holes they contain is work `view` already owns. Doing it
+/// here would be a second implementation of containment that can disagree with
+/// the first.
 fn emit(
     xs: &[i64],
     region: &Slabs,
@@ -1191,11 +1100,10 @@ mod tests {
         (store, layer)
     }
 
-    /// Oracle: closed form. An L-infinity offset of a square by `r` is a square
-    /// of side `2 * (half + r)`, for either sign of `r`. Nothing else in the
-    /// tree exercises a non-zero offset, because a grown result's coordinates
-    /// exist in no store row and the integration tests read results through
-    /// one.
+    /// An L-infinity offset of a square by `r` is a square of side `2 * (half +
+    /// r)`, for either sign of `r`. Nothing else in the tree exercises a
+    /// non-zero offset, because a grown result's coordinates exist in no store
+    /// row and the integration tests read results through one.
     #[test]
     fn offsetting_a_square_gives_the_square_the_closed_form_names() {
         let (_store, a) = square(100);
@@ -1213,10 +1121,10 @@ mod tests {
         }
     }
 
-    /// Oracle: law. A shrink by more than the half-width leaves nothing, and
-    /// "nothing" has to be an empty layer rather than a layer of empty
-    /// polygons — an empty clean result and a result that was never computed
-    /// have to stay distinguishable.
+    /// A shrink by more than the half-width leaves nothing, and "nothing" has
+    /// to be an empty layer rather than a layer of empty polygons — an empty
+    /// clean result and a result that was never computed have to stay
+    /// distinguishable.
     #[test]
     fn shrinking_past_the_half_width_leaves_nothing() {
         let (_store, a) = square(100);
@@ -1226,11 +1134,11 @@ mod tests {
         assert_eq!(area(&out), 0);
     }
 
-    /// Oracle: closed form. An L is the union of two bars, so growing it is the
-    /// union of the two grown bars, and eroding it is the L inset by the same
-    /// amount — the reflex corner is the one place a square kernel and a round
-    /// one would disagree, and the one this module's erosion is derived rather
-    /// than written.
+    /// An L is the union of two bars, so growing it is the union of the two
+    /// grown bars, and eroding it is the L inset by the same amount — the
+    /// reflex corner is the one place a square kernel and a round one would
+    /// disagree, and the one this module's erosion is derived rather than
+    /// written.
     #[test]
     fn offsetting_an_l_agrees_with_the_two_bars_it_is_made_of() {
         let mut builder = GeometryStoreBuilder::with_capacity(1, 6);
@@ -1255,9 +1163,9 @@ mod tests {
         assert_eq!(out.len(), 1, "an eroded L is still one polygon");
     }
 
-    /// Oracle: law. Growing distributes over union, so growing two squares far
-    /// enough apart to stay apart is two grown squares, and growing them until
-    /// they touch is one.
+    /// Growing distributes over union, so growing two squares far enough apart
+    /// to stay apart is two grown squares, and growing them until they touch is
+    /// one.
     #[test]
     fn growing_merges_two_squares_exactly_when_they_meet() {
         let mut builder = GeometryStoreBuilder::with_capacity(2, 8);
@@ -1284,8 +1192,8 @@ mod tests {
         assert_eq!(area(&out), 600 * 300);
     }
 
-    /// Oracle: law. `DbuArea` is the tree's area type and this module's own
-    /// laws are stated over it; a rectilinear region's doubled area is even.
+    /// `DbuArea` is the tree's area type and this module's own laws are stated
+    /// over it; a rectilinear region's doubled area is even.
     #[test]
     fn a_union_conserves_area_against_its_intersection() {
         let mut builder = GeometryStoreBuilder::with_capacity(2, 8);
