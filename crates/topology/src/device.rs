@@ -4,6 +4,12 @@
 //! recogniser's marker layer is exactly one device. That is the rule, and it is
 //! stated here because the old tree deduplicated BJTs on the net tuple instead,
 //! which silently merged two real devices wired identically.
+//!
+//! The rule constrains the *deck*, not just this module: a marker layer has to
+//! be one that is drawn one polygon per device. For a MOS that is the channel,
+//! `poly AND diff`, and not the implant — see [`recognise_into`], which refuses
+//! a marker whose terminal counts say it covers more than one device rather
+//! than reporting the first and dropping the rest.
 
 use crate::csr_run;
 use crate::net::{retain_intersecting_into, NetId, NetTable};
@@ -177,10 +183,47 @@ type Match = (PolyId, u32, u32);
 /// written in that same order, so `terminals_of` returns them as the recogniser
 /// stated them and not sorted by net.
 ///
-/// `derived` is accepted and unread — see the body for why it cannot be read.
-/// The parameter keeps its name rather than becoming `_derived`: the signature
-/// is frozen, and an underscore would read as "this body chose not to bother"
-/// rather than "the two frozen types have no bridge".
+/// # Two terminal positions on one layer
+///
+/// A MOS declares `[poly, diff_active, diff_active]`: source and drain are the
+/// same *layer* and different *regions* of it. So the binding below is per
+/// terminal **position**, and the positions naming one layer take that layer's
+/// polygons under the marker in ascending [`PolyId`] order — the only order
+/// that does not depend on how the spatial index bucketed the layer.
+///
+/// The count has to agree in both directions, and a marker where it does not is
+/// refused. Carrying *fewer* of a layer's polygons than the recogniser names
+/// positions leaves the tail on [`NetId::NONE`], which is the same fail-closed
+/// rule an absent terminal layer already had. Carrying *more* poisons the last
+/// position naming that layer with the same sentinel, and for the same reason:
+/// the marker is then not one device, and reporting the first transistor under
+/// it while dropping the rest is a plausible answer nothing downstream can
+/// question. That is finding F7, and it is a statement about which layer the
+/// deck named as the marker — see below.
+///
+/// # The marker layer is drawn one polygon per device, or there is no device
+///
+/// "One polygon on the marker layer is exactly one device" is this module's
+/// rule, so a deck that names a layer not drawn that way has stated something
+/// false and gets nothing back. An implant is the case that matters: `nsdm` is
+/// drawn one polygon per *diffusion region*, and a diffusion region holds as
+/// many transistors as there are gates crossing it. The layer that is drawn one
+/// polygon per transistor is the channel, `poly AND diff`, narrowed to a family
+/// by the implant it sits under — `poly AND diff AND nsdm`. Both are ordinary
+/// `derived` rows in the deck, so this needs no code and no signature: it is
+/// which layer the deck points [`DeviceRecognition::marker`] at.
+///
+/// It also settles what [`DeviceParam::Area`] measures. The marker is the
+/// device's extent, so on a channel marker the area is `W × L` — the oxide area
+/// `erc::rules::antenna` documents — and on an implant marker it was the whole
+/// active region.
+///
+/// `derived` is accepted and unread. That is no longer a gap: a deck states its
+/// derived layers in `Deck::derived` and `ingest::layout::derive_layers_into`
+/// materialises them into the store with real [`gpurify_core::LayerId`]s, so a
+/// recogniser naming one is naming an ordinary layer and there is nothing here
+/// an [`Evaluator`] could answer. The parameter keeps its name rather than
+/// becoming `_derived`: the signature is frozen.
 #[allow(unused_variables)]
 pub fn recognise_into(
     store: &GeometryStore,
@@ -189,13 +232,12 @@ pub fn recognise_into(
     recognition: &DeviceRecognition,
     out: &mut DeviceTable,
 ) {
-    // `derived` is unused, and cannot be used: `DeviceRecognition` names its
-    // marker and terminal layers as `LayerId`s into the store, while
-    // `Evaluator::get` is keyed by the `StrId` the deck named a derived layer
-    // with. There is no bridge between the two in either frozen signature, so a
-    // recogniser cannot name a derived layer at all. Reported, not worked
-    // around: inventing a `LayerId`-to-`StrId` mapping here would be a
-    // Definition decision.
+    // `derived` is unused because there is nothing left for it to answer: a
+    // deck's derived layers are materialised into the store during the read and
+    // carry ordinary `LayerId`s, so `recognition.terminal` can name one
+    // directly. What used to stand here — that `DeviceRecognition` speaks
+    // `LayerId` while `Evaluator::get` is keyed by `StrId`, with no bridge — is
+    // closed by giving derived layers ids rather than by building the bridge.
     let rows = recognition.kind.len();
     debug_assert_eq!(recognition.marker.len(), rows, "one marker layer per recogniser");
     debug_assert_eq!(recognition.model.len(), rows, "one model per recogniser");
@@ -235,6 +277,9 @@ pub fn recognise_into(
     // what lets the compact's store be unconditional.
     let mut exact: Vec<(PolyId, PolyId)> = Vec::new();
     let mut bind: Vec<NetId> = Vec::new();
+    // The terminal positions naming one layer, ascending. Hoisted so a deck
+    // with a hundred recognisers allocates once, like every other buffer here.
+    let mut positions: Vec<usize> = Vec::new();
     let mut matched: Vec<Match> = Vec::new();
     let mut bound: Vec<NetId> = Vec::new();
 
@@ -259,16 +304,39 @@ pub fn recognise_into(
         }
         SpatialIndex::build_into(store, recognition.marker[row], &mut marker_index);
 
-        // `bind[m * width + k]` is the net terminal `k` of marker `m` landed
-        // on, or `NetId::NONE` for a terminal layer with nothing under that
+        // `bind[m * width + k]` is the net terminal *position* `k` of marker `m`
+        // landed on, or `NetId::NONE` for a position with nothing under that
         // marker. That sentinel is the whole firing rule: `terminal_net` is a
         // `Vec<NetId>` with no way to spell an absent terminal, so a recogniser
-        // whose terminal layers are not all present under a marker has no row
-        // it could legally write, and skips it.
+        // whose positions are not all filled under a marker has no row it could
+        // legally write, and skips it.
         bind.clear();
         bind.resize(marker_count * width, NetId::NONE);
 
+        // A sentinel strictly above every marker in this layer's range, so the
+        // first pair of the scan below always reads as a new marker without a
+        // flag to test for it.
+        let past_markers = PolyId(markers.end);
+
         for (k, &layer) in terminals.iter().enumerate() {
+            // Every position naming this layer is filled by the first one that
+            // names it, so a later occurrence has nothing left to do. Tens of
+            // terminals across a whole deck, so this is not a bulk scan.
+            if terminals[..k].contains(&layer) {
+                continue;
+            }
+            positions.clear();
+            positions.extend(
+                terminals
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &named)| named == layer)
+                    .map(|(position, _)| position),
+            );
+            // Non-empty by construction — position `k` names this layer — which
+            // is what makes `positions.len() - 1` in the bind loop safe.
+            debug_assert_eq!(positions[0], k, "the first position naming a layer fills it");
+
             SpatialIndex::build_into(store, layer, &mut terminal_index);
             cross_layer_pairs_into(store, &marker_index, &terminal_index, touching, &mut pairs);
             debug_assert!(
@@ -278,23 +346,64 @@ pub fn recognise_into(
 
             // The prune answers "these two boxes meet"; a box is a superset of
             // the shape inside it. Binding on a box alone does not merely
-            // invent a device — the lowest-`PolyId` rule below means a spurious
-            // pair with a low id *wins*, and a real device silently comes back
-            // wired to a net it does not touch. So every kept pair is re-tested
-            // exactly, the same discipline `net::intra_layer_edges_into`
-            // applies to a conductor join — through the same predicate, which
-            // is why it is `pub(crate)` in `net` rather than written twice —
-            // and the branchless compact that applies it is shared for the same
-            // reason.
+            // invent a device — the ascending-`PolyId` rule below means a
+            // spurious pair with a low id *wins*, and a real device silently
+            // comes back wired to a net it does not touch. So every kept pair
+            // is re-tested exactly, the same discipline
+            // `net::intra_layer_edges_into` applies to a conductor join —
+            // through the same predicate, which is why it is `pub(crate)` in
+            // `net` rather than written twice — and the branchless compact that
+            // applies it is shared for the same reason.
             retain_intersecting_into(store, &pairs, &mut exact);
 
-            // Descending, so the store is unconditional and the *last* write
-            // wins: the lowest `PolyId` under the marker is the one that
-            // survives, which is what makes the binding independent of how the
-            // index bucketed the layer. `exact` is ascending, because the prune
-            // emits ascending pairs and a compact preserves order.
-            for &(marker, terminal) in exact.iter().rev() {
-                bind[(marker.0 - markers.start) as usize * width + k] = nets.net_of(terminal);
+            // One forward pass carrying a rank within each marker's run: the
+            // r-th of this layer's polygons under a marker fills the r-th
+            // position naming the layer. `exact` is ascending by
+            // `(marker, terminal)`, because the prune emits ascending pairs and
+            // a compact preserves order, so the rank is ascending `PolyId` —
+            // the only order that does not depend on how the index bucketed the
+            // layer.
+            //
+            // A layer named once fills its one position from rank 0, the lowest
+            // `PolyId` under the marker. A layer named twice is what makes a MOS
+            // channel two regions instead of one region twice. A rank past the
+            // last position naming the layer is the surplus case below.
+            let mut previous = past_markers;
+            let mut rank = 0usize;
+            for &(marker, terminal) in &exact {
+                // Branchless: a new marker resets the rank, the same marker
+                // advances it. `bool` is 0 or 1, so the multiply is the reset.
+                rank = (rank + 1) * usize::from(marker == previous);
+                previous = marker;
+                // A rank past the last position naming this layer is a marker
+                // carrying *more* of the layer than the recogniser has slots
+                // for, which is finding F7: two gates under one implant, and an
+                // implant is drawn one polygon per diffusion region rather than
+                // one per transistor. There is no slot to write the surplus to
+                // and no way to invent one — `bind` is `marker × width` and the
+                // positions are spent.
+                //
+                // So it poisons the last position naming this layer instead of
+                // being dropped, and the [`NetId::NONE`] firing rule below
+                // refuses the marker exactly as it refuses one carrying too
+                // few. Same rule in both directions, and the reason is the same:
+                // taking the first transistor and dropping the rest yields a
+                // plausible single device, wired to whichever regions happen to
+                // hold the two lowest [`PolyId`]s under the marker, that nothing
+                // downstream can tell from a layout which really holds one. A
+                // refusal is loud; a silently missing transistor is the failure
+                // this tree fears.
+                //
+                // Branchless, and this is where the old `if rank < len` went:
+                // `min` keeps the index in range and the select supplies the
+                // poison, so the store is unconditional. A poisoned slot cannot
+                // be un-poisoned — rank only ascends within a marker's run, and
+                // every other layer writes to its own positions.
+                let surplus = rank >= positions.len();
+                let slot = positions[rank.min(positions.len() - 1)];
+                let bound = nets.net_of(terminal);
+                bind[(marker.0 - markers.start) as usize * width + slot] =
+                    if surplus { NetId::NONE } else { bound };
             }
         }
 

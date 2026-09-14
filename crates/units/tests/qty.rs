@@ -150,6 +150,22 @@ fn the_value_in_base_units_does_not_depend_on_the_prefix() {
         3e-18,
         1e-15,
     );
+    // `FEMTO` and `PICO` appear below only in the restatement loop, which
+    // compares a quantity against itself and so cancels a sign error in the
+    // constant the same way the round-trip law does. Stated absolutely here,
+    // they are pinned: mutation testing found both surviving a deleted minus.
+    assert_close_relative(
+        "12.5 fF in farads",
+        Qty::<Capacitance, { prefix::FEMTO }>::new(12.5).base(),
+        12.5e-15,
+        1e-15,
+    );
+    assert_close_relative(
+        "12.5 pF in farads",
+        Qty::<Capacitance, { prefix::PICO }>::new(12.5).base(),
+        12.5e-12,
+        1e-15,
+    );
     assert_close_relative(
         "1.8 V in volts",
         Qty::<Voltage, { prefix::BASE }>::new(1.8).base(),

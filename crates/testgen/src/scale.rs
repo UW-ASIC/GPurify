@@ -223,6 +223,9 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
             via_cut: vec![ScaleLayers::CUT],
             via_connects: vec![(ScaleLayers::LOWER, ScaleLayers::UPPER)],
             intra_layer_touch: false,
+            // No text: this generator draws geometry, and a label pairing with
+            // no `TEXT` to pair binds nothing.
+            ..Connectivity::default()
         },
         expected_net_polys,
         layer_area,

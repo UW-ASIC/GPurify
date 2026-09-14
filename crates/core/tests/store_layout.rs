@@ -263,3 +263,62 @@ fn handles_resolve_to_the_rows_holding_the_geometry_they_were_pushed_with() {
         );
     }
 }
+
+/// Oracle: construct-from-answer, on a shape whose inside and outside this test
+/// states rather than derives.
+///
+/// [`GeometryStore::poly_contains_point`] is boundary-**inclusive**, which is
+/// not a detail: it is the whole reason it exists separately from `topology`'s
+/// strict-interior `point_inside`. GDSII fixes no relationship between a `TEXT`
+/// and a shape, so net-label binding is a convention, and every established one
+/// treats an on-edge label as attached — `KLayout` states it as "inside or on
+/// the edge of". Pin labels are routinely written at a rectangle's corner or the
+/// midpoint of an edge, so a strict test drops them and the net silently loses
+/// its name.
+///
+/// The **slanted** edge is the case worth having. `ops::point_seg_dist2` rounds
+/// an oblique segment's distance away from zero, so `dist2 == 0` never fires for
+/// a point genuinely on such an edge — a plausible implementation that would
+/// pass every rectilinear case in this corpus and be wrong on a 45° one.
+#[test]
+fn a_polygon_contains_the_points_on_its_boundary_as_well_as_its_interior() {
+    use gpurify_core::ops::Point;
+
+    let mut layout = LayoutBuilder::new(LAYERS);
+    // A right triangle, so two edges are axis-aligned and the hypotenuse is
+    // slanted: (0,0) -> (400,0) -> (0,400).
+    let triangle = layout.shape(LayerId(0), &(vec![0, 400, 0], vec![0, 0, 400]));
+    let (store, ids) = layout.finish();
+    let poly = ids.of(triangle);
+
+    let at = |x: i64, y: i64| Point { x: dbu(x), y: dbu(y) };
+
+    for (x, y, what) in [
+        (100, 100, "well inside"),
+        (0, 0, "the right-angle vertex"),
+        (400, 0, "a vertex at the far end of a horizontal edge"),
+        (0, 400, "a vertex at the far end of a vertical edge"),
+        (200, 0, "the midpoint of the horizontal edge"),
+        (0, 200, "the midpoint of the vertical edge"),
+        (200, 200, "the midpoint of the SLANTED edge"),
+        (100, 300, "another point on the slanted edge"),
+    ] {
+        assert!(
+            store.poly_contains_point(poly, at(x, y)),
+            "({x}, {y}) is {what}, and the boundary counts as inside"
+        );
+    }
+
+    for (x, y, what) in [
+        (201, 200, "just outside the slanted edge"),
+        (-1, 100, "left of the vertical edge"),
+        (100, -1, "below the horizontal edge"),
+        (400, 400, "the corner of the bounding box the triangle does not reach"),
+        (5000, 5000, "far away"),
+    ] {
+        assert!(
+            !store.poly_contains_point(poly, at(x, y)),
+            "({x}, {y}) is {what}, and must not read as contained"
+        );
+    }
+}

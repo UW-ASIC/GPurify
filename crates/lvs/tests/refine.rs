@@ -9,7 +9,8 @@
 mod common;
 
 use common::{
-    chain, differential_pair, net_node, node_count, permute, random_graph, stacked_pair,
+    chain, differential_pair, mos_and_bjt, mos_and_bjt_without_the_bjt, net_node, node_count,
+    permute, random_graph, stacked_pair,
 };
 use gpurify_lvs::refine::{refine_into, Partition, Refinement, TieBreak};
 use gpurify_lvs::{LayoutGraph, RefGraph};
@@ -94,19 +95,28 @@ fn reflexivity_holds_for_arbitrary_generated_graphs() {
 /// claim stated as something falsifiable: an implementation that resolved a
 /// class by index order, or by whatever the row order happened to be, would pair
 /// node `n` with node `n` here and be wrong for all but the fixed points.
+///
+/// **The fixture has to be rigid for the assertion to be legal**, and
+/// `stacked_pair` stopped being so when `role_code` collapsed the MOS channel:
+/// its upper device's source and drain both dangle, so exchanging them is an
+/// automorphism and there are two correct answers here rather than one. Asserted
+/// against the old expectation, refinement returned the other one — a *correct*
+/// pairing the test called wrong, which is `docs/CORRECTNESS_MAP.md` §5's
+/// dangerous class. [`chain`] carries the anchor that keeps one fixture rigid;
+/// see its doc comment for why a bare chain is not.
 #[test]
 fn refinement_recovers_the_relabelling_that_produced_the_graph() {
-    // `new_device[old]` and `new_net[old]`. Neither map has a fixed point on
-    // the nets, so an implementation ignoring the permutation cannot pass.
-    let new_device = [1u32, 0];
-    let new_net = [3u32, 5, 0, 4, 2, 1];
-    let source = stacked_pair();
+    // `new_device[old]` and `new_net[old]`. Neither map has a fixed point, so
+    // an implementation ignoring the permutation cannot pass.
+    let new_device = [1u32, 2, 0];
+    let new_net = [1u32, 2, 3, 0];
+    let source = chain(3);
     let relabelled = permute(&source, &new_device, &new_net);
 
     let mut scratch = Partition::default();
     let outcome = refine_into(
         &LayoutGraph(relabelled),
-        &RefGraph(stacked_pair()),
+        &RefGraph(chain(3)),
         TieBreak::LowestIndex,
         GENEROUS,
         &mut scratch,
@@ -115,10 +125,10 @@ fn refinement_recovers_the_relabelling_that_produced_the_graph() {
 
     let mut expected: Vec<(u32, u32)> = Vec::new();
     for (old, &new) in new_device.iter().enumerate() {
-        expected.push((new, u32::try_from(old).expect("two devices")));
+        expected.push((new, u32::try_from(old).expect("three devices")));
     }
     for (old, &new) in new_net.iter().enumerate() {
-        let old = u32::try_from(old).expect("six nets");
+        let old = u32::try_from(old).expect("four nets");
         expected.push((net_node(&source, new), net_node(&source, old)));
     }
     expected.sort_unstable();
@@ -208,6 +218,58 @@ fn the_same_symmetry_resolves_when_the_tie_break_is_allowed_to_fire() {
     for (layout, reference) in scratch.pairs() {
         assert_eq!(layout, reference);
     }
+}
+
+/// Oracle: construct-from-answer. One device is deleted from the reference and
+/// nothing else changes, so refinement stabilises with the bipolar's class
+/// holding one layout node and no reference one. That is a structural
+/// difference, not a budget and not a symmetry, and [`Refinement::Discrepant`]
+/// is the one outcome that says so.
+///
+/// Nothing in this suite reached `Discrepant` before: every fixture was a graph
+/// against itself or a relabelling of one, so `Complete`, `Symmetric` and
+/// `Exhausted` were the only three ever observed and the fourth arm of the enum
+/// was dead in the tests. It is also where the classes with unequal counts come
+/// from, which is what `Partition::unresolved` hands `compare::interpret`.
+#[test]
+fn a_deleted_device_leaves_the_partition_discrepant_rather_than_complete() {
+    let mut scratch = Partition::default();
+    let outcome = refine_into(
+        &LayoutGraph(mos_and_bjt()),
+        &RefGraph(mos_and_bjt_without_the_bjt()),
+        TieBreak::LowestIndex,
+        GENEROUS,
+        &mut scratch,
+    );
+    assert_eq!(outcome, Refinement::Discrepant);
+
+    let unresolved: Vec<(gpurify_lvs::refine::ClassId, u32, u32)> =
+        scratch.unresolved().collect();
+    assert!(
+        unresolved
+            .iter()
+            .any(|&(_, layout_nodes, ref_nodes)| layout_nodes != ref_nodes),
+        "refinement called itself discrepant with every class balanced: {unresolved:#?}"
+    );
+}
+
+/// Oracle: construct-from-answer. The same pair under [`TieBreak::Refuse`] is
+/// still `Discrepant`, not `Symmetric`. The order of those two tests inside
+/// `refine_observed` is load-bearing: an imbalanced class is a structural
+/// difference no tie-break can mend, so reporting it as a symmetry would blame
+/// the run's configuration for a difference between the netlists — and a caller
+/// would then loosen the tie-break and get the same answer.
+#[test]
+fn a_structural_difference_is_discrepant_even_when_ties_are_refused() {
+    let mut scratch = Partition::default();
+    let outcome = refine_into(
+        &LayoutGraph(mos_and_bjt()),
+        &RefGraph(mos_and_bjt_without_the_bjt()),
+        TieBreak::Refuse,
+        GENEROUS,
+        &mut scratch,
+    );
+    assert_eq!(outcome, Refinement::Discrepant);
 }
 
 /// Oracle: construct-from-answer. A chain propagates one hop per round from each

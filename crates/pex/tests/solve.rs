@@ -348,7 +348,7 @@ fn refinement_reaches_the_same_solution_as_a_bare_solve() {
 
     let mut refined = vec![0.0; 12];
     let converged =
-        refine(&a, &b, tight(), &mut refined, &mut workspace).expect("refinement converges");
+        refine(&a, &a, &b, tight(), &mut refined, &mut workspace).expect("refinement converges");
 
     for (index, ((&r, &p), &want)) in refined.iter().zip(&plain).zip(&expected).enumerate() {
         assert_close(

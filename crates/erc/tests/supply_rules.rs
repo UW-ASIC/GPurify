@@ -80,6 +80,7 @@ fn via_connectivity(cut: LayerId, joined: &[LayerId]) -> Connectivity {
         // Off: every join here is via-mediated, so a broken via edge splits a
         // net rather than being masked by shapes that happen to touch.
         intra_layer_touch: false,
+        ..Connectivity::default()
     }
 }
 
@@ -91,6 +92,7 @@ fn no_connectivity() -> Connectivity {
         via_cut: Vec::new(),
         via_connects: Vec::new(),
         intra_layer_touch: false,
+        ..Connectivity::default()
     }
 }
 

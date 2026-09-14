@@ -10,7 +10,43 @@
 //! bytes of `Vec` header per shape before a single character existed.
 
 use crate::intern::StrId;
-use gpurify_core::PolyId;
+use gpurify_core::{ops::Point, GeometryStore, LayerId, PolyId};
+
+/// One `TEXT` as the layout stated it, before anything decided what it names.
+///
+/// **The shape the reader can hand back.** A GDS `TEXT` carries a layer, a
+/// texttype and exactly one coordinate; it does not carry a polygon, and the
+/// specification defines no rule that would give it one. So a reader can only
+/// record where the label is, and the binding is a separate, later pass —
+/// [`Provenance::resolve_labels`] — which needs the flattened store and the
+/// deck's label pairing, neither of which exists while records are being
+/// parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlacedLabel {
+    /// The label's single `XY` point, in the root frame.
+    pub at: Point,
+    /// The layer the `TEXT` was drawn on, mapped through the deck.
+    pub layer: LayerId,
+    /// The `STRING` record's contents, interned.
+    pub name: StrId,
+}
+
+/// Why a placed label could not be bound to a polygon.
+///
+/// One variant, and it is the fail-closed half. A label the deck *claims* — its
+/// layer appears in `Connectivity::label_layer` — that lands on no shape of the
+/// conductor it names is a misplaced label, which real flows treat as a rule
+/// violation rather than as nothing: GF180MCU's own layer table says its label
+/// layers "will be used in DRC and LVS for any wrong placement of label check".
+///
+/// Dropping it silently is the failure this project exists to prevent: the net
+/// keeps its geometry and loses its name, and an unnamed net reads downstream
+/// as a net nobody labelled rather than as a label nobody could place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LabelError {
+    #[error("a net label on layer {layer:?} at ({x}, {y}) lies on no shape of the conductor it names")]
+    Unplaced { layer: LayerId, x: i64, y: i64 },
+}
 
 /// A root-to-instance hierarchy path, as a range into a shared component list.
 ///
@@ -147,6 +183,14 @@ pub struct Provenance {
     /// Net label attached to a polygon, if any. `None` is the common case, so
     /// this is a sparse pair list rather than a column of `Option`.
     labelled: Vec<(PolyId, StrId)>,
+    /// Labels the reader placed but nothing has bound yet.
+    ///
+    /// Not keyed by [`PolyId`] and so not touched by [`Self::permute`]: a point
+    /// is a point whatever row the polygon under it ends up on. This column is
+    /// consumed by [`Self::resolve_labels`], which is what turns it into
+    /// `labelled`, and it is kept afterwards rather than drained so a caller
+    /// can still say what the layout declared.
+    placed: Vec<PlacedLabel>,
     paths: PathTable,
 }
 
@@ -314,6 +358,28 @@ impl Provenance {
         );
     }
 
+    /// How many polygons this table describes.
+    ///
+    /// The one number that has to equal `GeometryStore::poly_count`, and the
+    /// only way to say so from outside: the columns are private, and the
+    /// consequence of a desync — every violation naming the next shape's cell —
+    /// is invisible in any single lookup. `ingest::layout` asserts it after
+    /// appending derived layers to both tables.
+    pub fn len(&self) -> usize {
+        // The CSR carries one offset more than it has rows, once it has been
+        // seeded at all — and it is seeded by the first `push`, which may not
+        // have happened, and is *not* unseeded by a `permute` of nothing.
+        debug_assert!(
+            self.prop_start.is_empty() || self.prop_start.len() == self.poly_path.len() + 1,
+            "the property column desynchronised from the row count"
+        );
+        self.poly_path.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn path_of(&self, poly: PolyId) -> PathId {
         debug_assert!(
             poly.idx() < self.poly_path.len(),
@@ -333,6 +399,132 @@ impl Provenance {
     /// Ordered so `topology`'s label binding is deterministic without sorting.
     pub fn labels(&self) -> &[(PolyId, StrId)] {
         &self.labelled
+    }
+
+    /// Record a `TEXT` where the layout drew it, bound to nothing.
+    ///
+    /// Called by the reader, once per text element, in file order. The point is
+    /// already in the root frame — a label under a mirrored instance moves with
+    /// it, the same as the geometry it names.
+    pub fn place_label(&mut self, at: Point, layer: LayerId, name: StrId) {
+        self.placed.push(PlacedLabel { at, layer, name });
+    }
+
+    /// Every label the layout declared, in file order, bound or not.
+    pub fn placed_labels(&self) -> &[PlacedLabel] {
+        &self.placed
+    }
+
+    /// Bind each placed label to the polygon it sits on.
+    ///
+    /// **Transform, A-to-B.** Reads [`Self::placed_labels`] and the store,
+    /// writes `labelled` — the column [`Self::labels`] hands to
+    /// `topology::port::bind_ports_into`. Called once per run by
+    /// `engine::pipeline::load_into`, after `read_layout` has flattened and
+    /// permuted, because both are preconditions: a label's point is in the root
+    /// frame only after flattening, and the [`PolyId`] it resolves to is a
+    /// store row only after the layer sort.
+    ///
+    /// # Which text names which conductor is the deck's answer
+    ///
+    /// GDSII defines no relationship between a `TEXT` and a shape — see
+    /// `Connectivity::label_layer`, which carries the pairing and says why it
+    /// has to. A text on a layer no row pairs is not a net label at all; it is
+    /// documentation, and it is passed over rather than refused.
+    ///
+    /// # The boundary counts as inside
+    ///
+    /// Through [`GeometryStore::poly_contains_point`], whose doc comment gives
+    /// the reason. Pin labels are routinely written at a rectangle's corner or
+    /// the midpoint of an edge, so a strict-interior test would drop them.
+    ///
+    /// # The lowest matching row wins
+    ///
+    /// Deterministic, and it costs nothing real: two shapes of one conductor
+    /// layer that both contain one point overlap, and overlapping shapes on a
+    /// conductor layer are already one net. Recorded because it is a choice —
+    /// the alternative, attaching the name to every match, produces the same
+    /// net through `bind_ports_into`'s dedup and more rows to get there.
+    ///
+    /// # Errors
+    ///
+    /// [`LabelError::Unplaced`] for a claimed label on no shape. Fail closed:
+    /// the alternative is a net that quietly loses its name.
+    pub fn resolve_labels(
+        &mut self,
+        store: &GeometryStore,
+        connectivity: &crate::deck::Connectivity,
+    ) -> Result<(), LabelError> {
+        debug_assert_eq!(
+            connectivity.label_layer.len(),
+            connectivity.label_names.len(),
+            "the deck's label pairing columns arrive parallel"
+        );
+
+        // A dispatcher, not a bulk transform: one iteration runs a whole search
+        // whose trip count is the paired layer's row count, and appends at most
+        // one row through `label`. The bulk data is one level down — the
+        // conductor's bounding-box column, which the search below scans.
+        for index in 0..self.placed.len() {
+            let label = self.placed[index];
+            let mut bound = None;
+
+            // ponytail: linear scan of the paired layer per label, bbox-pruned.
+            // The ceiling is labels × polygons-on-that-layer, and the upgrade
+            // path is a point query on `core::index::SpatialIndex` — which does
+            // not have one today, only the pairwise `candidate_pairs_into`, so
+            // taking it is a new interface in `core` rather than a call. A real
+            // design labels ports and rails, hundreds of texts against millions
+            // of shapes, and the prune below is what keeps that a scan of a
+            // `Bbox` column rather than of vertex rings.
+            for row in 0..connectivity.label_layer.len() {
+                if connectivity.label_layer[row] != label.layer {
+                    continue;
+                }
+                let conductor = connectivity.label_names[row];
+                for poly in store.polys_on_layer(conductor) {
+                    let poly = PolyId(poly);
+                    // The prune, and it is exact enough to be worth taking
+                    // first: a point outside a shape's box is outside the
+                    // shape, and the box is one contiguous load against a ring
+                    // walk.
+                    let box_of = store.poly_bbox(poly);
+                    let inside_box = (label.at.x.raw() >= box_of.xlo.raw())
+                        & (label.at.x.raw() <= box_of.xhi.raw())
+                        & (label.at.y.raw() >= box_of.ylo.raw())
+                        & (label.at.y.raw() <= box_of.yhi.raw());
+                    if inside_box && store.poly_contains_point(poly, label.at) {
+                        bound = Some(poly);
+                        break;
+                    }
+                }
+                if bound.is_some() {
+                    break;
+                }
+            }
+
+            // A text on an unpaired layer is not claimed and not a fault; a
+            // claimed one that landed nowhere is. The two are distinguished by
+            // whether any pairing row named this layer at all.
+            let claimed = connectivity.label_layer.contains(&label.layer);
+            match bound {
+                Some(poly) => self.label(poly, label.name),
+                None if claimed => {
+                    return Err(LabelError::Unplaced {
+                        layer: label.layer,
+                        x: label.at.x.raw(),
+                        y: label.at.y.raw(),
+                    })
+                }
+                None => {}
+            }
+        }
+
+        debug_assert!(
+            self.labelled.windows(2).all(|w| w[0].0 <= w[1].0),
+            "the label column is what `topology` binds without sorting"
+        );
+        Ok(())
     }
 
     pub fn paths(&self) -> &PathTable {

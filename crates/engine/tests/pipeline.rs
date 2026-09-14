@@ -241,6 +241,7 @@ fn one_conductor() -> Connectivity {
         via_cut: Vec::new(),
         via_connects: Vec::new(),
         intra_layer_touch: true,
+        ..Connectivity::default()
     }
 }
 

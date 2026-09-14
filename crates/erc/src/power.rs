@@ -1367,6 +1367,106 @@ pub struct Solved<'a> {
     pub solution: &'a PowerSolution,
 }
 
+/// Did a stated current budget fail to reach the solve?
+///
+/// **Decision** — a grid and the intent it was built from in, one `bool` out,
+/// pure. True when some net this run declares as a supply states a non-zero
+/// `budget_current_ua` and carries **no load at all** across its nodes.
+///
+/// That is an exact detector, not a heuristic. [`extract_into`]'s fourth pass
+/// writes `sign * budget_current_ua` spread over the rail's attach points, so
+/// the net's `node_load` column sums to the signed budget whenever the budget
+/// was read — and to exactly `0.0` whenever it was not. `-0.0 == 0.0`, so a
+/// ground rail's negative shares are covered by the same compare.
+///
+/// # Why a true answer means the input was un-modellable
+///
+/// Attach points come from [`DeviceTable::devices_on`], which is **terminal**
+/// based: a rail counts a device only where one of its terminals lands. A
+/// supply rail fed from off-chip through a pad has none — the current enters
+/// from outside the extracted netlist — so the ordinary shape of a real supply
+/// rail is a stated budget the model cannot place.
+///
+/// No number can be substituted for it, and that is settled rather than
+/// unexplored. Injecting at the inferred pad anchor is refuted by construction:
+/// [`solve_into`] eliminates pad nodes from the unknowns and builds its
+/// right-hand side over the unknowns only, so a pad node's `node_load` is never
+/// read and the solve is all zeros either way. Spreading the budget over the
+/// rail's own taps fabricates load positions, and a uniform spread reads
+/// *lower* per edge than a concentrated distal draw on every edge but one —
+/// more fail-open on exactly the distal segments an EM check is for. And the
+/// three inputs that produce an empty attach list — a pad-fed rail whose loads
+/// are outside the extraction, loads that are drawn but whose devices went
+/// unrecognised, and a genuinely unloaded net — are indistinguishable from
+/// everything reachable here.
+///
+/// So the branch-current rules refuse rather than report a verdict over a grid
+/// carrying no current: a zero current passes every density limit, every Blech
+/// product and every drop limit silently, which is the false-clean this crate
+/// exists to prevent.
+///
+/// A pad-marker layer on `Connectivity` does **not** close this, and the note in
+/// `docs/SIGNATURE_DEFECTS.md` that said it would is withdrawn. A pad names
+/// where current *enters*; every branch current is fixed by where it *leaves*,
+/// so with the pad known and the loads still unknown the right-hand side is
+/// still all zeros. What would close it is a per-terminal current column on
+/// `DeviceTable` fed by a per-instance power file — a new `ingest` reader, and
+/// still no help for loads outside the extraction.
+///
+/// [`DeviceTable::devices_on`]: gpurify_topology::DeviceTable::devices_on
+pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
+    debug_assert_eq!(
+        grid.node_load.len(),
+        grid.node_count(),
+        "one load per node, or the fold below reads another node's current"
+    );
+
+    // Summed per budgeted supply rather than scattered into a column indexed by
+    // `NetId`. A column is sized by the largest supply's *id*, not by how many
+    // supplies there are, so it allocates and zeroes `net_count` f64s on every
+    // call to hold the handful of accumulators actually read — and this runs
+    // three times per ERC run. Declared supplies are tens, of which ones state a
+    // budget, so the fold below is cheaper than the allocation it replaces.
+    //
+    // `any` short-circuits: the first discarded budget refuses the row, so the
+    // remaining nets are never summed. A design stating no budget at all — the
+    // common case — never touches the grid.
+    //
+    // Walked over `limit_net` rather than `supply_net`, and that is deliberate.
+    // `parse_intent` does not require a net carrying a `limits` entry to be a
+    // declared supply, and only supplies are given grid nodes — so a budget
+    // stated on a non-supply net was checked by nothing and reported clean,
+    // which is the same false-clean as a discarded one. The same compare catches
+    // it, its load being zero for want of any node at all. It also drops a
+    // `limits_of` binary search per supply.
+    intent
+        .limit_net
+        .iter()
+        .zip(&intent.limit)
+        .any(|(&net, limits)| {
+            limits.budget_current_ua.is_some_and(|budget| budget != 0.0)
+                && load_on(grid, net) == 0.0
+        })
+}
+
+/// Total load on one net, over every node of the grid.
+///
+/// Split out of [`discarded_budget`] so the bulk pass stands on its own: it is
+/// the only part of that function that is bulk, and it is called once per
+/// budgeted supply rather than once per call.
+fn load_on(grid: &PowerGrid, net: NetId) -> f64 {
+    // No data-dependent branch in the body: the compare is a mask and the
+    // multiply keeps every off-net term at exactly zero, so this is one
+    // contiguous pass over two columns with nothing to mispredict. `-0.0` sums
+    // to `-0.0`, and `-0.0 == 0.0`, so a ground rail's negative shares compare
+    // the same as a power rail's positive ones.
+    (0..grid.node_count())
+        .map(|node| {
+            f64::from(u8::from(grid.node_net[node] == net)) * grid.node_load[node].raw()
+        })
+        .sum()
+}
+
 /// Build the supply grid from layout.
 ///
 /// **Transform, A-to-B.** Caller owns `out`, cleared and refilled.
@@ -1607,11 +1707,20 @@ pub fn extract_into(
             let here = on.iter().filter(|&&n| n == net).count();
             attach.resize(attach.len() + here, request);
         }
-        // Surviving `if`: once per declared supply. A rail nothing attaches to
-        // draws nothing, and the division below would be by zero.
-        if attach.is_empty() {
-            continue;
-        }
+        // No `attach.is_empty()` guard, deliberately. The one that stood here
+        // claimed "a rail nothing attaches to draws nothing", and that is the
+        // fail-open this whole path was built on: a rail with no *device
+        // terminal* is the ordinary shape of a supply fed from off-chip through
+        // a pad, which draws everything. It was also dead code — the share it
+        // guarded is only ever stored by the loop below, which iterates once per
+        // attach point and so zero times, and `Qty::new` stores an `f64` without
+        // validating it. Deleting it changes no column this transform writes.
+        //
+        // What replaces it is `discarded_budget`, read by the rules rather than
+        // here: this transform's only error channel is `PowerError`, and
+        // `engine::run` turns any `Err` from it into a refusal of the *whole*
+        // ERC stage, which would take some thirty geometry rules down with it.
+        //
         // A ground node's load is negative by the column's own convention: it
         // injects into the rail rather than drawing from it.
         let sign = match intent.supply_role[supply] {

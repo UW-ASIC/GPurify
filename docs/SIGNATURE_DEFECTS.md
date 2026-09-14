@@ -4551,3 +4551,575 @@ which has private fields and no out-of-crate constructor):
 `a_mirrored_instance_keeps_the_orientation_the_cell_was_drawn_with`,
 `a_doubly_mirrored_instance_is_the_cell_as_drawn`, and
 `a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise`.
+
+---
+
+## `Xform::compose` wraps `i64` on nested magnification — open, fail-open in release
+
+Found while writing `wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store`
+(`crates/ingest/src/layout.rs`, the global-transform-equivariance law). It is
+**not** what that law tests; the law's fixture deliberately keeps `mag > 1` in
+the wrapping transform only, so it never trips this. Filed separately because it
+is a different defect with a different fix.
+
+**The arithmetic.** `crates/ingest/src/layout.rs:356`:
+
+```rust
+dx: a * child.dx + b * child.dy + self.dx,
+```
+
+`(a, b, c, e) = self.linear()`, whose entries are `±self.mag` or `0`. The
+reader accepts any magnification that is integral and in `1..=1e6`
+(`layout.rs:1120`), and `compose` multiplies them: `mag: self.mag * child.mag`.
+So two nested `1e6` instances give a composed `mag` of `10^12`, and the *next*
+level down multiplies that by a raw `SREF` `XY` offset, which GDSII bounds at
+`i32` — up to `2_147_483_647`. The product reaches `2.1·10^21 ≈ 2^71`, and
+`i64::MAX` is `9.22·10^18 ≈ 2^63`.
+
+**Verified, not derived.** A four-cell library — `LEAF` drawing
+`(0,0), (1,0), (0,1)`; `C2` placing `LEAF` at `dx = 18_446_743`; `C1` placing
+`C2` at `mag = 1e6`; `TOP` placing `C1` at `mag = 1e6` — read through
+`gds::read`:
+
+| profile | result |
+|---|---|
+| debug | panics, `attempt to multiply with overflow` at `layout.rs:356` — an unhandled arithmetic panic, not a `LayoutError` |
+| **release** | **`Ok`**, one polygon, vertices `x = [-1073709551616, -73709551616, -1073709551616]`, `y = [0, 0, 1000000000000]` |
+
+The true offset is `10^12 · 18_446_743 = 18_446_743_000_000_000_000` (`2^63.0`),
+which wraps to `-1_073_709_551_616`. That is inside `±MAX_ABS_DBU = 2^40 =
+1_099_511_627_776`, so `emit`'s range check — which runs *after* the
+composition — passes it, and the reader reports success for geometry it placed
+`1.8·10^19` dbu from where the file says.
+
+`18_446_743` is not adversarial beyond fitting `i32`: it is simply the smallest
+offset whose wrapped residue lands back inside the domain. Any offset above
+`9_223_373` already overflows; most wrap to a value the range check then
+refuses, which is a *wrong error* rather than a wrong answer — still not a
+correct read.
+
+**Why the existing guards do not cover it.** `MAX_ABS_DBU` bounds a *vertex*, and
+it is checked in `emit` against the already-composed transform. Nothing bounds
+the intermediate `a * child.dx`, and nothing bounds the composed `mag` — four
+nested `1e6` instances overflow `self.mag * child.mag` on its own (`10^24`), at
+which point `emit`'s `debug_assert!(at.mag >= 1)` is the only guard and is
+absent from exactly the profile where the wrong answer does damage. That is the
+same shape as the `Bbox::area()` clamp recorded above, and it wants the same
+treatment: an every-profile check, not a `debug_assert`.
+
+**Why it is not fixed here.** The fix is a refusal, and refusal needs a variant
+to refuse with. `LayoutError::CoordinateOutOfRange(i64)` carries the offending
+coordinate, and there is no coordinate to carry — the value never existed. The
+honest report is `UnsupportedTransform` ("instance transform is not
+representable exactly", which is precisely true) with `checked_mul`/`checked_add`
+throughout `compose` and `linear`, but `compose` returns `Self`, not
+`Result<Self, LayoutError>`, and `linear` returns `(i64, i64, i64, i64)`. Both
+signatures are frozen, and both are called from `Flatten::visit`
+(`layout.rs:1364`), `Flatten::emit` (`:1450`) and `Flatten::place` (`:1398`).
+Changing them is a Definition-Phase edit, so it is filed rather than committed.
+
+The cheap alternative that needs no signature change: bound the *accepted*
+magnification so no composition can overflow. `1e6` per instance is already the
+reader's own limit; the composed product is what is unbounded. A running check
+in `visit` — refuse when `at.mag` exceeds a depth-independent ceiling — is one
+`if` on the path that already returns `Result<(), LayoutError>`. It is a
+narrower fix (it does not bound `a * child.dx` for a legal `mag`), so it is
+written here as the fallback, not the answer.
+
+Not covered by any test today. Adding one is awkward on purpose: the debug
+profile panics rather than returning, so a test would have to be
+`#[cfg(not(debug_assertions))]` or assert a panic in one profile and a wrong
+`Ok` in the other. That is worth having once the refusal exists; asserting the
+current release behaviour would be asserting the bug.
+
+---
+
+## erc, from the ERC corpus-coverage pass
+
+Five findings surfaced while deriving corpus cases for the five uncovered ERC
+rule kinds. None is patched. The first two are defects in shipped behaviour; the
+last three are a doc/schema/harness cluster.
+
+### `electromigration` panics on any row naming two or more layers
+
+`crates/erc/src/ruleset.rs` parses the row per-layer for three columns and
+per-row for the fourth:
+
+```rust
+table.layer.extend_from_slice(layers);                             // N
+table.max_density.extend(layers.iter().map(|_| max_density));      // N
+table.max_current_per_cut.extend(layers.iter().map(|_| per_cut));  // N
+table.blech_limit.push(blech);                                     // 1
+```
+
+`crates/erc/src/rules/electrical.rs:860` then
+`debug_assert_eq!(table.layer.len(), table.blech_limit.len())`, and `:899`
+slices `blech: &table.blech_limit[span]` where `span` is the *layer* span. So a
+two-layer row panics on the assert in debug **and on the slice bound in
+release** — this is not a debug-only fail-closed guard, it is a crash in every
+profile. `em_current_density` directly below it has the same three per-layer
+columns and no fourth, which is why it is unaffected.
+
+The sibling columns say which side is wrong: `blech_limit` is a per-layer
+physical quantity (the Blech length is a property of the metal), so the fix is
+`extend`, not a refusal of multi-layer rows. That is a body change, not a
+signature change — `ElectromigrationTable` already stores `blech_limit` as a
+`Vec` indexed by the layer CSR.
+
+`tests/fixtures/params.json`'s `met1.electromigration` names **one** layer and
+must keep naming one until this is fixed; `ERC_EMIG_MET1`'s `note` records why.
+Both sites sit *above* the intent gate, so the panic is reachable by any deck
+that configures the rule, whether or not design intent is declared.
+
+### `esd_latchup` measures a guard ring's width as its bounding box's minor span
+
+`crates/erc/src/rules/reliability.rs:722`:
+
+```rust
+let box_of = store.poly_bbox(ring);
+// The narrow side of the ring is what an injected carrier has to
+// cross, so the width of a ring is the smaller of its two spans.
+let width = Measurement::Length(box_of.width().min(box_of.height()));
+```
+
+The comment's reasoning is right and its implementation is the bounding box. For
+a solid bar the two coincide. For an **annulus** — a ring, the shape the rule is
+named for and the only shape a guard ring is ever drawn as — the bbox is the
+outer rectangle, so the reported width is the ring's *outer dimension* rather
+than its trace width. A 200 nm trace enclosing a 20 µm well measures 20 µm.
+
+That is **fail-open** on exactly the geometry the rule exists to check: the
+narrower the ring relative to what it encloses, the more generous the
+measurement, and a ring far too thin to stop injection passes a
+`min_guard_ring_width` floor it should fail.
+
+`ERC_ESD_LATCHUP` cannot cover this — `ERC_HV`'s guard shape is a solid square,
+the degenerate case where bbox minor span and trace width agree. Covering it
+needs a cell drawing a real annulus.
+
+### `include_partial_windows` cites a check that does not exist and cannot exist there
+
+`DensityCmpTable::include_partial_windows`'s doc comment says `RuleSet::from_deck`
+rejects `false` when the steps do not cover both die edges exactly. No such check
+is in `crates/erc/src/ruleset.rs`, and none can be: `from_deck` never sees a die
+extent — the die arrives at `check_density_cmp` from `engine::run::design_extent`,
+long after the deck is parsed. Pass three of `check_density_cmp` has no `counted`
+gate and cites the same non-existent check as its justification, so with the flag
+`false` an excluded window still emits and still receives neighbour-delta
+violations.
+
+Related, and load-bearing for both `density_cmp` cases: `params.json` declares no
+`prBoundary`/`DIEAREA`/die layer, so `design_extent` falls back to the union of
+every polygon bbox (`crates/engine/src/run.rs:257`), which its own comment marks
+fail-open for a min-density floor. Both corpus cases state the die extent they
+assume in their `note`.
+
+### `CmpModel::nominal_thickness` is mandatory and never read
+
+`crates/erc/src/ruleset.rs:543` requires it; `check_density_cmp` never reads it.
+Under the model the excursion is `sensitivity · (d − target)` — measured from the
+calibration point, not from nominal — so the column has no consumer. A schema
+wart rather than a physics bug, but a deck author cannot tell that from the
+parser. `met1.density_cmp` supplies met1's own 400 nm so the value is at least
+not a fiction.
+
+### `measurement_matches` cannot assert an electrical measurement
+
+`tests/common/mod.rs` matches `Length`, `Area`, `Count` and `Ratio`, and falls to
+`_ => false` for everything else. `Measurement::Voltage`, `Current` and
+`Resistance` therefore can never be asserted by a corpus case. This is the
+remaining blocker on `ir_drop` coverage — it reports a voltage — while
+`reliability` escapes it by reporting a `Ratio`.
+
+This is the harness, not a frozen signature, so it is a small fix. It is filed
+rather than taken because a corpus case that silently compares nothing is the
+same fail-open shape as the rest of this section, and the arm should land
+together with the case that needs it.
+
+### a declared current budget is silently discarded on any rail without a device terminal
+
+**This is a fifth fail-open landing on the same rules as `E2E_AUDIT` §5.1's four,
+and it is not one of them.** Found by two blind derivations of `ERC_EMIG_MET1`
+disagreeing: the prior one predicted `examined == 1`, the independent one
+predicted `examined == 0` for *every* intent. The code agrees with the second.
+
+`crates/erc/src/power.rs:1612`:
+
+```rust
+// Surviving `if`: once per declared supply. A rail nothing attaches to
+// draws nothing, and the division below would be by zero.
+if attach.is_empty() {
+    continue;
+}
+```
+
+`attach` is filled at `:1596` from `devices.devices_on(net)`, which is
+**terminal-based** — a device counts only if one of its terminals lands on the
+net. `params.json` binds terminals to `poly` and `diff`. So a rail drawn on
+`li`/`met1` and fed from off-chip through a pad has an empty `attach`, the
+`continue` fires **before** `budget_current_ua` is first read at `:1626`, and the
+declared budget never enters the solve.
+
+The comment states the fail-open as if it were the safe reading: *"a rail nothing
+attaches to draws nothing"*. A rail with no device terminal on it is not a rail
+that draws nothing — it is the ordinary shape of a **supply rail fed through a
+pad**, which draws everything. Current enters from outside the extracted netlist,
+which is exactly the case `devices_on` cannot see.
+
+Downstream, every branch current is zero, so:
+
+- `check_electromigration` computes `blech_product = |I|·(L/W) = 0`, which is
+  under any `blech_limit`, so every branch is immortal and
+  `crates/erc/src/rules/electrical.rs:598`'s `examined += u64::from(!immortal)`
+  totals **zero**. The rule reports `Outcome::Ran` having examined nothing.
+- `check_ir_drop` sees zero drop everywhere and reports clean.
+
+`RuleRun::examined`'s frozen doc says "'Clean' has to mean *this rule executed,
+examined N shapes, and found nothing*". Here N is zero and the outcome is still
+`Ran`, so "your budget never reached the solver" and "this rail is within its
+electromigration limit" are the same output. That is the false-clean failure this
+tool is built against.
+
+Two things make it worse than the four in §5.1. It is silent — no `Skipped`, no
+diagnostic, and `Ran` with `examined: 0` is indistinguishable from a rule with
+nothing in scope. And it is not a bounded numerical error like the other four; it
+discards the input entirely, so no amount of derating analysis reaches it.
+
+### RESOLVED — fail-closed, and both of the paragraphs that stood here were wrong
+
+**The two claims this section used to make are withdrawn.** It said a tripwire
+test pinned the behaviour green and would have to stay that way, and it said the
+fix "is not obvious enough to take from a body" because `Connectivity` wants a
+pad marker. An audit refuted both.
+
+**No signature change was needed.** `Outcome::Refused` already exists
+(`crates/report/src/violation.rs:361`) and is documented "Refused because the
+input was outside what the tool represents exactly … Fail closed." That is the
+right word and it was already in the vocabulary.
+
+**The pad-marker diagnosis was wrong.** A pad marker names where current
+*enters*; every branch current is determined by where it *leaves*. With the pad
+known and the loads still unknown the right-hand side is still all zeros, so the
+marker would improve the anchor inference — a separate, real finding — and do
+nothing here. Same missing noun, different missing quantity.
+
+**No numeric fix is correct, and that is settled rather than assumed.** Injecting
+the budget at the inferred pad anchor is refuted by construction: `solve_into`
+eliminates pads from the unknowns and builds the RHS only over unknowns, so a pad
+node's `node_load` is never read and the solve is still identically zero.
+Spreading the budget over the rail's own taps fabricates load positions and is
+not conservative — a uniform spread reads *lower* per edge than a concentrated
+distal load on every edge but one, making EM on distal segments more fail-open,
+not less. The three situations that produce an empty `attach` — pad-fed rail with
+loads outside the extraction, loads present but recognition failed (F2: no pmos is
+recognised anywhere in the corpus), and a genuinely unloaded net — are
+indistinguishable from the available data. Refusal is therefore the only correct
+behaviour, not merely the loudest.
+
+**What landed, all bodies:**
+
+- `crates/erc/src/power.rs` — `pub(crate) fn discarded_budget(grid, intent)`.
+  Exact, not heuristic: a scatter-accumulate of `node_load` per supply net, true
+  when a net declares a non-zero `budget_current_ua` and its column sums to
+  `0.0`. `parse_intent` already rejects a non-finite or non-positive budget
+  (`ingest/src/intent.rs:194`) and one net carries one sign, so no cancellation
+  can fake a zero.
+- `crates/erc/src/lib.rs` — `refuse_rows`, the twin of `skip_rows`, writing
+  `Outcome::Refused` with `examined: 0`, one `RuleRun` per row.
+- `check_ir_drop`, `check_em_current_density` and `check_electromigration`
+  refuse. The gate sits *below* the existing `intent.is_usable()` skip, so a run
+  with no intent still reports `Skipped(NoDesignIntent)` rather than `Refused`.
+- `check_reliability` deliberately still runs. Zero current puts every node at
+  nominal, which is the *maximum* stress that model takes, so it was already
+  fail-closed; refusing would replace a conservative verdict with none.
+- The dead `if attach.is_empty() { continue; }` guard is gone with its comment,
+  which was wrong on both counts — the physics claim was false and the
+  division-by-zero claim was vacuous, since the `share` it computed was stored
+  only by a loop that iterates zero times in exactly that case.
+
+**A blast-radius correction:** this section originally named two affected rules.
+There are four, and the worst was unfiled. `check_em_current_density` reported
+`Ran` with a **full** `examined` population and no findings, because
+`limits.blech` is empty for that rule so nothing is ever immortal — byte-identical
+to a genuinely checked clean design. `check_electromigration`'s `examined == 0`
+at least looks odd; that one did not.
+
+**Granularity, and its cost stated plainly.** The row refuses whole. A budget is
+per net and a row covers layers, so this over-refuses: one un-modellable rail
+suppresses that rule's genuine findings on every other rail. `Outcome` carries no
+payload, so the alternative — "Ran over the nets whose budget landed" — is a row
+indistinguishable from a complete check while silently dropping the affected
+rails, which is the defect's own shape. Refusing is recoverable; a false clean is
+not.
+
+Covered by `a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current`
+and `a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict`
+(`tests/test_all.rs`). The second is the load-bearing one: a terminal-less rail
+with **no** budget declared must still report `Ran`, or a fix that refuses
+unconditionally would pass every other leg. Discrimination was measured by
+mutation, not asserted — deleting the gate, dropping either conjunct of the
+detector, and adding a blanket refusal to `check_reliability` are each caught by
+a different leg.
+
+**Still open, and separate:** the anchor inference would genuinely benefit from a
+pad marker in `Connectivity`; and a per-terminal current column on `DeviceTable`,
+fed by an `ingest` reader for a per-instance power file, is the change that would
+let a real budget be *modelled* rather than refused. Neither is needed for the
+fail-closed behaviour above.
+
+---
+
+# The signature freeze was lifted, and here is what moved
+
+Authorised explicitly, for filed defects only. Every entry below closes a
+finding that was recorded in this file or in
+`tests/fixtures/expectations.json`'s `blocking_findings`, and every one landed
+with its regression test written **first and seen red**.
+
+## `lvs::verdict::Discrepancy` gained `UndeclaredParam` — F8
+
+`compare_params` walked the *intersection* of the two sides' parameter names and
+passed over the symmetric difference. A reference card declaring `W L` against a
+layout device declaring nothing therefore compared **zero** parameters, found
+nothing, and returned `Verdict::Match` — the one outcome `crates/lvs/src/lib.rs`
+forbids in as many words. Reachable from every parametric run in the tree,
+because `graph::from_layout_into` projects no layout parameter at all.
+
+The old doc comment reasoned that a name only one side declares is the two
+sides' own business and that `Discrepancy` had no variant able to say
+"declared on one side only" — which was true, and was the thing to fix rather
+than the reason not to.
+
+- `Discrepancy::UndeclaredParam { side, layout_device, ref_device, param }`.
+  `side` is the side that *declared* it, matching `UnpairedDevice`'s reading of
+  the same field.
+- `compare_params` now reports the mismatched name and drains **both** tails, so
+  the report is the mirror image of the reversed comparison.
+- `engine::run::LVS_RULE_IDS` is `[&str; 7]`, `lvs.undeclared_param` inserted at
+  index 4. `lvs_measurement` gives it the `Count(1)` against `Count(0)` form —
+  one occurrence where none is allowed — because a missing declaration is not a
+  value that disagreed.
+
+Tests: `a_parameter_only_one_side_declares_is_not_evidence_of_agreement` and
+`the_side_that_declared_the_lone_parameter_is_the_side_the_report_names`,
+`crates/lvs/tests/compare.rs`.
+
+## `analytical::extract_into` gained a `&Connectivity` — F11
+
+Coupling and via extraction both need to know which layers are conductors and
+which are cuts, and that is a deck fact rather than something derivable from a
+`ProcessStack` keyed by `LayerId`. The parameter sits between `devices` and
+`stack`. Two call sites in `engine::run::run_pex`, thirteen in
+`crates/pex/tests/analytical.rs`.
+
+## `core::view::PolygonRef` gained `provenance()` — the store row to blame
+
+Read-only, and exactly what the `ring_poly` column's own doc comment says it
+exists for: "lets a rule on a derived layer still blame a violation on real
+geometry". `drc::rules::width::check_facing` needs it because a merged figure is
+a row of no layer, so `OuterRows` cannot name it.
+
+## Two node-model changes inside `pex`, both body-only but worth recording
+
+`analytical::extract_net_into` places nodes at segment **boundaries**, so a net
+of `n` polygons has `n + 1` nodes rather than `n`. The `<= store.poly_count()`
+assert in `extract_into` became `<= poly_count() + net_count()`. Nothing
+outside that function depended on the old bound; `reduce::lump_rows` already
+documented "the net's total series resistance stands between its first and last
+node", which is this model and not the old one.
+
+`extract_into` now calls `ParasiticNetwork::sort_canonical` before returning.
+The doc comment always promised "the order `sort_canonical` would have
+produced"; it is now that order by construction rather than by argument, which
+is what let coupling be emitted in a pass after every net has its nodes.
+
+## Still open, and narrowed rather than closed
+
+- **`overlay::margins` is still bounding-box.** `ring_contains_ring` now
+  decides *hosting* exactly, so a shape stranded in a concave host's notch
+  measures zero instead of a comfortable pass. The remaining optimism is the
+  *margin* of a genuinely contained shape in a concave host: the box's far side
+  may be further away than the host's material is. Closing it needs a distance
+  from the inner ring to the host's boundary, which is a body change, not a
+  signature one.
+- **`ring_contains_ring` does not see holes.** A store row is one ring, so a
+  host hole lying strictly inside the inner shape crosses nothing, puts no
+  vertex outside, and reads as contained. That needs the *validated* host rather
+  than its outer ring, and the route from a store `PolyId` to a `PolygonRef`
+  still does not exist — the same gap `pair_layers` records.
+- **`check_facing` merges outers for the notch sense only.** Merging is
+  defensible for width too — two touching 50-unit rectangles are a 100-unit
+  plate, and measuring them apart reports two false 50-unit widths — but that
+  direction is fail-*closed* and no case in the corpus exhibits it, so it was
+  left alone rather than changed with nothing to measure the change against.
+- **`analytical::LATERAL_HALO_THICKNESSES` is a guess.** Ten times the layer's
+  own thickness, because no deck in this tree states a coupling halo. Upgrade
+  path: a `coupling_halo_nm` in the deck's `pex` section.
+
+---
+
+# The LVS blockers: mapped, then closed
+
+`every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws` went from **27
+disagreements across 16 cells to 2**, and the two survivors are the same finding
+stated twice. What follows is the map that was made first and the order it turned
+out to need, because the order was not the numbering and getting it wrong made
+things worse rather than slower.
+
+## The order was F3 → F2 → F7 → F1, and F4 is still open
+
+**F3, the keystone — closed.** `terminals: [poly, diff, diff]` bound one slot per
+terminal *layer*, so source and drain both took the lowest `PolyId` on `diff`
+under the marker and every extracted MOS had `Source == Drain`. Binding the two
+positions to two different *polygons* could not fix it: probed, `LVS_INV` drew the
+nmos diffusion as **one rectangle** `(0, 0)–(500, 200)` on a single net spanning
+the channel.
+
+The conductor that needed to exist was `diff NOT poly`. That needed the deck to
+be able to *name* a derived layer, and `ingest::deck` had no derived support at
+all — no section, no parse path — while `crates/derived` had a full `DerivedExpr`
+operator set nothing could reach. Closed by giving derived layers real `LayerId`s
+and materialising them into the `GeometryStore` at load time
+(`ingest::layout::derive_layers_into`, `core::GeometryStore::append_layer`), so
+`NetTable`'s `PolyId` indexing and every downstream rule work unchanged.
+
+`DerivedExpr` could **not** be used: `gpurify-derived` depends on
+`gpurify-ingest`, and materialisation has to live in `ingest`. The deck carries a
+flat op-plus-operands table instead — the shape SVRF and KLayout decks use — and
+derived ids come after every base id, so declaration order *is* evaluation order
+and a cycle is unspellable.
+
+**F2 — closed, with F3.** Dropping `nwell` from the pfet's `terminals` makes it
+3-terminal like the nfet beside it. Measured on its own it took LVS from 27 to 19,
+and it was deliberately *held back* until F3 because it closes no LVS case alone
+and moves two ERC expectations that were written against the broken device
+population.
+
+**F7 — closed, and it was a *deck* defect.** Three code-only fixes were probed
+and rejected; the reasons are in `blocking_findings.F7`. The marker has to *be*
+the channel, which is a `derived` row now that F3 exists: `gate = poly AND diff`,
+`gate_n = gate AND nsdm`, `gate_p = gate AND psdm`. No code changed for it. One
+real fail-open was found alongside — a marker carrying *more* terminal polygons
+than the recogniser has positions was silently truncated, losing a transistor and
+possibly mis-wiring the survivor — and now refuses instead.
+
+**F1 — closed, and it had to go last.** Adding the licon cuts before F3 would have
+made the corpus *worse*: contacting `LVS_INV`'s output strap to an unsplit diff
+merges VSS into Y, so the net count falls *past* the derived 4 rather than
+reaching it. 35 cuts across ten cells, plus 18 `TEXT` deletions that were forced
+rather than cosmetic — a cut merging two labelled shapes puts two names on one
+net, which is `PortError::ConflictingLabels` and aborts the load.
+
+**F4 — closed, on the third attempt, and my own diagnosis of it was wrong.**
+`refine::role_code` now collapses `Source` and `Drain` to one code: a MOS channel
+is symmetric, which end is the source is decided by *bias* rather than by layout,
+and an extractor reading geometry has nothing to decide it with. It is the
+mechanism `TerminalRole::Pin` already uses for a resistor's two ends.
+
+The first two attempts were reverted because the collapse creates *genuine*
+automorphisms and three tests turned a **deleted device** into
+`Inconclusive(UnresolvedSymmetry)`. The real blocker was never the tie-break.
+`compare::interpret` returned on the **first** balanced unresolved class it saw,
+so a symmetry anywhere in the graph masked every genuine discrepancy sharing the
+partition. The two conditions are independent: a class holding the same count on
+both sides is a symmetry — either pairing of its members is right, so nothing in
+it is a difference — while a class holding different counts is a difference no
+pairing can mend, and **the second must survive the first**.
+
+`Partition::symmetric_nodes()` is the accessor that separates them, and it is
+deliberately *not* the `members(ClassId)` the old comment asked for: `interpret`
+wants a per-node verdict, not a per-class list, so one tally pass plus two
+branchless compacts beats an O(classes × nodes) query. Its members are **held
+back** from the unpaired scan — on both sides, and in `compare_terminals` too,
+without which the fix trades one bug for another and invents `TerminalMismatch`
+rows on a transistor with nothing wrong with it.
+
+**The claim that `TieBreak::LowestIndex` "was not enough for `mos_and_bjt`" is
+withdrawn — it was mine, and it was wrong.** Measured: under `LowestIndex`,
+`symmetric_nodes` comes back *empty* on that fixture, every surviving unresolved
+class is genuinely imbalanced, and the tie-break resolved the symmetric channel
+outright. What had left the class unbroken was an early return that a previous
+pass had already fixed. No `TieBreak` change was needed.
+
+Two fixtures were **not rigid** once the collapse landed, and both were the
+fixture's fault rather than the assertion's. A bare S/D chain reversed end to end
+maps every terminal onto one of the same code, so `chain` now diode-connects
+device 0's gate to one end of its own channel — the smallest anchor that
+distinguishes the two ends, and what a real mirror stack is anchored by. Both
+tests then passed *unmodified*. `stacked_pair` had an order-2 automorphism its
+own doc comment denied — refinement was returning the *other* correct pairing and
+the expectation called it wrong — so the relabelling test moved to `chain(3)` and
+`stacked_pair`'s doc now names its automorphism.
+
+**F5 is the only remaining LVS disagreement**, and both survivors state it
+cleanly: `LVS_SERIES_MERGE` and `LVS_PARALLEL_MERGE` each extract 2 devices where
+the geometry draws 1. That is a netlist *transformation* missing on top of a
+correct extraction, not an extraction fault. `LVS_SERIES_MERGE` used to **agree by
+coincidence** — the extractor dropped a finger while the expectation held the
+post-merge count, two errors cancelling.
+
+## Three corpus numbers that were right for the wrong reason
+
+Worth stating together, because each cost real time and the pattern repeats:
+`LVS_SERIES_MERGE`'s device count (above); `ERC_P2P_PASS`, marked `strength:
+vacuous` precisely because `LVS_INV` had too few attach points to examine; and
+`a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail`, whose "the poly
+rail has two taps" premise held only while F2 left the pfet unrecognised — its own
+message said so.
+
+## A landmine in `tests/fixtures/params.json`
+
+The `angle` rule's params are **two entries under the same key**:
+
+```json
+"params": { "angle": { "count": 0 }, "angle": { "count": 90 } }
+```
+
+`drc::ruleset` reads *one allowed direction per `angle` parameter*, so the
+repeated key is how the deck says "axis-aligned only". A JSON object with
+duplicate keys is legal and its resolution is parser-defined: serde reads every
+pair, and most JSON libraries — Python's `json` among them — keep only the last.
+
+**Do not round-trip this file through a library that collapses them.** Doing so
+silently drops the horizontal direction, and every horizontal edge in every
+design becomes an angle violation: it turned three DRC corpus cases red in a
+domain the change had nothing to do with, and the failure names the `angle` rule
+rather than the edit. There is no comment mechanism to warn in the file itself —
+the deck parser is `deny_unknown_fields` and rejects a `_comment` key, which is
+the right behaviour and is why this note lives here.
+
+
+## `cli` had no `--grid`, so no invocation could reach any stage — RESOLVED
+
+`crates/cli/src/args.rs` set `grid: None` unconditionally, with a comment
+explaining that `Common` had no field to park a value in and that adding one was
+"a widening of a frozen struct". A deck file does **not** declare a resolution —
+`read_deck` is *handed* one — so every run of the binary stopped at
+`LoadError::NoGrid` before a file was opened. Measured: no CLI invocation could
+reach DRC, ERC, LVS or PEX.
+
+`--grid <dbu-per-um>` now exists, and the grammar decision is the whole of it:
+**optional, never defaulted**. Making it required would invalidate every command
+line that already parses; defaulting it would silently reinterpret every limit in
+the deck — a 100 nm rule read against the wrong resolution is a different rule —
+turning a loud dead binary into a quiet wrong one. Absent means absent, and
+`load_into` still refuses, which is what makes optional safe.
+
+Verified end to end, not just parsed:
+
+```
+$ gpurify lvs LVS_CLEAN_MATCH.gds --deck params.json --grid 1000 \
+      --no-strict-layers --reference lvs_inv.cdl
+  lvs: ran
+  3 rules skipped
+  5 rules clean
+  12 violations: 12 errors, 0 warnings
+```
+
+Without the flag the same command still reports `no grid resolution:
+Inputs::grid is absent and nothing else establishes one`.
+
+Three tests in the `args` module: the value reaches `Inputs`, absence leaves it
+absent, and `0`/`-4`/`eleven`/`1.5` are refused — the parser rejects a
+non-positive resolution first, so the `Grid::new` conversion in `to_inputs`
+cannot fail.

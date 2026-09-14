@@ -31,6 +31,21 @@ pub enum Inconclusive {
     AmbiguousTop,
     /// A subcircuit the layout needs is absent from the reference.
     MissingSubcircuit(StrId),
+    /// This cell of a hierarchical plan was never compared, so nothing is known
+    /// about it either way.
+    ///
+    /// [`hierarchical::run`](crate::hierarchical::run) is handed **one** pair of
+    /// graphs and a plan of any length, and its signature gives it no way to
+    /// fetch a second pair — the gap is filed under `## lvs` in
+    /// `docs/SIGNATURE_DEFECTS.md`. A single-cell plan is the one shape where
+    /// the pair it holds unambiguously belongs to the cell the plan names; for
+    /// any longer plan, attributing that one comparison to a row would be a
+    /// guess, and `Match` reached by guessing is the path from "gave up" to
+    /// "matched" that this crate does not have.
+    ///
+    /// The `StrId` is the layout cell, so a reader is told *which* cells went
+    /// unchecked rather than only that some did.
+    UncomparedCell(StrId),
 }
 
 /// One concrete difference, phrased as something a human can act on.
@@ -53,6 +68,29 @@ pub enum Discrepancy {
         param: StrId,
         layout_value: f64,
         ref_value: f64,
+    },
+    /// Both sides have the device, but only one of them declares this
+    /// parameter, so it was never compared.
+    ///
+    /// `side` is the side that *declared* it, which is
+    /// [`Discrepancy::UnpairedDevice`]'s reading of the same field: the side the
+    /// thing exists on. There is no value pair, which is the point —
+    /// [`Discrepancy::ParameterMismatch`] needs two and there is only one.
+    ///
+    /// Separate from `ParameterMismatch` rather than folded into it behind a
+    /// sentinel. A missing declaration is not a value that disagreed, and a
+    /// report spelling it `ref_value: NaN` would be read as a measurement.
+    ///
+    /// This variant is why the name-keyed join may not pass over the symmetric
+    /// difference. It used to: a card declaring `W L` against an extraction
+    /// declaring nothing compared zero parameters, and the empty discrepancy
+    /// list read as [`Verdict::Match`] — a clean result for a comparison that
+    /// never happened, on the one outcome this crate's documentation forbids.
+    UndeclaredParam {
+        side: Side,
+        layout_device: u32,
+        ref_device: u32,
+        param: StrId,
     },
     /// Two nets on one side carry the same declared name.
     ///

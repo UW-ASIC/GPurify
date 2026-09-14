@@ -6,11 +6,12 @@
 //! because that is the rule `topology::device` states: one polygon on the
 //! recogniser's marker layer is exactly one device.
 
-use gpurify_core::PolyId;
+use gpurify_core::{LayerId, PolyId};
 use gpurify_derived::Evaluator;
-use gpurify_ingest::deck::{DeviceKind, DeviceRecognition};
+use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::netlist::{NetlistCase, NetlistLayers};
+use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistSpec};
 use gpurify_topology::device::recognise_into;
 use gpurify_topology::{extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole};
@@ -258,4 +259,311 @@ fn a_reused_device_table_is_refilled_and_an_empty_deck_recognises_nothing() {
     );
     assert_eq!(devices.len(), 0);
     assert!(devices.marker.is_empty(), "the marker column was not cleared");
+}
+
+/// Oracle: construct-from-answer. A MOS declares `[gate, sd, sd]` — two
+/// terminal *positions* on one terminal *layer* — and the two must land on the
+/// two source/drain regions, not twice on the same one.
+///
+/// The layout is drawn so the answer is fixed before anything runs: the
+/// source/drain layer holds exactly two polygons under the marker, on opposite
+/// sides of the gate, and they are far enough apart that no connectivity rule
+/// can join them. So `Source` and `Drain` name two different nets, and any
+/// binding that keeps one polygon per terminal *layer* reports them as one.
+///
+/// **This names finding F3.** `recognise_into` bound `bind[marker * width + k]`
+/// one slot per layer and kept the lowest `PolyId` under the marker for all of
+/// them, so every extracted MOS in the tree had `Source == Drain` and every LVS
+/// comparison over one was against a transistor with a shorted channel.
+#[test]
+fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
+    const MARKER: LayerId = LayerId(0);
+    const GATE: LayerId = LayerId(1);
+    const SD: LayerId = LayerId(2);
+
+    // Marker over the whole device; gate crossing it; the two source/drain
+    // regions either side of the gate, disjoint and not touching.
+    let mut layout = LayoutBuilder::new(3);
+    let marker = layout.rect(MARKER, -50, -50, 550, 250);
+    let gate = layout.rect(GATE, 200, -50, 250, 750);
+    let source = layout.rect(SD, 0, 0, 200, 200);
+    let drain = layout.rect(SD, 250, 0, 500, 200);
+    let (store, ids) = layout.finish();
+    let (marker, gate) = (ids.of(marker), ids.of(gate));
+    let (source, drain) = (ids.of(source), ids.of(drain));
+
+    let connectivity = Connectivity {
+        conductors: vec![GATE, SD],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert_ne!(
+        nets.net_of(source),
+        nets.net_of(drain),
+        "the two source/drain regions are disjoint rectangles on the same \
+         layer, so they are two nets before device recognition is asked anything"
+    );
+
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        marker: vec![MARKER],
+        terminal_start: vec![0, 3],
+        terminal: vec![GATE, SD, SD],
+        model: vec![strings.intern("nch")],
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(
+        &store,
+        &Evaluator::default(),
+        &nets,
+        &recognition,
+        &mut devices,
+    );
+
+    assert_eq!(devices.len(), 1, "one marker polygon is one device");
+    assert_eq!(devices.marker, [marker], "the device names its marker");
+    let (bound, roles) = devices.terminals_of(DeviceId(0));
+    assert_eq!(
+        roles,
+        [TerminalRole::Gate, TerminalRole::Source, TerminalRole::Drain],
+        "terminal roles follow the recogniser's terminal order"
+    );
+    assert_eq!(bound[0], nets.net_of(gate), "the gate is the gate layer's net");
+    assert_ne!(
+        bound[1], bound[2],
+        "source and drain bound to the same net, so the two terminal positions \
+         took the same polygon: the channel is reported as a short"
+    );
+    // Which position takes which polygon is a convention, and it has to be one:
+    // ascending `PolyId` is the only order that does not depend on how the
+    // spatial index happened to bucket the layer.
+    assert_eq!(
+        [bound[1], bound[2]],
+        [nets.net_of(source), nets.net_of(drain)],
+        "repeated terminal positions take the layer's polygons under the \
+         marker in ascending PolyId order"
+    );
+}
+
+/// Two fingers under one implant, drawn to the dimensions of the corpus cell
+/// `LVS_FINGERS`: one diffusion `(0, 0)–(1000, 200)`, two gates crossing it at
+/// x 200 and x 600, and one implant rectangle covering the lot.
+///
+/// `diff_active` is `diff NOT poly`, so the three regions are what the deck's
+/// derived layer materialises; `channel` is `poly AND diff`, the other derived
+/// layer the same deck can state. Both are drawn here rather than computed,
+/// because what is under test is what `recognise_into` does with a marker layer,
+/// not what a boolean produces.
+struct Fingers {
+    store: gpurify_core::GeometryStore,
+    channel: [PolyId; 2],
+    gate: [PolyId; 2],
+    /// Source, shared middle, drain — ascending in x, and so in [`PolyId`].
+    active: [PolyId; 3],
+}
+
+impl Fingers {
+    const IMPLANT: LayerId = LayerId(0);
+    const CHANNEL: LayerId = LayerId(1);
+    const POLY: LayerId = LayerId(2);
+    const ACTIVE: LayerId = LayerId(3);
+
+    fn draw() -> Self {
+        let mut layout = LayoutBuilder::new(4);
+        layout.rect(Self::IMPLANT, -50, -50, 1050, 250);
+        let channel = [
+            layout.rect(Self::CHANNEL, 200, 0, 250, 200),
+            layout.rect(Self::CHANNEL, 600, 0, 650, 200),
+        ];
+        let gate = [
+            layout.rect(Self::POLY, 200, -50, 250, 250),
+            layout.rect(Self::POLY, 600, -50, 650, 250),
+        ];
+        let active = [
+            layout.rect(Self::ACTIVE, 0, 0, 200, 200),
+            layout.rect(Self::ACTIVE, 250, 0, 600, 200),
+            layout.rect(Self::ACTIVE, 650, 0, 1000, 200),
+        ];
+        let (store, ids) = layout.finish();
+        Self {
+            store,
+            channel: channel.map(|h| ids.of(h)),
+            gate: gate.map(|h| ids.of(h)),
+            active: active.map(|h| ids.of(h)),
+        }
+    }
+
+    /// The nets the layout carries. Gates and diffusion regions are conductors;
+    /// neither the implant nor the channel is, so neither can join anything.
+    fn nets(&self) -> NetTable {
+        let connectivity = Connectivity {
+            conductors: vec![Self::POLY, Self::ACTIVE],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&self.store, &connectivity, &mut nets);
+        nets
+    }
+
+    /// A three-terminal MOS recogniser on `marker`, `[poly, active, active]` —
+    /// the shape `tests/fixtures/params.json` states.
+    fn recogniser(marker: LayerId, strings: &mut StrTable) -> DeviceRecognition {
+        DeviceRecognition {
+            kind: vec![DeviceKind::Mos],
+            marker: vec![marker],
+            terminal_start: vec![0, 3],
+            terminal: vec![Self::POLY, Self::ACTIVE, Self::ACTIVE],
+            model: vec![strings.intern("nch")],
+        }
+    }
+
+    fn recognise(&self, marker: LayerId, nets: &NetTable) -> DeviceTable {
+        let mut strings = StrTable::default();
+        let recognition = Self::recogniser(marker, &mut strings);
+        let mut devices = DeviceTable::default();
+        recognise_into(
+            &self.store,
+            &Evaluator::default(),
+            nets,
+            &recognition,
+            &mut devices,
+        );
+        devices
+    }
+}
+
+/// Oracle: construct-from-answer. Two transistors under one implant rectangle,
+/// and the recogniser is told the implant is the marker.
+///
+/// **This names finding F7.** "One polygon on the marker layer is exactly one
+/// device" is the rule this module states, and an implant is drawn one polygon
+/// per *diffusion region*, not per transistor — so on this layout the rule is
+/// arity-wrong before anything runs. There is no slot for the second finger and
+/// no way to invent one: `bind` is `marker × position` wide and the positions are
+/// spent.
+///
+/// What the recogniser must not do is take the first finger and drop the rest.
+/// That answer is a plausible single transistor, wired to whichever regions
+/// happen to hold the two lowest `PolyId`s under the marker, and nothing
+/// downstream can tell it from a layout that really holds one — which is how a
+/// missing transistor reached the corpus instead of a refusal. A marker carrying
+/// *more* of a terminal layer's polygons than the recogniser names positions is
+/// refused exactly as one carrying fewer already was.
+///
+/// The fix for the corpus is on the deck side and is the test below: name a
+/// marker layer that is drawn one polygon per transistor.
+#[test]
+fn two_gates_under_one_implant_are_refused_rather_than_reported_as_one_device() {
+    let drawn = Fingers::draw();
+    let nets = drawn.nets();
+
+    // The layout really does hold two transistors, and the three diffusion
+    // regions really are three nets — so a count of one below is a dropped
+    // device and not a merged one.
+    assert_eq!(
+        [
+            nets.net_of(drawn.active[0]),
+            nets.net_of(drawn.active[1]),
+            nets.net_of(drawn.active[2])
+        ]
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len(),
+        3,
+        "the three diffusion regions are disjoint, so they are three nets"
+    );
+    assert_ne!(
+        nets.net_of(drawn.gate[0]),
+        nets.net_of(drawn.gate[1]),
+        "the two gates are separate poly rectangles, so they are two nets"
+    );
+
+    let devices = drawn.recognise(Fingers::IMPLANT, &nets);
+    assert_eq!(
+        devices.len(),
+        0,
+        "one implant rectangle over two transistors is not one device: the \
+         recogniser reported {} of them, which is a transistor dropped in \
+         silence",
+        devices.len()
+    );
+}
+
+/// Oracle: construct-from-answer. The same layout, recognised on a marker layer
+/// drawn one polygon per channel — `poly AND diff`, which
+/// `ingest::layout::derive_layers_into` materialises with a real `LayerId` and
+/// which a deck states in its `derived` section.
+///
+/// This is the whole of the fix for F7, and it needs no code: the module's rule
+/// is that a marker polygon *is* a device, so the deck has to name a layer that
+/// is drawn that way. `nsdm` is not; `poly AND diff AND nsdm` is.
+///
+/// The answer is fixed by the geometry before anything runs. Two channel regions
+/// means two transistors, each gated by the poly crossing it, each flanked by the
+/// two diffusion regions its own channel touches — and the middle region is the
+/// drain of the first and the source of the second, which is what makes this a
+/// series pair rather than two isolated devices.
+#[test]
+fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
+    let drawn = Fingers::draw();
+    let nets = drawn.nets();
+    let devices = drawn.recognise(Fingers::CHANNEL, &nets);
+
+    assert_eq!(devices.len(), 2, "two channel regions are two transistors");
+    assert_eq!(
+        devices.marker,
+        drawn.channel,
+        "device ids are the rank of the marker polygon, ascending"
+    );
+
+    let (first, roles) = devices.terminals_of(DeviceId(0));
+    assert_eq!(
+        roles,
+        [TerminalRole::Gate, TerminalRole::Source, TerminalRole::Drain],
+        "terminal roles follow the recogniser's terminal order"
+    );
+    assert_eq!(
+        first,
+        [
+            nets.net_of(drawn.gate[0]),
+            nets.net_of(drawn.active[0]),
+            nets.net_of(drawn.active[1])
+        ],
+        "the left finger is gated by the poly at x 200 and flanked by the \
+         first two diffusion regions"
+    );
+
+    let (second, _) = devices.terminals_of(DeviceId(1));
+    assert_eq!(
+        second,
+        [
+            nets.net_of(drawn.gate[1]),
+            nets.net_of(drawn.active[1]),
+            nets.net_of(drawn.active[2])
+        ],
+        "the right finger is gated by the poly at x 600 and flanked by the \
+         last two diffusion regions"
+    );
+    assert_eq!(
+        first[2], second[1],
+        "the middle diffusion region is the first finger's drain and the \
+         second's source, which is what makes them a series pair"
+    );
+
+    // The marker is the device's extent, so its area is the one parameter a
+    // marker states on its own. On a channel that is W x L; on the implant it
+    // was the whole active region, 33x too large, which is the measuring half
+    // of F8.
+    assert_eq!(
+        devices.params_of(DeviceId(0)),
+        [(
+            gpurify_topology::device::DeviceParam::Area,
+            gpurify_topology::device::DeviceMeasure::Area(gpurify_units::DbuArea::new(50 * 200))
+        )],
+        "a channel marker measures W x L"
+    );
 }

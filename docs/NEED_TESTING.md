@@ -1126,11 +1126,25 @@ constructor, to check the order directly. For the cycle, an instance
 representation in `Netlist`: either a `DeviceKind::Subckt(SubcktId)` variant or
 a separate instance table.
 
-**Resolved.** `ComparisonPlan`'s three columns are `pub` and it derives
-`PartialEq, Eq` (`crates/lvs/src/hierarchical.rs:29-45`), so the order is
-directly assertable; and `ingest::Netlist`'s instance table supplies the
-cell-to-cell edge a cycle needs. `hierarchical::run` still takes one graph pair
-for a multi-cell plan, which is a design decision and stays open.
+**Resolved, and now actually tested.** `ComparisonPlan`'s three columns are
+`pub` and it derives `PartialEq, Eq` (`crates/lvs/src/hierarchical.rs:29-45`),
+and `ingest::Netlist`'s instance table supplies the cell-to-cell edge a cycle
+needs. Both are now exercised:
+`a_child_cell_is_planned_before_the_parent_that_instantiates_it` reads the
+`depth` column directly, and
+`two_cells_that_instantiate_each_other_are_refused_rather_than_ordered` covers
+`PlanError::Cyclic` for the first time. The stale claim that the order is
+"asserted indirectly through the sequence of `CellResult` rows" is withdrawn —
+and it was worse than indirect: the three tests that read those rows were
+**vacuous**, feeding `stacked_pair()` to both sides so `Match` was the right
+answer whatever `run` did. All three stayed green with the `compare` call
+deleted from `run` outright.
+
+`hierarchical::run` taking one graph pair for a multi-cell plan is still a
+design decision and stays open, but it is no longer a *fail-open*: a plan longer
+than one cell now reports every row as `Inconclusive::UncomparedCell(cell)`
+rather than repeating one comparison's verdict N times and handing N−1 cells a
+`Match` they were never entitled to.
 
 ### `Inconclusive::AmbiguousTop` and `Inconclusive::MissingSubcircuit` — lvs
 

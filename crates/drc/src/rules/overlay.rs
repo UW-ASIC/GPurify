@@ -20,7 +20,7 @@
 //! every enclosure rule. Skipping it because no host was found is fail-open,
 //! and it is the case that matters most.
 
-use super::{centre, mid};
+use super::{centre, mid, ring_segs};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_core::ops::{isqrt, Point};
@@ -439,18 +439,102 @@ fn pair_layers(
     Ok(())
 }
 
+/// Whether two axis-aligned segments cross at a point interior to both.
+///
+/// **Decision** — pure, two segments in, one `bool` out.
+///
+/// *Proper* crossing, and the strictness is the whole content: a T-junction,
+/// two collinear overlapping segments and two segments sharing an endpoint are
+/// all boundary contact, which is what an inner shape touching its host's edge
+/// from the inside looks like. Only a genuine transversal crossing says one
+/// shape's boundary passes through the other's.
+///
+/// Rectilinear only, which is this crate's whole input domain: a crossing needs
+/// one horizontal segment and one vertical one, so two parallel segments return
+/// `false` and no arbitrary-angle arithmetic is reachable from here.
+fn segments_cross(a: (Point, Point), b: (Point, Point)) -> bool {
+    // Branchless: both orderings are tested and the pair that is not
+    // horizontal-and-vertical fails its own guard, so there is no jump and no
+    // question of which operand came in which role.
+    crosses_hv(a, b) | crosses_hv(b, a)
+}
+
+/// [`segments_cross`] with the roles fixed: `h` horizontal, `v` vertical.
+fn crosses_hv(h: (Point, Point), v: (Point, Point)) -> bool {
+    let shaped = (h.0.y == h.1.y) & (v.0.x == v.1.x);
+    let (xlo, xhi) = (h.0.x.min(h.1.x), h.0.x.max(h.1.x));
+    let (ylo, yhi) = (v.0.y.min(v.1.y), v.0.y.max(v.1.y));
+    // Strict on all four: touching is not crossing.
+    shaped & (v.0.x > xlo) & (v.0.x < xhi) & (h.0.y > ylo) & (h.0.y < yhi)
+}
+
+/// Whether the ring of `inner` lies entirely within the ring of `host`.
+///
+/// **Decision** — two store rows in, one `bool` out, pure.
+///
+/// Two conditions, and both are needed:
+///
+///  - one vertex of `inner` is inside or on `host`, and
+///  - no edge of `inner` properly crosses an edge of `host`.
+///
+/// Together they are exact for rings that do not cross: if the boundaries never
+/// pass through each other then `inner` is wholly inside `host` or wholly
+/// outside it, and the anchor vertex says which. A vertex test alone is not
+/// enough — a bar whose two ends sit in the two arms of a U has every vertex
+/// inside the host and spans the opening, which is the case
+/// `a_bar_bridging_a_hosts_opening_is_not_enclosed_though_its_corners_are` is
+/// written for.
+///
+/// # What it does not see
+///
+/// Holes. A store row is one ring, and a polygon-with-hole is several rows that
+/// `validate_layer_into` binds together — so a host hole lying strictly inside
+/// `inner` crosses nothing, puts no vertex outside, and reads as contained. That
+/// is an inner shape sitting over a void in its host, and it is still fail-open.
+/// Closing it needs the *validated* host rather than its outer ring, and the
+/// route from a store [`PolyId`] to a `PolygonRef` does not exist — the same gap
+/// `pair_layers` records. Narrower than the bounding box it replaces by every
+/// shape that is not a rectangle, and filed rather than papered over.
+fn ring_contains_ring(store: &gpurify_core::GeometryStore, host: PolyId, inner: PolyId) -> bool {
+    let (xs, ys) = store.poly_verts(inner);
+    debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
+    debug_assert!(xs.len() >= 3, "a stored ring has at least three vertices");
+
+    // Boundary-inclusive, which is what makes an inner shape flush against its
+    // host's edge contained rather than unhosted.
+    let anchor = Point { x: xs[0], y: ys[0] };
+    if !store.poly_contains_point(host, anchor) {
+        return false;
+    }
+
+    let (hxs, hys) = store.poly_verts(host);
+    // Not a bulk loop: one candidate pair's two rings, single-digit vertex
+    // counts on real geometry. The early return is the escape valve — the
+    // taken side is the rest of a quadratic scan, and skipping it is exactly
+    // what a branch is for.
+    for si in ring_segs(xs, ys) {
+        for sh in ring_segs(hxs, hys) {
+            if segments_cross((si.a, si.b), (sh.a, sh.b)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Enclosure margins of `inner` within `outer`.
 ///
 /// **Decision.** Bounding boxes, which is exact when the host is a rectangle
 /// and optimistic otherwise — a non-convex host's box is larger than the host,
 /// so this can *overstate* the enclosure.
 ///
-/// That direction fails open, and **the transforms below do not currently
-/// confirm it.** An earlier revision of this doc said they used this as a prune
-/// and confirmed containment exactly with `ops::point_in_ring` before trusting
-/// a pass; no such confirmation was ever written, because `point_in_ring` needs
-/// a `RingRef` and no route from a store [`PolyId`] to one exists. See
-/// [`pair_layers`] and `docs/SIGNATURE_DEFECTS.md`.
+/// The transforms below no longer trust that on its own:
+/// [`ring_contains_ring`] confirms containment exactly before a candidate is
+/// allowed to host, so a shape stranded in a concave host's notch now measures
+/// zero rather than a comfortable pass. What is *not* yet exact is the margin of
+/// a genuinely contained shape in a concave host — the box's far side may be
+/// further away than the host's material is — and that remains optimistic. See
+/// `docs/SIGNATURE_DEFECTS.md`.
 pub fn margins(inner: Bbox, outer: Bbox) -> Margins {
     // No assert, and by decision rather than omission: this runs once per
     // candidate host inside the best-host fold, where a panic edge would pin
@@ -533,11 +617,21 @@ fn check_enclosure_rows<R>(
             let mut acc = (UNHOSTED, Reverse(u32::MAX));
             for &(_, candidate) in candidates {
                 let host_box = design.store.poly_bbox(candidate);
-                // Branchless: a candidate that does not contain the inner
-                // shape folds in as the sentinel and loses to every real
-                // host. Only containing hosts count — a margin measured
-                // against a host that clips the shape is not an enclosure.
-                let keep = i64::from(host_box.contains(inner_box));
+                // A candidate that does not contain the inner shape folds in as
+                // the sentinel and loses to every real host. Only containing
+                // hosts count — a margin measured against a host that clips the
+                // shape is not an enclosure.
+                //
+                // The box test is a *prune*, not the answer: box containment is
+                // necessary for real containment, so a candidate it rejects
+                // cannot host, and `&&` short-circuits the ring scan away for
+                // it. The surviving branch is the expensive-taken-side valve —
+                // the taken side is a ring-against-ring scan, and skipping it on
+                // a candidate whose box already misses is what a branch is for.
+                let keep = i64::from(
+                    host_box.contains(inner_box)
+                        && ring_contains_ring(design.store, candidate, inner),
+                );
                 let value = worst_of(margins(inner_box, host_box)).0.raw();
                 acc = acc.max((UNHOSTED + (value - UNHOSTED) * keep, Reverse(candidate.0)));
             }

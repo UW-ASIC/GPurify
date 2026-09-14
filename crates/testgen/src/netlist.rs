@@ -257,6 +257,9 @@ pub fn layout_from_netlist(
         // broken via edge splits a net instead of being masked by shapes that
         // happen to touch.
         intra_layer_touch: false,
+        // No text: this generator draws geometry, and a label pairing with no
+        // `TEXT` to pair binds nothing.
+        ..Connectivity::default()
     };
 
     let recognition = recognition_of(spec, &layers, strings);

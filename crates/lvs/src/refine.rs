@@ -141,15 +141,63 @@ const fn mix(mut z: u64) -> u64 {
 
 /// A terminal's role as a number the signature can carry.
 ///
-/// `Pin(k)` collapses to one code on purpose: [`TerminalRole::Pin`] asserts the
-/// two ends of a symmetric two-terminal device are interchangeable, so letting
-/// the position reach the signature would refuse to match a resistor written
-/// end-for-end. A diode has no `Pin` for exactly the opposite reason.
+/// **Interchangeable roles share a code**, and that is the whole of what this
+/// function decides. Two terminals compare equal exactly when their codes and
+/// their paired nets agree — [`crate::compare`]'s terminal join keys its merge
+/// on `(role_code, mate)` — so collapsing two roles here is precisely the
+/// statement that a device written with those two exchanged is the same device.
+///
+/// `Pin(k)` collapses on purpose: [`TerminalRole::Pin`] asserts the two ends of
+/// a symmetric two-terminal device are interchangeable, so letting the position
+/// reach the signature would refuse to match a resistor written end-for-end. A
+/// diode has no `Pin` for exactly the opposite reason.
+///
+/// `Emitter` and `Collector` do **not** collapse, and never will: a bipolar's
+/// doping is asymmetric, so exchanging them makes a different — and much
+/// worse — transistor.
+/// `a_bipolars_emitter_and_collector_are_not_interchangeable` is the guard on
+/// that, and it is what stops any future collapse being applied to everything.
+///
+/// # `Source` and `Drain` collapse, and that is finding F4
+///
+/// A MOS channel is symmetric; which end is the source is decided by *bias*,
+/// not by layout, and an extractor reading geometry has nothing to decide it
+/// with. `LVS_CLEAN_MATCH` and `LVS_SD_PERMUTE` are the same cell against
+/// references that are exact S/D swaps and **both expect `Match`**, which no
+/// S/D-distinguishing comparison can satisfy.
+/// `a_mos_written_source_for_drain_is_the_same_transistor` is the unit-scale
+/// statement of it, on a fixture whose two channel nets are anchored to
+/// different degrees so that `Match` is not available to a relabelling.
+///
+/// # What the collapse costs, and where that is paid
+///
+/// It creates **genuine automorphisms** wherever a device's two channel nets
+/// are otherwise indistinguishable — which is every isolated transistor and
+/// most small fixtures. That is not a defect of the collapse; it is the
+/// circuit being genuinely symmetric, and a comparison that claimed otherwise
+/// was reading a distinction that physics does not make.
+///
+/// Two things had to be right before it could ship, and both are:
+///
+/// - `refine_observed` must break a balanced stall even when an *imbalanced*
+///   class exists elsewhere in the same graph. Reading the two conditions as
+///   one returned on the first imbalance, left the symmetry unbroken, and made
+///   a deleted device read as an unfinished comparison. See the two
+///   independent tests above `lowest == u32::MAX`.
+/// - [`interpret`](crate::compare::interpret) must hold the members of a
+///   balanced unresolved class back from the unpaired scan rather than blame
+///   them, and must still report every class that is genuinely imbalanced.
+///   [`Partition::symmetric_nodes`] is what tells the two apart, and
+///   `an_unresolved_symmetry_does_not_mask_a_deleted_device` is the guard.
+///
+/// `TieBreak::LowestIndex` needed no change: it individualises one node per
+/// stalled class per round, and a symmetric channel is one class, so one round
+/// per device resolves it. Measured — every `LowestIndex` fixture in the suite
+/// reaches `Refinement::Complete` or `Discrepant`, never `Exhausted`.
 pub(crate) const fn role_code(role: TerminalRole) -> u64 {
     match role {
         TerminalRole::Gate => 0,
-        TerminalRole::Source => 1,
-        TerminalRole::Drain => 2,
+        TerminalRole::Source | TerminalRole::Drain => 1,
         TerminalRole::Bulk => 3,
         TerminalRole::Base => 4,
         TerminalRole::Emitter => 5,
@@ -310,6 +358,23 @@ const fn is_stalled(mine: u32, theirs: u32) -> bool {
     present & !resolved
 }
 
+/// A stalled class whose two sides hold the same number of nodes: a symmetry
+/// refinement could not break, rather than a difference.
+///
+/// Either pairing of its members is right, so nothing in it is a discrepancy —
+/// and equally, nothing in it is paired. That combination is what
+/// [`interpret`](crate::compare::interpret) needs a name for: its members are
+/// *unpaired without being unpairable*, and blaming them reports a difference
+/// that is not there.
+///
+/// Equal counts and a stall together mean at least two nodes a side: a class
+/// holding one each resolved, and a class holding none on either side is
+/// absent. The `debug_assert` in [`Partition::symmetric_nodes`] pins that, so
+/// the `> 1` here is a statement rather than a second guess.
+pub(crate) const fn is_symmetric(mine: u32, theirs: u32) -> bool {
+    (mine == theirs) & (mine > 1)
+}
+
 /// Nodes per class, and the lowest node index in each.
 ///
 /// `first` is `u32::MAX` for a class holding nothing on this side, which is
@@ -433,18 +498,28 @@ fn refine_observed<O: ObserveRefine>(
         let mut class = 0u32;
         for (&mine, &theirs) in layout_tally.iter().zip(&ref_tally) {
             let present = u32::from((mine | theirs) != 0);
+            let uneven = u32::from(mine != theirs);
             let stall = u32::from(is_stalled(mine, theirs));
             stalls += stall;
-            imbalance |= present & u32::from(mine != theirs);
-            // `class` when stalled, `u32::MAX` when not — a select, not a
-            // branch: `(stall ^ 1).wrapping_neg()` is all-ones on the unstalled
-            // row and zero on the stalled one.
-            lowest = lowest.min(class | (stall ^ 1).wrapping_neg());
+            imbalance |= present & uneven;
+            // `class` when the class is a stall a tie-break may enter,
+            // `u32::MAX` when not — a select, not a branch:
+            // `(breakable ^ 1).wrapping_neg()` is all-ones on the rows to skip
+            // and zero on the one to keep.
+            //
+            // Balanced, not merely stalled: an imbalanced class is a structural
+            // difference, and individualising a node inside one would invent a
+            // pairing between populations that cannot pair.
+            let breakable = stall & (uneven ^ 1);
+            lowest = lowest.min(class | (breakable ^ 1).wrapping_neg());
             class += 1;
         }
         debug_assert_eq!(class, count, "the fold saw one row per class");
         debug_assert!(stalls <= count, "more stalls than classes");
-        debug_assert!(stalls == 0 || lowest < count, "a stall named no class");
+        debug_assert!(
+            imbalance != 0 || stalls == 0 || lowest < count,
+            "every class balanced, a stall, and no class to break it in"
+        );
 
         // A separate pass, because a callback may not call out and may not
         // capture `&mut`. `O::ENABLED` is a `const`, so a production build
@@ -463,21 +538,38 @@ fn refine_observed<O: ObserveRefine>(
             out.class_count = count;
             return Refinement::Complete;
         }
-        // An imbalanced class is a structural difference no tie-break can mend,
-        // and choosing inside one would invent a pairing.
-        if imbalance != 0 {
+        // A run told not to guess still gets told about a structural
+        // difference: an imbalanced class is an answer, not a guess, and
+        // reporting it as a symmetry would blame the run's configuration for a
+        // difference between the netlists — a caller would then loosen the
+        // tie-break and get the same answer.
+        if tie_break == TieBreak::Refuse {
+            out.class_count = count;
+            return if imbalance == 0 {
+                Refinement::Symmetric
+            } else {
+                Refinement::Discrepant
+            };
+        }
+        // Every remaining stall is imbalanced, which no tie-break can mend.
+        //
+        // The two conditions are independent, and reading them as one is what
+        // made a *deleted device* come back `Inconclusive(UnresolvedSymmetry)`
+        // once `role_code` collapsed the MOS channel: the first imbalance
+        // returned here immediately, so a balanced class elsewhere in the same
+        // graph was left unbroken, and `compare::interpret` then read that
+        // unbroken class as the whole comparison having failed to finish. A
+        // symmetry is resolvable wherever it sits, and resolving it is what
+        // lets the rest of the netlist be compared at all.
+        if lowest == u32::MAX {
             out.class_count = count;
             return Refinement::Discrepant;
         }
-        if tie_break == TieBreak::Refuse {
-            out.class_count = count;
-            return Refinement::Symmetric;
-        }
 
-        // Every stalled class is balanced with more than one node per side, so
-        // the symmetry is genuine and either pairing is right. Individualise
-        // one class per stall — the lowest, and within it the lowest node index
-        // on each side — and let the next round propagate the consequence.
+        // The chosen class is balanced with more than one node per side, so the
+        // symmetry is genuine and either pairing is right. Individualise one
+        // class per round — the lowest, and within it the lowest node index on
+        // each side — and let the next round propagate the consequence.
         debug_assert!(lowest < count, "a stall without a class");
         // Widened rather than narrowed: the node counts are `usize`, and a
         // narrowing compare would be the assert agreeing with the bug it exists
@@ -595,6 +687,83 @@ impl Partition {
         open.into_iter()
     }
 
+    /// The nodes of every class that did not resolve but holds the same count
+    /// on both sides, ascending by node index: the layout column, then the
+    /// reference one.
+    ///
+    /// # Unpaired is not the same as unpairable
+    ///
+    /// A class holding the same count on both sides is a **symmetry**
+    /// refinement could not break — the two halves of a differential pair, or
+    /// the two ends of a MOS channel once [`role_code`] reads them as one role.
+    /// Either pairing of its members is right, so nothing in it is a
+    /// difference; and no pairing was chosen, so nothing in it is paired
+    /// either. A class holding *different* counts is the opposite: a structural
+    /// difference no pairing can mend.
+    ///
+    /// [`unresolved`](Self::unresolved) reports both kinds and
+    /// [`pairs`](Self::pairs) reports neither, so from outside `Partition` the
+    /// two were indistinguishable. `compare::interpret` therefore had to return
+    /// [`Inconclusive::UnresolvedSymmetry`](crate::verdict::Inconclusive) for
+    /// the whole comparison on the first balanced class it saw — which masked a
+    /// **deleted device** sitting in another class, because a run that gave up
+    /// says nothing about the device that is missing. That is finding F4's
+    /// second half, and this is the accessor it was blocked on.
+    ///
+    /// # Two columns, not one
+    ///
+    /// The two sides hold the same *number* of symmetric nodes by definition
+    /// but not the same *indices*, and `interpret` scatters into two separate
+    /// mate columns, so returning one interleaved list would only make the
+    /// caller split it again.
+    ///
+    /// Node indices are in the combined space the class columns use: devices
+    /// first, then nets.
+    #[must_use]
+    pub fn symmetric_nodes(&self) -> (Vec<u32>, Vec<u32>) {
+        let (layout_tally, _, ref_tally, _) = self.tallies();
+        debug_assert_eq!(layout_tally.len(), ref_tally.len(), "a tally per side");
+
+        // A uniform per class, hoisted out of the two compacts below so neither
+        // re-derives it and the two cannot disagree about which classes are
+        // symmetric.
+        let mut symmetric = vec![false; self.class_count as usize];
+        for (class, flag) in symmetric.iter_mut().enumerate() {
+            let (mine, theirs) = (layout_tally[class], ref_tally[class]);
+            debug_assert!(
+                !is_symmetric(mine, theirs) || is_stalled(mine, theirs),
+                "class {class} is balanced at {mine} a side and still resolved"
+            );
+            *flag = is_symmetric(mine, theirs);
+        }
+
+        // The same branchless compact `pairs` uses: store always, advance by the
+        // predicate, and size the buffer for the whole input rather than for the
+        // survivors.
+        let mut columns = (
+            vec![0u32; self.layout_class.len()],
+            vec![0u32; self.ref_class.len()],
+        );
+        for (out, class) in [
+            (&mut columns.0, &self.layout_class),
+            (&mut columns.1, &self.ref_class),
+        ] {
+            let mut written = 0usize;
+            for (node, &ClassId(id)) in class.iter().enumerate() {
+                out[written] = narrow(node);
+                written += usize::from(symmetric[id as usize]);
+            }
+            out.truncate(written);
+        }
+
+        debug_assert_eq!(
+            columns.0.len(),
+            columns.1.len(),
+            "a balanced class holds the same count on both sides"
+        );
+        columns
+    }
+
     /// Nodes per class on each side, plus the lowest node index in each.
     ///
     /// Derived rather than stored: it is read once per comparison, by
@@ -694,12 +863,29 @@ mod tests {
         }
     }
 
-    /// A source-to-drain chain of `devices` transistors over `devices + 1` nets.
+    /// A source-to-drain chain of `devices` transistors over `devices + 1` nets,
+    /// **diode-connected at the low end**.
     ///
     /// Refinement propagates one hop per round along a chain, so the number of
     /// rounds this needs grows with its length. That is the whole reason the
     /// fixture is a chain: the seam's claim is about how much work happened, so
     /// the fixture has to make the amount of work predictable.
+    ///
+    /// # Why device 0 carries a gate
+    ///
+    /// A bare chain is *not* rigid once [`role_code`] reads a MOS channel as
+    /// symmetric, and that is not a defect of either: reversing the chain end to
+    /// end maps every source onto a drain, so with the two roles collapsed the
+    /// reversal is a genuine automorphism and the fixture has a symmetry the
+    /// tests below would be measuring instead of what they name. Without the
+    /// gate, `a_rigid_graph_stalls_on_nothing_and_breaks_no_tie` reports
+    /// `Symmetric` — correctly — and stops being about rigidity at all.
+    ///
+    /// Tying device 0's gate to one end of its own channel is the smallest
+    /// anchor that distinguishes the two ends, and it is what a real stack is
+    /// anchored by: a diode-connected transistor at the bottom of a mirror.
+    /// A path graph with one distinguished endpoint has no automorphism but the
+    /// identity, so the chain is rigid again.
     fn chain(devices: u32) -> Graph {
         let mut graph = Graph::default();
         graph.device_terminal_start.push(0);
@@ -711,7 +897,12 @@ mod tests {
             graph.terminal_role.push(TerminalRole::Source);
             graph.terminal_net.push(index + 1);
             graph.terminal_role.push(TerminalRole::Drain);
-            graph.device_terminal_start.push((index + 1) * 2);
+            if index == 0 {
+                graph.terminal_net.push(0);
+                graph.terminal_role.push(TerminalRole::Gate);
+            }
+            let filled = u32::try_from(graph.terminal_net.len()).expect("a small fixture");
+            graph.device_terminal_start.push(filled);
             graph.device_param_start.push(0);
         }
         graph.net_terminal_start.push(0);
@@ -721,6 +912,9 @@ mod tests {
             }
             if net < devices {
                 graph.net_terminal.push((net, TerminalRole::Source));
+            }
+            if net == 0 {
+                graph.net_terminal.push((0, TerminalRole::Gate));
             }
             let filled = u32::try_from(graph.net_terminal.len()).expect("a small fixture");
             graph.net_terminal_start.push(filled);

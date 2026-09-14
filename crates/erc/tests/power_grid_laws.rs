@@ -334,6 +334,19 @@ fn a_solution_is_consistent_only_with_the_grid_it_matches() {
         !infected_current.is_consistent_with(&grid),
         "an infinite branch current is not a finite solution"
     );
+
+    // The third column, and the one the other three cases leave unread: the
+    // length arm above pops `node_voltage` without ever making one of its
+    // entries non-finite, so the fold over it went unverified while the folds
+    // over the other two were pinned. `|=` on a flag that starts true can only
+    // answer yes, so a NaN node voltage would reach every rule that reads this
+    // solution — the fail-open the predicate exists to refuse.
+    let mut infected_voltage = solve(&grid);
+    infected_voltage.node_voltage[1] = millivolts(f64::NAN);
+    assert!(
+        !infected_voltage.is_consistent_with(&grid),
+        "a NaN node voltage compares false against every limit and so passes every rule"
+    );
 }
 
 /// Oracle: determinism. The solve is iterative, and an iterative solve whose

@@ -74,54 +74,32 @@ thiserror = "1"
 wide = "0.7"
 
 # GPU: AOT SPIR-V from GLSL, for Quasi-static PEX only.
-vulkano = "0.35"
+# `default-features = false` drops the `x11` feature, which pulls `x11-dl` and
+# `x11rb` in and makes every binary downstream of `pex` link `-lxcb`. This is a
+# headless compute path with no window-system integration, so it needs none of
+# it — and with it on, `cargo test` outside `nix develop` fails at the link step
+# rather than at compile.
+vulkano = { version = "0.35", default-features = false }
+# `vulkano-shaders` is pinned but unused, and deliberately: it pulls in
+# `shaderc-sys`, which needs a system `libshaderc` or `cmake`, and neither is
+# present outside `nix develop`. Depending on it would make `cargo build` fail
+# for every crate downstream of `pex` outside the dev shell. The P2P Laplace
+# kernel is compiled by `glslc` and committed as SPIR-V; the regeneration
+# command is in `crates/pex/shaders/p2p_laplace.comp`.
 vulkano-shaders = "0.35"
 
-# Every `allow` below names why. An undocumented one reads as an oversight the
-# next agent will "fix" — the same discipline as a `ponytail:` comment, and for
-# the same reason. `cargo clippy` runs only inside `nix develop`.
+# Some are based off preference, some disagree with branch-less programming principles or using SIMD.
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-
-# `!(x > 0.0)` is not `x <= 0.0`: the negation is true for a NaN and the
-# comparison is false. Twelve sites spell a refusal that way *deliberately*, so
-# a NaN born of an absurd unit prefix or an overlapping stack row is refused
-# rather than accepted. Taking clippy's advice converts twelve fail-closed
-# guards into fail-open ones, which is the defect class this project exists to
-# prevent. Each site already carries a comment saying so.
 neg_cmp_op_on_partial_ord = "allow"
-
-# `&`/`|` between booleans is the `/branchless` idiom, not a typo: `&&` is a
-# branch, `&` is not, and the whole point of a bulk loop here is that it has no
-# data-dependent branch in the body. `docs/CONVENTIONS.md` and the `/branchless`
-# skill both prescribe it.
 needless_bitwise_bool = "allow"
-
-# Signatures are frozen (`CLAUDE.md`, the Definition-Phase barrier). A diff that
-# changes one is a bug report, not a commit, so an arity complaint is not
-# actionable from a body. Four sites, all public and all frozen.
 too_many_arguments = "allow"
-
-# Twenty-four bodies exceed 100 lines, and the only way to shorten one is to
-# split it into helpers — i.e. to mint signatures, in a phase whose whole rule
-# is that a signature change is a bug report rather than a commit. The length is
-# also mostly comment: `docs/CONVENTIONS.md` asks a transform to explain why it
-# is shaped the way it is, at the site.
 too_many_lines = "allow"
-
-# Geometry and linear algebra: `i`/`j`/`k` index a matrix, `a`/`b` name the two
-# operands of a boolean op, `x`/`y` are coordinates. Renaming them to satisfy a
-# lint makes the code read less like the mathematics it implements.
 similar_names = "allow"
 many_single_char_names = "allow"
-
-# Doc comments are frozen alongside the signatures they document, and the three
-# below all demand new prose in one. `must_use` additionally changes the public
-# surface. All four were allowed before the Implementation-Phase for the same
-# reason; nothing since has unfrozen them.
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"

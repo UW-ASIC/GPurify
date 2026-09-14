@@ -112,6 +112,10 @@ pub fn write_store(
     // instead of a `stream_of` call per polygon, and the deck check below runs
     // once per layer instead of once per row.
     let mut emitted = 0u32;
+    // Rows deliberately not written, so the coverage assert below can still say
+    // "every row was accounted for" rather than being weakened to an
+    // inequality that a genuinely dropped polygon would also satisfy.
+    let mut skipped = 0u32;
     for layer in 0..store.layer_count() {
         let layer = LayerId(u16::try_from(layer).expect("LayerId is a u16, so is the layer count"));
         let range = store.polys_on_layer(layer);
@@ -119,6 +123,24 @@ pub fn write_store(
         // per-layer loop, and most of a PDK's layer table is empty in any given
         // run so it predicts on the common side.
         if range.is_empty() {
+            continue;
+        }
+        // A derived layer is the deck's own arithmetic over geometry this file
+        // already carries — `diff_active` is `diff NOT poly`, and both operands
+        // are written above. Emitting it too would put the same area in the
+        // file twice, and a reader that took it at face value would see a
+        // conductor where the deck says there is none.
+        //
+        // It is also unrepresentable. `ingest::deck` keeps derived layers out of
+        // `by_stream` precisely so `of_stream` can never map a GDS record onto
+        // one, and `stream_of` has no pair to answer with — so a file written
+        // with them cannot be read back, and would fail closed on
+        // `UnknownLayer` rather than round-trip.
+        //
+        // Same outer-loop argument as the emptiness test above: per layer, not
+        // per row, and uniform across a run.
+        if layers.is_derived(layer) {
+            skipped += range.end - range.start;
             continue;
         }
         // Fail closed. A store row on a layer the deck's table never declared
@@ -140,8 +162,10 @@ pub fn write_store(
         }
     }
     debug_assert_eq!(
-        emitted, rows,
-        "the layer ranges do not cover the store, so a polygon was never written"
+        emitted + skipped,
+        rows,
+        "the layer ranges do not cover the store, so a polygon was neither \
+         written nor deliberately skipped"
     );
 
     put_record(out, ENDSTR, &[])?;

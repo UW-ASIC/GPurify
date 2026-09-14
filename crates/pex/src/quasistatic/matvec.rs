@@ -34,7 +34,7 @@ const VACUUM_PERMITTIVITY: f64 = 8.854_187_812_8e-12;
 
 /// `4πε₀`, the denominator of the free-space Green's function, hoisted so the
 /// per-panel coefficient is one divide at build time rather than per matvec.
-const FOUR_PI_EPS0: f64 = 4.0 * std::f64::consts::PI * VACUUM_PERMITTIVITY;
+pub(super) const FOUR_PI_EPS0: f64 = 4.0 * std::f64::consts::PI * VACUUM_PERMITTIVITY;
 
 /// `4 ln(1 + √2)`.
 ///
@@ -44,7 +44,7 @@ const FOUR_PI_EPS0: f64 = 4.0 * std::f64::consts::PI * VACUUM_PERMITTIVITY;
 /// `q / (4πε · √A / (4 ln(1 + √2)))`. That denominator is the panel's
 /// *effective radius* — the distance at which a point charge would produce the
 /// same potential — and it is what [`Collocation::radius`] stores.
-const SELF_POTENTIAL_SHAPE: f64 = 3.525_494_348_078_172;
+pub(super) const SELF_POTENTIAL_SHAPE: f64 = 3.525_494_348_078_172;
 
 /// Multiply the influence matrix by a vector.
 ///

@@ -2,6 +2,7 @@
 
 use crate::bbox::Bbox;
 use crate::ids::{LayerId, PolyId};
+use crate::ops::Point;
 use gpurify_units::Dbu;
 use std::ops::Range;
 
@@ -96,6 +97,202 @@ impl GeometryStore {
         let rows = self.polys_on_layer(layer);
         &self.poly_bbox[rows.start as usize..rows.end as usize]
     }
+
+    /// Whether a point lies inside one polygon, **the boundary counting as
+    /// inside**.
+    ///
+    /// **Decision** — a polygon and a point in, one bool out, pure.
+    ///
+    /// The slice-side twin of [`crate::ops::point_in_ring`], which is the same
+    /// predicate over the same convention and is not reachable from a store
+    /// row: it takes a `RingRef`, and only `crate::view` and `crate::boolean`
+    /// can build one. That is why this exists rather than a call.
+    ///
+    /// # Why the boundary is inside
+    ///
+    /// The same reason `point_in_ring` gives — a via landing exactly on a
+    /// conductor's edge is connected, and the alternative loses the connection
+    /// silently. The caller this was added for is net-label binding, where the
+    /// case is not an edge case at all: GDSII fixes no relationship between a
+    /// `TEXT` and a shape, so the convention is the tool's, and every
+    /// established one treats an on-edge label as attached. `KLayout` states it
+    /// as "inside or on the edge of", and pin labels are routinely written at a
+    /// rectangle's corner or the midpoint of its edge. A strict-interior test
+    /// would drop those labels, and a dropped label is a net that loses its
+    /// name — which reads downstream as an unnamed net, not as a fault.
+    ///
+    /// # Exact in `i128`
+    ///
+    /// Both halves are integer and exact. The ray cast is the same even-odd
+    /// scan `topology`'s `point_inside` runs, widened before the cross product
+    /// because two in-domain coordinates differ by up to `2^41` and the product
+    /// reaches `2^82`. The on-edge half is a zero cross product confined to the
+    /// edge's own span, which is exact for a slanted edge as well as an
+    /// axis-aligned one — `ops::point_seg_dist2` is *not* usable here, because
+    /// it rounds a slanted segment's distance away from zero and so never
+    /// reports zero for a point genuinely on such an edge.
+    ///
+    /// A polygon under three vertices bounds no area and contains nothing.
+    pub fn poly_contains_point(&self, poly: PolyId, p: Point) -> bool {
+        let (xs, ys) = self.poly_verts(poly);
+        point_in_verts(xs, ys, p)
+    }
+
+    /// Append one whole layer's rings to the tail of the store.
+    ///
+    /// **Transform, in-place.** The rings arrive as the same four columns
+    /// [`crate::Bbox::of_polys_into`] takes — two coordinate columns and a
+    /// `(start, len)` run per ring — and each becomes one row on `layer`.
+    ///
+    /// # Why the store is mutable at all
+    ///
+    /// It is not, after construction; this is *part* of construction. A deck
+    /// may declare a layer as a boolean over other layers, and such a layer has
+    /// to end up with real [`PolyId`]s or every consumer — net extraction,
+    /// label binding, device recognition — needs a second way to address a
+    /// polygon. Computing one needs a store to validate against, and a store
+    /// cannot exist until [`GeometryStoreBuilder::finish`] has run, so the
+    /// derived rows can only arrive afterwards. `ingest` is the one caller, and
+    /// the store it hands out is complete.
+    ///
+    /// # The precondition, and why it is checked in every profile
+    ///
+    /// Layer grouping is the invariant the whole type exists to carry, and it
+    /// survives an append only when `layer` is at or after every layer that
+    /// already holds rows — which is exactly `layer_start[layer] == poly_count`.
+    /// A deck assigns derived layers the ids after every base one and they are
+    /// materialised ascending, so that holds by construction. If it ever did
+    /// not, the rows would land inside another layer's range and
+    /// [`Self::polys_on_layer`] would hand a rule some other layer's geometry —
+    /// wrong, plausible, and checked clean. So this is an `assert`, not a
+    /// `debug_assert`.
+    pub fn append_layer(
+        &mut self,
+        layer: LayerId,
+        xs: &[Dbu],
+        ys: &[Dbu],
+        vert_start: &[u32],
+        vert_len: &[u32],
+    ) {
+        assert_eq!(xs.len(), ys.len(), "coordinate columns disagree in length");
+        assert_eq!(
+            vert_start.len(),
+            vert_len.len(),
+            "one vertex run per appended ring"
+        );
+        assert!(layer.idx() < self.layer_count(), "layer id past the table");
+        assert_eq!(
+            self.layer_start[layer.idx()] as usize,
+            self.poly_count(),
+            "a layer with rows after it cannot be appended to without moving them"
+        );
+
+        let base = u32::try_from(self.verts_x.len()).expect("vertex count fits a u32");
+        // The end of the appended run, checked before anything is written, for
+        // the same reason `GeometryStoreBuilder::push` checks it: `poly_vert_start`
+        // is a `u32` and a wrapped cursor hands `poly_verts` another polygon's
+        // coordinates.
+        base.checked_add(u32::try_from(xs.len()).expect("vertex count fits a u32"))
+            .expect("total vertex count fits a u32");
+        self.verts_x.extend_from_slice(xs);
+        self.verts_y.extend_from_slice(ys);
+
+        // One output row per input run, each a function of its own run and the
+        // hoisted `layer` and `base`, so any row order is legal.
+        let rings = vert_start.len();
+        self.poly_layer.resize(self.poly_layer.len() + rings, layer);
+        for (&start, &len) in vert_start.iter().zip(vert_len) {
+            let from = start as usize;
+            let to = from + len as usize;
+            debug_assert!(to <= xs.len(), "an appended run escapes the columns");
+            self.poly_vert_start.push(base + start);
+            self.poly_vert_len.push(len);
+            self.poly_bbox
+                .push(Bbox::of_points(&xs[from..to], &ys[from..to]));
+        }
+
+        // Every layer at or after this one was empty, so all their offsets sat
+        // at the old row count and all of them move by the same amount. Tens of
+        // entries, once per derived layer.
+        let grown = u32::try_from(rings).expect("appended ring count fits a u32");
+        for offset in &mut self.layer_start[layer.idx() + 1..] {
+            *offset += grown;
+        }
+
+        debug_assert_eq!(
+            self.poly_layer.len(),
+            self.poly_vert_start.len(),
+            "the appended rows left the columns ragged"
+        );
+        debug_assert_eq!(self.poly_layer.len(), self.poly_bbox.len());
+        debug_assert_eq!(
+            self.layer_start[self.layer_count()] as usize,
+            self.poly_count(),
+            "the layer offsets no longer cover every row"
+        );
+        debug_assert_eq!(
+            self.polys_on_layer(layer).len(),
+            rings,
+            "the appended rows are not the ones this layer reports"
+        );
+    }
+}
+
+/// [`GeometryStore::poly_contains_point`] over a ring's two coordinate columns.
+///
+/// **Decision** — pure. Split out from the accessor so the ring test is one
+/// function rather than one function per way of naming a ring.
+fn point_in_verts(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
+    debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
+    let n = xs.len();
+    // One test per ring, hoisted above the loop rather than a data-dependent
+    // branch inside it. Under three vertices there is no interior and no edge
+    // a point can be on that bounds anything.
+    if n < 3 {
+        return false;
+    }
+
+    // One pass over both columns carrying the previous vertex, seeded with the
+    // last so the ring's closing edge is the first term and needs no fixup
+    // after the loop. The body is branchless: both answers are accumulated as
+    // widened bools, never counted under an `if`.
+    let mut crossings = 0u32;
+    let mut on_edge = false;
+    let (mut ax, mut ay) = (xs[n - 1], ys[n - 1]);
+    for i in 0..n {
+        let (bx, by) = (xs[i], ys[i]);
+        // `(b - a) × (p - a)`, positive when `p` is left of the directed edge.
+        // Widened before the multiply: the operands are differences of
+        // coordinates bounded by `MAX_ABS_DBU`, so they reach `2^41` and the
+        // product `2^82`, where `i64` would silently wrap.
+        let side = i128::from(bx.raw() - ax.raw()) * i128::from(p.y.raw() - ay.raw())
+            - i128::from(by.raw() - ay.raw()) * i128::from(p.x.raw() - ax.raw());
+
+        // The half-open crossing convention: a vertex is counted by exactly one
+        // of the two edges meeting at it, so a ray grazing one is not counted
+        // twice. An upward edge counts when the point is left of it, a
+        // downward edge when it is right — the ray towards `+x` crossing it,
+        // either way.
+        let up = by.raw() > ay.raw();
+        let straddles = (ay.raw() > p.y.raw()) != (by.raw() > p.y.raw());
+        crossings += u32::from(straddles & ((side > 0) == up));
+
+        // The boundary half, which the crossing rule above deliberately does
+        // not answer. Collinear with the edge *and* within the edge's own span:
+        // the span test is what separates a point on the segment from one on
+        // the infinite line through it, and it is a bbox test because a
+        // collinear point is inside the segment exactly when it is inside the
+        // segment's box.
+        let within = (p.x.raw() >= ax.raw().min(bx.raw()))
+            & (p.x.raw() <= ax.raw().max(bx.raw()))
+            & (p.y.raw() >= ay.raw().min(by.raw()))
+            & (p.y.raw() <= ay.raw().max(by.raw()));
+        on_edge |= (side == 0) & within;
+
+        (ax, ay) = (bx, by);
+    }
+
+    (crossings & 1 == 1) | on_edge
 }
 
 /// Accumulates polygons in arrival order, then sorts them by layer.

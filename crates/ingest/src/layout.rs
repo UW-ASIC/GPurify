@@ -13,10 +13,13 @@
 //! an unsupported transform (non-orthogonal rotation, non-integral
 //! magnification) is an error, not an approximation.
 
-use crate::deck::Deck;
+use crate::deck::{Deck, DerivedOp, DerivedTable};
 use crate::intern::StrTable;
-use crate::provenance::Provenance;
+use crate::provenance::{PathTable, Provenance};
+use gpurify_core::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
+use gpurify_core::view::{validate_layer_into, ValidatedLayer};
 use gpurify_core::GeometryStore;
+use gpurify_units::Dbu;
 
 /// Everything a verification run needs from a layout file.
 #[derive(Debug, Default)]
@@ -60,6 +63,14 @@ pub enum LayoutError {
     CyclicHierarchy(String),
     #[error("layer {0}/{1} is not in the deck's layer table")]
     UnknownLayer(u16, u16),
+    /// A layer the deck computes from other layers could not be computed.
+    ///
+    /// Fail closed, and this is the shape that matters: the geometry underneath
+    /// a derived layer is real, so the alternative to refusing is a layer that
+    /// silently comes back empty — every conductor on it unconnected, every
+    /// device terminal on it unbound, and a clean report over all of it.
+    #[error("derived layer {0:?} could not be computed: {1}")]
+    Derived(gpurify_core::LayerId, BooleanError),
     #[error("io: {0}")]
     Io(String),
 }
@@ -133,6 +144,113 @@ pub fn read_layout(
     }
 }
 
+/// Compute every layer the deck derives and append it to the store.
+///
+/// **Transform, in-place.** Caller owns both tables. One row per derived layer
+/// in `derived`, folded left over its operands, appended to `store` as real
+/// polygons and matched one for one by a `Provenance` row so the two tables stay
+/// the same length.
+///
+/// # Why the polygons go in the store
+///
+/// So that nothing downstream needs a second way to address geometry.
+/// `topology::net` partitions store rows, `topology::port` binds a label to a
+/// store row, `topology::device` binds a terminal to a store row, and a rule
+/// reports a store row. A derived layer that lived beside the store instead
+/// would have to be taught to all four, and `NetTable` in particular indexes
+/// `poly_net` by [`gpurify_core::PolyId`] — there is no id a
+/// `ValidatedLayer` polygon could offer it.
+///
+/// # Order
+///
+/// `derived` is ascending by id and a row may only name lower ids, so one
+/// forward scan is enough: by the time a row is reached, every layer it folds
+/// is already in the store. That is the whole of the dependency handling, and
+/// it is why the deck needs no expression tree.
+///
+/// # Provenance
+///
+/// A derived polygon came from no instance, so its path is [`PathTable::ROOT`]
+/// and it carries no stream properties. What a report needs to name a real
+/// shape is on the geometry side: `core::view::PolygonRef::provenance` carries
+/// the lowest contributing store row through the boolean.
+///
+/// # Holes
+///
+/// Rings are appended as they come out of the boolean — outer counter-clockwise,
+/// holes clockwise — which is exactly the encoding `core::view::validate_layer_into`
+/// reads back, so validating the derived layer reproduces the polygons the
+/// boolean produced. It is also the same encoding a layout file uses for a
+/// donut, so a derived layer is no worse off here than a drawn one.
+pub fn derive_layers_into(
+    store: &mut GeometryStore,
+    provenance: &mut Provenance,
+    derived: &DerivedTable,
+) -> Result<(), LayoutError> {
+    // One buffer set for the whole call: an accumulator, the operand being
+    // folded into it, and the result of the fold, rotated rather than
+    // reallocated. Plus the four flat columns the store append takes.
+    let mut folded = ValidatedLayer::default();
+    let mut operand = ValidatedLayer::default();
+    let mut combined = ValidatedLayer::default();
+    let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
+    let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
+
+    // Tens of derived layers per deck, each a handful of operands, so neither
+    // of the two loops here is bulk; the bulk work is inside the booleans.
+    for row in 0..derived.len() {
+        let (layer, op) = derived.row(row);
+        let operands = derived.operands_of(row);
+        let blame = |why: BooleanError| LayoutError::Derived(layer, why);
+
+        validate_layer_into(store, operands[0], &mut folded).map_err(|why| blame(why.into()))?;
+        for &next in &operands[1..] {
+            validate_layer_into(store, next, &mut operand).map_err(|why| blame(why.into()))?;
+            match op {
+                DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
+                DerivedOp::Or => union_into(&folded, &operand, &mut combined),
+                DerivedOp::Not => subtraction_into(&folded, &operand, &mut combined),
+            }
+            .map_err(blame)?;
+            std::mem::swap(&mut folded, &mut combined);
+        }
+
+        xs.clear();
+        ys.clear();
+        start.clear();
+        len.clear();
+        for polygon in 0..u32::try_from(folded.len()).expect("a layer's polygons fit a u32") {
+            let polygon = folded.get(store, polygon);
+            // Outer first, then its holes — the ring order `validate_layer_into`
+            // emits and the one it reads back.
+            for ring in std::iter::once(polygon.outer()).chain(polygon.holes()) {
+                let (ring_xs, ring_ys) = ring.coords();
+                start.push(crate::narrow(xs.len()));
+                len.push(crate::narrow(ring_xs.len()));
+                xs.extend_from_slice(ring_xs);
+                ys.extend_from_slice(ring_ys);
+            }
+        }
+
+        store.append_layer(layer, &xs, &ys, &start, &len);
+        for _ in 0..start.len() {
+            provenance.push(PathTable::ROOT, &[]);
+        }
+        debug_assert_eq!(
+            store.polys_on_layer(layer).len(),
+            start.len(),
+            "the appended rings are not the ones the layer reports"
+        );
+    }
+
+    debug_assert!(
+        provenance.is_empty() || provenance.len() == store.poly_count(),
+        "provenance and the store disagree on how many polygons exist, so every \
+         violation past the first derived row names another shape's cell"
+    );
+    Ok(())
+}
+
 /// GDSII.
 ///
 /// A record stream of `(length, tag, payload)`. Record tags are a small dense
@@ -172,6 +290,15 @@ pub mod gds {
     const SNAME: u16 = 0x1206;
     const COLROW: u16 = 0x1302;
     const NODE: u16 = 0x1500;
+    /// `TEXT`'s half of the stream pair. The spec requires it — the grammar is
+    /// `<textbody> ::= TEXTTYPE [PRESENTATION] .. XY STRING`, with TEXTTYPE
+    /// unbracketed — so a `TEXT` without one is refused rather than defaulted.
+    const TEXTTYPE: u16 = 0x1602;
+    /// Justification and font of the rendered glyph. Read and discarded: it
+    /// moves where the *characters* are drawn relative to the `XY` point, and
+    /// the point itself is what names a shape.
+    const PRESENTATION: u16 = 0x1701;
+    const STRING: u16 = 0x1906;
     const STRANS: u16 = 0x1A01;
     const MAG: u16 = 0x1B05;
     const ANGLE: u16 = 0x1C05;
@@ -219,7 +346,13 @@ pub mod gds {
 
     pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
         let mut library = parse(bytes)?;
-        let (store, provenance, dropped) = flatten(&library, deck, unknown)?;
+        let (mut store, mut provenance, dropped) = flatten(&library, deck, unknown)?;
+        // Here rather than in `read_layout`, so that every path producing a
+        // store from bytes produces a *complete* one — the round-trip law
+        // compares a store read through `gds::read` against a store read
+        // through `read_layout`, and a derived layer materialised in only one
+        // of them would make the two differ by construction.
+        super::derive_layers_into(&mut store, &mut provenance, deck.layers.derived())?;
         Ok(Layout {
             store,
             provenance,
@@ -261,6 +394,20 @@ pub mod gds {
         rows: u32,
     }
 
+    /// One `TEXT` as the file states it, before any transform.
+    ///
+    /// The coordinate is inline rather than a range into `xs`/`ys`: the spec
+    /// says "a text or SREF element must have only one pair of coordinates", so
+    /// the run is always length one and a `(start, len)` pair would be two
+    /// words to describe one point.
+    struct Text {
+        layer: u16,
+        texttype: u16,
+        x: i64,
+        y: i64,
+        string: StrId,
+    }
+
     /// One structure, as ranges into the library's element and reference lists.
     struct Cell {
         name: StrId,
@@ -268,6 +415,8 @@ pub mod gds {
         elem_end: u32,
         ref_start: u32,
         ref_end: u32,
+        text_start: u32,
+        text_end: u32,
     }
 
     /// An exactly representable instance transform.
@@ -346,6 +495,7 @@ pub mod gds {
         by_name: Vec<u32>,
         elems: Vec<Elem>,
         refs: Vec<Ref>,
+        texts: Vec<Text>,
         xs: Vec<i64>,
         ys: Vec<i64>,
         props: Vec<(i16, StrId)>,
@@ -498,6 +648,8 @@ pub mod gds {
                         elem_end: narrow(lib.elems.len()),
                         ref_start: narrow(lib.refs.len()),
                         ref_end: narrow(lib.refs.len()),
+                        text_start: narrow(lib.texts.len()),
+                        text_end: narrow(lib.texts.len()),
                     });
                 }
                 STRNAME => {
@@ -512,6 +664,7 @@ pub mod gds {
                     }
                     lib.cells[index].elem_end = narrow(lib.elems.len());
                     lib.cells[index].ref_end = narrow(lib.refs.len());
+                    lib.cells[index].text_end = narrow(lib.texts.len());
                 }
                 BOUNDARY | BOX => {
                     if open.is_none() {
@@ -538,14 +691,28 @@ pub mod gds {
                     at = reference(&mut lib, bytes, next, at, tag == AREF)?;
                     continue;
                 }
-                // A TEXT carries no geometry, so skipping it cannot move a
-                // verdict. What it does carry is a net label, and
-                // `Provenance::label` binds one to a *polygon* — a
-                // point-in-polygon query that belongs to `topology`, and which
-                // no signature here can hand back unbound. Recorded rather than
-                // guessed at; a NODE is the same, an electrical annotation with
-                // no manufactured shape.
-                TEXT | NODE => {
+                // A TEXT carries no geometry, but it carries the net label, and
+                // a run whose labels never arrive is a run whose `PortTable` is
+                // empty — which makes every net unnamed, the SPEF and DSPF
+                // writers refuse, and the engine's field-solve path
+                // unreachable, because it selects nets by name.
+                //
+                // Read here and bound later: the point is in this cell's frame
+                // and there are no `PolyId`s yet, so the binding waits for
+                // `Provenance::resolve_labels`, after flattening and after the
+                // store's layer sort.
+                TEXT => {
+                    if open.is_none() {
+                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    }
+                    at = text(&mut lib, bytes, next, at)?;
+                    continue;
+                }
+                // A NODE is an electrical annotation with no manufactured shape
+                // and, unlike a TEXT, no name: the spec gives `NODETYPE` no
+                // meaning and never says what a node *is*. There is nothing to
+                // record that would not be a guess.
+                NODE => {
                     at = skip_element(bytes, next)?;
                     continue;
                 }
@@ -612,6 +779,113 @@ pub mod gds {
             _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
         }
         Ok(None)
+    }
+
+    /// Consume a `TEXT` through its `ENDEL`. Returns the offset past it.
+    ///
+    /// The grammar, from the Feb-87 manual — bracketed is optional, and note
+    /// that `TEXTTYPE`, `XY` and `STRING` are not:
+    ///
+    /// ```text
+    /// <text>     ::= TEXT [ELFLAGS] [PLEX] LAYER <textbody>
+    /// <textbody> ::= TEXTTYPE [PRESENTATION] [PATHTYPE] [WIDTH] [<strans>] XY STRING
+    /// ```
+    ///
+    /// # What is read and what is dropped
+    ///
+    /// `LAYER` and `TEXTTYPE` are the stream pair, and they are what the deck's
+    /// label pairing is stated against. `XY` is the one point the spec allows —
+    /// *"a text or SREF element must have only one pair of coordinates"* — and
+    /// it is what a later pass tests against the geometry. `STRING` is the
+    /// name.
+    ///
+    /// `PRESENTATION`, `PATHTYPE` and `WIDTH` describe the rendered glyph: how
+    /// the characters are justified around the point, how their strokes end,
+    /// how thick they are. None of that moves the point, and the point is the
+    /// whole of what names a shape, so all three are accepted and discarded.
+    /// Reading them is not optional even so — an unknown record is
+    /// `UnsupportedRecord`, so silently refusing a legal `TEXT` would be the
+    /// alternative.
+    ///
+    /// `STRANS`/`MAG`/`ANGLE` are accepted for the same reason and discarded
+    /// for a sharper one: they rotate and mirror the glyph about its own
+    /// anchor, and the anchor is the `XY` point, which they leave where it is.
+    /// The transform that *does* move a label is the instance transform, and
+    /// that is applied in `Flatten::visit` alongside the geometry.
+    fn text(
+        lib: &mut Library,
+        bytes: &[u8],
+        mut at: usize,
+        start: usize,
+    ) -> Result<usize, LayoutError> {
+        let mut layer: Option<u16> = None;
+        let mut texttype: Option<u16> = None;
+        let mut point: Option<(i64, i64)> = None;
+        let mut string: Option<StrId> = None;
+        let mut attribute = 0i16;
+        // A TEXT's properties are parsed and dropped: `props` is a per-polygon
+        // CSR column and this element becomes no polygon, so appending to it
+        // would shift every later shape's property range.
+        let props_before = lib.props.len();
+
+        let end = loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                LAYER => layer = Some(word(payload, at)?),
+                TEXTTYPE => texttype = Some(word(payload, at)?),
+                XY => {
+                    // Into scratch at the end of the shared columns, then
+                    // popped: `points` is the one checked reader of an XY
+                    // payload, and duplicating its framing checks here to save
+                    // two pushes would duplicate the thing most worth having
+                    // exactly once.
+                    let before = lib.xs.len();
+                    points(&mut lib.xs, &mut lib.ys, payload, at)?;
+                    // Fail closed on the one shape the spec forbids. A TEXT
+                    // with two points is not a TEXT with an extra point to
+                    // ignore; it is a file that means something this reader
+                    // cannot know.
+                    if lib.xs.len() != before + 1 {
+                        lib.xs.truncate(before);
+                        lib.ys.truncate(before);
+                        return Err(LayoutError::UnsupportedRecord(TEXT, offset(start)));
+                    }
+                    point = Some((lib.xs[before], lib.ys[before]));
+                    lib.xs.truncate(before);
+                    lib.ys.truncate(before);
+                }
+                STRING => string = Some(lib.strings.intern(&ascii(payload))),
+                // Glyph presentation, and the transform of the glyph about its
+                // own anchor. Accepted, discarded — see this function's doc.
+                PRESENTATION | PATHTYPE | WIDTH | STRANS | MAG | ANGLE => {}
+                _ => {
+                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
+                        break end;
+                    }
+                }
+            }
+            at = next;
+        };
+        lib.props.truncate(props_before);
+
+        // Fail closed on each of the three the grammar makes mandatory. A label
+        // missing its stream pair cannot be paired with a conductor, one
+        // missing its point cannot be placed, and one missing its string names
+        // nothing — and none of the three has a defensible default.
+        let (Some(layer), Some(texttype), Some((x, y)), Some(string)) =
+            (layer, texttype, point, string)
+        else {
+            return Err(LayoutError::UnsupportedRecord(TEXT, offset(start)));
+        };
+
+        lib.texts.push(Text {
+            layer,
+            texttype,
+            x,
+            y,
+            string,
+        });
+        Ok(end)
     }
 
     /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset
@@ -1191,6 +1465,9 @@ pub mod gds {
             for elem in &lib.elems[entry.elem_start as usize..entry.elem_end as usize] {
                 self.emit(elem, at, path)?;
             }
+            for label in &lib.texts[entry.text_start as usize..entry.text_end as usize] {
+                self.place(label, at)?;
+            }
 
             for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
                 let child = lib.find(reference.cell).ok_or_else(|| {
@@ -1215,6 +1492,57 @@ pub mod gds {
             }
 
             self.on_chain[index] = false;
+            Ok(())
+        }
+
+        /// Transform one label's point into the root frame and record it.
+        ///
+        /// The same transform the geometry takes, and it has to be: a label
+        /// under a mirrored instance names the shape the mirror put under it,
+        /// not the one that was there before. Unlike [`Self::emit`] there is no
+        /// winding to fix up, because a point has none.
+        ///
+        /// A text on a stream pair the deck's layer table does not name is
+        /// dropped under [`UnknownLayers::Drop`] and refused under `Reject`,
+        /// exactly as geometry is — but it is *not* counted in `dropped`, which
+        /// the `Layout` field's doc defines as polygons. What decides whether a
+        /// mapped label is a net label at all is the deck's `connectivity`
+        /// pairing, and that is read later, by
+        /// [`Provenance::resolve_labels`](crate::provenance::Provenance::resolve_labels).
+        fn place(&mut self, label: &Text, at: Xform) -> Result<(), LayoutError> {
+            let Some(layer) = self.deck.layers.of_stream(label.layer, label.texttype) else {
+                return match self.unknown {
+                    UnknownLayers::Reject => {
+                        Err(LayoutError::UnknownLayer(label.layer, label.texttype))
+                    }
+                    UnknownLayers::Drop => Ok(()),
+                };
+            };
+
+            let (a, b, c, e) = at.linear();
+            let x = a * label.x + b * label.y + at.dx;
+            let y = c * label.x + e * label.y + at.dy;
+
+            // The same `±MAX_ABS_DBU` bound `emit` enforces on every vertex,
+            // and for the same reason: `Dbu::new_unchecked` below is only sound
+            // inside it, and a label outside the domain would be compared
+            // against geometry that cannot be.
+            let bound = MAX_ABS_DBU.unsigned_abs();
+            if x.unsigned_abs() > bound {
+                return Err(LayoutError::CoordinateOutOfRange(x));
+            }
+            if y.unsigned_abs() > bound {
+                return Err(LayoutError::CoordinateOutOfRange(y));
+            }
+
+            self.provenance.place_label(
+                gpurify_core::ops::Point {
+                    x: Dbu::new_unchecked(x),
+                    y: Dbu::new_unchecked(y),
+                },
+                layer,
+                label.string,
+            );
             Ok(())
         }
 
@@ -1441,12 +1769,17 @@ mod tests {
     const XY: u16 = 0x1003;
     const SNAME: u16 = 0x1206;
     const STRANS: u16 = 0x1A01;
+    const MAG: u16 = 0x1B05;
     const ANGLE: u16 = 0x1C05;
     const PROPATTR: u16 = 0x2B02;
     const PROPVALUE: u16 = 0x2C06;
     const ENDEL: u16 = 0x1100;
     const ENDSTR: u16 = 0x0700;
     const ENDLIB: u16 = 0x0400;
+    const TEXT: u16 = 0x0C00;
+    const TEXTTYPE: u16 = 0x1602;
+    const PRESENTATION: u16 = 0x1701;
+    const STRING: u16 = 0x1906;
 
     /// `STRANS` bit 0, counting from the most significant as the Feb-87 manual
     /// does: reflect about the X axis before rotating. Spelled here from the
@@ -1548,6 +1881,10 @@ mod tests {
         angle: f64,
         x: i64,
         y: i64,
+        /// Integral, because the reader accepts only integral magnification and
+        /// an `i64` cannot be compared against a default with `float_cmp`
+        /// looking over your shoulder.
+        mag: i64,
     }
 
     fn sref(cell: &'static str, strans: u16, angle: f64, x: i64, y: i64) -> Ref {
@@ -1557,6 +1894,19 @@ mod tests {
             angle,
             x,
             y,
+            // One is the format's default and writes no MAG record, which keeps
+            // `gds_real`'s positive-value precondition honest the same way a
+            // zero angle does.
+            mag: 1,
+        }
+    }
+
+    impl Ref {
+        /// Attach a `MAG` record. Integral and in `1..=1e6` or the reader
+        /// refuses the instance, which is the subset the module doc declares.
+        fn magnified(mut self, mag: i64) -> Self {
+            self.mag = mag;
+            self
         }
     }
 
@@ -1617,6 +1967,12 @@ mod tests {
                 if reference.strans != 0 {
                     record(&mut out, STRANS, &reference.strans.to_be_bytes());
                 }
+                // `<strans> ::= STRANS [MAG] [ANGLE]`, so MAG sits between the
+                // flag word and the rotation.
+                if reference.mag != 1 {
+                    let mag = i32::try_from(reference.mag).expect("a test magnification fits an i32");
+                    record(&mut out, MAG, &gds_real(f64::from(mag)));
+                }
                 if reference.angle != 0.0 {
                     record(&mut out, ANGLE, &gds_real(reference.angle));
                 }
@@ -1640,6 +1996,68 @@ mod tests {
             layers: layer_table(strings, &ROWS),
             ..Deck::default()
         }
+    }
+
+    /// One `TEXT` element: a stream pair, one point, and the name.
+    struct Label {
+        layer: u16,
+        texttype: u16,
+        x: i64,
+        y: i64,
+        string: &'static str,
+    }
+
+    fn label(layer: u16, texttype: u16, x: i64, y: i64, string: &'static str) -> Label {
+        Label {
+            layer,
+            texttype,
+            x,
+            y,
+            string,
+        }
+    }
+
+    /// A one-cell library of boundaries and `TEXT`s.
+    ///
+    /// Written out here rather than folded into [`gds_hierarchy`] because the
+    /// record order inside a `TEXT` is its own: the Feb-87 grammar is
+    /// `TEXT [ELFLAGS] [PLEX] LAYER TEXTTYPE [PRESENTATION] [PATHTYPE] [WIDTH]
+    /// [<strans>] XY STRING`, so `TEXTTYPE` follows `LAYER` where a `BOUNDARY`
+    /// has `DATATYPE`, and `STRING` comes after the point rather than before
+    /// it. Assembled from the specification, not from the reader.
+    fn gds_labelled(cell: &str, elements: &[Boundary], labels: &[Label]) -> Vec<u8> {
+        let mut out = gds_hierarchy(&[(cell, elements, &[])]);
+        // `gds_hierarchy` closed the cell and the library; splice the texts in
+        // before that ENDSTR by rebuilding the tail. Cheaper to state: the two
+        // closing records are eight bytes, and re-emitting them after the text
+        // block is the whole edit.
+        let tail = out.len() - 8;
+        let texts = text_records(labels);
+        out.splice(tail..tail, texts);
+        out
+    }
+
+    /// The `TEXT` element block for a run of labels, ready to splice in front of
+    /// whichever cell's `ENDSTR` should own them.
+    fn text_records(labels: &[Label]) -> Vec<u8> {
+        let mut texts = Vec::new();
+        for label in labels {
+            record(&mut texts, TEXT, &[]);
+            record(&mut texts, LAYER, &label.layer.to_be_bytes());
+            record(&mut texts, TEXTTYPE, &label.texttype.to_be_bytes());
+            // Middle-centre justification, font 0 — read and discarded by the
+            // reader, present here because a real writer emits it.
+            record(&mut texts, PRESENTATION, &0x0005u16.to_be_bytes());
+            let x = i32::try_from(label.x).expect("test coordinates fit a GDSII coordinate");
+            let y = i32::try_from(label.y).expect("test coordinates fit a GDSII coordinate");
+            let mut xy = Vec::with_capacity(8);
+            xy.extend_from_slice(&x.to_be_bytes());
+            xy.extend_from_slice(&y.to_be_bytes());
+            record(&mut texts, XY, &xy);
+            record(&mut texts, STRING, &ascii(label.string));
+            record(&mut texts, ENDEL, &[]);
+        }
+        texts
     }
 
     /// A square boundary of side 400 on the deck's first layer.
@@ -2326,6 +2744,557 @@ mod tests {
                  with however deep the mirror sits; clockwise is read \
                  downstream as a hole"
             );
+        }
+    }
+
+    /// The stream pairs sky130 actually uses, so the fixture is not a made-up
+    /// numbering: `met1.drawing` is 68/20 and `met1.label` is 68/5.
+    const LABEL_ROWS: [(&str, u16, u16); 2] = [("met1", 68, 20), ("met1_label", 68, 5)];
+
+    /// A deck whose `met1_label` layer names `met1`, which is the pairing
+    /// `connectivity.labels` carries and the only thing that makes a `TEXT` a
+    /// net label rather than documentation.
+    fn labelling_deck(strings: &mut StrTable) -> Deck {
+        let layers = layer_table(strings, &LABEL_ROWS);
+        let met1 = layers.of_stream(68, 20).expect("the fixture declares met1");
+        let text = layers.of_stream(68, 5).expect("the fixture declares met1_label");
+        Deck {
+            connectivity: crate::deck::Connectivity {
+                conductors: vec![met1],
+                label_layer: vec![text],
+                label_names: vec![met1],
+                ..crate::deck::Connectivity::default()
+            },
+            layers,
+            ..Deck::default()
+        }
+    }
+
+    /// One 400-square of met1 at the origin, the shape every label test below
+    /// aims at.
+    fn met1_square() -> Boundary {
+        boundary(68, 20, &[0, 400, 400, 0], &[0, 0, 400, 400])
+    }
+
+    /// Read a library and bind its labels, returning the resolved column.
+    fn bound_labels(bytes: &[u8], deck: &Deck) -> Result<Vec<(PolyId, String)>, crate::LabelError> {
+        let mut layout = gds::read(bytes, deck, UnknownLayers::Reject).expect("a well-formed library");
+        layout
+            .provenance
+            .resolve_labels(&layout.store, &deck.connectivity)?;
+        Ok(layout
+            .provenance
+            .labels()
+            .iter()
+            .map(|&(poly, name)| (poly, layout.strings.resolve(name).to_owned()))
+            .collect())
+    }
+
+    /// Oracle: construct-from-answer. The label is written at a point the test
+    /// chose, inside a square the test chose, so which polygon it must name is
+    /// known before the reader runs.
+    ///
+    /// This is the path that did not exist: the reader skipped every `TEXT`, so
+    /// `Provenance::label` had no production caller, `PortTable` was empty in
+    /// every real run, and with it every net name — which made the SPEF and
+    /// DSPF writers return `UnnamedNet` and the engine's field-solve path,
+    /// which selects nets *by name*, unreachable.
+    #[test]
+    fn a_text_inside_a_shape_names_the_net_that_shape_is_on() {
+        let mut strings = StrTable::default();
+        let deck = labelling_deck(&mut strings);
+        let bytes = gds_labelled("TOP", &[met1_square()], &[label(68, 5, 200, 200, "VDD")]);
+
+        let bound = bound_labels(&bytes, &deck).expect("the label sits on the square");
+
+        assert_eq!(
+            bound,
+            vec![(PolyId(0), "VDD".to_owned())],
+            "the one text drawn inside the one square names it"
+        );
+    }
+
+    /// Oracle: law. The boundary counts as inside.
+    ///
+    /// Not an edge case in this domain: GDSII fixes no relationship between a
+    /// `TEXT` and a shape, so the convention is the tool's, and every
+    /// established one treats an on-edge label as attached — `KLayout` states it
+    /// as "inside or on the edge of". Pin labels are routinely written at a
+    /// rectangle's corner or the midpoint of an edge, so a strict-interior test
+    /// would silently drop them and leave the net unnamed.
+    ///
+    /// All four cases the half-open ray cast alone answers `false` for: a point
+    /// on a horizontal edge, on a vertical edge, and on two of the corners.
+    #[test]
+    fn a_text_on_a_shapes_edge_or_corner_still_names_it() {
+        let mut strings = StrTable::default();
+        let deck = labelling_deck(&mut strings);
+
+        for (x, y, where_it_is) in [
+            (200, 0, "the midpoint of the bottom edge"),
+            (0, 200, "the midpoint of the left edge"),
+            (400, 200, "the midpoint of the right edge"),
+            (0, 0, "the lower-left corner"),
+            (400, 400, "the upper-right corner"),
+        ] {
+            let bytes = gds_labelled("TOP", &[met1_square()], &[label(68, 5, x, y, "VDD")]);
+            let bound = bound_labels(&bytes, &deck).unwrap_or_else(|why| {
+                panic!("a label at {where_it_is} must bind, not refuse: {why}")
+            });
+            assert_eq!(
+                bound,
+                vec![(PolyId(0), "VDD".to_owned())],
+                "a label at {where_it_is} is on the conductor"
+            );
+        }
+    }
+
+    /// Oracle: law. A text on a layer no `connectivity.labels` row pairs is
+    /// documentation, not a net label, and is passed over in silence.
+    ///
+    /// The distinction is the whole reason the pairing is a deck table: the
+    /// GDSII specification contains no rule relating a `TEXT` to a shape — the
+    /// words *net*, *pin*, *port* and *connectivity* do not appear in it — so
+    /// nothing about the file itself says which texts are names.
+    #[test]
+    fn a_text_on_an_unpaired_layer_is_documentation_and_binds_nothing() {
+        let mut strings = StrTable::default();
+        // met1's own drawing layer is declared, and deliberately *not* paired.
+        let deck = labelling_deck(&mut strings);
+        let bytes = gds_labelled("TOP", &[met1_square()], &[label(68, 20, 200, 200, "a note")]);
+
+        let bound = bound_labels(&bytes, &deck).expect("an unpaired text is not a fault");
+
+        assert!(
+            bound.is_empty(),
+            "a text the deck does not pair names nothing, and must not be \
+             guessed onto the shape it happens to sit on"
+        );
+    }
+
+    /// Oracle: law. A label the deck *claims* that lands on no shape is
+    /// refused, not dropped.
+    ///
+    /// Fail closed, and the direction matters: a dropped label leaves the net
+    /// with its geometry and without its name, and an unnamed net reads
+    /// downstream as a net nobody labelled rather than as a label nobody could
+    /// place. Real flows agree — GF180MCU's layer table says its label layers
+    /// are used "for any wrong placement of label check".
+    #[test]
+    fn a_claimed_label_on_no_shape_is_refused_rather_than_dropped() {
+        let mut strings = StrTable::default();
+        let deck = labelling_deck(&mut strings);
+        // Well clear of the square, which spans 0..400 on both axes.
+        let bytes = gds_labelled("TOP", &[met1_square()], &[label(68, 5, 9_000, 9_000, "VDD")]);
+
+        match bound_labels(&bytes, &deck) {
+            Err(crate::LabelError::Unplaced { x, y, .. }) => {
+                assert_eq!((x, y), (9_000, 9_000), "the refusal names where the label was");
+            }
+            Ok(bound) => panic!("a misplaced label was accepted, binding {bound:?}"),
+        }
+    }
+
+    /// Oracle: law. A label under a mirrored instance moves with the geometry
+    /// it names.
+    ///
+    /// The regression this file already had for rings and did not have for
+    /// points.
+    ///
+    /// **The translation is what gives the test its teeth.** The child draws
+    /// its square at y 0..400 and labels the point (200, 200); the parent
+    /// places the cell mirrored about X and shifted up by 1000, so `y ↦ 1000 −
+    /// y` and the placed square spans y 600..1000 with the label at (200, 800).
+    /// The *untransformed* point (200, 200) is nowhere near that square, so a
+    /// reader that left the label in the child's frame refuses it as
+    /// `Unplaced`. A shift of 400 would have been worthless: the square would
+    /// land back on 0..400 and (200, 200) is a fixed point of `y ↦ 400 − y`, so
+    /// the test would pass with the transform dropped entirely.
+    #[test]
+    fn a_label_under_a_mirrored_instance_moves_with_the_shape_it_names() {
+        let mut strings = StrTable::default();
+        let deck = labelling_deck(&mut strings);
+
+        let mut bytes = gds_hierarchy(&[
+            ("CHILD", &[met1_square()], &[]),
+            ("TOP", &[], &[sref("CHILD", REFLECT, 0.0, 0, 1000)]),
+        ]);
+        // The label belongs to CHILD, so it is spliced into the first cell —
+        // whose ENDSTR is the record before TOP's BGNSTR.
+        let child_end = find_first_endstr(&bytes);
+        let mut texts = Vec::new();
+        record(&mut texts, TEXT, &[]);
+        record(&mut texts, LAYER, &68u16.to_be_bytes());
+        record(&mut texts, TEXTTYPE, &5u16.to_be_bytes());
+        let mut xy = Vec::with_capacity(8);
+        xy.extend_from_slice(&200i32.to_be_bytes());
+        xy.extend_from_slice(&200i32.to_be_bytes());
+        record(&mut texts, XY, &xy);
+        record(&mut texts, STRING, &ascii("VDD"));
+        record(&mut texts, ENDEL, &[]);
+        bytes.splice(child_end..child_end, texts);
+
+        let bound = bound_labels(&bytes, &deck)
+            .expect("the label is mirrored onto the square exactly as the square is");
+
+        assert_eq!(
+            bound,
+            vec![(PolyId(0), "VDD".to_owned())],
+            "a point under a mirrored instance takes the instance transform, \
+             the same as every vertex of the shape it names"
+        );
+    }
+
+    /// The byte offset of the first `ENDSTR` record, which is where a label
+    /// belonging to the first cell has to be spliced.
+    fn find_first_endstr(bytes: &[u8]) -> usize {
+        let mut at = 0;
+        while at + 4 <= bytes.len() {
+            let len = usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
+            let tag = u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]);
+            assert!(len >= 4, "a GDSII record carries its own header");
+            if tag == ENDSTR {
+                return at;
+            }
+            at += len;
+        }
+        panic!("the fixture library has no ENDSTR");
+    }
+
+    // ------------------------------------------ global transform equivariance
+
+    /// One representable instance transform, `W(p) = mag · R_q · Fʳ · p + (dx, dy)`.
+    ///
+    /// A test-local restatement of what the format allows, deliberately *not*
+    /// [`super::gds::Xform`]: the law below computes its expected answer with
+    /// [`Warp::apply`], and an expected answer computed with the function under
+    /// test asserts nothing.
+    #[derive(Clone, Copy)]
+    struct Warp {
+        mag: i64,
+        reflect: bool,
+        quarters: u8,
+        dx: i64,
+        dy: i64,
+    }
+
+    impl Warp {
+        /// Apply it, spelled from the Feb-87 manual in the order the manual
+        /// states.
+        ///
+        /// `STRANS` bit 0 is a reflection about the X axis — `(x, y) ↦ (x, −y)`
+        /// — and it runs **before** the `ANGLE` rotation, which is
+        /// counter-clockwise: `R₉₀(x, y) = (−y, x)`. Magnification is a scalar
+        /// and commutes with both, so it is folded into the last line.
+        fn apply(self, x: i64, y: i64) -> (i64, i64) {
+            let (x, y) = if self.reflect { (x, -y) } else { (x, y) };
+            let (x, y) = match self.quarters {
+                0 => (x, y),
+                1 => (-y, x),
+                2 => (-x, -y),
+                3 => (y, -x),
+                _ => unreachable!("a quarter turn is 0..=3"),
+            };
+            (self.mag * x + self.dx, self.mag * y + self.dy)
+        }
+
+        /// The `SREF` that carries it.
+        fn sref_of(self, cell: &'static str) -> Ref {
+            let strans = if self.reflect { REFLECT } else { 0 };
+            sref(cell, strans, f64::from(self.quarters) * 90.0, self.dx, self.dy)
+                .magnified(self.mag)
+        }
+    }
+
+    /// The library the equivariance law is stated over, optionally wrapped.
+    ///
+    /// `LEAF` draws two counter-clockwise rings on two different layers and
+    /// carries one `TEXT`. `MID` places `LEAF` **mirrored**. `TOP` draws a ring
+    /// of its own, places `LEAF` directly, and places `MID` under a quarter
+    /// turn — so the deepest ring arrives through a mirror composed with a
+    /// rotation across *two* levels of hierarchy, which `CLAUDE.md` records as
+    /// reached today only by a corpus test that is red for unrelated reasons.
+    ///
+    /// `TOP`'s own ring sits out at `x = 2·10⁶` so that one magnification in the
+    /// table below is genuinely unrepresentable rather than merely large.
+    ///
+    /// Cell order is load-bearing twice: `LEAF` first, so the existing
+    /// [`find_first_endstr`] splice point owns its labels, and `TOP` last, so
+    /// appending `WRAP` leaves every other cell's bytes byte-identical. `WRAP`
+    /// is then the library's only unreferenced cell, which is how the reader
+    /// spells "the root".
+    fn nested_mirror_library(wrap: Option<Warp>) -> Vec<u8> {
+        let leaf = [
+            ccw_triangle(),
+            boundary(ROWS[1].1, ROWS[1].2, &[0, 120, 120, 0], &[0, 0, 60, 60]),
+        ];
+        let top = [boundary(
+            ROWS[2].1,
+            ROWS[2].2,
+            &[2_000_000, 2_000_400, 2_000_400, 2_000_000],
+            &[0, 0, 400, 400],
+        )];
+        let mid_refs = [sref("LEAF", REFLECT, 0.0, 300, 0)];
+        let top_refs = [sref("LEAF", 0, 0.0, 0, 0), sref("MID", 0, 90.0, 1_000, 0)];
+        let wrap_refs: Vec<Ref> = wrap.into_iter().map(|w| w.sref_of("TOP")).collect();
+
+        let mut cells: Vec<(&str, &[Boundary], &[Ref])> = vec![
+            ("LEAF", &leaf, &[]),
+            ("MID", &[], &mid_refs),
+            ("TOP", &top, &top_refs),
+        ];
+        if !wrap_refs.is_empty() {
+            cells.push(("WRAP", &[], &wrap_refs));
+        }
+
+        let mut bytes = gds_hierarchy(&cells);
+        let at = find_first_endstr(&bytes);
+        let texts = text_records(&[label(ROWS[1].1, ROWS[1].2, 60, 20, "N1")]);
+        bytes.splice(at..at, texts);
+        bytes
+    }
+
+    /// The hierarchy path of a store row, resolved to text so two reads with
+    /// two independent [`StrTable`]s can be compared.
+    fn path_text(layout: &Layout, row: u32) -> Vec<String> {
+        let id = layout.provenance.path_of(PolyId(row));
+        layout
+            .provenance
+            .paths()
+            .get(id)
+            .iter()
+            .map(|&component| layout.strings.resolve(component).to_owned())
+            .collect()
+    }
+
+    /// Oracle: law — global transform equivariance of the whole reader.
+    ///
+    /// Wrap a library's single root cell in a new outermost cell holding one
+    /// `SREF` of it under any representable `W`. Flattening is function
+    /// composition, so the result must be the unwrapped result pushed through
+    /// `W` and nothing else:
+    ///
+    /// - **(a)** the row count, each layer's row range and each row's layer are
+    ///   untouched — `W` is a bijection of the plane and does not create,
+    ///   destroy or re-label a shape. (`layer_count` is deliberately *not*
+    ///   asserted: it is `deck.layers.len()`, identical by construction.)
+    /// - **(b)** row `i`'s vertices are `W(v_j)` in order when `W` does not
+    ///   reflect, and `[W(v₀), W(v_{n−1}), …, W(v₁)]` when it does — vertex 0
+    ///   is the fixed point `erc::first_vertex` relies on, and `[1..]` reverses
+    ///   because a determinant of −1 flips the winding.
+    /// - **(c)** every `PlacedLabel` point becomes `W(p)`, in the same order, on
+    ///   the same layer, with the same name.
+    /// - **(d)** every row's hierarchy path gains exactly one leading
+    ///   component, `TOP`, and nothing else — so the partition of rows by path
+    ///   is preserved.
+    ///
+    /// **Why it holds at arbitrary depth, which is the whole point.** Write the
+    /// base row as `v_j = A(u_{σ(j)})`, where `u` is the cell as drawn, `A` is
+    /// the composed transform and `σ` is the identity when `A`'s flip parity is
+    /// even and the `[1..]` reversal `ρ` when it is odd. Wrapped, the parity is
+    /// `p ⊕ r`. When `r = 0` the two parities agree and `v′_j = W(v_j)`. When
+    /// `r = 1` they differ, and *either* `σ = id, τ = ρ` *or* `σ = ρ, τ = id`;
+    /// because `ρ` is an involution both give `v′_j = W(v_{ρ(j)})`. So the law
+    /// is stated over the parity *difference*, never the absolute parity — which
+    /// is why the fixture deliberately contains a cell already placed mirrored,
+    /// under a rotation, two levels deep.
+    ///
+    /// A run that comes back `Err(LayoutError::CoordinateOutOfRange(_))` is a
+    /// pass — `W` may leave the representable domain — but that is spelled as
+    /// that one variant, and the table below asserts every other `W` is
+    /// accepted. Otherwise a reader that refused every wrapped library would
+    /// satisfy the law, which is exactly the fail-open shape this tree refuses.
+    #[test]
+    fn wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store() {
+        use gpurify_units::MAX_ABS_DBU;
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+
+        let base = gds::read(&nested_mirror_library(None), &deck, UnknownLayers::Reject)
+            .expect("the unwrapped library is well formed");
+
+        // ---- anti-vacuity. Every clause is quantified over rows, layers and
+        // labels, so a reader producing none of them satisfies all of them.
+        assert_eq!(
+            base.store.poly_count(),
+            5,
+            "the base fixture is one ring in TOP plus two rings under each of \
+             the two LEAF placements"
+        );
+        for layer in 0..3u16 {
+            assert!(
+                !base.store.polys_on_layer(LayerId(layer)).is_empty(),
+                "layer {layer} is empty, so clause (a) has nothing to compare \
+                 on it"
+            );
+        }
+        assert_eq!(
+            base.provenance.placed_labels().len(),
+            2,
+            "one TEXT in LEAF and two placements of LEAF, so clause (c) needs \
+             two points to move"
+        );
+        let base_paths: Vec<Vec<String>> = (0..5).map(|row| path_text(&base, row)).collect();
+        assert!(
+            base_paths.iter().any(Vec::is_empty)
+                && base_paths.iter().any(|p| p.len() == 2)
+                && base_paths.iter().collect::<std::collections::BTreeSet<_>>().len() == 3,
+            "clause (d) is vacuous unless the base already partitions its rows \
+             across a root path and a two-deep one: {base_paths:?}"
+        );
+
+        // Both rings on layer 0 are the same drawn triangle; they differ only
+        // because one arrived through the mirror inside MID composed with TOP's
+        // quarter turn. If they were congruent by translation the fixture would
+        // no longer exercise the parity path the law's derivation rests on.
+        let relative = |(xs, ys): &(Vec<i64>, Vec<i64>)| -> Vec<(i64, i64)> {
+            xs.iter().zip(ys).map(|(x, y)| (x - xs[0], y - ys[0])).collect()
+        };
+        assert_ne!(
+            relative(&verts(&base.store, 0)),
+            relative(&verts(&base.store, 1)),
+            "the two LEAF placements came out congruent by translation, so the \
+             base library no longer contains a mirror and the depth half of \
+             this law is untested"
+        );
+
+        // ---- the transforms. Every one is representable on this fixture, so
+        // every one is asserted to be accepted.
+        let warps = [
+            Warp { mag: 1, reflect: false, quarters: 0, dx: 0, dy: 0 },
+            Warp { mag: 1, reflect: false, quarters: 0, dx: -7_000, dy: 3_000 },
+            Warp { mag: 1, reflect: true, quarters: 0, dx: 0, dy: 0 },
+            Warp { mag: 1, reflect: false, quarters: 1, dx: 0, dy: 0 },
+            Warp { mag: 1, reflect: true, quarters: 3, dx: 1_234, dy: -5_678 },
+            Warp { mag: 3, reflect: true, quarters: 1, dx: -1_000, dy: 2_000 },
+            Warp { mag: 3, reflect: false, quarters: 2, dx: 500, dy: -500 },
+        ];
+        assert!(
+            warps.iter().any(|w| w.reflect)
+                && warps.iter().any(|w| !w.reflect)
+                && warps.iter().any(|w| w.quarters != 0)
+                && warps.iter().any(|w| w.mag > 1),
+            "the table has to reach both halves of clause (b), a rotation and a \
+             magnification, or it tests translation only"
+        );
+
+        for (index, w) in warps.into_iter().enumerate() {
+            let what = format!(
+                "W#{index} (mag {}, reflect {}, q {}, d ({}, {}))",
+                w.mag, w.reflect, w.quarters, w.dx, w.dy
+            );
+            let wrapped = gds::read(
+                &nested_mirror_library(Some(w)),
+                &deck,
+                UnknownLayers::Reject,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{what}: every coordinate it produces is inside \
+                     ±MAX_ABS_DBU, so refusing it is a defect, not the \
+                     out-of-range escape: {e}"
+                )
+            });
+
+            // (a)
+            assert_eq!(
+                wrapped.store.poly_count(),
+                base.store.poly_count(),
+                "{what}: a rigid motion created or destroyed a row"
+            );
+            for layer in 0..3u16 {
+                assert_eq!(
+                    wrapped.store.polys_on_layer(LayerId(layer)),
+                    base.store.polys_on_layer(LayerId(layer)),
+                    "{what}: layer {layer} holds a different row range"
+                );
+            }
+
+            for row in 0..5u32 {
+                assert_eq!(
+                    wrapped.store.poly_layer(PolyId(row)),
+                    base.store.poly_layer(PolyId(row)),
+                    "{what}: row {row} moved to another layer"
+                );
+
+                // (b)
+                let (bxs, bys) = verts(&base.store, row);
+                let n = bxs.len();
+                let order: Vec<usize> = if w.reflect {
+                    std::iter::once(0).chain((1..n).rev()).collect()
+                } else {
+                    (0..n).collect()
+                };
+                let want: (Vec<i64>, Vec<i64>) =
+                    order.iter().map(|&j| w.apply(bxs[j], bys[j])).unzip();
+                assert_eq!(
+                    verts(&wrapped.store, row),
+                    want,
+                    "{what}: row {row} is not the base row through W; a \
+                     reflecting W reverses [1..] and fixes vertex 0, and \
+                     nothing else may move"
+                );
+            }
+
+            // (c)
+            let (before, after) = (
+                base.provenance.placed_labels(),
+                wrapped.provenance.placed_labels(),
+            );
+            assert_eq!(
+                after.len(),
+                before.len(),
+                "{what}: the label count changed"
+            );
+            for (row, (b, a)) in before.iter().zip(after).enumerate() {
+                let (x, y) = w.apply(b.at.x.raw(), b.at.y.raw());
+                assert_eq!(
+                    (a.at.x.raw(), a.at.y.raw()),
+                    (x, y),
+                    "{what}: label {row} did not take the same transform its \
+                     geometry took"
+                );
+                assert_eq!(a.layer, b.layer, "{what}: label {row} changed layer");
+                assert_eq!(
+                    wrapped.strings.resolve(a.name),
+                    base.strings.resolve(b.name),
+                    "{what}: label {row} changed name"
+                );
+            }
+
+            // (d)
+            for row in 0..5u32 {
+                let mut want = vec!["TOP".to_owned()];
+                want.extend_from_slice(&base_paths[row as usize]);
+                assert_eq!(
+                    path_text(&wrapped, row),
+                    want,
+                    "{what}: row {row}'s path is not the base path with exactly \
+                     one leading component"
+                );
+            }
+        }
+
+        // ---- and the escape is real, not a blanket. TOP draws a ring at
+        // x = 2·10⁶, so a magnification of 10⁶ lands it at 2·10¹², past
+        // MAX_ABS_DBU = 2⁴⁰ ≈ 1.0995·10¹². `CoordinateOutOfRange` specifically:
+        // any other error would mean the reader refused for the wrong reason.
+        let overflow = Warp { mag: 1_000_000, reflect: false, quarters: 0, dx: 0, dy: 0 };
+        match gds::read(
+            &nested_mirror_library(Some(overflow)),
+            &deck,
+            UnknownLayers::Reject,
+        ) {
+            Err(LayoutError::CoordinateOutOfRange(value)) => assert!(
+                value.unsigned_abs() > MAX_ABS_DBU.unsigned_abs(),
+                "the reported coordinate {value} is inside the domain it was \
+                 refused for"
+            ),
+            other => panic!(
+                "a magnification that leaves the representable domain must be \
+                 refused as CoordinateOutOfRange, not as {other:?}"
+            ),
         }
     }
 }

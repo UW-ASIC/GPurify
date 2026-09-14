@@ -23,7 +23,8 @@
 use super::{COLUMNS_DIVERGED, mid, ring_segs};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::ops::{winding_of, Point, Winding};
-use gpurify_core::view::validate_layer_into;
+use gpurify_core::boolean::union_into;
+use gpurify_core::view::{validate_layer_into, ValidatedLayer};
 use gpurify_core::{GeometryStore, LayerId, PolyId, PolygonRef, RingRef};
 use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
@@ -725,6 +726,34 @@ struct Facing {
 ///
 /// **Transform, and a kernel**: each polygon's verdict is a function of its own
 /// coordinates and the row's uniforms, so any polygon order is legal.
+///
+/// # A notch is measured on the merged figure; a width is not
+///
+/// A notch is a gap *outside* the material between two edges of one conductor,
+/// and which conductor a polygon belongs to is a property of the layer rather
+/// than of the polygon. Three touching rectangles are one U with one notch, and
+/// each rectangle alone is convex and has none. So the notch scan runs over the
+/// layer's touching outers merged — [`union_into`] against an empty layer, which
+/// is the self-union — instead of over the store rows.
+///
+/// Without that merge the U drawn as one polygon reported and the same U drawn
+/// as three touching rectangles did not, and `check_min_spacing` did not report
+/// it either: the three rows are one merged figure and a wire is not too close
+/// to itself. A real 80 nm defect passed both rules, and which one it passed
+/// depended on nothing but how the layout happened to be fractured. That is the
+/// `notch_no_outer_merge` known defect.
+///
+/// A width is a gap *inside* material and stays on the store rows as drawn.
+/// Merging would be defensible there too — two touching 50-unit rectangles are a
+/// 100-unit plate, and measuring them apart reports two false 50-unit widths —
+/// but that direction is fail-*closed*, and it is left alone deliberately rather
+/// than changed with nothing to measure the change against.
+///
+/// `examined` stays the input polygon count for both senses, so the number keeps
+/// meaning "shapes this rule looked at" instead of jumping between store rows
+/// and merged figures.
+///
+/// [`union_into`]: gpurify_core::boolean::union_into
 fn check_facing(
     design: Design<'_>,
     rule: &[StrId],
@@ -739,8 +768,12 @@ fn check_facing(
     debug_assert_eq!(rule.len(), limit.len(), "{COLUMNS_DIVERGED}");
 
     // Hoisted above both loops: the sweep's three columns grow to the largest
-    // polygon this rule set ever sees and are refilled, never reallocated.
+    // polygon this rule set ever sees and are refilled, never reallocated. The
+    // merge buffers are hoisted for the same reason, and are untouched by a
+    // width rule — `ValidatedLayer::default()` allocates nothing.
     let mut sweep = FacingScratch::default();
+    let mut merged = ValidatedLayer::default();
+    let nothing = ValidatedLayer::default();
 
     for row in 0..rule.len() {
         let (rule_id, layer_id, limit) = (rule[row], layer[row], limit[row]);
@@ -758,12 +791,34 @@ fn check_facing(
             continue;
         }
 
+        // `examined` is the input count either way — see this function's doc
+        // comment — so it is read before the merge can change how many polygons
+        // there are.
         let polys = u32::try_from(scratch.layer_a.len()).expect("a layer indexes polygons with a u32");
-        let mut rows = OuterRows::new(design.store, layer_id);
 
-        for idx in 0..polys {
-            let poly = scratch.layer_a.get(design.store, idx);
-            let shape = rows.next().expect("one store row per validated polygon");
+        // The merge, for the notch sense only. `union_into` refuses
+        // non-rectilinear input, and refusing the row is the fail-closed answer:
+        // the facing scan below already assumes rectilinear geometry — see
+        // `edge_of`'s assert — so a layer it cannot merge is a layer it cannot
+        // measure either, and it had been measuring it anyway.
+        if !sense.material_between && union_into(&scratch.layer_a, &nothing, &mut merged).is_err() {
+            record_run(runs, out, before, rule_id, Outcome::Refused, 0);
+            continue;
+        }
+        let figures = if sense.material_between {
+            &scratch.layer_a
+        } else {
+            &merged
+        };
+        let count = u32::try_from(figures.len()).expect("a layer indexes polygons with a u32");
+
+        for idx in 0..count {
+            let poly = figures.get(design.store, idx);
+            // Provenance, not the store row order: a merged figure is not a row
+            // of any layer, so `OuterRows` cannot name it. For an unmerged
+            // width scan the two agree — a validated polygon's provenance is its
+            // own `PolyId`.
+            let shape = poly.provenance();
             // A convex shape has no notch, and that is not a violation of
             // anything. A width is always present, which is what the assert
             // inside `narrowest_width_at` states.
@@ -800,12 +855,13 @@ fn check_facing(
         }
 
         debug_assert!(
-            rows.next().is_none(),
-            "the layer holds more outer boundaries than it validated polygons"
+            count <= polys,
+            "a union of a layer with nothing cannot produce more figures than \
+             the layer has polygons, {count} against {polys}"
         );
         debug_assert!(
-            u64::try_from(out.len() - before).is_ok_and(|pushed| pushed <= u64::from(polys)),
-            "one violation per offending polygon, and there are only so many polygons"
+            u64::try_from(out.len() - before).is_ok_and(|pushed| pushed <= u64::from(count)),
+            "one violation per offending figure, and there are only so many figures"
         );
         record_run(runs, out, before, rule_id, Outcome::Ran, u64::from(polys));
     }

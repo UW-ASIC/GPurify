@@ -227,6 +227,23 @@ impl<'a> PolygonRef<'a> {
         self.layer.poly_bbox[self.idx as usize]
     }
 
+    /// The store row to blame a finding on.
+    ///
+    /// Provenance, not identity — the field's own documentation. For a polygon
+    /// validated straight off a layer this *is* its [`PolyId`]; for one a
+    /// boolean produced it is the lowest [`PolyId`] among the inputs that
+    /// contributed an edge to the outer ring, which is deterministic.
+    ///
+    /// It exists because a rule that works on merged geometry still has to name
+    /// a shape a human can find in the layout. `drc::rules::width` merges a
+    /// layer's touching outers before measuring a notch — a notch across a
+    /// fractured figure belongs to no single store row — and reports the
+    /// violation against this.
+    pub fn provenance(self) -> PolyId {
+        let ring = self.layer.poly_ring_start[self.idx as usize] as usize;
+        self.layer.ring_poly[ring]
+    }
+
     /// Signed area of the outer boundary minus the holes.
     ///
     /// `DbuArea` and exact: this feeds `min_area` and density, where a rounded

@@ -1,0 +1,67 @@
+// P2P Laplace: one thread per target panel, a strict left fold over sources.
+//
+// The device half of `matvec::CpuMatVec::apply_observed`, and the only kernel
+// `docs/GPU.md` found GPU-suitable — embarrassingly parallel, one thread per
+// target, high flop-per-byte once the source count is large.
+//
+//   P_ij = 2 k_i k_j / (k_i + k_j) / sqrt(|c_i - c_j|^2 + rho_i rho_j)
+//   y_i  = sum_j P_ij x_j
+//
+// The `j` fold is sequential and ascending, matching the host. That is a
+// requirement, not a style: the matrix is byte-gated by
+// `a_field_solve_is_byte_identical_across_runs`, so the reduction order has to
+// be fixed. An atomic accumulation would not qualify. It still does not agree
+// with the host bit-for-bit, because this is `f32` and that is `f64` — which is
+// why `docs/GPU.md` contract item 5 asks for a tolerance and why `Backend`
+// exists to attribute the difference.
+//
+// Four storage buffers, not seven. Vulkan 1.0 guarantees only
+// `maxPerStageDescriptorStorageBuffers = 4`, so the five panel columns are
+// packed into one `vec4` (centre, radius) plus one scalar column. That is also
+// the layout `Collocation`'s own doc argues for: the kernel reads every field
+// of a panel together.
+//
+// Regenerate with:
+//   nix develop -c glslc -O -fshader-stage=compute
+//       crates/pex/shaders/p2p_laplace.comp
+//       -o crates/pex/shaders/p2p_laplace.spv
+
+#version 450
+
+// 64 is one warp on Ada and two on GCN, and is under the 128 invocations
+// Vulkan 1.0 guarantees. `Device::find` re-checks it against the real limits
+// rather than assuming.
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer Panels { vec4 posr[]; };
+layout(set = 0, binding = 1) readonly buffer Coeffs { float coef[]; };
+layout(set = 0, binding = 2) readonly buffer Charge { float charge[]; };
+layout(set = 0, binding = 3) writeonly buffer Potential { float potential[]; };
+
+layout(push_constant) uniform Push { uint n; } push;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    // The tail workgroup's guard. Uniform in every group but the last, so it
+    // costs one predicated exit rather than divergence.
+    if (i >= push.n) { return; }
+
+    vec4 me = posr[i];
+    float ki = coef[i];
+
+    float acc = 0.0;
+    for (uint j = 0u; j < push.n; ++j) {
+        vec4 it = posr[j];
+        vec3 d = me.xyz - it.xyz;
+        // The `rho_i rho_j` softening is what removes the `i == j` case, so the
+        // diagonal falls out of the same expression as every other entry and
+        // the body carries no branch.
+        float r2 = dot(d, d) + me.w * it.w;
+        float kj = coef[j];
+        acc += 2.0 * ki * kj * charge[j] / ((ki + kj) * sqrt(r2));
+    }
+
+    // Overwritten, never accumulated, as on the host: `y`'s prior contents are
+    // not read, which is what lets the caller keep one buffer per solve.
+    potential[i] = acc;
+}

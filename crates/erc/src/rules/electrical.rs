@@ -23,9 +23,11 @@
 //! [`NoDesignIntent`]: gpurify_report::SkipReason::NoDesignIntent
 
 use crate::facts::IntentMap;
-use crate::power::{effective_resistance_into, EdgeKind, NetNetworks, PowerGrid, Solved};
+use crate::power::{
+    discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, PowerGrid, Solved,
+};
 use crate::ruleset::RuleHead;
-use crate::{record_run, skip_rows, Design, Scratch};
+use crate::{record_run, refuse_rows, skip_rows, Design, Scratch};
 use gpurify_core::LayerId;
 use gpurify_ingest::intent::NetLimits;
 use gpurify_ingest::StrId;
@@ -312,8 +314,6 @@ pub fn check_ir_drop(
     let rows = table.head.rule.len();
     debug_assert_eq!(rows, table.head.severity.len(), "RuleHead columns diverged");
 
-    // The gate is a property of the run, not of a rule row, so it is decided
-    // once above the loop and every row reads the same answer.
     // The gate is a property of the run, not of a rule row, so it is spent once
     // above the loop. Every row still records a run — a silent early return is
     // the empty clean result this crate exists to prevent.
@@ -325,6 +325,24 @@ pub fn check_ir_drop(
         solved.solution.is_consistent_with(solved.grid),
         "the solution's columns do not match the grid it claims to have solved"
     );
+    // The second gate, and it is a refusal rather than a skip: a stated budget
+    // that never reached the solve leaves every node at its pad voltage, so
+    // every drop is exactly zero and no limit can be exceeded. See
+    // `discarded_budget` for why no current is computable instead.
+    //
+    // Granularity: a discarded budget is per *net* and this refuses the whole
+    // row, which is a deliberate over-refusal. `Outcome` carries no payload and
+    // has no partial verdict, so the alternative is `Ran` over the nets whose
+    // budget did land — and that row is indistinguishable from a complete check
+    // while silently dropping the affected rails, which is the defect this gate
+    // closes rather than a fix for it. The cost is real and worth stating: one
+    // un-modellable rail suppresses this rule's genuine findings on every other
+    // rail in the design. Refusing is recoverable — the reader is told to state
+    // the load or extract it — and a false clean is not.
+    if discarded_budget(solved.grid, intent) {
+        refuse_rows(&table.head, out, runs);
+        return;
+    }
 
     // The dense `NetId`-keyed limit column, the same shape `check_branches`
     // builds for its layers, in place of one `IntentMap::limits_of` binary
@@ -699,6 +717,15 @@ pub fn check_em_current_density(
         solved.solution.is_consistent_with(solved.grid),
         "the solution's columns do not match the grid it claims to have solved"
     );
+    // The worst of the three to leave running: `blech` is empty here, so
+    // `immortal` is always false and `examined` counts *every* edge on a
+    // limited layer. A zero-current grid therefore reports `Ran` over the full
+    // in-scope population with no findings, which is exactly what a genuinely
+    // checked clean design reports. Same granularity trade as `check_ir_drop`.
+    if discarded_budget(solved.grid, intent) {
+        refuse_rows(&table.head, out, runs);
+        return;
+    }
 
     for row in 0..rows {
         let before = out.len();
@@ -873,6 +900,15 @@ pub fn check_electromigration(
         solved.solution.is_consistent_with(solved.grid),
         "the solution's columns do not match the grid it claims to have solved"
     );
+    // Refused for the same reason an unusable Arrhenius parameter is refused
+    // below, one input earlier: a zero branch current makes the Blech product
+    // `|I|·(L/W)` zero, every segment immortal and `examined` zero, so the row
+    // reads `Ran` having judged nothing. Same granularity trade as
+    // `check_ir_drop`.
+    if discarded_budget(solved.grid, intent) {
+        refuse_rows(&table.head, out, runs);
+        return;
+    }
 
     for row in 0..rows {
         let before = out.len();

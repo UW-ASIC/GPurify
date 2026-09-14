@@ -4,7 +4,7 @@
 //! the point of the seam: every decision about whether an answer is good enough
 //! is made here, in double precision, once.
 
-use super::matvec::MatVec;
+use super::matvec::{Backend, MatVec};
 
 /// How to solve.
 #[derive(Debug, Clone, Copy)]
@@ -371,48 +371,205 @@ pub struct Converged {
 /// exact right-hand side. Iterating that recovers `f64` accuracy at close to
 /// `f32` speed.
 ///
-/// Used unconditionally, including with the CPU adapter, where it converges in
-/// one outer step and costs one extra residual evaluation. Having one code path
-/// rather than two is worth that: two paths means the accuracy argument has to
-/// be made twice.
-pub fn refine<M: MatVec>(
-    operator: &M,
+/// # Two operators, and why one was never enough
+///
+/// `accurate` forms the residual; `fast` solves the correction equation. They
+/// may be the same value — `refine(&cpu, &cpu, ..)` is the host path and costs
+/// one extra residual evaluation over plain GMRES.
+///
+/// This signature used to take one operator and the body was one call to
+/// [`gmres`], on the argument that restarted GMRES *is* the refinement loop:
+/// every cycle forms `b − A x` on the host in `f64` and builds the next Krylov
+/// basis from it, which is the refinement iteration term for term. That argument
+/// is correct and it is not sufficient, and the comment that carried it said so:
+/// "Refinement does something restarting cannot only when the residual is
+/// computed *more accurately* than the correction, and both go through
+/// `operator`."
+///
+/// Both did. `residual` calls `operator.apply`, so under a `GpuF32` adapter the
+/// `A x` inside the residual is itself `f32` and the bound carries that
+/// adapter's own error however many cycles run. **Measured**: with the device
+/// live, a two-conductor solve stalled at a relative residual of `7.87e-7`
+/// against a `1e-10` tolerance and returned [`SolveError::NotConverged`] after
+/// 400 iterations. `7.87e-7` is `f32` epsilon with the fold's `√n` on it — not a
+/// hard problem, a precision floor.
+///
+/// That was fail-*closed*, which is why it was a refusal and not a wrong
+/// capacitance. It also made the GPU path useless: every field solve above the
+/// device's crossover refused. `docs/GPU.md` specifies the fix in as many words
+/// — "the GMRES matvec runs on the GPU in `f32`; the residual and the correction
+/// are computed on the host in `f64`" — so the defect was this signature, and it
+/// is the one filed under "pex quasistatic/solve.rs".
+///
+/// ## The loop
+///
+/// Classic mixed-precision iterative refinement:
+///
+/// ```text
+/// r ← b − A_accurate x                     (f64)
+/// while ‖r‖/‖b‖ > tolerance:
+///     solve A_fast d = r    loosely        (f32, the expensive part)
+///     x ← x + d
+///     r ← b − A_accurate x                 (f64)
+/// ```
+///
+/// The correction equation is solved to a *loose* tolerance, because a
+/// correction accurate to more digits than `fast` carries is digits that do not
+/// exist. `INNER_TOLERANCE` is that looseness, and the outer loop is what
+/// recovers the accuracy: each pass multiplies the error by roughly the inner
+/// tolerance, so three or four passes reach `1e-10` from `1e-3`.
+///
+/// The accurate operator costs one matvec per outer pass. At 8192 panels that is
+/// 183 ms against the device's 8.3 ms, so three outer passes plus thirty inner
+/// iterations each is about 1.3 s where a pure `f64` solve is 18 s — which is
+/// the whole point of the algorithm and the reason the measurement in
+/// `gpu::MEASURED_CROSSOVER` is worth anything.
+///
+/// The residual reported is always `accurate`'s, so [`Converged::residual`] is
+/// an `f64` bound whichever adapter did the work. That is contract item 4.
+pub fn refine<A: MatVec, F: MatVec>(
+    accurate: &A,
+    fast: &F,
     b: &[f64],
     options: Options,
     x: &mut [f64],
     workspace: &mut Workspace,
 ) -> Result<Converged, SolveError> {
-    // Restarted GMRES *is* the refinement loop, so `refine` is one call to it.
-    // Every cycle forms `b − A x` on the host in `f64` from the exact
-    // right-hand side, builds the next Krylov basis from that residual, solves
-    // the correction equation with the operator, and adds the correction to
-    // `x` — the refinement iteration, term for term. The explicit `residual()`
-    // at the top of each cycle is what makes the identity exact rather than
-    // approximate: textbook restarted GMRES carries the recurrence estimate
-    // across a restart, this one recomputes. A second outer loop would
-    // recompute the same residual and hand it to the same inner solver.
+    let n = b.len();
+    debug_assert_eq!(accurate.dim(), n, "the residual operator is `b`'s length");
+    debug_assert_eq!(fast.dim(), n, "both operators are the same problem");
+    debug_assert_eq!(x.len(), n, "`x` is the operator's dimension");
+
+    // The whole-loop residual buffer, and the correction. Two `Vec`s per solve,
+    // not per pass.
+    let mut scratch = Vec::new();
+    let mut correction = vec![0.0_f64; n];
+
+    // How hard to press the correction equation, decided by what `fast` is
+    // *declared* to carry rather than by a constant. `Backend` is that
+    // declaration and this is what it is for.
     //
-    // Not a shortcut with an upgrade path — a fact about the seam. Refinement
-    // does something restarting cannot only when the residual is computed
-    // *more accurately* than the correction, and both go through `operator`.
-    // `MatVec::apply` has one precision, so an outer loop cannot ask for a
-    // better `A x` than the inner solve already used: under a `GpuF32` adapter
-    // the residual carries that adapter's ~1e-7 error however many outer steps
-    // run, and Wilkinson's extended-precision residual is unreachable for the
-    // same reason. Genuine mixed precision is *two* operators at this seam, an
-    // accurate one for the residual and a fast one for the correction — a
-    // signature, not a body. `docs/SIGNATURE_DEFECTS.md`, "pex
-    // quasistatic/solve.rs".
+    // Both directions are wrong if this is a constant. Asking an `f32` operator
+    // for `1e-10` asks for digits it does not have, and the inner solve spends
+    // the whole budget not finding them — which is the `7.87e-7` stall this
+    // function's doc comment records. Asking an `f64` operator for `1e-3` is the
+    // opposite waste: the host path then takes several outer passes, and an
+    // outer pass is an `f64` matvec, the expensive thing the arrangement exists
+    // to avoid. Measured: it turned a host solve that converged into
+    // `NotConverged { residual: 8.39e-10 }` against a `1e-10` tolerance, purely
+    // by spending the iteration budget on passes it did not need.
     //
-    // The one thing an outer loop was previously said to buy, a looser
-    // tolerance for the correction equation, is `options.restart` under another
-    // name: for a Krylov inner solver, solving more loosely is taking fewer
-    // Arnoldi steps, and the cycle already exits early on the same tolerance.
-    // A separate inner tolerance earns its keep when the inner solve is a
-    // factorisation whose accuracy is fixed by its precision rather than by an
-    // iteration count. There is none here.
-    gmres(operator, b, options, x, workspace)
+    // So the host path asks for the full tolerance and converges in one outer
+    // pass, which is exactly the plain `gmres` this function used to be.
+    let inner_tolerance = match fast.backend() {
+        Backend::Cpu => options.tolerance,
+        Backend::GpuF32 => INNER_TOLERANCE,
+    };
+
+    let mut achieved = residual(accurate, b, x, &mut scratch);
+    let mut iterations = 0_u32;
+    let mut restarts = 0_u32;
+
+    // `<=` on the budget rather than a fixed pass count: the outer loop is
+    // bounded by the same `max_iterations` the inner solver is, so a caller that
+    // asked for a small budget gets it honoured rather than multiplied.
+    while achieved > options.tolerance && iterations < options.max_iterations {
+        // `scratch` is `b − A x` — `residual` leaves it there, which is the
+        // whole reason it is caller-owned — so the correction equation's
+        // right-hand side is already formed and needs no second matvec.
+        let rhs = std::mem::take(&mut scratch);
+        correction.clear();
+        correction.resize(n, 0.0);
+
+        let inner = Options {
+            tolerance: inner_tolerance,
+            restart: options.restart,
+            // **One Krylov cycle, never a restart.** A restart *inside* the
+            // correction equation recomputes `rhs − A_fast d` and carries on
+            // from it — which is what an outer refinement pass does, except
+            // with the inaccurate operator instead of the accurate one. The
+            // outer pass is strictly better at the same price, so an inner
+            // restart is work spent chasing a residual that is already at its
+            // own floor.
+            //
+            // Measured, with the device live and a `1e-3` inner tolerance:
+            // pass 1 reached it in 21 steps, passes 2 and 3 took 179 and 196 —
+            // four inner restarts each, grinding against the `f32` floor for
+            // the same three decades pass 1 got in twenty steps. Capped, each
+            // pass stops at the cycle boundary and hands whatever it has to an
+            // `f64` residual.
+            max_iterations: options.restart.min(options.max_iterations - iterations),
+        };
+        // A correction that did not converge is still a correction. It is the
+        // *outer* residual that decides, and it is recomputed below in `f64`, so
+        // a loose inner solve costs a pass rather than an answer. Only a
+        // breakdown — a genuinely singular system — is fatal, and it is
+        // propagated rather than retried.
+        let step = match gmres(fast, &rhs, inner, &mut correction, workspace) {
+            Ok(step) => step.iterations,
+            Err(SolveError::NotConverged { iterations, .. }) => iterations,
+            Err(fatal) => return Err(fatal),
+        };
+        iterations = iterations.saturating_add(step.max(1));
+        restarts = restarts.saturating_add(1);
+
+        for (value, &delta) in x.iter_mut().zip(&correction) {
+            *value += delta;
+        }
+
+        scratch = rhs;
+        let next = residual(accurate, b, x, &mut scratch);
+        // One line of diagnostics, behind an environment variable and off by
+        // default. It is here because the difference between "this problem is
+        // hard", "the inner tolerance is wrong" and "the operator is less
+        // accurate than it claims" is invisible in the returned error and
+        // obvious in the per-pass trace — which is how the `7.87e-7` stall and
+        // the inner-restart waste were both found. `var_os`, not `var`: the
+        // value is never read, only its presence.
+        if std::env::var_os("GPURIFY_REFINE_TRACE").is_some() {
+            eprintln!(
+                "refine pass {restarts}: {achieved:e} -> {next:e}, \
+                 inner steps {step}, budget {iterations}/{}",
+                options.max_iterations
+            );
+        }
+        // Fail closed on a refinement that has stopped refining. Without this a
+        // stalled loop spends the whole budget re-deriving the same number,
+        // which reads as "hard problem" when it is "this is the floor". One
+        // exact compare, not a tolerance: the loop exits on `>` above, so any
+        // real progress at all keeps it going.
+        if next >= achieved {
+            achieved = next;
+            break;
+        }
+        achieved = next;
+    }
+
+    if achieved > options.tolerance {
+        return Err(SolveError::NotConverged {
+            residual: achieved,
+            iterations,
+        });
+    }
+    Ok(Converged {
+        residual: achieved,
+        iterations,
+        restarts,
+    })
 }
+
+/// How loosely the correction equation is solved when `fast` is an `f32`
+/// adapter.
+///
+/// Three decades, which is roughly what an `f32` operator can be trusted for
+/// after the fold's `√n`. Each outer pass multiplies the error by about this, so
+/// four passes reach `1e-12` from `1e-0` — comfortably past the `1e-10` default
+/// tolerance, and cheap because the passes are the `f32` ones.
+///
+/// Looser would cost more outer passes, and an outer pass is an `f64` matvec —
+/// the expensive thing this whole arrangement exists to avoid. Tighter would ask
+/// the fast operator for digits it does not have and simply not converge.
+const INNER_TOLERANCE: f64 = 1e-3;
 
 /// True relative residual `‖b − Ax‖ / ‖b‖`.
 ///

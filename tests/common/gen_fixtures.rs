@@ -1,13 +1,13 @@
-//! Split the 160 per-case GDSII fixtures out of one source file, on demand.
+//! Split the 167 per-case GDSII fixtures out of one source file, on demand.
 //!
 //! # What goes in, what comes out
 //!
-//! In: `tests/fixtures/_source/conformance.gds` — 133 cells in one library —
+//! In: `tests/fixtures/_source/conformance.gds` — 134 cells in one library —
 //! and `tests/fixtures/manifest.json`, which says which cell each case id is
 //! drawn on. Out: `tests/fixtures/<domain>/<case id>.gds`, one small library per
 //! case holding that cell and everything it places.
 //!
-//! Both inputs stay in the repository; the 160 outputs do not, and are
+//! Both inputs stay in the repository; the 167 outputs do not, and are
 //! `.gitignore`d. That is the whole reason this file exists: the per-case files
 //! were byte-for-byte derivable from the source and were being carried anyway.
 //!
@@ -20,7 +20,7 @@
 //!
 //! # The reconstruction rule, in full
 //!
-//! Verified byte-identical on all 160 files against the versions that were
+//! Verified byte-identical on the first 160 files against the versions that were
 //! tracked before this module existed, and re-verified by
 //! [`the_generated_corpus_matches_what_the_generator_produces`] on every run.
 //!
@@ -75,7 +75,11 @@ const DOMAINS: [&str; 4] = ["drc", "erc", "lvs", "pex"];
 /// Asserted rather than trusted: a manifest that lost a domain would otherwise
 /// generate a smaller corpus, and the corpus tests would report "cell did not
 /// load" for cases that simply were not written.
-const CASE_COUNT: usize = 160;
+///
+/// One file per *case*, not per cell: several cases share a cell and each still
+/// gets its own `<case id>.gds`, so this moves for a new case that reuses an
+/// existing cell exactly as it does for one that adds geometry.
+const CASE_COUNT: usize = 167;
 
 // ---------------------------------------------------------------------------
 // The manifest, reading only the two fields that are inputs.

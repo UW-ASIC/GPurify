@@ -195,6 +195,20 @@ fn lvs_without_a_reference_netlist_is_skipped_and_never_a_match() {
 /// wrong because the two netlists differ, and `Inconclusive` is wrong because
 /// there is a unique top and one device is not a symmetry refinement can fail
 /// to break.
+///
+/// # The eight rows, and why three of them are skipped
+///
+/// This used to assert `rules_skipped == 0`, on the argument that no DRC or ERC
+/// rule was requested so none could have been skipped. The argument was sound and
+/// the assertion was accidentally true: `lvs::checks`'s six checks had no
+/// production caller, so **LVS filed no run row at all** and the count could only
+/// come from the two domains that were not selected. `run_lvs` calls them now, so
+/// the count is LVS's own — five rows ran and found nothing, and three record
+/// [`SkipReason::NotInDeck`] because `check_device_counts` and `check_parametric`
+/// compare against a limit no signature in that module is handed. Those three are
+/// deliberate tripwires, not a defect here, and a run selecting LVS therefore
+/// cannot report a pass until the deck reaches them — which is fail-closed and
+/// is the answer this project wants.
 #[test]
 fn lvs_with_a_reference_netlist_runs_and_blames_the_device_the_layout_lacks() {
     let loaded = Loaded {
@@ -218,8 +232,28 @@ fn lvs_with_a_reference_netlist_runs_and_blames_the_device_the_layout_lacks() {
          is the check reporting a skip it cannot justify"
     );
     assert_eq!(
-        summary.rules_skipped, 0,
-        "no drc or erc rule was requested, so none can have been skipped: {summary:?}"
+        out.runs.len(),
+        8,
+        "lvs::checks files eight rows between its six checks, and a stage that \
+         filed none is a domain whose empty violation table means nothing: {:?}",
+        out.runs
+    );
+    assert_eq!(
+        summary.rules_skipped, 3,
+        "the two device-count families and the parametric check cannot be \
+         configured from these signatures and record themselves unrun; the other \
+         five ran: {summary:?}"
+    );
+    assert_eq!(
+        summary.rules_clean, 5,
+        "an empty extraction has no floating net, no label conflict, no merged \
+         seed and no malformed device, so all five runnable checks are clean: \
+         {summary:?}"
+    );
+    assert!(
+        !summary.passed(),
+        "three checks did not run, and a rule that did not run must block the \
+         pass whatever the verdict says: {summary:?}"
     );
 
     let verdict = out.lvs.expect("a check that ran must leave its verdict behind");

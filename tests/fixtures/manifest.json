@@ -955,6 +955,48 @@
         "check": "p2p_resistance",
         "expect_violations": 0,
         "id": "ERC_P2P_PASS"
+      },
+      {
+        "cell": "PEX_CC",
+        "check": "density_cmp",
+        "expect_violations": 0,
+        "id": "ERC_DENSITY_CMP_PASS"
+      },
+      {
+        "cell": "DRC_DGRAD",
+        "check": "density_cmp",
+        "expect_violations": 10,
+        "id": "ERC_DENSITY_CMP_FAIL"
+      },
+      {
+        "cell": "LVS_INV",
+        "check": "ir_drop",
+        "expect_violations": 0,
+        "id": "ERC_IR_DROP_GATE"
+      },
+      {
+        "cell": "ERC_HV",
+        "check": "reliability",
+        "expect_violations": 0,
+        "id": "ERC_RELIABILITY"
+      },
+      {
+        "cell": "ERC_HV",
+        "check": "esd_latchup",
+        "expect_violations": 0,
+        "id": "ERC_ESD_LATCHUP"
+      },
+      {
+        "cell": "ERC_EM",
+        "check": "electromigration",
+        "expect_violations": 0,
+        "id": "ERC_EMIG_MET1"
+      },
+      {
+        "cell": "ERC_EM_DEV",
+        "check": "electromigration",
+        "expect_violations": 0,
+        "id": "ERC_EMIG_DEV"
       }
     ]
   },

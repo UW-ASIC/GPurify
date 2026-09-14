@@ -295,6 +295,57 @@ fn the_corpus_is_reproducible_from_its_seed() {
     }
 }
 
+/// `params.json` with its `connectivity.labels` pairing removed, written to a
+/// scratch file, and the path to it.
+///
+/// # Why the benchmark cannot claim the labels
+///
+/// Every test below loads `_source/conformance.gds` **whole**, and that library
+/// is 134 cells all drawn starting at the origin — nearly every one of its 8911
+/// cell pairs overlaps. `intra_layer_touch` is true, so flattening them into one
+/// store merges nearly everything: measured, 391 polygons become 19 nets, one of
+/// which holds 259 of the 313 that are on a net at all.
+///
+/// Those numbers moved when `ERC_EM_DEV` was drawn, and the direction is worth
+/// stating: it is the corpus's **first `licon`**, and at (380, 60)-(460, 140) it
+/// lands inside `ERC_EM`'s second li rectangle, so in the merged store it bridges
+/// the giant diff net to the giant li net. One net fewer, and the largest one
+/// larger by 48 polygons. Per-case fixtures see none of it.
+///
+/// The per-case fixtures are unaffected, because each is one cell in its own
+/// file. But in the merged store one net carries a label from every cell that
+/// contributed to it, and two different names on one net is
+/// `PortError::ConflictingLabels` — which stops the load outright. Stripping
+/// the pairing is what keeps the benchmark loading; nothing here reads a net
+/// name.
+///
+/// # This is a workaround, and the thing being worked around is worth knowing
+///
+/// The merge is not new and is not caused by the labels — it is what this
+/// benchmark has always measured. Ten of the ERC rules it times read the
+/// `NetTable`, and they are timed against a net graph no real layout produces;
+/// `check_soft_connection`'s per-net component labelling is the clearest case,
+/// since one 211-polygon net does in a single call what a design spreads over
+/// hundreds of independent small ones. The DRC rules and the geometry-only ERC
+/// rules — `check_missing_tie` among them, which reads `design.store` and
+/// `design.derived` and no net at all — are unaffected.
+fn unlabelled_deck(fixtures: &Path) -> std::path::PathBuf {
+    let source = std::fs::read_to_string(fixtures.join("params.json"))
+        .expect("the fixture deck is readable");
+    let mut deck: serde_json::Value =
+        serde_json::from_str(&source).expect("the fixture deck is JSON");
+    deck["connectivity"]
+        .as_object_mut()
+        .expect("the deck declares connectivity")
+        .remove("labels");
+
+    let dir = std::env::temp_dir().join(format!("gpurify-bench-deck-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch directory is writable");
+    let path = dir.join("params.json");
+    std::fs::write(&path, deck.to_string()).expect("the scratch directory is writable");
+    path
+}
+
 /// The grid the fixture corpus is drawn against: 1 dbu = 1 nm.
 ///
 /// Stated by `tests/fixtures/expectations.json`'s `grid_dbu_per_um`. Loading at
@@ -328,7 +379,7 @@ fn real_layout_keeps_the_store_invariants_and_records_its_cost() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let inputs = Inputs {
         layout: fixtures.join("_source/conformance.gds"),
-        deck: fixtures.join("params.json"),
+        deck: unlabelled_deck(&fixtures),
         grid: Some(Grid::new(FIXTURE_DBU_PER_UM).expect("a thousand dbu per micrometre is a grid")),
         reference: None,
         intent: None,
@@ -546,8 +597,11 @@ fn report_rules(timings: &mut [RuleTiming], floors: [(&str, Duration, Duration);
 #[test]
 fn every_rule_in_the_deck_is_timed_on_its_own() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // The pairing-free copy, for the reason `unlabelled_deck` gives: every load
+    // below is of the whole library, where the cells overlap and one merged net
+    // would carry a name from each of them.
     let deck: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(fixtures.join("params.json")).expect("params.json is tracked"),
+        &std::fs::read_to_string(unlabelled_deck(&fixtures)).expect("the scratch deck is written"),
     )
     .expect("params.json parses");
     let rules = deck["rules"]

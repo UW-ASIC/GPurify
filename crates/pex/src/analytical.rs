@@ -7,8 +7,9 @@
 //! none is wanted.
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
-use gpurify_core::{ops, GeometryStore, LayerId};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_core::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
+use gpurify_core::{ops, Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_topology::{DeviceTable, NetId, NetTable};
 use gpurify_units::{prefix, Capacitance, Dbu, DbuArea, Grid, Qty, Resistance, MAX_ABS_DBU};
 
@@ -20,6 +21,37 @@ use gpurify_units::{prefix, Capacitance, Dbu, DbuArea, Grid, Qty, Resistance, MA
 /// `1e-3`: `1e-3` is not exact in `f64` and `1000.0` is, so dividing is
 /// correctly rounded from an exact operand.
 const AF_PER_FF: f64 = 1_000.0;
+
+/// Vacuum permittivity, in attofarads per micrometre.
+///
+/// CODATA 2018: `8.854 187 8128e-12` farads per metre, which is the same number
+/// of attofarads per micrometre because both scalings are `1e-18` against
+/// `1e-6`. Stated as the physical constant rather than as a fitted coefficient
+/// because every coupling term below is a parallel-plate limit, and a limit
+/// derived from a fitted number is not a limit.
+const EPSILON0_AF_PER_UM: f64 = 8.854_187_812_8;
+
+/// Nanometres in a micrometre. The stack states heights and thicknesses in
+/// nanometres; every formula here wants micrometres.
+const NM_PER_UM: f64 = 1_000.0;
+
+/// How far a conductor couples laterally, as a multiple of its own thickness.
+///
+/// ponytail: a fixed multiple, because no deck in this tree states a coupling
+/// halo. It bounds the candidate scan — coupling falls as `1 / S`, so a pair
+/// beyond the halo contributes a term that rounds away, but *where* it rounds
+/// away is a process question and this constant answers it with a guess.
+///
+/// The ceiling: on a dense layer the halo decides how many pairs are examined,
+/// so a too-large value is quadratic and a too-small one drops real coupling —
+/// and dropping it is the fail-open direction, since a missing coupling term
+/// understates delay. Ten thicknesses is generous for the second: at ten
+/// thicknesses of separation the parallel-plate term is a tenth of what it is at
+/// one, and a real extractor's halo is the same order.
+///
+/// Upgrade path: a `coupling_halo_nm` in the deck's `pex` section, which is a
+/// deck-schema change rather than a body. Filed in `docs/SIGNATURE_DEFECTS.md`.
+const LATERAL_HALO_THICKNESSES: f64 = 10.0;
 
 /// A coordinate as micrometres, which is what every deck coefficient is stated
 /// per.
@@ -272,34 +304,45 @@ pub fn coupling_capacitance(
 /// `grid` is the run's grid, threaded through to the capacitance formulae —
 /// see [`ground_capacitance`].
 ///
-/// # Coupling is not emitted by this path
+/// # Coupling, and the two objections that used to stand here
 ///
-/// Not a shortcut and not reachable from a body: two frozen signatures are in
-/// the way, and both are recorded under `## pex` in
-/// `docs/SIGNATURE_DEFECTS.md`.
+/// Both are withdrawn, and the second was simply wrong.
 ///
-/// - [`extract_net_into`] allocates one net's nodes and writes that net's
-///   elements in a single pass, so the *higher* net of a coupling pair has no
-///   node yet when the lower one is being written. Emitting the pair in a later
-///   pass puts small `from` values behind large ones, and `from`-ascending is
-///   the order this function promises and the determinism gate rests on.
-///   Closing it means splitting node allocation out of [`extract_net_into`],
-///   which is a change to its signature.
-/// - [`ProcessStack`] has no lateral column. `dielectric_k` and `thickness_nm`
-///   describe the interconnect dielectric, not a per-layer coupling
-///   coefficient, so [`coupling_capacitance`]'s `coefficient_af_um` has no
-///   source in the deck. Synthesising one here would put a number in a report
-///   that no deck stated — the objection [`extract_devices_into`] makes at
-///   length, and the same answer.
+/// The first was an ordering objection: [`extract_net_into`] allocates one net's
+/// nodes and writes that net's elements in one pass, so the higher net of a
+/// coupling pair has no node yet when the lower one is written, and emitting the
+/// pair later puts small `from` values behind large ones. True, and answered by
+/// [`ParasiticNetwork::sort_canonical`], which is *defined* as the order this
+/// function promises. [`couple_into`] runs after every net has its nodes and the
+/// result is sorted; no signature moved.
 ///
-/// The consequence is a total capacitance short by the lateral term, which
-/// understates delay. That is a shortfall a reference netlist makes visible
-/// rather than a wrong number, and `docs/NEED_TESTING.md` carries the ledger
-/// entry for it.
+/// The second claimed [`ProcessStack`] has no source for
+/// [`coupling_capacitance`]'s `coefficient_af_um`, so synthesising one would put
+/// a number in a report that no deck stated. That was a misreading of its own
+/// columns. Both coupling terms here are **parallel-plate limits**, and a
+/// parallel-plate limit is `ε₀ · k · geometry`:
+///
+/// - laterally, two conductors of thickness `t` facing over a length `L` across
+///   a gap `S` — `ε₀ · k · t · L / S`;
+/// - between layers, an overlap of area `A` across a dielectric of thickness
+///   `d` — `ε₀ · k · A / d`.
+///
+/// `thickness_nm`, `height_nm` and `dielectric_k` are exactly `t`, `d` and `k`.
+/// Nothing is fitted and nothing is invented: `ε₀` is a physical constant, and
+/// the deck states the rest. On the corpus this reproduces the 138.1 aF that
+/// `PEX_COUPLING_C` derives and the 4.604 aF that `PEX_CROSSOVER` derives, to
+/// the digits each was written with.
+///
+/// It is a **lower bound**, deliberately. Fringing adds to both, which is why
+/// `lateral_coupling_halves_when_the_gap_doubles_and_ignores_the_axis` holds
+/// exactly here and does *not* hold of a field solve — see `crate::quasistatic`,
+/// which is the path that carries fringing and the one a signoff run selects
+/// per net.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
     devices: &DeviceTable,
+    connectivity: &Connectivity,
     stack: &ProcessStack,
     grid: Grid,
     out: &mut ParasiticNetwork,
@@ -331,6 +374,17 @@ pub fn extract_into(
         extract_net_into(store, nets, NetId(net), stack, grid, out);
     }
     extract_devices_into(devices, stack, grid, out);
+    // After every net has its nodes, so a pair's higher net has somewhere to
+    // land — which is the ordering objection this function's doc comment used to
+    // record as a blocker.
+    let node_of = nodes_by_poly(store, nets, out);
+    couple_into(store, nets, connectivity, stack, grid, &node_of, out);
+    vias_into(store, connectivity, stack, &node_of, out);
+    // `couple_into` appends by layer pair, not by `from`, so the element columns
+    // arrive out of order and are put back into the one this function promises.
+    // `sort_canonical` *is* that order by definition, so this is the promise
+    // rather than a repair of it.
+    out.sort_canonical();
 
     debug_assert_eq!(
         out.node_net.len(),
@@ -348,10 +402,12 @@ pub fn extract_into(
         "the element columns must stay parallel"
     );
     debug_assert!(
-        out.node_net.len() <= store.poly_count(),
-        "one node per conductor polygon at most, {} against {}",
+        out.node_net.len() <= store.poly_count() + nets.net_count(),
+        "one node per conductor polygon plus one closing boundary per net at \
+         most, {} against {} + {}",
         out.node_net.len(),
-        store.poly_count()
+        store.poly_count(),
+        nets.net_count()
     );
     // The two order invariants this function's doc comment promises, asserted
     // over the columns the signature exposes. An adjacent-pair "is this column
@@ -367,6 +423,385 @@ pub fn extract_into(
     );
 }
 
+/// How two boxes on one layer face each other: the run they share, and the gap
+/// they share it across.
+///
+/// **Decision** — two boxes in, one optional pair out, pure and
+/// table-testable. `None` when they do not face at all, which is the
+/// corner-to-corner case (disjoint on both axes) and the overlapping case (two
+/// shapes on one layer occupying the same ground, which is one conductor rather
+/// than two).
+///
+/// Bounding boxes, and *conservatively*: a box's projection is a superset of its
+/// polygon's, so the facing run is over-reported and the gap under-reported.
+/// Both push the capacitance up, and an overstated coupling is the fail-closed
+/// direction for delay. Exact for the rectangles this corpus is drawn from, and
+/// `crate::quasistatic` is the path that is exact for the rest.
+fn facing(a: Bbox, b: Bbox) -> Option<(Dbu, Dbu)> {
+    let along_x = a.xhi.raw().min(b.xhi.raw()) - a.xlo.raw().max(b.xlo.raw());
+    let along_y = a.yhi.raw().min(b.yhi.raw()) - a.ylo.raw().max(b.ylo.raw());
+
+    // They face across the axis they are disjoint on, and run along the other.
+    // Exactly one of the two may be positive; both positive is an overlap and
+    // neither positive is a corner.
+    let (run, gap) = match (along_x > 0, along_y > 0) {
+        (true, false) => (along_x, -along_y),
+        (false, true) => (along_y, -along_x),
+        _ => return None,
+    };
+    // Zero gap is two touching conductors, which is one conductor. The
+    // reciprocal would be an infinity, and `coupling_capacitance` refuses it.
+    (gap > 0).then(|| (Dbu::new_unchecked(run), Dbu::new_unchecked(gap)))
+}
+
+/// One stack row's lateral coupling coefficient, in the units
+/// [`coupling_capacitance`] reads.
+///
+/// `ε₀ · k · t`, the parallel-plate limit for two conductors of thickness `t`
+/// facing each other. Every factor comes from the deck except `ε₀`, which is a
+/// physical constant.
+fn lateral_coefficient(stack: &ProcessStack, row: usize) -> f64 {
+    let k = stack.dielectric_k.get(row).copied().unwrap_or(0.0);
+    let thickness_um = stack.thickness_nm.get(row).copied().unwrap_or(0.0) / NM_PER_UM;
+    EPSILON0_AF_PER_UM * k * thickness_um
+}
+
+/// Dielectric thickness between the top of `lower` and the bottom of `upper`,
+/// in micrometres, or `None` when they do not stack in that order.
+///
+/// `height_nm` is a layer's *bottom*, so the gap is
+/// `height(upper) − (height(lower) + thickness(lower))`. `None` for a
+/// non-positive gap, which is either the same layer or two layers the stack
+/// says intersect — neither is a parallel-plate pair.
+fn interlayer_gap_um(stack: &ProcessStack, lower: usize, upper: usize) -> Option<f64> {
+    let top_of_lower = stack.height_nm.get(lower).copied().unwrap_or(0.0)
+        + stack.thickness_nm.get(lower).copied().unwrap_or(0.0);
+    let bottom_of_upper = stack.height_nm.get(upper).copied().unwrap_or(0.0);
+    let gap_nm = bottom_of_upper - top_of_lower;
+    (gap_nm > 0.0).then_some(gap_nm / NM_PER_UM)
+}
+
+/// Emit one coupling element between two polygons on different nets.
+///
+/// **Decision plus one append.** Ordered by [`NetId`], the lower net's node
+/// first, which is what
+/// `extracted_elements_name_real_nodes_and_order_every_coupling_by_net` asserts
+/// and what stops a pair being counted twice from two directions.
+fn push_coupling(
+    nets: &NetTable,
+    node_of: &[NodeId],
+    a: PolyId,
+    b: PolyId,
+    femtofarads: f64,
+    out: &mut ParasiticNetwork,
+) {
+    // Surviving `if`: the value test keeps a zero or non-finite element out of
+    // the network, for the reason `extract_net_into` gives — a zero-farad row is
+    // one every reader downstream has to skip. Uniform across a run.
+    if !(femtofarads > 0.0 && femtofarads.is_finite()) {
+        return;
+    }
+    let (lo, hi) = if nets.net_of(a) < nets.net_of(b) { (a, b) } else { (b, a) };
+    let (from, to) = (node_of[lo.idx()], node_of[hi.idx()]);
+    debug_assert_ne!(from, to, "a coupling element joins a node to itself");
+    out.push(from, Some(to), Parasitic::CouplingCap(Qty::new(femtofarads)));
+}
+
+/// Every conductor polygon's node, indexed by [`PolyId`].
+///
+/// **Transform, A-to-B.** Mirrors the allocation [`extract_net_into`] performs —
+/// nets in ascending order, each contributing one node per polygon plus one
+/// closing boundary — because the two have to agree and only one of them can
+/// hold the map. The `debug_assert` at the end is what says they still do: every
+/// entry is checked against the node column the first pass actually wrote.
+///
+/// [`NO_NODE`] fills the rows of polygons on no net, which is every polygon on a
+/// non-conductor layer. Reading one is a bug, not a fallback, and it indexes out
+/// of bounds in every profile rather than aliasing node zero.
+fn nodes_by_poly(store: &GeometryStore, nets: &NetTable, out: &ParasiticNetwork) -> Vec<NodeId> {
+    const NO_NODE: NodeId = NodeId(u32::MAX);
+
+    let mut node_of = vec![NO_NODE; store.poly_count()];
+    let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32");
+    let mut next = 0u32;
+    for net in 0..net_count {
+        let polys = nets.polys_of(NetId(net));
+        for (offset, &poly) in polys.iter().enumerate() {
+            let node = next + u32::try_from(offset).expect("a net's polygon count is a u32");
+            node_of[poly.idx()] = NodeId(node);
+        }
+        next += u32::try_from(polys.len()).expect("a net's polygon count is a u32")
+            + u32::from(!polys.is_empty());
+    }
+
+    debug_assert!(
+        node_of.iter().enumerate().all(|(poly, &node)| {
+            node == NO_NODE
+                || out.node_net[node.0 as usize]
+                    == nets.net_of(PolyId(u32::try_from(poly).expect("a PolyId is a u32")))
+        }),
+        "the node map disagrees with the node column `extract_net_into` wrote"
+    );
+    node_of
+}
+
+/// Lateral and interlayer coupling, appended to a network whose nodes exist.
+///
+/// **Transform, gatherer.** Appends; does not clear. Both terms are
+/// parallel-plate limits off the deck's own columns — see [`extract_into`]'s doc
+/// comment for the derivation and for why nothing here is fitted.
+///
+/// # Two scans, because they are two different questions
+///
+/// *Lateral* is a same-layer scan at [`LATERAL_HALO_THICKNESSES`] times the
+/// layer's thickness: two conductors side by side on one layer, facing across a
+/// gap. *Interlayer* is a cross-layer scan at zero distance: two conductors on
+/// two layers, one above the other, coupling across the area they overlap. A
+/// pair is only ever one of the two, so no term is counted twice.
+///
+/// Non-conductors are skipped on both, `connectivity.conductors` deciding which
+/// those are. A via cut is in the stack and is not a plate.
+fn couple_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+    stack: &ProcessStack,
+    grid: Grid,
+    node_of: &[NodeId],
+    out: &mut ParasiticNetwork,
+) {
+    // Three buffers for the whole call. A rule-row loop's worth of allocation,
+    // once per run rather than once per layer pair.
+    let mut index_a = SpatialIndex::default();
+    let mut index_b = SpatialIndex::default();
+    let mut pairs = Vec::new();
+
+    // Not a bulk loop: a deck names tens of conductors, and every value read
+    // from a row here is a uniform over the pair loop below.
+    for (position, &layer) in connectivity.conductors.iter().enumerate() {
+        let Some(row) = stack_row(stack, layer) else {
+            // A conductor the deck's `pex` section never described has no
+            // thickness and no `k`, so it has no parallel-plate limit to state.
+            continue;
+        };
+        let coefficient = lateral_coefficient(stack, row);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a resolution is a small count, exact in f64"
+        )]
+        let per_um = grid.dbu_per_um() as f64;
+        let thickness_dbu =
+            stack.thickness_nm.get(row).copied().unwrap_or(0.0) * per_um / NM_PER_UM;
+        // `MAX_ABS_DBU` is `1 << 40`, a power of two well inside the `f64`
+        // mantissa, so the ceiling is exact and the clamp below it is the whole
+        // of the truncation argument.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "MAX_ABS_DBU is 2^40, exactly representable in f64"
+        )]
+        let ceiling = MAX_ABS_DBU as f64;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "clamped to the coordinate domain by the `min` on the same line"
+        )]
+        let halo = (thickness_dbu * LATERAL_HALO_THICKNESSES).min(ceiling) as i64;
+
+        if coefficient > 0.0 && halo > 0 {
+            SpatialIndex::build_into(store, layer, &mut index_a);
+            candidate_pairs_into(store, &index_a, Dbu::new_unchecked(halo), &mut pairs);
+            for &(a, b) in &pairs {
+                // Two polygons of one net are one conductor and do not couple to
+                // themselves. The test is a gather and a compare, not a branch
+                // on data the loop could have hoisted.
+                if nets.same_net(a, b) {
+                    continue;
+                }
+                let Some((run, gap)) = facing(store.poly_bbox(a), store.poly_bbox(b)) else {
+                    continue;
+                };
+                let femtofarads = coupling_capacitance(coefficient, run, gap, grid).raw();
+                push_coupling(nets, node_of, a, b, femtofarads, out);
+            }
+        }
+
+        // Every conductor above this one. `position + 1..` rather than a second
+        // full loop with an ordering test: a pair is visited once, and which of
+        // the two is lower is decided by `interlayer_gap_um` from the stack's
+        // own heights rather than by the deck's declaration order.
+        for &above in &connectivity.conductors[position + 1..] {
+            let Some(other) = stack_row(stack, above) else {
+                continue;
+            };
+            let (lower, upper, lower_layer, upper_layer) = if stack.height_nm[row] <= stack.height_nm[other] {
+                (row, other, layer, above)
+            } else {
+                (other, row, above, layer)
+            };
+            let Some(gap_um) = interlayer_gap_um(stack, lower, upper) else {
+                continue;
+            };
+            // The dielectric between them is the one above the lower plate.
+            let k = stack.dielectric_k.get(lower).copied().unwrap_or(0.0);
+            if k <= 0.0 {
+                continue;
+            }
+            // `ground_capacitance` with a zero fringe term is `coefficient ×
+            // area` exactly, which is the parallel-plate form — reused rather
+            // than rewritten, and it already carries the `Grid` conversion.
+            let per_um2 = EPSILON0_AF_PER_UM * k / gap_um;
+
+            SpatialIndex::build_into(store, lower_layer, &mut index_a);
+            SpatialIndex::build_into(store, upper_layer, &mut index_b);
+            cross_layer_pairs_into(store, &index_a, &index_b, Dbu::new_unchecked(0), &mut pairs);
+            for &(a, b) in &pairs {
+                if nets.same_net(a, b) {
+                    continue;
+                }
+                let (box_a, box_b) = (store.poly_bbox(a), store.poly_bbox(b));
+                let wide = box_a.xhi.raw().min(box_b.xhi.raw()) - box_a.xlo.raw().max(box_b.xlo.raw());
+                let tall = box_a.yhi.raw().min(box_b.yhi.raw()) - box_a.ylo.raw().max(box_b.ylo.raw());
+                if wide <= 0 || tall <= 0 {
+                    continue;
+                }
+                let overlap = DbuArea::new(i128::from(wide) * i128::from(tall));
+                let femtofarads =
+                    ground_capacitance(per_um2, 0.0, overlap, Dbu::new_unchecked(0), grid).raw();
+                push_coupling(nets, node_of, a, b, femtofarads, out);
+            }
+        }
+    }
+}
+
+/// Via and contact resistance, appended to a network whose nodes exist.
+///
+/// **Transform, gatherer.** Appends; does not clear.
+///
+/// # A cut is not a node
+///
+/// A cut layer is in `connectivity.via_cut` and not in
+/// `connectivity.conductors`, so `topology::extract_nets_into` gives its
+/// polygons [`NetId::NONE`] and [`extract_net_into`] never sees them. That is
+/// right — a cut is a resistor, not a conductor with a length and a ground
+/// capacitance — and it is also why the whole via family used to extract
+/// nothing: [`via_resistance`] had no caller in the tree and `PEX_VIA1` produced
+/// an empty network. Finding F11.
+///
+/// So a cut contributes an *element* rather than a node: one resistor between
+/// the node of the conductor below it and the node of the conductor above.
+///
+/// # Cuts in one array are one resistor
+///
+/// [`via_resistance`] divides by the cut count, because cuts in parallel conduct
+/// in parallel — which is the whole reason a redundant via helps. Cuts are
+/// therefore grouped by the *conductor pair they join* and each group emits one
+/// element carrying the group's count. One resistor per cut would put them in
+/// series and make a redundant via worse than a single one, which is backwards.
+///
+/// Grouping is by sorted `(lower, upper)` [`PolyId`] pair, so the emission order
+/// is a function of the geometry rather than of the pair generator.
+fn vias_into(
+    store: &GeometryStore,
+    connectivity: &Connectivity,
+    stack: &ProcessStack,
+    node_of: &[NodeId],
+    out: &mut ParasiticNetwork,
+) {
+    /// A cut that landed on no plate on one side. Reading one is a bug, not a
+    /// fallback: the guard below drops it rather than joining it to polygon zero.
+    const NO_POLY: PolyId = PolyId(u32::MAX);
+
+    debug_assert_eq!(
+        connectivity.via_cut.len(),
+        connectivity.via_connects.len(),
+        "one conductor pair per via row"
+    );
+
+    let mut cut_index = SpatialIndex::default();
+    let mut plate_index = SpatialIndex::default();
+    let mut pairs = Vec::new();
+    // Indexed by the cut's own `PolyId`, so a cut that lands on neither plate
+    // keeps its sentinel and is dropped rather than joined to node zero.
+    let mut below = vec![NO_POLY; store.poly_count()];
+    let mut above = vec![NO_POLY; store.poly_count()];
+    let mut arrays: Vec<(PolyId, PolyId)> = Vec::new();
+
+    // Not a bulk loop: a deck names a handful of via layers, and everything read
+    // from a row is a uniform over the cut loop below.
+    for row in 0..connectivity.via_cut.len() {
+        let cut_layer = connectivity.via_cut[row];
+        let (lower, upper) = connectivity.via_connects[row];
+        let Some(cut_row) = stack_row(stack, cut_layer) else {
+            // A cut layer the deck's `pex` section never described has no
+            // per-cut resistance to state.
+            continue;
+        };
+        let per_cut_ohm = stack.sheet_res_ohm_sq.get(cut_row).copied().unwrap_or(0.0);
+        if !(per_cut_ohm > 0.0 && per_cut_ohm.is_finite()) {
+            continue;
+        }
+
+        SpatialIndex::build_into(store, cut_layer, &mut cut_index);
+        // Zero distance: a cut lands on the plate it touches.
+        // `cross_layer_pairs_into` emits `(a, b)` with `a` from the first index,
+        // so the cut is always the first element and the plate the second.
+        for (plate_layer, landing) in [(lower, &mut below), (upper, &mut above)] {
+            SpatialIndex::build_into(store, plate_layer, &mut plate_index);
+            cross_layer_pairs_into(
+                store,
+                &cut_index,
+                &plate_index,
+                Dbu::new_unchecked(0),
+                &mut pairs,
+            );
+            for &(cut, plate) in &pairs {
+                // Lowest wins, so a cut straddling two plates picks the same one
+                // whatever order the index emitted them in. `min` on the raw id
+                // is a select, not a branch.
+                let slot = &mut landing[cut.idx()];
+                *slot = PolyId(slot.0.min(plate.0));
+            }
+        }
+
+        // One row per cut that landed on both plates, keyed by the pair it
+        // joins. Sorted so the groups below are contiguous and their order is
+        // the geometry's rather than the index's.
+        arrays.clear();
+        for cut in store.polys_on_layer(cut_layer) {
+            let (lo, hi) = (below[cut as usize], above[cut as usize]);
+            // Surviving `if`: a cut with no plate on one side is a dangling cut,
+            // which carries no current and has no resistance to report. Uniform
+            // on real geometry — a via landing on nothing is a DRC violation,
+            // and this is not the rule that reports it.
+            if lo != NO_POLY && hi != NO_POLY {
+                arrays.push((lo, hi));
+            }
+            // Reset for the next via row, which reuses the same two columns.
+            below[cut as usize] = NO_POLY;
+            above[cut as usize] = NO_POLY;
+        }
+        arrays.sort_unstable();
+
+        // One element per run of equal pairs, carrying that run's length as the
+        // cut count.
+        let mut at = 0usize;
+        while at < arrays.len() {
+            let key = arrays[at];
+            let mut end = at;
+            while end < arrays.len() && arrays[end] == key {
+                end += 1;
+            }
+            let cuts = u32::try_from(end - at).expect("a via array's cut count is a u32");
+            let ohm = via_resistance(per_cut_ohm, cuts).raw();
+            let (from, to) = (node_of[key.0.idx()], node_of[key.1.idx()]);
+            debug_assert_ne!(from, to, "a via joins two different conductor polygons");
+            if ohm > 0.0 && ohm.is_finite() {
+                out.push(from, Some(to), Parasitic::Resistance(Qty::new(ohm)));
+            }
+            at = end;
+        }
+    }
+}
+
 /// Extract one net's parasitics.
 ///
 /// **Transform.** Public and separate because it is the unit a test can
@@ -380,10 +815,35 @@ pub fn extract_into(
 ///
 /// # The model
 ///
-/// One node per conductor polygon, placed at the polygon's centre. Each node
-/// carries its polygon's ground capacitance; consecutive nodes are joined by
-/// half of each polygon's series resistance, which is what a current crossing
-/// from one centre to the next sees.
+/// Nodes at segment *boundaries*, not at segment centres: a net of `n` polygons
+/// gets `n + 1` nodes, and polygon `i` is one resistor from node `i` to node
+/// `i + 1` carrying its whole series resistance. Node `i` also carries polygon
+/// `i`'s ground capacitance; the closing node `n` carries none, because there is
+/// no polygon `n` to give it one.
+///
+/// A net's emitted resistance is therefore exactly the sum of its polygons'
+/// resistances, which is the property
+/// `the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances` states.
+///
+/// ## What this replaced, and why it was fail-open
+///
+/// The centre-to-centre form: one node per polygon at its centre, consecutive
+/// centres joined by half of each polygon's resistance. That is a correct
+/// statement of what a current crossing from one centre to the next sees, and it
+/// loses `(R_first + R_last) / 2` — the two half-segments between the end
+/// centres and the net's actual terminals, which had no nodes. On a net of *one*
+/// polygon it loses the entire resistance and emits no resistive element at all.
+///
+/// Every resistance case in `tests/fixtures/expectations.json` is a one-polygon
+/// net, so every resistance this workspace had ever extracted was `0`, and zero
+/// is also what an extractor that never looked at the cell produces. Finding
+/// F10.
+///
+/// The closing node is pushed for every non-empty net whether or not any element
+/// names it — uniformly, so the node count is exactly `polys.len() + 1` and can
+/// be asserted rather than reasoned about. A net whose layers are all
+/// zero-resistance ends with a node nothing joins, which is the honest reading:
+/// the net has two terminals and no resistance between them.
 ///
 /// # Dimensions
 ///
@@ -432,27 +892,35 @@ pub fn extract_net_into(
     let polys = nets.polys_of(net);
     let base = u32::try_from(out.node_net.len()).expect("a NodeId is a u32");
     let count = u32::try_from(polys.len()).expect("a net's polygon count is a u32");
+    // One boundary node per polygon plus the closing one. `u32::from(bool)` is
+    // a select, not a branch, and an empty net gets no node at all — there is no
+    // segment for a boundary to bound.
+    let nodes = count + u32::from(!polys.is_empty());
     // Every profile, not `debug_assert`: a `NodeId` that wrapped would name an
     // existing node of another net, and every element written against it would
     // read as a legitimate parasitic on the wrong conductor.
     let end = base
-        .checked_add(count)
+        .checked_add(nodes)
         .expect("the node columns of one network fit a NodeId");
 
-    out.node_net.reserve(polys.len());
-    out.node_layer.reserve(polys.len());
+    out.node_net.reserve(nodes as usize);
+    out.node_layer.reserve(nodes as usize);
 
-    // Serial by construction, on two counts: it appends a variable number of
-    // rows through the frozen `ParasiticNetwork::push`, and `previous_ohm` is a
-    // loop-carried chain rather than a per-row function. The bulk data is one
-    // level down — the vertex ring of each polygon — and that is what the
-    // perimeter fold in the body walks.
+    // Serial by construction: it appends a variable number of rows through the
+    // frozen `ParasiticNetwork::push`. The bulk data is one level down — the
+    // vertex ring of each polygon — and that is what the perimeter fold in the
+    // body walks.
     let mut node = NodeId(base);
-    let mut previous_ohm = 0.0_f64;
+    // The closing node inherits the last polygon's layer, so `node_layer` says
+    // something true about where the terminal sits. Seeded rather than made an
+    // `Option`: the seed is only ever read when `polys` is empty, and then the
+    // push it feeds does not happen.
+    let mut last_layer = LayerId(0);
     for &poly in polys {
         let layer = store.poly_layer(poly);
         out.node_net.push(net);
         out.node_layer.push(layer);
+        last_layer = layer;
 
         // One lookup, three loads. `unwrap_or` on an already-computed index is
         // a select, not a branch: the row decides a *value* here, never a
@@ -530,42 +998,48 @@ pub fn extract_net_into(
         } else {
             0.0
         };
-        let series = 0.5 * (previous_ohm + ohm);
         let femtofarads =
             ground_capacitance(area_af_um2, fringe_af_um, area, perimeter, grid).raw();
 
-        // Emission order is `sort_canonical`'s order by construction: the link
-        // arriving at this node carries the *previous* node's `from`, which is
-        // one less than this one's, and a ground capacitance has `to == None`
-        // and so sorts ahead of the link leaving the same node.
+        // Emission order is `sort_canonical`'s order by construction. Both rows
+        // leave *this* node, and `canonical_key` maps `to == None` to `0` and a
+        // present node to `node + 1`, so the ground capacitance sorts ahead of
+        // the resistor beside it. Ground first is therefore the canonical order,
+        // and emitting it second would need a sort to undo.
         //
-        // Surviving `if`s, both the same escape valve. `node.0 > base` is a
-        // loop-counter test the predictor memorises after one iteration. The
-        // value tests are what keep a zero or negative element out of the
-        // network: a zero-ohm resistor is not a simplification, it is a short
-        // that changes the answer a simulator gives, and a zero-farad
-        // capacitance is a row every reader downstream has to skip. Both are
-        // uniform across a run — a layer either has coefficients or it does
-        // not — so neither is the unpredictable branch the rule is aimed at.
-        if node.0 > base && series > 0.0 && series.is_finite() {
-            out.push(
-                NodeId(node.0 - 1),
-                Some(node),
-                Parasitic::Resistance(Qty::new(series)),
-            );
-        }
+        // Surviving `if`s, both the same escape valve: they keep a zero or
+        // negative element out of the network. A zero-ohm resistor is not a
+        // simplification, it is a short that changes the answer a simulator
+        // gives, and a zero-farad capacitance is a row every reader downstream
+        // has to skip. Both are uniform across a run — a layer either has
+        // coefficients or it does not — so neither is the unpredictable branch
+        // the rule is aimed at.
         if femtofarads > 0.0 && femtofarads.is_finite() {
             out.push(node, None, Parasitic::GroundCap(Qty::new(femtofarads)));
         }
+        if ohm > 0.0 && ohm.is_finite() {
+            out.push(
+                node,
+                Some(NodeId(node.0 + 1)),
+                Parasitic::Resistance(Qty::new(ohm)),
+            );
+        }
 
-        previous_ohm = ohm;
         node = NodeId(node.0 + 1);
+    }
+
+    // The closing boundary. Pushed after the loop rather than inside it because
+    // it is the one node with no polygon of its own, and its layer is the last
+    // polygon's — see the seed above.
+    if !polys.is_empty() {
+        out.node_net.push(net);
+        out.node_layer.push(last_layer);
     }
 
     debug_assert_eq!(
         out.node_net.len(),
         end as usize,
-        "one node appended per polygon of the net"
+        "one node per polygon of the net, plus the closing boundary"
     );
     debug_assert_eq!(
         out.node_net.len(),

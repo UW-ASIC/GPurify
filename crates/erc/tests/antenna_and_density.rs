@@ -63,6 +63,7 @@ fn gate_on_a_long_wire() -> (GeometryStore, NetTable, gpurify_core::PolyId) {
         via_cut: vec![LayerId(1)],
         via_connects: vec![(LayerId(0), LayerId(2))],
         intra_layer_touch: false,
+        ..Connectivity::default()
     };
     let mut nets = NetTable::default();
     gpurify_topology::extract_nets_into(&store, &connectivity, &mut nets);
@@ -221,6 +222,7 @@ fn gate_under_a_two_level_stack() -> (GeometryStore, NetTable, gpurify_core::Pol
         via_cut: vec![LayerId(1), LayerId(4)],
         via_connects: vec![(LayerId(0), LayerId(2)), (LayerId(0), LayerId(3))],
         intra_layer_touch: false,
+        ..Connectivity::default()
     };
     let mut nets = NetTable::default();
     gpurify_topology::extract_nets_into(&store, &connectivity, &mut nets);

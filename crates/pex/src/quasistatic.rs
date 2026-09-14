@@ -250,9 +250,15 @@ pub fn extract_into(
         matvec::Backend::Cpu => None,
     };
 
+    // The host adapter is built either way, and that is the whole of contract
+    // item 4: it is the *accurate* operator, the one `solve::refine` forms its
+    // residual with, and without it a device solve's residual would carry the
+    // device's own `f32` error and stall two decades above the tolerance. The
+    // build is a `sqrt` and a divide per panel, once — nothing next to a matvec.
+    let host = matvec::CpuMatVec::build(&mesh);
     let (residual, iterations, backend) = match accelerated {
-        Some(operator) => columns_into(&operator, &mesh, options, matrix)?,
-        None => columns_into(&matvec::CpuMatVec::build(&mesh), &mesh, options, matrix)?,
+        Some(operator) => columns_into(&host, &operator, &mesh, options, matrix)?,
+        None => columns_into(&host, &host, &mesh, options, matrix)?,
     };
 
     debug_assert_eq!(matrix.value.len(), n * n, "the matrix is square at {n}");
@@ -321,8 +327,15 @@ pub fn extract_into(
 /// every decision above the multiply — the iteration strategy, the residual,
 /// the refusal of a non-finite entry — happens once here, in `f64`, for both
 /// adapters. An adapter multiplies, so that is all an adapter can get wrong.
-fn columns_into<M: matvec::MatVec>(
-    operator: &M,
+///
+/// Two adapters, not one. `accurate` is the `f64` host reference and is what the
+/// residual is formed with; `fast` is whichever adapter was selected and is what
+/// the correction equation is solved with. On the host path they are the same
+/// value. The reported [`matvec::Backend`] is `fast`'s — it is the adapter that
+/// did the expensive work, and it is what a run's numbers are attributed to.
+fn columns_into<A: matvec::MatVec, F: matvec::MatVec>(
+    accurate: &A,
+    fast: &F,
     mesh: &mesh::Mesh,
     options: solve::Options,
     matrix: &mut CapMatrix,
@@ -330,9 +343,14 @@ fn columns_into<M: matvec::MatVec>(
     let n = mesh.conductor_net.len();
     let panels = mesh.panel.len();
     debug_assert_eq!(
-        operator.dim(),
+        accurate.dim(),
         panels,
-        "the operator is the mesh it was built from"
+        "the residual operator is the mesh it was built from"
+    );
+    debug_assert_eq!(
+        fast.dim(),
+        panels,
+        "both operators are the mesh they were built from"
     );
     debug_assert_eq!(matrix.value.len(), n * n, "the matrix is square at {n}");
     debug_assert_eq!(matrix.net.len(), n, "one row per meshed conductor");
@@ -363,7 +381,8 @@ fn columns_into<M: matvec::MatVec>(
         // matrix has to be a function of the geometry alone, and a warm start
         // would make column `c` depend on column `c - 1`'s round-off.
         charge.fill(0.0);
-        let converged = solve::refine(operator, &potential, options, &mut charge, &mut workspace)?;
+        let converged =
+            solve::refine(accurate, fast, &potential, options, &mut charge, &mut workspace)?;
         debug_assert!(
             converged.residual <= options.tolerance,
             "a converged solve returned {} against a tolerance of {}",
@@ -398,7 +417,7 @@ fn columns_into<M: matvec::MatVec>(
         }
     }
 
-    Ok((residual, iterations, operator.backend()))
+    Ok((residual, iterations, fast.backend()))
 }
 
 /// Refuse rather than mesh beyond this many panels.

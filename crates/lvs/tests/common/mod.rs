@@ -166,14 +166,25 @@ impl GraphBuilder {
 
 /// Two transistors stacked gate-to-drain, sharing a bulk.
 ///
-/// Rigid: refinement drives it to one node per class using nothing but
-/// structure and terminal roles, so the identity is the *only* pairing of this
-/// graph with itself and a test may assert it exactly. Neither the model name
-/// nor the port list is load-bearing, which keeps the fixture independent of
-/// two semantics the frozen definitions leave open.
-///
 /// Nets: 0 the lower gate, 1 the lower source, 2 the shared drain-gate node,
 /// 3 the common bulk, 4 the upper source, 5 the upper drain.
+///
+/// # Not rigid, and the automorphism is named here on purpose
+///
+/// It used to be, and the claim is withdrawn. `refine::role_code` reads a MOS
+/// channel as symmetric — finding F4 — so nets 4 and 5 are the upper device's
+/// two channel ends, each carrying one terminal of one device under one role
+/// code, and exchanging them is an automorphism no signature can break. The
+/// automorphism group has order two and that is all of it: net 1 is the lower
+/// device's only degree-one channel net, net 2 carries a gate as well, and the
+/// two devices differ in what their gates land on.
+///
+/// So a test may still assert the *identity* pairing of this graph against
+/// itself — the tie-break is lowest index on each side, and the two sides are
+/// the same graph — but it may **not** assert a unique pairing against a
+/// relabelling, because there are two. [`chain`] is the rigid fixture.
+/// Neither the model name nor the port list is load-bearing, which keeps the
+/// fixture independent of two semantics the frozen definitions leave open.
 #[must_use]
 pub fn stacked_pair() -> Graph {
     stacked_pair_with_params(&[], &[])
@@ -277,33 +288,42 @@ pub fn differential_pair() -> Graph {
     builder.finish()
 }
 
-/// A source-to-drain chain of `devices` transistors over `devices + 1` nets.
+/// A source-to-drain chain of `devices` transistors over `devices + 1` nets,
+/// diode-connected at the low end.
 ///
-/// Refinement propagates one hop per round from each end of a chain, so a chain
-/// of length n needs on the order of n/2 rounds to become discrete. That makes
-/// it the fixture for the round limit: the answer exists, and a run that stops
-/// early has genuinely not found it yet.
+/// Refinement propagates one hop per round along a chain, so a chain of length
+/// n needs on the order of n rounds to become discrete. That makes it the
+/// fixture for the round limit: the answer exists, and a run that stops early
+/// has genuinely not found it yet.
 ///
-/// The chain is directed — source at the low end of every device, drain at the
-/// high end — so it has no mirror automorphism and converges to one node per
-/// class.
+/// # The anchor is what makes it rigid
+///
+/// Writing the source at the low end of every device and the drain at the high
+/// end does **not** direct the chain, because `refine::role_code` reads a MOS
+/// channel as symmetric — which is physics, not a shortcut: which end is the
+/// source is set by bias, and an extractor reading geometry has nothing to
+/// decide it with. With the two roles collapsed, reversing the chain end to end
+/// maps every terminal onto one of the same code, so the reversal is a genuine
+/// automorphism.
+///
+/// Device 0's gate ties to one end of its own channel, which is the smallest
+/// thing that distinguishes the two ends of the path and is how a real stack is
+/// anchored: a diode-connected transistor at the bottom of a mirror. A path
+/// graph with one distinguished endpoint has no automorphism but the identity,
+/// so the chain converges to one node per class and a test may assert the
+/// pairing exactly.
 ///
 /// # Panics
 ///
 /// When `devices` is zero.
 #[must_use]
 pub fn chain(devices: u32) -> Graph {
+    use TerminalRole::{Drain, Gate, Source};
     assert!(devices > 0, "a chain needs at least one device");
     let mut builder = GraphBuilder::new(devices + 1);
-    for index in 0..devices {
-        builder.device(
-            DeviceKind::Mos,
-            NCH,
-            &[
-                (TerminalRole::Source, index),
-                (TerminalRole::Drain, index + 1),
-            ],
-        );
+    builder.device(DeviceKind::Mos, NCH, &[(Source, 0), (Drain, 1), (Gate, 0)]);
+    for index in 1..devices {
+        builder.device(DeviceKind::Mos, NCH, &[(Source, index), (Drain, index + 1)]);
     }
     builder.finish()
 }
@@ -472,6 +492,19 @@ pub fn flip(discrepancy: &Discrepancy) -> Discrepancy {
             param,
             layout_value: ref_value,
             ref_value: layout_value,
+        },
+        // Both a side and a device pair, so both are exchanged: the reference
+        // card declaring a lone `W` is, read backwards, the layout declaring it.
+        Discrepancy::UndeclaredParam {
+            side,
+            layout_device,
+            ref_device,
+            param,
+        } => Discrepancy::UndeclaredParam {
+            side: flip_side(side),
+            layout_device: ref_device,
+            ref_device: layout_device,
+            param,
         },
         Discrepancy::DuplicateName { side, name, nets } => Discrepancy::DuplicateName {
             side: flip_side(side),

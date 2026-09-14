@@ -19,7 +19,7 @@ use gpurify_drc::rules::overlay::{
     Margins, MinEnclosureTable, MinExtensionTable, OverlapTable,
 };
 use gpurify_report::{Measurement, Outcome, Severity, SkipReason, Violation};
-use gpurify_testgen::shapes::LayoutBuilder;
+use gpurify_testgen::shapes::{l_shape, LayoutBuilder};
 use gpurify_testgen::{
     assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point, Amount,
     ShapeKind, ViolationCase, ViolationShape,
@@ -83,6 +83,121 @@ fn an_enclosure_one_unit_under_the_limit_is_reported_on_the_deficient_margin() {
     let run = assert_rule_ran(&sink.runs, RULE);
     assert_eq!(run.examined, 1, "examined counts inner shapes");
     assert_eq!(run.violations, 1);
+}
+
+/// Oracle: construct-from-answer, and the `bbox_only_enclosure` defect.
+///
+/// The host is an L on layer B — arms along `x` and along `y`, notch in the
+/// upper right. The inner square on layer A sits *in the notch*: entirely inside
+/// the L's bounding box and entirely outside the L. Its enclosure is zero, which
+/// is what a shape sitting on bare substrate has.
+///
+/// `Bbox::contains` decided hosting and `margins` measured boxes, so the L's box
+/// contained the square, the square was declared hosted, and the margins came
+/// back generous. A shape with no host material anywhere near it reported a
+/// comfortable pass — fail-open, on the rule that says a via must be covered by
+/// metal.
+///
+/// Reported at the inner shape's own centre, which is the unhosted convention
+/// `an_inner_shape_with_no_host_has_an_enclosure_of_zero_not_no_enclosure`
+/// already pins.
+#[test]
+fn an_inner_shape_in_a_concave_hosts_notch_is_not_enclosed_by_it() {
+    let mut layout = LayoutBuilder::new(2);
+    // 400 arms, 200 thick, so the notch is the square (200, 200) .. (400, 400).
+    layout.shape(B, &l_shape(0, 0, 400, 200));
+    let stranded = layout.rect(A, 250, 250, 330, 330);
+    let (store, ids) = layout.finish();
+
+    let env = Env::default();
+    let mut sink = Sink::default();
+
+    check_min_enclosure(
+        env.design(&store),
+        &min_enclosure_table(10),
+        &mut sink.scratch,
+        &mut sink.out,
+        &mut sink.runs,
+    );
+
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(290, 290),
+            measured: Measurement::Length(dbu(0)),
+            limit: Measurement::Length(dbu(10)),
+            shapes: (ids.of(stranded), None),
+        },
+    );
+}
+
+/// The other side of the same boundary, so the test above is not satisfied by a
+/// rule that calls every concave host a miss. Same L, an inner square well
+/// inside the horizontal arm: 50 clear below, 50 above in a 200-thick arm, and
+/// further than that from either end.
+#[test]
+fn an_inner_shape_inside_a_concave_hosts_arm_is_enclosed_by_it() {
+    let mut layout = LayoutBuilder::new(2);
+    layout.shape(B, &l_shape(0, 0, 400, 200));
+    layout.rect(A, 250, 50, 330, 150);
+    let (store, _ids) = layout.finish();
+
+    let env = Env::default();
+    let mut sink = Sink::default();
+
+    check_min_enclosure(
+        env.design(&store),
+        &min_enclosure_table(50),
+        &mut sink.scratch,
+        &mut sink.out,
+        &mut sink.runs,
+    );
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// The generalisation, and the case a *vertex-only* containment test passes
+/// wrongly: a bar whose two ends are both inside the host and whose middle spans
+/// the host's opening. Every vertex of the inner shape is inside the host, and
+/// the inner shape is still not enclosed by it, because its middle sits over
+/// nothing.
+///
+/// Containment therefore has to be an edge-crossing test rather than a vertex
+/// test, which is the whole reason this case is written down.
+#[test]
+fn a_bar_bridging_a_hosts_opening_is_not_enclosed_though_its_corners_are() {
+    let mut layout = LayoutBuilder::new(2);
+    // A U opening upward: base (0,0)-(400,100), arms at x 0..100 and 300..400
+    // rising to y 500. One polygon, wound counter-clockwise.
+    layout.push(
+        B,
+        &[0, 400, 400, 300, 300, 100, 100, 0],
+        &[0, 0, 500, 500, 100, 100, 500, 500],
+    );
+    // Spans the opening at y 200..300; both ends sit inside the arms.
+    layout.rect(A, 50, 200, 350, 300);
+    let (store, _ids) = layout.finish();
+
+    let env = Env::default();
+    let mut sink = Sink::default();
+
+    check_min_enclosure(
+        env.design(&store),
+        &min_enclosure_table(10),
+        &mut sink.scratch,
+        &mut sink.out,
+        &mut sink.runs,
+    );
+
+    assert_eq!(
+        sink.out.len(),
+        1,
+        "a bar spanning the host's opening is not enclosed by it"
+    );
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(0)));
 }
 
 #[test]

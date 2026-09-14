@@ -1,7 +1,7 @@
 //! The comparison driver: refine, then read the partition as a verdict.
 
 use crate::graph::{narrow, Graph, LayoutGraph, RefGraph};
-use crate::refine::{refine_into, role_code, Partition, Refinement, TieBreak};
+use crate::refine::{is_symmetric, refine_into, role_code, Partition, Refinement, TieBreak};
 use crate::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use gpurify_ingest::StrId;
 use gpurify_topology::TerminalRole;
@@ -79,6 +79,20 @@ pub fn compare(
     }
 }
 
+/// A node no class paired with anything.
+///
+/// Unreachable as a node index: both graphs index their own nodes with a `u32`,
+/// so a column of them cannot be `u32::MAX` rows long.
+const UNPAIRED: u32 = u32::MAX;
+
+/// A node sitting in an unresolved class that holds the same count on both
+/// sides — *unpaired without being unpairable*.
+///
+/// The second sentinel rather than a parallel `Vec<bool>`, because the two
+/// passes that need it already carry the mate column, and a node is in exactly
+/// one of the three states. Unreachable for the same reason [`UNPAIRED`] is.
+const HELD_BACK: u32 = u32::MAX - 1;
+
 /// Turn a stable partition into discrepancies.
 ///
 /// **Decision** — pure, a partition and two graphs in, a verdict out, with no
@@ -112,27 +126,32 @@ pub fn interpret(
         debug_assert!(ref_count as usize <= ref_nodes);
 
         // Equal counts are a symmetry refinement could not break, not a
-        // difference. Its members are unpaired without being unpairable, and
-        // `Partition` publishes class membership nowhere, so they cannot be
-        // held back from the unpaired scan below — the honest answer is that
-        // the comparison did not finish.
+        // difference: either pairing of the class's members is right, so
+        // nothing in it is a discrepancy. Those members are held back below
+        // rather than blamed, and the verdict cannot be `Match` while one
+        // exists — `symmetric` carries that, and nothing here returns early.
         //
-        // This masks any genuine discrepancy sharing the partition. Telling the
-        // two apart needs a `members(ClassId)` accessor on `Partition`, which
-        // is a frozen signature; it is filed under `## lvs` in
-        // `docs/SIGNATURE_DEFECTS.md` and is not the Implementation-Phase's to
-        // add. Inconclusive is the fail-closed reading in the meantime.
-        if layout_count == ref_count && layout_count > 0 {
-            return Verdict::Inconclusive(Inconclusive::UnresolvedSymmetry);
+        // Returning on the first balanced class is what F4 had to fix. It
+        // masked every genuine discrepancy sharing the partition: with a MOS
+        // channel read as symmetric, a *deleted device* came back
+        // `Inconclusive(UnresolvedSymmetry)` because the surviving
+        // transistor's two channel nets were interchangeable. The two
+        // conditions are independent, and a difference no pairing can mend
+        // must survive a symmetry any pairing satisfies.
+        if is_symmetric(layout_count, ref_count) {
+            continue;
         }
         // More than one node on each side, so no individual node can be blamed
         // for the difference in counts.
         //
-        // For the same missing accessor, this class's members are also counted
-        // individually by the unpaired scan below, so the general form and the
-        // specific one are both reported where `Discrepancy::ClassImbalance`
-        // documents one. Suppressing the specific form needs the same
-        // `members(ClassId)` accessor; same ledger entry.
+        // This class's members are *also* counted individually by the unpaired
+        // scan below, where `Discrepancy::ClassImbalance` documents one form
+        // per class. `Partition::symmetric_nodes` could hold them back the way
+        // the balanced ones are held back, and that is deliberately not done:
+        // `ClassImbalance` carries no node indices at all, so suppressing the
+        // specific form would leave a reader with two counts and nothing to
+        // open. Over-reporting is the fail-closed direction of the two. Filed
+        // under `## lvs` in `docs/SIGNATURE_DEFECTS.md`.
         if layout_count > 1 && ref_count > 1 {
             found.push(Discrepancy::ClassImbalance {
                 layout_nodes: layout_count,
@@ -140,6 +159,11 @@ pub fn interpret(
             });
         }
     }
+
+    // Read once, before the scatter, because the two are written into the same
+    // columns: a node is paired, or held back, or neither.
+    let (layout_symmetric, ref_symmetric) = partition.symmetric_nodes();
+    let symmetric = !layout_symmetric.is_empty();
 
     // Read once. `pairs()` derives the class tallies and materialises the pair
     // list on every call, so the two passes below share one list rather than
@@ -149,29 +173,47 @@ pub fn interpret(
     // the scatter is building.
     let pairs: Vec<(u32, u32)> = partition.pairs().collect();
 
-    // `u32::MAX` is "no counterpart"; a node index that large is unreachable
+    // [`UNPAIRED`] is "no counterpart"; a node index that large is unreachable
     // through columns the graph itself indexes with `u32`.
     //
     // A scatter: the write index is the row's own value, so the store is
     // random rather than contiguous and does not vectorise without
     // lane-conflict detection. Scalar by that fact about the data.
-    let mut layout_mate = vec![u32::MAX; layout_nodes];
-    let mut ref_mate = vec![u32::MAX; ref_nodes];
+    let mut layout_mate = vec![UNPAIRED; layout_nodes];
+    let mut ref_mate = vec![UNPAIRED; ref_nodes];
     for &(layout_node, ref_node) in &pairs {
         debug_assert!((layout_node as usize) < layout_nodes, "pair names no node");
         debug_assert!((ref_node as usize) < ref_nodes, "pair names no node");
         debug_assert_eq!(
             layout_mate[layout_node as usize],
-            u32::MAX,
+            UNPAIRED,
             "layout node {layout_node} paired twice"
         );
         debug_assert_eq!(
             ref_mate[ref_node as usize],
-            u32::MAX,
+            UNPAIRED,
             "reference node {ref_node} paired twice"
         );
         layout_mate[layout_node as usize] = ref_node;
         ref_mate[ref_node as usize] = layout_node;
+    }
+
+    // The third state, written over the same columns. A symmetric class's
+    // members are unpaired without being unpairable, so they carry neither a
+    // mate nor the blame for not having one, and the two passes that read the
+    // mate columns — the terminal join and `report_unpaired` — both have to
+    // tell them from a node nothing could pair.
+    for (column, symmetric) in [
+        (&mut layout_mate, &layout_symmetric),
+        (&mut ref_mate, &ref_symmetric),
+    ] {
+        for &node in symmetric {
+            debug_assert_eq!(
+                column[node as usize], UNPAIRED,
+                "node {node} is both paired and in an unresolved class"
+            );
+            column[node as usize] = HELD_BACK;
+        }
     }
 
     // A pairing refinement proposed is a candidate until the terminals and the
@@ -195,12 +237,13 @@ pub fn interpret(
         // `pairs()` is ascending by layout node and nodes are devices then
         // nets, so this flips at most once over the whole loop.
         if is_device {
+            compare_identity(layout, reference, (layout_node, ref_node), &mut found);
             compare_terminals(
                 layout,
                 reference,
                 (layout_node, ref_node),
                 (layout_devices, ref_devices),
-                &layout_mate,
+                (&layout_mate, &ref_mate),
                 &mut scratch,
                 &mut found,
             );
@@ -228,18 +271,27 @@ pub fn interpret(
 
     // A clean verdict is only entitled to be clean when every node on both
     // sides paired. "Nothing to report" must not be reachable from "we did not
-    // look".
+    // look", and a held-back node is exactly a node nobody looked at — the
+    // compare is below both sentinels so neither state can reach `Match`.
+    let matched = found.is_empty() & !symmetric;
     debug_assert!(
-        !found.is_empty()
-            || (layout_mate.iter().all(|&mate| mate != u32::MAX)
-                && ref_mate.iter().all(|&mate| mate != u32::MAX)),
+        !matched
+            || (layout_mate.iter().all(|&mate| mate < HELD_BACK)
+                && ref_mate.iter().all(|&mate| mate < HELD_BACK)),
         "a match with unpaired nodes"
     );
 
-    if found.is_empty() {
-        Verdict::Match
-    } else {
+    // Order is the whole of finding F4. A difference found beside an unbroken
+    // symmetry is still a difference — the symmetry says nothing about the
+    // device that is missing — so it is reported rather than swallowed. An
+    // unbroken symmetry with nothing else found is a comparison that did not
+    // finish, and there is no path from that to `Match`.
+    if !found.is_empty() {
         Verdict::Mismatch(found)
+    } else if symmetric {
+        Verdict::Inconclusive(Inconclusive::UnresolvedSymmetry)
+    } else {
+        Verdict::Match
     }
 }
 
@@ -261,6 +313,66 @@ struct JoinScratch {
     /// One device's declared parameters, sorted by name.
     layout_params: Vec<(StrId, f64)>,
     ref_params: Vec<(StrId, f64)>,
+}
+
+/// One paired device's identity: the two columns that say *what it is*.
+///
+/// # Structure is not identity
+///
+/// [`compare_terminals`] proves the two devices sit in the same *place* in the
+/// graph. It says nothing about what they *are*: an nfet and a pfet wired
+/// identically have the same neighbourhood, and so do a resistor and a capacitor
+/// across one pair of nets — [`role_code`] collapses `Pin(_)` on purpose, so not
+/// even the roles separate those two.
+///
+/// Refinement folds [`Graph::device_kind`] and [`Graph::device_model`] into its
+/// signature, so a pairing it *proposed* almost never crosses either column. But
+/// that is a `wrapping_add` fold of neighbour hashes agreeing, not a comparison
+/// happening, and [`interpret`] is `pub` precisely so a partition refinement did
+/// not produce can be handed to it. Measured before this existed, in both
+/// profiles: an identity pairing of a one-device `Mos`/`NCH` layout against a
+/// one-device `Mos`/`PCH` reference, same terminals, returned
+/// [`Verdict::Match`] — the one outcome this crate's documentation forbids.
+///
+/// # Two unpaired devices, not a new variant
+///
+/// The reading [`compare_net_name`] already takes for a renamed net, and for the
+/// same reason it gives: two devices that must not pair are two unpaired
+/// devices, one per side. [`Discrepancy::UnpairedDevice`] carries `model`
+/// already, so the pair of rows names both models, and the report stays the
+/// mirror image of the reversed comparison without a `side` field having to be
+/// invented for a third shape.
+///
+/// The `if` is not a bulk-loop branch to remove: a sound netlist takes the
+/// untaken side for every device, so selectivity sits at an end of its range and
+/// the branch predicts, and the taken side allocates two `Discrepancy` rows.
+fn compare_identity(
+    layout: &Graph,
+    reference: &Graph,
+    pair: (u32, u32),
+    found: &mut Vec<Discrepancy>,
+) {
+    let (mine, theirs) = (pair.0 as usize, pair.1 as usize);
+    debug_assert!(mine < layout.device_count(), "pair names no layout device");
+    debug_assert!(theirs < reference.device_count(), "pair names no reference device");
+
+    let (layout_model, ref_model) = (layout.device_model[mine], reference.device_model[theirs]);
+    let same = (layout.device_kind[mine] == reference.device_kind[theirs])
+        & (layout_model == ref_model);
+    if same {
+        return;
+    }
+
+    found.push(Discrepancy::UnpairedDevice {
+        side: Side::Layout,
+        device: pair.0,
+        model: layout_model,
+    });
+    found.push(Discrepancy::UnpairedDevice {
+        side: Side::Reference,
+        device: pair.1,
+        model: ref_model,
+    });
 }
 
 /// One terminal of a paired device the other side has no connection for.
@@ -305,17 +417,33 @@ const fn unmatched_terminal(pair: (u32, u32), role: TerminalRole) -> Discrepancy
 /// The rank scan this replaced re-evaluated both key functions inside two nested
 /// filters, so one four-terminal device cost tens of gathers into `layout_mate`
 /// per direction and both directions ran. Each key is now computed once.
+///
+/// # A terminal on a held-back net is skipped, not blamed
+///
+/// [`HELD_BACK`] marks a net whose class refinement could not resolve and whose
+/// two sides hold the same count — a symmetry, where either pairing is right.
+/// Such a net has no counterpart *named*, but it is not a net the other side
+/// lacks, so reporting the terminal on it as a [`Discrepancy::TerminalMismatch`]
+/// invents a difference: it made every MOS in a comparison that refused a tie
+/// report both channel terminals as unmatched, on a transistor with nothing
+/// wrong with it.
+///
+/// Skipping is not fail-open, and only because [`interpret`] pairs it with a
+/// verdict that cannot be `Match` while any held-back node exists. Both sides
+/// are skipped — hence `ref_mate` — so the merge below still sees equal-length
+/// lists and a genuine imbalance still drains a tail.
 fn compare_terminals(
     layout: &Graph,
     reference: &Graph,
     pair: (u32, u32),
     devices: (u32, u32),
-    layout_mate: &[u32],
+    mates: (&[u32], &[u32]),
     scratch: &mut JoinScratch,
     found: &mut Vec<Discrepancy>,
 ) {
     let (layout_device, ref_device) = pair;
     let (layout_devices, ref_devices) = devices;
+    let (layout_mate, ref_mate) = mates;
     let (layout_nets, layout_roles) = layout.terminals_of(layout_device);
     let (ref_nets, ref_roles) = reference.terminals_of(ref_device);
     debug_assert_eq!(layout_nets.len(), layout_roles.len(), "a terminal without a role");
@@ -338,20 +466,26 @@ fn compare_terminals(
     for slot in 0..layout_roles.len() {
         // Fail closed. A terminal on no net, or on a net nothing paired, agrees
         // with nothing — including another such terminal. Letting two of them
-        // cancel is how an unconnected gate reads as a matching one. `u32::MAX`
+        // cancel is how an unconnected gate reads as a matching one. `UNPAIRED`
         // is `NetId::NONE` projected, so the add overflows and is caught here.
         match layout_devices
             .checked_add(layout_nets[slot])
             .and_then(|node| layout_mate.get(node as usize).copied())
-            .filter(|&mate| mate != u32::MAX)
+            .filter(|&mate| mate != UNPAIRED)
         {
+            // A symmetric net: unpaired, and not a difference either.
+            Some(HELD_BACK) => {}
             Some(mate) => mine.push((role_code(layout_roles[slot]), mate, narrow(slot))),
             None => found.push(unmatched_terminal(pair, layout_roles[slot])),
         }
     }
     for slot in 0..ref_roles.len() {
-        match ref_devices.checked_add(ref_nets[slot]) {
-            Some(node) => theirs.push((role_code(ref_roles[slot]), node, narrow(slot))),
+        match ref_devices
+            .checked_add(ref_nets[slot])
+            .map(|node| (node, ref_mate.get(node as usize).copied()))
+        {
+            Some((_, Some(HELD_BACK))) => {}
+            Some((node, _)) => theirs.push((role_code(ref_roles[slot]), node, narrow(slot))),
             None => found.push(unmatched_terminal(pair, ref_roles[slot])),
         }
     }
@@ -420,14 +554,27 @@ fn compare_terminals(
 /// sides declaring `W L` and `L W` reported both as beyond tolerance while
 /// nothing was wrong.
 ///
-/// A name only one side declares is passed over rather than reported, and that
-/// is a deliberate reading, not the truncation coming back: the parameter sets
-/// are the two sides' own, an extracted device carries what the recogniser could
-/// measure and a card carries what its model needed, and a real deck states
-/// which parameters a comparison covers. `Discrepancy` has no variant that can
-/// say "declared on one side only" — `ParameterMismatch` needs two values — so
-/// saying it at all is a frozen-signature question, filed under `## lvs` in
-/// `docs/SIGNATURE_DEFECTS.md`.
+/// # A name only one side declares is a finding, not a pass
+///
+/// It used to be passed over, on the reading that the two parameter sets are the
+/// two sides' own — an extracted device carries what the recogniser could
+/// measure, a card carries what its model needed. That reading is wrong in the
+/// one direction that matters. Passing over the symmetric difference means a
+/// reference declaring `W L` against a layout declaring *nothing* compares zero
+/// parameters, finds nothing, and returns [`Verdict::Match`]: a clean parametric
+/// result for a comparison that never looked, which is the same fail-open shape
+/// the position-wise scan above had, arriving by a different route. It is
+/// finding F8, and it was reachable from every parametric run in the tree
+/// because `graph::from_layout_into` projects no layout parameter at all.
+///
+/// [`Discrepancy::UndeclaredParam`] is the variant that says it. Both tails are
+/// drained, so the report is the mirror image of the reversed comparison — the
+/// law `swapping_the_two_sides_reverses_every_side_in_the_report` states for
+/// terminals, and the reason the `side` field is on the variant.
+///
+/// A deck that genuinely wants a parameter uncompared says so by not declaring
+/// it on *either* side, which this join reads as agreement because there is
+/// nothing there to disagree about.
 fn compare_params(
     layout: &Graph,
     reference: &Graph,
@@ -464,8 +611,16 @@ fn compare_params(
         // the reporting arm allocates a `Discrepancy` a device within tolerance
         // never reaches.
         if layout_param != ref_param {
-            at_mine += usize::from(layout_param < ref_param);
-            at_theirs += usize::from(ref_param < layout_param);
+            // Whichever name sorts first is the one the other side never
+            // declares, so it is reported and only its cursor advances.
+            let mine_first = layout_param < ref_param;
+            found.push(undeclared_param(
+                pair,
+                if mine_first { Side::Layout } else { Side::Reference },
+                if mine_first { layout_param } else { ref_param },
+            ));
+            at_mine += usize::from(mine_first);
+            at_theirs += usize::from(!mine_first);
             continue;
         }
         at_mine += 1;
@@ -483,6 +638,30 @@ fn compare_params(
                 ref_value,
             });
         }
+    }
+
+    // Both tails, not just the layout one, for the reason the terminal join
+    // above drains both: the report has to be the mirror image of the reversed
+    // comparison. A tail is every name the shorter side ran out before reaching.
+    for &(param, _) in &mine[at_mine..] {
+        found.push(undeclared_param(pair, Side::Layout, param));
+    }
+    for &(param, _) in &theirs[at_theirs..] {
+        found.push(undeclared_param(pair, Side::Reference, param));
+    }
+}
+
+/// One parameter of a paired device that only `side` declares.
+///
+/// **Decision.** Both sides report through it, so a finding about the reference
+/// card names the same pair as one about the layout device — the shape
+/// [`unmatched_terminal`] has, and for the same reason.
+const fn undeclared_param(pair: (u32, u32), side: Side, param: StrId) -> Discrepancy {
+    Discrepancy::UndeclaredParam {
+        side,
+        layout_device: pair.0,
+        ref_device: pair.1,
+        param,
     }
 }
 
@@ -515,6 +694,12 @@ fn compare_net_name(
 
 /// Every node of one side that no class paired, named as a discrepancy.
 ///
+/// [`HELD_BACK`] is the reason the test is `== UNPAIRED` rather than
+/// `>= HELD_BACK`: a node in a balanced unresolved class is unpaired without
+/// being unpairable, and blaming it reports a difference that is not there.
+/// Skipping it is safe only because [`interpret`] cannot return `Match` while
+/// one exists.
+///
 /// Two scalar loops, and they stay scalar: this is a compact carrying a payload
 /// the predicate did not compute — the surviving row is a `Discrepancy` built
 /// from the row index and a cold side-table column, not from the mate column
@@ -530,7 +715,7 @@ fn report_unpaired(graph: &Graph, mate: &[u32], side: Side, found: &mut Vec<Disc
     // takes it for no node at all, so selectivity sits at an end of its range
     // and the branch predicts.
     for (device, &partner) in mate[..devices].iter().enumerate() {
-        if partner == u32::MAX {
+        if partner == UNPAIRED {
             found.push(Discrepancy::UnpairedDevice {
                 side,
                 device: narrow(device),
@@ -539,7 +724,7 @@ fn report_unpaired(graph: &Graph, mate: &[u32], side: Side, found: &mut Vec<Disc
         }
     }
     for (net, &partner) in mate[devices..].iter().enumerate() {
-        if partner == u32::MAX {
+        if partner == UNPAIRED {
             found.push(Discrepancy::UnpairedNet {
                 side,
                 net: narrow(net),

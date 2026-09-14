@@ -12,6 +12,7 @@ mod common;
 use common::{one_row_network, probe_of};
 use gpurify_erc::power::{self, NetNetworks, SolveScratch};
 use gpurify_testgen::{assert_close, assert_close_relative, ladder_network, Rng};
+use gpurify_topology::NetId;
 use gpurify_units::{prefix, Qty, Resistance};
 
 type Probe = (u32, u32, Qty<Resistance, { prefix::BASE }>);
@@ -325,4 +326,35 @@ fn probing_a_second_network_through_one_scratch_replaces_the_first_answer() {
 
     assert_eq!(out.len(), 1, "the second probe did not clear the first");
     assert_close("the second network", out[0].2.raw(), 25.0, 1e-9);
+}
+
+/// Oracle: law. The row lookup is the only way into a network, and every caller
+/// treats a missing row as "this net has fewer than two terminals, so there is
+/// no interconnect to traverse" — `check_reliability` skips the whole probe
+/// (`rules/reliability.rs`) and `attach_terminal` collapses the clamp onto
+/// terminal 0. A lookup that always answered `None` would therefore disable
+/// every per-net probe in the crate and report a clean, fully-populated result,
+/// which is the empty-is-indistinguishable-from-passing shape this corpus
+/// exists to catch. Both answers are pinned here, and so are both answers of
+/// `is_empty`, which has no production caller and was otherwise unreachable.
+#[test]
+fn a_row_is_found_only_for_a_net_that_has_one() {
+    let networks = one_row_network(3, &[0, 2], &[(0, 1, 10.0), (1, 2, 10.0)]);
+
+    assert!(!networks.is_empty(), "one row is not no rows");
+    assert_eq!(networks.len(), 1, "one row was built");
+    assert_eq!(
+        networks.row_of(NetId(0)),
+        Some(0),
+        "the net the row was built for resolves to it"
+    );
+    assert_eq!(
+        networks.row_of(NetId(7)),
+        None,
+        "a net with no row is absent, not row 0"
+    );
+
+    let none = NetNetworks::default();
+    assert!(none.is_empty(), "a default network table holds no rows");
+    assert_eq!(none.row_of(NetId(0)), None, "no row is found in an empty table");
 }

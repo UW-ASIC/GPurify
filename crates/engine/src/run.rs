@@ -708,6 +708,37 @@ fn run_erc(
 /// A verdict that did not conclude is [`StageStatus::Refused`], not `Ran`.
 /// [`Verdict::Inconclusive`] means the comparison did not complete, and a stage
 /// that reported `Ran` on one would let a round limit read as a pass.
+///
+/// # The six layout-only checks run first, and they are why this stage has rows
+///
+/// [`gpurify_lvs::checks`] holds six checks that need no reference netlist — a
+/// floating net, two labels on one net, a merged net seed, a dangling terminal —
+/// and its own module comment says they run *before* comparison, "because each of
+/// them makes a comparison meaningless, and a mismatch caused by a label conflict
+/// is a confusing way to learn about the label conflict". They had no production
+/// caller at all until this call: LVS contributed **no** [`RuleRun`] row to a run,
+/// so [`Summary::rules_skipped`] read `0` for a domain in which three of the eight
+/// rows cannot be configured, and an empty `violations` was uninterpretable in
+/// exactly the way [`Outputs::runs`] exists to prevent.
+///
+/// They run after the skip above rather than before it. A stage that could not
+/// get its reference netlist is already `Skipped`, which [`Summary::passed`]
+/// denies on its own, so nothing is hidden by not running them there — and a
+/// `Skipped` stage that had nonetheless filed five `Ran` rows would make the
+/// status mean "the comparison was skipped" rather than "the stage was".
+///
+/// # Both sides are reduced, and only for the comparison
+///
+/// [`gpurify_lvs::reduce::reduce_into`] normalises series and parallel devices
+/// away on **both** graphs, because either netlist may be written unreduced —
+/// finding F5. Reducing only the layout would mean a reference written as two
+/// parallel cards stopped matching a layout drawn as two fingers, which is the
+/// reduction choosing the verdict rather than normalising the question.
+///
+/// The six checks above keep the *unreduced* graph. They are checks on the
+/// extraction — a dangling terminal, a device with the wrong terminal count — and
+/// a check run after a transformation of its input is a check on the
+/// transformation.
 fn run_lvs(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -728,15 +759,47 @@ fn run_lvs(
         &mut layout,
     );
 
+    append_stage(out, "lvs", LVS_CHECK_RULE_IDS.len(), |violations, runs| {
+        gpurify_lvs::checks::check_floating_nets(
+            &extracted.nets,
+            &extracted.devices,
+            &extracted.ports,
+            violations,
+            runs,
+        );
+        gpurify_lvs::checks::check_label_conflicts(
+            &extracted.nets,
+            &extracted.ports,
+            violations,
+            runs,
+        );
+        gpurify_lvs::checks::check_net_seed_conflicts(
+            &extracted.nets,
+            &extracted.ports,
+            violations,
+            runs,
+        );
+        gpurify_lvs::checks::check_device_counts(&extracted.devices, violations, runs);
+        gpurify_lvs::checks::check_parametric(&extracted.devices, violations, runs);
+        gpurify_lvs::checks::check_topology(&layout, violations, runs);
+        name_lvs_check_rows(&loaded.strings, violations, runs);
+    });
+
     let verdict = match reference.top() {
         // No unique top is the reference's own ambiguity, and guessing which
         // subcircuit was meant is the one thing a comparison must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
         Some(top) => {
+            let mut declared = gpurify_lvs::RefGraph::default();
+            gpurify_lvs::graph::from_reference_into(reference, top, &loaded.strings, &mut declared);
+
+            let mut reduced_layout = gpurify_lvs::LayoutGraph::default();
+            gpurify_lvs::reduce::reduce_into(&layout.0, &mut reduced_layout.0);
             let mut expected = gpurify_lvs::RefGraph::default();
-            gpurify_lvs::graph::from_reference_into(reference, top, &loaded.strings, &mut expected);
+            gpurify_lvs::reduce::reduce_into(&declared.0, &mut expected.0);
+
             let mut partition = gpurify_lvs::refine::Partition::default();
-            gpurify_lvs::compare(&layout, &expected, options.lvs, &mut partition)
+            gpurify_lvs::compare(&reduced_layout, &expected, options.lvs, &mut partition)
         }
     };
 
@@ -764,14 +827,91 @@ fn run_lvs(
 /// [`gpurify_ingest::StrTable::resolve`] answers for every row this crate
 /// produces. `run_checks` borrows `Loaded` shared and therefore cannot intern —
 /// see [`lvs_rule_id`].
-pub(crate) const LVS_RULE_IDS: [&str; 6] = [
+pub(crate) const LVS_RULE_IDS: [&str; 7] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
     "lvs.parameter_mismatch",
+    "lvs.undeclared_param",
     "lvs.duplicate_name",
     "lvs.class_imbalance",
 ];
+
+/// The rule id each of [`gpurify_lvs::checks`]'s eight run rows is reported
+/// under, indexed by the sentinel the check filed it with.
+///
+/// # Why the checks file a sentinel and this maps it back
+///
+/// None of the six signatures takes a [`StrTable`], so none of them can intern
+/// the name of the rule it is reporting; `lvs::checks` therefore counts its ids
+/// down from `u32::MAX`, deliberately, so that a row escaping into a report dies
+/// in [`StrTable::resolve`] rather than resolving to whichever real name happens
+/// to sit at that index. That was unobservable while nothing called the checks.
+/// It is observable now — every LVS run would write eight unresolvable rows, and
+/// `export::json::write_runs` resolves every one of them — so the seam that *does*
+/// hold the run's string table names them here, once, on the way out.
+///
+/// Row `k` of this table is `StrId(u32::MAX - k)`, which is the order
+/// `lvs::checks` declares its constants in and the order the six calls above file
+/// them in. [`name_lvs_check_rows`] asserts both, so a check reordered or added on
+/// the other side of the crate boundary fires there rather than silently
+/// mislabelling a report.
+pub(crate) const LVS_CHECK_RULE_IDS: [&str; 8] = [
+    "lvs.floating_net",
+    "lvs.label_conflict",
+    "lvs.net_seed_conflict",
+    "lvs.device_count_mos",
+    "lvs.device_count_bjt",
+    "lvs.parametric",
+    "lvs.terminal_net",
+    "lvs.terminal_count",
+];
+
+/// Replace every sentinel rule id the six checks filed with the run's interned
+/// one.
+///
+/// **Transform, in place**, on the two buffers [`append_stage`] is about to
+/// concatenate — so it runs before anything else can read a row, and there is no
+/// window in which [`Outputs`] holds an unresolvable id.
+///
+/// Fail closed in both directions. An id this table does not know is left exactly
+/// as it was, which is [`lvs_rule_id`]'s argument: a wrong name attributed
+/// silently is worse than a `resolve` that panics. And a `Loaded` assembled by
+/// hand — the per-crate tests do this — carries a string table that interned
+/// none of these, so its rows keep the sentinel and nothing pretends otherwise.
+fn name_lvs_check_rows(strings: &StrTable, violations: &mut Violations, runs: &mut [RuleRun]) {
+    debug_assert_eq!(
+        runs.len(),
+        LVS_CHECK_RULE_IDS.len(),
+        "the six checks filed {} rows, not the {} this table names",
+        runs.len(),
+        LVS_CHECK_RULE_IDS.len()
+    );
+    debug_assert!(
+        runs.iter()
+            .zip(0u32..)
+            .all(|(run, k)| run.rule == StrId(u32::MAX - k)),
+        "lvs::checks changed which sentinel it files a row under, or in what \
+         order; the names in LVS_CHECK_RULE_IDS no longer line up with them"
+    );
+
+    // A tiny gather per row — eight rows, and as many violations as the checks
+    // found, which is none in a sound extraction. `u32::MAX - id` is the row of
+    // the table; a real interned id is small, so the subtraction lands far past
+    // the end and `get` answers `None`, which is the fail-closed arm.
+    let named = |id: StrId| {
+        LVS_CHECK_RULE_IDS
+            .get((u32::MAX - id.0) as usize)
+            .and_then(|name| strings.get(name))
+            .unwrap_or(id)
+    };
+    for run in runs.iter_mut() {
+        run.rule = named(run.rule);
+    }
+    for rule in &mut violations.rule {
+        *rule = named(*rule);
+    }
+}
 
 /// The layer an LVS violation names.
 ///
@@ -836,8 +976,9 @@ fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut Vio
 /// The interned rule id for one discrepancy.
 ///
 /// [`run_checks`] borrows [`Loaded`] shared, so it cannot intern a name the
-/// table does not already carry. [`crate::pipeline::load_into`] interns all six
-/// of [`LVS_RULE_IDS`], which covers every run that read its inputs from disk.
+/// table does not already carry. [`crate::pipeline::load_into`] interns all
+/// seven of [`LVS_RULE_IDS`], which covers every run that read its inputs from
+/// disk.
 ///
 /// A `Loaded` assembled by hand — the per-crate tests do this — may carry a
 /// string table that has none of them, and then the row is reported under a
@@ -850,20 +991,21 @@ fn lvs_rule_id(discrepancy: &Discrepancy, strings: &StrTable) -> StrId {
         Discrepancy::UnpairedNet { .. } => LVS_RULE_IDS[1],
         Discrepancy::TerminalMismatch { .. } => LVS_RULE_IDS[2],
         Discrepancy::ParameterMismatch { .. } => LVS_RULE_IDS[3],
-        Discrepancy::DuplicateName { .. } => LVS_RULE_IDS[4],
-        Discrepancy::ClassImbalance { .. } => LVS_RULE_IDS[5],
+        Discrepancy::UndeclaredParam { .. } => LVS_RULE_IDS[4],
+        Discrepancy::DuplicateName { .. } => LVS_RULE_IDS[5],
+        Discrepancy::ClassImbalance { .. } => LVS_RULE_IDS[6],
     };
     strings.get(name).unwrap_or(StrId(u32::MAX))
 }
 
 /// What a discrepancy measured, and what it was measured against.
 ///
-/// Two of the six carry numbers, and those numbers are the finding:
+/// Two of the seven carry numbers, and those numbers are the finding:
 /// a parameter's two values, and a class's two node counts. `measured` is always
 /// the layout's side and `limit` the reference's, which is the direction
 /// [`gpurify_lvs::verdict::Side`] already fixes.
 ///
-/// The other four are not measurements of anything. They report `Count(1)`
+/// The other five are not measurements of anything. They report `Count(1)`
 /// against `Count(0)` — one occurrence where none is allowed — which is the
 /// only honest reading of a difference that is either present or absent.
 ///
@@ -944,6 +1086,7 @@ fn run_pex(
             &loaded.store,
             &extracted.nets,
             &extracted.devices,
+            &loaded.deck.connectivity,
             &loaded.deck.stack,
             grid,
             &mut network,
@@ -978,6 +1121,7 @@ fn run_pex(
             &loaded.store,
             &extracted.nets,
             &extracted.devices,
+            &loaded.deck.connectivity,
             &loaded.deck.stack,
             grid,
             &mut coarse,

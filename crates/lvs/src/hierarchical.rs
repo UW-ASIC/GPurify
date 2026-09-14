@@ -16,7 +16,7 @@
 use crate::compare::{compare, CompareOptions};
 use crate::graph::{narrow, LayoutGraph, RefGraph};
 use crate::refine::Partition;
-use crate::verdict::Verdict;
+use crate::verdict::{Inconclusive, Verdict};
 use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::StrId;
 
@@ -270,6 +270,13 @@ pub struct CellResult {
 /// **Transform, A-to-B.** Caller owns `out`. Cells are compared in plan order;
 /// a matched cell is abstracted into its parent, a failed one is flattened, and
 /// both facts are recorded per cell.
+///
+/// # One graph pair, so one comparison
+///
+/// The signature carries a single `(layout, reference)` pair, so a plan of more
+/// than one cell has no per-cell graph to compare. Those runs report every cell
+/// as [`Inconclusive::UncomparedCell`] rather than repeating one comparison's
+/// verdict across every row — see that variant, and the body.
 pub fn run(
     plan: &ComparisonPlan,
     layout: &LayoutGraph,
@@ -294,14 +301,29 @@ pub fn run(
     let mut scratch = Partition::default();
 
     // The signature hands `run` one pair of graphs and no way to fetch another,
-    // so `ref_subckt` selects nothing and every planned cell is this pair
-    // compared again. Abstracting a matched cell into its parent, and
-    // flattening a failed one into it, both need a per-cell graph source and a
-    // parent graph to write; neither is a parameter here. The plan's order is
-    // still what decides the order of the results.
+    // so `ref_subckt` selects nothing and there is exactly one comparison to be
+    // had however many cells the plan holds. Abstracting a matched cell into its
+    // parent, and flattening a failed one into it, both need a per-cell graph
+    // source and a parent graph to write; neither is a parameter here, and the
+    // gap is filed under `## lvs` in `docs/SIGNATURE_DEFECTS.md`.
+    //
+    // A single-cell plan is the one shape where the pair the caller handed in
+    // unambiguously belongs to the cell the plan names, because there is one
+    // candidate. Past that, `RefGraph` carries no `SubcktId` and so cannot be
+    // checked against `ref_subckt[i]`, which makes *every* row an attribution
+    // nothing supports — this used to run the same comparison per row and hand
+    // out N `Match`es for one, so N − 1 cells got a clean verdict they were
+    // never entitled to. `Inconclusive::UncomparedCell` is what those rows say
+    // now. Uniform, hoisted: it is one property of the plan, not of a cell.
+    let single = plan.layout_cell.len() == 1;
 
+    // Not a bulk loop: one iteration is a whole graph comparison.
     for &cell in &plan.layout_cell {
-        let verdict = compare(layout, reference, options, &mut scratch);
+        let verdict = if single {
+            compare(layout, reference, options, &mut scratch)
+        } else {
+            Verdict::Inconclusive(Inconclusive::UncomparedCell(cell))
+        };
         // A cell that did not match cannot stand in for itself as an opaque
         // device at its parent's level, so it is flattened there instead.
         // `Inconclusive` counts as "did not match": abstracting away a cell the

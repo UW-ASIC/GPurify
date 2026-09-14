@@ -185,6 +185,21 @@ pub fn load_into(inputs: &Inputs, out: &mut Loaded) -> Result<(), LoadError> {
         "two parses of one deck disagree on the layer table the layout was mapped against"
     );
 
+    // The label pass, and it is here rather than inside `read_layout` for two
+    // reasons that are both about what exists when. A label's point is in the
+    // root frame only after flattening, and the `PolyId` it resolves to is a
+    // store row only after `GeometryStoreBuilder::finish` has sorted by layer —
+    // so binding cannot happen while records are being read. And *which* text
+    // names *which* conductor is the deck's answer, not the file's: GDSII
+    // defines no relationship between a `TEXT` and a shape at all, so the
+    // pairing comes from `connectivity.labels` and the reader has no business
+    // deciding it.
+    //
+    // Before `bind_ports_into`, which is what turns the bound labels into the
+    // `PortTable` every net name downstream comes from.
+    out.provenance
+        .resolve_labels(&out.store, &out.deck.connectivity)?;
+
     // Both optional readers intern into the same table, after it became the
     // layout's: that is what makes a net name from the layout and the same name
     // from the reference netlist one `StrId` and an integer compare.
@@ -217,18 +232,23 @@ pub fn load_into(inputs: &Inputs, out: &mut Loaded) -> Result<(), LoadError> {
         "a label names a polygon or a string outside the run's tables"
     );
 
-    // The six LVS rule ids, interned here because `run_checks` borrows `Loaded`
+    // Every LVS rule id, interned here because `run_checks` borrows `Loaded`
     // shared and cannot. A mismatch it maps into the violation table names one
-    // of these, and a `StrId` a writer cannot resolve is a panic in the report
-    // rather than a line in it. Six names in a table of tens of thousands.
-    for id in crate::run::LVS_RULE_IDS {
+    // of the first seven, and one of `lvs::checks`'s eight run rows names one of
+    // the rest; a `StrId` a writer cannot resolve is a panic in the report
+    // rather than a line in it. Fifteen names in a table of tens of thousands.
+    for id in crate::run::LVS_RULE_IDS
+        .iter()
+        .chain(crate::run::LVS_CHECK_RULE_IDS.iter())
+    {
         out.strings.intern(id);
     }
     debug_assert!(
         crate::run::LVS_RULE_IDS
             .iter()
+            .chain(crate::run::LVS_CHECK_RULE_IDS.iter())
             .all(|id| out.strings.get(id).is_some()),
-        "an lvs rule id did not survive interning, so a mismatch has no name to be reported under"
+        "an lvs rule id did not survive interning, so a finding has no name to be reported under"
     );
 
     out.grid = Some(grid);
@@ -379,6 +399,9 @@ pub enum LoadError {
     Intent(#[from] gpurify_ingest::IntentError),
     #[error(transparent)]
     Netlist(#[from] gpurify_ingest::netlist::NetlistError),
+    /// A net label the deck claims could not be placed on any shape.
+    #[error(transparent)]
+    Label(#[from] gpurify_ingest::LabelError),
     /// No grid was supplied, so no length in the deck has a meaning.
     ///
     /// Fail closed rather than defaulting to a common resolution: a deck's

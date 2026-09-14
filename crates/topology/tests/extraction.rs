@@ -321,6 +321,7 @@ fn intra_layer_touch_decides_whether_two_abutting_shapes_are_one_net() {
         via_cut: Vec::new(),
         via_connects: Vec::new(),
         intra_layer_touch: true,
+        ..Connectivity::default()
     };
     let mut nets = NetTable::default();
     extract_nets_into(&store, &joined, &mut nets);
@@ -341,6 +342,7 @@ fn intra_layer_touch_decides_whether_two_abutting_shapes_are_one_net() {
         via_cut: Vec::new(),
         via_connects: Vec::new(),
         intra_layer_touch: false,
+        ..Connectivity::default()
     };
     let mut nets = NetTable::default();
     extract_nets_into(&store, &split, &mut nets);
@@ -387,6 +389,7 @@ fn shapes_that_touch_nothing_each_form_their_own_net() {
         via_cut: Vec::new(),
         via_connects: Vec::new(),
         intra_layer_touch: true,
+        ..Connectivity::default()
     };
     let mut nets = NetTable::default();
     extract_nets_into(&store, &connectivity, &mut nets);

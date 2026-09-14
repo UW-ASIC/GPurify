@@ -122,6 +122,7 @@ impl World {
             via_cut: Vec::new(),
             via_connects: Vec::new(),
             intra_layer_touch: true,
+            ..Connectivity::default()
         };
         let mut nets = NetTable::default();
         extract_nets_into(&store, &connectivity, &mut nets);

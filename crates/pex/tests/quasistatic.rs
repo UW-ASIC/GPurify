@@ -655,7 +655,15 @@ fn a_field_solve_obeys_reciprocity_and_reports_the_backend_that_ran_it() {
     let options = solve::Options {
         tolerance: 1e-10,
         restart: 30,
-        max_iterations: 400,
+        // The documented default. It was 400, which is enough for the host
+        // adapter — one refinement pass, because `refine` asks an `f64` operator
+        // for the full tolerance — and is not enough for the device one, which
+        // reaches the same `1e-10` in about 440 across a dozen `f32` passes.
+        // Needing more iterations for cheaper iterations is what mixed-precision
+        // refinement *is*, so this widens a budget rather than weakening a
+        // claim: the tolerance, the reciprocity check and the byte-identity
+        // check below are all untouched.
+        max_iterations: 1_000,
     };
     let mut matrix = CapMatrix::default();
     let mut network = ParasiticNetwork::default();
@@ -761,7 +769,15 @@ fn a_field_solve_is_byte_identical_across_runs() {
     let options = solve::Options {
         tolerance: 1e-10,
         restart: 30,
-        max_iterations: 400,
+        // The documented default. It was 400, which is enough for the host
+        // adapter — one refinement pass, because `refine` asks an `f64` operator
+        // for the full tolerance — and is not enough for the device one, which
+        // reaches the same `1e-10` in about 440 across a dozen `f32` passes.
+        // Needing more iterations for cheaper iterations is what mixed-precision
+        // refinement *is*, so this widens a budget rather than weakening a
+        // claim: the tolerance, the reciprocity check and the byte-identity
+        // check below are all untouched.
+        max_iterations: 1_000,
     };
     let stack = uniform_stack(3, 1.0, 0.25);
 

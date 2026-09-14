@@ -1,330 +1,841 @@
 {
-  "layers": {
-    "nwell": [1, 0],
-    "diff": [2, 0],
-    "poly": [3, 0],
-    "licon": [4, 0],
-    "li": [5, 0],
-    "mcon": [6, 0],
-    "met1": [7, 0],
-    "via1": [8, 0],
-    "met2": [9, 0],
-    "nsdm": [10, 0],
-    "psdm": [11, 0],
-    "diode": [14, 0]
-  },
-
-  "rules": {
-    "met1.min_width": {
-      "kind": "min_width",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 100 } }
-    },
-    "met1.max_width": {
-      "kind": "max_width",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 5000 } }
-    },
-    "met1.min_edge_length": {
-      "kind": "min_edge_length",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 100 } }
-    },
-    "met1.notch": {
-      "kind": "notch",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 100 } }
-    },
-    "met1.min_spacing": {
-      "kind": "min_spacing",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 100 } }
-    },
-    "met1.met2.min_spacing": {
-      "kind": "min_spacing_diff",
-      "layers": ["met1", "met2"],
-      "params": { "limit": { "nm": 100 } }
-    },
-    "met1.eol_spacing": {
-      "kind": "eol_spacing",
-      "layers": ["met1"],
-      "params": { "eol_width": { "nm": 200 }, "limit": { "nm": 150 } }
-    },
-    "met1.prl_spacing": {
-      "kind": "prl_spacing",
-      "layers": ["met1"],
-      "params": { "prl_threshold": { "nm": 500 }, "limit": { "nm": 200 } }
-    },
-    "met1.corner_to_corner": {
-      "kind": "corner_to_corner",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 150 } }
-    },
-    "met1.wide_dependent_spacing": {
-      "kind": "wide_dependent_spacing",
-      "layers": ["met1"],
-      "params": { "width_threshold": { "nm": 300 }, "limit": { "nm": 200 } }
-    },
-    "met1.min_area": {
-      "kind": "min_area",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 200 } }
-    },
-    "met1.min_enclosed_area": {
-      "kind": "min_enclosed_area",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 200 } }
-    },
-    "met1.cheesing": {
-      "kind": "cheesing",
-      "layers": ["met1"],
-      "params": { "max_unslotted": { "nm": 1500 } }
-    },
-    "met1.min_density": {
-      "kind": "density",
-      "layers": ["met1"],
-      "params": {
-        "window": { "nm": 2000 },
-        "step": { "nm": 2000 },
-        "limit": { "ratio": 0.3 },
-        "maximum": false
-      }
-    },
-    "met1.max_density": {
-      "kind": "density",
-      "layers": ["met1"],
-      "params": {
-        "window": { "nm": 2000 },
-        "step": { "nm": 2000 },
-        "limit": { "ratio": 0.8 },
-        "maximum": true
-      }
-    },
-    "met1.met2.min_enclosure": {
-      "kind": "min_enclosure",
-      "layers": ["met1", "met2"],
-      "params": { "limit": { "nm": 50 } }
-    },
-    "nwell.diff.min_enclosure": {
-      "kind": "min_enclosure",
-      "layers": ["nwell", "diff"],
-      "params": { "limit": { "nm": 50 } }
-    },
-    "met1.via1.asymmetric_enclosure": {
-      "kind": "asymmetric_enclosure",
-      "layers": ["met1", "via1"],
-      "params": { "min_one_side": { "nm": 100 } }
-    },
-    "poly.diff.min_extension": {
-      "kind": "min_extension",
-      "layers": ["poly", "diff"],
-      "params": { "limit": { "nm": 50 } }
-    },
-    "met1.met2.overlap": {
-      "kind": "overlap",
-      "layers": ["met1", "met2"],
-      "params": { "limit": { "nm": 50 } }
-    },
-    "diff.li.max_distance_to_tap": {
-      "kind": "max_distance_to_tap",
-      "layers": ["diff", "li"],
-      "params": { "limit": { "nm": 3000 } }
-    },
-    "off_grid": {
-      "kind": "off_grid",
-      "layers": [],
-      "params": { "pitch": { "nm": 5 } }
-    },
-    "angle": {
-      "kind": "angle",
-      "layers": [],
-      "params": { "angle": { "count": 0 }, "angle": { "count": 90 } }
-    },
-    "via1.redundant_via": {
-      "kind": "redundant_via",
-      "layers": ["via1"],
-      "params": { "min_count": { "count": 2 }, "within": { "nm": 500 } }
-    },
-    "via1.via_array_spacing": {
-      "kind": "via_array_spacing",
-      "layers": ["via1"],
-      "params": { "array_threshold": { "count": 3 }, "limit": { "nm": 200 } }
-    },
-    "met1.multi_patterning": {
-      "kind": "multi_patterning",
-      "layers": ["met1"],
-      "params": { "colors": { "count": 2 }, "color_spacing": { "nm": 100 } }
-    },
-
-    "poly.met1.antenna": {
-      "kind": "antenna",
-      "layers": ["poly", "met1"],
-      "params": { "max_ratio": { "ratio": 100.0 } }
-    },
-    "poly.antenna_electrical": {
-      "kind": "antenna_electrical",
-      "layers": ["poly", "li", "met1", "met2"],
-      "params": {
-        "max_ratio": { "ratio": 400.0 },
-        "diode_layer": { "layer": "diode" }
-      }
-    },
-    "em_current_density": {
-      "kind": "em_current_density",
-      "layers": ["li", "met1", "met2"],
-      "params": {
-        "max_density": { "ratio": 1000.0 },
-        "max_current_per_cut": { "ratio": 100.0 }
-      }
-    },
-    "esd_topological": {
-      "kind": "esd_topological",
-      "layers": ["met1"]
-    },
-    "floating_gate": {
-      "kind": "floating_gate",
-      "layers": []
-    },
-    "nwell.floating_well": {
-      "kind": "floating_well",
-      "layers": ["nwell", "nsdm"]
-    },
-    "hv_domain": {
-      "kind": "hv_domain",
-      "layers": [],
-      "params": { "max_domain_delta": { "ratio": 1800.0 } }
-    },
-    "diff.li.missing_tie": {
-      "kind": "missing_tie",
-      "layers": ["diff", "li"],
-      "params": { "max_distance": { "nm": 2000 } }
-    },
-    "multiple_drivers": {
-      "kind": "multiple_drivers",
-      "layers": [],
-      "params": { "max_drivers": { "count": 1 } }
-    },
-    "p2p_resistance": {
-      "kind": "p2p_resistance",
-      "layers": [],
-      "params": { "max_resistance": { "ratio": 10.0 } }
-    },
-    "nwell.soft_connection": {
-      "kind": "soft_connection",
-      "layers": ["nwell"]
-    },
-    "supply_short": {
-      "kind": "supply_short",
-      "layers": ["nsdm", "psdm"]
-    },
-    "tie_high_low": {
-      "kind": "tie_high_low",
-      "layers": []
-    },
-    "met1.unconnected_pin": {
-      "kind": "unconnected_pin",
-      "layers": ["met1"]
-    }
-  },
-
-  "connectivity": {
-    "conductors": ["diff", "poly", "li", "met1", "met2"],
-    "intra_layer_touch": true,
-    "vias": [
-      { "layer": "licon", "connects": ["diff", "li"] },
-      { "layer": "licon", "connects": ["poly", "li"] },
-      { "layer": "mcon", "connects": ["li", "met1"] },
-      { "layer": "via1", "connects": ["met1", "met2"] }
-    ]
-  },
-
-  "device_recognition": [
-    {
-      "kind": "mos",
-      "marker": "nsdm",
-      "model": "nfet_01v8",
-      "terminals": ["poly", "diff", "diff"]
-    },
-    {
-      "kind": "mos",
-      "marker": "psdm",
-      "model": "pfet_01v8",
-      "terminals": ["poly", "diff", "diff", "nwell"]
-    }
+ "layers": {
+  "nwell": [
+   1,
+   0
   ],
-
-  "pex": {
-    "nwell": {
-      "thickness_nm": 100,
-      "height_nm": 0,
-      "sheet_res_ohm_sq": 3000.0,
-      "area_cap_af_um2": 0.0,
-      "fringe_cap_af_um": 0.0,
-      "dielectric_k": 3.9
-    },
-    "diff": {
-      "thickness_nm": 100,
-      "height_nm": 0,
-      "sheet_res_ohm_sq": 120.0,
-      "area_cap_af_um2": 0.0,
-      "fringe_cap_af_um": 0.0,
-      "dielectric_k": 3.9
-    },
-    "poly": {
-      "thickness_nm": 200,
-      "height_nm": 200,
-      "sheet_res_ohm_sq": 48.2,
-      "area_cap_af_um2": 106.0,
-      "fringe_cap_af_um": 55.0,
-      "dielectric_k": 3.9
-    },
-    "licon": {
-      "thickness_nm": 500,
-      "height_nm": 400,
-      "sheet_res_ohm_sq": 152.0,
-      "area_cap_af_um2": 0.0,
-      "fringe_cap_af_um": 0.0,
-      "dielectric_k": 3.9
-    },
-    "li": {
-      "thickness_nm": 100,
-      "height_nm": 900,
-      "sheet_res_ohm_sq": 12.2,
-      "area_cap_af_um2": 37.0,
-      "fringe_cap_af_um": 41.0,
-      "dielectric_k": 3.9
-    },
-    "mcon": {
-      "thickness_nm": 300,
-      "height_nm": 1000,
-      "sheet_res_ohm_sq": 9.3,
-      "area_cap_af_um2": 0.0,
-      "fringe_cap_af_um": 0.0,
-      "dielectric_k": 3.9
-    },
-    "met1": {
-      "thickness_nm": 400,
-      "height_nm": 1300,
-      "sheet_res_ohm_sq": 0.1,
-      "area_cap_af_um2": 25.0,
-      "fringe_cap_af_um": 40.0,
-      "dielectric_k": 3.9
-    },
-    "via1": {
-      "thickness_nm": 300,
-      "height_nm": 1700,
-      "sheet_res_ohm_sq": 5.0,
-      "area_cap_af_um2": 0.0,
-      "fringe_cap_af_um": 0.0,
-      "dielectric_k": 3.9
-    },
-    "met2": {
-      "thickness_nm": 400,
-      "height_nm": 2000,
-      "sheet_res_ohm_sq": 0.08,
-      "area_cap_af_um2": 15.0,
-      "fringe_cap_af_um": 30.0,
-      "dielectric_k": 3.9
-    }
+  "diff": [
+   2,
+   0
+  ],
+  "poly": [
+   3,
+   0
+  ],
+  "licon": [
+   4,
+   0
+  ],
+  "li": [
+   5,
+   0
+  ],
+  "mcon": [
+   6,
+   0
+  ],
+  "met1": [
+   7,
+   0
+  ],
+  "via1": [
+   8,
+   0
+  ],
+  "met2": [
+   9,
+   0
+  ],
+  "nsdm": [
+   10,
+   0
+  ],
+  "psdm": [
+   11,
+   0
+  ],
+  "diode": [
+   14,
+   0
+  ],
+  "diff_label": [
+   2,
+   5
+  ],
+  "poly_label": [
+   3,
+   5
+  ],
+  "li_label": [
+   5,
+   5
+  ],
+  "met1_label": [
+   7,
+   5
+  ],
+  "met2_label": [
+   9,
+   5
+  ]
+ },
+ "derived": [
+  {
+   "name": "diff_active",
+   "op": "not",
+   "layers": [
+    "diff",
+    "poly"
+   ]
+  },
+  {
+   "name": "gate",
+   "op": "and",
+   "layers": [
+    "poly",
+    "diff"
+   ]
+  },
+  {
+   "name": "gate_n",
+   "op": "and",
+   "layers": [
+    "gate",
+    "nsdm"
+   ]
+  },
+  {
+   "name": "gate_p",
+   "op": "and",
+   "layers": [
+    "gate",
+    "psdm"
+   ]
   }
+ ],
+ "rules": {
+  "met1.min_width": {
+   "kind": "min_width",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 100
+    }
+   }
+  },
+  "met1.max_width": {
+   "kind": "max_width",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 5000
+    }
+   }
+  },
+  "met1.min_edge_length": {
+   "kind": "min_edge_length",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 100
+    }
+   }
+  },
+  "met1.notch": {
+   "kind": "notch",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 100
+    }
+   }
+  },
+  "met1.min_spacing": {
+   "kind": "min_spacing",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 100
+    }
+   }
+  },
+  "met1.met2.min_spacing": {
+   "kind": "min_spacing_diff",
+   "layers": [
+    "met1",
+    "met2"
+   ],
+   "params": {
+    "limit": {
+     "nm": 100
+    }
+   }
+  },
+  "met1.eol_spacing": {
+   "kind": "eol_spacing",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "eol_width": {
+     "nm": 200
+    },
+    "limit": {
+     "nm": 150
+    }
+   }
+  },
+  "met1.prl_spacing": {
+   "kind": "prl_spacing",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "prl_threshold": {
+     "nm": 500
+    },
+    "limit": {
+     "nm": 200
+    }
+   }
+  },
+  "met1.corner_to_corner": {
+   "kind": "corner_to_corner",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 150
+    }
+   }
+  },
+  "met1.wide_dependent_spacing": {
+   "kind": "wide_dependent_spacing",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "width_threshold": {
+     "nm": 300
+    },
+    "limit": {
+     "nm": 200
+    }
+   }
+  },
+  "met1.min_area": {
+   "kind": "min_area",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 200
+    }
+   }
+  },
+  "met1.min_enclosed_area": {
+   "kind": "min_enclosed_area",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "limit": {
+     "nm": 200
+    }
+   }
+  },
+  "met1.cheesing": {
+   "kind": "cheesing",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "max_unslotted": {
+     "nm": 1500
+    }
+   }
+  },
+  "met1.min_density": {
+   "kind": "density",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "window": {
+     "nm": 2000
+    },
+    "step": {
+     "nm": 2000
+    },
+    "limit": {
+     "ratio": 0.3
+    },
+    "maximum": false
+   }
+  },
+  "met1.max_density": {
+   "kind": "density",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "window": {
+     "nm": 2000
+    },
+    "step": {
+     "nm": 2000
+    },
+    "limit": {
+     "ratio": 0.8
+    },
+    "maximum": true
+   }
+  },
+  "met1.met2.min_enclosure": {
+   "kind": "min_enclosure",
+   "layers": [
+    "met1",
+    "met2"
+   ],
+   "params": {
+    "limit": {
+     "nm": 50
+    }
+   }
+  },
+  "nwell.diff.min_enclosure": {
+   "kind": "min_enclosure",
+   "layers": [
+    "nwell",
+    "diff"
+   ],
+   "params": {
+    "limit": {
+     "nm": 50
+    }
+   }
+  },
+  "met1.via1.asymmetric_enclosure": {
+   "kind": "asymmetric_enclosure",
+   "layers": [
+    "met1",
+    "via1"
+   ],
+   "params": {
+    "min_one_side": {
+     "nm": 100
+    }
+   }
+  },
+  "poly.diff.min_extension": {
+   "kind": "min_extension",
+   "layers": [
+    "poly",
+    "diff"
+   ],
+   "params": {
+    "limit": {
+     "nm": 50
+    }
+   }
+  },
+  "met1.met2.overlap": {
+   "kind": "overlap",
+   "layers": [
+    "met1",
+    "met2"
+   ],
+   "params": {
+    "limit": {
+     "nm": 50
+    }
+   }
+  },
+  "diff.li.max_distance_to_tap": {
+   "kind": "max_distance_to_tap",
+   "layers": [
+    "diff",
+    "li"
+   ],
+   "params": {
+    "limit": {
+     "nm": 3000
+    }
+   }
+  },
+  "off_grid": {
+   "kind": "off_grid",
+   "layers": [],
+   "params": {
+    "pitch": {
+     "nm": 5
+    }
+   }
+  },
+  "angle": {
+   "kind": "angle",
+   "layers": [],
+   "params": { "angle": { "count": 0 }, "angle": { "count": 90 } }
+  },
+  "via1.redundant_via": {
+   "kind": "redundant_via",
+   "layers": [
+    "via1"
+   ],
+   "params": {
+    "min_count": {
+     "count": 2
+    },
+    "within": {
+     "nm": 500
+    }
+   }
+  },
+  "via1.via_array_spacing": {
+   "kind": "via_array_spacing",
+   "layers": [
+    "via1"
+   ],
+   "params": {
+    "array_threshold": {
+     "count": 3
+    },
+    "limit": {
+     "nm": 200
+    }
+   }
+  },
+  "met1.multi_patterning": {
+   "kind": "multi_patterning",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "colors": {
+     "count": 2
+    },
+    "color_spacing": {
+     "nm": 100
+    }
+   }
+  },
+  "poly.met1.antenna": {
+   "kind": "antenna",
+   "layers": [
+    "poly",
+    "met1"
+   ],
+   "params": {
+    "max_ratio": {
+     "ratio": 100.0
+    }
+   }
+  },
+  "poly.antenna_electrical": {
+   "kind": "antenna_electrical",
+   "layers": [
+    "poly",
+    "li",
+    "met1",
+    "met2"
+   ],
+   "params": {
+    "max_ratio": {
+     "ratio": 400.0
+    },
+    "diode_layer": {
+     "layer": "diode"
+    }
+   }
+  },
+  "met1.density_cmp": {
+   "kind": "density_cmp",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "window_x": {
+     "nm": 1000
+    },
+    "window_y": {
+     "nm": 1000
+    },
+    "step_x": {
+     "nm": 1000
+    },
+    "step_y": {
+     "nm": 1000
+    },
+    "min_density": {
+     "ratio": 0.2
+    },
+    "max_density": {
+     "ratio": 0.85
+    },
+    "max_neighbour_delta": {
+     "ratio": 0.5
+    },
+    "include_partial_windows": true,
+    "cmp_target_density": {
+     "ratio": 0.5
+    },
+    "cmp_nominal_thickness": {
+     "nm": 400
+    },
+    "cmp_thickness_sensitivity": {
+     "nm": 200
+    },
+    "cmp_max_abs_thickness_delta": {
+     "nm": 50
+    }
+   }
+  },
+  "em_current_density": {
+   "kind": "em_current_density",
+   "layers": [
+    "li",
+    "met1",
+    "met2"
+   ],
+   "params": {
+    "max_density": {
+     "ratio": 1000.0
+    },
+    "max_current_per_cut": {
+     "ratio": 100.0
+    }
+   }
+  },
+  "met1.electromigration": {
+   "kind": "electromigration",
+   "layers": [
+    "met1"
+   ],
+   "params": {
+    "max_density": {
+     "ratio": 1000.0
+    },
+    "max_current_per_cut": {
+     "ratio": 100.0
+    },
+    "blech_limit": {
+     "ratio": 10.0
+    },
+    "reference_temperature": {
+     "ratio": 383.15
+    },
+    "activation_energy_ev": {
+     "ratio": 0.9
+    },
+    "current_exponent": {
+     "ratio": 1.0
+    }
+   }
+  },
+  "esd_topological": {
+   "kind": "esd_topological",
+   "layers": [
+    "met1"
+   ]
+  },
+  "esd_latchup": {
+   "kind": "esd_latchup",
+   "layers": [
+    "met1",
+    "nwell"
+   ],
+   "params": {
+    "required_current": {
+     "ratio": 1333.0
+    },
+    "max_path_resistance": {
+     "ratio": 2.7
+    },
+    "max_clamp_voltage": {
+     "ratio": 3600.0
+    },
+    "min_guard_ring_width": {
+     "nm": 1000
+    },
+    "max_tap_distance": {
+     "nm": 3000
+    }
+   }
+  },
+  "floating_gate": {
+   "kind": "floating_gate",
+   "layers": []
+  },
+  "nwell.floating_well": {
+   "kind": "floating_well",
+   "layers": [
+    "nwell",
+    "nsdm"
+   ]
+  },
+  "hv_domain": {
+   "kind": "hv_domain",
+   "layers": [],
+   "params": {
+    "max_domain_delta": {
+     "ratio": 1800.0
+    }
+   }
+  },
+  "ir_drop": {
+   "kind": "ir_drop",
+   "layers": []
+  },
+  "bti": {
+   "kind": "reliability",
+   "layers": [],
+   "params": {
+    "required_lifetime_hours": {
+     "ratio": 1000.0
+    },
+    "reference_lifetime_hours": {
+     "ratio": 1000.0
+    },
+    "reference_stress": {
+     "ratio": 1800.0
+    },
+    "stress_exponent": {
+     "ratio": 4.0
+    },
+    "reference_temperature": {
+     "ratio": 398.15
+    },
+    "activation_energy_ev": {
+     "ratio": 0.5
+    },
+    "max_abs_voltage": {
+     "ratio": 3600.0
+    },
+    "duty_cycle": {
+     "ratio": 1.0
+    }
+   }
+  },
+  "diff.li.missing_tie": {
+   "kind": "missing_tie",
+   "layers": [
+    "diff",
+    "li"
+   ],
+   "params": {
+    "max_distance": {
+     "nm": 2000
+    }
+   }
+  },
+  "multiple_drivers": {
+   "kind": "multiple_drivers",
+   "layers": [],
+   "params": {
+    "max_drivers": {
+     "count": 1
+    }
+   }
+  },
+  "p2p_resistance": {
+   "kind": "p2p_resistance",
+   "layers": [],
+   "params": {
+    "max_resistance": {
+     "ratio": 10.0
+    }
+   }
+  },
+  "nwell.soft_connection": {
+   "kind": "soft_connection",
+   "layers": [
+    "nwell"
+   ]
+  },
+  "supply_short": {
+   "kind": "supply_short",
+   "layers": [
+    "nsdm",
+    "psdm"
+   ]
+  },
+  "tie_high_low": {
+   "kind": "tie_high_low",
+   "layers": []
+  },
+  "met1.unconnected_pin": {
+   "kind": "unconnected_pin",
+   "layers": [
+    "met1"
+   ]
+  }
+ },
+ "connectivity": {
+  "conductors": [
+   "diff_active",
+   "poly",
+   "li",
+   "met1",
+   "met2"
+  ],
+  "intra_layer_touch": true,
+  "vias": [
+   {
+    "layer": "licon",
+    "connects": [
+     "diff_active",
+     "li"
+    ]
+   },
+   {
+    "layer": "licon",
+    "connects": [
+     "poly",
+     "li"
+    ]
+   },
+   {
+    "layer": "mcon",
+    "connects": [
+     "li",
+     "met1"
+    ]
+   },
+   {
+    "layer": "via1",
+    "connects": [
+     "met1",
+     "met2"
+    ]
+   }
+  ],
+  "labels": [
+   {
+    "layer": "diff_label",
+    "names": "diff_active"
+   },
+   {
+    "layer": "poly_label",
+    "names": "poly"
+   },
+   {
+    "layer": "li_label",
+    "names": "li"
+   },
+   {
+    "layer": "met1_label",
+    "names": "met1"
+   },
+   {
+    "layer": "met2_label",
+    "names": "met2"
+   }
+  ]
+ },
+ "device_recognition": [
+  {
+   "kind": "mos",
+   "marker": "gate_n",
+   "model": "nfet_01v8",
+   "terminals": [
+    "poly",
+    "diff_active",
+    "diff_active"
+   ]
+  },
+  {
+   "kind": "mos",
+   "marker": "gate_p",
+   "model": "pfet_01v8",
+   "terminals": [
+    "poly",
+    "diff_active",
+    "diff_active"
+   ]
+  }
+ ],
+ "pex": {
+  "nwell": {
+   "thickness_nm": 100,
+   "height_nm": 0,
+   "sheet_res_ohm_sq": 3000.0,
+   "area_cap_af_um2": 0.0,
+   "fringe_cap_af_um": 0.0,
+   "dielectric_k": 3.9
+  },
+  "diff": {
+   "thickness_nm": 100,
+   "height_nm": 0,
+   "sheet_res_ohm_sq": 120.0,
+   "area_cap_af_um2": 0.0,
+   "fringe_cap_af_um": 0.0,
+   "dielectric_k": 3.9
+  },
+  "diff_active": {
+   "thickness_nm": 100,
+   "height_nm": 0,
+   "sheet_res_ohm_sq": 120.0,
+   "area_cap_af_um2": 0.0,
+   "fringe_cap_af_um": 0.0,
+   "dielectric_k": 3.9
+  },
+  "poly": {
+   "thickness_nm": 200,
+   "height_nm": 200,
+   "sheet_res_ohm_sq": 48.2,
+   "area_cap_af_um2": 106.0,
+   "fringe_cap_af_um": 55.0,
+   "dielectric_k": 3.9
+  },
+  "licon": {
+   "thickness_nm": 500,
+   "height_nm": 400,
+   "sheet_res_ohm_sq": 152.0,
+   "area_cap_af_um2": 0.0,
+   "fringe_cap_af_um": 0.0,
+   "dielectric_k": 3.9
+  },
+  "li": {
+   "thickness_nm": 100,
+   "height_nm": 900,
+   "sheet_res_ohm_sq": 12.2,
+   "area_cap_af_um2": 37.0,
+   "fringe_cap_af_um": 41.0,
+   "dielectric_k": 3.9
+  },
+  "mcon": {
+   "thickness_nm": 300,
+   "height_nm": 1000,
+   "sheet_res_ohm_sq": 9.3,
+   "area_cap_af_um2": 0.0,
+   "fringe_cap_af_um": 0.0,
+   "dielectric_k": 3.9
+  },
+  "met1": {
+   "thickness_nm": 400,
+   "height_nm": 1300,
+   "sheet_res_ohm_sq": 0.1,
+   "area_cap_af_um2": 25.0,
+   "fringe_cap_af_um": 40.0,
+   "dielectric_k": 3.9
+  },
+  "via1": {
+   "thickness_nm": 300,
+   "height_nm": 1700,
+   "sheet_res_ohm_sq": 5.0,
+   "area_cap_af_um2": 0.0,
+   "fringe_cap_af_um": 0.0,
+   "dielectric_k": 3.9
+  },
+  "met2": {
+   "thickness_nm": 400,
+   "height_nm": 2000,
+   "sheet_res_ohm_sq": 0.08,
+   "area_cap_af_um2": 15.0,
+   "fringe_cap_af_um": 30.0,
+   "dielectric_k": 3.9
+  }
+ }
 }

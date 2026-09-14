@@ -308,7 +308,7 @@ pub fn from_layout_into(
 ///
 /// Terminals land ascending by device within each net, because they are filed in
 /// device order.
-fn transpose_into(graph: &mut Graph, net_count: usize) {
+pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
     let terminals = graph.terminal_net.len();
     debug_assert_eq!(
         terminals,

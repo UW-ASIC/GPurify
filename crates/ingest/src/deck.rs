@@ -88,14 +88,42 @@ pub struct LayerTable {
     /// Ties broken by id so a deck that points two names at one stream pair
     /// still has a total, deterministic order, and so the run of equal pairs
     /// starts at the lowest id — which is the id `of_stream` answers with.
+    ///
+    /// **Base layers only.** A derived layer is computed, not drawn, so no
+    /// record in a layout file may map onto one — see [`Self::push_derived`].
     by_stream: Vec<LayerId>,
+    /// The id of the first derived layer, and so the number of base ones.
+    ///
+    /// A `u16` rather than a `LayerId` because a deck with no derived layers
+    /// has no such id: the value is one past the last base layer, which is a
+    /// count and not a row.
+    derived_start: u16,
+    /// How each derived layer is computed, one row per id from `derived_start`
+    /// up. Here rather than beside `Deck::layers` because a derived layer's id
+    /// and its recipe are the same fact: [`Self::push_derived`] is the only way
+    /// to get either, so a layer cannot exist without the arithmetic that
+    /// produces it.
+    derived: DerivedTable,
 }
+
+/// The stream pair recorded for a derived layer.
+///
+/// A derived layer has none — it is computed from other layers, not read off a
+/// record — but [`LayerTable::stream`] is a column indexed by [`LayerId`] and
+/// every row needs a value. This one is excluded from [`LayerTable::by_stream`],
+/// so [`LayerTable::of_stream`] can never answer with a derived layer whatever a
+/// file contains. It is *not* an identity: ask [`LayerTable::is_derived`].
+const DERIVED_STREAM: (u16, u16) = (u16::MAX, u16::MAX);
 
 impl LayerTable {
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.name.len(), self.stream.len(), "one stream pair per layer");
         debug_assert_eq!(self.name.len(), self.by_name.len(), "one name index entry per layer");
-        debug_assert_eq!(self.name.len(), self.by_stream.len(), "one stream index entry per layer");
+        debug_assert_eq!(
+            usize::from(self.derived_start),
+            self.by_stream.len(),
+            "one stream index entry per base layer, and none for a derived one"
+        );
         self.name.len()
     }
     pub fn is_empty(&self) -> bool {
@@ -155,9 +183,110 @@ impl LayerTable {
     /// store row's `LayerId` back to a stream pair, and only the forward
     /// direction existed. Without this the writer cannot be implemented as
     /// signed, which blocks the `parse -> write -> parse` law.
+    ///
+    /// A derived layer answers with [`DERIVED_STREAM`], which is a placeholder
+    /// and not a pair the deck states. A writer emitting a store that holds
+    /// derived rows should ask [`Self::is_derived`] and skip them: they are the
+    /// deck's own arithmetic over layers the file already carries, so writing
+    /// them out duplicates area, and reading such a file back maps the
+    /// placeholder onto no layer at all.
     pub fn stream_of(&self, layer: LayerId) -> (u16, u16) {
         debug_assert!(layer.idx() < self.stream.len(), "layer id past the table");
         self.stream[layer.idx()]
+    }
+
+    /// Is this layer computed by the deck rather than drawn in the layout?
+    ///
+    /// Derived layers take the ids after every base one, so the test is one
+    /// compare. That contiguity is not a convenience: it is what lets
+    /// `GeometryStore::append_layer` put their polygons at the tail of a store
+    /// that is grouped by layer.
+    pub fn is_derived(&self, layer: LayerId) -> bool {
+        debug_assert!(layer.idx() < self.name.len(), "layer id past the table");
+        layer.0 >= self.derived_start
+    }
+
+    /// How the derived layers are computed, in id order.
+    ///
+    /// `ingest::layout::derive_layers_into` is the one consumer: it walks these
+    /// rows in order and appends each result to the store.
+    pub fn derived(&self) -> &DerivedTable {
+        debug_assert_eq!(
+            self.derived.len() + usize::from(self.derived_start),
+            self.name.len(),
+            "every layer is either base or derived, and no layer is both"
+        );
+        &self.derived
+    }
+
+    /// Add a derived layer, and hand back the id it took.
+    ///
+    /// Appended rather than sorted in: a derived layer's id has to be above
+    /// every base one *and* above every derived layer declared before it, which
+    /// is also the order they can be materialised in — each one may be built
+    /// from the ones already in the store. Ids therefore follow declaration
+    /// order here, while base ids follow name order; both are functions of the
+    /// deck text, so two runs agree.
+    ///
+    /// The recipe goes down with the id, in one call, because a derived layer
+    /// with no arithmetic behind it is a layer that stays empty for ever — and
+    /// an empty conductor reads downstream as geometry nobody connected rather
+    /// than as a deck that was assembled wrong.
+    ///
+    /// The name index is kept sorted so [`Self::id`] still finds it. The stream
+    /// index deliberately is not touched.
+    ///
+    /// # Panics
+    ///
+    /// When the table already holds `u16::MAX + 1` layers, which is every id
+    /// [`LayerId`] can spell, or when `operands` is empty or names a layer at
+    /// or above the id being taken — both of which [`parse_deck`] refuses
+    /// first, with a message naming the deck row.
+    pub fn push_derived(&mut self, name: StrId, op: DerivedOp, operands: &[LayerId]) -> LayerId {
+        let id = LayerId(
+            u16::try_from(self.name.len()).expect("a deck has tens of layers, and LayerId is a u16"),
+        );
+        assert!(
+            !operands.is_empty(),
+            "a derived layer is computed from at least one layer"
+        );
+        assert!(
+            operands.iter().all(|&operand| operand < id),
+            "a derived layer names an operand at or above its own id, so \
+             materialising it in id order would read a layer that does not exist yet"
+        );
+
+        let at = self
+            .by_name
+            .partition_point(|&LayerId(i)| self.name[usize::from(i)] < name);
+        self.name.push(name);
+        self.stream.push(DERIVED_STREAM);
+        self.by_name.insert(at, id);
+
+        // The CSR's leading zero goes down with the first row, exactly as every
+        // other segmented column in this module seeds itself.
+        if self.derived.operand_start.is_empty() {
+            self.derived.operand_start.push(0);
+        }
+        self.derived.layer.push(id);
+        self.derived.op.push(op);
+        self.derived.operand.extend_from_slice(operands);
+        self.derived
+            .operand_start
+            .push(narrow(self.derived.operand.len()));
+
+        debug_assert!(
+            self.by_name
+                .windows(2)
+                .all(|pair| self.name[pair[0].idx()] <= self.name[pair[1].idx()]),
+            "the by-name index is not ascending, so `id` would miss declared layers"
+        );
+        debug_assert!(self.is_derived(id), "a derived layer took a base layer's id");
+        debug_assert!(
+            self.derived.layer.windows(2).all(|pair| pair[0] < pair[1]),
+            "derived ids come out ascending, which is the order they are materialised in"
+        );
+        id
     }
 
     /// Build a layer table from resolved entries.
@@ -225,7 +354,90 @@ impl LayerTable {
             stream,
             by_name,
             by_stream,
+            // Every entry `build` is handed is a base layer; derived ones
+            // arrive through `push_derived` afterwards.
+            derived_start: count,
+            derived: DerivedTable::default(),
         }
+    }
+}
+
+/// The operators a deck may spell over layers.
+///
+/// Three, deliberately, and each is one of `core::boolean`'s: the set a PDK
+/// actually writes for connectivity and device recognition. A closed enum, so
+/// adding a fourth breaks the match that applies them rather than falling
+/// through to a default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivedOp {
+    /// Intersection. `poly AND diff` is the gate.
+    And,
+    /// Union.
+    Or,
+    /// Subtraction. `diff NOT poly` is the source/drain regions, which is what
+    /// makes them two conductors rather than one spanning the channel.
+    Not,
+}
+
+/// Layers the deck computes from other layers.
+///
+/// Reached through [`LayerTable::derived`], and built only by
+/// [`LayerTable::push_derived`], so a derived layer cannot have an id without a
+/// recipe or a recipe without an id.
+///
+/// **Five questions.** In: the deck's `derived` section, names already resolved.
+/// Out: one row per derived layer — the id it took, its operator, and the
+/// operand layers in the order it folds them. How many: tens per deck, read
+/// once per run when the store is built. Access pattern: one forward scan in id
+/// order. Lifetime: the whole run, with the deck. Parallelisable: no, and it
+/// must not be — a row may name a layer an earlier row produced.
+///
+/// # Why an operator and a list rather than an expression tree
+///
+/// Because a derived layer has a real [`LayerId`], every intermediate result
+/// can be a named layer, and a nested expression is spelled as two rows. That
+/// is how a PDK deck is written anyway — Calibre's SVRF layer statements and
+/// `KLayout`'s DRC scripts both name each step — and it removes the two things
+/// a tree would need here: name resolution separate from the layer table, and a
+/// topological sort. A row may only name layers with a lower id, so declaration
+/// order *is* evaluation order and a cycle is unspellable.
+///
+/// Operands fold left: `{ "op": "not", "layers": ["a", "b", "c"] }` is
+/// `(a − b) − c`, and a single operand is a copy.
+#[derive(Debug, Default)]
+pub struct DerivedTable {
+    /// The id this row produced. Ascending, and above every base layer.
+    layer: Vec<LayerId>,
+    op: Vec<DerivedOp>,
+    /// `operand[operand_start[i] .. operand_start[i + 1]]` are row `i`'s
+    /// operands. CSR, with the usual closing sentinel.
+    operand_start: Vec<u32>,
+    operand: Vec<LayerId>,
+}
+
+impl DerivedTable {
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.layer.len(), self.op.len(), "one operator per derived layer");
+        debug_assert!(
+            self.operand_start.len() == self.layer.len() + 1 || self.operand_start.is_empty(),
+            "the operand CSR carries one offset per row plus a terminator"
+        );
+        self.layer.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// The id row `row` produced, and the operator it folds with.
+    pub fn row(&self, row: usize) -> (LayerId, DerivedOp) {
+        (self.layer[row], self.op[row])
+    }
+    /// The layers one row folds, in the order it folds them. Never empty.
+    pub fn operands_of(&self, row: usize) -> &[LayerId] {
+        let start = self.operand_start[row] as usize;
+        let end = self.operand_start[row + 1] as usize;
+        debug_assert!(start < end, "a derived layer is computed from at least one layer");
+        debug_assert!(end <= self.operand.len(), "an operand range runs off the table");
+        &self.operand[start..end]
     }
 }
 
@@ -315,6 +527,42 @@ pub struct Connectivity {
     pub via_connects: Vec<(LayerId, LayerId)>,
     /// Whether shapes on the same conductor layer connect by touching.
     pub intra_layer_touch: bool,
+    /// One row per net-label layer: the layer a `TEXT` is drawn on, and the
+    /// conductor layer whose shapes it names.
+    ///
+    /// # Why this is a deck table and not a rule
+    ///
+    /// The GDSII Stream Format specification defines no relationship between a
+    /// `TEXT` element and any other element. The words *net*, *netlist*,
+    /// *connectivity*, *pin*, *port* and *terminal* do not appear in it at all;
+    /// `LAYER` and `TEXTTYPE` are opaque integers. So "which text names which
+    /// conductor" is not derivable from a layout file, and no rule this crate
+    /// could hardcode would be portable — the PDKs disagree with each other:
+    ///
+    /// | PDK | met1 drawn | pin | label |
+    /// |---|---|---|---|
+    /// | sky130 | 68/20 | 68/16 | 68/5 |
+    /// | GF180MCU | 34/0 | *(none)* | 34/10 |
+    ///
+    /// sky130 splits `.drawing` / `.pin` / `.label` / `.net` across datatypes
+    /// 20/16/5/23 per metal; GF180MCU has one `_Label` datatype and no pin
+    /// datatype. A reader that guessed same-layer would see sky130's
+    /// drawing-layer text and none of the rest, and none of GF180MCU's.
+    ///
+    /// The pairing is therefore stated, once, here — the same shape `KLayout`'s
+    /// `connect(metal1, metal1_labels)` takes, and the same thing Magic's
+    /// `cifinput` `labels` statement is.
+    ///
+    /// # One conductor per label layer
+    ///
+    /// `label_layer` is *not* required to be unique across rows, but each row
+    /// names exactly one conductor, so a label can never join two conductor
+    /// layers into one net. A text layer paired with two conductors would be a
+    /// short manufactured by the deck rather than drawn by the designer, which
+    /// is why the column is a pair and not a set.
+    pub label_layer: Vec<LayerId>,
+    /// The conductor each row of `label_layer` names. Parallel to it.
+    pub label_names: Vec<LayerId>,
 }
 
 /// How to recognise a device from geometry.
@@ -392,13 +640,17 @@ pub struct ProcessStack {
 /// ```json
 /// {
 ///   "layers": { "<name>": [<gds_layer>, <gds_datatype>] },
+///   "derived": [{ "name": "<name>", "op": "and"|"or"|"not",
+///                 "layers": ["<name>", ..] }],
 ///   "rules":  { "<rule_id>": { "kind": "<kind>",
 ///                              "layers": ["<name>", ..],
 ///                              "params": { "<param>": <value> } } },
 ///   "connectivity":       { "conductors": ["<name>", ..],
 ///                           "intra_layer_touch": <bool>,
 ///                           "vias": [{ "layer": "<name>",
-///                                      "connects": ["<name>", "<name>"] }] },
+///                                      "connects": ["<name>", "<name>"] }],
+///                           "labels": [{ "layer": "<name>",
+///                                        "names": "<name>" }] },
 ///   "device_recognition": [{ "kind": "mos"|"bjt"|"resistor"|"capacitor"|"diode",
 ///                            "marker": "<name>", "model": "<string>",
 ///                            "terminals": ["<name>", ..] }],
@@ -411,6 +663,21 @@ pub struct ProcessStack {
 /// Every section is optional; an absent one leaves its table empty. Layers take
 /// their [`LayerId`] ascending by name, so two runs over the same text agree on
 /// every id downstream.
+///
+/// ## Derived layers are layers
+///
+/// A `derived` row produces a real [`LayerId`], and everything that names a
+/// layer — a rule, a conductor, a via's endpoints, the conductor a label layer
+/// names, a device's marker or terminal — may name it. That is the point: net
+/// extraction, label binding and device recognition all address geometry by
+/// store row, so a computed layer only reaches them by having rows of its own.
+/// `ingest::layout` materialises them during the read.
+///
+/// The ids come *after* every base layer, in declaration order, so a row may
+/// fold only layers declared before it. That makes declaration order evaluation
+/// order and a cycle unspellable, and it is what lets the polygons be appended
+/// to a store that is grouped by layer. What a derived layer does not have is a
+/// GDS stream pair: no record in a layout file ever maps onto one.
 ///
 /// ## Parameter values are tagged
 ///
@@ -462,7 +729,12 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
     let doc: DeckJson =
         serde_json::from_str(source).map_err(|why| DeckError::Malformed(why.to_string()))?;
 
-    let layers = build_layers(&doc.layers, strings)?;
+    let mut layers = build_layers(&doc.layers, strings)?;
+    // Before every other section, because a rule, a conductor, a via, a label
+    // pairing or a device terminal may name a derived layer, and none of them
+    // can resolve a name the table does not hold yet. And before `build_stack`,
+    // whose columns are one row per layer.
+    build_derived(&doc.derived, &mut layers, strings)?;
     let rules = build_rules(&doc.rules, &layers, grid, strings)?;
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
     let devices = build_devices(&doc.device_recognition, &layers, strings)?;
@@ -471,6 +743,11 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
     debug_assert_eq!(devices.kind.len(), devices.marker.len(), "one marker per recogniser");
     debug_assert_eq!(devices.kind.len(), devices.model.len(), "one model per recogniser");
     debug_assert_eq!(connectivity.via_cut.len(), connectivity.via_connects.len());
+    debug_assert_eq!(
+        layers.derived().len(),
+        doc.derived.len(),
+        "one row per derived layer"
+    );
 
     Ok(Deck {
         grid: Some(grid),
@@ -480,6 +757,56 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
         devices,
         stack,
     })
+}
+
+/// The `"derived"` section, layers resolved and ids assigned.
+///
+/// **Transform, A-to-B.** Grows `layers` by one id per row, in declaration
+/// order, which is what makes declaration order evaluation order.
+///
+/// Every refusal here is a deck error naming the row: an operand the table does
+/// not hold yet — including the row's own name, and including a row declared
+/// later — is [`DeckError::UnknownLayer`], because a forward reference has no
+/// value at the point it would be read and an empty layer in its place is a
+/// rule that reports clean. A row with no operands is
+/// [`DeckError::MissingParam`], a name already taken is `Malformed`.
+fn build_derived(
+    declared: &[DerivedJson],
+    layers: &mut LayerTable,
+    strings: &mut StrTable,
+) -> Result<(), DeckError> {
+    // One buffer for the whole section: a row has a handful of operands, and
+    // they have to be resolved before the id is taken so a self-reference is an
+    // unresolved name rather than a layer folding itself.
+    let mut operands: Vec<LayerId> = Vec::new();
+    for row in declared {
+        if row.layers.is_empty() {
+            return Err(DeckError::MissingParam(row.name.clone(), "layers".to_owned()));
+        }
+        operands.clear();
+        for name in &row.layers {
+            operands.push(layer_of(layers, strings, &row.name, name)?);
+        }
+        if layers.id(strings, &row.name).is_some() {
+            return Err(DeckError::Malformed(format!(
+                "layer {} is declared twice",
+                row.name
+            )));
+        }
+        let op = match row.op.as_str() {
+            "and" => DerivedOp::And,
+            "or" => DerivedOp::Or,
+            "not" => DerivedOp::Not,
+            other => {
+                return Err(DeckError::Malformed(format!(
+                    "derived: unknown operator {other} on layer {}",
+                    row.name
+                )))
+            }
+        };
+        layers.push_derived(strings.intern(&row.name), op, &operands);
+    }
+    Ok(())
 }
 
 /// Resolve one layer name, naming what referred to it when it is not declared.
@@ -640,6 +967,8 @@ fn build_connectivity(
         via_cut: Vec::with_capacity(declared.vias.len()),
         via_connects: Vec::with_capacity(declared.vias.len()),
         intra_layer_touch: declared.intra_layer_touch,
+        label_layer: Vec::with_capacity(declared.labels.len()),
+        label_names: Vec::with_capacity(declared.labels.len()),
     };
 
     for name in &declared.conductors {
@@ -656,7 +985,41 @@ fn build_connectivity(
             layer_of(layers, strings, "connectivity", &via.connects.1)?,
         ));
     }
+    for label in &declared.labels {
+        let names = layer_of(layers, strings, "connectivity", &label.names)?;
+        // Fail closed on a pairing that names a layer the deck does not call a
+        // conductor. A label binds to a *net*, and a shape on a non-conductor
+        // layer is on no net — `topology::port` would refuse it as
+        // `OrphanLabel` at run time, one layout late and with no way to say
+        // which deck row was wrong.
+        if !connectivity.conductors.contains(&names) {
+            return Err(DeckError::Malformed(format!(
+                "connectivity: label layer {} names {}, which is not a conductor",
+                label.layer, label.names
+            )));
+        }
+        let text = layer_of(layers, strings, "connectivity", &label.layer)?;
+        // A `TEXT` record carries a stream pair, and a derived layer has none,
+        // so a pairing that puts the text on one can never bind a label. Left
+        // to run time it is silence: no label placed, no net named, and
+        // `export::parasitic` failing on the first unnamed net of a design that
+        // labelled every one of them.
+        if layers.is_derived(text) {
+            return Err(DeckError::Malformed(format!(
+                "connectivity: label layer {} is a derived layer, which carries no \
+                 text records",
+                label.layer
+            )));
+        }
+        connectivity.label_layer.push(text);
+        connectivity.label_names.push(names);
+    }
 
+    debug_assert_eq!(
+        connectivity.label_layer.len(),
+        connectivity.label_names.len(),
+        "the label pairing columns must stay parallel"
+    );
     Ok(connectivity)
 }
 
@@ -799,6 +1162,11 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Pairs<T> {
 struct DeckJson {
     #[serde(default)]
     layers: Pairs<(u16, u16)>,
+    /// An array, not an object: the order rows are declared in decides the ids
+    /// they take and therefore which of them may name which, so it is part of
+    /// the meaning rather than of the formatting.
+    #[serde(default)]
+    derived: Vec<DerivedJson>,
     #[serde(default)]
     rules: Pairs<RuleJson>,
     #[serde(default)]
@@ -845,6 +1213,8 @@ struct ConnectivityJson {
     intra_layer_touch: bool,
     #[serde(default)]
     vias: Vec<ViaJson>,
+    #[serde(default)]
+    labels: Vec<LabelJson>,
 }
 
 #[derive(Deserialize)]
@@ -854,6 +1224,18 @@ struct ViaJson {
     connects: (String, String),
 }
 
+/// One `connectivity.labels` row: a text layer and the conductor it names.
+///
+/// `names` rather than `connects`, because this is not a connection — a label
+/// joins nothing to anything. It renames one net, and the pairing says which
+/// layer's nets it may rename.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LabelJson {
+    layer: String,
+    names: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeviceJson {
@@ -861,6 +1243,19 @@ struct DeviceJson {
     marker: String,
     model: String,
     terminals: Vec<String>,
+}
+
+/// One `derived` row: the name the computed layer takes, the operator, and the
+/// layers it folds.
+///
+/// `layers` rather than `operands`, so the key reads the same as it does on a
+/// rule — in both places it is the list of layer names the row is about.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DerivedJson {
+    name: String,
+    op: String,
+    layers: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]

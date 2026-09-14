@@ -217,6 +217,22 @@ pub fn check_reliability(
         "a solution reaching a rule must be finite and parallel to its grid"
     );
 
+    // No `power::discarded_budget` gate here, and that is a decision rather
+    // than an omission. The other three readers of this solve refuse when a
+    // stated current budget never reached it, because a zero branch current is
+    // *under* every limit they compare against and passes silently. This rule
+    // is the opposite way round: with no current every node sits at exactly its
+    // pad voltage, and its pad voltage is its nominal, which is the **largest**
+    // stress this model can be handed. A shorter predicted lifetime and a
+    // larger applied voltage are both the fail-closed direction, so the answer
+    // is pessimistic rather than wrong, and refusing it would suppress genuine
+    // overstress findings to replace a conservative verdict with none.
+    //
+    // The one direction that would understate is a ground rail, whose real
+    // bounce is *away* from a 0 mV nominal — and that case never reaches a
+    // verdict either way: a zero stress makes `lifetime` infinite, `sound`
+    // false, and the row already refuses below.
+
     let grid = solved.grid;
     let voltage = &solved.solution.node_voltage[..];
     let applied_k = operating_temperature.raw();

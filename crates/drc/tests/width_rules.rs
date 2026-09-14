@@ -16,6 +16,7 @@ use gpurify_drc::rules::width::{
     check_max_width, check_min_edge_length, check_min_width, check_notch, narrowest_notch,
     narrowest_width, shortest_edge, MaxWidthTable, MinEdgeLengthTable, MinWidthTable, NotchTable,
 };
+use gpurify_drc::rules::spacing::{check_min_spacing, MinSpacingTable};
 use gpurify_report::{Severity, Violation};
 use gpurify_testgen::shapes::{hole, l_shape, plus_shape, rect, u_shape, LayoutBuilder};
 use gpurify_testgen::{
@@ -322,6 +323,118 @@ fn a_notch_exactly_at_the_limit_is_clean() {
 
     check_notch(
         env.design(&case.store),
+        &table,
+        &mut sink.scratch,
+        &mut sink.out,
+        &mut sink.runs,
+    );
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// A U drawn as three touching rectangles, arms 80 units apart.
+///
+/// The same conductor as [`u_shape`], fractured the way a router or a GDS writer
+/// emits it. Nothing distinguishes the two electrically, and no rule may
+/// distinguish them either.
+fn fractured_u() -> gpurify_core::GeometryStore {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 300, 100); // the base, touching both arms along y = 100
+    layout.rect(A, 0, 100, 110, 500); // left arm
+    layout.rect(A, 190, 100, 300, 500); // right arm, 80 across the gap
+    layout.finish().0
+}
+
+/// Oracle: construct-from-answer, and the `notch_no_outer_merge` defect.
+///
+/// A U whose arms are 80 units apart has an 80-unit notch. Drawing that U as one
+/// polygon reports it; drawing it as three touching rectangles used to report
+/// **nothing**, because `check_facing` ran `validate_layer_into` per store row
+/// and each rectangle is convex on its own. `min_spacing` did not report it
+/// either — the three rows are one merged figure and the gap is exempt as
+/// intra-figure, which is correct for spacing.
+///
+/// So a real 80-unit defect passed both rules, and which one it passed depended
+/// on nothing but how the layout happened to be fractured. Notch and spacing
+/// must partition the same merged geometry, and this is the half that was
+/// missing.
+#[test]
+fn a_notch_across_two_rectangles_of_one_merged_figure_is_still_a_notch() {
+    let store = fractured_u();
+
+    let env = Env::default();
+    let mut sink = Sink::default();
+    let mut table = NotchTable::default();
+    table.rule.push(RULE);
+    table.layer.push(A);
+    table.limit.push(dbu(81));
+
+    check_notch(
+        env.design(&store),
+        &table,
+        &mut sink.scratch,
+        &mut sink.out,
+        &mut sink.runs,
+    );
+
+    let found = assert_rule_ran(&sink.runs, RULE);
+    assert_eq!(
+        sink.out.len(),
+        1,
+        "an 80-unit notch across a fractured figure went unreported; found \
+         {found:?}"
+    );
+    assert_eq!(
+        sink.out.measured[0],
+        gpurify_report::Measurement::Length(dbu(80)),
+        "the notch is the 80-unit gap between the two arms"
+    );
+}
+
+/// The other side of the same boundary, so the test above is not satisfied by a
+/// rule that reports every same-figure pair it sees. Exactly at the limit is
+/// clean, which is what every other case in this file asserts of its own rule.
+#[test]
+fn a_fractured_notch_exactly_at_the_limit_is_clean() {
+    let store = fractured_u();
+
+    let env = Env::default();
+    let mut sink = Sink::default();
+    let mut table = NotchTable::default();
+    table.rule.push(RULE);
+    table.layer.push(A);
+    table.limit.push(dbu(80));
+
+    check_notch(
+        env.design(&store),
+        &table,
+        &mut sink.scratch,
+        &mut sink.out,
+        &mut sink.runs,
+    );
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// The partition, stated directly: the two rules that share this geometry must
+/// cover the 80-unit gap exactly once between them.
+///
+/// `min_spacing` exempting it is correct — the three rectangles are one
+/// conductor, and a wire is not too close to itself. What made the pair a
+/// fail-open was that `notch` did not pick up what `min_spacing` put down.
+#[test]
+fn spacing_exempts_the_intra_figure_gap_that_notch_now_reports() {
+    let store = fractured_u();
+
+    let env = Env::default();
+    let mut sink = Sink::default();
+    let mut table = MinSpacingTable::default();
+    table.rule.push(RULE);
+    table.layer.push(A);
+    table.limit.push(dbu(81));
+
+    check_min_spacing(
+        env.design(&store),
         &table,
         &mut sink.scratch,
         &mut sink.out,

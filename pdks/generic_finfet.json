@@ -1,334 +1,206 @@
 {
   "layers": {
-    "nwell": {
-      "layer": 64,
-      "datatype": 20
-    },
-    "diff": {
-      "layer": 65,
-      "datatype": 20
-    },
-    "poly": {
-      "layer": 66,
-      "datatype": 20
-    },
-    "licon": {
-      "layer": 66,
-      "datatype": 44
-    },
-    "li": {
-      "layer": 67,
-      "datatype": 20
-    },
-    "mcon": {
-      "layer": 67,
-      "datatype": 44
-    },
-    "met1": {
-      "layer": 68,
-      "datatype": 20
-    },
-    "via1": {
-      "layer": 68,
-      "datatype": 44
-    },
-    "met2": {
-      "layer": 69,
-      "datatype": 20
-    },
-    "via2": {
-      "layer": 69,
-      "datatype": 44
-    },
-    "met3": {
-      "layer": 70,
-      "datatype": 20
-    },
-    "via3": {
-      "layer": 70,
-      "datatype": 44
-    },
-    "met4": {
-      "layer": 71,
-      "datatype": 20
-    },
-    "via4": {
-      "layer": 71,
-      "datatype": 44
-    },
-    "met5": {
-      "layer": 72,
-      "datatype": 20
-    },
-    "nsdm": {
-      "layer": 93,
-      "datatype": 44
-    },
-    "psdm": {
-      "layer": 94,
-      "datatype": 20
-    }
+    "nwell": [64, 20],
+    "diff": [65, 20],
+    "poly": [66, 20],
+    "licon": [66, 44],
+    "li": [67, 20],
+    "mcon": [67, 44],
+    "met1": [68, 20],
+    "via1": [68, 44],
+    "met2": [69, 20],
+    "via2": [69, 44],
+    "met3": [70, 20],
+    "via3": [70, 44],
+    "met4": [71, 20],
+    "via4": [71, 44],
+    "met5": [72, 20],
+    "nsdm": [93, 44],
+    "psdm": [94, 20]
   },
-  "drc": {
-    "min_width": {
-      "layer": "met1",
-      "min": 140
-    },
-    "min_spacing": {
-      "layer": "met1",
-      "min": 140
-    },
-    "min_enclosure": {
-      "outer": "met1",
-      "inner": "mcon",
-      "min": 30
-    },
-    "min_extension": {
-      "layer": "poly",
-      "ref": "diff",
-      "min": 130
-    },
-    "min_area": {
-      "layer": "met1",
-      "min": 83000
-    },
-    "notch": {
-      "layer": "met1",
-      "min": 140
-    },
-    "off_grid": {
-      "grid": 5
-    },
-    "angle": {
-      "allowed": [
-        0,
-        45,
-        90,
-        135
-      ]
-    },
-    "min_density": {
-      "layer": "met1",
-      "window": 700000,
-      "min_frac": 0.35
-    },
-    "max_density": {
-      "layer": "met1",
-      "window": 700000,
-      "max_frac": 0.7
-    },
-    "overlap": {
-      "layer_a": "li",
-      "layer_b": "licon",
-      "min": 170
-    },
-    "corner_to_corner": {
-      "layer": "met1",
-      "min": 140
-    }
+
+  "rules": {
+    "nwell_min_width":              { "kind": "min_width", "layers": ["nwell"], "params": { "limit": { "nm": 840 } } },
+    "diff_min_width":               { "kind": "min_width", "layers": ["diff"],  "params": { "limit": { "nm": 150 } } },
+    "poly_min_width":               { "kind": "min_width", "layers": ["poly"],  "params": { "limit": { "nm": 150 } } },
+    "licon_min_width":              { "kind": "min_width", "layers": ["licon"], "params": { "limit": { "nm": 170 } } },
+    "li_min_width":                 { "kind": "min_width", "layers": ["li"],    "params": { "limit": { "nm": 170 } } },
+    "mcon_min_width":               { "kind": "min_width", "layers": ["mcon"],  "params": { "limit": { "nm": 170 } } },
+    "met1_min_width":               { "kind": "min_width", "layers": ["met1"],  "params": { "limit": { "nm": 140 } } },
+    "via1_min_width":               { "kind": "min_width", "layers": ["via1"],  "params": { "limit": { "nm": 150 } } },
+    "met2_min_width":               { "kind": "min_width", "layers": ["met2"],  "params": { "limit": { "nm": 140 } } },
+    "via2_min_width":               { "kind": "min_width", "layers": ["via2"],  "params": { "limit": { "nm": 200 } } },
+    "met3_min_width":               { "kind": "min_width", "layers": ["met3"],  "params": { "limit": { "nm": 300 } } },
+    "via3_min_width":               { "kind": "min_width", "layers": ["via3"],  "params": { "limit": { "nm": 200 } } },
+    "met4_min_width":               { "kind": "min_width", "layers": ["met4"],  "params": { "limit": { "nm": 300 } } },
+    "via4_min_width":               { "kind": "min_width", "layers": ["via4"],  "params": { "limit": { "nm": 800 } } },
+    "met5_min_width":               { "kind": "min_width", "layers": ["met5"],  "params": { "limit": { "nm": 1600 } } },
+    "nsdm_min_width":               { "kind": "min_width", "layers": ["nsdm"],  "params": { "limit": { "nm": 380 } } },
+    "psdm_min_width":               { "kind": "min_width", "layers": ["psdm"],  "params": { "limit": { "nm": 380 } } },
+
+    "nwell_min_spacing":            { "kind": "min_spacing", "layers": ["nwell"], "params": { "limit": { "nm": 1270 } } },
+    "diff_min_spacing":             { "kind": "min_spacing", "layers": ["diff"],  "params": { "limit": { "nm": 270 } } },
+    "poly_min_spacing":             { "kind": "min_spacing", "layers": ["poly"],  "params": { "limit": { "nm": 210 } } },
+    "licon_min_spacing":            { "kind": "min_spacing", "layers": ["licon"], "params": { "limit": { "nm": 170 } } },
+    "li_min_spacing":               { "kind": "min_spacing", "layers": ["li"],    "params": { "limit": { "nm": 170 } } },
+    "mcon_min_spacing":             { "kind": "min_spacing", "layers": ["mcon"],  "params": { "limit": { "nm": 190 } } },
+    "met1_min_spacing":             { "kind": "min_spacing", "layers": ["met1"],  "params": { "limit": { "nm": 140 } } },
+    "via1_min_spacing":             { "kind": "min_spacing", "layers": ["via1"],  "params": { "limit": { "nm": 170 } } },
+    "met2_min_spacing":             { "kind": "min_spacing", "layers": ["met2"],  "params": { "limit": { "nm": 140 } } },
+    "via2_min_spacing":             { "kind": "min_spacing", "layers": ["via2"],  "params": { "limit": { "nm": 200 } } },
+    "met3_min_spacing":             { "kind": "min_spacing", "layers": ["met3"],  "params": { "limit": { "nm": 300 } } },
+    "via3_min_spacing":             { "kind": "min_spacing", "layers": ["via3"],  "params": { "limit": { "nm": 200 } } },
+    "met4_min_spacing":             { "kind": "min_spacing", "layers": ["met4"],  "params": { "limit": { "nm": 300 } } },
+    "via4_min_spacing":             { "kind": "min_spacing", "layers": ["via4"],  "params": { "limit": { "nm": 800 } } },
+    "met5_min_spacing":             { "kind": "min_spacing", "layers": ["met5"],  "params": { "limit": { "nm": 1600 } } },
+    "nsdm_min_spacing":             { "kind": "min_spacing", "layers": ["nsdm"],  "params": { "limit": { "nm": 380 } } },
+    "psdm_min_spacing":             { "kind": "min_spacing", "layers": ["psdm"],  "params": { "limit": { "nm": 380 } } },
+
+    "licon_max_width":              { "kind": "max_width", "layers": ["licon"], "params": { "limit": { "nm": 170 } } },
+    "met5_max_width":               { "kind": "max_width", "layers": ["met5"],  "params": { "limit": { "nm": 30000 } } },
+
+    "met1_min_edge_length":         { "kind": "min_edge_length", "layers": ["met1"], "params": { "limit": { "nm": 70 } } },
+
+    "met1_notch":                   { "kind": "notch", "layers": ["met1"], "params": { "limit": { "nm": 140 } } },
+    "li_notch":                     { "kind": "notch", "layers": ["li"],   "params": { "limit": { "nm": 170 } } },
+
+    "poly_to_diff_min_spacing":     { "kind": "min_spacing_diff", "layers": ["poly", "diff"],  "params": { "limit": { "nm": 75 } } },
+    "nwell_to_diff_min_spacing":    { "kind": "min_spacing_diff", "layers": ["nwell", "diff"], "params": { "limit": { "nm": 340 } } },
+
+    "met1_eol_spacing":             { "kind": "eol_spacing", "layers": ["met1"], "params": { "eol_width": { "nm": 200 }, "limit": { "nm": 170 } } },
+
+    "met1_prl_spacing":             { "kind": "prl_spacing", "layers": ["met1"], "params": { "prl_threshold": { "nm": 600 }, "limit": { "nm": 190 } } },
+
+    "met1_corner_to_corner":        { "kind": "corner_to_corner", "layers": ["met1"], "params": { "limit": { "nm": 140 } } },
+
+    "met1_wide_dependent_spacing":  { "kind": "wide_dependent_spacing", "layers": ["met1"], "params": { "width_threshold": { "nm": 3000 }, "limit": { "nm": 280 } } },
+
+    "diff_min_area":                { "kind": "min_area", "layers": ["diff"], "params": { "limit": { "nm": 265 } } },
+    "li_min_area":                  { "kind": "min_area", "layers": ["li"],   "params": { "limit": { "nm": 235 } } },
+    "met1_min_area":                { "kind": "min_area", "layers": ["met1"], "params": { "limit": { "nm": 285 } } },
+    "met2_min_area":                { "kind": "min_area", "layers": ["met2"], "params": { "limit": { "nm": 285 } } },
+    "met3_min_area":                { "kind": "min_area", "layers": ["met3"], "params": { "limit": { "nm": 485 } } },
+    "met4_min_area":                { "kind": "min_area", "layers": ["met4"], "params": { "limit": { "nm": 485 } } },
+    "met5_min_area":                { "kind": "min_area", "layers": ["met5"], "params": { "limit": { "nm": 2000 } } },
+
+    "met1_min_enclosed_area":       { "kind": "min_enclosed_area", "layers": ["met1"], "params": { "limit": { "nm": 300 } } },
+
+    "met5_cheesing":                { "kind": "cheesing", "layers": ["met5"], "params": { "max_unslotted": { "nm": 30000 } } },
+
+    "met1_min_density":             { "kind": "density", "layers": ["met1"], "params": { "window": { "nm": 700000 }, "step": { "nm": 70000 }, "limit": { "ratio": 0.35 }, "maximum": false } },
+    "met1_max_density":             { "kind": "density", "layers": ["met1"], "params": { "window": { "nm": 700000 }, "step": { "nm": 70000 }, "limit": { "ratio": 0.70 }, "maximum": true } },
+
+    "met1_encloses_mcon":           { "kind": "min_enclosure", "layers": ["met1", "mcon"],  "params": { "limit": { "nm": 30 } } },
+    "li_encloses_licon":            { "kind": "min_enclosure", "layers": ["li", "licon"],   "params": { "limit": { "nm": 80 } } },
+    "met2_encloses_via1":           { "kind": "min_enclosure", "layers": ["met2", "via1"],  "params": { "limit": { "nm": 55 } } },
+    "nwell_encloses_diff":          { "kind": "min_enclosure", "layers": ["nwell", "diff"], "params": { "limit": { "nm": 180 } } },
+
+    "met1_encloses_mcon_one_side":  { "kind": "asymmetric_enclosure", "layers": ["met1", "mcon"], "params": { "min_one_side": { "nm": 60 } } },
+
+    "poly_endcap_over_diff":        { "kind": "min_extension", "layers": ["poly", "diff"], "params": { "limit": { "nm": 130 } } },
+
+    "li_licon_overlap":             { "kind": "overlap", "layers": ["li", "licon"], "params": { "limit": { "nm": 170 } } },
+
+    "nwell_max_distance_to_tap":    { "kind": "max_distance_to_tap", "layers": ["nwell", "diff"], "params": { "limit": { "nm": 15000 } } },
+
+    "manufacturing_grid":           { "kind": "off_grid", "layers": [], "params": { "pitch": { "nm": 5 } } },
+
+    "allowed_edge_angles":          { "kind": "angle", "layers": [], "params": { "angle": { "count": 0 }, "angle": { "count": 45 }, "angle": { "count": 90 }, "angle": { "count": 135 } } },
+
+    "via1_redundant_via":           { "kind": "redundant_via", "layers": ["via1"], "params": { "min_count": { "count": 2 }, "within": { "nm": 500 } } },
+
+    "via2_array_spacing":           { "kind": "via_array_spacing", "layers": ["via2"], "params": { "array_threshold": { "count": 4 }, "limit": { "nm": 250 } } },
+
+    "met1_multi_patterning":        { "kind": "multi_patterning", "layers": ["met1"], "params": { "colors": { "count": 2 }, "color_spacing": { "nm": 280 } } },
+
+    "antenna_poly_etch":            { "kind": "antenna", "layers": ["poly", "poly"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_li_etch":              { "kind": "antenna", "layers": ["poly", "poly", "licon", "li"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_met1_etch":            { "kind": "antenna", "layers": ["poly", "poly", "licon", "li", "mcon", "met1"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_met2_etch":            { "kind": "antenna", "layers": ["poly", "poly", "licon", "li", "mcon", "met1", "via1", "met2"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_met3_etch":            { "kind": "antenna", "layers": ["poly", "poly", "licon", "li", "mcon", "met1", "via1", "met2", "via2", "met3"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_met4_etch":            { "kind": "antenna", "layers": ["poly", "poly", "licon", "li", "mcon", "met1", "via1", "met2", "via2", "met3", "via3", "met4"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_met5_etch":            { "kind": "antenna", "layers": ["poly", "poly", "licon", "li", "mcon", "met1", "via1", "met2", "via2", "met3", "via3", "met4", "via4", "met5"], "params": { "max_ratio": { "ratio": 400.0 } } },
+    "antenna_met1_sidewall":        { "kind": "antenna", "layers": ["poly", "met1"], "params": { "max_ratio": { "ratio": 800.0 }, "sidewall_thickness": { "nm": 360 } } },
+
+    "antenna_electrical_full_net":  { "kind": "antenna_electrical", "layers": ["poly", "licon", "li", "mcon", "met1", "via1", "met2", "via2", "met3", "via3", "met4", "via4", "met5"], "params": { "max_ratio": { "ratio": 800.0 } } },
+
+    "met1_density_cmp":             { "kind": "density_cmp", "layers": ["met1"], "params": { "window_x": { "nm": 20000 }, "window_y": { "nm": 20000 }, "step_x": { "nm": 10000 }, "step_y": { "nm": 10000 }, "min_density": { "ratio": 0.35 }, "max_density": { "ratio": 0.70 }, "max_neighbour_delta": { "ratio": 0.15 }, "include_partial_windows": true, "cmp_target_density": { "ratio": 0.50 }, "cmp_nominal_thickness": { "nm": 360 }, "cmp_thickness_sensitivity": { "nm": 120 }, "cmp_max_abs_thickness_delta": { "nm": 40 } } },
+
+    "em_li":                        { "kind": "electromigration", "layers": ["li", "licon"], "params": { "max_density": { "ratio": 280.0 }, "max_current_per_cut": { "ratio": 80.0 }, "blech_limit": { "ratio": 15000.0 }, "reference_temperature": { "ratio": 378.0 }, "activation_energy_ev": { "ratio": 0.9 }, "current_exponent": { "ratio": 2.0 } } },
+    "em_met1":                      { "kind": "electromigration", "layers": ["met1", "mcon"], "params": { "max_density": { "ratio": 1000.0 }, "max_current_per_cut": { "ratio": 80.0 }, "blech_limit": { "ratio": 54000.0 }, "reference_temperature": { "ratio": 378.0 }, "activation_energy_ev": { "ratio": 0.9 }, "current_exponent": { "ratio": 2.0 } } },
+    "em_met2":                      { "kind": "electromigration", "layers": ["met2", "via1"], "params": { "max_density": { "ratio": 1000.0 }, "max_current_per_cut": { "ratio": 60.0 }, "blech_limit": { "ratio": 54000.0 }, "reference_temperature": { "ratio": 378.0 }, "activation_energy_ev": { "ratio": 0.9 }, "current_exponent": { "ratio": 2.0 } } },
+    "em_met3_met4":                 { "kind": "electromigration", "layers": ["met3", "via2", "met4", "via3"], "params": { "max_density": { "ratio": 2350.0 }, "max_current_per_cut": { "ratio": 110.0 }, "blech_limit": { "ratio": 126750.0 }, "reference_temperature": { "ratio": 378.0 }, "activation_energy_ev": { "ratio": 0.9 }, "current_exponent": { "ratio": 2.0 } } },
+    "em_met5":                      { "kind": "electromigration", "layers": ["met5", "via4"], "params": { "max_density": { "ratio": 3500.0 }, "max_current_per_cut": { "ratio": 1800.0 }, "blech_limit": { "ratio": 189000.0 }, "reference_temperature": { "ratio": 378.0 }, "activation_energy_ev": { "ratio": 0.9 }, "current_exponent": { "ratio": 2.0 } } },
+
+    "peak_current_li":              { "kind": "em_current_density", "layers": ["li", "licon"], "params": { "max_density": { "ratio": 420.0 }, "max_current_per_cut": { "ratio": 120.0 } } },
+    "peak_current_met1":            { "kind": "em_current_density", "layers": ["met1", "mcon"], "params": { "max_density": { "ratio": 1500.0 }, "max_current_per_cut": { "ratio": 120.0 } } },
+    "peak_current_met2":            { "kind": "em_current_density", "layers": ["met2", "via1"], "params": { "max_density": { "ratio": 1500.0 }, "max_current_per_cut": { "ratio": 90.0 } } },
+    "peak_current_met3_met4":       { "kind": "em_current_density", "layers": ["met3", "via2", "met4", "via3"], "params": { "max_density": { "ratio": 3525.0 }, "max_current_per_cut": { "ratio": 165.0 } } },
+    "peak_current_met5":            { "kind": "em_current_density", "layers": ["met5", "via4"], "params": { "max_density": { "ratio": 5250.0 }, "max_current_per_cut": { "ratio": 2700.0 } } },
+
+    "esd_latchup_pad":              { "kind": "esd_latchup", "layers": ["met5", "diff"], "params": { "required_current": { "ratio": 1330.0 }, "max_path_resistance": { "ratio": 2.0 }, "max_clamp_voltage": { "ratio": 5500.0 }, "min_guard_ring_width": { "nm": 420 }, "max_tap_distance": { "nm": 15000 } } },
+
+    "esd_pad_reaches_clamp":        { "kind": "esd_topological", "layers": ["met5"], "params": {} },
+
+    "floating_gate":                { "kind": "floating_gate", "layers": [], "params": {} },
+
+    "floating_nwell":               { "kind": "floating_well", "layers": ["nwell", "diff"], "params": {} },
+
+    "gate_oxide_domain_delta":      { "kind": "hv_domain", "layers": [], "params": { "max_domain_delta": { "ratio": 1980.0 } } },
+
+    "ir_drop":                      { "kind": "ir_drop", "layers": [], "params": {} },
+
+    "nwell_missing_tie":            { "kind": "missing_tie", "layers": ["nwell", "diff"], "params": { "max_distance": { "nm": 15000 } } },
+
+    "multiple_drivers":             { "kind": "multiple_drivers", "layers": [], "params": { "max_drivers": { "count": 1 } } },
+
+    "p2p_resistance":               { "kind": "p2p_resistance", "layers": [], "params": { "max_resistance": { "ratio": 1000.0 } } },
+
+    "bti_pmos":                     { "kind": "reliability", "layers": [], "params": { "required_lifetime_hours": { "ratio": 87600.0 }, "reference_lifetime_hours": { "ratio": 87600.0 }, "reference_stress": { "ratio": 1800.0 }, "stress_exponent": { "ratio": 3.0 }, "reference_temperature": { "ratio": 398.0 }, "activation_energy_ev": { "ratio": 0.6 }, "max_abs_voltage": { "ratio": 1980.0 }, "duty_cycle": { "ratio": 0.5 } } },
+    "hci_nmos":                     { "kind": "reliability", "layers": [], "params": { "required_lifetime_hours": { "ratio": 87600.0 }, "reference_lifetime_hours": { "ratio": 87600.0 }, "reference_stress": { "ratio": 1800.0 }, "stress_exponent": { "ratio": 5.0 }, "reference_temperature": { "ratio": 298.0 }, "activation_energy_ev": { "ratio": 0.1 }, "max_abs_voltage": { "ratio": 1980.0 }, "duty_cycle": { "ratio": 0.1 } } },
+    "tddb_gate_oxide":              { "kind": "reliability", "layers": [], "params": { "required_lifetime_hours": { "ratio": 87600.0 }, "reference_lifetime_hours": { "ratio": 87600.0 }, "reference_stress": { "ratio": 1800.0 }, "stress_exponent": { "ratio": 40.0 }, "reference_temperature": { "ratio": 398.0 }, "activation_energy_ev": { "ratio": 0.8 }, "max_abs_voltage": { "ratio": 1980.0 }, "duty_cycle": { "ratio": 1.0 } } },
+
+    "soft_connection_through_diff": { "kind": "soft_connection", "layers": ["diff"], "params": {} },
+    "soft_connection_through_poly": { "kind": "soft_connection", "layers": ["poly"], "params": { "warning": true } },
+
+    "tie_high_low":                 { "kind": "tie_high_low", "layers": [], "params": { "warning": true } },
+
+    "unconnected_routing_pin":      { "kind": "unconnected_pin", "layers": ["li", "met1", "met2", "met3", "met4", "met5"], "params": {} }
   },
-  "lvs": {
-    "cut_required": true
-  },
+
   "connectivity": {
-    "conductors": [
-      "diff",
-      "poly",
-      "li",
-      "met1",
-      "met2",
-      "met3",
-      "met4",
-      "met5"
-    ],
+    "conductors": ["diff", "poly", "li", "met1", "met2", "met3", "met4", "met5"],
+    "intra_layer_touch": true,
     "vias": [
-      {
-        "layer": "licon",
-        "connects": [
-          "diff",
-          "poly",
-          "li"
-        ]
-      },
-      {
-        "layer": "mcon",
-        "connects": [
-          "li",
-          "met1"
-        ]
-      },
-      {
-        "layer": "via1",
-        "connects": [
-          "met1",
-          "met2"
-        ]
-      },
-      {
-        "layer": "via2",
-        "connects": [
-          "met2",
-          "met3"
-        ]
-      },
-      {
-        "layer": "via3",
-        "connects": [
-          "met3",
-          "met4"
-        ]
-      },
-      {
-        "layer": "via4",
-        "connects": [
-          "met4",
-          "met5"
-        ]
-      }
+      { "layer": "licon", "connects": ["diff", "li"] },
+      { "layer": "licon", "connects": ["poly", "li"] },
+      { "layer": "mcon", "connects": ["li", "met1"] },
+      { "layer": "via1", "connects": ["met1", "met2"] },
+      { "layer": "via2", "connects": ["met2", "met3"] },
+      { "layer": "via3", "connects": ["met3", "met4"] },
+      { "layer": "via4", "connects": ["met4", "met5"] }
     ]
   },
-  "device_recognition": {
-    "mos": [
-      {
-        "name": "nmos",
-        "gate_layer": "poly",
-        "channel_layer": "diff",
-        "type_implant": "nsdm",
-        "device_type": "nmos"
-      },
-      {
-        "name": "pmos",
-        "gate_layer": "poly",
-        "channel_layer": "diff",
-        "type_implant": "psdm",
-        "device_type": "pmos",
-        "well_layer": "nwell"
-      }
-    ]
-  },
+
+  "device_recognition": [
+    { "kind": "mos", "marker": "nsdm", "model": "nfet", "terminals": ["poly", "diff", "diff"] },
+    { "kind": "mos", "marker": "psdm", "model": "pfet", "terminals": ["poly", "diff", "diff", "nwell"] }
+  ],
+
   "pex": {
-    "poly": {
-      "sheet_res_ohm_sq": 48.2,
-      "area_cap_af_um2": 106.0,
-      "fringe_cap_af_um": 55.0,
-      "coupling_cap_af_um": 40.0,
-      "coupling_ref_spacing_nm": 210
-    },
-    "li": {
-      "sheet_res_ohm_sq": 12.8,
-      "area_cap_af_um2": 37.0,
-      "fringe_cap_af_um": 40.0,
-      "coupling_cap_af_um": 50.0,
-      "coupling_ref_spacing_nm": 170
-    },
-    "met1": {
-      "sheet_res_ohm_sq": 0.125,
-      "area_cap_af_um2": 25.0,
-      "fringe_cap_af_um": 40.0,
-      "coupling_cap_af_um": 85.0,
-      "coupling_ref_spacing_nm": 140
-    },
-    "met2": {
-      "sheet_res_ohm_sq": 0.125,
-      "area_cap_af_um2": 17.0,
-      "fringe_cap_af_um": 38.0,
-      "coupling_cap_af_um": 85.0,
-      "coupling_ref_spacing_nm": 140
-    },
-    "met3": {
-      "sheet_res_ohm_sq": 0.047,
-      "area_cap_af_um2": 12.0,
-      "fringe_cap_af_um": 35.0,
-      "coupling_cap_af_um": 80.0,
-      "coupling_ref_spacing_nm": 300
-    },
-    "met4": {
-      "sheet_res_ohm_sq": 0.047,
-      "area_cap_af_um2": 10.0,
-      "fringe_cap_af_um": 33.0,
-      "coupling_cap_af_um": 70.0,
-      "coupling_ref_spacing_nm": 300
-    },
-    "met5": {
-      "sheet_res_ohm_sq": 0.029,
-      "area_cap_af_um2": 9.0,
-      "fringe_cap_af_um": 32.0,
-      "coupling_cap_af_um": 60.0,
-      "coupling_ref_spacing_nm": 1600
-    }
-  },
-  "devices": {
-    "_aliases": {
-      "n": "nfet", "p": "pfet",
-      "nmos_rvt": "nfet", "pmos_rvt": "pfet",
-      "nlvt": "nfet", "plvt": "pfet",
-      "lvtnfet": "nfet", "lvtpfet": "pfet",
-      "nmos_lvt": "nfet", "nfet_lvt": "nfet",
-      "pfet_lvt": "pfet",
-      "nfet_hvt": "nfet", "pfet_hvt": "pfet",
-      "hvtnfet": "nfet",
-      "pulvt": "pfet", "plplvt": "pfet",
-      "res": "resistor",
-      "cap": "capacitor"
-    },
-    "nfet":      { "type": "nmos", "cell": "mosfet",    "min_w": 420, "min_l": 150 },
-    "pfet":      { "type": "pmos", "cell": "mosfet",    "min_w": 420, "min_l": 150 },
-    "resistor":  { "type": "res",  "cell": "resistor",  "default_w": 400, "min_w": 330 },
-    "capacitor": { "type": "cap",  "cell": "capacitor" }
-  },
-  "cell": {
-    "layers": {
-      "diff": "diff",
-      "poly": "poly",
-      "li": "li",
-      "licon": "licon",
-      "mcon": "mcon",
-      "met1": "met1",
-      "nwell": "nwell",
-      "nsdm": "nsdm",
-      "psdm": "psdm",
-      "tap": "diff",
-      "routing_metals": ["met1", "met2", "met3", "met4", "met5"],
-      "routing_vias": ["via1", "via2", "via3", "via4"]
-    },
-    "contact": 170,
-    "sd_width": 250,
-    "min_finger_width": 420,
-    "max_finger_width": 10000,
-    "poly_ext": 130,
-    "via_enclosure": 300,
-    "plate_spacing": 200,
-    "res_head": 300,
-    "well_enclosure": 300,
-    "via_spacing": 170,
-    "mcon_size": 170,
-    "m1_enc": 60,
-    "met1_space": 140,
-    "device_gap": 600,
-    "well_spacing": 600,
-    "dti": null,
-    "res_corner_squares": 0.56,
-    "res_serpentine_aspect": 10.0,
-    "res_min_segment": 10000,
-    "res_seg_gap": 400,
-    "bjt_max_emitter_stripe": 25000,
-    "bjt_min_emitter_side": 420,
-    "bjt_base_frac": 0.3,
-    "bjt_collector_frac": 0.5,
-    "bjt_stripe_gap": 200,
-    "diode_gap": 200,
-    "ind_min_trace": 1000,
-    "ind_min_diameter": 10000,
-    "wpe_clearance_nm": [2000, 3000, 5000],
-    "nwell_diff_enc": 180,
-    "min_guard_ring_width": 420,
-    "guard_licon_pitch": 340,
-    "p_epi_thickness": 3000,
-    "p_well_depth": 1500,
-    "n_well_depth": 2000,
-    "retrograde_pwell": false,
-    "lod_moat_ext_nm": [3000, 5000],
-    "sheet_tolerance": {},
-    "linewidth_control_nm": {}
+    "diff":  { "thickness_nm": 150,  "height_nm": 0,    "sheet_res_ohm_sq": 8.0,   "area_cap_af_um2": 940.0, "fringe_cap_af_um": 250.0, "dielectric_k": 4.2 },
+    "poly":  { "thickness_nm": 200,  "height_nm": 150,  "sheet_res_ohm_sq": 48.2,  "area_cap_af_um2": 106.0, "fringe_cap_af_um": 55.0,  "dielectric_k": 4.2 },
+    "licon": { "thickness_nm": 780,  "height_nm": 150,  "sheet_res_ohm_sq": 15.0,  "dielectric_k": 4.2 },
+    "li":    { "thickness_nm": 100,  "height_nm": 930,  "sheet_res_ohm_sq": 12.8,  "area_cap_af_um2": 37.0,  "fringe_cap_af_um": 40.0,  "dielectric_k": 4.2 },
+    "mcon":  { "thickness_nm": 345,  "height_nm": 1030, "sheet_res_ohm_sq": 9.0,   "dielectric_k": 4.2 },
+    "met1":  { "thickness_nm": 360,  "height_nm": 1375, "sheet_res_ohm_sq": 0.125, "area_cap_af_um2": 25.0,  "fringe_cap_af_um": 40.0,  "dielectric_k": 4.1 },
+    "via1":  { "thickness_nm": 270,  "height_nm": 1735, "sheet_res_ohm_sq": 4.5,   "dielectric_k": 4.1 },
+    "met2":  { "thickness_nm": 360,  "height_nm": 2005, "sheet_res_ohm_sq": 0.125, "area_cap_af_um2": 17.0,  "fringe_cap_af_um": 38.0,  "dielectric_k": 4.1 },
+    "via2":  { "thickness_nm": 420,  "height_nm": 2365, "sheet_res_ohm_sq": 3.4,   "dielectric_k": 4.1 },
+    "met3":  { "thickness_nm": 845,  "height_nm": 2785, "sheet_res_ohm_sq": 0.047, "area_cap_af_um2": 12.0,  "fringe_cap_af_um": 35.0,  "dielectric_k": 3.6 },
+    "via3":  { "thickness_nm": 390,  "height_nm": 3630, "sheet_res_ohm_sq": 3.4,   "dielectric_k": 3.6 },
+    "met4":  { "thickness_nm": 845,  "height_nm": 4020, "sheet_res_ohm_sq": 0.047, "area_cap_af_um2": 10.0,  "fringe_cap_af_um": 33.0,  "dielectric_k": 3.6 },
+    "via4":  { "thickness_nm": 505,  "height_nm": 4865, "sheet_res_ohm_sq": 2.0,   "dielectric_k": 3.6 },
+    "met5":  { "thickness_nm": 1260, "height_nm": 5370, "sheet_res_ohm_sq": 0.029, "area_cap_af_um2": 9.0,   "fringe_cap_af_um": 32.0,  "dielectric_k": 3.6 }
   }
 }

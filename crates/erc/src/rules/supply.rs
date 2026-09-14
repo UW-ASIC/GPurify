@@ -556,6 +556,19 @@ pub fn check_missing_tie(
             }
         }
 
+        // Coincident edges measure the same distance as each other, so keeping
+        // one of each is exact and it is what keeps a bucket shallow: abutting
+        // taps share their common edge, and every one of those duplicates would
+        // otherwise be a full `point_seg_dist2` on every probe that reaches its
+        // bucket. Sorted by endpoint, which is also what makes the grid's
+        // contents independent of the order the store hands out polygons.
+        // Keyed on the endpoint pair in ascending order, not on the segment as
+        // drawn: an edge two abutting taps share appears once in each ring and
+        // the two windings run it in opposite directions, and
+        // `point_seg_dist2` cannot tell them apart either.
+        taps.sort_unstable_by_key(undirected);
+        taps.dedup_by_key(|s| undirected(s));
+
         // Index the taps once per rule row, which is what makes the search below
         // ask a bounded number of segments per probe rather than the whole
         // column.
@@ -585,7 +598,13 @@ pub fn check_missing_tie(
             // Surviving `if`: `tapped` is a uniform, hoisted above the row loop,
             // not a test on this row's data.
             let (at, worst) = if tapped {
-                furthest_from_taps(xs, ys, design.store.poly_bbox(poly), &grid, &mut stack)
+                // `limit2` goes in as the floor the search starts from, not just
+                // as the test applied to its answer. The rule asks whether any
+                // point breaks the limit and how far the worst one is; on a
+                // region that breaks it nowhere the second half is never read,
+                // and a search that starts at the limit proves the first half
+                // without descending. See `furthest_from_taps`.
+                furthest_from_taps(xs, ys, design.store.poly_bbox(poly), limit2, &grid, &mut stack)
             } else {
                 (Point { x: x0, y: y0 }, NO_TAP_IN_RANGE)
             };
@@ -847,6 +866,20 @@ fn tap_geometry<'a>(
     }
 }
 
+/// One segment's endpoints in ascending order — its identity ignoring which way
+/// round it was drawn.
+///
+/// A distance to a segment does not depend on its direction, so this is the key
+/// two coincident tap edges have to agree on before one of them can be dropped.
+fn undirected(s: &Seg) -> (i64, i64, i64, i64) {
+    let (p, q) = (
+        (s.a.x.raw(), s.a.y.raw()),
+        (s.b.x.raw(), s.b.y.raw()),
+    );
+    let (lo, hi) = (p.min(q), p.max(q));
+    (lo.0, lo.1, hi.0, hi.1)
+}
+
 /// Append one ring's closed edges to a segment column.
 ///
 /// **Transform, gatherer.** Caller owns `out` and this appends rather than
@@ -1007,6 +1040,32 @@ fn isqrt_ceil(area: i128) -> i64 {
     narrowed
 }
 
+/// Segments a [`TapGrid`] bucket should hold before another bucket is worth the
+/// ring walk that reaching it costs.
+///
+/// Tuned by measurement, not derived: the conformance corpus's 77 tap edges over
+/// a one-per-bucket table spent most of a nearest-tap query on grid bookkeeping
+/// rather than on distances.
+const BUCKET_TARGET: i64 = 16;
+
+/// Whether no point of a cell can be further from a tap than the best found.
+///
+/// The bound is `sqrt(d2) + reach <= sqrt(worst)`, and it is tested with the
+/// right-hand root hoisted into `worst_root` and the left one never taken:
+/// `sqrt(d2) <= worst_root - reach` squares to one multiply. `worst_root` is
+/// `isqrt`'s floor, so the slack it loses is under one database unit and it
+/// loses it on the safe side — the test refuses to prune slightly too often,
+/// never slightly too rarely.
+///
+/// Branchless: `&`, not `&&`. A negative slack squares to a positive number
+/// that would pass the second test, and the sign test is one comparison, so
+/// there is nothing here worth a branch.
+#[inline]
+fn prunes(worst_root: i64, reach: i64, d2: DbuArea) -> bool {
+    let slack = i128::from(worst_root - reach);
+    (slack >= 0) & (d2.raw() <= slack * slack)
+}
+
 /// One axis-aligned block of integer points, closed on both ends.
 ///
 /// The unit of work in [`furthest_from_taps`]'s search. `i64` rather than
@@ -1018,6 +1077,43 @@ struct Cell {
     ylo: i64,
     xhi: i64,
     yhi: i64,
+    /// The tap nearest this cell's parent probe, as an index into
+    /// [`TapGrid::segs`]. Inherited by the children, so the search carries its
+    /// own answer downward — [`furthest_from_taps`] says why one remembered tap
+    /// is worth a whole grid query.
+    hint: u32,
+}
+
+/// The nearest tap to some point: how far, and which one.
+///
+/// The two travel together because [`furthest_from_taps`] needs both — the
+/// distance to compare, and the tap to hand its children as their starting
+/// bound. Returning the distance alone is what made the search re-derive the
+/// second half a hundred thousand times.
+#[derive(Debug, Clone, Copy)]
+struct Nearest {
+    dist2: DbuArea,
+    /// Index into [`TapGrid::segs`], or [`u32::MAX`] when nothing was scanned.
+    tap: u32,
+}
+
+impl Nearest {
+    /// Nothing scanned yet: the fold's identity.
+    const NONE: Self = Self {
+        dist2: NO_TAP_IN_RANGE,
+        tap: u32::MAX,
+    };
+
+    /// Fold one candidate in, keeping whichever is nearer.
+    ///
+    /// The catalogue's bit-blend: the index rides the same comparison the
+    /// distance does, so naming the winner costs no branch and no second pass.
+    #[inline]
+    fn keep(&mut self, other: Self) {
+        let mask = u32::from(other.dist2 < self.dist2).wrapping_neg();
+        self.tap = (self.tap & !mask) | (other.tap & mask);
+        self.dist2 = self.dist2.min(other.dist2);
+    }
 }
 
 /// A uniform grid over one rule row's tap edges.
@@ -1114,6 +1210,14 @@ impl TapGrid {
         // cell, then widened until the bucket table is O(segments) whatever the
         // aspect ratio — a 1 nm-tall, 1 mm-wide tap must not ask for a million
         // buckets per edge.
+        //
+        // Departing from it in one place: `SpatialIndex` aims at one row per
+        // bucket, and this grid is asked for a *nearest*, which pays a ring walk
+        // per query rather than one lookup. A bucket holding a handful of
+        // segments amortises that walk over a fold the machine likes; a bucket
+        // holding one segment spends more on the walk than on the distance. So
+        // the side count is taken over `taps.len() / BUCKET_TARGET`, which keeps
+        // the table O(segments) while making each bucket worth entering.
         out.extents.clear();
         out.extents.reserve(taps.len());
         out.extents.extend(taps.iter().map(|s| {
@@ -1124,8 +1228,8 @@ impl TapGrid {
         debug_assert_eq!(out.extents.len(), taps.len(), "one extent per tap edge");
         let mid = out.extents.len() / 2;
         out.extents.select_nth_unstable(mid);
-        let side = i64::try_from(taps.len())
-            .expect("a tap edge count fits an i64")
+        let side = (i64::try_from(taps.len()).expect("a tap edge count fits an i64")
+            / BUCKET_TARGET)
             .isqrt()
             .max(1);
         let cell = out.extents[mid]
@@ -1218,9 +1322,21 @@ impl TapGrid {
         (y - self.origin.y.raw()).div_euclid(self.cell)
     }
 
-    /// The least squared distance from `p` to any bucket in one cell.
+    /// One filed tap edge.
+    ///
+    /// Every index this grid hands out is one of its own, so the cast is a fact
+    /// about `segs` rather than a claim about the caller.
     #[inline]
-    fn nybucket(&self, cx: i64, cy: i64, p: Point) -> DbuArea {
+    fn tap(&self, at: u32) -> Seg {
+        self.segs[usize::try_from(at).expect("a filed-segment index fits a usize")]
+    }
+
+    /// The nearest tap in one cell.
+    ///
+    /// [`Nearest::NONE`] when the cell is empty, which loses every `keep` it
+    /// takes part in and is never read by a caller that found nothing.
+    #[inline]
+    fn nybucket(&self, cx: i64, cy: i64, p: Point) -> Nearest {
         let b = self.bucket(cx, cy);
         let (lo, hi) = (
             usize::try_from(self.start[b]).expect("a bucket offset fits a usize"),
@@ -1231,21 +1347,30 @@ impl TapGrid {
         // `ingest` built, which checked every coordinate against the same bound
         // once.
         let bucket = &self.segs[lo..hi];
-        let mut best = NO_TAP_IN_RANGE;
-        for &seg in bucket {
-            best = best.min(point_seg_dist2(p, seg));
+        let mut best = Nearest::NONE;
+        // The counter rides in the iterator rather than beside it, so the body
+        // stays the fold with no bounds check and no cast.
+        for (tap, &seg) in (self.start[b]..).zip(bucket) {
+            best.keep(Nearest {
+                dist2: point_seg_dist2(p, seg),
+                tap,
+            });
         }
         best
     }
 
-    /// The squared distance from `p` to the nearest tap edge.
+    /// The nearest tap edge to `p`.
     ///
-    /// **Decision** — one point in, one squared distance out. Exact: rings of
-    /// cells are scanned outward from `p`'s own cell and the scan stops only
-    /// once the best found is closer than the nearest point of any cell not yet
-    /// scanned, which is `r × cell_size` away because a segment is filed under
-    /// every cell it overlaps.
-    fn nearest2(&self, p: Point) -> DbuArea {
+    /// **Decision** — one point in, one [`Nearest`] out. Exact: rings of cells
+    /// are scanned outward from `p`'s own cell and the scan stops only once the
+    /// best found is closer than the nearest point of any cell not yet scanned,
+    /// which is `r × cell_size` away because a segment is filed under every cell
+    /// it overlaps.
+    ///
+    /// Naming the tap is what makes this affordable to *not* call — see
+    /// [`furthest_from_taps`], which asks it a few thousand times and answers a
+    /// hundred thousand probes from the taps it returned.
+    fn nearest2(&self, p: Point) -> Nearest {
         debug_assert!(self.nx >= 1 && self.ny >= 1, "an empty grid has no nearest tap");
         let (px, py) = (self.axis_x(p.x.raw()), self.axis_y(p.y.raw()));
         let rmax = px
@@ -1254,7 +1379,7 @@ impl TapGrid {
             .max(py.abs())
             .max((py - (self.ny - 1)).abs());
 
-        let mut best = NO_TAP_IN_RANGE;
+        let mut best = Nearest::NONE;
         let mut r = 0;
         while r <= rmax {
             let (x0, x1) = (px - r, px + r);
@@ -1265,14 +1390,14 @@ impl TapGrid {
                 // whole, the rows between contribute only their two ends.
                 if (cy == y0) | (cy == y1) {
                     for cx in x0.max(0)..=x1.min(self.nx - 1) {
-                        best = best.min(self.nybucket(cx, cy, p));
+                        best.keep(self.nybucket(cx, cy, p));
                     }
                 } else {
                     if (0..self.nx).contains(&x0) {
-                        best = best.min(self.nybucket(x0, cy, p));
+                        best.keep(self.nybucket(x0, cy, p));
                     }
                     if (0..self.nx).contains(&x1) && x1 != x0 {
-                        best = best.min(self.nybucket(x1, cy, p));
+                        best.keep(self.nybucket(x1, cy, p));
                     }
                 }
             }
@@ -1280,26 +1405,40 @@ impl TapGrid {
             // Every segment not yet scanned lies outside the block of cells at
             // Chebyshev radius `r`, so no point of it is nearer than `r × cell`.
             let gap = i128::from(r) * i128::from(self.cell);
-            if best.raw() <= gap * gap {
+            if best.dist2.raw() <= gap * gap {
                 break;
             }
             r += 1;
         }
 
         debug_assert!(
-            best < NO_TAP_IN_RANGE,
+            best.dist2 < NO_TAP_IN_RANGE,
             "a grid with a segment in it has a nearest segment"
+        );
+        debug_assert!(
+            usize::try_from(best.tap).is_ok_and(|at| at < self.segs.len()),
+            "the nearest segment is one of the filed ones"
         );
         best
     }
 }
 
 /// The point of one region polygon furthest from any tap, and that distance
-/// squared.
+/// squared — resolved only above `floor`.
 ///
-/// **Decision** — one ring, its bounding box and a tap grid in, one point and
-/// one squared distance out. `stack` is caller-owned scratch, cleared on entry,
-/// so a layer of a hundred thousand regions allocates once.
+/// **Decision** — one ring, its bounding box, a floor and a tap grid in, one
+/// point and one squared distance out. `stack` is caller-owned scratch, cleared
+/// on entry, so a layer of a hundred thousand regions allocates once.
+///
+/// **What `floor` buys, and what it costs.** The returned distance is the true
+/// maximum whenever that maximum exceeds `floor`, and is `floor` itself
+/// otherwise — the search declines to distinguish between maxima at or below it.
+/// That is exactly the distinction [`check_missing_tie`] does not make either:
+/// it asks `worst > limit2` and reads the distance only on the side where the
+/// answer is yes. Passing the limit in rather than applying it after is what
+/// turns a region that is comfortably tied from a full descent into a handful of
+/// pruned cells, and on the conformance corpus 43 of the 45 regions are that
+/// case. Pass `DbuArea::new(-1)` for the unconditional maximum.
 ///
 /// This is the rule's whole claim — [`check_missing_tie`]'s doc comment says
 /// *the* furthest point — and a search over the region's vertices alone does not
@@ -1313,22 +1452,38 @@ impl TapGrid {
 /// vertices. A cell is pruned when the furthest a point of it could possibly be
 /// from a tap is no further than the best already found — `nearest2` is
 /// 1-Lipschitz, so that bound is the probe's own distance plus the probe's reach
-/// into its cell, and both terms round *up* so the bound is never optimistic. A
-/// cell that survives is quartered. Single points cannot be quartered, and
-/// dropping them is what terminates the search: `Dbu` is an integer, so the
-/// resolution floor is one database unit and the answer is exact over every
-/// point the report could name.
+/// into its cell, and both terms round on the side that never makes the bound
+/// optimistic. A cell that survives is quartered. Single points cannot be
+/// quartered, and dropping them is what terminates the search: `Dbu` is an
+/// integer, so the resolution floor is one database unit and the answer is exact
+/// over every point the report could name.
+///
+/// **What a probe costs, and why it is usually not a grid query.** `nearest2` is
+/// exact and therefore expensive — it walks rings of cells until it can prove
+/// nothing unscanned is closer. The search does not need that. Both uses it
+/// makes of a probe's distance want only an *upper* bound on it:
+///
+/// - a cell is pruned when `f(probe) + reach` cannot beat `worst`, and
+///   over-stating `f(probe)` only makes the prune more cautious;
+/// - a probe can improve `worst` only if `f(probe) > worst`, and an upper bound
+///   that already loses says so.
+///
+/// The distance to *any single* tap is such a bound. Each cell therefore carries
+/// the tap that was nearest to its parent, one `point_seg_dist2` re-establishes
+/// the bound for the child, and the exact query runs only on the probes that
+/// bound cannot dismiss — 5 811 of 113 217 cells on the conformance corpus. Only
+/// the exact query ever writes `worst`, so the reported measurement is
+/// unchanged.
 ///
 /// **Cost.** Set by the *shape* of the maximum, not by the region's size: an
 /// isolated maximum — every shape a layout is mostly made of — prunes within a
 /// few cells of the seed, and only a maximum spread along a ridge forces the
-/// descent to the floor. The worst measured case is a region tapped along one
-/// edge alone, 200 µm square at a nanometre grid, at 1.7 s release. A region
-/// that size tapped anywhere sane is microseconds.
+/// descent to the floor.
 fn furthest_from_taps(
     xs: &[Dbu],
     ys: &[Dbu],
     bbox: Bbox,
+    floor: DbuArea,
     grid: &TapGrid,
     stack: &mut Vec<Cell>,
 ) -> (Point, DbuArea) {
@@ -1342,21 +1497,38 @@ fn furthest_from_taps(
     //
     // Not a bulk loop: a layout polygon carries a handful of vertices, and it is
     // the fold inside `nearest2` that is bulk.
-    let mut worst = DbuArea::new(-1);
+    let mut best = Nearest {
+        dist2: DbuArea::new(-1),
+        tap: 0,
+    };
     let mut at = Point { x: xs[0], y: ys[0] };
     for vertex in 0..xs.len() {
         let here = Point {
             x: xs[vertex],
             y: ys[vertex],
         };
-        let d2 = grid.nearest2(here);
+        let found = grid.nearest2(here);
         // Surviving `if`: not a bulk loop, for the reason above, and the taken
-        // side is two stores.
-        if d2 > worst {
-            worst = d2;
+        // side is two stores. Not `Nearest::keep`, which folds toward the
+        // *nearest* tap; this loop wants the furthest vertex.
+        if found.dist2 > best.dist2 {
+            best = found;
             at = here;
         }
     }
+
+    // The incumbent starts at the caller's floor when no vertex already clears
+    // it. That is the whole of the floor's effect: a cell is pruned against the
+    // incumbent, so on a region whose maximum is under the floor the first few
+    // cells prune and the descent never happens. `at` still names the furthest
+    // *vertex*, which is a point of the region and a legal report point, and it
+    // is read only when `worst` came back above the floor — by which time the
+    // search has written both.
+    let mut worst = best.dist2.max(floor);
+    // The prune below compares lengths, not areas, and `worst` moves a handful
+    // of times against a great many comparisons — so its root is carried beside
+    // it rather than taken per cell.
+    let mut worst_root = isqrt(worst).raw();
 
     stack.clear();
     stack.push(Cell {
@@ -1364,6 +1536,7 @@ fn furthest_from_taps(
         ylo: bbox.ylo.raw(),
         xhi: bbox.xhi.raw(),
         yhi: bbox.yhi.raw(),
+        hint: best.tap,
     });
     while let Some(cell) = stack.pop() {
         debug_assert!(
@@ -1376,25 +1549,48 @@ fn furthest_from_taps(
             x: Dbu::new_unchecked(cx),
             y: Dbu::new_unchecked(cy),
         };
-        let d2 = grid.nearest2(here);
 
-        // `&&`, not `&`: the containment walk is a pass over the region's ring
-        // and is the expensive side a branch exists to skip. It is skipped for
-        // every probe that could not have won anyway, which is nearly all of
-        // them.
-        if d2 > worst && point_in_region(xs, ys, here) {
-            worst = d2;
-            at = here;
-        }
+        // The inherited tap, which is one real tap and so an upper bound on the
+        // distance to the nearest. This is the whole probe for all but a handful
+        // of cells.
+        let mut probe = Nearest {
+            dist2: point_seg_dist2(here, grid.tap(cell.hint)),
+            tap: cell.hint,
+        };
 
-        // The bound. `reach` is how far the probe can see into its own cell, so
-        // nothing in the cell is further from a tap than `d2`'s root plus it.
+        // How far the probe can see into its own cell. Nothing in the cell is
+        // further from a tap than the probe's own distance plus this.
         let rx = i128::from((cell.xhi - cx).max(cx - cell.xlo));
         let ry = i128::from((cell.yhi - cy).max(cy - cell.ylo));
-        let bound = i128::from(isqrt_ceil(d2.raw())) + i128::from(isqrt_ceil(rx * rx + ry * ry));
+        let reach = isqrt_ceil(rx * rx + ry * ry);
+
+        // Surviving `if`: the exact query, whose taken side is a ring walk over
+        // the grid. One test covers both reasons to want one — this cell is
+        // about to be quartered on a bound the inherited tap inflated, or this
+        // probe might beat `worst` — because a probe that beats `worst` cannot
+        // prune, so the second reason lies inside the first.
+        if !prunes(worst_root, reach, probe.dist2) {
+            let exact = grid.nearest2(here);
+            debug_assert!(
+                exact.dist2 <= probe.dist2,
+                "the inherited tap is a real tap"
+            );
+            probe = exact;
+
+            // `&&`, not `&`: the containment walk is a pass over the region's
+            // ring and is the expensive side a branch exists to skip.
+            if exact.dist2 > worst && point_in_region(xs, ys, here) {
+                worst = exact.dist2;
+                worst_root = isqrt(worst).raw();
+                at = here;
+            }
+        }
+
         // Surviving `if`: the prune, which is the whole point of the search and
-        // is taken for the overwhelming majority of cells.
-        if bound * bound <= worst.raw() {
+        // is taken for the overwhelming majority of cells. `probe` is the exact
+        // nearest whenever the first test failed, so which cells survive here
+        // does not depend on the hint at all.
+        if prunes(worst_root, reach, probe.dist2) {
             continue;
         }
 
@@ -1414,6 +1610,7 @@ fn furthest_from_taps(
             ylo: cell.ylo,
             xhi: cx,
             yhi: cy,
+            hint: probe.tap,
         });
         if splits_x {
             stack.push(Cell {
@@ -1421,6 +1618,7 @@ fn furthest_from_taps(
                 ylo: cell.ylo,
                 xhi: cell.xhi,
                 yhi: cy,
+                hint: probe.tap,
             });
         }
         if splits_y {
@@ -1429,6 +1627,7 @@ fn furthest_from_taps(
                 ylo: cy + 1,
                 xhi: cx,
                 yhi: cell.yhi,
+                hint: probe.tap,
             });
         }
         if splits_x && splits_y {
@@ -1437,6 +1636,7 @@ fn furthest_from_taps(
                 ylo: cy + 1,
                 xhi: cell.xhi,
                 yhi: cell.yhi,
+                hint: probe.tap,
             });
         }
     }

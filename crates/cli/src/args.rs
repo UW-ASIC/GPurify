@@ -58,6 +58,15 @@ pub struct Common {
     /// Reject geometry on layers the deck does not describe, rather than
     /// dropping it. On by default; a signoff run wants it.
     pub strict_layers: bool,
+    /// Database units per micrometre, from `--grid`.
+    ///
+    /// `None` is the absence of the flag, and it stops the run at
+    /// [`LoadError::NoGrid`](gpurify_ingest::layout::LoadError) before a file is
+    /// opened. That is deliberate and must stay: a deck file does **not** declare
+    /// a resolution — `read_deck` is *handed* one — so defaulting a value here
+    /// would silently reinterpret every limit in the deck, turning a loud dead
+    /// binary into a quiet wrong one. Absent means absent.
+    pub grid: Option<u32>,
 }
 
 /// How to render the result.
@@ -90,6 +99,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
     let mut format = Format::Text;
     let mut output: Option<&str> = None;
     let mut threads: Option<usize> = None;
+    let mut grid: Option<u32> = None;
     let mut check_determinism = false;
     // On by default. Dropping geometry from a layer the deck never described
     // is the fail-open case, so it takes an explicit `--no-strict-layers`.
@@ -127,6 +137,21 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
                 let raw = value(rest, index)?;
                 threads = Some(raw.parse().ok().filter(|count| *count > 0).ok_or_else(|| {
                     ArgError::Usage(format!("--threads wants a positive count, not {raw:?}"))
+                })?);
+                taken = 2;
+            }
+            // Optional, not required, and that is the whole grammar decision:
+            // making it required would invalidate every command line that
+            // already parses, while defaulting it would reinterpret the deck.
+            // Absent keeps exactly the behaviour this binary had — a refusal at
+            // load — and supplying it is what makes any stage reachable at all.
+            "--grid" => {
+                let raw = value(rest, index)?;
+                grid = Some(raw.parse().ok().filter(|per_um| *per_um > 0).ok_or_else(|| {
+                    ArgError::Usage(format!(
+                        "--grid wants a positive count of database units per \
+                         micrometre, not {raw:?}"
+                    ))
                 })?);
                 taken = 2;
             }
@@ -250,6 +275,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
             threads,
             check_determinism,
             strict_layers,
+            grid,
         },
     })
 }
@@ -364,20 +390,13 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
     let inputs = gpurify_engine::Inputs {
         layout: args.common.layout.clone(),
         deck: args.common.deck.clone(),
-        // Always `None`, and therefore every run of this binary stops at
-        // `LoadError::NoGrid` before a file is opened. Nothing here can supply
-        // one: `Common` has no field to park a `--grid` value in, and a deck
-        // file does not declare a resolution — `read_deck` is *handed* the grid
-        // (`crates/ingest/src/deck.rs:46-53`). Not a shortcut this file can
-        // spend down; adding the field is a widening of a frozen struct, and
-        // making the flag required would invalidate the grammar the test module
-        // below fixes. Filed in `docs/SIGNATURE_DEFECTS.md`, under the second
-        // `cli` heading.
-        //
-        // Defaulting a grid here rather than leaving it absent is the one thing
-        // that must not happen: it silently reinterprets every limit in the
-        // deck, turning a loud dead binary into a quiet wrong one.
-        grid: None,
+        // Supplied by `--grid`, and `None` when the flag is absent. `Grid::new`
+        // refuses a zero, which the parser has already excluded, so the
+        // `and_then` keeps the absence and cannot invent a resolution.
+        grid: args.common.grid.map(|per_um| {
+            gpurify_units::Grid::new(i64::from(per_um))
+                .expect("the parser refuses a non-positive resolution, so this cannot fail")
+        }),
         reference,
         intent,
         unknown_layers: if args.common.strict_layers {
@@ -531,6 +550,58 @@ mod tests {
             "strict layer checking must be on by default; dropping geometry on \
              an undescribed layer is the fail-open case"
         );
+    }
+
+    /// Oracle: construct-from-answer, and the reason `--grid` exists.
+    ///
+    /// A deck file does **not** declare a resolution — `read_deck` is *handed*
+    /// one — so before this flag there was no way to supply it and every run of
+    /// this binary stopped at `LoadError::NoGrid` before a file was opened.
+    /// Measured at the time: no CLI invocation could reach the LVS stage, or any
+    /// other.
+    #[test]
+    fn a_stated_grid_reaches_the_inputs_that_carry_it() {
+        let args = parse_ok(&["drc", "top.gds", "--deck", "rules.json", "--grid", "1000"]);
+        assert_eq!(args.common.grid, Some(1000));
+        let (inputs, _) = to_inputs(&args);
+        assert_eq!(
+            inputs.grid.map(gpurify_units::Grid::dbu_per_um),
+            Some(1000),
+            "the parsed resolution must reach `Inputs`, or the flag is decoration"
+        );
+    }
+
+    /// Oracle: the fail-closed half, and the one that must never be traded for
+    /// convenience. Absent means **absent**: a defaulted grid would silently
+    /// reinterpret every limit in the deck — a 100 nm rule read against the
+    /// wrong resolution is a different rule — turning a loud dead binary into a
+    /// quiet wrong one. So the flag is optional and its absence still refuses.
+    #[test]
+    fn no_grid_flag_leaves_the_resolution_absent_rather_than_defaulted() {
+        let args = parse_ok(BASE);
+        assert_eq!(args.common.grid, None);
+        let (inputs, _) = to_inputs(&args);
+        assert!(
+            inputs.grid.is_none(),
+            "an unstated resolution must stay unstated; `load_into` refuses it, \
+             and that refusal is the whole safety of this flag being optional"
+        );
+    }
+
+    /// Oracle: construct-from-answer. A resolution is a positive count of
+    /// database units per micrometre. Zero is what `Grid::new` refuses, and the
+    /// parser refuses it first so the conversion in `to_inputs` cannot fail.
+    #[test]
+    fn a_grid_that_is_not_a_positive_count_is_refused() {
+        for bad in ["0", "-4", "eleven", "1.5"] {
+            assert!(
+                matches!(
+                    parse_err(&["drc", "top.gds", "--deck", "rules.json", "--grid", bad]),
+                    ArgError::Usage(_)
+                ),
+                "--grid {bad:?} is not a resolution and must be refused"
+            );
+        }
     }
 
     /// Oracle: construct-from-answer. Every shared flag, given explicitly, and

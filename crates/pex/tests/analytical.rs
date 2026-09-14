@@ -16,8 +16,8 @@
 mod common;
 
 use common::{extracted, grid, resistance_ohm, serialise, uniform_stack};
-use gpurify_core::LayerId;
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_core::{GeometryStore, GeometryStoreBuilder, LayerId};
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_pex::analytical::{
     coupling_capacitance, extract_into, extract_net_into, ground_capacitance, segment_resistance,
     stack_row, via_resistance,
@@ -25,7 +25,7 @@ use gpurify_pex::analytical::{
 use gpurify_pex::network::{Parasitic, ParasiticNetwork};
 use gpurify_pex::reduce::total_capacitance;
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
-use gpurify_topology::DeviceTable;
+use gpurify_topology::{DeviceTable, NetId, NetTable};
 use gpurify_units::DbuArea;
 
 /// A node index as a subscript, refusing anything that is not one.
@@ -317,6 +317,7 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         case.store(),
         &case.nets,
         &devices,
+        &Connectivity::default(),
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut single,
@@ -325,6 +326,7 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         case.store(),
         &case.nets,
         &devices,
+        &Connectivity::default(),
         &uniform_stack(3, 3.0, 0.75),
         grid(),
         &mut tripled,
@@ -343,6 +345,211 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
     );
 }
 
+/// Conductor rectangles on layer 0, one per `(width, height)`, in the order
+/// given.
+///
+/// The order survives: `finish` counting-sorts by layer and every rectangle here
+/// is on the same one, so `PolyId(i)` is `sides[i]` and the assignment below can
+/// name them positionally.
+fn rects(sides: &[(i64, i64)]) -> GeometryStore {
+    let mut builder = GeometryStoreBuilder::with_capacity(sides.len(), 4 * sides.len());
+    for &(width, height) in sides {
+        builder.push(
+            LayerId(0),
+            &[dbu(0), dbu(width), dbu(width), dbu(0)],
+            &[dbu(0), dbu(0), dbu(height), dbu(height)],
+        );
+    }
+    builder.finish(1).0
+}
+
+/// Oracle: closed form, and the one the whole resistive half of PEX rests on.
+/// A 2000 by 200 nm rectangle on a 0.1 ohm per square layer is ten squares, so
+/// it is one ohm — the same arithmetic
+/// `a_ten_square_run_of_a_hundred_milliohm_layer_is_one_ohm` does against
+/// `segment_resistance` directly, asked here of the network the extractor
+/// actually emits.
+///
+/// This is finding F10. The chain model put a node at each polygon's centre and
+/// joined *consecutive* centres, so the first node of a net never received a
+/// resistor and a net of one polygon emitted none at all. Every resistance case
+/// in `tests/fixtures/expectations.json` is a one-polygon net, so every
+/// resistance this workspace had ever extracted was zero — and zero is also
+/// what an extractor that never looked at the cell produces, which is the
+/// fail-open shape `docs/VOCABULARY.md` §3 names.
+///
+/// A wire has resistance whether or not a second polygon happens to sit beside
+/// it. No model gets to lose it.
+#[test]
+fn a_net_of_one_polygon_still_carries_that_polygons_resistance() {
+    let store = rects(&[(2_000, 200)]);
+    let nets = NetTable::from_assignment(&[NetId(0)]);
+
+    let mut network = ParasiticNetwork::default();
+    extract_into(
+        &store,
+        &nets,
+        &DeviceTable::default(),
+        &Connectivity::default(),
+        &uniform_stack(1, 0.0, 0.0),
+        grid(),
+        &mut network,
+    );
+
+    let total: f64 = network.value.iter().filter_map(|&v| resistance_ohm(v)).sum();
+    assert_close("ten squares of 0.1 ohm/sq, through the network", total, 1.0, 1e-12);
+}
+
+/// Oracle: law — conservation. A net's emitted resistance is the sum of its
+/// polygons' resistances, whatever the chain does with the distribution along
+/// it. Three rectangles of deliberately different aspect ratios, so a model that
+/// halved the two ends (the F10 shape, which is exact in the middle and short by
+/// `(R_first + R_last) / 2`) fails by a different amount than one that dropped a
+/// polygon, and neither can pass by cancellation.
+///
+/// The per-polygon terms are taken from [`segment_resistance`], which the four
+/// closed-form tests above pin independently, so this asserts the *network*
+/// against the *formula* rather than against itself.
+#[test]
+fn the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances() {
+    const SIDES: [(i64, i64); 3] = [(2_000, 200), (5_000, 100), (300, 300)];
+
+    let store = rects(&SIDES);
+    let nets = NetTable::from_assignment(&[NetId(0); SIDES.len()]);
+
+    let mut network = ParasiticNetwork::default();
+    extract_into(
+        &store,
+        &nets,
+        &DeviceTable::default(),
+        &Connectivity::default(),
+        &uniform_stack(1, 0.0, 0.0),
+        grid(),
+        &mut network,
+    );
+
+    let want: f64 = SIDES
+        .iter()
+        .map(|&(width, height)| {
+            let (long, short) = (width.max(height), width.min(height));
+            segment_resistance(0.1, dbu(long), dbu(short)).raw()
+        })
+        .sum();
+    let got: f64 = network.value.iter().filter_map(|&v| resistance_ohm(v)).sum();
+    assert_close("a net's resistance is its polygons' resistances", got, want, 1e-12);
+}
+
+/// Two plates on layers 0 and 2 with `cuts` cut squares on layer 1 between
+/// them, the two plates one net and the cuts on none.
+///
+/// The landing plates are the point: a bare cut carries no current, so a fixture
+/// without them cannot say what a via array's resistance is. `PEX_VIA1` and
+/// `PEX_VIA2` under `tests/fixtures/` are drawn without them, which their own
+/// `note` fields record.
+fn via_stack(cuts: i64) -> (GeometryStore, Connectivity, NetTable) {
+    const LOWER: LayerId = LayerId(0);
+    const CUT: LayerId = LayerId(1);
+    const UPPER: LayerId = LayerId(2);
+
+    let mut builder = GeometryStoreBuilder::default();
+    let plate = |builder: &mut GeometryStoreBuilder, layer| {
+        builder.push(
+            layer,
+            &[dbu(0), dbu(1_000), dbu(1_000), dbu(0)],
+            &[dbu(0), dbu(0), dbu(200), dbu(200)],
+        );
+    };
+    plate(&mut builder, LOWER);
+    plate(&mut builder, UPPER);
+    for i in 0..cuts {
+        let x = 100 + 200 * i;
+        builder.push(
+            CUT,
+            &[dbu(x), dbu(x + 100), dbu(x + 100), dbu(x)],
+            &[dbu(50), dbu(50), dbu(150), dbu(150)],
+        );
+    }
+
+    // `finish` counting-sorts by layer, so the rows come back lower plate, cuts,
+    // upper plate — which is the order the net assignment below names.
+    let store = builder.finish(3).0;
+    let connectivity = Connectivity {
+        conductors: vec![LOWER, UPPER],
+        via_cut: vec![CUT],
+        via_connects: vec![(LOWER, UPPER)],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    // One net for the two plates; the cuts are on none, which is what a cut
+    // layer absent from `conductors` gets and the whole reason `vias_into`
+    // exists.
+    let mut assignment = vec![NetId::NONE; store.poly_count()];
+    assignment[0] = NetId(0);
+    assignment[store.poly_count() - 1] = NetId(0);
+    (store, connectivity, NetTable::from_assignment(&assignment))
+}
+
+/// One via stack extracted, with only the cut layer conducting.
+fn via_resistance_of(cuts: i64) -> f64 {
+    let (store, connectivity, nets) = via_stack(cuts);
+    let mut stack = uniform_stack(3, 0.0, 0.0);
+    stack.sheet_res_ohm_sq = vec![0.0, 5.0, 0.0];
+
+    let mut network = ParasiticNetwork::default();
+    extract_into(
+        &store,
+        &nets,
+        &DeviceTable::default(),
+        &connectivity,
+        &stack,
+        grid(),
+        &mut network,
+    );
+    network
+        .value
+        .iter()
+        .filter_map(|&v| resistance_ohm(v))
+        .sum()
+}
+
+/// Oracle: closed form, asked of the extractor rather than of the formula. One
+/// 5 ohm cut between two plates is 5 ohms, which is the first assertion
+/// `via_resistance_divides_by_the_number_of_cuts` already makes of
+/// [`via_resistance`] directly.
+///
+/// This is the second half of finding F11. A cut layer is in
+/// `connectivity.via_cut` and not in `conductors`, so its polygons get
+/// `NetId::NONE` and `extract_net_into` never saw them — which left
+/// [`via_resistance`] with no caller anywhere in the tree and every via in every
+/// design contributing nothing at all. `PEX_VIA1` extracted an empty network.
+#[test]
+fn one_cut_between_two_plates_contributes_its_own_resistance() {
+    assert_close("one 5 ohm cut", via_resistance_of(1), 5.0, 1e-12);
+}
+
+/// Oracle: law — cuts of one array are in parallel, so `n` of them is `1 / n` of
+/// one. That is the whole reason a redundant via helps, and it is the direction
+/// an extractor emitting one resistor per cut gets exactly backwards: it would
+/// put them in series and make the redundant via *worse* than a single one.
+///
+/// Stated over a range, because one or two worked cases pass against an
+/// implementation that special-cased the array sizes it had seen.
+#[test]
+fn a_via_array_extracts_its_cuts_in_parallel_not_in_series() {
+    let one = via_resistance_of(1);
+    assert!(one > 0.0, "the single-cut case extracted nothing to compare against");
+    for cuts in 2..=5 {
+        #[expect(clippy::cast_precision_loss, reason = "a cut count under ten is exact in f64")]
+        let n = cuts as f64;
+        assert_close_relative(
+            "cuts of one array conduct in parallel",
+            via_resistance_of(cuts) * n,
+            one,
+            1e-12,
+        );
+    }
+}
+
 /// Oracle: law. A conductor of nonzero length on a layer of nonzero sheet
 /// resistance has nonzero series resistance, and every resistance in the
 /// network is positive: a zero or negative parasitic resistor is not a
@@ -355,6 +562,7 @@ fn every_extracted_resistance_is_positive_and_at_least_one_exists() {
         case.store(),
         &case.nets,
         &DeviceTable::default(),
+        &Connectivity::default(),
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
@@ -389,6 +597,7 @@ fn extracted_elements_name_real_nodes_and_order_every_coupling_by_net() {
         case.store(),
         &case.nets,
         &DeviceTable::default(),
+        &Connectivity::default(),
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
@@ -454,6 +663,7 @@ fn per_net_capacitance_sums_to_the_total_plus_the_coupling_counted_twice() {
         case.store(),
         &case.nets,
         &DeviceTable::default(),
+        &Connectivity::default(),
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
@@ -502,6 +712,7 @@ fn extraction_emits_the_order_sort_canonical_would_have_produced() {
         case.store(),
         &case.nets,
         &DeviceTable::default(),
+        &Connectivity::default(),
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
@@ -529,16 +740,16 @@ fn extraction_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     let stack = uniform_stack(3, 1.4, 0.35);
 
     let mut fresh = ParasiticNetwork::default();
-    extract_into(case.store(), &case.nets, &devices, &stack, grid(), &mut fresh);
+    extract_into(case.store(), &case.nets, &devices, &Connectivity::default(), &stack, grid(), &mut fresh);
     let first = serialise(&fresh);
 
     let mut again = ParasiticNetwork::default();
-    extract_into(case.store(), &case.nets, &devices, &stack, grid(), &mut again);
+    extract_into(case.store(), &case.nets, &devices, &Connectivity::default(), &stack, grid(), &mut again);
     assert_bytes_identical("two extractions of one corpus", &first, &serialise(&again));
 
     // The same buffer, a second time. Anything appended rather than replaced
     // shows up here and nowhere else.
-    extract_into(case.store(), &case.nets, &devices, &stack, grid(), &mut again);
+    extract_into(case.store(), &case.nets, &devices, &Connectivity::default(), &stack, grid(), &mut again);
     assert_bytes_identical(
         "an extraction into a reused buffer",
         &first,

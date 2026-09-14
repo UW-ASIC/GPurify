@@ -11,13 +11,16 @@ mod common;
 use common::{
     assert_same_discrepancies, blames_device, blames_net, chain, differential_pair, discrepancies,
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
-    stacked_pair_with_params, NPN, VDD, VSS, WIDTH,
+    stacked_pair_with_params, GraphBuilder, NCH, NPN, PCH, RES, VDD, VSS, WIDTH,
 };
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::StrId;
 use gpurify_lvs::compare::interpret;
-use gpurify_lvs::refine::{Partition, TieBreak};
+use gpurify_lvs::refine::{ClassId, Partition, TieBreak};
 use gpurify_lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
-use gpurify_lvs::{compare, CompareOptions, LayoutGraph, RefGraph};
+use gpurify_lvs::{compare, CompareOptions, Graph, LayoutGraph, RefGraph};
 use gpurify_testgen::Rng;
+use gpurify_topology::TerminalRole;
 
 /// Options that resolve every tie and never run out of rounds, so a verdict is
 /// about the graphs rather than about the budget.
@@ -188,7 +191,7 @@ fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
     use gpurify_ingest::deck::DeviceKind;
     use gpurify_topology::TerminalRole::{Bulk, Drain, Gate, Source};
 
-    let mut builder = common::GraphBuilder::new(6);
+    let mut builder = GraphBuilder::new(6);
     builder.device(
         DeviceKind::Mos,
         common::NCH,
@@ -231,6 +234,118 @@ fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
     }
 }
 
+/// One device, stated kind and model, on as many pins as `roles` names.
+///
+/// The minimum fixture for a device-identity check. Both sides get the same
+/// terminal count, the same roles and the same nets, so *structure* cannot tell
+/// them apart and the only thing left to disagree about is what the device is.
+fn lone_device(kind: DeviceKind, model: StrId, roles: &[TerminalRole]) -> Graph {
+    let nets = u32::try_from(roles.len()).expect("a handful of terminals");
+    let terminals: Vec<(TerminalRole, u32)> =
+        roles.iter().copied().zip(0..nets).collect();
+    let mut builder = GraphBuilder::new(nets);
+    builder.device(kind, model, &terminals);
+    builder.finish()
+}
+
+/// The pairing that pairs node `n` with node `n`, stated rather than refined.
+///
+/// [`interpret`] is `pub` and documented as the part worth a table of
+/// constructed cases, so this is the input that table is written in. Every node
+/// lands in a class of its own, so every class resolves and every node pairs.
+fn identity_partition(nodes: u32) -> Partition {
+    let classes: Vec<ClassId> = (0..nodes).map(ClassId).collect();
+    Partition::from_classes(classes.clone(), classes)
+}
+
+/// Oracle: the crate's own prohibition. `lvs/src/lib.rs` forbids a false
+/// [`Verdict::Match`], and until [`interpret`] read the device columns it
+/// produced one here: an nfet paired with a pfet, wired identically, came back
+/// `Match`.
+///
+/// Refinement folds the model into its signature, so a pairing it *proposes*
+/// almost never crosses two models — but `wrapping_add` over neighbour hashes is
+/// a hash agreeing, not a comparison happening, and `interpret` is `pub`
+/// precisely so a partition it did not produce can be handed to it. The terminal
+/// join proves the two devices sit in the same *place*; nothing proved they are
+/// the same *thing*.
+///
+/// Reported as two unpaired devices, one per side, which is the reading
+/// `compare_net_name` already takes for a renamed net: the pair of rows carries
+/// both model names, so the report says NCH against PCH.
+#[test]
+fn a_paired_device_whose_model_disagrees_is_not_a_match() {
+    use TerminalRole::{Bulk, Drain, Gate, Source};
+    const MOS: [TerminalRole; 4] = [Gate, Source, Drain, Bulk];
+
+    let layout = LayoutGraph(lone_device(DeviceKind::Mos, NCH, &MOS));
+    let reference = RefGraph(lone_device(DeviceKind::Mos, PCH, &MOS));
+    // One device and four nets.
+    let paired = identity_partition(5);
+
+    let verdict = interpret(&layout, &reference, &paired, decisive());
+    assert_ne!(
+        verdict,
+        Verdict::Match,
+        "an nfet paired with a pfet, wired identically, came back matched"
+    );
+    assert_same_discrepancies(
+        discrepancies(&verdict),
+        &[
+            Discrepancy::UnpairedDevice {
+                side: Side::Layout,
+                device: 0,
+                model: NCH,
+            },
+            Discrepancy::UnpairedDevice {
+                side: Side::Reference,
+                device: 0,
+                model: PCH,
+            },
+        ],
+    );
+}
+
+/// Oracle: the same prohibition, on the other identity column. A resistor and a
+/// capacitor across one pair of nets have the same neighbourhood, the same
+/// terminal count and the same `Pin` roles — [`refine::role_code`] collapses
+/// `Pin(_)` on purpose — so [`gpurify_lvs::Graph::device_kind`] is the only
+/// thing that distinguishes them, and it was never read.
+#[test]
+fn a_paired_device_whose_kind_disagrees_is_not_a_match() {
+    const PINS: [TerminalRole; 2] = [TerminalRole::Pin(0), TerminalRole::Pin(1)];
+
+    let layout = LayoutGraph(lone_device(DeviceKind::Resistor, RES, &PINS));
+    let reference = RefGraph(lone_device(DeviceKind::Capacitor, RES, &PINS));
+    // One device and two nets.
+    let paired = identity_partition(3);
+
+    let verdict = interpret(&layout, &reference, &paired, decisive());
+    assert_ne!(
+        verdict,
+        Verdict::Match,
+        "a resistor paired with a capacitor came back matched"
+    );
+}
+
+/// Oracle: construct-from-answer, and the discrimination guard on the two tests
+/// above. The same stated pairing over two devices that *do* agree on kind and
+/// model is a match, so neither test above is satisfied by a comparator that
+/// reports every paired device it looks at.
+#[test]
+fn a_stated_pairing_of_two_agreeing_devices_is_still_a_match() {
+    use TerminalRole::{Bulk, Drain, Gate, Source};
+    const MOS: [TerminalRole; 4] = [Gate, Source, Drain, Bulk];
+
+    let verdict = interpret(
+        &LayoutGraph(lone_device(DeviceKind::Mos, NCH, &MOS)),
+        &RefGraph(lone_device(DeviceKind::Mos, NCH, &MOS)),
+        &identity_partition(5),
+        decisive(),
+    );
+    assert_eq!(verdict, Verdict::Match);
+}
+
 /// Oracle: construct-from-answer. Two structurally identical netlists whose
 /// widths differ by half. The tolerance is one percent, so the difference is
 /// fifty times it, which is outside under either reading of "relative" — over
@@ -257,6 +372,178 @@ fn a_parameter_beyond_tolerance_is_reported_with_both_values() {
             param: WIDTH,
             layout_value: 1.0,
             ref_value: 1.5,
+        }],
+    );
+}
+
+/// Oracle: physics. Finding F4, stated as the thing that has to become true.
+///
+/// A MOS channel is symmetric: which end is the source is decided by *bias*, not
+/// by layout, so a netlist written source-for-drain describes the same circuit.
+/// `LVS_CLEAN_MATCH` and `LVS_SD_PERMUTE` are the same cell against references
+/// that are exact S/D swaps, and both expect `Match`.
+///
+/// **The anchoring is the whole fixture, not decoration**, and it is the trap
+/// this repo has fallen into three times. Net 1 carries one terminal; net 2
+/// carries the bipolar's base as well. So the two channel nets have different
+/// degrees, no relabelling of nets maps one graph onto the other, and `Match`
+/// is available only to a comparison that reads the two roles as one. A fixture
+/// whose halves differ by a relabelling would return `Match` whatever
+/// [`gpurify_lvs::refine::role_code`] does, and would measure nothing.
+///
+/// The reference also keeps the *slots* in `Gate, Source, Drain, Bulk` order, so
+/// the swap is in the roles rather than in the terminal order — which
+/// `terminal_order.rs` already covers separately.
+#[test]
+fn a_mos_written_source_for_drain_is_the_same_transistor() {
+    use gpurify_ingest::deck::DeviceKind;
+    use gpurify_topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
+
+    let anchored = |source: u32, drain: u32| {
+        let mut builder = GraphBuilder::new(6);
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 3)],
+        );
+        // The anchor: net 2 carries a second terminal, net 1 does not.
+        builder.device(
+            DeviceKind::Bjt,
+            NPN,
+            &[(Base, 2), (Emitter, 4), (Collector, 5)],
+        );
+        builder.finish()
+    };
+
+    let mut scratch = Partition::default();
+    let verdict = compare(
+        &LayoutGraph(anchored(1, 2)),
+        &RefGraph(anchored(2, 1)),
+        decisive(),
+        &mut scratch,
+    );
+    assert_eq!(
+        verdict,
+        Verdict::Match,
+        "a MOS channel is symmetric, so a reference that calls the other end \
+         the source is the same transistor"
+    );
+}
+
+/// Oracle: physics, and the guard on finding F4's fix when it lands.
+///
+/// `refine::role_code` collapses interchangeable roles to one code — that is how
+/// `TerminalRole::Pin` makes a resistor's two ends exchangeable, and it is the
+/// mechanism F4 needs for a MOS channel. This is the boundary on it.
+///
+/// A bipolar's emitter and collector are **not** interchangeable: the doping is
+/// asymmetric and exchanging them makes a different, much worse, transistor. So
+/// `Emitter` and `Collector` keep distinct codes and the exchange is a mismatch.
+///
+/// **The anchoring is the whole fixture, not decoration.** The MOS on net 2
+/// gives that net a degree the emitter's net does not have. Without it, swapping
+/// the two is a *relabelling* and `Match` is the correct answer whatever the
+/// roles do — which is what the first version of this test measured, and it
+/// measured nothing.
+#[test]
+fn a_bipolars_emitter_and_collector_are_not_interchangeable() {
+    use gpurify_ingest::deck::DeviceKind;
+    use gpurify_topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
+
+    let anchored = |emitter: u32, collector: u32| {
+        let mut builder = GraphBuilder::new(6);
+        builder.device(
+            DeviceKind::Bjt,
+            NPN,
+            &[(Base, 0), (Emitter, emitter), (Collector, collector)],
+        );
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 4), (Source, 2), (Drain, 5), (Bulk, 3)],
+        );
+        builder.finish()
+    };
+
+    let mut scratch = Partition::default();
+    let verdict = compare(
+        &LayoutGraph(anchored(1, 2)),
+        &RefGraph(anchored(2, 1)),
+        decisive(),
+        &mut scratch,
+    );
+    assert_ne!(
+        verdict,
+        Verdict::Match,
+        "a bipolar's emitter and collector are asymmetric, so exchanging them \
+         is a different device"
+    );
+}
+
+/// Oracle: the crate's own prohibition. `lvs/src/lib.rs` forbids a false
+/// [`Verdict::Match`], and a reference card declaring `W` against a layout
+/// device declaring nothing used to produce exactly one: the name-keyed join
+/// walked the *intersection*, so zero parameters were compared and the empty
+/// discrepancy list read as agreement.
+///
+/// This is finding F8. The corpus case is `LVS_PARAM_MISMATCH`, where
+/// `topology` emits only `DeviceParam::Area` and `graph::from_layout_into`
+/// projects no layout parameter at all — so every parametric LVS run in the
+/// tree compared nothing and said `Match`.
+///
+/// A parameter one side declares and the other does not is not evidence of
+/// agreement; it is a parameter that was never checked, which is the fail-open
+/// shape `docs/VOCABULARY.md` §3 names. The verdict must not be `Match`, and the
+/// report must name the side that declared it.
+#[test]
+fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
+    let mut scratch = Partition::default();
+    let verdict = compare(
+        &LayoutGraph(stacked_pair_with_params(&[], &[])),
+        &RefGraph(stacked_pair_with_params(&[(WIDTH, 1.0)], &[])),
+        decisive(),
+        &mut scratch,
+    );
+
+    assert_ne!(
+        verdict,
+        Verdict::Match,
+        "a reference declaring W against a layout declaring nothing compared \
+         zero parameters and called it a match"
+    );
+    assert_same_discrepancies(
+        discrepancies(&verdict),
+        &[Discrepancy::UndeclaredParam {
+            side: Side::Reference,
+            layout_device: 0,
+            ref_device: 0,
+            param: WIDTH,
+        }],
+    );
+}
+
+/// The mirror image, so the previous test is not satisfied by a comparator that
+/// only ever blames the reference. Swapping the two sides must swap the `side`
+/// field and nothing else — the same law
+/// `swapping_the_two_sides_reverses_every_side_in_the_report` states for
+/// terminals.
+#[test]
+fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
+    let mut scratch = Partition::default();
+    let verdict = compare(
+        &LayoutGraph(stacked_pair_with_params(&[(WIDTH, 1.0)], &[])),
+        &RefGraph(stacked_pair_with_params(&[], &[])),
+        decisive(),
+        &mut scratch,
+    );
+
+    assert_same_discrepancies(
+        discrepancies(&verdict),
+        &[Discrepancy::UndeclaredParam {
+            side: Side::Layout,
+            layout_device: 0,
+            ref_device: 0,
+            param: WIDTH,
         }],
     );
 }
@@ -430,6 +717,101 @@ fn the_same_symmetric_structure_matches_when_the_tie_break_may_fire() {
     assert_eq!(verdict, Verdict::Match);
 }
 
+/// Oracle: construct-from-answer, and the second half of finding F4.
+///
+/// The layout holds a bipolar the reference does not, *and* — once a MOS channel
+/// reads as symmetric — the surviving transistor's two channel nets are
+/// interchangeable. Under [`TieBreak::Refuse`] that symmetry stays unbroken, so
+/// the partition handed to `interpret` carries a balanced unresolved class and an
+/// imbalanced one at the same time.
+///
+/// An unbroken symmetry used to abort the whole reading: `interpret` returned
+/// `Inconclusive(UnresolvedSymmetry)` on the first balanced class it saw and the
+/// deleted bipolar went unreported. The two conditions are independent. A class
+/// holding the same count on both sides is a symmetry — either pairing of its
+/// members is right, so nothing in it is a difference. A class holding different
+/// counts is a difference no pairing can mend. The second must survive the first.
+///
+/// The channel nets are held back rather than blamed, which is the other half of
+/// the same statement: unpaired is not the same as unpairable.
+#[test]
+fn an_unresolved_symmetry_does_not_mask_a_deleted_device() {
+    let mut options = decisive();
+    options.tie_break = TieBreak::Refuse;
+
+    let mut scratch = Partition::default();
+    let verdict = compare(
+        &LayoutGraph(mos_and_bjt()),
+        &RefGraph(mos_and_bjt_without_the_bjt()),
+        options,
+        &mut scratch,
+    );
+
+    let found = discrepancies(&verdict);
+    assert!(
+        found.contains(&Discrepancy::UnpairedDevice {
+            side: Side::Layout,
+            device: 1,
+            model: NPN,
+        }),
+        "an unbroken symmetry elsewhere in the graph swallowed the deleted \
+         bipolar: {found:#?}"
+    );
+    let blamed: Vec<u32> = (0..7u32)
+        .filter(|&net| found.iter().any(|d| blames_net(d, Side::Layout, net)))
+        .collect();
+    assert_eq!(
+        blamed,
+        [4, 5, 6],
+        "the symmetric channel nets are unpaired without being unpairable, so \
+         they are not a difference: {found:#?}"
+    );
+}
+
+/// Oracle: law, and the discrimination guard on the test above.
+///
+/// A netlist does not differ from itself — that is
+/// `a_netlist_compared_against_itself_matches`, extended to the one axis it does
+/// not cover. `compare` never reaches `interpret` with an unbroken symmetry over
+/// two identical graphs, because refinement calls that case
+/// [`gpurify_lvs::refine::Refinement::Symmetric`] and answers it directly; so the
+/// only way to hand `interpret` that partition is to state it, which is what
+/// [`gpurify_lvs::refine::Partition::from_classes`] is for.
+///
+/// The partition is `mos_and_bjt` against itself with the MOS's two channel nets
+/// — nodes 3 and 4, which are nets 1 and 2 — left sharing one class, exactly as
+/// a refusal leaves them once `role_code` reads a MOS channel as symmetric.
+/// Everything else is discrete.
+///
+/// **Holding those two nets back is not enough on its own.** The MOS *is*
+/// paired, and two of its four terminals land on them, so the terminal join sees
+/// a net with no counterpart named and used to report both as
+/// `TerminalMismatch` — two invented differences on a transistor with nothing
+/// wrong with it, and a `Mismatch` verdict for a netlist compared with itself.
+/// A terminal on a held-back net is skipped on *both* sides instead, which is
+/// safe only because a held-back node forbids `Match`: the answer here is
+/// `Inconclusive`, which is what "we could not finish" is spelt.
+#[test]
+fn an_unbroken_symmetry_does_not_make_a_netlist_differ_from_itself() {
+    // Nodes: 0 the MOS, 1 the bipolar, 2..=8 the seven nets. Nodes 3 and 4 are
+    // the MOS's source and drain nets, and they share class 3.
+    let classes: Vec<ClassId> = [0u32, 1, 2, 3, 3, 5, 6, 7, 8].map(ClassId).to_vec();
+    let unbroken = Partition::from_classes(classes.clone(), classes);
+
+    let verdict = interpret(
+        &LayoutGraph(mos_and_bjt()),
+        &RefGraph(mos_and_bjt()),
+        &unbroken,
+        decisive(),
+    );
+    assert_eq!(
+        verdict,
+        Verdict::Inconclusive(Inconclusive::UnresolvedSymmetry),
+        "a netlist was reported as differing from itself because one of its \
+         own symmetries went unbroken"
+    );
+}
+
 /// Oracle: law. `interpret` is documented as pure: a partition and two graphs
 /// in, a verdict out, nothing mutated. So reading the partition `compare` left
 /// behind must give the verdict `compare` returned, and reading it again must
@@ -485,9 +867,12 @@ fn a_comparison_gives_the_same_verdict_on_every_run() {
         &mut scratch,
     );
 
+    // `Verdict` derives `PartialEq`, so the two reports are compared as values.
+    // The `Debug` strings this replaced would have called two discrepancy lists
+    // equal on a formatting coincidence and unequal on a formatting change, and
+    // `graph.rs`'s doc comment on `Graph`'s derive argues against exactly that.
     assert_eq!(
-        format!("{first:?}"),
-        format!("{second:?}"),
+        first, second,
         "the same comparison produced two different reports"
     );
 }

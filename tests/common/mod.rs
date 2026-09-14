@@ -760,13 +760,35 @@ pub fn fixtures() -> PathBuf {
 /// stop those four cases at load and replace the finding they carry with an I/O
 /// error. Dropping is fail-open, so it is a deliberate choice made here, in the
 /// harness, and not a default inherited from [`Inputs`].
-fn case_inputs(domain: &str, id: &str) -> Inputs {
+///
+/// # `intent` is a parameter, and it used to be the constant `None`
+///
+/// `docs/CORRECTNESS_MAP.md` §3: this one field hardcoded to `None` made
+/// `IntentMap::declared` false on every corpus case, so all six intent-gated ERC
+/// rules recorded `Skipped(NoDesignIntent)` regardless of what was on disk —
+/// F9 is filed as a missing fixture and was really a harness constant. It is now
+/// per-case and still optional; every caller but [`run_case_with_intent`] passes
+/// `None`, so the 160 cases are byte-for-byte the run they were before.
+///
+/// # `reference` is a parameter for the same reason
+///
+/// It was the constant `None` too, so the LVS stage of the engine had never run
+/// on real geometry in this workspace: `run_lvs` returns `Skipped` without a
+/// reference netlist, so `lvs::graph::from_layout_into` was reached only by
+/// `crates/engine/tests/checks.rs` on an `Extracted::default()`. Every caller but
+/// [`run_case_with_reference`] passes `None`, so the corpus cases are unchanged.
+fn case_inputs(
+    domain: &str,
+    id: &str,
+    intent: Option<PathBuf>,
+    reference: Option<PathBuf>,
+) -> Inputs {
     Inputs {
         layout: fixtures().join(domain).join(format!("{id}.gds")),
         deck: fixtures().join("params.json"),
         grid: Some(Grid::new(DBU_PER_UM).expect("a thousand dbu per micrometre is a grid")),
-        reference: None,
-        intent: None,
+        reference,
+        intent,
         unknown_layers: UnknownLayers::Drop,
     }
 }
@@ -787,9 +809,62 @@ pub struct CaseRun {
 ///
 /// The layout path is `<domain>/<id>.gds`: the corpus names its files by case
 /// id, and several ids share a cell. [`case_inputs`] carries the rest.
+///
+/// No design intent, which is what every case in `expectations.json` was derived
+/// against. [`run_case_with_intent`] is the same run with one supplied.
 pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, String> {
-    let inputs = case_inputs(domain, id);
+    run_case_inputs(case_inputs(domain, id, None, None), checks)
+}
 
+/// The same case with a reference netlist beside it, so the LVS stage compares
+/// rather than skipping.
+///
+/// `reference` names a file under `tests/fixtures/` — a tracked one, since the
+/// four generated per-domain directories are what `.gitignore` covers. The path
+/// goes through [`Inputs::reference`] and therefore through
+/// `engine::pipeline::read_reference`, which sniffs the dialect off the file's
+/// own first subcircuit opener; a harness that parsed the netlist itself would
+/// not be exercising the reader a user reaches.
+pub fn run_case_with_reference(
+    domain: &str,
+    id: &str,
+    checks: Checks,
+    reference: &str,
+) -> Result<CaseRun, String> {
+    let path = fixtures().join(reference);
+    run_case_inputs(case_inputs(domain, id, None, Some(path)), checks)
+}
+
+/// The same case with a design intent file written beside it.
+///
+/// `intent_source` is the JSON `ingest::intent::parse_intent` documents — the
+/// format already in the tree, not a second spelling of it. It is written to a
+/// scratch file because [`Inputs::intent`] is a path: intent reaches the engine
+/// through `read_intent`, and a harness that skipped the file would not be
+/// exercising the same code a user does.
+///
+/// Kept off the corpus path deliberately. An intent file keyed by case id under
+/// `tests/fixtures/` would change the outcome of whichever case it named, and
+/// the four cases that expect `Skipped(NoDesignIntent)` are the regression guard
+/// on the gate still working.
+pub fn run_case_with_intent(
+    domain: &str,
+    id: &str,
+    checks: Checks,
+    intent_source: &str,
+) -> Result<CaseRun, String> {
+    let dir = scratch_dir(id);
+    let path = dir.join("intent.json");
+    std::fs::write(&path, intent_source).expect("the scratch directory is writable");
+    let run = run_case_inputs(case_inputs(domain, id, Some(path), None), checks);
+    // Best-effort, and silent for the reason `Run::drop` gives: a failure to
+    // clean up must not turn a passing test red or mask a failing one.
+    let _ = std::fs::remove_dir_all(&dir);
+    run
+}
+
+/// Load, extract and check whatever inputs were assembled.
+fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
     let mut loaded = Loaded::default();
     load_into(&inputs, &mut loaded).map_err(|why| format!("load failed: {why}"))?;
 
@@ -811,6 +886,89 @@ pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, Strin
         .map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun { loaded, extracted, outputs })
+}
+
+/// One case run through the **field solve** rather than the closed form.
+///
+/// The other half of `pex`. [`run_case`] leaves `quasistatic_nets` empty, so
+/// `engine::run::run_pex` takes the analytical branch; naming every net here
+/// takes the other one, which meshes the conductors and solves for the
+/// capacitance matrix.
+///
+/// # Why every net, by name
+///
+/// `run_pex` selects by *name*, through `ports.net_of`, so this can only work
+/// on a cell whose nets are labelled — which is what the `TEXT` records in
+/// `_source/conformance.gds` and the `connectivity.labels` pairing in
+/// `params.json` are for. A cell with no labels yields no names, and the run
+/// refuses rather than silently field-solving nothing; that refusal is returned
+/// here as an error rather than swallowed.
+///
+/// # What this reaches that nothing else does
+///
+/// The whole quasi-static path, including `merge_field_solved_into` and the
+/// `reciprocity_refusal` gate, none of which any other test in the workspace
+/// executes.
+pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> {
+    let inputs = case_inputs(domain, id, None, None);
+
+    let mut loaded = Loaded::default();
+    load_into(&inputs, &mut loaded).map_err(|why| format!("load failed: {why}"))?;
+
+    let mut extracted = Extracted::default();
+    extract_into(&loaded, &mut extracted).map_err(|why| format!("extraction failed: {why}"))?;
+
+    // Every net that carries a name. Ascending by `NetId`, so the selection is
+    // a function of the geometry and not of the order a table happened to be
+    // built in.
+    let named: Vec<String> = (0..extracted.nets.net_count())
+        .filter_map(|net| {
+            extracted
+                .ports
+                .name_of(gpurify::topology::NetId(u32::try_from(net).expect("a NetId is a u32")))
+        })
+        .map(|name| loaded.strings.resolve(name).to_owned())
+        .collect();
+    if named.is_empty() {
+        return Err(format!(
+            "cell {id} has no labelled net, so there is nothing to field solve — \
+             a field solve selects by name"
+        ));
+    }
+
+    let options = RunOptions {
+        checks: Checks { drc: false, erc: false, lvs: false, pex: true },
+        lvs: gpurify::lvs::CompareOptions::default(),
+        quasistatic_nets: named,
+        threads: Some(1),
+    };
+
+    let mut outputs = Outputs::default();
+    run_checks(&loaded, &extracted, &options, &mut outputs)
+        .map_err(|why| format!("run failed: {why}"))?;
+
+    Ok(CaseRun { loaded, extracted, outputs })
+}
+
+/// The coupling capacitance a field solve found in one cell, in attofarads.
+///
+/// Folded over the element column rather than read off a slot, because
+/// `ParasiticNetwork` has none — `net_capacitance` sums ground and coupling
+/// together and nothing splits them, which `expectations.json` records as F13.
+pub fn field_solved_coupling_af(domain: &str, id: &str) -> Result<f64, String> {
+    let run = run_case_field_solved(domain, id)?;
+    let network = run
+        .outputs
+        .parasitics
+        .as_ref()
+        .ok_or_else(|| format!("cell {id} field solved to no network at all"))?;
+    let mut femtofarads = 0.0;
+    for value in &network.value {
+        if let gpurify::pex::Parasitic::CouplingCap(coupling) = value {
+            femtofarads += coupling.raw();
+        }
+    }
+    Ok(femtofarads * AF_PER_FF)
 }
 
 /// The deck rule id a case's `rule`/`check` name refers to.
@@ -863,14 +1021,19 @@ fn deck_rule_of(case: &GeometryCase) -> Option<&'static str> {
         // against the ERC rows that own them now.
         "antenna" => "poly.met1.antenna",
         "antenna_car" | "antenna_electrical" => "poly.antenna_electrical",
+        "density_cmp" => "met1.density_cmp",
+        "electromigration" => "met1.electromigration",
         "em_current_density" => "em_current_density",
+        "esd_latchup" => "esd_latchup",
         "esd_missing" => "esd_topological",
         "floating_gate" => "floating_gate",
         "floating_well" => "nwell.floating_well",
         "hv_domain_crossing" => "hv_domain",
+        "ir_drop" => "ir_drop",
         "missing_tie" => "diff.li.missing_tie",
         "multiple_drivers" => "multiple_drivers",
         "p2p_resistance" => "p2p_resistance",
+        "reliability" => "bti",
         "soft_connection" => "nwell.soft_connection",
         "supply_short" => "supply_short",
         "tie_high_low" => "tie_high_low",
@@ -1078,7 +1241,7 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
         )];
     };
 
-    let inputs = case_inputs(&case.domain, &case.id);
+    let inputs = case_inputs(&case.domain, &case.id, None, None);
     let mut loaded = Loaded::default();
     if let Err(why) = load_into(&inputs, &mut loaded) {
         return vec![format!("{}: cell {} did not load — {why}{context}", case.id, case.cell)];
@@ -1137,17 +1300,41 @@ fn parse_outcome(text: &str) -> Outcome {
 /// refuses to compare a resistance with a spacing, and a rule reporting the
 /// wrong dimension is exactly the kind of finding this corpus should surface
 /// rather than abort on.
+///
+/// # Exact where the value is exact, relative where it is solved
+///
+/// `Length`, `Area` and `Count` carry integers and compare exactly. The three
+/// electrical dimensions carry an `f64` inside a `Qty`, and every one of them
+/// arrives out of the conjugate-gradient solve in `erc::power` rather than out
+/// of arithmetic on the geometry — so they compare the way `Ratio` does, to a
+/// relative `1e-9`. Exact equality on a solved voltage would be a test of the
+/// iteration order, not of the physics; `1e-9` is far tighter than any defect
+/// this corpus is looking for and far looser than a reassociated sum.
+///
+/// The `_ => false` fallthrough stays: a `Measurement` variant with no arm here
+/// must fail loudly rather than be silently accepted, which is the same
+/// fail-closed rule `Measurement::violates` applies to a dimension mismatch.
 fn measurement_matches(got: Measurement, want: &ExpectedMeasurement) -> bool {
+    /// One relative tolerance for every floating-point dimension.
+    fn near(value: f64, want: &ExpectedMeasurement) -> bool {
+        want.value
+            .as_f64()
+            .is_some_and(|expected| (value - expected).abs() <= 1e-9 * expected.abs().max(1.0))
+    }
+
     match (got, want.kind.as_str()) {
         (Measurement::Length(value), "Length") => want.value.as_i64() == Some(value.raw()),
         (Measurement::Area(value), "Area") => {
             want.value.as_i64().map(i128::from) == Some(value.raw())
         }
         (Measurement::Count(value), "Count") => want.value.as_u64() == Some(u64::from(value)),
-        (Measurement::Ratio(value), "Ratio") => want
-            .value
-            .as_f64()
-            .is_some_and(|expected| (value - expected).abs() <= 1e-9 * expected.abs().max(1.0)),
+        (Measurement::Ratio(value), "Ratio") => near(value, want),
+        // Millivolts, microamps and ohms — the prefix is the one the
+        // `Measurement` variant carries, so `expectations.json` states the
+        // number in the unit the report prints.
+        (Measurement::Voltage(value), "Voltage") => near(value.raw(), want),
+        (Measurement::Current(value), "Current") => near(value.raw(), want),
+        (Measurement::Resistance(value), "Resistance") => near(value.raw(), want),
         _ => false,
     }
 }
@@ -1254,12 +1441,28 @@ pub struct Totals {
     pub coupling_cap_af: f64,
 }
 
-pub fn totals_of(run: &CaseRun) -> Totals {
+/// `only: Some(layer)` folds the elements that leave a node on that layer and
+/// nothing else.
+///
+/// The corpus needs the split because one cell carries two conductors: `PEX_DIFF`
+/// is met1 *and* met2, and its two cases derive 1.0 ohm and 0.8 ohm from the two
+/// separately. A whole-cell fold answers 1.8 to both, which agrees with neither
+/// and is not a defect in the extraction. `ParasiticNetwork` has `node_layer`,
+/// so the split is available here even though F13 says nothing on the type
+/// itself produces it.
+pub fn totals_of(run: &CaseRun, only: Option<gpurify::core::LayerId>) -> Totals {
     let mut totals = Totals { resistance_ohm: 0.0, ground_cap_af: 0.0, coupling_cap_af: 0.0 };
     let Some(network) = run.outputs.parasitics.as_ref() else {
         return totals;
     };
-    for &value in &network.value {
+    for (row, &value) in network.value.iter().enumerate() {
+        // The element's layer is its near node's. A coupling capacitance runs
+        // between two layers and is attributed to the lower net's, which is the
+        // side `analytical` emits it from.
+        let layer = network.node_layer[network.from[row].0 as usize];
+        if only.is_some_and(|want| want != layer) {
+            continue;
+        }
         match value {
             Parasitic::Resistance(ohm) => totals.resistance_ohm += ohm.raw(),
             Parasitic::GroundCap(ff) => totals.ground_cap_af += ff.raw() * AF_PER_FF,
@@ -1274,7 +1477,9 @@ pub fn totals_of(run: &CaseRun) -> Totals {
 /// something this fold does not produce.
 fn value_of(kind: &str, totals: &Totals) -> Option<f64> {
     Some(match kind {
-        "resistance" | "resistance_met2" | "via_resistance" => totals.resistance_ohm,
+        "resistance" | "resistance_met1" | "resistance_met2" | "via_resistance" => {
+            totals.resistance_ohm
+        }
         "area_cap" => totals.ground_cap_af,
         "coupling_cap" | "coupling_cap_met2" | "interlayer_cap" => totals.coupling_cap_af,
         _ => return None,
@@ -1314,7 +1519,31 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
             return failed;
         }
     };
-    let totals = totals_of(&run);
+    // A kind ending in a conductor name scopes the fold to that conductor;
+    // every other kind is the whole cell. `PEX_DIFF` is met1 *and* met2 in one
+    // cell and its two cases derive 1.0 ohm and 0.8 ohm separately, so a
+    // whole-cell fold answers 1.8 to both and agrees with neither — which is a
+    // question the harness asked wrong, not an extraction defect.
+    //
+    // Resolved through the run's own `LayerTable`, so the corpus does not encode
+    // the deck's layer ordering a second time.
+    let scope = match case.kind.rsplit_once('_') {
+        Some((_, conductor @ ("met1" | "met2"))) => {
+            match run.loaded.deck.layers.id(&run.loaded.strings, conductor) {
+                Some(layer) => Some(layer),
+                None => {
+                    failed.push(format!(
+                        "{}: kind {} names {conductor} and the deck defines no such \
+                         layer{context}",
+                        case.id, case.kind
+                    ));
+                    return failed;
+                }
+            }
+        }
+        _ => None,
+    };
+    let totals = totals_of(&run, scope);
 
     if let Some(per_net) = case.expect_per_net.as_ref() {
         failed.extend(check_per_net(case, &run, per_net, &context));
@@ -1456,7 +1685,7 @@ pub fn check_coupling_laws() -> Vec<String> {
     let mut failed = Vec::new();
     let coupling = |id: &str| -> f64 {
         run_case("pex", id, Checks { drc: false, erc: false, lvs: false, pex: true })
-            .map_or(f64::NAN, |run| totals_of(&run).coupling_cap_af)
+            .map_or(f64::NAN, |run| totals_of(&run, None).coupling_cap_af)
     };
 
     let at_100 = coupling("PEX_SPACING_100");

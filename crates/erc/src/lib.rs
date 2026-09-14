@@ -378,6 +378,27 @@ pub(crate) fn skip_rows(head: &RuleHead, out: &Violations, runs: &mut Vec<RuleRu
     }
 }
 
+/// Record every row of a rule table as refused, for an input the rule cannot
+/// represent.
+///
+/// **Decision.** The twin of [`skip_rows`], and the distinction between them is
+/// the one [`Outcome`] exists to make: *skipped* is nothing was asked, and
+/// *refused* is something was asked and this rule will not answer it. All three
+/// callers today are the discarded-budget gate — see [`power::discarded_budget`],
+/// reached from `check_ir_drop`, `check_em_current_density` and
+/// `check_electromigration` — which is a property of the whole run for the same
+/// reason the intent gate is, so it too is tested once above the row loop and
+/// spent here.
+///
+/// [`Outcome`]: gpurify_report::Outcome
+/// [`power::discarded_budget`]: power::discarded_budget
+pub(crate) fn refuse_rows(head: &RuleHead, out: &Violations, runs: &mut Vec<RuleRun>) {
+    // Not bulk: a deck configures tens of rows per kind.
+    for row in 0..head.len() {
+        record_run(runs, out, out.len(), head.rule[row], Outcome::Refused, 0);
+    }
+}
+
 /// Close out one rule row: append its [`RuleRun`], with the violation count
 /// derived rather than counted by the caller.
 ///

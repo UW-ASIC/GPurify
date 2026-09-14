@@ -218,7 +218,11 @@ fn projecting_twice_into_one_buffer_gives_the_same_graph_as_projecting_once() {
     from_reference_into(&netlist, SubcktId(0), &strings, &mut twice);
     from_reference_into(&netlist, SubcktId(0), &strings, &mut twice);
 
-    assert_eq!(format!("{once:?}"), format!("{twice:?}"));
+    // Column by column, not `Debug` string against `Debug` string. `RefGraph`
+    // derives `PartialEq` for exactly this, and `graph.rs`'s own doc comment
+    // says why: a formatting comparison cannot tell a real difference from a
+    // formatting one, and it passes `-0.0` off against `0.0` in `param`.
+    assert_eq!(once, twice);
 }
 
 /// A resistor and a transistor in one subcircuit over five nets.
