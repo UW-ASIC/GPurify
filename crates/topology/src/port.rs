@@ -1,43 +1,22 @@
 //! Port binding: attaching declared names to extracted nets.
-//!
-//! A net has a name only if the layout says so, via a TEXT label placed on a
-//! conductor shape. Everything else is anonymous, and LVS matches it by
-//! structure.
-//!
-//! # Ambiguity is an error
-//!
-//! Two different labels on one net, or one label touching two nets, is a
-//! contradiction in the layout. It is reported, not resolved: picking one and
-//! carrying on produces an LVS result that is confidently wrong about which
-//! net is which.
 
 use crate::net::{NetId, NetTable};
 use gpurify_ingest::{Provenance, StrId};
 
-/// Named nets.
-///
-/// Sorted by [`NetId`], so lookup is a binary search and iteration order is the
-/// same on every run.
-///
-/// Both directions are indexed. `net`/`name` is the net-ordered view — what
-/// [`name_of`](Self::name_of), reports and `drc` read. `by_name`/`by_name_net`
-/// is the same rows re-sorted by name, which is what
-/// [`net_of`](Self::net_of) partitions on. The second pair is a derived
-/// permutation of the first, so two tables holding the same bindings still
-/// compare equal.
+/// Named nets. `net`/`name` is ascending by [`NetId`]; `by_name`/`by_name_net`
+/// is the same rows re-sorted by name, a derived permutation, so two tables
+/// holding the same bindings compare equal.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PortTable {
     net: Vec<NetId>,
     name: Vec<StrId>,
-    /// The `name` column ascending. Ties — one name reaching two nets — stay in
-    /// net order, so a partition point lands on the lowest such net.
+    /// The `name` column ascending; ties stay in net order, so a partition
+    /// point lands on the lowest such net.
     by_name: Vec<StrId>,
     /// The net of the row `by_name` holds at the same index.
     by_name_net: Vec<NetId>,
-    /// [`bind_ports_into`]'s working column, owned by the table so the
-    /// allocation survives from one run to the next. Emptied on every exit path
-    /// of that function — including both error paths — so it never contributes
-    /// to what `Debug` prints or `PartialEq` compares.
+    /// [`bind_ports_into`]'s working column, emptied on every exit path so it
+    /// never reaches `Debug` or `PartialEq`.
     scratch: Vec<(NetId, StrId)>,
 }
 
@@ -51,12 +30,9 @@ pub enum PortError {
 }
 
 impl PortTable {
-    /// The four columns hold the same rows, so their lengths agree.
-    ///
-    /// `O(1)` deliberately: this runs on every accessor, and `len` is called
-    /// once per net by `lvs` and `export`, so an ordering scan here would be
-    /// quadratic in a debug build. Ordering is asserted where it is
-    /// established — [`build`](Self::build) and [`bind_ports_into`].
+    /// The four columns hold the same rows, so their lengths agree. `O(1)`,
+    /// because this runs on every accessor; ordering is asserted where it is
+    /// established instead.
     fn debug_columns(&self) {
         debug_assert_eq!(
             self.net.len(),
@@ -86,15 +62,11 @@ impl PortTable {
         self.net.binary_search(&net).ok().map(|row| self.name[row])
     }
 
-    /// The net a name refers to, if any.
-    ///
-    /// A name that reaches two nets answers with the lower of them, which is
-    /// what the net-ordered scan this replaced also found first.
+    /// The net a name refers to, if any; the lower of them if it reaches two.
     pub fn net_of(&self, name: StrId) -> Option<NetId> {
         self.debug_columns();
         // Partition rather than `binary_search`: on a repeated name the search
-        // may land on any of the matching rows, and the first one is the
-        // canonical answer.
+        // may land on any matching row, and the first is the canonical answer.
         let row = self.by_name.partition_point(|candidate| *candidate < name);
         (self.by_name.get(row) == Some(&name)).then(|| self.by_name_net[row])
     }
@@ -109,22 +81,12 @@ impl PortTable {
         self.len() == 0
     }
 
-    /// Build directly from name bindings.
-    ///
-    /// Reopened in the Testing-Phase, for the same reason as
-    /// [`crate::NetTable::from_assignment`]: private fields and a single
-    /// `todo!()` producer meant no test could hand a named net to anything
-    /// downstream. `export`'s SPEF and DSPF writers both require named nets, so
-    /// every writer test had to run the full extract-label-bind chain first.
-    ///
-    /// Entries are sorted by [`NetId`] here, so the binary-search invariant
-    /// holds however the caller ordered them.
+    /// Build from name bindings, sorted here however the caller ordered them.
     ///
     /// # Panics
     ///
-    /// Debug builds only, when two entries name the same net. That is
-    /// [`PortError::ConflictingLabels`], and a table is the wrong place to
-    /// discover it: [`bind_ports_into`] refuses it before one is built.
+    /// Debug builds only, when two entries name the same net — that is
+    /// [`PortError::ConflictingLabels`], refused before a table is built.
     #[must_use]
     pub fn build(entries: &[(NetId, StrId)]) -> Self {
         let mut sorted = entries.to_vec();
@@ -134,11 +96,6 @@ impl PortTable {
             "two entries name one net, which is a conflict rather than a table"
         );
 
-        // The same two splits `bind_ports_into` ends with, because this is the
-        // same transform: one `(net, name)` column split into the two the table
-        // stores, then re-sorted and split again into the name index. Both
-        // columns of a pair are written by one pass, which is what the two
-        // one-column maps this replaced could not do.
         let mut table = Self::default();
         table.net.reserve(sorted.len());
         table.name.reserve(sorted.len());
@@ -165,15 +122,8 @@ impl PortTable {
     }
 }
 
-/// Bind every label in the layout to its net.
-///
-/// **Transform, A-to-B.** Caller owns `out`. Reads `Provenance::labels`, which
-/// is already ascending by [`PolyId`](gpurify_core::PolyId), so the result is
-/// deterministic without a sort.
-///
-/// A label whose shape carries [`NetId::NONE`] — a cut, a marker, anything on a
-/// layer the deck does not call a conductor — is [`PortError::OrphanLabel`].
-/// See [`crate::net::extract_nets_into`] for which polygons those are.
+/// Bind every label in the layout to its net; caller owns `out`. A label whose
+/// shape carries [`NetId::NONE`] is [`PortError::OrphanLabel`].
 pub fn bind_ports_into(
     nets: &NetTable,
     provenance: &Provenance,
@@ -186,8 +136,7 @@ pub fn bind_ports_into(
          lets this bind without sorting the labels first"
     );
 
-    // Split into per-column borrows so the table's own scratch column can be
-    // read while the output columns are written.
+    // Per-column borrows, so scratch is readable while the columns are written.
     let PortTable {
         net: out_net,
         name: out_name,
@@ -196,17 +145,13 @@ pub fn bind_ports_into(
         scratch: bound,
     } = out;
 
-    // Cleared before anything can fail, so an error leaves an empty table and
-    // not the previous call's rows. A stale binding is a name pointing at the
-    // wrong net, which is the failure this module refuses.
+    // Cleared before anything can fail: an error must leave an empty table, not
+    // the previous call's rows naming the wrong net.
     out_net.clear();
     out_name.clear();
     by_name.clear();
     by_name_net.clear();
 
-    // The working column lives on the table, so binding twice reuses one
-    // allocation. It is emptied again on every exit below, which is what keeps
-    // it out of `PartialEq` and `Debug`.
     bound.clear();
     bound.reserve(labels.len());
     for &(poly, name) in labels {
@@ -221,10 +166,7 @@ pub fn bind_ports_into(
     // Orphans first, before the sort: `NetId::NONE` is `u32::MAX`, so two
     // orphan labels would otherwise sort adjacent and read as a conflict on a
     // net that does not exist. Fail closed — an orphan is reported, never
-    // skipped, or a conductor layer missing from the deck reads as a layout
-    // that simply has fewer pins.
-    // `|=`, not `||`: no early exit, so the scan costs the same on every input
-    // and carries no data-dependent branch.
+    // skipped, or a missing conductor layer reads as a layout with fewer pins.
     let mut orphaned = false;
     for &(net, _) in bound.iter() {
         orphaned |= net == NetId::NONE;
@@ -234,15 +176,13 @@ pub fn bind_ports_into(
         return Err(PortError::OrphanLabel);
     }
 
-    // Sorting by `(net, name)` brings one net's labels adjacent, which turns
-    // both remaining questions into a neighbour comparison: the repeated name
-    // is `dedup`, and what survives it on one net is the contradiction.
+    // Sorting by `(net, name)` brings one net's labels adjacent: `dedup` takes
+    // the repeat, and what survives on one net is the contradiction.
     bound.sort_unstable();
     bound.dedup();
 
-    // Adjacent-pair scan over two offset views of one column. The empty and
-    // single-row cases collapse to two empty views rather than to a length
-    // guard.
+    // Two offset views of one column; empty and single-row collapse to two
+    // empty views rather than to a length guard.
     let left = &bound[..bound.len().saturating_sub(1)];
     let right = &bound[bound.len().min(1)..];
     debug_assert_eq!(
@@ -255,10 +195,8 @@ pub fn bind_ports_into(
     for i in 0..left.len() {
         let (net, _) = left[i];
         let (next, _) = right[i];
-        // `NetId::NONE` is `u32::MAX`, which is `min`'s identity, so a pair that
-        // does not clash contributes nothing and needs no branch. Reporting the
-        // lowest clashing net rather than the first one found is the same answer
-        // read off a sorted column, and it is canonical.
+        // `NetId::NONE` is `min`'s identity, so a pair that does not clash
+        // contributes nothing.
         let clash = u32::from(net == next).wrapping_sub(1);
         conflict = NetId(conflict.0.min(net.0 | clash));
     }
@@ -267,8 +205,6 @@ pub fn bind_ports_into(
         return Err(PortError::ConflictingLabels(conflict));
     }
 
-    // Both output columns from one pass; the four `clear`s above already left
-    // them empty.
     out_net.reserve(bound.len());
     out_name.reserve(bound.len());
     for &(net, name) in bound.iter() {
@@ -276,9 +212,8 @@ pub fn bind_ports_into(
         out_name.push(name);
     }
 
-    // Re-sorted by `(name, net)`, the same rows are the name-ordered index
-    // `net_of` partitions. The net order it was just read in is what breaks
-    // ties, so a name reaching two nets indexes the lower one first.
+    // Re-sorted by `(name, net)` into the index `net_of` partitions; net order
+    // breaks ties, so a name reaching two nets indexes the lower one first.
     bound.sort_unstable_by_key(|&(net, name)| (name, net));
     by_name.reserve(bound.len());
     by_name_net.reserve(bound.len());
@@ -323,13 +258,8 @@ pub fn bind_ports_into(
 mod tests {
     use super::{NetId, PortTable, StrId};
 
-    /// Reads the private columns directly, for the reason
-    /// `NetTable`'s module test does: `build`'s whole job is the sort, and
-    /// checking it through `name_of` — which binary-searches the column the
-    /// sort produced — would let an unsorted table and a broken search agree.
-    ///
-    /// Oracle: construct-from-answer. Entries go in worst-case order — every
-    /// one out of place — and the sorted columns are written down beside them.
+    /// Reads the private columns directly: checking the sort through `name_of`
+    /// would let an unsorted table and a broken search agree.
     #[test]
     fn build_sorts_by_net_however_the_caller_ordered_the_entries() {
         let table = PortTable::build(&[
