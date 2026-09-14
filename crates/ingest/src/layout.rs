@@ -1,17 +1,9 @@
-//! Layout readers: GDSII and OASIS.
+//! Layout readers: GDSII and OASIS, both producing a `GeometryStore` and a
+//! [`Provenance`], dispatched by [`read_layout`] on the file's magic.
 //!
-//! Both produce the same two outputs — a `GeometryStore` and a [`Provenance`] —
-//! and share nothing else. They are different binary formats with different
-//! record models, so there is no common reader trait: one implementation each,
-//! and a single [`read_layout`] that dispatches on the file's magic.
-//!
-//! # Flattening
-//!
-//! Both formats are hierarchical; verification is flat. Flattening happens
-//! here, during the read, so the store is built once rather than built and then
-//! rewritten. Each emitted polygon records the instance path it came from, and
-//! an unsupported transform (non-orthogonal rotation, non-integral
-//! magnification) is an error, not an approximation.
+//! Flattening happens during the read. Each emitted polygon records the instance
+//! path it came from, and an unsupported transform (non-orthogonal rotation,
+//! non-integral magnification) is an error, not an approximation.
 
 use crate::deck::{Deck, DerivedOp, DerivedTable};
 use crate::intern::StrTable;
@@ -28,23 +20,12 @@ pub struct Layout {
     pub provenance: Provenance,
     pub strings: StrTable,
     /// Polygons the reader dropped because their stream pair is absent from the
-    /// deck's layer table. Zero under [`UnknownLayers::Reject`], which refuses
-    /// the file instead.
-    ///
-    /// Added in the Testing-Phase: `Drop` is documented as "never silent" and
-    /// nothing in the reader's signature carried the count that claim is about,
-    /// so a run against the wrong deck produced a smaller store and said
-    /// nothing. A caller reporting a non-zero value here is what makes the
-    /// difference between running a partial deck on purpose and running one by
-    /// accident.
+    /// deck's layer table. Zero under [`UnknownLayers::Reject`].
     pub dropped: u32,
 }
 
-/// Why a layout could not be read.
-///
-/// Every variant is a refusal, never a degradation. In particular
-/// `UnsupportedTransform`: the old reader silently approximated some of these,
-/// which moves geometry and therefore moves verdicts.
+/// Why a layout could not be read. Every variant is a refusal, never a
+/// degradation: approximating a transform moves geometry and moves verdicts.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LayoutError {
     #[error("unrecognised file format")]
@@ -63,12 +44,8 @@ pub enum LayoutError {
     CyclicHierarchy(String),
     #[error("layer {0}/{1} is not in the deck's layer table")]
     UnknownLayer(u16, u16),
-    /// A layer the deck computes from other layers could not be computed.
-    ///
-    /// Fail closed, and this is the shape that matters: the geometry underneath
-    /// a derived layer is real, so the alternative to refusing is a layer that
-    /// silently comes back empty — every conductor on it unconnected, every
-    /// device terminal on it unbound, and a clean report over all of it.
+    /// A layer the deck computes from other layers could not be computed. Fail
+    /// closed: the alternative is a layer that silently comes back empty.
     #[error("derived layer {0:?} could not be computed: {1}")]
     Derived(gpurify_core::LayerId, BooleanError),
     #[error("io: {0}")]
@@ -76,11 +53,6 @@ pub enum LayoutError {
 }
 
 /// How strictly to treat geometry the deck does not describe.
-///
-/// Not a correctness switch: both settings verify identically. It decides
-/// whether a layer absent from the deck is an error or is dropped, which is the
-/// difference between running a partial deck deliberately and running one by
-/// accident.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownLayers {
     /// Reject. The default, and what a signoff run uses.
@@ -92,13 +64,8 @@ pub enum UnknownLayers {
 
 /// Read a layout file, flatten it, and produce the store plus provenance.
 ///
-/// **Transform, generative** — produces tables from a filename rather than from
-/// a table. The deck is needed during the read, not after: layer mapping and
-/// the grid resolution both affect what is emitted, and mapping afterwards
-/// would mean holding raw layer numbers for every polygon.
-///
-/// This is the one function that applies the `GeometryStoreBuilder::finish`
-/// permutation to the provenance columns.
+/// The one function that applies the `GeometryStoreBuilder::finish` permutation
+/// to the provenance columns.
 pub fn read_layout(
     path: &std::path::Path,
     deck: &Deck,
@@ -109,8 +76,7 @@ pub fn read_layout(
     let mut file = std::fs::File::open(path).map_err(|e| LayoutError::Io(e.to_string()))?;
 
     // Peek the gzip magic rather than asking a decoder: `MultiGzDecoder::new`
-    // parses the first header eagerly, cannot fail, and has already pulled up
-    // to 32 KiB into a `BufReader` you cannot get back.
+    // parses the first header eagerly and cannot fail.
     let mut magic = [0u8; 2];
     let peeked = file
         .read(&mut magic)
@@ -119,11 +85,9 @@ pub fn read_layout(
 
     let mut bytes = Vec::new();
     if peeked == 2 && magic == [0x1f, 0x8b] {
-        // `MultiGzDecoder`, never `GzDecoder`. A gzip file is a *series* of
-        // members — `bgzip` and several EDA writers emit many — and `GzDecoder`
-        // stops after the first with a clean `Ok(0)`. That is a silently
-        // partial layout and a clean report over the die area that never
-        // decoded, which is exactly the fail-open case this tree refuses.
+        // `MultiGzDecoder`, never `GzDecoder`: a gzip file is a *series* of
+        // members and `GzDecoder` stops after the first with a clean `Ok(0)`,
+        // which is a silently partial layout.
         flate2::read::MultiGzDecoder::new(file)
             .read_to_end(&mut bytes)
             .map_err(|e| LayoutError::Io(e.to_string()))?;
@@ -132,9 +96,8 @@ pub fn read_layout(
             .map_err(|e| LayoutError::Io(e.to_string()))?;
     }
 
-    // Detection runs on the decompressed bytes, and a failed decompression
-    // above returned rather than falling through to "try it as GDSII": reading
-    // compressed noise as records produces a plausible short layout.
+    // Detection runs on the decompressed bytes: reading compressed noise as
+    // records produces a plausible short layout.
     if gds::detect(&bytes) {
         gds::read(&bytes, deck, unknown)
     } else if oasis::detect(&bytes) {
@@ -146,58 +109,22 @@ pub fn read_layout(
 
 /// Compute every layer the deck derives and append it to the store.
 ///
-/// **Transform, in-place.** Caller owns both tables. One row per derived layer
-/// in `derived`, folded left over its operands, appended to `store` as real
-/// polygons and matched one for one by a `Provenance` row so the two tables stay
-/// the same length.
-///
-/// # Why the polygons go in the store
-///
-/// So that nothing downstream needs a second way to address geometry.
-/// `topology::net` partitions store rows, `topology::port` binds a label to a
-/// store row, `topology::device` binds a terminal to a store row, and a rule
-/// reports a store row. A derived layer that lived beside the store instead
-/// would have to be taught to all four, and `NetTable` in particular indexes
-/// `poly_net` by [`gpurify_core::PolyId`] — there is no id a
-/// `ValidatedLayer` polygon could offer it.
-///
-/// # Order
-///
-/// `derived` is ascending by id and a row may only name lower ids, so one
-/// forward scan is enough: by the time a row is reached, every layer it folds
-/// is already in the store. That is the whole of the dependency handling, and
-/// it is why the deck needs no expression tree.
-///
-/// # Provenance
-///
-/// A derived polygon came from no instance, so its path is [`PathTable::ROOT`]
-/// and it carries no stream properties. What a report needs to name a real
-/// shape is on the geometry side: `core::view::PolygonRef::provenance` carries
-/// the lowest contributing store row through the boolean.
-///
-/// # Holes
-///
-/// Rings are appended as they come out of the boolean — outer counter-clockwise,
-/// holes clockwise — which is exactly the encoding `core::view::validate_layer_into`
-/// reads back, so validating the derived layer reproduces the polygons the
-/// boolean produced. It is also the same encoding a layout file uses for a
-/// donut, so a derived layer is no worse off here than a drawn one.
+/// One row per derived layer, folded left over its operands and matched one for
+/// one by a `Provenance` row so the two tables stay the same length. `derived`
+/// is ascending by id and a row may only name lower ids, so one forward scan is
+/// the whole of the dependency handling. A derived polygon came from no
+/// instance, so its path is [`PathTable::ROOT`].
 pub fn derive_layers_into(
     store: &mut GeometryStore,
     provenance: &mut Provenance,
     derived: &DerivedTable,
 ) -> Result<(), LayoutError> {
-    // One buffer set for the whole call: an accumulator, the operand being
-    // folded into it, and the result of the fold, rotated rather than
-    // reallocated. Plus the four flat columns the store append takes.
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
     let mut combined = ValidatedLayer::default();
     let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
     let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
 
-    // Tens of derived layers per deck, each a handful of operands, so neither
-    // of the two loops here is bulk; the bulk work is inside the booleans.
     for row in 0..derived.len() {
         let (layer, op) = derived.row(row);
         let operands = derived.operands_of(row);
@@ -221,8 +148,7 @@ pub fn derive_layers_into(
         len.clear();
         for polygon in 0..u32::try_from(folded.len()).expect("a layer's polygons fit a u32") {
             let polygon = folded.get(store, polygon);
-            // Outer first, then its holes — the ring order `validate_layer_into`
-            // emits and the one it reads back.
+            // Outer first, then its holes: `validate_layer_into`'s ring order.
             for ring in std::iter::once(polygon.outer()).chain(polygon.holes()) {
                 let (ring_xs, ring_ys) = ring.coords();
                 start.push(crate::narrow(xs.len()));
@@ -251,10 +177,7 @@ pub fn derive_layers_into(
     Ok(())
 }
 
-/// GDSII.
-///
-/// A record stream of `(length, tag, payload)`. Record tags are a small dense
-/// `u16` space known at compile time, so dispatch is an array index, not a map.
+/// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
     use crate::intern::{StrId, StrTable};
@@ -290,13 +213,11 @@ pub mod gds {
     const SNAME: u16 = 0x1206;
     const COLROW: u16 = 0x1302;
     const NODE: u16 = 0x1500;
-    /// `TEXT`'s half of the stream pair. The spec requires it — the grammar is
-    /// `<textbody> ::= TEXTTYPE [PRESENTATION] .. XY STRING`, with TEXTTYPE
-    /// unbracketed — so a `TEXT` without one is refused rather than defaulted.
+    /// `TEXT`'s half of the stream pair. Unbracketed in the grammar, so a `TEXT`
+    /// without one is refused rather than defaulted.
     const TEXTTYPE: u16 = 0x1602;
     /// Justification and font of the rendered glyph. Read and discarded: it
-    /// moves where the *characters* are drawn relative to the `XY` point, and
-    /// the point itself is what names a shape.
+    /// does not move the `XY` point, which is what names a shape.
     const PRESENTATION: u16 = 0x1701;
     const STRING: u16 = 0x1906;
     const STRANS: u16 = 0x1A01;
@@ -330,11 +251,8 @@ pub mod gds {
     /// so both are refused rather than approximated.
     const STRANS_ABSOLUTE: u16 = 0x0006;
 
-    /// A byte offset as [`LayoutError`] states it.
-    ///
-    /// One place so the cast is justified once: an offset is an index into a
-    /// slice already in memory, so it is at most `usize::MAX` and this is
-    /// lossless on every target this tree builds for.
+    /// A byte offset as [`LayoutError`] states it. One place, so the cast is
+    /// justified once: an index into a slice already in memory is lossless here.
     const fn offset(at: usize) -> u64 {
         at as u64
     }
@@ -347,18 +265,14 @@ pub mod gds {
     pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
         let mut library = parse(bytes)?;
         let (mut store, mut provenance, dropped) = flatten(&library, deck, unknown)?;
-        // Here rather than in `read_layout`, so that every path producing a
-        // store from bytes produces a *complete* one — the round-trip law
-        // compares a store read through `gds::read` against a store read
-        // through `read_layout`, and a derived layer materialised in only one
-        // of them would make the two differ by construction.
+        // Here rather than in `read_layout`, so every path producing a store
+        // from bytes produces a complete one.
         super::derive_layers_into(&mut store, &mut provenance, deck.layers.derived())?;
         Ok(Layout {
             store,
             provenance,
-            // The names the elements interned along the way. Taken rather than
-            // borrowed: the library dies here and the ids in the store's
-            // provenance only mean something against this table.
+            // Taken, not borrowed: the library dies here and the ids in the
+            // store's provenance only mean something against this table.
             strings: std::mem::take(&mut library.strings),
             dropped,
         })
@@ -367,10 +281,6 @@ pub mod gds {
     // ---------------------------------------------------------------- parsing
 
     /// One geometry element as the file states it, before any transform.
-    ///
-    /// Ranges into [`Library`]'s flat columns rather than owned vectors: a
-    /// library holds millions of these and a `Vec` per element is three words
-    /// of header before a single coordinate exists.
     struct Elem {
         layer: u16,
         datatype: u16,
@@ -381,9 +291,7 @@ pub mod gds {
     }
 
     /// One `SREF` or `AREF`: a child cell, its placement, and the array step.
-    ///
-    /// An `SREF` is the one-by-one case with zero steps, so flattening has one
-    /// path rather than two.
+    /// An `SREF` is the one-by-one case with zero steps.
     struct Ref {
         cell: StrId,
         /// The child's own transform, whose translation is the array origin.
@@ -395,11 +303,6 @@ pub mod gds {
     }
 
     /// One `TEXT` as the file states it, before any transform.
-    ///
-    /// The coordinate is inline rather than a range into `xs`/`ys`: the spec
-    /// says "a text or SREF element must have only one pair of coordinates", so
-    /// the run is always length one and a `(start, len)` pair would be two
-    /// words to describe one point.
     struct Text {
         layer: u16,
         texttype: u16,
@@ -419,14 +322,9 @@ pub mod gds {
         text_end: u32,
     }
 
-    /// An exactly representable instance transform.
-    ///
-    /// Integral magnification, an optional reflection about the X axis, a
-    /// quarter turn, and a translation — the subset the module doc declares.
-    /// It is closed under composition, which is what makes flattening a fold
-    /// rather than a matrix stack: `F` and `R` do not commute, but
-    /// `F·R_q = R_{-q}·F`, so every composite is still one scale, one
-    /// reflection, one quarter turn and one translation.
+    /// An exactly representable instance transform: integral magnification, an
+    /// optional reflection about the X axis, a quarter turn, and a translation.
+    /// Closed under composition, since `F·R_q = R_{-q}·F`.
     #[derive(Clone, Copy)]
     struct Xform {
         mag: i64,
@@ -447,10 +345,6 @@ pub mod gds {
 
         /// The linear part as the row-major pair `(a, b, c, e)` of
         /// `x' = a·x + b·y`, `y' = c·x + e·y`.
-        ///
-        /// A uniform: computed once per instance and hoisted above the vertex
-        /// loop, so the `match` and the `if` below are constant across every
-        /// row that loop then walks.
         fn linear(self) -> (i64, i64, i64, i64) {
             let (a, b, c, e) = match self.quadrant & 3 {
                 0 => (1, 0, 0, 1),
@@ -489,9 +383,7 @@ pub mod gds {
         strings: StrTable,
         cells: Vec<Cell>,
         /// Cell indices ordered by name, for the `SNAME` lookup. Sorted and
-        /// binary-searched, not hashed — see [`crate::intern`]; a map's
-        /// iteration order is what made the old tree's reports differ between
-        /// runs of the same binary.
+        /// binary-searched, not hashed — see [`crate::intern`].
         by_name: Vec<u32>,
         elems: Vec<Elem>,
         refs: Vec<Ref>,
@@ -513,9 +405,6 @@ pub mod gds {
     }
 
     /// One `(tag, payload)` record and the offset just past it.
-    ///
-    /// Fail closed on both framing errors a stream can have: a header that runs
-    /// off the end, and a length that cannot advance.
     fn record(bytes: &[u8], at: usize) -> Result<(u16, &[u8], usize), LayoutError> {
         let head = bytes
             .get(at..at + 4)
@@ -542,8 +431,7 @@ pub mod gds {
         Ok(u16::from_be_bytes(bytes))
     }
 
-    /// A four-byte signed integer payload, widened to the arithmetic width the
-    /// rest of this module works in.
+    /// A four-byte signed integer payload, widened to this module's width.
     fn long(payload: &[u8], at: usize) -> Result<i64, LayoutError> {
         let bytes: [u8; 4] = payload
             .get(..4)
@@ -583,13 +471,6 @@ pub mod gds {
     }
 
     /// Append an `XY` payload to the coordinate columns.
-    ///
-    /// Two passes over the same bytes, and they stay two: reaching one would
-    /// need a `Cols` impl reinterpreting a byte slice as eight-byte points, and
-    /// `Cols` is sealed inside `gpurify-core`, plus a two-column `map_into`,
-    /// which does not exist. Both are entries in `docs/SIGNATURE_DEFECTS.md`
-    /// under *ingest*; neither is reachable from this crate. `chunks_exact`
-    /// keeps both passes branchless and the second is served entirely from L1.
     fn points(xs: &mut Vec<i64>, ys: &mut Vec<i64>, payload: &[u8], at: usize) -> Result<(), LayoutError> {
         if !payload.len().is_multiple_of(8) {
             return Err(LayoutError::Truncated(offset(at)));
@@ -608,31 +489,20 @@ pub mod gds {
         Ok(())
     }
 
-    /// Read the record stream into a [`Library`].
-    ///
-    /// **Transform, generative.** One pass, no hierarchy resolution: every
-    /// record is either consumed into a table, skipped as carrying no geometry,
-    /// or refused. Nothing is approximated, so a construct this reader does not
-    /// implement cannot reach the store as something else.
+    /// Read the record stream into a [`Library`], one pass and no hierarchy
+    /// resolution. Every record is consumed, skipped, or refused.
     fn parse(bytes: &[u8]) -> Result<Library, LayoutError> {
         let mut lib = Library::default();
-        // One scratch set for every `PATH` in the library, hoisted above the
-        // record scan so stroking a centreline allocates nothing per element.
         let mut stroke = Stroke::default();
         let mut open: Option<usize> = None;
         let mut at = 0usize;
 
-        // The record scan is a chain — record N's offset is record N−1's offset
-        // plus the length record N−1 declared — so it is not vectorisable, and
-        // its `match` is a state machine, not a data-dependent branch inside a
-        // kernel.
         loop {
             let (tag, payload, next) = record(bytes, at)?;
             match tag {
                 ENDLIB => break,
-                // Library metadata. `UNITS` is read and discarded on purpose:
-                // coordinates are database units already and this reader never
-                // rescales them, so the grid is the layout's, not the file's.
+                // `UNITS` is read and discarded on purpose: coordinates are
+                // database units already and this reader never rescales them.
                 HEADER | BGNLIB | LIBNAME | UNITS | REFLIBS | FONTS | GENERATIONS | ATTRTABLE
                 | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
                 BGNSTR => {
@@ -673,10 +543,8 @@ pub mod gds {
                     at = boundary(&mut lib, bytes, next, at, tag)?;
                     continue;
                 }
-                // A stroked centreline, and by the time `path` returns it is an
-                // `Elem` like any other — the outline is exact or the element
-                // was refused, so nothing downstream can tell a `PATH` from a
-                // `BOUNDARY`.
+                // By the time `path` returns this is an `Elem` like any other:
+                // the outline is exact or the element was refused.
                 PATH => {
                     if open.is_none() {
                         return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
@@ -691,16 +559,9 @@ pub mod gds {
                     at = reference(&mut lib, bytes, next, at, tag == AREF)?;
                     continue;
                 }
-                // A TEXT carries no geometry, but it carries the net label, and
-                // a run whose labels never arrive is a run whose `PortTable` is
-                // empty — which makes every net unnamed, the SPEF and DSPF
-                // writers refuse, and the engine's field-solve path
-                // unreachable, because it selects nets by name.
-                //
                 // Read here and bound later: the point is in this cell's frame
                 // and there are no `PolyId`s yet, so the binding waits for
-                // `Provenance::resolve_labels`, after flattening and after the
-                // store's layer sort.
+                // `Provenance::resolve_labels`.
                 TEXT => {
                     if open.is_none() {
                         return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
@@ -708,10 +569,8 @@ pub mod gds {
                     at = text(&mut lib, bytes, next, at)?;
                     continue;
                 }
-                // A NODE is an electrical annotation with no manufactured shape
-                // and, unlike a TEXT, no name: the spec gives `NODETYPE` no
-                // meaning and never says what a node *is*. There is nothing to
-                // record that would not be a guess.
+                // A NODE has no manufactured shape and, unlike a TEXT, no name:
+                // there is nothing to record that would not be a guess.
                 NODE => {
                     at = skip_element(bytes, next)?;
                     continue;
@@ -740,14 +599,8 @@ pub mod gds {
         Ok(lib)
     }
 
-    /// The records an element carries whatever kind it is: its stream
-    /// properties, the flags that carry no geometry, and its terminator.
-    /// `Ok(Some(next))` is the `ENDEL`, `Ok(None)` "consumed, keep reading".
-    ///
-    /// One implementation because [`boundary`] and [`path`] state these
-    /// identically — they held a verbatim copy each while the two readers were
-    /// written apart, and a property arm added to one and not the other is a
-    /// polygon whose provenance silently lands on its neighbour.
+    /// The records an element carries whatever kind it is. `Ok(Some(next))` is
+    /// the `ENDEL`, `Ok(None)` "consumed, keep reading".
     ///
     /// [`reference`] deliberately does **not** route through this: an `SREF`
     /// has no `prop_start` range to own the pair, so a property record on one
@@ -783,35 +636,15 @@ pub mod gds {
 
     /// Consume a `TEXT` through its `ENDEL`. Returns the offset past it.
     ///
-    /// The grammar, from the Feb-87 manual — bracketed is optional, and note
-    /// that `TEXTTYPE`, `XY` and `STRING` are not:
-    ///
     /// ```text
     /// <text>     ::= TEXT [ELFLAGS] [PLEX] LAYER <textbody>
     /// <textbody> ::= TEXTTYPE [PRESENTATION] [PATHTYPE] [WIDTH] [<strans>] XY STRING
     /// ```
     ///
-    /// # What is read and what is dropped
-    ///
-    /// `LAYER` and `TEXTTYPE` are the stream pair, and they are what the deck's
-    /// label pairing is stated against. `XY` is the one point the spec allows —
-    /// *"a text or SREF element must have only one pair of coordinates"* — and
-    /// it is what a later pass tests against the geometry. `STRING` is the
-    /// name.
-    ///
-    /// `PRESENTATION`, `PATHTYPE` and `WIDTH` describe the rendered glyph: how
-    /// the characters are justified around the point, how their strokes end,
-    /// how thick they are. None of that moves the point, and the point is the
-    /// whole of what names a shape, so all three are accepted and discarded.
-    /// Reading them is not optional even so — an unknown record is
-    /// `UnsupportedRecord`, so silently refusing a legal `TEXT` would be the
-    /// alternative.
-    ///
-    /// `STRANS`/`MAG`/`ANGLE` are accepted for the same reason and discarded
-    /// for a sharper one: they rotate and mirror the glyph about its own
-    /// anchor, and the anchor is the `XY` point, which they leave where it is.
-    /// The transform that *does* move a label is the instance transform, and
-    /// that is applied in `Flatten::visit` alongside the geometry.
+    /// `LAYER`, `TEXTTYPE`, `XY` and `STRING` are kept. The rest describe the
+    /// glyph about its anchor and leave the `XY` point where it is, so they are
+    /// accepted — not optional, an unread record being `UnsupportedRecord` — and
+    /// discarded.
     fn text(
         lib: &mut Library,
         bytes: &[u8],
@@ -824,8 +657,7 @@ pub mod gds {
         let mut string: Option<StrId> = None;
         let mut attribute = 0i16;
         // A TEXT's properties are parsed and dropped: `props` is a per-polygon
-        // CSR column and this element becomes no polygon, so appending to it
-        // would shift every later shape's property range.
+        // CSR column and this element becomes no polygon.
         let props_before = lib.props.len();
 
         let end = loop {
@@ -834,17 +666,12 @@ pub mod gds {
                 LAYER => layer = Some(word(payload, at)?),
                 TEXTTYPE => texttype = Some(word(payload, at)?),
                 XY => {
-                    // Into scratch at the end of the shared columns, then
-                    // popped: `points` is the one checked reader of an XY
-                    // payload, and duplicating its framing checks here to save
-                    // two pushes would duplicate the thing most worth having
-                    // exactly once.
+                    // Into scratch, then popped: `points` is the one checked
+                    // reader of an XY payload.
                     let before = lib.xs.len();
                     points(&mut lib.xs, &mut lib.ys, payload, at)?;
-                    // Fail closed on the one shape the spec forbids. A TEXT
-                    // with two points is not a TEXT with an extra point to
-                    // ignore; it is a file that means something this reader
-                    // cannot know.
+                    // A TEXT with two points is not a TEXT with a point to
+                    // ignore; the spec allows exactly one.
                     if lib.xs.len() != before + 1 {
                         lib.xs.truncate(before);
                         lib.ys.truncate(before);
@@ -855,8 +682,7 @@ pub mod gds {
                     lib.ys.truncate(before);
                 }
                 STRING => string = Some(lib.strings.intern(&ascii(payload))),
-                // Glyph presentation, and the transform of the glyph about its
-                // own anchor. Accepted, discarded — see this function's doc.
+                // Accepted, discarded — see this function's doc.
                 PRESENTATION | PATHTYPE | WIDTH | STRANS | MAG | ANGLE => {}
                 _ => {
                     if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
@@ -868,10 +694,8 @@ pub mod gds {
         };
         lib.props.truncate(props_before);
 
-        // Fail closed on each of the three the grammar makes mandatory. A label
-        // missing its stream pair cannot be paired with a conductor, one
-        // missing its point cannot be placed, and one missing its string names
-        // nothing — and none of the three has a defensible default.
+        // Fail closed on each record the grammar makes mandatory; none of them
+        // has a defensible default.
         let (Some(layer), Some(texttype), Some((x, y)), Some(string)) =
             (layer, texttype, point, string)
         else {
@@ -908,8 +732,7 @@ pub mod gds {
             let (tag, payload, next) = record(bytes, at)?;
             match tag {
                 LAYER => layer = Some(word(payload, at)?),
-                // One arm for both because a BOX's type plays the datatype's
-                // role exactly: it is the second half of the stream pair.
+                // A BOX's type is the second half of the stream pair.
                 DATATYPE | BOXTYPE => datatype = Some(word(payload, at)?),
                 XY => {
                     points(&mut lib.xs, &mut lib.ys, payload, at)?;
@@ -925,7 +748,7 @@ pub mod gds {
         };
 
         // The closing point a BOUNDARY repeats belongs to the file format, not
-        // to the store. One compare per element, not per vertex.
+        // to the store.
         let last = lib.xs.len().wrapping_sub(1);
         let first = vert_start as usize;
         if lib.xs.len() - first >= 2 && lib.xs[first] == lib.xs[last] && lib.ys[first] == lib.ys[last] {
@@ -934,9 +757,8 @@ pub mod gds {
         }
 
         let vert_len = narrow(lib.xs.len()) - vert_start;
-        // Fail closed. An element missing its stream pair or its geometry, or
-        // one with no interior, is refused: there is no representation of it
-        // that is not a guess, and a guess is a moved verdict.
+        // An element missing its stream pair or its geometry, or one with no
+        // interior, is refused: any representation of it would be a guess.
         let (Some(layer), Some(datatype)) = (layer, datatype) else {
             return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
         };
@@ -957,10 +779,6 @@ pub mod gds {
 
     /// Per-`PATH` scratch: the centreline and the two offset chains it strokes
     /// into.
-    ///
-    /// A column of `(i64, i64)` rather than two of `i64` because every one of
-    /// these is read as a point — both coordinates in the same expression —
-    /// which is the one case `CONVENTIONS.md` §1 keeps `AoS` for.
     #[derive(Default)]
     struct Stroke {
         /// The centreline as the file states it, with the two end caps applied.
@@ -974,28 +792,12 @@ pub mod gds {
         right: Vec<(i64, i64)>,
     }
 
-    /// Consume a `PATH` through its `ENDEL`, stroking its centreline into the
-    /// outline the rest of the pipeline sees. Returns the offset past it.
+    /// Consume a `PATH` through its `ENDEL`, stroking its `n`-point centreline
+    /// into a `2n`-point ring. Returns the offset past it.
     ///
-    /// **Transform, A-to-B.** An `n`-point centreline in, a `2n`-point ring
-    /// out: one offset corner per vertex per side.
-    ///
-    /// # What is exact, and what is refused
-    ///
-    /// The outline is exact or the element is refused; there is no rounded
-    /// case, because a rounded outline moves a spacing verdict exactly the way
-    /// a rounded instance transform does. Exact means all four of:
-    ///
-    /// - **every segment axis-parallel and non-degenerate**, so both offset
-    ///   lines are axis-parallel and their intersection is an integer point;
-    /// - **an even width**, so the half-width the offset is by is still a whole
-    ///   database unit;
-    /// - **no vertex that reverses direction**, which has no miter at all — the
-    ///   two offset lines coincide and the join is a cap, a different element;
-    /// - **`PATHTYPE` 0, 2 or 4.** Type 1 is a semicircular cap and no polygon
-    ///   is that shape.
-    ///
-    /// Everything else is a typed refusal, never a store row.
+    /// Exact or refused, since a rounded outline moves a spacing verdict. Exact
+    /// needs every segment axis-parallel and non-degenerate, an even width, no
+    /// vertex that reverses direction, and `PATHTYPE` 0, 2 or 4.
     fn path(
         lib: &mut Library,
         stroke: &mut Stroke,
@@ -1038,8 +840,7 @@ pub mod gds {
         };
 
         // The centreline moves out of the coordinate columns and the outline
-        // takes its place: the columns hold what the store will, and a refusal
-        // below leaves no half-written element behind it.
+        // takes its place, so a refusal below leaves no half-written element.
         let first = vert_start as usize;
         let (cx, cy) = (&lib.xs[first..], &lib.ys[first..]);
         let centre = cx.len();
@@ -1059,10 +860,9 @@ pub mod gds {
         if !seen_xy || n < 2 {
             return Err(LayoutError::UnsupportedRecord(PATH, offset(start)));
         }
-        // A zero width has no area to verify. A negative one is GDSII's
-        // "absolute width", which does not compose with an instance
-        // magnification — the same objection `STRANS_ABSOLUTE` is refused for.
-        // An odd width offsets by half a database unit, which is off the grid.
+        // Zero width has no area to verify; a negative one is GDSII's "absolute
+        // width", which does not compose with an instance magnification; an odd
+        // one offsets by half a database unit, which is off the grid.
         if width <= 0 || width % 2 != 0 {
             return Err(LayoutError::UnsupportedRecord(WIDTH, offset(start)));
         }
@@ -1081,10 +881,8 @@ pub mod gds {
         debug_assert_eq!(segments, head.len(), "the offset views diverged");
 
         // Exactly one of the two deltas is zero on an axis-parallel,
-        // non-degenerate segment. Folded to one flag over the whole centreline
-        // rather than tested per vertex, so the scan carries no branch: `&=` on
-        // `bool` is the non-short-circuiting operator, so the fold is one `and`
-        // per row and no control flow.
+        // non-degenerate segment. `&=` does not short-circuit, so the fold
+        // carries no branch.
         let mut axis_parallel = true;
         for i in 0..segments {
             let (a, b) = (tail[i], head[i]);
@@ -1102,9 +900,8 @@ pub mod gds {
         }
         debug_assert_eq!(stroke.dirs.len(), n - 1, "one direction per segment");
 
-        // A reversal is the one join with no intersection to miter at. Same
-        // shape of check as above — `|=` on `bool` does not short-circuit — and
-        // empty for a two-point centreline.
+        // A reversal is the one join with no intersection to miter at. Empty
+        // for a two-point centreline.
         let (prev, curr) = (&stroke.dirs[..segments - 1], &stroke.dirs[1..]);
         debug_assert_eq!(prev.len(), curr.len(), "the offset views diverged");
         let mut reverses = false;
@@ -1116,11 +913,9 @@ pub mod gds {
             return Err(LayoutError::UnsupportedTransform);
         }
 
-        // The end caps are the only term that depends on a vertex's *index*, so
-        // they are folded into the centreline here and the corner map below
-        // stays uniform over every row. Extending a segment along its own
-        // direction leaves that direction unchanged, which is why `dirs` is
-        // computed first and stays valid.
+        // The end caps are the only term depending on a vertex's *index*, so
+        // they fold into the centreline here. Extending a segment along its own
+        // direction leaves that direction unchanged, so `dirs` stays valid.
         let (front, back) = (stroke.dirs[0], stroke.dirs[segments - 1]);
         stroke.pts[0].0 -= begin_ext * front.0;
         stroke.pts[0].1 -= begin_ext * front.1;
@@ -1139,13 +934,9 @@ pub mod gds {
         );
 
         // The miter, exact and division-free. With `d` the dot product of the
-        // two unit directions — `1` at a collinear join, `0` at a quarter turn,
-        // and `-1` refused above — the offset corner is
-        // `p + half * (n_in * (1 - d) + n_out)`, which is the intersection of
-        // the two offset lines in both surviving cases: `n_in + n_out` at a
-        // turn, and `n_out` alone where the two normals are the same vector.
-        // `side` is `+1` for the left chain and `-1` for the right, and is a
-        // uniform, so the body is six multiplies and no branch.
+        // two unit directions, the offset corner is
+        // `p + half * (n_in * (1 - d) + n_out)` — the intersection of the two
+        // offset lines. `side` is `+1` for the left chain, `-1` for the right.
         let corner = |side: i64| {
             move |(p, pv, cv): ((i64, i64), (i64, i64), (i64, i64))| {
                 let dot = pv.0 * cv.0 + pv.1 * cv.1;
@@ -1178,10 +969,8 @@ pub mod gds {
                 .push(right((stroke.pts[i], stroke.ext[i], stroke.ext[i + 1])));
         }
 
-        // Right side forward, then left side back. That order is what makes the
-        // ring counter-clockwise, and `core::view` reads a clockwise ring as a
-        // hole — a stroked wire emitted the other way round would subtract
-        // itself from its own layer.
+        // Right side forward, then left back: that is what makes the ring
+        // counter-clockwise, and `core::view` reads clockwise as a hole.
         lib.xs.extend(stroke.right.iter().map(|p| p.0));
         lib.xs.extend(stroke.left.iter().rev().map(|p| p.0));
         lib.ys.extend(stroke.right.iter().map(|p| p.1));
@@ -1228,9 +1017,8 @@ pub mod gds {
                 SNAME => name = Some(lib.strings.intern(&ascii(payload))),
                 STRANS => {
                     let flags = word(payload, at)?;
-                    // An absolute magnification or angle does not compose with
-                    // the parent's, so the fold in `Xform::compose` would be
-                    // wrong for it. Refused, never approximated.
+                    // Absolute does not compose with the parent's, so
+                    // `Xform::compose` would be wrong for it.
                     if flags & STRANS_ABSOLUTE != 0 {
                         return Err(LayoutError::UnsupportedTransform);
                     }
@@ -1238,9 +1026,8 @@ pub mod gds {
                 }
                 MAG => {
                     let m = real(payload, at)?;
-                    // Non-integral magnification would put a vertex off the
-                    // manufacturing grid, which is a geometry change, not a
-                    // rounding.
+                    // Non-integral magnification puts a vertex off the
+                    // manufacturing grid: a geometry change, not a rounding.
                     if !((1.0..=1e6).contains(&m) && m.fract() == 0.0) {
                         return Err(LayoutError::UnsupportedTransform);
                     }
@@ -1311,9 +1098,8 @@ pub mod gds {
         place.dx = pt[0].0;
         place.dy = pt[0].1;
 
-        // An AREF states the far corner of the array, not the step, so the step
-        // is exact or the array is not representable — a rounded pitch moves
-        // every instance after the first.
+        // An AREF states the far corner, not the step, so the step is exact or
+        // the array is not representable: a rounded pitch moves every instance.
         let (col_step, row_step) = if array {
             if cols == 0 || rows == 0 {
                 return Err(LayoutError::UnsupportedTransform);
@@ -1364,7 +1150,7 @@ pub mod gds {
         provenance: Provenance,
         dropped: u32,
         /// Which cells are on the current root-to-here chain, for the cycle
-        /// check. A column of `bool`, not a set: cell ids are dense.
+        /// check.
         on_chain: Vec<bool>,
         /// The instance chain, root first, as `Provenance` wants it.
         chain: Vec<StrId>,
@@ -1375,19 +1161,13 @@ pub mod gds {
         ty: Vec<Dbu>,
     }
 
-    /// Resolve the hierarchy into one flat store.
-    ///
-    /// **Transform, A-to-B.** Every top cell — one on a normal layout — is
-    /// walked depth first, and each element it reaches is transformed into the
-    /// root frame once. The store's own layer sort runs last, and its
-    /// permutation is applied to the provenance columns here, which is the
-    /// invariant `crate::ingest`'s module doc names.
+    /// Resolve the hierarchy into one flat store, applying the store's layer
+    /// sort permutation to the provenance columns.
     fn flatten(
         lib: &Library,
         deck: &Deck,
         unknown: UnknownLayers,
     ) -> Result<(GeometryStore, Provenance, u32), LayoutError> {
-        // A scatter, and it fails closed on a name no cell defines.
         let mut referenced = vec![false; lib.cells.len()];
         for reference in &lib.refs {
             let target = lib.find(reference.cell).ok_or_else(|| {
@@ -1411,9 +1191,8 @@ pub mod gds {
             ty: Vec::new(),
         };
 
-        // Fail closed: a library whose every cell is referenced has no root to
-        // walk from, which means a cycle. Reporting an empty store for it would
-        // be a clean report over a layout nobody read.
+        // A library whose every cell is referenced has no root, which means a
+        // cycle. An empty store for it would be a clean report over nothing.
         if !lib.cells.is_empty() && referenced.iter().all(|&r| r) {
             return Err(LayoutError::CyclicHierarchy(
                 lib.strings.resolve(lib.cells[0].name).to_owned(),
@@ -1431,10 +1210,8 @@ pub mod gds {
             store.poly_count(),
             "the store returned a permutation of a different length than its rows"
         );
-        // The invariant `crate::ingest`'s module doc names, and the one place
-        // it happens: provenance is accumulated in file order and the store is
-        // sorted by layer, so without this every violation names another
-        // shape's cell.
+        // Provenance is accumulated in file order and the store is sorted by
+        // layer, so without this every violation names another shape's cell.
         walk.provenance.permute(&permutation);
         Ok((store, walk.provenance, walk.dropped))
     }
@@ -1452,9 +1229,8 @@ pub mod gds {
             }
             self.on_chain[index] = true;
 
-            // The root path is `PathId(0)` by definition, so the common case —
-            // a flat library, where every shape is in the top cell — interns
-            // nothing at all.
+            // The root path is `PathId(0)` by definition, so a flat library
+            // interns nothing at all.
             let path = if self.chain.is_empty() {
                 PathTable::ROOT
             } else {
@@ -1497,18 +1273,9 @@ pub mod gds {
 
         /// Transform one label's point into the root frame and record it.
         ///
-        /// The same transform the geometry takes, and it has to be: a label
-        /// under a mirrored instance names the shape the mirror put under it,
-        /// not the one that was there before. Unlike [`Self::emit`] there is no
-        /// winding to fix up, because a point has none.
-        ///
-        /// A text on a stream pair the deck's layer table does not name is
-        /// dropped under [`UnknownLayers::Drop`] and refused under `Reject`,
-        /// exactly as geometry is — but it is *not* counted in `dropped`, which
-        /// the `Layout` field's doc defines as polygons. What decides whether a
-        /// mapped label is a net label at all is the deck's `connectivity`
-        /// pairing, and that is read later, by
-        /// [`Provenance::resolve_labels`](crate::provenance::Provenance::resolve_labels).
+        /// The same transform the geometry takes, and it has to be. An unmapped
+        /// stream pair is dropped or refused as geometry is, but is *not*
+        /// counted in `dropped`, which is defined over polygons.
         fn place(&mut self, label: &Text, at: Xform) -> Result<(), LayoutError> {
             let Some(layer) = self.deck.layers.of_stream(label.layer, label.texttype) else {
                 return match self.unknown {
@@ -1523,10 +1290,8 @@ pub mod gds {
             let x = a * label.x + b * label.y + at.dx;
             let y = c * label.x + e * label.y + at.dy;
 
-            // The same `±MAX_ABS_DBU` bound `emit` enforces on every vertex,
-            // and for the same reason: `Dbu::new_unchecked` below is only sound
-            // inside it, and a label outside the domain would be compared
-            // against geometry that cannot be.
+            // The same `±MAX_ABS_DBU` bound `emit` enforces on every vertex:
+            // `Dbu::new_unchecked` below is only sound inside it.
             let bound = MAX_ABS_DBU.unsigned_abs();
             if x.unsigned_abs() > bound {
                 return Err(LayoutError::CoordinateOutOfRange(x));
@@ -1559,8 +1324,7 @@ pub mod gds {
                     UnknownLayers::Reject => {
                         return Err(LayoutError::UnknownLayer(elem.layer, elem.datatype))
                     }
-                    // Never silent: the count is what a caller reports to tell
-                    // a partial deck run on purpose from one by accident.
+                    // Never silent: the count is what a caller reports.
                     UnknownLayers::Drop => {
                         self.dropped += 1;
                         return Ok(());
@@ -1569,8 +1333,6 @@ pub mod gds {
             };
 
             let (xs, ys) = (&lib.xs[start..end], &lib.ys[start..end]);
-            // Uniforms, hoisted: the whole transform is four multipliers and
-            // two offsets, so the vertex loops below carry no branch at all.
             let (a, b, c, e) = at.linear();
             let (dx, dy) = (at.dx, at.dy);
             let verts = xs.len();
@@ -1592,10 +1354,8 @@ pub mod gds {
             debug_assert_eq!(self.rx.len(), verts);
             debug_assert_eq!(self.ry.len(), verts);
 
-            // Parse, don't validate: the `±MAX_ABS_DBU` bound every downstream
-            // i128 area product rests on is checked here, once, and never
-            // rechecked. A max-magnitude reduction rather than a per-vertex
-            // test, so the check itself carries no branch.
+            // The `±MAX_ABS_DBU` bound every downstream i128 area product rests
+            // on is checked here, once, and never rechecked.
             let bound = MAX_ABS_DBU.unsigned_abs();
             let mut worst = 0u64;
             for i in 0..verts {
@@ -1604,8 +1364,6 @@ pub mod gds {
                     .max(self.ry[i].unsigned_abs());
             }
             if worst > bound {
-                // Cold: the offending value is wanted once, on the path that
-                // refuses the file, so the scan for it is not on any hot path.
                 let out = self
                     .rx
                     .iter()
@@ -1628,28 +1386,12 @@ pub mod gds {
             }
             debug_assert_eq!(self.tx.len(), self.ty.len());
 
-            // GDSII itself gives a BOUNDARY's vertex order no meaning — the
-            // Feb-87 manual states no winding for it, and a boundary drawn
-            // inside another is not a hole in this format. This store does
-            // read a clockwise ring as a hole, so the order is meaning we add;
-            // whether that is the right model is `docs/SIGNATURE_DEFECTS.md`,
-            // not this line. What this line owes either model is the weaker,
-            // spec-independent invariant the flattener was breaking: *a cell's
-            // rings have the same orientation wherever the cell is placed.*
-            //
-            // `strans` bit 0 is `diag(1,-1)` applied before the rotation, so
-            // `Xform::linear` composes to determinant −1 exactly when `flip` —
-            // rotations are det +1 and `mag >= 1` — and the shoelace sum scales
-            // by that determinant. A mirrored instance of a counter-clockwise
-            // cell therefore arrives clockwise unless the vertex order follows,
-            // and `validate_layer_into` reads it as an orphan hole.
-            //
-            // `[1..]`, not the whole run: `erc::first_vertex` documents vertex
-            // 0 as a shape's canonical report point, so reversing it would move
-            // every per-shape ERC coordinate under a mirror. Rings are stored
-            // open here, so fixing vertex 0 and reversing the rest is the
-            // reversal. `at.flip` is a per-instance uniform, hoisted with
-            // `(a, b, c, e)` above the vertex loops — not a per-row branch.
+            // A cell's rings must have the same orientation wherever the cell
+            // is placed: `Xform::linear` has determinant −1 exactly when `flip`
+            // and the shoelace sum scales by it, so a mirrored counter-clockwise
+            // cell arrives clockwise and `validate_layer_into` reads it as a
+            // hole. `[1..]`, not the whole run: `erc::first_vertex` documents
+            // vertex 0 as a shape's canonical report point.
             debug_assert_eq!(
                 a * e - b * c < 0,
                 at.flip,
@@ -1661,9 +1403,8 @@ pub mod gds {
             }
 
             self.builder.push(layer, &self.tx, &self.ty);
-            // Immediately after the push, so the two tables cannot drift: the
-            // permutation applied at the end is only meaningful if row N of one
-            // is row N of the other.
+            // Immediately after the push: the permutation applied at the end is
+            // only meaningful if row N of one table is row N of the other.
             let props = elem.prop_start as usize..(elem.prop_start + elem.prop_len) as usize;
             self.provenance.push(path, &lib.props[props]);
             Ok(())
@@ -1672,11 +1413,6 @@ pub mod gds {
 }
 
 /// OASIS.
-///
-/// Variable-length integers, modal state carried between records, and optional
-/// per-cell compression. The modal state is the part that makes this a separate
-/// implementation rather than a variation of the GDS reader: a record's meaning
-/// depends on records before it.
 pub mod oasis {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
 
@@ -1687,44 +1423,17 @@ pub mod oasis {
         prefix.starts_with(MAGIC)
     }
 
-    /// # Not implemented, and refused rather than half-read
-    ///
-    /// OASIS is recognised and then declined. This is a format that has not
-    /// been written yet, not a shortcut inside one that has: there is no
-    /// ceiling here to raise and no faster version of the code below.
-    ///
-    /// What the format itself settles, and what makes the eventual reader
-    /// safe to land incrementally: **an OASIS record carries no length.** A
-    /// record id is one byte and its operands are self-delimiting, so a record
-    /// the reader does not model cannot be skipped past — there is no way to
-    /// find where the next one starts. Refusal is therefore forced by the
-    /// encoding rather than chosen, and a reader implementing only `START`,
-    /// `CELL`, `RECTANGLE`, `POLYGON` and `PLACEMENT` is not a partial reader
-    /// that drops geometry; it is a total reader over a smaller subset, which
-    /// is exactly the shape `gds` already has. The modal state is fully
-    /// tracked for the records that *are* modelled, because every record before
-    /// an unmodelled one was read.
-    ///
-    /// What still has to be built, in order: the unsigned and signed
-    /// variable-length integer decoder and the seven real types; the modal
-    /// variable block and its "unset is an error" rule; the five point-list
-    /// encodings and the eleven repetition kinds; then `CBLOCK` (raw deflate,
-    /// so its declared uncompressed byte count is the only integrity evidence
-    /// there is and must be checked). Flattening is `gds`'s, which is private
-    /// to that module and would move up to `layout` alongside `Xform` and
-    /// `Library`.
+    /// Recognised and then refused: OASIS is not implemented. A record carries
+    /// no length, so one the reader does not model cannot be skipped past —
+    /// refusal is forced by the encoding, not chosen.
     pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
-        // The signature is `gds::read`'s, frozen, and both of these are read by
-        // the reader the upgrade path above describes. Discarded here rather
-        // than renamed to `_deck`/`_unknown`, which would put the placeholder
-        // spelling in the rendered docs of a function that will take them.
+        // The signature is `gds::read`'s. Discarded rather than renamed, which
+        // would show in the rendered docs.
         let _ = (deck, unknown);
         if !detect(bytes) {
             return Err(LayoutError::UnknownFormat);
         }
         let at = u64::try_from(MAGIC.len()).expect("the magic is thirteen bytes");
-        // The first record id after the magic, which is precisely the record
-        // this reader does not support — as is every other one.
         let id = bytes
             .get(MAGIC.len())
             .copied()
@@ -1733,19 +1442,9 @@ pub mod oasis {
     }
 }
 
-/// Reader tests, and the GDSII round trip.
-///
-/// Unit tests rather than integration tests because every one of them needs a
-/// populated [`Deck`], and `deck::LayerTable` has private fields, no
-/// constructor and no in-memory producer. The fixture lives in `deck`'s own
-/// test module; see the note there and `docs/NEED_TESTING.md`.
-///
-/// The input is assembled byte by byte from the Calma stream format, which is
-/// an external specification and therefore an oracle: a record is
-/// `(length, tag, payload)` with the length in bytes including the four-byte
-/// header, coordinates are 32-bit big-endian, and a BOUNDARY's point list
-/// repeats its first point last. Nothing here reads a value out of the code
-/// under test.
+/// Reader tests, and the GDSII round trip. Input is assembled byte by byte from
+/// the Calma stream format, so nothing here reads a value out of the code under
+/// test.
 #[cfg(test)]
 mod tests {
     use super::{gds, Deck, Layout, LayoutError, UnknownLayers};
@@ -1781,15 +1480,11 @@ mod tests {
     const PRESENTATION: u16 = 0x1701;
     const STRING: u16 = 0x1906;
 
-    /// `STRANS` bit 0, counting from the most significant as the Feb-87 manual
-    /// does: reflect about the X axis before rotating. Spelled here from the
-    /// specification rather than imported from the reader, which is the code
-    /// under test.
+    /// `STRANS` bit 0: reflect about the X axis before rotating. From the spec,
+    /// not imported from the code under test.
     const REFLECT: u16 = 0x8000;
 
-    /// One BOUNDARY element: a stream pair, an open point list closed by
-    /// [`gds_library`] when it writes the XY record, and any property records
-    /// that follow it.
+    /// One BOUNDARY element: a stream pair, an open point list, and properties.
     struct Boundary {
         layer: u16,
         datatype: u16,
@@ -1810,9 +1505,7 @@ mod tests {
     }
 
     impl Boundary {
-        /// Attach one `PROPATTR` / `PROPVALUE` pair, which is what
-        /// [`Provenance::props_of`] hands back for the polygon this element
-        /// becomes.
+        /// Attach one `PROPATTR` / `PROPVALUE` pair.
         fn tagged(mut self, attribute: i16, value: &str) -> Self {
             self.props.push((attribute, value.to_owned()));
             self
@@ -1827,9 +1520,7 @@ mod tests {
         out.extend_from_slice(payload);
     }
 
-    /// A GDSII eight-byte real: sign, a seven-bit excess-64 base-sixteen
-    /// exponent, and a fifty-six-bit fraction. Only positive values occur in a
-    /// UNITS record, so the sign bit is always clear.
+    /// A GDSII eight-byte real. Only positive values occur here.
     fn gds_real(value: f64) -> [u8; 8] {
         const TWO_POW_56: f64 = 72_057_594_037_927_936.0;
         assert!(value > 0.0, "a GDSII unit is positive");
@@ -1870,20 +1561,15 @@ mod tests {
     }
 
     /// One `SREF`: the cell placed, the `STRANS` flag word, the rotation in
-    /// degrees, and where the child's origin lands in the parent.
-    ///
-    /// `angle` is stated in degrees because that is what the record holds; a
-    /// zero writes no `ANGLE` record at all, which is how the format spells the
-    /// default and keeps `gds_real`'s positive-value precondition honest.
+    /// degrees, and where the child's origin lands. A zero angle writes no
+    /// `ANGLE` record, which is how the format spells the default.
     struct Ref {
         cell: &'static str,
         strans: u16,
         angle: f64,
         x: i64,
         y: i64,
-        /// Integral, because the reader accepts only integral magnification and
-        /// an `i64` cannot be compared against a default with `float_cmp`
-        /// looking over your shoulder.
+        /// Integral: the reader accepts only integral magnification.
         mag: i64,
     }
 
@@ -1894,36 +1580,26 @@ mod tests {
             angle,
             x,
             y,
-            // One is the format's default and writes no MAG record, which keeps
-            // `gds_real`'s positive-value precondition honest the same way a
-            // zero angle does.
+            // One is the format's default and writes no MAG record.
             mag: 1,
         }
     }
 
     impl Ref {
         /// Attach a `MAG` record. Integral and in `1..=1e6` or the reader
-        /// refuses the instance, which is the subset the module doc declares.
+        /// refuses the instance.
         fn magnified(mut self, mag: i64) -> Self {
             self.mag = mag;
             self
         }
     }
 
-    /// A one-cell GDSII library holding the given boundaries.
-    ///
-    /// The UNITS record states a one-micrometre user unit over a one-nanometre
-    /// database unit, which is the thousand-database-units-per-micrometre grid
-    /// every test in this module works on.
+    /// A one-cell GDSII library on a 1000-dbu-per-micrometre grid.
     fn gds_library(cell: &str, elements: &[Boundary]) -> Vec<u8> {
         gds_hierarchy(&[(cell, elements, &[])])
     }
 
-    /// A GDSII library of several cells, each holding boundaries and `SREF`s.
-    ///
-    /// The reader takes every cell nothing references as a root, so the
-    /// hierarchy is stated entirely by which names appear in which `SREF` list;
-    /// a caller wanting one root gives exactly one cell no other cell places.
+    /// A GDSII library of several cells. Every unreferenced cell is a root.
     fn gds_hierarchy(cells: &[(&str, &[Boundary], &[Ref])]) -> Vec<u8> {
         let mut out = Vec::new();
         record(&mut out, HEADER, &600u16.to_be_bytes());
@@ -1951,24 +1627,21 @@ mod tests {
                 // A BOUNDARY's point list closes by repeating its first point.
                 xy.extend_from_within(0..8);
                 record(&mut out, XY, &xy);
-                // Properties follow the geometry and precede ENDEL, one PROPATTR
-                // and one PROPVALUE per pair.
+                // Properties follow the geometry and precede ENDEL.
                 for (attribute, value) in &element.props {
                     record(&mut out, PROPATTR, &attribute.to_be_bytes());
                     record(&mut out, PROPVALUE, &ascii(value));
                 }
                 record(&mut out, ENDEL, &[]);
             }
-            // The format's order inside an SREF: the name, then the optional
-            // transform records, then the single point the origin lands on.
+            // The format's order inside an SREF.
             for reference in *refs {
                 record(&mut out, SREF, &[]);
                 record(&mut out, SNAME, &ascii(reference.cell));
                 if reference.strans != 0 {
                     record(&mut out, STRANS, &reference.strans.to_be_bytes());
                 }
-                // `<strans> ::= STRANS [MAG] [ANGLE]`, so MAG sits between the
-                // flag word and the rotation.
+                // `<strans> ::= STRANS [MAG] [ANGLE]`.
                 if reference.mag != 1 {
                     let mag = i32::try_from(reference.mag).expect("a test magnification fits an i32");
                     record(&mut out, MAG, &gds_real(f64::from(mag)));
@@ -2017,36 +1690,24 @@ mod tests {
         }
     }
 
-    /// A one-cell library of boundaries and `TEXT`s.
-    ///
-    /// Written out here rather than folded into [`gds_hierarchy`] because the
-    /// record order inside a `TEXT` is its own: the Feb-87 grammar is
-    /// `TEXT [ELFLAGS] [PLEX] LAYER TEXTTYPE [PRESENTATION] [PATHTYPE] [WIDTH]
-    /// [<strans>] XY STRING`, so `TEXTTYPE` follows `LAYER` where a `BOUNDARY`
-    /// has `DATATYPE`, and `STRING` comes after the point rather than before
-    /// it. Assembled from the specification, not from the reader.
+    /// A one-cell library of boundaries and `TEXT`s, from the specification.
     fn gds_labelled(cell: &str, elements: &[Boundary], labels: &[Label]) -> Vec<u8> {
         let mut out = gds_hierarchy(&[(cell, elements, &[])]);
-        // `gds_hierarchy` closed the cell and the library; splice the texts in
-        // before that ENDSTR by rebuilding the tail. Cheaper to state: the two
-        // closing records are eight bytes, and re-emitting them after the text
-        // block is the whole edit.
+        // Splice the texts in before the closing ENDSTR by rebuilding the tail.
         let tail = out.len() - 8;
         let texts = text_records(labels);
         out.splice(tail..tail, texts);
         out
     }
 
-    /// The `TEXT` element block for a run of labels, ready to splice in front of
-    /// whichever cell's `ENDSTR` should own them.
+    /// The `TEXT` element block for a run of labels, ready to splice in.
     fn text_records(labels: &[Label]) -> Vec<u8> {
         let mut texts = Vec::new();
         for label in labels {
             record(&mut texts, TEXT, &[]);
             record(&mut texts, LAYER, &label.layer.to_be_bytes());
             record(&mut texts, TEXTTYPE, &label.texttype.to_be_bytes());
-            // Middle-centre justification, font 0 — read and discarded by the
-            // reader, present here because a real writer emits it.
+            // Read and discarded by the reader; a real writer emits it.
             record(&mut texts, PRESENTATION, &0x0005u16.to_be_bytes());
             let x = i32::try_from(label.x).expect("test coordinates fit a GDSII coordinate");
             let y = i32::try_from(label.y).expect("test coordinates fit a GDSII coordinate");
@@ -2075,9 +1736,7 @@ mod tests {
         }
     }
 
-    /// Compare two stores row by row. `GeometryStore` does not derive
-    /// `PartialEq` and should not — its columns are private — so identity is
-    /// stated here as the conjunction of everything the store exposes.
+    /// Compare two stores row by row, `GeometryStore` deriving no `PartialEq`.
     fn assert_same_store(what: &str, left: &GeometryStore, right: &GeometryStore) {
         assert_eq!(
             left.poly_count(),
@@ -2116,17 +1775,9 @@ mod tests {
         }
     }
 
-    /// One layout, stated twice: as the store `core`'s builder makes of it, and
-    /// as the GDSII library the format specification says holds it.
-    ///
-    /// Two rectangles, an L and a plus, on all three layers and pushed in an
-    /// order that is not grouped by layer, so the store's layer sort has work
-    /// to do. The non-convex shapes are there because a reader that emitted a
-    /// bounding box instead of a point list would reproduce a rectangle
-    /// perfectly.
-    /// `Ids` and the handles come back alongside so a caller can ask which
-    /// store row each element became — which is the whole of the permutation
-    /// invariant and is not readable from the store.
+    /// One layout, stated twice: as a builder-made store, and as the GDSII
+    /// library the specification says holds it. Shapes are non-convex and
+    /// ungrouped by layer, so the sort has work and a bbox reader cannot pass.
     fn corpus() -> (GeometryStore, Ids, Vec<Handle>, Vec<Boundary>) {
         use gpurify_testgen::shapes::{l_shape, plus_shape, rect};
         let shapes = [
@@ -2150,11 +1801,8 @@ mod tests {
         (store, ids, handles, elements)
     }
 
-    /// Oracle: construct-from-answer. One rectangle is written into the file at
-    /// coordinates the test chose, so the store the reader produces has a known
-    /// answer down to the vertex. This is the assertion the old suite never
-    /// made: not "one polygon was read" but "this polygon, on this layer, at
-    /// these four points".
+    /// One rectangle written at chosen coordinates: the store has a known
+    /// answer down to the vertex.
     #[test]
     fn a_boundary_reads_back_on_the_layer_and_at_the_coordinates_it_was_written_at() {
         let mut strings = StrTable::default();
@@ -2188,11 +1836,8 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer. The file declares one shape on a layer
-    /// the deck knows and one on a layer it does not, so both settings have an
-    /// answer stated in advance: `Reject` names the undeclared stream pair,
-    /// `Drop` keeps exactly the shape that was declared. A reader that invented
-    /// a layer for the stray pair would pass a count-only test and fail this.
+    /// One shape on a known layer and one on an unknown one: `Reject` names the
+    /// undeclared stream pair, `Drop` keeps exactly the declared shape.
     #[test]
     fn an_undeclared_layer_is_refused_under_reject_and_dropped_under_drop() {
         let mut strings = StrTable::default();
@@ -2229,10 +1874,8 @@ mod tests {
         );
     }
 
-    /// Oracle: law. `UnknownLayers` is documented as not being a correctness
-    /// switch — both settings verify identically. Where every layer in the file
-    /// is declared there is nothing to drop, so the two must produce the same
-    /// store for any such input.
+    /// `UnknownLayers` is not a correctness switch: where every layer is
+    /// declared, both settings produce the same store.
     #[test]
     fn the_two_unknown_layer_settings_agree_when_every_layer_is_declared() {
         let mut strings = StrTable::default();
@@ -2262,11 +1905,8 @@ mod tests {
         assert_same_store("Reject against Drop", &rejecting.store, &dropping.store);
     }
 
-    /// Oracle: construct-from-answer. A record whose declared length runs past
-    /// the end of the file is a truncation, and the reader is documented as
-    /// saying where. Cutting the final byte off a valid library is the smallest
-    /// input with that property, and the offset reported has to land inside the
-    /// file the reader was given.
+    /// A record whose declared length runs past the end of the file is a
+    /// truncation, reported at an offset inside the file.
     #[test]
     fn a_record_running_past_the_end_of_the_file_is_a_truncation_not_a_short_read() {
         let mut strings = StrTable::default();
@@ -2287,27 +1927,8 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The same four shapes are stated twice —
-    /// once as the store `GeometryStoreBuilder` makes of them and once as the
-    /// GDSII library the format specification says holds them — and the reader
-    /// has to turn the second into the first, vertex by vertex.
-    ///
-    /// This is what survives of the round-trip law. `parse -> write -> parse`
-    /// cannot be written: `export::gds::write_store` takes a `&LayerTable`, and
-    /// a `LayerTable` can only be built inside this crate, where the
-    /// dev-dependency cycle makes it a different type from the one `export`
-    /// links against. Both halves of that are recorded in
-    /// `docs/NEED_TESTING.md`. What is lost is the writer; what the law was
-    /// really buying — that the reader reproduces a store stated independently
-    /// of it — is what the assertion below makes, and it makes it against the
-    /// format specification rather than against this workspace's own writer,
-    /// which is the stronger oracle of the two.
-    ///
-    /// Asserting the whole store also pins the reader's *push* order: both
-    /// paths interleave layers across the same `GeometryStoreBuilder::finish`,
-    /// so the two agree row for row exactly when the reader pushes elements in
-    /// file order. It does not pin the sort itself as stable — an unstable sort
-    /// agrees with itself — and nothing here should be read as requiring one.
+    /// The reader has to turn the GDSII library into the builder-made store,
+    /// vertex by vertex. Asserting the whole store also pins push order.
     #[test]
     fn a_library_holding_a_known_layout_reads_back_as_that_exact_store() {
         let mut strings = StrTable::default();
@@ -2321,18 +1942,9 @@ mod tests {
         assert_same_store("a known layout read from GDSII", &expected, &read.store);
     }
 
-    /// Oracle: construct-from-answer, on the invariant `crate`'s module doc
-    /// calls out by name: provenance is accumulated in file order and must be
-    /// permuted into store order, or every violation is reported against the
-    /// wrong cell.
-    ///
-    /// Each element carries a `PROPATTR` / `PROPVALUE` pair naming its position
-    /// in the file, which is the only per-polygon annotation a flat library can
-    /// carry — hierarchy paths need an SREF, and `Provenance::props` exists for
-    /// exactly this stream data. `Ids` says which store row each element became,
-    /// so the expected property of every row is known before the read. The
-    /// corpus interleaves layers, so the permutation is not the identity and a
-    /// reader that skipped `Provenance::permute` reads its neighbour's tag.
+    /// Provenance is accumulated in file order and must be permuted into store
+    /// order. Each element carries a property naming its file position, and the
+    /// corpus interleaves layers so the permutation is not the identity.
     #[test]
     fn each_polygons_stream_properties_follow_it_through_the_layer_sort() {
         let mut strings = StrTable::default();
@@ -2382,13 +1994,8 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The dispatcher is the only entry point a
-    /// run actually uses, and everything above it tests `gds::read` on bytes,
-    /// so what is unchecked is one `match`: a `read_layout` that opened the
-    /// file, recognised it as GDSII and then returned `Layout::default()`
-    /// satisfies both of its refusal tests. The answer is the store the corpus
-    /// was built from, so the dispatch has to reach the reader and hand back
-    /// what it produced.
+    /// The dispatcher has to reach the reader and hand back what it produced; a
+    /// `read_layout` returning `Layout::default()` satisfies its refusal tests.
     #[test]
     fn read_layout_dispatches_a_gdsii_file_onto_the_gdsii_reader() {
         let mut strings = StrTable::default();
@@ -2407,9 +2014,7 @@ mod tests {
         assert_same_store("a known layout through read_layout", &expected, &layout.store);
     }
 
-    /// Oracle: determinism, which is a gate rather than a test. The same bytes
-    /// read twice must produce the same store. `ingest` takes no thread count,
-    /// so there is one configuration to run this at rather than two.
+    /// The same bytes read twice must produce the same store.
     #[test]
     fn reading_the_same_library_twice_produces_the_same_store() {
         let mut strings = StrTable::default();
@@ -2422,10 +2027,7 @@ mod tests {
         assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
     }
 
-    /// Oracle: law. A `Layout` carries exactly one provenance row per store
-    /// row. That is the invariant the permutation exists to preserve and the
-    /// one nothing in the type system holds; reading a flat library puts every
-    /// row at the root path, so the check is total over the store.
+    /// A `Layout` carries exactly one provenance row per store row.
     #[test]
     fn every_polygon_read_has_a_provenance_row_of_its_own() {
         let mut strings = StrTable::default();
@@ -2465,20 +2067,14 @@ mod tests {
         }
     }
 
-    /// The cell every mirroring test below instantiates: a right triangle with
-    /// legs 200 and 100 at the cell origin, wound counter-clockwise.
-    ///
-    /// Chirality is the point. A rectangle is its own mirror image about either
-    /// axis, so a reader that dropped the reflection entirely would reproduce
-    /// one exactly; a triangle with three distinct vertices and no symmetry
-    /// cannot hide a wrong transform, and three vertices is short enough to
-    /// state every expected coordinate in the test that wants it.
+    /// The cell every mirroring test below instantiates: a counter-clockwise
+    /// right triangle. Chirality is the point — a rectangle is its own mirror
+    /// image, so a reader dropping the reflection would reproduce one exactly.
     fn ccw_triangle() -> Boundary {
         boundary(ROWS[0].1, ROWS[0].2, &[0, 200, 0], &[0, 0, 100])
     }
 
-    /// The vertices of a store row, as a pair of owned columns, so a test can
-    /// compare against a literal without borrowing the layout twice.
+    /// The vertices of a store row, as a pair of owned columns.
     fn verts(store: &GeometryStore, row: u32) -> (Vec<i64>, Vec<i64>) {
         let (xs, ys) = store.poly_verts(PolyId(row));
         (
@@ -2487,14 +2083,9 @@ mod tests {
         )
     }
 
-    /// Oracle: construct-from-answer. `LEAF` is one counter-clockwise triangle;
-    /// `TOP` places it twice, once plain and once under `STRANS 0x8000`. GDSII
-    /// defines bit 0 as a reflection about the X axis applied *before* the
-    /// rotation, so the mirrored copy's coordinates are `(x, −y)` shifted by the
-    /// reference point — which is a determinant of −1 and therefore reverses the
-    /// ring. Both rows' vertices are stated here in full; the winding equality
-    /// is asserted alongside them because it is the property, and the literals
-    /// are only one way of reaching it.
+    /// `TOP` places `LEAF` twice, plain and under `STRANS 0x8000`. The mirrored
+    /// copy is `(x, −y)` shifted by the reference point — determinant −1, so the
+    /// ring reverses.
     #[test]
     fn a_mirrored_instance_keeps_the_orientation_the_cell_was_drawn_with() {
         use gpurify_core::ops::{winding_of, Winding};
@@ -2525,9 +2116,8 @@ mod tests {
             (vec![0, 200, 0], vec![0, 0, 100]),
             "the unmirrored placement is the cell as drawn"
         );
-        // (0,0), (200,0), (0,100) under (x, −y) + (1000, 0) is (1000,0),
-        // (1200,0), (1000,−100), which is clockwise; the reversal that restores
-        // the drawn orientation fixes vertex 0 and turns the rest around.
+        // (0,0), (200,0), (0,100) under (x, −y) + (1000, 0) is clockwise, so
+        // the reversal fixes vertex 0 and turns the rest around.
         assert_eq!(
             verts(&layout.store, 1),
             (vec![1_000, 1_000, 1_200], vec![0, -100, 0]),
@@ -2546,15 +2136,9 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer, and the answer is the identity. `TOP`
-    /// places `MID` mirrored, `MID` places `LEAF` mirrored, and two reflections
-    /// compose to a rotation — so the doubly nested copy must be the cell as
-    /// drawn, vertex for vertex, including its order. `TOP` also places `LEAF`
-    /// directly so the answer sits in the same store as the thing it answers.
-    ///
-    /// This is the parity path: `Xform::compose` xors the two `flip`s, and any
-    /// fix that reversed per level rather than on the composed transform would
-    /// reverse this ring twice and pass, or once and fail here.
+    /// Two reflections compose to a rotation, so the doubly nested copy must be
+    /// the cell as drawn, vertex for vertex. The parity path: a fix that
+    /// reversed per level rather than on the composed transform fails here.
     #[test]
     fn a_doubly_mirrored_instance_is_the_cell_as_drawn() {
         let mut strings = StrTable::default();
@@ -2587,18 +2171,9 @@ mod tests {
         );
     }
 
-    /// Oracle: construct-from-answer. `TOP` places `LEAF` four times, each
-    /// mirrored and rotated by one more quarter turn, at origins 2000 apart so
-    /// no two overlap. GDSII applies the reflection first, so the composed
-    /// linear part is `R_q · diag(1, −1)`: `(x, −y)`, `(y, x)`, `(−x, y)`,
-    /// `(−y, −x)`. Every one of those has determinant −1, so every one of the
-    /// four rings reverses — `F·R_q = R_{−q}·F` is where a transform fix most
-    /// easily goes wrong, and a fix that keyed off the quadrant rather than the
-    /// determinant would get two of these four right.
-    ///
-    /// The triangle's area is 10000 whichever way it is placed, and the
-    /// signed area's sign is the winding, so the stated vertices and the
-    /// counter-clockwise assertion are two readings of the same fact.
+    /// `TOP` places `LEAF` four times, each mirrored and rotated one more
+    /// quarter turn. The composed linear part `R_q · diag(1, −1)` has
+    /// determinant −1 in all four, so all four rings reverse.
     #[test]
     fn a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise() {
         use gpurify_core::ops::{winding_of, Winding};
@@ -2648,30 +2223,11 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer, derived from the GDSII composition rule
-    /// rather than from a run. A mirror and a rotation split across *two*
-    /// levels of hierarchy, in both orders — the case the corpus exercises only
-    /// through `DRC_HIER_NEST`, inside a test that is red for unrelated reasons
-    /// and therefore gates nothing.
-    ///
-    /// The two orders are **not** the same transform, and that is the point.
-    /// GDSII applies a reference's reflection before its rotation, so composing
-    /// parent over child gives:
-    ///
-    /// - mirrored parent over a child rotated a quarter turn:
-    ///   `F · R₉₀ · p = F · (−y, x) = (−y, −x)`
-    /// - a parent rotated a quarter turn over a mirrored child:
-    ///   `R₉₀ · F · p = R₉₀ · (x, −y) = (y, x)`
-    ///
-    /// Those are negatives of each other, which is `F · R_q = R_{−q} · F` seen
-    /// from outside: [`Xform::compose`] negates the child's quadrant when the
-    /// parent flips, and a composition that instead *added* the quadrants would
-    /// give both placements the same answer and pass a test that checked only
-    /// one of them. Both determinants are −1 — exactly one flip survives either
-    /// composition — so both rings reverse.
-    ///
-    /// The `assert_ne!` is the one carrying the asymmetry: it fails if the two
-    /// orders are ever collapsed into one, whatever else stays right.
+    /// A mirror and a rotation split across *two* levels of hierarchy, in both
+    /// orders, which are **not** the same transform: reflection runs before
+    /// rotation, so `F · R₉₀ · p = (−y, −x)` and `R₉₀ · F · p = (y, x)`. A
+    /// composition that *added* the quadrants would give both the same answer;
+    /// the `assert_ne!` carries that asymmetry. Both determinants are −1.
     #[test]
     fn a_mirror_and_a_rotation_split_across_two_levels_do_not_commute() {
         use gpurify_core::ops::{winding_of, Winding};
@@ -2719,9 +2275,8 @@ mod tests {
              `R₉₀ · F` in reversed order"
         );
 
-        // The asymmetry, stated independently of the literals above: translate
-        // each to its own first vertex and the two shapes still differ, because
-        // `(−y, −x)` and `(y, x)` are negatives rather than a translation apart.
+        // The asymmetry, independent of the literals: translated to their own
+        // first vertices the two shapes still differ.
         let relative = |(xs, ys): &(Vec<i64>, Vec<i64>)| -> Vec<(i64, i64)> {
             xs.iter()
                 .zip(ys)
@@ -2747,13 +2302,11 @@ mod tests {
         }
     }
 
-    /// The stream pairs sky130 actually uses, so the fixture is not a made-up
-    /// numbering: `met1.drawing` is 68/20 and `met1.label` is 68/5.
+    /// The stream pairs sky130 uses: `met1.drawing` 68/20, `met1.label` 68/5.
     const LABEL_ROWS: [(&str, u16, u16); 2] = [("met1", 68, 20), ("met1_label", 68, 5)];
 
-    /// A deck whose `met1_label` layer names `met1`, which is the pairing
-    /// `connectivity.labels` carries and the only thing that makes a `TEXT` a
-    /// net label rather than documentation.
+    /// A deck whose `met1_label` layer names `met1` — the pairing that makes a
+    /// `TEXT` a net label rather than documentation.
     fn labelling_deck(strings: &mut StrTable) -> Deck {
         let layers = layer_table(strings, &LABEL_ROWS);
         let met1 = layers.of_stream(68, 20).expect("the fixture declares met1");
@@ -2770,8 +2323,7 @@ mod tests {
         }
     }
 
-    /// One 400-square of met1 at the origin, the shape every label test below
-    /// aims at.
+    /// One 400-square of met1 at the origin, what every label test aims at.
     fn met1_square() -> Boundary {
         boundary(68, 20, &[0, 400, 400, 0], &[0, 0, 400, 400])
     }
@@ -2790,15 +2342,8 @@ mod tests {
             .collect())
     }
 
-    /// Oracle: construct-from-answer. The label is written at a point the test
-    /// chose, inside a square the test chose, so which polygon it must name is
-    /// known before the reader runs.
-    ///
-    /// This is the path that did not exist: the reader skipped every `TEXT`, so
-    /// `Provenance::label` had no production caller, `PortTable` was empty in
-    /// every real run, and with it every net name — which made the SPEF and
-    /// DSPF writers return `UnnamedNet` and the engine's field-solve path,
-    /// which selects nets *by name*, unreachable.
+    /// The label is written inside a square the test chose, so which polygon it
+    /// must name is known before the reader runs.
     #[test]
     fn a_text_inside_a_shape_names_the_net_that_shape_is_on() {
         let mut strings = StrTable::default();
@@ -2814,17 +2359,9 @@ mod tests {
         );
     }
 
-    /// Oracle: law. The boundary counts as inside.
-    ///
-    /// Not an edge case in this domain: GDSII fixes no relationship between a
-    /// `TEXT` and a shape, so the convention is the tool's, and every
-    /// established one treats an on-edge label as attached — `KLayout` states it
-    /// as "inside or on the edge of". Pin labels are routinely written at a
-    /// rectangle's corner or the midpoint of an edge, so a strict-interior test
-    /// would silently drop them and leave the net unnamed.
-    ///
-    /// All four cases the half-open ray cast alone answers `false` for: a point
-    /// on a horizontal edge, on a vertical edge, and on two of the corners.
+    /// The boundary counts as inside: pin labels are routinely written at a
+    /// corner or an edge midpoint. All four cases the half-open ray cast alone
+    /// answers `false` for.
     #[test]
     fn a_text_on_a_shapes_edge_or_corner_still_names_it() {
         let mut strings = StrTable::default();
@@ -2849,13 +2386,8 @@ mod tests {
         }
     }
 
-    /// Oracle: law. A text on a layer no `connectivity.labels` row pairs is
-    /// documentation, not a net label, and is passed over in silence.
-    ///
-    /// The distinction is the whole reason the pairing is a deck table: the
-    /// GDSII specification contains no rule relating a `TEXT` to a shape — the
-    /// words *net*, *pin*, *port* and *connectivity* do not appear in it — so
-    /// nothing about the file itself says which texts are names.
+    /// A text on a layer no `connectivity.labels` row pairs is documentation,
+    /// not a net label, and is passed over in silence.
     #[test]
     fn a_text_on_an_unpaired_layer_is_documentation_and_binds_nothing() {
         let mut strings = StrTable::default();
@@ -2872,14 +2404,8 @@ mod tests {
         );
     }
 
-    /// Oracle: law. A label the deck *claims* that lands on no shape is
-    /// refused, not dropped.
-    ///
-    /// Fail closed, and the direction matters: a dropped label leaves the net
-    /// with its geometry and without its name, and an unnamed net reads
-    /// downstream as a net nobody labelled rather than as a label nobody could
-    /// place. Real flows agree — GF180MCU's layer table says its label layers
-    /// are used "for any wrong placement of label check".
+    /// A label the deck *claims* that lands on no shape is refused: a dropped
+    /// one leaves the net with its geometry and without its name.
     #[test]
     fn a_claimed_label_on_no_shape_is_refused_rather_than_dropped() {
         let mut strings = StrTable::default();
@@ -2895,21 +2421,12 @@ mod tests {
         }
     }
 
-    /// Oracle: law. A label under a mirrored instance moves with the geometry
-    /// it names.
+    /// A label under a mirrored instance moves with the geometry it names.
     ///
-    /// The regression this file already had for rings and did not have for
-    /// points.
-    ///
-    /// **The translation is what gives the test its teeth.** The child draws
-    /// its square at y 0..400 and labels the point (200, 200); the parent
-    /// places the cell mirrored about X and shifted up by 1000, so `y ↦ 1000 −
-    /// y` and the placed square spans y 600..1000 with the label at (200, 800).
-    /// The *untransformed* point (200, 200) is nowhere near that square, so a
-    /// reader that left the label in the child's frame refuses it as
-    /// `Unplaced`. A shift of 400 would have been worthless: the square would
-    /// land back on 0..400 and (200, 200) is a fixed point of `y ↦ 400 − y`, so
-    /// the test would pass with the transform dropped entirely.
+    /// The translation gives the test its teeth: `y ↦ 1000 − y` puts the square
+    /// at y 600..1000 and the label at (200, 800), so a reader leaving it in the
+    /// child's frame refuses it. A shift of 400 would be worthless — (200, 200)
+    /// is a fixed point of `y ↦ 400 − y`.
     #[test]
     fn a_label_under_a_mirrored_instance_moves_with_the_shape_it_names() {
         let mut strings = StrTable::default();
@@ -2919,8 +2436,7 @@ mod tests {
             ("CHILD", &[met1_square()], &[]),
             ("TOP", &[], &[sref("CHILD", REFLECT, 0.0, 0, 1000)]),
         ]);
-        // The label belongs to CHILD, so it is spliced into the first cell —
-        // whose ENDSTR is the record before TOP's BGNSTR.
+        // The label belongs to CHILD, so it is spliced into the first cell.
         let child_end = find_first_endstr(&bytes);
         let mut texts = Vec::new();
         record(&mut texts, TEXT, &[]);
@@ -2945,8 +2461,8 @@ mod tests {
         );
     }
 
-    /// The byte offset of the first `ENDSTR` record, which is where a label
-    /// belonging to the first cell has to be spliced.
+    /// The byte offset of the first `ENDSTR`, where a label belonging to the
+    /// first cell has to be spliced.
     fn find_first_endstr(bytes: &[u8]) -> usize {
         let mut at = 0;
         while at + 4 <= bytes.len() {
@@ -2963,12 +2479,9 @@ mod tests {
 
     // ------------------------------------------ global transform equivariance
 
-    /// One representable instance transform, `W(p) = mag · R_q · Fʳ · p + (dx, dy)`.
-    ///
-    /// A test-local restatement of what the format allows, deliberately *not*
-    /// [`super::gds::Xform`]: the law below computes its expected answer with
-    /// [`Warp::apply`], and an expected answer computed with the function under
-    /// test asserts nothing.
+    /// One representable instance transform, `W(p) = mag · R_q · Fʳ · p + (dx,
+    /// dy)`. Deliberately *not* [`super::gds::Xform`]: an expected answer
+    /// computed with the function under test asserts nothing.
     #[derive(Clone, Copy)]
     struct Warp {
         mag: i64,
@@ -2979,13 +2492,8 @@ mod tests {
     }
 
     impl Warp {
-        /// Apply it, spelled from the Feb-87 manual in the order the manual
-        /// states.
-        ///
-        /// `STRANS` bit 0 is a reflection about the X axis — `(x, y) ↦ (x, −y)`
-        /// — and it runs **before** the `ANGLE` rotation, which is
-        /// counter-clockwise: `R₉₀(x, y) = (−y, x)`. Magnification is a scalar
-        /// and commutes with both, so it is folded into the last line.
+        /// Apply it, spelled from the specification: the reflection about the X
+        /// axis runs **before** the counter-clockwise `ANGLE` rotation.
         fn apply(self, x: i64, y: i64) -> (i64, i64) {
             let (x, y) = if self.reflect { (x, -y) } else { (x, y) };
             let (x, y) = match self.quarters {
@@ -3007,22 +2515,14 @@ mod tests {
     }
 
     /// The library the equivariance law is stated over, optionally wrapped.
+    /// `MID` places `LEAF` mirrored and `TOP` places `MID` under a quarter turn,
+    /// so the deepest ring arrives through a mirror composed with a rotation
+    /// across two levels; `TOP`'s ring at `x = 2·10⁶` makes one magnification
+    /// below genuinely unrepresentable.
     ///
-    /// `LEAF` draws two counter-clockwise rings on two different layers and
-    /// carries one `TEXT`. `MID` places `LEAF` **mirrored**. `TOP` draws a ring
-    /// of its own, places `LEAF` directly, and places `MID` under a quarter
-    /// turn — so the deepest ring arrives through a mirror composed with a
-    /// rotation across *two* levels of hierarchy, which `CLAUDE.md` records as
-    /// reached today only by a corpus test that is red for unrelated reasons.
-    ///
-    /// `TOP`'s own ring sits out at `x = 2·10⁶` so that one magnification in the
-    /// table below is genuinely unrepresentable rather than merely large.
-    ///
-    /// Cell order is load-bearing twice: `LEAF` first, so the existing
-    /// [`find_first_endstr`] splice point owns its labels, and `TOP` last, so
-    /// appending `WRAP` leaves every other cell's bytes byte-identical. `WRAP`
-    /// is then the library's only unreferenced cell, which is how the reader
-    /// spells "the root".
+    /// Cell order is load-bearing: `LEAF` first so [`find_first_endstr`] owns
+    /// its labels, `TOP` last so appending `WRAP` leaves every other cell's
+    /// bytes identical and `WRAP` is the only unreferenced cell.
     fn nested_mirror_library(wrap: Option<Warp>) -> Vec<u8> {
         let leaf = [
             ccw_triangle(),
@@ -3055,7 +2555,7 @@ mod tests {
     }
 
     /// The hierarchy path of a store row, resolved to text so two reads with
-    /// two independent [`StrTable`]s can be compared.
+    /// independent [`StrTable`]s compare.
     fn path_text(layout: &Layout, row: u32) -> Vec<String> {
         let id = layout.provenance.path_of(PolyId(row));
         layout
@@ -3067,43 +2567,28 @@ mod tests {
             .collect()
     }
 
-    /// Oracle: law — global transform equivariance of the whole reader.
+    /// Global transform equivariance of the whole reader.
     ///
     /// Wrap a library's single root cell in a new outermost cell holding one
     /// `SREF` of it under any representable `W`. Flattening is function
     /// composition, so the result must be the unwrapped result pushed through
     /// `W` and nothing else:
     ///
-    /// - **(a)** the row count, each layer's row range and each row's layer are
-    ///   untouched — `W` is a bijection of the plane and does not create,
-    ///   destroy or re-label a shape. (`layer_count` is deliberately *not*
-    ///   asserted: it is `deck.layers.len()`, identical by construction.)
-    /// - **(b)** row `i`'s vertices are `W(v_j)` in order when `W` does not
-    ///   reflect, and `[W(v₀), W(v_{n−1}), …, W(v₁)]` when it does — vertex 0
-    ///   is the fixed point `erc::first_vertex` relies on, and `[1..]` reverses
-    ///   because a determinant of −1 flips the winding.
-    /// - **(c)** every `PlacedLabel` point becomes `W(p)`, in the same order, on
-    ///   the same layer, with the same name.
-    /// - **(d)** every row's hierarchy path gains exactly one leading
-    ///   component, `TOP`, and nothing else — so the partition of rows by path
-    ///   is preserved.
+    /// - **(a)** row count, layer ranges and each row's layer are untouched.
+    /// - **(b)** row `i`'s vertices are `W(v_j)` in order, or
+    ///   `[W(v₀), W(v_{n−1}), …, W(v₁)]` when `W` reflects — vertex 0 is the
+    ///   fixed point `erc::first_vertex` relies on.
+    /// - **(c)** every `PlacedLabel` point becomes `W(p)`, same order, layer and
+    ///   name.
+    /// - **(d)** every row's hierarchy path gains exactly one leading `TOP`.
     ///
-    /// **Why it holds at arbitrary depth, which is the whole point.** Write the
-    /// base row as `v_j = A(u_{σ(j)})`, where `u` is the cell as drawn, `A` is
-    /// the composed transform and `σ` is the identity when `A`'s flip parity is
-    /// even and the `[1..]` reversal `ρ` when it is odd. Wrapped, the parity is
-    /// `p ⊕ r`. When `r = 0` the two parities agree and `v′_j = W(v_j)`. When
-    /// `r = 1` they differ, and *either* `σ = id, τ = ρ` *or* `σ = ρ, τ = id`;
-    /// because `ρ` is an involution both give `v′_j = W(v_{ρ(j)})`. So the law
-    /// is stated over the parity *difference*, never the absolute parity — which
-    /// is why the fixture deliberately contains a cell already placed mirrored,
-    /// under a rotation, two levels deep.
+    /// The law is stated over the flip-parity *difference*, never the absolute
+    /// parity, which is why the fixture contains a cell already placed mirrored
+    /// under a rotation two levels deep.
     ///
-    /// A run that comes back `Err(LayoutError::CoordinateOutOfRange(_))` is a
-    /// pass — `W` may leave the representable domain — but that is spelled as
-    /// that one variant, and the table below asserts every other `W` is
-    /// accepted. Otherwise a reader that refused every wrapped library would
-    /// satisfy the law, which is exactly the fail-open shape this tree refuses.
+    /// `Err(LayoutError::CoordinateOutOfRange(_))` is a pass — `W` may leave the
+    /// representable domain — but only that one variant, since a reader refusing
+    /// every wrapped library would otherwise satisfy the law.
     #[test]
     fn wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store() {
         use gpurify_units::MAX_ABS_DBU;
@@ -3114,7 +2599,7 @@ mod tests {
         let base = gds::read(&nested_mirror_library(None), &deck, UnknownLayers::Reject)
             .expect("the unwrapped library is well formed");
 
-        // ---- anti-vacuity. Every clause is quantified over rows, layers and
+        // ---- anti-vacuity: every clause is quantified over rows, layers and
         // labels, so a reader producing none of them satisfies all of them.
         assert_eq!(
             base.store.poly_count(),
@@ -3144,10 +2629,8 @@ mod tests {
              across a root path and a two-deep one: {base_paths:?}"
         );
 
-        // Both rings on layer 0 are the same drawn triangle; they differ only
-        // because one arrived through the mirror inside MID composed with TOP's
-        // quarter turn. If they were congruent by translation the fixture would
-        // no longer exercise the parity path the law's derivation rests on.
+        // Both rings on layer 0 are the same drawn triangle, differing only by
+        // the mirror inside MID composed with TOP's quarter turn.
         let relative = |(xs, ys): &(Vec<i64>, Vec<i64>)| -> Vec<(i64, i64)> {
             xs.iter().zip(ys).map(|(x, y)| (x - xs[0], y - ys[0])).collect()
         };
@@ -3159,8 +2642,7 @@ mod tests {
              this law is untested"
         );
 
-        // ---- the transforms. Every one is representable on this fixture, so
-        // every one is asserted to be accepted.
+        // ---- the transforms, every one representable on this fixture.
         let warps = [
             Warp { mag: 1, reflect: false, quarters: 0, dx: 0, dy: 0 },
             Warp { mag: 1, reflect: false, quarters: 0, dx: -7_000, dy: 3_000 },
@@ -3276,10 +2758,8 @@ mod tests {
             }
         }
 
-        // ---- and the escape is real, not a blanket. TOP draws a ring at
-        // x = 2·10⁶, so a magnification of 10⁶ lands it at 2·10¹², past
-        // MAX_ABS_DBU = 2⁴⁰ ≈ 1.0995·10¹². `CoordinateOutOfRange` specifically:
-        // any other error would mean the reader refused for the wrong reason.
+        // The escape is real, not a blanket: a magnification of 10⁶ lands TOP's
+        // ring at 2·10¹², past MAX_ABS_DBU. `CoordinateOutOfRange` specifically.
         let overflow = Warp { mag: 1_000_000, reflect: false, quarters: 0, dx: 0, dy: 0 };
         match gds::read(
             &nested_mirror_library(Some(overflow)),

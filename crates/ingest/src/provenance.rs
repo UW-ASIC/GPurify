@@ -1,26 +1,11 @@
-//! Cold per-polygon data: where a shape came from.
-//!
-//! Keyed by the same [`PolyId`] as `core`'s `GeometryStore`, in a separate
-//! table because no geometric transform reads any of it. Splitting it out is
-//! what keeps `core` free of strings, maps and serde.
-//!
-//! It is read exactly twice: once when a report names the cell a violation is
-//! in, and once when LVS binds a net label. Everything here is therefore
-//! `StrId` and index ranges — the old `Vec<Vec<String>>` per polygon was 48
-//! bytes of `Vec` header per shape before a single character existed.
+//! Cold per-polygon data: where a shape came from, keyed by the same [`PolyId`]
+//! as `core`'s `GeometryStore`.
 
 use crate::intern::StrId;
 use gpurify_core::{ops::Point, GeometryStore, LayerId, PolyId};
 
-/// One `TEXT` as the layout stated it, before anything decided what it names.
-///
-/// **The shape the reader can hand back.** A GDS `TEXT` carries a layer, a
-/// texttype and exactly one coordinate; it does not carry a polygon, and the
-/// specification defines no rule that would give it one. So a reader can only
-/// record where the label is, and the binding is a separate, later pass —
-/// [`Provenance::resolve_labels`] — which needs the flattened store and the
-/// deck's label pairing, neither of which exists while records are being
-/// parsed.
+/// One `TEXT` as the layout stated it. A GDS `TEXT` carries no polygon, so
+/// binding is a separate later pass: [`Provenance::resolve_labels`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacedLabel {
     /// The label's single `XY` point, in the root frame.
@@ -31,27 +16,16 @@ pub struct PlacedLabel {
     pub name: StrId,
 }
 
-/// Why a placed label could not be bound to a polygon.
-///
-/// One variant, and it is the fail-closed half. A label the deck *claims* — its
-/// layer appears in `Connectivity::label_layer` — that lands on no shape of the
-/// conductor it names is a misplaced label, which real flows treat as a rule
-/// violation rather than as nothing: GF180MCU's own layer table says its label
-/// layers "will be used in DRC and LVS for any wrong placement of label check".
-///
-/// Dropping it silently is the failure this project exists to prevent: the net
-/// keeps its geometry and loses its name, and an unnamed net reads downstream
-/// as a net nobody labelled rather than as a label nobody could place.
+/// Why a placed label could not be bound to a polygon. A label the deck claims
+/// that lands on no shape is a fault, not a no-op: dropping it leaves a net with
+/// its geometry and without its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LabelError {
     #[error("a net label on layer {layer:?} at ({x}, {y}) lies on no shape of the conductor it names")]
     Unplaced { layer: LayerId, x: i64, y: i64 },
 }
 
-/// A root-to-instance hierarchy path, as a range into a shared component list.
-///
-/// Paths are deeply shared — every shape under one instance has the same path —
-/// so they are deduplicated and referenced by id, not stored per polygon.
+/// A root-to-instance hierarchy path, deduplicated and referenced by id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct PathId(pub u32);
@@ -63,13 +37,8 @@ pub struct PathTable {
     components: Vec<StrId>,
     /// `components[span[i].0 .. span[i].1]` is path `i`.
     span: Vec<(u32, u32)>,
-    /// Ids sorted by their path's components. The binary-search index.
-    ///
-    /// The same field, for the same reason, as [`crate::intern::StrTable`]'s:
-    /// dedup has to be exact and its iteration order has to be identical on
-    /// every machine, which is what rules out a hash map. Sorted lexicographic
-    /// by component id, so [`Self::ROOT`] — the empty path — is always row 0 of
-    /// this index as well as row 0 of `span`.
+    /// Ids sorted lexicographic by component id — the binary-search index — so
+    /// [`Self::ROOT`] is row 0 of this index as well as of `span`.
     sorted: Vec<PathId>,
 }
 
@@ -89,10 +58,6 @@ impl PathTable {
             "the binary-search index holds a different number of paths than the table"
         );
 
-        // Dedup by binary search over `sorted`, O(log paths · depth) per
-        // intern. A flattening reader interns one path per instance and then
-        // once more per shape under it, so this is on the per-shape path.
-        //
         // The scrutinee is bound first so the shared borrow of `self` taken by
         // the comparator ends before the `&mut self` work below.
         let found = self
@@ -108,9 +73,6 @@ impl PathTable {
         let end = crate::narrow(self.components.len());
         let id = PathId(crate::narrow(self.span.len()));
         self.span.push((start, end));
-        // O(paths) memmove of `u32`s per *distinct* path, the same shape and
-        // ceiling `StrTable::intern` accepts. Repeat interns — the common case,
-        // one per shape — do not reach here at all.
         self.sorted.insert(pos, id);
 
         debug_assert!(
@@ -133,9 +95,8 @@ impl PathTable {
             "the binary-search index holds a different number of paths than the table"
         );
         // Ascending is maintained inductively, so only the new row's two
-        // neighbours need checking. An index that fell out of order does not
-        // panic, it silently stops finding duplicates — every shape under one
-        // instance would then get its own path row.
+        // neighbours need checking. An index out of order does not panic, it
+        // stops finding duplicates.
         debug_assert!(
             pos == 0 || self.get(self.sorted[pos - 1]) < components,
             "the path index is out of order below the row just inserted"
@@ -166,12 +127,6 @@ impl PathTable {
 }
 
 /// Per-polygon provenance, one row per row of the `GeometryStore`.
-///
-/// **Five questions.** In: annotations from a layout reader. Out: the same,
-/// permuted into store order. How many: one row per polygon. Access pattern:
-/// random single-row reads when a report is written, never a scan — which is
-/// why this is a separate table and not columns in the store. Lifetime: the
-/// whole run. Parallelisable: read-only after ingest.
 #[derive(Debug, Default)]
 pub struct Provenance {
     /// Which instance path each polygon came from.
@@ -183,13 +138,8 @@ pub struct Provenance {
     /// Net label attached to a polygon, if any. `None` is the common case, so
     /// this is a sparse pair list rather than a column of `Option`.
     labelled: Vec<(PolyId, StrId)>,
-    /// Labels the reader placed but nothing has bound yet.
-    ///
-    /// Not keyed by [`PolyId`] and so not touched by [`Self::permute`]: a point
-    /// is a point whatever row the polygon under it ends up on. This column is
-    /// consumed by [`Self::resolve_labels`], which is what turns it into
-    /// `labelled`, and it is kept afterwards rather than drained so a caller
-    /// can still say what the layout declared.
+    /// Labels the reader placed but nothing has bound yet. Not keyed by
+    /// [`PolyId`], so [`Self::permute`] leaves it alone.
     placed: Vec<PlacedLabel>,
     paths: PathTable,
 }
@@ -217,17 +167,10 @@ impl Provenance {
 
     /// Attach a net label to a polygon. Sparse; most polygons have none.
     pub fn label(&mut self, poly: PolyId, name: StrId) {
-        // Sorted on insert because ascending order is `labels`'s interface, not
-        // an optimisation: it hands out a shared slice, `topology::port` binds
-        // against it without sorting, and `engine::pipeline` asserts over it —
-        // all three on a table that may never be permuted. Deferring the sort
-        // to `permute` would leave that slice in reader-encounter order, which
-        // is the nondeterministic binding this column exists to prevent.
-        //
-        // The O(labels) memmove is what that slice costs, and only for input
-        // that arrives out of order: a reader emitting text records in
-        // ascending `PolyId` lands at `at == self.labelled.len()` every time,
-        // where `Vec::insert` is a push.
+        // Sorted on insert because ascending order is `labels`'s interface:
+        // `topology::port` binds against it without sorting, on a table that may
+        // never be permuted, so deferring the sort to `permute` would leave it
+        // in nondeterministic reader-encounter order.
         let at = self
             .labelled
             .partition_point(|&(labelled, _)| labelled <= poly);
@@ -245,12 +188,9 @@ impl Provenance {
         );
     }
 
-    /// Reorder into store row order.
-    ///
-    /// **The invariant this whole module hangs on.** `permutation[new] == old`,
-    /// as returned by `GeometryStoreBuilder::finish`. Called exactly once, by
-    /// [`crate::layout::read_layout`]. Getting it wrong reports every violation
-    /// against the wrong cell — plausible output, entirely wrong.
+    /// Reorder into store row order: `permutation[new] == old`, as returned by
+    /// `GeometryStoreBuilder::finish`. Called exactly once, by
+    /// [`crate::layout::read_layout`].
     pub fn permute(&mut self, permutation: &[u32]) {
         let rows = permutation.len();
         debug_assert_eq!(
@@ -262,12 +202,8 @@ impl Provenance {
             permutation.iter().all(|&old| (old as usize) < rows),
             "the permutation names an arrival row that was never pushed"
         );
-        // In range is not enough: `[0, 0, 2]` passes the check above, and it
-        // duplicates one row's provenance over another's while leaving
-        // `inverse` holding a zero for the row it dropped. Every violation on
-        // the dropped row would then be reported against whichever cell sits at
-        // arrival row 0 — plausible output, entirely wrong, which is the
-        // failure this whole module is written around.
+        // In range is not enough: `[0, 0, 2]` passes the check above while
+        // duplicating one row's provenance over another's.
         debug_assert!(
             {
                 let mut seen = vec![false; rows];
@@ -279,20 +215,13 @@ impl Provenance {
              provenance was dropped"
         );
 
-        // The hierarchy path is one row in, one row out: a gather, whose
-        // data-dependent load is an address rather than a branch. The row count
-        // was asserted equal to `rows` on entry, so the reserve covers the whole
-        // output and the push never reallocates.
         let mut poly_path = Vec::with_capacity(rows);
         for &old in permutation {
             poly_path.push(self.poly_path[old as usize]);
         }
         debug_assert_eq!(poly_path.len(), rows, "the gather dropped a row");
 
-        // The property column is CSR, so this is a segmented gather: the row is
-        // a range rather than a value, and the destination offset of row N is
-        // the running total through row N-1. That chain is what keeps it scalar;
-        // there is nothing here to run wide.
+        // The property column is CSR, so this is a segmented gather.
         let mut props = Vec::with_capacity(self.props.len());
         let mut prop_start = Vec::with_capacity(rows + 1);
         prop_start.push(0);
@@ -305,9 +234,6 @@ impl Provenance {
         if !self.labelled.is_empty() {
             debug_assert!(
                 {
-                    // A strict left fold with `&`, not `all`: no short circuit,
-                    // so the cost is flat in the number of labels and the loop
-                    // carries no data-dependent branch.
                     let mut ok = true;
                     for i in 0..self.labelled.len() {
                         ok &= self.labelled[i].0.idx() < rows;
@@ -317,14 +243,10 @@ impl Provenance {
                 "a label names an arrival row this permutation does not cover"
             );
 
-            // Inverting a permutation is a scatter: the output index is the
-            // data, which is unvectorisable without lane-conflict detection.
             let mut inverse = vec![0u32; rows];
             for (new, &old) in permutation.iter().enumerate() {
                 inverse[old as usize] = crate::narrow(new);
             }
-            // Elementwise in place; the assert above proves every load into
-            // `inverse` is in range.
             for row in &mut self.labelled {
                 row.0 = PolyId(inverse[row.0.idx()]);
             }
@@ -358,17 +280,11 @@ impl Provenance {
         );
     }
 
-    /// How many polygons this table describes.
-    ///
-    /// The one number that has to equal `GeometryStore::poly_count`, and the
-    /// only way to say so from outside: the columns are private, and the
-    /// consequence of a desync — every violation naming the next shape's cell —
-    /// is invisible in any single lookup. `ingest::layout` asserts it after
-    /// appending derived layers to both tables.
+    /// How many polygons this table describes. Must equal
+    /// `GeometryStore::poly_count`.
     pub fn len(&self) -> usize {
-        // The CSR carries one offset more than it has rows, once it has been
-        // seeded at all — and it is seeded by the first `push`, which may not
-        // have happened, and is *not* unseeded by a `permute` of nothing.
+        // The CSR carries one offset more than it has rows, once seeded at all —
+        // the first `push` seeds it, and a `permute` of nothing does not unseed.
         debug_assert!(
             self.prop_start.is_empty() || self.prop_start.len() == self.poly_path.len() + 1,
             "the property column desynchronised from the row count"
@@ -401,11 +317,8 @@ impl Provenance {
         &self.labelled
     }
 
-    /// Record a `TEXT` where the layout drew it, bound to nothing.
-    ///
-    /// Called by the reader, once per text element, in file order. The point is
-    /// already in the root frame — a label under a mirrored instance moves with
-    /// it, the same as the geometry it names.
+    /// Record a `TEXT` where the layout drew it, bound to nothing. The point is
+    /// already in the root frame.
     pub fn place_label(&mut self, at: Point, layer: LayerId, name: StrId) {
         self.placed.push(PlacedLabel { at, layer, name });
     }
@@ -417,34 +330,11 @@ impl Provenance {
 
     /// Bind each placed label to the polygon it sits on.
     ///
-    /// **Transform, A-to-B.** Reads [`Self::placed_labels`] and the store,
-    /// writes `labelled` — the column [`Self::labels`] hands to
-    /// `topology::port::bind_ports_into`. Called once per run by
-    /// `engine::pipeline::load_into`, after `read_layout` has flattened and
-    /// permuted, because both are preconditions: a label's point is in the root
-    /// frame only after flattening, and the [`PolyId`] it resolves to is a
-    /// store row only after the layer sort.
-    ///
-    /// # Which text names which conductor is the deck's answer
-    ///
-    /// GDSII defines no relationship between a `TEXT` and a shape — see
-    /// `Connectivity::label_layer`, which carries the pairing and says why it
-    /// has to. A text on a layer no row pairs is not a net label at all; it is
-    /// documentation, and it is passed over rather than refused.
-    ///
-    /// # The boundary counts as inside
-    ///
-    /// Through [`GeometryStore::poly_contains_point`], whose doc comment gives
-    /// the reason. Pin labels are routinely written at a rectangle's corner or
-    /// the midpoint of an edge, so a strict-interior test would drop them.
-    ///
-    /// # The lowest matching row wins
-    ///
-    /// Deterministic, and it costs nothing real: two shapes of one conductor
-    /// layer that both contain one point overlap, and overlapping shapes on a
-    /// conductor layer are already one net. Recorded because it is a choice —
-    /// the alternative, attaching the name to every match, produces the same
-    /// net through `bind_ports_into`'s dedup and more rows to get there.
+    /// Must run after `read_layout` has flattened and permuted: a label's point
+    /// is in the root frame only after flattening, and its [`PolyId`] is a store
+    /// row only after the layer sort. Which text names which conductor comes
+    /// from `Connectivity::label_layer`; a text on an unpaired layer is
+    /// documentation. The boundary counts as inside, lowest matching row wins.
     ///
     /// # Errors
     ///
@@ -461,10 +351,6 @@ impl Provenance {
             "the deck's label pairing columns arrive parallel"
         );
 
-        // A dispatcher, not a bulk transform: one iteration runs a whole search
-        // whose trip count is the paired layer's row count, and appends at most
-        // one row through `label`. The bulk data is one level down — the
-        // conductor's bounding-box column, which the search below scans.
         for index in 0..self.placed.len() {
             let label = self.placed[index];
             let mut bound = None;
@@ -484,10 +370,7 @@ impl Provenance {
                 let conductor = connectivity.label_names[row];
                 for poly in store.polys_on_layer(conductor) {
                     let poly = PolyId(poly);
-                    // The prune, and it is exact enough to be worth taking
-                    // first: a point outside a shape's box is outside the
-                    // shape, and the box is one contiguous load against a ring
-                    // walk.
+                    // A point outside a shape's box is outside the shape.
                     let box_of = store.poly_bbox(poly);
                     let inside_box = (label.at.x.raw() >= box_of.xlo.raw())
                         & (label.at.x.raw() <= box_of.xhi.raw())
@@ -504,8 +387,7 @@ impl Provenance {
             }
 
             // A text on an unpaired layer is not claimed and not a fault; a
-            // claimed one that landed nowhere is. The two are distinguished by
-            // whether any pairing row named this layer at all.
+            // claimed one that landed nowhere is.
             let claimed = connectivity.label_layer.contains(&label.layer);
             match bound {
                 Some(poly) => self.label(poly, label.name),
@@ -533,43 +415,17 @@ impl Provenance {
 
     /// Intern a hierarchy path into this table's own [`PathTable`], returning
     /// the id [`Self::push`] takes.
-    ///
-    /// Added in the Testing-Phase. [`PathTable::intern`] needs `&mut` and
-    /// [`Self::paths`] hands out a shared reference, so no caller outside this
-    /// crate could make a [`PathId`] other than [`PathTable::ROOT`] — the
-    /// hierarchy-path column, the one whose mispermutation names the wrong cell
-    /// in every violation under an instance, was unreachable from an
-    /// integration test and so was `topology`'s label binding against a
-    /// labelled instance.
-    ///
-    /// A method rather than a `paths_mut`: this is the only mutation a caller
-    /// needs, and handing out `&mut PathTable` would also hand out the ability
-    /// to intern paths no polygon references.
     pub fn intern_path(&mut self, components: &[StrId]) -> PathId {
         self.paths.intern(components)
     }
 }
 
-/// The permutation, checked on the column it was written for.
-///
-/// A unit test because it was written when a non-root [`PathId`] could not be
-/// made from outside this crate: [`PathTable::intern`] needs a `&mut` and
-/// [`Provenance::paths`] hands out a shared reference only, so every externally
-/// built row sat at [`PathTable::ROOT`] and the hierarchy path — the exact
-/// column whose mispermutation names the wrong cell — was unreachable.
-/// [`Provenance::intern_path`] closed that in the Testing-Phase; these tests
-/// stay here, and an integration test may now cover the same ground.
 #[cfg(test)]
 mod tests {
     use super::Provenance;
     use crate::intern::StrTable;
     use gpurify_core::PolyId;
 
-    /// Oracle: construct-from-answer. Each row is pushed under a path that
-    /// names it, and the permutation is stated by the test rather than taken
-    /// from a store, so the expected path of every row after the reorder is
-    /// known before `permute` runs. The permutation moves every row, which is
-    /// what stops a `permute` that does nothing from passing.
     #[test]
     fn permute_moves_each_hierarchy_path_onto_the_row_its_polygon_became() {
         let mut strings = StrTable::default();
@@ -613,10 +469,7 @@ mod tests {
         }
     }
 
-    /// Oracle: law. The identity permutation is a no-op. Worth stating on its
-    /// own because it is what a single-layer layout produces, and a `permute`
-    /// that reversed or rotated its input would still pass a test that only
-    /// counted rows.
+    /// The identity permutation is a no-op.
     #[test]
     fn the_identity_permutation_leaves_every_row_where_it_is() {
         let mut strings = StrTable::default();

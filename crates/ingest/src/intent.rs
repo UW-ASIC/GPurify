@@ -1,16 +1,7 @@
 //! Design intent: the per-chip inputs a PDK cannot supply.
 //!
-//! Six ERC rules need facts about *this design* rather than this process —
-//! which nets are supplies, what voltage they sit at, how much current a net is
-//! budgeted, what IR drop is acceptable. No PDK knows any of that, so putting
-//! it in the deck would make the deck per-chip.
-//!
-//! # Optional, but never silently so
-//!
-//! A run without an intent file is legitimate: DRC, LVS, PEX and the
-//! topological ERC rules do not need one. The rules that do are **skipped and
-//! reported as skipped**. An empty clean result standing in for "we could not
-//! check this" is the false-clean failure this whole tool is built against.
+//! Optional. Rules needing an absent intent are reported as skipped, never as
+//! clean.
 
 use crate::intern::{StrId, StrTable};
 use gpurify_units::{prefix, Qty, Voltage};
@@ -43,11 +34,6 @@ pub enum SupplyRole {
 }
 
 /// Everything the design's owner must state that the process does not.
-///
-/// **Five questions.** In: a small declarative file. Out: interned nets and
-/// per-net limits. How many: tens of domains, hundreds of declared nets — small
-/// enough that everything here is a sorted `Vec` and nothing is hashed.
-/// Lifetime: whole run, read-only after load. Parallelisable: read-only.
 #[derive(Debug, Default)]
 pub struct DesignIntent {
     /// Domain names, indexed by [`DomainId`].
@@ -65,10 +51,8 @@ pub struct DesignIntent {
     limit: Vec<NetLimits>,
 }
 
-/// The limits a design states for one net.
-///
-/// Every field is optional and a `None` means *not checked*, which the report
-/// records. It does not mean *unlimited*.
+/// The limits a design states for one net. `None` means *not checked*, never
+/// *unlimited*.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NetLimits {
     /// Absolute IR drop permitted from the supply pad to any point.
@@ -121,18 +105,14 @@ impl DesignIntent {
     /// True when nothing was declared, so every intent-dependent rule must
     /// report itself skipped rather than clean.
     pub fn is_empty(&self) -> bool {
-        // All three, not just the supplies: a file stating only limits declared
-        // something, and the sense of this predicate is "nobody wrote one".
+        // All three: a file stating only limits still declared something.
         self.domain_name.is_empty() && self.supply_net.is_empty() && self.limit_net.is_empty()
     }
 }
 
 /// The intent file's wire shape.
 ///
-/// `deny_unknown_fields` throughout: a typo'd key on a file that *gates* six
-/// rules would leave them running against a declaration nobody made, and the
-/// run would report clean. Every section is optional, so an absent one is an
-/// empty column and not an error.
+/// `deny_unknown_fields` throughout: a typo'd key would silently ungate a rule.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IntentFile {
@@ -162,9 +142,6 @@ struct SupplySpec {
 }
 
 /// The wire spelling of [`SupplyRole`].
-///
-/// A separate type so the frozen public enum needs no `Deserialize` impl — the
-/// file format is this module's business, not its callers'.
 #[derive(Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum RoleSpec {
@@ -182,13 +159,9 @@ struct LimitSpec {
     budget_current_ua: Option<f64>,
 }
 
-/// A stated limit must be a strictly positive, finite number.
-///
-/// `None` is *unchecked* and stays `None`. Zero, negative, NaN and infinity are
-/// each refused rather than carried: a NaN compares false against every
-/// measurement, so it is a limit that can never be exceeded — a limit stated by
-/// the operator that silently checks nothing is the false-clean this file's
-/// header names.
+/// A stated limit must be a strictly positive, finite number. Zero, negative,
+/// NaN and infinity are refused rather than carried: a NaN compares false
+/// against every measurement, so it would check nothing.
 fn checked_limit(value: Option<f64>, net: &str) -> Result<Option<f64>, IntentError> {
     match value {
         Some(v) if !(v.is_finite() && v > 0.0) => Err(IntentError::BadLimit(net.to_owned())),
@@ -198,16 +171,7 @@ fn checked_limit(value: Option<f64>, net: &str) -> Result<Option<f64>, IntentErr
 
 /// Parse and validate design intent from memory.
 ///
-/// Reopened in the Testing-Phase. [`read_intent`] took a `&Path` and was the
-/// only producer of a [`DesignIntent`] whose fields are all private, so the only
-/// intent any test could build was the absent one: `is_empty` could be shown
-/// true and never false, `DomainConflict`, `DomainWithoutSupply` and `BadLimit`
-/// were unreachable, and `erc::resolve_intent_into` — the re-keying every
-/// intent-gated rule reads — had no populated input.
-///
 /// # Schema
-///
-/// JSON, stated here because it was stated nowhere:
 ///
 /// ```json
 /// {
@@ -220,44 +184,19 @@ fn checked_limit(value: Option<f64>, net: &str) -> Result<Option<f64>, IntentErr
 /// }
 /// ```
 ///
-/// Every section is optional and every key of a `limits` entry but `net` is
-/// optional — an absent one is [`NetLimits`]'s `None`, which means *unchecked*
-/// and never *unlimited*. A file with all three sections empty parses to an
-/// intent [`DesignIntent::is_empty`] reports as empty, which is the same verdict
-/// as no file at all.
-///
-/// `supplies` and `limits` are arrays rather than objects keyed by net so that a
-/// net stated twice is *expressible*, and therefore refusable: a JSON object
-/// with a repeated key silently keeps the last, which would turn
-/// `DomainConflict` into a preference for whichever declaration came last.
-///
-/// ## What each refusal is
-///
-/// `Malformed` for anything not this shape, including a net repeated in
-/// `limits`; `DomainConflict` for a net in `supplies` twice under two domains;
-/// `DomainWithoutSupply` for a declared domain no supply entry names; `BadLimit`
-/// for an IR-drop limit that is not strictly positive. Never a silent drop: an
-/// intent file the tool half-understood is worse than none, because the rules it
-/// gates would run against it and report clean.
-///
-/// The two sorted columns are sorted here, by [`StrId`], so the file may state
-/// its nets in any order and the binary searches downstream hold regardless.
+/// Every section is optional; an absent key is [`NetLimits`]'s `None`.
+/// `supplies` and `limits` are arrays rather than objects keyed by net so a net
+/// stated twice is expressible, and therefore refusable.
 pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent, IntentError> {
     let file: IntentFile =
         serde_json::from_str(source).map_err(|e| IntentError::Malformed(e.to_string()))?;
 
     let mut out = DesignIntent::default();
 
-    // `domains` is a `BTreeMap`, so its keys are already ascending and a
-    // domain's index in this slice *is* its `DomainId`. That makes the
-    // name-to-id lookup below a binary search over a sorted slice rather than a
-    // second map.
+    // `domains` is a `BTreeMap`, so a domain's index here *is* its `DomainId`.
     let domain_names: Vec<&str> = file.domains.keys().map(String::as_str).collect();
     out.domain_name.reserve(domain_names.len());
     out.domain_voltage.reserve(domain_names.len());
-    // Tens of domains, hundreds of nets — declaration data, not bulk data. Every
-    // loop in this function is scalar for that reason, and each pass below can
-    // refuse the file mid-way, which no uniform kernel could.
     for (name, spec) in &file.domains {
         if !spec.voltage_mv.is_finite() {
             return Err(IntentError::Malformed(format!(
@@ -292,21 +231,13 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         return Err(IntentError::DomainWithoutSupply(domain_names[index].to_owned()));
     }
 
-    // Sorted here so the file may state its nets in any order, and so the
-    // duplicate scan below is a single adjacent-pair pass.
+    // Sorted so the file may state its nets in any order.
     supply.sort_unstable_by_key(|&(net, _, _)| net);
-    // Any repeat is refused, not only a repeat under two different domains: a
-    // net stated twice under one domain in two roles is the same ambiguity, and
-    // `DomainConflict` is the variant that says "this net's declaration is not
-    // single-valued".
+    // Any repeat is refused, not only a repeat under two different domains.
     if let Some(pair) = supply.windows(2).find(|pair| pair[0].0 == pair[1].0) {
         return Err(IntentError::DomainConflict(strings.resolve(pair[0].0).to_owned()));
     }
 
-    // One pass writing three columns rather than three passes writing one each:
-    // the row is already in registers when it is destructured. No branch in the
-    // body, and the three `reserve`s put the `push` capacity checks outside the
-    // loop where they are loop-invariant.
     out.supply_net.reserve(supply.len());
     out.supply_domain.reserve(supply.len());
     out.supply_role.reserve(supply.len());
@@ -315,10 +246,8 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         out.supply_domain.push(domain);
         out.supply_role.push(role);
     }
-    // The columns must agree in length. This was the check `Cols::len` made on a
-    // multi-column source; splitting one source into three columns owes the same
-    // guarantee, and a short column here is a supply whose role or domain reads
-    // off the row next door.
+    // A short column here is a supply whose role or domain reads off the row
+    // next door.
     debug_assert_eq!(out.supply_net.len(), supply.len());
     debug_assert_eq!(out.supply_domain.len(), supply.len());
     debug_assert_eq!(out.supply_role.len(), supply.len());
@@ -372,18 +301,12 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
 }
 
 /// Read design intent from a file.
-///
-/// A thin wrapper over [`parse_intent`]: reads the bytes, and every decision
-/// after that belongs to the parser. Keeping the file read out of the parser is
-/// what makes the parser testable.
 pub fn read_intent(
     path: &std::path::Path,
     strings: &mut StrTable,
 ) -> Result<DesignIntent, IntentError> {
-    // Never a silently-empty intent: a file the operator passed and the tool
-    // could not open must stop the run, not turn six rules into skips the
-    // operator did not ask for. Non-UTF-8 lands here too, which is the same
-    // verdict for the same reason.
+    // Never a silently-empty intent: an unreadable file the operator passed
+    // must stop the run, not turn rules into unasked-for skips.
     let source = std::fs::read_to_string(path)
         .map_err(|e| IntentError::Io(format!("{}: {e}", path.display())))?;
     parse_intent(&source, strings)

@@ -1,15 +1,7 @@
-//! Reference-netlist readers: SPICE/CDL and Spectre.
+//! Reference-netlist readers: SPICE/CDL and Spectre, both producing [`Netlist`].
 //!
-//! These are parsers, and parsers belong here — they have nothing in common
-//! with the subgraph matching in `lvs` beyond both involving netlists. Both
-//! dialects produce the same [`Netlist`], so `lvs` sees one shape.
-//!
-//! # Declared subset
-//!
-//! Neither reader guesses. Each implements a stated subset and errors on
-//! anything outside it, with the source line, because a reference netlist
-//! silently misparsed produces an LVS mismatch that looks like a layout bug and
-//! costs a day.
+//! Neither reader guesses: anything outside the declared subset is an error with
+//! its source line, a silent misparse surfacing as an LVS mismatch.
 
 use crate::deck::DeviceKind;
 use crate::intern::{StrId, StrTable};
@@ -60,16 +52,6 @@ pub struct RefDeviceId(pub u32);
 pub struct RefInstanceId(pub u32);
 
 /// A parsed reference netlist, hierarchy preserved.
-///
-/// Hierarchy is kept rather than flattened, because hierarchical LVS compares
-/// cell by cell and flattening first would throw away the structure it needs.
-/// Flattening, where a run wants it, is a separate explicit step.
-///
-/// **Five questions.** In: text. Out: `SoA` tables of subcircuits, nets and
-/// device instances. How many: thousands of devices for a block, millions for a
-/// full chip. Access pattern: `lvs` walks devices per subcircuit and terminals
-/// per device, so both are CSR ranges. Lifetime: whole run. Parallelisable:
-/// per-subcircuit comparison is independent.
 #[derive(Debug, Default)]
 pub struct Netlist {
     /// One row per subcircuit definition.
@@ -95,60 +77,24 @@ pub struct Netlist {
     /// | `Bjt` (`Q`) | collector, base, emitter, then substrate if stated |
     /// | `Resistor`, `Capacitor`, `Diode` | pin 0, pin 1 |
     ///
-    /// This is SPICE's own card order and the Spectre reader normalises to it,
-    /// so both dialects produce one shape. Written down in the Testing-Phase
-    /// because `lvs`'s `Graph` carries a `TerminalRole` per terminal and nothing
-    /// stated how a position became one — so the projection test could assert
-    /// the MOS role *set* but not the order, and a reader that transposed drain
-    /// and source would have passed it.
-    ///
-    /// **Note it is not `DeviceRecognition`'s order.** A recogniser lists gate
-    /// first; a SPICE card lists drain first. The two orders meet in `lvs`, and
-    /// they are different because the two source formats are.
+    /// SPICE's own card order; the Spectre reader normalises to it. **Not**
+    /// `DeviceRecognition`'s order, which lists gate first.
     pub terminal_net: Vec<RefNetId>,
     /// Parameters, CSR into `param`.
     pub device_param_start: Vec<u32>,
-    /// Interned name and value.
-    ///
-    /// **SI base units, suffixes expanded at parse.** `w=1u` is `1e-6`, and a
-    /// bare `w=1` is one metre — a SPICE scale suffix is part of the number's
-    /// syntax, not a unit annotation, so expanding it is the reader's job and
-    /// nothing downstream can do it later. Stated in the Testing-Phase because
-    /// "the netlist's own units" left `w=1u` as either `1e-6` or `1`, which is a
-    /// factor of a million in every parametric LVS comparison. `lvs` attaches
-    /// the dimension when it compares; the scale is already right.
+    /// Interned name and value, in SI base units with scale suffixes already
+    /// expanded: `w=1u` is `1e-6` and a bare `w=1` is one metre.
     pub param: Vec<(StrId, f64)>,
 
     /// One row per subcircuit instance — an `X` card — in file order.
-    ///
-    /// Added in the Testing-Phase. Nothing pointed a row at a [`SubcktId`], so
-    /// no netlist a caller could build contained an instantiation at all: the
-    /// SPICE reader had nowhere to put an `X` card, [`Netlist::top`] — "the one
-    /// nothing else instantiates" — had no input that exercised its search, and
-    /// `lvs`'s `PlanError::Cyclic` and `Inconclusive::AmbiguousTop` were
-    /// unreachable from any input, cycles and ambiguity both being properties of
-    /// this edge.
-    ///
-    /// A separate table rather than a [`DeviceKind`](crate::deck::DeviceKind)
-    /// variant: an instance is not a device family, it has no model to compare
-    /// and no parameters to match, and adding it to that enum would put it in
-    /// the deck's device recogniser, where geometry can never produce one.
-    ///
-    /// The parent is a column, as it is for nets, rather than a CSR range off
-    /// the subcircuit: an empty instance table then means exactly "nothing is
-    /// instantiated" for any number of subcircuits, so a default-constructed
-    /// `Netlist` and every fixture that spreads one stay valid.
     pub instance_name: Vec<StrId>,
     /// The subcircuit each instance instantiates — the callee.
     pub instance_of: Vec<SubcktId>,
-    /// The subcircuit each instance sits in — the caller. Together with
-    /// `instance_of` this is the only cell-to-cell edge in the netlist, and so
-    /// the only place a hierarchy cycle can be stated.
+    /// The subcircuit each instance sits in — the caller. With `instance_of`,
+    /// the only cell-to-cell edge, so the only place a cycle can be stated.
     pub instance_subckt: Vec<SubcktId>,
     /// Terminals, CSR into `instance_terminal_net`. Positional, matching the
-    /// instantiated subcircuit's `port_net` order — that correspondence is the
-    /// whole content of an `X` card and dropping it would silently disconnect
-    /// the hierarchy.
+    /// instantiated subcircuit's `port_net` order.
     pub instance_terminal_start: Vec<u32>,
     pub instance_terminal_net: Vec<RefNetId>,
 
@@ -200,20 +146,11 @@ impl Netlist {
             instance.0 as usize,
         )
     }
-    /// The top-level subcircuit — the one nothing else instantiates, by way of
-    /// `instance_of`.
-    ///
-    /// `None` when there is no unique top, which is an ambiguity `lvs` must
-    /// refuse rather than resolve by guessing. A netlist with no subcircuits has
-    /// no top; one whose only subcircuit instantiates itself has none either,
-    /// since it appears in `instance_of`.
+    /// The top-level subcircuit — the one nothing else instantiates. `None` when
+    /// there is no unique top, an ambiguity `lvs` must refuse, not guess at.
     pub fn top(&self) -> Option<SubcktId> {
         let subckts = self.subckt_count();
 
-        // A scatter: `instance_of` supplies the write *address*, so the output
-        // index is data-dependent and the loop is unvectorisable without
-        // lane-conflict detection. It is nevertheless the finished form: the
-        // store is already unconditional and there is no branch left to remove.
         let mut instantiated = vec![false; subckts];
         for &callee in &self.instance_of {
             debug_assert!(
@@ -225,12 +162,7 @@ impl Netlist {
         }
 
         // Count the uninstantiated subcircuits and keep the last one seen; when
-        // the count is one, that is the only one. A strict ascending fold, so
-        // "last seen" means the highest row. The select is arithmetic — `used`
-        // widens to 0/1 and blends the two candidates — so the body carries no
-        // data-dependent branch.
-        // `narrow` once above the loop, so the row index rides in a `u32`
-        // without a per-row conversion and without a truncating cast.
+        // the count is one, that is the only one.
         let rows = narrow(subckts);
         let mut free = 0u32;
         let mut top = 0u32;
@@ -248,24 +180,7 @@ impl Netlist {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The shared reader.
-//
-// Both dialects are the same three steps over the same tables — lex to cards,
-// collect the definitions, then read each card — so there is one
-// implementation and the two `read`s below name a dialect. The surface syntax
-// differs in four places and nowhere else: the comment marker, the
-// continuation marker, whether parentheses wrap a terminal list, and how a
-// device's family is named.
-//
-// SIMD/bulk triage: every loop here is a *chain*. A token's start is only known
-// once the previous one has been scanned, interning mutates the string table in
-// sequence, and a card parser branches on the card's own text. A chain is the
-// blocker `/simd-loops` names, so the loops below stay scalar and their
-// branches are the parse itself rather than a predicate over bulk data. The
-// counts are file-sized and read once per run, not polygon-sized and read per
-// rule.
-// ---------------------------------------------------------------------------
+// The shared reader: lex to cards, collect the definitions, then read each card.
 
 /// Which surface syntax a card is written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,21 +223,13 @@ fn strip_comment(raw: &str, dialect: Dialect) -> &str {
     cut.map_or(raw, |at| &raw[..at])
 }
 
-/// Spectre wraps a terminal list in parentheses and SPICE does not. Both then
-/// read as "the last positional token is the master", so the parentheses carry
-/// no information past the lexer and are separators. The dialect is a uniform,
-/// not per-token data.
+/// Spectre's parentheses carry no information past the lexer.
 fn is_separator(c: char, dialect: Dialect) -> bool {
     c.is_whitespace() || (dialect == Dialect::Spectre && (c == '(' || c == ')'))
 }
 
-/// Lex `source` into tokens grouped into logical cards. **Transform, A-to-B.**
-///
-/// In: text. Out: one token arena plus a CSR column of card starts, with
-/// `card_start.len() == cards + 1`. Comments are dropped and a continuation
-/// line is folded into the card it continues — SPICE marks one with a leading
-/// `+`, Spectre with a trailing `\` on the line before — so a card's first
-/// token sits on the line a human is told about.
+/// Lex `source` into tokens plus a CSR column of card starts, comments dropped
+/// and continuation lines folded into the card they continue.
 fn lex(source: &str, dialect: Dialect) -> (Vec<Tok<'_>>, Vec<u32>) {
     let mut toks: Vec<Tok<'_>> = Vec::new();
     let mut card_start: Vec<u32> = Vec::new();
@@ -352,8 +259,6 @@ fn lex(source: &str, dialect: Dialect) -> (Vec<Tok<'_>>, Vec<u32>) {
             }
         }
 
-        // Hoisted above the token loop: whether this line opens a card is a
-        // property of the line, not of any token in it.
         let base = raw.as_ptr() as usize;
         let mut tokens = rest
             .split(|c| is_separator(c, dialect))
@@ -380,14 +285,9 @@ fn lex(source: &str, dialect: Dialect) -> (Vec<Tok<'_>>, Vec<u32>) {
     (toks, card_start)
 }
 
-/// A SPICE numeric literal, in SI base units. **Decision.**
-///
-/// One token in, one `f64` out. The scale suffix is part of the number's
-/// syntax rather than a unit annotation — `1u` is `1e-6` and a bare `1` is one
-/// metre — so expanding it is the reader's job and nothing downstream can do it
-/// later. Letters after the suffix are the unit a human wrote and SPICE ignores
-/// them, so `1uF` is also `1e-6`. An unrecognised suffix is `None`, not a
-/// silent factor of one.
+/// A SPICE numeric literal, in SI base units with its scale suffix expanded;
+/// letters after the suffix are ignored, so `1uF` is `1e-6`. An unrecognised
+/// suffix is `None`, not a silent factor of one.
 fn spice_number(text: &str) -> Option<f64> {
     let bytes = text.as_bytes();
     let mut at = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
@@ -446,11 +346,9 @@ fn spice_number(text: &str) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
-/// Split a card's tail into its positional tokens and its `k=v` tokens.
-///
-/// A positional token *after* a parameter is refused rather than read as a
-/// terminal: every dialect here states all terminals before the first
-/// parameter, so a card that does not is outside the subset.
+/// Split a card's tail into its positional tokens and its `k=v` tokens. A
+/// positional token *after* a parameter is refused rather than read as a
+/// terminal: every dialect here states all terminals first.
 fn split_params<'t>(card: &'t [Tok<'t>]) -> Result<(&'t [Tok<'t>], &'t [Tok<'t>]), NetlistError> {
     let tail = &card[1..];
     let at = tail
@@ -477,9 +375,8 @@ fn split_terminals<'t>(
         DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Diode => 2,
     };
     let got = narrow(positional.len().saturating_sub(1));
-    // A `Q` card states its substrate terminal or leaves it out — "then
-    // substrate if stated", per `terminal_net`'s own table. Nothing else in the
-    // subset has an optional terminal.
+    // A `Q` card's substrate terminal is optional; nothing else in the subset
+    // has an optional terminal.
     let stated = got == want || (kind == DeviceKind::Bjt && got == 4);
     if !stated {
         return Err(NetlistError::TerminalCount(
@@ -495,26 +392,9 @@ fn split_terminals<'t>(
     Ok((nets, *model))
 }
 
-/// The Spectre primitive masters this subset reads.
-///
-/// Every Spectre built-in device master that lands in one of
-/// [`DeviceKind`](crate::deck::DeviceKind)'s five families, plus the four SPICE
-/// model types (`nmos`, `pmos`, `npn`, `pnp`) a mixed-flow netlist writes in the
-/// same position. The MOS entries are the compact-model names a foundry model
-/// card names as its master — a `model` card of its own reaches
-/// [`Build::models`] and never gets here, so this list is what an *instance*
-/// may name directly.
-///
-/// A master outside the list is `Unsupported` with its line, never guessed at
-/// from its terminal count: a four-terminal master read as a MOS when it is a
-/// four-terminal subcircuit produces an LVS mismatch that reads as a layout bug.
-/// Spectre's remaining built-ins — `inductor`, `vsource`, `isource`, the
-/// controlled sources, `switch`, `tline` — have no `DeviceKind` variant to land
-/// in, so they stay `Unsupported`; see `docs/SIGNATURE_DEFECTS.md`.
-///
-/// The match is over a fixed compile-time vocabulary and runs once per instance
-/// card, so it is a `match` rather than a table. Spectre is case-sensitive, so
-/// this is too.
+/// The Spectre primitive masters this subset reads. Case-sensitive, as Spectre
+/// is; a master outside the list is `Unsupported` with its line, never guessed
+/// at from its terminal count.
 fn spectre_primitive(master: &str) -> Option<DeviceKind> {
     Some(match master {
         "resistor" | "res" => DeviceKind::Resistor,
@@ -534,14 +414,9 @@ struct Build<'a> {
     strings: &'a mut StrTable,
     out: Netlist,
     /// `net_of[name.0]` is the [`RefNetId`] that name has in the subcircuit
-    /// currently open, or [`NO_NET`]. A dense side table rather than a map: net
-    /// names are already interned to a dense `u32`, so a lookup is one indexed
-    /// load where a `HashMap` would be a hash per terminal. It is reset per
-    /// subcircuit by walking only the rows that subcircuit created.
+    /// currently open, or [`NO_NET`]. Reset per subcircuit.
     net_of: Vec<u32>,
-    /// Definitions sorted by interned name, for binary search. Sorted rather
-    /// than hashed for the reason `StrTable` is: one iteration order on every
-    /// machine.
+    /// Definitions sorted by interned name, for binary search.
     defs: Vec<(StrId, SubcktId)>,
     /// Spectre `model` cards, sorted the same way.
     models: Vec<(StrId, DeviceKind)>,
@@ -575,9 +450,8 @@ impl Build<'_> {
         RefNetId(row)
     }
 
-    /// The subcircuit a card sits in. A card outside every subcircuit has no
-    /// row to land in — this netlist has no top-level cell — so it is outside
-    /// the subset rather than silently dropped.
+    /// The subcircuit a card sits in. A card outside every subcircuit has no row
+    /// to land in, so it is refused rather than silently dropped.
     fn open_id(&self, head: Tok) -> Result<SubcktId, NetlistError> {
         self.open
             .map(|(id, _)| id)
@@ -628,15 +502,6 @@ impl Build<'_> {
         let Some((_, first_net)) = self.open.take() else {
             return;
         };
-        // A scatter — `net_name[row]` supplies the write address — so it is
-        // unvectorisable without lane-conflict detection, for the same reason
-        // as `Netlist::top`. It is the finished form: the store is
-        // unconditional, the row count is the subcircuit's own net count, and
-        // resetting only those rows is what keeps `net_of` a dense table
-        // instead of a per-subcircuit map. A generation counter would make the
-        // reset O(1) per subcircuit but not per file — every net is reset
-        // exactly once either way — while widening the table and adding a
-        // compare to every lookup.
         for row in first_net as usize..self.out.net_name.len() {
             self.net_of[self.out.net_name[row].0 as usize] = NO_NET;
         }
@@ -662,9 +527,7 @@ impl Build<'_> {
         subckt: SubcktId,
     ) -> Result<(), NetlistError> {
         // A bare number where a model name belongs is SPICE's positional value
-        // form, `R1 a b 1k`. This subset does not read it: interning `1k` as a
-        // model would compare a resistor against a model that does not exist,
-        // and LVS would report that as a layout bug.
+        // form, `R1 a b 1k`, refused rather than interned as a model name.
         if spice_number(model.text).is_some() {
             return Err(NetlistError::Unsupported(
                 model.span,
@@ -683,10 +546,7 @@ impl Build<'_> {
         self.out.device_model.push(model);
         self.out.device_kind.push(kind);
 
-        // Card order is the role — drain, gate, source, bulk for a `Mos` — so
-        // the terminals are pushed exactly as written. Spectre states them in
-        // the same order, which is why its reader normalises to this one by
-        // doing nothing.
+        // Card order is the role, so terminals are pushed exactly as written.
         for net in nets {
             let net = self.net(net.text, subckt);
             self.out.terminal_net.push(net);
@@ -706,9 +566,8 @@ impl Build<'_> {
         params: &[Tok],
         subckt: SubcktId,
     ) -> Result<(), NetlistError> {
-        // A parameterised instantiation has nowhere to land — the instance
-        // table carries no parameters — and dropping them silently would
-        // compare against the wrong device sizes.
+        // A parameterised instantiation has nowhere to land, and dropping the
+        // parameters silently would compare against the wrong device sizes.
         if let Some(param) = params.first() {
             return Err(NetlistError::Unsupported(
                 param.span,
@@ -738,8 +597,7 @@ impl Build<'_> {
     }
 }
 
-/// Is this card a subcircuit definition? Asked by the definition pass, which
-/// reads nothing else.
+/// Is this card a subcircuit definition?
 fn is_definition(card: &[Tok], dialect: Dialect) -> bool {
     match dialect {
         Dialect::Spice => card[0].text.eq_ignore_ascii_case(".subckt"),
@@ -748,9 +606,6 @@ fn is_definition(card: &[Tok], dialect: Dialect) -> bool {
 }
 
 /// One SPICE or CDL card.
-///
-/// Card keywords are a fixed compile-time vocabulary, so dispatch is a `match`
-/// on the leading token rather than a map lookup.
 fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), NetlistError> {
     let head = card[0];
     if let Some(word) = head.text.strip_prefix('.') {
@@ -810,12 +665,9 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
         _ => {}
     }
 
-    // An instance statement: `name (nets…) master [params]`. Everything else
-    // the language has — `alter`, a sweep, an `inline subckt`, `parameters` —
-    // is outside the declared subset and is refused at its line rather than
-    // skipped, because a skipped statement is a netlist missing whatever it
-    // said. Classification comes before "is a subcircuit open", so a statement
-    // between subcircuits is refused as unsupported rather than as misplaced.
+    // An instance statement: `name (nets…) master [params]`. Classification
+    // comes before "is a subcircuit open", so a statement between subcircuits is
+    // unsupported rather than misplaced.
     let (positional, params) = split_params(card)?;
     let unsupported = || NetlistError::Unsupported(head.span, head.text.to_string());
     let (master, nets) = positional.split_last().ok_or_else(unsupported)?;
@@ -840,15 +692,8 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
     b.device(head, kind, nets, model, params, subckt)
 }
 
-/// Read a reference netlist in either dialect. **Transform, generative.**
-///
-/// In: text plus the run's string table. Out: the [`Netlist`] tables, or the
-/// first thing outside the declared subset with the line it sits on.
-///
-/// Two passes over the cards. The first collects every definition, so a call
-/// may precede the `.subckt` it names and still be resolved at the call's own
-/// line; a name defined twice is refused there rather than after the file has
-/// been read. The second reads every card against those definitions.
+/// Read a reference netlist in either dialect. Two passes: the first collects
+/// every definition, so a call may precede the `.subckt` it names.
 fn read_dialect(
     source: &str,
     strings: &mut StrTable,
@@ -921,18 +766,9 @@ fn read_dialect(
         .instance_terminal_start
         .push(narrow(b.out.instance_terminal_net.len()));
 
-    // Fail closed on a miswired instantiation: an instance with the wrong
-    // number of nets silently disconnects the hierarchy, which LVS reports as a
-    // layout bug. The callee may be defined after the call, so this is the
-    // first point every port count is known.
-    //
-    // Find, then report. The scan body has no panic edge and no error return:
-    // it carries the lowest offending row in the accumulator, and the one
-    // branch that builds the error sits outside it. That leaves the scan itself
-    // branchless over every instance in the file: the callee's port count is a
-    // gather off `subckt_port_start`, the instance's own terminal count comes
-    // from two offset views of one CSR column — the adjacent-pair shape — and
-    // the "is this row an offender" decision is a select rather than an `if`.
+    // Fail closed on a miswired instantiation, which silently disconnects the
+    // hierarchy. The callee may be defined after the call, so this is the first
+    // point every port count is known.
     let instances = b.out.instance_name.len();
     let port_start = &b.out.subckt_port_start[..];
     debug_assert!(
@@ -961,10 +797,8 @@ fn read_dialect(
         let i = row as usize;
         let of = of_col[i].0 as usize;
         let want = port_start[of + 1] - port_start[of];
-        // A match smears to all-ones and swallows the row, a mismatch smears to
-        // zero and lets it through; `min` then keeps the earliest offender,
-        // which is the row a `break` would have stopped on. One loop, so "every
-        // instance was scanned" is the trip count itself rather than a counter.
+        // A match smears to all-ones and swallows the row; `min` keeps the
+        // earliest offender.
         let matched = u32::from(last_col[i] - first_col[i] == want);
         offender = offender.min(row | matched.wrapping_neg());
     }
@@ -1022,9 +856,6 @@ fn read_dialect(
 }
 
 /// SPICE and CDL.
-///
-/// Card keywords are a fixed compile-time vocabulary, so dispatch is a `match`
-/// on the leading token rather than a map lookup.
 pub mod spice {
     use super::{Netlist, NetlistError};
     use crate::intern::StrTable;
@@ -1036,27 +867,8 @@ pub mod spice {
 
 /// Spectre.
 ///
-/// A different surface syntax over the same model, so it produces the same
-/// [`Netlist`] and everything downstream is unchanged.
-///
-/// # Declared subset
-///
-/// No `inline subckt`, no `alter`, no sweeps. Anything outside the subset is
-/// `NetlistError::Unsupported` with the line it sits on. That is the reader's
-/// stated interface rather than an unfinished corner, and each exclusion is the
-/// same refusal for a different reason:
-///
-/// - `alter` and a sweep are simulator control, not circuit structure. There is
-///   no [`Netlist`] column for a corner or a swept parameter, so accepting one
-///   would mean reading it and dropping it — a netlist quietly missing what the
-///   statement said.
-/// - An `inline subckt` scopes its ports into the enclosing cell rather than
-///   away from it. Reading it as a plain `subckt` would be a guess about
-///   connectivity, and a wrong guess reconnects nets: exactly the misparse this
-///   module's header refuses to make.
-///
-/// Widening any of these needs somewhere for the meaning to land, not a looser
-/// parser.
+/// Declared subset: no `inline subckt`, no `alter`, no sweeps. Anything outside
+/// it is `NetlistError::Unsupported` with the line it sits on.
 pub mod spectre {
     use super::{Netlist, NetlistError};
     use crate::intern::StrTable;
