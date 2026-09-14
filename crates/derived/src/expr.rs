@@ -9,10 +9,6 @@ use gpurify_ingest::StrId;
 use gpurify_units::{Dbu, MAX_ABS_DBU};
 
 /// A reference to either a base layer or a named derived layer.
-///
-/// Two variants rather than one id space, because resolving a name to a base
-/// layer must fail loudly when the deck does not define it, and a derived name
-/// must be resolvable to its expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerRef {
     Base(LayerId),
@@ -20,51 +16,27 @@ pub enum LayerRef {
 }
 
 /// A derived-layer expression.
-///
-/// A closed enum matched exhaustively, not a trait object: the operator set is
-/// fixed by the deck schema, and adding one should break every match until it
-/// is handled.
-///
-/// Boxed children, unusually for this tree — an expression is a handful of
-/// nodes evaluated once per layer per run, not bulk data, so an arena would be
-/// machinery for nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DerivedExpr {
     Layer(LayerRef),
     Union(Box<DerivedExpr>, Box<DerivedExpr>),
     Intersection(Box<DerivedExpr>, Box<DerivedExpr>),
-    /// `lhs` minus `rhs`. Non-commutative; the only operator where swapping
-    /// operands is a silent wrong answer.
+    /// `lhs` minus `rhs`. Non-commutative: swapping the operands is silently
+    /// wrong rather than an error.
     Subtraction(Box<DerivedExpr>, Box<DerivedExpr>),
     /// Grow (positive) or shrink (negative) by an exact L-infinity kernel.
     Offset(Box<DerivedExpr>, Dbu),
-    /// The area of `operand` that lies inside `region`.
-    ///
-    /// Area, not whole shapes: a shape straddling the region boundary is cut,
-    /// and only the part within `region` survives. The deck spells this
-    /// operator, so it stays, but it is `Intersection` under another name and a
-    /// body may evaluate it as one. Whole-shape selection is a different
-    /// operator and this is not it — `core::boolean` exposes no primitive for
-    /// one.
+    /// The area of `operand` inside `region` — area, not whole shapes, so a
+    /// shape straddling the boundary is cut.
     Inside {
         operand: Box<DerivedExpr>,
         region: Box<DerivedExpr>,
     },
-    /// The area of `operand` that lies inside `universe` and **not** inside
-    /// `region`.
+    /// The area of `operand` inside `universe` and **not** inside `region`.
     ///
-    /// Area, not whole shapes, the same cut [`DerivedExpr::Inside`] makes, so
-    /// the two partition the operand exactly whenever `universe` contains it.
-    ///
-    /// Requires an explicit finite universe: "not inside" over an unbounded
-    /// plane is not a set of polygons, and the old implementation's implicit
-    /// universe was where several of its surprises lived.
-    ///
-    /// A universe that does not contain the operand truncates the result rather
-    /// than raising an error. The universe is the extent the deck declared, and
-    /// returning geometry from outside it would be an answer about area the
-    /// deck never claimed. Documented here because an undocumented truncation
-    /// is exactly the surprise the explicit universe was introduced to remove.
+    /// The universe must be explicit and finite; one that does not contain the
+    /// operand truncates the result rather than erroring, since area outside
+    /// the extent the deck declared was never claimed.
     Outside {
         operand: Box<DerivedExpr>,
         region: Box<DerivedExpr>,
@@ -73,11 +45,6 @@ pub enum DerivedExpr {
 }
 
 /// Why a set of derived-layer definitions could not be ordered or evaluated.
-///
-/// The two naming variants carry a [`StrId`] rather than a `String`, because
-/// [`Evaluator::plan`] is handed names and expressions and never a `StrTable`.
-/// A name is a `u32` until a report reaches a human, and the caller holding the
-/// table is what spells it.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum DerivedError {
     #[error("derived layer {:?} is defined in terms of itself", .0)]
@@ -93,54 +60,25 @@ pub enum DerivedError {
 }
 
 /// Evaluates named derived layers once each and caches the results.
-///
-/// **Five questions.** In: the deck's named expressions and a store. Out: one
-/// [`ValidatedLayer`] per name. How many: tens of derived layers per deck, each
-/// referenced by many rules — which is exactly why the result is cached and not
-/// recomputed. Lifetime: the whole run, built once after the layout is read.
-/// Parallelisable: independent expressions are, but the dependency graph must
-/// be honoured, so it is evaluated in topological order.
-///
-/// Recursion is detected during that ordering, not by a depth counter: a cycle
-/// is a deck error to report, not a stack to blow.
 #[derive(Debug, Default)]
 pub struct Evaluator {
-    /// Names in evaluation order: every definition sits after the definitions
-    /// it references, so evaluation is one forward scan. Not sorted — a
-    /// topological order and an ascending-`StrId` order coincide only by
-    /// accident — which is what `lookup` is for.
+    /// Names in evaluation order: every definition sits after the ones it
+    /// references, so evaluation is one forward scan. Not sorted by name.
     name: Vec<StrId>,
     expr: Vec<DerivedExpr>,
-    /// Indices into `name`, ordered by the `StrId` each one points at, so
-    /// [`get`](Evaluator::get) is a binary search here and an indexed read
-    /// there. A second column rather than a second sort, because `name` has to
-    /// stay in evaluation order. Tens of derived layers per deck, so `u32`.
+    /// Indices into `name` sorted by the `StrId` each points at, which is what
+    /// [`get`](Evaluator::get) binary-searches.
     lookup: Vec<u32>,
     /// Evaluated results, parallel to `name`.
-    ///
-    /// Kept and refilled rather than dropped between calls, so a second
-    /// `evaluate` reuses every buffer the first one grew.
     result: Vec<ValidatedLayer>,
-    /// Operand buffers, indexed by depth in the expression rather than by node:
-    /// a node takes the slots it needs off the front and hands the rest to its
-    /// children, so the live count is the height of the tree and the siblings
-    /// of a finished subtree get its slots back.
-    ///
-    /// Sized in [`evaluate`](Evaluator::evaluate) to the deepest definition the
-    /// deck holds — [`scratch_slots`] counts it exactly — and kept afterwards,
-    /// so a second `evaluate` allocates nothing and no node allocates at all.
+    /// Operand buffers indexed by depth in the expression, not by node, so the
+    /// live count is the height of the tree.
     scratch: Vec<ValidatedLayer>,
 }
 
 impl Evaluator {
-    /// Order the deck's named expressions and reject cycles.
-    ///
-    /// **Decision** — the ordering is pure and table-testable: a list of
-    /// definitions in, either an order or the [`StrId`] of a cycle out.
-    ///
-    /// `names[i]` names `exprs[i]`, and the two are reordered together. Fills
-    /// both orders: the evaluation order `evaluate` scans, and the sorted
-    /// `lookup` column `get` binary-searches.
+    /// Order the deck's named expressions and reject cycles. `names[i]` names
+    /// `exprs[i]`, and the two are reordered together.
     pub fn plan(names: &[StrId], exprs: &[DerivedExpr]) -> Result<Self, DerivedError> {
         debug_assert_eq!(
             names.len(),
@@ -149,13 +87,8 @@ impl Evaluator {
         );
         let count = u32::try_from(names.len()).expect("a deck's derived layers fit a u32");
 
-        // None of the loops below is a bulk loop: a deck names tens of derived
-        // layers, and every loop here is a graph walk whose output index is
-        // data-dependent, so none of them is a vector shape either.
-
-        // The input order sorted by name, so a reference resolves to the
-        // definition providing it while the evaluation order is still being
-        // built.
+        // The input order sorted by name, so a reference resolves while the
+        // evaluation order is still being built.
         let mut by_name: Vec<u32> = (0..count).collect();
         by_name.sort_unstable_by_key(|&row| names[row as usize]);
         debug_assert!(
@@ -167,9 +100,8 @@ impl Evaluator {
         );
 
         // Edges dependency -> dependent, and the count each definition is
-        // waiting on. A reference no definition provides is refused here rather
-        // than dropped: an unordered definition that evaluated to an empty layer
-        // would read downstream as "nothing to check here".
+        // waiting on. A reference no definition provides is refused rather than
+        // dropped: an empty layer reads downstream as "nothing to check here".
         let mut waiting_on = vec![0u32; names.len()];
         let mut edges: Vec<(u32, u32)> = Vec::new();
         let mut referenced: Vec<StrId> = Vec::new();
@@ -185,14 +117,11 @@ impl Evaluator {
             }
         }
 
-        // CSR over the edges, so emitting a definition reaches its dependents in
-        // one contiguous run instead of rescanning every edge.
+        // `csr_offsets` requires the sort.
         edges.sort_unstable();
         let dependents_start = csr_offsets(names.len(), &edges, |&(dependency, _)| dependency);
 
-        // Kahn: a definition is emitted once nothing it references is still
-        // waiting. An order rather than a depth counter, so a chain four
-        // thousand definitions deep costs a queue and not the stack.
+        // Kahn, iterative: a deep chain cannot blow the stack.
         let mut order: Vec<u32> = (0..count)
             .filter(|&row| waiting_on[row as usize] == 0)
             .collect();
@@ -203,10 +132,6 @@ impl Evaluator {
             let run = dependents_start[ready] as usize..dependents_start[ready + 1] as usize;
             for &(_, dependent) in &edges[run] {
                 waiting_on[dependent as usize] -= 1;
-                // Tens of definitions, so this is not a bulk loop and the branch
-                // is not the kind `/branchless` triages. The taken side appends,
-                // so the output index is data-dependent and the trip count is
-                // not known until the walk finishes.
                 if waiting_on[dependent as usize] == 0 {
                     order.push(dependent);
                 }
@@ -214,11 +139,9 @@ impl Evaluator {
         }
 
         if order.len() != names.len() {
-            // Fail closed, naming a definition that is on the cycle rather than
-            // one merely downstream of it: the reported name is one a deck
-            // author can actually break. `cycle_member` walks the second edge
-            // index for it, built here because nothing on the accepting path
-            // needs a dependent -> dependency direction.
+            // Fail closed, naming a definition on the cycle rather than one
+            // merely downstream: the reported name is one a deck author can
+            // break.
             let member = cycle_member(&waiting_on, &edges);
             return Err(DerivedError::Recursive(names[member as usize]));
         }
@@ -248,11 +171,6 @@ impl Evaluator {
     }
 
     /// Evaluate every named layer against a store.
-    ///
-    /// **Transform.** Fills `self.result`, reusing the buffers a previous call
-    /// grew rather than dropping them. Nothing below the entry allocates: the
-    /// operand buffers every node writes come out of `self.scratch`, sized once
-    /// here to the deepest definition in the deck.
     pub fn evaluate(&mut self, store: &gpurify_core::GeometryStore) -> Result<(), DerivedError> {
         debug_assert_eq!(
             self.name.len(),
@@ -261,25 +179,18 @@ impl Evaluator {
         );
         let count = self.expr.len();
 
-        // `resize_with` rather than `clear`: re-evaluating an evaluator that
-        // already has results keeps every buffer it allocated, and each one is
-        // cleared and refilled by the transform that writes it. This is the
-        // "allocates once on first call" the doc comment above promises.
         if self.result.len() != count {
             self.result.resize_with(count, ValidatedLayer::default);
         }
 
-        // One pool deep enough for every definition, never shrunk: a deck's
-        // deepest expression is what sizes it, and a second `evaluate` finds it
-        // already that deep with every buffer's capacity still on it.
+        // One pool deep enough for every definition, so no node allocates.
         let deepest = self.expr.iter().map(scratch_slots).max().unwrap_or(0);
         if self.scratch.len() < deepest {
             self.scratch.resize_with(deepest, ValidatedLayer::default);
         }
 
-        // Destructured, because a definition reads `result` behind it while
-        // writing `result` ahead of it and takes `scratch` mutably at the same
-        // time — three disjoint borrows the compiler will not take from `self`.
+        // Destructured: reading `result` behind the cursor while writing ahead
+        // of it and holding `scratch` is three borrows `self` will not give.
         let Self {
             name,
             expr,
@@ -288,12 +199,8 @@ impl Evaluator {
             scratch,
         } = self;
 
-        // Not a bulk loop — tens of derived layers per deck — and it returns on
-        // the first deck error rather than accumulating, so the body carries an
-        // early exit.
         for (row, node) in expr.iter().enumerate() {
-            // The split is what lets a definition read the results of the
-            // definitions `plan` placed before it while writing its own.
+            // The split lets a definition read the results before it.
             let (evaluated, rest) = result.split_at_mut(row);
             let context = Context {
                 store,
@@ -313,14 +220,6 @@ impl Evaluator {
     }
 
     /// A previously evaluated named layer.
-    ///
-    /// The only way a rule reaches derived geometry, and deliberately the only
-    /// way: everything a rule needs is a layer the deck named, so this borrows
-    /// shared and every consumer can hold it at once. A rule needing an operand
-    /// built from its own parameters — "shapes wider than W" — composes
-    /// `core::boolean::*_into` into its own scratch instead. There is no
-    /// evaluate-an-arbitrary-expression entry point, because one would need
-    /// `&mut self` and would serialise every consumer behind this cache.
     pub fn get(&self, name: StrId) -> Option<&ValidatedLayer> {
         debug_assert_eq!(
             self.lookup.len(),
@@ -328,19 +227,12 @@ impl Evaluator {
             "one lookup slot per definition"
         );
         let row = index_of(&self.name, &self.lookup, name)?;
-        // `get`, not an index: a name the deck defines has no result until
-        // `evaluate` has run, and "not evaluated yet" is an absence like any
-        // other rather than a panic.
+        // A defined name has no result until `evaluate` has run.
         self.result.get(row as usize)
     }
 }
 
 /// What one expression node is evaluated against.
-///
-/// Four borrows threaded unchanged through every node, so they travel as one
-/// parameter: the store the base layers live in, the name and lookup columns a
-/// reference resolves through, and the definitions already evaluated by the
-/// time this node is reached.
 #[derive(Clone, Copy)]
 struct Context<'a> {
     store: &'a GeometryStore,
@@ -351,15 +243,8 @@ struct Context<'a> {
 
 /// Evaluate one expression node into `out`.
 ///
-/// **Transform, A-to-B.** Caller owns `out`, which every path below clears and
-/// refills — including the bare-name path, so a definition that is only another
-/// definition's name still owns its result rather than borrowing it.
-///
-/// `scratch` is the depth-indexed operand pool: this node takes the slots it
-/// needs off the front and hands the remainder to its children, which is why
-/// nothing here allocates. It is at least [`scratch_slots`] long for `expr`,
-/// asserted on entry, and the split below panics rather than silently sharing a
-/// buffer between two operands if it ever is not.
+/// `scratch` must be at least [`scratch_slots`] long for `expr`: a node splits
+/// the slots it needs off the front and hands the remainder to its children.
 fn eval<'r>(
     expr: &DerivedExpr,
     context: Context<'r>,
@@ -373,8 +258,7 @@ fn eval<'r>(
     match expr {
         DerivedExpr::Layer(LayerRef::Base(layer)) => {
             // Fail closed: a layer the store does not have is a typed error and
-            // never an empty result. `polys_on_layer` would panic on it, which
-            // is the same refusal spelled less usefully.
+            // never an empty result.
             if layer.idx() >= context.store.layer_count() {
                 return Err(DerivedError::UnknownLayer);
             }
@@ -383,15 +267,8 @@ fn eval<'r>(
         }
         DerivedExpr::Layer(LayerRef::Named(name)) => {
             let source = resolve(context, *name)?;
-            // A union with nothing is the copy `ValidatedLayer` exposes no other
-            // spelling of. Region-preserving, and it re-derives the same
-            // canonical decomposition every other operator here produces.
-            //
-            // This is the one place a named reference is copied rather than
-            // borrowed, and it is the top of a definition that is nothing but
-            // another definition's name: the result belongs to this row's cache
-            // slot, so it has to own its geometry. A named reference *inside* an
-            // expression goes through [`operand`] and is borrowed.
+            // A union with nothing is the copy `ValidatedLayer` exposes no
+            // other spelling of; this row's cache slot has to own its geometry.
             union_into(source, &ValidatedLayer::default(), out)?;
             Ok(())
         }
@@ -412,9 +289,8 @@ fn eval<'r>(
             offset_into(grown, *amount, out)?;
             Ok(())
         }
-        // `Inside` is `Intersection` under the name the deck spells, exactly as
-        // the enum's doc comment permits: both keep the area of `operand` that
-        // lies within the other operand and cut what straddles the edge.
+        // `Inside` is `Intersection` under the name the deck spells: both keep
+        // the area within the other operand and cut what straddles the edge.
         DerivedExpr::Inside { operand, region } => {
             combine(intersection_into, operand, region, context, scratch, out)
         }
@@ -424,14 +300,8 @@ fn eval<'r>(
             universe,
         } => {
             // `(operand and universe) minus region`. Clipping to the universe
-            // first is what makes this the exact complement of `Inside` over the
-            // extent the deck declared, and what truncates an operand reaching
-            // outside it — the truncation the enum documents rather than errors
-            // on.
-            //
-            // Two slots taken here, and the remainder handed to both the clip
-            // and the region: the clip has finished with it by the time the
-            // region starts, and neither result lives in it.
+            // first is what makes this the exact complement of `Inside` over
+            // the extent the deck declared.
             let (mine, rest) = scratch.split_at_mut(2);
             let (clipped, excluded) = mine.split_at_mut(1);
             combine(
@@ -451,16 +321,8 @@ fn eval<'r>(
 
 /// One operand of an operator, either borrowed or evaluated into `slot`.
 ///
-/// **Transform, A-to-B**, with the A-is-already-a-B case taken as a borrow: a
-/// named reference resolves to a layer the evaluator already holds, so it is
-/// handed straight to the operator instead of being copied through a boolean.
-/// Every other node is evaluated into the caller's `slot`, using `scratch` for
-/// its own operands, and the borrow returned points there.
-///
-/// `slot` and `scratch` are separate parameters rather than one pool because
-/// the returned borrow outlives the call while `scratch` does not: that is what
-/// lets a binary node evaluate its second operand out of the same buffers the
-/// first one just finished with.
+/// `slot` and `scratch` are separate parameters because the returned borrow
+/// outlives the call while `scratch` does not.
 fn operand<'r>(
     expr: &DerivedExpr,
     context: Context<'r>,
@@ -476,12 +338,8 @@ fn operand<'r>(
     }
 }
 
-/// The already-evaluated layer a name refers to.
-///
-/// **Decision** — a name and the evaluator's columns in, a borrow of the result
-/// out. `plan` put every dependency before the definition naming it, so the row
-/// is filled by the time this is reached; refusing rather than indexing keeps a
-/// broken order an error instead of a panic.
+/// The already-evaluated layer a name refers to, refused rather than indexed so
+/// a broken evaluation order is an error and not a panic.
 fn resolve(context: Context<'_>, name: StrId) -> Result<&ValidatedLayer, DerivedError> {
     let row =
         index_of(context.names, context.lookup, name).ok_or(DerivedError::Undefined(name))?;
@@ -491,14 +349,8 @@ fn resolve(context: Context<'_>, name: StrId) -> Result<&ValidatedLayer, Derived
         .ok_or(DerivedError::Undefined(name))
 }
 
-/// How many operand buffers evaluating an expression needs.
-///
-/// **Decision** — one expression in, the exact slot count [`eval`] will split
-/// off it out. Counted rather than guessed, and counted against the splits in
-/// `eval` itself: a binary node takes two, an `Offset` one, an `Outside` two
-/// plus the two its inner clip takes, and every node's children share whatever
-/// is left. So the answer is the *height* of the tree in slots, not the node
-/// count — sibling subtrees hand the same buffers back and forth.
+/// How many operand buffers evaluating an expression needs: the *height* of the
+/// tree in slots, not the node count, since sibling subtrees share buffers.
 fn scratch_slots(expr: &DerivedExpr) -> usize {
     match expr {
         DerivedExpr::Layer(_) => 0,
@@ -522,11 +374,8 @@ fn scratch_slots(expr: &DerivedExpr) -> usize {
 
 /// Evaluate two operands and combine them with one of `core::boolean`'s three.
 ///
-/// **Transform, A-to-B.** Two slots off the front of `scratch` hold whichever
-/// operands have to be materialised; the remainder is handed to the left
-/// operand and then, once that has returned, to the right one. Reusing it is
-/// safe precisely because neither operand's result lives in it: each lives in
-/// this node's own slot, or in the evaluator's results if it was a name.
+/// The remainder of `scratch` is handed to both operands in turn; that is safe
+/// only because neither operand's result lives in it.
 fn combine<'r>(
     op: fn(&ValidatedLayer, &ValidatedLayer, &mut ValidatedLayer) -> Result<(), BooleanError>,
     lhs: &DerivedExpr,
@@ -546,20 +395,10 @@ fn combine<'r>(
 /// A definition that is genuinely on a cycle, from the residual state of an
 /// ordering that stalled.
 ///
-/// **Decision** — the undecremented in-degrees and the edge list in, the row of
-/// a definition on a cycle out. Pure and table-testable.
-///
-/// The ordering emits a row exactly when its in-degree reaches zero, so a
-/// non-zero one is the same statement as "never emitted", and a row is left
-/// waiting only on dependencies that were never emitted either. A walk in the
-/// dependent -> dependency direction therefore never leaves a finite set, so it
-/// must arrive somewhere it has already been — and a row reachable from itself
-/// along dependency edges is on a cycle rather than downstream of one. The
-/// lowest waiting row starts the walk and the lowest waiting dependency steps
-/// it, so the name reported is a function of the deck and not of the traversal.
-///
-/// The reverse index is built here rather than beside the forward one because
-/// only this path reads it, and this path ends in a deck error.
+/// A non-zero in-degree means "never emitted", and such a row waits only on
+/// rows that were never emitted either, so walking dependent -> dependency must
+/// revisit a row — which is on the cycle rather than downstream of it. Start and
+/// step both take the lowest waiting row, so the name is a function of the deck.
 fn cycle_member(waiting_on: &[u32], edges: &[(u32, u32)]) -> u32 {
     let rows = waiting_on.len();
 
@@ -602,17 +441,7 @@ fn cycle_member(waiting_on: &[u32], edges: &[(u32, u32)]) -> u32 {
     u32::try_from(row).expect("a deck's derived layers fit a u32")
 }
 
-/// CSR offsets over one endpoint of the dependency edges.
-///
-/// **Decision** — a row count and an edge list in, the `rows + 1` offsets out.
-/// The two walks want opposite directions: [`Evaluator::plan`] groups by
-/// dependency to reach a definition's dependents, [`cycle_member`] groups by
-/// dependent to walk back to a cycle. One counting pass spelled once, so the
-/// coverage assertion cannot hold on one side and be forgotten on the other.
-///
-/// Not a bulk loop — a deck names tens of derived layers, and each references a
-/// handful — and the counting pass is a scatter besides, so there is nothing
-/// contiguous on the output side to widen.
+/// CSR offsets over one endpoint of the dependency edges: `rows + 1` of them.
 fn csr_offsets(rows: usize, edges: &[(u32, u32)], group: fn(&(u32, u32)) -> u32) -> Vec<u32> {
     let mut start = vec![0u32; rows + 1];
     for edge in edges {
@@ -629,13 +458,10 @@ fn csr_offsets(rows: usize, edges: &[(u32, u32)], group: fn(&(u32, u32)) -> u32)
     start
 }
 
-/// Every derived name an expression references, at any depth and through every
-/// operand every operator has.
+/// Every derived name an expression references, at any depth, appended to `out`.
 ///
-/// **Decision** — one expression in, its dependency names appended to a
-/// caller-owned buffer, so `plan` reuses one allocation across definitions.
-/// Duplicates are kept: the in-degree they produce is matched by the edges they
-/// produce, and deduplicating would leave a definition waiting forever.
+/// Duplicates are kept: each one is matched by an edge, and deduplicating would
+/// leave a definition waiting forever.
 fn referenced_names(expr: &DerivedExpr, out: &mut Vec<StrId>) {
     match expr {
         DerivedExpr::Layer(LayerRef::Named(name)) => out.push(*name),
@@ -663,11 +489,7 @@ fn referenced_names(expr: &DerivedExpr, out: &mut Vec<StrId>) {
     }
 }
 
-/// The row of `names` holding `name`, reached through a column of row indices
-/// sorted by the name each one points at.
-///
-/// **Decision** — the one spelling of the lookup, so `get` and the evaluator's
-/// name resolution cannot drift apart.
+/// The row of `names` holding `name`, via a column of indices sorted by name.
 fn index_of(names: &[StrId], sorted: &[u32], name: StrId) -> Option<u32> {
     debug_assert_eq!(sorted.len(), names.len(), "one sorted slot per name");
     let slot = sorted
@@ -678,23 +500,13 @@ fn index_of(names: &[StrId], sorted: &[u32], name: StrId) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    //! The evaluation order `plan` produces, asserted where it is visible.
-    //!
-    //! `Evaluator` hands results out by name, never by position, so the order
-    //! is on the private side of the interface and `tests/plan.rs` can only see
-    //! whether a deck was accepted. That is the acceptance half. The ordering
-    //! half is here, for the same reason the prefilter's adapter tests are unit
-    //! tests: the property is real, is the point of the function, and is not
-    //! observable from outside.
+    //! The evaluation order `plan` produces, which is not observable outside.
 
     use super::{DerivedError, DerivedExpr, Evaluator, LayerRef};
     use gpurify_core::LayerId;
     use gpurify_ingest::StrId;
 
-    /// One definition, built so its identity survives into the stored
-    /// expression: the base layer on the left spine is a tag, and the named
-    /// references hang off it. Every definition has the same shape, so
-    /// [`tag_of`] reads the tag back whatever the dependencies are.
+    /// One definition, tagged by the base layer on its left spine.
     fn definition(tag: u16, dependencies: &[StrId]) -> DerivedExpr {
         let mut expr = DerivedExpr::Layer(LayerRef::Base(LayerId(tag)));
         for &dependency in dependencies {
@@ -715,10 +527,8 @@ mod tests {
         }
     }
 
-    /// Every derived name an expression references, at any depth and through
-    /// every operand an operator has. Written out rather than asked of the
-    /// crate, because asking the crate would make the test agree with whatever
-    /// the crate does.
+    /// Every derived name an expression references, written out rather than
+    /// asked of the crate under test.
     fn dependencies_of(expr: &DerivedExpr, out: &mut Vec<StrId>) {
         match expr {
             DerivedExpr::Layer(LayerRef::Named(name)) => out.push(*name),
@@ -746,16 +556,8 @@ mod tests {
         }
     }
 
-    /// A diamond whose only valid evaluation order is the exact reverse of both
-    /// the order the definitions are written in and the numeric order of their
-    /// names.
-    ///
-    /// `root` needs `left` and `right`, both of which need `leaf`. So `leaf`
-    /// must come first and `root` last, while the input lists them
-    /// `root, left, right, leaf` with ascending [`StrId`]. An implementation
-    /// that preserved input order, or that sorted the names so `get` could
-    /// binary-search them, produces a forward scan that evaluates `root`
-    /// against results that do not exist yet.
+    /// A diamond whose only valid order reverses both the input order and the
+    /// numeric order of the names.
     fn diamond() -> (Vec<StrId>, Vec<DerivedExpr>) {
         let (root, left, right, leaf) = (StrId(10), StrId(20), StrId(30), StrId(40));
         (
@@ -769,11 +571,8 @@ mod tests {
         )
     }
 
-    /// Oracle: law. A topological order is *defined* by one property — every
-    /// dependency sits at a smaller index than the definition naming it — and
-    /// that property holds for any legal order of any DAG. So it is checkable
-    /// without asserting the particular permutation `plan` happens to pick,
-    /// which would be a test of a choice rather than of a requirement.
+    /// Every dependency sits at a smaller index than the definition naming it,
+    /// for any legal order of any DAG.
     #[test]
     fn every_dependency_is_ordered_before_the_definition_that_names_it() {
         let (names, exprs) = diamond();
@@ -802,10 +601,8 @@ mod tests {
         }
     }
 
-    /// Oracle: law. Ordering is a permutation, so it neither invents a
-    /// definition nor loses one. Without this a `plan` that dropped the
-    /// definitions it could not place would satisfy the ordering law above by
-    /// emitting nothing at all.
+    /// Ordering is a permutation — a `plan` emitting nothing satisfies the
+    /// ordering law above.
     #[test]
     fn ordering_the_definitions_neither_adds_nor_drops_one() {
         let (names, exprs) = diamond();
@@ -821,11 +618,8 @@ mod tests {
         );
     }
 
-    /// Oracle: law. Reordering moves names and expressions together or it moves
-    /// them apart, and moving them apart is a silent wrong answer rather than
-    /// an error: every name still resolves, every expression still evaluates,
-    /// and every result belongs to a different layer than it claims. The tag on
-    /// each definition is what makes that visible.
+    /// Moving names and expressions apart is silently wrong rather than an
+    /// error — everything still resolves, under the wrong layer.
     #[test]
     fn reordering_keeps_each_expression_paired_with_its_own_name() {
         let (names, exprs) = diamond();
@@ -849,14 +643,8 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer. The cycle is written into the input, so
-    /// the set of names on it is known before `plan` runs: `left` and `right`
-    /// need each other, and `victim` needs `left` but is on no cycle at all.
-    /// Breaking `victim` changes nothing, so reporting it sends a deck author
-    /// to the wrong line.
-    ///
-    /// Here rather than in `tests/plan.rs` because the suite's cycle tests
-    /// match `Recursive(_)` and this is a claim about the name inside it.
+    /// `left` and `right` need each other; `victim` names `left` but is on no
+    /// cycle.
     #[test]
     fn the_reported_cycle_is_a_name_on_the_cycle_and_not_one_downstream_of_it() {
         let (victim, left, right) = (StrId(10), StrId(20), StrId(30));

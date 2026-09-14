@@ -1,17 +1,4 @@
 //! Bounding-box prefiltering for boolean operands.
-//!
-//! Structurally identical to the candidate-pair prune in `core::index`: reject
-//! cheaply, then compute exactly. And it has the same silent failure mode — a
-//! wrongly rejected pair produces a shorter, perfectly well-formed operand list
-//! and a quietly wrong answer, because nothing downstream ever looks at the
-//! pair again.
-//!
-//! So it carries the same kind of test adapter, for the same reason: the
-//! property that matters is *no rejected pair would have contributed to the
-//! result*, and that is not observable in the output.
-//!
-//! This code is new. It has no history of being right, which is the argument
-//! for instrumenting it from the start rather than after it burns someone.
 
 use gpurify_core::observe::{NoObserve, Observer};
 use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
@@ -21,24 +8,20 @@ use gpurify_units::Dbu;
 pub trait ObservePrefilter: Observer {
     /// A pair was kept for exact evaluation.
     fn kept(&mut self, a: PolyId, b: PolyId);
-    /// A pair was rejected on bounding boxes alone. The one that matters.
+    /// A pair was rejected on bounding boxes alone — silently wrong if the
+    /// pair would have contributed, so this is the half that matters.
     fn rejected(&mut self, a: PolyId, b: PolyId);
 }
 
-/// The null adapter. Empty bodies on a zero-sized type, so the whole seam folds
-/// away behind `ENABLED == false`; the parameters are named out because there is
-/// nothing to name them for.
+/// The null adapter: the seam folds away behind `ENABLED == false`.
 impl ObservePrefilter for NoObserve {
     fn kept(&mut self, _a: PolyId, _b: PolyId) {}
     fn rejected(&mut self, _a: PolyId, _b: PolyId) {}
 }
 
-/// Which operand pairs can possibly interact.
+/// Which operand pairs can possibly interact, ascending and without repeats.
 ///
-/// **Transform, gatherer.** Caller owns `out`, cleared and refilled, emitted in
-/// ascending order so the result is deterministic regardless of index layout.
-///
-/// A superset: a surviving pair may still contribute nothing. A pair absent
+/// A superset: a surviving pair may still contribute nothing, but a pair absent
 /// from here is never evaluated by anyone.
 pub fn candidates_into(
     store: &GeometryStore,
@@ -49,10 +32,7 @@ pub fn candidates_into(
     candidates_observed(store, a, b, out, &mut NoObserve);
 }
 
-/// [`candidates_into`] with the seam exposed.
-///
-/// Private, so the observer does not widen this module's interface and adapter
-/// tests are unit tests here. Same trade as `core::observe` records.
+/// [`candidates_into`] with the observer seam exposed.
 fn candidates_observed<O: ObservePrefilter>(
     store: &GeometryStore,
     a: &ValidatedLayer,
@@ -74,16 +54,14 @@ fn candidates_observed<O: ObservePrefilter>(
         "one bounding box per validated polygon"
     );
 
-    // An empty operand is an answer, not a refusal: nothing can interact with
-    // nothing, and most of a deck's layer table is empty. It is also what keeps
-    // `provenance_into` off the degenerate case where every layer matches.
+    // An empty operand is an answer, not a refusal, and it keeps
+    // `provenance_into` off the case where every layer matches.
     if a_box.is_empty() || b_box.is_empty() {
         return;
     }
 
     // Scratch is allocated per call: the frozen signature has nowhere to hang a
-    // reusable buffer, and adding one is a signature change rather than a body.
-    // `core::index` records the same trade. Filed in `docs/SIGNATURE_DEFECTS.md`.
+    // reusable buffer. Filed in `docs/SIGNATURE_DEFECTS.md`.
     let mut a_row = Vec::new();
     let mut b_row = Vec::new();
     provenance_into(store, a_box, &mut a_row);
@@ -108,13 +86,9 @@ fn candidates_observed<O: ObservePrefilter>(
 
     let mut near: Vec<(PolyId, Bbox)> = Vec::new();
 
-    // Each polygon of `a` appends a data-dependent *number* of pairs, so the
-    // outer loop is a scatter. The elementwise half of the transform is the
-    // compact inside it.
     for (&left, &left_box) in a_row.iter().zip(a_box) {
-        // Two binary searches replace the scan of `b`. Everything outside
-        // `lo .. hi` is disjoint from `left_box` in x alone, so the exact test
-        // below runs only over the x-overlapping window.
+        // Everything outside `lo .. hi` is disjoint from `left_box` in x alone,
+        // so the exact test below runs only over the x-overlapping window.
         let (lo, hi) = index.window(left_box);
         let win_row = &index.row[lo..hi];
         let win_bbox = &index.bbox[lo..hi];
@@ -126,9 +100,7 @@ fn candidates_observed<O: ObservePrefilter>(
         );
 
         // A branchless compact: the store is unconditional and the write cursor
-        // carries the predicate. `near` is reserved for the whole window rather
-        // than for the survivors, and that over-reservation is exactly what pays
-        // for the unconditional store.
+        // carries the predicate, so `near` is reserved for the whole window.
         near.clear();
         near.reserve(width);
         debug_assert!(
@@ -138,8 +110,6 @@ fn candidates_observed<O: ObservePrefilter>(
         let survivors = &mut near.spare_capacity_mut()[..width];
         let mut w = 0usize;
         for (i, (&right, &right_box)) in win_row.iter().zip(win_bbox).enumerate() {
-            // `Bbox::overlaps` is four `<=` on already-loaded registers, which
-            // LLVM if-converts to `setle`/`and`. No branch enters this body.
             let keep = left_box.overlaps(right_box);
             // `w <= i` by induction: `w` starts at 0 and `bool` is 0 or 1, so it
             // advances by at most one per iteration. `(PolyId, Bbox)` is `Copy`,
@@ -172,14 +142,9 @@ fn candidates_observed<O: ObservePrefilter>(
             "the x-window dropped an operand the exact test would have kept"
         );
 
-        // The window is in ascending-`xlo` order, so the survivors have to be
-        // put back into store-row order; `b_row` is strictly ascending, so
-        // sorting on the row is sorting on the operand's own index. Keys are
-        // distinct, so the result does not depend on the sort being stable.
+        // The window is in ascending-`xlo` order, so the survivors go back into
+        // store-row order for the caller's ascending guarantee.
         near.sort_unstable_by_key(|&(right, _)| right.0);
-        // A map straight into the caller's buffer: `left` is a uniform broadcast
-        // across the survivors. The staging vector that used to sit between them
-        // bought a second copy of every pair and nothing else.
         out.extend(near.iter().map(|&(right, _)| (left, right)));
     }
 
@@ -197,21 +162,8 @@ fn candidates_observed<O: ObservePrefilter>(
     }
 }
 
-/// One operand's bounding boxes, ordered for interval queries.
-///
-/// **Five questions.** In: an operand's store-row and bounding-box columns.
-/// Out: the same two columns reordered by `xlo`, plus the running maximum of
-/// `xhi`. How many: one per call, over the tens to thousands of polygons a
-/// derived-layer operand carries. Access pattern: built once, then two binary
-/// searches and one contiguous scan per polygon of the other operand — so the
-/// columns are parallel arrays, not a tree. Lifetime: the call. Parallelisable:
-/// queries are independent reads of a finished index.
-///
-/// A sorted interval index rather than the uniform grid of
-/// `core::index::SpatialIndex`: that one indexes a *store layer*, and a boolean
-/// result has rows in no store, so it cannot be pointed at a `ValidatedLayer`
-/// without widening `core`. This indexes the boxes themselves and so works on
-/// either kind of operand.
+/// One operand's bounding boxes, ordered for interval queries. Indexes the
+/// boxes themselves, so it works on a boolean result with rows in no store.
 #[derive(Debug, Default)]
 struct OperandIndex {
     /// Store rows, in ascending `xlo` order.
@@ -226,11 +178,9 @@ struct OperandIndex {
 }
 
 impl OperandIndex {
-    /// The half-open range of index rows whose x-extent can meet `query`.
-    ///
-    /// Both ends are exact, not heuristic: at or above `hi` every box starts
-    /// after the query ends, and below `lo` every box ends before it starts.
-    /// Inclusive on both, because [`Bbox::overlaps`] counts a shared edge.
+    /// The half-open range of index rows whose x-extent can meet `query`. Both
+    /// bounds compare inclusively, because [`Bbox::overlaps`] counts a shared
+    /// edge.
     fn window(&self, query: Bbox) -> (usize, usize) {
         let hi = self.bbox.partition_point(|b| b.xlo <= query.xhi);
         let lo = self.max_xhi[..hi].partition_point(|&reach| reach < query.xlo);
@@ -243,9 +193,6 @@ impl OperandIndex {
 }
 
 /// Order one operand's columns by `xlo` and accumulate the reach of each prefix.
-///
-/// **Transform, A-to-B.** Caller owns `out`, cleared and refilled, so a loop
-/// over operand pairs reuses one allocation.
 fn build_index(row: &[PolyId], bbox: &[Bbox], out: &mut OperandIndex) {
     debug_assert_eq!(row.len(), bbox.len(), "an operand's columns are parallel");
     debug_assert!(
@@ -253,13 +200,11 @@ fn build_index(row: &[PolyId], bbox: &[Bbox], out: &mut OperandIndex) {
         "the caller returns before an empty operand reaches here"
     );
 
-    // `row` is one strictly-ascending `PolyId` per operand polygon, and `PolyId`
-    // is a `u32`, so the column cannot be longer than the id space it indexes.
-    // Checked rather than cast: this runs once per operand, not per row, and a
-    // truncation here would silently shorten the permutation and drop polygons.
+    // Checked rather than cast: a truncation here would silently shorten the
+    // permutation and drop polygons.
     let count = u32::try_from(row.len()).expect("one `PolyId` per row bounds the column by u32");
     let mut order: Vec<u32> = (0..count).collect();
-    // Ties broken on the operand's own index, so the index is a function of the
+    // Ties broken on the operand's own index, so the order is a function of the
     // input and not of the sort's internal choices.
     order.sort_unstable_by_key(|&i| (bbox[i as usize].xlo, i));
 
@@ -268,13 +213,7 @@ fn build_index(row: &[PolyId], bbox: &[Bbox], out: &mut OperandIndex) {
         bbox: out_bbox,
         max_xhi,
     } = out;
-    // Two gathers over the same permutation, fused into one pass. A gather's
-    // *address* is data-dependent, not its control flow, so there is no branch
-    // in here to remove. The bounds check on `row[i]` stays: `order` being a
-    // permutation of `0 .. row.len()` is true by construction but is not a fact
-    // the compiler has, and buying it back with `unsafe` is not worth it in a
-    // loop whose cost is the random-access load anyway. `push` after one
-    // `reserve` for the same reason.
+    // Two gathers over the same permutation, fused into one pass.
     out_row.clear();
     out_row.reserve(order.len());
     out_bbox.clear();
@@ -285,10 +224,7 @@ fn build_index(row: &[PolyId], bbox: &[Bbox], out: &mut OperandIndex) {
         out_bbox.push(bbox[i]);
     }
 
-    // A prefix scan: row k reads what row k-1 wrote, so it is serial by shape —
-    // an accumulator chain, not a map, and the same shape as `SpatialIndex`'s
-    // prefix sum. The allocation is reserved once above the loop, not grown per
-    // row.
+    // A prefix scan: row k reads what row k-1 wrote, so it is serial by shape.
     max_xhi.clear();
     max_xhi.reserve(out_bbox.len());
     let mut reach = out_bbox[0].xhi;
@@ -311,14 +247,8 @@ fn build_index(row: &[PolyId], bbox: &[Bbox], out: &mut OperandIndex) {
 
 /// Replay the box test over every pair, for the observer only.
 ///
-/// A second pass rather than a call from inside the prune loop, and the whole
-/// thing sits behind `O::ENABLED` so a production build never codegens it. The
-/// prune loop only ever visits the x-window `lo .. hi`, so it never sees the
-/// pairs the window itself dropped and could not report them rejected; running
-/// the replay after the prune rather than during is also what makes the observed
-/// and unobserved answers identical by construction, and walking the operands in
-/// the same nesting is what makes `kept` come out in the order the caller was
-/// handed. Same shape as `core::index::report_prune`, for the same reasons.
+/// A second pass, not a call from inside the prune loop: the prune only visits
+/// the x-window, so it never sees the pairs the window itself dropped.
 fn report_prune<O: ObservePrefilter>(
     a_row: &[PolyId],
     a_box: &[Bbox],
@@ -329,9 +259,6 @@ fn report_prune<O: ObservePrefilter>(
     debug_assert!(O::ENABLED, "the null adapter must never reach this loop");
     debug_assert_eq!(a_row.len(), a_box.len(), "one store row per operand polygon");
     debug_assert_eq!(b_row.len(), b_box.len(), "one store row per operand polygon");
-    // The `if` stays: both sides are one observer call, the split is the whole
-    // point of the replay, and this loop exists only when a test adapter is
-    // installed — there is nothing here to make fast.
     for (&left, &left_box) in a_row.iter().zip(a_box) {
         for (&right, &right_box) in b_row.iter().zip(b_box) {
             if left_box.overlaps(right_box) {
@@ -345,34 +272,23 @@ fn report_prune<O: ObservePrefilter>(
 
 /// The store row each polygon of a validated layer came from.
 ///
-/// `ValidatedLayer` *records* this — its `ring_poly` column — and exposes it to
-/// nobody: the column is private and `PolygonRef` has no accessor, so the only
-/// route from a validated polygon back to a [`PolyId`] is the store itself. This
-/// recovers it by matching the operand's bounding-box column against the store's:
-/// `validate_layer_into` copies `store.poly_bbox(outer)` verbatim and emits outer
-/// boundaries in ascending row order, so the operand's column is a subsequence of
-/// the column of the layer it was validated from.
+/// `ValidatedLayer` records this in a private column with no accessor, so the
+/// rows are recovered by matching bounding-box columns: `validate_layer_into`
+/// copies boxes verbatim in ascending row order, so an operand's column is a
+/// subsequence of the layer it came from.
 ///
-/// A subsequence can be embedded more than one way, and a layout is full of
-/// repeated shapes — an array of vias makes a run of identical boxes, and a
-/// drawn/pin layer pair makes two whole columns identical. Under an ambiguous
-/// embedding a *greedy* match names a real store row that is not the row the
-/// polygon came from, and nothing downstream can tell. So a layer is only
-/// accepted here when its embedding is unique, checked by matching from both
-/// ends: greedy-from-the-left is the smallest embedding and greedy-from-the-right
-/// the largest, so the two agreeing means there is exactly one. Layers are tried
-/// in order and the first unambiguous one wins; an ambiguous match is used only
-/// if no layer offers an unambiguous one, because the alternative — the index
-/// fallback below — is not more truthful, only less specific.
+/// A subsequence can embed more than one way — an array of vias is a run of
+/// identical boxes — and under an ambiguous embedding a greedy match names a
+/// real store row that is not the right one. So a layer is accepted only when
+/// its embedding is unique: greedy-from-the-left is the smallest embedding and
+/// greedy-from-the-right the largest, so the two agreeing means there is exactly
+/// one. An ambiguous match is used only if no layer offers an unambiguous one.
 ///
-/// **Known correctness gap, and it needs a signature to close.** A layer a
-/// boolean produced has rows in no store, so it has no preimage at all and falls
-/// back to its own index: values in [`PolyId`]'s space that do not name store
-/// rows and cannot be told apart from ones that do. `ValidatedLayer` holds the
-/// answer in its private `ring_poly` column; reading it needs
-/// `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core`. That accessor also
-/// closes the cost — this is O(store rows) per operand where reading a column is
-/// O(operand). Filed in `docs/SIGNATURE_DEFECTS.md`.
+/// **Known correctness gap.** A layer a boolean produced has rows in no store,
+/// so it falls back to its own index: values in [`PolyId`]'s space that do not
+/// name store rows and cannot be told apart from ones that do. Closing it needs
+/// `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core`. Filed in
+/// `docs/SIGNATURE_DEFECTS.md`.
 fn provenance_into(store: &GeometryStore, want: &[Bbox], out: &mut Vec<PolyId>) {
     debug_assert!(
         !want.is_empty(),
@@ -381,7 +297,6 @@ fn provenance_into(store: &GeometryStore, want: &[Bbox], out: &mut Vec<PolyId>) 
     out.clear();
     out.reserve(want.len());
 
-    // A loop over the deck's layer table: tens of rows, not bulk data.
     let mut ambiguous: Option<LayerId> = None;
     for layer in 0..store.layer_count() {
         let layer = LayerId(u16::try_from(layer).expect("a layer table is indexed by a u16"));
@@ -395,8 +310,8 @@ fn provenance_into(store: &GeometryStore, want: &[Bbox], out: &mut Vec<PolyId>) 
         ambiguous = ambiguous.or(Some(layer));
     }
 
-    // Nothing identified the operand outright. A single ambiguous layer is still
-    // the right layer; only which of its repeated boxes is which is unknown.
+    // A single ambiguous layer is still the right layer; only which of its
+    // repeated boxes is which is unknown.
     if let Some(layer) = ambiguous {
         let matched = match_layer(store, layer, want, out);
         debug_assert!(
@@ -407,10 +322,9 @@ fn provenance_into(store: &GeometryStore, want: &[Bbox], out: &mut Vec<PolyId>) 
         return;
     }
 
-    // No store preimage, so the operand is a boolean result. Its polygons are
-    // still distinct and still ascending, which is everything the caller's
-    // ordering guarantee rests on; the blame a report can assign is what is
-    // lost, and the doc comment above says why closing that needs an accessor.
+    // No store preimage, so the operand is a boolean result. The indices are
+    // still distinct and ascending, which is all the caller's ordering
+    // guarantee needs; what is lost is the blame a report can assign.
     out.clear();
     out.extend(
         (0..want.len()).map(|i| PolyId(u32::try_from(i).expect("a polygon count fits a u32"))),
@@ -418,16 +332,8 @@ fn provenance_into(store: &GeometryStore, want: &[Bbox], out: &mut Vec<PolyId>) 
     debug_assert_eq!(out.len(), want.len());
 }
 
-/// Greedy left-to-right embedding of `want` in one layer's box column.
-///
-/// **Transform, gatherer.** `out` is cleared and refilled with the store rows
-/// matched; true when every wanted box found one, which is what makes the layer
-/// a candidate preimage.
-///
-/// The match cursor is `out.len()`, so row k reads what row k−1 wrote: a serial
-/// chain, and nothing to vectorise. The `if` is the match itself — on the layer
-/// the operand was validated from every row hits, so it predicts at ~100%, and
-/// on a layer that is not it the scan is wasted rather than wrong.
+/// Greedy left-to-right embedding of `want` in one layer's box column: fills
+/// `out` with the rows matched, true when every wanted box found one.
 fn match_layer(
     store: &GeometryStore,
     layer: LayerId,
@@ -452,13 +358,9 @@ fn match_layer(
 
 /// Is `found` the only way `want` embeds in this layer's box column?
 ///
-/// `found` is the greedy left-to-right embedding, which is the smallest one.
-/// Matching from the right gives the largest. Equal at every position means
-/// there is exactly one embedding, so the recovered rows are the rows the
-/// operand was validated from rather than merely rows that look like them.
-///
-/// Same chain shape as [`match_layer`], walked the other way, and it exits early
-/// on the first disagreement because one is enough.
+/// `found` is the greedy left-to-right embedding, the smallest one; matching
+/// from the right gives the largest. Equal at every position means there is
+/// exactly one, so the recovered rows are the rows the operand came from.
 fn embedding_is_unique(
     store: &GeometryStore,
     layer: LayerId,
@@ -508,18 +410,8 @@ fn check_recovered(store: &GeometryStore, layer: LayerId, want: &[Bbox], out: &[
 
 #[cfg(test)]
 mod tests {
-    //! The completeness property, asserted at the seam.
-    //!
-    //! `candidates_into` returns a superset, so keeping a pair that turns out
-    //! to contribute nothing costs time and nothing else. Rejecting a pair that
-    //! would have contributed costs a verdict, and produces a shorter, entirely
-    //! well-formed operand list on the way out. Only the observer sees the
-    //! difference.
-    //!
-    //! The oracle is exhaustive pairing on inputs small enough to pair
-    //! exhaustively. The test builds the rectangles, so it knows every bounding
-    //! box in plain `i64` before the store exists, and it computes the answer
-    //! from those rather than from anything the crate under test provides.
+    //! The completeness property, asserted at the observer seam against
+    //! exhaustive pairing of extents the test itself chose.
 
     use super::{candidates_observed, ObservePrefilter};
     use gpurify_core::observe::Observer;
@@ -555,20 +447,14 @@ mod tests {
         }
     }
 
-    /// Do two boxes share at least one point?
-    ///
-    /// **Inclusive: touching counts.** That is `core::bbox::Bbox::overlaps`'s
-    /// stated convention and this module is the same prune at a different seam.
-    /// It is also the direction that fails closed — two shapes sharing an edge
-    /// merge under a union, so a prune that dropped the pair would remove area
-    /// from a derived layer.
+    /// Do two boxes share at least one point? Inclusive: touching counts, which
+    /// is the direction that fails closed — a shared edge merges under a union.
     fn overlaps(p: Extent, q: Extent) -> bool {
         p[0] <= q[2] && q[0] <= p[2] && p[1] <= q[3] && q[1] <= p[3]
     }
 
-    /// Rectangles with extents the caller keeps, so the expected answer is
-    /// arithmetic on numbers the test chose rather than a second reading of the
-    /// store.
+    /// Rectangles whose extents the caller keeps, so the expected answer never
+    /// comes from a second reading of the store.
     fn push_rects(layout: &mut LayoutBuilder, layer: LayerId, boxes: &[Extent]) -> Vec<Handle> {
         boxes
             .iter()
@@ -576,9 +462,8 @@ mod tests {
             .collect()
     }
 
-    /// Pseudo-random rectangles in a window small enough that overlaps are
-    /// common and disjoint pairs are common, which is what makes both halves of
-    /// the property load-bearing.
+    /// Pseudo-random rectangles in a window small enough that both overlapping
+    /// and disjoint pairs are common.
     fn random_extents(rng: &mut Rng, count: usize, window: i64, max_side: i64) -> Vec<Extent> {
         (0..count)
             .map(|_| {
@@ -614,15 +499,8 @@ mod tests {
         (a, b)
     }
 
-    /// Oracle: adapter. The property is stated over the rejected set, which is
-    /// invisible in the return value, and checked against exhaustive pairing —
-    /// eight rectangles against seven is fifty-six cross pairs, so "exhaustive"
-    /// is a nested loop.
-    ///
-    /// Both directions are asserted, and both are needed. That no rejected pair
-    /// overlaps is the correctness claim. That every overlapping pair survives
-    /// is what stops a prune from satisfying the first claim by rejecting
-    /// nothing and emitting nothing.
+    /// No rejected pair overlaps is the correctness claim; every overlapping
+    /// pair surviving stops a prune from emitting nothing.
     #[test]
     fn no_rejected_pair_could_have_contributed_to_the_exact_result() {
         for seed in [1u64, 2, 3, 5, 8] {
@@ -670,11 +548,8 @@ mod tests {
                 );
             }
 
-            // The prune is only ever a superset, so "reject nothing" is a legal
-            // reading of the interface and passes every assertion above while
-            // doing no work at all. Counting the disjoint pairs the test built
-            // itself is the check that it ran: on a window of 600 with sides of
-            // at most 180, most of the fifty-six cross pairs miss each other.
+            // "Reject nothing" is a legal superset and passes every assertion
+            // above, so count the disjoint pairs the test built itself.
             let disjoint = a_boxes
                 .iter()
                 .flat_map(|&box_a| b_boxes.iter().map(move |&box_b| (box_a, box_b)))
@@ -688,9 +563,8 @@ mod tests {
         }
     }
 
-    /// Oracle: adapter. The kept half of the seam has to agree with what the
-    /// caller is handed, or the rejected half proves nothing about the output:
-    /// a prune could report every pair kept and then emit half of them.
+    /// The kept half of the seam must agree with what the caller is handed, or
+    /// the rejected half proves nothing about the output.
     #[test]
     fn the_pairs_reported_kept_are_exactly_the_pairs_emitted() {
         let mut rng = Rng::new(13);
@@ -723,11 +597,9 @@ mod tests {
         }
     }
 
-    /// Oracle: construct-from-answer, aimed at the one mistake this prune has a
-    /// documented history of. Two rectangles sharing exactly one edge interact:
-    /// their union is a single polygon. A strict overlap test rejects that pair
-    /// and every downstream check re-verifies only what survives, so nothing
-    /// else in the tree would notice.
+    /// Two rectangles sharing exactly one edge interact — their union is a
+    /// single polygon — and a strict overlap test would drop the pair with
+    /// nothing downstream to notice.
     #[test]
     fn two_operands_touching_along_an_edge_are_kept() {
         let a_boxes: Vec<Extent> = vec![[0, 0, 100, 100]];
@@ -759,10 +631,8 @@ mod tests {
             "{touching:?} was reported rejected as well as kept"
         );
 
-        // The other half of the fixture, and the reason a prune that keeps
-        // everything does not pass this test: these two boxes are four hundred
-        // units apart in both axes. Keeping the pair is legal under the
-        // superset clause and would mean the bounding-box comparison never ran.
+        // The other half of the fixture: keep-everything is legal under the
+        // superset clause, so a pair four hundred units apart must be rejected.
         let distant = (ids.of(a_handles[0]), ids.of(b_handles[1]));
         assert!(
             seam.rejected.contains(&distant) && !out.contains(&distant),
@@ -771,10 +641,8 @@ mod tests {
         );
     }
 
-    /// Oracle: determinism. The doc comment states pairs come out in ascending
-    /// order *regardless of index layout*, which is a claim about repeat runs:
-    /// the same operands must produce the same list, and a reused output buffer
-    /// must be cleared rather than appended to.
+    /// The same operands produce the same list, and a reused output buffer is
+    /// cleared rather than appended to.
     #[test]
     fn the_same_operands_produce_the_same_candidate_list_twice() {
         let mut rng = Rng::new(21);
