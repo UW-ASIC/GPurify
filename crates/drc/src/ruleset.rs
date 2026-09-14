@@ -31,6 +31,22 @@ use crate::rules::via::{RedundantViaTable, ViaArraySpacingTable};
 use crate::rules::width::{MaxWidthTable, MinEdgeLengthTable, MinWidthTable, NotchTable};
 use crate::rules::{area, grid, overlay, patterning, spacing, via, width};
 use crate::{Design, DrcError, Scratch};
+
+/// Runs one transform per **non-empty** table, in the order written.
+///
+/// The emptiness guard is the point, not an optimisation: a kind the deck does
+/// not configure must produce no [`RuleRun`] at all, and that silence is a
+/// different claim from a skip. Each guard is also constant for the whole run
+/// rather than data-dependent, so the predictor memorises every one of them on
+/// the first deck and none of them sits inside a loop over shapes.
+macro_rules! dispatch {
+    ($self:ident, $design:ident, $scratch:ident, $out:ident, $runs:ident,
+     $($table:ident => $check:path),+ $(,)?) => {$(
+        if !$self.$table.is_empty() {
+            $check($design, &$self.$table, $scratch, $out, $runs);
+        }
+    )+};
+}
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_report::{LimitSense, RuleRun, Violations};
@@ -723,100 +739,37 @@ impl RuleSet {
 
         let expected = self.rule_count();
 
-        // Twenty-four guards on twenty-four table lengths. Each is constant for
-        // the whole run and not over bulk data at all — the branch predictor
-        // memorises every one of them on the first deck — and the guard is what
-        // makes the doc's claim true: a kind the deck does not use costs the
-        // run nothing, not even its transform's prologue.
-        if !self.min_width.is_empty() {
-            width::check_min_width(design, &self.min_width, scratch, out, runs);
-        }
-        if !self.max_width.is_empty() {
-            width::check_max_width(design, &self.max_width, scratch, out, runs);
-        }
-        if !self.min_edge_length.is_empty() {
-            width::check_min_edge_length(design, &self.min_edge_length, scratch, out, runs);
-        }
-        if !self.notch.is_empty() {
-            width::check_notch(design, &self.notch, scratch, out, runs);
-        }
+        dispatch! { self, design, scratch, out, runs,
+            min_width => width::check_min_width,
+            max_width => width::check_max_width,
+            min_edge_length => width::check_min_edge_length,
+            notch => width::check_notch,
 
-        if !self.min_spacing.is_empty() {
-            spacing::check_min_spacing(design, &self.min_spacing, scratch, out, runs);
-        }
-        if !self.min_spacing_diff.is_empty() {
-            spacing::check_min_spacing_diff(design, &self.min_spacing_diff, scratch, out, runs);
-        }
-        if !self.eol_spacing.is_empty() {
-            spacing::check_eol_spacing(design, &self.eol_spacing, scratch, out, runs);
-        }
-        if !self.prl_spacing.is_empty() {
-            spacing::check_prl_spacing(design, &self.prl_spacing, scratch, out, runs);
-        }
-        if !self.corner_to_corner.is_empty() {
-            spacing::check_corner_to_corner(design, &self.corner_to_corner, scratch, out, runs);
-        }
-        if !self.wide_dependent_spacing.is_empty() {
-            spacing::check_wide_dependent_spacing(
-                design,
-                &self.wide_dependent_spacing,
-                scratch,
-                out,
-                runs,
-            );
-        }
+            min_spacing => spacing::check_min_spacing,
+            min_spacing_diff => spacing::check_min_spacing_diff,
+            eol_spacing => spacing::check_eol_spacing,
+            prl_spacing => spacing::check_prl_spacing,
+            corner_to_corner => spacing::check_corner_to_corner,
+            wide_dependent_spacing => spacing::check_wide_dependent_spacing,
 
-        if !self.min_area.is_empty() {
-            area::check_min_area(design, &self.min_area, scratch, out, runs);
-        }
-        if !self.min_enclosed_area.is_empty() {
-            area::check_min_enclosed_area(design, &self.min_enclosed_area, scratch, out, runs);
-        }
-        if !self.cheesing.is_empty() {
-            area::check_cheesing(design, &self.cheesing, scratch, out, runs);
-        }
-        if !self.density.is_empty() {
-            area::check_density(design, &self.density, scratch, out, runs);
-        }
+            min_area => area::check_min_area,
+            min_enclosed_area => area::check_min_enclosed_area,
+            cheesing => area::check_cheesing,
+            density => area::check_density,
 
-        if !self.min_enclosure.is_empty() {
-            overlay::check_min_enclosure(design, &self.min_enclosure, scratch, out, runs);
-        }
-        if !self.asymmetric_enclosure.is_empty() {
-            overlay::check_asymmetric_enclosure(
-                design,
-                &self.asymmetric_enclosure,
-                scratch,
-                out,
-                runs,
-            );
-        }
-        if !self.min_extension.is_empty() {
-            overlay::check_min_extension(design, &self.min_extension, scratch, out, runs);
-        }
-        if !self.overlap.is_empty() {
-            overlay::check_overlap(design, &self.overlap, scratch, out, runs);
-        }
-        if !self.max_distance_to_tap.is_empty() {
-            overlay::check_max_distance_to_tap(design, &self.max_distance_to_tap, scratch, out, runs);
-        }
+            min_enclosure => overlay::check_min_enclosure,
+            asymmetric_enclosure => overlay::check_asymmetric_enclosure,
+            min_extension => overlay::check_min_extension,
+            overlap => overlay::check_overlap,
+            max_distance_to_tap => overlay::check_max_distance_to_tap,
 
-        if !self.off_grid.is_empty() {
-            grid::check_off_grid(design, &self.off_grid, scratch, out, runs);
-        }
-        if !self.angle.is_empty() {
-            grid::check_angle(design, &self.angle, scratch, out, runs);
-        }
+            off_grid => grid::check_off_grid,
+            angle => grid::check_angle,
 
-        if !self.redundant_via.is_empty() {
-            via::check_redundant_via(design, &self.redundant_via, scratch, out, runs);
-        }
-        if !self.via_array_spacing.is_empty() {
-            via::check_via_array_spacing(design, &self.via_array_spacing, scratch, out, runs);
-        }
+            redundant_via => via::check_redundant_via,
+            via_array_spacing => via::check_via_array_spacing,
 
-        if !self.multi_patterning.is_empty() {
-            patterning::check_multi_patterning(design, &self.multi_patterning, scratch, out, runs);
+            multi_patterning => patterning::check_multi_patterning,
         }
 
         // The crate's top-level invariant, asserted where it is produced: one
