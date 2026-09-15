@@ -12,7 +12,11 @@ use gpurify_topology::{NetId, PortTable};
 
 /// Between a net's name and the node's index within it, declared to the reader
 /// of both files as `*DELIMITER :`.
-const DELIMITER: char = ':';
+///
+/// Shared with the SPICE writer, which splits a node name the same way but
+/// resolves the net half under its own naming policy — see
+/// [`crate::netlist::put_node`].
+pub(crate) const DELIMITER: char = ':';
 
 /// SPICE node zero, the far end of a ground capacitance in DSPF.
 const GROUND: &str = "0";
@@ -104,7 +108,10 @@ pub(crate) fn first_node_of(network: &ParasiticNetwork, net: NetId) -> Option<No
 
 /// The net a node sits on, and the node's index within that net's run — a
 /// position in a canonically ordered column, so a sub-node name is stable.
-fn node_place(network: &ParasiticNetwork, node: NodeId) -> Result<(NetId, usize), WriteError> {
+pub(crate) fn node_place(
+    network: &ParasiticNetwork,
+    node: NodeId,
+) -> Result<(NetId, usize), WriteError> {
     let nets = &network.node_net[..];
     let row = node.0 as usize;
     // Fail closed. An element pointing past the node columns is a broken

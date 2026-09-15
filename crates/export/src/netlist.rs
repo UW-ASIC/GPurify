@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::json::format_f64;
-use crate::parasitic::{first_node_of, node_name, spice_card};
+use crate::parasitic::{first_node_of, node_place, spice_card, DELIMITER};
 use crate::{narrow, Header, WriteError, INFALLIBLE};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
@@ -207,10 +207,10 @@ pub fn write_spice(
             // the two files agree about both the letter and the scale factor.
             let (letter, _, magnitude, suffix) = spice_card(network.value[row]);
             write!(out, "{letter}p{row} ").expect(INFALLIBLE);
-            node_name(network, network.from[row], ports, strings, out)?;
+            put_node(network, network.from[row], ports, strings, out)?;
             out.push(' ');
             match network.to[row] {
-                Some(node) => node_name(network, node, ports, strings, out)?,
+                Some(node) => put_node(network, node, ports, strings, out)?,
                 // SPICE's ground: a `None` far end is a capacitance to it, not
                 // a node the network forgot to name.
                 None => out.push('0'),
@@ -255,11 +255,38 @@ fn put_terminal_node(
     // each other on the plain net name.
     let node = spliced.and_then(|network| Some((network, first_node_of(network, net)?)));
     if let Some((network, node)) = node {
-        node_name(network, node, ports, strings, out)
+        put_node(network, node, ports, strings, out)
     } else {
         net_name(net, ports, strings, out);
         Ok(())
     }
+}
+
+/// Append the name of one parasitic node, under SPICE's naming policy.
+///
+/// Same `net:index` shape as [`crate::parasitic::node_name`], but the net half
+/// goes through [`net_name`], which numbers an anonymous net instead of
+/// refusing it. SPEF and DSPF are right to demand a name — their whole purpose
+/// is to annotate a netlist someone else wrote, so a net they cannot name is a
+/// net they cannot attach to. SPICE carries the netlist *and* the parasitics in
+/// one file, so it can name a net itself, and an internal node the generator
+/// never declared (a well tie, a routing-only island) is ordinary rather than
+/// an error. Sharing `node_name` here made `write_spice` inherit SPEF's
+/// strictness and fail on exactly those nets.
+fn put_node(
+    network: &ParasiticNetwork,
+    node: gpurify_pex::network::NodeId,
+    ports: &PortTable,
+    strings: &StrTable,
+    out: &mut String,
+) -> Result<(), WriteError> {
+    let before = out.len();
+    let (net, index) = node_place(network, node)?;
+    net_name(net, ports, strings, out);
+    write!(out, "{DELIMITER}{index}").expect(INFALLIBLE);
+
+    debug_assert!(out.len() > before, "a node was named the empty string");
+    Ok(())
 }
 
 /// The name of one net in the emitted netlist, shared with the parasitic writers.
