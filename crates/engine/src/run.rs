@@ -6,8 +6,8 @@ use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_lvs::verdict::Inconclusive;
 use gpurify_lvs::{Discrepancy, Verdict};
-use gpurify_pex::network::NodeId;
-use gpurify_pex::ParasiticNetwork;
+use gpurify_extract::network::NodeId;
+use gpurify_extract::ParasiticNetwork;
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::{celsius, prefix, Dbu, Grid, Qty, Temperature};
 
@@ -770,11 +770,11 @@ fn lvs_measurement(discrepancy: &Discrepancy) -> (Measurement, Measurement) {
 /// An asymmetry outside the solve's own tolerance is [`StageStatus::Refused`]
 /// and nothing is written — see [`reciprocity_refusal`].
 ///
-/// ponytail: the solve's [`gpurify_pex::quasistatic::CapMatrix`] is still
+/// ponytail: the solve's [`gpurify_extract::quasistatic::CapMatrix`] is still
 /// dropped, because [`Outputs`] has no slot for it. The per-net totals it
-/// summarises survive as [`gpurify_pex::Parasitic::CouplingCap`] rows in the
+/// summarises survive as [`gpurify_extract::Parasitic::CouplingCap`] rows in the
 /// merged network, so the loss is the off-diagonal *matrix* form a field solver
-/// reports, not the coupling itself. [`gpurify_pex::quasistatic::Accuracy`]'s
+/// reports, not the coupling itself. [`gpurify_extract::quasistatic::Accuracy`]'s
 /// other four fields — the achieved residual, the tolerance, the iteration
 /// count and the backend that ran — have nowhere to land either, so a run's
 /// numbers cannot be attributed after the fact. Upgrade path: a matrix field and
@@ -791,7 +791,7 @@ fn run_pex(
 
     let mut network = ParasiticNetwork::default();
     if options.quasistatic_nets.is_empty() {
-        gpurify_pex::analytical::extract_into(
+        gpurify_extract::analytical::extract_into(
             &loaded.store,
             &extracted.nets,
             &extracted.devices,
@@ -821,7 +821,7 @@ fn run_pex(
         // The rest of the design, closed form. Unconditional: a run that
         // field-solves one net must still describe every other one.
         let mut coarse = ParasiticNetwork::default();
-        gpurify_pex::analytical::extract_into(
+        gpurify_extract::analytical::extract_into(
             &loaded.store,
             &extracted.nets,
             &extracted.devices,
@@ -831,15 +831,15 @@ fn run_pex(
             &mut coarse,
         );
 
-        let mut matrix = gpurify_pex::quasistatic::CapMatrix::default();
+        let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
         let mut solved = ParasiticNetwork::default();
-        let accuracy = gpurify_pex::quasistatic::extract_into(
+        let accuracy = gpurify_extract::quasistatic::extract_into(
             &loaded.store,
             &extracted.nets,
             &selected,
             &loaded.deck.stack,
             grid,
-            gpurify_pex::quasistatic::solve::Options::default(),
+            gpurify_extract::quasistatic::solve::Options::default(),
             &mut matrix,
             &mut solved,
         )?;
@@ -859,14 +859,14 @@ fn run_pex(
         // ponytail: the per-net `InductMatrix` is dropped like `CapMatrix` is —
         // `Outputs` has no slot for it.
         if options.quasistatic_inductance {
-            let mut inductance = gpurify_pex::quasistatic::InductMatrix::default();
-            if let Err(refusal) = gpurify_pex::quasistatic::extract_inductance_into(
+            let mut inductance = gpurify_extract::quasistatic::InductMatrix::default();
+            if let Err(refusal) = gpurify_extract::quasistatic::extract_inductance_into(
                 &loaded.store,
                 &extracted.nets,
                 &selected,
                 &loaded.deck.stack,
                 grid,
-                &gpurify_pex::quasistatic::InductanceOptions::default(),
+                &gpurify_extract::quasistatic::InductanceOptions::default(),
                 &mut inductance,
                 &mut solved,
             ) {
@@ -891,7 +891,7 @@ fn run_pex(
 /// Not the residual, which is per-column: reciprocity is a statement *between*
 /// columns, `C[i][j]` and `C[j][i]` being two solves of one number. It does not
 /// catch under-meshing, which is symmetric about its own error.
-fn reciprocity_refusal(accuracy: &gpurify_pex::quasistatic::Accuracy) -> Option<String> {
+fn reciprocity_refusal(accuracy: &gpurify_extract::quasistatic::Accuracy) -> Option<String> {
     debug_assert!(
         accuracy.tolerance > 0.0,
         "a tolerance of zero refuses every solve"
@@ -1101,9 +1101,9 @@ pub enum EngineError {
     #[error(transparent)]
     Erc(#[from] gpurify_erc::ErcError),
     #[error(transparent)]
-    Solve(#[from] gpurify_pex::quasistatic::solve::SolveError),
+    Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
     #[error(transparent)]
-    Mesh(#[from] gpurify_pex::quasistatic::mesh::MeshError),
+    Mesh(#[from] gpurify_extract::quasistatic::mesh::MeshError),
 }
 
 /// [`merge_field_solved_into`] and [`reciprocity_refusal`] are private, so their
@@ -1112,10 +1112,10 @@ pub enum EngineError {
 mod tests {
     use super::{merge_field_solved_into, reciprocity_refusal};
     use gpurify_geom::LayerId;
-    use gpurify_pex::network::NodeId;
-    use gpurify_pex::quasistatic::matvec::Backend;
-    use gpurify_pex::quasistatic::Accuracy;
-    use gpurify_pex::{Parasitic, ParasiticNetwork};
+    use gpurify_extract::network::NodeId;
+    use gpurify_extract::quasistatic::matvec::Backend;
+    use gpurify_extract::quasistatic::Accuracy;
+    use gpurify_extract::{Parasitic, ParasiticNetwork};
     use gpurify_topology::NetId;
     use gpurify_geom::Qty;
 

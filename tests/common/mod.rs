@@ -81,7 +81,7 @@ use gpurify::geom::{GeometryStore, LayerId, PolyId};
 use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
 use gpurify::ingest::layout::UnknownLayers;
-use gpurify::pex::Parasitic;
+use gpurify::extract::Parasitic;
 use gpurify::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
 use gpurify::geom::{Dbu, Grid};
 use gpurify::{export, ingest, lvs};
@@ -1007,7 +1007,7 @@ pub fn field_solved_coupling_af(domain: &str, id: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("cell {id} field solved to no network at all"))?;
     let mut femtofarads = 0.0;
     for value in &network.value {
-        if let gpurify::pex::Parasitic::CouplingCap(coupling) = value {
+        if let gpurify::extract::Parasitic::CouplingCap(coupling) = value {
             femtofarads += coupling.raw();
         }
     }

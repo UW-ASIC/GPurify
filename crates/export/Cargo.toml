@@ -9,7 +9,7 @@ gpurify-ingest = { workspace = true }
 gpurify-topology = { workspace = true }
 gpurify-report = { workspace = true }
 gpurify-lvs = { workspace = true }
-gpurify-pex = { workspace = true }
+gpurify-extract = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

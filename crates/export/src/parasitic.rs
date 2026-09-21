@@ -6,8 +6,8 @@ use std::ops::Range;
 use crate::json::format_f64;
 use crate::{narrow, Header, WriteError, INFALLIBLE};
 use gpurify_ingest::StrTable;
-use gpurify_pex::network::{NodeId, Parasitic};
-use gpurify_pex::ParasiticNetwork;
+use gpurify_extract::network::{NodeId, Parasitic};
+use gpurify_extract::ParasiticNetwork;
 use gpurify_topology::{NetId, PortTable};
 
 /// Between a net's name and the node's index within it, declared to the reader
@@ -447,7 +447,7 @@ pub fn write_dspf(
 /// agree about what a node is called.
 pub fn node_name(
     network: &ParasiticNetwork,
-    node: gpurify_pex::network::NodeId,
+    node: gpurify_extract::network::NodeId,
     ports: &PortTable,
     strings: &StrTable,
     out: &mut String,

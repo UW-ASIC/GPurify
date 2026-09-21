@@ -17,7 +17,7 @@ use fixture::{World, COUPLING_FF, GROUND_CAP_FF, SERIES_OHM};
 use gpurify_export::json::format_f64;
 use gpurify_export::parasitic::{node_name, write_dspf, write_spef};
 use gpurify_export::WriteError;
-use gpurify_pex::network::NodeId;
+use gpurify_extract::network::NodeId;
 
 fn spef(world: &World) -> String {
     let mut out = String::new();

@@ -11,7 +11,7 @@ gpurify-report = { workspace = true }
 gpurify-drc = { workspace = true }
 gpurify-erc = { workspace = true }
 gpurify-lvs = { workspace = true }
-gpurify-pex = { workspace = true }
+gpurify-extract = { workspace = true }
 gpurify-export = { workspace = true }
 thiserror = { workspace = true }
 

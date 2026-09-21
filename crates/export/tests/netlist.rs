@@ -18,7 +18,7 @@ use gpurify_topology::NetId;
 
 fn spice(
     world: &World,
-    parasitics: Option<&gpurify_pex::ParasiticNetwork>,
+    parasitics: Option<&gpurify_extract::ParasiticNetwork>,
     detail: Detail,
 ) -> String {
     let mut out = String::new();

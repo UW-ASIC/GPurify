@@ -622,7 +622,7 @@ fn a_kind_in_neither_domains_vocabulary_is_refused_whatever_was_selected() {
 #[test]
 fn the_inductance_flag_adds_elements_only_when_asked() {
     use gpurify_engine::pipeline::Inputs;
-    use gpurify_pex::Parasitic;
+    use gpurify_extract::Parasitic;
     use std::path::Path;
 
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");

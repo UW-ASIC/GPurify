@@ -150,11 +150,10 @@ dependencies = [
  "gpurify-engine",
  "gpurify-erc",
  "gpurify-export",
+ "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
  "gpurify-lvs",
- "gpurify-pex",
- "gpurify-quasistatic",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
@@ -194,10 +193,10 @@ dependencies = [
  "gpurify-drc",
  "gpurify-erc",
  "gpurify-export",
+ "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
  "gpurify-lvs",
- "gpurify-pex",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
@@ -220,16 +219,31 @@ dependencies = [
 name = "gpurify-export"
 version = "0.1.0"
 dependencies = [
+ "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
  "gpurify-lvs",
- "gpurify-pex",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "gpurify-extract"
+version = "0.1.0"
+dependencies = [
+ "gpurify-geom",
+ "gpurify-ingest",
+ "gpurify-report",
+ "gpurify-testgen",
+ "gpurify-topology",
+ "num-complex",
+ "rayon",
+ "thiserror",
+ "vulkano",
 ]
 
 [[package]]
@@ -265,34 +279,6 @@ dependencies = [
  "gpurify-testgen",
  "gpurify-topology",
  "thiserror",
-]
-
-[[package]]
-name = "gpurify-pex"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-quasistatic",
- "gpurify-report",
- "gpurify-testgen",
- "gpurify-topology",
- "thiserror",
- "wide",
-]
-
-[[package]]
-name = "gpurify-quasistatic"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-testgen",
- "gpurify-topology",
- "num-complex",
- "rayon",
- "thiserror",
- "vulkano",
 ]
 
 [[package]]
@@ -598,15 +584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "safe_arch"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -766,16 +743,6 @@ dependencies = [
  "smallvec",
  "thread_local",
  "vk-parse",
-]
-
-[[package]]
-name = "wide"
-version = "0.7.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
-dependencies = [
- "bytemuck",
- "safe_arch",
 ]
 
 [[package]]
