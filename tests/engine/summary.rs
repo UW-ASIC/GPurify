@@ -15,7 +15,7 @@
 //! - `report::Severity::Warning` — "exists so a rule can report something it is
 //!   unsure about **without either failing the run** or staying silent".
 
-use gpurify_engine::{StageStatus, Summary};
+use gpurify::engine::{StageStatus, Summary};
 
 /// Sets one of the four stage fields, so a case can be written once and applied
 /// to each stage in turn.

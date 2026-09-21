@@ -11,14 +11,14 @@
 
 pub use gpurify_geom as geom;
 pub use gpurify_check as check;
-pub use gpurify_engine as engine;
-pub use gpurify_export as export;
+pub mod engine;
+pub mod export;
 pub use gpurify_ingest as ingest;
 pub use gpurify_extract as extract;
 
 /// What a caller needs for an ordinary run, without naming a crate.
 pub mod prelude {
-    pub use gpurify_engine::{Checks, Inputs, Outputs, RunOptions, StageStatus, Summary};
+    pub use crate::engine::{Checks, Inputs, Outputs, RunOptions, StageStatus, Summary};
     pub use gpurify_check::report::{Measurement, Severity, Violation, Violations};
     pub use gpurify_geom::{Dbu, Grid};
 }

@@ -169,16 +169,16 @@ pub fn load_into(inputs: &Inputs, out: &mut Loaded) -> Result<(), LoadError> {
 /// field is `pub`) never runs the loader, and would otherwise reach that panic
 /// on its first LVS finding.
 pub fn intern_report_ids(strings: &mut StrTable) {
-    for id in crate::run::LVS_RULE_IDS
+    for id in crate::engine::run::LVS_RULE_IDS
         .iter()
-        .chain(crate::run::LVS_CHECK_RULE_IDS.iter())
+        .chain(crate::engine::run::LVS_CHECK_RULE_IDS.iter())
     {
         strings.intern(id);
     }
     debug_assert!(
-        crate::run::LVS_RULE_IDS
+        crate::engine::run::LVS_RULE_IDS
             .iter()
-            .chain(crate::run::LVS_CHECK_RULE_IDS.iter())
+            .chain(crate::engine::run::LVS_CHECK_RULE_IDS.iter())
             .all(|id| strings.get(id).is_some()),
         "an lvs rule id did not survive interning, so a finding has no name to be reported under"
     );

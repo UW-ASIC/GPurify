@@ -20,10 +20,10 @@
 //!   writer that consulted the clock. Two back-to-back runs would agree even if
 //!   one did, because a formatted time has second resolution at best.
 
-mod fixture;
+use crate::fixture;
 
 use fixture::World;
-use gpurify_export::{gds, json, netlist, parasitic};
+use gpurify::export::{gds, json, netlist, parasitic};
 use gpurify_ingest::deck::LayerTable;
 use gpurify_testgen::assert_bytes_identical;
 

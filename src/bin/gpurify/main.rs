@@ -37,25 +37,25 @@ fn main() -> std::process::ExitCode {
     // and compares the two rendered reports byte for byte. Each pass gets fresh
     // buffers: reusing one set would compare a run against what the first left
     // behind.
-    let mut first: Option<(gpurify_engine::Summary, String)> = None;
+    let mut first: Option<(gpurify::engine::Summary, String)> = None;
     let mut pass = 0u8;
 
     let (result, text) = loop {
         pass += 1;
         debug_assert!(pass <= 2, "the determinism gate runs the pipeline twice");
 
-        let mut loaded = gpurify_engine::Loaded::default();
-        let mut extracted = gpurify_engine::Extracted::default();
-        let mut outputs = gpurify_engine::Outputs::default();
+        let mut loaded = gpurify::engine::Loaded::default();
+        let mut extracted = gpurify::engine::Extracted::default();
+        let mut outputs = gpurify::engine::Outputs::default();
 
-        let result = gpurify_engine::pipeline::load_into(&inputs, &mut loaded)
-            .map_err(gpurify_engine::EngineError::from)
+        let result = gpurify::engine::pipeline::load_into(&inputs, &mut loaded)
+            .map_err(gpurify::engine::EngineError::from)
             .and_then(|()| {
-                gpurify_engine::pipeline::extract_into(&loaded, &mut extracted)
-                    .map_err(gpurify_engine::EngineError::from)
+                gpurify::engine::pipeline::extract_into(&loaded, &mut extracted)
+                    .map_err(gpurify::engine::EngineError::from)
             })
             .and_then(|()| {
-                gpurify_engine::run::run_checks(&loaded, &extracted, &options, &mut outputs)
+                gpurify::engine::run::run_checks(&loaded, &extracted, &options, &mut outputs)
             });
 
         // A run that did not finish produced no verdict, so there is nothing to
@@ -76,7 +76,7 @@ fn main() -> std::process::ExitCode {
                 format::write_summary(summary, &mut text);
             }
             args::Format::Json => {
-                let header = gpurify_export::Header {
+                let header = gpurify::export::Header {
                     tool_version: env!("CARGO_PKG_VERSION"),
                     deck_path: inputs.deck.display().to_string(),
                     layout_path: inputs.layout.display().to_string(),
@@ -84,14 +84,14 @@ fn main() -> std::process::ExitCode {
                     // JSON reports byte for byte.
                     timestamp: None,
                 };
-                let report = gpurify_export::json::Report {
+                let report = gpurify::export::json::Report {
                     header: &header,
                     violations: &outputs.violations,
                     runs: &outputs.runs,
                     strings: &loaded.strings,
                     grid,
                 };
-                if let Err(error) = gpurify_export::json::write_report(&report, &mut text) {
+                if let Err(error) = gpurify::export::json::write_report(&report, &mut text) {
                     return fail(&error);
                 }
             }
@@ -113,7 +113,7 @@ fn main() -> std::process::ExitCode {
                     );
                     return ExitCode::FAILURE;
                 };
-                let header = gpurify_export::Header {
+                let header = gpurify::export::Header {
                     tool_version: env!("CARGO_PKG_VERSION"),
                     deck_path: inputs.deck.display().to_string(),
                     layout_path: inputs.layout.display().to_string(),
@@ -121,9 +121,9 @@ fn main() -> std::process::ExitCode {
                     timestamp: None,
                 };
                 let write = if args.common.format == args::Format::Spef {
-                    gpurify_export::parasitic::write_spef
+                    gpurify::export::parasitic::write_spef
                 } else {
-                    gpurify_export::parasitic::write_dspf
+                    gpurify::export::parasitic::write_dspf
                 };
                 if let Err(error) = write(
                     network,
@@ -187,7 +187,7 @@ fn main() -> std::process::ExitCode {
 /// A finished run in, a process exit code out. A run that failed to complete is
 /// not a pass: it produced no verdict at all.
 fn exit_code(
-    result: &Result<gpurify_engine::Summary, gpurify_engine::EngineError>,
+    result: &Result<gpurify::engine::Summary, gpurify::engine::EngineError>,
 ) -> std::process::ExitCode {
     match result {
         Ok(summary) if summary.passed() => std::process::ExitCode::SUCCESS,
@@ -195,10 +195,10 @@ fn exit_code(
     }
 }
 
-/// The exit-code contract, pinned through [`gpurify_engine::Summary::passed`].
+/// The exit-code contract, pinned through [`gpurify::engine::Summary::passed`].
 #[cfg(test)]
 mod tests {
-    use gpurify_engine::{StageStatus, Summary};
+    use gpurify::engine::{StageStatus, Summary};
 
     /// The only summary shape that may exit zero.
     fn clean_run() -> Summary {

@@ -7,11 +7,11 @@
 //! parasitic *decision* are separate parameters, and that `net_name` is where a
 //! net gets the one name it carries across every file a run produces.
 
-mod fixture;
+use crate::fixture;
 
 use fixture::World;
-use gpurify_export::netlist::{net_name, write_spice, Detail};
-use gpurify_export::{parasitic, WriteError};
+use gpurify::export::netlist::{net_name, write_spice, Detail};
+use gpurify::export::{parasitic, WriteError};
 use gpurify_testgen::dbu;
 use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_check::topology::NetId;

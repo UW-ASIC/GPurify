@@ -1,6 +1,6 @@
 //! The text rendering of a run, for a human.
 
-use gpurify_engine::{Outputs, StageStatus, Summary};
+use gpurify::engine::{Outputs, StageStatus, Summary};
 use gpurify_ingest::StrTable;
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason};
 use gpurify_geom::{Dbu, Grid};
@@ -224,7 +224,7 @@ pub fn write_error(error: &dyn std::error::Error, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::{write_error, write_measurement, write_summary, write_violations};
-    use gpurify_engine::{Outputs, StageStatus, Summary};
+    use gpurify::engine::{Outputs, StageStatus, Summary};
     use gpurify_ingest::StrTable;
     use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
     use gpurify_testgen::{
@@ -544,8 +544,8 @@ mod tests {
     /// transparent wrapper, and no backtrace comes with it.
     #[test]
     fn an_error_is_rendered_as_its_own_message_and_nothing_else() {
-        let inner = gpurify_engine::pipeline::LoadError::NoGrid;
-        let wrapped = gpurify_engine::EngineError::Load(inner.clone());
+        let inner = gpurify::engine::pipeline::LoadError::NoGrid;
+        let wrapped = gpurify::engine::EngineError::Load(inner.clone());
         for error in [
             &inner as &dyn std::error::Error,
             &wrapped as &dyn std::error::Error,

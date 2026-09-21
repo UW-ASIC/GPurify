@@ -147,14 +147,13 @@ name = "gpurify"
 version = "0.1.0"
 dependencies = [
  "gpurify-check",
- "gpurify-engine",
- "gpurify-export",
  "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
  "gpurify-testgen",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -165,46 +164,6 @@ dependencies = [
  "gpurify-ingest",
  "gpurify-testgen",
  "serde",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-cli"
-version = "0.1.0"
-dependencies = [
- "gpurify-check",
- "gpurify-engine",
- "gpurify-export",
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-testgen",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-engine"
-version = "0.1.0"
-dependencies = [
- "gpurify-check",
- "gpurify-export",
- "gpurify-extract",
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-testgen",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-export"
-version = "0.1.0"
-dependencies = [
- "gpurify-check",
- "gpurify-extract",
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-testgen",
- "serde",
- "serde_json",
  "thiserror",
 ]
 
@@ -237,7 +196,6 @@ name = "gpurify-ingest"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "gpurify-export",
  "gpurify-geom",
  "gpurify-testgen",
  "serde",

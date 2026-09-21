@@ -13,8 +13,8 @@
 //! reports nothing. `testgen::assertions` does the same, for the same reason.
 
 use gpurify_check::drc::DrcError;
-use gpurify_engine::pipeline::{Extracted, Loaded};
-use gpurify_engine::run::{
+use gpurify::engine::pipeline::{Extracted, Loaded};
+use gpurify::engine::run::{
     run_checks, Checks, EngineError, Outputs, RunOptions, StageStatus, Summary,
 };
 use gpurify_ingest::deck::{DeviceKind, RuleSpec};
@@ -621,11 +621,11 @@ fn a_kind_in_neither_domains_vocabulary_is_refused_whatever_was_selected() {
 /// and one resistance row per field-solved net.
 #[test]
 fn the_inductance_flag_adds_elements_only_when_asked() {
-    use gpurify_engine::pipeline::Inputs;
+    use gpurify::engine::pipeline::Inputs;
     use gpurify_extract::Parasitic;
     use std::path::Path;
 
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let inputs = Inputs {
         layout: fixtures.join("pex/PEX_COUPLING_C.gds"),
         deck: fixtures.join("params.json"),
@@ -646,7 +646,7 @@ fn the_inductance_flag_adds_elements_only_when_asked() {
         opts.quasistatic_nets = vec!["PEX_CC_n0".to_string(), "PEX_CC_n1".to_string()];
         opts.quasistatic_inductance = inductance;
         let mut out = Outputs::default();
-        let summary = gpurify_engine::run::run(&inputs, &opts, &mut out)
+        let summary = gpurify::engine::run::run(&inputs, &opts, &mut out)
             .expect("the coupling fixture field-solves");
         assert_eq!(summary.pex, StageStatus::Ran, "the solve must not refuse");
         out

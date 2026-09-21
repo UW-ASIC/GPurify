@@ -16,10 +16,10 @@
 //! files are unreadable, without a test having to know either file format.
 
 use gpurify_geom::{GeometryStoreBuilder, LayerId};
-use gpurify_engine::pipeline::{
+use gpurify::engine::pipeline::{
     extract_into, intern_report_ids, load_into, Extracted, Inputs, LoadError, Loaded,
 };
-use gpurify_engine::run::{run, run_checks, Checks, EngineError, Outputs, RunOptions};
+use gpurify::engine::run::{run, run_checks, Checks, EngineError, Outputs, RunOptions};
 use gpurify_ingest::deck::{parse_deck, Connectivity, Deck};
 use gpurify_ingest::StrTable;
 use gpurify_check::lvs::refine::TieBreak;
@@ -372,7 +372,7 @@ fn a_deck_that_leaves_raw_diffusion_conducting_under_a_mos_marker_is_refused() {
     let refused = extract_into(&loaded, &mut extracted)
         .expect_err("a conducting channel must refuse extraction, not merge S and D");
     assert!(
-        matches!(refused, gpurify_engine::pipeline::ExtractError::Channel(_)),
+        matches!(refused, gpurify::engine::pipeline::ExtractError::Channel(_)),
         "the refusal must be the channel guard's, got {refused:?}"
     );
 }

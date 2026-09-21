@@ -2,9 +2,9 @@
 
 use std::fmt::Write as _;
 
-use crate::json::format_f64;
-use crate::parasitic::{first_node_of, node_place, spice_card, DELIMITER};
-use crate::{narrow, Header, WriteError, INFALLIBLE};
+use crate::export::json::format_f64;
+use crate::export::parasitic::{first_node_of, node_place, spice_card, DELIMITER};
+use crate::export::{narrow, Header, WriteError, INFALLIBLE};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
 use gpurify_extract::ParasiticNetwork;
@@ -263,7 +263,7 @@ fn put_terminal_node(
 
 /// Append the name of one parasitic node, under SPICE's naming policy.
 ///
-/// Same `net:index` shape as [`crate::parasitic::node_name`], but the net half
+/// Same `net:index` shape as [`crate::export::parasitic::node_name`], but the net half
 /// goes through [`net_name`], which numbers an anonymous net instead of
 /// refusing it. SPEF and DSPF are right to demand a name — their whole purpose
 /// is to annotate a netlist someone else wrote, so a net they cannot name is a

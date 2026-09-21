@@ -3,8 +3,8 @@
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use crate::json::format_f64;
-use crate::{narrow, Header, WriteError, INFALLIBLE};
+use crate::export::json::format_f64;
+use crate::export::{narrow, Header, WriteError, INFALLIBLE};
 use gpurify_ingest::StrTable;
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
@@ -15,7 +15,7 @@ use gpurify_check::topology::{NetId, PortTable};
 ///
 /// Shared with the SPICE writer, which splits a node name the same way but
 /// resolves the net half under its own naming policy — see
-/// [`crate::netlist::put_node`].
+/// [`crate::export::netlist::put_node`].
 pub(crate) const DELIMITER: char = ':';
 
 /// SPICE node zero, the far end of a ground capacitance in DSPF.
@@ -174,7 +174,7 @@ const fn as_henries(value: Parasitic) -> Option<f64> {
 
 /// How one parasitic appears as a SPICE card: its prefix letter, which counter
 /// numbers it, its magnitude, and the scale factor that magnitude is in. Shared
-/// with [`crate::netlist`] so both files describe the same circuit — the suffix
+/// with [`crate::export::netlist`] so both files describe the same circuit — the suffix
 /// is load-bearing, since SPICE reads a bare number as SI and a femtofarad that
 /// lost its `f` is off by 10^15.
 pub(crate) const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {

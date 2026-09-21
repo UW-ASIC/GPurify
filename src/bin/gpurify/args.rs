@@ -328,13 +328,13 @@ pub enum ArgError {
 }
 
 /// Translate the parsed arguments into what `engine` wants.
-pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOptions) {
+pub fn to_inputs(args: &Args) -> (gpurify::engine::Inputs, gpurify::engine::RunOptions) {
     debug_assert!(
         !args.common.layout.as_os_str().is_empty() && !args.common.deck.as_os_str().is_empty(),
         "parse rejects a command line missing either path"
     );
 
-    let off = gpurify_engine::Checks {
+    let off = gpurify::engine::Checks {
         drc: false,
         erc: false,
         lvs: false,
@@ -346,21 +346,21 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
     let (checks, reference, intent, quasistatic_nets, quasistatic_inductance) = match &args.command
     {
         Command::Drc => (
-            gpurify_engine::Checks { drc: true, ..off },
+            gpurify::engine::Checks { drc: true, ..off },
             None,
             None,
             Vec::new(),
             false,
         ),
         Command::Erc { intent } => (
-            gpurify_engine::Checks { erc: true, ..off },
+            gpurify::engine::Checks { erc: true, ..off },
             None,
             intent.clone(),
             Vec::new(),
             false,
         ),
         Command::Lvs { reference } => (
-            gpurify_engine::Checks { lvs: true, ..off },
+            gpurify::engine::Checks { lvs: true, ..off },
             Some(reference.clone()),
             None,
             Vec::new(),
@@ -370,14 +370,14 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
             quasistatic,
             quasistatic_inductance,
         } => (
-            gpurify_engine::Checks { pex: true, ..off },
+            gpurify::engine::Checks { pex: true, ..off },
             None,
             None,
             quasistatic.clone(),
             *quasistatic_inductance,
         ),
         Command::All { reference, intent } => (
-            gpurify_engine::Checks::ALL,
+            gpurify::engine::Checks::ALL,
             reference.clone(),
             intent.clone(),
             Vec::new(),
@@ -387,7 +387,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
     debug_assert!(checks != off, "every subcommand selects at least one check");
     debug_assert!(quasistatic_nets.is_empty() || checks.pex);
 
-    let inputs = gpurify_engine::Inputs {
+    let inputs = gpurify::engine::Inputs {
         layout: args.common.layout.clone(),
         deck: args.common.deck.clone(),
         // `Grid::new` refuses a zero, which the parser has already excluded.
@@ -410,7 +410,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
                   edge; naming the type would mean adding a dependency to satisfy a \
                   spelling. `engine` does not re-export it either"
     )]
-    let options = gpurify_engine::RunOptions {
+    let options = gpurify::engine::RunOptions {
         checks,
         lvs: Default::default(),
         quasistatic_nets,
@@ -424,7 +424,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
 #[cfg(test)]
 mod tests {
     use super::{parse, to_inputs, ArgError, Args, Command, Format};
-    use gpurify_engine::Checks;
+    use gpurify::engine::Checks;
     use gpurify_testgen::Rng;
     use std::path::{Path, PathBuf};
 

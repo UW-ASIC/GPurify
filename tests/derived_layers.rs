@@ -16,7 +16,7 @@
 //! read it back through the same entry point a run uses.
 
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_export::gds::write_store;
+use gpurify::export::gds::write_store;
 use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;

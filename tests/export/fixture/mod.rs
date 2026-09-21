@@ -30,8 +30,8 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_export::json::Report;
-use gpurify_export::Header;
+use gpurify::export::json::Report;
+use gpurify::export::Header;
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::{Provenance, StrId, StrTable};
 use gpurify_extract::network::{NodeId, Parasitic};
@@ -91,7 +91,7 @@ impl World {
 
     /// Only the lower net named, so the upper one is anonymous.
     ///
-    /// The input for the [`gpurify_export::WriteError::UnnamedNet`] assertions:
+    /// The input for the [`gpurify::export::WriteError::UnnamedNet`] assertions:
     /// a format requiring a name for every net must refuse this one by number,
     /// not invent a placeholder.
     #[must_use]

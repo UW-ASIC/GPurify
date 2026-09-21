@@ -11,12 +11,12 @@
 //! with a placeholder — a placeholder being, precisely, a name that changes
 //! between runs.
 
-mod fixture;
+use crate::fixture;
 
 use fixture::{World, COUPLING_FF, GROUND_CAP_FF, SERIES_OHM};
-use gpurify_export::json::format_f64;
-use gpurify_export::parasitic::{node_name, write_dspf, write_spef};
-use gpurify_export::WriteError;
+use gpurify::export::json::format_f64;
+use gpurify::export::parasitic::{node_name, write_dspf, write_spef};
+use gpurify::export::WriteError;
 use gpurify_extract::network::NodeId;
 
 fn spef(world: &World) -> String {

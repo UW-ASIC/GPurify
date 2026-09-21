@@ -1,6 +1,6 @@
 //! Running the checks, and reporting honestly about which ones ran.
 
-use crate::pipeline::{Extracted, Inputs, Loaded};
+use crate::engine::pipeline::{Extracted, Inputs, Loaded};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
@@ -606,7 +606,7 @@ fn run_lvs(
 /// The rule id each [`Discrepancy`] variant is reported under, in the order
 /// [`gpurify_check::lvs::verdict::Discrepancy`] declares its variants.
 ///
-/// Interned by [`crate::pipeline::load_into`], because `run_checks` borrows
+/// Interned by [`crate::engine::pipeline::load_into`], because `run_checks` borrows
 /// `Loaded` shared and cannot intern.
 pub(crate) const LVS_RULE_IDS: [&str; 7] = [
     "lvs.unpaired_device",
@@ -1080,10 +1080,10 @@ pub fn run(
     // Nothing touches `out` before the load: a run that failed to read its
     // inputs must not have left findings behind.
     let mut loaded = Loaded::default();
-    crate::pipeline::load_into(inputs, &mut loaded)?;
+    crate::engine::pipeline::load_into(inputs, &mut loaded)?;
 
     let mut extracted = Extracted::default();
-    crate::pipeline::extract_into(&loaded, &mut extracted)?;
+    crate::engine::pipeline::extract_into(&loaded, &mut extracted)?;
 
     run_checks(&loaded, &extracted, options, out)
 }
@@ -1091,9 +1091,9 @@ pub fn run(
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum EngineError {
     #[error(transparent)]
-    Load(#[from] crate::pipeline::LoadError),
+    Load(#[from] crate::engine::pipeline::LoadError),
     #[error(transparent)]
-    Extract(#[from] crate::pipeline::ExtractError),
+    Extract(#[from] crate::engine::pipeline::ExtractError),
     /// The deck could not be turned into a DRC rule set.
     #[error(transparent)]
     Drc(#[from] gpurify_check::drc::DrcError),

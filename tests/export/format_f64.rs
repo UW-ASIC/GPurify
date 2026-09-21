@@ -14,7 +14,7 @@
 //! survive, which is what a capacitance in femtofarads needs. See
 //! `docs/NEED_TESTING.md`.
 
-use gpurify_export::json::format_f64;
+use gpurify::export::json::format_f64;
 use gpurify_testgen::{assert_close, assert_close_relative};
 
 fn formatted(value: f64) -> String {

@@ -14,10 +14,10 @@
 //! round trip is stated; the marker writer takes its layer as a parameter
 //! rather than through the table, so it is testable with real geometry.
 
-mod fixture;
+use crate::fixture;
 
 use fixture::World;
-use gpurify_export::gds::{write_markers, write_store};
+use gpurify::export::gds::{write_markers, write_store};
 use gpurify_ingest::deck::{Deck, LayerTable};
 use gpurify_ingest::layout::{gds as reader, UnknownLayers};
 

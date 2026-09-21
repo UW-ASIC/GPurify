@@ -1,6 +1,6 @@
 //! GDSII writer: marker layers, and the other half of `parse -> write -> parse`.
 
-use crate::{narrow, WriteError};
+use crate::export::{narrow, WriteError};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::LayerTable;
 use gpurify_check::report::Violations;

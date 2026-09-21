@@ -6,12 +6,12 @@
 //! already commits to in prose: the output is JSON, it carries both halves of
 //! the report, it does not reorder the violation table, its floats go through
 //! `format_f64`, and everything that varies between two runs is confined to
-//! the [`Header`](gpurify_export::Header).
+//! the [`Header`](gpurify::export::Header).
 
-mod fixture;
+use crate::fixture;
 
 use fixture::World;
-use gpurify_export::json;
+use gpurify::export::json;
 use gpurify_check::report::{Measurement, Outcome};
 use gpurify_testgen::{dbu, point};
 use serde_json::Value;
