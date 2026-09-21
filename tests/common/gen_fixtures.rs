@@ -334,6 +334,23 @@ pub fn ensure(root: &Path) {
     ONCE.call_once(|| generate(root));
 }
 
+/// The fixture root, with the generated part of it present.
+///
+/// Every reader of a corpus path routes through here, which is why the
+/// generator hangs off this one function rather than off a build script: the
+/// per-case GDS is split out of `_source/conformance.gds` when a test first asks
+/// for a path, and not when someone runs `cargo build`.
+///
+/// It lives beside the generator rather than in `common`, because `common`
+/// belongs to one test binary and the corpus is read from several. A test that
+/// joins `tests/fixtures` by hand gets a path that exists only if something else
+/// in its own binary asked for one first.
+pub fn fixtures() -> std::path::PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    ensure(&root);
+    root
+}
+
 fn generate(root: &Path) {
     let manifest_path = root.join("manifest.json");
     let text = std::fs::read_to_string(&manifest_path)
@@ -389,7 +406,7 @@ fn write_if_different(path: &Path, bytes: &[u8]) {
 /// which are still tracked.
 #[test]
 fn the_generated_corpus_matches_what_the_generator_produces() {
-    let root = super::fixtures();
+    let root = fixtures();
     let text =
         std::fs::read_to_string(root.join("manifest.json")).expect("the manifest is tracked");
     let manifest: Manifest = serde_json::from_str(&text).expect("the manifest parses");

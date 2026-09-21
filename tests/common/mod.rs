@@ -89,7 +89,7 @@ use gpurify::{export, ingest};
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Database units per micrometre for every fixture here: a 1 nm grid.
@@ -765,17 +765,7 @@ pub fn load_corpus() -> Corpus {
     serde_json::from_str(&text).unwrap_or_else(|why| panic!("{}: {why}", path.display()))
 }
 
-/// The fixture root, with the generated part of it present.
-///
-/// Every corpus reader routes through here, which is why the generator hangs off
-/// this one function rather than off a build script: the per-case GDS is split
-/// out of `_source/conformance.gds` when a test first asks for a path, and not
-/// when someone runs `cargo build`.
-pub fn fixtures() -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    gen_fixtures::ensure(&root);
-    root
-}
+pub use gen_fixtures::fixtures;
 
 // ---------------------------------------------------------------------------
 // Driving one case through the pipeline.

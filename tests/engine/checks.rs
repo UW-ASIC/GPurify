@@ -623,9 +623,10 @@ fn a_kind_in_neither_domains_vocabulary_is_refused_whatever_was_selected() {
 fn the_inductance_flag_adds_elements_only_when_asked() {
     use gpurify::engine::pipeline::Inputs;
     use gpurify_extract::Parasitic;
-    use std::path::Path;
 
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // Not `tests/fixtures` joined by hand: the per-case GDS is generated on
+    // demand and only this call generates it.
+    let fixtures = crate::gen_fixtures::fixtures();
     let inputs = Inputs {
         layout: fixtures.join("pex/PEX_COUPLING_C.gds"),
         deck: fixtures.join("params.json"),
