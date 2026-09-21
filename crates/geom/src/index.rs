@@ -414,6 +414,13 @@ fn candidate_pairs_observed<O: ObservePairs>(
 /// `SAME` says `index` holds `layer`'s own rows, so a pair is emitted once with
 /// `a < b`. The gather writes the raw superset straight into `out` and the
 /// compact runs over it in place.
+///
+/// The compact runs *before* the sort. The box predicate is per-pair and reads
+/// nothing but its own two boxes, so the two commute — and on a real layer the
+/// gather's superset is two orders of magnitude larger than what survives it. A
+/// 100k-polygon corpus gathered 2.5M pairs to keep 44k: sorting first spent
+/// 48ms ordering rows the next loop threw away, which was most of net
+/// extraction's whole cost.
 fn prune_pairs<const SAME: bool, O: ObservePairs>(
     store: &GeometryStore,
     index: &SpatialIndex,
@@ -427,17 +434,17 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
         let a = PolyId(row);
         gather_near::<SAME, O>(index, distance, a, store.poly_bbox(a), out, observer);
     }
-    out.sort_unstable();
-    out.dedup();
-    debug_assert!(
-        !SAME || out.iter().all(|&(a, b)| a < b),
-        "the same-layer form emits `a < b` only"
-    );
-    let examined = out.len();
+    let gathered = out.len();
 
-    // Before the compact, which destroys the examined list.
+    // The seam reports over the same ordered, deduplicated list it always did,
+    // so `emitted` still matches what comes back row for row. Its cost is a
+    // copy of the raw superset, which is why it is behind the `const` and not
+    // in the path the pipeline takes.
     if O::ENABLED {
-        report_prune(store, out, distance, observer);
+        let mut examined = out.clone();
+        examined.sort_unstable();
+        examined.dedup();
+        report_prune(store, &examined, distance, observer);
     }
 
     // Branchless compact, in place: survivors move down into slots already read
@@ -447,11 +454,11 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
         let pairs = out.as_mut_slice();
         debug_assert_eq!(
             pairs.len(),
-            examined,
+            gathered,
             "the compact reads what the gather wrote"
         );
         let mut w = 0usize;
-        for i in 0..examined {
+        for i in 0..gathered {
             let (a, b) = pairs[i];
             let p = store.poly_bbox(a).within(store.poly_bbox(b), distance);
             // `w <= i` by induction: `w == i == 0` on entry, and each iteration
@@ -460,7 +467,7 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
             // why reading `pairs[i]` before the store is sound: slot `i` is
             // still its own until some later iteration lands on it.
             debug_assert!(w <= i);
-            // SAFETY: `w <= i < examined == pairs.len()`, from the induction.
+            // SAFETY: `w <= i < gathered == pairs.len()`, from the induction.
             unsafe { *pairs.get_unchecked_mut(w) = (a, b) };
             w += usize::from(p);
         }
@@ -468,8 +475,17 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
     };
 
     out.truncate(kept);
-    debug_assert_eq!(kept, out.len());
-    debug_assert!(kept <= examined, "a compact cannot grow its input");
+    debug_assert!(kept <= gathered, "a compact cannot grow its input");
+
+    // The gather reaches one row from several cells, so the superset repeats
+    // pairs; the sort is what makes the dedup adjacent, and the order is the
+    // returned contract either way.
+    out.sort_unstable();
+    out.dedup();
+    debug_assert!(
+        !SAME || out.iter().all(|&(a, b)| a < b),
+        "the same-layer form emits `a < b` only"
+    );
     debug_assert!(
         out.windows(2).all(|w| w[0] < w[1]),
         "candidate pairs come back strictly ascending and deduplicated"
