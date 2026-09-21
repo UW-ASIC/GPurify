@@ -13,8 +13,8 @@
 mod common;
 
 use common::{head, rule};
-use gpurify_core::{GeometryStore, LayerId, PolyId};
-use gpurify_derived::{Evaluator, LayerRef};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_erc::facts::{classify_nets_into, NetFacts};
 use gpurify_erc::rules::supply::{
     check_esd_topological, check_missing_tie, check_soft_connection, check_supply_short,

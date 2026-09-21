@@ -3,7 +3,7 @@
 use gpurify_engine::{Outputs, StageStatus, Summary};
 use gpurify_ingest::StrTable;
 use gpurify_report::{Measurement, Outcome, Severity, SkipReason};
-use gpurify_units::{Dbu, Grid};
+use gpurify_geom::{Dbu, Grid};
 use std::fmt::Write as _;
 
 /// Append the rule records, the violation rows and the LVS verdict to `out`.
@@ -230,7 +230,7 @@ mod tests {
     use gpurify_testgen::{
         assert_bytes_identical, dbu, point, scale_corpus, ScaleCorpus, ScaleSpec,
     };
-    use gpurify_units::{DbuArea, Grid};
+    use gpurify_geom::{DbuArea, Grid};
 
     /// Append one row to the violation columns directly.
     ///

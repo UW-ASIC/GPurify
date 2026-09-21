@@ -11,7 +11,7 @@
     reason = "each test binary links only the fixtures it names"
 )]
 
-use gpurify_core::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_erc::facts::IntentMap;
 use gpurify_erc::power;
 use gpurify_erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution, SolveConfig};
@@ -22,7 +22,7 @@ use gpurify_report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_testgen::point;
 use gpurify_testgen::Rng;
 use gpurify_topology::NetId;
-use gpurify_units::{prefix, Current, Grid, Qty, Resistance, Temperature, Voltage};
+use gpurify_geom::{prefix, Current, Grid, Qty, Resistance, Temperature, Voltage};
 
 /// A rule id. Tests never need the text, so they never need a `StrTable` —
 /// whose `intern` is a frozen `todo!()` until the Implementation-Phase.
@@ -143,7 +143,7 @@ pub fn assert_skipped_for_intent(runs: &[RuleRun], violations: &Violations, id: 
 /// When the point falls outside both named shapes.
 pub fn assert_at_is_on_a_named_shape(store: &GeometryStore, violations: &Violations, row: usize) {
     let at = violations.at[row];
-    let here = gpurify_core::Bbox::point(at.x, at.y);
+    let here = gpurify_geom::Bbox::point(at.x, at.y);
     let a = store.poly_bbox(violations.shape_a[row]);
     let inside_a = a.contains(here);
     let inside_b = violations.shape_b[row].is_some_and(|b| store.poly_bbox(b).contains(here));

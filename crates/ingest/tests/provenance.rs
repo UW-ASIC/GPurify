@@ -6,8 +6,8 @@
 //! those two tables together, and nothing downstream notices when they come
 //! apart: a report against the wrong cell is plausible output.
 
-use gpurify_core::{LayerId, PolyId};
-use gpurify_ingest::intern::{StrId, StrTable};
+use gpurify_geom::{LayerId, PolyId};
+use gpurify_geom::{StrId, StrTable};
 use gpurify_ingest::provenance::PathTable;
 use gpurify_ingest::Provenance;
 use gpurify_testgen::LayoutBuilder;
@@ -181,10 +181,10 @@ fn an_unlabelled_layout_has_no_label_rows_at_all() {
 /// [`gpurify_ingest::LabelError::Unplaced`], aborting the load.
 #[test]
 fn a_label_binds_to_its_split_flank_and_one_on_the_channel_refuses_the_load() {
-    use gpurify_core::ops::Point;
+    use gpurify_geom::ops::Point;
     use gpurify_ingest::deck::Connectivity;
     use gpurify_ingest::LabelError;
-    use gpurify_units::Dbu;
+    use gpurify_geom::Dbu;
 
     const ACTIVE: LayerId = LayerId(0);
     const TEXT: LayerId = LayerId(1);

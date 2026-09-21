@@ -13,7 +13,7 @@ use common::{one_row_network, probe_of};
 use gpurify_erc::power::{self, NetNetworks, SolveScratch};
 use gpurify_testgen::{assert_close, assert_close_relative, ladder_network, Rng};
 use gpurify_topology::NetId;
-use gpurify_units::{prefix, Qty, Resistance};
+use gpurify_geom::{prefix, Qty, Resistance};
 
 type Probe = (u32, u32, Qty<Resistance, { prefix::BASE }>);
 

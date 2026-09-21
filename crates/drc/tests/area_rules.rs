@@ -371,7 +371,7 @@ fn a_slotted_plate_passes_a_limit_its_area_alone_would_fail() {
 /// So a limit of 0.2 is exceeded by the stepped sweep and by no unstepped one,
 /// and both numbers are exactly representable in binary floating point, so the
 /// comparison is not a tolerance question.
-fn straddling_hot_spot() -> gpurify_core::GeometryStore {
+fn straddling_hot_spot() -> gpurify_geom::GeometryStore {
     let mut layout = LayoutBuilder::new(1);
     layout.rect(A, 0, 0, 10, 10);
     layout.rect(A, 1_990, 1_990, 2_000, 2_000);

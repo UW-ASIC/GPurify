@@ -1,10 +1,10 @@
 //! GDSII writer: marker layers, and the other half of `parse -> write -> parse`.
 
 use crate::{narrow, WriteError};
-use gpurify_core::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::LayerTable;
 use gpurify_report::Violations;
-use gpurify_units::Dbu;
+use gpurify_geom::Dbu;
 
 // Record tags as they appear on the wire — `(record type << 8) | data type`.
 const HEADER: u16 = 0x0002;

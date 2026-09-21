@@ -8,15 +8,15 @@ use crate::facts::{NetFacts, RoleMask};
 use crate::ruleset::RuleHead;
 use crate::{ascending, base_layer, first_vertex, push_net_violations, record_run};
 use crate::{Design, Scratch};
-use gpurify_core::connectivity::components_into;
-use gpurify_core::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId, RingRef, ValidatedLayer};
-use gpurify_derived::{Evaluator, LayerRef};
+use gpurify_geom::connectivity::components_into;
+use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef, ValidatedLayer};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use gpurify_topology::NetId;
-use gpurify_units::{Dbu, DbuArea};
+use gpurify_geom::{Dbu, DbuArea};
 
 /// One conductor carrying two ties of opposite type.
 #[derive(Debug, Default)]
@@ -397,7 +397,7 @@ pub fn check_soft_connection(
 /// sample. Distances are exact: `point_seg_dist2` in [`DbuArea`] against the
 /// squared limit, so no square root enters a verdict.
 ///
-/// [`DbuArea`]: gpurify_units::DbuArea
+/// [`DbuArea`]: gpurify_geom::DbuArea
 pub fn check_missing_tie(
     design: Design<'_>,
     table: &MissingTieTable,
@@ -831,7 +831,7 @@ fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
 
 /// The smallest integer at least the square root of a non-negative area.
 ///
-/// [`gpurify_core::ops::isqrt`] rounds *toward zero*, which is the wrong
+/// [`gpurify_geom::ops::isqrt`] rounds *toward zero*, which is the wrong
 /// rounding for a bound: an upper bound rounded down prunes away the maximum it
 /// was supposed to protect.
 fn isqrt_ceil(area: i128) -> i64 {
@@ -1355,7 +1355,7 @@ fn furthest_from_taps(
 
 /// The fold seed for "no tap is in range".
 ///
-/// The largest area [`gpurify_core::ops::isqrt`] accepts, so a region with no
+/// The largest area [`gpurify_geom::ops::isqrt`] accepts, so a region with no
 /// taps at all measures `MAX_ABS_DBU` from one and is reported rather than
 /// passed.
 const NO_TAP_IN_RANGE: DbuArea = DbuArea::new(1i128 << 80);

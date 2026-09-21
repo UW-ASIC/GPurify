@@ -6,8 +6,8 @@
 //! because that is the rule `topology::device` states: one polygon on the
 //! recogniser's marker layer is exactly one device.
 
-use gpurify_core::{LayerId, PolyId};
-use gpurify_derived::Evaluator;
+use gpurify_geom::{LayerId, PolyId};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::netlist::{NetlistCase, NetlistLayers};
@@ -373,7 +373,7 @@ fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
 /// because what is under test is what `recognise_into` does with a marker layer,
 /// not what a boolean produces.
 struct Fingers {
-    store: gpurify_core::GeometryStore,
+    store: gpurify_geom::GeometryStore,
     channel: [PolyId; 2],
     gate: [PolyId; 2],
     /// Source, shared middle, drain — ascending in x, and so in [`PolyId`].
@@ -583,15 +583,15 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
         [
             (
                 DeviceParam::Width,
-                DeviceMeasure::Length(gpurify_units::Dbu::new_unchecked(200))
+                DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(200))
             ),
             (
                 DeviceParam::Length,
-                DeviceMeasure::Length(gpurify_units::Dbu::new_unchecked(50))
+                DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(50))
             ),
             (
                 DeviceParam::Area,
-                DeviceMeasure::Area(gpurify_units::DbuArea::new(50 * 200))
+                DeviceMeasure::Area(gpurify_geom::DbuArea::new(50 * 200))
             ),
         ],
         "a channel marker measures W, L and W x L"
@@ -705,8 +705,8 @@ fn a_resistor_recogniser_gives_its_two_terminals_interchangeable_pins() {
 // area, or net extraction fuses source and drain into one net in silence.
 // ---------------------------------------------------------------------------
 
-use gpurify_core::boolean::BooleanError;
-use gpurify_core::view::ValidityError;
+use gpurify_geom::boolean::BooleanError;
+use gpurify_geom::view::ValidityError;
 use gpurify_topology::device::{refuse_conducting_channels, ChannelError};
 
 /// Oracle: construct-from-answer. The [`Fingers`] layout is the *correct*

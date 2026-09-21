@@ -4,9 +4,9 @@
 //! last moment. Every outer boundary is counter-clockwise and every hole is
 //! clockwise, the canonical winding `core::view` establishes.
 
-use gpurify_core::ops::Point;
-use gpurify_core::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
-use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::ops::Point;
+use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
+use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// Wrap an `i64` as a coordinate. `MAX_ABS_DBU` is the bound that keeps every
 /// `i128` area product from overflowing.

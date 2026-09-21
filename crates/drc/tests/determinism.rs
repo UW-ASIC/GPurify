@@ -22,7 +22,7 @@ use gpurify_testgen::{assert_violations_eq, dbu};
 
 /// A layout with several rules' worth of findings in it, so the comparison has
 /// rows to disagree about.
-fn busy_layout() -> gpurify_core::GeometryStore {
+fn busy_layout() -> gpurify_geom::GeometryStore {
     let mut layout = LayoutBuilder::new(2);
     for column in 0..12i64 {
         for row in 0..12i64 {
@@ -53,7 +53,7 @@ fn two_rules() -> RuleSet {
 fn run_once(
     set: &RuleSet,
     env: &Env,
-    store: &gpurify_core::GeometryStore,
+    store: &gpurify_geom::GeometryStore,
     scratch: &mut Scratch,
 ) -> (Violations, Vec<RuleRun>) {
     let mut out = Violations::default();

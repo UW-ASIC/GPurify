@@ -1,10 +1,10 @@
 //! Resistor ladders and parallel-plate capacitors with closed-form answers.
 
-use gpurify_core::ops::Point;
-use gpurify_core::{GeometryStore, LayerId};
+use gpurify_geom::ops::Point;
+use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_erc::power::NetNetworks;
 use gpurify_topology::NetId;
-use gpurify_units::{prefix, Qty, Resistance};
+use gpurify_geom::{prefix, Qty, Resistance};
 
 use crate::shapes::{dbu, LayoutBuilder};
 
@@ -69,7 +69,7 @@ pub fn ladder_network(rungs: u32, series_ohm: f64, parallel_ohm: f64) -> LadderC
             x: dbu(i64::from(node) * 1_000),
             y: dbu(0),
         });
-        networks.node_poly.push(gpurify_core::PolyId(node));
+        networks.node_poly.push(gpurify_geom::PolyId(node));
     }
 
     let series = Qty::<Resistance, { prefix::BASE }>::new(series_ohm);
@@ -244,7 +244,7 @@ mod tests {
     fn parallel_plate_of_one_square_micrometre_matches_epsilon_zero() {
         use super::{plate_answer, PlateSpec};
         let answer = plate_answer(PlateSpec {
-            layer: gpurify_core::LayerId(0),
+            layer: gpurify_geom::LayerId(0),
             width_dbu: 1_000,
             length_dbu: 1_000,
             dbu_per_um: 1_000,
@@ -266,7 +266,7 @@ mod tests {
     fn plate_capacitance_scales_with_area_permittivity_and_inverse_separation() {
         use super::{plate_answer, PlateSpec};
         let base = PlateSpec {
-            layer: gpurify_core::LayerId(0),
+            layer: gpurify_geom::LayerId(0),
             width_dbu: 2_000,
             length_dbu: 3_000,
             dbu_per_um: 1_000,

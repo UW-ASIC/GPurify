@@ -11,7 +11,7 @@
 mod common;
 
 use common::{Env, Sink, A, RULE};
-use gpurify_core::LayerId;
+use gpurify_geom::LayerId;
 use gpurify_drc::rules::spacing::{check_min_spacing, MinSpacingTable};
 use gpurify_drc::rules::width::{
     check_max_width, check_min_edge_length, check_min_width, check_notch, narrowest_notch,
@@ -346,7 +346,7 @@ fn a_notch_exactly_at_the_limit_is_clean() {
 /// The same conductor as [`u_shape`], fractured the way a router or a GDS writer
 /// emits it. Nothing distinguishes the two electrically, and no rule may
 /// distinguish them either.
-fn fractured_u() -> gpurify_core::GeometryStore {
+fn fractured_u() -> gpurify_geom::GeometryStore {
     let mut layout = LayoutBuilder::new(1);
     layout.rect(A, 0, 0, 300, 100); // the base, touching both arms along y = 100
     layout.rect(A, 0, 100, 110, 500); // left arm

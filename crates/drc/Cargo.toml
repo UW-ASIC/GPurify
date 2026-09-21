@@ -4,10 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gpurify-units = { workspace = true }
-gpurify-core = { workspace = true }
+gpurify-geom = { workspace = true }
 gpurify-ingest = { workspace = true }
-gpurify-derived = { workspace = true }
 gpurify-topology = { workspace = true }
 gpurify-report = { workspace = true }
 thiserror = { workspace = true }

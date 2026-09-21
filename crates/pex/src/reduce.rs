@@ -3,7 +3,7 @@
 //! Invariant across every order: total capacitance on each net, and the driving
 //! point resistance between any two terminals.
 
-use gpurify_units::Qty;
+use gpurify_geom::Qty;
 
 use crate::network::{cap_ff, NodeId, Parasitic, ParasiticNetwork};
 
@@ -559,7 +559,7 @@ pub fn merge_parallel_into(network: &ParasiticNetwork, out: &mut ParasiticNetwor
 /// Total capacitance over every element of a network.
 pub fn total_capacitance(
     network: &ParasiticNetwork,
-) -> gpurify_units::Qty<gpurify_units::Capacitance, { gpurify_units::prefix::FEMTO }> {
+) -> gpurify_geom::Qty<gpurify_geom::Capacitance, { gpurify_geom::prefix::FEMTO }> {
     debug_assert_eq!(
         network.from.len(),
         network.value.len(),

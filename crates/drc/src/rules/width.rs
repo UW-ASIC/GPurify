@@ -12,13 +12,13 @@
 
 use super::{mid, ring_segs, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
-use gpurify_core::boolean::union_into;
-use gpurify_core::ops::{winding_of, Point, Winding};
-use gpurify_core::view::{validate_layer_into, ValidatedLayer};
-use gpurify_core::{GeometryStore, LayerId, PolyId, PolygonRef, RingRef};
+use gpurify_geom::boolean::union_into;
+use gpurify_geom::ops::{winding_of, Point, Winding};
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::{GeometryStore, LayerId, PolyId, PolygonRef, RingRef};
 use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_units::Dbu;
+use gpurify_geom::Dbu;
 
 /// Minimum width: no part of a shape may be narrower than the limit.
 #[derive(Debug, Default)]
@@ -340,7 +340,7 @@ fn narrowest_width_at(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> (Dbu
 }
 
 /// The store row each validated polygon of one layer came from, in
-/// [`ValidatedLayer::get`](gpurify_core::ValidatedLayer::get) order.
+/// [`ValidatedLayer::get`](gpurify_geom::ValidatedLayer::get) order.
 ///
 /// `ValidatedLayer::ring_poly` is private with no accessor, so this replays the
 /// filter validation used: one polygon per counter-clockwise row, in ascending

@@ -12,7 +12,7 @@
 mod common;
 
 use common::{Env, Sink, A, B, RULE};
-use gpurify_core::{Bbox, PolyId};
+use gpurify_geom::{Bbox, PolyId};
 use gpurify_drc::rules::overlay::{
     check_asymmetric_enclosure, check_max_distance_to_tap, check_min_enclosure,
     check_min_extension, check_overlap, margins, AsymmetricEnclosureTable, Margins,
@@ -280,7 +280,7 @@ fn an_inner_shape_inside_two_hosts_is_judged_by_the_better_of_them() {
 /// The two-sided layout: margins of 40 left, 60 right, 100 bottom, 100 top.
 ///
 /// Returns the store and the two polygon ids, inner first.
-fn two_sided_enclosure() -> (gpurify_core::GeometryStore, PolyId, PolyId) {
+fn two_sided_enclosure() -> (gpurify_geom::GeometryStore, PolyId, PolyId) {
     let mut layout = LayoutBuilder::new(2);
     let inner = layout.rect(A, 100, 100, 200, 200);
     let outer = layout.rect(B, 60, 0, 260, 300);
@@ -560,7 +560,7 @@ fn an_overlap_exactly_at_the_limit_is_clean() {
 /// is 400 across and 300 up from the tap's nearest point, and every other corner
 /// of the well is strictly closer. So the answer is one number and it belongs to
 /// one corner, which is what a test needs in order to assert a coordinate.
-fn untied_well() -> (gpurify_core::GeometryStore, PolyId) {
+fn untied_well() -> (gpurify_geom::GeometryStore, PolyId) {
     let mut layout = LayoutBuilder::new(2);
     let well = layout.rect(A, 0, 0, 100, 100);
     layout.rect(B, 400, 300, 500, 400);

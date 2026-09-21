@@ -6,7 +6,7 @@
 
 use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, SupplyRole};
 use gpurify_topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
-use gpurify_units::{prefix, Qty, Voltage};
+use gpurify_geom::{prefix, Qty, Voltage};
 
 /// Which terminal roles are present on a net, as a bit per role.
 ///

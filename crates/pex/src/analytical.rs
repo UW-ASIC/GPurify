@@ -1,11 +1,11 @@
 //! Closed-form extraction from the deck's process stack.
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
-use gpurify_core::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
-use gpurify_core::{ops, Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
+use gpurify_geom::{ops, Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_topology::{DeviceTable, NetId, NetTable};
-use gpurify_units::{prefix, Capacitance, Dbu, DbuArea, Grid, Qty, Resistance, MAX_ABS_DBU};
+use gpurify_geom::{prefix, Capacitance, Dbu, DbuArea, Grid, Qty, Resistance, MAX_ABS_DBU};
 
 /// Attofarads in a femtofarad. Divided by, never multiplied by `1e-3`, which is
 /// not exact in `f64`.
@@ -46,7 +46,7 @@ fn micrometres(value: Dbu, grid: Grid) -> f64 {
 
 /// An area as square micrometres.
 #[inline]
-fn square_micrometres(value: gpurify_units::DbuArea, grid: Grid) -> f64 {
+fn square_micrometres(value: gpurify_geom::DbuArea, grid: Grid) -> f64 {
     debug_assert!(grid.dbu_per_um() > 0, "a Grid is positive by construction");
     // The bound `Bbox::area` states.
     debug_assert!(
@@ -72,8 +72,8 @@ fn square_micrometres(value: gpurify_units::DbuArea, grid: Grid) -> f64 {
 /// Series resistance of a conductor run: `sheet_resistance × length / width`.
 pub fn segment_resistance(
     sheet_ohm_sq: f64,
-    length: gpurify_units::Dbu,
-    width: gpurify_units::Dbu,
+    length: gpurify_geom::Dbu,
+    width: gpurify_geom::Dbu,
 ) -> Qty<Resistance, { prefix::BASE }> {
     debug_assert!(
         sheet_ohm_sq.is_finite() && sheet_ohm_sq >= 0.0,
@@ -135,8 +135,8 @@ pub fn via_resistance(per_cut_ohm: f64, cuts: u32) -> Qty<Resistance, { prefix::
 pub fn ground_capacitance(
     area_af_um2: f64,
     fringe_af_um: f64,
-    area: gpurify_units::DbuArea,
-    perimeter: gpurify_units::Dbu,
+    area: gpurify_geom::DbuArea,
+    perimeter: gpurify_geom::Dbu,
     grid: Grid,
 ) -> Qty<Capacitance, { prefix::FEMTO }> {
     debug_assert!(
@@ -172,8 +172,8 @@ pub fn ground_capacitance(
 /// separation; `grid` converts both lengths to micrometres.
 pub fn coupling_capacitance(
     coefficient_af_um: f64,
-    facing_length: gpurify_units::Dbu,
-    separation: gpurify_units::Dbu,
+    facing_length: gpurify_geom::Dbu,
+    separation: gpurify_geom::Dbu,
     grid: Grid,
 ) -> Qty<Capacitance, { prefix::FEMTO }> {
     debug_assert!(

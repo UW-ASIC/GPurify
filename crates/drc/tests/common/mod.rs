@@ -17,9 +17,9 @@
     reason = "each test binary links only the fixtures it names"
 )]
 
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{GeometryStore, LayerId, ValidatedLayer};
-use gpurify_derived::Evaluator;
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
+use gpurify_geom::Evaluator;
 use gpurify_drc::{Design, Scratch};
 use gpurify_ingest::StrId;
 use gpurify_report::{RuleRun, Violations};

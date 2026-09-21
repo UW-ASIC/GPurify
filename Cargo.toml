@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gpurify-core = { workspace = true }
-gpurify-derived = { workspace = true }
+gpurify-geom = { workspace = true }
 gpurify-drc = { workspace = true }
 gpurify-engine = { workspace = true }
 gpurify-erc = { workspace = true }
@@ -16,7 +15,6 @@ gpurify-pex = { workspace = true }
 gpurify-quasistatic = { workspace = true }
 gpurify-report = { workspace = true }
 gpurify-topology = { workspace = true }
-gpurify-units = { workspace = true }
 
 [features]
 default = ["gpu"]
@@ -38,10 +36,8 @@ workspace = true
 [workspace]
 resolver = "2"
 members = [
-    "crates/units",
-    "crates/core",
+    "crates/geom",
     "crates/ingest",
-    "crates/derived",
     "crates/topology",
     "crates/report",
     "crates/drc",
@@ -57,10 +53,8 @@ members = [
 exclude = ["tools"]
 
 [workspace.dependencies]
-gpurify-units = { path = "crates/units" }
-gpurify-core = { path = "crates/core" }
+gpurify-geom = { path = "crates/geom" }
 gpurify-ingest = { path = "crates/ingest" }
-gpurify-derived = { path = "crates/derived" }
 gpurify-topology = { path = "crates/topology" }
 gpurify-report = { path = "crates/report" }
 gpurify-drc = { path = "crates/drc" }

@@ -10,7 +10,7 @@
 
 pub mod deck;
 pub mod intent;
-pub mod intern;
+
 pub mod layout;
 pub mod netlist;
 pub mod provenance;
@@ -41,5 +41,5 @@ pub(crate) fn csr<'a, T>(start: &[u32], rows: &'a [T], row: usize) -> &'a [T] {
 
 pub use deck::{Deck, DeckError};
 pub use intent::{DesignIntent, IntentError};
-pub use intern::{StrId, StrTable};
+pub use gpurify_geom::{StrId, StrTable};
 pub use provenance::{LabelError, PlacedLabel, Provenance};

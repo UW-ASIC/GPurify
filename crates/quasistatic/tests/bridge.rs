@@ -8,20 +8,20 @@
 mod common;
 
 use common::{grid, uniform_stack};
-use gpurify_core::{GeometryStoreBuilder, LayerId};
+use gpurify_geom::{GeometryStoreBuilder, LayerId};
 use gpurify_quasistatic::henry::bridge::{
     extract_inductance_into, InductMatrix, InductanceError, InductanceOptions,
 };
 use gpurify_quasistatic::integrals::filament::self_inductance_bar;
 use gpurify_topology::{NetId, NetTable};
-use gpurify_units::Dbu;
+use gpurify_geom::Dbu;
 
 fn dbu(raw: i64) -> Dbu {
     Dbu::new(raw).expect("a test coordinate is in the coordinate domain")
 }
 
 /// One 10 µm × 1 µm bar on layer 0 of a 1 nm grid, assigned to net 0.
-fn one_bar() -> (gpurify_core::GeometryStore, NetTable) {
+fn one_bar() -> (gpurify_geom::GeometryStore, NetTable) {
     let mut builder = GeometryStoreBuilder::default();
     builder.push_rect(LayerId(0), dbu(0), dbu(0), dbu(10_000), dbu(1_000));
     let (store, _) = builder.finish(1);

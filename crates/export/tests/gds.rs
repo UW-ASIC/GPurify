@@ -34,7 +34,7 @@ fn markers(world: &World, violations: &gpurify_report::Violations, layer: u16) -
     write_markers(
         violations,
         &world.store,
-        gpurify_core::LayerId(layer),
+        gpurify_geom::LayerId(layer),
         &mut out,
     )
     .expect("the markers are writable");
@@ -219,7 +219,7 @@ fn both_gds_writers_append_to_the_buffer_they_are_given() {
     write_markers(
         &world.violations,
         &world.store,
-        gpurify_core::LayerId(1),
+        gpurify_geom::LayerId(1),
         &mut combined,
     )
     .expect("the markers are writable");

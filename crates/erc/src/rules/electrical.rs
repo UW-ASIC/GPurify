@@ -14,11 +14,11 @@ use crate::power::{
 };
 use crate::ruleset::RuleHead;
 use crate::{record_run, refuse_rows, skip_rows, Design, Scratch};
-use gpurify_core::LayerId;
+use gpurify_geom::LayerId;
 use gpurify_ingest::intent::NetLimits;
 use gpurify_ingest::StrId;
 use gpurify_report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_units::{
+use gpurify_geom::{
     prefix, Current, CurrentDensity, Dbu, Grid, Qty, Resistance, Temperature, Voltage,
 };
 
@@ -516,7 +516,7 @@ fn check_branches(
 /// Records [`Skipped`]`(`[`NoDesignIntent`]`)` when there is no solve.
 ///
 /// [`EdgeKind`]: crate::power::EdgeKind
-/// [`Dbu`]: gpurify_units::Dbu
+/// [`Dbu`]: gpurify_geom::Dbu
 /// [`Skipped`]: gpurify_report::Outcome::Skipped
 /// [`NoDesignIntent`]: gpurify_report::SkipReason::NoDesignIntent
 pub fn check_em_current_density(

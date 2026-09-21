@@ -146,12 +146,11 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 name = "gpurify"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
- "gpurify-derived",
  "gpurify-drc",
  "gpurify-engine",
  "gpurify-erc",
  "gpurify-export",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-lvs",
  "gpurify-pex",
@@ -159,7 +158,6 @@ dependencies = [
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "serde",
  "serde_json",
 ]
@@ -168,33 +166,12 @@ dependencies = [
 name = "gpurify-cli"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
  "gpurify-engine",
  "gpurify-export",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-report",
  "gpurify-testgen",
- "gpurify-units",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-core"
-version = "0.1.0"
-dependencies = [
- "gpurify-testgen",
- "gpurify-units",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-derived"
-version = "0.1.0"
-dependencies = [
- "gpurify-core",
- "gpurify-ingest",
- "gpurify-testgen",
- "gpurify-units",
  "thiserror",
 ]
 
@@ -202,13 +179,11 @@ dependencies = [
 name = "gpurify-drc"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
- "gpurify-derived",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "thiserror",
 ]
 
@@ -216,18 +191,16 @@ dependencies = [
 name = "gpurify-engine"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
- "gpurify-derived",
  "gpurify-drc",
  "gpurify-erc",
  "gpurify-export",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-lvs",
  "gpurify-pex",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "thiserror",
 ]
 
@@ -235,13 +208,11 @@ dependencies = [
 name = "gpurify-erc"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
- "gpurify-derived",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "thiserror",
 ]
 
@@ -249,14 +220,23 @@ dependencies = [
 name = "gpurify-export"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-lvs",
  "gpurify-pex",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "gpurify-geom"
+version = "0.1.0"
+dependencies = [
+ "gpurify-testgen",
  "serde",
  "serde_json",
  "thiserror",
@@ -267,10 +247,9 @@ name = "gpurify-ingest"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "gpurify-core",
  "gpurify-export",
+ "gpurify-geom",
  "gpurify-testgen",
- "gpurify-units",
  "serde",
  "serde_json",
  "thiserror",
@@ -280,12 +259,11 @@ dependencies = [
 name = "gpurify-lvs"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "thiserror",
 ]
 
@@ -293,13 +271,12 @@ dependencies = [
 name = "gpurify-pex"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-quasistatic",
  "gpurify-report",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "thiserror",
  "wide",
 ]
@@ -308,11 +285,10 @@ dependencies = [
 name = "gpurify-quasistatic"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-testgen",
  "gpurify-topology",
- "gpurify-units",
  "num-complex",
  "rayon",
  "thiserror",
@@ -323,10 +299,9 @@ dependencies = [
 name = "gpurify-report"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-testgen",
- "gpurify-units",
  "serde",
  "thiserror",
 ]
@@ -335,33 +310,20 @@ dependencies = [
 name = "gpurify-testgen"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
  "gpurify-erc",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-report",
  "gpurify-topology",
- "gpurify-units",
 ]
 
 [[package]]
 name = "gpurify-topology"
 version = "0.1.0"
 dependencies = [
- "gpurify-core",
- "gpurify-derived",
+ "gpurify-geom",
  "gpurify-ingest",
  "gpurify-testgen",
- "gpurify-units",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-units"
-version = "0.1.0"
-dependencies = [
- "gpurify-testgen",
- "serde",
- "serde_json",
  "thiserror",
 ]
 

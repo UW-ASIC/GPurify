@@ -64,7 +64,7 @@ macro_rules! dispatch {
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_report::{LimitSense, RuleRun, Violations};
-use gpurify_units::Dbu;
+use gpurify_geom::Dbu;
 
 /// Every DRC rule the deck configures, filed by kind.
 ///
@@ -180,10 +180,10 @@ impl RuleSet {
         };
 
         let square =
-            |spec: &RuleSpec, param: &'static str| -> Result<gpurify_units::DbuArea, DrcError> {
+            |spec: &RuleSpec, param: &'static str| -> Result<gpurify_geom::DbuArea, DrcError> {
                 let side = length(spec, param)?;
                 debug_assert!(
-                    side.raw() <= gpurify_units::MAX_ABS_DBU,
+                    side.raw() <= gpurify_geom::MAX_ABS_DBU,
                     "a side past the coordinate domain squares past the i128 ceiling"
                 );
                 Ok(side.mul_wide(side))
@@ -576,8 +576,8 @@ mod tests {
     use super::RuleSet;
     use crate::rules::grid::Direction;
     use crate::{Design, Scratch};
-    use gpurify_core::{GeometryStore, LayerId};
-    use gpurify_derived::Evaluator;
+    use gpurify_geom::{GeometryStore, LayerId};
+    use gpurify_geom::Evaluator;
     use gpurify_ingest::StrId;
     use gpurify_report::{LimitSense, Outcome, RuleRun, Violations};
     use gpurify_testgen::dbu;

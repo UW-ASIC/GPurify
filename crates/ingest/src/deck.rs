@@ -5,10 +5,10 @@
 //! exactly or not at all. Rule kinds are interned verbatim and never interpreted
 //! here.
 
-use crate::intern::{StrId, StrTable};
+use gpurify_geom::{StrId, StrTable};
 use crate::narrow;
-use gpurify_core::LayerId;
-use gpurify_units::{prefix::NANO, Dbu, Grid, GridError, Length, Qty};
+use gpurify_geom::LayerId;
+use gpurify_geom::{prefix::NANO, Dbu, Grid, GridError, Length, Qty};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
@@ -1067,8 +1067,8 @@ pub fn read_deck(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{parse_deck, DeckError, LayerTable, StrTable};
-    use gpurify_core::LayerId;
-    use gpurify_units::Grid;
+    use gpurify_geom::LayerId;
+    use gpurify_geom::Grid;
 
     /// The `"cell"` key is the one consumer-owned name [`DeckJson`] admits; any
     /// other unknown key must still die in `deny_unknown_fields`, or a

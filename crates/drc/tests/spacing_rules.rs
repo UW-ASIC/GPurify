@@ -11,7 +11,7 @@
 mod common;
 
 use common::{Env, Sink, A, B, RULE};
-use gpurify_core::Bbox;
+use gpurify_geom::Bbox;
 use gpurify_drc::rules::spacing::{
     check_corner_to_corner, check_eol_spacing, check_min_spacing, check_min_spacing_diff,
     check_prl_spacing, check_wide_dependent_spacing, parallel_run_length, CornerToCornerTable,

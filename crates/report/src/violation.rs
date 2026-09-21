@@ -1,10 +1,10 @@
 //! The violation table, and the record of which rules ran.
 
 use crate::measure::Measurement;
-use gpurify_core::ops::Point;
-use gpurify_core::{LayerId, PolyId};
+use gpurify_geom::ops::Point;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::StrId;
-use gpurify_units::Dbu;
+use gpurify_geom::Dbu;
 
 /// How bad a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -347,10 +347,10 @@ pub fn record_run(
 #[cfg(test)]
 mod record_run_tests {
     use super::{record_run, Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
-    use gpurify_core::ops::Point;
-    use gpurify_core::{LayerId, PolyId};
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{LayerId, PolyId};
     use gpurify_ingest::StrId;
-    use gpurify_units::Dbu;
+    use gpurify_geom::Dbu;
 
     /// Push `count` placeholder rows onto a violation table.
     fn fill(out: &mut Violations, count: usize) {

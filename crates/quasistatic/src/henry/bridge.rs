@@ -12,10 +12,10 @@
 
 use crate::henry::netlist::{FreqSweep, Netlist, Node, Port, Segment};
 use crate::henry::solver::{solve_with, Method, SolveError};
-use gpurify_core::GeometryStore;
+use gpurify_geom::GeometryStore;
 use gpurify_ingest::deck::ProcessStack;
 use gpurify_topology::{NetId, NetTable};
-use gpurify_units::Grid;
+use gpurify_geom::Grid;
 
 /// How the inductance solve is run.
 #[derive(Debug, Clone, Copy)]
@@ -237,7 +237,7 @@ pub fn extract_inductance_into(
 
 /// The filament endpoints of one bounding box, in database units: the centre
 /// line along the long axis. Ties (a square) run along x.
-fn filament_endpoints(bbox: gpurify_core::Bbox) -> ((i64, i64), (i64, i64)) {
+fn filament_endpoints(bbox: gpurify_geom::Bbox) -> ((i64, i64), (i64, i64)) {
     let (xlo, xhi) = (bbox.xlo.raw(), bbox.xhi.raw());
     let (ylo, yhi) = (bbox.ylo.raw(), bbox.yhi.raw());
     if xhi - xlo >= yhi - ylo {

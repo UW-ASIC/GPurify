@@ -14,8 +14,8 @@
 mod common;
 
 use common::{head, rule};
-use gpurify_core::{Bbox, GeometryStore, LayerId};
-use gpurify_derived::{Evaluator, LayerRef};
+use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_erc::rules::antenna::{
     check_antenna, check_antenna_electrical, check_density_cmp, AntennaElectricalTable,
     AntennaMeasure, AntennaTable, DensityCmpTable,
@@ -51,7 +51,7 @@ fn measured_ratio(violations: &Violations, row: usize) -> f64 {
 /// Layer zero is the wire, layer one the cut, layer two the gate. The gate is a
 /// thousand units square and the wire is four thousand by one thousand, so the
 /// antenna ratio is exactly four with no rounding anywhere.
-fn gate_on_a_long_wire() -> (GeometryStore, NetTable, gpurify_core::PolyId) {
+fn gate_on_a_long_wire() -> (GeometryStore, NetTable, gpurify_geom::PolyId) {
     let mut layout = LayoutBuilder::new(3);
     layout.rect(LayerId(0), 0, 0, 4_000, 1_000);
     let gate = layout.rect(LayerId(2), 0, 0, 1_000, 1_000);
@@ -208,7 +208,7 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
 /// thousand units square, metal 1 is twice that area and metal 2 ten times it,
 /// so the stage-one ratio is exactly two and the stage-two ratio exactly twelve
 /// with no rounding anywhere.
-fn gate_under_a_two_level_stack() -> (GeometryStore, NetTable, gpurify_core::PolyId) {
+fn gate_under_a_two_level_stack() -> (GeometryStore, NetTable, gpurify_geom::PolyId) {
     let mut layout = LayoutBuilder::new(5);
     layout.rect(LayerId(0), 0, 0, 2_000, 1_000);
     let gate = layout.rect(LayerId(2), 0, 0, 1_000, 1_000);

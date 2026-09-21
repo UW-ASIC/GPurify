@@ -14,8 +14,8 @@
 mod common;
 
 use common::{head, manufacturing_grid, operating_temperature, rule};
-use gpurify_core::{Bbox, LayerId};
-use gpurify_derived::{Evaluator, LayerRef};
+use gpurify_geom::{Bbox, LayerId};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_erc::facts::{IntentMap, NetFacts};
 use gpurify_erc::power::NetNetworks;
 use gpurify_erc::rules::{antenna, electrical, reliability, supply, topology};
@@ -28,7 +28,7 @@ use gpurify_ingest::{StrId, StrTable};
 use gpurify_report::{Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_testgen::{dbu, LayoutBuilder};
 use gpurify_topology::{DeviceTable, NetTable};
-use gpurify_units::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
+use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 
 /// The id given to each kind's single configured row, in the order `KINDS`
 /// spells them. Ids are positional so a failure names the kind.
@@ -217,7 +217,7 @@ fn every_kind() -> RuleSet {
 
 /// Everything a run borrows, over a two-layer layout the size of the die.
 struct Cell {
-    store: gpurify_core::GeometryStore,
+    store: gpurify_geom::GeometryStore,
     derived: Evaluator,
     nets: NetTable,
     devices: DeviceTable,
@@ -398,7 +398,7 @@ fn run_appends_to_the_buffers_it_is_given() {
         at: gpurify_testgen::point(1, 1),
         measured: gpurify_report::Measurement::Count(1),
         limit: gpurify_report::Measurement::Count(0),
-        shapes: (gpurify_core::PolyId(0), None),
+        shapes: (gpurify_geom::PolyId(0), None),
     });
 
     rules.run(

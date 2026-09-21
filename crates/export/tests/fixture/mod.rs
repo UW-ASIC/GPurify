@@ -29,7 +29,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gpurify_core::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_export::json::Report;
 use gpurify_export::Header;
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
@@ -43,7 +43,7 @@ use gpurify_topology::{
     bind_ports_into, extract_nets_into, DeviceTable, Extraction, NetId, NetTable, PortTable,
     TerminalRole,
 };
-use gpurify_units::{Grid, Qty};
+use gpurify_geom::{Grid, Qty};
 
 /// The one conductor layer. Both rectangles live here.
 pub const CONDUCTOR: LayerId = LayerId(0);

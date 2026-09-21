@@ -10,8 +10,8 @@
 
 use std::collections::BTreeSet;
 
-use gpurify_core::{LayerId, PolyId};
-use gpurify_derived::Evaluator;
+use gpurify_geom::{LayerId, PolyId};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::netlist::{ExpectedDevice, NetlistCase};

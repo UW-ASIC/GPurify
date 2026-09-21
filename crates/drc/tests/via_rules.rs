@@ -15,7 +15,7 @@
 mod common;
 
 use common::{Env, Sink, A, RULE};
-use gpurify_core::PolyId;
+use gpurify_geom::PolyId;
 use gpurify_drc::rules::via::{
     check_redundant_via, check_via_array_spacing, RedundantViaTable, ViaArraySpacingTable,
 };
@@ -27,7 +27,7 @@ use gpurify_testgen::{
 };
 
 /// `count` cuts of side 100 in a row, the first centred on the origin.
-fn cut_row(count: i64, pitch: i64) -> (gpurify_core::GeometryStore, Vec<PolyId>) {
+fn cut_row(count: i64, pitch: i64) -> (gpurify_geom::GeometryStore, Vec<PolyId>) {
     let mut layout = LayoutBuilder::new(1);
     let handles: Vec<_> = (0..count)
         .map(|i| {

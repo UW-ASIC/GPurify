@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gpurify-units = { workspace = true }
-gpurify-core = { workspace = true }
+gpurify-geom = { workspace = true }
 thiserror = { workspace = true }
 flate2 = { workspace = true }
 # `parse_deck` and `parse_intent` read JSON — the deck and the design intent are

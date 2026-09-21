@@ -1,7 +1,7 @@
 fn main() {
     use gpurify::engine::pipeline::{extract_into, load_into, Inputs};
     use gpurify::ingest::layout::UnknownLayers;
-    use gpurify::units::Grid;
+    use gpurify::geom::Grid;
     use std::path::Path;
 
     let proj_dir = Path::new(".");
@@ -29,7 +29,7 @@ fn main() {
 
     let mut poly_counts = vec![0u32; nets.net_count()];
     for poly_idx in 0..store.poly_count() {
-        let poly = gpurify::core::PolyId(poly_idx as u32);
+        let poly = gpurify::geom::PolyId(poly_idx as u32);
         let net = nets.net_of(poly);
         if (net.idx() as usize) < nets.net_count() {
             poly_counts[net.idx() as usize] += 1;

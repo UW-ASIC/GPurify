@@ -5,7 +5,7 @@
 //! edge order.
 
 use crate::Rng;
-use gpurify_core::connectivity::ComponentLabel;
+use gpurify_geom::connectivity::ComponentLabel;
 
 /// A graph and its partition.
 #[derive(Debug, Clone, PartialEq, Eq)]

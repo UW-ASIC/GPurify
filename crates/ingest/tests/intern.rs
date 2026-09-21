@@ -6,7 +6,7 @@
 //! `resolve` inverting `intern`, and a reverse lookup that finds a name however
 //! the table was filled.
 
-use gpurify_ingest::intern::{StrId, StrTable};
+use gpurify_geom::{StrId, StrTable};
 use gpurify_ingest::provenance::PathTable;
 use gpurify_testgen::Rng;
 

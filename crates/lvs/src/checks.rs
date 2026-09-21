@@ -8,15 +8,15 @@
 //! unrun, never as clean.
 
 use crate::graph::{narrow, LayoutGraph};
-use gpurify_core::ops::Point;
-use gpurify_core::{LayerId, PolyId};
+use gpurify_geom::ops::Point;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
 use gpurify_report::{
     record_run, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_topology::{DeviceTable, NetId, NetTable, PortTable};
-use gpurify_units::Dbu;
+use gpurify_geom::Dbu;
 
 /// Rule ids for the eight run rows the six checks produce. Counted down from
 /// `u32::MAX` to stay out of the range a run's `StrTable` issues.

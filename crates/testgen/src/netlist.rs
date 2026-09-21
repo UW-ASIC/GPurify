@@ -6,7 +6,7 @@
 //! by construction. Every distinct [`TerminalRole`] gets its own conductor and
 //! cut layer, because `DeviceRecognition` identifies terminal `k` by layer.
 
-use gpurify_core::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_topology::TerminalRole;

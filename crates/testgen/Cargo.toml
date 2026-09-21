@@ -6,8 +6,7 @@ publish = false
 description = "Seeded generators and oracles for the GPUVerify test suite."
 
 [dependencies]
-gpurify-units = { workspace = true }
-gpurify-core = { workspace = true }
+gpurify-geom = { workspace = true }
 gpurify-ingest = { workspace = true }
 gpurify-report = { workspace = true }
 gpurify-topology = { workspace = true }

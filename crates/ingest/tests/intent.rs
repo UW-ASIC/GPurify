@@ -8,7 +8,7 @@
 //! would mean every net fails.
 
 use gpurify_ingest::intent::DesignIntent;
-use gpurify_ingest::intern::StrTable;
+use gpurify_geom::StrTable;
 use gpurify_ingest::IntentError;
 
 /// Oracle: construct-from-answer. An absent intent is the input; the correct

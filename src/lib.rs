@@ -9,8 +9,7 @@
 //! live. Those two link every crate at once, so they belong to no single one of
 //! them, and a virtual workspace root cannot host a test target.
 
-pub use gpurify_core as core;
-pub use gpurify_derived as derived;
+pub use gpurify_geom as geom;
 pub use gpurify_drc as drc;
 pub use gpurify_engine as engine;
 pub use gpurify_erc as erc;
@@ -21,11 +20,10 @@ pub use gpurify_pex as pex;
 pub use gpurify_quasistatic as quasistatic;
 pub use gpurify_report as report;
 pub use gpurify_topology as topology;
-pub use gpurify_units as units;
 
 /// What a caller needs for an ordinary run, without naming a crate.
 pub mod prelude {
     pub use gpurify_engine::{Checks, Inputs, Outputs, RunOptions, StageStatus, Summary};
     pub use gpurify_report::{Measurement, Severity, Violation, Violations};
-    pub use gpurify_units::{Dbu, Grid};
+    pub use gpurify_geom::{Dbu, Grid};
 }

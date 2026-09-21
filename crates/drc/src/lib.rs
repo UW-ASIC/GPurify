@@ -11,17 +11,17 @@ pub mod ruleset;
 
 pub use ruleset::RuleSet;
 
-use gpurify_core::connectivity::ComponentLabel;
-use gpurify_core::index::SpatialIndex;
-use gpurify_core::rects::Rect;
-use gpurify_core::{GeometryStore, PolyId, ValidatedLayer};
-use gpurify_derived::Evaluator;
+use gpurify_geom::connectivity::ComponentLabel;
+use gpurify_geom::index::SpatialIndex;
+use gpurify_geom::rects::Rect;
+use gpurify_geom::{GeometryStore, PolyId, ValidatedLayer};
+use gpurify_geom::Evaluator;
 // Imported for the intra-doc links above and in `DrcError`; the rule modules
 // take their own copies.
 #[allow(unused_imports)]
 use gpurify_report::{Outcome, RuleRun, Violations};
 use gpurify_topology::{DeviceTable, NetTable};
-use gpurify_units::DbuArea;
+use gpurify_geom::DbuArea;
 
 /// Why a deck could not be turned into a [`RuleSet`].
 ///

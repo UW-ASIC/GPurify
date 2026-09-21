@@ -22,14 +22,14 @@
 
 use crate::centre;
 use crate::facts::IntentMap;
-use gpurify_core::connectivity::{components_into, ComponentLabel};
-use gpurify_core::ops::Point;
-use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::connectivity::{components_into, ComponentLabel};
+use gpurify_geom::ops::Point;
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_topology::net::{intra_layer_edges_into, via_edges_into};
 use gpurify_topology::{DeviceTable, NetId, NetTable};
-use gpurify_units::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
+use gpurify_geom::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -1649,7 +1649,7 @@ pub fn extract_into(
 /// A uniform grid over one net's tap points, for nearest-tap queries.
 ///
 /// CSR by bucket, queried by expanding rings around the query cell. Distinct
-/// from [`gpurify_core::index::SpatialIndex`] and from `rules::supply::TapGrid`:
+/// from [`gpurify_geom::index::SpatialIndex`] and from `rules::supply::TapGrid`:
 /// this indexes one net's shapes *across* layers and answers a nearest-point
 /// query, where those answer within-distance pair queries over segments.
 #[derive(Debug, Default)]
@@ -2181,7 +2181,7 @@ struct ChainProfile {
     /// `lo` — the sweep's input. A *perpendicular* edge has `lo == hi`, so the
     /// slab predicate `lo <= t0 && hi >= t1` with `t0 < t1` is unsatisfiable
     /// for it and its `across` is never read. Same trick, and the same reason,
-    /// as [`gpurify_core::rects`]'s edge table.
+    /// as [`gpurify_geom::rects`]'s edge table.
     edge: Vec<(Dbu, Dbu, Dbu)>,
     /// The sweep's active-edge list, which after each slab's retirement *is*
     /// that slab's crossing set.
@@ -3175,8 +3175,8 @@ mod tests {
     use super::{
         assemble_into, factorise_into, ChainProfile, Point, SolveScratch, TapIndex, NOT_AN_UNKNOWN,
     };
-    use gpurify_core::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
-    use gpurify_units::Dbu;
+    use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
+    use gpurify_geom::Dbu;
 
     /// One polygon on layer zero, from its rectilinear ring.
     fn shape(xs: &[i64], ys: &[i64]) -> GeometryStore {

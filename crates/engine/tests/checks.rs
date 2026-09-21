@@ -630,7 +630,7 @@ fn the_inductance_flag_adds_elements_only_when_asked() {
         layout: fixtures.join("pex/PEX_COUPLING_C.gds"),
         deck: fixtures.join("params.json"),
         grid: Some(
-            gpurify_units::Grid::new(1_000)
+            gpurify_geom::Grid::new(1_000)
                 .expect("1000 database units per micrometre is a 1 nm grid"),
         ),
         ..Inputs::default()

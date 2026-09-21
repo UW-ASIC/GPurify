@@ -12,14 +12,14 @@ pub use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts, Ro
 pub use power::{NetNetworks, PowerError, PowerGrid, PowerSolution, Process, Solved};
 pub use ruleset::{RuleHead, RuleSet, RunInputs, KINDS};
 
-use gpurify_core::connectivity::ComponentLabel;
-use gpurify_core::ops::Point;
-use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
-use gpurify_derived::{Evaluator, LayerRef};
+use gpurify_geom::connectivity::ComponentLabel;
+use gpurify_geom::ops::Point;
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::StrId;
 use gpurify_report::{Outcome, RuleRun, Violations};
 use gpurify_topology::{DeviceTable, NetTable};
-use gpurify_units::{prefix, Dbu, DbuArea, Qty, Resistance};
+use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance};
 
 /// Why a deck could not be turned into a [`RuleSet`].
 ///
@@ -133,10 +133,10 @@ pub(crate) fn centre(box_: Bbox) -> Point {
         "a box's bounds run low to high"
     );
     debug_assert!(
-        box_.xlo.raw().abs() <= gpurify_units::MAX_ABS_DBU
-            && box_.ylo.raw().abs() <= gpurify_units::MAX_ABS_DBU
-            && box_.xhi.raw().abs() <= gpurify_units::MAX_ABS_DBU
-            && box_.yhi.raw().abs() <= gpurify_units::MAX_ABS_DBU,
+        box_.xlo.raw().abs() <= gpurify_geom::MAX_ABS_DBU
+            && box_.ylo.raw().abs() <= gpurify_geom::MAX_ABS_DBU
+            && box_.xhi.raw().abs() <= gpurify_geom::MAX_ABS_DBU
+            && box_.yhi.raw().abs() <= gpurify_geom::MAX_ABS_DBU,
         "a box outside the coordinate domain has no representable centre"
     );
     Point {

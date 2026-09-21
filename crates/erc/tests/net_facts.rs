@@ -7,7 +7,7 @@
 //! fold itself is checked construct-from-answer: a layout emitted from a
 //! netlist must classify back to that netlist's terminals.
 
-use gpurify_derived::Evaluator;
+use gpurify_geom::Evaluator;
 use gpurify_erc::facts::{classify_nets_into, NetFacts, RoleMask};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;

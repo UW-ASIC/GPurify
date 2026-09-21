@@ -17,13 +17,13 @@
 
 use super::{centre, poly_dist2, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
-use gpurify_core::connectivity::components_into;
-use gpurify_core::index::{candidate_pairs_into, SpatialIndex};
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{LayerId, PolyId};
+use gpurify_geom::connectivity::components_into;
+use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
-use gpurify_units::{Dbu, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, MAX_ABS_DBU};
 
 /// Floor on the backtracking budget, in search steps.
 ///

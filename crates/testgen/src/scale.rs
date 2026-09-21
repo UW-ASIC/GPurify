@@ -6,7 +6,7 @@
 //! Blocks are placed by recursively quartering a region with the gap scaled by
 //! level, which gives the corpus more than one spatial scale.
 
-use gpurify_core::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
 
 use crate::shapes::{Handle, Ids, LayoutBuilder};

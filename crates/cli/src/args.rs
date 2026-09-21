@@ -392,7 +392,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
         deck: args.common.deck.clone(),
         // `Grid::new` refuses a zero, which the parser has already excluded.
         grid: args.common.grid.map(|per_um| {
-            gpurify_units::Grid::new(i64::from(per_um))
+            gpurify_geom::Grid::new(i64::from(per_um))
                 .expect("the parser refuses a non-positive resolution, so this cannot fail")
         }),
         reference,
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(args.common.grid, Some(1000));
         let (inputs, _) = to_inputs(&args);
         assert_eq!(
-            inputs.grid.map(gpurify_units::Grid::dbu_per_um),
+            inputs.grid.map(gpurify_geom::Grid::dbu_per_um),
             Some(1000),
             "the parsed resolution must reach `Inputs`, or the flag is decoration"
         );

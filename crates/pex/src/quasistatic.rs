@@ -11,10 +11,10 @@ pub use gpurify_quasistatic::{matvec, mesh, solve, Accuracy, CapMatrix};
 pub use gpurify_quasistatic::gpu;
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
-use gpurify_core::{GeometryStore, LayerId};
+use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::deck::ProcessStack;
 use gpurify_topology::{NetId, NetTable};
-use gpurify_units::{prefix, Capacitance, Inductance, Qty, Resistance};
+use gpurify_geom::{prefix, Capacitance, Inductance, Qty, Resistance};
 
 /// Farads to the femtofarads [`Parasitic`] states capacitance in.
 const FEMTOFARADS_PER_FARAD: f64 = 1e15;
@@ -33,7 +33,7 @@ pub fn extract_into(
     nets: &NetTable,
     selected: &[NetId],
     stack: &ProcessStack,
-    grid: gpurify_units::Grid,
+    grid: gpurify_geom::Grid,
     options: solve::Options,
     matrix: &mut CapMatrix,
     out: &mut ParasiticNetwork,
@@ -110,7 +110,7 @@ pub fn extract_inductance_into(
     nets: &NetTable,
     selected: &[NetId],
     stack: &ProcessStack,
-    grid: gpurify_units::Grid,
+    grid: gpurify_geom::Grid,
     options: &InductanceOptions,
     matrix: &mut InductMatrix,
     out: &mut ParasiticNetwork,

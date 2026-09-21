@@ -38,13 +38,13 @@
 //! column in common but the duration, so they are two printers rather than one
 //! with a union of columns that serves neither.
 
-use gpurify::core::{GeometryStore, LayerId};
+use gpurify::geom::{GeometryStore, LayerId};
 use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, Loaded};
 use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions};
 use gpurify::ingest::layout::UnknownLayers;
 use gpurify::report::RuleRun;
 use gpurify::topology::NetTable;
-use gpurify::units::Grid;
+use gpurify::geom::Grid;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -223,7 +223,7 @@ fn the_store_keeps_one_bbox_per_polygon_and_records_its_build_cost() {
             corpus.polygons
         );
         for layer in 0..corpus.store.layer_count() {
-            let layer = gpurify::core::LayerId(u16::try_from(layer).expect("layer fits u16"));
+            let layer = gpurify::geom::LayerId(u16::try_from(layer).expect("layer fits u16"));
             let range = corpus.store.polys_on_layer(layer);
             assert_eq!(
                 corpus.store.layer_bboxes(layer).len(),
@@ -253,16 +253,16 @@ fn candidate_pair_generation_stays_subquadratic_and_records_its_cost() {
 
     for polygons in SIZES {
         let corpus = corpus(polygons);
-        let layer = gpurify::core::LayerId(0);
+        let layer = gpurify::geom::LayerId(0);
 
         let (pairs, timing) = timed("core::candidate_pairs", polygons, || {
-            let mut index = gpurify::core::index::SpatialIndex::default();
-            gpurify::core::index::SpatialIndex::build_into(&corpus.store, layer, &mut index);
+            let mut index = gpurify::geom::index::SpatialIndex::default();
+            gpurify::geom::index::SpatialIndex::build_into(&corpus.store, layer, &mut index);
             let mut pairs = Vec::new();
-            gpurify::core::index::candidate_pairs_into(
+            gpurify::geom::index::candidate_pairs_into(
                 &corpus.store,
                 &index,
-                gpurify::units::Dbu::new_unchecked(500),
+                gpurify::geom::Dbu::new_unchecked(500),
                 &mut pairs,
             );
             pairs
@@ -484,13 +484,13 @@ fn real_layout_keeps_the_store_invariants_and_records_its_cost() {
         .expect("the deck declares at least one layer");
 
     let (pairs, timing) = timed("core::pairs[real]", 0, || {
-        let mut index = gpurify::core::index::SpatialIndex::default();
-        gpurify::core::index::SpatialIndex::build_into(store, densest, &mut index);
+        let mut index = gpurify::geom::index::SpatialIndex::default();
+        gpurify::geom::index::SpatialIndex::build_into(store, densest, &mut index);
         let mut pairs = Vec::new();
-        gpurify::core::index::candidate_pairs_into(
+        gpurify::geom::index::candidate_pairs_into(
             store,
             &index,
-            gpurify::units::Dbu::new_unchecked(500),
+            gpurify::geom::Dbu::new_unchecked(500),
             &mut pairs,
         );
         pairs

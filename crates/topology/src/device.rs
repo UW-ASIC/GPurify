@@ -5,15 +5,15 @@
 
 use crate::csr_run;
 use crate::net::{retain_intersecting_into, NetId, NetTable};
-use gpurify_core::boolean::{intersection_into, BooleanError};
-use gpurify_core::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_core::ops::area2;
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{GeometryStore, LayerId, PolyId, ValidatedLayer};
-use gpurify_derived::Evaluator;
+use gpurify_geom::boolean::{intersection_into, BooleanError};
+use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
+use gpurify_geom::ops::area2;
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrId;
-use gpurify_units::{Dbu, DbuArea};
+use gpurify_geom::{Dbu, DbuArea};
 
 /// Identifies one recognised device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -167,7 +167,7 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 /// marker carrying too few or too many of them is refused, not half-reported.
 ///
 /// `derived` is accepted and unread — derived layers carry real
-/// [`gpurify_core::LayerId`]s — and keeps its name because the signature is
+/// [`gpurify_geom::LayerId`]s — and keeps its name because the signature is
 /// frozen.
 #[allow(unused_variables)]
 pub fn recognise_into(
@@ -594,7 +594,7 @@ pub fn refuse_conducting_channels(
 fn terminals_of_recogniser(
     recognition: &DeviceRecognition,
     row: usize,
-) -> &[gpurify_core::LayerId] {
+) -> &[gpurify_geom::LayerId] {
     let (start, end) = csr_run(&recognition.terminal_start, row);
     &recognition.terminal[start..end]
 }

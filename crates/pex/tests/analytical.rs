@@ -16,7 +16,7 @@
 mod common;
 
 use common::{extracted, grid, resistance_ohm, serialise, uniform_stack};
-use gpurify_core::{GeometryStore, GeometryStoreBuilder, LayerId};
+use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_pex::analytical::{
     coupling_capacitance, extract_into, extract_net_into, ground_capacitance, segment_resistance,
@@ -26,7 +26,7 @@ use gpurify_pex::network::{Parasitic, ParasiticNetwork};
 use gpurify_pex::reduce::total_capacitance;
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
 use gpurify_topology::{DeviceTable, NetId, NetTable};
-use gpurify_units::DbuArea;
+use gpurify_geom::DbuArea;
 
 /// A node index as a subscript, refusing anything that is not one.
 fn node(index: u32) -> usize {

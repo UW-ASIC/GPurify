@@ -364,7 +364,7 @@ fn solving_one_grid_twice_produces_identical_columns() {
         first.relative_residual.to_bits(),
         second.relative_residual.to_bits()
     );
-    let bits = |values: &[gpurify_units::Qty<gpurify_units::Voltage, -3>]| {
+    let bits = |values: &[gpurify_geom::Qty<gpurify_geom::Voltage, -3>]| {
         values.iter().map(|v| v.raw().to_bits()).collect::<Vec<_>>()
     };
     assert_eq!(bits(&first.node_voltage), bits(&second.node_voltage));

@@ -147,7 +147,7 @@ fn mesh_options(max_edge: i64, max_panels: u32) -> MeshOptions {
 /// its three rows, so no law below can depend on which layer a conductor landed
 /// on — the corpora place them freely.
 ///
-/// [`GeometryStore`]: gpurify_core::GeometryStore
+/// [`GeometryStore`]: gpurify_geom::GeometryStore
 fn stack() -> ProcessStack {
     uniform_stack(3, 1.0, 0.25)
 }

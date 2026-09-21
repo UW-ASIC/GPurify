@@ -9,14 +9,14 @@
 mod common;
 
 use common::{capacitance_ff, resistance_ohm, serialise};
-use gpurify_core::LayerId;
+use gpurify_geom::LayerId;
 use gpurify_pex::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_pex::reduce::{
     collapse_series_into, merge_parallel_into, reduce_into, total_capacitance, Order,
 };
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, Rng};
 use gpurify_topology::NetId;
-use gpurify_units::{prefix, Capacitance, Qty, Resistance};
+use gpurify_geom::{prefix, Capacitance, Qty, Resistance};
 
 fn ohms(value: f64) -> Parasitic {
     Parasitic::Resistance(Qty::<Resistance, { prefix::BASE }>::new(value))

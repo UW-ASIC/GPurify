@@ -5,7 +5,7 @@
 //! pairing, and a stall is resolved by [`TieBreak`] rather than by hash order.
 
 use crate::graph::{narrow, Graph, LayoutGraph, RefGraph};
-use gpurify_core::observe::{NoObserve, Observer};
+use gpurify_geom::observe::{NoObserve, Observer};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_topology::TerminalRole;
 
@@ -637,7 +637,7 @@ mod partition_tests {
 mod tests {
     use super::{refine_observed, ClassId, ObserveRefine, Partition, Refinement, TieBreak};
     use crate::graph::{Graph, LayoutGraph, RefGraph};
-    use gpurify_core::observe::Observer;
+    use gpurify_geom::observe::Observer;
     use gpurify_ingest::deck::DeviceKind;
     use gpurify_ingest::StrId;
     use gpurify_topology::TerminalRole;

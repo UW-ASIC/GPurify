@@ -19,7 +19,7 @@ use common::{
     declared_supplies, head, limit_net, manufacturing_grid, microamps, millivolts,
     operating_temperature, rule, series_chain, solve, GridBuilder,
 };
-use gpurify_core::{LayerId, PolyId};
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_erc::facts::IntentMap;
 use gpurify_erc::power::{PowerGrid, PowerSolution, Solved};
 use gpurify_erc::rules::electrical::{
@@ -32,7 +32,7 @@ use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Outcome, RuleRun, Violations};
 use gpurify_testgen::{assert_close, assert_close_relative};
 use gpurify_topology::NetId;
-use gpurify_units::{prefix, CurrentDensity, Qty, Temperature};
+use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
 
 fn density(value: f64) -> Qty<CurrentDensity, { prefix::BASE }> {
     Qty::new(value)

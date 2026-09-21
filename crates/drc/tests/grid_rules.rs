@@ -11,7 +11,7 @@
 mod common;
 
 use common::{Env, Sink, A, RULE};
-use gpurify_core::PolyId;
+use gpurify_geom::PolyId;
 use gpurify_drc::rules::grid::{check_angle, check_off_grid, AngleTable, Direction, OffGridTable};
 use gpurify_report::{Measurement, Severity, Violation};
 use gpurify_testgen::shapes::LayoutBuilder;
@@ -30,7 +30,7 @@ fn off_grid_table(pitch: i64) -> OffGridTable {
 }
 
 /// A square of side `size` with its lower-left corner at `(x, y)`.
-fn square(x: i64, y: i64, size: i64) -> (gpurify_core::GeometryStore, PolyId) {
+fn square(x: i64, y: i64, size: i64) -> (gpurify_geom::GeometryStore, PolyId) {
     let mut layout = LayoutBuilder::new(1);
     let handle = layout.rect(A, x, y, x + size, y + size);
     let (store, ids) = layout.finish();

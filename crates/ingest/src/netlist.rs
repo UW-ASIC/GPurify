@@ -4,7 +4,7 @@
 //! its source line, a silent misparse surfacing as an LVS mismatch.
 
 use crate::deck::DeviceKind;
-use crate::intern::{StrId, StrTable};
+use gpurify_geom::{StrId, StrTable};
 use crate::{csr, narrow};
 
 /// Where a token came from, for an error a human can act on.
@@ -858,7 +858,7 @@ fn read_dialect(
 /// SPICE and CDL.
 pub mod spice {
     use super::{Netlist, NetlistError};
-    use crate::intern::StrTable;
+    use gpurify_geom::StrTable;
 
     pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
         super::read_dialect(source, strings, super::Dialect::Spice)
@@ -871,7 +871,7 @@ pub mod spice {
 /// it is `NetlistError::Unsupported` with the line it sits on.
 pub mod spectre {
     use super::{Netlist, NetlistError};
-    use crate::intern::StrTable;
+    use gpurify_geom::StrTable;
 
     pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
         super::read_dialect(source, strings, super::Dialect::Spectre)

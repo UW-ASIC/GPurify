@@ -18,8 +18,8 @@ use common::{
     assert_skipped_for_intent, declared_supplies, head, limit_net, manufacturing_grid, microamps,
     millivolts, ohms, operating_temperature, rule, series_chain, solve,
 };
-use gpurify_core::LayerId;
-use gpurify_derived::Evaluator;
+use gpurify_geom::LayerId;
+use gpurify_geom::Evaluator;
 use gpurify_erc::facts::IntentMap;
 use gpurify_erc::power::{NetNetworks, Solved};
 use gpurify_erc::rules::electrical::{
@@ -37,7 +37,7 @@ use gpurify_ingest::{StrId, StrTable};
 use gpurify_report::{Outcome, RuleRun, Violations};
 use gpurify_testgen::{dbu, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
 use gpurify_topology::{DeviceTable, NetId, NetTable, TerminalRole};
-use gpurify_units::{prefix, CurrentDensity, Qty, Temperature};
+use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
 
 /// A supply grid and its solution, so the four solve-reading rules have
 /// something real to be gated over.

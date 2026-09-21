@@ -1,15 +1,15 @@
 //! Running the checks, and reporting honestly about which ones ran.
 
 use crate::pipeline::{Extracted, Inputs, Loaded};
-use gpurify_core::ops::Point;
-use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::ops::Point;
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_lvs::verdict::Inconclusive;
 use gpurify_lvs::{Discrepancy, Verdict};
 use gpurify_pex::network::NodeId;
 use gpurify_pex::ParasiticNetwork;
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_units::{celsius, prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{celsius, prefix, Dbu, Grid, Qty, Temperature};
 
 /// Which checks to run.
 // All sixteen combinations are meaningful, including none, so the sum type
@@ -687,7 +687,7 @@ const NO_LOCATION: Point = Point {
     y: Dbu::new_unchecked(0),
 };
 
-/// See [`NO_LAYER`]. Past the end of any [`gpurify_core::GeometryStore`].
+/// See [`NO_LAYER`]. Past the end of any [`gpurify_geom::GeometryStore`].
 const NO_SHAPE: PolyId = PolyId(u32::MAX);
 
 /// Map every discrepancy of a mismatch into the violation table, every row a
@@ -1111,13 +1111,13 @@ pub enum EngineError {
 #[cfg(test)]
 mod tests {
     use super::{merge_field_solved_into, reciprocity_refusal};
-    use gpurify_core::LayerId;
+    use gpurify_geom::LayerId;
     use gpurify_pex::network::NodeId;
     use gpurify_pex::quasistatic::matvec::Backend;
     use gpurify_pex::quasistatic::Accuracy;
     use gpurify_pex::{Parasitic, ParasiticNetwork};
     use gpurify_topology::NetId;
-    use gpurify_units::Qty;
+    use gpurify_geom::Qty;
 
     fn ground(ff: f64) -> Parasitic {
         Parasitic::GroundCap(Qty::new(ff))

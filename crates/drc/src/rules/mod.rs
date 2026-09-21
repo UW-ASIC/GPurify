@@ -23,9 +23,9 @@ pub mod spacing;
 pub mod via;
 pub mod width;
 
-use gpurify_core::ops::{seg_seg_dist2, Point, Seg};
-use gpurify_core::{Bbox, GeometryStore, PolyId};
-use gpurify_units::{Dbu, DbuArea};
+use gpurify_geom::ops::{seg_seg_dist2, Point, Seg};
+use gpurify_geom::{Bbox, GeometryStore, PolyId};
+use gpurify_geom::{Dbu, DbuArea};
 
 /// The message every rule table's column-length assert carries.
 pub(crate) const COLUMNS_DIVERGED: &str = "a rule table's columns hold different row counts";

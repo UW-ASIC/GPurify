@@ -22,10 +22,10 @@ pub mod krylov;
 pub mod linalg;
 pub mod operator;
 
-use gpurify_core::GeometryStore;
+use gpurify_geom::GeometryStore;
 use gpurify_ingest::deck::ProcessStack;
 use gpurify_topology::{NetId, NetTable};
-use gpurify_units::{Dbu, Grid, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
 
 /// The Maxwell capacitance matrix for a set of conductors.
 ///
@@ -139,7 +139,7 @@ pub fn extract_into(
     nets: &NetTable,
     selected: &[NetId],
     stack: &ProcessStack,
-    grid: gpurify_units::Grid,
+    grid: gpurify_geom::Grid,
     options: solve::Options,
     matrix: &mut CapMatrix,
 ) -> Result<Accuracy, solve::SolveError> {

@@ -862,7 +862,7 @@ fn at_of(violation: &gpurify::report::Violation) -> (i64, i64) {
 }
 
 /// The layer a name resolves to in the run's own deck.
-fn layer_of(run: &common::CaseRun, name: &str) -> gpurify::core::LayerId {
+fn layer_of(run: &common::CaseRun, name: &str) -> gpurify::geom::LayerId {
     run.loaded
         .deck
         .layers
@@ -1309,12 +1309,12 @@ fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell
 
     assert_eq!(
         ring.measured,
-        Measurement::Length(gpurify::units::Dbu::new(500).expect("500 dbu is inside MAX_ABS_DBU"))
+        Measurement::Length(gpurify::geom::Dbu::new(500).expect("500 dbu is inside MAX_ABS_DBU"))
     );
     assert_eq!(
         ring.limit,
         Measurement::Length(
-            gpurify::units::Dbu::new(1000).expect("1000 dbu is inside MAX_ABS_DBU")
+            gpurify::geom::Dbu::new(1000).expect("1000 dbu is inside MAX_ABS_DBU")
         )
     );
     assert_eq!(at_of(ring), (0, 0));

@@ -7,21 +7,21 @@
 //!
 //! # Why this goes through the file
 //!
-//! A derived layer only earns its keep if it has real [`gpurify_core::PolyId`]s
-//! in the [`gpurify_core::GeometryStore`] — that is what lets `topology` extract
+//! A derived layer only earns its keep if it has real [`gpurify_geom::PolyId`]s
+//! in the [`gpurify_geom::GeometryStore`] — that is what lets `topology` extract
 //! nets over it, bind a label to it and recognise a device terminal on it
 //! without any of those learning a second way to address geometry. So the claim
 //! under test is about the *store the reader produces*, and the cheapest honest
 //! way to make that claim is to write a base-layer-only layout out as GDSII and
 //! read it back through the same entry point a run uses.
 
-use gpurify_core::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_export::gds::write_store;
 use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::shapes::LayoutBuilder;
-use gpurify_units::Grid;
+use gpurify_geom::Grid;
 
 /// One nanometre per database unit, which is what every fixture in this file is
 /// drawn on.

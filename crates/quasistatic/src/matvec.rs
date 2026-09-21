@@ -7,7 +7,7 @@
 //! `f32` inside host `f64` iterative refinement, so the answer is `f64`-accurate
 //! and the accuracy is measured rather than assumed.
 
-use gpurify_core::observe::{NoObserve, Observer};
+use gpurify_geom::observe::{NoObserve, Observer};
 
 /// Vacuum permittivity, F/m. CODATA 2018.
 const VACUUM_PERMITTIVITY: f64 = 8.854_187_812_8e-12;

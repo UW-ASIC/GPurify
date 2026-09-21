@@ -8,7 +8,7 @@
 //! checked the non-touching case, which is the shape of half the failures the
 //! previous suite shipped.
 
-use gpurify_core::LayerId;
+use gpurify_geom::LayerId;
 use gpurify_testgen::shapes::{Handle, Ids, LayoutBuilder};
 use gpurify_topology::net::{intra_layer_edges_into, via_edges_into};
 

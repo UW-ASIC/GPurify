@@ -6,12 +6,12 @@
 //! non-integral magnification) is an error, not an approximation.
 
 use crate::deck::{Deck, DerivedOp, DerivedTable};
-use crate::intern::StrTable;
+use gpurify_geom::StrTable;
 use crate::provenance::{PathTable, Provenance};
-use gpurify_core::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
-use gpurify_core::view::{validate_layer_into, ValidatedLayer};
-use gpurify_core::GeometryStore;
-use gpurify_units::Dbu;
+use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::GeometryStore;
+use gpurify_geom::Dbu;
 
 /// Everything a verification run needs from a layout file.
 #[derive(Debug, Default)]
@@ -47,7 +47,7 @@ pub enum LayoutError {
     /// A layer the deck computes from other layers could not be computed. Fail
     /// closed: the alternative is a layer that silently comes back empty.
     #[error("derived layer {0:?} could not be computed: {1}")]
-    Derived(gpurify_core::LayerId, BooleanError),
+    Derived(gpurify_geom::LayerId, BooleanError),
     #[error("io: {0}")]
     Io(String),
 }
@@ -180,11 +180,11 @@ pub fn derive_layers_into(
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
-    use crate::intern::{StrId, StrTable};
+    use gpurify_geom::{StrId, StrTable};
     use crate::narrow;
     use crate::provenance::{PathId, PathTable, Provenance};
-    use gpurify_core::{GeometryStore, GeometryStoreBuilder};
-    use gpurify_units::{Dbu, MAX_ABS_DBU};
+    use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
+    use gpurify_geom::{Dbu, MAX_ABS_DBU};
 
     /// Every GDSII library opens with a six-byte `HEADER` record, so the magic
     /// is the record framing itself: length 6, record type 0, data type 2.
@@ -1325,7 +1325,7 @@ pub mod gds {
             }
 
             self.provenance.place_label(
-                gpurify_core::ops::Point {
+                gpurify_geom::ops::Point {
                     x: Dbu::new_unchecked(x),
                     y: Dbu::new_unchecked(y),
                 },
@@ -1476,9 +1476,9 @@ pub mod oasis {
 mod tests {
     use super::{gds, Deck, Layout, LayoutError, UnknownLayers};
     use crate::deck::tests::{layer_table, ROWS};
-    use crate::intern::StrTable;
+    use gpurify_geom::StrTable;
     use crate::provenance::PathTable;
-    use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId};
+    use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
     use gpurify_testgen::shapes::{Handle, Ids};
     use gpurify_testgen::{dbu, LayoutBuilder};
 
@@ -2121,7 +2121,7 @@ mod tests {
     /// ring reverses.
     #[test]
     fn a_mirrored_instance_keeps_the_orientation_the_cell_was_drawn_with() {
-        use gpurify_core::ops::{winding_of, Winding};
+        use gpurify_geom::ops::{winding_of, Winding};
 
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);
@@ -2212,7 +2212,7 @@ mod tests {
     /// determinant −1 in all four, so all four rings reverse.
     #[test]
     fn a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise() {
-        use gpurify_core::ops::{winding_of, Winding};
+        use gpurify_geom::ops::{winding_of, Winding};
 
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);
@@ -2267,7 +2267,7 @@ mod tests {
     /// the `assert_ne!` carries that asymmetry. Both determinants are −1.
     #[test]
     fn a_mirror_and_a_rotation_split_across_two_levels_do_not_commute() {
-        use gpurify_core::ops::{winding_of, Winding};
+        use gpurify_geom::ops::{winding_of, Winding};
 
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);
@@ -2649,7 +2649,7 @@ mod tests {
     /// every wrapped library would otherwise satisfy the law.
     #[test]
     fn wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store() {
-        use gpurify_units::MAX_ABS_DBU;
+        use gpurify_geom::MAX_ABS_DBU;
 
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);

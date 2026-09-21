@@ -1,6 +1,6 @@
 //! What a rule measured.
 
-use gpurify_units::{prefix, Current, Dbu, DbuArea, Qty, Resistance, Voltage};
+use gpurify_geom::{prefix, Current, Dbu, DbuArea, Qty, Resistance, Voltage};
 
 /// A measured quantity, carrying its dimension. The electrical variants fix a
 /// prefix so a report column has one scale.

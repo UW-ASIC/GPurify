@@ -5,7 +5,7 @@ use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
-use gpurify_units::Grid;
+use gpurify_geom::Grid;
 
 /// One row's run in a CSR offset column. Unguarded on purpose: a row past the
 /// table panics rather than reading as an empty run.

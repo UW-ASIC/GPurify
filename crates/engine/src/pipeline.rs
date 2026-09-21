@@ -1,12 +1,12 @@
 //! The shared stages: load, then extract. Everything the four checks read.
 
-use gpurify_core::GeometryStore;
-use gpurify_derived::Evaluator;
+use gpurify_geom::GeometryStore;
+use gpurify_geom::Evaluator;
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{Deck, DesignIntent, Provenance, StrTable};
 use gpurify_topology::{DeviceTable, Extraction, NetTable, PortTable};
-use gpurify_units::Grid;
+use gpurify_geom::Grid;
 use std::path::PathBuf;
 
 /// What a run was asked to work on: paths, plus the grid they are read against.
@@ -322,7 +322,7 @@ pub enum LoadError {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ExtractError {
     #[error(transparent)]
-    Derived(#[from] gpurify_derived::DerivedError),
+    Derived(#[from] gpurify_geom::DerivedError),
     #[error(transparent)]
     Port(#[from] gpurify_topology::port::PortError),
     /// A MOS channel marker overlaps conductor area on its source/drain layer,

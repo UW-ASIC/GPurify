@@ -10,15 +10,15 @@
 mod common;
 
 use common::{head, one_row_network, rule};
-use gpurify_core::{GeometryStore, LayerId, PolyId};
-use gpurify_derived::Evaluator;
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::Evaluator;
 use gpurify_erc::power::NetNetworks;
 use gpurify_erc::rules::electrical::{check_p2p_resistance, P2pResistanceTable};
 use gpurify_erc::{Design, Scratch};
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violations};
 use gpurify_testgen::{assert_clean, assert_close_relative, point, LayoutBuilder};
 use gpurify_topology::{DeviceTable, NetTable};
-use gpurify_units::{prefix, Qty, Resistance};
+use gpurify_geom::{prefix, Qty, Resistance};
 
 /// A net whose two attach points are joined by `strands` identical straps.
 ///

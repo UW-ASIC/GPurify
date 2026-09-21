@@ -29,10 +29,10 @@
 //! every loop below pass vacuously, which is the same false clean in the test
 //! suite that the tests themselves exist to prevent in the tool.
 
-use gpurify::core::LayerId;
+use gpurify::geom::LayerId;
 use gpurify::ingest::deck::{Deck, DeviceKind, ParamValue};
 use gpurify::ingest::StrTable;
-use gpurify::units::Grid;
+use gpurify::geom::Grid;
 use std::path::{Path, PathBuf};
 
 /// The grid every deck in `pdks/` is authored against — `pdks/README.md` states

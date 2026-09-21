@@ -15,7 +15,7 @@
 //! That makes the reader consulted first observable on an input where both
 //! files are unreadable, without a test having to know either file format.
 
-use gpurify_core::{GeometryStoreBuilder, LayerId};
+use gpurify_geom::{GeometryStoreBuilder, LayerId};
 use gpurify_engine::pipeline::{
     extract_into, intern_report_ids, load_into, Extracted, Inputs, LoadError, Loaded,
 };
@@ -25,7 +25,7 @@ use gpurify_ingest::StrTable;
 use gpurify_lvs::refine::TieBreak;
 use gpurify_lvs::CompareOptions;
 use gpurify_testgen::LayoutBuilder;
-use gpurify_units::Grid;
+use gpurify_geom::Grid;
 use std::path::PathBuf;
 
 /// The single conductor layer every extraction case below lives on.

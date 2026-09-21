@@ -9,20 +9,20 @@
 //! Every area here is a [`DbuArea`] summed in `i128`; a ratio is the only `f64`
 //! and it is formed once, at the comparison.
 //!
-//! [`DbuArea`]: gpurify_units::DbuArea
+//! [`DbuArea`]: gpurify_geom::DbuArea
 
 use crate::ruleset::RuleHead;
 use crate::{base_layer, centre, record_run, Design, Scratch};
-use gpurify_core::boolean::union_into;
-use gpurify_core::ops::area2;
-use gpurify_core::rects::{clipped_area, decompose_into, Rect};
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{Bbox, LayerId, PolyId};
-use gpurify_derived::LayerRef;
+use gpurify_geom::boolean::union_into;
+use gpurify_geom::ops::area2;
+use gpurify_geom::rects::{clipped_area, decompose_into, Rect};
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{Bbox, LayerId, PolyId};
+use gpurify_geom::LayerRef;
 use gpurify_ingest::StrId;
 use gpurify_report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_topology::NetId;
-use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// What an antenna rule counts as collecting area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

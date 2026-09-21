@@ -10,15 +10,15 @@
 
 use super::{centre, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
-use gpurify_core::boolean::{union_into, BooleanError};
-use gpurify_core::rects::{clipped_area, covered_area, decompose_into};
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{Bbox, LayerId, PolyId};
+use gpurify_geom::boolean::{union_into, BooleanError};
+use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_ingest::StrId;
 use gpurify_report::{
     LimitSense, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
 };
-use gpurify_units::{Dbu, DbuArea};
+use gpurify_geom::{Dbu, DbuArea};
 
 /// Minimum area of a connected figure, measured after merging.
 #[derive(Debug, Default)]

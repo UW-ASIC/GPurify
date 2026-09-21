@@ -15,8 +15,8 @@
 mod common;
 
 use common::{head, rule};
-use gpurify_core::PolyId;
-use gpurify_derived::Evaluator;
+use gpurify_geom::PolyId;
+use gpurify_geom::Evaluator;
 use gpurify_erc::facts::{classify_nets_into, NetFacts};
 use gpurify_erc::rules::topology::{
     check_floating_gate, check_multiple_drivers, check_unconnected_pin, FloatingGateTable,

@@ -76,14 +76,14 @@
 
 mod gen_fixtures;
 
-use gpurify::core::view::{validate_layer_into, ValidatedLayer, ValidityError};
-use gpurify::core::{GeometryStore, LayerId, PolyId};
+use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
+use gpurify::geom::{GeometryStore, LayerId, PolyId};
 use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
 use gpurify::ingest::layout::UnknownLayers;
 use gpurify::pex::Parasitic;
 use gpurify::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
-use gpurify::units::{Dbu, Grid};
+use gpurify::geom::{Dbu, Grid};
 use gpurify::{export, ingest, lvs};
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
@@ -130,9 +130,9 @@ pub struct Run {
     pub checks: Checks,
 
     /// The layer the deliberate violation sits on.
-    pub met1: gpurify::core::LayerId,
+    pub met1: gpurify::geom::LayerId,
     /// Where the violation is, in database units.
-    pub violation_at: gpurify::core::ops::Point,
+    pub violation_at: gpurify::geom::ops::Point,
     /// The width the fixture actually drew.
     pub actual_width: Dbu,
     pub actual_width_nm: i64,
@@ -1523,7 +1523,7 @@ pub struct Totals {
 /// and is not a defect in the extraction. `ParasiticNetwork` has `node_layer`,
 /// so the split is available here even though F13 says nothing on the type
 /// itself produces it.
-pub fn totals_of(run: &CaseRun, only: Option<gpurify::core::LayerId>) -> Totals {
+pub fn totals_of(run: &CaseRun, only: Option<gpurify::geom::LayerId>) -> Totals {
     let mut totals = Totals {
         resistance_ohm: 0.0,
         ground_cap_af: 0.0,

@@ -11,15 +11,15 @@
 
 use super::{centre, mid, ring_segs, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
-use gpurify_core::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_core::ops::{isqrt, Point};
-use gpurify_core::view::{validate_layer_into, ValidityError};
-use gpurify_core::{Bbox, LayerId, PolyId};
+use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
+use gpurify_geom::ops::{isqrt, Point};
+use gpurify_geom::view::{validate_layer_into, ValidityError};
+use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_ingest::StrId;
 use gpurify_report::{
     LimitSense, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
 };
-use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use std::cmp::Reverse;
 
 /// Minimum enclosure: the outer layer must surround the inner one by at least
@@ -339,7 +339,7 @@ fn crosses_hv(h: (Point, Point), v: (Point, Point)) -> bool {
 /// **Does not see holes**, since a store row is one ring: a host hole lying
 /// strictly inside `inner` crosses nothing and reads as contained. Fail-open,
 /// and the same missing provenance route `pair_layers` records.
-fn ring_contains_ring(store: &gpurify_core::GeometryStore, host: PolyId, inner: PolyId) -> bool {
+fn ring_contains_ring(store: &gpurify_geom::GeometryStore, host: PolyId, inner: PolyId) -> bool {
     let (xs, ys) = store.poly_verts(inner);
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
     debug_assert!(xs.len() >= 3, "a stored ring has at least three vertices");

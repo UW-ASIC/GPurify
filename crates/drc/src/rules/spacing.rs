@@ -15,14 +15,14 @@
 use super::{gap_midpoint, poly_dist2, ring_segs, row_columns, seg_bbox, COLUMNS_DIVERGED};
 use crate::rules::width::narrowest_width;
 use crate::{record_run, Design, Scratch};
-use gpurify_core::connectivity::{components_into, ComponentLabel};
-use gpurify_core::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
-use gpurify_core::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
-use gpurify_core::view::validate_layer_into;
-use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::connectivity::{components_into, ComponentLabel};
+use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// Minimum spacing between two shapes on the same layer.
 #[derive(Debug, Default)]
@@ -222,7 +222,7 @@ fn prepare_same_layer(
     store: &GeometryStore,
     layer: LayerId,
     limit: Dbu,
-    validated: &mut gpurify_core::ValidatedLayer,
+    validated: &mut gpurify_geom::ValidatedLayer,
     index: &mut SpatialIndex,
     pairs: &mut Vec<(PolyId, PolyId)>,
     dists: &mut Vec<DbuArea>,
@@ -922,7 +922,7 @@ pub fn check_corner_to_corner(
 fn wide_flags_into(
     store: &GeometryStore,
     layer: LayerId,
-    validated: &gpurify_core::ValidatedLayer,
+    validated: &gpurify_geom::ValidatedLayer,
     threshold: Dbu,
     flags: &mut Vec<u8>,
 ) {

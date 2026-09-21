@@ -8,9 +8,9 @@
 //! recorded in `docs/NEED_TESTING.md`.
 
 use gpurify_ingest::deck::{ParamValue, RuleSpec, RuleTable};
-use gpurify_ingest::intern::{StrId, StrTable};
+use gpurify_geom::{StrId, StrTable};
 use gpurify_ingest::DeckError;
-use gpurify_units::Grid;
+use gpurify_geom::Grid;
 
 /// Compare two `ParamValue`. The enum does not derive `PartialEq`, and a float
 /// variant should not get a derived one: `Ratio` is compared to a stated
@@ -66,7 +66,7 @@ fn spec(id: StrId, kind: StrId, layers: (u32, u32), params: (u32, u32)) -> RuleS
 /// a well-formed parameter list belonging to another rule.
 #[test]
 fn each_rule_reads_back_exactly_its_own_slice_of_the_side_arrays() {
-    use gpurify_core::LayerId;
+    use gpurify_geom::LayerId;
     use gpurify_testgen::dbu;
 
     let mut strings = StrTable::default();

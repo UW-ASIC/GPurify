@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 gpurify-engine = { workspace = true }
 gpurify-ingest = { workspace = true }
-gpurify-units = { workspace = true }
+gpurify-geom = { workspace = true }
 gpurify-report = { workspace = true }
 gpurify-export = { workspace = true }
 thiserror = { workspace = true }
@@ -19,7 +19,6 @@ gpurify-testgen = { workspace = true }
 # The dependency turns the macro from a workaround into a choice, and it costs
 # no build time, since `gpurify-core` is already in this crate's graph through
 # `gpurify-engine`.
-gpurify-core = { workspace = true }
 
 
 [[bin]]

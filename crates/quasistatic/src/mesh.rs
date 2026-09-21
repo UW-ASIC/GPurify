@@ -1,9 +1,9 @@
 //! Panel meshing: conductor surfaces to boundary elements.
 
-use gpurify_core::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::{Bbox, GeometryStore, LayerId};
 use gpurify_ingest::deck::ProcessStack;
 use gpurify_topology::{NetId, NetTable};
-use gpurify_units::{Dbu, Grid};
+use gpurify_geom::{Dbu, Grid};
 use std::cmp::Ordering;
 
 /// A flat rectangular boundary element.

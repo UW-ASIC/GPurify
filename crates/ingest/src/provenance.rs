@@ -1,8 +1,8 @@
 //! Cold per-polygon data: where a shape came from, keyed by the same [`PolyId`]
 //! as `core`'s `GeometryStore`.
 
-use crate::intern::StrId;
-use gpurify_core::{ops::Point, GeometryStore, LayerId, PolyId};
+use gpurify_geom::StrId;
+use gpurify_geom::{ops::Point, GeometryStore, LayerId, PolyId};
 
 /// One `TEXT` as the layout stated it. A GDS `TEXT` carries no polygon, so
 /// binding is a separate later pass: [`Provenance::resolve_labels`].
@@ -424,8 +424,8 @@ impl Provenance {
 #[cfg(test)]
 mod tests {
     use super::Provenance;
-    use crate::intern::StrTable;
-    use gpurify_core::PolyId;
+    use gpurify_geom::StrTable;
+    use gpurify_geom::PolyId;
 
     #[test]
     fn permute_moves_each_hierarchy_path_onto_the_row_its_polygon_became() {
