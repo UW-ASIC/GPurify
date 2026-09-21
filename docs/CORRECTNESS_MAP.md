@@ -113,16 +113,16 @@ in `tests/common/mod.rs` gained `Voltage`/`Current`/`Resistance` arms — its
 `_ => false` fallthrough is fail-closed and was kept.
 
 **A FIFTH fail-open was found writing them, and it is not one of the four
-magnitude fail-opens.** Two blind derivations of `ERC_EMIG_MET1` disagreed — prior said
-`examined == 1`, independent said `examined == 0` — and the code sided with the
-independent one. `crates/erc/src/power.rs:1612` does
-`if attach.is_empty() { continue; }` *above* the first read of
-`budget_current_ua`, and `attach` comes from `devices_on(net)`, which is
-terminal-based. A rail fed from off-chip through a pad — the ordinary shape of a
-supply rail — has no device terminal, so its declared budget is silently
-discarded and `check_electromigration` reports `Ran` having examined nothing.
-Unlike the other four this discards the input rather than biasing it, and
-`Ran` with `examined: 0` is indistinguishable from a rule with nothing in scope.
+magnitude fail-opens.** Two blind derivations of `ERC_EMIG_MET1` disagreed —
+prior said `examined == 1`, independent said `examined == 0` — and the code
+sided with the independent one. `crates/check/src/erc/power.rs:1612` does `if
+attach.is_empty() { continue; }` *above* the first read of `budget_current_ua`,
+and `attach` comes from `devices_on(net)`, which is terminal-based. A rail fed
+from off-chip through a pad — the ordinary shape of a supply rail — has no
+device terminal, so its declared budget is silently discarded and
+`check_electromigration` reports `Ran` having examined nothing. Unlike the
+other four this discards the input rather than biasing it, and `Ran` with
+`examined: 0` is indistinguishable from a rule with nothing in scope.
 **It is now fixed, body-only, and both of the original diagnoses were wrong.**
 `power::discarded_budget` detects it exactly — a net declaring a non-zero
 `budget_current_ua` whose `node_load` column sums to `0.0` — and `check_ir_drop`,
@@ -206,13 +206,13 @@ an implementation returning nothing was rejected.
 
 | law | test |
 |---|---|
-| 1 rigid motion of the extraction | `crates/topology/tests/laws.rs :: a_rigid_motion_of_every_vertex_leaves_the_extraction_bit_identical` |
-| 2 `PolyId` permutation | `crates/topology/tests/laws.rs :: permuting_arrival_order_gives_the_same_partition_and_the_same_net_ids` |
-| 3 integer scale | `crates/topology/tests/laws.rs :: an_anisotropic_integer_scale_moves_only_the_measured_area` |
+| 1 rigid motion of the extraction | `crates/check/tests/topology/laws.rs :: a_rigid_motion_of_every_vertex_leaves_the_extraction_bit_identical` |
+| 2 `PolyId` permutation | `crates/check/tests/topology/laws.rs :: permuting_arrival_order_gives_the_same_partition_and_the_same_net_ids` |
+| 3 integer scale | `crates/check/tests/topology/laws.rs :: an_anisotropic_integer_scale_moves_only_the_measured_area` |
 | 4 global transform equivariance | `crates/ingest/src/layout.rs :: wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store` (inline, as the scope note requires) |
-| 5 translation equivariance | `crates/drc/tests/overlay_laws.rs :: translating_the_overlay_design_across_the_origin_moves_only_the_report` |
-| 6 uniform scale of geometry and deck | `crates/drc/tests/overlay_laws.rs :: scaling_the_overlay_geometry_and_deck_together_scales_only_the_measurements` |
-| 7 rigid motion of spacing | subsumed — laws 5 and 6 plus `crates/drc/tests/determinism.rs` |
+| 5 translation equivariance | `crates/check/tests/drc/overlay_laws.rs :: translating_the_overlay_design_across_the_origin_moves_only_the_report` |
+| 6 uniform scale of geometry and deck | `crates/check/tests/drc/overlay_laws.rs :: scaling_the_overlay_geometry_and_deck_together_scales_only_the_measurements` |
+| 7 rigid motion of spacing | subsumed — laws 5 and 6 plus `crates/check/tests/drc/determinism.rs` |
 
 `overlay_laws.rs` carries two further tests that are **guards on the fixture,
 not laws**: `the_fixture_reports_at_odd_negative_midpoints` and
@@ -231,10 +231,11 @@ whose power is asserted, not measured. Doing that sweep is cheap and unfinished.
 
 ### topology extraction (3)
 
-`topology` had the weakest oracle coverage in the tree (1 of 16 declared oracles
-was law/closed-form), and F1–F8 are largely topology findings. That is the gap
-`crates/topology/tests/laws.rs` was written to close: three metamorphic laws,
-green, over `extract_into` as a whole rather than over any one function.
+`topology` had the weakest oracle coverage in the tree (1 of 16 declared
+oracles was law/closed-form), and F1–F8 are largely topology findings. That is
+the gap `crates/check/tests/topology/laws.rs` was written to close: three
+metamorphic laws, green, over `extract_into` as a whole rather than over any
+one function.
 
 1. **Rigid-motion invariance of the whole extraction.** Translation, `k·90°`
    rotation, mirror in x or y applied to every vertex ⇒ `NetTable`, `DeviceTable`
@@ -362,8 +363,8 @@ done**; what follows is what the doing of them left behind.
 
 1. ~~Unhook `intent: None`.~~ Done — `case_inputs` takes an `Option<PathBuf>`,
    `run_case_with_intent` supplies one, `a_corpus_case_with_design_intent_reaches_an_intent_gated_rule` proves it.
-2. ~~Laws 5 and 6 (drc enclosure/overlap).~~ Done — `crates/drc/tests/overlay_laws.rs`.
-3. ~~Laws 1–3 (topology).~~ Done — `crates/topology/tests/laws.rs`.
+2. ~~Laws 5 and 6 (drc enclosure/overlap).~~ Done — `crates/check/tests/drc/overlay_laws.rs`.
+3. ~~Laws 1–3 (topology).~~ Done — `crates/check/tests/topology/laws.rs`.
 4. ~~Law 4 (ingest global transform).~~ Done — inline in `crates/ingest/src/layout.rs`.
 5. ~~`density_cmp` corpus case.~~ Done — two, `PASS` and `FAIL`, both `Ran`.
 6. ~~The other four uncovered kinds.~~ Deck rows, arms and one `Skipped` case each.

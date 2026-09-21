@@ -6,8 +6,8 @@ workspace is held to this. It is derived from Fabian's _Data-Oriented Design_
 shape — specialised to what this codebase actually is: **a pipeline that turns
 layout geometry into verification verdicts.**
 
-The exemplars already in-tree are `crates/core/src/bbox.rs` and
-`crates/core/src/store.rs`. When in doubt, make the code you are writing look
+The exemplars already in-tree are `crates/geom/src/bbox.rs` and
+`crates/geom/src/store.rs`. When in doubt, make the code you are writing look
 like those.
 
 ---

@@ -13,12 +13,11 @@ pub use power::{NetNetworks, PowerError, PowerGrid, PowerSolution, Process, Solv
 pub use ruleset::{RuleHead, RuleSet, RunInputs, KINDS};
 
 use crate::report::{Outcome, RuleRun, Violations};
-use crate::topology::{DeviceTable, NetTable};
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::ops::Point;
+use gpurify_geom::LayerRef;
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
-use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::StrId;
 
 /// Why a deck could not be turned into a [`RuleSet`].
@@ -55,19 +54,7 @@ pub enum ErcError {
     DuplicateRule(String),
 }
 
-/// Everything a rule reads about the layout, borrowed for the length of one run.
-///
-/// Role masks, design intent and the solved supply grid are deliberately *not*
-/// here: they stay per-rule parameters so that "this rule needs design intent"
-/// is visible at the signature.
-#[derive(Debug, Clone, Copy)]
-pub struct Design<'a> {
-    pub store: &'a GeometryStore,
-    /// Pre-evaluated named derived layers.
-    pub derived: &'a Evaluator,
-    pub nets: &'a NetTable,
-    pub devices: &'a DeviceTable,
-}
+pub use crate::Design;
 
 /// The buffer set every rule transform borrows and refills.
 ///

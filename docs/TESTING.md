@@ -166,12 +166,12 @@ it is the benchmark corpus and the oracle, so there is one tool rather than two.
 ## Test adapters
 
 Some behaviour is invisible in a return value, and those places get an adapter
-at the seam. See `crates/core/src/observe.rs`.
+at the seam. See `crates/geom/src/observe.rs`.
 
 | Seam | Property it makes testable |
 |---|---|
-| `core::index` candidate pairs | the prune never rejects a pair the exact predicate would accept |
-| `derived::prefilter` | same, for the bbox prefilter |
+| `geom::index` candidate pairs | the prune never rejects a pair the exact predicate would accept |
+| `geom::prefilter` | same, for the bbox prefilter |
 | rule dispatch | "clean" means this rule ran and examined N shapes |
 | allocation / work counters | the kernel rule and "nothing allocates per iteration" become assertions |
 
@@ -214,7 +214,7 @@ workspace generated 12,830 mutants; at one test run each that is over 20 hours
 even at `-j16`. Scope it to the file being changed:
 
 ```sh
-nix develop -c cargo mutants -p gpurify-core -j 8 --timeout 120 -f src/bbox.rs
+nix develop -c cargo mutants -p gpurify-geom -j 8 --timeout 120 -f src/bbox.rs
 ```
 
 ---
@@ -292,21 +292,23 @@ Where the weight sits, and why:
   net extraction has no conservation property to state: the answer is the
   partition the generator built the layout from.
 
-The workspace has six private `*_observed` entry points, and all six are tested
-through a recording adapter, as unit tests inside their own crates — the trade
-recorded in `crates/core/src/observe.rs`.
-`core::index::candidate_pairs_observed` and `cross_layer_pairs_observed`,
-`core::connectivity::components_observed`,
-`derived::prefilter::candidates_observed`, `lvs::refine::refine_observed` and
-`drc::record_run`. The adapter column above counts only the tests that name the
-seam itself as their oracle; the rest are annotated construct-from-answer,
-because their fixtures state the merge sequence, the round sequence or the
-violation count before the call.
+The workspace has six `*_observed` entry points, and all six are tested through
+a recording adapter — the trade recorded in `crates/geom/src/observe.rs`.
+`geom::index::candidate_pairs_observed` and `cross_layer_pairs_observed`,
+`geom::connectivity::components_observed`,
+`geom::prefilter::candidates_observed`, `lvs::refine::refine_observed` and
+`drc::record_run`. The private ones are unit tests inside their own crate;
+`prefilter`'s seam is `pub`, so its tests sit in
+`crates/geom/tests/derived/prefilter.rs` and can use `gpurify-testgen`, which
+depends on `gpurify-geom` and so cannot reach a unit test there. The adapter
+column above counts only the tests that name the seam itself as their oracle;
+the rest are annotated construct-from-answer, because their fixtures state the
+merge sequence, the round sequence or the violation count before the call.
 
-`pex::matvec::ObserveMatVec` is the exception and has no test. The trait exists
-and `NoObserve` implements it, but no function in the workspace takes one, so
-there is nothing to install an adapter at. That is a signature defect, not a
-coverage decision, and it is recorded in `NEED_TESTING.md`.
+`extract::field::matvec::ObserveMatVec` is the exception and has no test. The
+trait exists and `NoObserve` implements it, but no function in the workspace
+takes one, so there is nothing to install an adapter at. That is a signature
+defect, not a coverage decision, and it is recorded in `NEED_TESTING.md`.
 
 **Two of the three gates are met.** Coverage holds: every interface has a
 definitive test or an entry in `NEED_TESTING.md` naming what is missing.

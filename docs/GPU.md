@@ -88,9 +88,9 @@ result.
 
 ## Status: the path exists and runs
 
-All six hold. `crates/quasistatic/src/gpu.rs` is the adapter,
-`crates/quasistatic/shaders/p2p_laplace.comp` the kernel,
-`crates/quasistatic/tests/gpu.rs` the tests — none of them `#[ignore]`d.
+All six hold. `crates/extract/src/field/gpu.rs` is the adapter,
+`crates/extract/shaders/p2p_laplace.comp` the kernel,
+`crates/extract/tests/field/gpu.rs` the tests — none of them `#[ignore]`d.
 
 | # | How it is met |
 |---|---|
@@ -119,8 +119,8 @@ but a 66× figure at 8192, because it is timing an unoptimised host fold. A
 crossover measured against a debug host would be too *low*, which is the
 fail-open direction.
 
-End to end, `cargo test -p gpurify-pex --test quasistatic` runs in **18.3 s on
-the host and 3.05 s with the device**.
+End to end, `cargo test -p gpurify-extract --test pex quasistatic` runs in
+**18.3 s on the host and 3.05 s with the device**.
 
 ### Item 4 is what made the rest usable
 
@@ -133,7 +133,7 @@ every solve above the crossover refused.
 
 This document already specified the fix: the matvec in `f32` on the device, the
 residual and the correction in `f64` on the host. `refine` now takes both, and
-`quasistatic::columns_into` builds `CpuMatVec` unconditionally to be the accurate
+`field::columns_into` builds `CpuMatVec` unconditionally to be the accurate
 one. Two further findings came out of the same trace:
 
 - **The inner solve must never restart.** A restart inside the correction

@@ -14,13 +14,11 @@ pub use ruleset::RuleSet;
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
 use gpurify_geom::rects::Rect;
-use gpurify_geom::Evaluator;
-use gpurify_geom::{GeometryStore, PolyId, ValidatedLayer};
+use gpurify_geom::{PolyId, ValidatedLayer};
 // Imported for the intra-doc links above and in `DrcError`; the rule modules
 // take their own copies.
 #[allow(unused_imports)]
 use crate::report::{Outcome, RuleRun, Violations};
-use crate::topology::{DeviceTable, NetTable};
 use gpurify_geom::DbuArea;
 
 /// Why a deck could not be turned into a [`RuleSet`].
@@ -60,19 +58,7 @@ pub enum DrcError {
     DuplicateRule(String),
 }
 
-/// Everything a rule reads, borrowed for the length of one run.
-///
-/// `nets` and `devices` are deliberately not `Option`: an absent topology and
-/// an empty one are indistinguishable once inside a rule, and reading "no nets
-/// extracted" as "nothing to report" is fail-open.
-#[derive(Debug, Clone, Copy)]
-pub struct Design<'a> {
-    pub store: &'a GeometryStore,
-    /// Pre-evaluated named derived layers.
-    pub derived: &'a Evaluator,
-    pub nets: &'a NetTable,
-    pub devices: &'a DeviceTable,
-}
+pub use crate::Design;
 
 /// The buffer set every rule transform borrows and refills.
 ///

@@ -130,38 +130,29 @@ ERC then refuses its whole stage rather than reporting rules it never ran.
 ## Architecture
 
 ```
-units ──┬──────────────────────────────────────────────┐
-        │                                              │
-core ───┼─→ ingest ─→ derived ─→ topology ─→ ┬─ drc ─┐ │
-        │                                    ├─ erc ─┤ │
-        └─→ report ──────────────────────────┼─ lvs ─┼─┴─→ export ─→ engine ─→ cli
-                                             └─ pex ─┘
+geom ─→ ingest ─→ check ─→ extract ─→ gpurify
+                                      └─ engine, export, bin/gpurify
 ```
 
 | Crate | What lives there |
 |---|---|
-| `units` | `Dbu`, `Grid`, `Qty` — the newtypes that stop a coordinate being a bare integer. |
-| `core` | Geometry: the store, exact predicates, exact rectilinear booleans, the spatial index. |
-| `ingest` | Every reader — GDS, OASIS, SPICE/CDL, Spectre, deck, design intent. |
-| `derived` | Derived-layer expressions and the candidate-pair prefilter. |
-| `topology` | Nets, devices and ports — connectivity recovered from geometry. |
-| `report` | Violations, measurements, run records. |
-| `drc` | Geometry rules. 24 kinds. |
-| `erc` | Electrical rules, including antenna and the power-grid solve. 19 kinds. |
-| `lvs` | Graph matching, and nothing else. |
-| `pex` | Parasitic extraction. The only place a GPU appears. |
-| `export` | Every writer — GDS, SPICE, SPEF, DSPF, JSON. |
-| `engine` | Orchestration: load, extract, check, summarise. |
-| `cli` | Argument parsing and rendering. |
-| `testgen` | Fixture generation. Test infrastructure, not the system under test. |
+| `gpurify-geom` | `Dbu`, `Grid`, `Qty` — the newtypes that stop a coordinate being a bare integer — and the geometry over them: the store, exact predicates, exact rectilinear booleans, the spatial index, derived-layer expressions and the candidate-pair prefilter. |
+| `gpurify-ingest` | Every reader — GDS, OASIS, SPICE/CDL, Spectre, deck, design intent. |
+| `gpurify-check` | `topology`, nets, devices and ports recovered from geometry; `report`, violations, measurements and run records; `drc`, geometry rules, 24 kinds; `erc`, electrical rules including antenna and the power-grid solve, 19 kinds; `lvs`, graph matching and nothing else. |
+| `gpurify-extract` | Parasitic extraction, with the field solver under `field`. The only place a GPU appears. |
+| `gpurify` | `engine`, orchestration: load, extract, check, summarise; `export`, every writer — GDS, SPICE, SPEF, DSPF, JSON; and the `gpurify` binary, argument parsing and rendering. |
+| `gpurify-testgen` | Fixture generation. Test infrastructure, not the system under test. |
 
 Every reader lives in `ingest` and every writer in `export`, so determinism is
 enforced in one place instead of argued about in eleven.
 
-These are separate crates because the compiler then *enforces* that graph. Merge
-them into modules and nothing stops `core` importing `drc` — the split is the
-layering, not decoration. A consumer who wants the whole tool depends on
-`gpurify` and gets `gpurify::drc`, `gpurify::core` and the rest as re-exports.
+These are separate crates because the compiler then *enforces* that graph:
+nothing in `geom` can import `check`. Inside a crate the modules are peers and
+the compiler says nothing, so a merge is only made where the parts are one
+shape — `drc`, `erc` and `lvs` are one transform over the same borrowed tables,
+appending to the same violation columns. A consumer who wants the whole tool
+depends on `gpurify` and gets `gpurify::check`, `gpurify::geom` and the rest as
+re-exports.
 
 ## Conventions worth knowing before reading the code
 
@@ -252,8 +243,9 @@ mean nothing.
 
 ## GPU
 
-There is one GPU path, behind `pex`'s quasi-static `MatVec` seam, built ahead of
-time to SPIR-V from GLSL with no JIT. Everything else is CPU and deliberately so:
-the rest of this workload is branchy pointer-chasing over irregular geometry,
-which is not what a GPU is good at. `docs/GPU.md` makes the argument in full. A
-machine with no Vulkan device takes the CPU path and says which it took.
+There is one GPU path, behind `extract`'s quasi-static `MatVec` seam, built
+ahead of time to SPIR-V from GLSL with no JIT. Everything else is CPU and
+deliberately so: the rest of this workload is branchy pointer-chasing over
+irregular geometry, which is not what a GPU is good at. `docs/GPU.md` makes the
+argument in full. A machine with no Vulkan device takes the CPU path and says
+which it took.
