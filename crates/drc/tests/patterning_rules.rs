@@ -241,11 +241,7 @@ fn an_uncolourable_layer_is_one_violation_naming_the_shape_that_could_not_be_pla
     );
 
     let at = sink.out.at[0];
-    let squares = [
-        (-50, -50, 50, 50),
-        (100, -50, 200, 50),
-        (-50, 100, 50, 200),
-    ];
+    let squares = [(-50, -50, 50, 50), (100, -50, 200, 50), (-50, 100, 50, 200)];
     assert!(
         squares.iter().any(|&(xlo, ylo, xhi, yhi)| at.x >= dbu(xlo)
             && at.x <= dbu(xhi)
@@ -281,7 +277,10 @@ fn the_same_layer_with_a_third_mask_available_is_clean() {
     );
 
     assert_clean(&sink.runs, &sink.out, RULE);
-    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, u64::from(case.shapes));
+    assert_eq!(
+        assert_rule_ran(&sink.runs, RULE).examined,
+        u64::from(case.shapes)
+    );
 }
 
 /// Oracle: construct-from-answer, and the boundary that decides the verdict. At

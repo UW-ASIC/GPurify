@@ -340,11 +340,10 @@ fn the_tap_distance_is_an_exact_integer() {
     let (out, runs) = run_overlay(&fixture(|x, y| (x, y)), 1);
     assert_base_is_not_vacuous(&out, &runs);
 
-    let row = out
-        .rule
-        .iter()
-        .position(|rule| *rule == TAP)
-        .expect("the fixture must drive max_distance_to_tap, or the scale law is vacuous there");
+    let row =
+        out.rule.iter().position(|rule| *rule == TAP).expect(
+            "the fixture must drive max_distance_to_tap, or the scale law is vacuous there",
+        );
 
     assert_eq!(
         400i64 * 400 + 300 * 300,

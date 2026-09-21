@@ -301,9 +301,24 @@ fn scaling_by_a_factor_and_dividing_it_out_restores_the_original() {
         let value = Qty::<Voltage, { prefix::BASE }>::new(rng.unit() * 20.0 - 10.0);
         let factor = rng.unit() * 8.0 + 0.5;
 
-        assert_close("(v * k) / k", ((value * factor) / factor).raw(), value.raw(), 1e-12);
-        assert_close("(v / k) * k", ((value / factor) * factor).raw(), value.raw(), 1e-12);
-        assert_close("v * 2 - v", ((value * 2.0) - value).raw(), value.raw(), 1e-12);
+        assert_close(
+            "(v * k) / k",
+            ((value * factor) / factor).raw(),
+            value.raw(),
+            1e-12,
+        );
+        assert_close(
+            "(v / k) * k",
+            ((value / factor) * factor).raw(),
+            value.raw(),
+            1e-12,
+        );
+        assert_close(
+            "v * 2 - v",
+            ((value * 2.0) - value).raw(),
+            value.raw(),
+            1e-12,
+        );
     }
 }
 
@@ -344,7 +359,15 @@ fn the_ratio_of_two_quantities_of_one_dimension_is_their_bare_ratio() {
 /// the ordinary values.
 #[test]
 fn only_finite_values_are_finite() {
-    for raw in [0.0_f64, -0.0, 1.8, -1e30, f64::MIN_POSITIVE, f64::MAX, f64::MIN] {
+    for raw in [
+        0.0_f64,
+        -0.0,
+        1.8,
+        -1e30,
+        f64::MIN_POSITIVE,
+        f64::MAX,
+        f64::MIN,
+    ] {
         assert!(
             Qty::<Voltage, { prefix::BASE }>::new(raw).is_finite(),
             "{raw} V is a finite measurement"

@@ -10,10 +10,10 @@
 //! The scan is exact for any rectilinear polygon, which is the whole input
 //! domain, so there is no approximate path here.
 
-use super::{COLUMNS_DIVERGED, mid, ring_segs, row_columns};
+use super::{mid, ring_segs, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
-use gpurify_core::ops::{winding_of, Point, Winding};
 use gpurify_core::boolean::union_into;
+use gpurify_core::ops::{winding_of, Point, Winding};
 use gpurify_core::view::{validate_layer_into, ValidatedLayer};
 use gpurify_core::{GeometryStore, LayerId, PolyId, PolygonRef, RingRef};
 use gpurify_ingest::StrId;
@@ -93,7 +93,11 @@ fn edge_of((a, b): (Point, Point)) -> Edge {
         vertical || a.y == b.y,
         "a validated polygon is rectilinear, so every edge is axis-aligned"
     );
-    let (pos, from, to) = if vertical { (a.x, a.y, b.y) } else { (a.y, a.x, b.x) };
+    let (pos, from, to) = if vertical {
+        (a.x, a.y, b.y)
+    } else {
+        (a.y, a.x, b.x)
+    };
     Edge {
         pos,
         lo: from.min(to),
@@ -112,7 +116,10 @@ fn poly_rings(poly: PolygonRef<'_>) -> impl Iterator<Item = RingRef<'_>> {
 /// One ring's edges as vertex pairs, the closing edge last.
 fn ring_edges(ring: RingRef<'_>) -> impl Iterator<Item = (Point, Point)> + '_ {
     let (xs, ys) = ring.coords();
-    debug_assert!(xs.len() >= 3, "a validated ring has at least three vertices");
+    debug_assert!(
+        xs.len() >= 3,
+        "a validated ring has at least three vertices"
+    );
     ring_segs(xs, ys).map(|s| (s.a, s.b))
 }
 
@@ -153,9 +160,15 @@ fn facing(a: Edge, b: Edge, material_between: bool) -> Option<(Dbu, Point)> {
     let across = mid(near.pos, far.pos);
     let along = mid(lo, hi);
     let at = if a.vertical {
-        Point { x: across, y: along }
+        Point {
+            x: across,
+            y: along,
+        }
     } else {
-        Point { x: along, y: across }
+        Point {
+            x: along,
+            y: across,
+        }
     };
     Some((far.pos - near.pos, at))
 }
@@ -272,7 +285,10 @@ fn sweep_axis(
             consider(edges, active, slot + 1, material_between, &mut best);
         }
     }
-    debug_assert!(active.is_empty(), "every edge that entered the sweep left it");
+    debug_assert!(
+        active.is_empty(),
+        "every edge that entered the sweep left it"
+    );
 
     best
 }
@@ -302,7 +318,10 @@ fn narrowest_facing(
     let across = sweep_axis(edge_col, true, material_between, events, active);
     let along = sweep_axis(edge_col, false, material_between, events, active);
     // `min_by_key` keeps the first of a tie, which is what fixes the axis order.
-    let best = [across, along].into_iter().flatten().min_by_key(|&(gap, _)| gap);
+    let best = [across, along]
+        .into_iter()
+        .flatten()
+        .min_by_key(|&(gap, _)| gap);
 
     debug_assert!(
         best.is_none_or(|(gap, _)| gap.raw() >= 0),
@@ -325,7 +344,7 @@ fn narrowest_width_at(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> (Dbu
 ///
 /// `ValidatedLayer::ring_poly` is private with no accessor, so this replays the
 /// filter validation used: one polygon per counter-clockwise row, in ascending
-/// row order. The missing accessor is recorded in `docs/SIGNATURE_DEFECTS.md`.
+/// row order.
 struct OuterRows<'a> {
     store: &'a GeometryStore,
     next: u32,
@@ -421,10 +440,13 @@ fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
 /// Holes participate: the material between an outer edge and a hole edge facing
 /// it is width, and ignoring it is how a ring with a thin wall passes.
 /// Allocates the sweep's buffers per call because the signature has nowhere to
-/// put them; recorded in `docs/SIGNATURE_DEFECTS.md`.
+/// put them.
 pub fn narrowest_width(poly: PolygonRef<'_>) -> Dbu {
     let (width, _) = narrowest_width_at(poly, &mut FacingScratch::default());
-    debug_assert!(width.raw() > 0, "a polygon with a width of zero has no interior");
+    debug_assert!(
+        width.raw() > 0,
+        "a polygon with a width of zero has no interior"
+    );
     debug_assert!(
         width <= poly.bbox().width().max(poly.bbox().height()),
         "a width is a gap between two coordinates of the polygon, so its own box bounds it"
@@ -437,8 +459,7 @@ pub fn narrowest_width(poly: PolygonRef<'_>) -> Dbu {
 /// The mirror of [`narrowest_width`], over the facing pairs whose gap lies
 /// *outside* the shape. `None` for a convex shape, which is not a notch of zero.
 pub fn narrowest_notch(poly: PolygonRef<'_>) -> Option<Dbu> {
-    let notch =
-        narrowest_facing(poly, false, &mut FacingScratch::default()).map(|(gap, _)| gap);
+    let notch = narrowest_facing(poly, false, &mut FacingScratch::default()).map(|(gap, _)| gap);
     debug_assert!(
         notch.is_none_or(|gap| gap.raw() > 0),
         "a notch of zero would mean two boundary edges touching, which is not simple"
@@ -477,7 +498,10 @@ fn ring_shortest_edge(ring: RingRef<'_>) -> Dbu {
     // Reslicing to the same `n` deletes the per-element bounds check on the
     // second column, and is the release profile's half of the length check.
     let ys = &ys[..n];
-    let last = Point { x: xs[n - 1], y: ys[n - 1] };
+    let last = Point {
+        x: xs[n - 1],
+        y: ys[n - 1],
+    };
     let closing = edge_length(last, Point { x: xs[0], y: ys[0] });
 
     let mut prev = last;
@@ -488,7 +512,10 @@ fn ring_shortest_edge(ring: RingRef<'_>) -> Dbu {
         prev = here;
     }
 
-    debug_assert!(shortest <= closing, "the seed is one of the edges folded over");
+    debug_assert!(
+        shortest <= closing,
+        "the seed is one of the edges folded over"
+    );
     shortest
 }
 
@@ -576,7 +603,8 @@ fn check_facing(
         }
 
         // Read before the merge can change how many polygons there are.
-        let polys = u32::try_from(scratch.layer_a.len()).expect("a layer indexes polygons with a u32");
+        let polys =
+            u32::try_from(scratch.layer_a.len()).expect("a layer indexes polygons with a u32");
 
         // The merge, for the notch sense only. A layer `union_into` cannot merge
         // is a layer the facing scan cannot measure either, so refusing the row
@@ -679,7 +707,10 @@ pub fn check_min_edge_length(
 
     for row in 0..table.len() {
         let (rule_id, layer_id, limit) = (table.rule[row], table.layer[row], table.limit[row]);
-        debug_assert!(limit.raw() > 0, "an edge-length limit is positive by construction");
+        debug_assert!(
+            limit.raw() > 0,
+            "an edge-length limit is positive by construction"
+        );
         let before = out.len();
 
         if validate_layer_into(design.store, layer_id, &mut scratch.layer_a).is_err() {
@@ -687,7 +718,8 @@ pub fn check_min_edge_length(
             continue;
         }
 
-        let polys = u32::try_from(scratch.layer_a.len()).expect("a layer indexes polygons with a u32");
+        let polys =
+            u32::try_from(scratch.layer_a.len()).expect("a layer indexes polygons with a u32");
         let mut rows = OuterRows::new(design.store, layer_id);
         let mut examined = 0u64;
 

@@ -244,7 +244,11 @@ fn a_reused_device_table_is_refilled_and_an_empty_deck_recognises_nothing() {
         devices.marker, markers,
         "a reused DeviceTable appended a second copy instead of being refilled"
     );
-    assert_eq!(devices.len(), 2, "the same deck over the same layout, twice");
+    assert_eq!(
+        devices.len(),
+        2,
+        "the same deck over the same layout, twice"
+    );
 
     recognise_into(
         &case.store,
@@ -258,7 +262,10 @@ fn a_reused_device_table_is_refilled_and_an_empty_deck_recognises_nothing() {
         "a deck naming no recognisers left the previous run's devices behind"
     );
     assert_eq!(devices.len(), 0);
-    assert!(devices.marker.is_empty(), "the marker column was not cleared");
+    assert!(
+        devices.marker.is_empty(),
+        "the marker column was not cleared"
+    );
 }
 
 /// Oracle: construct-from-answer. A MOS declares `[gate, sd, sd]` — two
@@ -328,10 +335,18 @@ fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
     let (bound, roles) = devices.terminals_of(DeviceId(0));
     assert_eq!(
         roles,
-        [TerminalRole::Gate, TerminalRole::Source, TerminalRole::Drain],
+        [
+            TerminalRole::Gate,
+            TerminalRole::Source,
+            TerminalRole::Drain
+        ],
         "terminal roles follow the recogniser's terminal order"
     );
-    assert_eq!(bound[0], nets.net_of(gate), "the gate is the gate layer's net");
+    assert_eq!(
+        bound[0],
+        nets.net_of(gate),
+        "the gate is the gate layer's net"
+    );
     assert_ne!(
         bound[1], bound[2],
         "source and drain bound to the same net, so the two terminal positions \
@@ -509,21 +524,26 @@ fn two_gates_under_one_implant_are_refused_rather_than_reported_as_one_device() 
 /// series pair rather than two isolated devices.
 #[test]
 fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
+    use gpurify_topology::device::{DeviceMeasure, DeviceParam};
+
     let drawn = Fingers::draw();
     let nets = drawn.nets();
     let devices = drawn.recognise(Fingers::CHANNEL, &nets);
 
     assert_eq!(devices.len(), 2, "two channel regions are two transistors");
     assert_eq!(
-        devices.marker,
-        drawn.channel,
+        devices.marker, drawn.channel,
         "device ids are the rank of the marker polygon, ascending"
     );
 
     let (first, roles) = devices.terminals_of(DeviceId(0));
     assert_eq!(
         roles,
-        [TerminalRole::Gate, TerminalRole::Source, TerminalRole::Drain],
+        [
+            TerminalRole::Gate,
+            TerminalRole::Source,
+            TerminalRole::Drain
+        ],
         "terminal roles follow the recogniser's terminal order"
     );
     assert_eq!(
@@ -554,17 +574,27 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
          second's source, which is what makes them a series pair"
     );
 
-    // The marker is the device's extent, so its area is the one parameter a
-    // marker states on its own. On a channel that is W x L; on the implant it
-    // was the whole active region, 33x too large, which is the measuring half
-    // of F8.
+    // The marker is the device's extent. Its area is W x L — on the implant it
+    // was the whole active region, 33x too large, the measuring half of F8 —
+    // and the flanking diffusion is offset in x, which names x the channel
+    // axis: L = 50 along the current, W = 200 across it.
     assert_eq!(
         devices.params_of(DeviceId(0)),
-        [(
-            gpurify_topology::device::DeviceParam::Area,
-            gpurify_topology::device::DeviceMeasure::Area(gpurify_units::DbuArea::new(50 * 200))
-        )],
-        "a channel marker measures W x L"
+        [
+            (
+                DeviceParam::Width,
+                DeviceMeasure::Length(gpurify_units::Dbu::new_unchecked(200))
+            ),
+            (
+                DeviceParam::Length,
+                DeviceMeasure::Length(gpurify_units::Dbu::new_unchecked(50))
+            ),
+            (
+                DeviceParam::Area,
+                DeviceMeasure::Area(gpurify_units::DbuArea::new(50 * 200))
+            ),
+        ],
+        "a channel marker measures W, L and W x L"
     );
 }
 
@@ -667,5 +697,142 @@ fn a_resistor_recogniser_gives_its_two_terminals_interchangeable_pins() {
     assert_ne!(
         terminal_nets[0], terminal_nets[1],
         "a resistor across one net is a short, not a device"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The conduction guard: a MOS channel marker must not sit on live conductor
+// area, or net extraction fuses source and drain into one net in silence.
+// ---------------------------------------------------------------------------
+
+use gpurify_core::boolean::BooleanError;
+use gpurify_core::view::ValidityError;
+use gpurify_topology::device::{refuse_conducting_channels, ChannelError};
+
+/// Oracle: construct-from-answer. The [`Fingers`] layout is the *correct*
+/// deck's world: the diffusion arrives split (`diff NOT poly`), so each channel
+/// marker only *abuts* its two flanking regions along an edge and overlaps no
+/// conductor area on the source/drain layer. Sharing an edge is how a terminal
+/// is recognised at all, so the guard accepting it is not a tolerance — it is
+/// the difference between area and contact that the whole split rests on.
+///
+/// The marker does overlap the poly gates with area; position 0 is the gate,
+/// whose layer conducts *through* the channel on purpose, and the guard must
+/// not read that as a short.
+#[test]
+fn a_channel_abutting_its_split_diffusion_passes_the_conduction_guard() {
+    let drawn = Fingers::draw();
+    let mut strings = StrTable::default();
+    let recognition = Fingers::recogniser(Fingers::CHANNEL, &mut strings);
+    let connectivity = Connectivity {
+        conductors: vec![Fingers::POLY, Fingers::ACTIVE],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+
+    assert_eq!(
+        refuse_conducting_channels(&drawn.store, &connectivity, &recognition),
+        Ok(()),
+        "a channel that only touches the split source/drain regions is the \
+         legal configuration, and refusing it would refuse every correct deck"
+    );
+}
+
+/// Oracle: construct-from-answer. The pre-split deck's world: the raw
+/// diffusion — one rectangle spanning the channel — is the conductor and the
+/// source/drain terminal layer. `extract_nets_into` would hand both terminal
+/// positions that one polygon's net and every extracted MOS would come back
+/// with source shorted to drain, reported by nothing. The guard must refuse
+/// this configuration naming the geometry, not extract it.
+#[test]
+fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
+    const CHANNEL: LayerId = LayerId(0);
+    const POLY: LayerId = LayerId(1);
+    const DIFF: LayerId = LayerId(2);
+
+    let mut layout = LayoutBuilder::new(3);
+    let channel = layout.rect(CHANNEL, 200, 0, 250, 200);
+    layout.rect(POLY, 200, -50, 250, 250);
+    // One diffusion rectangle spanning the channel: the collapsing shape.
+    let diff = layout.rect(DIFF, 0, 0, 500, 200);
+    let (store, ids) = layout.finish();
+
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        marker: vec![CHANNEL],
+        terminal_start: vec![0, 3],
+        terminal: vec![POLY, DIFF, DIFF],
+        model: vec![strings.intern("nch")],
+    };
+    let connectivity = Connectivity {
+        conductors: vec![POLY, DIFF],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+
+    let refused = refuse_conducting_channels(&store, &connectivity, &recognition)
+        .expect_err("a channel over conducting diffusion is the silent S/D short");
+    let ChannelError::ConductingChannel {
+        marker,
+        conductor,
+        poly,
+    } = refused
+    else {
+        panic!("the refusal must name the conducting channel, got {refused:?}");
+    };
+    assert_eq!(marker, CHANNEL, "the refusal names the marker layer");
+    assert_eq!(conductor, DIFF, "the refusal names the source/drain layer");
+    // The named polygon is the lowest store row contributing to the overlap —
+    // the marker or the diffusion — which pins the refusal to the drawing and
+    // to nothing else. Both are acceptable names for one defect; what the
+    // assertion rules out is a polygon outside the overlap entirely.
+    assert!(
+        poly == ids.of(channel) || poly == ids.of(diff),
+        "the refusal names {poly:?}, which is neither the channel {:?} nor the \
+         diffusion {:?} that overlap",
+        ids.of(channel),
+        ids.of(diff)
+    );
+}
+
+/// Oracle: construct-from-answer. A non-rectilinear source/drain layer is a
+/// channel overlap the rectilinear splitter cannot represent, so the guard
+/// must refuse it naming the polygon rather than approximate or skip it.
+#[test]
+fn a_non_rectilinear_source_drain_layer_is_refused_not_split() {
+    const CHANNEL: LayerId = LayerId(0);
+    const POLY: LayerId = LayerId(1);
+    const DIFF: LayerId = LayerId(2);
+
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(CHANNEL, 200, 0, 250, 200);
+    layout.rect(POLY, 200, -50, 250, 250);
+    // A triangle: every edge check the boolean runs on this layer refuses.
+    let triangle = layout.push(DIFF, &[0, 500, 250], &[0, 0, 200]);
+    let (store, ids) = layout.finish();
+
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        marker: vec![CHANNEL],
+        terminal_start: vec![0, 3],
+        terminal: vec![POLY, DIFF, DIFF],
+        model: vec![strings.intern("nch")],
+    };
+    let connectivity = Connectivity {
+        conductors: vec![POLY, DIFF],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+
+    let refused = refuse_conducting_channels(&store, &connectivity, &recognition)
+        .expect_err("a slanted diffusion cannot be split and must not be guessed at");
+    assert_eq!(
+        refused,
+        ChannelError::Geometry(BooleanError::Validity(ValidityError::NotRectilinear(
+            ids.of(triangle)
+        ))),
+        "the refusal names the polygon the splitter cannot represent"
     );
 }

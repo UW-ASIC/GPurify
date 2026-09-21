@@ -15,16 +15,14 @@
 //! bipartiteness, which [`color_into`] settles in one pass, so double
 //! patterning never comes back `Exhausted`.
 
-use super::{COLUMNS_DIVERGED, centre, poly_dist2, row_columns};
+use super::{centre, poly_dist2, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::connectivity::components_into;
 use gpurify_core::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_core::view::validate_layer_into;
 use gpurify_core::{LayerId, PolyId};
 use gpurify_ingest::StrId;
-use gpurify_report::{
-    Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
-};
+use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
 use gpurify_units::{Dbu, MAX_ABS_DBU};
 
 /// Floor on the backtracking budget, in search steps.
@@ -353,7 +351,11 @@ const IDX_MASK: u64 = (1 << IDX_BITS) - 1;
 /// [`SatQueue::pick_checked`] asserts the two agree under `debug_assertions`.
 fn dsatur_pick(color: &[u8], sat: &[u32], adj_start: &[u32]) -> u32 {
     debug_assert_eq!(color.len(), sat.len(), "one saturation per node");
-    debug_assert_eq!(adj_start.len(), color.len() + 1, "adjacency is CSR over nodes");
+    debug_assert_eq!(
+        adj_start.len(),
+        color.len() + 1,
+        "adjacency is CSR over nodes"
+    );
 
     // The three tie-breaks packed into one key: saturation on top, then degree,
     // then the index complemented so a lower one sorts higher. An assigned node
@@ -707,7 +709,7 @@ pub fn check_multi_patterning(
         // Geometry this tool cannot represent exactly is a refusal, never a
         // clean answer. The nodes below are store rows rather than validated
         // polygons because a violation names a `PolyId` and a validated index
-        // cannot be resolved back to one — `docs/SIGNATURE_DEFECTS.md`.
+        // cannot be resolved back to one.
         if validate_layer_into(design.store, layer, layer_a).is_err() {
             record_run(runs, out, before, rule, Outcome::Refused, examined);
             continue;
@@ -718,9 +720,9 @@ pub fn check_multi_patterning(
         SpatialIndex::build_into(design.store, layer, index_a);
         candidate_pairs_into(design.store, index_a, spacing, pairs);
         debug_assert!(
-            pairs.iter().all(|&(a, b)| shapes.contains(&a.0)
-                && shapes.contains(&b.0)
-                && a.0 < b.0),
+            pairs
+                .iter()
+                .all(|&(a, b)| shapes.contains(&a.0) && shapes.contains(&b.0) && a.0 < b.0),
             "the same-layer prune emits pairs of rows on the layer, low row first"
         );
 
@@ -780,16 +782,13 @@ pub fn check_multi_patterning(
             edges[kept] = (u, v);
             kept += usize::from(u != v);
         }
-        debug_assert!(kept <= pairs.len(), "the conflict graph is a subset of the prune");
+        debug_assert!(
+            kept <= pairs.len(),
+            "the conflict graph is a subset of the prune"
+        );
         edges.truncate(kept);
 
-        let coloring = color_into_with(
-            &mut coloring_scratch,
-            node_count,
-            edges,
-            colors,
-            colouring,
-        );
+        let coloring = color_into_with(&mut coloring_scratch, node_count, edges, colors, colouring);
         debug_assert_eq!(
             colouring.len(),
             usize::from(coloring == Coloring::Complete) * node_count as usize,
@@ -834,12 +833,12 @@ mod tests {
 
         // An odd cycle, a four-clique, a path, a triangle, an edgeless graph.
         let graphs: [Graph<'_>; 5] = [
-            (7, 3, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 0)]),
             (
-                4,
+                7,
                 3,
-                &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+                &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 0)],
             ),
+            (4, 3, &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]),
             (6, 2, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]),
             (3, 2, &[(0, 1), (1, 2), (2, 0)]),
             (5, 3, &[]),
@@ -851,7 +850,10 @@ mod tests {
         for &(nodes, palette, edges) in &graphs {
             let a = color_into_with(&mut shared, nodes, edges, palette, &mut reused);
             let b = color_into(nodes, edges, palette, &mut fresh);
-            assert_eq!(a, b, "a reused scratch changed the verdict for {nodes} nodes");
+            assert_eq!(
+                a, b,
+                "a reused scratch changed the verdict for {nodes} nodes"
+            );
             assert_eq!(
                 reused, fresh,
                 "a reused scratch changed the colouring for {nodes} nodes"
@@ -864,5 +866,3 @@ mod tests {
         }
     }
 }
-
-

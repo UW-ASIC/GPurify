@@ -9,7 +9,7 @@
 //! **An unhosted inner shape is zero enclosure, not skipped.** A via with no
 //! metal under it violates every enclosure rule; skipping it is fail-open.
 
-use super::{COLUMNS_DIVERGED, centre, mid, ring_segs, row_columns};
+use super::{centre, mid, ring_segs, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_core::ops::{isqrt, Point};
@@ -258,7 +258,10 @@ fn run_of(pairs: &[(PolyId, PolyId)], cursor: &mut usize, a: PolyId) -> (usize, 
     while *cursor < pairs.len() && pairs[*cursor].0 == a {
         *cursor += 1;
     }
-    debug_assert!(lo <= *cursor && *cursor <= pairs.len(), "the run is a range");
+    debug_assert!(
+        lo <= *cursor && *cursor <= pairs.len(),
+        "the run is a range"
+    );
     (lo, *cursor)
 }
 
@@ -267,7 +270,7 @@ fn run_of(pairs: &[(PolyId, PolyId)], cursor: &mut usize, a: PolyId) -> (usize, 
 /// Validation is the fail-closed gate: geometry this tool does not represent
 /// exactly is a refusal for the rule row, never a clean one.
 ///
-/// **Known fail-open, filed in `docs/SIGNATURE_DEFECTS.md`:** the measurements
+/// **Known fail-open:** the measurements
 /// are taken on bounding boxes. A box margin *overstates* the enclosure a
 /// non-convex host gives, so an L-shaped pad leaving a via's corner uncovered
 /// reads as clean. Closing it needs
@@ -364,7 +367,7 @@ fn ring_contains_ring(store: &gpurify_core::GeometryStore, host: PolyId, inner: 
 /// Exact when the host is a rectangle, optimistic otherwise:
 /// [`ring_contains_ring`] confirms containment before a candidate may host, but
 /// the *margin* of a genuinely contained shape in a concave host can still
-/// overstate. See `docs/SIGNATURE_DEFECTS.md`.
+/// overstate.
 pub fn margins(inner: Bbox, outer: Bbox) -> Margins {
     // `Sub` rather than a checked constructor: a margin legally reaches
     // `+/-2^41`, one bit past the coordinate domain, which `Sub` documents as
@@ -406,7 +409,15 @@ fn check_enclosure_rows<R>(
 
         // The inner layer is the `a` operand, so the pair list comes back
         // grouped by inner shape and the walk below is a merge, not a search.
-        if pair_layers(design, inner_layer, outers[row], Dbu::new_unchecked(0), scratch).is_err() {
+        if pair_layers(
+            design,
+            inner_layer,
+            outers[row],
+            Dbu::new_unchecked(0),
+            scratch,
+        )
+        .is_err()
+        {
             record_run(runs, out, before, rule, Outcome::Refused, 0);
             continue;
         }
@@ -452,7 +463,11 @@ fn check_enclosure_rows<R>(
                 let hosted = best >= 0;
                 let at = if hosted {
                     let host_box = design.store.poly_bbox(PolyId(host));
-                    strip_midpoint(inner_box, host_box, worst_of(margins(inner_box, host_box)).1)
+                    strip_midpoint(
+                        inner_box,
+                        host_box,
+                        worst_of(margins(inner_box, host_box)).1,
+                    )
                 } else {
                     centre(inner_box)
                 };
@@ -606,8 +621,7 @@ pub fn check_min_extension(
             debug_assert!(w <= i);
             // Unchecked, and slicing to `[..n]` is not enough to earn it here:
             // `w`'s step is data-dependent, so LLVM cannot prove `w <= i` and
-            // emits a live panic edge instead. Measured 1.19x at 8k —
-            // `docs/BULK_MEASUREMENTS.md` §4.
+            // emits a live panic edge instead. Measured 1.19x at 8k.
             //
             // SAFETY: `w <= i < n == slots.len()`, from the induction above.
             unsafe { slots.get_unchecked_mut(w) }.write((line, reference));
@@ -700,7 +714,7 @@ pub fn check_overlap(
 
         // One figure per overlapping pair, and every pair here overlaps.
         //
-        // **Known fail-open, filed in `docs/SIGNATURE_DEFECTS.md`:** the figure
+        // **Known fail-open:** the figure
         // is the pair's box intersection, not the exact boolean one. For a
         // non-convex operand the box meet is larger, so a too-small overlap
         // reads as passing. The exact route needs

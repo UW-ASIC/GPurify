@@ -30,7 +30,7 @@
 //! suite that the tests themselves exist to prevent in the tool.
 
 use gpurify::core::LayerId;
-use gpurify::ingest::deck::{Deck, ParamValue};
+use gpurify::ingest::deck::{Deck, DeviceKind, ParamValue};
 use gpurify::ingest::StrTable;
 use gpurify::units::Grid;
 use std::path::{Path, PathBuf};
@@ -77,8 +77,8 @@ fn name_of(path: &Path) -> &str {
 /// The string table comes back with it: layer and rule names are `StrId`s from
 /// here on, and resolving one against a different table is a different name.
 fn load(path: &Path) -> (Deck, StrTable) {
-    let source = std::fs::read_to_string(path)
-        .unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+    let source =
+        std::fs::read_to_string(path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
     let mut strings = StrTable::default();
 
@@ -106,16 +106,10 @@ fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
         let (deck, strings) = load(&path);
 
         gpurify::drc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
-            panic!(
-                "{}: the DRC rule set does not build: {why}",
-                name_of(&path)
-            )
+            panic!("{}: the DRC rule set does not build: {why}", name_of(&path))
         });
         gpurify::erc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
-            panic!(
-                "{}: the ERC rule set does not build: {why}",
-                name_of(&path)
-            )
+            panic!("{}: the ERC rule set does not build: {why}", name_of(&path))
         });
     }
 }
@@ -319,8 +313,7 @@ fn every_via_joins_two_declared_conductors() {
         let (deck, strings) = load(&path);
         let deck_name = name_of(&path);
 
-        let is_conductor =
-            |layer: LayerId| deck.connectivity.conductors.contains(&layer);
+        let is_conductor = |layer: LayerId| deck.connectivity.conductors.contains(&layer);
 
         for (&cut, &(lower, upper)) in deck
             .connectivity
@@ -336,6 +329,92 @@ fn every_via_joins_two_declared_conductors() {
                     "{deck_name}: via {cut_name} joins {name}, which the deck does \
                      not list as a conductor; the net stops at this via and LVS \
                      reads the two halves as an open"
+                );
+            }
+        }
+    }
+}
+
+/// Oracle: construct-from-answer. A deck pairs at least one text layer with a
+/// conductor, so a port label has something to bind to.
+///
+/// **This is a bug all four shipped decks had.** `connectivity.labels` is
+/// optional and an absent section is an empty pairing, not an error: every
+/// `TEXT` in the layout is then read, matched against nothing, and discarded as
+/// documentation. `bind_ports_into` returns an empty `PortTable`, and
+/// `export::netlist` writes `.subckt TOP` with no pins at all — a subcircuit
+/// nothing can instantiate, from a run that exits zero. LVS compares it against
+/// a reference whose every pin is missing, which is not a quiet wrong answer but
+/// it is a wrong answer produced by the deck rather than the layout.
+///
+/// A deck could legitimately name its text layers something other than its
+/// routing layers, so what is pinned is only that *some* pairing exists.
+#[test]
+fn every_deck_pairs_a_text_layer_with_a_conductor() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+        let deck_name = name_of(&path);
+
+        assert!(
+            !deck.connectivity.label_layer.is_empty(),
+            "{deck_name}: connectivity.labels pairs no text layer with any \
+             conductor, so every port label in a layout binds to nothing and \
+             the extracted subcircuit comes out with no pins"
+        );
+        // `build_connectivity` refuses a pairing whose named layer is not a
+        // conductor, so this only restates the column invariant the parse left.
+        assert_eq!(
+            deck.connectivity.label_layer.len(),
+            deck.connectivity.label_names.len(),
+            "{deck_name}: the label pairing columns are not parallel"
+        );
+        for &named in &deck.connectivity.label_names {
+            let name = strings.resolve(deck.layers.name(named));
+            assert!(
+                deck.connectivity.conductors.contains(&named),
+                "{deck_name}: a label row names {name}, which is not a conductor"
+            );
+        }
+    }
+}
+
+/// Oracle: construct-from-answer, against `topology::device`'s stated rule —
+/// "a marker whose positions are not all filled is skipped".
+///
+/// **This is a bug all four shipped decks had.** Every `pgate` recogniser
+/// declared a fourth terminal on `nwell`. A terminal layer that is not a
+/// conductor has no net, so that position never fills, and every marker of that
+/// recogniser is dropped: the PMOS half of a CMOS layout simply does not appear
+/// in the extraction. Nothing reports it, because a device that was never
+/// recognised raises no violation — the run comes back clean with half the
+/// transistors.
+///
+/// Scoped to `Mos` on purpose. `gf180mcu.json` still declares a junction diode
+/// `pn_3p3` across `comp_active` and `nwell`, which is unrecognisable for the
+/// same reason, but whether the cathode should become a conductor or the
+/// recogniser should go is a process question and not one a test may decide.
+#[test]
+fn every_mos_terminal_names_a_conductor() {
+    for path in deck_files() {
+        let (deck, strings) = load(&path);
+        let deck_name = name_of(&path);
+        let devices = &deck.devices;
+
+        for row in 0..devices.kind.len() {
+            if devices.kind[row] != DeviceKind::Mos {
+                continue;
+            }
+            let model = strings.resolve(devices.model[row]);
+            let span =
+                devices.terminal_start[row] as usize..devices.terminal_start[row + 1] as usize;
+            for &terminal in &devices.terminal[span] {
+                let name = strings.resolve(deck.layers.name(terminal));
+                assert!(
+                    deck.connectivity.conductors.contains(&terminal),
+                    "{deck_name}: the {model} recogniser puts a terminal on \
+                     {name}, which the deck does not list as a conductor; that \
+                     position can never be filled, so every {model} in a layout \
+                     is silently dropped from the extraction"
                 );
             }
         }

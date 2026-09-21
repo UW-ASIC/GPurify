@@ -402,8 +402,8 @@ fn spectre_primitive(master: &str) -> Option<DeviceKind> {
         "diode" => DeviceKind::Diode,
         "bjt" | "npn" | "pnp" | "vbic" | "hicum" | "mextram" => DeviceKind::Bjt,
         "mos" | "nmos" | "pmos" | "mos0" | "mos1" | "mos2" | "mos3" | "mos9" | "bsim1"
-        | "bsim2" | "bsim3" | "bsim3v3" | "bsim4" | "bsim4v5" | "bsimsoi" | "bsimcmg"
-        | "hisim" | "hisim2" | "hisimhv" | "psp" | "ekv" => DeviceKind::Mos,
+        | "bsim2" | "bsim3" | "bsim3v3" | "bsim4" | "bsim4v5" | "bsimsoi" | "bsimcmg" | "hisim"
+        | "hisim2" | "hisimhv" | "psp" | "ekv" => DeviceKind::Mos,
         _ => return None,
     })
 }
@@ -877,4 +877,3 @@ pub mod spectre {
         super::read_dialect(source, strings, super::Dialect::Spectre)
     }
 }
-

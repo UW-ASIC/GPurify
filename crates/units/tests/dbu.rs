@@ -24,7 +24,16 @@ fn coord(raw: i64) -> Dbu {
 /// half.
 #[test]
 fn the_coordinate_domain_is_closed_at_max_abs_dbu() {
-    for raw in [0_i64, 1, -1, 4_096, -4_096, MAX_ABS_DBU - 1, MAX_ABS_DBU, -MAX_ABS_DBU] {
+    for raw in [
+        0_i64,
+        1,
+        -1,
+        4_096,
+        -4_096,
+        MAX_ABS_DBU - 1,
+        MAX_ABS_DBU,
+        -MAX_ABS_DBU,
+    ] {
         assert_eq!(
             coord(raw).raw(),
             raw,

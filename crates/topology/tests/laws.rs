@@ -23,9 +23,9 @@ use gpurify_derived::Evaluator;
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::shapes::LayoutBuilder;
-use gpurify_topology::device::{recognise_into, DeviceMeasure};
+use gpurify_topology::device::{recognise_into, DeviceMeasure, DeviceParam};
 use gpurify_topology::{extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole};
-use gpurify_units::DbuArea;
+use gpurify_units::{Dbu, DbuArea};
 
 // The layer table. Five conductors, one cut, one marker — the marker is
 // deliberately *not* a conductor, which is what makes `NetId::NONE` reachable
@@ -223,7 +223,10 @@ fn assert_the_base_run_can_fail_a_law(
     nets: &NetTable,
     devices: &DeviceTable,
 ) {
-    assert!(nets.net_count() > 1, "one net cannot show a partition moving");
+    assert!(
+        nets.net_count() > 1,
+        "one net cannot show a partition moving"
+    );
 
     let multi = net_ids(nets)
         .into_iter()
@@ -285,7 +288,11 @@ fn assert_the_base_run_can_fail_a_law(
     );
     assert_eq!(
         devices.terminals_of(DeviceId(0)).1,
-        [TerminalRole::Gate, TerminalRole::Source, TerminalRole::Drain],
+        [
+            TerminalRole::Gate,
+            TerminalRole::Source,
+            TerminalRole::Drain
+        ],
         "terminal roles follow the recogniser's terminal order"
     );
 
@@ -311,7 +318,11 @@ fn assert_the_base_run_can_fail_a_law(
     // And the marker that did not fire failed on its drain slot alone — its
     // gate and source really are there, so the skip is `recognise_into`'s
     // `NetId::NONE` rule and not an empty corner of the layout.
-    assert_eq!(nets.net_of(ids[MARK_E]), NetId::NONE, "a marker carries no net");
+    assert_eq!(
+        nets.net_of(ids[MARK_E]),
+        NetId::NONE,
+        "a marker carries no net"
+    );
     assert!(
         nets.net_of(ids[GATE_E]) != NetId::NONE && nets.net_of(ids[SRC_E]) != NetId::NONE,
         "the second marker must have a gate and a source under it and no drain"
@@ -319,7 +330,9 @@ fn assert_the_base_run_can_fail_a_law(
 }
 
 /// Assert two device tables agree in every column, with `Area` scaled by
-/// `area_scale` in the second.
+/// `area_scale` and `Width`/`Length` by `wl_scale = (width, length)` in the
+/// second — `(1, 1)` for an isometry, whose extents (and channel axis, which
+/// moves with the source/drain geometry) are preserved.
 ///
 /// Column by column rather than through a derived `PartialEq`, because
 /// `DeviceTable` has none and adding one would be a signature change.
@@ -327,6 +340,7 @@ fn assert_device_columns_agree(
     base: &DeviceTable,
     other: &DeviceTable,
     area_scale: i128,
+    wl_scale: (i64, i64),
     ctx: &str,
 ) {
     assert_eq!(base.kind, other.kind, "{ctx}: kind");
@@ -347,9 +361,17 @@ fn assert_device_columns_agree(
         .param
         .iter()
         .map(|&(param, measure)| {
-            let scaled = match measure {
-                DeviceMeasure::Area(a) => DeviceMeasure::Area(DbuArea::new(a.raw() * area_scale)),
-                unchanged => unchanged,
+            let scaled = match (param, measure) {
+                (_, DeviceMeasure::Area(a)) => {
+                    DeviceMeasure::Area(DbuArea::new(a.raw() * area_scale))
+                }
+                (DeviceParam::Width, DeviceMeasure::Length(w)) => {
+                    DeviceMeasure::Length(Dbu::new_unchecked(w.raw() * wl_scale.0))
+                }
+                (DeviceParam::Length, DeviceMeasure::Length(l)) => {
+                    DeviceMeasure::Length(Dbu::new_unchecked(l.raw() * wl_scale.1))
+                }
+                (_, unchanged) => unchanged,
             };
             (param, scaled)
         })
@@ -452,7 +474,7 @@ fn a_rigid_motion_of_every_vertex_leaves_the_extraction_bit_identical() {
             moved_nets, nets,
             "{name}: the net partition changed under an isometry"
         );
-        assert_device_columns_agree(&devices, &moved_devices, 1, name);
+        assert_device_columns_agree(&devices, &moved_devices, 1, (1, 1), name);
         assert_reverse_index_agrees(&nets, &devices, &moved_devices, name);
     }
 }
@@ -522,12 +544,16 @@ fn permuting_arrival_order_gives_the_same_partition_and_the_same_net_ids() {
     image.sort_unstable();
     assert_eq!(
         image,
-        (0..u32::try_from(ids.len()).expect("tens of shapes")).map(PolyId).collect::<Vec<_>>(),
+        (0..u32::try_from(ids.len()).expect("tens of shapes"))
+            .map(PolyId)
+            .collect::<Vec<_>>(),
         "the induced map on PolyId is not a permutation"
     );
     assert_ne!(
         pi,
-        (0..u32::try_from(ids.len()).expect("tens of shapes")).map(PolyId).collect::<Vec<_>>(),
+        (0..u32::try_from(ids.len()).expect("tens of shapes"))
+            .map(PolyId)
+            .collect::<Vec<_>>(),
         "the shuffle left every PolyId where it was, so nothing below is a test"
     );
 
@@ -562,7 +588,11 @@ fn permuting_arrival_order_gives_the_same_partition_and_the_same_net_ids() {
         s.sort_unstable();
         s
     };
-    assert_eq!(sizes(&nets), sizes(&other_nets), "the net-size multiset moved");
+    assert_eq!(
+        sizes(&nets),
+        sizes(&other_nets),
+        "the net-size multiset moved"
+    );
 
     // (c) the ids are pinned. First the documented invariant inside each run —
     // nets ascending by smallest `PolyId` — then the stronger claim that the
@@ -581,8 +611,7 @@ fn permuting_arrival_order_gives_the_same_partition_and_the_same_net_ids() {
     let mut images: Vec<Vec<PolyId>> = net_ids(&nets)
         .into_iter()
         .map(|n| {
-            let mut polys: Vec<PolyId> =
-                nets.polys_of(n).iter().map(|&p| pi[p.idx()]).collect();
+            let mut polys: Vec<PolyId> = nets.polys_of(n).iter().map(|&p| pi[p.idx()]).collect();
             polys.sort_unstable();
             polys
         })
@@ -635,7 +664,10 @@ fn permuting_arrival_order_gives_the_same_partition_and_the_same_net_ids() {
     for (d, &other) in device_map.iter().enumerate() {
         let row = other.0 as usize;
         assert_eq!(devices.kind[d], other_devices.kind[row], "device {d}: kind");
-        assert_eq!(devices.model[d], other_devices.model[row], "device {d}: model");
+        assert_eq!(
+            devices.model[d], other_devices.model[row],
+            "device {d}: model"
+        );
 
         let base_device = DeviceId(u32::try_from(d).expect("tens of devices"));
         let (base_nets_of, base_roles) = devices.terminals_of(base_device);
@@ -716,10 +748,13 @@ fn an_anisotropic_integer_scale_moves_only_the_measured_area() {
         scaled_nets, nets,
         "scaling every coordinate changed the net partition"
     );
+    // The fixture's channel runs along x — the flanking diffusion is offset in
+    // x — so `L` picks up `SX` and `W` picks up `SY`; the area their product.
     assert_device_columns_agree(
         &devices,
         &scaled_devices,
         i128::from(SX) * i128::from(SY),
+        (SY, SX),
         "anisotropic scale",
     );
     assert_reverse_index_agrees(&nets, &devices, &scaled_devices, "anisotropic scale");

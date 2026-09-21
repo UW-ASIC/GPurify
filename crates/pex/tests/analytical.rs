@@ -127,7 +127,12 @@ fn a_four_by_nine_micrometre_plate_is_seventy_one_point_six_attofarads() {
         dbu(2 * (4_000 + 9_000)),
         grid(),
     );
-    assert_close("36 um^2 at 1.7 aF/um^2 plus 26 um at 0.4 aF/um", c.raw(), 0.0716, 1e-12);
+    assert_close(
+        "36 um^2 at 1.7 aF/um^2 plus 26 um at 0.4 aF/um",
+        c.raw(),
+        0.0716,
+        1e-12,
+    );
 }
 
 /// Oracle: law. The doc comment defines ground capacitance as an area term plus
@@ -396,8 +401,17 @@ fn a_net_of_one_polygon_still_carries_that_polygons_resistance() {
         &mut network,
     );
 
-    let total: f64 = network.value.iter().filter_map(|&v| resistance_ohm(v)).sum();
-    assert_close("ten squares of 0.1 ohm/sq, through the network", total, 1.0, 1e-12);
+    let total: f64 = network
+        .value
+        .iter()
+        .filter_map(|&v| resistance_ohm(v))
+        .sum();
+    assert_close(
+        "ten squares of 0.1 ohm/sq, through the network",
+        total,
+        1.0,
+        1e-12,
+    );
 }
 
 /// Oracle: law — conservation. A net's emitted resistance is the sum of its
@@ -435,8 +449,17 @@ fn the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances() {
             segment_resistance(0.1, dbu(long), dbu(short)).raw()
         })
         .sum();
-    let got: f64 = network.value.iter().filter_map(|&v| resistance_ohm(v)).sum();
-    assert_close("a net's resistance is its polygons' resistances", got, want, 1e-12);
+    let got: f64 = network
+        .value
+        .iter()
+        .filter_map(|&v| resistance_ohm(v))
+        .sum();
+    assert_close(
+        "a net's resistance is its polygons' resistances",
+        got,
+        want,
+        1e-12,
+    );
 }
 
 /// Two plates on layers 0 and 2 with `cuts` cut squares on layer 1 between
@@ -537,9 +560,15 @@ fn one_cut_between_two_plates_contributes_its_own_resistance() {
 #[test]
 fn a_via_array_extracts_its_cuts_in_parallel_not_in_series() {
     let one = via_resistance_of(1);
-    assert!(one > 0.0, "the single-cut case extracted nothing to compare against");
+    assert!(
+        one > 0.0,
+        "the single-cut case extracted nothing to compare against"
+    );
     for cuts in 2..=5 {
-        #[expect(clippy::cast_precision_loss, reason = "a cut count under ten is exact in f64")]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a cut count under ten is exact in f64"
+        )]
         let n = cuts as f64;
         assert_close_relative(
             "cuts of one array conduct in parallel",
@@ -740,16 +769,40 @@ fn extraction_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     let stack = uniform_stack(3, 1.4, 0.35);
 
     let mut fresh = ParasiticNetwork::default();
-    extract_into(case.store(), &case.nets, &devices, &Connectivity::default(), &stack, grid(), &mut fresh);
+    extract_into(
+        case.store(),
+        &case.nets,
+        &devices,
+        &Connectivity::default(),
+        &stack,
+        grid(),
+        &mut fresh,
+    );
     let first = serialise(&fresh);
 
     let mut again = ParasiticNetwork::default();
-    extract_into(case.store(), &case.nets, &devices, &Connectivity::default(), &stack, grid(), &mut again);
+    extract_into(
+        case.store(),
+        &case.nets,
+        &devices,
+        &Connectivity::default(),
+        &stack,
+        grid(),
+        &mut again,
+    );
     assert_bytes_identical("two extractions of one corpus", &first, &serialise(&again));
 
     // The same buffer, a second time. Anything appended rather than replaced
     // shows up here and nowhere else.
-    extract_into(case.store(), &case.nets, &devices, &Connectivity::default(), &stack, grid(), &mut again);
+    extract_into(
+        case.store(),
+        &case.nets,
+        &devices,
+        &Connectivity::default(),
+        &stack,
+        grid(),
+        &mut again,
+    );
     assert_bytes_identical(
         "an extraction into a reused buffer",
         &first,

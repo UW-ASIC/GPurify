@@ -87,7 +87,9 @@ pub fn segment_resistance(
     // Fail closed: a zero-width conductor is not a wire, and `f64` would hand
     // back an infinity plus every sum downstream of it.
     debug_assert!(
-        length.raw() >= 0 && width.raw() > 0 && width.raw().unsigned_abs() <= MAX_ABS_DBU.unsigned_abs(),
+        length.raw() >= 0
+            && width.raw() > 0
+            && width.raw().unsigned_abs() <= MAX_ABS_DBU.unsigned_abs(),
         "a conductor has a positive in-domain width, not {}",
         width.raw()
     );
@@ -108,10 +110,7 @@ pub fn segment_resistance(
 
 /// Resistance of a via or contact cut: the per-cut constant over the number of
 /// cuts in the array, because cuts conduct in parallel.
-pub fn via_resistance(
-    per_cut_ohm: f64,
-    cuts: u32,
-) -> Qty<Resistance, { prefix::BASE }> {
+pub fn via_resistance(per_cut_ohm: f64, cuts: u32) -> Qty<Resistance, { prefix::BASE }> {
     debug_assert!(
         per_cut_ohm.is_finite() && per_cut_ohm >= 0.0,
         "a per-cut resistance is a finite non-negative number, not {per_cut_ohm}"
@@ -149,7 +148,10 @@ pub fn ground_capacitance(
         "a fringe coefficient is a finite non-negative number, not {fringe_af_um}"
     );
     debug_assert!(area.raw() >= 0, "a conductor's area is non-negative");
-    debug_assert!(perimeter.raw() >= 0, "a conductor's perimeter is non-negative");
+    debug_assert!(
+        perimeter.raw() >= 0,
+        "a conductor's perimeter is non-negative"
+    );
 
     // Superposition is an interface promise: `f(a, 0) + f(0, b) == f(a, b)`,
     // so the two terms stay separate products rather than one fused expression.
@@ -222,8 +224,16 @@ pub fn extract_into(
     // rather than a missing one.
     debug_assert!(grid.dbu_per_um() > 0, "a Grid is positive by construction");
     let rows = stack.sheet_res_ohm_sq.len();
-    debug_assert_eq!(stack.area_cap_af_um2.len(), rows, "one area coefficient per stack row");
-    debug_assert_eq!(stack.fringe_cap_af_um.len(), rows, "one fringe coefficient per stack row");
+    debug_assert_eq!(
+        stack.area_cap_af_um2.len(),
+        rows,
+        "one area coefficient per stack row"
+    );
+    debug_assert_eq!(
+        stack.fringe_cap_af_um.len(),
+        rows,
+        "one fringe coefficient per stack row"
+    );
 
     out.clear();
 
@@ -331,10 +341,18 @@ fn push_coupling(
     if !(femtofarads > 0.0 && femtofarads.is_finite()) {
         return;
     }
-    let (lo, hi) = if nets.net_of(a) < nets.net_of(b) { (a, b) } else { (b, a) };
+    let (lo, hi) = if nets.net_of(a) < nets.net_of(b) {
+        (a, b)
+    } else {
+        (b, a)
+    };
     let (from, to) = (node_of[lo.idx()], node_of[hi.idx()]);
     debug_assert_ne!(from, to, "a coupling element joins a node to itself");
-    out.push(from, Some(to), Parasitic::CouplingCap(Qty::new(femtofarads)));
+    out.push(
+        from,
+        Some(to),
+        Parasitic::CouplingCap(Qty::new(femtofarads)),
+    );
 }
 
 /// Every conductor polygon's node, indexed by [`PolyId`].
@@ -433,11 +451,12 @@ fn couple_into(
             let Some(other) = stack_row(stack, above) else {
                 continue;
             };
-            let (lower, upper, lower_layer, upper_layer) = if stack.height_nm[row] <= stack.height_nm[other] {
-                (row, other, layer, above)
-            } else {
-                (other, row, above, layer)
-            };
+            let (lower, upper, lower_layer, upper_layer) =
+                if stack.height_nm[row] <= stack.height_nm[other] {
+                    (row, other, layer, above)
+                } else {
+                    (other, row, above, layer)
+                };
             let Some(gap_um) = interlayer_gap_um(stack, lower, upper) else {
                 continue;
             };
@@ -458,8 +477,10 @@ fn couple_into(
                     continue;
                 }
                 let (box_a, box_b) = (store.poly_bbox(a), store.poly_bbox(b));
-                let wide = box_a.xhi.raw().min(box_b.xhi.raw()) - box_a.xlo.raw().max(box_b.xlo.raw());
-                let tall = box_a.yhi.raw().min(box_b.yhi.raw()) - box_a.ylo.raw().max(box_b.ylo.raw());
+                let wide =
+                    box_a.xhi.raw().min(box_b.xhi.raw()) - box_a.xlo.raw().max(box_b.xlo.raw());
+                let tall =
+                    box_a.yhi.raw().min(box_b.yhi.raw()) - box_a.ylo.raw().max(box_b.ylo.raw());
                 if wide <= 0 || tall <= 0 {
                     continue;
                 }
@@ -777,11 +798,27 @@ pub fn extract_devices_into(
 /// An array index and not a hash map, for determinism rather than speed.
 pub fn stack_row(stack: &ProcessStack, layer: LayerId) -> Option<usize> {
     let rows = stack.sheet_res_ohm_sq.len();
-    debug_assert_eq!(stack.thickness_nm.len(), rows, "one thickness per stack row");
+    debug_assert_eq!(
+        stack.thickness_nm.len(),
+        rows,
+        "one thickness per stack row"
+    );
     debug_assert_eq!(stack.height_nm.len(), rows, "one height per stack row");
-    debug_assert_eq!(stack.area_cap_af_um2.len(), rows, "one area coefficient per stack row");
-    debug_assert_eq!(stack.fringe_cap_af_um.len(), rows, "one fringe coefficient per stack row");
-    debug_assert_eq!(stack.dielectric_k.len(), rows, "one permittivity per stack row");
+    debug_assert_eq!(
+        stack.area_cap_af_um2.len(),
+        rows,
+        "one area coefficient per stack row"
+    );
+    debug_assert_eq!(
+        stack.fringe_cap_af_um.len(),
+        rows,
+        "one fringe coefficient per stack row"
+    );
+    debug_assert_eq!(
+        stack.dielectric_k.len(),
+        rows,
+        "one permittivity per stack row"
+    );
 
     // Fail closed: a layer past the stack is `None`, never a wrapped or clamped
     // row holding another layer's coefficients.

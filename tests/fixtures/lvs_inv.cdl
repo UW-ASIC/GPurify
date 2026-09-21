@@ -11,12 +11,12 @@
 * supplies. `manifest.json` records the same two devices for LVS_CLEAN_MATCH,
 * which corroborates the derivation without being its source.
 *
-* No `w` or `l` parameters. `lvs::graph::from_layout_into` is documented to emit
-* an empty parameter column - `DeviceTable::param` is `(DeviceParam,
-* DeviceMeasure)` and `Graph::param` is `(StrId, f64)`, with no signature on that
-* path carrying the scale that converts one to the other - so a parameter stated
-* here could only ever be reported undeclared. LVS_PARAM_MATCH and
-* LVS_PARAM_MISMATCH are the cases that want them, and they are blocked on F8.
+* No `w` or `l` parameters, still - but the reason changed. `from_layout_into`
+* now projects measured `w`/`l` in SI metres, gated per name on the string
+* table: a name this file never declares is never interned, so the layout emits
+* none and the comparison stays purely structural. Declaring `w`/`l` here would
+* switch the parametric comparison on against the drawn channel dimensions;
+* LVS_PARAM_MATCH and LVS_PARAM_MISMATCH are the cases meant to exercise that.
 .subckt LVS_INV A Y VDD VSS
 MN Y A VSS VSS nfet_01v8
 MP Y A VDD VDD pfet_01v8

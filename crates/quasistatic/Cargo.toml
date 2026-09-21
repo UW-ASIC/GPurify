@@ -1,0 +1,31 @@
+[package]
+name = "gpurify-quasistatic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpurify-units = { workspace = true }
+gpurify-core = { workspace = true }
+gpurify-ingest = { workspace = true }
+gpurify-topology = { workspace = true }
+thiserror = { workspace = true }
+num-complex = { workspace = true }
+rayon = { workspace = true }
+# The only GPU dependency in the workspace, and it reaches exactly one module:
+# `gpu`. `vulkano-shaders` is deliberately *not* here — it pulls in
+# `shaderc-sys`, which needs a system `libshaderc` or `cmake` to build one, and
+# neither is present outside `nix develop`. The kernel is compiled ahead of time
+# and committed instead; see `shaders/p2p_laplace.comp`.
+vulkano = { workspace = true, optional = true }
+
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+# The bit-identity test pins solves to explicit thread-pool sizes.
+rayon = { workspace = true }
+
+[features]
+default = ["gpu"]
+gpu = ["dep:vulkano"]
+
+[lints]
+workspace = true

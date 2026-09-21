@@ -16,7 +16,11 @@ use gpurify_testgen::dbu;
 use gpurify_topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_topology::NetId;
 
-fn spice(world: &World, parasitics: Option<&gpurify_pex::ParasiticNetwork>, detail: Detail) -> String {
+fn spice(
+    world: &World,
+    parasitics: Option<&gpurify_pex::ParasiticNetwork>,
+    detail: Detail,
+) -> String {
     let mut out = String::new();
     write_spice(
         world.extraction(),

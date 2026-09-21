@@ -155,24 +155,33 @@ pub fn load_into(inputs: &Inputs, out: &mut Loaded) -> Result<(), LoadError> {
         "a label names a polygon or a string outside the run's tables"
     );
 
-    // Every LVS rule id, interned here because `run_checks` borrows `Loaded`
-    // shared and cannot. An unresolvable `StrId` is a panic in the report.
+    intern_report_ids(&mut out.strings);
+
+    out.grid = Some(grid);
+    Ok(())
+}
+
+/// Intern every LVS report rule id into `strings`.
+///
+/// Interned before checking because `run_checks` borrows `Loaded` shared and
+/// cannot; an unresolvable `StrId` is a panic in the report. Public and apart
+/// from [`load_into`] because an embedder building a [`Loaded`] by hand (every
+/// field is `pub`) never runs the loader, and would otherwise reach that panic
+/// on its first LVS finding.
+pub fn intern_report_ids(strings: &mut StrTable) {
     for id in crate::run::LVS_RULE_IDS
         .iter()
         .chain(crate::run::LVS_CHECK_RULE_IDS.iter())
     {
-        out.strings.intern(id);
+        strings.intern(id);
     }
     debug_assert!(
         crate::run::LVS_RULE_IDS
             .iter()
             .chain(crate::run::LVS_CHECK_RULE_IDS.iter())
-            .all(|id| out.strings.get(id).is_some()),
+            .all(|id| strings.get(id).is_some()),
         "an lvs rule id did not survive interning, so a finding has no name to be reported under"
     );
-
-    out.grid = Some(grid);
-    Ok(())
 }
 
 /// Read a reference netlist, picking the dialect from the file's own text.
@@ -248,6 +257,15 @@ pub fn extract_into(loaded: &Loaded, out: &mut Extracted) -> Result<(), ExtractE
     // derived expressions, so nothing here can plan it.
     out.derived.evaluate(&loaded.store)?;
 
+    // Before nets exist: a MOS channel marker over live conductor area means
+    // extraction would fuse source and drain into one net and report the short
+    // as clean, so that deck-and-layout configuration is refused instead.
+    gpurify_topology::device::refuse_conducting_channels(
+        &loaded.store,
+        &loaded.deck.connectivity,
+        &loaded.deck.devices,
+    )?;
+
     // Each of the three clears the table it fills, so a reused `Extracted` is
     // refilled rather than appended to.
     gpurify_topology::net::extract_nets_into(
@@ -307,4 +325,8 @@ pub enum ExtractError {
     Derived(#[from] gpurify_derived::DerivedError),
     #[error(transparent)]
     Port(#[from] gpurify_topology::port::PortError),
+    /// A MOS channel marker overlaps conductor area on its source/drain layer,
+    /// so extraction would report source and drain as one net.
+    #[error(transparent)]
+    Channel(#[from] gpurify_topology::ChannelError),
 }

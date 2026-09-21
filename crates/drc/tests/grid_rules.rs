@@ -12,9 +12,7 @@ mod common;
 
 use common::{Env, Sink, A, RULE};
 use gpurify_core::PolyId;
-use gpurify_drc::rules::grid::{
-    check_angle, check_off_grid, AngleTable, Direction, OffGridTable,
-};
+use gpurify_drc::rules::grid::{check_angle, check_off_grid, AngleTable, Direction, OffGridTable};
 use gpurify_report::{Measurement, Severity, Violation};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
@@ -74,7 +72,11 @@ fn every_vertex_off_the_pitch_is_reported_at_that_vertex_with_its_offset() {
         &mut sink.runs,
     );
 
-    assert_eq!(sink.out.rule.len(), 4, "all four vertices are off the pitch");
+    assert_eq!(
+        sink.out.rule.len(),
+        4,
+        "all four vertices are off the pitch"
+    );
     for corner in [point(7, 0), point(57, 0), point(57, 50), point(7, 50)] {
         let _ = assert_has_violation(
             &sink.out,
@@ -136,16 +138,15 @@ fn a_shape_on_the_lattice_is_clean_and_the_same_shape_one_unit_off_is_not() {
 
 // -------------------------------------------------------------------- angle
 
-const RECTILINEAR: [Direction; 2] = [
-    Direction { dx: 1, dy: 0 },
-    Direction { dx: 0, dy: 1 },
-];
+const RECTILINEAR: [Direction; 2] = [Direction { dx: 1, dy: 0 }, Direction { dx: 0, dy: 1 }];
 
 fn angle_table(allowed: &[Direction]) -> AngleTable {
     let mut table = AngleTable::default();
     table.rule.push(RULE);
     table.allowed_start.push(0);
-    table.allowed_len.push(u32::try_from(allowed.len()).expect("a handful of directions"));
+    table
+        .allowed_len
+        .push(u32::try_from(allowed.len()).expect("a handful of directions"));
     table.allowed.extend_from_slice(allowed);
     table
 }
@@ -193,7 +194,10 @@ fn an_edge_parallel_to_no_allowed_direction_is_reported_at_the_vertex_it_leaves(
     );
 
     let run = assert_rule_ran(&sink.runs, RULE);
-    assert_eq!(run.examined, 3, "examined counts edges, and a triangle has three");
+    assert_eq!(
+        run.examined, 3,
+        "examined counts edges, and a triangle has three"
+    );
     assert_eq!(run.violations, 1);
 }
 
@@ -258,8 +262,14 @@ fn an_edge_parallel_to_an_allowed_direction_is_clean() {
 #[test]
 fn only_multiples_of_forty_five_degrees_are_representable_as_an_integer_vector() {
     assert_eq!(Direction::from_degrees(0), Some(Direction { dx: 1, dy: 0 }));
-    assert_eq!(Direction::from_degrees(45), Some(Direction { dx: 1, dy: 1 }));
-    assert_eq!(Direction::from_degrees(90), Some(Direction { dx: 0, dy: 1 }));
+    assert_eq!(
+        Direction::from_degrees(45),
+        Some(Direction { dx: 1, dy: 1 })
+    );
+    assert_eq!(
+        Direction::from_degrees(90),
+        Some(Direction { dx: 0, dy: 1 })
+    );
     assert_eq!(
         Direction::from_degrees(135),
         Some(Direction { dx: -1, dy: 1 })

@@ -203,7 +203,10 @@ fn interning_a_path_twice_gives_one_id_and_preserves_component_order() {
 
     let deep = paths.intern(&[top, bank, bit]);
     let shallow = paths.intern(&[top, bank]);
-    assert_ne!(deep, shallow, "a prefix was deduplicated onto its extension");
+    assert_ne!(
+        deep, shallow,
+        "a prefix was deduplicated onto its extension"
+    );
     assert_eq!(
         paths.intern(&[top, bank, bit]),
         deep,

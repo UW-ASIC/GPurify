@@ -170,7 +170,7 @@ pub fn decompose_into(
                 // leave a live `cmp/jae` to a panic edge in the loop, which is
                 // both a data-dependent branch and a serialising one. Measured
                 // 1.19x at 8k / 1.18x at 200k / 1.06x at 4M — the one place in
-                // this shape where the `unsafe` pays (`docs/BULK_MEASUREMENTS.md`).
+                // this shape where the `unsafe` pays.
                 unsafe { out.get_unchecked_mut(w) }.write(e);
                 w += usize::from(p);
             }
@@ -182,9 +182,7 @@ pub fn decompose_into(
 
             core::mem::swap(&mut active, &mut retained);
             debug_assert!(
-                active
-                    .iter()
-                    .all(|&(lo, hi, _)| (lo <= x0) & (hi >= x1)),
+                active.iter().all(|&(lo, hi, _)| (lo <= x0) & (hi >= x1)),
                 "the active list holds only edges crossing this slab side to side"
             );
             debug_assert_eq!(

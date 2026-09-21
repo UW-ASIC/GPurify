@@ -216,7 +216,10 @@ mod tests {
     fn ladder_stages_add_in_series() {
         let one = ladder_network(1, 3.0, 8.0).expected_ohm;
         let ten = ladder_network(10, 3.0, 8.0).expected_ohm;
-        assert!((ten - 10.0 * one).abs() < 1e-9, "{ten} is not ten times {one}");
+        assert!(
+            (ten - 10.0 * one).abs() < 1e-9,
+            "{ten} is not ten times {one}"
+        );
     }
 
     /// CSR offsets match the columns they index.

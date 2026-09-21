@@ -82,9 +82,18 @@ fn gap_outside(v: Dbu, a: Dbu, b: Dbu) -> i128 {
 
 /// Orientation of the triple `(a, b, c)`.
 pub fn orientation(a: Point, b: Point, c: Point) -> Orientation {
-    debug_assert!(in_domain(a.x) && in_domain(a.y), "a is off the coordinate domain");
-    debug_assert!(in_domain(b.x) && in_domain(b.y), "b is off the coordinate domain");
-    debug_assert!(in_domain(c.x) && in_domain(c.y), "c is off the coordinate domain");
+    debug_assert!(
+        in_domain(a.x) && in_domain(a.y),
+        "a is off the coordinate domain"
+    );
+    debug_assert!(
+        in_domain(b.x) && in_domain(b.y),
+        "b is off the coordinate domain"
+    );
+    debug_assert!(
+        in_domain(c.x) && in_domain(c.y),
+        "c is off the coordinate domain"
+    );
 
     match cross(a, b, c).signum() {
         1 => Orientation::CounterClockwise,
@@ -131,7 +140,10 @@ pub fn segments_intersect(p: Seg, q: Seg) -> bool {
 pub fn point_in_ring(ring: RingRef<'_>, p: Point) -> bool {
     let (xs, ys) = ring.coords();
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
-    debug_assert!(in_domain(p.x) && in_domain(p.y), "p is off the coordinate domain");
+    debug_assert!(
+        in_domain(p.x) && in_domain(p.y),
+        "p is off the coordinate domain"
+    );
     debug_assert!(
         xs.iter().chain(ys).all(|&c| in_domain(c)),
         "a ring vertex is off the coordinate domain"
@@ -171,7 +183,10 @@ pub fn point_in_ring(ring: RingRef<'_>, p: Point) -> bool {
         ay = by;
     }
 
-    debug_assert!(crossings <= 1 && boundary <= 1, "both accumulators are parities");
+    debug_assert!(
+        crossings <= 1 && boundary <= 1,
+        "both accumulators are parities"
+    );
     (boundary | crossings) != 0
 }
 
@@ -219,7 +234,11 @@ fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptE
 /// layout is made of, and it fails by *missing* a crossing — a
 /// self-intersecting polygon validated as clean.
 pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
-    debug_assert_eq!(xs.len(), ys.len(), "a coordinate run's columns are parallel");
+    debug_assert_eq!(
+        xs.len(),
+        ys.len(),
+        "a coordinate run's columns are parallel"
+    );
     debug_assert!(
         xs.iter().chain(ys).all(|&c| in_domain(c)),
         "a vertex is off the coordinate domain"
@@ -285,7 +304,11 @@ pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
 /// Doubled so it stays an exact integer. Sign encodes winding, which is why
 /// [`winding_of`] is a thin wrapper rather than a separate traversal.
 pub fn area2(xs: &[Dbu], ys: &[Dbu]) -> DbuArea {
-    debug_assert_eq!(xs.len(), ys.len(), "a coordinate run's columns are parallel");
+    debug_assert_eq!(
+        xs.len(),
+        ys.len(),
+        "a coordinate run's columns are parallel"
+    );
     debug_assert!(
         xs.iter().chain(ys).all(|&c| in_domain(c)),
         "a vertex is off the coordinate domain"
@@ -302,14 +325,22 @@ pub fn area2(xs: &[Dbu], ys: &[Dbu]) -> DbuArea {
     // ring's closing edge as one scalar fixup outside. Each term is at most
     // `2^80`, so a million-vertex ring still sums inside `i128`.
     let (fx, fy) = (&xs[..n - 1], &ys[1..]);
-    debug_assert_eq!(fx.len(), fy.len(), "the shoelace's offset views are parallel");
+    debug_assert_eq!(
+        fx.len(),
+        fy.len(),
+        "the shoelace's offset views are parallel"
+    );
     let mut forward = DbuArea::new(0);
     for (&x, &y) in fx.iter().zip(fy) {
         forward = forward + x.mul_wide(y);
     }
 
     let (bx, by) = (&xs[1..], &ys[..n - 1]);
-    debug_assert_eq!(bx.len(), by.len(), "the shoelace's offset views are parallel");
+    debug_assert_eq!(
+        bx.len(),
+        by.len(),
+        "the shoelace's offset views are parallel"
+    );
     let mut backward = DbuArea::new(0);
     for (&x, &y) in bx.iter().zip(by) {
         backward = backward + x.mul_wide(y);
@@ -335,7 +366,10 @@ pub fn winding_of(xs: &[Dbu], ys: &[Dbu]) -> Option<Winding> {
 /// caller compares against a squared limit anyway. Returns [`DbuArea`] because
 /// that is the dimension of a squared coordinate.
 pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
-    debug_assert!(in_domain(p.x) && in_domain(p.y), "p is off the coordinate domain");
+    debug_assert!(
+        in_domain(p.x) && in_domain(p.y),
+        "p is off the coordinate domain"
+    );
     debug_assert!(
         in_domain(seg.a.x) && in_domain(seg.a.y) && in_domain(seg.b.x) && in_domain(seg.b.y),
         "a segment endpoint is off the coordinate domain"
@@ -360,7 +394,10 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     // scaled by `|v|²` so it stays an integer.
     let along = vx * wx + vy * wy;
     let len2 = vx * vx + vy * vy;
-    debug_assert!(len2 > 0, "a zero-length segment is axis-aligned and took the branch above");
+    debug_assert!(
+        len2 > 0,
+        "a zero-length segment is axis-aligned and took the branch above"
+    );
 
     // Foot before `a`, or past `b`: the answer is that endpoint's own distance.
     if along <= 0 {

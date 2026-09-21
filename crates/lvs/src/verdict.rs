@@ -36,9 +36,17 @@ pub enum Inconclusive {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Discrepancy {
     /// A device exists on one side with no counterpart.
-    UnpairedDevice { side: Side, device: u32, model: StrId },
+    UnpairedDevice {
+        side: Side,
+        device: u32,
+        model: StrId,
+    },
     /// A net exists on one side with no counterpart.
-    UnpairedNet { side: Side, net: u32, name: Option<StrId> },
+    UnpairedNet {
+        side: Side,
+        net: u32,
+        name: Option<StrId>,
+    },
     /// Both sides have the device, but a terminal lands on a different net.
     TerminalMismatch {
         layout_device: u32,
@@ -73,10 +81,7 @@ pub enum Discrepancy {
     /// The counts in one refinement class differ. Emitted only when the class
     /// holds more than one node per side; a smaller one is reported as
     /// `UnpairedDevice` or `UnpairedNet` instead.
-    ClassImbalance {
-        layout_nodes: u32,
-        ref_nodes: u32,
-    },
+    ClassImbalance { layout_nodes: u32, ref_nodes: u32 },
 }
 
 /// Which netlist a discrepancy is about.

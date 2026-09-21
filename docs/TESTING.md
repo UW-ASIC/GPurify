@@ -224,7 +224,7 @@ nix develop -c cargo mutants -p gpurify-core -j 8 --timeout 120 -f src/bbox.rs
 Tests lead. A rewrite verified by a suite that does not catch logic changes is
 a green checkmark that means nothing.
 
-The four phases (see `CLAUDE.md`) enforce that ordering structurally: signatures
+The four phases enforce that ordering structurally: signatures
 freeze in the Definition-Phase, tests are written against them in the
 Testing-Phase, and the Implementation-Phase is done when those tests pass — not
 before.
@@ -306,8 +306,7 @@ violation count before the call.
 `pex::matvec::ObserveMatVec` is the exception and has no test. The trait exists
 and `NoObserve` implements it, but no function in the workspace takes one, so
 there is nothing to install an adapter at. That is a signature defect, not a
-coverage decision, and it is recorded in both `NEED_TESTING.md` and
-`SIGNATURE_DEFECTS.md`.
+coverage decision, and it is recorded in `NEED_TESTING.md`.
 
 **Two of the three gates are met.** Coverage holds: every interface has a
 definitive test or an entry in `NEED_TESTING.md` naming what is missing.

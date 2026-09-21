@@ -16,12 +16,16 @@
 //! Which branch a run takes is printed, so a green result cannot be read as
 //! "the device path was exercised" when it was not.
 
+// The whole binary is the device adapter; without the feature there is no
+// `gpu` module to test.
+#![cfg(feature = "gpu")]
+
 mod common;
 
 use common::{extracted, grid, uniform_stack};
-use gpurify_pex::quasistatic::gpu::{Device, GpuMatVec};
-use gpurify_pex::quasistatic::matvec::{select, Backend, CpuMatVec, MatVec};
-use gpurify_pex::quasistatic::mesh::{build_into, Mesh, MeshOptions};
+use gpurify_quasistatic::gpu::{Device, GpuMatVec};
+use gpurify_quasistatic::matvec::{select, Backend, CpuMatVec, MatVec};
+use gpurify_quasistatic::mesh::{build_into, Mesh, MeshOptions};
 use gpurify_testgen::{dbu, Rng};
 
 /// The relative tolerance an `f32` matvec is held to against the `f64`
@@ -42,7 +46,10 @@ const F32_TOLERANCE: f64 = 2e-5;
 /// wrong column. The top 53 bits of the generator go into the mantissa, which is
 /// the usual construction and is exact.
 fn unit(rng: &mut Rng) -> f64 {
-    #[expect(clippy::cast_precision_loss, reason = "53 bits is exactly an f64 mantissa")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "53 bits is exactly an f64 mantissa"
+    )]
     let raw = (rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64;
     raw - 0.5
 }
@@ -260,7 +267,7 @@ fn an_empty_mesh_is_refused_rather_than_uploaded() {
 /// can be measured on a lattice and applied to a real mesh. Correctness is
 /// asserted on real meshed geometry above; this is only for the clock.
 fn lattice(n: usize) -> Mesh {
-    use gpurify_pex::quasistatic::mesh::Panel;
+    use gpurify_quasistatic::mesh::Panel;
 
     // Integer cube root by search, not `cbrt().ceil()`: the float round trip is
     // three lossy casts to compute a number under a hundred, and getting it one

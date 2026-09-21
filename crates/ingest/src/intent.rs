@@ -228,14 +228,18 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     }
 
     if let Some(index) = domain_has_supply.iter().position(|&used| !used) {
-        return Err(IntentError::DomainWithoutSupply(domain_names[index].to_owned()));
+        return Err(IntentError::DomainWithoutSupply(
+            domain_names[index].to_owned(),
+        ));
     }
 
     // Sorted so the file may state its nets in any order.
     supply.sort_unstable_by_key(|&(net, _, _)| net);
     // Any repeat is refused, not only a repeat under two different domains.
     if let Some(pair) = supply.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-        return Err(IntentError::DomainConflict(strings.resolve(pair[0].0).to_owned()));
+        return Err(IntentError::DomainConflict(
+            strings.resolve(pair[0].0).to_owned(),
+        ));
     }
 
     out.supply_net.reserve(supply.len());

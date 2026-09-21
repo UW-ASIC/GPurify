@@ -50,7 +50,12 @@ fn two_rules() -> RuleSet {
     set
 }
 
-fn run_once(set: &RuleSet, env: &Env, store: &gpurify_core::GeometryStore, scratch: &mut Scratch) -> (Violations, Vec<RuleRun>) {
+fn run_once(
+    set: &RuleSet,
+    env: &Env,
+    store: &gpurify_core::GeometryStore,
+    scratch: &mut Scratch,
+) -> (Violations, Vec<RuleRun>) {
     let mut out = Violations::default();
     let mut runs = Vec::new();
     set.run(env.design(store), scratch, &mut out, &mut runs);
@@ -157,7 +162,10 @@ fn translating_the_whole_design_translates_the_report_and_changes_nothing_else()
     let (moved_store, _ids) = moved_layout.finish();
     let (moved, moved_runs) = run_once(&set, &env, &moved_store, &mut Scratch::default());
 
-    assert_eq!(origin_runs, moved_runs, "translation changed what was examined");
+    assert_eq!(
+        origin_runs, moved_runs,
+        "translation changed what was examined"
+    );
     assert_eq!(origin.rule.len(), moved.rule.len());
     for row in 0..origin.rule.len() {
         assert_eq!(origin.rule[row], moved.rule[row]);

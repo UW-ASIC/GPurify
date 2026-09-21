@@ -345,11 +345,16 @@ fn the_bulk_conversion_is_byte_identical_across_two_runs() {
 
     let mut first = Vec::new();
     let mut second = vec![Dbu::new_unchecked(0); 4_096];
-    g.to_dbu_into(&lengths, &mut first).expect("seed 83 is on grid");
-    g.to_dbu_into(&lengths, &mut second).expect("seed 83 is on grid");
+    g.to_dbu_into(&lengths, &mut first)
+        .expect("seed 83 is on grid");
+    g.to_dbu_into(&lengths, &mut second)
+        .expect("seed 83 is on grid");
 
-    let bytes = |coords: &[Dbu]| -> Vec<u8> {
-        coords.iter().flat_map(|c| c.raw().to_le_bytes()).collect()
-    };
-    assert_bytes_identical("a deck's worth of converted limits", &bytes(&first), &bytes(&second));
+    let bytes =
+        |coords: &[Dbu]| -> Vec<u8> { coords.iter().flat_map(|c| c.raw().to_le_bytes()).collect() };
+    assert_bytes_identical(
+        "a deck's worth of converted limits",
+        &bytes(&first),
+        &bytes(&second),
+    );
 }

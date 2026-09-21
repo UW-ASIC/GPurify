@@ -39,7 +39,6 @@ const COORD_LIMIT: u64 = i32::MAX as u64;
 ///
 /// Fixed at the workspace's 1 nm grid: no parameter of either writer carries a
 /// `Grid`, and omitting `UNITS` would let every tool apply a default of its own.
-/// Recorded in `docs/SIGNATURE_DEFECTS.md` under `export::gds`.
 const USER_UNITS_PER_DBU: f64 = 1e-3;
 const METRES_PER_DBU: f64 = 1e-9;
 
@@ -200,7 +199,9 @@ fn put_boundary(
 
     let mut worst = 0u64;
     for (x, y) in xs.iter().zip(ys) {
-        worst = worst.max(x.raw().unsigned_abs()).max(y.raw().unsigned_abs());
+        worst = worst
+            .max(x.raw().unsigned_abs())
+            .max(y.raw().unsigned_abs());
     }
     if worst > COORD_LIMIT {
         return Err(WriteError::Unrepresentable(
@@ -213,7 +214,11 @@ fn put_boundary(
     for (&x, &y) in xs.iter().zip(ys) {
         payload.push(pack((x, y)));
     }
-    debug_assert_eq!(payload.len(), xs.len(), "a vertex was dropped on the way out");
+    debug_assert_eq!(
+        payload.len(),
+        xs.len(),
+        "a vertex was dropped on the way out"
+    );
     // GDSII repeats a boundary's first point as its last. The store holds no
     // such point and `ingest`'s reader drops it again, which is what keeps
     // `parse -> write -> parse` from growing a vertex per trip.

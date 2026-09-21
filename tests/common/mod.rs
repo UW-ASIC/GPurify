@@ -41,8 +41,8 @@
 //!
 //! # What `manifest.json` is now
 //!
-//! It used to be read by nothing: it is the deleted tree's *output*, and
-//! `CLAUDE.md` is explicit that the old tree is not an oracle. That is still
+//! It used to be read by nothing: it is the deleted tree's *output*, and the
+//! deleted tree is not an oracle. That is still
 //! true of its answers — `expect_violations` is read by nothing here, and every
 //! expected number comes from `expectations.json`, re-derived from the geometry
 //! plus the rule's frozen doc comment.
@@ -174,18 +174,27 @@ impl Run {
     /// layers, no parameters (`erc::ruleset` line 619). Nothing about the skip
     /// path is specific to it.
     pub fn clean_with_gated_rule() -> Self {
-        let mut run = build("clean-gated", &min_width_and_ir_drop_deck(LIMIT_NM), WIDE_NM);
+        let mut run = build(
+            "clean-gated",
+            &min_width_and_ir_drop_deck(LIMIT_NM),
+            WIDE_NM,
+        );
         run.checks.erc = true;
         run
     }
-
 
     /// A deck naming a rule kind that is in neither `drc::ruleset::KINDS` nor
     /// `erc::ruleset::KINDS`.
     pub fn with_unknown_rule_kind() -> Self {
         // `parse_deck` interns the kind verbatim and does not know the
         // vocabulary, so this must be refused where the vocabulary lives.
-        build("unknown-kind", &deck_with_rule(r#""kind": "min_widht", "layers": ["met1"], "params": { "limit": { "nm": 300 } }"#), WIDE_NM)
+        build(
+            "unknown-kind",
+            &deck_with_rule(
+                r#""kind": "min_widht", "layers": ["met1"], "params": { "limit": { "nm": 300 } }"#,
+            ),
+            WIDE_NM,
+        )
     }
 
     /// A deck stating a limit that is not a whole number of grid units.
@@ -194,7 +203,13 @@ impl Run {
         // to be fractional to be off it. Written as `0.5` rather than as a
         // sub-nanometre integer because the schema's `nm` value is a number,
         // not an integer, and a rounding parser would accept this one silently.
-        build("off-grid", &deck_with_rule(r#""kind": "min_width", "layers": ["met1"], "params": { "limit": { "nm": 300.5 } }"#), WIDE_NM)
+        build(
+            "off-grid",
+            &deck_with_rule(
+                r#""kind": "min_width", "layers": ["met1"], "params": { "limit": { "nm": 300.5 } }"#,
+            ),
+            WIDE_NM,
+        )
     }
 
     /// Geometry at `±MAX_ABS_DBU`, the edge of the representable domain.
@@ -294,6 +309,7 @@ impl Run {
             checks: self.checks,
             lvs: lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
+            quasistatic_inductance: false,
             threads: Some(threads),
         }
     }
@@ -325,7 +341,9 @@ impl Run {
 
     /// Every rule id the deck declares.
     pub fn deck_rule_ids(&self) -> Vec<StrId> {
-        let loaded = self.load().expect("a fixture whose rules are being listed loads");
+        let loaded = self
+            .load()
+            .expect("a fixture whose rules are being listed loads");
         loaded.deck.rules.spec.iter().map(|spec| spec.id).collect()
     }
 }
@@ -473,7 +491,12 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         // PEX is off because no fixture declares a process stack, and a
         // parasitic extracted against absent coefficients is a number nothing
         // measured.
-        checks: Checks { drc: true, erc: false, lvs: true, pex: false },
+        checks: Checks {
+            drc: true,
+            erc: false,
+            lvs: true,
+            pex: false,
+        },
         met1,
         violation_at: gpurify_testgen::point(CENTRE_NM.0, CENTRE_NM.1),
         actual_width: Dbu::new_unchecked(0),
@@ -490,10 +513,8 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
 fn scratch_dir(tag: &str) -> PathBuf {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "gpurify-e2e-{}-{tag}-{serial}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("gpurify-e2e-{}-{tag}-{serial}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory can be created");
     dir
 }
@@ -531,14 +552,17 @@ pub fn rule_run(runs: &[RuleRun], strings: &ingest::StrTable, name: &str) -> Rul
 }
 
 /// Read a store back from GDS bytes held in memory.
-pub fn load_bytes(bytes: &[u8], deck: &ingest::Deck) -> Result<ingest::layout::Layout, ingest::layout::LayoutError> {
+pub fn load_bytes(
+    bytes: &[u8],
+    deck: &ingest::Deck,
+) -> Result<ingest::layout::Layout, ingest::layout::LayoutError> {
     ingest::layout::gds::read(bytes, deck, ingest::layout::UnknownLayers::Reject)
 }
 
 /// Two stores hold the same geometry.
 ///
 /// Compared column by column rather than with `assert_eq!` because
-/// `GeometryStore` has no `PartialEq` — recorded in `docs/SIGNATURE_DEFECTS.md`.
+/// `GeometryStore` has no `PartialEq`.
 /// Compares layer grouping too, since the round trip has to preserve the CSR
 /// layout invariant and not merely the coordinates.
 pub fn assert_stores_equal(left: &GeometryStore, right: &GeometryStore) {
@@ -565,7 +589,11 @@ pub fn assert_stores_equal(left: &GeometryStore, right: &GeometryStore) {
         let (rx, ry) = right.poly_verts(poly);
         assert_eq!(lx, rx, "polygon {row} x column");
         assert_eq!(ly, ry, "polygon {row} y column");
-        assert_eq!(left.poly_bbox(poly), right.poly_bbox(poly), "polygon {row} bbox");
+        assert_eq!(
+            left.poly_bbox(poly),
+            right.poly_bbox(poly),
+            "polygon {row} bbox"
+        );
     }
 }
 
@@ -731,8 +759,8 @@ pub struct PerNet {
 /// nothing to say.
 pub fn load_corpus() -> Corpus {
     let path = fixtures().join("expectations.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|why| panic!("{}: {why}", path.display()))
 }
 
@@ -878,6 +906,7 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
         // would field-solve it, which is a different extraction and a different
         // set of expected numbers.
         quasistatic_nets: Vec::new(),
+        quasistatic_inductance: false,
         threads: Some(1),
     };
 
@@ -885,7 +914,11 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
     run_checks(&loaded, &extracted, &options, &mut outputs)
         .map_err(|why| format!("run failed: {why}"))?;
 
-    Ok(CaseRun { loaded, extracted, outputs })
+    Ok(CaseRun {
+        loaded,
+        extracted,
+        outputs,
+    })
 }
 
 /// One case run through the **field solve** rather than the closed form.
@@ -923,9 +956,9 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
     // built in.
     let named: Vec<String> = (0..extracted.nets.net_count())
         .filter_map(|net| {
-            extracted
-                .ports
-                .name_of(gpurify::topology::NetId(u32::try_from(net).expect("a NetId is a u32")))
+            extracted.ports.name_of(gpurify::topology::NetId(
+                u32::try_from(net).expect("a NetId is a u32"),
+            ))
         })
         .map(|name| loaded.strings.resolve(name).to_owned())
         .collect();
@@ -937,9 +970,15 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
     }
 
     let options = RunOptions {
-        checks: Checks { drc: false, erc: false, lvs: false, pex: true },
+        checks: Checks {
+            drc: false,
+            erc: false,
+            lvs: false,
+            pex: true,
+        },
         lvs: gpurify::lvs::CompareOptions::default(),
         quasistatic_nets: named,
+        quasistatic_inductance: false,
         threads: Some(1),
     };
 
@@ -947,7 +986,11 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
     run_checks(&loaded, &extracted, &options, &mut outputs)
         .map_err(|why| format!("run failed: {why}"))?;
 
-    Ok(CaseRun { loaded, extracted, outputs })
+    Ok(CaseRun {
+        loaded,
+        extracted,
+        outputs,
+    })
 }
 
 /// The coupling capacitance a field solve found in one cell, in attofarads.
@@ -1039,7 +1082,10 @@ fn deck_rule_of(case: &GeometryCase) -> Option<&'static str> {
         "tie_high_low" => "tie_high_low",
         "unconnected_pin" => "met1.unconnected_pin",
         "layer_validity" => return None,
-        other => panic!("case {} names rule {other}, which maps to no deck row", case.id),
+        other => panic!(
+            "case {} names rule {other}, which maps to no deck row",
+            case.id
+        ),
     })
 }
 
@@ -1064,7 +1110,12 @@ pub fn check_geometry_case(case: &GeometryCase) -> Vec<String> {
 
     // DRC and ERC both, whichever domain directory the cell sits in: three of
     // the DRC-named cases are antenna cases, and `erc` owns that family now.
-    let checks = Checks { drc: true, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: true,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
     let run = match run_case(&case.domain, &case.id, checks) {
         Ok(run) => run,
         Err(why) => {
@@ -1085,7 +1136,12 @@ pub fn check_geometry_case(case: &GeometryCase) -> Vec<String> {
         return failed;
     };
 
-    let record = run.outputs.runs.iter().find(|run| run.rule == rule).copied();
+    let record = run
+        .outputs
+        .runs
+        .iter()
+        .find(|run| run.rule == rule)
+        .copied();
     let Some(record) = record else {
         failed.push(format!(
             "{}: rule {deck_rule} recorded no RuleRun on cell {}. A rule that \
@@ -1244,7 +1300,10 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
     let inputs = case_inputs(&case.domain, &case.id, None, None);
     let mut loaded = Loaded::default();
     if let Err(why) = load_into(&inputs, &mut loaded) {
-        return vec![format!("{}: cell {} did not load — {why}{context}", case.id, case.cell)];
+        return vec![format!(
+            "{}: cell {} did not load — {why}{context}",
+            case.id, case.cell
+        )];
     }
 
     let Some(layer) = loaded.deck.layers.id(&loaded.strings, &want.layer) else {
@@ -1290,7 +1349,9 @@ fn parse_outcome(text: &str) -> Outcome {
         "Skipped(NoDesignIntent)" => Outcome::Skipped(SkipReason::NoDesignIntent),
         "Skipped(NotInDeck)" => Outcome::Skipped(SkipReason::NotInDeck),
         "Skipped(EmptyLayer)" => Outcome::Skipped(SkipReason::EmptyLayer),
-        other => panic!("expectations.json states an outcome {other} that report has no variant for"),
+        other => {
+            panic!("expectations.json states an outcome {other} that report has no variant for")
+        }
     }
 }
 
@@ -1366,17 +1427,21 @@ fn context_of(case: &GeometryCase) -> String {
 
 /// Every way an LVS case's *layout side* disagreed with the geometry.
 ///
-/// `expect_match` is not checked and cannot be: the corpus ships no reference
-/// netlist file. The reference netlists exist only inside `manifest.json`, which
-/// is the old implementation's record and is not read here, and findings F1–F6
-/// in `expectations.json` say the comparison could not reach a verdict even with
-/// one — no cell draws a `licon`, no pmos is recognised, and source and drain
-/// collapse onto one net.
+/// Source and drain extract to **distinct** nets: `params.json` derives
+/// `diff_active = diff NOT poly`, lists it — not raw `diff` — as the
+/// conductor, and recognises each MOS on a per-channel marker (`gate_n`,
+/// `gate_p`), so the channel conducts nothing laterally and the two
+/// diffusion flanks are two nets. That is what the `expect_nets` asserted
+/// below encode — `LVS_INV` is 4 nets, not the 3 the old S/D collapse gave —
+/// and `engine::pipeline::extract_into` now *refuses* the collapsing
+/// configuration outright (`topology::device::refuse_conducting_channels`),
+/// so a deck that leaves raw diffusion as the conductor under a MOS marker
+/// fails to extract rather than reporting the short as clean. F1, F2 and F3
+/// are closed; the per-cell derivations live in each case's `note`.
 ///
-/// What *is* derivable from the geometry alone is how many devices and how many
-/// nets the cell extracts to, and those two are where F1, F2 and F3 show
-/// themselves. The comparison would only report the same three findings one
-/// stage later.
+/// `expect_match` is still not asserted here: this helper runs the layout
+/// side only. The one full comparison against a shipped reference netlist is
+/// `tests/test_all.rs`'s `LVS_CLEAN_MATCH` run against `lvs_inv.cdl`.
 pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
     let mut failed = Vec::new();
     let blocked = format!(
@@ -1387,11 +1452,19 @@ pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
         case.blocked_by.join(", ")
     );
 
-    let checks = Checks { drc: false, erc: false, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: false,
+        lvs: false,
+        pex: false,
+    };
     let run = match run_case("lvs", &case.id, checks) {
         Ok(run) => run,
         Err(why) => {
-            failed.push(format!("{}: cell {} did not extract — {why}{blocked}", case.id, case.cell));
+            failed.push(format!(
+                "{}: cell {} did not extract — {why}{blocked}",
+                case.id, case.cell
+            ));
             return failed;
         }
     };
@@ -1451,7 +1524,11 @@ pub struct Totals {
 /// so the split is available here even though F13 says nothing on the type
 /// itself produces it.
 pub fn totals_of(run: &CaseRun, only: Option<gpurify::core::LayerId>) -> Totals {
-    let mut totals = Totals { resistance_ohm: 0.0, ground_cap_af: 0.0, coupling_cap_af: 0.0 };
+    let mut totals = Totals {
+        resistance_ohm: 0.0,
+        ground_cap_af: 0.0,
+        coupling_cap_af: 0.0,
+    };
     let Some(network) = run.outputs.parasitics.as_ref() else {
         return totals;
     };
@@ -1498,7 +1575,9 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
         " [strength: {}, seam: {}{}]",
         case.strength,
         case.seam,
-        case.dispute.as_ref().map_or(String::new(), |d| format!(", dispute: {d}"))
+        case.dispute
+            .as_ref()
+            .map_or(String::new(), |d| format!(", dispute: {d}"))
     );
 
     if case.provenance == "underivable" {
@@ -1508,7 +1587,12 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
         return failed;
     }
 
-    let checks = Checks { drc: false, erc: false, lvs: false, pex: true };
+    let checks = Checks {
+        drc: false,
+        erc: false,
+        lvs: false,
+        pex: true,
+    };
     let run = match run_case("pex", &case.id, checks) {
         Ok(run) => run,
         Err(why) => {
@@ -1610,7 +1694,10 @@ fn check_per_net(
 ) -> Vec<String> {
     let mut failed = Vec::new();
     let Some(network) = run.outputs.parasitics.as_ref() else {
-        failed.push(format!("{}: cell {} extracted no network at all{context}", case.id, case.cell));
+        failed.push(format!(
+            "{}: cell {} extracted no network at all{context}",
+            case.id, case.cell
+        ));
         return failed;
     };
 
@@ -1684,8 +1771,17 @@ fn check_per_net(
 pub fn check_coupling_laws() -> Vec<String> {
     let mut failed = Vec::new();
     let coupling = |id: &str| -> f64 {
-        run_case("pex", id, Checks { drc: false, erc: false, lvs: false, pex: true })
-            .map_or(f64::NAN, |run| totals_of(&run, None).coupling_cap_af)
+        run_case(
+            "pex",
+            id,
+            Checks {
+                drc: false,
+                erc: false,
+                lvs: false,
+                pex: true,
+            },
+        )
+        .map_or(f64::NAN, |run| totals_of(&run, None).coupling_cap_af)
     };
 
     let at_100 = coupling("PEX_SPACING_100");

@@ -299,7 +299,10 @@ pub fn spaced_pair(
     gap: i64,
     size: i64,
 ) -> (Handle, Handle) {
-    assert!(gap > 0 && gap % 2 == 0, "gap {gap} must be positive and even");
+    assert!(
+        gap > 0 && gap % 2 == 0,
+        "gap {gap} must be positive and even"
+    );
     assert!(size > 0, "size {size} must be positive");
     let (ax, ay) = at;
     let half = gap / 2;
@@ -355,8 +358,16 @@ pub fn random_rectilinear_layer(
             if rng.unit() >= grid.density {
                 continue;
             }
-            let jitter_x = if slack > 0 { rng.range(0, slack + 1) } else { 0 };
-            let jitter_y = if slack > 0 { rng.range(0, slack + 1) } else { 0 };
+            let jitter_x = if slack > 0 {
+                rng.range(0, slack + 1)
+            } else {
+                0
+            };
+            let jitter_y = if slack > 0 {
+                rng.range(0, slack + 1)
+            } else {
+                0
+            };
             let x = origin.0 + i64::from(col) * grid.cell + 1 + jitter_x;
             let y = origin.1 + i64::from(row) * grid.cell + 1 + jitter_y;
             layout.rect(layer, x, y, x + side, y + side);

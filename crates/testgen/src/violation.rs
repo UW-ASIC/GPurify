@@ -10,9 +10,7 @@ use gpurify_ingest::StrId;
 use gpurify_report::{Measurement, Severity, Violation};
 use gpurify_units::{prefix, Current, Qty, Resistance, Voltage};
 
-use crate::shapes::{
-    area, dbu, hole, point, rect, u_shape, Handle, Ids, LayoutBuilder,
-};
+use crate::shapes::{area, dbu, hole, point, rect, u_shape, Handle, Ids, LayoutBuilder};
 
 /// A measured quantity in the plain integers this crate computes in.
 ///
@@ -43,9 +41,7 @@ impl Amount {
             Self::Area(v) => Measurement::Area(area(v)),
             Self::Ratio(v) => Measurement::Ratio(v),
             Self::Count(v) => Measurement::Count(v),
-            Self::Millivolts(v) => {
-                Measurement::Voltage(Qty::<Voltage, { prefix::MILLI }>::new(v))
-            }
+            Self::Millivolts(v) => Measurement::Voltage(Qty::<Voltage, { prefix::MILLI }>::new(v)),
             Self::Microamps(v) => Measurement::Current(Qty::<Current, { prefix::MICRO }>::new(v)),
             Self::Ohms(v) => Measurement::Resistance(Qty::<Resistance, { prefix::BASE }>::new(v)),
         }
@@ -165,19 +161,11 @@ pub enum ShapeKind {
 
     /// Two rectangles on two layers overlapping by `measured` in x. `at` is the
     /// centre of the overlap.
-    Overlap {
-        a: LayerId,
-        b: LayerId,
-        extent: i64,
-    },
+    Overlap { a: LayerId, b: LayerId, extent: i64 },
 
     /// A shape on `a` and a shape on `b`, `measured` apart. `at` is the
     /// midpoint of the gap — the cross-layer twin of [`ShapeKind::Spacing`].
-    Separation {
-        a: LayerId,
-        b: LayerId,
-        size: i64,
-    },
+    Separation { a: LayerId, b: LayerId, size: i64 },
 
     /// A `size` square whose lower-left corner sits `measured` off a `grid`
     /// multiple. `at` is that corner: the offending vertex, not the centre.
@@ -210,19 +198,11 @@ pub enum ShapeKind {
 
     /// `measured` cut squares of side `size` in a row at `pitch`. `at` is the
     /// centre of the first cut.
-    ViaArray {
-        cut: LayerId,
-        size: i64,
-        pitch: i64,
-    },
+    ViaArray { cut: LayerId, size: i64, pitch: i64 },
 
     /// Three `size` squares pairwise within `gap` — an odd conflict cycle, so
     /// no two-colouring exists. `at` is the first square's centre.
-    OddCycle {
-        layer: LayerId,
-        size: i64,
-        gap: i64,
-    },
+    OddCycle { layer: LayerId, size: i64, gap: i64 },
 }
 
 /// A layout with one violation in it, and the violation.
@@ -347,13 +327,8 @@ fn build(
         }
 
         ShapeKind::Spacing { layer, extent } => {
-            let (a, b) = crate::shapes::spaced_pair(
-                layout,
-                layer,
-                at,
-                measured.length("a spacing"),
-                extent,
-            );
+            let (a, b) =
+                crate::shapes::spaced_pair(layout, layer, at, measured.length("a spacing"), extent);
             (a, Some(b))
         }
 
@@ -421,7 +396,10 @@ fn build(
             hole_width,
         } => {
             let target = measured.area("an enclosed area");
-            assert!(margin > 0 && hole_width > 0, "margin and width are positive");
+            assert!(
+                margin > 0 && hole_width > 0,
+                "margin and width are positive"
+            );
             assert_eq!(
                 target % i128::from(hole_width),
                 0,
@@ -435,7 +413,12 @@ fn build(
             );
             let outer = layout.shape(
                 layer,
-                &rect(ax - w - margin, ay - h - margin, ax + w + margin, ay + h + margin),
+                &rect(
+                    ax - w - margin,
+                    ay - h - margin,
+                    ax + w + margin,
+                    ay + h + margin,
+                ),
             );
             layout.shape(layer, &hole(ax - w, ay - h, ax + w, ay + h));
             (outer, None)
@@ -473,7 +456,13 @@ fn build(
             let ext = measured.length("an extension");
             let e = half(ext, "the extension");
             let w = half(width, "the line width");
-            let bar = layout.rect(crossed, ax - e - width, ay - 2 * width, ax - e, ay + 2 * width);
+            let bar = layout.rect(
+                crossed,
+                ax - e - width,
+                ay - 2 * width,
+                ax - e,
+                ay + 2 * width,
+            );
             let stripe = layout.rect(line, ax - e - 3 * width, ay - w, ax + e, ay + w);
             (stripe, Some(bar))
         }
@@ -519,11 +508,7 @@ fn build(
                 "the run {run:?} subtends {actual} degrees, not {degrees}"
             );
             (
-                layout.push(
-                    layer,
-                    &[ax, ax + run.0, ax + run.0],
-                    &[ay, ay + run.1, ay],
-                ),
+                layout.push(layer, &[ax, ax + run.0, ax + run.0], &[ay, ay + run.1, ay]),
                 None,
             )
         }
@@ -564,7 +549,10 @@ fn build(
                 let handle = layout.rect(layer, x, y, x + cell, y + cell);
                 first.get_or_insert(handle);
             }
-            (first.expect("a density case needs at least one shape"), None)
+            (
+                first.expect("a density case needs at least one shape"),
+                None,
+            )
         }
 
         ShapeKind::Antenna {

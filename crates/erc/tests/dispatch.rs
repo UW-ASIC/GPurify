@@ -502,7 +502,10 @@ fn from_deck_files_each_row_under_the_kind_the_deck_named() {
     let mut strings = StrTable::default();
     let (deck, ids) = deck_of(
         &mut strings,
-        &[("gate.floating", "floating_gate"), ("net.tied", "tie_high_low")],
+        &[
+            ("gate.floating", "floating_gate"),
+            ("net.tied", "tie_high_low"),
+        ],
     );
     let rules = RuleSet::from_deck(&deck, &strings)
         .expect("both kinds are in KINDS and neither takes a layer or a parameter");
@@ -532,7 +535,10 @@ fn a_deck_naming_a_kind_this_crate_does_not_implement_files_no_row() {
     let mut strings = StrTable::default();
     let (deck, _) = deck_of(
         &mut strings,
-        &[("met1.width", "min_width"), ("gate.floating", "floating_gate")],
+        &[
+            ("met1.width", "min_width"),
+            ("gate.floating", "floating_gate"),
+        ],
     );
 
     let rules = RuleSet::from_deck(&deck, &strings)
@@ -550,7 +556,10 @@ fn a_deck_defining_one_rule_id_twice_is_refused() {
     let mut strings = StrTable::default();
     let (deck, _) = deck_of(
         &mut strings,
-        &[("gate.floating", "floating_gate"), ("gate.floating", "tie_high_low")],
+        &[
+            ("gate.floating", "floating_gate"),
+            ("gate.floating", "tie_high_low"),
+        ],
     );
 
     assert_eq!(

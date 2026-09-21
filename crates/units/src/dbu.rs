@@ -36,7 +36,10 @@ impl Dbu {
     /// Construct without the range check; only for values derived from
     /// already-checked ones by an operation that cannot leave the range.
     pub const fn new_unchecked(raw: i64) -> Self {
-        debug_assert!(in_domain(raw), "new_unchecked outside the coordinate domain");
+        debug_assert!(
+            in_domain(raw),
+            "new_unchecked outside the coordinate domain"
+        );
         Self(raw)
     }
 
@@ -59,7 +62,10 @@ impl Dbu {
         debug_assert!(in_domain(self.0));
         debug_assert!(in_domain(rhs.0));
         let area = DbuArea(self.0 as i128 * rhs.0 as i128);
-        debug_assert!(area.0.unsigned_abs() <= 1u128 << 80, "area past the 2^80 ceiling");
+        debug_assert!(
+            area.0.unsigned_abs() <= 1u128 << 80,
+            "area past the 2^80 ceiling"
+        );
         area
     }
 }
@@ -177,7 +183,10 @@ impl Grid {
             length.raw() * per_um / 10f64.powi(-exponent)
         };
 
-        #[expect(clippy::cast_precision_loss, reason = "MAX_ABS_DBU is 2^40, exact in f64")]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "MAX_ABS_DBU is 2^40, exact in f64"
+        )]
         let limit = MAX_ABS_DBU as f64;
         // Negated rather than `>`, so a `NaN` born of `0.0 * inf` is refused.
         if !(units.abs() <= limit) {
@@ -212,7 +221,10 @@ impl Grid {
             reason = "|coord| <= 2^40 and the resolution is a small count; both exact in f64"
         )]
         let nanometres = coord.raw() as f64 * 1_000.0 / self.dbu_per_um as f64;
-        debug_assert!(nanometres.is_finite(), "a bounded coordinate over a positive grid");
+        debug_assert!(
+            nanometres.is_finite(),
+            "a bounded coordinate over a positive grid"
+        );
         Qty::new(nanometres)
     }
 

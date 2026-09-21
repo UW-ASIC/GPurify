@@ -72,7 +72,8 @@ fn the_rule_run_summary_is_byte_identical_across_runs_threads_and_seconds() {
     let world = World::named();
     assert_writer_is_deterministic("the rule-run summary", || {
         let mut out = String::new();
-        json::write_summary(&world.runs, &world.strings, &mut out).expect("the summary is writable");
+        json::write_summary(&world.runs, &world.strings, &mut out)
+            .expect("the summary is writable");
         out.into_bytes()
     });
 }

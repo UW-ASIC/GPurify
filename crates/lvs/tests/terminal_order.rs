@@ -7,12 +7,12 @@
 //! terminals in the *same* order, and the one thing the two projections in
 //! `graph.rs` are documented to disagree about is never exercised.
 //!
-//! What they disagree about is recorded as resolved in
-//! `docs/SIGNATURE_DEFECTS.md`. `topology::role_at` names the gate at position 0
+//! What they disagree about is resolved and stated here.
+//! `topology::role_at` names the gate at position 0
 //! because a recogniser's terminal layers are listed geometry-first;
 //! `graph::card_role` names the drain at position 0 because that is SPICE's `M`
-//! card order. The entry says in as many words that the two orders *meet in
-//! `lvs`* — so a comparison matching terminals slot by slot reported a
+//! card order. The two orders *meet in `lvs`* — so a comparison matching
+//! terminals slot by slot reported a
 //! `TerminalMismatch` on every MOS and every BJT the refiner had just paired
 //! correctly, and the whole inherited suite stayed green through it.
 //!

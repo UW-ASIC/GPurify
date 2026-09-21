@@ -269,6 +269,21 @@ impl GeometryStoreBuilder {
         row
     }
 
+    /// Append one axis-aligned rectangle, returning its pre-sort row index.
+    ///
+    /// Sugar over [`Self::push`] for embedders whose geometry is rectangles
+    /// built in memory: corner plus extents, expanded here to the CCW winding
+    /// `view` canonicalises, so no such caller re-derives it — backwards is
+    /// a hole.
+    pub fn push_rect(&mut self, layer: LayerId, x: Dbu, y: Dbu, w: Dbu, h: Dbu) -> u32 {
+        debug_assert!(
+            (w.raw() > 0) & (h.raw() > 0),
+            "a rectangle with a non-positive extent is degenerate or wound backwards"
+        );
+        let (x2, y2) = (x + w, y + h);
+        self.push(layer, &[x, x2, x2, x], &[y, y, y2, y2])
+    }
+
     /// Sort by layer, compute bounding boxes, and produce the store.
     ///
     /// Returns the permutation alongside the store: `permutation[new_row] ==

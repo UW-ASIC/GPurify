@@ -62,8 +62,16 @@ fn far_end(row: Row, node: u32) -> u32 {
 /// The element columns as rows.
 fn rows_of(network: &ParasiticNetwork) -> Vec<Row> {
     let n = network.value.len();
-    debug_assert_eq!(network.from.len(), n, "the element columns must stay parallel");
-    debug_assert_eq!(network.to.len(), n, "the element columns must stay parallel");
+    debug_assert_eq!(
+        network.from.len(),
+        n,
+        "the element columns must stay parallel"
+    );
+    debug_assert_eq!(
+        network.to.len(),
+        n,
+        "the element columns must stay parallel"
+    );
 
     let mut rows = Vec::with_capacity(n);
     for ((&from, &to), &value) in network.from.iter().zip(&network.to).zip(&network.value) {
@@ -173,7 +181,11 @@ fn compact_into<T: Copy, U: Copy>(
 
 /// Drop the rows `keep` marks dead, preserving order.
 fn compact_rows(rows: &[Row], keep: &[bool], out: &mut Vec<Row>) {
-    debug_assert_eq!(rows.len(), keep.len(), "the row and keep columns must agree");
+    debug_assert_eq!(
+        rows.len(),
+        keep.len(),
+        "the row and keep columns must agree"
+    );
     // Sliced rather than zipped: a short `keep` would make `zip` stop early and
     // emit a silently-short result. The slice panics instead, in every profile.
     let keep = &keep[..rows.len()];
@@ -404,18 +416,16 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
         first_node[slot] = [first_node[slot], id][usize::from(boundary)];
         last_node[slot] = id;
     }
-    debug_assert_eq!(usize::try_from(rank).expect("net counts fit in usize") + 1, nets);
+    debug_assert_eq!(
+        usize::try_from(rank).expect("net counts fit in usize") + 1,
+        nets
+    );
     debug_assert_eq!(first_node[0], NodeId(0), "node zero opens the first run");
 
     let mut cap_sum = vec![0.0_f64; nets];
     let mut res_sum = vec![0.0_f64; nets];
 
-    for ((&from, &to), &value) in network
-        .from
-        .iter()
-        .zip(&network.to)
-        .zip(&network.value)
-    {
+    for ((&from, &to), &value) in network.from.iter().zip(&network.to).zip(&network.value) {
         let row = (from, to, value);
         let slot = slot_of_node[from.0 as usize] as usize;
         cap_sum[slot] += f64::from(u8::from(is_ground_cap(row))) * cap_ff(value);
@@ -432,7 +442,10 @@ fn lump_rows(network: &ParasiticNetwork, out: &mut Vec<Row>) {
     // A payload-carrying compact: `out` is sized for every candidate up front
     // and the store is unconditional, so the write index carries the decision.
     out.clear();
-    out.resize(2 * nets, (NodeId(0), None, Parasitic::GroundCap(Qty::new(0.0))));
+    out.resize(
+        2 * nets,
+        (NodeId(0), None, Parasitic::GroundCap(Qty::new(0.0))),
+    );
     let mut written = 0_usize;
     for slot in 0..nets {
         // Zero is not an element: a zero-ohm resistor is a short and a zero

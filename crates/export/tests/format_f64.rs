@@ -83,10 +83,9 @@ fn the_formatter_holds_no_per_thread_state() {
 fn every_formatted_value_parses_back_as_a_finite_number() {
     for &value in TABLE {
         let text = formatted(value);
-        let parsed: f64 = text
-            .trim()
-            .parse()
-            .unwrap_or_else(|error| panic!("{value} formatted to {text:?}, which is not a number: {error}"));
+        let parsed: f64 = text.trim().parse().unwrap_or_else(|error| {
+            panic!("{value} formatted to {text:?}, which is not a number: {error}")
+        });
         assert!(
             parsed.is_finite(),
             "{value} formatted to {text:?}, which reads back as {parsed}"

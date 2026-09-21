@@ -15,10 +15,13 @@
 //! That makes the reader consulted first observable on an input where both
 //! files are unreadable, without a test having to know either file format.
 
-use gpurify_core::LayerId;
-use gpurify_engine::pipeline::{extract_into, load_into, Extracted, Inputs, LoadError, Loaded};
-use gpurify_engine::run::{run, Checks, EngineError, Outputs, RunOptions};
-use gpurify_ingest::deck::{Connectivity, Deck};
+use gpurify_core::{GeometryStoreBuilder, LayerId};
+use gpurify_engine::pipeline::{
+    extract_into, intern_report_ids, load_into, Extracted, Inputs, LoadError, Loaded,
+};
+use gpurify_engine::run::{run, run_checks, Checks, EngineError, Outputs, RunOptions};
+use gpurify_ingest::deck::{parse_deck, Connectivity, Deck};
+use gpurify_ingest::StrTable;
 use gpurify_lvs::refine::TieBreak;
 use gpurify_lvs::CompareOptions;
 use gpurify_testgen::LayoutBuilder;
@@ -258,6 +261,118 @@ fn run_options() -> RunOptions {
             match_names: false,
         },
         quasistatic_nets: Vec::new(),
+        quasistatic_inductance: false,
         threads: Some(1),
     }
+}
+
+/// Oracle: law, from `intern_report_ids`'s doc comment. An embedder builds
+/// `Loaded` by hand — deck from an in-memory string, geometry from the builder,
+/// no file ever opened — and the seam must leave the string table exactly as
+/// `load_into` would have: every LVS report id resolvable before a check runs.
+#[test]
+fn a_hand_built_loaded_runs_checks_once_its_report_ids_are_interned() {
+    use gpurify_testgen::shapes::dbu;
+
+    let grid = Grid::new(1_000).expect("1000 database units per micrometre is a legal grid");
+    let mut strings = StrTable::default();
+    let deck = parse_deck(r#"{"layers": {"met1": [68, 20]}}"#, grid, &mut strings)
+        .expect("a one-layer deck parses");
+
+    let mut builder = GeometryStoreBuilder::default();
+    builder.push_rect(METAL, dbu(0), dbu(0), dbu(100), dbu(100));
+    let (store, _) = builder.finish(deck.layers.len());
+
+    let mut loaded = Loaded {
+        strings,
+        grid: Some(grid),
+        deck,
+        store,
+        ..Loaded::default()
+    };
+    intern_report_ids(&mut loaded.strings);
+
+    // The two ends of the id lists `load_into` interned through this same
+    // seam: resolvable, and round-tripping to the constant they were made from.
+    for id in ["lvs.unpaired_device", "lvs.terminal_count"] {
+        let interned = loaded
+            .strings
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} did not intern, and a finding filed under it panics"));
+        assert_eq!(loaded.strings.resolve(interned), id);
+    }
+
+    let mut extracted = Extracted::default();
+    extract_into(&loaded, &mut extracted).expect("one undecorated layer extracts");
+
+    let mut options = run_options();
+    options.checks = Checks {
+        drc: true,
+        erc: false,
+        lvs: false,
+        pex: false,
+    };
+    let mut out = Outputs::default();
+    run_checks(&loaded, &extracted, &options, &mut out)
+        .expect("a drc-only run over a hand-built Loaded must not fail");
+}
+
+/// Oracle: law, from `refuse_conducting_channels`'s doc comment, at the seam
+/// every caller routes through. A deck in the pre-split style — the raw
+/// diffusion is both the conductor and the MOS source/drain terminal layer,
+/// and the implant-shaped marker overlaps it with area — must fail extraction
+/// with a channel refusal, not extract a transistor whose source and drain
+/// share a net. Silence here is a short reported as clean, which is the
+/// engine's old ceiling; the refusal is what removed it.
+#[test]
+fn a_deck_that_leaves_raw_diffusion_conducting_under_a_mos_marker_is_refused() {
+    use gpurify_testgen::shapes::dbu;
+
+    let grid = Grid::new(1_000).expect("1000 database units per micrometre is a legal grid");
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        r#"{
+          "layers": { "diff": [65, 20], "poly": [66, 20], "nsdm": [93, 44] },
+          "connectivity": {
+            "conductors": ["diff", "poly"],
+            "intra_layer_touch": true
+          },
+          "device_recognition": [
+            { "kind": "mos", "marker": "nsdm", "model": "nfet",
+              "terminals": ["poly", "diff", "diff"] }
+          ]
+        }"#,
+        grid,
+        &mut strings,
+    )
+    .expect("the pre-split deck still parses; the refusal is geometric, not schematic");
+
+    let diff = deck.layers.id(&strings, "diff").expect("declared");
+    let poly = deck.layers.id(&strings, "poly").expect("declared");
+    let nsdm = deck.layers.id(&strings, "nsdm").expect("declared");
+
+    // One transistor as the old corpus drew it: one diffusion rectangle
+    // spanning the channel, a gate crossing it, the implant over the lot.
+    let mut builder = GeometryStoreBuilder::default();
+    builder.push_rect(diff, dbu(0), dbu(0), dbu(500), dbu(200));
+    builder.push_rect(poly, dbu(200), dbu(-50), dbu(50), dbu(300));
+    builder.push_rect(nsdm, dbu(-50), dbu(-50), dbu(600), dbu(300));
+    let (store, _) = builder.finish(deck.layers.len());
+
+    let mut loaded = Loaded {
+        strings,
+        grid: Some(grid),
+        deck,
+        store,
+        ..Loaded::default()
+    };
+    intern_report_ids(&mut loaded.strings);
+
+    let mut extracted = Extracted::default();
+    let refused = extract_into(&loaded, &mut extracted)
+        .expect_err("a conducting channel must refuse extraction, not merge S and D");
+    assert!(
+        matches!(refused, gpurify_engine::pipeline::ExtractError::Channel(_)),
+        "the refusal must be the channel guard's, got {refused:?}"
+    );
 }

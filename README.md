@@ -241,13 +241,11 @@ mean nothing.
 
 | File | Contents |
 |---|---|
-| `CLAUDE.md` | Project rules and the phase model. Start here. |
 | `docs/VOCABULARY.md` | Shared terms, used exactly. |
 | `docs/CONVENTIONS.md` | The code rubric. |
 | `docs/TESTING.md` | Oracles, test adapters, the three gates. |
 | `docs/NEED_TESTING.md` | What ships without a definitive test, and why. |
-| `docs/SIGNATURE_DEFECTS.md` | Frozen signatures found to be wrong, and their status. |
-| `docs/BULK_MEASUREMENTS.md` | What SIMD, chunking and branchless actually bought — measured, including where the answer was "nothing". |
+| `docs/CORRECTNESS_MAP.md` | Where correctness is established, and where it is not. |
 | `docs/GPU.md` | Why GPU survives only in quasi-static PEX. |
 | `pdks/README.md` | Per-PDK source, coverage and gaps. |
 | `tests/fixtures/README.md` | The 160-case corpus: where it came from, how each expectation was derived, and every case that disputes the old tree's answer. |

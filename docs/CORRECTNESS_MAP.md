@@ -20,7 +20,7 @@ find was `prefix::FEMTO`/`PICO` surviving a deleted minus sign, because every
 test touching them was a round-trip (sign-cancelling) or a letter lookup. That
 is a *test* defect. The constant was always right. Every genuine *correctness*
 finding this project has ever had — the 3 DRC disagreements, F1–F13, the 13
-sites in `E2E_AUDIT` §5, the mirrored-SREF winding bug — came from
+known-wrong extraction sites, the mirrored-SREF winding bug — came from
 physics-derived expectations instead.
 
 Measured sweep results, before it was stopped (OOM, `-j 12` over-subscribed):
@@ -112,8 +112,8 @@ ran half proves the rule computes the right answer with it. `measurement_matches
 in `tests/common/mod.rs` gained `Voltage`/`Current`/`Resistance` arms — its
 `_ => false` fallthrough is fail-closed and was kept.
 
-**A FIFTH fail-open was found writing them, and it is not one of E2E_AUDIT §5.1's
-four.** Two blind derivations of `ERC_EMIG_MET1` disagreed — prior said
+**A FIFTH fail-open was found writing them, and it is not one of the four
+magnitude fail-opens.** Two blind derivations of `ERC_EMIG_MET1` disagreed — prior said
 `examined == 1`, independent said `examined == 0` — and the code sided with the
 independent one. `crates/erc/src/power.rs:1612` does
 `if attach.is_empty() { continue; }` *above* the first read of
@@ -138,9 +138,8 @@ population. Discrimination was measured by mutation — deleting the gate, dropp
 either conjunct of the detector, and adding a blanket refusal to
 `check_reliability` are each caught by a different test leg.
 
-Filed in `docs/SIGNATURE_DEFECTS.md`. The prior `note` in `expectations.json` has
-been corrected in place rather than deleted, so the wrong derivation and its
-refutation sit together.
+The prior `note` in `expectations.json` has been corrected in place rather
+than deleted, so the wrong derivation and its refutation sit together.
 
 The corpus half of each pair remains a regression guard on the gate, not coverage
 of the rule, and
@@ -383,15 +382,14 @@ What is now at the front:
    was drawn to make it derivable. The absolute count *is* asserted there,
    because the fail-open that made it underivable is the fifth one — a discarded
    budget, not a magnitude bias — and drawing a `licon` closes it. The four
-   magnitude fail-opens of `E2E_AUDIT` §5.1 remain, and the test's doc comment
+   four magnitude fail-opens remain, and the test's doc comment
    says which of its claims survive them.
 3. **Discrimination checks for laws 1, 2, 3, 5, 6.** Break the mechanism each
    guards, confirm the law goes red, revert. None has ever been seen red.
    *Hours.*
 4. **File the nested-`mag` `i64` overflow.** Law 4's scope note names it —
    two nested `1e6` magnifications give `a·child.dx ≈ 2^71` and **wrap silently
-   in release**. It is still not in `docs/SIGNATURE_DEFECTS.md`. *Minutes to
-   file.*
+   in release**. Still unfiled.
 5. **File the two `esd_latchup`/`electromigration` findings in §3.** The guard-ring
    bbox fail-open and the two-layer `electromigration` row that panics in both
    profiles. Both are unfiled. *Minutes.*
@@ -414,11 +412,11 @@ when the case names a rule kind no existing arm maps.
 - **LVS.** No laws were proposed for it. F8 — `compare_params` returning `Match`
   while comparing zero parameters — is still the single worst defect in the tree
   and is untouched by anything here.
-- **PEX.** `E2E_AUDIT` §5.2 says the quasi-static path is wrong on every real
+- **PEX.** The quasi-static path is wrong on every real
   input (square-panel shape factor on rectangles, no layered-dielectric Green's
   function, half-micrometre mesh). No law addresses that; only a reference
   solution would.
-- **The 13 known-wrong sites in `E2E_AUDIT` §5**, including the four fail-opens
+- **The 13 known-wrong extraction sites**, including the four fail-opens
   compounding onto `check_electromigration`. These are capability gaps behind
   frozen signatures.
 - **An independent oracle.** Every law here is self-referential to this
@@ -427,6 +425,3 @@ when the case names a rule kind no existing arm maps.
 - **The mutation sweep**, abandoned at `units` + 82% of `drc`. `erc` (2372
   mutants), `core` (1153), `pex` (864), `lvs` (486) are unmeasured. Re-run at
   `-j 4`, not `-j 12`.
-- `E2E_AUDIT` §1 and §4 remain stale — they audit a `tests/test_all.rs` and a
-  fixture that have since been rewritten. Several derivations flagged this
-  independently.

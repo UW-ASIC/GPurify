@@ -20,9 +20,7 @@ use gpurify_core::view::validate_layer_into;
 use gpurify_core::{Bbox, LayerId, PolyId};
 use gpurify_derived::LayerRef;
 use gpurify_ingest::StrId;
-use gpurify_report::{
-    LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations,
-};
+use gpurify_report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_topology::NetId;
 use gpurify_units::{Dbu, DbuArea, MAX_ABS_DBU};
 
@@ -315,7 +313,14 @@ fn positions(span: i64, step: i64) -> usize {
 /// Window `i` spans `[origin + i * step, origin + i * step + window]`, so it
 /// meets `[lo, hi]` exactly when its far edge is past `lo` and its near edge is
 /// before `hi`; solving both for `i` gives the range directly.
-fn window_span(lo: i64, hi: i64, origin: i64, window: i64, step: i64, count: usize) -> (usize, usize) {
+fn window_span(
+    lo: i64,
+    hi: i64,
+    origin: i64,
+    window: i64,
+    step: i64,
+    count: usize,
+) -> (usize, usize) {
     debug_assert!(step > 0 && window > 0, "a window and a step are positive");
     debug_assert!(lo <= hi, "a rectangle's bounds run low to high");
     let count = i64::try_from(count).expect("a window count fits an i64");
@@ -481,7 +486,10 @@ fn window_owners_into(
 /// [`Violation`] has no spelling for "no shape", so the fallback is the layer's
 /// own lowest row.
 fn window_owner(owners: &[u32], slot: usize, fallback: u32) -> PolyId {
-    debug_assert!(slot < owners.len(), "a window slot is inside the owner grid");
+    debug_assert!(
+        slot < owners.len(),
+        "a window slot is inside the owner grid"
+    );
     let best = owners[slot];
     let none = u32::from(best == u32::MAX).wrapping_neg();
     PolyId((best & !none) | (fallback & none))
@@ -864,10 +872,12 @@ pub fn check_density_cmp(
 
                 examined += u64::from(counted);
                 let measured = Measurement::Ratio(value);
-                let under =
-                    counted & min_on & measured.violates(Measurement::Ratio(min), LimitSense::Minimum);
-                let over =
-                    counted & max_on & measured.violates(Measurement::Ratio(max), LimitSense::Maximum);
+                let under = counted
+                    & min_on
+                    & measured.violates(Measurement::Ratio(min), LimitSense::Minimum);
+                let over = counted
+                    & max_on
+                    & measured.violates(Measurement::Ratio(max), LimitSense::Maximum);
 
                 if under {
                     out.push(Violation {
@@ -896,8 +906,8 @@ pub fn check_density_cmp(
                 // the sensitivity times the density's distance from the
                 // calibration point.
                 if let Some(model) = cmp {
-                    let excursion = model.thickness_sensitivity.raw() as f64
-                        * (value - model.target_density);
+                    let excursion =
+                        model.thickness_sensitivity.raw() as f64 * (value - model.target_density);
                     debug_assert!(excursion.is_finite(), "a CMP model with no finite response");
                     // Saturating at the coordinate domain rather than wrapping:
                     // a saturated excursion violates every limit, which is the
@@ -934,7 +944,10 @@ pub fn check_density_cmp(
         // what the first wrote. Adjacency is the storage order above: `+1` along
         // x, `+nx` along y.
         if let Some(delta) = table.max_neighbour_delta[row] {
-            debug_assert!(delta.is_finite(), "a non-finite gradient limit checks nothing");
+            debug_assert!(
+                delta.is_finite(),
+                "a non-finite gradient limit checks nothing"
+            );
             let limit = Measurement::Ratio(delta);
             for j in 0..ny {
                 for i in 0..nx {
@@ -943,10 +956,7 @@ pub fn check_density_cmp(
                     // adjacent pair is examined once. `min` clamps the last row
                     // and column onto themselves, whose difference is zero and
                     // violates nothing.
-                    let ahead = [
-                        j * nx + (i + 1).min(nx - 1),
-                        (j + 1).min(ny - 1) * nx + i,
-                    ];
+                    let ahead = [j * nx + (i + 1).min(nx - 1), (j + 1).min(ny - 1) * nx + i];
                     for neighbour in ahead {
                         let gap = Measurement::Ratio((density[slot] - density[neighbour]).abs());
                         if gap.violates(limit, LimitSense::Maximum) {
@@ -958,10 +968,7 @@ pub fn check_density_cmp(
                                 at: centre(clipped),
                                 measured: gap,
                                 limit,
-                                shapes: (
-                                    window_owner(&owners, j * nx + i, fallback),
-                                    None,
-                                ),
+                                shapes: (window_owner(&owners, j * nx + i, fallback), None),
                             });
                         }
                     }

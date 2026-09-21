@@ -178,11 +178,8 @@ fn a_cycle_reached_only_through_an_offset_operand_is_still_a_cycle() {
 #[test]
 fn a_cycle_reached_only_through_the_universe_of_an_outside_is_still_a_cycle() {
     let field = StrId(1);
-    let error = plan(&[(
-        field,
-        outside(base(0), base(1), named(field)),
-    )])
-    .expect_err("a universe naming its own result has no evaluation order");
+    let error = plan(&[(field, outside(base(0), base(1), named(field)))])
+        .expect_err("a universe naming its own result has no evaluation order");
     assert!(
         matches!(error, DerivedError::Recursive(_)),
         "a cycle through the universe of an Outside must be Recursive, got {error:?}"

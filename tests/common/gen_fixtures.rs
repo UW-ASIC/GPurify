@@ -15,7 +15,8 @@
 //!
 //! Only `gds_file` and each case's `cell` are read. `expect_violations`,
 //! `reference_netlist` and `expected` — the deleted tree's own answers — are
-//! read by nothing in this workspace, and `CLAUDE.md` is why. Every expected
+//! read by nothing in this workspace: the deleted tree is not an oracle, and
+//! routing its answers back in would defeat that quietly. Every expected
 //! number the corpus checks comes from `expectations.json`.
 //!
 //! # The reconstruction rule, in full
@@ -145,7 +146,11 @@ fn records(bytes: &[u8]) -> Vec<Span> {
         spans.push((at, at + len));
         at += len;
     }
-    assert_eq!(at, bytes.len(), "conformance.gds ends mid-record at byte {at}");
+    assert_eq!(
+        at,
+        bytes.len(),
+        "conformance.gds ends mid-record at byte {at}"
+    );
     spans
 }
 
@@ -296,7 +301,11 @@ fn case_gds(source: &Source, case_id: &str, cell: &str) -> Vec<u8> {
     }
     out.extend_from_slice(&ENDLIB_RECORD);
 
-    debug_assert_eq!(out.len() % 2, 0, "{case_id}: a GDSII stream has even length");
+    debug_assert_eq!(
+        out.len() % 2,
+        0,
+        "{case_id}: a GDSII stream has even length"
+    );
     debug_assert!(
         out.ends_with(&ENDLIB_RECORD),
         "{case_id}: the stream does not end with ENDLIB"
@@ -340,8 +349,7 @@ fn generate(root: &Path) {
     let mut written = 0;
     for domain in DOMAINS {
         let dir = root.join(domain);
-        std::fs::create_dir_all(&dir)
-            .unwrap_or_else(|why| panic!("{}: {why}", dir.display()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|why| panic!("{}: {why}", dir.display()));
         for case in manifest.domain(domain) {
             let path = dir.join(format!("{}.gds", case.id));
             write_if_different(&path, &case_gds(&source, &case.id, &case.cell));
@@ -382,17 +390,19 @@ fn write_if_different(path: &Path, bytes: &[u8]) {
 #[test]
 fn the_generated_corpus_matches_what_the_generator_produces() {
     let root = super::fixtures();
-    let text = std::fs::read_to_string(root.join("manifest.json")).expect("the manifest is tracked");
+    let text =
+        std::fs::read_to_string(root.join("manifest.json")).expect("the manifest is tracked");
     let manifest: Manifest = serde_json::from_str(&text).expect("the manifest parses");
-    let bytes = std::fs::read(root.join(&manifest.gds_file)).expect("the source library is tracked");
+    let bytes =
+        std::fs::read(root.join(&manifest.gds_file)).expect("the source library is tracked");
     let source = Source::index(&bytes);
 
     let mut checked = 0;
     for domain in DOMAINS {
         for case in manifest.domain(domain) {
             let path = root.join(domain).join(format!("{}.gds", case.id));
-            let on_disk = std::fs::read(&path)
-                .unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+            let on_disk =
+                std::fs::read(&path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
             assert_eq!(
                 on_disk,
                 case_gds(&source, &case.id, &case.cell),

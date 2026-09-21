@@ -229,10 +229,12 @@ impl Row<'_> {
     }
 
     fn positive_dbu(&self, value: Dbu, param: &'static str) -> Result<Dbu, ErcError> {
-        (value.raw() > 0).then_some(value).ok_or_else(|| ErcError::NonPositiveLimit {
-            rule: self.name(),
-            limit: param.to_owned(),
-        })
+        (value.raw() > 0)
+            .then_some(value)
+            .ok_or_else(|| ErcError::NonPositiveLimit {
+                rule: self.name(),
+                limit: param.to_owned(),
+            })
     }
 
     /// A finite `f64`. Infinity and NaN are refused here rather than compared
@@ -255,10 +257,12 @@ impl Row<'_> {
     /// A finite, strictly positive `f64`.
     fn positive(&self, param: &'static str) -> Result<f64, ErcError> {
         let value = self.number(param)?;
-        (value > 0.0).then_some(value).ok_or_else(|| ErcError::NonPositiveLimit {
-            rule: self.name(),
-            limit: param.to_owned(),
-        })
+        (value > 0.0)
+            .then_some(value)
+            .ok_or_else(|| ErcError::NonPositiveLimit {
+                rule: self.name(),
+                limit: param.to_owned(),
+            })
     }
 
     /// A fraction in `0.0 ..= 1.0`.
@@ -417,7 +421,8 @@ impl RuleSet {
                         Some(_) => Some(antenna::CmpModel {
                             target_density: row.fraction("cmp_target_density")?,
                             nominal_thickness: row.length("cmp_nominal_thickness")?,
-                            thickness_sensitivity: row.signed_length("cmp_thickness_sensitivity")?,
+                            thickness_sensitivity: row
+                                .signed_length("cmp_thickness_sensitivity")?,
                             max_abs_thickness_delta: row.length("cmp_max_abs_thickness_delta")?,
                         }),
                     };
@@ -588,7 +593,9 @@ impl RuleSet {
                     // The mechanism's name is the rule's own id: `ParamValue`
                     // carries no string to state a separate one.
                     table.mechanism.push(spec.id);
-                    table.reference_lifetime_hours.push(reference_lifetime_hours);
+                    table
+                        .reference_lifetime_hours
+                        .push(reference_lifetime_hours);
                     table.reference_stress.push(reference_stress);
                     table.stress_exponent.push(stress_exponent);
                     table.reference_temperature.push(reference_temperature);
@@ -813,7 +820,9 @@ impl RuleSet {
             "the role column names more nets than the extraction produced"
         );
         debug_assert!(
-            inputs.power.is_none_or(|s| s.solution.is_consistent_with(s.grid)),
+            inputs
+                .power
+                .is_none_or(|s| s.solution.is_consistent_with(s.grid)),
             "a solution whose columns do not match its grid would be read by four rules"
         );
         debug_assert!(

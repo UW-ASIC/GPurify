@@ -220,7 +220,11 @@ fn a_shared_node_that_carries_a_declared_name_blocks_the_series_merge() {
     builder.name_net(2, VSS);
     let src = builder.finish();
 
-    assert_eq!(reduced(&src).device_count(), 2, "a named node is not internal");
+    assert_eq!(
+        reduced(&src).device_count(),
+        2,
+        "a named node is not internal"
+    );
     assert_eq!(reduced(&src), src);
 }
 
@@ -245,7 +249,11 @@ fn a_shared_node_with_a_third_terminal_blocks_the_series_merge() {
     builder.device(DeviceKind::Capacitor, NCH, &[(Pin(0), 2), (Pin(1), 4)]);
     let src = builder.finish();
 
-    assert_eq!(reduced(&src).device_count(), 3, "the node has somewhere else to go");
+    assert_eq!(
+        reduced(&src).device_count(),
+        3,
+        "the node has somewhere else to go"
+    );
     assert_eq!(reduced(&src), src);
 }
 
@@ -308,7 +316,11 @@ fn a_series_merge_that_creates_a_parallel_pair_reduces_again() {
 /// because the interesting way to break it is a second pass that keeps going.
 #[test]
 fn reducing_an_already_reduced_graph_changes_nothing() {
-    for src in [series_pair(0), parallel_pair(NCH, 1, 2), series_pair_tight()] {
+    for src in [
+        series_pair(0),
+        parallel_pair(NCH, 1, 2),
+        series_pair_tight(),
+    ] {
         let once = reduced(&src);
         let twice = reduced(&once);
         assert_eq!(twice, once, "reduction is not idempotent");
@@ -335,11 +347,13 @@ fn an_unreducible_graph_comes_through_byte_identical() {
     }
 }
 
-/// Oracle: construct-from-answer. `graph::from_layout_into` projects no device
-/// parameter at all (finding F8) and this signature is handed no string table, so
+/// Oracle: construct-from-answer. `reduce_into` is handed no string table, so
 /// nothing here can tell `W` from `L` from `M` — and the two are not
 /// interchangeable, since a parallel merge adds widths and a series merge adds
-/// lengths. A device that declares a parameter therefore does not merge.
+/// lengths. A device that declares a parameter therefore does not merge. Since
+/// `from_layout_into` began projecting measured `w`/`l`, this refusal is also
+/// what keeps the finger counts comparable: neither a sized reference card nor
+/// a sized extracted finger merges, so they pair one to one.
 ///
 /// Fail-closed: an under-reduced netlist can only put an extra unpaired device in
 /// a report, never remove one, so this can cost a `Match` and can never invent

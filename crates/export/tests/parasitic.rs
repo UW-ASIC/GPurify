@@ -47,8 +47,14 @@ fn dspf(world: &World) -> String {
 
 fn name_of(world: &World, node: NodeId) -> String {
     let mut out = String::new();
-    node_name(&world.parasitics, node, &world.ports, &world.strings, &mut out)
-        .expect("every net in this world is named");
+    node_name(
+        &world.parasitics,
+        node,
+        &world.ports,
+        &world.strings,
+        &mut out,
+    )
+    .expect("every net in this world is named");
     out
 }
 
@@ -211,7 +217,11 @@ fn node_name_is_a_function_of_its_arguments_alone() {
     let world = World::named();
     for n in 0..3 {
         let first = name_of(&world, NodeId(n));
-        assert_eq!(first, name_of(&world, NodeId(n)), "node {n} was named twice");
+        assert_eq!(
+            first,
+            name_of(&world, NodeId(n)),
+            "node {n} was named twice"
+        );
     }
 }
 

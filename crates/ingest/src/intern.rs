@@ -41,11 +41,15 @@ impl StrTable {
 
         // Each scrutinee is bound first so the immutable borrow of `self` taken
         // by the comparator ends before the `&mut self` work below.
-        let merged = self.sorted.binary_search_by(|&id| self.resolve(id).cmp(name));
+        let merged = self
+            .sorted
+            .binary_search_by(|&id| self.resolve(id).cmp(name));
         if let Ok(pos) = merged {
             return self.sorted[pos];
         }
-        let staged = self.pending.binary_search_by(|&id| self.resolve(id).cmp(name));
+        let staged = self
+            .pending
+            .binary_search_by(|&id| self.resolve(id).cmp(name));
         let pos = match staged {
             Ok(pos) => return self.pending[pos],
             Err(pos) => pos,
@@ -75,7 +79,12 @@ impl StrTable {
     /// `sort_by`, not `sort_unstable_by`: both inputs are already sorted and
     /// the stable sort detects the two natural runs, making this a linear merge.
     fn merge(&mut self) {
-        let Self { arena, span, sorted, pending } = self;
+        let Self {
+            arena,
+            span,
+            sorted,
+            pending,
+        } = self;
         sorted.append(pending);
         let (arena, span) = (&*arena, &*span);
         sorted.sort_by(|&a, &b| text(arena, span, a).cmp(text(arena, span, b)));
@@ -154,6 +163,9 @@ mod tests {
             assert_eq!(table.get(&name), Some(*id), "a merged name went missing");
         }
         assert_eq!(table.len(), names, "re-interning grew the table");
-        assert!(table.get("net_999999").is_none(), "a name never interned was found");
+        assert!(
+            table.get("net_999999").is_none(),
+            "a name never interned was found"
+        );
     }
 }

@@ -21,8 +21,10 @@
 //! ponytail: the upgrade path is one parameter and not a rewrite — a `&StrTable`
 //! at this signature, or `DeviceParam` reaching [`Graph`] as a tag rather than as
 //! a name, and then the additive column is identifiable and the sum is three
-//! lines. It is worth taking the day `from_layout_into` measures `W`; today it
-//! would only change which side of a mismatch the report blames.
+//! lines. `from_layout_into` measures `w`/`l` now, but the refusal still holds
+//! the line correctly: a sized finger and a sized card each stay one device,
+//! so the counts pair one to one and no sum is needed until a reference is
+//! written pre-merged *with* sizes — that is the day to take this.
 //!
 //! [`compare`]: crate::compare::compare
 //! [`Discrepancy::UnpairedDevice`]: crate::verdict::Discrepancy::UnpairedDevice
@@ -274,7 +276,8 @@ fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
         let (terminal_nets, roles) = src.terminals_of(device);
         let from = plan.key.len();
         for slot in 0..roles.len() {
-            plan.key.push(terminal_key(roles[slot], terminal_nets[slot]));
+            plan.key
+                .push(terminal_key(roles[slot], terminal_nets[slot]));
         }
         plan.key[from..].sort_unstable();
         plan.key_start.push(narrow(plan.key.len()));
@@ -294,7 +297,14 @@ fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
 /// tie-break, so the partition is independent of row order. An unmergeable device
 /// is left out of every join rather than breaking the run it sits in.
 fn join_parallel(src: &Graph, plan: &mut Plan, devices: usize) {
-    let Plan { root, order, mergeable, key, key_start, .. } = plan;
+    let Plan {
+        root,
+        order,
+        mergeable,
+        key,
+        key_start,
+        ..
+    } = plan;
     order.clear();
     order.extend(0..narrow(devices));
     order.sort_unstable_by(|&a, &b| {
@@ -486,8 +496,7 @@ fn group_is_sound(src: &Graph, plan: &Plan, from: usize, to: usize) -> bool {
 fn mark_consumed(plan: &mut Plan) {
     plan.consumed.iter_mut().for_each(|dead| *dead = false);
     for &(net, first, second) in &plan.series {
-        plan.consumed[net as usize] |=
-            plan.root[first as usize] == plan.root[second as usize];
+        plan.consumed[net as usize] |= plan.root[first as usize] == plan.root[second as usize];
     }
 }
 
@@ -522,7 +531,11 @@ fn count_groups(plan: &Plan) -> usize {
 /// `graph::transpose_into` so the two directions cannot disagree.
 fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
     let nets = src.net_count();
-    debug_assert_eq!(plan.new_net.len(), nets, "the plan ranked another graph's nets");
+    debug_assert_eq!(
+        plan.new_net.len(),
+        nets,
+        "the plan ranked another graph's nets"
+    );
 
     out.net_name.clear();
     out.net_name.reserve(plan.nets);
@@ -577,7 +590,8 @@ fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
             // unreducible graph come through byte-identical.
             let (terminal_nets, roles) = src.terminals_of(head);
             for slot in 0..roles.len() {
-                out.terminal_net.push(remap(&plan.new_net, terminal_nets[slot]));
+                out.terminal_net
+                    .push(remap(&plan.new_net, terminal_nets[slot]));
                 out.terminal_role.push(roles[slot]);
             }
             out.param.extend_from_slice(src.params_of(head));
@@ -593,11 +607,16 @@ fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
                 "a merged device carried a parameter it cannot have added"
             );
         }
-        out.device_terminal_start.push(narrow(out.terminal_net.len()));
+        out.device_terminal_start
+            .push(narrow(out.terminal_net.len()));
         out.device_param_start.push(narrow(out.param.len()));
         at = end;
     }
-    debug_assert_eq!(out.device_kind.len(), plan.groups, "a group lost its device");
+    debug_assert_eq!(
+        out.device_kind.len(),
+        plan.groups,
+        "a group lost its device"
+    );
 
     transpose_into(out, plan.nets);
 

@@ -650,7 +650,10 @@ fn a_pad_net_reaching_none_of_the_listed_clamp_models_is_flagged() {
     common::assert_at_is_on_a_named_shape(&case.store, &violations, 0);
 
     let run = assert_rule_ran(&runs, id);
-    assert_eq!(run.examined, 3, "one rail per net, so three distinct pad nets");
+    assert_eq!(
+        run.examined, 3,
+        "one rail per net, so three distinct pad nets"
+    );
     assert_eq!(run.violations, 1);
 }
 

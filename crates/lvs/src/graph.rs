@@ -1,9 +1,11 @@
 //! The one bipartite device/net graph shape both sides are reduced to before matching.
 
+use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_ingest::deck::DeviceKind;
+use gpurify_topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
+use gpurify_units::Grid;
 
 /// One row's run in a CSR offset column. Unguarded on purpose: a row past the
 /// table panics rather than reading as an empty run.
@@ -121,14 +123,44 @@ pub struct LayoutGraph(pub Graph);
 #[derive(Debug, Default, PartialEq)]
 pub struct RefGraph(pub Graph);
 
+/// The SPICE parameter name each measured [`DeviceParam`] compares under —
+/// the same names `export` writes and `parse_spice` interns off a card.
+const fn spice_param_name(param: DeviceParam) -> &'static str {
+    match param {
+        DeviceParam::Width => "w",
+        DeviceParam::Length => "l",
+        DeviceParam::Area => "area",
+        DeviceParam::Perimeter => "perim",
+        DeviceParam::Fingers => "nf",
+    }
+}
+
 /// Project a `topology` extraction into the matching graph, refilling `out`.
 ///
 /// Index-preserving: graph device row `k` is `DeviceId(k)` and net row `k` is
 /// `NetId(k)`, the graph's only link back to geometry. `port_net` is ascending.
+///
+/// # Parameters
+///
+/// Measured device parameters are projected to `(StrId, f64)` rows in SI base
+/// units — metres and square metres, the units `parse_spice` expands `w=1u`
+/// into — through `grid`; with no grid a length has no physical meaning, so
+/// none is emitted rather than a wrong number.
+///
+/// A parameter is emitted **only when its SPICE name is already interned in
+/// `strings`**. `compare_params` reports the symmetric difference as
+/// [`Discrepancy::UndeclaredParam`](crate::verdict::Discrepancy::UndeclaredParam),
+/// so a name the reference side never declares — nothing else interns `"w"` —
+/// could only ever be noise; and when the reference does declare it, the
+/// intern exists and the comparison is live. Fail-closed both ways: a
+/// reference declaring `w` against a layout that measured none still reports
+/// `UndeclaredParam`.
 pub fn from_layout_into(
     nets: &NetTable,
     devices: &DeviceTable,
     ports: &PortTable,
+    strings: &StrTable,
+    grid: Option<Grid>,
     out: &mut LayoutGraph,
 ) {
     let device_count = devices.len();
@@ -150,10 +182,13 @@ pub fn from_layout_into(
     graph.device_model.clear();
     graph.device_model.extend_from_slice(&devices.model);
     graph.device_terminal_start.clear();
-    graph.device_terminal_start
+    graph
+        .device_terminal_start
         .extend_from_slice(&devices.terminal_start);
     graph.terminal_role.clear();
-    graph.terminal_role.extend_from_slice(&devices.terminal_role);
+    graph
+        .terminal_role
+        .extend_from_slice(&devices.terminal_role);
 
     // `NetId::NONE` becomes `u32::MAX` and stays: a terminal on no net is an
     // extraction fault `check_topology` reports, not one to drop or renumber.
@@ -163,14 +198,43 @@ pub fn from_layout_into(
         graph.terminal_net.push(net.0);
     }
 
-    // Parameters are left empty: converting `(DeviceParam, DeviceMeasure)` to
-    // `(StrId, f64)` needs a `StrTable` and a `Dbu` scale, and this signature has
-    // neither. Parametric comparison reports nothing rather than a wrong number.
+    // Measured parameters, in SI base units, gated per name on `strings` (see
+    // the function doc). `metre_per_dbu` is exact for every real grid — a
+    // power-of-ten division of 1e-6.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a grid resolution is a small positive integer (1000 for a \
+                  1 nm grid), and a measured extent or area is bounded by the \
+                  coordinate domain; the comparison these feed applies a \
+                  relative tolerance orders of magnitude above one ulp"
+    )]
+    let metre_per_dbu = grid.map(|grid| 1e-6 / grid.dbu_per_um() as f64);
     graph.param.clear();
     graph.device_param_start.clear();
-    graph
-        .device_param_start
-        .resize(graph.device_terminal_start.len(), 0);
+    graph.device_param_start.reserve(device_count + 1);
+    graph.device_param_start.push(0);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "see `metre_per_dbu` above: measured extents are bounded by \
+                  the coordinate domain and compared under a relative tolerance"
+    )]
+    for device in 0..device_count {
+        for &(param, measure) in devices.params_of(gpurify_topology::DeviceId(narrow(device))) {
+            let Some(name) = strings.get(spice_param_name(param)) else {
+                continue;
+            };
+            let value = match (measure, metre_per_dbu) {
+                (DeviceMeasure::Count(count), _) => f64::from(count),
+                (DeviceMeasure::Length(length), Some(scale)) => length.raw() as f64 * scale,
+                (DeviceMeasure::Area(area), Some(scale)) => area.raw() as f64 * scale * scale,
+                // No grid: a dbu has no physical size, and emitting the raw
+                // integer would compare a coordinate against a metre.
+                (_, None) => continue,
+            };
+            graph.param.push((name, value));
+        }
+        graph.device_param_start.push(narrow(graph.param.len()));
+    }
 
     // A port is a named net: `PortTable` is the only thing either column can
     // come from, so `net_name` and `port_net` are the same set read two ways.
@@ -178,9 +242,8 @@ pub fn from_layout_into(
     // ponytail: `O(nets · log ports)`, because `PortTable` publishes none of its
     // four columns and `name_of` — a binary search, so a chain rather than a
     // lane op — is the only way to read one. That is the same missing accessor
-    // six sites across three crates are blocked on, this one the hottest;
-    // `## PortTable has no enumerable surface, third pass` in
-    // `docs/SIGNATURE_DEFECTS.md` is the consolidated record. A merge of the
+    // six sites across three crates are blocked on, this one the hottest:
+    // `PortTable` has no enumerable surface. A merge of the
     // port column against `0 .. net_count` is one linear pass and needs no
     // search at all.
     //
@@ -279,7 +342,10 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
         .truncate(graph.net_terminal_start[net_count] as usize);
 
     debug_assert!(
-        graph.net_terminal_start.windows(2).all(|pair| pair[0] <= pair[1]),
+        graph
+            .net_terminal_start
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1]),
         "net offsets are non-decreasing"
     );
     debug_assert!(
@@ -287,7 +353,10 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
         "the transpose filed more terminals than the devices declared"
     );
     debug_assert!(
-        graph.net_terminal.iter().all(|&(device, _)| (device as usize) < device_count),
+        graph
+            .net_terminal
+            .iter()
+            .all(|&(device, _)| (device as usize) < device_count),
         "a net lists a terminal of a device that does not exist"
     );
 }
@@ -343,8 +412,15 @@ pub fn from_reference_into(
         count += mine;
     }
     let net_count = count as usize;
-    debug_assert_eq!(rank.len(), rows, "the rank column is one entry per reference net");
-    debug_assert!(net_count <= rows, "more nets ranked than the netlist declares");
+    debug_assert_eq!(
+        rank.len(),
+        rows,
+        "the rank column is one entry per reference net"
+    );
+    debug_assert!(
+        net_count <= rows,
+        "more nets ranked than the netlist declares"
+    );
 
     // The nets of this subcircuit, in ascending reference-row order. Every
     // reference net carries a name, so every projected net is `Some`.
@@ -379,10 +455,12 @@ pub fn from_reference_into(
     );
 
     graph.device_kind.clear();
-    graph.device_kind
+    graph
+        .device_kind
         .extend_from_slice(&netlist.device_kind[first..last]);
     graph.device_model.clear();
-    graph.device_model
+    graph
+        .device_model
         .extend_from_slice(&netlist.device_model[first..last]);
 
     debug_assert!(
@@ -504,6 +582,56 @@ pub fn from_reference_into(
         tlast - tfirst,
         "a terminal lost its role"
     );
+}
+
+/// Drop every reference `Bulk` terminal when the layout extracts none.
+///
+/// A SPICE MOS card always states four nets, but a deck whose MOS recogniser
+/// binds three terminals never extracts a bulk — so the reference's bulk
+/// terminals describe a connection the comparison has no layout counterpart
+/// for, and refinement would unpair every node over it. The condition is
+/// side-wide and fail-closed: if any layout device carries a `Bulk`, nothing
+/// is dropped and a genuinely missing bulk strap still mismatches. A
+/// recogniser that declares a bulk position either binds it or refuses the
+/// whole marker, so "no `Bulk` anywhere" is exactly "the deck does not
+/// extract bulk".
+///
+/// Only terminals are dropped, never nets: a reference net left with no
+/// terminals still exists, exactly like the floating labelled net the layout
+/// holds in its place.
+pub fn drop_unextracted_bulk(layout: &LayoutGraph, reference: &mut RefGraph) {
+    if layout.0.terminal_role.contains(&TerminalRole::Bulk) {
+        return;
+    }
+    let graph = &mut reference.0;
+    if !graph.terminal_role.contains(&TerminalRole::Bulk) {
+        return;
+    }
+
+    let device_count = graph.device_count();
+    let net_count = graph.net_count();
+    let mut nets = Vec::with_capacity(graph.terminal_net.len());
+    let mut roles = Vec::with_capacity(graph.terminal_role.len());
+    let mut starts = Vec::with_capacity(device_count + 1);
+    starts.push(0u32);
+    for device in 0..device_count {
+        let (terminal_nets, terminal_roles) = graph.terminals_of(narrow(device));
+        for slot in 0..terminal_roles.len() {
+            if terminal_roles[slot] == TerminalRole::Bulk {
+                continue;
+            }
+            nets.push(terminal_nets[slot]);
+            roles.push(terminal_roles[slot]);
+        }
+        starts.push(narrow(nets.len()));
+    }
+    graph.terminal_net = nets;
+    graph.terminal_role = roles;
+    graph.device_terminal_start = starts;
+    transpose_into(graph, net_count);
+
+    debug_assert_eq!(graph.device_count(), device_count, "a device went missing");
+    debug_assert_eq!(graph.net_count(), net_count, "a net went missing");
 }
 
 /// A SPICE card position to the [`TerminalRole`] it names, in card order —

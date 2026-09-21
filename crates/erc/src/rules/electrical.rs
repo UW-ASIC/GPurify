@@ -17,9 +17,7 @@ use crate::{record_run, refuse_rows, skip_rows, Design, Scratch};
 use gpurify_core::LayerId;
 use gpurify_ingest::intent::NetLimits;
 use gpurify_ingest::StrId;
-use gpurify_report::{
-    LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations,
-};
+use gpurify_report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_units::{
     prefix, Current, CurrentDensity, Dbu, Grid, Qty, Resistance, Temperature, Voltage,
 };
@@ -155,7 +153,10 @@ pub fn check_p2p_resistance(
             }
             let (points, polys) = networks.nodes_of(net);
             let (a, b) = (worst.0 as usize, worst.1 as usize);
-            debug_assert!(a < points.len() && b < points.len(), "a probe named a node outside its row");
+            debug_assert!(
+                a < points.len() && b < points.len(),
+                "a probe named a node outside its row"
+            );
             out.push(Violation {
                 rule: id,
                 layer: design.store.poly_layer(polys[a]),
@@ -528,7 +529,11 @@ pub fn check_em_current_density(
 ) {
     let rows = table.head.rule.len();
     debug_assert_eq!(rows, table.head.severity.len(), "RuleHead columns diverged");
-    debug_assert_eq!(table.layer_start.len(), rows + 1, "CSR needs rows + 1 starts");
+    debug_assert_eq!(
+        table.layer_start.len(),
+        rows + 1,
+        "CSR needs rows + 1 starts"
+    );
     debug_assert_eq!(table.layer.len(), table.max_density.len());
     debug_assert_eq!(table.layer.len(), table.max_current_per_cut.len());
 
@@ -553,7 +558,10 @@ pub fn check_em_current_density(
         let before = out.len();
         let (id, severity) = (table.head.rule[row], table.head.severity[row]);
         let span = table.layer_start[row] as usize..table.layer_start[row + 1] as usize;
-        debug_assert!(span.end <= table.layer.len(), "row {row}'s CSR span runs past its column");
+        debug_assert!(
+            span.end <= table.layer.len(),
+            "row {row}'s CSR span runs past its column"
+        );
         let limits = LayerLimits {
             layer: &table.layer[span.clone()],
             max_density: &table.max_density[span.clone()],
@@ -641,7 +649,11 @@ pub fn check_electromigration(
 ) {
     let rows = table.head.rule.len();
     debug_assert_eq!(rows, table.head.severity.len(), "RuleHead columns diverged");
-    debug_assert_eq!(table.layer_start.len(), rows + 1, "CSR needs rows + 1 starts");
+    debug_assert_eq!(
+        table.layer_start.len(),
+        rows + 1,
+        "CSR needs rows + 1 starts"
+    );
     debug_assert_eq!(table.layer.len(), table.max_density.len());
     debug_assert_eq!(table.layer.len(), table.max_current_per_cut.len());
     debug_assert_eq!(table.layer.len(), table.blech_limit.len());
@@ -682,7 +694,10 @@ pub fn check_electromigration(
         };
 
         let span = table.layer_start[row] as usize..table.layer_start[row + 1] as usize;
-        debug_assert!(span.end <= table.layer.len(), "row {row}'s CSR span runs past its column");
+        debug_assert!(
+            span.end <= table.layer.len(),
+            "row {row}'s CSR span runs past its column"
+        );
         let limits = LayerLimits {
             layer: &table.layer[span.clone()],
             max_density: &table.max_density[span.clone()],

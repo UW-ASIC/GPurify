@@ -93,7 +93,8 @@ pub fn check_supply_short(
     for row in 0..rows {
         let before = out.len();
         let rule = table.head.rule[row];
-        let (Some(tap_a), Some(tap_b)) = (base_layer(table.tap_a[row]), base_layer(table.tap_b[row]))
+        let (Some(tap_a), Some(tap_b)) =
+            (base_layer(table.tap_a[row]), base_layer(table.tap_b[row]))
         else {
             record_run(runs, out, before, rule, Outcome::Refused, 0);
             continue;
@@ -268,7 +269,11 @@ pub fn check_soft_connection(
         unsafe { soft_nets.set_len(w) };
 
         let examined = w;
-        debug_assert_eq!(examined, soft_nets.len(), "the compact and its count disagree");
+        debug_assert_eq!(
+            examined,
+            soft_nets.len(),
+            "the compact and its count disagree"
+        );
 
         for &(net, _) in &soft_nets {
             let net = NetId(net);
@@ -310,7 +315,11 @@ pub fn check_soft_connection(
             scratch
                 .boxes
                 .extend(hard.iter().map(|&p| design.store.poly_bbox(p)));
-            debug_assert_eq!(scratch.boxes.len(), hard.len(), "one box per hard conductor");
+            debug_assert_eq!(
+                scratch.boxes.len(),
+                hard.len(),
+                "one box per hard conductor"
+            );
 
             // The pair kept is the pair that shares a *point*, not the pair
             // whose boxes overlap: joining two conductors that only share a box
@@ -338,7 +347,8 @@ pub fn check_soft_connection(
                         break;
                     }
                     // `&&` rather than `&`: the exact test is two ring walks.
-                    if box_a.overlaps(box_b) && polys_meet(design.store, hard[a as usize], hard[b as usize])
+                    if box_a.overlaps(box_b)
+                        && polys_meet(design.store, hard[a as usize], hard[b as usize])
                     {
                         scratch.edges.push((a, b));
                     }
@@ -472,7 +482,14 @@ pub fn check_missing_tie(
                 // test applied to its answer: on a region that breaks the limit
                 // nowhere the exact maximum is never read, and a search starting
                 // at the limit proves that without descending.
-                furthest_from_taps(xs, ys, design.store.poly_bbox(poly), limit2, &grid, &mut stack)
+                furthest_from_taps(
+                    xs,
+                    ys,
+                    design.store.poly_bbox(poly),
+                    limit2,
+                    &grid,
+                    &mut stack,
+                )
             } else {
                 (Point { x: x0, y: y0 }, NO_TAP_IN_RANGE)
             };
@@ -597,8 +614,8 @@ pub fn check_esd_topological(
     for row in 0..rows {
         let before = out.len();
         let rule = table.head.rule[row];
-        let clamps = &table.clamp_model[table.clamp_start[row] as usize
-            ..table.clamp_start[row + 1] as usize];
+        let clamps = &table.clamp_model
+            [table.clamp_start[row] as usize..table.clamp_start[row + 1] as usize];
 
         // Which nets a pad marker lands on, with `check_supply_short`'s trash
         // slot and its `extracted` guard, for the same reasons.
@@ -638,7 +655,11 @@ pub fn check_esd_topological(
         unsafe { pad_nets.set_len(w) };
 
         let examined = w;
-        debug_assert_eq!(examined, pad_nets.len(), "the compact and its count disagree");
+        debug_assert_eq!(
+            examined,
+            pad_nets.len(),
+            "the compact and its count disagree"
+        );
 
         for &(net, _) in &pad_nets {
             let net = NetId(net);
@@ -694,10 +715,7 @@ fn tap_geometry<'a>(
 /// One segment's endpoints in ascending order — its identity ignoring which way
 /// round it was drawn.
 fn undirected(s: &Seg) -> (i64, i64, i64, i64) {
-    let (p, q) = (
-        (s.a.x.raw(), s.a.y.raw()),
-        (s.b.x.raw(), s.b.y.raw()),
-    );
+    let (p, q) = ((s.a.x.raw(), s.a.y.raw()), (s.b.x.raw(), s.b.y.raw()));
     let (lo, hi) = (p.min(q), p.max(q));
     (lo.0, lo.1, hi.0, hi.1)
 }
@@ -706,7 +724,10 @@ fn undirected(s: &Seg) -> (i64, i64, i64, i64) {
 fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
     let (xs, ys) = ring.coords();
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
-    debug_assert!(xs.len() >= 3, "a validated ring has at least three vertices");
+    debug_assert!(
+        xs.len() >= 3,
+        "a validated ring has at least three vertices"
+    );
     out.reserve(xs.len());
     for vertex in 0..xs.len() {
         out.push(ring_edge(xs, ys, vertex));
@@ -717,7 +738,10 @@ fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
 #[inline]
 fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
-    debug_assert!(i < xs.len(), "a ring edge starts at one of the ring's vertices");
+    debug_assert!(
+        i < xs.len(),
+        "a ring edge starts at one of the ring's vertices"
+    );
     // Branchless wrap: the subtraction is by zero for every vertex but the
     // last, which puts the ring's closing edge in the same pass.
     let next = (i + 1) - xs.len() * usize::from(i + 1 == xs.len());
@@ -952,7 +976,10 @@ impl TapGrid {
         }
         let span_x = extent.xhi.raw() - extent.xlo.raw() + 1;
         let span_y = extent.yhi.raw() - extent.ylo.raw() + 1;
-        debug_assert!(span_x >= 1 && span_y >= 1, "a real extent is not the EMPTY sentinel");
+        debug_assert!(
+            span_x >= 1 && span_y >= 1,
+            "a real extent is not the EMPTY sentinel"
+        );
 
         // Cell size by `core::index::SpatialIndex`'s recipe: the median segment
         // extent, widened until the bucket table is O(segments) whatever the
@@ -1008,9 +1035,11 @@ impl TapGrid {
         for b in 0..buckets {
             out.start[b + 1] += out.start[b];
         }
-        let total = usize::try_from(out.start[buckets]).expect("a filed-segment count fits a usize");
+        let total =
+            usize::try_from(out.start[buckets]).expect("a filed-segment count fits a usize");
         out.segs.clear();
-        out.segs.resize(total, *taps.first().expect("the column is not empty"));
+        out.segs
+            .resize(total, *taps.first().expect("the column is not empty"));
         out.cursor.clear();
         out.cursor.extend_from_slice(&out.start[..buckets]);
         for seg in taps {
@@ -1034,15 +1063,24 @@ impl TapGrid {
     /// The flat bucket index of one in-range cell.
     #[inline]
     fn bucket(&self, cx: i64, cy: i64) -> usize {
-        debug_assert!((0..self.nx).contains(&cx) && (0..self.ny).contains(&cy), "cell off grid");
+        debug_assert!(
+            (0..self.nx).contains(&cx) && (0..self.ny).contains(&cy),
+            "cell off grid"
+        );
         usize::try_from(cy * self.nx + cx).expect("a cell inside the grid has a non-negative index")
     }
 
     /// The inclusive cell range one segment's bounding box covers, clamped.
     #[inline]
     fn cells_of(&self, seg: Seg) -> (i64, i64, i64, i64) {
-        let (x0, x1) = (seg.a.x.raw().min(seg.b.x.raw()), seg.a.x.raw().max(seg.b.x.raw()));
-        let (y0, y1) = (seg.a.y.raw().min(seg.b.y.raw()), seg.a.y.raw().max(seg.b.y.raw()));
+        let (x0, x1) = (
+            seg.a.x.raw().min(seg.b.x.raw()),
+            seg.a.x.raw().max(seg.b.x.raw()),
+        );
+        let (y0, y1) = (
+            seg.a.y.raw().min(seg.b.y.raw()),
+            seg.a.y.raw().max(seg.b.y.raw()),
+        );
         (
             self.axis_x(x0).clamp(0, self.nx - 1),
             self.axis_y(y0).clamp(0, self.ny - 1),
@@ -1093,7 +1131,10 @@ impl TapGrid {
     /// is `r × cell_size` away because a segment is filed under every cell it
     /// overlaps.
     fn nearest2(&self, p: Point) -> Nearest {
-        debug_assert!(self.nx >= 1 && self.ny >= 1, "an empty grid has no nearest tap");
+        debug_assert!(
+            self.nx >= 1 && self.ny >= 1,
+            "an empty grid has no nearest tap"
+        );
         let (px, py) = (self.axis_x(p.x.raw()), self.axis_y(p.y.raw()));
         let rmax = px
             .abs()

@@ -18,7 +18,7 @@ use gpurify_units::Dbu;
 /// Off-grid: every vertex must land on a manufacturing pitch.
 ///
 /// No layer column — one pitch for the whole design. Per-layer pitches need a
-/// `layer` column here; filed in `docs/SIGNATURE_DEFECTS.md`.
+/// `layer` column here.
 #[derive(Debug, Default)]
 pub struct OffGridTable {
     pub rule: Vec<StrId>,
@@ -127,9 +127,9 @@ fn is_edge(a: Point, b: Point) -> bool {
 #[inline]
 fn directions_matched(allowed: &[Direction], a: Point, b: Point) -> u32 {
     let (dx, dy) = edge_delta(a, b);
-    allowed
-        .iter()
-        .fold(0u32, |n, direction| n + u32::from(direction.parallel_to(dx, dy)))
+    allowed.iter().fold(0u32, |n, direction| {
+        n + u32::from(direction.parallel_to(dx, dy))
+    })
 }
 
 impl OffGridTable {
@@ -161,7 +161,10 @@ impl AngleTable {
         let end = start + self.allowed_len[row] as usize;
         // Fail closed: a run past the end panics on the slice below, in every
         // profile. Clamping would silently hand the rule a rule nobody wrote.
-        debug_assert!(end <= self.allowed.len(), "an allowed run leaves the column");
+        debug_assert!(
+            end <= self.allowed.len(),
+            "an allowed run leaves the column"
+        );
         &self.allowed[start..end]
     }
 
@@ -204,11 +207,15 @@ pub fn check_off_grid(
         let mut examined = 0usize;
 
         // Collapsing this into a single flat scan needs a `verts_layer` column
-        // on `GeometryStore`; filed in `docs/SIGNATURE_DEFECTS.md`.
+        // on `GeometryStore`.
         for index in 0..polys {
             let poly = PolyId(index);
             let (xs, ys) = store.poly_verts(poly);
-            debug_assert_eq!(xs.len(), ys.len(), "a polygon's coordinate columns disagree");
+            debug_assert_eq!(
+                xs.len(),
+                ys.len(),
+                "a polygon's coordinate columns disagree"
+            );
             examined += xs.len();
 
             // One branchless compact over the polygon's two coordinate columns,
@@ -319,7 +326,11 @@ pub fn check_angle(
         for index in 0..polys {
             let poly = PolyId(index);
             let (xs, ys) = store.poly_verts(poly);
-            debug_assert_eq!(xs.len(), ys.len(), "a polygon's coordinate columns disagree");
+            debug_assert_eq!(
+                xs.len(),
+                ys.len(),
+                "a polygon's coordinate columns disagree"
+            );
             let verts = xs.len();
             // A polygon with no coordinates has no ring to close; this is also
             // the guard that keeps `verts - 1` below from wrapping.

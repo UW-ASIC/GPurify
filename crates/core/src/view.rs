@@ -105,7 +105,10 @@ impl ValidatedLayer {
         let start = self.ring_vert_start[ring as usize] as usize;
         let len = self.ring_vert_len[ring as usize] as usize;
         debug_assert!(len >= 3, "a validated ring has at least three vertices");
-        debug_assert!(start + len <= self.verts_x.len(), "ring run past the column");
+        debug_assert!(
+            start + len <= self.verts_x.len(),
+            "ring run past the column"
+        );
         RingRef {
             xs: &self.verts_x[start..start + len],
             ys: &self.verts_y[start..start + len],
@@ -363,7 +366,9 @@ pub fn validate_layer_into(
     debug_assert_eq!(owned.len(), holes.len(), "every hole found a container");
     debug_assert!(
         owned.iter().all(|&(slot, hole)| {
-            store.poly_bbox(outers[slot]).contains(store.poly_bbox(hole))
+            store
+                .poly_bbox(outers[slot])
+                .contains(store.poly_bbox(hole))
         }),
         "a hole was bound to an outer boundary whose box does not enclose it"
     );
@@ -420,7 +425,10 @@ impl ValidatedLayer {
     /// ring row.
     fn push_ring(&mut self, xs: &[Dbu], ys: &[Dbu], poly: PolyId, winding: Winding) {
         debug_assert_eq!(xs.len(), ys.len(), "the source columns are parallel");
-        debug_assert!(xs.len() >= 3, "a validated ring has at least three vertices");
+        debug_assert!(
+            xs.len() >= 3,
+            "a validated ring has at least three vertices"
+        );
         let start = u32::try_from(self.verts_x.len()).expect("a layer's vertices fit a u32");
         let len = u32::try_from(xs.len()).expect("a ring's vertices fit a u32");
         self.verts_x.extend_from_slice(xs);

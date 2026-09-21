@@ -341,8 +341,7 @@ fn operand<'r>(
 /// The already-evaluated layer a name refers to, refused rather than indexed so
 /// a broken evaluation order is an error and not a panic.
 fn resolve(context: Context<'_>, name: StrId) -> Result<&ValidatedLayer, DerivedError> {
-    let row =
-        index_of(context.names, context.lookup, name).ok_or(DerivedError::Undefined(name))?;
+    let row = index_of(context.names, context.lookup, name).ok_or(DerivedError::Undefined(name))?;
     context
         .evaluated
         .get(row as usize)

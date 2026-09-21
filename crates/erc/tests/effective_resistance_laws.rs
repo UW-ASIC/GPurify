@@ -356,5 +356,9 @@ fn a_row_is_found_only_for_a_net_that_has_one() {
 
     let none = NetNetworks::default();
     assert!(none.is_empty(), "a default network table holds no rows");
-    assert_eq!(none.row_of(NetId(0)), None, "no row is found in an empty table");
+    assert_eq!(
+        none.row_of(NetId(0)),
+        None,
+        "no row is found in an empty table"
+    );
 }

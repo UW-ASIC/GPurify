@@ -14,7 +14,7 @@ expectations.json         the re-derived answers. What the harness reads.
 ## Where it came from
 
 The corpus was built for the implementation that was deleted at the start of
-this rewrite. `CLAUDE.md` is explicit that the old tree is **not an oracle** —
+this rewrite. The old tree is **not an oracle** —
 the new tree is validated against physics. Routing the old answers back in
 through a manifest would defeat that quietly, which is why the corpus is split
 in two and the halves are kept apart.

@@ -355,17 +355,15 @@ fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
 /// Oracle: construct-from-answer. Each LVS cell draws a stated number of
 /// devices and a stated number of nets.
 ///
-/// **`expect_match` is not asserted, and the corpus is why.** The 16 reference
-/// netlists exist only inside `manifest.json`, which is the deleted tree's
-/// output and is not read by this suite; no netlist file ships in the corpus at
-/// all. Findings F1–F6 in `expectations.json` add that the comparison could not
-/// reach a verdict even given one — no cell draws a `licon`, so no strap ties
-/// anything; `nwell` is not a conductor, so no pmos is recognised; and both
-/// diffusion terminals bind to the same net, so every extracted MOS has
-/// source == drain.
-///
-/// The device and net counts are where all three of those show themselves, one
-/// stage earlier and with a clearer message than a graph mismatch would give.
+/// **The counts assert the split.** F1–F3 are closed: every cell draws its
+/// `licon`s, the pfet recogniser is 3-terminal so every pmos is recognised,
+/// and `diff_active = diff NOT poly` is the conductor, so a MOS channel
+/// conducts nothing laterally and source and drain extract to distinct nets.
+/// The `expect_nets` values below encode exactly that — `LVS_INV` is 4 nets,
+/// where the pre-split extraction gave 3 with VSS shorted through the channel
+/// to Y. `expect_match` stays unasserted in this loop because it runs the
+/// layout side only; the full comparison against `lvs_inv.cdl` is the test
+/// below this one.
 #[test]
 fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
     let corpus = common::load_corpus();
@@ -386,27 +384,27 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
 /// `lvs::graph::from_layout_into` was reached only by
 /// `crates/engine/tests/checks.rs` on an `Extracted::default()` — an empty
 /// extraction, which exercises none of its columns. This one hands it
-/// `LVS_INV`'s six nets, six bound ports and one recognised nfet, read out of a
-/// real GDS by the ordinary reader, against `lvs_inv.cdl` read by the ordinary
+/// `LVS_INV`'s four nets, four bound ports and two recognised MOS — source and
+/// drain distinct, per the split `diff_active` conductor — read out of a real
+/// GDS by the ordinary reader, against `lvs_inv.cdl` read by the ordinary
 /// SPICE reader.
 ///
-/// # The verdict is a mismatch, and that is derived rather than observed
+/// # The verdict is `Match`, and that is derived rather than observed
 ///
-/// A comparison pairs nodes, so a `Match` requires the two graphs to have the
-/// same device count and the same net count. The reference declares two MOS on
-/// four nets — asserted below, off the parsed netlist, so a typo in the fixture
-/// is a failure and not a silently weaker test. The layout side supplies neither
-/// number today, and `expectations.json` says why in three filed findings: no
-/// cell draws a `licon` (F1), so nothing straps `li` to poly or diff; `nwell` is
-/// not a conductor (F2), so the psdm recogniser never fires and no pmos exists;
-/// and both diffusion terminals bind to one net (F3), so the one nfet that *is*
-/// recognised has source == drain. Two graphs of different size are not
-/// isomorphic, so `Match` is impossible and asserting it would be asserting
-/// those three findings closed.
-///
-/// This is therefore a tripwire as well as a test: the day F1–F3 close it goes
-/// red saying so, and the assertion — not the extraction — is what gets
-/// rewritten.
+/// F1–F3 are closed: the layout side extracts the reference's own shape — two
+/// MOS on four nets, source and drain distinct — and both sizes are asserted
+/// below, off the parsed netlist and off the extraction, so a fixture that
+/// loses a card weakens nothing silently. F4 is closed too, and its residual
+/// cause was **not** the S/D asymmetry its name recorded —
+/// `refine::role_code` had already collapsed `Source | Drain => 1` — but the
+/// bulk terminal: a SPICE `M` card states four nets, the deck's MOS
+/// recognisers bind three, so the reference carried a `Bulk` terminal the
+/// layout can never extract and refinement unpaired everything over it.
+/// `lvs::graph::drop_unextracted_bulk` now removes reference bulk terminals
+/// exactly when the layout extracts no bulk at all, and the two graphs are
+/// isomorphic: `Match`. Parameters stay uncompared here — `lvs_inv.cdl`
+/// declares none, so `from_layout_into` emits none (its per-name gate), which
+/// is the same comparison as before with the arity fixed.
 ///
 /// # What is asserted independently of those findings
 ///
@@ -422,7 +420,12 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
 /// [`RuleRun`]: gpurify::report::RuleRun
 #[test]
 fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows() {
-    let checks = Checks { drc: false, erc: false, lvs: true, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: false,
+        lvs: true,
+        pex: false,
+    };
     let run = common::run_case_with_reference("lvs", "LVS_CLEAN_MATCH", checks, "lvs_inv.cdl")
         .expect("LVS_INV and the inverter netlist beside it both read");
 
@@ -450,25 +453,24 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         .lvs
         .as_ref()
         .expect("a stage that was given both netlists leaves its verdict behind");
-    let gpurify::lvs::Verdict::Mismatch(found) = verdict else {
-        panic!(
-            "the layout extracts {} devices on {} nets against the reference's 2 on 4, \
-             and two graphs of different size cannot be isomorphic — so {verdict:?} \
-             either claims an agreement that does not exist, or declines to conclude \
-             what the node counts already decide. If the counts now agree, F1–F3 have \
-             closed and this test is the tripwire saying so.",
-            run.extracted.devices.len(),
-            run.extracted.nets.net_count()
-        );
-    };
+    assert_eq!(
+        *verdict,
+        gpurify::lvs::Verdict::Match,
+        "the layout extracts {} devices on {} nets against the reference's 2 on 4, \
+         source and drain distinct and the unextracted bulk dropped, so the two \
+         graphs are isomorphic and anything but Match reports a difference that \
+         is not there",
+        run.extracted.devices.len(),
+        run.extracted.nets.net_count()
+    );
 
-    // Every difference reaches the report a human opens, not only the exit code
-    // a CI job reads.
+    // A clean comparison contributes no violation rows; the six layout-only
+    // checks on this clean cell contribute none either.
     assert_eq!(
         run.outputs.violations.len(),
-        found.len(),
-        "the comparison found {} discrepancies and the report carries {} rows",
-        found.len(),
+        0,
+        "a Match verdict must reach the report as zero discrepancy rows, \
+         but the report carries {}",
         run.outputs.violations.len()
     );
 
@@ -489,8 +491,16 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         // one. They are recorded unrun rather than passing every layout, which
         // is the whole point of the variant — and the reason a run selecting
         // LVS cannot report a pass today.
-        ("lvs.device_count_mos", Outcome::Skipped(SkipReason::NotInDeck), 0),
-        ("lvs.device_count_bjt", Outcome::Skipped(SkipReason::NotInDeck), 0),
+        (
+            "lvs.device_count_mos",
+            Outcome::Skipped(SkipReason::NotInDeck),
+            0,
+        ),
+        (
+            "lvs.device_count_bjt",
+            Outcome::Skipped(SkipReason::NotInDeck),
+            0,
+        ),
         ("lvs.parametric", Outcome::Skipped(SkipReason::NotInDeck), 0),
         ("lvs.terminal_net", Outcome::Ran, terminals),
         ("lvs.terminal_count", Outcome::Ran, devices),
@@ -529,7 +539,10 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
             violations: &run.outputs.violations,
             runs: &run.outputs.runs,
             strings: &run.loaded.strings,
-            grid: run.loaded.grid.expect("a successful load establishes the grid"),
+            grid: run
+                .loaded
+                .grid
+                .expect("a successful load establishes the grid"),
         },
         &mut json,
     )
@@ -702,7 +715,8 @@ fn a_field_solve_obeys_the_coupling_laws_a_closed_form_cannot_state() {
     // facing plates with no fringe at all couple this much, and two real
     // conductors couple more — so this is a *lower* bound and a solve below it
     // is wrong however self-consistent it looks.
-    let plate = |separation_nm: f64| EPSILON_0_AF_PER_NM * K * THICKNESS_NM * LENGTH_NM / separation_nm;
+    let plate =
+        |separation_nm: f64| EPSILON_0_AF_PER_NM * K * THICKNESS_NM * LENGTH_NM / separation_nm;
 
     for (id, value, separation) in [
         ("PEX_SPACING_100", s100, 100.0),
@@ -767,7 +781,12 @@ const HV_DOMAIN_INTENT: &str = r#"{
 /// is written by this test.
 #[test]
 fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     let without = common::run_case("erc", "ERC_HV_CROSS", checks)
         .expect("ERC_HV_CROSS reaches the checks with no intent, as the corpus runs it");
@@ -954,12 +973,16 @@ const IR_DROP_INTENT_SLACK: &str = r#"{
 ///
 /// The pad anchor is inferred — `Connectivity` has no pad-marker layer, so
 /// `power.rs` takes the centre tap of the rail's widest shape. A real pad at an
-/// end of the stripe would see 8 squares, not 5. Filed in
-/// `docs/SIGNATURE_DEFECTS.md`; this test is derived against the inference, not
-/// against a pad.
+/// end of the stripe would see 8 squares, not 5. This test is derived against
+/// the inference, not against a pad.
 #[test]
 fn a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     let run = common::run_case_with_intent("erc", "ERC_IR_DROP_GATE", checks, IR_DROP_INTENT)
         .expect("LVS_INV reaches the checks with an intent file beside it");
@@ -1002,7 +1025,10 @@ fn a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail() {
     let violation = &found[0];
 
     let Measurement::Voltage(measured) = violation.measured else {
-        panic!("ir_drop reports a drop, which is a voltage: got {:?}", violation.measured);
+        panic!(
+            "ir_drop reports a drop, which is a voltage: got {:?}",
+            violation.measured
+        );
     };
     // 1000 µA — half of the stated 2000 — through 5.0 squares of 48.2 Ω/sq.
     assert_near(measured.raw(), 241.0, "the IR drop at the nfet tap");
@@ -1047,10 +1073,15 @@ fn a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail() {
     // over 200 and the second is clean at zero current, and a rule that ignored
     // the stated number and fired whenever the drop exceeded zero satisfies
     // both. Here the drop is the same 241.0 mV and the limit is 300.
-    let slack = common::run_case_with_intent("erc", "ERC_IR_DROP_GATE", checks, IR_DROP_INTENT_SLACK)
-        .expect("the same cell reaches the checks with a looser limit");
+    let slack =
+        common::run_case_with_intent("erc", "ERC_IR_DROP_GATE", checks, IR_DROP_INTENT_SLACK)
+            .expect("the same cell reaches the checks with a looser limit");
     let ran = common::rule_run(&slack.outputs.runs, &slack.loaded.strings, "ir_drop");
-    assert_eq!(ran.outcome, Outcome::Ran, "the limit is stated, so the rule has jurisdiction");
+    assert_eq!(
+        ran.outcome,
+        Outcome::Ran,
+        "the limit is stated, so the rule has jurisdiction"
+    );
     assert_eq!(ran.examined, 3, "the same three nodes carry a stated limit");
     assert!(
         violations_of(&slack, "ir_drop").is_empty(),
@@ -1119,7 +1150,12 @@ const HV_OVERSTRESS_INTENT: &str = r#"{
 /// own doc comment names.
 #[test]
 fn the_reliability_model_derates_a_cool_part_upward_and_an_overstressed_one_below_its_floor() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     let nominal = common::run_case_with_intent("erc", "ERC_RELIABILITY", checks, HV_DOMAIN_INTENT)
         .expect("ERC_HV reaches the checks with an intent file beside it");
@@ -1168,10 +1204,17 @@ fn the_reliability_model_derates_a_cool_part_upward_and_an_overstressed_one_belo
     let violation = &found[0];
 
     let Measurement::Ratio(hours) = violation.measured else {
-        panic!("a predicted lifetime is reported as a Ratio: got {:?}", violation.measured);
+        panic!(
+            "a predicted lifetime is reported as a Ratio: got {:?}",
+            violation.measured
+        );
     };
     // 5091.59717249751 h × (1800/3300)^4.
-    assert_near(hours, 450.700_767_403_645_33, "the predicted lifetime at 3300 mV");
+    assert_near(
+        hours,
+        450.700_767_403_645_33,
+        "the predicted lifetime at 3300 mV",
+    );
     assert_eq!(violation.limit, Measurement::Ratio(1000.0));
 
     assert_eq!(
@@ -1222,7 +1265,12 @@ fn the_reliability_model_derates_a_cool_part_upward_and_an_overstressed_one_belo
 /// test therefore derives cleanly and covers nothing of that defect.
 #[test]
 fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     let run = common::run_case_with_intent("erc", "ERC_ESD_LATCHUP", checks, HV_DOMAIN_INTENT)
         .expect("ERC_HV reaches the checks with an intent file beside it");
@@ -1259,8 +1307,16 @@ fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell
     // pad's is (200, 200).
     let (ring, pad) = (&found[0], &found[1]);
 
-    assert_eq!(ring.measured, Measurement::Length(gpurify::units::Dbu::new(500).expect("500 dbu is inside MAX_ABS_DBU")));
-    assert_eq!(ring.limit, Measurement::Length(gpurify::units::Dbu::new(1000).expect("1000 dbu is inside MAX_ABS_DBU")));
+    assert_eq!(
+        ring.measured,
+        Measurement::Length(gpurify::units::Dbu::new(500).expect("500 dbu is inside MAX_ABS_DBU"))
+    );
+    assert_eq!(
+        ring.limit,
+        Measurement::Length(
+            gpurify::units::Dbu::new(1000).expect("1000 dbu is inside MAX_ABS_DBU")
+        )
+    );
     assert_eq!(at_of(ring), (0, 0));
     assert_eq!(ring.layer, layer_of(&run, "nwell"));
     assert_eq!(ring.severity, Severity::Error);
@@ -1372,7 +1428,12 @@ const EM_INTENT_NO_BUDGET: &str = r#"{
 /// terminal.
 #[test]
 fn a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     let run = common::run_case_with_intent("erc", "ERC_EMIG_MET1", checks, EM_INTENT)
         .expect("ERC_EM reaches the checks with an intent file beside it");
@@ -1473,7 +1534,12 @@ fn a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current() {
 ///   have meant "unchecked" there.
 #[test]
 fn a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     let run = common::run_case_with_intent("erc", "ERC_EMIG_MET1", checks, EM_INTENT_NO_BUDGET)
         .expect("ERC_EM reaches the checks with a budget-free intent beside it");
@@ -1490,7 +1556,11 @@ fn a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict() {
          assertions would be satisfied by an accident"
     );
 
-    let ran = common::rule_run(&run.outputs.runs, &run.loaded.strings, "met1.electromigration");
+    let ran = common::rule_run(
+        &run.outputs.runs,
+        &run.loaded.strings,
+        "met1.electromigration",
+    );
     assert_eq!(
         ran.outcome,
         Outcome::Ran,
@@ -1575,30 +1645,27 @@ fn em_dev_intent(budget_ua: f64) -> String {
 /// met1  7/0  (600, 50) - (700, 1950)    <- the rail under test
 /// ```
 ///
-/// The nsdm marker binds an `nfet_01v8` whose `terminals` are `[poly, diff,
-/// diff]`; there is one diff polygon, so source and drain both land on it and
-/// `devices_on(ERC_EM_DEV_n0)` is non-empty. `power::extract_into` then counts
-/// **two** terminals on the net, halves the budget, and scatter-accumulates both
-/// shares onto the one diff node — so the full declared budget arrives.
+/// The nfet is recognised on the derived `gate_n` channel marker with
+/// `terminals: [poly, diff_active, diff_active]`; `diff_active = diff NOT
+/// poly` splits the drawn diffusion at the gate, so source (left flank) and
+/// drain (right flank) extract as **distinct** nets. The licon lands inside
+/// the drain flank `(250, 0)-(500, 200)`, so `ERC_EM_DEV_n0` carries exactly
+/// one device terminal — the drain — and `power::extract_into` puts the whole
+/// declared budget on its tap. Same arriving current as the pre-split corpus,
+/// where both S and D landed on one net, the budget was halved, and the two
+/// shares scatter-accumulated back onto one node.
 ///
 /// # The grid the solve builds
 ///
-/// Taps, per shape, on that shape's long axis:
-///
-/// - **diff** (horizontal, 500 ≥ 200): own centre `x = 250`, the licon tap
-///   `x = 420`, and the device tap — the nsdm bbox centre `(250, 100)` clamped
-///   onto diff — which is `x = 250` again and dedupes. **2 nodes.**
-/// - **li** (horizontal, 350 ≥ 100): own centre `x = 525`, licon `x = 420`,
-///   mcon `x = 650`. **3 nodes.**
-/// - **met1** (`chain_is_horizontal((600,50,700,1950))` is `100 >= 1900`, so
-///   **vertical**): own centre `y = 1000`, mcon `y = 100`. **2 nodes.**
-///
-/// 7 nodes, and 6 edges: 1 + 2 + 1 chain edges plus the licon and mcon via
-/// edges. That is a tree, so there is exactly one path from source to load and
-/// every edge on it carries the whole current. The pad anchor is the centre tap
-/// of the rail's widest shape on its **highest** layer — met1, `height_nm`
-/// 1300 — so the source is met1's `y = 1000` node and the load is the diff
-/// node; the path runs through all six edges.
+/// Taps land per shape on its long axis: the drain flank takes its own centre,
+/// the licon tap and the device tap; li takes its centre plus the licon and
+/// mcon taps; met1 (vertical, `100 >= 1900` fails `chain_is_horizontal`) takes
+/// its centre `y = 1000` and the mcon tap `y = 100`. The graph is a tree, so
+/// there is exactly one path from source to load and every edge on it carries
+/// the whole current. The pad anchor is the centre tap of the rail's widest
+/// shape on its **highest** layer — met1, `height_nm` 1300 — so the source is
+/// met1's `y = 1000` node and the load is the diffusion node; the path runs
+/// through every edge between them.
 ///
 /// # The one in-scope edge
 ///
@@ -1651,7 +1718,7 @@ fn em_dev_intent(budget_ua: f64) -> String {
 ///
 /// # What this does not cover
 ///
-/// The four magnitude fail-opens of `docs/E2E_AUDIT.md` §5.1 are untouched: this
+/// The four magnitude fail-opens are untouched: this
 /// asserts the closed form the code *states*, at a hardcoded 85 °C corner with
 /// no self-heating and a budget spread uniformly over attach points. What it
 /// adds over the tripwire is that the budget reaches the solve at all, and that
@@ -1663,7 +1730,12 @@ fn em_dev_intent(budget_ua: f64) -> String {
 /// or `mcon`.
 #[test]
 fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
-    let checks = Checks { drc: false, erc: true, lvs: false, pex: false };
+    let checks = Checks {
+        drc: false,
+        erc: true,
+        lvs: false,
+        pex: false,
+    };
 
     // 1000 µA: examined, and over the derated limit.
     let hot = common::run_case_with_intent("erc", "ERC_EMIG_DEV", checks, &em_dev_intent(1000.0))
@@ -1674,15 +1746,11 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
         .strings
         .get("ERC_EM_DEV_n0")
         .expect("the intent file interned the net name it declares");
-    let net = hot
-        .extracted
-        .ports
-        .net_of(declared)
-        .expect(
-            "the intent declares ERC_EM_DEV_n0 and the extraction bound no net \
+    let net = hot.extracted.ports.net_of(declared).expect(
+        "the intent declares ERC_EM_DEV_n0 and the extraction bound no net \
              to that name, so IntentMap would be empty and every assertion below \
              would be satisfied by the gate rather than by the physics",
-        );
+    );
     assert!(
         !hot.extracted.devices.devices_on(net).is_empty(),
         "the whole point of this cell is that the limited net carries a device \
@@ -1690,7 +1758,11 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
          it and every current below is zero"
     );
 
-    let ran = common::rule_run(&hot.outputs.runs, &hot.loaded.strings, "met1.electromigration");
+    let ran = common::rule_run(
+        &hot.outputs.runs,
+        &hot.loaded.strings,
+        "met1.electromigration",
+    );
     assert_eq!(ran.outcome, Outcome::Ran, "one intent file opens the gate");
     assert_eq!(
         ran.examined, 1,
@@ -1708,7 +1780,10 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
     let violation = &found[0];
 
     let Measurement::Current(measured) = violation.measured else {
-        panic!("electromigration measures a branch current: got {:?}", violation.measured);
+        panic!(
+            "electromigration measures a branch current: got {:?}",
+            violation.measured
+        );
     };
     // The whole declared budget: two terminals on one net, halved and
     // scatter-accumulated back onto the one diff node, then carried down a
@@ -1738,7 +1813,11 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
     // above.
     let warm = common::run_case_with_intent("erc", "ERC_EMIG_DEV", checks, &em_dev_intent(500.0))
         .expect("the same cell reaches the checks at half the budget");
-    let ran = common::rule_run(&warm.outputs.runs, &warm.loaded.strings, "met1.electromigration");
+    let ran = common::rule_run(
+        &warm.outputs.runs,
+        &warm.loaded.strings,
+        "met1.electromigration",
+    );
     assert_eq!(ran.outcome, Outcome::Ran);
     assert_eq!(
         ran.examined, 1,
@@ -1757,7 +1836,11 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
     // to do with the limit.
     let cool = common::run_case_with_intent("erc", "ERC_EMIG_DEV", checks, &em_dev_intent(1.0))
         .expect("the same cell reaches the checks at 1 uA");
-    let ran = common::rule_run(&cool.outputs.runs, &cool.loaded.strings, "met1.electromigration");
+    let ran = common::rule_run(
+        &cool.outputs.runs,
+        &cool.loaded.strings,
+        "met1.electromigration",
+    );
     assert_eq!(
         ran.outcome,
         Outcome::Ran,
@@ -1773,5 +1856,66 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
     assert!(
         violations_of(&cool, "met1.electromigration").is_empty(),
         "an immortal segment is exempted before the compare"
+    );
+}
+
+/// Oracle: law — determinism, on the split extraction path specifically.
+///
+/// `LVS_INV` is the corpus's gate-splitting cell: `diff_active = diff NOT
+/// poly` is materialised by the boolean at load, the channel markers bind
+/// source and drain to two of its pieces, and the four licon cuts merge eight
+/// conductor polygons into four nets. Two independent runs over it must agree
+/// bit-for-bit on every extracted table — net partition, device terminals,
+/// port bindings — or every byte-comparison gate downstream of extraction is
+/// comparing noise.
+#[test]
+fn extracting_the_split_corpus_twice_is_bit_identical() {
+    let checks = Checks {
+        drc: false,
+        erc: false,
+        lvs: false,
+        pex: false,
+    };
+    let first = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
+    let second = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
+
+    assert_eq!(
+        first.extracted.nets, second.extracted.nets,
+        "two extractions of one layout disagree on the net partition"
+    );
+    assert_eq!(
+        first.extracted.ports, second.extracted.ports,
+        "two extractions of one layout disagree on the port bindings"
+    );
+    // `DeviceTable` carries no `PartialEq`; its public columns are the value.
+    let devices = &first.extracted.devices;
+    let again = &second.extracted.devices;
+    assert_eq!(devices.kind, again.kind);
+    assert_eq!(devices.marker, again.marker);
+    assert_eq!(devices.model, again.model);
+    assert_eq!(devices.terminal_start, again.terminal_start);
+    assert_eq!(
+        devices.terminal_net, again.terminal_net,
+        "two extractions of one layout wire a device terminal to different nets"
+    );
+    assert_eq!(devices.terminal_role, again.terminal_role);
+    assert_eq!(devices.param_start, again.param_start);
+    assert_eq!(devices.param, again.param);
+
+    // And the split really is in force: distinct source and drain on a device.
+    let (terminal_nets, roles) = devices.terminals_of(gpurify::topology::DeviceId(0));
+    let source = roles
+        .iter()
+        .position(|&r| r == gpurify::topology::TerminalRole::Source);
+    let drain = roles
+        .iter()
+        .position(|&r| r == gpurify::topology::TerminalRole::Drain);
+    let (source, drain) = (
+        source.expect("a MOS has a source"),
+        drain.expect("and a drain"),
+    );
+    assert_ne!(
+        terminal_nets[source], terminal_nets[drain],
+        "the determinism above would be vacuous if the split were not in force"
     );
 }

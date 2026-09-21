@@ -84,7 +84,10 @@ fn reflexivity_holds_for_arbitrary_generated_graphs() {
             "seed {seed}: a graph failed to refine against itself"
         );
         for (layout, reference) in scratch.pairs() {
-            assert_eq!(layout, reference, "seed {seed}: {layout} paired with {reference}");
+            assert_eq!(
+                layout, reference,
+                "seed {seed}: {layout} paired with {reference}"
+            );
         }
     }
 }
@@ -158,9 +161,16 @@ fn pairs_come_back_ascending_by_layout_node() {
     let layout_side: Vec<u32> = scratch.pairs().map(|(layout, _)| layout).collect();
     let mut sorted = layout_side.clone();
     sorted.sort_unstable();
-    assert_eq!(layout_side, sorted, "pairs are not ascending by layout node");
+    assert_eq!(
+        layout_side, sorted,
+        "pairs are not ascending by layout node"
+    );
     sorted.dedup();
-    assert_eq!(sorted.len(), layout_side.len(), "a layout node paired twice");
+    assert_eq!(
+        sorted.len(),
+        layout_side.len(),
+        "a layout node paired twice"
+    );
 }
 
 /// Oracle: construct-from-answer. Exchanging the two halves of a differential
@@ -180,8 +190,7 @@ fn a_differential_pair_stays_symmetric_when_ties_are_refused() {
     );
     assert_eq!(outcome, Refinement::Symmetric);
 
-    let unresolved: Vec<(gpurify_lvs::refine::ClassId, u32, u32)> =
-        scratch.unresolved().collect();
+    let unresolved: Vec<(gpurify_lvs::refine::ClassId, u32, u32)> = scratch.unresolved().collect();
     assert!(
         !unresolved.is_empty(),
         "refinement called itself symmetric without naming a class"
@@ -243,8 +252,7 @@ fn a_deleted_device_leaves_the_partition_discrepant_rather_than_complete() {
     );
     assert_eq!(outcome, Refinement::Discrepant);
 
-    let unresolved: Vec<(gpurify_lvs::refine::ClassId, u32, u32)> =
-        scratch.unresolved().collect();
+    let unresolved: Vec<(gpurify_lvs::refine::ClassId, u32, u32)> = scratch.unresolved().collect();
     assert!(
         unresolved
             .iter()

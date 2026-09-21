@@ -21,7 +21,10 @@
 //!   node indices rather than [`Node`](gpurify_lvs::graph::Node)s, so that is
 //!   the numbering they must be in.
 
-#![allow(dead_code, reason = "each test binary links only the fixtures it names")]
+#![allow(
+    dead_code,
+    reason = "each test binary links only the fixtures it names"
+)]
 
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
@@ -101,7 +104,10 @@ impl GraphBuilder {
         terminals: &[(TerminalRole, u32)],
         params: &[(StrId, f64)],
     ) -> u32 {
-        assert!(!terminals.is_empty(), "a device with no terminals is not one");
+        assert!(
+            !terminals.is_empty(),
+            "a device with no terminals is not one"
+        );
         for &(_, net) in terminals {
             assert!(net < self.nets, "terminal names net {net} of {}", self.nets);
         }
@@ -375,9 +381,16 @@ pub fn random_graph(rng: &mut Rng, devices: u32, nets: u32) -> Graph {
 pub fn permute(source: &Graph, new_device: &[u32], new_net: &[u32]) -> Graph {
     let device_count = source.device_kind.len();
     let net_count = source.net_name.len();
-    assert_eq!(new_device.len(), device_count, "device map is the wrong size");
+    assert_eq!(
+        new_device.len(),
+        device_count,
+        "device map is the wrong size"
+    );
     assert_eq!(new_net.len(), net_count, "net map is the wrong size");
-    assert!(is_permutation(new_device), "device map is not a permutation");
+    assert!(
+        is_permutation(new_device),
+        "device map is not a permutation"
+    );
     assert!(is_permutation(new_net), "net map is not a permutation");
 
     // `order[new] = old`, so devices are emitted in their new index order.
@@ -394,8 +407,8 @@ pub fn permute(source: &Graph, new_device: &[u32], new_net: &[u32]) -> Graph {
                 (source.terminal_role[slot], new_net[net])
             })
             .collect();
-        let params = source.device_param_start[old] as usize
-            ..source.device_param_start[old + 1] as usize;
+        let params =
+            source.device_param_start[old] as usize..source.device_param_start[old + 1] as usize;
         builder.device_with_params(
             source.device_kind[old],
             source.device_model[old],
@@ -461,7 +474,11 @@ pub fn discrepancies(verdict: &Verdict) -> &[Discrepancy] {
 #[must_use]
 pub fn flip(discrepancy: &Discrepancy) -> Discrepancy {
     match *discrepancy {
-        Discrepancy::UnpairedDevice { side, device, model } => Discrepancy::UnpairedDevice {
+        Discrepancy::UnpairedDevice {
+            side,
+            device,
+            model,
+        } => Discrepancy::UnpairedDevice {
             side: flip_side(side),
             device,
             model,
@@ -566,7 +583,11 @@ pub fn assert_same_discrepancies(actual: &[Discrepancy], expected: &[Discrepancy
 #[must_use]
 pub fn blames_device(discrepancy: &Discrepancy, side: Side, index: u32) -> bool {
     match *discrepancy {
-        Discrepancy::UnpairedDevice { side: found, device, .. } => found == side && device == index,
+        Discrepancy::UnpairedDevice {
+            side: found,
+            device,
+            ..
+        } => found == side && device == index,
         Discrepancy::TerminalMismatch {
             layout_device,
             ref_device,
@@ -588,7 +609,9 @@ pub fn blames_device(discrepancy: &Discrepancy, side: Side, index: u32) -> bool 
 #[must_use]
 pub fn blames_net(discrepancy: &Discrepancy, side: Side, index: u32) -> bool {
     match *discrepancy {
-        Discrepancy::UnpairedNet { side: found, net, .. } => found == side && net == index,
+        Discrepancy::UnpairedNet {
+            side: found, net, ..
+        } => found == side && net == index,
         Discrepancy::DuplicateName { nets, .. } => nets.0 == index || nets.1 == index,
         _ => false,
     }

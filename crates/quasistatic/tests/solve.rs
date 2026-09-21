@@ -9,8 +9,8 @@
 //! small enough to invert on paper, or the right-hand side was formed by
 //! applying the operator to a solution chosen first.
 
-use gpurify_pex::quasistatic::matvec::{Backend, MatVec};
-use gpurify_pex::quasistatic::solve::{gmres, refine, residual, Options, SolveError, Workspace};
+use gpurify_quasistatic::matvec::{Backend, MatVec};
+use gpurify_quasistatic::solve::{gmres, refine, residual, Options, SolveError, Workspace};
 use gpurify_testgen::{assert_close, assert_close_relative, Rng};
 
 /// A dense operator, row-major.

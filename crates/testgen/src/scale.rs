@@ -131,13 +131,8 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
         let y = by + band * BAND_PITCH;
 
         let rail_width = i64::from(fingers) * FINGER_PITCH + FINGER_WIDTH;
-        let mut handles = vec![layout.rect(
-            ScaleLayers::LOWER,
-            bx,
-            y,
-            bx + rail_width,
-            y + RAIL_HEIGHT,
-        )];
+        let mut handles =
+            vec![layout.rect(ScaleLayers::LOWER, bx, y, bx + rail_width, y + RAIL_HEIGHT)];
         layer_area[ScaleLayers::LOWER.idx()] += i128::from(rail_width) * i128::from(RAIL_HEIGHT);
 
         for finger in 0..fingers {
@@ -154,13 +149,7 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
 
             let cx = x + FINGER_WIDTH / 2 - CUT_SIZE / 2;
             let cy = y + RAIL_HEIGHT / 2 - CUT_SIZE / 2;
-            layout.rect(
-                ScaleLayers::CUT,
-                cx,
-                cy,
-                cx + CUT_SIZE,
-                cy + CUT_SIZE,
-            );
+            layout.rect(ScaleLayers::CUT, cx, cy, cx + CUT_SIZE, cy + CUT_SIZE);
             layer_area[ScaleLayers::CUT.idx()] += i128::from(CUT_SIZE) * i128::from(CUT_SIZE);
         }
         net_handles.push(handles);

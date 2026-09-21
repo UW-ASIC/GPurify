@@ -215,11 +215,15 @@ pub fn build_into(
     morton_keys(&scratch, &mut key);
     debug_assert_eq!(key.len(), scratch.len(), "one sort key per panel");
 
-    let mut order: Vec<u32> =
-        (0..u32::try_from(scratch.len()).expect("the panel count is bounded by max_panels")).collect();
+    let mut order: Vec<u32> = (0..u32::try_from(scratch.len())
+        .expect("the panel count is bounded by max_panels"))
+        .collect();
     for band in out.conductor_start.windows(2) {
         let (from, to) = (band[0] as usize, band[1] as usize);
-        debug_assert!(from <= to && to <= scratch.len(), "a CSR band runs backwards");
+        debug_assert!(
+            from <= to && to <= scratch.len(),
+            "a CSR band runs backwards"
+        );
         // The exact centroid is the tiebreak, so two panels quantised into the
         // same cell of the key still order by position and by nothing else.
         order[from..to].sort_by(|&a, &b| {
@@ -339,8 +343,7 @@ fn near_another_conductor(solid: &[Solid], of: Solid, distance: Dbu) -> bool {
     // O(n^2) in the polygons of the selected nets — tens to thousands, not the
     // whole layout. `SpatialIndex::build_into` is frozen at
     // `(&GeometryStore, LayerId)` and a solid column is neither, so the indexed
-    // version is blocked: `docs/SIGNATURE_DEFECTS.md`,
-    // `index: no build-from-bbox-column seam`.
+    // version is blocked on a build-from-bbox-column seam.
     let mut near = false;
     for other in solid {
         near |= (other.conductor != of.conductor) & of.bbox.within(other.bbox, distance);
@@ -598,12 +601,7 @@ mod tests {
         assert_eq!(gather(2), z);
         assert_eq!(morton3(0, 0, 0), 0);
         assert_eq!(
-            morton3(
-                MORTON_MAX,
-                MORTON_MAX,
-                MORTON_MAX
-            )
-            .count_ones(),
+            morton3(MORTON_MAX, MORTON_MAX, MORTON_MAX).count_ones(),
             3 * MORTON_BITS,
             "a full key is 63 bits wide"
         );

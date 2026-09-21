@@ -119,7 +119,10 @@ pub fn check_floating_gate(
     // value, and `count <= nets <= capacity`.
     unsafe { flagged.set_len(count) };
     debug_assert_eq!(count, flagged.len(), "the compact and its count disagree");
-    debug_assert!(count as u64 <= examined, "a floating gate net carries a gate");
+    debug_assert!(
+        count as u64 <= examined,
+        "a floating gate net carries a gate"
+    );
 
     for row in 0..rows {
         let before = out.len();
@@ -194,7 +197,9 @@ pub fn check_floating_well(
                     layer.idx() < design.store.layer_count(),
                     "a tap layer the store's layer table does not have"
                 );
-                scratch.boxes.extend_from_slice(design.store.layer_bboxes(layer));
+                scratch
+                    .boxes
+                    .extend_from_slice(design.store.layer_bboxes(layer));
             }
             LayerRef::Named(name) => {
                 let Some(taps) = design.derived.get(name) else {
@@ -247,9 +252,11 @@ pub fn check_floating_well(
         // in a hole ties the hole, so the well it punctures stays untied.
         for &tap in &scratch.boxes {
             let probe = centre(tap);
-            let end =
-                ring_order.partition_point(|&k| boxes[k as usize].xlo.raw() <= probe.x.raw());
-            debug_assert!(end <= ring_order.len(), "a stab range leaves the ring order");
+            let end = ring_order.partition_point(|&k| boxes[k as usize].xlo.raw() <= probe.x.raw());
+            debug_assert!(
+                end <= ring_order.len(),
+                "a stab range leaves the ring order"
+            );
 
             let mut best = u32::MAX;
             let mut best_area = 0i128;
@@ -395,9 +402,15 @@ pub fn check_multiple_drivers(
         // but the net it lands on is still one this rule examined.
         let ungated = u32::from(scratch.edges[end - 1].1 == NO_GATE);
         let drivers = u32::try_from(end - read).expect("a group is shorter than the pair column");
-        debug_assert!(drivers >= ungated, "the sentinel row is one of the group's own");
+        debug_assert!(
+            drivers >= ungated,
+            "the sentinel row is one of the group's own"
+        );
 
-        debug_assert!(write <= read, "the collapse write cursor overtook its read cursor");
+        debug_assert!(
+            write <= read,
+            "the collapse write cursor overtook its read cursor"
+        );
         scratch.edges[write] = (net, drivers - ungated);
         write += 1;
         read = end;

@@ -133,8 +133,8 @@ impl Violations {
         // Sort a permutation, then gather each column through it: sorting the
         // columns independently would let them disagree row for row. A table
         // wider than a `u32` fails closed rather than truncating.
-        let rows_u32 =
-            u32::try_from(rows).expect("a violation table indexes rows with a u32; see CONVENTIONS");
+        let rows_u32 = u32::try_from(rows)
+            .expect("a violation table indexes rows with a u32; see CONVENTIONS");
         let mut perm: Vec<u32> = (0..rows_u32).collect();
         // Cached: `sort_unstable_by_key` calls its extractor on every compare.
         perm.sort_by_cached_key(|&row| self.row_key(row as usize));
@@ -145,7 +145,10 @@ impl Violations {
             for pair in perm.windows(2) {
                 ascending &= self.row_key(pair[0] as usize) <= self.row_key(pair[1] as usize);
             }
-            debug_assert!(ascending, "sort_canonical: the permutation is not in key order");
+            debug_assert!(
+                ascending,
+                "sort_canonical: the permutation is not in key order"
+            );
         }
 
         permute_column(&perm, &mut self.rule);
@@ -158,7 +161,11 @@ impl Violations {
         permute_column(&perm, &mut self.shape_b);
 
         debug_assert!(self.columns_agree(), "sort_canonical: {COLUMNS_DIVERGED}");
-        debug_assert_eq!(self.rule.len(), rows, "sort_canonical changed the row count");
+        debug_assert_eq!(
+            self.rule.len(),
+            rows,
+            "sort_canonical changed the row count"
+        );
     }
 
     /// The canonical sort key of one row: the six documented fields, then
@@ -283,4 +290,141 @@ pub enum SkipReason {
     NotInDeck,
     /// The layer the rule names holds no geometry.
     EmptyLayer,
+}
+
+/// Close out one rule row: append its [`RuleRun`], with the violation count
+/// derived rather than counted by the caller.
+///
+/// `violations_before` is `out.len()` read before the row's work started, so a
+/// rule cannot report a violation it did not push, or push one it did not
+/// report. A skipped row passes the two as equal and an `examined` of zero.
+///
+/// No assertion ties `examined` or the pushed count to a non-[`Outcome::Ran`]
+/// outcome: a rule that refuses partway through has legitimately examined
+/// geometry and pushed rows first.
+///
+/// This lives here rather than in `drc`, `erc` and `lvs` because all three
+/// close a row the same way, and three copies of a fail-open guard is three
+/// places for one of them to drift.
+pub fn record_run(
+    runs: &mut Vec<RuleRun>,
+    out: &Violations,
+    violations_before: usize,
+    rule: StrId,
+    outcome: Outcome,
+    examined: u64,
+) {
+    let after = out.len();
+    debug_assert!(
+        violations_before <= after,
+        "a rule row started at {violations_before} of a table that now holds {after}: \
+         the shared violation table was truncated under a running rule"
+    );
+    let pushed = after - violations_before;
+    debug_assert!(
+        u32::try_from(pushed).is_ok(),
+        "{pushed} violations from one rule row overflow the run's count column"
+    );
+
+    let before_rows = runs.len();
+    runs.push(RuleRun {
+        rule,
+        outcome,
+        examined,
+        // Saturating rather than wrapping: past 4 billion violations from one
+        // rule the exact count is noise, but wrapping it to a small number
+        // would read as a nearly-clean rule, which is fail-open.
+        violations: u32::try_from(pushed).unwrap_or(u32::MAX),
+    });
+    debug_assert_eq!(
+        runs.len(),
+        before_rows + 1,
+        "one rule row produces exactly one run row"
+    );
+}
+
+/// Adapter tests for the one seam every rule row in the workspace crosses.
+#[cfg(test)]
+mod record_run_tests {
+    use super::{record_run, Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
+    use gpurify_core::ops::Point;
+    use gpurify_core::{LayerId, PolyId};
+    use gpurify_ingest::StrId;
+    use gpurify_units::Dbu;
+
+    /// Push `count` placeholder rows onto a violation table.
+    fn fill(out: &mut Violations, count: usize) {
+        for _ in 0..count {
+            out.rule.push(StrId(9));
+            out.layer.push(LayerId(0));
+            out.severity.push(Severity::Error);
+            out.at.push(Point {
+                x: Dbu::new_unchecked(0),
+                y: Dbu::new_unchecked(0),
+            });
+            out.measured.push(Measurement::Count(0));
+            out.limit.push(Measurement::Count(1));
+            out.shape_a.push(PolyId(0));
+            out.shape_b.push(None);
+        }
+    }
+
+    #[test]
+    fn the_recorded_violation_count_is_what_the_row_actually_pushed() {
+        let mut out = Violations::default();
+        fill(&mut out, 5);
+
+        let mut runs = Vec::new();
+        record_run(&mut runs, &out, 2, StrId(4), Outcome::Ran, 77);
+
+        assert_eq!(
+            runs,
+            vec![RuleRun {
+                rule: StrId(4),
+                outcome: Outcome::Ran,
+                examined: 77,
+                violations: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_row_that_pushed_nothing_reports_zero_however_full_the_shared_table_is() {
+        let mut out = Violations::default();
+        fill(&mut out, 40);
+
+        let mut runs = Vec::new();
+        record_run(&mut runs, &out, 40, StrId(1), Outcome::Ran, 0);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].violations, 0);
+        assert_eq!(runs[0].examined, 0);
+    }
+
+    #[test]
+    fn every_outcome_appends_exactly_one_row_and_none_replaces_another() {
+        let out = Violations::default();
+        let mut runs = Vec::new();
+
+        record_run(&mut runs, &out, 0, StrId(0), Outcome::Ran, 12);
+        record_run(&mut runs, &out, 0, StrId(1), Outcome::Refused, 12);
+        record_run(
+            &mut runs,
+            &out,
+            0,
+            StrId(2),
+            Outcome::Skipped(SkipReason::EmptyLayer),
+            0,
+        );
+
+        assert_eq!(runs.len(), 3);
+        assert_eq!(
+            runs.iter().map(|r| r.rule).collect::<Vec<_>>(),
+            vec![StrId(0), StrId(1), StrId(2)],
+            "rows are appended in call order, which is what makes a run reproducible"
+        );
+        assert_eq!(runs[1].outcome, Outcome::Refused);
+        assert_eq!(runs[2].outcome, Outcome::Skipped(SkipReason::EmptyLayer));
+        assert!(runs.iter().all(|r| r.violations == 0));
+    }
 }

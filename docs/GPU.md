@@ -88,9 +88,9 @@ result.
 
 ## Status: the path exists and runs
 
-All six hold. `crates/pex/src/quasistatic/gpu.rs` is the adapter,
-`crates/pex/shaders/p2p_laplace.comp` the kernel, `crates/pex/tests/gpu.rs` the
-tests — none of them `#[ignore]`d.
+All six hold. `crates/quasistatic/src/gpu.rs` is the adapter,
+`crates/quasistatic/shaders/p2p_laplace.comp` the kernel,
+`crates/quasistatic/tests/gpu.rs` the tests — none of them `#[ignore]`d.
 
 | # | How it is met |
 |---|---|

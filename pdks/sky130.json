@@ -154,11 +154,17 @@
     "driver_contention": { "kind": "multiple_drivers", "layers": [], "params": { "max_drivers": {"count": 1} } }
   },
 
+  "derived": [
+    { "name": "ngate",       "op": "and", "layers": ["poly", "diff", "nsdm"] },
+    { "name": "pgate",       "op": "and", "layers": ["poly", "diff", "psdm"] },
+    { "name": "diff_active", "op": "not", "layers": ["diff", "poly"] }
+  ],
+
   "connectivity": {
-    "conductors": ["diff", "tap", "poly", "li", "met1", "met2", "met3", "met4", "met5"],
+    "conductors": ["diff_active", "tap", "poly", "li", "met1", "met2", "met3", "met4", "met5"],
     "intra_layer_touch": true,
     "vias": [
-      { "layer": "licon", "connects": ["diff", "li"] },
+      { "layer": "licon", "connects": ["diff_active", "li"] },
       { "layer": "licon", "connects": ["tap",  "li"] },
       { "layer": "licon", "connects": ["poly", "li"] },
       { "layer": "mcon",  "connects": ["li",   "met1"] },
@@ -166,20 +172,29 @@
       { "layer": "via2",  "connects": ["met2", "met3"] },
       { "layer": "via3",  "connects": ["met3", "met4"] },
       { "layer": "via4",  "connects": ["met4", "met5"] }
+    ],
+    "labels": [
+      { "layer": "li",   "names": "li"   },
+      { "layer": "met1", "names": "met1" },
+      { "layer": "met2", "names": "met2" },
+      { "layer": "met3", "names": "met3" },
+      { "layer": "met4", "names": "met4" },
+      { "layer": "met5", "names": "met5" }
     ]
   },
 
   "device_recognition": [
-    { "kind": "mos", "marker": "nsdm", "model": "sky130_fd_pr__nfet_01v8",
-      "terminals": ["poly", "diff", "diff"] },
-    { "kind": "mos", "marker": "psdm", "model": "sky130_fd_pr__pfet_01v8",
-      "terminals": ["poly", "diff", "diff", "nwell"] },
+    { "kind": "mos", "marker": "ngate", "model": "sky130_fd_pr__nfet_01v8",
+      "terminals": ["poly", "diff_active", "diff_active"] },
+    { "kind": "mos", "marker": "pgate", "model": "sky130_fd_pr__pfet_01v8",
+      "terminals": ["poly", "diff_active", "diff_active"] },
     { "kind": "resistor", "marker": "rpm", "model": "sky130_fd_pr__res_high_po",
       "terminals": ["poly", "poly"] }
   ],
 
   "pex": {
     "diff":  { "thickness_nm": 120.0,  "height_nm": 206.2,  "sheet_res_ohm_sq": 197.0,  "dielectric_k": 3.9 },
+    "diff_active": { "thickness_nm": 120.0, "height_nm": 206.2, "sheet_res_ohm_sq": 197.0, "dielectric_k": 3.9 },
     "tap":   { "thickness_nm": 120.0,  "height_nm": 206.2,  "sheet_res_ohm_sq": 197.0,  "dielectric_k": 3.9 },
     "poly":  { "thickness_nm": 180.0,  "height_nm": 326.2,  "sheet_res_ohm_sq": 48.2,
                "area_cap_af_um2": 106.13, "fringe_cap_af_um": 55.27, "dielectric_k": 3.9 },

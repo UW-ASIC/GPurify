@@ -82,9 +82,7 @@ pub fn plan(
     // Stable: "deepest first" says nothing about a tie, and settling one by sort
     // instability would make the plan differ between runs.
     let mut perm: Vec<u32> = (0..rows).collect();
-    perm.sort_by_key(|&row| {
-        std::cmp::Reverse(subckt_depth[resolved[row as usize] as usize])
-    });
+    perm.sort_by_key(|&row| std::cmp::Reverse(subckt_depth[resolved[row as usize] as usize]));
 
     debug_assert_eq!(resolved.len(), layout_cells.len(), "one pairing per cell");
     debug_assert!(

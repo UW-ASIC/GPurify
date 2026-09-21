@@ -6,7 +6,10 @@
 //! `NetNetworks`, `IntentMap` and the nineteen rule tables are all public
 //! columns with no builder of their own.
 
-#![allow(dead_code, reason = "each test binary links only the fixtures it names")]
+#![allow(
+    dead_code,
+    reason = "each test binary links only the fixtures it names"
+)]
 
 use gpurify_core::{GeometryStore, LayerId, PolyId};
 use gpurify_erc::facts::IntentMap;

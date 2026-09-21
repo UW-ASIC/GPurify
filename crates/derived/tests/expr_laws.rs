@@ -146,7 +146,10 @@ fn overlapping_store(dx: i64, dy: i64) -> GeometryStore {
     // An L whose bounding box is 400 square but whose area is not, a plus with
     // four reflex corners, and a rectangle far enough away that no operand on
     // the other layer reaches it.
-    layout.shape(OPERAND_A, &shifted(&shapes::l_shape(0, 0, 400, 120), dx, dy));
+    layout.shape(
+        OPERAND_A,
+        &shifted(&shapes::l_shape(0, 0, 400, 120), dx, dy),
+    );
     layout.shape(
         OPERAND_A,
         &shifted(&shapes::plus_shape(900, 300, 200, 80), dx, dy),
@@ -222,7 +225,10 @@ fn union_and_intersection_commute_over_whole_layers() {
         ],
     );
 
-    let (joined, common) = (layer_of(&store, &evaluator, ab), layer_of(&store, &evaluator, ab_cut));
+    let (joined, common) = (
+        layer_of(&store, &evaluator, ab),
+        layer_of(&store, &evaluator, ab_cut),
+    );
     assert!(
         !joined.is_empty() && !common.is_empty(),
         "the fixture puts area in both operands and area in both at once, so an \
@@ -418,7 +424,10 @@ fn de_morgan_holds_against_an_explicit_universe() {
             (both_nots, intersection(named(not_a), named(not_b))),
             (
                 not_both,
-                subtraction(base(UNIVERSE), intersection(base(OPERAND_A), base(OPERAND_B))),
+                subtraction(
+                    base(UNIVERSE),
+                    intersection(base(OPERAND_A), base(OPERAND_B)),
+                ),
             ),
             (either_not, union(named(not_a), named(not_b))),
         ],

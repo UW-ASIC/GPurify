@@ -22,6 +22,8 @@ pub enum Command {
     Pex {
         /// Nets to solve by field solve rather than closed form.
         quasistatic: Vec<String>,
+        /// Also solve those nets for inductance and resistance.
+        quasistatic_inductance: bool,
     },
     /// Everything at once. A missing optional input leaves its check selected
     /// and reported as skipped, rather than dropping it from the summary.
@@ -101,6 +103,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
     let mut intent: Option<&str> = None;
     let mut reference: Option<&str> = None;
     let mut quasistatic: Vec<String> = Vec::new();
+    let mut quasistatic_inductance = false;
 
     // Every option a subcommand has no field for is accepted here and refused
     // below, so the refusal message can name the subcommand.
@@ -130,12 +133,17 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
             }
             "--grid" => {
                 let raw = value(rest, index)?;
-                grid = Some(raw.parse().ok().filter(|per_um| *per_um > 0).ok_or_else(|| {
-                    ArgError::Usage(format!(
-                        "--grid wants a positive count of database units per \
+                grid = Some(
+                    raw.parse()
+                        .ok()
+                        .filter(|per_um| *per_um > 0)
+                        .ok_or_else(|| {
+                            ArgError::Usage(format!(
+                                "--grid wants a positive count of database units per \
                          micrometre, not {raw:?}"
-                    ))
-                })?);
+                            ))
+                        })?,
+                );
                 taken = 2;
             }
             "--intent" => {
@@ -150,6 +158,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
                 quasistatic.push(value(rest, index)?.to_string());
                 taken = 2;
             }
+            "--quasistatic-inductance" => quasistatic_inductance = true,
             "--check-determinism" => check_determinism = true,
             "--strict-layers" => strict_layers = true,
             "--no-strict-layers" => strict_layers = false,
@@ -193,11 +202,13 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
             refuse("--intent", intent.is_some())?;
             refuse("--reference", reference.is_some())?;
             refuse("--quasistatic", !quasistatic.is_empty())?;
+            refuse("--quasistatic-inductance", quasistatic_inductance)?;
             Command::Drc
         }
         "erc" => {
             refuse("--reference", reference.is_some())?;
             refuse("--quasistatic", !quasistatic.is_empty())?;
+            refuse("--quasistatic-inductance", quasistatic_inductance)?;
             Command::Erc {
                 intent: intent.map(PathBuf::from),
             }
@@ -205,6 +216,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
         "lvs" => {
             refuse("--intent", intent.is_some())?;
             refuse("--quasistatic", !quasistatic.is_empty())?;
+            refuse("--quasistatic-inductance", quasistatic_inductance)?;
             Command::Lvs {
                 reference: reference
                     .map(PathBuf::from)
@@ -214,10 +226,14 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
         "pex" => {
             refuse("--intent", intent.is_some())?;
             refuse("--reference", reference.is_some())?;
-            Command::Pex { quasistatic }
+            Command::Pex {
+                quasistatic,
+                quasistatic_inductance,
+            }
         }
         "all" => {
             refuse("--quasistatic", !quasistatic.is_empty())?;
+            refuse("--quasistatic-inductance", quasistatic_inductance)?;
             Command::All {
                 reference: reference.map(PathBuf::from),
                 intent: intent.map(PathBuf::from),
@@ -327,36 +343,45 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
     // `All` selects LVS whether or not a reference was given: the run then
     // reports it Skipped, where dropping the check would leave a summary that
     // never mentions LVS at all.
-    let (checks, reference, intent, quasistatic_nets) = match &args.command {
+    let (checks, reference, intent, quasistatic_nets, quasistatic_inductance) = match &args.command
+    {
         Command::Drc => (
             gpurify_engine::Checks { drc: true, ..off },
             None,
             None,
             Vec::new(),
+            false,
         ),
         Command::Erc { intent } => (
             gpurify_engine::Checks { erc: true, ..off },
             None,
             intent.clone(),
             Vec::new(),
+            false,
         ),
         Command::Lvs { reference } => (
             gpurify_engine::Checks { lvs: true, ..off },
             Some(reference.clone()),
             None,
             Vec::new(),
+            false,
         ),
-        Command::Pex { quasistatic } => (
+        Command::Pex {
+            quasistatic,
+            quasistatic_inductance,
+        } => (
             gpurify_engine::Checks { pex: true, ..off },
             None,
             None,
             quasistatic.clone(),
+            *quasistatic_inductance,
         ),
         Command::All { reference, intent } => (
             gpurify_engine::Checks::ALL,
             reference.clone(),
             intent.clone(),
             Vec::new(),
+            false,
         ),
     };
     debug_assert!(checks != off, "every subcommand selects at least one check");
@@ -389,6 +414,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
         checks,
         lvs: Default::default(),
         quasistatic_nets,
+        quasistatic_inductance,
         threads: args.common.threads,
     };
     (inputs, options)
@@ -633,8 +659,15 @@ mod tests {
             "vss",
         ]);
         match &args.command {
-            Command::Pex { quasistatic } => {
+            Command::Pex {
+                quasistatic,
+                quasistatic_inductance,
+            } => {
                 assert_eq!(quasistatic.as_slice(), ["vdd", "clk", "vss"]);
+                assert!(
+                    !quasistatic_inductance,
+                    "the flag was not given, so it must stay off"
+                );
             }
             other => panic!("expected pex, parsed {other:?}"),
         }
@@ -782,6 +815,13 @@ mod tests {
                 "rules.json",
                 "--quasistatic",
                 "vdd",
+            ],
+            &[
+                "drc",
+                "top.gds",
+                "--deck",
+                "rules.json",
+                "--quasistatic-inductance",
             ],
         ];
         for argv in cases {
@@ -994,5 +1034,20 @@ mod tests {
             "clk",
         ]));
         assert_eq!(pex.quasistatic_nets.as_slice(), ["vdd", "clk"]);
+        assert!(
+            !pex.quasistatic_inductance,
+            "inductance is opt-in, and the flag was not given"
+        );
+
+        let (_, inductive) = to_inputs(&parse_ok(&[
+            "pex",
+            "top.gds",
+            "--deck",
+            "rules.json",
+            "--quasistatic",
+            "vdd",
+            "--quasistatic-inductance",
+        ]));
+        assert!(inductive.quasistatic_inductance);
     }
 }

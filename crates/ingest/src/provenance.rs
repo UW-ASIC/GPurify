@@ -21,7 +21,9 @@ pub struct PlacedLabel {
 /// its geometry and without its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LabelError {
-    #[error("a net label on layer {layer:?} at ({x}, {y}) lies on no shape of the conductor it names")]
+    #[error(
+        "a net label on layer {layer:?} at ({x}, {y}) lies on no shape of the conductor it names"
+    )]
     Unplaced { layer: LayerId, x: i64, y: i64 },
 }
 
@@ -155,8 +157,7 @@ impl Provenance {
         }
         self.poly_path.push(path);
         self.props.extend_from_slice(props);
-        self.prop_start
-            .push(crate::narrow(self.props.len()));
+        self.prop_start.push(crate::narrow(self.props.len()));
 
         debug_assert_eq!(
             self.prop_start.len(),

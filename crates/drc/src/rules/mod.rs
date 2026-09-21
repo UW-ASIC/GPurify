@@ -23,7 +23,7 @@ pub mod spacing;
 pub mod via;
 pub mod width;
 
-use gpurify_core::ops::{Point, Seg, seg_seg_dist2};
+use gpurify_core::ops::{seg_seg_dist2, Point, Seg};
 use gpurify_core::{Bbox, GeometryStore, PolyId};
 use gpurify_units::{Dbu, DbuArea};
 
@@ -132,10 +132,22 @@ const fn bbox_gap2(a: Bbox, b: Bbox) -> DbuArea {
 /// Raw rather than [`Dbu`] because the difference of two in-domain coordinates
 /// reaches `2^41`, one bit past what `Dbu::new_unchecked` asserts to.
 const fn axis_gap(alo: Dbu, ahi: Dbu, blo: Dbu, bhi: Dbu) -> i128 {
-    let lo = if alo.raw() >= blo.raw() { alo.raw() } else { blo.raw() };
-    let hi = if ahi.raw() <= bhi.raw() { ahi.raw() } else { bhi.raw() };
+    let lo = if alo.raw() >= blo.raw() {
+        alo.raw()
+    } else {
+        blo.raw()
+    };
+    let hi = if ahi.raw() <= bhi.raw() {
+        ahi.raw()
+    } else {
+        bhi.raw()
+    };
     let d = lo - hi;
-    if d > 0 { d as i128 } else { 0 }
+    if d > 0 {
+        d as i128
+    } else {
+        0
+    }
 }
 
 /// Exact squared distance between two store polygons' *boundaries*.
@@ -146,8 +158,7 @@ const fn axis_gap(alo: Dbu, ahi: Dbu, blo: Dbu, bhi: Dbu) -> i128 {
 /// cross. Squared because the true distance is irrational in general.
 ///
 /// Quadratic in the two ring sizes. Going sub-quadratic needs an index over one
-/// ring's edges and so a caller-owned scratch buffer — recorded under
-/// `## drc/rules/mod.rs` in `docs/SIGNATURE_DEFECTS.md`.
+/// ring's edges and so a caller-owned scratch buffer.
 pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea {
     let (axs, ays) = store.poly_verts(a);
     let (bxs, bys) = store.poly_verts(b);
@@ -157,7 +168,10 @@ pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea
     debug_assert!(bxs.len() >= 3, "a stored ring has at least three vertices");
 
     let box_b = Bbox::of_points(bxs, bys);
-    debug_assert!(!box_b.is_empty(), "a ring with vertices has a non-empty box");
+    debug_assert!(
+        !box_b.is_empty(),
+        "a ring with vertices has a non-empty box"
+    );
 
     // The sentinel is always replaced: both rings are non-empty and no real gap
     // comes close to `i128::MAX`. The assert below is what says so.

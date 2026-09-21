@@ -177,35 +177,50 @@
     "tie_high_low": { "kind": "tie_high_low", "layers": [], "params": {"warning": true} },
     "MT.unconnected": { "kind": "unconnected_pin", "layers": ["metaltop"], "params": {"warning": true} }
   },
+  "derived": [
+    { "name": "ngate",       "op": "and", "layers": ["poly2", "comp", "nplus"] },
+    { "name": "pgate",       "op": "and", "layers": ["poly2", "comp", "pplus"] },
+    { "name": "natgate",     "op": "and", "layers": ["poly2", "comp", "nat"] },
+    { "name": "comp_active", "op": "not", "layers": ["comp", "poly2"] }
+  ],
   "connectivity": {
-    "conductors": ["comp","poly2","metal1","metal2","metal3","metal4","metal5","metaltop"],
+    "conductors": ["comp_active","poly2","metal1","metal2","metal3","metal4","metal5","metaltop"],
     "intra_layer_touch": true,
     "vias": [
-      { "layer": "contact", "connects": ["comp", "metal1"] },
+      { "layer": "contact", "connects": ["comp_active", "metal1"] },
       { "layer": "contact", "connects": ["poly2", "metal1"] },
       { "layer": "via1", "connects": ["metal1", "metal2"] },
       { "layer": "via2", "connects": ["metal2", "metal3"] },
       { "layer": "via3", "connects": ["metal3", "metal4"] },
       { "layer": "via4", "connects": ["metal4", "metal5"] },
       { "layer": "via5", "connects": ["metal5", "metaltop"] }
+    ],
+    "labels": [
+      { "layer": "metal1",   "names": "metal1"   },
+      { "layer": "metal2",   "names": "metal2"   },
+      { "layer": "metal3",   "names": "metal3"   },
+      { "layer": "metal4",   "names": "metal4"   },
+      { "layer": "metal5",   "names": "metal5"   },
+      { "layer": "metaltop", "names": "metaltop" }
     ]
   },
   "device_recognition": [
-    { "kind": "mos", "marker": "nplus", "model": "nmos_3p3",
-      "terminals": ["poly2", "comp", "comp"] },
-    { "kind": "mos", "marker": "pplus", "model": "pmos_3p3",
-      "terminals": ["poly2", "comp", "comp", "nwell"] },
-    { "kind": "mos", "marker": "nat", "model": "nmos_6p0_nat",
-      "terminals": ["poly2", "comp", "comp"] },
+    { "kind": "mos", "marker": "ngate", "model": "nmos_3p3",
+      "terminals": ["poly2", "comp_active", "comp_active"] },
+    { "kind": "mos", "marker": "pgate", "model": "pmos_3p3",
+      "terminals": ["poly2", "comp_active", "comp_active"] },
+    { "kind": "mos", "marker": "natgate", "model": "nmos_6p0_nat",
+      "terminals": ["poly2", "comp_active", "comp_active"] },
     { "kind": "capacitor", "marker": "mos_cap_mk", "model": "nmoscap_3p3",
-      "terminals": ["poly2", "comp"] },
+      "terminals": ["poly2", "comp_active"] },
     { "kind": "resistor", "marker": "resistor", "model": "ppolyf_u_1k",
       "terminals": ["poly2", "poly2"] },
     { "kind": "diode", "marker": "diode_mk", "model": "pn_3p3",
-      "terminals": ["comp", "nwell"] }
+      "terminals": ["comp_active", "nwell"] }
   ],
   "pex": {
     "comp":     { "thickness_nm": 300.0,  "height_nm": 14.5,   "sheet_res_ohm_sq": 7.0,   "area_cap_af_um2": 0.0,     "fringe_cap_af_um": 0.0,    "dielectric_k": 11.7 },
+    "comp_active": { "thickness_nm": 300.0, "height_nm": 14.5, "sheet_res_ohm_sq": 7.0,   "area_cap_af_um2": 0.0,     "fringe_cap_af_um": 0.0,    "dielectric_k": 11.7 },
     "poly2":    { "thickness_nm": 200.0,  "height_nm": 320.0,  "sheet_res_ohm_sq": 7.3,   "area_cap_af_um2": 110.67,  "fringe_cap_af_um": 50.72,  "dielectric_k": 4.0 },
     "contact":  { "thickness_nm": 915.5,  "height_nm": 314.5,  "sheet_res_ohm_sq": 8.0,   "area_cap_af_um2": 0.0,     "fringe_cap_af_um": 0.0,    "dielectric_k": 4.0 },
     "metal1":   { "thickness_nm": 550.0,  "height_nm": 1230.0, "sheet_res_ohm_sq": 0.09,  "area_cap_af_um2": 29.304,  "fringe_cap_af_um": 39.431, "dielectric_k": 4.0 },

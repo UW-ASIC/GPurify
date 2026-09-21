@@ -12,8 +12,8 @@
 //! until the Implementation-Phase, and an assertion that panics inside itself
 //! reports nothing. `testgen::assertions` does the same, for the same reason.
 
-use gpurify_engine::pipeline::{Extracted, Loaded};
 use gpurify_drc::DrcError;
+use gpurify_engine::pipeline::{Extracted, Loaded};
 use gpurify_engine::run::{
     run_checks, Checks, EngineError, Outputs, RunOptions, StageStatus, Summary,
 };
@@ -37,6 +37,7 @@ fn options(checks: Checks, threads: usize) -> RunOptions {
             match_names: false,
         },
         quasistatic_nets: Vec::new(),
+        quasistatic_inductance: false,
         threads: Some(threads),
     }
 }
@@ -256,7 +257,9 @@ fn lvs_with_a_reference_netlist_runs_and_blames_the_device_the_layout_lacks() {
          pass whatever the verdict says: {summary:?}"
     );
 
-    let verdict = out.lvs.expect("a check that ran must leave its verdict behind");
+    let verdict = out
+        .lvs
+        .expect("a check that ran must leave its verdict behind");
     let Verdict::Mismatch(found) = &verdict else {
         panic!(
             "a one-device reference against an empty layout is a mismatch, and \
@@ -274,9 +277,13 @@ fn lvs_with_a_reference_netlist_runs_and_blames_the_device_the_layout_lacks() {
          difference exists, yet the discrepancies are {found:#?}"
     );
     assert!(
-        !found
-            .iter()
-            .any(|d| matches!(d, Discrepancy::UnpairedDevice { side: Side::Layout, .. })),
+        !found.iter().any(|d| matches!(
+            d,
+            Discrepancy::UnpairedDevice {
+                side: Side::Layout,
+                ..
+            }
+        )),
         "the layout holds no device at all, so nothing in it can be unpaired: {found:#?}"
     );
 }
@@ -305,7 +312,10 @@ fn an_lvs_mismatch_is_an_error_in_the_report_and_fails_the_run() {
         .expect("a reference netlist and an empty layout compare, they do not error");
 
     let Some(Verdict::Mismatch(found)) = out.lvs.as_ref() else {
-        panic!("the premise of this test is a mismatch, and the verdict is {:?}", out.lvs);
+        panic!(
+            "the premise of this test is a mismatch, and the verdict is {:?}",
+            out.lvs
+        );
     };
     assert_eq!(
         out.violations.rule.len(),
@@ -566,8 +576,13 @@ fn loaded_with_rule_kinds(kinds: &[&str]) -> Loaded {
 fn one_deck_may_hold_a_drc_rule_and_an_erc_rule() {
     let loaded = loaded_with_rule_kinds(&["min_width", "antenna_electrical"]);
 
-    run_checks(&loaded, &Extracted::default(), &options(NONE_SELECTED, 1), &mut Outputs::default())
-        .expect("min_width is drc's kind and antenna_electrical is erc's; both are known");
+    run_checks(
+        &loaded,
+        &Extracted::default(),
+        &options(NONE_SELECTED, 1),
+        &mut Outputs::default(),
+    )
+    .expect("min_width is drc's kind and antenna_electrical is erc's; both are known");
 }
 
 /// Oracle: construct-from-answer, on the fail-closed path. A kind in neither
@@ -596,5 +611,70 @@ fn a_kind_in_neither_domains_vocabulary_is_refused_whatever_was_selected() {
             EngineError::Drc(DrcError::UnknownKind { ref kind, .. }) if kind == "min_widht"
         ),
         "expected the unknown kind to be named, got {error:?}"
+    );
+}
+
+/// Oracle: construct-from-answer, on the opt-in seam. `quasistatic_inductance`
+/// is off by default and the off path never reaches the inductance bridge, so
+/// an off run's network holds no [`Parasitic::Inductance`] element at all —
+/// exactly the pre-flag output. On, the same run gains at least one inductance
+/// and one resistance row per field-solved net.
+#[test]
+fn the_inductance_flag_adds_elements_only_when_asked() {
+    use gpurify_engine::pipeline::Inputs;
+    use gpurify_pex::Parasitic;
+    use std::path::Path;
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let inputs = Inputs {
+        layout: fixtures.join("pex/PEX_COUPLING_C.gds"),
+        deck: fixtures.join("params.json"),
+        grid: Some(
+            gpurify_units::Grid::new(1_000)
+                .expect("1000 database units per micrometre is a 1 nm grid"),
+        ),
+        ..Inputs::default()
+    };
+    let pex_only = Checks {
+        drc: false,
+        erc: false,
+        lvs: false,
+        pex: true,
+    };
+    let run_with = |inductance: bool| -> Outputs {
+        let mut opts = options(pex_only, 1);
+        opts.quasistatic_nets = vec!["PEX_CC_n0".to_string(), "PEX_CC_n1".to_string()];
+        opts.quasistatic_inductance = inductance;
+        let mut out = Outputs::default();
+        let summary = gpurify_engine::run::run(&inputs, &opts, &mut out)
+            .expect("the coupling fixture field-solves");
+        assert_eq!(summary.pex, StageStatus::Ran, "the solve must not refuse");
+        out
+    };
+    let count = |out: &Outputs, want_inductance: bool| -> usize {
+        out.parasitics.as_ref().map_or(0, |network| {
+            network
+                .value
+                .iter()
+                .filter(|value| matches!(value, Parasitic::Inductance(_)) == want_inductance)
+                .count()
+        })
+    };
+
+    let off = run_with(false);
+    assert_eq!(
+        count(&off, true),
+        0,
+        "off is the default, and the bridge must not have run"
+    );
+
+    let on = run_with(true);
+    assert!(
+        count(&on, true) >= 1,
+        "on, the two field-solved nets carry inductance elements"
+    );
+    assert!(
+        count(&on, false) >= count(&off, false),
+        "the capacitive elements survive beside the inductive ones"
     );
 }

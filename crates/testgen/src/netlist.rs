@@ -166,7 +166,15 @@ pub fn layout_from_netlist(
         );
         let column = i64::try_from(index).expect("a spec written by hand is small");
         let x = plan.column_pitch * column + plan.column_pitch / 2;
-        emit_column(&mut layout, spec, &layers, plan, x, device, &mut net_handles);
+        emit_column(
+            &mut layout,
+            spec,
+            &layers,
+            plan,
+            x,
+            device,
+            &mut net_handles,
+        );
 
         // Spans the column across every band, so it overlaps this device's
         // stubs and, because columns do not share x, no other's.
@@ -372,7 +380,11 @@ mod tests {
         let mut sorted = all.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), all.len(), "two layers were assigned the same id");
+        assert_eq!(
+            sorted.len(),
+            all.len(),
+            "two layers were assigned the same id"
+        );
         assert_eq!(layers.count, all.len());
     }
 

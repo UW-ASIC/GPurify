@@ -18,6 +18,7 @@ pub use gpurify_export as export;
 pub use gpurify_ingest as ingest;
 pub use gpurify_lvs as lvs;
 pub use gpurify_pex as pex;
+pub use gpurify_quasistatic as quasistatic;
 pub use gpurify_report as report;
 pub use gpurify_topology as topology;
 pub use gpurify_units as units;

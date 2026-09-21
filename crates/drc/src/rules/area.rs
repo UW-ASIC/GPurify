@@ -8,7 +8,7 @@
 //! overlapping rectangles each below the limit are one shape that is above it.
 //! The union is exact (`core::boolean`), not a bounding-box approximation.
 
-use super::{COLUMNS_DIVERGED, centre, row_columns};
+use super::{centre, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::boolean::{union_into, BooleanError};
 use gpurify_core::rects::{clipped_area, covered_area, decompose_into};
@@ -307,8 +307,7 @@ pub fn check_min_enclosed_area(
                 let box_ = Bbox::of_points(xs, ys);
                 debug_assert!(!box_.is_empty(), "a hole ring has at least three vertices");
 
-                if !Measurement::Area(area)
-                    .violates(Measurement::Area(limit), LimitSense::Minimum)
+                if !Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Minimum)
                 {
                     continue;
                 }
@@ -364,11 +363,19 @@ pub fn check_cheesing(
             continue;
         }
 
-        let examined = report_figures(design, layer, rule, limit, scratch, out, |area, has_hole| {
-            let oversized =
-                Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Maximum);
-            oversized & !has_hole
-        });
+        let examined = report_figures(
+            design,
+            layer,
+            rule,
+            limit,
+            scratch,
+            out,
+            |area, has_hole| {
+                let oversized =
+                    Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Maximum);
+                oversized & !has_hole
+            },
+        );
         record_run(runs, out, violations_before, rule, Outcome::Ran, examined);
     }
 
@@ -458,7 +465,10 @@ pub fn check_density(
         // coordinate domain's edge cannot be swept without leaving it, and
         // clamping the window would shrink the numerator while leaving the
         // denominator alone — a layer reported sparser than it is.
-        let (xmax, ymax) = (x0 + (cols - 1) * stride + side, y0 + (ways - 1) * stride + side);
+        let (xmax, ymax) = (
+            x0 + (cols - 1) * stride + side,
+            y0 + (ways - 1) * stride + side,
+        );
         if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
             record_run(runs, out, violations_before, rule, Outcome::Refused, 0);
             continue;
@@ -575,7 +585,10 @@ pub fn check_density(
         }
 
         let examined = u64::try_from(sweep).expect("a window sweep is a positive count");
-        debug_assert!(examined > 0, "a non-empty extent is swept by at least one window");
+        debug_assert!(
+            examined > 0,
+            "a non-empty extent is swept by at least one window"
+        );
         record_run(runs, out, violations_before, rule, Outcome::Ran, examined);
     }
 
@@ -607,7 +620,10 @@ fn to_f64(area: i128) -> f64 {
 /// coordinate domain.
 fn positions(span: i64, window: i64, step: i64) -> i64 {
     debug_assert!(span >= 0, "an extent's span runs low to high");
-    debug_assert!(window > 0 && step > 0, "a sweep has a positive window and step");
+    debug_assert!(
+        window > 0 && step > 0,
+        "a sweep has a positive window and step"
+    );
     // `max(0)` turns a layer narrower than the window into the single covering
     // window rather than a negative count. `(a + step - 1) / step` is the
     // round-up, spelled out because signed `div_ceil` is unstable here.

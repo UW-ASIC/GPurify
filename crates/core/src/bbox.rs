@@ -189,7 +189,10 @@ impl Bbox {
         // Both spans are clamped at zero and bounded by `2^41`, so it is exact.
         let area = w as i128 * h as i128;
         debug_assert!(area >= 0, "a clamped area cannot be negative");
-        debug_assert!(area.unsigned_abs() <= 1u128 << 82, "area past the 2^82 ceiling");
+        debug_assert!(
+            area.unsigned_abs() <= 1u128 << 82,
+            "area past the 2^82 ceiling"
+        );
         debug_assert!(!self.is_empty() || area == 0, "an empty box covers no area");
         DbuArea::new(area)
     }
@@ -238,10 +241,17 @@ impl Bbox {
             let to = from + len as usize;
             // Fail closed: a range escaping the columns panics on the slice
             // below in every profile.
-            debug_assert!(to <= xs.len(), "a polygon's vertex range escapes the columns");
+            debug_assert!(
+                to <= xs.len(),
+                "a polygon's vertex range escapes the columns"
+            );
             out.push(Self::of_points(&xs[from..to], &ys[from..to]));
         }
 
-        debug_assert_eq!(out.len(), starts.len(), "one row per polygon, buffer cleared");
+        debug_assert_eq!(
+            out.len(),
+            starts.len(),
+            "one row per polygon, buffer cleared"
+        );
     }
 }

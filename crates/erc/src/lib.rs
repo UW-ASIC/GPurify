@@ -220,46 +220,6 @@ pub(crate) fn refuse_rows(head: &RuleHead, out: &Violations, runs: &mut Vec<Rule
     }
 }
 
-/// Close out one rule row: append its [`RuleRun`], with the violation count
-/// derived rather than counted by the caller.
-///
-/// `violations_before` must be `out.len()` read before the row's work started —
-/// that is what makes the count derived. A skipped row passes the two as equal
-/// and an `examined` of zero.
-pub(crate) fn record_run(
-    runs: &mut Vec<RuleRun>,
-    out: &Violations,
-    violations_before: usize,
-    rule: StrId,
-    outcome: Outcome,
-    examined: u64,
-) {
-    let after = out.len();
-    debug_assert!(
-        violations_before <= after,
-        "a rule row started at {violations_before} of a table that now holds {after}: \
-         the shared violation table was truncated under a running rule"
-    );
-    let pushed = after - violations_before;
-    debug_assert!(
-        u32::try_from(pushed).is_ok(),
-        "{pushed} violations from one rule row overflow the run's count column"
-    );
-    // No assert tying `pushed`/`examined` to a non-`Ran` outcome: a rule that
-    // refuses partway through has legitimately examined and pushed rows first.
-
-    let before_rows = runs.len();
-    runs.push(RuleRun {
-        rule,
-        outcome,
-        examined,
-        // Saturating rather than wrapping: wrapping to a small number would
-        // read as a nearly-clean rule, which is fail-open.
-        violations: u32::try_from(pushed).unwrap_or(u32::MAX),
-    });
-    debug_assert_eq!(
-        runs.len(),
-        before_rows + 1,
-        "one rule row produces exactly one run row"
-    );
-}
+/// Re-exported so the rule modules keep saying `crate::record_run`; the one
+/// implementation is [`gpurify_report::record_run`].
+pub(crate) use gpurify_report::record_run;

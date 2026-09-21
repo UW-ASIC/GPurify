@@ -15,14 +15,14 @@ use common::{Env, Sink, A, B, RULE};
 use gpurify_core::{Bbox, PolyId};
 use gpurify_drc::rules::overlay::{
     check_asymmetric_enclosure, check_max_distance_to_tap, check_min_enclosure,
-    check_min_extension, check_overlap, margins, AsymmetricEnclosureTable, MaxDistanceToTapTable,
-    Margins, MinEnclosureTable, MinExtensionTable, OverlapTable,
+    check_min_extension, check_overlap, margins, AsymmetricEnclosureTable, Margins,
+    MaxDistanceToTapTable, MinEnclosureTable, MinExtensionTable, OverlapTable,
 };
 use gpurify_report::{Measurement, Outcome, Severity, SkipReason, Violation};
 use gpurify_testgen::shapes::{l_shape, LayoutBuilder};
 use gpurify_testgen::{
-    assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point, Amount,
-    ShapeKind, ViolationCase, ViolationShape,
+    assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point,
+    Amount, ShapeKind, ViolationCase, ViolationShape,
 };
 
 /// An inner square clearing its host by exactly `enclosure` on the left and
@@ -673,12 +673,7 @@ fn a_well_layer_with_no_taps_at_all_violates_on_every_well_shape() {
     assert_eq!(named, ids.sorted(&[near, far]));
     for row in 0..2 {
         let corners = if sink.out.shape_a[row] == ids.of(near) {
-            [
-                point(0, 0),
-                point(100, 0),
-                point(100, 100),
-                point(0, 100),
-            ]
+            [point(0, 0), point(100, 0), point(100, 100), point(0, 100)]
         } else {
             [
                 point(900, 900),

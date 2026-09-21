@@ -105,7 +105,11 @@ fn main() -> std::process::ExitCode {
                         "--format {} asked for a parasitic network, but extraction \
                          produced none, and an empty netlist would read as a design \
                          with no parasitics",
-                        if args.common.format == args::Format::Spef { "spef" } else { "dspf" }
+                        if args.common.format == args::Format::Spef {
+                            "spef"
+                        } else {
+                            "dspf"
+                        }
                     );
                     return ExitCode::FAILURE;
                 };

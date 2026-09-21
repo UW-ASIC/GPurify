@@ -4,7 +4,7 @@ pub mod device;
 pub mod net;
 pub mod port;
 
-pub use device::{DeviceId, DeviceTable, TerminalRole};
+pub use device::{ChannelError, DeviceId, DeviceTable, TerminalRole};
 pub use net::{extract_nets_into, NetId, NetTable};
 pub use port::{bind_ports_into, PortTable};
 

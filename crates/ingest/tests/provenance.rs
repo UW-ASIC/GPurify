@@ -164,3 +164,83 @@ fn an_unlabelled_layout_has_no_label_rows_at_all() {
         "pushing polygons created label rows for polygons that have no label"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Label resolution over a split diffusion: a pin binds to the piece under it,
+// and a pin on the channel binds to nothing and refuses the load.
+// ---------------------------------------------------------------------------
+
+/// Oracle: construct-from-answer. The conductor arrives as the split
+/// source/drain layer — two rectangles flanking a channel gap at
+/// `(200,0)-(250,200)` — so where each label lands decides its polygon before
+/// anything runs.
+///
+/// The pin on the channel is a **refusal**, not a binding: the channel is the
+/// MOS body, it carries no extracted net, and quietly attaching the label to
+/// the nearest flank would name a net the designer did not pin. That is
+/// [`gpurify_ingest::LabelError::Unplaced`], aborting the load.
+#[test]
+fn a_label_binds_to_its_split_flank_and_one_on_the_channel_refuses_the_load() {
+    use gpurify_core::ops::Point;
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_ingest::LabelError;
+    use gpurify_units::Dbu;
+
+    const ACTIVE: LayerId = LayerId(0);
+    const TEXT: LayerId = LayerId(1);
+
+    let at = |x: i64, y: i64| Point {
+        x: Dbu::new(x).expect("fixture coordinates are in range"),
+        y: Dbu::new(y).expect("fixture coordinates are in range"),
+    };
+    let connectivity = Connectivity {
+        conductors: vec![ACTIVE],
+        intra_layer_touch: true,
+        label_layer: vec![TEXT],
+        label_names: vec![ACTIVE],
+        ..Connectivity::default()
+    };
+
+    let mut layout = LayoutBuilder::new(2);
+    let source = layout.rect(ACTIVE, 0, 0, 200, 200);
+    let drain = layout.rect(ACTIVE, 250, 0, 500, 200);
+    let (store, ids) = layout.finish();
+
+    let mut strings = StrTable::default();
+    let (s_name, d_name) = (strings.intern("VSS"), strings.intern("Y"));
+
+    // The two flank pins bind, each to its own piece.
+    let mut provenance = Provenance::default();
+    for _ in 0..store.poly_count() {
+        provenance.push(PathTable::ROOT, &[]);
+    }
+    provenance.place_label(at(100, 100), TEXT, s_name);
+    provenance.place_label(at(300, 100), TEXT, d_name);
+    provenance
+        .resolve_labels(&store, &connectivity)
+        .expect("both pins sit on a source/drain piece");
+    assert_eq!(
+        provenance.labels(),
+        &[(ids.of(source), s_name), (ids.of(drain), d_name)],
+        "each pin bound to the split piece under it, not to the other flank"
+    );
+
+    // A third pin over the channel gap sits on no conductor shape at all.
+    let mut provenance = Provenance::default();
+    for _ in 0..store.poly_count() {
+        provenance.push(PathTable::ROOT, &[]);
+    }
+    provenance.place_label(at(225, 100), TEXT, strings.intern("pin_on_channel"));
+    let refused = provenance
+        .resolve_labels(&store, &connectivity)
+        .expect_err("a pin on the MOS channel names no extracted conductor");
+    assert_eq!(
+        refused,
+        LabelError::Unplaced {
+            layer: TEXT,
+            x: 225,
+            y: 100
+        },
+        "the refusal names the label's layer and point"
+    );
+}

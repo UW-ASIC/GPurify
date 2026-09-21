@@ -26,9 +26,7 @@ use vulkano::descriptor_set::allocator::{
 };
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::PhysicalDevice;
-use vulkano::device::{
-    Device as VkDevice, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags,
-};
+use vulkano::device::{Device as VkDevice, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
@@ -40,9 +38,9 @@ use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
+use super::matvec::FOUR_PI_EPS0;
 use super::matvec::{Backend, MatVec};
 use super::mesh::Mesh;
-use super::matvec::FOUR_PI_EPS0;
 
 /// The compiled P2P Laplace kernel: ahead-of-time SPIR-V from
 /// `shaders/p2p_laplace.comp`, committed beside it.
@@ -50,7 +48,7 @@ use super::matvec::FOUR_PI_EPS0;
 /// Committed rather than built by a build script because `vulkano-shaders` pulls
 /// in `shaderc-sys`, which needs `libshaderc` or `cmake` — neither present
 /// outside `nix develop`. Regeneration command in the shader's own header.
-const P2P_LAPLACE_SPV: &[u8] = include_bytes!("../../shaders/p2p_laplace.spv");
+const P2P_LAPLACE_SPV: &[u8] = include_bytes!("../shaders/p2p_laplace.spv");
 
 /// Threads per workgroup, and the `local_size_x` the shader was compiled for.
 /// The two must agree, or a tail is left unwritten.
@@ -214,8 +212,11 @@ impl Device {
         // to trusting it here is trusting it at every call site.
         // `spirv_words` has already checked the magic number and the word
         // alignment, which are the two ways a wrong file reaches this line.
-        let module = unsafe { ShaderModule::new(device.clone(), ShaderModuleCreateInfo::new(&words)) }
-            .map_err(|why| DeviceError::MissingFeature(format!("the shader would not load: {why}")))?;
+        let module =
+            unsafe { ShaderModule::new(device.clone(), ShaderModuleCreateInfo::new(&words)) }
+                .map_err(|why| {
+                    DeviceError::MissingFeature(format!("the shader would not load: {why}"))
+                })?;
         let entry = module.entry_point("main").ok_or_else(|| {
             DeviceError::MissingFeature("the shader declares no `main` entry point".to_owned())
         })?;
@@ -256,7 +257,7 @@ impl Device {
 /// The panel count above which the device was measured to win.
 ///
 /// Measured in `--release` by
-/// `crates/pex/tests/gpu.rs::the_crossover_is_measured_rather_than_assumed` on
+/// `crates/quasistatic/tests/gpu.rs::the_crossover_is_measured_rather_than_assumed` on
 /// an RTX 4060 Laptop against an i9-14900HX: host wins at 64 panels, device wins
 /// 1.6× at 256 and 22× at 8192. 256 is the first *sampled* count at which the
 /// device won; rounding down to an unmeasured size is the invention this
@@ -368,7 +369,10 @@ impl<'d> GpuMatVec<'d> {
                 *sum += coordinate;
             }
         }
-        #[expect(clippy::cast_precision_loss, reason = "a panel count under 2^53 is exact in f64")]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a panel count under 2^53 is exact in f64"
+        )]
         let count = panels as f64;
         for slot in &mut origin {
             *slot /= count;
@@ -521,9 +525,7 @@ impl<'d> GpuMatVec<'d> {
                     descriptor.clone(),
                 )
             })
-            .and_then(|builder| {
-                builder.push_constants(device.pipeline.layout().clone(), 0, n)
-            })
+            .and_then(|builder| builder.push_constants(device.pipeline.layout().clone(), 0, n))
             .map_err(|why| DeviceError::MissingFeature(format!("recording: {why}")))?;
 
         // SAFETY: `dispatch` is unsafe because vulkano cannot check that the

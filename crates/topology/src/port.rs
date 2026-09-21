@@ -112,7 +112,11 @@ impl PortTable {
             table.by_name_net.push(net);
         }
 
-        debug_assert_eq!(table.net.len(), sorted.len(), "a port went missing in the split");
+        debug_assert_eq!(
+            table.net.len(),
+            sorted.len(),
+            "a port went missing in the split"
+        );
         debug_assert!(
             table.by_name.windows(2).all(|pair| pair[0] <= pair[1]),
             "the name index must be ascending, which is what `net_of` partitions"

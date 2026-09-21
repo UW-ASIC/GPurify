@@ -48,9 +48,24 @@ fn cross_prefix_operands_give_the_same_canonical_answer_as_base_prefix_ones() {
     let milliamps = Qty::<Current, { prefix::MILLI }>::new(600.0);
     let milliohms = Qty::<Resistance, { prefix::MILLI }>::new(3_000.0);
 
-    assert_close_relative("mV / uA in ohms", (millivolts / microamps).raw(), 3.0, 1e-12);
-    assert_close_relative("mV / mohm in amps", (millivolts / milliohms).raw(), 0.6, 1e-12);
-    assert_close_relative("mA * kohm in volts", (milliamps * kilohms).raw(), 1.8, 1e-12);
+    assert_close_relative(
+        "mV / uA in ohms",
+        (millivolts / microamps).raw(),
+        3.0,
+        1e-12,
+    );
+    assert_close_relative(
+        "mV / mohm in amps",
+        (millivolts / milliohms).raw(),
+        0.6,
+        1e-12,
+    );
+    assert_close_relative(
+        "mA * kohm in volts",
+        (milliamps * kilohms).raw(),
+        1.8,
+        1e-12,
+    );
 
     // The direction of the scale factor, stated where it is largest. A
     // conversion applied the wrong way round is out by 10^18 here.

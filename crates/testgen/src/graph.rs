@@ -26,7 +26,10 @@ pub struct GraphCase {
 /// they create cycles without changing the answer.
 #[must_use]
 pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> GraphCase {
-    assert!(!sizes.is_empty(), "a partition needs at least one component");
+    assert!(
+        !sizes.is_empty(),
+        "a partition needs at least one component"
+    );
     assert!(
         sizes.iter().all(|&s| s > 0),
         "a component of zero nodes is not a component"

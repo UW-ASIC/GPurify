@@ -89,7 +89,10 @@ pub struct Qty<D: Dimension, const P: i8> {
 impl<D: Dimension, const P: i8> Qty<D, P> {
     /// Wrap a count of `10^P` base units.
     pub const fn new(raw: f64) -> Self {
-        Self { raw, _dimension: PhantomData }
+        Self {
+            raw,
+            _dimension: PhantomData,
+        }
     }
 
     /// The count of `10^P` base units.
@@ -108,7 +111,10 @@ impl<D: Dimension, const P: i8> Qty<D, P> {
         // One multiply, not a `powi` and a division: at Q == P the factor is
         // exactly 1.0 and the result is the original bit for bit.
         let scale = 10f64.powi(i32::from(P) - i32::from(Q));
-        debug_assert!(scale.is_finite() && scale != 0.0, "10^({P}-{Q}) is unusable");
+        debug_assert!(
+            scale.is_finite() && scale != 0.0,
+            "10^({P}-{Q}) is unusable"
+        );
         Qty::new(self.raw * scale)
     }
 

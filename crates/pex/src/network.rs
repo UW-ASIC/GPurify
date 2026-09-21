@@ -115,7 +115,11 @@ impl ParasiticNetwork {
         self.value.clear();
 
         debug_assert_eq!(self.node_count(), 0, "a cleared network declares no node");
-        debug_assert_eq!(self.element_count(), 0, "a cleared network holds no element");
+        debug_assert_eq!(
+            self.element_count(),
+            0,
+            "a cleared network holds no element"
+        );
     }
 
     pub fn push(&mut self, from: NodeId, to: Option<NodeId>, value: Parasitic) {

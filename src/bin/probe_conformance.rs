@@ -39,7 +39,11 @@ fn main() {
     let max_net_size = *poly_counts.iter().max().unwrap_or(&0) as usize;
     println!("Largest net: {} polygons", max_net_size);
     let sum_polys: u32 = poly_counts.iter().sum();
-    println!("Sum of poly_counts: {} (should equal {})", sum_polys, store.poly_count());
+    println!(
+        "Sum of poly_counts: {} (should equal {})",
+        sum_polys,
+        store.poly_count()
+    );
 
     let mut size_freq = std::collections::BTreeMap::new();
     for &size in &poly_counts {
@@ -52,19 +56,23 @@ fn main() {
     }
 
     let huge = poly_counts.iter().filter(|&&s| s > 1000).count();
-    let large = poly_counts.iter().filter(|&&s| 100 < s && s <= 1000).count();
+    let large = poly_counts
+        .iter()
+        .filter(|&&s| 100 < s && s <= 1000)
+        .count();
     let small = poly_counts.iter().filter(|&&s| s <= 100).count();
     println!("\nNets > 1000 polys: {}", huge);
     println!("Nets 100..1000 polys: {}", large);
     println!("Nets <= 100 polys: {}", small);
 
-    if let Some((biggest_idx, &biggest_size)) = poly_counts
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, &s)| s)
+    if let Some((biggest_idx, &biggest_size)) =
+        poly_counts.iter().enumerate().max_by_key(|(_, &s)| s)
     {
-        println!("\nBiggest net: index {} with {} polygons ({:.1}%)", 
-            biggest_idx, biggest_size, 
-            (biggest_size as f64 / store.poly_count() as f64) * 100.0);
+        println!(
+            "\nBiggest net: index {} with {} polygons ({:.1}%)",
+            biggest_idx,
+            biggest_size,
+            (biggest_size as f64 / store.poly_count() as f64) * 100.0
+        );
     }
 }

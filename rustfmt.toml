@@ -1,0 +1,14 @@
+# rustfmt defaults, pinned.
+#
+# Measured, not guessed: a grid over `use_small_heuristics` x `max_width` and an
+# individual sweep of every width knob (`fn_call_width`, `struct_lit_width`,
+# `chain_width`, `array_width`, `struct_variant_width`, `fn_params_layout`) all
+# bottomed out at the stock defaults. No override brought this tree closer to
+# formatted, so none are recorded here -- a config restating a default is just a
+# second place for it to go stale.
+#
+# The one real drift risk is `style_edition`. `cargo fmt` infers it from the
+# crate `edition`, so bumping the workspace to edition 2024 would silently
+# reformat the tree (measured: 828 changed hunks). Pinning it decouples layout
+# from the language edition, so an edition bump stays a language change.
+style_edition = "2021"

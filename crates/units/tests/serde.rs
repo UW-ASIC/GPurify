@@ -25,8 +25,7 @@ use gpurify_units::{prefix, Capacitance, Length, Qty, Resistance, Voltage};
 /// serialise to identical text.
 #[test]
 fn a_quantity_serialises_as_a_bare_number_carrying_neither_dimension_nor_prefix() {
-    let value =
-        serde_json::to_value(Qty::<Capacitance, { prefix::ATTO }>::new(3.0)).expect("3 aF");
+    let value = serde_json::to_value(Qty::<Capacitance, { prefix::ATTO }>::new(3.0)).expect("3 aF");
     assert!(
         value.is_number(),
         "a quantity is a bare number on the wire, not {value}"
@@ -99,7 +98,16 @@ fn writing_a_quantity_and_reading_it_back_returns_the_same_count() {
         assert_eq!(parsed.raw(), raw, "{text} did not read back as {raw}");
     }
 
-    for raw in [0.0_f64, -0.0, 1.8, -3.5, 1e-18, 1e18, 123.456_789, f64::MIN_POSITIVE] {
+    for raw in [
+        0.0_f64,
+        -0.0,
+        1.8,
+        -3.5,
+        1e-18,
+        1e18,
+        123.456_789,
+        f64::MIN_POSITIVE,
+    ] {
         round_trip::<Capacitance, { prefix::ATTO }>(raw);
         round_trip::<Voltage, { prefix::BASE }>(raw);
         round_trip::<Resistance, { prefix::MILLI }>(raw);

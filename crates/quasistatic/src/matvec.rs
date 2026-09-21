@@ -57,8 +57,7 @@ pub struct CpuMatVec {
     // An FMM cannot go here: its far field is a truncation and this type is the
     // exact reference the `f32` device adapter is differentially tested against.
     // It is a *third* adapter behind [`MatVec`], blocked on four frozen
-    // signatures — `docs/SIGNATURE_DEFECTS.md`, "pex quasistatic/matvec.rs,
-    // third `ponytail:` spend-down pass".
+    // signatures.
     //
     // AoS, for the reason `mesh::Panel` gives: the matvec reads every field of a
     // column panel together, so one 40-byte row per cache miss beats five
@@ -142,9 +141,9 @@ impl CpuMatVec {
                 // is the same one line with `a` and `b` instead of `√A` —
                 // `A / (2a·ln((b + √(a²+b²))/a) + 2b·ln((a + √(a²+b²))/b))`,
                 // which collapses to exactly this expression when `a == b`.
-                // Blocked on `mesh::Panel` carrying those two numbers —
-                // `docs/SIGNATURE_DEFECTS.md`, "pex quasistatic". `mesh_box`
-                // has them as `du`/`dv` and keeps only their product, and they
+                // Blocked on `mesh::Panel` carrying those two numbers:
+                // `mesh_box` has them as `du`/`dv` and keeps only their
+                // product, and they
                 // are not recoverable here: centroid spacing within a face
                 // gives one edge back only when that face was cut more than
                 // once along it, which is exactly the case that was never in
@@ -215,17 +214,17 @@ impl CpuMatVec {
         // coupling is under-predicted by that much, and worst at long range.
         // Only the diagonal and the touching pairs are safe — the correction
         // vanishes as separation goes to zero, which is exactly why the
-        // reciprocity and self-potential tests in `crates/pex/tests` are blind
-        // to it.
+        // reciprocity and self-potential tests in `crates/quasistatic/tests`
+        // are blind to it.
         //
         // Upgrade path: the layered Green's function, `Σ_n A_n/|r − r'_n|` over
         // the images of the source in every interface, each `A_n` a product of
         // those interfaces' reflection coefficients. It needs each interface
         // plane and the permittivity either side of it. `Mesh::epsilon`
         // collapses all of that to the one value above a panel and `build` is
-        // handed nothing else, so this is a signature change and not a body —
-        // `docs/SIGNATURE_DEFECTS.md`, "pex quasistatic, layered Green's
-        // function". The stack is one argument away: `quasistatic::extract_into`
+        // handed nothing else, so this is a signature change and not a body:
+        // it needs a layered Green's function. The stack is one argument
+        // away: `quasistatic::extract_into`
         // holds a `&ProcessStack` and calls `CpuMatVec::build(&mesh)`.
         let n = self.panel.len();
         debug_assert_eq!(x.len(), n, "one charge per panel");
@@ -294,6 +293,7 @@ impl MatVec for CpuMatVec {
 
 /// Choose an adapter: GPU only above the panel count at which that device was
 /// *measured* to win, and only when a device is present. Never a user flag.
+#[cfg(feature = "gpu")]
 pub fn select(panels: usize, device: Option<&gpu::Device>) -> Backend {
     // A crossover of zero would select the device at every size, including the
     // sizes it was never measured at and the empty problem — the fail-open
@@ -325,4 +325,5 @@ impl ObserveMatVec for NoObserve {
     fn bytes_transferred(&mut self, _bytes: u64) {}
 }
 
+#[cfg(feature = "gpu")]
 use super::gpu;

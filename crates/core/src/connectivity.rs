@@ -214,7 +214,11 @@ mod tests {
         let mut seen = Recorder::default();
         components_observed(6, &edges, &mut out, &mut seen);
 
-        assert_eq!(seen.merged.len(), 5, "six nodes reach one component in five");
+        assert_eq!(
+            seen.merged.len(),
+            5,
+            "six nodes reach one component in five"
+        );
         assert_eq!(
             seen.redundant.len(),
             4,

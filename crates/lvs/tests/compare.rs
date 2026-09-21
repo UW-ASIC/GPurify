@@ -141,9 +141,7 @@ fn a_deleted_device_is_reported_as_unpaired_on_the_side_that_still_has_it() {
         "the transistor, which was not touched, is implicated: {found:#?}"
     );
     assert!(
-        !found
-            .iter()
-            .any(|d| blames_device(d, Side::Reference, 0)),
+        !found.iter().any(|d| blames_device(d, Side::Reference, 0)),
         "the reference transistor is implicated: {found:#?}"
     );
 }
@@ -241,8 +239,7 @@ fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
 /// them apart and the only thing left to disagree about is what the device is.
 fn lone_device(kind: DeviceKind, model: StrId, roles: &[TerminalRole]) -> Graph {
     let nets = u32::try_from(roles.len()).expect("a handful of terminals");
-    let terminals: Vec<(TerminalRole, u32)> =
-        roles.iter().copied().zip(0..nets).collect();
+    let terminals: Vec<(TerminalRole, u32)> = roles.iter().copied().zip(0..nets).collect();
     let mut builder = GraphBuilder::new(nets);
     builder.device(kind, model, &terminals);
     builder.finish()
@@ -430,6 +427,96 @@ fn a_mos_written_source_for_drain_is_the_same_transistor() {
     );
 }
 
+/// Oracle: construct-from-answer, the corpus shape of F4's second half. A SPICE
+/// `M` card states four nets, so a parsed reference always carries a `Bulk`
+/// terminal; a deck whose MOS recogniser binds three terminals never extracts
+/// one. `drop_unextracted_bulk` removes the reference's bulk exactly then, and
+/// the comparison concludes on what both sides can state.
+///
+/// The reference is *also* written source-for-drain and both sides declare
+/// `W`/`L`: the swap must not break the parameter pairing, because the channel
+/// collapse acts on the terminal join and `compare_params` keys on names.
+///
+/// **The anchoring is the whole fixture**: the bipolar's base on net 2 gives
+/// the drain's net a degree the source's net does not have, so `Match` is
+/// available only to a comparison that is genuinely S/D-interchangeable, not
+/// to any relabelling.
+#[test]
+fn a_reference_bulk_the_deck_cannot_extract_is_dropped_and_the_swap_still_pairs() {
+    use gpurify_topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
+
+    let sized: &[(StrId, f64)] = &[(WIDTH, 2e-6), (common::LENGTH, 5e-7)];
+    let anchor = |builder: &mut GraphBuilder| {
+        builder.device(
+            DeviceKind::Bjt,
+            NPN,
+            &[(Base, 2), (Emitter, 4), (Collector, 5)],
+        );
+    };
+
+    // Layout: 3-terminal MOS, no bulk anywhere, measured W/L.
+    let mut builder = GraphBuilder::new(6);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2)],
+        sized,
+    );
+    anchor(&mut builder);
+    let layout = LayoutGraph(builder.finish());
+
+    // Reference: the card's four terminals, source and drain exchanged, the
+    // same declared sizes.
+    let mut builder = GraphBuilder::new(6);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 2), (Drain, 1), (Bulk, 3)],
+        sized,
+    );
+    anchor(&mut builder);
+    let mut reference = RefGraph(builder.finish());
+
+    // Before the drop the extra Bulk neighbour splits the device classes and
+    // nothing pairs — the exact corpus failure.
+    let mut scratch = Partition::default();
+    assert_ne!(
+        compare(&layout, &reference, decisive(), &mut scratch),
+        Verdict::Match,
+        "a reference bulk terminal with no layout counterpart cannot pair"
+    );
+
+    gpurify_lvs::graph::drop_unextracted_bulk(&layout, &mut reference);
+    let verdict = compare(&layout, &reference, decisive(), &mut scratch);
+    assert_eq!(
+        verdict,
+        Verdict::Match,
+        "with the unextracted bulk dropped, an S/D-swapped reference with the \
+         same W/L is the same transistor"
+    );
+
+    // Fail-closed boundary: a layout that *does* extract bulk keeps the
+    // reference's, and a comparison across the arity difference still reports.
+    let bulked = || {
+        let mut builder = GraphBuilder::new(6);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            sized,
+        );
+        anchor(&mut builder);
+        builder.finish()
+    };
+    let bulked_layout = LayoutGraph(bulked());
+    let mut bulked_reference = RefGraph(bulked());
+    gpurify_lvs::graph::drop_unextracted_bulk(&bulked_layout, &mut bulked_reference);
+    assert_eq!(
+        bulked_reference.0, bulked_layout.0,
+        "a layout that extracts bulk must leave the reference's bulk alone"
+    );
+}
+
 /// Oracle: physics, and the guard on finding F4's fix when it lands.
 ///
 /// `refine::role_code` collapses interchangeable roles to one code — that is how
@@ -486,10 +573,11 @@ fn a_bipolars_emitter_and_collector_are_not_interchangeable() {
 /// walked the *intersection*, so zero parameters were compared and the empty
 /// discrepancy list read as agreement.
 ///
-/// This is finding F8. The corpus case is `LVS_PARAM_MISMATCH`, where
-/// `topology` emits only `DeviceParam::Area` and `graph::from_layout_into`
-/// projects no layout parameter at all — so every parametric LVS run in the
-/// tree compared nothing and said `Match`.
+/// This was finding F8's fail-open half. Its corpus case is
+/// `LVS_PARAM_MISMATCH`; `topology` now measures `Width`/`Length` for a MOS and
+/// `graph::from_layout_into` projects them, so the one-sided shape below is no
+/// longer every run's shape — but it remains reachable (a reference declaring a
+/// name the layout cannot measure), and must never read as agreement.
 ///
 /// A parameter one side declares and the other does not is not evidence of
 /// agreement; it is a parameter that was never checked, which is the fail-open
@@ -673,8 +761,7 @@ fn no_round_budget_makes_a_netlist_differ_from_itself() {
             &mut scratch,
         );
         assert!(
-            verdict == Verdict::Match
-                || verdict == Verdict::Inconclusive(Inconclusive::RoundLimit),
+            verdict == Verdict::Match || verdict == Verdict::Inconclusive(Inconclusive::RoundLimit),
             "budget {budget} produced {verdict:?} for a netlist against itself"
         );
     }

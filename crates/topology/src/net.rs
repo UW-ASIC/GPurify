@@ -157,11 +157,7 @@ impl Eq for NetTable {}
 /// Only polygons on a layer in [`Connectivity::conductors`] get a net. A cut
 /// *joins* the two conductors it overlaps but does not *belong* to that net,
 /// which is what makes [`crate::port::PortError::OrphanLabel`] reachable.
-pub fn extract_nets_into(
-    store: &GeometryStore,
-    connectivity: &Connectivity,
-    out: &mut NetTable,
-) {
+pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out: &mut NetTable) {
     let rows = store.poly_count();
     let node_count = u32::try_from(rows).expect("a polygon index fits a PolyId");
     debug_assert_eq!(
@@ -182,7 +178,9 @@ pub fn extract_nets_into(
         via_edges_append(store, cut, connects, &mut out.scratch, &mut out.edges);
     }
     debug_assert!(
-        out.edges.iter().all(|&(a, b)| a < node_count && b < node_count),
+        out.edges
+            .iter()
+            .all(|&(a, b)| a < node_count && b < node_count),
         "an edge names a polygon this store does not have"
     );
 
@@ -287,7 +285,7 @@ pub(crate) fn retain_intersecting_into(
         debug_assert!(w <= i);
         // Unchecked because `w`'s step is data-dependent, so LLVM cannot prove
         // `w < slots.len()` and emits a live panic edge in the loop body.
-        // Measured 1.19x at 8k, 1.06x at 4M — `docs/BULK_MEASUREMENTS.md` §4.
+        // Measured 1.19x at 8k, 1.06x at 4M.
         //
         // SAFETY: `w <= i < pairs.len() == slots.len()`, from the induction
         // above. Rejected slots stay uninitialised and are never read, because
@@ -308,7 +306,10 @@ pub(crate) fn retain_intersecting_into(
 /// The closed segment from vertex `i` of a ring to the next one, wrapping.
 #[inline]
 fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
-    debug_assert!(i < xs.len(), "a ring edge starts at one of the ring's vertices");
+    debug_assert!(
+        i < xs.len(),
+        "a ring edge starts at one of the ring's vertices"
+    );
     // Branchless wrap: the multiply is by zero for every vertex but the last.
     let next = (i + 1) - xs.len() * usize::from(i + 1 == xs.len());
     Seg {
@@ -331,12 +332,7 @@ const DIRECT_PAIR_BUDGET: usize = 1 << 10;
 /// Two paths over one predicate, chosen against [`DIRECT_PAIR_BUDGET`]; they
 /// agree because two segments that meet share a point whose x lies in both
 /// extents, so the sweep can skip no pair that meets.
-fn rings_meet(
-    ax: &[Dbu],
-    ay: &[Dbu],
-    bx: &[Dbu],
-    by: &[Dbu],
-) -> bool {
+fn rings_meet(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
     // `saturating_mul`: a pair big enough to overflow must take the sweep.
     if ax.len().saturating_mul(bx.len()) <= DIRECT_PAIR_BUDGET {
         return rings_meet_direct(ax, ay, bx, by);
@@ -370,7 +366,10 @@ fn edge_xspans_into(xs: &[Dbu], out: &mut Vec<(Dbu, Dbu)>) {
     }
     out.push((xs[n - 1].min(xs[0]), xs[n - 1].max(xs[0])));
     debug_assert_eq!(out.len(), n, "one x-extent per edge, the closing edge last");
-    debug_assert!(out.iter().all(|&(lo, hi)| lo <= hi), "an extent runs low to high");
+    debug_assert!(
+        out.iter().all(|&(lo, hi)| lo <= hi),
+        "an extent runs low to high"
+    );
 }
 
 /// [`rings_meet`] by plane sweep: one event per edge, ascending by its left x.
@@ -378,7 +377,10 @@ fn edge_xspans_into(xs: &[Dbu], out: &mut Vec<(Dbu, Dbu)>) {
 /// joins its own, so every cross pair that can meet is tested exactly once.
 fn rings_meet_sweep(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
     let (n, m) = (ax.len(), bx.len());
-    debug_assert!(n > 0 && m > 0, "an empty ring is polys_intersect's own answer");
+    debug_assert!(
+        n > 0 && m > 0,
+        "an empty ring is polys_intersect's own answer"
+    );
 
     let (mut span_a, mut span_b) = (Vec::new(), Vec::new());
     edge_xspans_into(ax, &mut span_a);
@@ -392,8 +394,12 @@ fn rings_meet_sweep(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
     order_a.sort_unstable_by_key(|&i| span_a[i as usize]);
     order_b.sort_unstable_by_key(|&i| span_b[i as usize]);
     debug_assert!(
-        order_a.windows(2).all(|w| span_a[w[0] as usize].0 <= span_a[w[1] as usize].0)
-            && order_b.windows(2).all(|w| span_b[w[0] as usize].0 <= span_b[w[1] as usize].0),
+        order_a
+            .windows(2)
+            .all(|w| span_a[w[0] as usize].0 <= span_a[w[1] as usize].0)
+            && order_b
+                .windows(2)
+                .all(|w| span_b[w[0] as usize].0 <= span_b[w[1] as usize].0),
         "the sweep visits edges in ascending left x"
     );
 
@@ -403,8 +409,12 @@ fn rings_meet_sweep(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
     while ia < n || ib < m {
         // The sentinel is far outside `MAX_ABS_DBU`, so a spent side never
         // wins the compare and the loop drains the other.
-        let key_a = order_a.get(ia).map_or(i64::MAX, |&i| span_a[i as usize].0.raw());
-        let key_b = order_b.get(ib).map_or(i64::MAX, |&i| span_b[i as usize].0.raw());
+        let key_a = order_a
+            .get(ia)
+            .map_or(i64::MAX, |&i| span_a[i as usize].0.raw());
+        let key_b = order_b
+            .get(ib)
+            .map_or(i64::MAX, |&i| span_b[i as usize].0.raw());
         let sweep_x = key_a.min(key_b);
 
         // Retire before admitting: an edge ending left of the sweep line can
@@ -451,12 +461,7 @@ fn meets_any(edge: Seg, xs: &[Dbu], ys: &[Dbu], live: &[u32]) -> bool {
 /// `core::ops::point_in_ring` is the same predicate and is unreachable: it
 /// takes a `RingRef`, and building one means validating the layer — a fallible
 /// pass whose error this signature has nowhere to report.
-fn point_inside(
-    xs: &[Dbu],
-    ys: &[Dbu],
-    px: Dbu,
-    py: Dbu,
-) -> bool {
+fn point_inside(xs: &[Dbu], ys: &[Dbu], px: Dbu, py: Dbu) -> bool {
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
     let n = xs.len();
     // Under three vertices there is no interior to be inside of.
@@ -505,11 +510,7 @@ struct EdgeScratch {
 }
 
 /// Edges from shapes touching on one conductor layer.
-pub fn intra_layer_edges_into(
-    store: &GeometryStore,
-    layer: LayerId,
-    out: &mut Vec<(u32, u32)>,
-) {
+pub fn intra_layer_edges_into(store: &GeometryStore, layer: LayerId, out: &mut Vec<(u32, u32)>) {
     out.clear();
     intra_layer_edges_append(store, layer, &mut EdgeScratch::default(), out);
 }
@@ -584,7 +585,9 @@ fn via_edges_append(
     debug_assert_ne!(cut, lower, "a cut layer is not one of the layers it joins");
     debug_assert_ne!(cut, upper, "a cut layer is not one of the layers it joins");
     debug_assert!(
-        [cut, lower, upper].iter().all(|l| l.idx() < store.layer_count()),
+        [cut, lower, upper]
+            .iter()
+            .all(|l| l.idx() < store.layer_count()),
         "a layer the store's layer table does not have"
     );
 
@@ -701,8 +704,7 @@ fn cuts_landing_on(
 #[cfg(test)]
 mod tests {
     use super::{
-        rings_meet_direct, rings_meet_sweep, sort_dedup_from, NetId, NetTable,
-        DIRECT_PAIR_BUDGET,
+        rings_meet_direct, rings_meet_sweep, sort_dedup_from, NetId, NetTable, DIRECT_PAIR_BUDGET,
     };
     use gpurify_core::PolyId;
     use gpurify_units::Dbu;
@@ -712,8 +714,7 @@ mod tests {
     #[test]
     fn a_stated_assignment_builds_the_reverse_index_it_implies() {
         let none = NetId::NONE;
-        let table =
-            NetTable::from_assignment(&[NetId(1), NetId(0), NetId(1), none, NetId(0)]);
+        let table = NetTable::from_assignment(&[NetId(1), NetId(0), NetId(1), none, NetId(0)]);
 
         assert_eq!(table.net_start, [0, 2, 4], "two nets of two polygons each");
         assert_eq!(
@@ -794,8 +795,14 @@ mod tests {
     fn the_sweep_and_the_exhaustive_scan_agree_on_every_ring_pair() {
         // The sizes below are chosen against the budget.
         const {
-            assert!(8 * 8 <= DIRECT_PAIR_BUDGET, "the small pair takes the direct scan");
-            assert!(64 * 64 > DIRECT_PAIR_BUDGET, "the large pair takes the sweep");
+            assert!(
+                8 * 8 <= DIRECT_PAIR_BUDGET,
+                "the small pair takes the direct scan"
+            );
+            assert!(
+                64 * 64 > DIRECT_PAIR_BUDGET,
+                "the large pair takes the sweep"
+            );
         }
 
         let mut saw_meeting = false;
@@ -823,7 +830,10 @@ mod tests {
                 }
             }
         }
-        assert!(saw_meeting, "a corpus where no pair ever meets proves nothing");
+        assert!(
+            saw_meeting,
+            "a corpus where no pair ever meets proves nothing"
+        );
         assert!(saw_apart, "nor one where every pair meets");
     }
 }

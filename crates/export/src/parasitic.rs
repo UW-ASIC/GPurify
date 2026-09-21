@@ -129,7 +129,10 @@ pub(crate) fn node_place(
 fn net_run(node_net: &[NetId], start: usize) -> (NetId, usize) {
     debug_assert!(start < node_net.len(), "a run starts at a node that exists");
     let net = node_net[start];
-    (net, start + node_net[start..].partition_point(|&other| other == net))
+    (
+        net,
+        start + node_net[start..].partition_point(|&other| other == net),
+    )
 }
 
 /// Append a net's name, or refuse the net for having none.
@@ -343,7 +346,11 @@ pub fn write_spef(
         ));
     }
     debug_assert_eq!(network.node_count(), nodes, "a writer mutates nothing");
-    debug_assert_eq!(network.element_count(), elements, "a writer mutates nothing");
+    debug_assert_eq!(
+        network.element_count(),
+        elements,
+        "a writer mutates nothing"
+    );
     Ok(())
 }
 
@@ -384,7 +391,7 @@ pub fn write_dspf(
 
         // The sub-node record carries the node's layer where DSPF wants its
         // position: `ParasiticNetwork` has `node_layer` and no coordinate
-        // column. Filed in `docs/SIGNATURE_DEFECTS.md` under `## export`.
+        // column.
         for row in node..node_end {
             out.push_str("*|S (");
             node_name(network, NodeId(narrow(row)), ports, strings, out)?;

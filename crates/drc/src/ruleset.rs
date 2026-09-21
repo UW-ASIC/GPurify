@@ -129,14 +129,14 @@ impl RuleSet {
         // squared by `square` below, because `ParamValue` has no area variant.
         // A real PDK area has no integer square root, so the deck author
         // rounds: the rounding that reports nothing is *down* for the two
-        // minima and *up* for `cheesing`. Filed under `## drc` in
-        // `docs/SIGNATURE_DEFECTS.md`.
+        // minima and *up* for `cheesing`.
         let rules = &deck.rules;
 
         // Every kind name resolved once, so the per-row match below is `u32`
         // equality and never a string compare. A kind the run's table has never
         // seen is `None`, which no `spec.kind` can equal.
-        let kind_id: [Option<StrId>; KINDS.len()] = std::array::from_fn(|at| strings.get(KINDS[at]));
+        let kind_id: [Option<StrId>; KINDS.len()] =
+            std::array::from_fn(|at| strings.get(KINDS[at]));
 
         let name_of = |id: StrId| strings.resolve(id).to_owned();
 
@@ -179,14 +179,15 @@ impl RuleSet {
             Ok(limit)
         };
 
-        let square = |spec: &RuleSpec, param: &'static str| -> Result<gpurify_units::DbuArea, DrcError> {
-            let side = length(spec, param)?;
-            debug_assert!(
-                side.raw() <= gpurify_units::MAX_ABS_DBU,
-                "a side past the coordinate domain squares past the i128 ceiling"
-            );
-            Ok(side.mul_wide(side))
-        };
+        let square =
+            |spec: &RuleSpec, param: &'static str| -> Result<gpurify_units::DbuArea, DrcError> {
+                let side = length(spec, param)?;
+                debug_assert!(
+                    side.raw() <= gpurify_units::MAX_ABS_DBU,
+                    "a side past the coordinate domain squares past the i128 ceiling"
+                );
+                Ok(side.mul_wide(side))
+            };
 
         let ratio_of = |spec: &RuleSpec, param: &'static str| -> Result<f64, DrcError> {
             let ParamValue::Ratio(limit) = value(spec, param)? else {
@@ -587,7 +588,6 @@ mod tests {
     const B: LayerId = LayerId(1);
 
     use super::KINDS;
-
 
     fn id(kind: &str) -> StrId {
         let index = KINDS

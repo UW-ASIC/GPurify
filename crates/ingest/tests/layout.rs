@@ -88,7 +88,8 @@ fn a_file_in_neither_format_is_refused_rather_than_read_as_an_empty_layout() {
     let path = scratch("not-a-layout.bin");
     std::fs::write(&path, b"this is not a layout file, it is a sentence").expect("scratch write");
 
-    let result = gpurify_ingest::layout::read_layout(&path, &Deck::default(), UnknownLayers::Reject);
+    let result =
+        gpurify_ingest::layout::read_layout(&path, &Deck::default(), UnknownLayers::Reject);
     let _ = std::fs::remove_file(&path);
 
     match result {

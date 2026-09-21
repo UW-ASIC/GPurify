@@ -147,7 +147,11 @@ impl PowerGrid {
     pub fn node_count(&self) -> usize {
         // The columns are public and pushed one at a time, so "six values in
         // step" is a caller invariant with no constructor to enforce it.
-        debug_assert_eq!(self.node_at.len(), self.node_net.len(), "one point per node");
+        debug_assert_eq!(
+            self.node_at.len(),
+            self.node_net.len(),
+            "one point per node"
+        );
         debug_assert_eq!(
             self.node_poly.len(),
             self.node_net.len(),
@@ -306,11 +310,7 @@ impl NetNetworks {
 
     /// One row's edges: endpoints and resistance, parallel.
     pub fn edges_of(&self, row: u32) -> (&[u32], &[u32], &[Qty<Resistance, { prefix::BASE }>]) {
-        debug_assert_eq!(
-            self.edge_to.len(),
-            self.edge_from.len(),
-            "one end per edge"
-        );
+        debug_assert_eq!(self.edge_to.len(), self.edge_from.len(), "one end per edge");
         debug_assert_eq!(
             self.edge_resistance.len(),
             self.edge_from.len(),
@@ -331,7 +331,10 @@ impl NetNetworks {
 /// make "carries nothing" and "does not exist" read the same, and a probe that
 /// confuses them reports a net clean that it never measured.
 fn csr_run(start: &[u32], row: u32) -> (usize, usize) {
-    let (from, to) = (start[row as usize] as usize, start[row as usize + 1] as usize);
+    let (from, to) = (
+        start[row as usize] as usize,
+        start[row as usize + 1] as usize,
+    );
     debug_assert!(from <= to, "a CSR run runs backwards");
     (from, to)
 }
@@ -484,7 +487,7 @@ pub struct SolveScratch {
 impl SolveScratch {
     /// Drop every buffer's capacity.
     pub fn shrink(&mut self) {
-        // Accepted equivalent-mutant site, per `docs/SIGNATURE_DEFECTS.md`:
+        // Accepted equivalent-mutant site:
         // every field is private and neither length nor capacity is exposed, so
         // no test can tell this body from an empty one.
         *self = Self::default();
@@ -922,7 +925,8 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
         row_stage.sort_unstable_by_key(|&(c, _)| c);
         // Merge the run of each column into one entry.
         for &(c, v) in row_stage.iter() {
-            let fresh = l_col.len() == l_start[i] as usize || *l_col.last().expect("non-empty") != c;
+            let fresh =
+                l_col.len() == l_start[i] as usize || *l_col.last().expect("non-empty") != c;
             l_col.resize(l_col.len() + usize::from(fresh), c);
             l_val.resize(l_val.len() + usize::from(fresh), 0.0);
             *l_val.last_mut().expect("the resize above left an entry") += v;
@@ -1036,8 +1040,16 @@ fn conjugate_gradient(
     config: SolveConfig,
 ) -> Result<(u32, f64), PowerError> {
     let unknowns = scratch.x.len();
-    debug_assert_eq!(scratch.rhs.len(), unknowns, "one right-hand side per unknown");
-    debug_assert_eq!(scratch.inv_diag.len(), unknowns, "one reciprocal per unknown");
+    debug_assert_eq!(
+        scratch.rhs.len(),
+        unknowns,
+        "one right-hand side per unknown"
+    );
+    debug_assert_eq!(
+        scratch.inv_diag.len(),
+        unknowns,
+        "one reciprocal per unknown"
+    );
     debug_assert!(
         config.relative_tolerance > 0.0 && config.relative_tolerance.is_finite(),
         "a non-positive tolerance never stops the iteration"
@@ -1140,7 +1152,11 @@ fn conjugate_gradient(
     debug_assert!(iterations <= config.max_iterations, "the cap was overrun");
     Ok((
         iterations,
-        if initial > 0.0 { residual / initial } else { 0.0 },
+        if initial > 0.0 {
+            residual / initial
+        } else {
+            0.0
+        },
     ))
 }
 
@@ -1195,9 +1211,7 @@ fn load_on(grid: &PowerGrid, net: NetId) -> f64 {
     // `-0.0` sums to `-0.0`, and `-0.0 == 0.0`, so a ground rail's negative
     // shares compare the same as a power rail's positive ones.
     (0..grid.node_count())
-        .map(|node| {
-            f64::from(u8::from(grid.node_net[node] == net)) * grid.node_load[node].raw()
-        })
+        .map(|node| f64::from(u8::from(grid.node_net[node] == net)) * grid.node_load[node].raw())
         .sum()
 }
 
@@ -1215,7 +1229,7 @@ fn load_on(grid: &PowerGrid, net: NetId) -> f64 {
 /// [`IntentMap`] carries one `budget_current_ua` per net and no per-instance
 /// column. A hot spot therefore reads cooler than it is wherever the real draw
 /// is concentrated; closing it needs a per-terminal current column on
-/// [`DeviceTable`]. Recorded in `docs/SIGNATURE_DEFECTS.md`.
+/// [`DeviceTable`].
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -1288,7 +1302,10 @@ pub fn extract_into(
         // SAFETY: slot `k` was written on the iteration where `w` held `k`, for
         // every `k` in `0..w`, and `w <= candidate.len() <= kept.capacity()`.
         unsafe { kept.set_len(w) };
-        debug_assert!(kept.len() <= candidate.len(), "a compact cannot grow its input");
+        debug_assert!(
+            kept.len() <= candidate.len(),
+            "a compact cannot grow its input"
+        );
 
         shape.extend_from_slice(&kept);
         supply_of_shape.resize(
@@ -1481,7 +1498,7 @@ pub fn extract_into(
     // centre tap of the rail's widest shape on its highest conducting layer.
     // The residual error is one anchor where a real rail has many, which
     // over-reports drop rather than under-reporting it. A pad-marker layer on
-    // `Connectivity` closes it; recorded in `docs/SIGNATURE_DEFECTS.md`.
+    // `Connectivity` closes it.
     for supply in 0..intent.supply_net.len() {
         let (from, to) = (
             supply_start[supply] as usize,
@@ -1518,9 +1535,10 @@ pub fn extract_into(
         let host = store.poly_bbox(shape[anchor]);
         let middle = tap_on(host, host);
         let (lo, hi) = taps.chain_of(u32::try_from(anchor).expect("a shape index is a u32"));
-        let at = lo + taps.node_along[lo..hi]
-            .binary_search(&middle)
-            .expect("every shape carries a tap at its own centre");
+        let at = lo
+            + taps.node_along[lo..hi]
+                .binary_search(&middle)
+                .expect("every shape carries a tap at its own centre");
         out.source_node
             .push(u32::try_from(at).expect("a node index is a u32"));
         out.source_voltage.push(intent.supply_voltage[supply]);
@@ -1568,10 +1586,7 @@ pub fn extract_into(
         let (node_a, node_b) = (taps.req_node[ra], taps.req_node[rb]);
         // The two taps are the same physical point — the shapes touch — so this
         // is the floor; the metal between them is carried by the two chains.
-        let length = run_length(
-            out.node_at[node_a as usize],
-            out.node_at[node_b as usize],
-        );
+        let length = run_length(out.node_at[node_a as usize], out.node_at[node_b as usize]);
         out.edge_from.push(node_a);
         out.edge_to.push(node_b);
         out.edge_resistance
@@ -1585,7 +1600,11 @@ pub fn extract_into(
     for (link, &(a, b, cut)) in via.iter().enumerate() {
         let (host_a, host_b) = (store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
         let width = conductor_width(host_a, host_b);
-        let length = via_length(process, store.poly_layer(PolyId(a)), store.poly_layer(PolyId(b)));
+        let length = via_length(
+            process,
+            store.poly_layer(PolyId(a)),
+            store.poly_layer(PolyId(b)),
+        );
         let (ra, rb) = (via_req as usize + 2 * link, via_req as usize + 2 * link + 1);
         out.edge_from.push(taps.req_node[ra]);
         out.edge_to.push(taps.req_node[rb]);
@@ -1726,8 +1745,7 @@ impl TapIndex {
         out.cursor.extend_from_slice(&out.bucket_start);
         for index in 0..out.at.len() {
             let b = out.bucket_of(out.at[index]) as usize;
-            out.rows[out.cursor[b] as usize] =
-                u32::try_from(index).expect("a tap index is a u32");
+            out.rows[out.cursor[b] as usize] = u32::try_from(index).expect("a tap index is a u32");
             out.cursor[b] += 1;
         }
 
@@ -1773,10 +1791,10 @@ impl TapIndex {
         // The query cell, clamped: a marker outside the extent searches from the
         // border cell outwards, and the slack test below is what keeps that
         // exact rather than merely close.
-        let cx = ((marker.x.raw() - self.origin_x.raw()).max(0) / self.cell)
-            .min(i64::from(self.nx - 1));
-        let cy = ((marker.y.raw() - self.origin_y.raw()).max(0) / self.cell)
-            .min(i64::from(self.ny - 1));
+        let cx =
+            ((marker.x.raw() - self.origin_x.raw()).max(0) / self.cell).min(i64::from(self.nx - 1));
+        let cy =
+            ((marker.y.raw() - self.origin_y.raw()).max(0) / self.cell).min(i64::from(self.ny - 1));
 
         let mut best = (i128::MAX, u32::MAX);
         let mut radius = 0i64;
@@ -1785,8 +1803,7 @@ impl TapIndex {
             let (lo_y, hi_y) = (cy - radius, cy + radius);
             let scan = |mut best: (i128, u32), row: i64, col: i64| {
                 // Both are already clipped to the grid by every call site below.
-                let b = (u32::try_from(row).expect("a scanned row is inside the grid")
-                    * self.nx
+                let b = (u32::try_from(row).expect("a scanned row is inside the grid") * self.nx
                     + u32::try_from(col).expect("a scanned column is inside the grid"))
                     as usize;
                 let (from, to) = (
@@ -1809,10 +1826,7 @@ impl TapIndex {
                     // one; a winning pair is never *further*, so `min` agrees
                     // with the blend.
                     let closer = u32::from((distance, index) < best).wrapping_neg();
-                    best = (
-                        distance.min(best.0),
-                        (index & closer) | (best.1 & !closer),
-                    );
+                    best = (distance.min(best.0), (index & closer) | (best.1 & !closer));
                 }
                 best
             };
@@ -1957,8 +1971,7 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
     for &layer in touching {
         intra_layer_edges_into(store, layer, &mut pairs);
         out.metal.reserve(pairs.len());
-        out.metal
-            .extend(pairs.iter().map(|&(a, b)| (a, b, layer)));
+        out.metal.extend(pairs.iter().map(|&(a, b)| (a, b, layer)));
     }
     for (row, &cut) in connectivity.via_cut.iter().enumerate() {
         via_edges_into(store, cut, connectivity.via_connects[row], &mut pairs);
@@ -2073,7 +2086,9 @@ impl TapTable {
             "every node belongs to exactly one shape's chain"
         );
         debug_assert!(
-            self.req_node.iter().all(|&n| (n as usize) < self.node_shape.len()),
+            self.req_node
+                .iter()
+                .all(|&n| (n as usize) < self.node_shape.len()),
             "a tap request resolved to a node that does not exist"
         );
         debug_assert!(
@@ -2182,8 +2197,15 @@ impl ChainProfile {
     fn build(&mut self, store: &GeometryStore, poly: PolyId) {
         let host = store.poly_bbox(poly);
         let (xs, ys) = store.poly_verts(poly);
-        debug_assert_eq!(xs.len(), ys.len(), "a ring's coordinate columns are parallel");
-        debug_assert!(xs.len() >= 3, "a validated ring has at least three vertices");
+        debug_assert_eq!(
+            xs.len(),
+            ys.len(),
+            "a ring's coordinate columns are parallel"
+        );
+        debug_assert!(
+            xs.len() >= 3,
+            "a validated ring has at least three vertices"
+        );
 
         let (along, across) = if chain_is_horizontal(host) {
             (xs, ys)
@@ -2229,8 +2251,7 @@ impl ChainProfile {
             self.active.retain(|&(_, hi, _)| hi >= t1);
 
             self.crossing.clear();
-            self.crossing
-                .extend(self.active.iter().map(|&(_, _, c)| c));
+            self.crossing.extend(self.active.iter().map(|&(_, _, c)| c));
             self.crossing.sort_unstable();
             // A vertical line through the interior of a slab enters and leaves
             // the ring the same number of times, so the crossings pair up and
@@ -2297,7 +2318,10 @@ impl ChainProfile {
             squares > 0.0 && squares.is_finite(),
             "a segment of positive length over a positive width has positive squares"
         );
-        debug_assert!(narrow < i64::MAX, "a segment of positive length crossed no slab");
+        debug_assert!(
+            narrow < i64::MAX,
+            "a segment of positive length crossed no slab"
+        );
         (squares, Dbu::new_unchecked(narrow))
     }
 }
@@ -2435,9 +2459,7 @@ pub fn extract_nets_into(
     // of a connection are the same net, so keying on one is enough.
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
-    let by_net = |&(a, b, layer): &(u32, u32, LayerId)| {
-        (nets.net_of(PolyId(a)).0, a, b, layer.0)
-    };
+    let by_net = |&(a, b, layer): &(u32, u32, LayerId)| (nets.net_of(PolyId(a)).0, a, b, layer.0);
     links.metal.sort_unstable_by_key(by_net);
     links.via.sort_unstable_by_key(by_net);
 
@@ -2814,15 +2836,9 @@ pub fn solve_into(
     // would have written.
     scratch.rhs.push(0.0);
     for edge in 0..edges {
-        let (from, to) = (
-            grid.edge_from[edge] as usize,
-            grid.edge_to[edge] as usize,
-        );
+        let (from, to) = (grid.edge_from[edge] as usize, grid.edge_to[edge] as usize);
         let g = UA_PER_MV_OHM / grid.edge_resistance[edge].raw();
-        let (a, b) = (
-            scratch.unknown_of_node[from],
-            scratch.unknown_of_node[to],
-        );
+        let (a, b) = (scratch.unknown_of_node[from], scratch.unknown_of_node[to]);
         let (a_unknown, b_unknown) = (a != NOT_AN_UNKNOWN, b != NOT_AN_UNKNOWN);
         let a_row = (a as usize).min(unknowns);
         let b_row = (b as usize).min(unknowns);
@@ -2863,8 +2879,7 @@ pub fn solve_into(
     // The pads keep the exact voltage they were fixed at, which is the boundary
     // condition and not an approximation to it.
     for unknown in 0..unknowns {
-        out.node_voltage[scratch.node_of_unknown[unknown] as usize] =
-            Qty::new(scratch.x[unknown]);
+        out.node_voltage[scratch.node_of_unknown[unknown] as usize] = Qty::new(scratch.x[unknown]);
     }
 
     let PowerSolution {
@@ -2957,10 +2972,7 @@ pub fn effective_resistance_into(
         "a terminal names a node the row does not have"
     );
     debug_assert!(
-        edge_from
-            .iter()
-            .chain(edge_to)
-            .all(|&n| n < node_width),
+        edge_from.iter().chain(edge_to).all(|&n| n < node_width),
         "an edge names a node the row does not have"
     );
 
@@ -3124,8 +3136,7 @@ pub fn effective_resistance_into(
                 let xaa = inverse[pi * unknowns + pi] * keep;
                 let xbb = inverse[qi * unknowns + qi];
                 let xab = inverse[pi * unknowns + qi] * keep;
-                probe[group[p] as usize * terminals + group[q] as usize] =
-                    xaa + xbb - 2.0 * xab;
+                probe[group[p] as usize * terminals + group[q] as usize] = xaa + xbb - 2.0 * xab;
             }
         }
     }
@@ -3162,8 +3173,7 @@ pub fn effective_resistance_into(
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_into, factorise_into, ChainProfile, Point, SolveScratch, TapIndex,
-        NOT_AN_UNKNOWN,
+        assemble_into, factorise_into, ChainProfile, Point, SolveScratch, TapIndex, NOT_AN_UNKNOWN,
     };
     use gpurify_core::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
     use gpurify_units::Dbu;
@@ -3397,4 +3407,3 @@ mod tests {
         }
     }
 }
-

@@ -25,7 +25,12 @@ pub struct Checks {
 
 impl Checks {
     /// All four.
-    pub const ALL: Self = Self { drc: true, erc: true, lvs: true, pex: true };
+    pub const ALL: Self = Self {
+        drc: true,
+        erc: true,
+        lvs: true,
+        pex: true,
+    };
 }
 
 /// How to run.
@@ -35,6 +40,10 @@ pub struct RunOptions {
     pub lvs: gpurify_lvs::CompareOptions,
     /// Nets to extract by field solve. Empty means analytical extraction only.
     pub quasistatic_nets: Vec<String>,
+    /// Also solve the quasi-static nets for inductance and resistance. Off by
+    /// default, and with it off the run's output is byte-identical to a build
+    /// without the flag: the inductance bridge is never invoked.
+    pub quasistatic_inductance: bool,
     /// Worker threads. Affects speed only: output must be byte-identical at any
     /// value of this.
     pub threads: Option<usize>,
@@ -112,8 +121,7 @@ impl Summary {
 }
 
 /// The reason a stage that needs a grid did not get one.
-const NO_GRID: &str =
-    "no grid resolution reached this run, so no length in the deck has a meaning";
+const NO_GRID: &str = "no grid resolution reached this run, so no length in the deck has a meaning";
 
 /// The temperature every ERC derating is computed at.
 ///
@@ -122,8 +130,7 @@ const NO_GRID: &str =
 /// positive and finite. It is the same point `crates/erc/tests/common` derates
 /// at, so a rule characterised there and run here sees one temperature. Upgrade
 /// path: a `sign_off_temperature` field on [`RunOptions`], which is a
-/// Definition-Phase change rather than a body — filed in
-/// `docs/SIGNATURE_DEFECTS.md`, and blocked there rather than unexamined.
+/// signature change rather than a body.
 fn sign_off_temperature() -> Qty<Temperature, { prefix::BASE }> {
     celsius(85.0)
 }
@@ -137,7 +144,7 @@ const DIE_LAYER_NAMES: [&str; 3] = ["prBoundary", "DIEAREA", "die"];
 /// The deck's outline layer when it declares one, otherwise the union of every
 /// polygon's bounding box. That fallback is **fail-open for a minimum-density
 /// rule**: the margin outside the outermost shape is never swept, and nothing in
-/// [`Inputs`] declares a die — filed in `docs/SIGNATURE_DEFECTS.md`.
+/// [`Inputs`] declares a die.
 /// [`Bbox::EMPTY`] for a store with no geometry, so the caller's skip is
 /// reachable.
 fn design_extent(loaded: &Loaded) -> Bbox {
@@ -255,7 +262,10 @@ pub fn run_checks(
     out.runs.clear();
     out.lvs = None;
     out.parasitics = None;
-    debug_assert!(out.violations.is_empty(), "a stale finding survived the clear");
+    debug_assert!(
+        out.violations.is_empty(),
+        "a stale finding survived the clear"
+    );
 
     let drc = if options.checks.drc {
         run_drc(loaded, extracted, out)?
@@ -525,6 +535,8 @@ fn run_lvs(
         &extracted.nets,
         &extracted.devices,
         &extracted.ports,
+        &loaded.strings,
+        run_grid(loaded),
         &mut layout,
     );
 
@@ -561,6 +573,9 @@ fn run_lvs(
         Some(top) => {
             let mut declared = gpurify_lvs::RefGraph::default();
             gpurify_lvs::graph::from_reference_into(reference, top, &loaded.strings, &mut declared);
+            // A 3-terminal MOS recogniser extracts no bulk; the reference's
+            // card-mandated fourth net must not unpair the comparison.
+            gpurify_lvs::graph::drop_unextracted_bulk(&layout, &mut declared);
 
             let mut reduced_layout = gpurify_lvs::LayoutGraph::default();
             gpurify_lvs::reduce::reduce_into(&layout.0, &mut reduced_layout.0);
@@ -763,8 +778,7 @@ fn lvs_measurement(discrepancy: &Discrepancy) -> (Measurement, Measurement) {
 /// other four fields — the achieved residual, the tolerance, the iteration
 /// count and the backend that ran — have nowhere to land either, so a run's
 /// numbers cannot be attributed after the fact. Upgrade path: a matrix field and
-/// an accuracy field on [`Outputs`], a Definition-Phase change — filed in
-/// `docs/SIGNATURE_DEFECTS.md`, and blocked there rather than unexamined.
+/// an accuracy field on [`Outputs`], a signature change rather than a body.
 fn run_pex(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -834,6 +848,30 @@ fn run_pex(
         // produced reaches `out.parasitics`.
         if let Some(refusal) = reciprocity_refusal(&accuracy) {
             return Ok(StageStatus::Refused(refusal));
+        }
+
+        // Opt-in inductance: the same selection, one magnetoquasistatic solve,
+        // appended onto `solved`'s one-node-per-net anchors before the merge.
+        // A bridge refusal (a layer with no sheet resistance) is a refusal
+        // here too, not a skip. `quasistatic_inductance == false` never
+        // reaches the bridge, which is what keeps the default byte-identical.
+        //
+        // ponytail: the per-net `InductMatrix` is dropped like `CapMatrix` is —
+        // `Outputs` has no slot for it.
+        if options.quasistatic_inductance {
+            let mut inductance = gpurify_pex::quasistatic::InductMatrix::default();
+            if let Err(refusal) = gpurify_pex::quasistatic::extract_inductance_into(
+                &loaded.store,
+                &extracted.nets,
+                &selected,
+                &loaded.deck.stack,
+                grid,
+                &gpurify_pex::quasistatic::InductanceOptions::default(),
+                &mut inductance,
+                &mut solved,
+            ) {
+                return Ok(StageStatus::Refused(refusal.to_string()));
+            }
         }
 
         merge_field_solved_into(&coarse, &solved, &mut network);
@@ -964,7 +1002,10 @@ fn merge_field_solved_into(
         out.node_net.push(source.node_net[row]);
         out.node_layer.push(source.node_layer[row]);
     }
-    debug_assert_eq!(fine, fine_nodes, "a field-solved node reached no merged row");
+    debug_assert_eq!(
+        fine, fine_nodes,
+        "a field-solved node reached no merged row"
+    );
 
     out.from.reserve(coarse_elements + fine_elements);
     out.to.reserve(coarse_elements + fine_elements);
@@ -989,7 +1030,10 @@ fn merge_field_solved_into(
     for i in 0..fine_elements {
         let from = fine_map[solved.from[i].0 as usize];
         let to = solved.to[i].map(|node| fine_map[node.0 as usize]);
-        debug_assert_ne!(from, DROPPED_NODE, "a field-solved element lost its near node");
+        debug_assert_ne!(
+            from, DROPPED_NODE,
+            "a field-solved element lost its near node"
+        );
         debug_assert!(
             to.is_none_or(|far| far != DROPPED_NODE),
             "a field-solved element lost its far node"
@@ -1069,8 +1113,8 @@ mod tests {
     use super::{merge_field_solved_into, reciprocity_refusal};
     use gpurify_core::LayerId;
     use gpurify_pex::network::NodeId;
-    use gpurify_pex::quasistatic::Accuracy;
     use gpurify_pex::quasistatic::matvec::Backend;
+    use gpurify_pex::quasistatic::Accuracy;
     use gpurify_pex::{Parasitic, ParasiticNetwork};
     use gpurify_topology::NetId;
     use gpurify_units::Qty;
@@ -1089,7 +1133,11 @@ mod tests {
             ..ParasiticNetwork::default()
         };
         analytical.push(NodeId(0), None, ground(1.0));
-        analytical.push(NodeId(0), Some(NodeId(1)), Parasitic::Resistance(Qty::new(10.0)));
+        analytical.push(
+            NodeId(0),
+            Some(NodeId(1)),
+            Parasitic::Resistance(Qty::new(10.0)),
+        );
         analytical.push(NodeId(2), None, ground(7.0));
 
         // The solve was asked for net 1 and meshed it into two nodes.

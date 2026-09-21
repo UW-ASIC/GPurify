@@ -16,7 +16,9 @@ use gpurify_core::index::SpatialIndex;
 use gpurify_core::rects::Rect;
 use gpurify_core::{GeometryStore, PolyId, ValidatedLayer};
 use gpurify_derived::Evaluator;
-use gpurify_ingest::StrId;
+// Imported for the intra-doc links above and in `DrcError`; the rule modules
+// take their own copies.
+#[allow(unused_imports)]
 use gpurify_report::{Outcome, RuleRun, Violations};
 use gpurify_topology::{DeviceTable, NetTable};
 use gpurify_units::DbuArea;
@@ -79,9 +81,7 @@ pub struct Design<'a> {
 /// Splitting it into worker slots is private, but a parallel dispatcher needs a
 /// worker count and there is no route for one to arrive: [`RuleSet::run`] takes
 /// no thread budget and `gpurify_engine::run::run_drc` does not receive
-/// `&RunOptions`, so `RunOptions::threads` cannot reach this crate. Filed in
-/// `docs/SIGNATURE_DEFECTS.md` under "drc, from the `ponytail:` spend-down
-/// pass".
+/// `&RunOptions`, so `RunOptions::threads` cannot reach this crate.
 #[derive(Debug, Default)]
 pub struct Scratch {
     /// Validated geometry of the rule's primary layer.
@@ -118,133 +118,6 @@ impl Scratch {
     }
 }
 
-/// Close out one rule row: append its [`RuleRun`], with the violation count
-/// derived rather than counted by the caller.
-///
-/// `violations_before` is `out.len()` read before the row's work started, so a
-/// rule cannot report a violation it did not push or push one it did not
-/// report.
-pub(crate) fn record_run(
-    runs: &mut Vec<RuleRun>,
-    out: &Violations,
-    violations_before: usize,
-    rule: StrId,
-    outcome: Outcome,
-    examined: u64,
-) {
-    let after = out.len();
-    debug_assert!(
-        violations_before <= after,
-        "a rule row started at {violations_before} of a table that now holds {after}: \
-         the shared violation table was truncated under a running rule"
-    );
-    let pushed = after - violations_before;
-    debug_assert!(
-        u32::try_from(pushed).is_ok(),
-        "{pushed} violations from one rule row overflow the run's count column"
-    );
-
-    let before_rows = runs.len();
-    runs.push(RuleRun {
-        rule,
-        outcome,
-        examined,
-        // Saturating rather than wrapping: past 4 billion violations from one
-        // rule the exact count is noise, but wrapping it to a small number
-        // would read as a nearly-clean rule, which is fail-open.
-        violations: u32::try_from(pushed).unwrap_or(u32::MAX),
-    });
-    debug_assert_eq!(
-        runs.len(),
-        before_rows + 1,
-        "one rule row produces exactly one run row"
-    );
-}
-
-/// Adapter tests for the one seam every rule row crosses; `record_run` is
-/// `pub(crate)`, so these cannot live in `tests/`.
-#[cfg(test)]
-mod tests {
-    use super::record_run;
-    use gpurify_core::ops::Point;
-    use gpurify_core::{LayerId, PolyId};
-    use gpurify_ingest::StrId;
-    use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
-    use gpurify_units::Dbu;
-
-    /// Push `count` placeholder rows onto a violation table.
-    fn fill(out: &mut Violations, count: usize) {
-        for _ in 0..count {
-            out.rule.push(StrId(9));
-            out.layer.push(LayerId(0));
-            out.severity.push(Severity::Error);
-            out.at.push(Point {
-                x: Dbu::new_unchecked(0),
-                y: Dbu::new_unchecked(0),
-            });
-            out.measured.push(Measurement::Count(0));
-            out.limit.push(Measurement::Count(1));
-            out.shape_a.push(PolyId(0));
-            out.shape_b.push(None);
-        }
-    }
-
-    #[test]
-    fn the_recorded_violation_count_is_what_the_row_actually_pushed() {
-        let mut out = Violations::default();
-        fill(&mut out, 5);
-
-        let mut runs = Vec::new();
-        record_run(&mut runs, &out, 2, StrId(4), Outcome::Ran, 77);
-
-        assert_eq!(
-            runs,
-            vec![RuleRun {
-                rule: StrId(4),
-                outcome: Outcome::Ran,
-                examined: 77,
-                violations: 3,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_row_that_pushed_nothing_reports_zero_however_full_the_shared_table_is() {
-        let mut out = Violations::default();
-        fill(&mut out, 40);
-
-        let mut runs = Vec::new();
-        record_run(&mut runs, &out, 40, StrId(1), Outcome::Ran, 0);
-
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].violations, 0);
-        assert_eq!(runs[0].examined, 0);
-    }
-
-    #[test]
-    fn every_outcome_appends_exactly_one_row_and_none_replaces_another() {
-        let out = Violations::default();
-        let mut runs = Vec::new();
-
-        record_run(&mut runs, &out, 0, StrId(0), Outcome::Ran, 12);
-        record_run(&mut runs, &out, 0, StrId(1), Outcome::Refused, 12);
-        record_run(
-            &mut runs,
-            &out,
-            0,
-            StrId(2),
-            Outcome::Skipped(SkipReason::EmptyLayer),
-            0,
-        );
-
-        assert_eq!(runs.len(), 3);
-        assert_eq!(
-            runs.iter().map(|r| r.rule).collect::<Vec<_>>(),
-            vec![StrId(0), StrId(1), StrId(2)],
-            "rows are appended in call order, which is what makes a run reproducible"
-        );
-        assert_eq!(runs[1].outcome, Outcome::Refused);
-        assert_eq!(runs[2].outcome, Outcome::Skipped(SkipReason::EmptyLayer));
-        assert!(runs.iter().all(|r| r.violations == 0));
-    }
-}
+/// Re-exported so the rule modules keep saying `crate::record_run`; the one
+/// implementation is [`gpurify_report::record_run`].
+pub(crate) use gpurify_report::record_run;

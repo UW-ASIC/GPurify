@@ -61,7 +61,7 @@ fn candidates_observed<O: ObservePrefilter>(
     }
 
     // Scratch is allocated per call: the frozen signature has nowhere to hang a
-    // reusable buffer. Filed in `docs/SIGNATURE_DEFECTS.md`.
+    // reusable buffer.
     let mut a_row = Vec::new();
     let mut b_row = Vec::new();
     provenance_into(store, a_box, &mut a_row);
@@ -121,8 +121,7 @@ fn candidates_observed<O: ObservePrefilter>(
             // data-dependent, so LLVM gets no affine recurrence for it and
             // cannot prove the bound itself — it emits a live `cmp/jae` to a
             // panic edge instead, which is a branch in a body that otherwise has
-            // none. Measured 1.19x at 8k / 1.18x at 200k / 1.06x at 4M in
-            // `docs/BULK_MEASUREMENTS.md` §4.
+            // none. Measured 1.19x at 8k / 1.18x at 200k / 1.06x at 4M.
             unsafe { survivors.get_unchecked_mut(w) }.write((right, right_box));
             w += usize::from(keep);
         }
@@ -257,8 +256,16 @@ fn report_prune<O: ObservePrefilter>(
     observer: &mut O,
 ) {
     debug_assert!(O::ENABLED, "the null adapter must never reach this loop");
-    debug_assert_eq!(a_row.len(), a_box.len(), "one store row per operand polygon");
-    debug_assert_eq!(b_row.len(), b_box.len(), "one store row per operand polygon");
+    debug_assert_eq!(
+        a_row.len(),
+        a_box.len(),
+        "one store row per operand polygon"
+    );
+    debug_assert_eq!(
+        b_row.len(),
+        b_box.len(),
+        "one store row per operand polygon"
+    );
     for (&left, &left_box) in a_row.iter().zip(a_box) {
         for (&right, &right_box) in b_row.iter().zip(b_box) {
             if left_box.overlaps(right_box) {
@@ -287,8 +294,7 @@ fn report_prune<O: ObservePrefilter>(
 /// **Known correctness gap.** A layer a boolean produced has rows in no store,
 /// so it falls back to its own index: values in [`PolyId`]'s space that do not
 /// name store rows and cannot be told apart from ones that do. Closing it needs
-/// `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core`. Filed in
-/// `docs/SIGNATURE_DEFECTS.md`.
+/// `ValidatedLayer::provenance(&self) -> &[PolyId]` in `core`.
 fn provenance_into(store: &GeometryStore, want: &[Bbox], out: &mut Vec<PolyId>) {
     debug_assert!(
         !want.is_empty(),

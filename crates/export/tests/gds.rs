@@ -110,7 +110,9 @@ fn the_cell_name_reaches_the_library() {
 
 /// Whether a byte stream contains a given record or coordinate.
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 /// One GDSII LAYER record, from the Calma stream format: a four-byte header of

@@ -21,8 +21,8 @@ use gpurify_drc::rules::spacing::{
 use gpurify_report::{Measurement, Outcome, Severity, Violation};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
-    assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point, Amount,
-    ShapeKind, ViolationCase, ViolationShape,
+    assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point,
+    Amount, ShapeKind, ViolationCase, ViolationShape,
 };
 
 /// Two 200-sided squares on layer A facing across an exact gap, 400 tall so
@@ -32,7 +32,10 @@ fn spaced(gap: i64, limit: i64) -> ViolationCase {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::Spacing { layer: A, extent: 200 },
+            kind: ShapeKind::Spacing {
+                layer: A,
+                extent: 200,
+            },
         },
         (0, 0),
         Amount::Length(gap),
@@ -141,7 +144,11 @@ fn a_cross_layer_gap_one_unit_under_the_limit_is_reported_at_the_midpoint() {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::Separation { a: A, b: B, size: 200 },
+            kind: ShapeKind::Separation {
+                a: A,
+                b: B,
+                size: 200,
+            },
         },
         (0, 0),
         Amount::Length(100),
@@ -177,7 +184,11 @@ fn a_cross_layer_gap_exactly_at_the_limit_is_clean_and_the_pair_was_examined() {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::Separation { a: A, b: B, size: 200 },
+            kind: ShapeKind::Separation {
+                a: A,
+                b: B,
+                size: 200,
+            },
         },
         (0, 0),
         Amount::Length(100),

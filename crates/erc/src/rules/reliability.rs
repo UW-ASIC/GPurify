@@ -15,9 +15,7 @@ use gpurify_core::ops::{point_in_ring, segments_intersect, Point, Seg};
 use gpurify_core::view::validate_layer_into;
 use gpurify_core::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
 use gpurify_ingest::StrId;
-use gpurify_report::{
-    LimitSense, Measurement, Outcome, RuleRun, Violation, Violations,
-};
+use gpurify_report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use gpurify_topology::{DeviceId, NetId};
 use gpurify_units::{prefix, Current, Dbu, Qty, Resistance, Temperature, Voltage};
 use std::cmp::Reverse;
@@ -631,7 +629,10 @@ fn domain_spread(
 /// same code path as "no exemption polygon covers this device". Exact, not by
 /// bounding box: the box test can reject, never accept.
 fn encloses(store: &GeometryStore, isolation: &ValidatedLayer, inner: Bbox) -> bool {
-    debug_assert!(inner.xlo <= inner.xhi && inner.ylo <= inner.yhi, "an empty query box");
+    debug_assert!(
+        inner.xlo <= inner.xhi && inner.ylo <= inner.yhi,
+        "an empty query box"
+    );
     (0..isolation.len())
         .map(|idx| isolation.get(store, u32::try_from(idx).expect("a layer indexes with u32")))
         .any(|poly| poly.bbox().contains(inner) && covers(poly, inner))
@@ -647,7 +648,10 @@ fn encloses(store: &GeometryStore, isolation: &ValidatedLayer, inner: Bbox) -> b
 /// Touching counts as crossing, so a marker whose edge lies on the isolation
 /// boundary is *not* exempt: the fail-closed direction.
 fn covers(poly: PolygonRef<'_>, inner: Bbox) -> bool {
-    let corner = Point { x: inner.xlo, y: inner.ylo };
+    let corner = Point {
+        x: inner.xlo,
+        y: inner.ylo,
+    };
     let inside = point_in_ring(poly.outer(), corner)
         && !poly.holes().any(|hole| point_in_ring(hole, corner));
     inside && !crosses(poly.outer(), inner) && !poly.holes().any(|hole| crosses(hole, inner))
@@ -657,7 +661,10 @@ fn covers(poly: PolygonRef<'_>, inner: Bbox) -> bool {
 fn crosses(ring: RingRef<'_>, box_: Bbox) -> bool {
     let (xs, ys) = ring.coords();
     debug_assert_eq!(xs.len(), ys.len(), "a ring's columns are parallel");
-    debug_assert!(xs.len() >= 3, "a validated ring has at least three vertices");
+    debug_assert!(
+        xs.len() >= 3,
+        "a validated ring has at least three vertices"
+    );
 
     let corner = |x: Dbu, y: Dbu| Point { x, y };
     let (lb, rb, rt, lt) = (
@@ -788,7 +795,11 @@ impl ClampGraph {
             self.net.windows(2).all(|w| w[0] < w[1]),
             "the node list is sorted by net first, so deduping it yields the nets ascending"
         );
-        debug_assert_eq!(self.node_supply.len(), self.node.len(), "one supply flag per node");
+        debug_assert_eq!(
+            self.node_supply.len(),
+            self.node.len(),
+            "one supply flag per node"
+        );
 
         // One probe run per net, in `net` order, so `probe_start` is CSR over
         // the same index space.
@@ -827,7 +838,10 @@ impl ClampGraph {
         }
         for i in 0..self.net.len() {
             let net = self.net[i];
-            let (lo, hi) = (self.probe_start[i] as usize, self.probe_start[i + 1] as usize);
+            let (lo, hi) = (
+                self.probe_start[i] as usize,
+                self.probe_start[i + 1] as usize,
+            );
             for p in lo..hi {
                 let (ta, tb, _) = self.probe[p];
                 // A probe pair whose terminals no clamp lands on is not an edge
@@ -853,7 +867,10 @@ impl ClampGraph {
         }
         for i in 0..self.net.len() {
             let net = self.net[i];
-            let (lo, hi) = (self.probe_start[i] as usize, self.probe_start[i + 1] as usize);
+            let (lo, hi) = (
+                self.probe_start[i] as usize,
+                self.probe_start[i + 1] as usize,
+            );
             for p in lo..hi {
                 let (ta, tb, ohms) = self.probe[p];
                 let (Some(a), Some(b)) = (self.node_at(net, ta), self.node_at(net, tb)) else {
@@ -945,7 +962,11 @@ impl ClampGraph {
     ) -> Option<f64> {
         let n = self.node.len();
         debug_assert_eq!(self.node_supply.len(), n, "one supply flag per node");
-        debug_assert_eq!(self.adj_start.len(), n + 1, "one adjacency offset per node plus the end");
+        debug_assert_eq!(
+            self.adj_start.len(),
+            n + 1,
+            "one adjacency offset per node plus the end"
+        );
 
         // A pad net no qualifying clamp touches reaches nothing through this
         // graph.
@@ -975,7 +996,10 @@ impl ClampGraph {
                 continue;
             }
             if self.node_supply[node] {
-                debug_assert!(here >= 0.0 && here.is_finite(), "a path resistance is {here}");
+                debug_assert!(
+                    here >= 0.0 && here.is_finite(),
+                    "a path resistance is {here}"
+                );
                 return Some(here);
             }
             for e in self.adj_start[node] as usize..self.adj_start[node + 1] as usize {

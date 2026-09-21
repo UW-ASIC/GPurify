@@ -13,9 +13,14 @@ gpurify-export = { workspace = true }
 gpurify-ingest = { workspace = true }
 gpurify-lvs = { workspace = true }
 gpurify-pex = { workspace = true }
+gpurify-quasistatic = { workspace = true }
 gpurify-report = { workspace = true }
 gpurify-topology = { workspace = true }
 gpurify-units = { workspace = true }
+
+[features]
+default = ["gpu"]
+gpu = ["gpurify-pex/gpu"]
 
 [dev-dependencies]
 gpurify-testgen = { workspace = true }
@@ -43,6 +48,7 @@ members = [
     "crates/erc",
     "crates/lvs",
     "crates/pex",
+    "crates/quasistatic",
     "crates/export",
     "crates/engine",
     "crates/cli",
@@ -60,7 +66,14 @@ gpurify-report = { path = "crates/report" }
 gpurify-drc = { path = "crates/drc" }
 gpurify-erc = { path = "crates/erc" }
 gpurify-lvs = { path = "crates/lvs" }
-gpurify-pex = { path = "crates/pex" }
+# `default-features = false` on both, so a dependant's own `gpu` feature is the
+# only thing that turns the solver's GPU path on; `pex/gpu` forwards to it.
+# Without it on `pex`, `pex`'s own `default = ["gpu"]` re-enables the path for
+# every crate that depends on it, feature unification carries that back up, and
+# `--no-default-features` builds Vulkan in regardless — which is what used to
+# happen, and it meant the CPU-only configuration was never actually tested.
+gpurify-pex = { path = "crates/pex", default-features = false }
+gpurify-quasistatic = { path = "crates/quasistatic", default-features = false }
 gpurify-export = { path = "crates/export" }
 gpurify-engine = { path = "crates/engine" }
 gpurify-testgen = { path = "crates/testgen" }
@@ -69,24 +82,24 @@ gpurify-testgen = { path = "crates/testgen" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 rayon = "1"
+num-complex = "0.4"
 flate2 = "1"
 thiserror = "1"
 wide = "0.7"
 
-# GPU: AOT SPIR-V from GLSL, for Quasi-static PEX only.
+# GPU: AOT SPIR-V from GLSL, for `gpurify-quasistatic` only.
 # `default-features = false` drops the `x11` feature, which pulls `x11-dl` and
 # `x11rb` in and makes every binary downstream of `pex` link `-lxcb`. This is a
 # headless compute path with no window-system integration, so it needs none of
 # it — and with it on, `cargo test` outside `nix develop` fails at the link step
 # rather than at compile.
 vulkano = { version = "0.35", default-features = false }
-# `vulkano-shaders` is pinned but unused, and deliberately: it pulls in
-# `shaderc-sys`, which needs a system `libshaderc` or `cmake`, and neither is
-# present outside `nix develop`. Depending on it would make `cargo build` fail
-# for every crate downstream of `pex` outside the dev shell. The P2P Laplace
-# kernel is compiled by `glslc` and committed as SPIR-V; the regeneration
-# command is in `crates/pex/shaders/p2p_laplace.comp`.
-vulkano-shaders = "0.35"
+# `vulkano-shaders` is deliberately absent: it pulls in `shaderc-sys`, which
+# needs a system `libshaderc` or `cmake`, and neither is present outside
+# `nix develop`. Depending on it would make `cargo build` fail for every crate
+# downstream of `pex` outside the dev shell. The P2P Laplace kernel is compiled
+# by `glslc` and committed as SPIR-V; the regeneration command is in
+# `crates/quasistatic/shaders/p2p_laplace.comp`.
 
 # Some are based off preference, some disagree with branch-less programming principles or using SIMD.
 [workspace.lints.clippy]

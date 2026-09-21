@@ -73,8 +73,16 @@ const DERIVED_STREAM: (u16, u16) = (u16::MAX, u16::MAX);
 
 impl LayerTable {
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.name.len(), self.stream.len(), "one stream pair per layer");
-        debug_assert_eq!(self.name.len(), self.by_name.len(), "one name index entry per layer");
+        debug_assert_eq!(
+            self.name.len(),
+            self.stream.len(),
+            "one stream pair per layer"
+        );
+        debug_assert_eq!(
+            self.name.len(),
+            self.by_name.len(),
+            "one name index entry per layer"
+        );
         debug_assert_eq!(
             usize::from(self.derived_start),
             self.by_stream.len(),
@@ -96,7 +104,11 @@ impl LayerTable {
             .binary_search_by_key(&wanted, |&LayerId(i)| self.name[usize::from(i)])
             .ok()?;
         let found = self.by_name[at];
-        debug_assert_eq!(self.name[found.idx()], wanted, "the index named another layer");
+        debug_assert_eq!(
+            self.name[found.idx()],
+            wanted,
+            "the index named another layer"
+        );
         Some(found)
     }
     pub fn name(&self, layer: LayerId) -> StrId {
@@ -158,7 +170,8 @@ impl LayerTable {
     /// or above the id being taken — all of which [`parse_deck`] refuses first.
     pub fn push_derived(&mut self, name: StrId, op: DerivedOp, operands: &[LayerId]) -> LayerId {
         let id = LayerId(
-            u16::try_from(self.name.len()).expect("a deck has tens of layers, and LayerId is a u16"),
+            u16::try_from(self.name.len())
+                .expect("a deck has tens of layers, and LayerId is a u16"),
         );
         assert!(
             !operands.is_empty(),
@@ -194,7 +207,10 @@ impl LayerTable {
                 .all(|pair| self.name[pair[0].idx()] <= self.name[pair[1].idx()]),
             "the by-name index is not ascending, so `id` would miss declared layers"
         );
-        debug_assert!(self.is_derived(id), "a derived layer took a base layer's id");
+        debug_assert!(
+            self.is_derived(id),
+            "a derived layer took a base layer's id"
+        );
         debug_assert!(
             self.derived.layer.windows(2).all(|pair| pair[0] < pair[1]),
             "derived ids come out ascending, which is the order they are materialised in"
@@ -206,8 +222,8 @@ impl LayerTable {
     /// `LayerId(i)` is `entries[i]`. Both indexes tie-break by id, so a repeat
     /// still gives a total, deterministic order.
     pub fn build(entries: &[(StrId, u16, u16)]) -> Self {
-        let count = u16::try_from(entries.len())
-            .expect("a deck has tens of layers, and LayerId is a u16");
+        let count =
+            u16::try_from(entries.len()).expect("a deck has tens of layers, and LayerId is a u16");
 
         let name: Vec<StrId> = entries.iter().map(|&(name, _, _)| name).collect();
         let stream: Vec<(u16, u16)> = entries
@@ -238,7 +254,11 @@ impl LayerTable {
         debug_assert_eq!(name.len(), entries.len(), "one row per declared layer");
         debug_assert_eq!(name.len(), stream.len(), "one stream pair per layer");
         debug_assert_eq!(name.len(), by_name.len(), "one name index entry per layer");
-        debug_assert_eq!(name.len(), by_stream.len(), "one stream index entry per layer");
+        debug_assert_eq!(
+            name.len(),
+            by_stream.len(),
+            "one stream index entry per layer"
+        );
 
         Self {
             name,
@@ -282,7 +302,11 @@ pub struct DerivedTable {
 
 impl DerivedTable {
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.layer.len(), self.op.len(), "one operator per derived layer");
+        debug_assert_eq!(
+            self.layer.len(),
+            self.op.len(),
+            "one operator per derived layer"
+        );
         debug_assert!(
             self.operand_start.len() == self.layer.len() + 1 || self.operand_start.is_empty(),
             "the operand CSR carries one offset per row plus a terminator"
@@ -300,8 +324,14 @@ impl DerivedTable {
     pub fn operands_of(&self, row: usize) -> &[LayerId] {
         let start = self.operand_start[row] as usize;
         let end = self.operand_start[row + 1] as usize;
-        debug_assert!(start < end, "a derived layer is computed from at least one layer");
-        debug_assert!(end <= self.operand.len(), "an operand range runs off the table");
+        debug_assert!(
+            start < end,
+            "a derived layer is computed from at least one layer"
+        );
+        debug_assert!(
+            end <= self.operand.len(),
+            "an operand range runs off the table"
+        );
         &self.operand[start..end]
     }
 }
@@ -347,13 +377,19 @@ impl RuleTable {
     pub fn layers_of(&self, rule: &RuleSpec) -> &[LayerId] {
         let start = rule.layer_start as usize;
         let end = start + rule.layer_len as usize;
-        debug_assert!(end <= self.layer_ref.len(), "a rule's layer range runs off the table");
+        debug_assert!(
+            end <= self.layer_ref.len(),
+            "a rule's layer range runs off the table"
+        );
         &self.layer_ref[start..end]
     }
     pub fn params_of(&self, rule: &RuleSpec) -> &[(StrId, ParamValue)] {
         let start = rule.param_start as usize;
         let end = start + rule.param_len as usize;
-        debug_assert!(end <= self.param.len(), "a rule's parameter range runs off the table");
+        debug_assert!(
+            end <= self.param.len(),
+            "a rule's parameter range runs off the table"
+        );
         &self.param[start..end]
     }
     /// Look up one parameter by interned name.
@@ -502,8 +538,16 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
     let devices = build_devices(&doc.device_recognition, &layers, strings)?;
     let stack = build_stack(&doc.pex, &layers, strings)?;
 
-    debug_assert_eq!(devices.kind.len(), devices.marker.len(), "one marker per recogniser");
-    debug_assert_eq!(devices.kind.len(), devices.model.len(), "one model per recogniser");
+    debug_assert_eq!(
+        devices.kind.len(),
+        devices.marker.len(),
+        "one marker per recogniser"
+    );
+    debug_assert_eq!(
+        devices.kind.len(),
+        devices.model.len(),
+        "one model per recogniser"
+    );
     debug_assert_eq!(connectivity.via_cut.len(), connectivity.via_connects.len());
     debug_assert_eq!(
         layers.derived().len(),
@@ -534,7 +578,10 @@ fn build_derived(
     let mut operands: Vec<LayerId> = Vec::new();
     for row in declared {
         if row.layers.is_empty() {
-            return Err(DeckError::MissingParam(row.name.clone(), "layers".to_owned()));
+            return Err(DeckError::MissingParam(
+                row.name.clone(),
+                "layers".to_owned(),
+            ));
         }
         operands.clear();
         for name in &row.layers {
@@ -576,7 +623,10 @@ fn layer_of(
 
 /// Layer names to a [`LayerTable`], ids ascending by the name's *bytes* — an
 /// interning order would differ between runs.
-fn build_layers(declared: &Pairs<(u16, u16)>, strings: &mut StrTable) -> Result<LayerTable, DeckError> {
+fn build_layers(
+    declared: &Pairs<(u16, u16)>,
+    strings: &mut StrTable,
+) -> Result<LayerTable, DeckError> {
     let mut sorted: Vec<&(String, (u16, u16))> = declared.0.iter().collect();
     sorted.sort_unstable_by(|left, right| left.0.cmp(&right.0));
 
@@ -631,7 +681,9 @@ fn build_rules(
 
         let layer_start = table.layer_ref.len();
         for name in rule_layers {
-            table.layer_ref.push(layer_of(layers, strings, rule_id, name)?);
+            table
+                .layer_ref
+                .push(layer_of(layers, strings, rule_id, name)?);
         }
 
         let param_start = table.param.len();
@@ -651,7 +703,11 @@ fn build_rules(
         });
     }
 
-    debug_assert_eq!(table.spec.len(), declared.0.len(), "one row per declared rule");
+    debug_assert_eq!(
+        table.spec.len(),
+        declared.0.len(),
+        "one row per declared rule"
+    );
     Ok(table)
 }
 
@@ -668,9 +724,7 @@ fn param_value(
         ParamJson::Ratio(ratio) => ParamValue::Ratio(ratio),
         ParamJson::Count(count) => ParamValue::Count(count),
         ParamJson::Nm(nm) => ParamValue::Length(to_limit(nm, grid, rule_id)?),
-        ParamJson::Layer(ref name) => {
-            ParamValue::Layer(layer_of(layers, strings, rule_id, name)?)
-        }
+        ParamJson::Layer(ref name) => ParamValue::Layer(layer_of(layers, strings, rule_id, name)?),
     })
 }
 
@@ -783,9 +837,12 @@ fn build_devices(
                 )))
             }
         });
-        devices
-            .marker
-            .push(layer_of(layers, strings, "device_recognition", &device.marker)?);
+        devices.marker.push(layer_of(
+            layers,
+            strings,
+            "device_recognition",
+            &device.marker,
+        )?);
         devices.model.push(strings.intern(&device.model));
         for name in &device.terminals {
             devices
@@ -895,6 +952,13 @@ struct DeckJson {
     device_recognition: Vec<DeviceJson>,
     #[serde(default)]
     pex: Pairs<StackJson>,
+    /// Consumer-owned: a downstream tool keeps its layer roles and construction
+    /// dimensions in the deck it hands us. Named so such a deck parses and the
+    /// section is ignored — an anonymous escape hatch would also swallow the
+    /// misspelled real sections `deny_unknown_fields` exists to catch.
+    #[allow(dead_code)]
+    #[serde(default)]
+    cell: serde_json::Value,
 }
 
 /// `kind` and `layers` are `Option`, so their absence is `MissingParam` naming
@@ -1002,8 +1066,30 @@ pub fn read_deck(
 /// Layer-table tests, and the fixture the layout tests borrow.
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{LayerTable, StrTable};
+    use super::{parse_deck, DeckError, LayerTable, StrTable};
     use gpurify_core::LayerId;
+    use gpurify_units::Grid;
+
+    /// The `"cell"` key is the one consumer-owned name [`DeckJson`] admits; any
+    /// other unknown key must still die in `deny_unknown_fields`, or a
+    /// misspelled section is a deck missing that section and a clean report.
+    #[test]
+    fn a_cell_section_parses_ignored_while_a_misspelled_section_still_fails() {
+        let grid = Grid::new(1_000).expect("a positive resolution is a legal grid");
+
+        let carried = r#"{"layers": {"met1": [68, 20]}, "cell": {"roles": {"met1": "route"}}}"#;
+        let deck = parse_deck(carried, grid, &mut StrTable::default())
+            .expect("a deck carrying a consumer-owned cell section must parse");
+        assert_eq!(deck.layers.len(), 1, "the cell section leaked into parsing");
+
+        let misspelled = r#"{"layers": {"met1": [68, 20]}, "rulez": {}}"#;
+        let error = parse_deck(misspelled, grid, &mut StrTable::default())
+            .expect_err("an unknown key that is not `cell` must still fail closed");
+        assert!(
+            matches!(error, DeckError::Malformed(_)),
+            "a misspelled section was {error:?}, not a malformed-deck refusal"
+        );
+    }
 
     /// Build a layer table from `(name, gds layer, gds datatype)` rows.
     pub(crate) fn layer_table(strings: &mut StrTable, rows: &[(&str, u16, u16)]) -> LayerTable {
@@ -1015,7 +1101,8 @@ pub(crate) mod tests {
     }
 
     /// The rows every layout test in this crate is written against.
-    pub(crate) const ROWS: [(&str, u16, u16); 3] = [("met1", 68, 20), ("via1", 67, 44), ("poly", 66, 20)];
+    pub(crate) const ROWS: [(&str, u16, u16); 3] =
+        [("met1", 68, 20), ("via1", 67, 44), ("poly", 66, 20)];
 
     #[test]
     fn a_name_the_deck_does_not_declare_resolves_to_no_layer_at_all() {
@@ -1046,7 +1133,9 @@ pub(crate) mod tests {
             "an interned name that the deck never declared resolved to a layer"
         );
         assert!(
-            layers.id(&strings, "a name nothing ever interned").is_none(),
+            layers
+                .id(&strings, "a name nothing ever interned")
+                .is_none(),
             "an unknown name resolved to a layer"
         );
         assert_eq!(
@@ -1084,4 +1173,3 @@ pub(crate) mod tests {
         );
     }
 }
-

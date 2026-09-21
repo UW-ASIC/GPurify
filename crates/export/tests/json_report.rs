@@ -44,7 +44,10 @@ fn formatted(value: f64) -> String {
 #[test]
 fn the_report_and_the_summary_are_both_valid_json_objects() {
     let world = World::named();
-    for (what, text) in [("report", report_of(&world)), ("summary", summary_of(&world))] {
+    for (what, text) in [
+        ("report", report_of(&world)),
+        ("summary", summary_of(&world)),
+    ] {
         let value = parsed(&text);
         assert!(
             value.is_object(),
@@ -326,7 +329,9 @@ fn the_summary_preserves_the_order_of_the_runs_it_was_handed() {
     let backward = summary_of(&backward_world);
 
     let forward_first = forward.find("m1.width").expect("the width rule is named");
-    let forward_last = forward.find("m1.antenna").expect("the antenna rule is named");
+    let forward_last = forward
+        .find("m1.antenna")
+        .expect("the antenna rule is named");
     let backward_first = backward.find("m1.width").expect("the width rule is named");
     let backward_last = backward
         .find("m1.antenna")

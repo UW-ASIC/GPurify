@@ -8,9 +8,8 @@
 //! the order *is* directly assertable and the deepest-first invariant is checked
 //! against a stated hierarchy below. (The header that stood here said the
 //! columns were private and the order unobservable, and it was stale: it was
-//! written before the resolution recorded under `## lvs` in
-//! `docs/SIGNATURE_DEFECTS.md`, and while it stood it hid the fact that nothing
-//! asserted the order at all.)
+//! written before that disagreement was resolved, and while it stood it hid
+//! the fact that nothing asserted the order at all.)
 //!
 //! # Every fixture here is a genuine difference between the two sides
 //!
@@ -23,7 +22,9 @@
 
 mod common;
 
-use common::{mos_and_bjt, mos_and_bjt_without_the_bjt, stacked_pair, CELL_A, CELL_B, CELL_MISSING};
+use common::{
+    mos_and_bjt, mos_and_bjt_without_the_bjt, stacked_pair, CELL_A, CELL_B, CELL_MISSING,
+};
 use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::StrId;
 use gpurify_lvs::compare::CompareOptions;
@@ -105,9 +106,17 @@ fn a_child_cell_is_planned_before_the_parent_that_instantiates_it() {
     plan(&parent_instantiating_child(), &[CELL_A, CELL_B], &mut out)
         .expect("both cells pair by name");
 
-    assert_eq!(out.layout_cell, [CELL_B, CELL_A], "the plan is not deepest-first");
+    assert_eq!(
+        out.layout_cell,
+        [CELL_B, CELL_A],
+        "the plan is not deepest-first"
+    );
     assert_eq!(out.ref_subckt, [SubcktId(1), SubcktId(0)]);
-    assert_eq!(out.depth, [1, 0], "a child is not one level below its parent");
+    assert_eq!(
+        out.depth,
+        [1, 0],
+        "a child is not one level below its parent"
+    );
 }
 
 /// Oracle: construct-from-answer. Two cells instantiating each other have no
@@ -159,11 +168,20 @@ fn every_planned_cell_produces_one_result_naming_it_in_plan_order() {
 
     let (layout, reference) = mismatching_pair();
     let mut results = Vec::new();
-    run(&order, &layout, &reference, CompareOptions::default(), &mut results);
+    run(
+        &order,
+        &layout,
+        &reference,
+        CompareOptions::default(),
+        &mut results,
+    );
 
     assert_eq!(results.len(), order.layout_cell.len(), "got {results:#?}");
     let cells: Vec<StrId> = results.iter().map(|result| result.cell).collect();
-    assert_eq!(cells, order.layout_cell, "the results do not follow the plan");
+    assert_eq!(
+        cells, order.layout_cell,
+        "the results do not follow the plan"
+    );
     assert_eq!(cells, [CELL_B, CELL_A], "the child was not reported first");
 }
 
@@ -183,9 +201,21 @@ fn a_planned_run_reports_the_same_cells_in_the_same_order_every_time() {
 
     let (layout, reference) = mismatching_pair();
     let mut reused: Vec<CellResult> = Vec::new();
-    run(&order, &layout, &reference, CompareOptions::default(), &mut reused);
+    run(
+        &order,
+        &layout,
+        &reference,
+        CompareOptions::default(),
+        &mut reused,
+    );
     let first = rows(&reused);
-    run(&order, &layout, &reference, CompareOptions::default(), &mut reused);
+    run(
+        &order,
+        &layout,
+        &reference,
+        CompareOptions::default(),
+        &mut reused,
+    );
     let second = rows(&reused);
 
     assert_eq!(
@@ -257,8 +287,7 @@ fn a_cell_that_matched_is_not_reported_as_flattened() {
 /// path from "gave up" to "matched" `lvs/src/lib.rs` forbids.
 ///
 /// Every row is now `Inconclusive::UncomparedCell`, naming the cell, and
-/// therefore flattened. The signature gap that forces this is filed under
-/// `## lvs` in `docs/SIGNATURE_DEFECTS.md`.
+/// therefore flattened.
 #[test]
 fn a_multi_cell_plan_reports_every_cell_as_uncompared_rather_than_matched() {
     let results = planned_run(&[CELL_A, CELL_B], &matching_pair());
@@ -296,7 +325,13 @@ fn planned_run(layout_cells: &[StrId], pair: &(LayoutGraph, RefGraph)) -> Vec<Ce
     plan(&netlist, layout_cells, &mut order).expect("every cell pairs");
 
     let mut out = Vec::new();
-    run(&order, &pair.0, &pair.1, CompareOptions::default(), &mut out);
+    run(
+        &order,
+        &pair.0,
+        &pair.1,
+        CompareOptions::default(),
+        &mut out,
+    );
     out
 }
 

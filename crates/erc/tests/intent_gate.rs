@@ -235,7 +235,14 @@ fn em_current_density_skips_without_intent_and_examines_limited_edges_with_it() 
     };
 
     let (mut violations, mut runs) = empty_report();
-    check_em_current_density(None, &supply_intent(), manufacturing_grid(), &table, &mut violations, &mut runs);
+    check_em_current_density(
+        None,
+        &supply_intent(),
+        manufacturing_grid(),
+        &table,
+        &mut violations,
+        &mut runs,
+    );
     assert_skipped_for_intent(&runs, &violations, id);
 
     let (mut violations, mut runs) = empty_report();
@@ -265,7 +272,15 @@ fn electromigration_skips_without_intent_and_reaches_the_edges_with_it() {
     let table = electromigration_table(id, LayerId(0));
 
     let (mut violations, mut runs) = empty_report();
-    check_electromigration(None, &supply_intent(), manufacturing_grid(), operating_temperature(), &table, &mut violations, &mut runs);
+    check_electromigration(
+        None,
+        &supply_intent(),
+        manufacturing_grid(),
+        operating_temperature(),
+        &table,
+        &mut violations,
+        &mut runs,
+    );
     assert_skipped_for_intent(&runs, &violations, id);
 
     let (mut violations, mut runs) = empty_report();
@@ -296,7 +311,14 @@ fn reliability_skips_without_intent_and_evaluates_nodes_with_it() {
     let table = reliability_table(id);
 
     let (mut violations, mut runs) = empty_report();
-    check_reliability(None, &supply_intent(), operating_temperature(), &table, &mut violations, &mut runs);
+    check_reliability(
+        None,
+        &supply_intent(),
+        operating_temperature(),
+        &table,
+        &mut violations,
+        &mut runs,
+    );
     assert_skipped_for_intent(&runs, &violations, id);
 
     let (mut violations, mut runs) = empty_report();

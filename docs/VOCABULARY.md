@@ -103,9 +103,8 @@ loop.
 input row), *reduce* (fold to one value), *compact* (`if p { out.push(x) }`),
 *in-place update* (`x[i] = f(x[i], y[i])`). There is no combinator library —
 the shape is written out at each site and enforced by review, so naming the
-shape in the comment is what makes the site checkable. `bulk-loops.md` in the
-project-libraries skill is the long form. _Avoid_: combinator (retired: it
-named `gpurify-core::bulk`, which was inlined and deleted).
+shape in the comment is what makes the site checkable. _Avoid_: combinator
+(retired: it named a `bulk` module that was inlined and deleted).
 
 **Data-dependent branch** — an `if` on a value inside a bulk loop body. It is
 what stops vectorisation. Removed mechanically: `if p { out[n]=x; n+=1 }`

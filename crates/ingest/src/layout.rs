@@ -355,7 +355,12 @@ pub mod gds {
             // The reflection is the second column negated, because it runs
             // before the rotation.
             let s = if self.flip { -1 } else { 1 };
-            (self.mag * a, self.mag * b * s, self.mag * c, self.mag * e * s)
+            (
+                self.mag * a,
+                self.mag * b * s,
+                self.mag * c,
+                self.mag * e * s,
+            )
         }
 
         /// `self` applied after `child`.
@@ -471,7 +476,12 @@ pub mod gds {
     }
 
     /// Append an `XY` payload to the coordinate columns.
-    fn points(xs: &mut Vec<i64>, ys: &mut Vec<i64>, payload: &[u8], at: usize) -> Result<(), LayoutError> {
+    fn points(
+        xs: &mut Vec<i64>,
+        ys: &mut Vec<i64>,
+        payload: &[u8],
+        at: usize,
+    ) -> Result<(), LayoutError> {
         if !payload.len().is_multiple_of(8) {
             return Err(LayoutError::Truncated(offset(at)));
         }
@@ -528,7 +538,9 @@ pub mod gds {
                     lib.cells[index].name = name;
                 }
                 ENDSTR => {
-                    let index = open.take().ok_or(LayoutError::UnsupportedRecord(tag, offset(at)))?;
+                    let index = open
+                        .take()
+                        .ok_or(LayoutError::UnsupportedRecord(tag, offset(at)))?;
                     if lib.cells[index].name == StrId(u32::MAX) {
                         return Err(LayoutError::UnsupportedRecord(BGNSTR, offset(at)));
                     }
@@ -685,7 +697,8 @@ pub mod gds {
                 // Accepted, discarded — see this function's doc.
                 PRESENTATION | PATHTYPE | WIDTH | STRANS | MAG | ANGLE => {}
                 _ => {
-                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
+                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)?
+                    {
                         break end;
                     }
                 }
@@ -739,7 +752,8 @@ pub mod gds {
                     seen_xy = true;
                 }
                 _ => {
-                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
+                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)?
+                    {
                         break end;
                     }
                 }
@@ -751,7 +765,10 @@ pub mod gds {
         // to the store.
         let last = lib.xs.len().wrapping_sub(1);
         let first = vert_start as usize;
-        if lib.xs.len() - first >= 2 && lib.xs[first] == lib.xs[last] && lib.ys[first] == lib.ys[last] {
+        if lib.xs.len() - first >= 2
+            && lib.xs[first] == lib.xs[last]
+            && lib.ys[first] == lib.ys[last]
+        {
             lib.xs.pop();
             lib.ys.pop();
         }
@@ -831,7 +848,8 @@ pub mod gds {
                     seen_xy = true;
                 }
                 _ => {
-                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)? {
+                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)?
+                    {
                         break end;
                     }
                 }
@@ -896,7 +914,9 @@ pub mod gds {
         stroke.dirs.reserve(segments);
         for i in 0..segments {
             let (a, b) = (tail[i], head[i]);
-            stroke.dirs.push(((b.0 - a.0).signum(), (b.1 - a.1).signum()));
+            stroke
+                .dirs
+                .push(((b.0 - a.0).signum(), (b.1 - a.1).signum()));
         }
         debug_assert_eq!(stroke.dirs.len(), n - 1, "one direction per segment");
 
@@ -977,7 +997,11 @@ pub mod gds {
         lib.ys.extend(stroke.left.iter().rev().map(|p| p.1));
 
         let vert_len = narrow(lib.xs.len()) - vert_start;
-        debug_assert_eq!(lib.xs.len(), lib.ys.len(), "the coordinate columns diverged");
+        debug_assert_eq!(
+            lib.xs.len(),
+            lib.ys.len(),
+            "the coordinate columns diverged"
+        );
         debug_assert_eq!(
             vert_len as usize,
             2 * n,
@@ -1317,7 +1341,10 @@ pub mod gds {
             let start = elem.vert_start as usize;
             let end = start + elem.vert_len as usize;
             debug_assert!(end <= lib.xs.len(), "vertex run leaves the column");
-            debug_assert!(at.mag >= 1, "magnification was checked integral and positive");
+            debug_assert!(
+                at.mag >= 1,
+                "magnification was checked integral and positive"
+            );
 
             let Some(layer) = self.deck.layers.of_stream(elem.layer, elem.datatype) else {
                 match self.unknown {
@@ -1643,14 +1670,17 @@ mod tests {
                 }
                 // `<strans> ::= STRANS [MAG] [ANGLE]`.
                 if reference.mag != 1 {
-                    let mag = i32::try_from(reference.mag).expect("a test magnification fits an i32");
+                    let mag =
+                        i32::try_from(reference.mag).expect("a test magnification fits an i32");
                     record(&mut out, MAG, &gds_real(f64::from(mag)));
                 }
                 if reference.angle != 0.0 {
                     record(&mut out, ANGLE, &gds_real(reference.angle));
                 }
-                let x = i32::try_from(reference.x).expect("test coordinates fit a GDSII coordinate");
-                let y = i32::try_from(reference.y).expect("test coordinates fit a GDSII coordinate");
+                let x =
+                    i32::try_from(reference.x).expect("test coordinates fit a GDSII coordinate");
+                let y =
+                    i32::try_from(reference.y).expect("test coordinates fit a GDSII coordinate");
                 let mut xy = Vec::with_capacity(8);
                 xy.extend_from_slice(&x.to_be_bytes());
                 xy.extend_from_slice(&y.to_be_bytes());
@@ -1791,10 +1821,8 @@ mod tests {
         let mut elements = Vec::with_capacity(shapes.len());
         let mut handles = Vec::with_capacity(shapes.len());
         for (layer, shape) in &shapes {
-            handles.push(layout.shape(
-                LayerId(u16::try_from(*layer).expect("three layers")),
-                shape,
-            ));
+            handles
+                .push(layout.shape(LayerId(u16::try_from(*layer).expect("three layers")), shape));
             elements.push(boundary(ROWS[*layer].1, ROWS[*layer].2, &shape.0, &shape.1));
         }
         let (store, ids) = layout.finish();
@@ -1809,7 +1837,8 @@ mod tests {
         let deck = three_layer_deck(&mut strings);
         let bytes = gds_library("TOP", &[first_layer_square()]);
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
 
         assert_eq!(layout.store.poly_count(), 1);
         assert_eq!(
@@ -2011,7 +2040,11 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let layout = read.expect("a library built to the format specification");
-        assert_same_store("a known layout through read_layout", &expected, &layout.store);
+        assert_same_store(
+            "a known layout through read_layout",
+            &expected,
+            &layout.store,
+        );
     }
 
     /// The same bytes read twice must produce the same store.
@@ -2104,7 +2137,8 @@ mod tests {
             ),
         ]);
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(
             layout.store.poly_count(),
             2,
@@ -2126,7 +2160,11 @@ mod tests {
         );
 
         let (xs, ys) = layout.store.poly_verts(PolyId(0));
-        assert_eq!(winding_of(xs, ys), Some(Winding::CounterClockwise), "the cell as drawn");
+        assert_eq!(
+            winding_of(xs, ys),
+            Some(Winding::CounterClockwise),
+            "the cell as drawn"
+        );
         let (xs, ys) = layout.store.poly_verts(PolyId(1));
         assert_eq!(
             winding_of(xs, ys),
@@ -2149,14 +2187,12 @@ mod tests {
             (
                 "TOP",
                 &[],
-                &[
-                    sref("LEAF", 0, 0.0, 0, 0),
-                    sref("MID", REFLECT, 0.0, 0, 0),
-                ],
+                &[sref("LEAF", 0, 0.0, 0, 0), sref("MID", REFLECT, 0.0, 0, 0)],
             ),
         ]);
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(layout.store.poly_count(), 2);
         assert_eq!(
             verts(&layout.store, 0),
@@ -2194,7 +2230,8 @@ mod tests {
             ),
         ]);
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(layout.store.poly_count(), 4);
 
         // Each row: the drawn triangle through `R_q · diag(1, −1)`, offset by
@@ -2310,7 +2347,9 @@ mod tests {
     fn labelling_deck(strings: &mut StrTable) -> Deck {
         let layers = layer_table(strings, &LABEL_ROWS);
         let met1 = layers.of_stream(68, 20).expect("the fixture declares met1");
-        let text = layers.of_stream(68, 5).expect("the fixture declares met1_label");
+        let text = layers
+            .of_stream(68, 5)
+            .expect("the fixture declares met1_label");
         Deck {
             connectivity: crate::deck::Connectivity {
                 conductors: vec![met1],
@@ -2330,7 +2369,8 @@ mod tests {
 
     /// Read a library and bind its labels, returning the resolved column.
     fn bound_labels(bytes: &[u8], deck: &Deck) -> Result<Vec<(PolyId, String)>, crate::LabelError> {
-        let mut layout = gds::read(bytes, deck, UnknownLayers::Reject).expect("a well-formed library");
+        let mut layout =
+            gds::read(bytes, deck, UnknownLayers::Reject).expect("a well-formed library");
         layout
             .provenance
             .resolve_labels(&layout.store, &deck.connectivity)?;
@@ -2393,7 +2433,11 @@ mod tests {
         let mut strings = StrTable::default();
         // met1's own drawing layer is declared, and deliberately *not* paired.
         let deck = labelling_deck(&mut strings);
-        let bytes = gds_labelled("TOP", &[met1_square()], &[label(68, 20, 200, 200, "a note")]);
+        let bytes = gds_labelled(
+            "TOP",
+            &[met1_square()],
+            &[label(68, 20, 200, 200, "a note")],
+        );
 
         let bound = bound_labels(&bytes, &deck).expect("an unpaired text is not a fault");
 
@@ -2411,11 +2455,19 @@ mod tests {
         let mut strings = StrTable::default();
         let deck = labelling_deck(&mut strings);
         // Well clear of the square, which spans 0..400 on both axes.
-        let bytes = gds_labelled("TOP", &[met1_square()], &[label(68, 5, 9_000, 9_000, "VDD")]);
+        let bytes = gds_labelled(
+            "TOP",
+            &[met1_square()],
+            &[label(68, 5, 9_000, 9_000, "VDD")],
+        );
 
         match bound_labels(&bytes, &deck) {
             Err(crate::LabelError::Unplaced { x, y, .. }) => {
-                assert_eq!((x, y), (9_000, 9_000), "the refusal names where the label was");
+                assert_eq!(
+                    (x, y),
+                    (9_000, 9_000),
+                    "the refusal names where the label was"
+                );
             }
             Ok(bound) => panic!("a misplaced label was accepted, binding {bound:?}"),
         }
@@ -2509,8 +2561,14 @@ mod tests {
         /// The `SREF` that carries it.
         fn sref_of(self, cell: &'static str) -> Ref {
             let strans = if self.reflect { REFLECT } else { 0 };
-            sref(cell, strans, f64::from(self.quarters) * 90.0, self.dx, self.dy)
-                .magnified(self.mag)
+            sref(
+                cell,
+                strans,
+                f64::from(self.quarters) * 90.0,
+                self.dx,
+                self.dy,
+            )
+            .magnified(self.mag)
         }
     }
 
@@ -2624,7 +2682,11 @@ mod tests {
         assert!(
             base_paths.iter().any(Vec::is_empty)
                 && base_paths.iter().any(|p| p.len() == 2)
-                && base_paths.iter().collect::<std::collections::BTreeSet<_>>().len() == 3,
+                && base_paths
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == 3,
             "clause (d) is vacuous unless the base already partitions its rows \
              across a root path and a two-deep one: {base_paths:?}"
         );
@@ -2632,7 +2694,10 @@ mod tests {
         // Both rings on layer 0 are the same drawn triangle, differing only by
         // the mirror inside MID composed with TOP's quarter turn.
         let relative = |(xs, ys): &(Vec<i64>, Vec<i64>)| -> Vec<(i64, i64)> {
-            xs.iter().zip(ys).map(|(x, y)| (x - xs[0], y - ys[0])).collect()
+            xs.iter()
+                .zip(ys)
+                .map(|(x, y)| (x - xs[0], y - ys[0]))
+                .collect()
         };
         assert_ne!(
             relative(&verts(&base.store, 0)),
@@ -2644,13 +2709,55 @@ mod tests {
 
         // ---- the transforms, every one representable on this fixture.
         let warps = [
-            Warp { mag: 1, reflect: false, quarters: 0, dx: 0, dy: 0 },
-            Warp { mag: 1, reflect: false, quarters: 0, dx: -7_000, dy: 3_000 },
-            Warp { mag: 1, reflect: true, quarters: 0, dx: 0, dy: 0 },
-            Warp { mag: 1, reflect: false, quarters: 1, dx: 0, dy: 0 },
-            Warp { mag: 1, reflect: true, quarters: 3, dx: 1_234, dy: -5_678 },
-            Warp { mag: 3, reflect: true, quarters: 1, dx: -1_000, dy: 2_000 },
-            Warp { mag: 3, reflect: false, quarters: 2, dx: 500, dy: -500 },
+            Warp {
+                mag: 1,
+                reflect: false,
+                quarters: 0,
+                dx: 0,
+                dy: 0,
+            },
+            Warp {
+                mag: 1,
+                reflect: false,
+                quarters: 0,
+                dx: -7_000,
+                dy: 3_000,
+            },
+            Warp {
+                mag: 1,
+                reflect: true,
+                quarters: 0,
+                dx: 0,
+                dy: 0,
+            },
+            Warp {
+                mag: 1,
+                reflect: false,
+                quarters: 1,
+                dx: 0,
+                dy: 0,
+            },
+            Warp {
+                mag: 1,
+                reflect: true,
+                quarters: 3,
+                dx: 1_234,
+                dy: -5_678,
+            },
+            Warp {
+                mag: 3,
+                reflect: true,
+                quarters: 1,
+                dx: -1_000,
+                dy: 2_000,
+            },
+            Warp {
+                mag: 3,
+                reflect: false,
+                quarters: 2,
+                dx: 500,
+                dy: -500,
+            },
         ];
         assert!(
             warps.iter().any(|w| w.reflect)
@@ -2724,11 +2831,7 @@ mod tests {
                 base.provenance.placed_labels(),
                 wrapped.provenance.placed_labels(),
             );
-            assert_eq!(
-                after.len(),
-                before.len(),
-                "{what}: the label count changed"
-            );
+            assert_eq!(after.len(), before.len(), "{what}: the label count changed");
             for (row, (b, a)) in before.iter().zip(after).enumerate() {
                 let (x, y) = w.apply(b.at.x.raw(), b.at.y.raw());
                 assert_eq!(
@@ -2760,7 +2863,13 @@ mod tests {
 
         // The escape is real, not a blanket: a magnification of 10⁶ lands TOP's
         // ring at 2·10¹², past MAX_ABS_DBU. `CoordinateOutOfRange` specifically.
-        let overflow = Warp { mag: 1_000_000, reflect: false, quarters: 0, dx: 0, dy: 0 };
+        let overflow = Warp {
+            mag: 1_000_000,
+            reflect: false,
+            quarters: 0,
+            dx: 0,
+            dy: 0,
+        };
         match gds::read(
             &nested_mirror_library(Some(overflow)),
             &deck,

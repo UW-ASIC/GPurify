@@ -47,6 +47,7 @@ use gpurify::topology::NetTable;
 use gpurify::units::Grid;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Sizes to sweep, in polygons.
@@ -112,7 +113,14 @@ fn timed<T>(stage: &'static str, polygons: u32, work: impl FnOnce() -> T) -> (T,
     let start = Instant::now();
     let value = work();
     let elapsed = start.elapsed();
-    (value, Timing { stage, polygons, elapsed })
+    (
+        value,
+        Timing {
+            stage,
+            polygons,
+            elapsed,
+        },
+    )
 }
 
 /// One corpus at a requested size.
@@ -159,7 +167,11 @@ fn net_extraction_stays_canonical_and_records_its_cost() {
         // agreeing with the minimum-`PolyId` ordering.
         let mut ranks = Vec::with_capacity(corpus.expected_net_polys.len());
         for (net, polys) in corpus.expected_net_polys.iter().enumerate() {
-            let lowest = polys.iter().copied().min().expect("a net has at least one shape");
+            let lowest = polys
+                .iter()
+                .copied()
+                .min()
+                .expect("a net has at least one shape");
             let id = nets.net_of(lowest);
             for &poly in polys {
                 assert_eq!(
@@ -329,21 +341,34 @@ fn the_corpus_is_reproducible_from_its_seed() {
 /// hundreds of independent small ones. The DRC rules and the geometry-only ERC
 /// rules — `check_missing_tie` among them, which reads `design.store` and
 /// `design.derived` and no net at all — are unaffected.
+/// Written exactly once per process, behind a [`OnceLock`].
+///
+/// The scratch path is scoped by process id, but the two callers are separate
+/// `#[test]`s in one binary and so run as parallel threads of one process:
+/// both used to write the same path, and `fs::write` truncates before it
+/// writes, so one could read the file while the other had emptied it. That is
+/// a flake, and it reads as "params.json parses" failing on a deck that is
+/// perfectly valid. The content is a pure function of the fixture deck, so one
+/// copy serves every caller and there is nothing left to race on.
 fn unlabelled_deck(fixtures: &Path) -> std::path::PathBuf {
-    let source = std::fs::read_to_string(fixtures.join("params.json"))
-        .expect("the fixture deck is readable");
-    let mut deck: serde_json::Value =
-        serde_json::from_str(&source).expect("the fixture deck is JSON");
-    deck["connectivity"]
-        .as_object_mut()
-        .expect("the deck declares connectivity")
-        .remove("labels");
+    static DECK: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DECK.get_or_init(|| {
+        let source = std::fs::read_to_string(fixtures.join("params.json"))
+            .expect("the fixture deck is readable");
+        let mut deck: serde_json::Value =
+            serde_json::from_str(&source).expect("the fixture deck is JSON");
+        deck["connectivity"]
+            .as_object_mut()
+            .expect("the deck declares connectivity")
+            .remove("labels");
 
-    let dir = std::env::temp_dir().join(format!("gpurify-bench-deck-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("the scratch directory is writable");
-    let path = dir.join("params.json");
-    std::fs::write(&path, deck.to_string()).expect("the scratch directory is writable");
-    path
+        let dir = std::env::temp_dir().join(format!("gpurify-bench-deck-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch directory is writable");
+        let path = dir.join("params.json");
+        std::fs::write(&path, deck.to_string()).expect("the scratch directory is writable");
+        path
+    })
+    .clone()
 }
 
 /// The grid the fixture corpus is drawn against: 1 dbu = 1 nm.
@@ -539,8 +564,10 @@ impl RuleTiming {
     /// Nanoseconds per examined element, or `None` when the rule examined
     /// nothing and the ratio would be a division by zero dressed as a speed.
     fn per_examined_ns(&self) -> Option<f64> {
-        (self.examined > 0)
-            .then(|| self.rule_only().as_secs_f64() * 1e9 / f64::from(u32::try_from(self.examined).unwrap_or(u32::MAX)))
+        (self.examined > 0).then(|| {
+            self.rule_only().as_secs_f64() * 1e9
+                / f64::from(u32::try_from(self.examined).unwrap_or(u32::MAX))
+        })
     }
 }
 
@@ -575,7 +602,9 @@ fn report_rules(timings: &mut [RuleTiming], floors: [(&str, Duration, Duration);
          domain:"
     );
     for (domain, floor, spread) in floors {
-        println!("    {domain:<4} {floor:?}, which itself moved {spread:?} across three measurements");
+        println!(
+            "    {domain:<4} {floor:?}, which itself moved {spread:?} across three measurements"
+        );
     }
     println!(
         "  A `rule` under its domain's spread is the shared cost wobbling, not a \n  \
@@ -616,48 +645,50 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
     // `rules` replaced by `rows`. The layer table, the connectivity and the
     // process stack all stay: a rule stripped of the layers it names cannot run
     // at all, and neither can ERC without a sheet resistance.
-    let timed_deck = |tag: &str, rows: serde_json::Value, checks: Checks| -> (Duration, Option<RuleRun>) {
-        let mut one = deck.clone();
-        one["rules"] = rows;
-        let deck_path = dir.join(format!("{tag}.json"));
-        std::fs::write(&deck_path, one.to_string()).expect("the scratch directory is writable");
+    let timed_deck =
+        |tag: &str, rows: serde_json::Value, checks: Checks| -> (Duration, Option<RuleRun>) {
+            let mut one = deck.clone();
+            one["rules"] = rows;
+            let deck_path = dir.join(format!("{tag}.json"));
+            std::fs::write(&deck_path, one.to_string()).expect("the scratch directory is writable");
 
-        let inputs = Inputs {
-            layout: fixtures.join("_source/conformance.gds"),
-            deck: deck_path,
-            grid: Some(
-                Grid::new(FIXTURE_DBU_PER_UM).expect("a thousand dbu per micrometre is a grid"),
-            ),
-            reference: None,
-            intent: None,
-            unknown_layers: UnknownLayers::Drop,
+            let inputs = Inputs {
+                layout: fixtures.join("_source/conformance.gds"),
+                deck: deck_path,
+                grid: Some(
+                    Grid::new(FIXTURE_DBU_PER_UM).expect("a thousand dbu per micrometre is a grid"),
+                ),
+                reference: None,
+                intent: None,
+                unknown_layers: UnknownLayers::Drop,
+            };
+
+            // Loaded and extracted once, outside the clock. Both are shared by every
+            // rule in a real run, so charging them to each row would time the
+            // pipeline forty times and call it rule cost.
+            let mut loaded = Loaded::default();
+            load_into(&inputs, &mut loaded).expect("the fixture corpus loads");
+            let mut extracted = Extracted::default();
+            extract_into(&loaded, &mut extracted).expect("the fixture corpus extracts");
+
+            let options = RunOptions {
+                checks,
+                lvs: gpurify::lvs::CompareOptions::default(),
+                quasistatic_nets: Vec::new(),
+                quasistatic_inductance: false,
+                threads: Some(1),
+            };
+
+            let mut outputs = Outputs::default();
+            let start = Instant::now();
+            for _ in 0..RULE_ITERS {
+                outputs = Outputs::default();
+                run_checks(&loaded, &extracted, &options, &mut outputs)
+                    .unwrap_or_else(|why| panic!("{tag}: {why}"));
+            }
+            let elapsed = start.elapsed();
+            (elapsed / RULE_ITERS, outputs.runs.first().copied())
         };
-
-        // Loaded and extracted once, outside the clock. Both are shared by every
-        // rule in a real run, so charging them to each row would time the
-        // pipeline forty times and call it rule cost.
-        let mut loaded = Loaded::default();
-        load_into(&inputs, &mut loaded).expect("the fixture corpus loads");
-        let mut extracted = Extracted::default();
-        extract_into(&loaded, &mut extracted).expect("the fixture corpus extracts");
-
-        let options = RunOptions {
-            checks,
-            lvs: gpurify::lvs::CompareOptions::default(),
-            quasistatic_nets: Vec::new(),
-            threads: Some(1),
-        };
-
-        let mut outputs = Outputs::default();
-        let start = Instant::now();
-        for _ in 0..RULE_ITERS {
-            outputs = Outputs::default();
-            run_checks(&loaded, &extracted, &options, &mut outputs)
-                .unwrap_or_else(|why| panic!("{tag}: {why}"));
-        }
-        let elapsed = start.elapsed();
-        (elapsed / RULE_ITERS, outputs.runs.first().copied())
-    };
 
     // ERC is selected only for rules ERC owns, and that is not tidiness — it is
     // what makes 24 of the 40 rows readable. `run_erc` extracts the power nets
@@ -701,7 +732,10 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
             timed_deck("baseline", empty(), checks).0,
             timed_deck("baseline", empty(), checks).0,
         ];
-        let least = floors.into_iter().min().expect("three measurements have a minimum");
+        let least = floors
+            .into_iter()
+            .min()
+            .expect("three measurements have a minimum");
         // How far the floor moved while nothing about the deck changed. Carried
         // out to the printer, because it is the resolution of every other row:
         // a rule whose subtracted cost is under it is the shared cost wobbling.
@@ -723,7 +757,8 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
         let (call, record) = timed_deck(id, rows, checks);
         timings.push(RuleTiming {
             rule: id.clone(),
-            outcome: record.map_or_else(|| "NoRecord".to_owned(), |run| format!("{:?}", run.outcome)),
+            outcome: record
+                .map_or_else(|| "NoRecord".to_owned(), |run| format!("{:?}", run.outcome)),
             examined: record.map_or(0, |run| run.examined),
             call,
             baseline: if checks.erc { erc_floor } else { drc_floor },
@@ -749,7 +784,10 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
 
     report_rules(
         &mut timings,
-        [("drc", drc_floor, drc_spread), ("erc", erc_floor, erc_spread)],
+        [
+            ("drc", drc_floor, drc_spread),
+            ("erc", erc_floor, erc_spread),
+        ],
     );
 }
 

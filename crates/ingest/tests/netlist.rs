@@ -174,8 +174,8 @@ mp y a vdd vdd pfet w=4
     );
     assert_eq!(strings.resolve(netlist.subckt_name[0]), "inv");
 
-    let ports = &netlist.port_net[netlist.subckt_port_start[0] as usize
-        ..netlist.subckt_port_start[1] as usize];
+    let ports = &netlist.port_net
+        [netlist.subckt_port_start[0] as usize..netlist.subckt_port_start[1] as usize];
     let port_names: Vec<&str> = ports
         .iter()
         .map(|n| strings.resolve(netlist.net_name[n.0 as usize]))

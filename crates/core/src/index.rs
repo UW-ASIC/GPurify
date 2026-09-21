@@ -133,7 +133,10 @@ impl SpatialIndex {
         let (ox, oy) = (extent.xlo.raw(), extent.ylo.raw());
         let span_x = extent.xhi.raw() - ox + 1;
         let span_y = extent.yhi.raw() - oy + 1;
-        debug_assert!(span_x >= 1 && span_y >= 1, "a real box is not the EMPTY sentinel");
+        debug_assert!(
+            span_x >= 1 && span_y >= 1,
+            "a real box is not the EMPTY sentinel"
+        );
         debug_assert!(
             ox.unsigned_abs() <= MAX_ABS_DBU.unsigned_abs()
                 && extent.xhi.raw().unsigned_abs() <= MAX_ABS_DBU.unsigned_abs(),
@@ -163,7 +166,10 @@ impl SpatialIndex {
             .max(1)
             .max((span_x + side - 1) / side)
             .max((span_y + side - 1) / side);
-        debug_assert!(widest >= extents[mid], "the maximum is not below the median");
+        debug_assert!(
+            widest >= extents[mid],
+            "the maximum is not below the median"
+        );
 
         Grid::build_into(bboxes, rows.start, extent, fine_cell, 0, &mut out.fine);
         // A layer whose widest box already fits the fine cell needs no second
@@ -224,7 +230,10 @@ impl Grid {
         out: &mut Self,
     ) {
         debug_assert!(cell >= 1, "a cell is at least one database unit wide");
-        debug_assert!(min_ext >= 0 && min_ext <= cell, "the level's extent band is empty");
+        debug_assert!(
+            min_ext >= 0 && min_ext <= cell,
+            "the level's extent band is empty"
+        );
 
         out.clear();
         out.cell_size = Dbu::new_unchecked(cell);
@@ -274,7 +283,10 @@ impl Grid {
             out.bucket_start[b] += out.bucket_start[b - 1];
         }
         let filed = out.bucket_start[buckets] as usize;
-        debug_assert!(filed >= members, "every member is filed under at least one cell");
+        debug_assert!(
+            filed >= members,
+            "every member is filed under at least one cell"
+        );
         debug_assert!(filed <= 4 * members, "a member spans more than 2x2 cells");
         out.rows.resize(filed, 0);
 
@@ -433,7 +445,11 @@ fn prune_pairs<const SAME: bool, O: ObservePairs>(
     // conditional.
     let kept = {
         let pairs = out.as_mut_slice();
-        debug_assert_eq!(pairs.len(), examined, "the compact reads what the gather wrote");
+        debug_assert_eq!(
+            pairs.len(),
+            examined,
+            "the compact reads what the gather wrote"
+        );
         let mut w = 0usize;
         for i in 0..examined {
             let (a, b) = pairs[i];
@@ -503,7 +519,15 @@ fn gather_near<const SAME: bool, O: ObservePairs>(
     } else {
         0
     };
-    gather_level::<SAME, O>(&index.coarse, coarse_base, distance, a, a_box, out, observer);
+    gather_level::<SAME, O>(
+        &index.coarse,
+        coarse_base,
+        distance,
+        a,
+        a_box,
+        out,
+        observer,
+    );
 }
 
 /// [`gather_near`] against one level.
@@ -534,7 +558,10 @@ fn gather_level<const SAME: bool, O: ObservePairs>(
     // direction that fails closed; the per-bucket test below takes the slop
     // back out.
     let pad = (distance.raw() / cell + 1) * cell;
-    debug_assert!(pad > distance.raw(), "the cell window must cover the distance");
+    debug_assert!(
+        pad > distance.raw(),
+        "the cell window must cover the distance"
+    );
 
     let (c0, c1) = cell_span(a_box.xlo.raw() - pad, a_box.xhi.raw() + pad, ox, cell, nx);
     let (r0, r1) = cell_span(a_box.ylo.raw() - pad, a_box.yhi.raw() + pad, oy, cell, ny);
@@ -553,10 +580,8 @@ fn gather_level<const SAME: bool, O: ObservePairs>(
             // `bucket_skipped` exists to expose.
             if !grid.cell_bbox(c, r).within(a_box, distance) {
                 if O::ENABLED {
-                    let id =
-                        bucket_base + u32::try_from(bucket).expect("a bucket id fits a u32");
-                    let rows =
-                        u32::try_from(end - start).expect("a bucket's row count fits a u32");
+                    let id = bucket_base + u32::try_from(bucket).expect("a bucket id fits a u32");
+                    let rows = u32::try_from(end - start).expect("a bucket's row count fits a u32");
                     observer.bucket_skipped(id, rows);
                 }
                 continue;

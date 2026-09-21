@@ -12,7 +12,7 @@
 //! figure at distance zero — a wire, not a violation — so every rule labels the
 //! layer's connected figures first and skips pairs within one figure.
 
-use super::{COLUMNS_DIVERGED, gap_midpoint, poly_dist2, ring_segs, row_columns, seg_bbox};
+use super::{gap_midpoint, poly_dist2, ring_segs, row_columns, seg_bbox, COLUMNS_DIVERGED};
 use crate::rules::width::narrowest_width;
 use crate::{record_run, Design, Scratch};
 use gpurify_core::connectivity::{components_into, ComponentLabel};
@@ -420,8 +420,9 @@ pub fn check_min_spacing_diff(
         // Stated once over the column rather than once per pair, so the compact
         // below carries no panic edge.
         debug_assert!(
-            pairs.iter().all(|&(a, b)| store.poly_layer(a) == a_layer
-                && store.poly_layer(b) == b_layer),
+            pairs
+                .iter()
+                .all(|&(a, b)| store.poly_layer(a) == a_layer && store.poly_layer(b) == b_layer),
             "a cross-layer candidate names its two layers in the order the rule does"
         );
 
@@ -535,7 +536,11 @@ pub fn check_eol_spacing(
         // `k < w`, and `w <= n <= capacity`.
         unsafe { separate.set_len(w) };
         let merged_dropped = w;
-        debug_assert_eq!(merged_dropped, separate.len(), "the compact kept what it counted");
+        debug_assert_eq!(
+            merged_dropped,
+            separate.len(),
+            "the compact kept what it counted"
+        );
 
         // 2. Measure. `areas` is dead once `label_figures` has read it, so the
         //    eol distances land back in it. Pairs with no end of line carry
@@ -553,7 +558,11 @@ pub fn check_eol_spacing(
                     .unwrap_or(NO_EOL),
             );
         }
-        debug_assert_eq!(areas.len(), separate.len(), "one measurement per separate pair");
+        debug_assert_eq!(
+            areas.len(),
+            separate.len(),
+            "one measurement per separate pair"
+        );
 
         // 3. Count what was judged: the pairs that had an end of line at all.
         let mut examined = 0u64;
@@ -909,8 +918,7 @@ pub fn check_corner_to_corner(
 /// rather than its own polygon's, because `ValidatedLayer` publishes no
 /// store-row provenance. Deliberately fail-closed — over-applying the wide
 /// limit costs a re-check, under-applying it misses a violation. The fix is
-/// hole-to-polygon provenance on `ValidatedLayer`, logged in
-/// `docs/SIGNATURE_DEFECTS.md`.
+/// hole-to-polygon provenance on `ValidatedLayer`.
 fn wide_flags_into(
     store: &GeometryStore,
     layer: LayerId,

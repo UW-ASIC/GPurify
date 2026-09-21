@@ -63,7 +63,11 @@ pub fn gmres<M: MatVec>(
     workspace: &mut Workspace,
 ) -> Result<Converged, SolveError> {
     let n = b.len();
-    debug_assert_eq!(operator.dim(), n, "the operator's dimension is `b`'s length");
+    debug_assert_eq!(
+        operator.dim(),
+        n,
+        "the operator's dimension is `b`'s length"
+    );
     debug_assert_eq!(x.len(), n, "`x` is the operator's dimension");
     debug_assert!(
         options.tolerance > 0.0,
@@ -446,7 +450,11 @@ const INNER_TOLERANCE: f64 = 1e-3;
 /// residual.
 pub fn residual<M: MatVec>(operator: &M, b: &[f64], x: &[f64], scratch: &mut Vec<f64>) -> f64 {
     let n = b.len();
-    debug_assert_eq!(operator.dim(), n, "the operator's dimension is `b`'s length");
+    debug_assert_eq!(
+        operator.dim(),
+        n,
+        "the operator's dimension is `b`'s length"
+    );
     debug_assert_eq!(x.len(), n, "`x` is the operator's dimension");
 
     scratch.clear();

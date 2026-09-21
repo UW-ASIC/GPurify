@@ -32,7 +32,10 @@ fn area_case(measured: i128, limit: i128) -> ViolationCase {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::Area { layer: A, width: 100 },
+            kind: ShapeKind::Area {
+                layer: A,
+                width: 100,
+            },
         },
         (0, 0),
         Amount::Area(measured),
@@ -218,7 +221,10 @@ fn a_hole_one_square_unit_under_the_limit_is_reported_at_the_hole() {
     let _ = assert_has_violation(&sink.out, &case.expected);
 
     let run = assert_rule_ran(&sink.runs, RULE);
-    assert_eq!(run.examined, 1, "examined counts holes, and the ring has one");
+    assert_eq!(
+        run.examined, 1,
+        "examined counts holes, and the ring has one"
+    );
     assert_eq!(run.violations, 1);
 }
 

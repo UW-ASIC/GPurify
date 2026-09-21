@@ -91,8 +91,7 @@ pub fn write_spice(
         writeln!(out, "* written: {stamp}").expect(INFALLIBLE);
     }
     // This signature holds no `Grid`, so it can name no physical unit; saying so
-    // keeps a simulator from reading database units as metres. Recorded in
-    // `docs/SIGNATURE_DEFECTS.md`.
+    // keeps a simulator from reading database units as metres.
     writeln!(out, "* lengths below are in database units").expect(INFALLIBLE);
 
     // ponytail: `O(nets · log ports)`, because `PortTable` publishes none of
@@ -243,7 +242,7 @@ pub fn write_spice(
 /// named `net:index` and the bare net name is not one of them, so terminals
 /// attach at their net's *first* node, or every terminal would sit on a node no
 /// parasitic element touches. A stated lumping: `ParasiticNetwork` carries no
-/// terminal-to-node column. Filed in `docs/SIGNATURE_DEFECTS.md` under `pex`.
+/// terminal-to-node column.
 fn put_terminal_node(
     net: NetId,
     spliced: Option<&ParasiticNetwork>,

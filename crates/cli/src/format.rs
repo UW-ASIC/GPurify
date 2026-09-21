@@ -93,8 +93,7 @@ pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: 
     // here: `gpurify-lvs` is not a dependency and `gpurify_engine` re-exports
     // `Outputs` without it, so no `match` is writable. Names therefore print as
     // interned `StrId`s. Not a lost finding — every discrepancy of a `Mismatch`
-    // is already an error row above. Filed under `## cli` in
-    // `docs/SIGNATURE_DEFECTS.md`.
+    // is already an error row above.
     if let Some(verdict) = &outputs.lvs {
         let _ = writeln!(out, "lvs: {verdict:?}");
     }
@@ -235,8 +234,8 @@ mod tests {
 
     /// Append one row to the violation columns directly.
     ///
-    /// A macro because `LayerId` and `PolyId` cannot appear in a signature here,
-    /// and because `Violations::push` is still a `todo!()` body.
+    /// A macro because `LayerId` and `PolyId` cannot appear in a signature
+    /// here.
     macro_rules! push_row {
         ($violations:expr, $rule:expr, $layer:expr, $at:expr, $measured:expr, $limit:expr, $shape:expr) => {{
             let violations: &mut Violations = $violations;

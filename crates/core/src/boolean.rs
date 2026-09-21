@@ -142,13 +142,7 @@ pub fn offset_into(
 }
 
 /// `p` minus `q`, both swept over the same axis.
-fn difference_over(
-    axis: &[i64],
-    p: &[VEdge],
-    q: &[VEdge],
-    sweep: &mut Sweep,
-    out: &mut Slabs,
-) {
+fn difference_over(axis: &[i64], p: &[VEdge], q: &[VEdge], sweep: &mut Sweep, out: &mut Slabs) {
     let mut sp = Slabs::default();
     let mut sq = Slabs::default();
     occupancy(p, axis, sweep, &mut sp);
@@ -295,11 +289,7 @@ fn ring_mark(len: usize) -> u32 {
 
 /// Copy one validated ring into the flat columns, refusing arbitrary angles:
 /// an edge with `(x0 != x1) & (y0 != y1)` is skew.
-fn push_ring(
-    ring: RingRef<'_>,
-    sweep: &mut Sweep,
-    rings: &mut Rings,
-) -> Result<(), BooleanError> {
+fn push_ring(ring: RingRef<'_>, sweep: &mut Sweep, rings: &mut Rings) -> Result<(), BooleanError> {
     let (xs, ys) = ring.coords();
     debug_assert_eq!(xs.len(), ys.len(), "a ring's two columns are parallel");
     let n = xs.len();
@@ -401,10 +391,7 @@ fn vedges_into(rings: &Rings, out: &mut Vec<VEdge>) {
     out.reserve(rings.xs.len());
 
     for ring in 0..rings.start.len().saturating_sub(1) {
-        let (lo, hi) = (
-            rings.start[ring] as usize,
-            rings.start[ring + 1] as usize,
-        );
+        let (lo, hi) = (rings.start[ring] as usize, rings.start[ring + 1] as usize);
         let n = hi - lo;
         for i in 0..n {
             let (a, b) = (lo + i, lo + (i + 1) % n);

@@ -157,7 +157,12 @@ fn terminal_ranges_tile_the_terminal_columns_without_gap_or_overlap() {
 fn a_reference_subcircuit_projects_to_the_graph_it_describes() {
     let netlist = one_subcircuit();
     let mut graph = RefGraph::default();
-    from_reference_into(&netlist, SubcktId(0), &gpurify_ingest::StrTable::default(), &mut graph);
+    from_reference_into(
+        &netlist,
+        SubcktId(0),
+        &gpurify_ingest::StrTable::default(),
+        &mut graph,
+    );
     let graph = &graph.0;
 
     assert_eq!(graph.device_count(), 2);
@@ -198,7 +203,13 @@ fn a_reference_subcircuit_projects_to_the_graph_it_describes() {
     assert_eq!(graph.port_net, [0, 1]);
     assert_eq!(
         graph.net_name,
-        [Some(VDD), Some(VSS), Some(StrId(32)), Some(StrId(33)), Some(StrId(34))]
+        [
+            Some(VDD),
+            Some(VSS),
+            Some(StrId(32)),
+            Some(StrId(33)),
+            Some(StrId(34))
+        ]
     );
 }
 
@@ -294,4 +305,3 @@ fn a_shared_net_lists_every_terminal_that_lands_on_it() {
     assert_eq!(graph.terminals_on(0), [(0, Gate)]);
     assert_eq!(graph.terminals_on(4), [(1, Source)]);
 }
-

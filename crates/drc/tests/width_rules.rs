@@ -12,16 +12,16 @@ mod common;
 
 use common::{Env, Sink, A, RULE};
 use gpurify_core::LayerId;
+use gpurify_drc::rules::spacing::{check_min_spacing, MinSpacingTable};
 use gpurify_drc::rules::width::{
     check_max_width, check_min_edge_length, check_min_width, check_notch, narrowest_notch,
     narrowest_width, shortest_edge, MaxWidthTable, MinEdgeLengthTable, MinWidthTable, NotchTable,
 };
-use gpurify_drc::rules::spacing::{check_min_spacing, MinSpacingTable};
 use gpurify_report::{Severity, Violation};
 use gpurify_testgen::shapes::{hole, l_shape, plus_shape, rect, u_shape, LayoutBuilder};
 use gpurify_testgen::{
-    assert_clean, assert_has_violation, assert_only_violation, assert_rule_ran, dbu, point,
-    layout_with_violation, Amount, ShapeKind, ViolationCase, ViolationShape,
+    assert_clean, assert_has_violation, assert_only_violation, assert_rule_ran, dbu,
+    layout_with_violation, point, Amount, ShapeKind, ViolationCase, ViolationShape,
 };
 
 /// A rectangle exactly `measured` units across and 1000 long.
@@ -30,7 +30,10 @@ fn width_case(measured: i64, limit: i64) -> ViolationCase {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::Width { layer: A, run: 1_000 },
+            kind: ShapeKind::Width {
+                layer: A,
+                run: 1_000,
+            },
         },
         (0, 0),
         Amount::Length(measured),
@@ -175,7 +178,10 @@ fn two_short_edges_on_one_shape_are_two_violations_at_two_coordinates() {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::EdgeLength { layer: A, body: 1_000 },
+            kind: ShapeKind::EdgeLength {
+                layer: A,
+                body: 1_000,
+            },
         },
         (0, 0),
         Amount::Length(40),
@@ -226,7 +232,10 @@ fn edges_exactly_at_the_minimum_length_are_clean_over_a_nonzero_edge_count() {
         ViolationShape {
             rule: RULE,
             severity: Severity::Error,
-            kind: ShapeKind::EdgeLength { layer: A, body: 1_000 },
+            kind: ShapeKind::EdgeLength {
+                layer: A,
+                body: 1_000,
+            },
         },
         (0, 0),
         Amount::Length(40),

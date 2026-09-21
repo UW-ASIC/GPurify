@@ -13,7 +13,7 @@ use gpurify_core::{LayerId, PolyId};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
 use gpurify_report::{
-    Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
+    record_run, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_topology::{DeviceTable, NetId, NetTable, PortTable};
 use gpurify_units::Dbu;
@@ -148,7 +148,14 @@ pub fn check_floating_nets(
         floating.len(),
         "the compact and the violations it wrote disagree"
     );
-    record_run(runs, out, before, FLOATING_NET, Outcome::Ran, u64::from(net_count));
+    record_run(
+        runs,
+        out,
+        before,
+        FLOATING_NET,
+        Outcome::Ran,
+        u64::from(net_count),
+    );
 }
 
 /// Two different labels resolving to one net, or one label to two nets.
@@ -198,7 +205,10 @@ pub fn check_label_conflicts(
     // SAFETY: every slot in `0..w` was written when `w` held that value, and
     // `w <= pairs == capacity`.
     unsafe { clashes.set_len(w) };
-    debug_assert!(clashes.len() <= pairs, "more clashing pairs than adjacent pairs");
+    debug_assert!(
+        clashes.len() <= pairs,
+        "more clashing pairs than adjacent pairs"
+    );
 
     for &((_, a), (_, b)) in &clashes {
         out.push(Violation {
@@ -212,7 +222,14 @@ pub fn check_label_conflicts(
         });
     }
 
-    record_run(runs, out, before, LABEL_CONFLICT, Outcome::Ran, u64::from(net_count));
+    record_run(
+        runs,
+        out,
+        before,
+        LABEL_CONFLICT,
+        Outcome::Ran,
+        u64::from(net_count),
+    );
 }
 
 /// Net seeds that disagree: two labelled shapes extraction merged into one net
@@ -250,15 +267,18 @@ pub fn check_net_seed_conflicts(
         });
     }
 
-    record_run(runs, out, before, NET_SEED_CONFLICT, Outcome::Ran, u64::from(seeds));
+    record_run(
+        runs,
+        out,
+        before,
+        NET_SEED_CONFLICT,
+        Outcome::Ran,
+        u64::from(seeds),
+    );
 }
 
 /// Device counts by family, against what the deck says is possible.
-pub fn check_device_counts(
-    devices: &DeviceTable,
-    out: &mut Violations,
-    runs: &mut Vec<RuleRun>,
-) {
+pub fn check_device_counts(devices: &DeviceTable, out: &mut Violations, runs: &mut Vec<RuleRun>) {
     let before = out.len();
     debug_assert_eq!(
         devices.terminal_start.len(),
@@ -278,11 +298,7 @@ pub fn check_device_counts(
 
 /// Devices whose measured parameters fall outside the deck's declared range for
 /// their model.
-pub fn check_parametric(
-    devices: &DeviceTable,
-    out: &mut Violations,
-    runs: &mut Vec<RuleRun>,
-) {
+pub fn check_parametric(devices: &DeviceTable, out: &mut Violations, runs: &mut Vec<RuleRun>) {
     let before = out.len();
     debug_assert_eq!(
         devices.param_start.len(),
@@ -306,11 +322,7 @@ pub fn check_parametric(
 
 /// Structural sanity of the extracted graph itself: a terminal on no net, a
 /// device with the wrong terminal count for its family.
-pub fn check_topology(
-    layout: &LayoutGraph,
-    out: &mut Violations,
-    runs: &mut Vec<RuleRun>,
-) {
+pub fn check_topology(layout: &LayoutGraph, out: &mut Violations, runs: &mut Vec<RuleRun>) {
     let graph = &layout.0;
     let devices = graph.device_kind.len();
     let net_count = narrow(graph.net_name.len());
@@ -322,8 +334,7 @@ pub fn check_topology(
         "a net column and a role column arrive parallel"
     );
     debug_assert!(
-        graph.device_terminal_start.is_empty()
-            || graph.device_terminal_start.len() == devices + 1,
+        graph.device_terminal_start.is_empty() || graph.device_terminal_start.len() == devices + 1,
         "the terminal CSR carries one offset per device plus a terminator"
     );
     debug_assert!(
@@ -404,7 +415,11 @@ pub fn check_topology(
         return;
     }
 
-    debug_assert_eq!(graph.device_kind.len(), width.len(), "SoA columns must agree");
+    debug_assert_eq!(
+        graph.device_kind.len(),
+        width.len(),
+        "SoA columns must agree"
+    );
     let mut wrong: Vec<(DeviceKind, u32)> = Vec::with_capacity(devices);
     let slots = &mut wrong.spare_capacity_mut()[..devices];
     let mut w = 0usize;
@@ -425,7 +440,10 @@ pub fn check_topology(
     // SAFETY: every slot in `0..w` was written when `w` held that value, and
     // `w <= devices == capacity`.
     unsafe { wrong.set_len(w) };
-    debug_assert!(wrong.len() <= devices, "more malformed devices than devices");
+    debug_assert!(
+        wrong.len() <= devices,
+        "more malformed devices than devices"
+    );
 
     for &(kind, measured) in &wrong {
         out.push(Violation {
@@ -438,40 +456,13 @@ pub fn check_topology(
             limit: Measurement::Count(FULL_WIDTHS[(kind as usize) & 7]),
         });
     }
-    record_run(runs, out, before, TERMINAL_COUNT, Outcome::Ran, examined(devices));
-}
-
-/// Close out one check: append its [`RuleRun`], with the violation count derived
-/// from `out.len()` before and after rather than counted by the caller.
-fn record_run(
-    runs: &mut Vec<RuleRun>,
-    out: &Violations,
-    violations_before: usize,
-    rule: StrId,
-    outcome: Outcome,
-    examined: u64,
-) {
-    let after = out.len();
-    debug_assert!(
-        violations_before <= after,
-        "a check started at {violations_before} of a table that now holds {after}: \
-         the shared violation table was truncated under a running check"
-    );
-    let pushed = after - violations_before;
-
-    let before_rows = runs.len();
-    runs.push(RuleRun {
-        rule,
-        outcome,
-        examined,
-        // Saturating, not wrapping: wrapping past four billion findings would
-        // read as a nearly-clean check.
-        violations: u32::try_from(pushed).unwrap_or(u32::MAX),
-    });
-    debug_assert_eq!(
-        runs.len(),
-        before_rows + 1,
-        "one check row produces exactly one run row"
+    record_run(
+        runs,
+        out,
+        before,
+        TERMINAL_COUNT,
+        Outcome::Ran,
+        examined(devices),
     );
 }
 
@@ -480,7 +471,11 @@ fn record_run(
 fn adjacent<T>(column: &[T]) -> (&[T], &[T]) {
     let head = column.len().saturating_sub(1);
     let tail = column.len().min(1);
-    debug_assert_eq!(head, column.len() - tail, "the two views name a different pair count");
+    debug_assert_eq!(
+        head,
+        column.len() - tail,
+        "the two views name a different pair count"
+    );
     (&column[..head], &column[tail..])
 }
 
@@ -494,4 +489,3 @@ fn first_poly(nets: &NetTable, net: NetId) -> PolyId {
 fn examined(count: usize) -> u64 {
     u64::try_from(count).expect("a row count fits a u64")
 }
-

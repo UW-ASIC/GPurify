@@ -132,13 +132,11 @@ pub fn interpret(
         debug_assert!((layout_node as usize) < layout_nodes, "pair names no node");
         debug_assert!((ref_node as usize) < ref_nodes, "pair names no node");
         debug_assert_eq!(
-            layout_mate[layout_node as usize],
-            UNPAIRED,
+            layout_mate[layout_node as usize], UNPAIRED,
             "layout node {layout_node} paired twice"
         );
         debug_assert_eq!(
-            ref_mate[ref_node as usize],
-            UNPAIRED,
+            ref_mate[ref_node as usize], UNPAIRED,
             "reference node {ref_node} paired twice"
         );
         layout_mate[layout_node as usize] = ref_node;
@@ -248,11 +246,14 @@ fn compare_identity(
 ) {
     let (mine, theirs) = (pair.0 as usize, pair.1 as usize);
     debug_assert!(mine < layout.device_count(), "pair names no layout device");
-    debug_assert!(theirs < reference.device_count(), "pair names no reference device");
+    debug_assert!(
+        theirs < reference.device_count(),
+        "pair names no reference device"
+    );
 
     let (layout_model, ref_model) = (layout.device_model[mine], reference.device_model[theirs]);
-    let same = (layout.device_kind[mine] == reference.device_kind[theirs])
-        & (layout_model == ref_model);
+    let same =
+        (layout.device_kind[mine] == reference.device_kind[theirs]) & (layout_model == ref_model);
     if same {
         return;
     }
@@ -304,7 +305,11 @@ fn compare_terminals(
     let (layout_mate, ref_mate) = mates;
     let (layout_nets, layout_roles) = layout.terminals_of(layout_device);
     let (ref_nets, ref_roles) = reference.terminals_of(ref_device);
-    debug_assert_eq!(layout_nets.len(), layout_roles.len(), "a terminal without a role");
+    debug_assert_eq!(
+        layout_nets.len(),
+        layout_roles.len(),
+        "a terminal without a role"
+    );
     debug_assert_eq!(ref_nets.len(), ref_roles.len(), "a terminal without a role");
 
     let (mine, theirs) = (&mut scratch.layout_terminals, &mut scratch.ref_terminals);
@@ -428,7 +433,11 @@ fn compare_params(
             let mine_first = layout_param < ref_param;
             found.push(undeclared_param(
                 pair,
-                if mine_first { Side::Layout } else { Side::Reference },
+                if mine_first {
+                    Side::Layout
+                } else {
+                    Side::Reference
+                },
                 if mine_first { layout_param } else { ref_param },
             ));
             at_mine += usize::from(mine_first);

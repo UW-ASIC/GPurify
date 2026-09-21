@@ -4,7 +4,7 @@
 //! when they are physically adjacent, because the failure guarded against is
 //! one etch defect taking out one cut.
 
-use super::{COLUMNS_DIVERGED, centre, gap_midpoint, poly_dist2, row_columns};
+use super::{centre, gap_midpoint, poly_dist2, row_columns, COLUMNS_DIVERGED};
 use crate::{record_run, Design, Scratch};
 use gpurify_core::connectivity::components_into;
 use gpurify_core::index::{candidate_pairs_into, SpatialIndex};
@@ -125,7 +125,10 @@ pub fn check_redundant_via(
             "a cut counted more neighbours than there are other cuts on the layer"
         );
         debug_assert_eq!(
-            rect_start.iter().map(|&count| u64::from(count)).sum::<u64>(),
+            rect_start
+                .iter()
+                .map(|&count| u64::from(count))
+                .sum::<u64>(),
             2 * areas.iter().filter(|&&d2| d2 <= within2).count() as u64,
             "a pair in reach credits exactly two cuts, and a pair out of reach none"
         );
@@ -142,7 +145,10 @@ pub fn check_redundant_via(
             // The cut is one of the cuts in its own neighbourhood.
             let count = neighbours + 1;
             let cut = PolyId(row);
-            debug_assert!(count as usize <= n, "a cut has more neighbours than the layer holds");
+            debug_assert!(
+                count as usize <= n,
+                "a cut has more neighbours than the layer holds"
+            );
 
             if count < min_count {
                 out.push(Violation {

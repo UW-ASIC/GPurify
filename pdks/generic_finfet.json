@@ -168,27 +168,42 @@
     "unconnected_routing_pin":      { "kind": "unconnected_pin", "layers": ["li", "met1", "met2", "met3", "met4", "met5"], "params": {} }
   },
 
+  "derived": [
+    { "name": "ngate",       "op": "and", "layers": ["poly", "diff", "nsdm"] },
+    { "name": "pgate",       "op": "and", "layers": ["poly", "diff", "psdm"] },
+    { "name": "diff_active", "op": "not", "layers": ["diff", "poly"] }
+  ],
+
   "connectivity": {
-    "conductors": ["diff", "poly", "li", "met1", "met2", "met3", "met4", "met5"],
+    "conductors": ["diff_active", "poly", "li", "met1", "met2", "met3", "met4", "met5"],
     "intra_layer_touch": true,
     "vias": [
-      { "layer": "licon", "connects": ["diff", "li"] },
+      { "layer": "licon", "connects": ["diff_active", "li"] },
       { "layer": "licon", "connects": ["poly", "li"] },
       { "layer": "mcon", "connects": ["li", "met1"] },
       { "layer": "via1", "connects": ["met1", "met2"] },
       { "layer": "via2", "connects": ["met2", "met3"] },
       { "layer": "via3", "connects": ["met3", "met4"] },
       { "layer": "via4", "connects": ["met4", "met5"] }
+    ],
+    "labels": [
+      { "layer": "li",   "names": "li"   },
+      { "layer": "met1", "names": "met1" },
+      { "layer": "met2", "names": "met2" },
+      { "layer": "met3", "names": "met3" },
+      { "layer": "met4", "names": "met4" },
+      { "layer": "met5", "names": "met5" }
     ]
   },
 
   "device_recognition": [
-    { "kind": "mos", "marker": "nsdm", "model": "nfet", "terminals": ["poly", "diff", "diff"] },
-    { "kind": "mos", "marker": "psdm", "model": "pfet", "terminals": ["poly", "diff", "diff", "nwell"] }
+    { "kind": "mos", "marker": "ngate", "model": "nfet", "terminals": ["poly", "diff_active", "diff_active"] },
+    { "kind": "mos", "marker": "pgate", "model": "pfet", "terminals": ["poly", "diff_active", "diff_active"] }
   ],
 
   "pex": {
     "diff":  { "thickness_nm": 150,  "height_nm": 0,    "sheet_res_ohm_sq": 8.0,   "area_cap_af_um2": 940.0, "fringe_cap_af_um": 250.0, "dielectric_k": 4.2 },
+    "diff_active": { "thickness_nm": 150, "height_nm": 0, "sheet_res_ohm_sq": 8.0, "area_cap_af_um2": 940.0, "fringe_cap_af_um": 250.0, "dielectric_k": 4.2 },
     "poly":  { "thickness_nm": 200,  "height_nm": 150,  "sheet_res_ohm_sq": 48.2,  "area_cap_af_um2": 106.0, "fringe_cap_af_um": 55.0,  "dielectric_k": 4.2 },
     "licon": { "thickness_nm": 780,  "height_nm": 150,  "sheet_res_ohm_sq": 15.0,  "dielectric_k": 4.2 },
     "li":    { "thickness_nm": 100,  "height_nm": 930,  "sheet_res_ohm_sq": 12.8,  "area_cap_af_um2": 37.0,  "fringe_cap_af_um": 40.0,  "dielectric_k": 4.2 },

@@ -76,7 +76,14 @@ pub fn refine_into(
     max_rounds: u32,
     out: &mut Partition,
 ) -> Refinement {
-    refine_observed(layout, reference, tie_break, max_rounds, out, &mut NoObserve)
+    refine_observed(
+        layout,
+        reference,
+        tie_break,
+        max_rounds,
+        out,
+        &mut NoObserve,
+    )
 }
 
 /// How refinement ended.
@@ -161,10 +168,9 @@ fn device_signature(graph: &Graph, device: u32, own: ClassId, net_class: &[Class
     }
 
     let head = mix(DEVICE_TAG ^ (u64::from(own.0) << 8));
-    let head = mix(
-        head ^ kind_code(graph.device_kind[device as usize])
-            ^ (u64::from(graph.device_model[device as usize].0) << 8),
-    );
+    let head = mix(head
+        ^ kind_code(graph.device_kind[device as usize])
+        ^ (u64::from(graph.device_model[device as usize].0) << 8));
     mix(head ^ neighbours)
 }
 
@@ -191,7 +197,10 @@ fn push_signatures(graph: &Graph, class: &[ClassId], offset: u32, out: &mut Vec<
     // renumbers one node onto another.
     for (device, &own) in device_class.iter().enumerate() {
         let index = narrow(device);
-        out.push((device_signature(graph, index, own, net_class), offset + index));
+        out.push((
+            device_signature(graph, index, own, net_class),
+            offset + index,
+        ));
     }
     for (net, &own) in net_class.iter().enumerate() {
         let signature = net_signature(graph, narrow(net), own, device_class);
@@ -292,7 +301,10 @@ fn refine_observed<O: ObserveRefine>(
     let ref_devices = reference.device_count();
     let layout_nodes = layout_devices + layout.net_count();
     let ref_nodes = ref_devices + reference.net_count();
-    debug_assert!(u32::try_from(layout_nodes + ref_nodes).is_ok(), "node space fits a u32");
+    debug_assert!(
+        u32::try_from(layout_nodes + ref_nodes).is_ok(),
+        "node space fits a u32"
+    );
 
     // Devices in one class, nets in another. A side with no devices must not open
     // an empty class, or the class count would fall on the first round.
@@ -330,7 +342,8 @@ fn refine_observed<O: ObserveRefine>(
 
         // Split the combined scatter target back into two columns.
         out.next_ref.clear();
-        out.next_ref.extend_from_slice(&out.next_layout[layout_nodes..]);
+        out.next_ref
+            .extend_from_slice(&out.next_layout[layout_nodes..]);
         out.next_layout.truncate(layout_nodes);
         std::mem::swap(&mut out.layout_class, &mut out.next_layout);
         std::mem::swap(&mut out.ref_class, &mut out.next_ref);
@@ -350,7 +363,12 @@ fn refine_observed<O: ObserveRefine>(
             continue;
         }
 
-        tally_into(&out.layout_class, count, &mut layout_tally, &mut layout_first);
+        tally_into(
+            &out.layout_class,
+            count,
+            &mut layout_tally,
+            &mut layout_first,
+        );
         tally_into(&out.ref_class, count, &mut ref_tally, &mut ref_first);
 
         // A zip over unequal columns stops at the shorter one and would report a
@@ -487,7 +505,10 @@ impl Partition {
             written += usize::from(resolved);
         }
         paired.truncate(written);
-        debug_assert!(written <= self.ref_class.len(), "more pairs than reference nodes");
+        debug_assert!(
+            written <= self.ref_class.len(),
+            "more pairs than reference nodes"
+        );
         paired.into_iter()
     }
 
@@ -568,7 +589,12 @@ impl Partition {
             &mut layout_tally,
             &mut layout_first,
         );
-        tally_into(&self.ref_class, self.class_count, &mut ref_tally, &mut ref_first);
+        tally_into(
+            &self.ref_class,
+            self.class_count,
+            &mut ref_tally,
+            &mut ref_first,
+        );
         (layout_tally, layout_first, ref_tally, ref_first)
     }
 }
@@ -586,7 +612,10 @@ mod partition_tests {
         assert_eq!(stated.class_count, 3, "one past the highest class named");
         assert!(stated.next_layout.is_empty(), "scratch is the refiner's");
         assert_eq!(Partition::from_classes(vec![], vec![]).class_count, 0);
-        assert_eq!(Partition::from_classes(vec![], vec![]), Partition::default());
+        assert_eq!(
+            Partition::from_classes(vec![], vec![]),
+            Partition::default()
+        );
     }
 
     /// Scratch is not part of the value: a reused buffer holds a previous
@@ -739,7 +768,10 @@ mod tests {
         );
         for (position, &(index, classes, split)) in observer.rounds.iter().enumerate() {
             let position = u32::try_from(position).expect("a small round count");
-            assert_eq!(index, position, "round indices are not consecutive from zero");
+            assert_eq!(
+                index, position,
+                "round indices are not consecutive from zero"
+            );
             if position > 0 {
                 let previous = observer.rounds[position as usize - 1].1;
                 assert!(
@@ -828,7 +860,10 @@ mod tests {
         );
         for class in &observer.tie_broken {
             assert!(
-                observer.stalled.iter().any(|(stalled, ..)| stalled == class),
+                observer
+                    .stalled
+                    .iter()
+                    .any(|(stalled, ..)| stalled == class),
                 "class {class:?} was tie-broken but never reported as stalled"
             );
         }
