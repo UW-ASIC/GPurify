@@ -29,10 +29,10 @@
 //! every loop below pass vacuously, which is the same false clean in the test
 //! suite that the tests themselves exist to prevent in the tool.
 
+use gpurify::geom::Grid;
 use gpurify::geom::LayerId;
 use gpurify::ingest::deck::{Deck, DeviceKind, ParamValue};
 use gpurify::ingest::StrTable;
-use gpurify::geom::Grid;
 use std::path::{Path, PathBuf};
 
 /// The grid every deck in `pdks/` is authored against — `pdks/README.md` states
@@ -132,8 +132,10 @@ fn every_deck_configures_rules_and_every_rule_belongs_to_a_domain() {
         let (deck, strings) = load(&path);
         let deck_name = name_of(&path);
 
-        let drc = gpurify::check::drc::RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
-        let erc = gpurify::check::erc::RuleSet::from_deck(&deck, &strings).expect("the ERC set builds");
+        let drc =
+            gpurify::check::drc::RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
+        let erc =
+            gpurify::check::erc::RuleSet::from_deck(&deck, &strings).expect("the ERC set builds");
         let filed = drc.rule_count() + erc.len();
 
         assert!(

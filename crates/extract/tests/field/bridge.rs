@@ -8,13 +8,13 @@
 use crate::common;
 
 use common::{grid, uniform_stack};
-use gpurify_geom::{GeometryStoreBuilder, LayerId};
+use gpurify_check::topology::{NetId, NetTable};
 use gpurify_extract::field::henry::bridge::{
     extract_inductance_into, InductMatrix, InductanceError, InductanceOptions,
 };
 use gpurify_extract::field::integrals::filament::self_inductance_bar;
-use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::Dbu;
+use gpurify_geom::{GeometryStoreBuilder, LayerId};
 
 fn dbu(raw: i64) -> Dbu {
     Dbu::new(raw).expect("a test coordinate is in the coordinate domain")

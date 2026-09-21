@@ -8,8 +8,8 @@
 //! restores the original" holds for every pair and a hand-picked one proves
 //! much less.
 
-use gpurify_testgen::Rng;
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_testgen::Rng;
 
 /// Unwrap a coordinate the test asserts is inside the domain.
 fn coord(raw: i64) -> Dbu {

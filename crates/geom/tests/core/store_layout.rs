@@ -7,10 +7,10 @@
 //! geometric assertion in the tree still passes. That is the whole reason this
 //! file exists.
 
+use gpurify_geom::Dbu;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_testgen::shapes::{dbu, l_shape, rect, u_shape, LayoutBuilder};
 use gpurify_testgen::Rng;
-use gpurify_geom::Dbu;
 
 const LAYERS: usize = 5;
 

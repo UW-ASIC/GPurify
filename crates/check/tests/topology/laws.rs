@@ -18,14 +18,16 @@
 //! every geometric law is trivially true of it and asserting one would be
 //! coverage theatre.
 
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_check::topology::device::{recognise_into, DeviceMeasure, DeviceParam};
+use gpurify_check::topology::{
+    extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole,
+};
 use gpurify_geom::Evaluator;
+use gpurify_geom::{Dbu, DbuArea};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::shapes::LayoutBuilder;
-use gpurify_check::topology::device::{recognise_into, DeviceMeasure, DeviceParam};
-use gpurify_check::topology::{extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole};
-use gpurify_geom::{Dbu, DbuArea};
 
 // The layer table. Five conductors, one cut, one marker — the marker is
 // deliberately *not* a conductor, which is what makes `NetId::NONE` reachable

@@ -7,10 +7,10 @@
 //! half of a deck is tested from inside the crate instead, and the gap is
 //! recorded in `docs/NEED_TESTING.md`.
 
-use gpurify_ingest::deck::{ParamValue, RuleSpec, RuleTable};
-use gpurify_geom::{StrId, StrTable};
-use gpurify_ingest::DeckError;
 use gpurify_geom::Grid;
+use gpurify_geom::{StrId, StrTable};
+use gpurify_ingest::deck::{ParamValue, RuleSpec, RuleTable};
+use gpurify_ingest::DeckError;
 
 /// Compare two `ParamValue`. The enum does not derive `PartialEq`, and a float
 /// variant should not get a derived one: `Ratio` is compared to a stated

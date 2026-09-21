@@ -14,8 +14,8 @@
 //! nothing below asserts anything about JSON's spelling of a number beyond it
 //! being one.
 
-use gpurify_testgen::{assert_bytes_identical, Rng};
 use gpurify_geom::{prefix, Capacitance, Length, Qty, Resistance, Voltage};
+use gpurify_testgen::{assert_bytes_identical, Rng};
 
 /// Oracle: closed form. The doc comment says the dimension and prefix are
 /// schema, so the only thing on the wire is the count. Stated two ways: the

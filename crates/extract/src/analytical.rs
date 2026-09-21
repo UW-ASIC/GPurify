@@ -1,11 +1,11 @@
 //! Closed-form extraction from the deck's process stack.
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
+use gpurify_check::topology::{DeviceTable, NetId, NetTable};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::{ops, Bbox, GeometryStore, LayerId, PolyId};
-use gpurify_ingest::deck::{Connectivity, ProcessStack};
-use gpurify_check::topology::{DeviceTable, NetId, NetTable};
 use gpurify_geom::{prefix, Capacitance, Dbu, DbuArea, Grid, Qty, Resistance, MAX_ABS_DBU};
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 
 /// Attofarads in a femtofarad. Divided by, never multiplied by `1e-3`, which is
 /// not exact in `f64`.

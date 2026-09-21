@@ -5,11 +5,11 @@ use std::fmt::Write as _;
 use crate::export::json::format_f64;
 use crate::export::parasitic::{first_node_of, node_place, spice_card, DELIMITER};
 use crate::export::{narrow, Header, WriteError, INFALLIBLE};
-use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::StrTable;
-use gpurify_extract::ParasiticNetwork;
 use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
+use gpurify_extract::ParasiticNetwork;
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::StrTable;
 
 /// The subcircuit's name, matching what `engine` hands `gds::write_store`.
 /// Never `header.layout_path`: a path in a body is what the [`Header`] keeps out.

@@ -28,17 +28,17 @@
 use crate::common;
 
 use common::{Env, Sink};
-use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_check::drc::rules::overlay::{
     check_asymmetric_enclosure, check_max_distance_to_tap, check_min_enclosure,
     check_min_extension, check_overlap, AsymmetricEnclosureTable, MaxDistanceToTapTable,
     MinEnclosureTable, MinExtensionTable, OverlapTable,
 };
-use gpurify_ingest::StrId;
 use gpurify_check::report::{Measurement, Outcome, RuleRun, SkipReason, Violations};
+use gpurify_geom::MAX_ABS_DBU;
+use gpurify_geom::{GeometryStore, LayerId};
+use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{dbu, point};
-use gpurify_geom::MAX_ABS_DBU;
 
 // ------------------------------------------------------------------- fixture
 

@@ -12,14 +12,14 @@ pub use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts, Ro
 pub use power::{NetNetworks, PowerError, PowerGrid, PowerSolution, Process, Solved};
 pub use ruleset::{RuleHead, RuleSet, RunInputs, KINDS};
 
+use crate::report::{Outcome, RuleRun, Violations};
+use crate::topology::{DeviceTable, NetTable};
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::ops::Point;
+use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::StrId;
-use crate::report::{Outcome, RuleRun, Violations};
-use crate::topology::{DeviceTable, NetTable};
-use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance};
 
 /// Why a deck could not be turned into a [`RuleSet`].
 ///

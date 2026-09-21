@@ -19,7 +19,6 @@ use common::{
     declared_supplies, head, limit_net, manufacturing_grid, microamps, millivolts,
     operating_temperature, rule, series_chain, solve, GridBuilder,
 };
-use gpurify_geom::{LayerId, PolyId};
 use gpurify_check::erc::facts::IntentMap;
 use gpurify_check::erc::power::{PowerGrid, PowerSolution, Solved};
 use gpurify_check::erc::rules::electrical::{
@@ -27,12 +26,13 @@ use gpurify_check::erc::rules::electrical::{
     EmCurrentDensityTable, IrDropTable,
 };
 use gpurify_check::erc::rules::reliability::{check_reliability, ReliabilityTable};
-use gpurify_ingest::intent::NetLimits;
-use gpurify_ingest::StrId;
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
-use gpurify_testgen::{assert_close, assert_close_relative};
 use gpurify_check::topology::NetId;
 use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
+use gpurify_geom::{LayerId, PolyId};
+use gpurify_ingest::intent::NetLimits;
+use gpurify_ingest::StrId;
+use gpurify_testgen::{assert_close, assert_close_relative};
 
 fn density(value: f64) -> Qty<CurrentDensity, { prefix::BASE }> {
     Qty::new(value)

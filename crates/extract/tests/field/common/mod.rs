@@ -12,12 +12,12 @@
 
 #![allow(dead_code, reason = "each test binary links only the fixtures it uses")]
 
-use gpurify_geom::GeometryStore;
-use gpurify_ingest::deck::{Connectivity, ProcessStack};
-use gpurify_extract::field::CapMatrix;
-use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use gpurify_check::topology::{extract_nets_into, NetId, NetTable};
+use gpurify_extract::field::CapMatrix;
+use gpurify_geom::GeometryStore;
 use gpurify_geom::Grid;
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
+use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 
 /// The 1 nm grid every case in this crate's tests is stated against.
 ///

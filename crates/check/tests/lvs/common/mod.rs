@@ -26,12 +26,12 @@
     reason = "each test binary links only the fixtures it names"
 )]
 
-use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::StrId;
 use gpurify_check::lvs::graph::Graph;
 use gpurify_check::lvs::verdict::{Discrepancy, Side, Verdict};
-use gpurify_testgen::Rng;
 use gpurify_check::topology::TerminalRole;
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::StrId;
+use gpurify_testgen::Rng;
 
 /// Interned names, stated as ids.
 ///

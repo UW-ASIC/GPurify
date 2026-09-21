@@ -38,13 +38,13 @@
 //! column in common but the duration, so they are two printers rather than one
 //! with a union of columns that serves neither.
 
-use gpurify::geom::{GeometryStore, LayerId};
-use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, Loaded};
-use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions};
-use gpurify::ingest::layout::UnknownLayers;
 use gpurify::check::report::RuleRun;
 use gpurify::check::topology::NetTable;
+use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, Loaded};
+use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions};
 use gpurify::geom::Grid;
+use gpurify::geom::{GeometryStore, LayerId};
+use gpurify::ingest::layout::UnknownLayers;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -154,7 +154,11 @@ fn net_extraction_stays_canonical_and_records_its_cost() {
         let corpus = corpus(polygons);
         let (nets, timing) = timed("topology::extract_nets", polygons, || {
             let mut nets = NetTable::default();
-            gpurify::check::topology::extract_nets_into(&corpus.store, &corpus.connectivity, &mut nets);
+            gpurify::check::topology::extract_nets_into(
+                &corpus.store,
+                &corpus.connectivity,
+                &mut nets,
+            );
             nets
         });
 

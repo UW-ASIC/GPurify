@@ -1,8 +1,8 @@
 //! Bounding-box prefiltering for boolean operands.
 
 use crate::observe::{NoObserve, Observer};
-use crate::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use crate::Dbu;
+use crate::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 
 /// What crossing the prefilter seam did.
 pub trait ObservePrefilter: Observer {

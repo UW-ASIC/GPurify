@@ -1,12 +1,12 @@
 //! The shared stages: load, then extract. Everything the four checks read.
 
-use gpurify_geom::GeometryStore;
+use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::Evaluator;
+use gpurify_geom::GeometryStore;
+use gpurify_geom::Grid;
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{Deck, DesignIntent, Provenance, StrTable};
-use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
-use gpurify_geom::Grid;
 use std::path::PathBuf;
 
 /// What a run was asked to work on: paths, plus the grid they are read against.

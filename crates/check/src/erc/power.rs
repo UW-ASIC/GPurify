@@ -22,14 +22,14 @@
 
 use crate::erc::centre;
 use crate::erc::facts::IntentMap;
+use crate::topology::net::{intra_layer_edges_into, via_edges_into};
+use crate::topology::{DeviceTable, NetId, NetTable};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::Point;
+use gpurify_geom::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_ingest::intent::SupplyRole;
-use crate::topology::net::{intra_layer_edges_into, via_edges_into};
-use crate::topology::{DeviceTable, NetId, NetTable};
-use gpurify_geom::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -725,42 +725,9 @@ fn cholesky_inverse_into(a: &mut [f64], n: usize, out: &mut Vec<f64>) -> bool {
     true
 }
 
-/// One sparse mat-vec: `out[i]` is row `i` of the assembled matrix times `v`.
-fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64]) {
-    debug_assert_eq!(
-        row_start.len(),
-        out.len() + 1,
-        "one CSR offset per row plus the end"
-    );
-    debug_assert_eq!(col.len(), value.len(), "one column index per value");
-    let used = row_start[out.len()] as usize;
-    debug_assert!(used <= col.len(), "the CSR runs past its own columns");
-    debug_assert!(
-        col[..used].iter().all(|&c| (c as usize) < v.len()),
-        "a CSR column names an unknown the vector does not have"
-    );
-
-    for (i, row) in out.iter_mut().enumerate() {
-        let (from, to) = (row_start[i] as usize, row_start[i + 1] as usize);
-        let mut acc = 0.0f64;
-        for k in from..to {
-            acc += value[k] * v[col[k] as usize];
-        }
-        *row = acc;
-    }
-}
-
-/// The Euclidean norm of a residual, folded left in ascending index order.
-///
-/// The order is interface: it makes a converged-or-not verdict the same bits on
-/// every run.
-fn norm(v: &[f64]) -> f64 {
-    let mut acc = 0.0f64;
-    for &x in v {
-        acc += x * x;
-    }
-    acc.sqrt()
-}
+/// The field solver folds the same three loops, so they live one crate down.
+/// The fold order is interface there for the same reason it is here.
+use gpurify_geom::linalg::{axpy, dot, nrm2 as norm, spmv};
 
 /// Assemble a Laplacian into `scratch`'s CSR columns, and its inverse diagonal.
 ///
@@ -1101,10 +1068,7 @@ fn conjugate_gradient(
 
     // Left fold, ascending: `rz` decides `alpha`, which decides the solution, so
     // reassociating it would make two runs of one design disagree.
-    let mut rz = 0.0f64;
-    for i in 0..unknowns {
-        rz += r[i] * z[i];
-    }
+    let mut rz = dot(r, z);
 
     let initial = norm(r);
     let goal = initial * config.relative_tolerance;
@@ -1112,10 +1076,7 @@ fn conjugate_gradient(
     let mut iterations = 0u32;
     while residual > goal && iterations < config.max_iterations {
         spmv(row_start, col, value, p, ap);
-        let mut pap = 0.0f64;
-        for i in 0..unknowns {
-            pap += p[i] * ap[i];
-        }
+        let pap = dot(p, ap);
         // The matrix is positive definite, so a non-positive `p·Ap` means the
         // iteration reached the floating-point floor; stopping here leaves the
         // convergence test below to decide whether that is good enough.
@@ -1123,17 +1084,12 @@ fn conjugate_gradient(
             break;
         }
         let alpha = rz / pap;
-        for i in 0..unknowns {
-            x[i] += alpha * p[i];
-        }
-        for i in 0..unknowns {
-            r[i] -= alpha * ap[i];
-        }
+        axpy(alpha, p, x);
+        // `+ (−α)` rather than `− α`: the negation is exact, so the two round
+        // the same way.
+        axpy(-alpha, ap, r);
         precondition((l_start, l_col, l_val, l_diag), inv_diag, r, z);
-        let mut next = 0.0f64;
-        for i in 0..unknowns {
-            next += r[i] * z[i];
-        }
+        let next = dot(r, z);
         let beta = next / rz;
         for i in 0..unknowns {
             p[i] = z[i] + beta * p[i];
@@ -3175,8 +3131,8 @@ mod tests {
     use super::{
         assemble_into, factorise_into, ChainProfile, Point, SolveScratch, TapIndex, NOT_AN_UNKNOWN,
     };
-    use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
     use gpurify_geom::Dbu;
+    use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 
     /// One polygon on layer zero, from its rectilinear ring.
     fn shape(xs: &[i64], ys: &[i64]) -> GeometryStore {

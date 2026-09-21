@@ -11,9 +11,11 @@
 use crate::common;
 
 use common::{Env, Sink, A, RULE};
-use gpurify_geom::PolyId;
-use gpurify_check::drc::rules::grid::{check_angle, check_off_grid, AngleTable, Direction, OffGridTable};
+use gpurify_check::drc::rules::grid::{
+    check_angle, check_off_grid, AngleTable, Direction, OffGridTable,
+};
 use gpurify_check::report::{Measurement, Severity, Violation};
+use gpurify_geom::PolyId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
     assert_clean, assert_has_violation, assert_rule_ran, dbu, layout_with_violation, point, Amount,

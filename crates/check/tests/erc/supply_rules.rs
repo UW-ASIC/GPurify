@@ -13,8 +13,6 @@
 use crate::common;
 
 use common::{head, rule};
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_check::erc::facts::{classify_nets_into, NetFacts};
 use gpurify_check::erc::rules::supply::{
     check_esd_topological, check_missing_tie, check_soft_connection, check_supply_short,
@@ -23,15 +21,17 @@ use gpurify_check::erc::rules::supply::{
 };
 use gpurify_check::erc::rules::topology::{check_floating_well, FloatingWellTable};
 use gpurify_check::erc::{Design, Scratch};
+use gpurify_check::report::{Measurement, RuleRun, Violations};
+use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
+use gpurify_geom::{Evaluator, LayerRef};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_check::report::{Measurement, RuleRun, Violations};
 use gpurify_testgen::shapes::l_shape;
 use gpurify_testgen::{
     assert_clean, assert_rule_ran, dbu, layout_from_netlist, point, DeviceSpec, Floorplan,
     LayoutBuilder, NetlistSpec,
 };
-use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
 
 /// A hand-drawn layout, extracted under a stated connectivity.
 struct Drawn {

@@ -13,16 +13,16 @@
 
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{base_layer, centre, record_run, Design, Scratch};
+use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use crate::topology::NetId;
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::area2;
 use gpurify_geom::rects::{clipped_area, decompose_into, Rect};
 use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_geom::LayerRef;
-use gpurify_ingest::StrId;
-use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use crate::topology::NetId;
+use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_ingest::StrId;
 
 /// What an antenna rule counts as collecting area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -5,10 +5,10 @@
 //! of the thing being measured — the middle of a gap, the centre of an area,
 //! the midpoint of an edge. Each variant of [`ShapeKind`] says which.
 
-use gpurify_geom::{GeometryStore, LayerId};
-use gpurify_ingest::StrId;
 use gpurify_check::report::{Measurement, Severity, Violation};
 use gpurify_geom::{prefix, Current, Qty, Resistance, Voltage};
+use gpurify_geom::{GeometryStore, LayerId};
+use gpurify_ingest::StrId;
 
 use crate::shapes::{area, dbu, hole, point, rect, u_shape, Handle, Ids, LayoutBuilder};
 

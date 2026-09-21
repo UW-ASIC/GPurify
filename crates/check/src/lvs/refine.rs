@@ -5,9 +5,9 @@
 //! pairing, and a stall is resolved by [`TieBreak`] rather than by hash order.
 
 use crate::lvs::graph::{narrow, Graph, LayoutGraph, RefGraph};
+use crate::topology::TerminalRole;
 use gpurify_geom::observe::{NoObserve, Observer};
 use gpurify_ingest::deck::DeviceKind;
-use crate::topology::TerminalRole;
 
 /// A class of nodes not yet distinguished from each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -637,10 +637,10 @@ mod partition_tests {
 mod tests {
     use super::{refine_observed, ClassId, ObserveRefine, Partition, Refinement, TieBreak};
     use crate::lvs::graph::{Graph, LayoutGraph, RefGraph};
+    use crate::topology::TerminalRole;
     use gpurify_geom::observe::Observer;
     use gpurify_ingest::deck::DeviceKind;
     use gpurify_ingest::StrId;
-    use crate::topology::TerminalRole;
 
     const NCH: StrId = StrId(1);
 

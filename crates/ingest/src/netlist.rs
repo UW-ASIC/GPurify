@@ -4,8 +4,8 @@
 //! its source line, a silent misparse surfacing as an LVS mismatch.
 
 use crate::deck::DeviceKind;
-use gpurify_geom::{StrId, StrTable};
 use crate::{csr, narrow};
+use gpurify_geom::{StrId, StrTable};
 
 /// Where a token came from, for an error a human can act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

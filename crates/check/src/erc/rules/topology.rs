@@ -8,12 +8,12 @@ use crate::erc::ruleset::RuleHead;
 use crate::erc::{
     ascending, base_layer, centre, first_vertex, push_net_violations, record_run, Design, Scratch,
 };
-use gpurify_geom::ops::{winding_of, Winding};
-use gpurify_geom::{LayerId, PolyId};
-use gpurify_geom::LayerRef;
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId, TerminalRole};
+use gpurify_geom::ops::{winding_of, Winding};
 use gpurify_geom::Dbu;
+use gpurify_geom::LayerRef;
+use gpurify_geom::{LayerId, PolyId};
 
 /// A gate net with nothing driving it: the net's role mask is exactly
 /// [`RoleMask::GATE`].

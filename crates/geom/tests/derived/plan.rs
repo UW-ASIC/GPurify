@@ -15,11 +15,11 @@
 //! sharper statement — that a dependency really does precede the definition
 //! naming it — needs the private columns and lives in `src/expr.rs`.
 
-use gpurify_geom::{GeometryStore, LayerId};
-use gpurify_geom::{DerivedError, DerivedExpr, Evaluator, LayerRef};
-use gpurify_geom::StrId;
-use gpurify_testgen::LayoutBuilder;
 use gpurify_geom::Dbu;
+use gpurify_geom::StrId;
+use gpurify_geom::{DerivedError, DerivedExpr, Evaluator, LayerRef};
+use gpurify_geom::{GeometryStore, LayerId};
+use gpurify_testgen::LayoutBuilder;
 
 fn base(layer: u16) -> DerivedExpr {
     DerivedExpr::Layer(LayerRef::Base(LayerId(layer)))

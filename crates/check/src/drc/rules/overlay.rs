@@ -11,15 +11,15 @@
 
 use super::{centre, mid, ring_segs, row_columns, COLUMNS_DIVERGED};
 use crate::drc::{record_run, Design, Scratch};
+use crate::report::{
+    LimitSense, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
+};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::view::{validate_layer_into, ValidityError};
 use gpurify_geom::{Bbox, LayerId, PolyId};
-use gpurify_ingest::StrId;
-use crate::report::{
-    LimitSense, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
-};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_ingest::StrId;
 use std::cmp::Reverse;
 
 /// Minimum enclosure: the outer layer must surround the inner one by at least

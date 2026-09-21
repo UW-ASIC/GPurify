@@ -12,13 +12,13 @@
 use crate::common;
 
 use common::{Env, Sink, A, B, RULE};
-use gpurify_geom::{Bbox, PolyId};
 use gpurify_check::drc::rules::overlay::{
     check_asymmetric_enclosure, check_max_distance_to_tap, check_min_enclosure,
     check_min_extension, check_overlap, margins, AsymmetricEnclosureTable, Margins,
     MaxDistanceToTapTable, MinEnclosureTable, MinExtensionTable, OverlapTable,
 };
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason, Violation};
+use gpurify_geom::{Bbox, PolyId};
 use gpurify_testgen::shapes::{l_shape, LayoutBuilder};
 use gpurify_testgen::{
     assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point,

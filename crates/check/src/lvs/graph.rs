@@ -1,11 +1,11 @@
 //! The one bipartite device/net graph shape both sides are reduced to before matching.
 
-use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::netlist::{Netlist, SubcktId};
-use gpurify_ingest::{StrId, StrTable};
 use crate::topology::device::{DeviceMeasure, DeviceParam};
 use crate::topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::Grid;
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::netlist::{Netlist, SubcktId};
+use gpurify_ingest::{StrId, StrTable};
 
 /// One row's run in a CSR offset column. Unguarded on purpose: a row past the
 /// table panics rather than reading as an empty run.

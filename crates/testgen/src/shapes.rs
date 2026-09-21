@@ -5,8 +5,8 @@
 //! clockwise, the canonical winding `core::view` establishes.
 
 use gpurify_geom::ops::Point;
-use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 
 /// Wrap an `i64` as a coordinate. `MAX_ABS_DBU` is the bound that keeps every
 /// `i128` area product from overflowing.

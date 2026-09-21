@@ -6,12 +6,12 @@
 //! non-integral magnification) is an error, not an approximation.
 
 use crate::deck::{Deck, DerivedOp, DerivedTable};
-use gpurify_geom::StrTable;
 use crate::provenance::{PathTable, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::GeometryStore;
 use gpurify_geom::Dbu;
+use gpurify_geom::GeometryStore;
+use gpurify_geom::StrTable;
 
 /// Everything a verification run needs from a layout file.
 #[derive(Debug, Default)]
@@ -180,11 +180,11 @@ pub fn derive_layers_into(
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
-    use gpurify_geom::{StrId, StrTable};
     use crate::narrow;
     use crate::provenance::{PathId, PathTable, Provenance};
-    use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{Dbu, MAX_ABS_DBU};
+    use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
+    use gpurify_geom::{StrId, StrTable};
 
     /// Every GDSII library opens with a six-byte `HEADER` record, so the magic
     /// is the record framing itself: length 6, record type 0, data type 2.
@@ -1476,8 +1476,8 @@ pub mod oasis {
 mod tests {
     use super::{gds, Deck, Layout, LayoutError, UnknownLayers};
     use crate::deck::tests::{layer_table, ROWS};
-    use gpurify_geom::StrTable;
     use crate::provenance::PathTable;
+    use gpurify_geom::StrTable;
     use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
     use gpurify_testgen::shapes::{Handle, Ids};
     use gpurify_testgen::{dbu, LayoutBuilder};

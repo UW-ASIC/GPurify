@@ -76,15 +76,15 @@
 
 mod gen_fixtures;
 
-use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
-use gpurify::geom::{GeometryStore, LayerId, PolyId};
+use gpurify::check::lvs;
+use gpurify::check::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
 use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
-use gpurify::ingest::layout::UnknownLayers;
 use gpurify::extract::Parasitic;
-use gpurify::check::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
+use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
 use gpurify::geom::{Dbu, Grid};
-use gpurify::check::lvs;
+use gpurify::geom::{GeometryStore, LayerId, PolyId};
+use gpurify::ingest::layout::UnknownLayers;
 use gpurify::{export, ingest};
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;

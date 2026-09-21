@@ -9,11 +9,11 @@ use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::area2;
 use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::Evaluator;
+use gpurify_geom::{Dbu, DbuArea};
+use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrId;
-use gpurify_geom::{Dbu, DbuArea};
 
 /// Identifies one recognised device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

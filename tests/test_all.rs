@@ -29,10 +29,10 @@
 //! writing an implementation underneath it.
 
 use gpurify::check::drc::DrcError;
+use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
 use gpurify::engine::pipeline::LoadError;
 use gpurify::engine::run::{Checks, EngineError, StageStatus};
 use gpurify::ingest::DeckError;
-use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
 
 mod common;
 
@@ -1313,9 +1313,7 @@ fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell
     );
     assert_eq!(
         ring.limit,
-        Measurement::Length(
-            gpurify::geom::Dbu::new(1000).expect("1000 dbu is inside MAX_ABS_DBU")
-        )
+        Measurement::Length(gpurify::geom::Dbu::new(1000).expect("1000 dbu is inside MAX_ABS_DBU"))
     );
     assert_eq!(at_of(ring), (0, 0));
     assert_eq!(ring.layer, layer_of(&run, "nwell"));

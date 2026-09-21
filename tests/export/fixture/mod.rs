@@ -29,21 +29,23 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify::export::json::Report;
 use gpurify::export::Header;
-use gpurify_ingest::deck::{Connectivity, DeviceKind};
-use gpurify_ingest::{Provenance, StrId, StrTable};
-use gpurify_extract::network::{NodeId, Parasitic};
-use gpurify_extract::ParasiticNetwork;
-use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
-use gpurify_testgen::{dbu, point, LayoutBuilder};
+use gpurify_check::report::{
+    Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
+};
 use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{
     bind_ports_into, extract_nets_into, DeviceTable, Extraction, NetId, NetTable, PortTable,
     TerminalRole,
 };
+use gpurify_extract::network::{NodeId, Parasitic};
+use gpurify_extract::ParasiticNetwork;
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Grid, Qty};
+use gpurify_ingest::deck::{Connectivity, DeviceKind};
+use gpurify_ingest::{Provenance, StrId, StrTable};
+use gpurify_testgen::{dbu, point, LayoutBuilder};
 
 /// The one conductor layer. Both rectangles live here.
 pub const CONDUCTOR: LayerId = LayerId(0);

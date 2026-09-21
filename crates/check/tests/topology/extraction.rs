@@ -10,15 +10,17 @@
 
 use std::collections::BTreeSet;
 
-use gpurify_geom::{LayerId, PolyId};
+use gpurify_check::topology::device::recognise_into;
+use gpurify_check::topology::{
+    extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole,
+};
 use gpurify_geom::Evaluator;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::netlist::{ExpectedDevice, NetlistCase};
 use gpurify_testgen::shapes::{random_rectilinear_layer, LayoutBuilder, RandomLayerSpec};
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistSpec, Rng};
-use gpurify_check::topology::device::recognise_into;
-use gpurify_check::topology::{extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole};
 
 /// One four-terminal MOS and one two-terminal resistor sharing two nets.
 ///

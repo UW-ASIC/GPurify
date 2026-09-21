@@ -7,9 +7,9 @@ use crate::topology::csr_run;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{segments_intersect, Point, Seg};
+use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
-use gpurify_geom::Dbu;
 
 /// Identifies one electrical net: a dense rank over `0 .. net_count`, ascending
 /// by each net's smallest [`PolyId`], which is what makes ids canonical across
@@ -706,8 +706,8 @@ mod tests {
     use super::{
         rings_meet_direct, rings_meet_sweep, sort_dedup_from, NetId, NetTable, DIRECT_PAIR_BUDGET,
     };
-    use gpurify_geom::PolyId;
     use gpurify_geom::Dbu;
+    use gpurify_geom::PolyId;
 
     /// Reads the private columns directly: every public accessor reads the CSR
     /// under test, so a matching pair of errors could cancel.

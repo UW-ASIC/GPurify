@@ -9,14 +9,14 @@
 use crate::common;
 
 use common::{capacitance_ff, resistance_ohm, serialise};
-use gpurify_geom::LayerId;
+use gpurify_check::topology::NetId;
 use gpurify_extract::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_extract::reduce::{
     collapse_series_into, merge_parallel_into, reduce_into, total_capacitance, Order,
 };
-use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, Rng};
-use gpurify_check::topology::NetId;
+use gpurify_geom::LayerId;
 use gpurify_geom::{prefix, Capacitance, Qty, Resistance};
+use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, Rng};
 
 fn ohms(value: f64) -> Parasitic {
     Parasitic::Resistance(Qty::<Resistance, { prefix::BASE }>::new(value))

@@ -430,7 +430,8 @@ pub fn solve_full(
 
         // Mesh-analysis formulation: solve the fundamental-loop system directly.
         if formulation == Formulation::Mesh {
-            let zmat = crate::field::henry::mesh_analysis::solve_ports(&zb, &edges, &port_pairs, nn);
+            let zmat =
+                crate::field::henry::mesh_analysis::solve_ports(&zb, &edges, &port_pairs, nn);
             z_all.push(zmat);
             continue;
         }

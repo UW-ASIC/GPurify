@@ -5,12 +5,14 @@
 //! known before a label is placed, and therefore so is whether two labels land
 //! on one net.
 
+use gpurify_check::topology::port::PortError;
+use gpurify_check::topology::{
+    bind_ports_into, extract_nets_into, NetTable, PortTable, TerminalRole,
+};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::{Provenance, StrTable};
 use gpurify_testgen::netlist::NetlistCase;
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistSpec};
-use gpurify_check::topology::port::PortError;
-use gpurify_check::topology::{bind_ports_into, extract_nets_into, NetTable, PortTable, TerminalRole};
 
 /// Three nets, one of which carries two polygons joined through a via.
 ///

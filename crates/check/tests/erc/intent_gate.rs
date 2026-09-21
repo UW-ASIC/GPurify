@@ -18,8 +18,6 @@ use common::{
     assert_skipped_for_intent, declared_supplies, head, limit_net, manufacturing_grid, microamps,
     millivolts, ohms, operating_temperature, rule, series_chain, solve,
 };
-use gpurify_geom::LayerId;
-use gpurify_geom::Evaluator;
 use gpurify_check::erc::facts::IntentMap;
 use gpurify_check::erc::power::{NetNetworks, Solved};
 use gpurify_check::erc::rules::electrical::{
@@ -31,13 +29,15 @@ use gpurify_check::erc::rules::reliability::{
     ReliabilityTable,
 };
 use gpurify_check::erc::{Design, Scratch};
+use gpurify_check::report::{Outcome, RuleRun, Violations};
+use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
+use gpurify_geom::Evaluator;
+use gpurify_geom::LayerId;
+use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::intent::{DomainId, NetLimits, SupplyRole};
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_check::report::{Outcome, RuleRun, Violations};
 use gpurify_testgen::{dbu, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
-use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
-use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
 
 /// A supply grid and its solution, so the four solve-reading rules have
 /// something real to be gated over.

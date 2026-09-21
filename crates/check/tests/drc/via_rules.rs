@@ -15,11 +15,11 @@
 use crate::common;
 
 use common::{Env, Sink, A, RULE};
-use gpurify_geom::PolyId;
 use gpurify_check::drc::rules::via::{
     check_redundant_via, check_via_array_spacing, RedundantViaTable, ViaArraySpacingTable,
 };
 use gpurify_check::report::{Measurement, Severity, Violation};
+use gpurify_geom::PolyId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
     assert_clean, assert_has_violation, assert_only_violation, assert_rule_ran, dbu,

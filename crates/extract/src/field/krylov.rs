@@ -802,7 +802,9 @@ mod determinism_tests {
     //! byte-identical output on repeat runs and at any rayon thread count.
     use super::*;
     use crate::field::linalg::DenseMatrix;
-    use crate::field::operator::{BlockJacobi, BlockJacobiComplex, DenseComplexOperator, DenseOperator};
+    use crate::field::operator::{
+        BlockJacobi, BlockJacobiComplex, DenseComplexOperator, DenseOperator,
+    };
 
     fn real_system(n: usize) -> (DenseMatrix<f64>, Vec<f64>) {
         let mut a = DenseMatrix::<f64>::zeros(n, n);

@@ -182,9 +182,9 @@ fn an_unlabelled_layout_has_no_label_rows_at_all() {
 #[test]
 fn a_label_binds_to_its_split_flank_and_one_on_the_channel_refuses_the_load() {
     use gpurify_geom::ops::Point;
+    use gpurify_geom::Dbu;
     use gpurify_ingest::deck::Connectivity;
     use gpurify_ingest::LabelError;
-    use gpurify_geom::Dbu;
 
     const ACTIVE: LayerId = LayerId(0);
     const TEXT: LayerId = LayerId(1);

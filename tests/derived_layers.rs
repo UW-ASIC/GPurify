@@ -15,13 +15,13 @@
 //! way to make that claim is to write a base-layer-only layout out as GDSII and
 //! read it back through the same entry point a run uses.
 
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify::export::gds::write_store;
+use gpurify_geom::Grid;
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::shapes::LayoutBuilder;
-use gpurify_geom::Grid;
 
 /// One nanometre per database unit, which is what every fixture in this file is
 /// drawn on.

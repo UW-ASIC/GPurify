@@ -41,6 +41,7 @@ pub mod boolean;
 pub mod connectivity;
 pub mod ids;
 pub mod index;
+pub mod linalg;
 pub mod observe;
 pub mod ops;
 pub mod rects;

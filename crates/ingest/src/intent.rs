@@ -3,8 +3,8 @@
 //! Optional. Rules needing an absent intent are reported as skipped, never as
 //! clean.
 
-use gpurify_geom::{StrId, StrTable};
 use gpurify_geom::{prefix, Qty, Voltage};
+use gpurify_geom::{StrId, StrTable};
 
 /// Why an intent file was rejected.
 #[derive(Debug, Clone, thiserror::Error)]

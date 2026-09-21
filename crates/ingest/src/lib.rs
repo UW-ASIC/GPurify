@@ -40,6 +40,6 @@ pub(crate) fn csr<'a, T>(start: &[u32], rows: &'a [T], row: usize) -> &'a [T] {
 }
 
 pub use deck::{Deck, DeckError};
-pub use intent::{DesignIntent, IntentError};
 pub use gpurify_geom::{StrId, StrTable};
+pub use intent::{DesignIntent, IntentError};
 pub use provenance::{LabelError, PlacedLabel, Provenance};

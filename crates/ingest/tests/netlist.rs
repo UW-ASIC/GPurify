@@ -7,8 +7,8 @@
 //! offset column in this workspace states — `GeometryStore::layer_start` and
 //! `Provenance::prop_start` both document it.
 
-use gpurify_ingest::deck::DeviceKind;
 use gpurify_geom::StrTable;
+use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{
     spectre, spice, Netlist, NetlistError, RefDeviceId, RefNetId, SubcktId,
 };

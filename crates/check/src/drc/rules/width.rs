@@ -12,13 +12,13 @@
 
 use super::{mid, ring_segs, row_columns, COLUMNS_DIVERGED};
 use crate::drc::{record_run, Design, Scratch};
+use crate::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::{winding_of, Point, Winding};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId, PolygonRef, RingRef};
 use gpurify_ingest::StrId;
-use crate::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_geom::Dbu;
 
 /// Minimum width: no part of a shape may be narrower than the limit.
 #[derive(Debug, Default)]

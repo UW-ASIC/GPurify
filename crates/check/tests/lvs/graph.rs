@@ -11,12 +11,12 @@ use common::{
     mos_and_bjt, random_graph, stacked_pair, stacked_pair_with_params, GraphBuilder, LENGTH, NCH,
     RES, VDD, VSS, WIDTH,
 };
+use gpurify_check::lvs::graph::{from_reference_into, RefGraph};
+use gpurify_check::topology::TerminalRole;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::StrId;
-use gpurify_check::lvs::graph::{from_reference_into, RefGraph};
 use gpurify_testgen::Rng;
-use gpurify_check::topology::TerminalRole;
 
 /// Oracle: construct-from-answer. The fixture states each device's terminals
 /// before the graph exists, so the accessor either hands back that list or it is

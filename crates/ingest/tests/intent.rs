@@ -7,8 +7,8 @@
 //! default: a `max_drop` of `None` means unchecked, and a `max_drop` of zero
 //! would mean every net fails.
 
-use gpurify_ingest::intent::DesignIntent;
 use gpurify_geom::StrTable;
+use gpurify_ingest::intent::DesignIntent;
 use gpurify_ingest::IntentError;
 
 /// Oracle: construct-from-answer. An absent intent is the input; the correct

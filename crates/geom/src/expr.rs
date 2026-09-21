@@ -1,12 +1,10 @@
 //! The derived-layer expression tree and its evaluator.
 
-use crate::boolean::{
-    intersection_into, offset_into, subtraction_into, union_into, BooleanError,
-};
+use crate::boolean::{intersection_into, offset_into, subtraction_into, union_into, BooleanError};
 use crate::view::validate_layer_into;
-use crate::{GeometryStore, LayerId, ValidatedLayer};
 use crate::StrId;
 use crate::{Dbu, MAX_ABS_DBU};
+use crate::{GeometryStore, LayerId, ValidatedLayer};
 
 /// A reference to either a base layer or a named derived layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

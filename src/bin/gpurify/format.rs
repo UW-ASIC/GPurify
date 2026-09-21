@@ -1,9 +1,9 @@
 //! The text rendering of a run, for a human.
 
 use gpurify::engine::{Outputs, StageStatus, Summary};
-use gpurify_ingest::StrTable;
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason};
 use gpurify_geom::{Dbu, Grid};
+use gpurify_ingest::StrTable;
 use std::fmt::Write as _;
 
 /// Append the rule records, the violation rows and the LVS verdict to `out`.
@@ -225,12 +225,12 @@ pub fn write_error(error: &dyn std::error::Error, out: &mut String) {
 mod tests {
     use super::{write_error, write_measurement, write_summary, write_violations};
     use gpurify::engine::{Outputs, StageStatus, Summary};
-    use gpurify_ingest::StrTable;
     use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
+    use gpurify_geom::{DbuArea, Grid};
+    use gpurify_ingest::StrTable;
     use gpurify_testgen::{
         assert_bytes_identical, dbu, point, scale_corpus, ScaleCorpus, ScaleSpec,
     };
-    use gpurify_geom::{DbuArea, Grid};
 
     /// Append one row to the violation columns directly.
     ///

@@ -10,13 +10,13 @@
 
 use gpurify_geom::ops::{self_intersects, Winding};
 use gpurify_geom::view::{is_outer, validate_layer_into, ValidatedLayer, ValidityError};
+use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId, RingId};
 use gpurify_testgen::shapes::{
     dbu, hole, l_shape, l_shape_area, plus_shape, plus_shape_area, rect, u_shape, u_shape_area,
     LayoutBuilder,
 };
 use gpurify_testgen::Rng;
-use gpurify_geom::DbuArea;
 
 const LAYER: LayerId = LayerId(0);
 const OTHER: LayerId = LayerId(1);

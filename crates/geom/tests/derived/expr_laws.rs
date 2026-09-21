@@ -16,11 +16,11 @@
 //! The non-convex shapes are what make the tests able to fail.
 
 use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
-use gpurify_geom::{DerivedError, DerivedExpr, Evaluator, LayerRef};
 use gpurify_geom::StrId;
-use gpurify_testgen::{assert_bytes_identical, dbu, shapes, LayoutBuilder};
 use gpurify_geom::{Dbu, DbuArea};
+use gpurify_geom::{DerivedError, DerivedExpr, Evaluator, LayerRef};
+use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
+use gpurify_testgen::{assert_bytes_identical, dbu, shapes, LayoutBuilder};
 
 const OPERAND_A: LayerId = LayerId(0);
 const OPERAND_B: LayerId = LayerId(1);

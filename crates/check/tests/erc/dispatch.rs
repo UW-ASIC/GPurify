@@ -14,21 +14,21 @@
 use crate::common;
 
 use common::{head, manufacturing_grid, operating_temperature, rule};
-use gpurify_geom::{Bbox, LayerId};
-use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_check::erc::facts::{IntentMap, NetFacts};
 use gpurify_check::erc::power::NetNetworks;
 use gpurify_check::erc::rules::{antenna, electrical, reliability, supply, topology};
 use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
 use gpurify_check::erc::{Design, ErcError, Scratch};
+use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
+use gpurify_check::topology::{DeviceTable, NetTable};
+use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
+use gpurify_geom::{Bbox, LayerId};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::deck::{
     Connectivity, Deck, DeviceRecognition, LayerTable, ProcessStack, RuleSpec, RuleTable,
 };
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_testgen::{dbu, LayoutBuilder};
-use gpurify_check::topology::{DeviceTable, NetTable};
-use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 
 /// The id given to each kind's single configured row, in the order `KINDS`
 /// spells them. Ids are positional so a failure names the kind.

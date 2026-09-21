@@ -18,14 +18,14 @@
 use crate::common;
 
 use common::{mos_and_bjt, permute, GraphBuilder, LENGTH, NCH, PCH, VSS, WIDTH};
-use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::StrId;
 use gpurify_check::lvs::compare::{compare, CompareOptions};
 use gpurify_check::lvs::graph::{Graph, LayoutGraph, RefGraph};
 use gpurify_check::lvs::reduce::reduce_into;
 use gpurify_check::lvs::refine::Partition;
 use gpurify_check::lvs::verdict::Verdict;
 use gpurify_check::topology::TerminalRole::{self, Bulk, Drain, Gate, Pin, Source};
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::StrId;
 
 /// Two nmos stacked source-to-drain, with `gate_b` deciding whether the upper
 /// device's gate is strapped to the lower one's.

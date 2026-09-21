@@ -1,7 +1,7 @@
 fn main() {
     use gpurify::engine::pipeline::{extract_into, load_into, Inputs};
-    use gpurify::ingest::layout::UnknownLayers;
     use gpurify::geom::Grid;
+    use gpurify::ingest::layout::UnknownLayers;
     use std::path::Path;
 
     let proj_dir = Path::new(".");

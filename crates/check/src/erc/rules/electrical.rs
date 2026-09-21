@@ -14,13 +14,13 @@ use crate::erc::power::{
 };
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{record_run, refuse_rows, skip_rows, Design, Scratch};
-use gpurify_geom::LayerId;
-use gpurify_ingest::intent::NetLimits;
-use gpurify_ingest::StrId;
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use gpurify_geom::LayerId;
 use gpurify_geom::{
     prefix, Current, CurrentDensity, Dbu, Grid, Qty, Resistance, Temperature, Voltage,
 };
+use gpurify_ingest::intent::NetLimits;
+use gpurify_ingest::StrId;
 
 /// Boltzmann's constant in electronvolts per kelvin — `Ea / kT` is
 /// dimensionless only if the two agree on eV.

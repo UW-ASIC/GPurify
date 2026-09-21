@@ -15,14 +15,14 @@
 use super::{gap_midpoint, poly_dist2, ring_segs, row_columns, seg_bbox, COLUMNS_DIVERGED};
 use crate::drc::rules::width::narrowest_width;
 use crate::drc::{record_run, Design, Scratch};
+use crate::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
-use gpurify_ingest::StrId;
-use crate::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_ingest::StrId;
 
 /// Minimum spacing between two shapes on the same layer.
 #[derive(Debug, Default)]

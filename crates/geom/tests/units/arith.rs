@@ -13,8 +13,8 @@
 //! backwards is off by a factor of a million here and correct everywhere both
 //! operands share a prefix.
 
-use gpurify_testgen::{assert_close_relative, Rng};
 use gpurify_geom::{prefix, Area, Current, CurrentDensity, Length, Qty, Resistance, Voltage};
+use gpurify_testgen::{assert_close_relative, Rng};
 
 /// Oracle: closed form. 1.8 V, 0.6 A and 3 ohms are one triple, and each
 /// operator recovers the member it is missing. The type annotations are half

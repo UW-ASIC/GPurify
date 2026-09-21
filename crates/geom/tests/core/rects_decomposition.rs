@@ -11,13 +11,13 @@
 
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into, owner_of, Rect};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_testgen::shapes::{
     dbu, l_shape, l_shape_area, plus_shape, plus_shape_area, random_rectilinear_layer, rect,
     u_shape, u_shape_area, LayoutBuilder, RandomLayerSpec,
 };
 use gpurify_testgen::Rng;
-use gpurify_geom::DbuArea;
 
 const LAYER: LayerId = LayerId(0);
 

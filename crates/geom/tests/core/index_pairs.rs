@@ -14,12 +14,12 @@
 //! comparison below is one-sided.
 
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
+use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_testgen::shapes::{
     dbu, random_rectilinear_layer, spaced_pair, LayoutBuilder, RandomLayerSpec,
 };
 use gpurify_testgen::Rng;
-use gpurify_geom::Dbu;
 
 const A: LayerId = LayerId(0);
 const B: LayerId = LayerId(1);

@@ -11,13 +11,13 @@ use crate::erc::facts::IntentMap;
 use crate::erc::power::{effective_resistance_into, NetNetworks, Solved};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{centre, first_vertex, record_run, skip_rows, Design, Scratch};
-use gpurify_geom::ops::{point_in_ring, segments_intersect, Point, Seg};
-use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
-use gpurify_ingest::StrId;
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId};
+use gpurify_geom::ops::{point_in_ring, segments_intersect, Point, Seg};
+use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{prefix, Current, Dbu, Qty, Resistance, Temperature, Voltage};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_ingest::StrId;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 

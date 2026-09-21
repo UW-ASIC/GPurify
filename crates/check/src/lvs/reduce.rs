@@ -30,9 +30,9 @@
 //! [`Discrepancy::UnpairedDevice`]: crate::lvs::verdict::Discrepancy::UnpairedDevice
 //! [`Verdict::Match`]: crate::lvs::verdict::Verdict::Match
 
+use crate::topology::TerminalRole;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
-use crate::topology::TerminalRole;
 
 use crate::lvs::graph::{narrow, transpose_into, Graph};
 use crate::lvs::refine::role_code;

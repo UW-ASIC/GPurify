@@ -13,13 +13,13 @@ use gpurify_geom::ops::{
     self_intersects, winding_of, Orientation, Seg, Winding,
 };
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_testgen::shapes::{
     dbu, l_shape, l_shape_area, plus_shape, plus_shape_area, point, rect, u_shape, u_shape_area,
     LayoutBuilder,
 };
 use gpurify_testgen::Rng;
-use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 
 const LAYER: LayerId = LayerId(0);
 

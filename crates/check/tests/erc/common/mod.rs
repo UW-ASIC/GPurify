@@ -11,18 +11,18 @@
     reason = "each test binary links only the fixtures it names"
 )]
 
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_check::erc::facts::IntentMap;
 use gpurify_check::erc::power;
 use gpurify_check::erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution, SolveConfig};
 use gpurify_check::erc::ruleset::RuleHead;
-use gpurify_ingest::intent::{DomainId, NetLimits, SupplyRole};
-use gpurify_ingest::StrId;
 use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
-use gpurify_testgen::point;
-use gpurify_testgen::Rng;
 use gpurify_check::topology::NetId;
 use gpurify_geom::{prefix, Current, Grid, Qty, Resistance, Temperature, Voltage};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_ingest::intent::{DomainId, NetLimits, SupplyRole};
+use gpurify_ingest::StrId;
+use gpurify_testgen::point;
+use gpurify_testgen::Rng;
 
 /// A rule id. Tests never need the text, so they never need a `StrTable` —
 /// whose `intern` is a frozen `todo!()` until the Implementation-Phase.

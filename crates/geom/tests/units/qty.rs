@@ -10,8 +10,8 @@
 //! 273.15 is a constant and the three readings that matter are stated in the
 //! function's own doc comment.
 
-use gpurify_testgen::{assert_close, assert_close_relative, Rng};
 use gpurify_geom::{celsius, prefix, Capacitance, Dimension, Length, Qty, Resistance, Voltage};
+use gpurify_testgen::{assert_close, assert_close_relative, Rng};
 
 /// Restate at prefix `Q` and back at `P`.
 ///

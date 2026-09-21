@@ -14,8 +14,8 @@ pub use ruleset::RuleSet;
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
 use gpurify_geom::rects::Rect;
-use gpurify_geom::{GeometryStore, PolyId, ValidatedLayer};
 use gpurify_geom::Evaluator;
+use gpurify_geom::{GeometryStore, PolyId, ValidatedLayer};
 // Imported for the intra-doc links above and in `DrcError`; the rule modules
 // take their own copies.
 #[allow(unused_imports)]

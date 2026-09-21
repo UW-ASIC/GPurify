@@ -4,8 +4,8 @@
 //! The completeness property, asserted at the observer seam against
 //! exhaustive pairing of extents the test itself chose.
 
-use gpurify_geom::prefilter::{candidates_observed, ObservePrefilter};
 use gpurify_geom::observe::Observer;
+use gpurify_geom::prefilter::{candidates_observed, ObservePrefilter};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_testgen::shapes::{Handle, Ids, LayoutBuilder};

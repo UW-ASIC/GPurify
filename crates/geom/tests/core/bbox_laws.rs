@@ -8,9 +8,9 @@
 //! it, because only the second direction can fail.
 
 use gpurify_geom::Bbox;
+use gpurify_geom::{DbuArea, MAX_ABS_DBU};
 use gpurify_testgen::shapes::dbu;
 use gpurify_testgen::Rng;
-use gpurify_geom::{DbuArea, MAX_ABS_DBU};
 
 fn bbox(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Bbox {
     Bbox {

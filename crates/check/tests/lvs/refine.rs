@@ -190,7 +190,8 @@ fn a_differential_pair_stays_symmetric_when_ties_are_refused() {
     );
     assert_eq!(outcome, Refinement::Symmetric);
 
-    let unresolved: Vec<(gpurify_check::lvs::refine::ClassId, u32, u32)> = scratch.unresolved().collect();
+    let unresolved: Vec<(gpurify_check::lvs::refine::ClassId, u32, u32)> =
+        scratch.unresolved().collect();
     assert!(
         !unresolved.is_empty(),
         "refinement called itself symmetric without naming a class"
@@ -252,7 +253,8 @@ fn a_deleted_device_leaves_the_partition_discrepant_rather_than_complete() {
     );
     assert_eq!(outcome, Refinement::Discrepant);
 
-    let unresolved: Vec<(gpurify_check::lvs::refine::ClassId, u32, u32)> = scratch.unresolved().collect();
+    let unresolved: Vec<(gpurify_check::lvs::refine::ClassId, u32, u32)> =
+        scratch.unresolved().collect();
     assert!(
         unresolved
             .iter()

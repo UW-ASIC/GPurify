@@ -1,7 +1,7 @@
 //! The extracted parasitic network.
 
-use gpurify_geom::LayerId;
 use gpurify_check::topology::NetId;
+use gpurify_geom::LayerId;
 use gpurify_geom::{prefix, Capacitance, Inductance, Qty, Resistance};
 
 /// One parasitic element, at a fixed prefix per kind: ohms, femtofarads,

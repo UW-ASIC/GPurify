@@ -6,15 +6,17 @@
 //! because that is the rule `topology::device` states: one polygon on the
 //! recogniser's marker layer is exactly one device.
 
-use gpurify_geom::{LayerId, PolyId};
+use gpurify_check::topology::device::recognise_into;
+use gpurify_check::topology::{
+    extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole,
+};
 use gpurify_geom::Evaluator;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::netlist::{NetlistCase, NetlistLayers};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistSpec};
-use gpurify_check::topology::device::recognise_into;
-use gpurify_check::topology::{extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole};
 
 const MOS_TERMINALS: [TerminalRole; 4] = [
     TerminalRole::Gate,
@@ -705,9 +707,9 @@ fn a_resistor_recogniser_gives_its_two_terminals_interchangeable_pins() {
 // area, or net extraction fuses source and drain into one net in silence.
 // ---------------------------------------------------------------------------
 
+use gpurify_check::topology::device::{refuse_conducting_channels, ChannelError};
 use gpurify_geom::boolean::BooleanError;
 use gpurify_geom::view::ValidityError;
-use gpurify_check::topology::device::{refuse_conducting_channels, ChannelError};
 
 /// Oracle: construct-from-answer. The [`Fingers`] layout is the *correct*
 /// deck's world: the diffusion arrives split (`diff NOT poly`), so each channel

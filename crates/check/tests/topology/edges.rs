@@ -8,9 +8,9 @@
 //! checked the non-touching case, which is the shape of half the failures the
 //! previous suite shipped.
 
+use gpurify_check::topology::net::{intra_layer_edges_into, via_edges_into};
 use gpurify_geom::LayerId;
 use gpurify_testgen::shapes::{Handle, Ids, LayoutBuilder};
-use gpurify_check::topology::net::{intra_layer_edges_into, via_edges_into};
 
 /// The edge set, as unordered pairs sorted for comparison.
 ///

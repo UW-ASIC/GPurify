@@ -12,9 +12,9 @@
 //! cases never notices.
 
 use gpurify_check::report::{LimitSense, Measurement};
+use gpurify_geom::Qty;
 use gpurify_testgen::dbu;
 use gpurify_testgen::shapes::area;
-use gpurify_geom::Qty;
 
 /// One dimension's worth of ordered values: below the limit, at it, above it.
 ///

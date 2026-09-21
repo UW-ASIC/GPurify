@@ -61,10 +61,10 @@ macro_rules! dispatch {
         }
     )+};
 }
-use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
-use gpurify_ingest::{StrId, StrTable};
 use crate::report::{LimitSense, RuleRun, Violations};
 use gpurify_geom::Dbu;
+use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
+use gpurify_ingest::{StrId, StrTable};
 
 /// Every DRC rule the deck configures, filed by kind.
 ///
@@ -576,13 +576,13 @@ mod tests {
     use super::RuleSet;
     use crate::drc::rules::grid::Direction;
     use crate::drc::{Design, Scratch};
-    use gpurify_geom::{GeometryStore, LayerId};
-    use gpurify_geom::Evaluator;
-    use gpurify_ingest::StrId;
     use crate::report::{LimitSense, Outcome, RuleRun, Violations};
+    use crate::topology::{DeviceTable, NetTable};
+    use gpurify_geom::Evaluator;
+    use gpurify_geom::{GeometryStore, LayerId};
+    use gpurify_ingest::StrId;
     use gpurify_testgen::dbu;
     use gpurify_testgen::shapes::{area, hole, rect, LayoutBuilder};
-    use crate::topology::{DeviceTable, NetTable};
 
     const A: LayerId = LayerId(0);
     const B: LayerId = LayerId(1);

@@ -8,15 +8,15 @@ use crate::erc::facts::{NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{ascending, base_layer, first_vertex, push_net_violations, record_run};
 use crate::erc::{Design, Scratch};
+use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
+use crate::topology::NetId;
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef, ValidatedLayer};
+use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::StrId;
-use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::NetId;
-use gpurify_geom::{Dbu, DbuArea};
 
 /// One conductor carrying two ties of opposite type.
 #[derive(Debug, Default)]

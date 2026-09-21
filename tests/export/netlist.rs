@@ -12,9 +12,9 @@ use crate::fixture;
 use fixture::World;
 use gpurify::export::netlist::{net_name, write_spice, Detail};
 use gpurify::export::{parasitic, WriteError};
-use gpurify_testgen::dbu;
 use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_check::topology::NetId;
+use gpurify_testgen::dbu;
 
 fn spice(
     world: &World,

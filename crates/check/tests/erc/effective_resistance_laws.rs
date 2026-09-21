@@ -11,9 +11,9 @@ use crate::common;
 
 use common::{one_row_network, probe_of};
 use gpurify_check::erc::power::{self, NetNetworks, SolveScratch};
-use gpurify_testgen::{assert_close, assert_close_relative, ladder_network, Rng};
 use gpurify_check::topology::NetId;
 use gpurify_geom::{prefix, Qty, Resistance};
+use gpurify_testgen::{assert_close, assert_close_relative, ladder_network, Rng};
 
 type Probe = (u32, u32, Qty<Resistance, { prefix::BASE }>);
 

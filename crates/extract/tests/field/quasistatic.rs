@@ -17,16 +17,18 @@
 use crate::common;
 
 use common::{extracted, grid, uniform_stack};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_check::topology::NetId;
 #[cfg(feature = "gpu")]
 use gpurify_extract::field::gpu::Device;
 #[cfg(feature = "gpu")]
 use gpurify_extract::field::matvec::select;
 use gpurify_extract::field::matvec::{Backend, CpuMatVec, MatVec};
-use gpurify_extract::field::mesh::{build_into, conductor_area, Mesh, MeshError, MeshOptions, Panel};
+use gpurify_extract::field::mesh::{
+    build_into, conductor_area, Mesh, MeshError, MeshOptions, Panel,
+};
 use gpurify_extract::field::CapMatrix;
+use gpurify_ingest::deck::ProcessStack;
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
-use gpurify_check::topology::NetId;
 
 /// A matrix from its rows, with one net per row.
 fn matrix(rows: &[&[f64]]) -> CapMatrix {

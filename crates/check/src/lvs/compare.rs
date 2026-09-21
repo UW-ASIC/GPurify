@@ -3,8 +3,8 @@
 use crate::lvs::graph::{narrow, Graph, LayoutGraph, RefGraph};
 use crate::lvs::refine::{is_symmetric, refine_into, role_code, Partition, Refinement, TieBreak};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
-use gpurify_ingest::StrId;
 use crate::topology::TerminalRole;
+use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
 /// How to run a comparison. Every field changes what a run concludes; none is a

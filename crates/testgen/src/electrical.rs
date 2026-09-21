@@ -1,10 +1,10 @@
 //! Resistor ladders and parallel-plate capacitors with closed-form answers.
 
-use gpurify_geom::ops::Point;
-use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_check::erc::power::NetNetworks;
 use gpurify_check::topology::NetId;
+use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Qty, Resistance};
+use gpurify_geom::{GeometryStore, LayerId};
 
 use crate::shapes::{dbu, LayoutBuilder};
 

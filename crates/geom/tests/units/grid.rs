@@ -8,8 +8,8 @@
 //! defect, so an off-grid length asserts `NotOnGrid` and never a nearby
 //! integer.
 
-use gpurify_testgen::{assert_bytes_identical, Rng};
 use gpurify_geom::{prefix, Dbu, Grid, GridError, Length, Qty, MAX_ABS_DBU};
+use gpurify_testgen::{assert_bytes_identical, Rng};
 
 /// A length in nanometres.
 fn nm(raw: f64) -> Qty<Length, { prefix::NANO }> {

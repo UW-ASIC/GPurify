@@ -4,9 +4,9 @@
 use std::fmt::Write as _;
 
 use crate::export::{Header, WriteError, INFALLIBLE};
-use gpurify_ingest::{StrId, StrTable};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_geom::{Dbu, Grid};
+use gpurify_ingest::{StrId, StrTable};
 
 /// A complete verification report.
 ///

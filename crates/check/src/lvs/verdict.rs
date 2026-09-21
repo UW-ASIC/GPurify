@@ -1,7 +1,7 @@
 //! What a comparison concluded, and why.
 
-use gpurify_ingest::StrId;
 use crate::topology::TerminalRole;
+use gpurify_ingest::StrId;
 
 /// The result of comparing one cell.
 #[derive(Debug, Clone, PartialEq)]

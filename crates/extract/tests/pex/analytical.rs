@@ -16,17 +16,17 @@
 use crate::common;
 
 use common::{extracted, grid, resistance_ohm, serialise, uniform_stack};
-use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId};
-use gpurify_ingest::deck::{Connectivity, ProcessStack};
+use gpurify_check::topology::{DeviceTable, NetId, NetTable};
 use gpurify_extract::analytical::{
     coupling_capacitance, extract_into, extract_net_into, ground_capacitance, segment_resistance,
     stack_row, via_resistance,
 };
 use gpurify_extract::network::{Parasitic, ParasiticNetwork};
 use gpurify_extract::reduce::total_capacitance;
-use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
-use gpurify_check::topology::{DeviceTable, NetId, NetTable};
 use gpurify_geom::DbuArea;
+use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId};
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
+use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
 
 /// A node index as a subscript, refusing anything that is not one.
 fn node(index: u32) -> usize {

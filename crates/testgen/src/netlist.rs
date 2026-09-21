@@ -6,10 +6,10 @@
 //! by construction. Every distinct [`TerminalRole`] gets its own conductor and
 //! cut layer, because `DeviceRecognition` identifies terminal `k` by layer.
 
+use gpurify_check::topology::TerminalRole;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_check::topology::TerminalRole;
 
 use crate::shapes::{Handle, Ids, LayoutBuilder};
 
@@ -341,8 +341,8 @@ fn recognition_of(
 #[cfg(test)]
 mod tests {
     use super::{assign_layers, DeviceSpec, NetlistSpec};
-    use gpurify_ingest::deck::DeviceKind;
     use gpurify_check::topology::TerminalRole;
+    use gpurify_ingest::deck::DeviceKind;
 
     fn two_transistors() -> NetlistSpec {
         NetlistSpec {

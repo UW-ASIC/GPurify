@@ -4,12 +4,12 @@ use crate::erc::facts::{IntentMap, NetFacts};
 use crate::erc::power::{NetNetworks, Solved};
 use crate::erc::rules::{antenna, electrical, reliability, supply, topology};
 use crate::erc::{Design, ErcError, Scratch};
-use gpurify_geom::{Bbox, LayerId};
+use crate::report::{RuleRun, Severity, Violations};
 use gpurify_geom::LayerRef;
+use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
-use crate::report::{RuleRun, Severity, Violations};
-use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
 
 /// Every rule kind this crate implements, as the deck spells it.
 ///

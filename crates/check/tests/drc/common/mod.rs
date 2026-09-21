@@ -17,13 +17,13 @@
     reason = "each test binary links only the fixtures it names"
 )]
 
-use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
-use gpurify_geom::Evaluator;
 use gpurify_check::drc::{Design, Scratch};
-use gpurify_ingest::StrId;
 use gpurify_check::report::{RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
+use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::Evaluator;
+use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
+use gpurify_ingest::StrId;
 
 /// The rule under test in almost every case.
 pub const RULE: StrId = StrId(0);

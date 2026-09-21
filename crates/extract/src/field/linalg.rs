@@ -422,40 +422,12 @@ impl LowRankApprox {
 // ===========================================================================
 // Strict sequential vector kernels.
 //
-// main's `quasistatic::simd` module (wide::f64x4, 16 partial sums) is
-// deliberately NOT ported: docs/CONVENTIONS.md demands byte-identical output,
-// and the deterministic baseline is the strict left fold in ascending index
-// order. These are the scalar reference loops from that module's tails.
-// ponytail: scalar folds; re-port the fixed-order f64x4 block sums from
-// origin/main:crates/pex/src/quasistatic/simd.rs if a profile says GMRES MGS
-// is the bottleneck (they are also deterministic, just a different fold order).
+// The real-valued three live in `gpurify_geom::linalg`, where the ERC power
+// solve reaches them too. The split-plane complex forms below have no second
+// caller, so they stay here.
 // ===========================================================================
 
-/// Σ aᵢ·bᵢ as a strict left fold in ascending index order.
-#[inline]
-pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
-    debug_assert_eq!(a.len(), b.len());
-    let mut s = 0.0;
-    for (x, y) in a.iter().zip(b) {
-        s += x * y;
-    }
-    s
-}
-
-/// ‖a‖₂.
-#[inline]
-pub(crate) fn nrm2(a: &[f64]) -> f64 {
-    dot(a, a).sqrt()
-}
-
-/// y += α·x (call with −α for the MGS update w −= h·v).
-#[inline]
-pub(crate) fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
-    debug_assert_eq!(x.len(), y.len());
-    for (yj, xj) in y.iter_mut().zip(x) {
-        *yj += alpha * xj;
-    }
-}
+pub(crate) use gpurify_geom::linalg::{axpy, dot, nrm2};
 
 /// Split-plane complex (unconjugated) dot Σ (ar+i·ai)(xr+i·xi):
 /// returns (Σ ar·xr − ai·xi, Σ ar·xi + ai·xr).

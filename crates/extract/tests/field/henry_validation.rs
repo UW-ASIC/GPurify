@@ -144,12 +144,16 @@ fn iterative_matches_direct() {
         .freq fmin=1e8 fmax=1e8 ndec=1\n\
         .end\n";
     let nl = gpurify_extract::field::henry::parse(deck).unwrap();
-    let zd =
-        gpurify_extract::field::henry::solve_with(&nl, gpurify_extract::field::henry::Method::Direct)
-            .unwrap();
-    let zi =
-        gpurify_extract::field::henry::solve_with(&nl, gpurify_extract::field::henry::Method::Iterative)
-            .unwrap();
+    let zd = gpurify_extract::field::henry::solve_with(
+        &nl,
+        gpurify_extract::field::henry::Method::Direct,
+    )
+    .unwrap();
+    let zi = gpurify_extract::field::henry::solve_with(
+        &nl,
+        gpurify_extract::field::henry::Method::Iterative,
+    )
+    .unwrap();
     let mut maxrel = 0.0f64;
     for i in 0..2 {
         for j in 0..2 {

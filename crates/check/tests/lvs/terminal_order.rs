@@ -22,11 +22,11 @@
 
 use crate::common;
 
-use gpurify_ingest::deck::DeviceKind;
 use gpurify_check::lvs::compare::{compare, CompareOptions};
 use gpurify_check::lvs::refine::Partition;
 use gpurify_check::lvs::{LayoutGraph, RefGraph, Verdict};
 use gpurify_check::topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
+use gpurify_ingest::deck::DeviceKind;
 
 /// A MOS in recogniser order against the same MOS in SPICE `M` card order.
 #[test]

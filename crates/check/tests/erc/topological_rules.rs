@@ -15,22 +15,22 @@
 use crate::common;
 
 use common::{head, rule};
-use gpurify_geom::PolyId;
-use gpurify_geom::Evaluator;
 use gpurify_check::erc::facts::{classify_nets_into, NetFacts};
 use gpurify_check::erc::rules::topology::{
     check_floating_gate, check_multiple_drivers, check_unconnected_pin, FloatingGateTable,
     MultipleDriversTable, UnconnectedPinTable,
 };
 use gpurify_check::erc::{Design, Scratch};
+use gpurify_check::report::{Measurement, Severity, Violations};
+use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
+use gpurify_geom::Evaluator;
+use gpurify_geom::PolyId;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
-use gpurify_check::report::{Measurement, Severity, Violations};
 use gpurify_testgen::{
     assert_clean, assert_rule_ran, layout_from_netlist, DeviceSpec, Floorplan, NetlistCase,
     NetlistSpec,
 };
-use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
 
 /// A layout emitted from a netlist, extracted and classified — everything the
 /// four transforms in `rules::topology` read.

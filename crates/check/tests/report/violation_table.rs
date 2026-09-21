@@ -11,9 +11,9 @@
 //! sorted one arrangement and checked the result would not touch that claim, so
 //! every ordering test here shuffles first, with a printed seed.
 
+use gpurify_check::report::{Measurement, Severity, Violation, Violations};
 use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::StrId;
-use gpurify_check::report::{Measurement, Severity, Violation, Violations};
 use gpurify_testgen::{assert_bytes_identical, assert_violations_eq, point, Rng};
 
 /// The corpus whose canonical order is known before anything is sorted.

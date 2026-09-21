@@ -1,15 +1,15 @@
 //! Running the checks, and reporting honestly about which ones ran.
 
 use crate::engine::pipeline::{Extracted, Inputs, Loaded};
-use gpurify_geom::ops::Point;
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
-use gpurify_ingest::{StrId, StrTable};
 use gpurify_check::lvs::verdict::Inconclusive;
 use gpurify_check::lvs::{Discrepancy, Verdict};
+use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_extract::network::NodeId;
 use gpurify_extract::ParasiticNetwork;
-use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use gpurify_geom::ops::Point;
 use gpurify_geom::{celsius, prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_ingest::{StrId, StrTable};
 
 /// Which checks to run.
 // All sixteen combinations are meaningful, including none, so the sum type
@@ -572,7 +572,12 @@ fn run_lvs(
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
         Some(top) => {
             let mut declared = gpurify_check::lvs::RefGraph::default();
-            gpurify_check::lvs::graph::from_reference_into(reference, top, &loaded.strings, &mut declared);
+            gpurify_check::lvs::graph::from_reference_into(
+                reference,
+                top,
+                &loaded.strings,
+                &mut declared,
+            );
             // A 3-terminal MOS recogniser extracts no bulk; the reference's
             // card-mandated fourth net must not unpair the comparison.
             gpurify_check::lvs::graph::drop_unextracted_bulk(&layout, &mut declared);
@@ -1111,12 +1116,12 @@ pub enum EngineError {
 #[cfg(test)]
 mod tests {
     use super::{merge_field_solved_into, reciprocity_refusal};
-    use gpurify_geom::LayerId;
+    use gpurify_check::topology::NetId;
     use gpurify_extract::network::NodeId;
     use gpurify_extract::quasistatic::matvec::Backend;
     use gpurify_extract::quasistatic::Accuracy;
     use gpurify_extract::{Parasitic, ParasiticNetwork};
-    use gpurify_check::topology::NetId;
+    use gpurify_geom::LayerId;
     use gpurify_geom::Qty;
 
     fn ground(ff: f64) -> Parasitic {

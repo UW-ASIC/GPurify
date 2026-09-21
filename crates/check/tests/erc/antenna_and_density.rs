@@ -14,21 +14,21 @@
 use crate::common;
 
 use common::{head, rule};
-use gpurify_geom::{Bbox, GeometryStore, LayerId};
-use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_check::erc::rules::antenna::{
     check_antenna, check_antenna_electrical, check_density_cmp, AntennaElectricalTable,
     AntennaMeasure, AntennaTable, DensityCmpTable,
 };
 use gpurify_check::erc::{Design, Scratch};
+use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
+use gpurify_check::topology::{DeviceTable, NetTable};
+use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::{Evaluator, LayerRef};
 use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::StrId;
-use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_testgen::shapes::{random_rectilinear_layer, RandomLayerSpec};
 use gpurify_testgen::{
     assert_clean, assert_close_relative, assert_rule_ran, dbu, LayoutBuilder, Rng,
 };
-use gpurify_check::topology::{DeviceTable, NetTable};
 
 fn report() -> (Violations, Vec<RuleRun>) {
     (Violations::default(), Vec::new())

@@ -424,8 +424,8 @@ impl Provenance {
 #[cfg(test)]
 mod tests {
     use super::Provenance;
-    use gpurify_geom::StrTable;
     use gpurify_geom::PolyId;
+    use gpurify_geom::StrTable;
 
     #[test]
     fn permute_moves_each_hierarchy_path_onto_the_row_its_polygon_became() {

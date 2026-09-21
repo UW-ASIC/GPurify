@@ -7,12 +7,12 @@
 //! fold itself is checked construct-from-answer: a layout emitted from a
 //! netlist must classify back to that netlist's terminals.
 
-use gpurify_geom::Evaluator;
 use gpurify_check::erc::facts::{classify_nets_into, NetFacts, RoleMask};
+use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
-use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
 
 /// The seven named roles, with the bit each is documented to carry.
 const NAMED: [(TerminalRole, RoleMask); 7] = [

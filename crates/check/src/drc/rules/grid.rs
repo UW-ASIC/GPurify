@@ -9,11 +9,11 @@
 
 use super::COLUMNS_DIVERGED;
 use crate::drc::{record_run, Design, Scratch};
+use crate::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::ops::Point;
+use gpurify_geom::Dbu;
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
-use crate::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_geom::Dbu;
 
 /// Off-grid: every vertex must land on a manufacturing pitch.
 ///

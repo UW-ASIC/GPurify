@@ -11,10 +11,10 @@ pub use crate::field::{matvec, mesh, solve, Accuracy, CapMatrix};
 pub use crate::field::gpu;
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
-use gpurify_geom::{GeometryStore, LayerId};
-use gpurify_ingest::deck::ProcessStack;
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{prefix, Capacitance, Inductance, Qty, Resistance};
+use gpurify_geom::{GeometryStore, LayerId};
+use gpurify_ingest::deck::ProcessStack;
 
 /// Farads to the femtofarads [`Parasitic`] states capacitance in.
 const FEMTOFARADS_PER_FARAD: f64 = 1e15;
@@ -40,8 +40,7 @@ pub fn extract_into(
 ) -> Result<Accuracy, solve::SolveError> {
     out.clear();
 
-    let accuracy =
-        crate::field::extract_into(store, nets, selected, stack, grid, options, matrix)?;
+    let accuracy = crate::field::extract_into(store, nets, selected, stack, grid, options, matrix)?;
 
     // The ascending net order the solve assembled the matrix in: `matrix.net`
     // is the sorted selection, one row per net.

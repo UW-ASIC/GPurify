@@ -14,8 +14,8 @@
 //! checked as well as the positive one — an assertion that only ever passes is
 //! not evidence of anything.
 
-use gpurify_ingest::StrId;
 use gpurify_check::report::{Outcome, RuleRun, SkipReason, Violations};
+use gpurify_ingest::StrId;
 use gpurify_testgen::{assert_clean, assert_rule_ran};
 
 const RULE: StrId = StrId(31);

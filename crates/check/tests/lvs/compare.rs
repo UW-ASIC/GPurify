@@ -13,14 +13,14 @@ use common::{
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
     stacked_pair_with_params, GraphBuilder, NCH, NPN, PCH, RES, VDD, VSS, WIDTH,
 };
-use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::StrId;
 use gpurify_check::lvs::compare::interpret;
 use gpurify_check::lvs::refine::{ClassId, Partition, TieBreak};
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use gpurify_check::lvs::{compare, CompareOptions, Graph, LayoutGraph, RefGraph};
-use gpurify_testgen::Rng;
 use gpurify_check::topology::TerminalRole;
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::StrId;
+use gpurify_testgen::Rng;
 
 /// Options that resolve every tie and never run out of rounds, so a verdict is
 /// about the graphs rather than about the budget.
@@ -186,8 +186,8 @@ fn the_nets_orphaned_by_a_deleted_device_are_reported_by_index() {
 /// asserting the perturbation stays local would fail against it.
 #[test]
 fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
-    use gpurify_ingest::deck::DeviceKind;
     use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    use gpurify_ingest::deck::DeviceKind;
 
     let mut builder = GraphBuilder::new(6);
     builder.device(
@@ -393,8 +393,10 @@ fn a_parameter_beyond_tolerance_is_reported_with_both_values() {
 /// `terminal_order.rs` already covers separately.
 #[test]
 fn a_mos_written_source_for_drain_is_the_same_transistor() {
+    use gpurify_check::topology::TerminalRole::{
+        Base, Bulk, Collector, Drain, Emitter, Gate, Source,
+    };
     use gpurify_ingest::deck::DeviceKind;
-    use gpurify_check::topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
 
     let anchored = |source: u32, drain: u32| {
         let mut builder = GraphBuilder::new(6);
@@ -443,7 +445,9 @@ fn a_mos_written_source_for_drain_is_the_same_transistor() {
 /// to any relabelling.
 #[test]
 fn a_reference_bulk_the_deck_cannot_extract_is_dropped_and_the_swap_still_pairs() {
-    use gpurify_check::topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
+    use gpurify_check::topology::TerminalRole::{
+        Base, Bulk, Collector, Drain, Emitter, Gate, Source,
+    };
 
     let sized: &[(StrId, f64)] = &[(WIDTH, 2e-6), (common::LENGTH, 5e-7)];
     let anchor = |builder: &mut GraphBuilder| {
@@ -534,8 +538,10 @@ fn a_reference_bulk_the_deck_cannot_extract_is_dropped_and_the_swap_still_pairs(
 /// measured nothing.
 #[test]
 fn a_bipolars_emitter_and_collector_are_not_interchangeable() {
+    use gpurify_check::topology::TerminalRole::{
+        Base, Bulk, Collector, Drain, Emitter, Gate, Source,
+    };
     use gpurify_ingest::deck::DeviceKind;
-    use gpurify_check::topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
 
     let anchored = |emitter: u32, collector: u32| {
         let mut builder = GraphBuilder::new(6);

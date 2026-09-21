@@ -22,10 +22,10 @@ pub mod krylov;
 pub mod linalg;
 pub mod operator;
 
-use gpurify_geom::GeometryStore;
-use gpurify_ingest::deck::ProcessStack;
 use gpurify_check::topology::{NetId, NetTable};
+use gpurify_geom::GeometryStore;
 use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
+use gpurify_ingest::deck::ProcessStack;
 
 /// The Maxwell capacitance matrix for a set of conductors.
 ///

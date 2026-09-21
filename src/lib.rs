@@ -9,12 +9,12 @@
 //! live. Those two link every crate at once, so they belong to no single one of
 //! them, and a virtual workspace root cannot host a test target.
 
-pub use gpurify_geom as geom;
 pub use gpurify_check as check;
+pub use gpurify_geom as geom;
 pub mod engine;
 pub mod export;
-pub use gpurify_ingest as ingest;
 pub use gpurify_extract as extract;
+pub use gpurify_ingest as ingest;
 
 /// What a caller needs for an ordinary run, without naming a crate.
 pub mod prelude {

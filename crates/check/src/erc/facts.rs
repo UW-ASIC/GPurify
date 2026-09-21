@@ -4,9 +4,9 @@
 //! is resolved exactly once, here, into [`IntentMap::declared`], so six rules
 //! cannot each get that test wrong.
 
-use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, SupplyRole};
 use crate::topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::{prefix, Qty, Voltage};
+use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, SupplyRole};
 
 /// Which terminal roles are present on a net, as a bit per role.
 ///

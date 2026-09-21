@@ -25,12 +25,12 @@ use crate::common;
 use common::{
     mos_and_bjt, mos_and_bjt_without_the_bjt, stacked_pair, CELL_A, CELL_B, CELL_MISSING,
 };
-use gpurify_ingest::netlist::{Netlist, SubcktId};
-use gpurify_ingest::StrId;
 use gpurify_check::lvs::compare::CompareOptions;
 use gpurify_check::lvs::hierarchical::{plan, run, CellResult, ComparisonPlan, PlanError};
 use gpurify_check::lvs::verdict::Inconclusive;
 use gpurify_check::lvs::{LayoutGraph, RefGraph, Verdict};
+use gpurify_ingest::netlist::{Netlist, SubcktId};
+use gpurify_ingest::StrId;
 
 /// Two subcircuits, no devices, no nets and no instantiation. A plan is about
 /// which cells pair with which, so the cells' contents are not part of the
