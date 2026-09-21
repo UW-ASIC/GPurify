@@ -13,7 +13,7 @@ use gpurify_extract::field::henry::bridge::{
     extract_inductance_into, InductMatrix, InductanceError, InductanceOptions,
 };
 use gpurify_extract::field::integrals::filament::self_inductance_bar;
-use gpurify_topology::{NetId, NetTable};
+use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::Dbu;
 
 fn dbu(raw: i64) -> Dbu {

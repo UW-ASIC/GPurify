@@ -29,7 +29,7 @@ fn library(cell_name: &str) -> Vec<u8> {
     out
 }
 
-fn markers(world: &World, violations: &gpurify_report::Violations, layer: u16) -> Vec<u8> {
+fn markers(world: &World, violations: &gpurify_check::report::Violations, layer: u16) -> Vec<u8> {
     let mut out = Vec::new();
     write_markers(
         violations,

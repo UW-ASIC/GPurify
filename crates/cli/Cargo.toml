@@ -7,7 +7,7 @@ edition = "2021"
 gpurify-engine = { workspace = true }
 gpurify-ingest = { workspace = true }
 gpurify-geom = { workspace = true }
-gpurify-report = { workspace = true }
+gpurify-check = { workspace = true }
 gpurify-export = { workspace = true }
 thiserror = { workspace = true }
 

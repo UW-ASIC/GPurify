@@ -292,7 +292,7 @@ fn lattice(n: usize) -> Mesh {
     }
     Mesh {
         conductor_start: vec![0, u32::try_from(n).expect("a panel count is a u32")],
-        conductor_net: vec![gpurify_topology::NetId(0)],
+        conductor_net: vec![gpurify_check::topology::NetId(0)],
         epsilon: vec![3.9; n],
         panel,
     }

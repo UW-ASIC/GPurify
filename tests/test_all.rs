@@ -28,11 +28,11 @@
 //! completion criterion for Phase 4 — not a suite to be turned green early by
 //! writing an implementation underneath it.
 
-use gpurify::drc::DrcError;
+use gpurify::check::drc::DrcError;
 use gpurify::engine::pipeline::LoadError;
 use gpurify::engine::run::{Checks, EngineError, StageStatus};
 use gpurify::ingest::DeckError;
-use gpurify::report::{Measurement, Outcome, Severity, SkipReason};
+use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
 
 mod common;
 
@@ -417,7 +417,7 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
 /// dangling terminals went unchecked in every run. That is the false-clean shape
 /// `Outputs::runs` documents itself as existing to prevent.
 ///
-/// [`RuleRun`]: gpurify::report::RuleRun
+/// [`RuleRun`]: gpurify::check::report::RuleRun
 #[test]
 fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows() {
     let checks = Checks {
@@ -455,7 +455,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         .expect("a stage that was given both netlists leaves its verdict behind");
     assert_eq!(
         *verdict,
-        gpurify::lvs::Verdict::Match,
+        gpurify::check::lvs::Verdict::Match,
         "the layout extracts {} devices on {} nets against the reference's 2 on 4, \
          source and drain distinct and the unextracted bulk dropped, so the two \
          graphs are isomorphic and anything but Match reports a difference that \
@@ -842,7 +842,7 @@ fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
 /// canonical one `Violations::sort_canonical` already establishes — `at.y` then
 /// `at.x` — re-established after the filter so the pairing below is positional
 /// rather than a search.
-fn violations_of(run: &common::CaseRun, rule: &str) -> Vec<gpurify::report::Violation> {
+fn violations_of(run: &common::CaseRun, rule: &str) -> Vec<gpurify::check::report::Violation> {
     let id = run
         .loaded
         .strings
@@ -857,7 +857,7 @@ fn violations_of(run: &common::CaseRun, rule: &str) -> Vec<gpurify::report::Viol
 }
 
 /// A reported point, as a plain pair, for the assertion messages below.
-fn at_of(violation: &gpurify::report::Violation) -> (i64, i64) {
+fn at_of(violation: &gpurify::check::report::Violation) -> (i64, i64) {
     (violation.at.x.raw(), violation.at.y.raw())
 }
 
@@ -1903,13 +1903,13 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
     assert_eq!(devices.param, again.param);
 
     // And the split really is in force: distinct source and drain on a device.
-    let (terminal_nets, roles) = devices.terminals_of(gpurify::topology::DeviceId(0));
+    let (terminal_nets, roles) = devices.terminals_of(gpurify::check::topology::DeviceId(0));
     let source = roles
         .iter()
-        .position(|&r| r == gpurify::topology::TerminalRole::Source);
+        .position(|&r| r == gpurify::check::topology::TerminalRole::Source);
     let drain = roles
         .iter()
-        .position(|&r| r == gpurify::topology::TerminalRole::Drain);
+        .position(|&r| r == gpurify::check::topology::TerminalRole::Drain);
     let (source, drain) = (
         source.expect("a MOS has a source"),
         drain.expect("and a drain"),

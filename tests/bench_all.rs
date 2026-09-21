@@ -42,8 +42,8 @@ use gpurify::geom::{GeometryStore, LayerId};
 use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, Loaded};
 use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions};
 use gpurify::ingest::layout::UnknownLayers;
-use gpurify::report::RuleRun;
-use gpurify::topology::NetTable;
+use gpurify::check::report::RuleRun;
+use gpurify::check::topology::NetTable;
 use gpurify::geom::Grid;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use std::path::Path;
@@ -154,7 +154,7 @@ fn net_extraction_stays_canonical_and_records_its_cost() {
         let corpus = corpus(polygons);
         let (nets, timing) = timed("topology::extract_nets", polygons, || {
             let mut nets = NetTable::default();
-            gpurify::topology::extract_nets_into(&corpus.store, &corpus.connectivity, &mut nets);
+            gpurify::check::topology::extract_nets_into(&corpus.store, &corpus.connectivity, &mut nets);
             nets
         });
 
@@ -673,7 +673,7 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
 
             let options = RunOptions {
                 checks,
-                lvs: gpurify::lvs::CompareOptions::default(),
+                lvs: gpurify::check::lvs::CompareOptions::default(),
                 quasistatic_nets: Vec::new(),
                 quasistatic_inductance: false,
                 threads: Some(1),
@@ -699,7 +699,7 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
     // domain, never the other's.
     let checks_for = |kind: &str| Checks {
         drc: true,
-        erc: gpurify::erc::ruleset::KINDS.contains(&kind),
+        erc: gpurify::check::erc::ruleset::KINDS.contains(&kind),
         lvs: false,
         pex: false,
     };
@@ -747,7 +747,7 @@ fn every_rule_in_the_deck_is_timed_on_its_own() {
         (least, spread)
     };
     let (drc_floor, drc_spread) = floor(checks_for("min_width"));
-    let (erc_floor, erc_spread) = floor(checks_for(gpurify::erc::ruleset::KINDS[0]));
+    let (erc_floor, erc_spread) = floor(checks_for(gpurify::check::erc::ruleset::KINDS[0]));
 
     let mut timings = Vec::with_capacity(rules.len());
     for (id, spec) in &rules {

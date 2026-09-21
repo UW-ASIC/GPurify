@@ -5,7 +5,7 @@ use gpurify_geom::Evaluator;
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{Deck, DesignIntent, Provenance, StrTable};
-use gpurify_topology::{DeviceTable, Extraction, NetTable, PortTable};
+use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::Grid;
 use std::path::PathBuf;
 
@@ -260,7 +260,7 @@ pub fn extract_into(loaded: &Loaded, out: &mut Extracted) -> Result<(), ExtractE
     // Before nets exist: a MOS channel marker over live conductor area means
     // extraction would fuse source and drain into one net and report the short
     // as clean, so that deck-and-layout configuration is refused instead.
-    gpurify_topology::device::refuse_conducting_channels(
+    gpurify_check::topology::device::refuse_conducting_channels(
         &loaded.store,
         &loaded.deck.connectivity,
         &loaded.deck.devices,
@@ -268,7 +268,7 @@ pub fn extract_into(loaded: &Loaded, out: &mut Extracted) -> Result<(), ExtractE
 
     // Each of the three clears the table it fills, so a reused `Extracted` is
     // refilled rather than appended to.
-    gpurify_topology::net::extract_nets_into(
+    gpurify_check::topology::net::extract_nets_into(
         &loaded.store,
         &loaded.deck.connectivity,
         &mut out.nets,
@@ -278,7 +278,7 @@ pub fn extract_into(loaded: &Loaded, out: &mut Extracted) -> Result<(), ExtractE
         "more nets than there are polygons to put in them"
     );
 
-    gpurify_topology::device::recognise_into(
+    gpurify_check::topology::device::recognise_into(
         &loaded.store,
         &out.derived,
         &out.nets,
@@ -290,7 +290,7 @@ pub fn extract_into(loaded: &Loaded, out: &mut Extracted) -> Result<(), ExtractE
         "a device is recognised on a marker polygon, so there cannot be more of them than polygons"
     );
 
-    gpurify_topology::port::bind_ports_into(&out.nets, &loaded.provenance, &mut out.ports)?;
+    gpurify_check::topology::port::bind_ports_into(&out.nets, &loaded.provenance, &mut out.ports)?;
     debug_assert!(
         out.ports.len() <= loaded.provenance.labels().len(),
         "ports are deduplicated labels, so there cannot be more of them than labels"
@@ -324,9 +324,9 @@ pub enum ExtractError {
     #[error(transparent)]
     Derived(#[from] gpurify_geom::DerivedError),
     #[error(transparent)]
-    Port(#[from] gpurify_topology::port::PortError),
+    Port(#[from] gpurify_check::topology::port::PortError),
     /// A MOS channel marker overlaps conductor area on its source/drain layer,
     /// so extraction would report source and drain as one net.
     #[error(transparent)]
-    Channel(#[from] gpurify_topology::ChannelError),
+    Channel(#[from] gpurify_check::topology::ChannelError),
 }

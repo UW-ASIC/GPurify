@@ -25,7 +25,7 @@ use gpurify_extract::analytical::{
 use gpurify_extract::network::{Parasitic, ParasiticNetwork};
 use gpurify_extract::reduce::total_capacitance;
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
-use gpurify_topology::{DeviceTable, NetId, NetTable};
+use gpurify_check::topology::{DeviceTable, NetId, NetTable};
 use gpurify_geom::DbuArea;
 
 /// A node index as a subscript, refusing anything that is not one.

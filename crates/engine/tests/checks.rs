@@ -12,7 +12,7 @@
 //! until the Implementation-Phase, and an assertion that panics inside itself
 //! reports nothing. `testgen::assertions` does the same, for the same reason.
 
-use gpurify_drc::DrcError;
+use gpurify_check::drc::DrcError;
 use gpurify_engine::pipeline::{Extracted, Loaded};
 use gpurify_engine::run::{
     run_checks, Checks, EngineError, Outputs, RunOptions, StageStatus, Summary,
@@ -20,9 +20,9 @@ use gpurify_engine::run::{
 use gpurify_ingest::deck::{DeviceKind, RuleSpec};
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::StrId;
-use gpurify_lvs::refine::TieBreak;
-use gpurify_lvs::verdict::{Discrepancy, Side};
-use gpurify_lvs::{CompareOptions, Verdict};
+use gpurify_check::lvs::refine::TieBreak;
+use gpurify_check::lvs::verdict::{Discrepancy, Side};
+use gpurify_check::lvs::{CompareOptions, Verdict};
 
 /// Every field written out rather than `CompareOptions::default()`, which is a
 /// `todo!()` body until Phase 4 — a fixture that panics before reaching the

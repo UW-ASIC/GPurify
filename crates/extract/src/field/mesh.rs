@@ -2,7 +2,7 @@
 
 use gpurify_geom::{Bbox, GeometryStore, LayerId};
 use gpurify_ingest::deck::ProcessStack;
-use gpurify_topology::{NetId, NetTable};
+use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{Dbu, Grid};
 use std::cmp::Ordering;
 

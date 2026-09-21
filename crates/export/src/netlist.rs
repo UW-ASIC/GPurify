@@ -8,8 +8,8 @@ use crate::{narrow, Header, WriteError, INFALLIBLE};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
 use gpurify_extract::ParasiticNetwork;
-use gpurify_topology::device::{DeviceId, DeviceMeasure, DeviceParam};
-use gpurify_topology::{Extraction, NetId, PortTable, TerminalRole};
+use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
+use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
 
 /// The subcircuit's name, matching what `engine` hands `gds::write_store`.
 /// Never `header.layout_path`: a path in a body is what the [`Header`] keeps out.
@@ -290,7 +290,7 @@ fn put_node(
 
 /// The name of one net in the emitted netlist, shared with the parasitic writers.
 pub fn net_name(
-    net: gpurify_topology::NetId,
+    net: gpurify_check::topology::NetId,
     ports: &PortTable,
     strings: &StrTable,
     out: &mut String,
@@ -299,7 +299,7 @@ pub fn net_name(
     // this is the loudest the signature allows.
     debug_assert_ne!(
         net,
-        gpurify_topology::NetId::NONE,
+        gpurify_check::topology::NetId::NONE,
         "asked for the name of no net at all"
     );
 

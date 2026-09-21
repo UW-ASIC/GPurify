@@ -36,10 +36,10 @@ use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::{Provenance, StrId, StrTable};
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
-use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
+use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
 use gpurify_testgen::{dbu, point, LayoutBuilder};
-use gpurify_topology::device::{DeviceMeasure, DeviceParam};
-use gpurify_topology::{
+use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+use gpurify_check::topology::{
     bind_ports_into, extract_nets_into, DeviceTable, Extraction, NetId, NetTable, PortTable,
     TerminalRole,
 };

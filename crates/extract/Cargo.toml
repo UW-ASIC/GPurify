@@ -6,8 +6,7 @@ edition = "2021"
 [dependencies]
 gpurify-geom = { workspace = true }
 gpurify-ingest = { workspace = true }
-gpurify-topology = { workspace = true }
-gpurify-report = { workspace = true }
+gpurify-check = { workspace = true }
 thiserror = { workspace = true }
 num-complex = { workspace = true }
 rayon = { workspace = true }

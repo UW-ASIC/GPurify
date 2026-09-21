@@ -12,7 +12,7 @@ mod fixture;
 
 use fixture::World;
 use gpurify_export::json;
-use gpurify_report::{Measurement, Outcome};
+use gpurify_check::report::{Measurement, Outcome};
 use gpurify_testgen::{dbu, point};
 use serde_json::Value;
 

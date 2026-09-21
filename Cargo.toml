@@ -5,15 +5,11 @@ edition = "2021"
 
 [dependencies]
 gpurify-geom = { workspace = true }
-gpurify-drc = { workspace = true }
+gpurify-check = { workspace = true }
 gpurify-engine = { workspace = true }
-gpurify-erc = { workspace = true }
 gpurify-export = { workspace = true }
 gpurify-ingest = { workspace = true }
-gpurify-lvs = { workspace = true }
 gpurify-extract = { workspace = true }
-gpurify-report = { workspace = true }
-gpurify-topology = { workspace = true }
 
 [features]
 default = ["gpu"]
@@ -37,11 +33,7 @@ resolver = "2"
 members = [
     "crates/geom",
     "crates/ingest",
-    "crates/topology",
-    "crates/report",
-    "crates/drc",
-    "crates/erc",
-    "crates/lvs",
+    "crates/check",
     "crates/extract",
     "crates/export",
     "crates/engine",
@@ -53,11 +45,7 @@ exclude = ["tools"]
 [workspace.dependencies]
 gpurify-geom = { path = "crates/geom" }
 gpurify-ingest = { path = "crates/ingest" }
-gpurify-topology = { path = "crates/topology" }
-gpurify-report = { path = "crates/report" }
-gpurify-drc = { path = "crates/drc" }
-gpurify-erc = { path = "crates/erc" }
-gpurify-lvs = { path = "crates/lvs" }
+gpurify-check = { path = "crates/check" }
 # `default-features = false`, so a dependant's own `gpu` feature is the only
 # thing that turns the solver's GPU path on. Without it, `extract`'s own
 # `default = ["gpu"]` re-enables the path for every crate that depends on it,

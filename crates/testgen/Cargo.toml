@@ -8,9 +8,7 @@ description = "Seeded generators and oracles for the GPUVerify test suite."
 [dependencies]
 gpurify-geom = { workspace = true }
 gpurify-ingest = { workspace = true }
-gpurify-report = { workspace = true }
-gpurify-topology = { workspace = true }
-gpurify-erc = { workspace = true }
+gpurify-check = { workspace = true }
 
 [lints]
 workspace = true

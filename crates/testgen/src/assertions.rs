@@ -1,7 +1,7 @@
 //! Assertions over violation tables, rule runs and float comparisons.
 
 use gpurify_ingest::StrId;
-use gpurify_report::{Outcome, RuleRun, Violation, Violations};
+use gpurify_check::report::{Outcome, RuleRun, Violation, Violations};
 
 /// Assert two `f64` agree to an absolute tolerance.
 ///

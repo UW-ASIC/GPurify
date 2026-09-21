@@ -15,7 +15,7 @@ use gpurify_extract::reduce::{
     collapse_series_into, merge_parallel_into, reduce_into, total_capacitance, Order,
 };
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, Rng};
-use gpurify_topology::NetId;
+use gpurify_check::topology::NetId;
 use gpurify_geom::{prefix, Capacitance, Qty, Resistance};
 
 fn ohms(value: f64) -> Parasitic {

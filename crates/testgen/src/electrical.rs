@@ -2,8 +2,8 @@
 
 use gpurify_geom::ops::Point;
 use gpurify_geom::{GeometryStore, LayerId};
-use gpurify_erc::power::NetNetworks;
-use gpurify_topology::NetId;
+use gpurify_check::erc::power::NetNetworks;
+use gpurify_check::topology::NetId;
 use gpurify_geom::{prefix, Qty, Resistance};
 
 use crate::shapes::{dbu, LayoutBuilder};

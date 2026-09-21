@@ -9,7 +9,7 @@
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_topology::TerminalRole;
+use gpurify_check::topology::TerminalRole;
 
 use crate::shapes::{Handle, Ids, LayoutBuilder};
 
@@ -342,7 +342,7 @@ fn recognition_of(
 mod tests {
     use super::{assign_layers, DeviceSpec, NetlistSpec};
     use gpurify_ingest::deck::DeviceKind;
-    use gpurify_topology::TerminalRole;
+    use gpurify_check::topology::TerminalRole;
 
     fn two_transistors() -> NetlistSpec {
         NetlistSpec {

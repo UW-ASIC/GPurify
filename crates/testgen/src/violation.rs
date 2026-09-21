@@ -7,7 +7,7 @@
 
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
-use gpurify_report::{Measurement, Severity, Violation};
+use gpurify_check::report::{Measurement, Severity, Violation};
 use gpurify_geom::{prefix, Current, Qty, Resistance, Voltage};
 
 use crate::shapes::{area, dbu, hole, point, rect, u_shape, Handle, Ids, LayoutBuilder};
@@ -639,7 +639,7 @@ mod tests {
     /// A geometric `Amount` survives the trip into a `Measurement` unchanged.
     #[test]
     fn geometric_amounts_convert_to_the_measurement_they_name() {
-        use gpurify_report::Measurement;
+        use gpurify_check::report::Measurement;
         assert!(matches!(
             Amount::Ratio(0.25).measurement(),
             Measurement::Ratio(v) if (v - 0.25).abs() < f64::EPSILON

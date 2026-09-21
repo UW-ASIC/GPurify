@@ -405,7 +405,7 @@ pub fn to_inputs(args: &Args) -> (gpurify_engine::Inputs, gpurify_engine::RunOpt
     };
     #[expect(
         clippy::default_trait_access,
-        reason = "the lint wants `CompareOptions::default()`, but `gpurify_lvs` is \
+        reason = "the lint wants `CompareOptions::default()`, but `gpurify_check` is \
                   not a dependency of `cli` and the module graph does not have that \
                   edge; naming the type would mean adding a dependency to satisfy a \
                   spelling. `engine` does not re-export it either"

@@ -82,9 +82,10 @@ use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, Load
 use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
 use gpurify::ingest::layout::UnknownLayers;
 use gpurify::extract::Parasitic;
-use gpurify::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
+use gpurify::check::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
 use gpurify::geom::{Dbu, Grid};
-use gpurify::{export, ingest, lvs};
+use gpurify::check::lvs;
+use gpurify::{export, ingest};
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
@@ -901,7 +902,7 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
 
     let options = RunOptions {
         checks,
-        lvs: gpurify::lvs::CompareOptions::default(),
+        lvs: gpurify::check::lvs::CompareOptions::default(),
         // Empty, so `run_pex` takes the analytical path. Naming a net here
         // would field-solve it, which is a different extraction and a different
         // set of expected numbers.
@@ -956,7 +957,7 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
     // built in.
     let named: Vec<String> = (0..extracted.nets.net_count())
         .filter_map(|net| {
-            extracted.ports.name_of(gpurify::topology::NetId(
+            extracted.ports.name_of(gpurify::check::topology::NetId(
                 u32::try_from(net).expect("a NetId is a u32"),
             ))
         })
@@ -976,7 +977,7 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
             lvs: false,
             pex: true,
         },
-        lvs: gpurify::lvs::CompareOptions::default(),
+        lvs: gpurify::check::lvs::CompareOptions::default(),
         quasistatic_nets: named,
         quasistatic_inductance: false,
         threads: Some(1),

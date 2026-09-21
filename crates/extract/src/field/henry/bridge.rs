@@ -14,7 +14,7 @@ use crate::field::henry::netlist::{FreqSweep, Netlist, Node, Port, Segment};
 use crate::field::henry::solver::{solve_with, Method, SolveError};
 use gpurify_geom::GeometryStore;
 use gpurify_ingest::deck::ProcessStack;
-use gpurify_topology::{NetId, NetTable};
+use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::Grid;
 
 /// How the inductance solve is run.

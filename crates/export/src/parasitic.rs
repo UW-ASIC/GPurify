@@ -8,7 +8,7 @@ use crate::{narrow, Header, WriteError, INFALLIBLE};
 use gpurify_ingest::StrTable;
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
-use gpurify_topology::{NetId, PortTable};
+use gpurify_check::topology::{NetId, PortTable};
 
 /// Between a net's name and the node's index within it, declared to the reader
 /// of both files as `*DELIMITER :`.

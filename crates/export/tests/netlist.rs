@@ -13,8 +13,8 @@ use fixture::World;
 use gpurify_export::netlist::{net_name, write_spice, Detail};
 use gpurify_export::{parasitic, WriteError};
 use gpurify_testgen::dbu;
-use gpurify_topology::device::{DeviceMeasure, DeviceParam};
-use gpurify_topology::NetId;
+use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+use gpurify_check::topology::NetId;
 
 fn spice(
     world: &World,

@@ -26,7 +26,7 @@ use gpurify_extract::field::matvec::{Backend, CpuMatVec, MatVec};
 use gpurify_extract::field::mesh::{build_into, conductor_area, Mesh, MeshError, MeshOptions, Panel};
 use gpurify_extract::field::CapMatrix;
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
-use gpurify_topology::NetId;
+use gpurify_check::topology::NetId;
 
 /// A matrix from its rows, with one net per row.
 fn matrix(rows: &[&[f64]]) -> CapMatrix {

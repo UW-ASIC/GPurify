@@ -24,7 +24,7 @@ pub mod operator;
 
 use gpurify_geom::GeometryStore;
 use gpurify_ingest::deck::ProcessStack;
-use gpurify_topology::{NetId, NetTable};
+use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
 
 /// The Maxwell capacitance matrix for a set of conductors.

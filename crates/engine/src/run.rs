@@ -4,11 +4,11 @@ use crate::pipeline::{Extracted, Inputs, Loaded};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
-use gpurify_lvs::verdict::Inconclusive;
-use gpurify_lvs::{Discrepancy, Verdict};
+use gpurify_check::lvs::verdict::Inconclusive;
+use gpurify_check::lvs::{Discrepancy, Verdict};
 use gpurify_extract::network::NodeId;
 use gpurify_extract::ParasiticNetwork;
-use gpurify_report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::{celsius, prefix, Dbu, Grid, Qty, Temperature};
 
 /// Which checks to run.
@@ -37,7 +37,7 @@ impl Checks {
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     pub checks: Checks,
-    pub lvs: gpurify_lvs::CompareOptions,
+    pub lvs: gpurify_check::lvs::CompareOptions,
     /// Nets to extract by field solve. Empty means analytical extraction only.
     pub quasistatic_nets: Vec<String>,
     /// Also solve the quasi-static nets for inductance and resistance. Off by
@@ -126,7 +126,7 @@ const NO_GRID: &str = "no grid resolution reached this run, so no length in the 
 /// The temperature every ERC derating is computed at.
 ///
 /// ponytail: 85 °C, hard-coded, because nothing in [`Inputs`] or [`RunOptions`]
-/// carries a sign-off corner and [`gpurify_erc::RunInputs`] requires one that is
+/// carries a sign-off corner and [`gpurify_check::erc::RunInputs`] requires one that is
 /// positive and finite. It is the same point `crates/erc/tests/common` derates
 /// at, so a rule characterised there and run here sees one temperature. Upgrade
 /// path: a `sign_off_temperature` field on [`RunOptions`], which is a
@@ -205,10 +205,10 @@ fn run_grid(loaded: &Loaded) -> Option<Grid> {
 fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
     for spec in &loaded.deck.rules.spec {
         let kind = loaded.strings.resolve(spec.kind);
-        let known = gpurify_drc::ruleset::KINDS.contains(&kind)
-            || gpurify_erc::ruleset::KINDS.contains(&kind);
+        let known = gpurify_check::drc::ruleset::KINDS.contains(&kind)
+            || gpurify_check::erc::ruleset::KINDS.contains(&kind);
         if !known {
-            return Err(gpurify_drc::DrcError::UnknownKind {
+            return Err(gpurify_check::drc::DrcError::UnknownKind {
                 rule: loaded.strings.resolve(spec.id).to_owned(),
                 kind: kind.to_owned(),
             }
@@ -376,15 +376,15 @@ fn run_drc(
     extracted: &Extracted,
     out: &mut Outputs,
 ) -> Result<StageStatus, EngineError> {
-    let rules = gpurify_drc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
-    let design = gpurify_drc::Design {
+    let rules = gpurify_check::drc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
+    let design = gpurify_check::drc::Design {
         store: &loaded.store,
         derived: &extracted.derived,
         nets: &extracted.nets,
         devices: &extracted.devices,
     };
 
-    let mut scratch = gpurify_drc::Scratch::default();
+    let mut scratch = gpurify_check::drc::Scratch::default();
     append_stage(out, "drc", rules.rule_count(), |violations, runs| {
         rules.run(design, &mut scratch, violations, runs);
     });
@@ -393,9 +393,9 @@ fn run_drc(
 
 /// Assemble everything ERC reads, then dispatch its rules.
 ///
-/// The five steps are the order `gpurify_erc`'s crate doc fixes and none can
+/// The five steps are the order `gpurify_check`'s crate doc fixes and none can
 /// move. A supply grid that cannot be built or solved is
-/// [`gpurify_erc::PowerError`], which has no [`EngineError`] variant, so it
+/// [`gpurify_check::erc::PowerError`], which has no [`EngineError`] variant, so it
 /// becomes [`StageStatus::Refused`] — fail closed either way.
 fn run_erc(
     loaded: &Loaded,
@@ -404,7 +404,7 @@ fn run_erc(
 ) -> Result<StageStatus, EngineError> {
     // Before any skip: a skip decided ahead of this would hide a wrong deck
     // behind a missing input.
-    let rules = gpurify_erc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
+    let rules = gpurify_check::erc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
 
     let Some(grid) = run_grid(loaded) else {
         return Ok(StageStatus::Skipped(NO_GRID));
@@ -418,36 +418,36 @@ fn run_erc(
         ));
     }
 
-    let design = gpurify_erc::Design {
+    let design = gpurify_check::erc::Design {
         store: &loaded.store,
         derived: &extracted.derived,
         nets: &extracted.nets,
         devices: &extracted.devices,
     };
-    let process = gpurify_erc::power::Process {
+    let process = gpurify_check::erc::power::Process {
         grid,
         stack: &loaded.deck.stack,
         connectivity: &loaded.deck.connectivity,
     };
 
-    let mut facts = gpurify_erc::NetFacts::default();
-    gpurify_erc::classify_nets_into(&extracted.nets, &extracted.devices, &mut facts);
+    let mut facts = gpurify_check::erc::NetFacts::default();
+    gpurify_check::erc::classify_nets_into(&extracted.nets, &extracted.devices, &mut facts);
     debug_assert!(
         facts.len() <= extracted.nets.net_count(),
         "the role column names more nets than the extraction produced"
     );
 
-    let mut intent = gpurify_erc::IntentMap::default();
-    gpurify_erc::resolve_intent_into(
+    let mut intent = gpurify_check::erc::IntentMap::default();
+    gpurify_check::erc::resolve_intent_into(
         loaded.intent.as_ref(),
         &extracted.ports,
         &extracted.nets,
         &mut intent,
     );
 
-    let mut networks = gpurify_erc::NetNetworks::default();
-    let mut power_grid = gpurify_erc::PowerGrid::default();
-    if let Err(error) = gpurify_erc::power::extract_nets_into(
+    let mut networks = gpurify_check::erc::NetNetworks::default();
+    let mut power_grid = gpurify_check::erc::PowerGrid::default();
+    if let Err(error) = gpurify_check::erc::power::extract_nets_into(
         &loaded.store,
         &extracted.nets,
         &extracted.devices,
@@ -455,7 +455,7 @@ fn run_erc(
         &mut networks,
     )
     .and_then(|()| {
-        gpurify_erc::power::extract_into(
+        gpurify_check::erc::power::extract_into(
             &loaded.store,
             &extracted.nets,
             &extracted.devices,
@@ -469,29 +469,29 @@ fn run_erc(
 
     // `None` is the information: no declared supply means no grid, and the four
     // electrical rules read exactly that before recording themselves skipped.
-    let mut solution = gpurify_erc::PowerSolution::default();
+    let mut solution = gpurify_check::erc::PowerSolution::default();
     let power = if power_grid.is_empty() {
         None
     } else {
-        let mut solve_scratch = gpurify_erc::power::SolveScratch::default();
-        if let Err(error) = gpurify_erc::power::solve_into(
+        let mut solve_scratch = gpurify_check::erc::power::SolveScratch::default();
+        if let Err(error) = gpurify_check::erc::power::solve_into(
             &power_grid,
-            gpurify_erc::power::SolveConfig::default(),
+            gpurify_check::erc::power::SolveConfig::default(),
             &mut solve_scratch,
             &mut solution,
         ) {
             return Ok(StageStatus::Refused(error.to_string()));
         }
-        Some(gpurify_erc::Solved {
+        Some(gpurify_check::erc::Solved {
             grid: &power_grid,
             solution: &solution,
         })
     };
 
-    let mut scratch = gpurify_erc::Scratch::default();
+    let mut scratch = gpurify_check::erc::Scratch::default();
     append_stage(out, "erc", rules.len(), |violations, runs| {
         rules.run(
-            gpurify_erc::RunInputs {
+            gpurify_check::erc::RunInputs {
                 design,
                 facts: &facts,
                 intent: &intent,
@@ -530,8 +530,8 @@ fn run_lvs(
         );
     };
 
-    let mut layout = gpurify_lvs::LayoutGraph::default();
-    gpurify_lvs::graph::from_layout_into(
+    let mut layout = gpurify_check::lvs::LayoutGraph::default();
+    gpurify_check::lvs::graph::from_layout_into(
         &extracted.nets,
         &extracted.devices,
         &extracted.ports,
@@ -541,28 +541,28 @@ fn run_lvs(
     );
 
     append_stage(out, "lvs", LVS_CHECK_RULE_IDS.len(), |violations, runs| {
-        gpurify_lvs::checks::check_floating_nets(
+        gpurify_check::lvs::checks::check_floating_nets(
             &extracted.nets,
             &extracted.devices,
             &extracted.ports,
             violations,
             runs,
         );
-        gpurify_lvs::checks::check_label_conflicts(
+        gpurify_check::lvs::checks::check_label_conflicts(
             &extracted.nets,
             &extracted.ports,
             violations,
             runs,
         );
-        gpurify_lvs::checks::check_net_seed_conflicts(
+        gpurify_check::lvs::checks::check_net_seed_conflicts(
             &extracted.nets,
             &extracted.ports,
             violations,
             runs,
         );
-        gpurify_lvs::checks::check_device_counts(&extracted.devices, violations, runs);
-        gpurify_lvs::checks::check_parametric(&extracted.devices, violations, runs);
-        gpurify_lvs::checks::check_topology(&layout, violations, runs);
+        gpurify_check::lvs::checks::check_device_counts(&extracted.devices, violations, runs);
+        gpurify_check::lvs::checks::check_parametric(&extracted.devices, violations, runs);
+        gpurify_check::lvs::checks::check_topology(&layout, violations, runs);
         name_lvs_check_rows(&loaded.strings, violations, runs);
     });
 
@@ -571,19 +571,19 @@ fn run_lvs(
         // must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
         Some(top) => {
-            let mut declared = gpurify_lvs::RefGraph::default();
-            gpurify_lvs::graph::from_reference_into(reference, top, &loaded.strings, &mut declared);
+            let mut declared = gpurify_check::lvs::RefGraph::default();
+            gpurify_check::lvs::graph::from_reference_into(reference, top, &loaded.strings, &mut declared);
             // A 3-terminal MOS recogniser extracts no bulk; the reference's
             // card-mandated fourth net must not unpair the comparison.
-            gpurify_lvs::graph::drop_unextracted_bulk(&layout, &mut declared);
+            gpurify_check::lvs::graph::drop_unextracted_bulk(&layout, &mut declared);
 
-            let mut reduced_layout = gpurify_lvs::LayoutGraph::default();
-            gpurify_lvs::reduce::reduce_into(&layout.0, &mut reduced_layout.0);
-            let mut expected = gpurify_lvs::RefGraph::default();
-            gpurify_lvs::reduce::reduce_into(&declared.0, &mut expected.0);
+            let mut reduced_layout = gpurify_check::lvs::LayoutGraph::default();
+            gpurify_check::lvs::reduce::reduce_into(&layout.0, &mut reduced_layout.0);
+            let mut expected = gpurify_check::lvs::RefGraph::default();
+            gpurify_check::lvs::reduce::reduce_into(&declared.0, &mut expected.0);
 
-            let mut partition = gpurify_lvs::refine::Partition::default();
-            gpurify_lvs::compare(&reduced_layout, &expected, options.lvs, &mut partition)
+            let mut partition = gpurify_check::lvs::refine::Partition::default();
+            gpurify_check::lvs::compare(&reduced_layout, &expected, options.lvs, &mut partition)
         }
     };
 
@@ -604,7 +604,7 @@ fn run_lvs(
 }
 
 /// The rule id each [`Discrepancy`] variant is reported under, in the order
-/// [`gpurify_lvs::verdict::Discrepancy`] declares its variants.
+/// [`gpurify_check::lvs::verdict::Discrepancy`] declares its variants.
 ///
 /// Interned by [`crate::pipeline::load_into`], because `run_checks` borrows
 /// `Loaded` shared and cannot intern.
@@ -618,7 +618,7 @@ pub(crate) const LVS_RULE_IDS: [&str; 7] = [
     "lvs.class_imbalance",
 ];
 
-/// The rule id each of [`gpurify_lvs::checks`]'s eight run rows is reported
+/// The rule id each of [`gpurify_check::lvs::checks`]'s eight run rows is reported
 /// under, indexed by the sentinel the check filed it with.
 ///
 /// Row `k` here is `StrId(u32::MAX - k)`: no check signature takes a
@@ -1096,10 +1096,10 @@ pub enum EngineError {
     Extract(#[from] crate::pipeline::ExtractError),
     /// The deck could not be turned into a DRC rule set.
     #[error(transparent)]
-    Drc(#[from] gpurify_drc::DrcError),
+    Drc(#[from] gpurify_check::drc::DrcError),
     /// The deck could not be turned into an ERC rule set.
     #[error(transparent)]
-    Erc(#[from] gpurify_erc::ErcError),
+    Erc(#[from] gpurify_check::erc::ErcError),
     #[error(transparent)]
     Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
     #[error(transparent)]
@@ -1116,7 +1116,7 @@ mod tests {
     use gpurify_extract::quasistatic::matvec::Backend;
     use gpurify_extract::quasistatic::Accuracy;
     use gpurify_extract::{Parasitic, ParasiticNetwork};
-    use gpurify_topology::NetId;
+    use gpurify_check::topology::NetId;
     use gpurify_geom::Qty;
 
     fn ground(ff: f64) -> Parasitic {

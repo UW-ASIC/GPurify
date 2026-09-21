@@ -1,0 +1,16 @@
+[package]
+name = "gpurify-check"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpurify-geom = { workspace = true }
+gpurify-ingest = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+gpurify-testgen = { workspace = true }
+
+[lints]
+workspace = true

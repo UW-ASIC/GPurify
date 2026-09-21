@@ -22,8 +22,8 @@ use gpurify_engine::pipeline::{
 use gpurify_engine::run::{run, run_checks, Checks, EngineError, Outputs, RunOptions};
 use gpurify_ingest::deck::{parse_deck, Connectivity, Deck};
 use gpurify_ingest::StrTable;
-use gpurify_lvs::refine::TieBreak;
-use gpurify_lvs::CompareOptions;
+use gpurify_check::lvs::refine::TieBreak;
+use gpurify_check::lvs::CompareOptions;
 use gpurify_testgen::LayoutBuilder;
 use gpurify_geom::Grid;
 use std::path::PathBuf;

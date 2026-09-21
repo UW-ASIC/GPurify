@@ -13,7 +13,7 @@ pub use crate::field::gpu;
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::deck::ProcessStack;
-use gpurify_topology::{NetId, NetTable};
+use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{prefix, Capacitance, Inductance, Qty, Resistance};
 
 /// Farads to the femtofarads [`Parasitic`] states capacitance in.

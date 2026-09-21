@@ -105,10 +105,10 @@ fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
     for path in deck_files() {
         let (deck, strings) = load(&path);
 
-        gpurify::drc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
+        gpurify::check::drc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
             panic!("{}: the DRC rule set does not build: {why}", name_of(&path))
         });
-        gpurify::erc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
+        gpurify::check::erc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
             panic!("{}: the ERC rule set does not build: {why}", name_of(&path))
         });
     }
@@ -132,8 +132,8 @@ fn every_deck_configures_rules_and_every_rule_belongs_to_a_domain() {
         let (deck, strings) = load(&path);
         let deck_name = name_of(&path);
 
-        let drc = gpurify::drc::RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
-        let erc = gpurify::erc::RuleSet::from_deck(&deck, &strings).expect("the ERC set builds");
+        let drc = gpurify::check::drc::RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
+        let erc = gpurify::check::erc::RuleSet::from_deck(&deck, &strings).expect("the ERC set builds");
         let filed = drc.rule_count() + erc.len();
 
         assert!(

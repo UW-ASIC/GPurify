@@ -2,7 +2,7 @@
 
 use gpurify_engine::{Outputs, StageStatus, Summary};
 use gpurify_ingest::StrTable;
-use gpurify_report::{Measurement, Outcome, Severity, SkipReason};
+use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason};
 use gpurify_geom::{Dbu, Grid};
 use std::fmt::Write as _;
 
@@ -89,7 +89,7 @@ pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: 
     // violations than were found.
     debug_assert_eq!(written, rows, "the violation renderer dropped rows");
 
-    // Printed through `Debug` because `gpurify_lvs::Verdict` is not nameable
+    // Printed through `Debug` because `gpurify_check::lvs::Verdict` is not nameable
     // here: `gpurify-lvs` is not a dependency and `gpurify_engine` re-exports
     // `Outputs` without it, so no `match` is writable. Names therefore print as
     // interned `StrId`s. Not a lost finding — every discrepancy of a `Mismatch`
@@ -226,7 +226,7 @@ mod tests {
     use super::{write_error, write_measurement, write_summary, write_violations};
     use gpurify_engine::{Outputs, StageStatus, Summary};
     use gpurify_ingest::StrTable;
-    use gpurify_report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
+    use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violations};
     use gpurify_testgen::{
         assert_bytes_identical, dbu, point, scale_corpus, ScaleCorpus, ScaleSpec,
     };

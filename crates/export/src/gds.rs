@@ -3,7 +3,7 @@
 use crate::{narrow, WriteError};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::LayerTable;
-use gpurify_report::Violations;
+use gpurify_check::report::Violations;
 use gpurify_geom::Dbu;
 
 // Record tags as they appear on the wire — `(record type << 8) | data type`.

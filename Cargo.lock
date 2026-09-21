@@ -146,43 +146,38 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 name = "gpurify"
 version = "0.1.0"
 dependencies = [
- "gpurify-drc",
+ "gpurify-check",
  "gpurify-engine",
- "gpurify-erc",
  "gpurify-export",
  "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
- "gpurify-lvs",
- "gpurify-report",
  "gpurify-testgen",
- "gpurify-topology",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gpurify-check"
+version = "0.1.0"
+dependencies = [
+ "gpurify-geom",
+ "gpurify-ingest",
+ "gpurify-testgen",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
 name = "gpurify-cli"
 version = "0.1.0"
 dependencies = [
+ "gpurify-check",
  "gpurify-engine",
  "gpurify-export",
  "gpurify-geom",
  "gpurify-ingest",
- "gpurify-report",
  "gpurify-testgen",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-drc"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-report",
- "gpurify-testgen",
- "gpurify-topology",
  "thiserror",
 ]
 
@@ -190,28 +185,12 @@ dependencies = [
 name = "gpurify-engine"
 version = "0.1.0"
 dependencies = [
- "gpurify-drc",
- "gpurify-erc",
+ "gpurify-check",
  "gpurify-export",
  "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
- "gpurify-lvs",
- "gpurify-report",
  "gpurify-testgen",
- "gpurify-topology",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-erc"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-report",
- "gpurify-testgen",
- "gpurify-topology",
  "thiserror",
 ]
 
@@ -219,13 +198,11 @@ dependencies = [
 name = "gpurify-export"
 version = "0.1.0"
 dependencies = [
+ "gpurify-check",
  "gpurify-extract",
  "gpurify-geom",
  "gpurify-ingest",
- "gpurify-lvs",
- "gpurify-report",
  "gpurify-testgen",
- "gpurify-topology",
  "serde",
  "serde_json",
  "thiserror",
@@ -235,11 +212,10 @@ dependencies = [
 name = "gpurify-extract"
 version = "0.1.0"
 dependencies = [
+ "gpurify-check",
  "gpurify-geom",
  "gpurify-ingest",
- "gpurify-report",
  "gpurify-testgen",
- "gpurify-topology",
  "num-complex",
  "rayon",
  "thiserror",
@@ -270,47 +246,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpurify-lvs"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-report",
- "gpurify-testgen",
- "gpurify-topology",
- "thiserror",
-]
-
-[[package]]
-name = "gpurify-report"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-testgen",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "gpurify-testgen"
 version = "0.1.0"
 dependencies = [
- "gpurify-erc",
+ "gpurify-check",
  "gpurify-geom",
  "gpurify-ingest",
- "gpurify-report",
- "gpurify-topology",
-]
-
-[[package]]
-name = "gpurify-topology"
-version = "0.1.0"
-dependencies = [
- "gpurify-geom",
- "gpurify-ingest",
- "gpurify-testgen",
- "thiserror",
 ]
 
 [[package]]
