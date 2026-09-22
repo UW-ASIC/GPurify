@@ -1306,6 +1306,24 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
 
     let mut validated = ValidatedLayer::default();
     match validate_layer_into(&loaded.store, layer, &mut validated) {
+        // `Valid` is the claim that the geometry is representable, which is as
+        // checkable as any refusal and is the whole point of a fixture drawn to
+        // be legal. Without it a case could only ever assert that the tool says
+        // no, and a reader that refused everything would pass every one.
+        Ok(()) if want.variant == VALID => Vec::new(),
+        Ok(()) => vec![format!(
+            "{}: cell {} validated cleanly on layer {}; the geometry is {} and the \
+             tool must refuse it rather than check it{context}",
+            case.id, case.cell, want.layer, want.variant
+        )],
+        Err(error) if want.variant == VALID => vec![format!(
+            "{}: cell {} refuses as {} on layer {}; the geometry is representable \
+             and the tool must check it rather than refuse it{context}",
+            case.id,
+            case.cell,
+            validity_variant(error),
+            want.layer
+        )],
         Err(error) if validity_variant(error) == want.variant => Vec::new(),
         Err(error) => vec![format!(
             "{}: cell {} refuses as {}; the geometry says it must refuse as {}. \
@@ -1316,13 +1334,15 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
             validity_variant(error),
             want.variant
         )],
-        Ok(()) => vec![format!(
-            "{}: cell {} validated cleanly on layer {}; the geometry is {} and the \
-             tool must refuse it rather than check it{context}",
-            case.id, case.cell, want.layer, want.variant
-        )],
     }
 }
+
+/// The `expect_validity_error.variant` that claims a layer validates.
+///
+/// Spelled as a variant rather than as an absent field so the case still names
+/// the layer the claim is about, and so `assert: ["validity_error"]` keeps
+/// meaning "this case is about representability" either way.
+const VALID: &str = "Valid";
 
 fn validity_variant(error: ValidityError) -> &'static str {
     match error {

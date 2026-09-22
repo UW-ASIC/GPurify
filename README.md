@@ -144,21 +144,21 @@ A suite that reports only pass or fail flatters itself, so each case carries a
 grade for how much evidence is actually behind it:
 
 ```
-strong       ███████████████████████████████████  111   the rule ran, had real geometry to look at, and the measurement came close to the limit
-blocked      ████                                  13   the expected answer is sound but the tool cannot currently reach it
-vacuous      ███                                   11   the rule ran but never came close to the limit
-refused      ███                                   11   the rule correctly refuses this input rather than guessing
-weak         ███                                    9   nothing to check, for a legitimate reason
+strong       ███████████████████████████████████  122   the rule ran, had real geometry to look at, and the measurement came close to the limit
+blocked      ███                                   11   the expected answer is sound but the tool cannot currently reach it
+vacuous      ███                                   10   the rule ran but never came close to the limit
 skipped      ██                                     7   the rule reported skipped, and a clean count here would be a lie
-underivable  ██                                     5   nothing in the test data determines the answer
+weak         ██                                     7   nothing to check, for a legitimate reason
+refused      █                                      5   the rule correctly refuses this input rather than guessing
+underivable  █                                      5   nothing in the test data determines the answer
 ```
 
-Two thirds of the suite genuinely discriminates. The rest is accounted for by
-name, which is not the same as being counted as a pass.
+Nearly three quarters of the suite genuinely discriminates. The rest is
+accounted for by name, which is not the same as being counted as a pass.
 
 Expected answers were worked out from the geometry and the physics first, then
-compared against the previous implementation's output. 115 cases agree, which
-means two independent routes reached the same number. 27 disagree, and each one
+compared against the previous implementation's output. 119 cases agree, which
+means two independent routes reached the same number. 24 disagree, and each one
 records which side is wrong and why.
 
 ## Speed
@@ -289,9 +289,6 @@ sign off a tapeout with it. Specifically:
 
 - Geometry must be rectilinear. A shape drawn at 45 degrees is refused, not
   approximated, so a layout with diagonal routing cannot be checked at all.
-- A polygon whose hole is written as a keyhole ring, which is how GDSII
-  expresses a hole, is refused as self-intersecting. Holes produced internally
-  by derived-layer booleans are fine; holes arriving from a file are not.
 - The included process files are starting points, not qualified decks. Among
   other gaps, no shipped deck configures the supply-short rule, so a short
   between two supply nets goes unreported by all four.
@@ -330,6 +327,6 @@ a sign-off path is an accuracy problem rather than a speed tradeoff.
 | `tests/fixtures/README.md` | The test corpus and how each expected answer was derived. |
 
 ```sh
-cargo test --workspace                    # 871 tests
+cargo test --workspace                    # 874 tests
 cargo test --release --test bench_all     # the timing tables above
 ```

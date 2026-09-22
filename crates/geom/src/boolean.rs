@@ -1052,6 +1052,115 @@ fn combine_into(
     emit(&xs, &result, &mut sweep, out)
 }
 
+/// The canonical rings of one raw rectilinear ring, written into `out_*`.
+///
+/// Outer rings come back counter-clockwise and holes clockwise, which is the
+/// convention [`validate_layer_into`] reads. A ring that touches itself is
+/// resolved into the rings it denotes.
+///
+/// # Why a reader needs this
+///
+/// GDSII has no record for a hole. A polygon with one is written as a single
+/// *keyhole* ring that runs in to the hole along a line and back out along the
+/// same line, so the ring revisits a vertex and is weakly simple rather than
+/// simple. [`validate_layer_into`] refuses it as
+/// [`ValidityError::SelfIntersecting`], and correctly: it is not a simple ring,
+/// and the store's model is one simple ring per row. This is what turns the
+/// file's single ring into the outer and the hole that the store, and every
+/// rule downstream of it, already understand.
+///
+/// # Why it goes through the sweep
+///
+/// Splitting a keyhole at its repeated vertex is right for one hole and wrong
+/// as soon as there are two, or the slit runs along an edge the ring already
+/// has. The occupancy sweep is indifferent to both: winding is counted from
+/// vertical edges alone, a slit's two opposite traversals cancel, and the rings
+/// are retraced from the region rather than from the input's vertex order. It
+/// is also where this crate's notion of a canonical ring is already defined, so
+/// a reader using it cannot come to disagree with the booleans about what a
+/// hole is.
+///
+/// Coordinates are raw `i64`, not [`Dbu`]: the caller is the layout reader and
+/// these are the file's own numbers, read before anything has bounds-checked
+/// them. They must already be inside [`MAX_ABS_DBU`], because the sweep clamps
+/// against that bound and would otherwise pull an out-of-domain vertex quietly
+/// into range.
+pub fn canonical_rings_into(
+    xs: &[i64],
+    ys: &[i64],
+    out_xs: &mut Vec<i64>,
+    out_ys: &mut Vec<i64>,
+    out_start: &mut Vec<u32>,
+) -> Result<(), BooleanError> {
+    assert_eq!(xs.len(), ys.len(), "a ring's two columns are parallel");
+    assert!(
+        xs.iter()
+            .chain(ys)
+            .all(|&c| c.unsigned_abs() <= MAX_ABS_DBU.unsigned_abs()),
+        "a coordinate is outside the domain the sweep clamps against"
+    );
+
+    let n = xs.len();
+    // An edge with both deltas non-zero is skew, and so is the closing one:
+    // the same test `push_ring` runs, against a raw run rather than a ring that
+    // has already been validated.
+    let skew = (0..n.saturating_sub(1)).fold(false, |acc, i| {
+        acc | ((xs[i] != xs[i + 1]) & (ys[i] != ys[i + 1]))
+    });
+    let wrap = n > 1 && (xs[n - 1] != xs[0]) && (ys[n - 1] != ys[0]);
+    if skew | wrap {
+        return Err(BooleanError::NotRectilinear);
+    }
+
+    let mut rings = Rings::default();
+    rings.start.push(0);
+    rings.xs.extend_from_slice(xs);
+    rings.ys.extend_from_slice(ys);
+    rings.start.push(ring_mark(rings.xs.len()));
+
+    let mut sweep = Sweep::default();
+    let mut edges = Vec::new();
+    vedges_into(&rings, &mut edges);
+
+    let mut axis = Vec::new();
+    axis_into(&edges, &mut axis);
+    sort_dedup(&mut axis);
+
+    let mut region = Slabs::default();
+    occupancy(&edges, &axis, &mut sweep, &mut region);
+
+    segments(&axis, &region, &mut sweep);
+    successors_into(
+        &sweep.segs,
+        &mut sweep.order,
+        &mut sweep.by_end,
+        &mut sweep.next,
+    );
+    link(
+        &sweep.segs,
+        &sweep.next,
+        &mut sweep.link_x,
+        &mut sweep.link_y,
+        &mut sweep.link_start,
+        &mut sweep.used,
+    );
+
+    out_xs.clear();
+    out_ys.clear();
+    out_start.clear();
+    out_xs.extend_from_slice(&sweep.link_x);
+    out_ys.extend_from_slice(&sweep.link_y);
+    out_start.extend_from_slice(&sweep.link_start);
+
+    debug_assert_eq!(out_xs.len(), out_ys.len(), "flat columns stay parallel");
+    debug_assert_eq!(
+        out_start[out_start.len() - 1] as usize,
+        out_xs.len(),
+        "the CSR offsets cover every vertex traced"
+    );
+    Ok(())
+}
+
 /// The layer of the one-layer store `emit` builds. A result belongs to no input
 /// layer, and this tag never leaves this module.
 const RESULT_LAYER: LayerId = LayerId(0);
@@ -1209,5 +1318,75 @@ mod tests {
             "area is not conserved across the union and the intersection"
         );
         assert_eq!(joined.len(), 1, "two overlapping squares union into an L");
+    }
+
+    /// Oracle: closed form — a keyhole ring denotes an outer minus its hole.
+    ///
+    /// The input is the ring KLayout writes for a 1000x1000 square with a
+    /// 400x400 hole: one weakly simple loop that runs in to the hole along
+    /// `y = 700` and back out along the same line. `validate_layer_into`
+    /// refuses it, so a reader that passed it through refused every layer it
+    /// appeared on. Decomposed, it is two rings whose signed areas sum to the
+    /// area the shape has.
+    #[test]
+    fn a_keyhole_ring_decomposes_into_its_outer_and_its_hole() {
+        // Written in the order KLayout emits, closing point already dropped.
+        let xs = [0, 0, 300, 300, 700, 700, 0, 0, 1000, 1000];
+        let ys = [0, 700, 700, 300, 300, 700, 700, 1000, 1000, 0];
+
+        let (mut rx, mut ry, mut start) = (Vec::new(), Vec::new(), Vec::new());
+        canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start)
+            .expect("a keyhole is rectilinear");
+
+        assert_eq!(start.len() - 1, 2, "one outer and one hole");
+
+        let mut signed = Vec::new();
+        for ring in 0..start.len() - 1 {
+            let (lo, hi) = (start[ring] as usize, start[ring + 1] as usize);
+            let n = hi - lo;
+            let mut area2 = 0i128;
+            for i in 0..n {
+                let (a, b) = (lo + i, lo + (i + 1) % n);
+                area2 += i128::from(rx[a]) * i128::from(ry[b])
+                    - i128::from(rx[b]) * i128::from(ry[a]);
+            }
+            signed.push(area2 / 2);
+        }
+        signed.sort_unstable();
+
+        assert_eq!(
+            signed,
+            vec![-400 * 400, 1000 * 1000],
+            "the hole comes back clockwise and the outer counter-clockwise, so \
+             their signed areas carry opposite sign"
+        );
+        assert_eq!(
+            signed.iter().sum::<i128>(),
+            1000 * 1000 - 400 * 400,
+            "outer minus hole is the area the keyhole denotes"
+        );
+    }
+
+    /// A ring that is already simple survives decomposition unchanged in area
+    /// and in ring count, so a reader may run every boundary through this
+    /// without inventing geometry.
+    #[test]
+    fn a_simple_ring_decomposes_to_itself() {
+        let xs = [0, 400, 400, 0];
+        let ys = [0, 0, 400, 400];
+
+        let (mut rx, mut ry, mut start) = (Vec::new(), Vec::new(), Vec::new());
+        canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start).expect("a square");
+
+        assert_eq!(start.len() - 1, 1, "a square is one ring");
+        assert_eq!(rx.len(), 4, "and it keeps its four corners");
+
+        let n = rx.len();
+        let mut area2 = 0i128;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            area2 += i128::from(rx[i]) * i128::from(ry[j]) - i128::from(rx[j]) * i128::from(ry[i]);
+        }
+        assert_eq!(area2 / 2, 400 * 400, "and its area, counter-clockwise");
     }
 }

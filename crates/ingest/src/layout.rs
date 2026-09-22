@@ -182,6 +182,7 @@ pub mod gds {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
     use crate::narrow;
     use crate::provenance::{PathId, PathTable, Provenance};
+    use gpurify_geom::boolean::canonical_rings_into;
     use gpurify_geom::{Dbu, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
@@ -725,6 +726,42 @@ pub mod gds {
         Ok(end)
     }
 
+    /// The fewest vertices a keyhole ring can have.
+    ///
+    /// The outer boundary contributes at least four, the hole at least four,
+    /// and the slit revisits its two endpoints. A shorter ring cannot be hiding
+    /// a hole, so the duplicate scan below is skipped and the four-to-eight
+    /// vertex shapes that make up nearly every layout pay nothing for it.
+    const KEYHOLE_MIN_VERTS: usize = 10;
+
+    /// Whether a ring revisits a vertex, which is how GDSII writes a hole.
+    ///
+    /// Sorted rather than compared pairwise: a ring has no bounded length, and
+    /// a quadratic scan over one is the sort of thing that only surfaces on
+    /// somebody else's layout. Allocates, and is reached only by a ring long
+    /// enough to have a hole in it at all.
+    fn ring_revisits_a_vertex(xs: &[i64], ys: &[i64]) -> bool {
+        debug_assert_eq!(xs.len(), ys.len(), "a ring's coordinate runs are parallel");
+        if xs.len() < KEYHOLE_MIN_VERTS {
+            return false;
+        }
+        let mut seen: Vec<(i64, i64)> = xs.iter().copied().zip(ys.iter().copied()).collect();
+        seen.sort_unstable();
+        seen.windows(2).any(|w| w[0] == w[1])
+    }
+
+    /// Whether every vertex is inside the domain the sweep clamps against.
+    ///
+    /// `canonical_rings_into` asserts this rather than checking it, because a
+    /// coordinate outside the bound would be quietly pulled into range. The
+    /// reader's own out-of-range error belongs to the flattening stage, where
+    /// it names the offending value, so a ring that fails here is left for that
+    /// stage to refuse rather than refused early with a worse message.
+    fn ring_is_in_domain(xs: &[i64], ys: &[i64]) -> bool {
+        let bound = MAX_ABS_DBU.unsigned_abs();
+        xs.iter().chain(ys).all(|&c| c.unsigned_abs() <= bound)
+    }
+
     /// Whether a ring's vertices run clockwise.
     ///
     /// The shoelace sum, accumulated in `i128` rather than `Dbu`: these are raw
@@ -800,6 +837,67 @@ pub mod gds {
         };
         if !seen_xy || vert_len < 3 {
             return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
+        }
+
+        // A ring that revisits a vertex is a keyhole: GDSII has no record for a
+        // hole, so a polygon with one is written as a single loop that runs in
+        // along a line and back out along it. `geom::view` refuses that as
+        // self-intersecting, and rightly, because the store's model is one
+        // simple ring per row. Decomposing here is what turns the file's one
+        // ring into the rows that model already describes, and the sweep hands
+        // them back with the outer counter-clockwise and the hole clockwise,
+        // which is the convention the next block would otherwise impose.
+        //
+        // Only a ring that actually revisits a vertex takes this path. The
+        // sweep retraces a region rather than preserving a vertex order, and
+        // `erc::first_vertex` documents vertex 0 as a shape's canonical report
+        // point, so running every boundary through it would move the coordinate
+        // every violation on that shape is reported at.
+        if ring_revisits_a_vertex(&lib.xs[first..], &lib.ys[first..])
+            && ring_is_in_domain(&lib.xs[first..], &lib.ys[first..])
+        {
+            let mut rx = Vec::new();
+            let mut ry = Vec::new();
+            let mut starts = Vec::new();
+            // A decomposition that fails leaves the ring alone: the paths below
+            // and in `geom::view` already refuse what it could not handle, and
+            // they name it better than a boolean error would here.
+            if canonical_rings_into(
+                &lib.xs[first..],
+                &lib.ys[first..],
+                &mut rx,
+                &mut ry,
+                &mut starts,
+            )
+            .is_ok()
+                // A ring that encloses nothing traces to no rings at all, and
+                // taking this path would then drop the element instead of
+                // storing it: a shape that vanishes between the file and the
+                // store is the fail-open version of refusing it. Left for the
+                // ordinary path, where `geom::view` names it degenerate.
+                && starts.len() > 1
+            {
+                lib.xs.truncate(first);
+                lib.ys.truncate(first);
+                for ring in 0..starts.len() - 1 {
+                    let (lo, hi) = (starts[ring] as usize, starts[ring + 1] as usize);
+                    let ring_start = narrow(lib.xs.len());
+                    lib.xs.extend_from_slice(&rx[lo..hi]);
+                    lib.ys.extend_from_slice(&ry[lo..hi]);
+                    lib.elems.push(Elem {
+                        layer,
+                        datatype,
+                        vert_start: ring_start,
+                        vert_len: narrow(lib.xs.len()) - ring_start,
+                        // Every ring the one element decomposed into carries
+                        // that element's properties: they belonged to the shape,
+                        // and the shape is all of them.
+                        prop_start,
+                        prop_len: narrow(lib.props.len()) - prop_start,
+                    });
+                }
+                return Ok(end);
+            }
         }
 
         // Every BOUNDARY and BOX is an outer ring, so it is stored
@@ -1958,6 +2056,59 @@ mod tests {
             stored[0], stored[1],
             "the same square listed clockwise and counter-clockwise must have \
              the same area; GDSII gives its point order no meaning"
+        );
+    }
+
+    /// Oracle: closed form — a keyhole BOUNDARY is a polygon with a hole.
+    ///
+    /// GDSII has no record for a hole, so a shape with one is written as a
+    /// single ring that runs in along a line and back out along it. That ring
+    /// revisits a vertex, which made `validate_layer_into` refuse it as
+    /// self-intersecting and every rule on the layer record `Refused` having
+    /// examined nothing. A layer holding one holed polygon could not be checked
+    /// at all.
+    ///
+    /// The area is the assertion that carries this. A decomposition that lost
+    /// the hole would still give one polygon, a valid layer and no error;
+    /// nothing but the area tells the two apart.
+    #[test]
+    fn a_keyhole_boundary_reads_back_as_one_polygon_with_its_hole() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+
+        // 1000 x 1000 with a 400 x 400 hole, entered and left along y = 700.
+        let bytes = gds_library(
+            "TOP",
+            &[boundary(
+                ROWS[0].1,
+                ROWS[0].2,
+                &[0, 0, 300, 300, 700, 700, 0, 0, 1000, 1000],
+                &[0, 700, 700, 300, 300, 700, 700, 1000, 1000, 0],
+            )],
+        );
+
+        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(
+            layout.store.poly_count(),
+            2,
+            "the store's model is one simple ring per row, so a holed polygon \
+             is stored as the outer and the hole"
+        );
+
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid)
+            .expect("a keyhole denotes an outer and the hole it contains");
+
+        assert_eq!(valid.len(), 1, "the two rings are one polygon");
+        let polygon = valid.get(&layout.store, 0);
+        assert_eq!(polygon.holes().count(), 1, "and it has one hole");
+        assert_eq!(
+            polygon.area().raw(),
+            1000 * 1000 - 400 * 400,
+            "outer minus hole; a decomposition that dropped the hole would \
+             leave the whole square and still validate"
         );
     }
 

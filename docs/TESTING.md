@@ -50,8 +50,8 @@ deleted implementation's output and nothing in the suite reads it.
 frozen doc comment, then records the comparison against the manifest in a
 `corroboration` field rather than folding it into the value. Where the two
 disagree the derived value stands and a `dispute` field names which side is
-wrong. 115 of the 167 agree with the manifest and therefore rest on two
-independent routes to the same number; 27 disagree and say why.
+wrong. 119 of the 167 agree with the manifest and therefore rest on two
+independent routes to the same number; 24 disagree and say why.
 `tests/fixtures/README.md` is the full account.
 
 ### What the corpus closed
@@ -59,18 +59,19 @@ independent routes to the same number; 27 disagree and say why.
 | | old suite | now |
 |---|---|---|
 | DRC cases asserting only absence | 45 of 94 | 0 — every case carries `expect_outcome` and `examined_min` |
-| zero-violation cases asserting `examined > 0` | — | 46 of 71 |
+| zero-violation cases asserting `examined > 0` | — | 49 of 73 |
 | DRC positive cases checking coordinate *and* measurement | 30 of 94 | all 40 |
 | ERC cases checking a measured value | 0 | all 6 positive cases, plus the layer the finding is reported on |
 | PEX cases checking a value | 0 | 15 closed-form values, 8 deliberate mismatches, 1 per-net pair; the other 3 through the coupling law |
 | LVS cases checking anything but a verdict | 0 | 16 device-and-net counts |
 
-The 25 zero-violation cases whose `examined_min` is 0 are not a residue of the
-old weakness. Each has a stated reason and the reason is checkable: 11 expect
+The 24 zero-violation cases whose `examined_min` is 0 are not a residue of the
+old weakness. Each has a stated reason and the reason is checkable: 6 expect
 `Outcome::Refused` (the geometry is unrepresentable, so no rule row exists to
-examine anything), 4 expect `Skipped(NoDesignIntent)`, and 10 run over a
+examine anything), 9 expect `Skipped(NoDesignIntent)`, and 9 run over a
 genuinely empty jurisdiction — a spacing rule on a cell with one shape has
 nothing to pair. Asserting `examined > 0` there would be asserting a falsehood.
+The other 49 zero-violation geometry cases do assert `examined_min > 0`.
 
 Five cases are marked `underivable` and say so in the file: two intent-gated ERC
 rules that need per-net voltages, and three lateral-coupling cases for which
@@ -98,19 +99,33 @@ All 167 cases pass:
 | lvs | 16 / 16 |
 | pex | 27 / 27 |
 
-That is the end of a work list rather than the end of the argument. The four
-defects the corpus used to name — `bbox_only_enclosure`, `notch_no_outer_merge`,
-`extract_net_into` dropping the first node's resistance, and `extract_into`
-emitting no `CouplingCap` — were the Implementation-Phase's job and are done.
-A case whose `dispute` reads `code_wrong` was the corpus disagreeing with the
-code and being right, which is the outcome the split between `manifest.json` and
-`expectations.json` exists to make possible.
+That is the end of a work list rather than the end of the argument. A case whose
+`dispute` reads `code_wrong` was the corpus disagreeing with the code and being
+right, which is the outcome the split between `manifest.json` and
+`expectations.json` exists to make possible. `keyhole_rejected` closed that way:
+the reader now decomposes a GDSII keyhole into the outer and the hole it
+denotes, so `DRC_MEA_FAIL` reports the `Area(10000)` at `(150, 150)` that its
+derivation predicted while the tree could not reach it.
 
-**Green is not the same as strong.** `strength` still grades every case, and 56
-of the 167 are something other than `strong`: 13 `blocked`, 11 `vacuous`, 11
-`refused`, 9 `weak`, 7 `skipped`, 5 `underivable`. A suite that reports only its
+**The defect ledger has outlived two of its entries.** `bbox_only_enclosure` and
+`notch_no_outer_merge` are still listed in `known_defects`, and their four cases
+are graded `strong`, expect the physics, and pass. Their notes still say the
+frozen path yields 0. Whatever closed them did not clear the ledger, so the
+entries and the `dispute: code_wrong` markers on those cases now describe a tree
+that no longer exists. Re-deriving those four is the cheapest outstanding work
+in this file.
+
+**Green is not the same as strong.** `strength` still grades every case, and 45
+of the 167 are something other than `strong`: 11 `blocked`, 10 `vacuous`, 7
+`skipped`, 7 `weak`, 5 `refused`, 5 `underivable`. A suite that reports only its
 pass rate hides exactly that distribution, which is why the grade is a field
 rather than a comment.
+
+**The `counts` block is derived, and drifted once.** It is a cache of the
+`cases` arrays and nothing reads it at run time, so it went two cases stale
+without any test noticing: it claimed 11 `refused` and 72 `strong` for DRC where
+the cases held 9 and 74. It has been recomputed. Anything quoting it, this
+document included, was quoting the cache rather than the corpus.
 
 ---
 
@@ -244,7 +259,7 @@ before.
 
 ## What the suite covers
 
-Today: **870 tests**, none `#[ignore]`d, all passing, across six crates.
+Today: **874 tests**, none `#[ignore]`d, all passing, across six crates.
 
 Everything from here to the end of this section is the **Testing-Phase record**,
 kept as written. Read it as history, not as the current shape of the tree: it
