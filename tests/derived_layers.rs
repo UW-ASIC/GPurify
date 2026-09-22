@@ -35,10 +35,6 @@ fn deck(source: &str) -> Deck {
 }
 
 /// The bounding box of every polygon on one layer, ascending by row.
-///
-/// Boxes rather than vertex runs: the shapes below are rectangles, so a box is
-/// the whole shape, and a box comparison names the disagreement in coordinates
-/// a human can find in the drawing.
 fn boxes_on(store: &GeometryStore, layer: LayerId) -> Vec<(i64, i64, i64, i64)> {
     store
         .polys_on_layer(layer)
@@ -55,10 +51,6 @@ fn boxes_on(store: &GeometryStore, layer: LayerId) -> Vec<(i64, i64, i64, i64)> 
 }
 
 /// Write a store out as GDSII and read it back through the reader.
-///
-/// The store handed in holds base geometry only; every derived layer's range is
-/// empty, so nothing derived is written to the file and whatever comes back on
-/// one was produced by the read.
 fn round_trip(store: &GeometryStore, deck: &Deck) -> GeometryStore {
     let mut bytes = Vec::new();
     write_store(store, &deck.layers, "TOP", &mut bytes).expect("base geometry is writable");
@@ -68,10 +60,6 @@ fn round_trip(store: &GeometryStore, deck: &Deck) -> GeometryStore {
 }
 
 /// A deck declaring `diff_active = diff NOT poly` over two base layers.
-///
-/// Layer ids are assigned ascending by name over the base layers first, so
-/// `diff` is 0 and `poly` is 1; a derived layer takes the next id after every
-/// base one, in declaration order, so `diff_active` is 2.
 const SUBTRACTION_DECK: &str = r#"{
   "layers": { "diff": [2, 0], "poly": [3, 0] },
   "derived": [
@@ -87,11 +75,6 @@ const DIFF_ACTIVE: LayerId = LayerId(2);
 /// is two source/drain regions, and their coordinates are decided by the
 /// drawing: `(0,0)-(500,200)` minus `(200,-50)-(250,750)` is `(0,0)-(200,200)`
 /// and `(250,0)-(500,200)`.
-///
-/// **This is finding F3's missing half.** Without a derived layer in the store
-/// there is one `diff` polygon spanning the channel, so a MOS recogniser has
-/// one polygon and one net to bind both of its source/drain terminals to and
-/// every extracted transistor comes back with its channel shorted.
 #[test]
 fn a_deck_declared_subtraction_lands_in_the_store_as_real_polygons() {
     let deck = deck(SUBTRACTION_DECK);
@@ -136,12 +119,6 @@ fn a_deck_declared_subtraction_lands_in_the_store_as_real_polygons() {
 /// Oracle: construct-from-answer. A derived layer may be built on a derived
 /// layer, and the deck says so by naming it — which is only spellable because a
 /// derived layer has a real `LayerId` like any other.
-///
-/// `diff_active` is the two regions above; intersecting it with the right-hand
-/// window `(100,0)-(400,200)` keeps `(100,0)-(200,200)` from the left region
-/// and `(250,0)-(400,200)` from the right one. Both operands are cut, so a
-/// chain that silently read the *base* `diff` instead would come back with one
-/// polygon spanning the gate.
 #[test]
 fn a_derived_layer_may_be_built_on_an_earlier_derived_layer() {
     // Base layers ascending by name: diff 0, poly 1, window 2. Derived in
@@ -183,9 +160,6 @@ fn a_derived_layer_may_be_built_on_an_earlier_derived_layer() {
 /// Oracle: construct-from-answer. A derived layer over a layer the layout does
 /// not draw is empty, and an empty derived layer is a layer with no polygons —
 /// never a missing layer, and never a panic.
-///
-/// The positive half is asserted from the same run so the emptiness is evidence
-/// about the geometry rather than about a materialiser that never ran.
 #[test]
 fn a_derived_layer_with_nothing_under_it_is_empty_rather_than_absent() {
     let deck = deck(SUBTRACTION_DECK);
@@ -211,11 +185,6 @@ fn a_derived_layer_with_nothing_under_it_is_empty_rather_than_absent() {
 
 /// Oracle: construct-from-answer. A derived layer has no GDS stream pair, so no
 /// record in a layout file may ever map onto one.
-///
-/// This is the fail-open half of giving derived layers real ids: if
-/// `of_stream` could answer with a derived layer, geometry a foundry drew would
-/// land on a layer the deck computes, and the boolean's own result would be
-/// appended to it rather than replacing it.
 #[test]
 fn no_gds_stream_pair_maps_onto_a_derived_layer() {
     let deck = deck(SUBTRACTION_DECK);

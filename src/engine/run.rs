@@ -1,4 +1,7 @@
 //! Running the checks, and reporting honestly about which ones ran.
+//!
+//! Data in: [`Loaded`] + [`Extracted`] + [`RunOptions`]. Data out: [`Outputs`]
+//! (violations, rule records, LVS verdict, parasitics) and a [`Summary`].
 
 use crate::engine::pipeline::{Extracted, Inputs, Loaded};
 use gpurify_check::lvs::verdict::Inconclusive;
@@ -7,13 +10,11 @@ use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, 
 use gpurify_extract::network::NodeId;
 use gpurify_extract::ParasiticNetwork;
 use gpurify_geom::ops::Point;
-use gpurify_geom::{celsius, prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{celsius, prefix, Dbu, Qty, Temperature};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Which checks to run.
-// All sixteen combinations are meaningful, including none, so the sum type
-// CONVENTIONS §3 prefers would be forced here.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checks {
@@ -24,7 +25,6 @@ pub struct Checks {
 }
 
 impl Checks {
-    /// All four.
     pub const ALL: Self = Self {
         drc: true,
         erc: true,
@@ -40,12 +40,9 @@ pub struct RunOptions {
     pub lvs: gpurify_check::lvs::CompareOptions,
     /// Nets to extract by field solve. Empty means analytical extraction only.
     pub quasistatic_nets: Vec<String>,
-    /// Also solve the quasi-static nets for inductance and resistance. Off by
-    /// default, and with it off the run's output is byte-identical to a build
-    /// without the flag: the inductance bridge is never invoked.
+    /// Also solve the quasi-static nets for inductance. Off leaves output unchanged.
     pub quasistatic_inductance: bool,
-    /// Worker threads. Affects speed only: output must be byte-identical at any
-    /// value of this.
+    /// Worker threads. Output must be byte-identical at any value.
     pub threads: Option<usize>,
 }
 
@@ -57,27 +54,22 @@ pub enum StageStatus {
     NotSelected,
     /// Requested, but a required input was absent.
     Skipped(&'static str),
-    /// Requested, attempted, and refused: the input is outside what this tool
-    /// represents exactly.
+    /// Requested and refused: the input is outside what this tool represents exactly.
     Refused(String),
 }
 
 /// Everything a run produced.
 #[derive(Debug, Default)]
 pub struct Outputs {
-    /// DRC and ERC findings, sorted canonically before this is returned.
+    /// DRC, ERC and LVS findings, sorted canonically.
     pub violations: Violations,
-    /// One row per rule, run or not — what makes an empty `violations`
-    /// interpretable.
+    /// One row per rule, run or not, sorted by rule id.
     pub runs: Vec<RuleRun>,
     pub lvs: Option<Verdict>,
     pub parasitics: Option<ParasiticNetwork>,
 }
 
-/// What happened, at a glance.
-///
-/// Deliberately not just counts: `0 violations` without `3 rules skipped` is
-/// the false-clean failure in report form.
+/// What happened, at a glance. `0 violations` without `rules_skipped` is a false clean.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Summary {
     pub drc: StageStatus,
@@ -87,30 +79,19 @@ pub struct Summary {
     pub violations: u32,
     pub errors: u32,
     pub warnings: u32,
-    /// Rules that ran and found nothing. Evidence the run did work.
+    /// Rules that ran and found nothing.
     pub rules_clean: u32,
     /// Rules that did not run. Read this before believing a clean result.
     pub rules_skipped: u32,
 }
 
 impl Summary {
-    /// Whether the run is a pass, and the single place that criterion is written.
-    ///
-    /// A skipped rule is **not** a pass; a check never selected is `NotSelected`
-    /// and does not block one. [`Self::rules_clean`] is evidence, not criterion,
-    /// and an LVS mismatch arrives through [`Self::errors`] and nowhere else.
+    /// The pass criterion: no errors, no skipped rule, and no selected stage
+    /// skipped or refused. An LVS mismatch arrives through `errors`.
     pub fn passed(&self) -> bool {
-        debug_assert!(
-            self.errors <= self.violations && self.warnings <= self.violations,
-            "a severity count larger than the table it counts: {self:?}"
-        );
-
-        // A stage asked for and not run blocks the pass; one never asked for
-        // does not. `Refused` sits with `Skipped` rather than with `Ran`.
         let denied = |status: &StageStatus| {
             matches!(status, StageStatus::Skipped(_) | StageStatus::Refused(_))
         };
-
         self.errors == 0
             && self.rules_skipped == 0
             && !denied(&self.drc)
@@ -120,88 +101,43 @@ impl Summary {
     }
 }
 
-/// The reason a stage that needs a grid did not get one.
-const NO_GRID: &str = "no grid resolution reached this run, so no length in the deck has a meaning";
-
 /// The temperature every ERC derating is computed at.
 ///
-/// ponytail: 85 °C, hard-coded, because nothing in [`Inputs`] or [`RunOptions`]
-/// carries a sign-off corner and [`gpurify_check::erc::RunInputs`] requires one that is
-/// positive and finite. It is the same point `crates/erc/tests/common` derates
-/// at, so a rule characterised there and run here sees one temperature. Upgrade
-/// path: a `sign_off_temperature` field on [`RunOptions`], which is a
-/// signature change rather than a body.
+/// ponytail: 85 °C hard-coded, as nothing carries a sign-off corner; add a
+/// `RunOptions` field when one is needed.
 fn sign_off_temperature() -> Qty<Temperature, { prefix::BASE }> {
     celsius(85.0)
 }
 
-/// The layer names a deck may declare its die outline under, tried in this
-/// order. First one the deck declares wins.
+/// Layer names a deck may declare its die outline under, first match wins.
 const DIE_LAYER_NAMES: [&str; 3] = ["prBoundary", "DIEAREA", "die"];
 
-/// The die boundary every density in this run divides by.
-///
-/// The deck's outline layer when it declares one, otherwise the union of every
-/// polygon's bounding box. That fallback is **fail-open for a minimum-density
-/// rule**: the margin outside the outermost shape is never swept, and nothing in
-/// [`Inputs`] declares a die.
-/// [`Bbox::EMPTY`] for a store with no geometry, so the caller's skip is
-/// reachable.
+/// The die boundary every density divides by: the deck's outline layer if it
+/// has one, else the union of every polygon's bbox (fail-open for min-density,
+/// which never sweeps the margin). [`Bbox::EMPTY`] for an empty store.
 fn design_extent(loaded: &Loaded) -> Bbox {
-    // Both guards fail closed into the fallback: a declared layer the store has
-    // no column for would make `layer_bboxes` panic, and an empty outline is a
-    // worse denominator than a tight one.
     let declared = DIE_LAYER_NAMES
         .iter()
         .find_map(|name| loaded.deck.layers.id(&loaded.strings, name))
         .filter(|layer| layer.idx() < loaded.store.layer_count())
         .map(|layer| union_bboxes(loaded.store.layer_bboxes(layer)))
         .filter(|outline| !outline.is_empty());
-
-    let die = declared.unwrap_or_else(|| design_bbox(&loaded.store));
-    debug_assert!(
-        die.is_empty() || (die.xlo.raw() <= die.xhi.raw() && die.ylo.raw() <= die.yhi.raw()),
-        "a non-empty die runs low to high on both axes"
-    );
-    debug_assert!(
-        die.is_empty() || !design_bbox(&loaded.store).is_empty(),
-        "a die boundary over a store holding no geometry"
-    );
-    die
+    declared.unwrap_or_else(|| design_bbox(&loaded.store))
 }
 
-/// The union of one contiguous bbox column.
 fn union_bboxes(boxes: &[Bbox]) -> Bbox {
-    let mut acc = Bbox::EMPTY;
-    for &b in boxes {
-        acc = acc.union(b);
-    }
-    acc
+    boxes.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b))
 }
 
-/// The union of every polygon's bounding box.
 fn design_bbox(store: &GeometryStore) -> Bbox {
-    let mut die = Bbox::EMPTY;
-    for layer in 0..store.layer_count() {
+    (0..store.layer_count()).fold(Bbox::EMPTY, |die, layer| {
         let layer = LayerId(u16::try_from(layer).expect("a LayerId is a u16"));
-        die = die.union(union_bboxes(store.layer_bboxes(layer)));
-    }
-    debug_assert!(
-        die.is_empty() || (die.xlo.raw() <= die.xhi.raw() && die.ylo.raw() <= die.yhi.raw()),
-        "a non-empty extent runs low to high on both axes"
-    );
-    die
+        die.union(union_bboxes(store.layer_bboxes(layer)))
+    })
 }
 
-/// The grid this run's lengths are expressed against, if it has one.
-fn run_grid(loaded: &Loaded) -> Option<Grid> {
-    loaded.grid.or(loaded.deck.grid)
-}
-
-/// Refuse a deck row whose kind no domain implements.
-///
-/// Neither rule set can do this alone — the other domain's rows are
-/// unrecognised to it — and a rule nobody runs is a report that looks complete.
+/// Refuse a deck row whose kind neither DRC nor ERC implements. A rule nobody
+/// runs is a report that looks complete.
 fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
     for spec in &loaded.deck.rules.spec {
         let kind = loaded.strings.resolve(spec.kind);
@@ -218,159 +154,77 @@ fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
     Ok(())
 }
 
-/// Run the selected checks against an extraction, appending into `out`.
-///
-/// Concatenation order is unobservable: `Violations::sort_canonical` runs before
-/// returning. A deck that cannot become rule tables fails the whole run — not a
-/// skipped rule, because a run against a wrong deck has no verdict to report.
+/// Run the selected checks. A deck that cannot become rule tables fails the whole
+/// run: a run against a wrong deck has no verdict to report.
 pub fn run_checks(
     loaded: &Loaded,
     extracted: &Extracted,
     options: &RunOptions,
-    out: &mut Outputs,
-) -> Result<Summary, EngineError> {
-    debug_assert!(
-        extracted.ports.len() <= extracted.nets.net_count(),
-        "the port table names more nets than the extraction produced"
-    );
-    debug_assert!(
-        options.lvs.param_tolerance >= 0.0,
-        "a negative parametric tolerance rejects every device parameter"
-    );
-    // `threads` is read here and nowhere else: nothing below this line is
-    // parallel. Zero workers is still refused, since a run that does nothing
-    // would report a clean design.
-    debug_assert!(
-        options.threads.is_none_or(|threads| threads > 0),
-        "a run with no worker would report a clean design it never checked"
-    );
-
-    // Before `options.checks` is read at all: deciding it inside the `if` would
-    // let a misspelled ERC rule through a DRC-only run.
+) -> Result<(Outputs, Summary), EngineError> {
+    // Before `options.checks` is read, so a misspelled ERC kind fails a DRC-only run.
     reject_unknown_rule_kinds(loaded)?;
 
-    // Cleared column by column rather than reassigned, so the caller's
-    // allocation survives; `Violations` is `SoA` and has no `clear` of its own.
-    out.violations.rule.clear();
-    out.violations.layer.clear();
-    out.violations.severity.clear();
-    out.violations.at.clear();
-    out.violations.measured.clear();
-    out.violations.limit.clear();
-    out.violations.shape_a.clear();
-    out.violations.shape_b.clear();
-    out.runs.clear();
-    out.lvs = None;
-    out.parasitics = None;
-    debug_assert!(
-        out.violations.is_empty(),
-        "a stale finding survived the clear"
-    );
-
+    let mut out = Outputs::default();
     let drc = if options.checks.drc {
-        run_drc(loaded, extracted, out)?
+        run_drc(loaded, extracted, &mut out)?
     } else {
         StageStatus::NotSelected
     };
-
     let erc = if options.checks.erc {
-        run_erc(loaded, extracted, out)?
+        run_erc(loaded, extracted, &mut out)?
     } else {
         StageStatus::NotSelected
     };
-
     let lvs = if options.checks.lvs {
-        run_lvs(loaded, extracted, options, out)
+        run_lvs(loaded, extracted, options, &mut out)
     } else {
         StageStatus::NotSelected
     };
-
     let pex = if options.checks.pex {
-        run_pex(loaded, extracted, options, out)?
+        run_pex(loaded, extracted, options, &mut out)?
     } else {
         StageStatus::NotSelected
     };
 
-    // Both orders are established here and nowhere else, which is what makes
-    // the concatenation order above unobservable.
     out.violations.sort_canonical();
     out.runs.sort_by_key(|run| run.rule);
 
-    let severities = &out.violations.severity[..];
-    let mut errors = 0_u32;
-    let mut warnings = 0_u32;
-    for &severity in severities {
-        let is_error = u32::from(severity == Severity::Error);
-        errors += is_error;
-        warnings += 1 - is_error;
-    }
+    let violations =
+        u32::try_from(out.violations.len()).expect("a violation table indexes rows with a u32");
+    let errors = count(out.violations.severity.iter(), |&&s| s == Severity::Error);
+    let rules_clean = count(out.runs.iter(), |run| {
+        run.outcome == Outcome::Ran && run.violations == 0
+    });
+    let rules_skipped = count(out.runs.iter(), |run| run.outcome != Outcome::Ran);
 
-    let n = out.runs.len();
-    let mut rules_clean = 0_u32;
-    let mut rules_skipped = 0_u32;
-    for i in 0..n {
-        let run = out.runs[i];
-        let ran = u32::from(run.outcome == Outcome::Ran);
-        let found = u32::from(run.violations > 0);
-        // Clean is *ran and found nothing*; skipped is everything that did not
-        // run, `Refused` included.
-        rules_clean += ran * (1 - found);
-        rules_skipped += 1 - ran;
-    }
-
-    let violations = u32::try_from(out.violations.len())
-        .expect("a violation table indexes rows with a u32; see CONVENTIONS");
-    debug_assert_eq!(
-        errors + warnings,
-        violations,
-        "a violation without a severity, or a severity without a violation"
-    );
-    debug_assert!(
-        (rules_clean + rules_skipped) as usize <= out.runs.len(),
-        "more rules accounted for than rules recorded"
-    );
-
-    Ok(Summary {
+    let summary = Summary {
         drc,
         erc,
         lvs,
         pex,
         violations,
         errors,
-        warnings,
+        warnings: violations - errors,
         rules_clean,
         rules_skipped,
-    })
+    };
+    Ok((out, summary))
 }
 
-/// Run one rule set into fresh buffers, then append them to `out`.
-///
-/// `drc` and `erc` both *clear* the tables their `run` is handed, so neither can
-/// be given `out` directly. `rule_count` is the reservation *and* the expected
-/// row count: filing fewer rows than a rule set holds rules lost one silently.
-fn append_stage(
-    out: &mut Outputs,
-    domain: &str,
-    rule_count: usize,
-    run: impl FnOnce(&mut Violations, &mut Vec<RuleRun>),
-) {
-    let mut violations = Violations::default();
-    let mut runs: Vec<RuleRun> = Vec::with_capacity(rule_count);
-    run(&mut violations, &mut runs);
-    debug_assert_eq!(
-        runs.len(),
-        rule_count,
-        "a configured {domain} rule finished without recording that it ran"
-    );
+fn count<T>(items: impl Iterator<Item = T>, keep: impl FnMut(&T) -> bool) -> u32 {
+    u32::try_from(items.filter(keep).count()).expect("a table indexes rows with a u32")
+}
 
+/// Run one rule set into fresh buffers (DRC and ERC clear what they are
+/// handed), then append them to `out`.
+fn append_stage(out: &mut Outputs, run: impl FnOnce(&mut Violations, &mut Vec<RuleRun>)) {
+    let mut violations = Violations::default();
+    let mut runs = Vec::new();
+    run(&mut violations, &mut runs);
     out.violations.extend(&violations);
     out.runs.append(&mut runs);
 }
 
-/// Assemble everything DRC reads, then dispatch its rules.
-///
-/// Geometric throughout — it needs neither a grid nor a die, so it has no skip
-/// of its own.
 fn run_drc(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -383,36 +237,26 @@ fn run_drc(
         nets: &extracted.nets,
         devices: &extracted.devices,
     };
-
     let mut scratch = gpurify_check::drc::Scratch::default();
-    append_stage(out, "drc", rules.rule_count(), |violations, runs| {
+    append_stage(out, |violations, runs| {
         rules.run(design, &mut scratch, violations, runs);
     });
     Ok(StageStatus::Ran)
 }
 
-/// Assemble everything ERC reads, then dispatch its rules.
-///
-/// The five steps are the order `gpurify_check`'s crate doc fixes and none can
-/// move. A supply grid that cannot be built or solved is
-/// [`gpurify_check::erc::PowerError`], which has no [`EngineError`] variant, so it
-/// becomes [`StageStatus::Refused`] — fail closed either way.
+/// Classify nets, resolve intent, build and solve the supply grid, then run the
+/// rules. A supply grid that cannot be built or solved is [`StageStatus::Refused`].
 fn run_erc(
     loaded: &Loaded,
     extracted: &Extracted,
     out: &mut Outputs,
 ) -> Result<StageStatus, EngineError> {
-    // Before any skip: a skip decided ahead of this would hide a wrong deck
-    // behind a missing input.
+    // Before any skip, so a missing input cannot hide a wrong deck.
     let rules = gpurify_check::erc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
 
-    let Some(grid) = run_grid(loaded) else {
-        return Ok(StageStatus::Skipped(NO_GRID));
-    };
+    let grid = loaded.grid;
     let die = design_extent(loaded);
     if die.is_empty() {
-        // Skipped rather than defaulted to a point: a denominator invented here
-        // would put a number on a report that nothing measured.
         return Ok(StageStatus::Skipped(
             "the layout holds no geometry, so no die boundary bounds a density",
         ));
@@ -432,10 +276,6 @@ fn run_erc(
 
     let mut facts = gpurify_check::erc::NetFacts::default();
     gpurify_check::erc::classify_nets_into(&extracted.nets, &extracted.devices, &mut facts);
-    debug_assert!(
-        facts.len() <= extracted.nets.net_count(),
-        "the role column names more nets than the extraction produced"
-    );
 
     let mut intent = gpurify_check::erc::IntentMap::default();
     gpurify_check::erc::resolve_intent_into(
@@ -467,8 +307,7 @@ fn run_erc(
         return Ok(StageStatus::Refused(error.to_string()));
     }
 
-    // `None` is the information: no declared supply means no grid, and the four
-    // electrical rules read exactly that before recording themselves skipped.
+    // `None` means no declared supply; the electrical rules record themselves skipped.
     let mut solution = gpurify_check::erc::PowerSolution::default();
     let power = if power_grid.is_empty() {
         None
@@ -489,7 +328,7 @@ fn run_erc(
     };
 
     let mut scratch = gpurify_check::erc::Scratch::default();
-    append_stage(out, "erc", rules.len(), |violations, runs| {
+    append_stage(out, |violations, runs| {
         rules.run(
             gpurify_check::erc::RunInputs {
                 design,
@@ -509,15 +348,9 @@ fn run_erc(
     Ok(StageStatus::Ran)
 }
 
-/// Project both netlists into matching graphs and compare them.
-///
-/// Flat, on the reference's unique top cell. A verdict that did not conclude is
-/// [`StageStatus::Refused`], not `Ran`.
-///
-/// The six layout-only checks run first, on the *unreduced* graph: a check run
-/// after a transformation of its input is a check on the transformation. The
-/// comparison then reduces **both** sides, because either netlist may be written
-/// unreduced and reducing one would let the reduction choose the verdict.
+/// The six layout-only checks on the unreduced graph, then a flat comparison of
+/// both sides reduced, on the reference's unique top cell. A verdict that did not
+/// conclude is [`StageStatus::Refused`].
 fn run_lvs(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -536,11 +369,11 @@ fn run_lvs(
         &extracted.devices,
         &extracted.ports,
         &loaded.strings,
-        run_grid(loaded),
+        Some(loaded.grid),
         &mut layout,
     );
 
-    append_stage(out, "lvs", LVS_CHECK_RULE_IDS.len(), |violations, runs| {
+    append_stage(out, |violations, runs| {
         gpurify_check::lvs::checks::check_floating_nets(
             &extracted.nets,
             &extracted.devices,
@@ -567,8 +400,7 @@ fn run_lvs(
     });
 
     let verdict = match reference.top() {
-        // Guessing which subcircuit was meant is the one thing a comparison
-        // must never do.
+        // Guessing which subcircuit was meant is the one thing a comparison must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
         Some(top) => {
             let mut declared = gpurify_check::lvs::RefGraph::default();
@@ -579,7 +411,7 @@ fn run_lvs(
                 &mut declared,
             );
             // A 3-terminal MOS recogniser extracts no bulk; the reference's
-            // card-mandated fourth net must not unpair the comparison.
+            // fourth net must not unpair the comparison.
             gpurify_check::lvs::graph::drop_unextracted_bulk(&layout, &mut declared);
 
             let mut reduced_layout = gpurify_check::lvs::LayoutGraph::default();
@@ -594,8 +426,7 @@ fn run_lvs(
 
     let status = match &verdict {
         Verdict::Match => StageStatus::Ran,
-        // The stage still *ran*: it concluded. The failure is carried by the
-        // rows this records, which is what keeps `Ran` meaning "concluded".
+        // Concluded; the failure is carried by the error rows.
         Verdict::Mismatch(found) => {
             record_discrepancies(found, &loaded.strings, &mut out.violations);
             StageStatus::Ran
@@ -608,11 +439,7 @@ fn run_lvs(
     status
 }
 
-/// The rule id each [`Discrepancy`] variant is reported under, in the order
-/// [`gpurify_check::lvs::verdict::Discrepancy`] declares its variants.
-///
-/// Interned by [`crate::engine::pipeline::load_into`], because `run_checks` borrows
-/// `Loaded` shared and cannot intern.
+/// The rule id of each [`Discrepancy`] variant, in declaration order.
 pub(crate) const LVS_RULE_IDS: [&str; 7] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
@@ -623,13 +450,8 @@ pub(crate) const LVS_RULE_IDS: [&str; 7] = [
     "lvs.class_imbalance",
 ];
 
-/// The rule id each of [`gpurify_check::lvs::checks`]'s eight run rows is reported
-/// under, indexed by the sentinel the check filed it with.
-///
-/// Row `k` here is `StrId(u32::MAX - k)`: no check signature takes a
-/// [`StrTable`], so `lvs::checks` counts ids down from `u32::MAX` and a row
-/// escaping into a report dies in [`StrTable::resolve`] rather than resolving to
-/// a real name. [`name_lvs_check_rows`] asserts the order.
+/// The rule id of each of `lvs::checks`' eight run rows. Row `k` is filed under
+/// the sentinel `StrId(u32::MAX - k)`.
 pub(crate) const LVS_CHECK_RULE_IDS: [&str; 8] = [
     "lvs.floating_net",
     "lvs.label_conflict",
@@ -641,29 +463,15 @@ pub(crate) const LVS_CHECK_RULE_IDS: [&str; 8] = [
     "lvs.terminal_count",
 ];
 
-/// Replace every sentinel rule id the six checks filed with the run's interned
-/// one, in place, before [`append_stage`] concatenates the buffers.
-///
-/// Fail closed: an id this table does not know is left exactly as it was, since
-/// a wrong name attributed silently is worse than a `resolve` that panics.
+/// Replace every sentinel rule id with the interned one. An id this table does
+/// not know is left as is, so `resolve` panics rather than misattributing it.
 fn name_lvs_check_rows(strings: &StrTable, violations: &mut Violations, runs: &mut [RuleRun]) {
-    debug_assert_eq!(
-        runs.len(),
-        LVS_CHECK_RULE_IDS.len(),
-        "the six checks filed {} rows, not the {} this table names",
-        runs.len(),
-        LVS_CHECK_RULE_IDS.len()
-    );
     debug_assert!(
         runs.iter()
             .zip(0u32..)
             .all(|(run, k)| run.rule == StrId(u32::MAX - k)),
-        "lvs::checks changed which sentinel it files a row under, or in what \
-         order; the names in LVS_CHECK_RULE_IDS no longer line up with them"
+        "lvs::checks changed its sentinel order; LVS_CHECK_RULE_IDS no longer lines up"
     );
-
-    // `u32::MAX - id` is the row; a real interned id is small, so it lands far
-    // past the end and `get` answers `None`, the fail-closed arm.
     let named = |id: StrId| {
         LVS_CHECK_RULE_IDS
             .get((u32::MAX - id.0) as usize)
@@ -678,27 +486,16 @@ fn name_lvs_check_rows(strings: &StrTable, violations: &mut Violations, runs: &m
     }
 }
 
-/// The layer an LVS violation names: `u16::MAX`, past the end of any deck's
-/// layer table.
-///
-/// An LVS discrepancy has no layer, point or shape, so all three fields carry a
-/// sentinel rather than a plausible coordinate borrowed from a nearby shape.
+/// An LVS finding has no layer, place or shape: past-the-end sentinels.
 const NO_LAYER: LayerId = LayerId(u16::MAX);
-
-/// See [`NO_LAYER`]. The origin, standing in for "this finding is not at a
-/// place".
 const NO_LOCATION: Point = Point {
     x: Dbu::new_unchecked(0),
     y: Dbu::new_unchecked(0),
 };
-
-/// See [`NO_LAYER`]. Past the end of any [`gpurify_geom::GeometryStore`].
 const NO_SHAPE: PolyId = PolyId(u32::MAX);
 
-/// Map every discrepancy of a mismatch into the violation table, every row a
-/// [`Severity::Error`] — which is how a mismatch reaches [`Summary::passed`].
+/// One error row per discrepancy, which is how a mismatch fails [`Summary::passed`].
 fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut Violations) {
-    let before = out.len();
     for discrepancy in found {
         let (measured, limit) = lvs_measurement(discrepancy);
         out.push(Violation {
@@ -711,18 +508,10 @@ fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut Vio
             shapes: (NO_SHAPE, None),
         });
     }
-    debug_assert_eq!(
-        out.len() - before,
-        found.len(),
-        "a discrepancy the comparison found reached no row of the report"
-    );
 }
 
-/// The interned rule id for one discrepancy.
-///
-/// A name the table does not carry falls back to a sentinel
-/// [`gpurify_ingest::StrTable::resolve`] panics on — the safer failure, since
-/// `StrId(0)` would attribute the mismatch to whatever was interned first.
+/// Falls back to `StrId(u32::MAX)`, which `resolve` panics on, rather than
+/// attributing the row to whatever was interned first.
 fn lvs_rule_id(discrepancy: &Discrepancy, strings: &StrTable) -> StrId {
     let name = match discrepancy {
         Discrepancy::UnpairedDevice { .. } => LVS_RULE_IDS[0],
@@ -736,15 +525,9 @@ fn lvs_rule_id(discrepancy: &Discrepancy, strings: &StrTable) -> StrId {
     strings.get(name).unwrap_or(StrId(u32::MAX))
 }
 
-/// What a discrepancy measured, and what it was measured against.
-///
-/// `measured` is always the layout's side and `limit` the reference's. Only two
-/// of the seven carry numbers; the rest report `Count(1)` against `Count(0)`. A
-/// non-finite value falls back to that form, as [`Violations::push`] refuses it.
+/// `(layout side, reference side)`. Only two variants carry numbers; the rest
+/// (and a non-finite parameter) report `Count(1)` against `Count(0)`.
 fn lvs_measurement(discrepancy: &Discrepancy) -> (Measurement, Measurement) {
-    const ONE: Measurement = Measurement::Count(1);
-    const NONE_ALLOWED: Measurement = Measurement::Count(0);
-
     match *discrepancy {
         Discrepancy::ParameterMismatch {
             layout_value,
@@ -761,39 +544,22 @@ fn lvs_measurement(discrepancy: &Discrepancy) -> (Measurement, Measurement) {
             Measurement::Count(layout_nodes),
             Measurement::Count(ref_nodes),
         ),
-        _ => (ONE, NONE_ALLOWED),
+        _ => (Measurement::Count(1), Measurement::Count(0)),
     }
 }
 
-/// Extract parasitics into [`Outputs::parasitics`].
+/// Analytical extraction of the whole design; with `quasistatic_nets`, those nets
+/// are field-solved and overlaid on it. A non-reciprocal solve is refused.
 ///
-/// Analytical for the whole design when [`RunOptions::quasistatic_nets`] is
-/// empty; a non-empty selection field-solves *those* nets and keeps the
-/// analytical network for every other one. Both paths cover the whole design,
-/// which is what makes the [`StageStatus::Ran`] honest.
-///
-/// An asymmetry outside the solve's own tolerance is [`StageStatus::Refused`]
-/// and nothing is written — see [`reciprocity_refusal`].
-///
-/// ponytail: the solve's [`gpurify_extract::quasistatic::CapMatrix`] is still
-/// dropped, because [`Outputs`] has no slot for it. The per-net totals it
-/// summarises survive as [`gpurify_extract::Parasitic::CouplingCap`] rows in the
-/// merged network, so the loss is the off-diagonal *matrix* form a field solver
-/// reports, not the coupling itself. [`gpurify_extract::quasistatic::Accuracy`]'s
-/// other four fields — the achieved residual, the tolerance, the iteration
-/// count and the backend that ran — have nowhere to land either, so a run's
-/// numbers cannot be attributed after the fact. Upgrade path: a matrix field and
-/// an accuracy field on [`Outputs`], a signature change rather than a body.
+/// ponytail: the solve's `CapMatrix`, `InductMatrix` and `Accuracy` are dropped,
+/// as `Outputs` has no slot for them; add fields there when a caller needs them.
 fn run_pex(
     loaded: &Loaded,
     extracted: &Extracted,
     options: &RunOptions,
     out: &mut Outputs,
 ) -> Result<StageStatus, EngineError> {
-    let Some(grid) = run_grid(loaded) else {
-        return Ok(StageStatus::Skipped(NO_GRID));
-    };
-
+    let grid = loaded.grid;
     let mut network = ParasiticNetwork::default();
     if options.quasistatic_nets.is_empty() {
         gpurify_extract::analytical::extract_into(
@@ -808,9 +574,7 @@ fn run_pex(
     } else {
         let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
         for name in &options.quasistatic_nets {
-            // `get`, never `intern`: a name the run never saw is a net that is
-            // not there. Fail closed — field-solving the rest and saying nothing
-            // would answer a request that was never met.
+            // `get`, never `intern`: a name the run never saw is not a net.
             let Some(net) = loaded
                 .strings
                 .get(name)
@@ -823,8 +587,6 @@ fn run_pex(
             selected.push(net);
         }
 
-        // The rest of the design, closed form. Unconditional: a run that
-        // field-solves one net must still describe every other one.
         let mut coarse = ParasiticNetwork::default();
         gpurify_extract::analytical::extract_into(
             &loaded.store,
@@ -849,20 +611,10 @@ fn run_pex(
             &mut solved,
         )?;
 
-        // Refuse before the merge, so nothing a failed reciprocity check
-        // produced reaches `out.parasitics`.
         if let Some(refusal) = reciprocity_refusal(&accuracy) {
             return Ok(StageStatus::Refused(refusal));
         }
 
-        // Opt-in inductance: the same selection, one magnetoquasistatic solve,
-        // appended onto `solved`'s one-node-per-net anchors before the merge.
-        // A bridge refusal (a layer with no sheet resistance) is a refusal
-        // here too, not a skip. `quasistatic_inductance == false` never
-        // reaches the bridge, which is what keeps the default byte-identical.
-        //
-        // ponytail: the per-net `InductMatrix` is dropped like `CapMatrix` is —
-        // `Outputs` has no slot for it.
         if options.quasistatic_inductance {
             let mut inductance = gpurify_extract::quasistatic::InductMatrix::default();
             if let Err(refusal) = gpurify_extract::quasistatic::extract_inductance_into(
@@ -882,33 +634,13 @@ fn run_pex(
         merge_field_solved_into(&coarse, &solved, &mut network);
     }
 
-    debug_assert!(
-        network.element_count() == 0 || network.node_count() > 0,
-        "parasitic elements naming nodes the network does not have"
-    );
     out.parasitics = Some(network);
     Ok(StageStatus::Ran)
 }
 
-/// Whether a solve's own accuracy disqualifies its capacitance matrix. `None`
-/// is "reciprocal within the tolerance the solve was given".
-///
-/// Not the residual, which is per-column: reciprocity is a statement *between*
-/// columns, `C[i][j]` and `C[j][i]` being two solves of one number. It does not
-/// catch under-meshing, which is symmetric about its own error.
+/// `Some(reason)` when the matrix is not reciprocal within the solve's own
+/// tolerance. A NaN or infinite asymmetry is refused too.
 fn reciprocity_refusal(accuracy: &gpurify_extract::quasistatic::Accuracy) -> Option<String> {
-    debug_assert!(
-        accuracy.tolerance > 0.0,
-        "a tolerance of zero refuses every solve"
-    );
-    debug_assert!(
-        !accuracy.asymmetry.is_sign_negative(),
-        "a relative gap is non-negative"
-    );
-
-    // `is_finite` first, not a negated comparison: a NaN or infinite asymmetry
-    // compares false against every bound, so `> tolerance` alone would pass
-    // exactly the matrices nothing could check.
     let refused = !accuracy.asymmetry.is_finite() || accuracy.asymmetry > accuracy.tolerance;
     refused.then(|| {
         format!(
@@ -1080,17 +812,11 @@ fn replaced_node_count(analytical: &ParasiticNetwork, replaced: &[u8]) -> usize 
 pub fn run(
     inputs: &Inputs,
     options: &RunOptions,
-    out: &mut Outputs,
-) -> Result<Summary, EngineError> {
-    // Nothing touches `out` before the load: a run that failed to read its
-    // inputs must not have left findings behind.
-    let mut loaded = Loaded::default();
-    crate::engine::pipeline::load_into(inputs, &mut loaded)?;
-
-    let mut extracted = Extracted::default();
-    crate::engine::pipeline::extract_into(&loaded, &mut extracted)?;
-
-    run_checks(&loaded, &extracted, options, out)
+) -> Result<(Loaded, Extracted, Outputs, Summary), EngineError> {
+    let loaded = crate::engine::pipeline::load(inputs)?;
+    let extracted = crate::engine::pipeline::extract(&loaded)?;
+    let (outputs, summary) = run_checks(&loaded, &extracted, options)?;
+    Ok((loaded, extracted, outputs, summary))
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -1099,10 +825,8 @@ pub enum EngineError {
     Load(#[from] crate::engine::pipeline::LoadError),
     #[error(transparent)]
     Extract(#[from] crate::engine::pipeline::ExtractError),
-    /// The deck could not be turned into a DRC rule set.
     #[error(transparent)]
     Drc(#[from] gpurify_check::drc::DrcError),
-    /// The deck could not be turned into an ERC rule set.
     #[error(transparent)]
     Erc(#[from] gpurify_check::erc::ErcError),
     #[error(transparent)]

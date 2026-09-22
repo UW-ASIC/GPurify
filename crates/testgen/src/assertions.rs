@@ -4,9 +4,6 @@ use gpurify_check::report::{Outcome, RuleRun, Violation, Violations};
 use gpurify_ingest::StrId;
 
 /// Assert two `f64` agree to an absolute tolerance.
-///
-/// Both must be finite: a `NaN` compares false against everything, so an
-/// unguarded comparison against one passes silently.
 pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {
     assert!(
         actual.is_finite() && expected.is_finite(),
@@ -20,9 +17,6 @@ pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {
 }
 
 /// Assert two `f64` agree to a tolerance relative to the expected magnitude.
-///
-/// `expected` must not be zero: a relative tolerance around zero admits every
-/// value. Use [`assert_close`] there.
 pub fn assert_close_relative(what: &str, actual: f64, expected: f64, tolerance: f64) {
     assert!(
         actual.is_finite() && expected.is_finite(),
@@ -41,9 +35,6 @@ pub fn assert_close_relative(what: &str, actual: f64, expected: f64, tolerance: 
 }
 
 /// Assert a rule ran and looked at something, returning its record.
-///
-/// The `examined > 0` floor is load-bearing: `Outcome::Ran` over an empty layer
-/// is not evidence the rule's logic executed.
 #[must_use]
 pub fn assert_rule_ran(runs: &[RuleRun], rule: StrId) -> RuleRun {
     let matching: Vec<&RuleRun> = runs.iter().filter(|r| r.rule == rule).collect();
@@ -71,9 +62,6 @@ pub fn assert_rule_ran(runs: &[RuleRun], rule: StrId) -> RuleRun {
 }
 
 /// Assert a rule ran, examined shapes, and found nothing.
-///
-/// The only acceptable form of a clean assertion: an empty violation table on
-/// its own is also satisfied by a rule that never executed.
 pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
     let run = assert_rule_ran(runs, rule);
     assert!(
@@ -96,8 +84,6 @@ pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
 }
 
 /// Assert a violation table holds exactly one row, and that it is this one.
-///
-/// Every field is compared, coordinate and measurement included.
 pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
     assert!(
         violations.rule.len() == 1,
@@ -122,9 +108,6 @@ pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> us
 }
 
 /// Assert two violation tables are equal row for row, in order.
-///
-/// Order is part of the interface: `Violations::sort_canonical` makes two
-/// tables with the same rows in a different order a determinism failure.
 pub fn assert_violations_eq(actual: &Violations, expected: &Violations) {
     assert!(
         actual.rule.len() == expected.rule.len(),
@@ -163,9 +146,6 @@ pub fn assert_bytes_identical(what: &str, first: &[u8], second: &[u8]) {
 }
 
 /// Read one row back out of a table.
-///
-/// Reads the public columns rather than `Violations::get`, whose body is still
-/// `todo!()` — an assertion helper must not panic before it can report.
 fn row(violations: &Violations, index: usize) -> Violation {
     Violation {
         rule: violations.rule[index],

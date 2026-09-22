@@ -13,9 +13,6 @@ use gpurify_ingest::StrId;
 use crate::shapes::{area, dbu, hole, point, rect, u_shape, Handle, Ids, LayoutBuilder};
 
 /// A measured quantity in the plain integers this crate computes in.
-///
-/// The same cases as [`Measurement`] in types the generator can do arithmetic
-/// on; [`Amount::measurement`] is the one-way conversion.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Amount {
     /// A distance in database units.
@@ -88,9 +85,6 @@ pub struct ViolationShape {
 }
 
 /// The geometric configuration to realise.
-///
-/// Every field is a secondary dimension the measurement does not pin down; the
-/// measured quantity itself comes from `measured`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeKind {
     /// A rectangle `measured` wide and `run` long. `at` is its centre.
@@ -122,9 +116,6 @@ pub enum ShapeKind {
 
     /// Two `size`-sided squares whose nearest corners are `legs` apart on the
     /// two axes. `at` is the midpoint of the corner-to-corner segment.
-    ///
-    /// `legs` must be a Pythagorean pair for `measured`: only then is the
-    /// diagonal distance exact between integer coordinates.
     CornerToCorner {
         layer: LayerId,
         size: i64,
@@ -219,9 +210,6 @@ pub struct ViolationCase {
 }
 
 /// Build a layout whose only violation is the stated one.
-///
-/// A measurement that cannot be realised exactly on an integer grid is refused,
-/// not rounded: a rounded expectation is a fiction.
 #[must_use]
 pub fn layout_with_violation(
     kind: ViolationShape,
