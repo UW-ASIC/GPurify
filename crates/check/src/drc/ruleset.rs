@@ -1,157 +1,161 @@
-//! The rule set: every kind's table, the deck builder, and the dispatcher.
-//!
-//! A deck's rules arrive as a flat [`RuleTable`] of [`RuleSpec`] rows whose
-//! kind is an interned string; [`RuleSet::from_deck`] matches that string once
-//! per rule and files the row into the table for its kind. After that the kind
-//! is encoded in *which table the row is in*, so no transform needs a tag.
-//!
-//! [`RuleTable`]: gpurify_ingest::deck::RuleTable
-//! [`RuleSpec`]: gpurify_ingest::deck::RuleSpec
+//! The rule set: one [`Rule`] per deck row, the deck parser, and the driver.
 
-use crate::drc::rules::area::{CheesingTable, DensityTable, MinAreaTable, MinEnclosedAreaTable};
-use crate::drc::rules::grid::{AngleTable, OffGridTable};
-use crate::drc::rules::overlay::{
-    AsymmetricEnclosureTable, MaxDistanceToTapTable, MinEnclosureTable, MinExtensionTable,
-    OverlapTable,
-};
-use crate::drc::rules::patterning::MultiPatterningTable;
-use crate::drc::rules::spacing::{
-    CornerToCornerTable, EolSpacingTable, MinSpacingDiffTable, MinSpacingTable, PrlSpacingTable,
-    WideDependentSpacingTable,
-};
-use crate::drc::rules::via::{RedundantViaTable, ViaArraySpacingTable};
-use crate::drc::rules::width::{MaxWidthTable, MinEdgeLengthTable, MinWidthTable, NotchTable};
 use crate::drc::rules::{area, grid, overlay, patterning, spacing, via, width};
 use crate::drc::{Design, DrcError, Scratch};
-
-/// Files a deck row into its table: check the layer count, parse the
-/// parameters, then push one value into each column.
-///
-/// Each entry reads `<index> "<kind>" <table> [<layers>] { <column>: <value> }`.
-/// Every value is parsed before any column is pushed: a row that fails parsing
-/// must not leave one column longer than its siblings, which is the invariant
-/// `row_columns!` asserts on every `len`. Kinds needing more than this are
-/// written out after `@rest`.
-macro_rules! deck_arms {
-    ($set:ident, $spec:ident, $kind:ident, $layers:ident,
-     $($n:literal $name:literal $table:ident [$count:literal] { $($col:ident : $val:expr),+ $(,)? })+
-     @rest $($rest:tt)*) => {
-        match $kind {
-            $($n => {
-                debug_assert_eq!(KINDS[$kind], $name);
-                $layers($spec, $count)?;
-                let ($($col,)+) = ($($val,)+);
-                $($set.$table.$col.push($col);)+
-            })+
-            $($rest)*
-        }
-    };
-}
-
-/// Runs one transform per **non-empty** table, in the order written.
-///
-/// The emptiness guard is not an optimisation: a kind the deck does not
-/// configure must produce no [`RuleRun`] at all, and that silence is a
-/// different claim from a skip.
-macro_rules! dispatch {
-    ($self:ident, $design:ident, $scratch:ident, $out:ident, $runs:ident,
-     $($table:ident => $check:path),+ $(,)?) => {$(
-        if !$self.$table.is_empty() {
-            $check($design, &$self.$table, $scratch, $out, $runs);
-        }
-    )+};
-}
-use crate::report::{LimitSense, RuleRun, Violations};
-use gpurify_geom::Dbu;
+use crate::report::{record_run, LimitSense, RuleRun, Violations};
+use gpurify_geom::{Dbu, DbuArea, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
 
-/// Every DRC rule the deck configures, filed by kind.
-///
-/// Twenty-four distinct field types rather than one `Vec<Rule>` with a kind
-/// tag, so the dispatcher below cannot be wired up wrong in a way that still
-/// compiles and reports the wrong rule id.
+/// One configured DRC rule. Every limit is positive; area limits are squared.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rule {
+    MinWidth {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    MaxWidth {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    MinEdgeLength {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    Notch {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    MinSpacing {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    MinSpacingDiff {
+        a: LayerId,
+        b: LayerId,
+        limit: Dbu,
+    },
+    /// An edge shorter than `eol_width` is an end of line and needs `limit`.
+    EolSpacing {
+        layer: LayerId,
+        eol_width: Dbu,
+        limit: Dbu,
+    },
+    /// Pairs whose parallel run is at least `prl_threshold` need `limit`.
+    PrlSpacing {
+        layer: LayerId,
+        prl_threshold: Dbu,
+        limit: Dbu,
+    },
+    CornerToCorner {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    /// Pairs with a shape whose narrowest width is at least `width_threshold`.
+    WideDependentSpacing {
+        layer: LayerId,
+        width_threshold: Dbu,
+        limit: Dbu,
+    },
+    MinArea {
+        layer: LayerId,
+        limit: DbuArea,
+    },
+    MinEnclosedArea {
+        layer: LayerId,
+        limit: DbuArea,
+    },
+    /// A figure above `max_unslotted` must carry a hole.
+    Cheesing {
+        layer: LayerId,
+        max_unslotted: DbuArea,
+    },
+    /// Covered fraction of a `window`-sided square swept in `step`s.
+    Density {
+        layer: LayerId,
+        window: Dbu,
+        step: Dbu,
+        limit: f64,
+        sense: LimitSense,
+    },
+    MinEnclosure {
+        outer: LayerId,
+        inner: LayerId,
+        limit: Dbu,
+    },
+    /// At least `min_one_side` on one side of each axis.
+    AsymmetricEnclosure {
+        outer: LayerId,
+        inner: LayerId,
+        min_one_side: Dbu,
+    },
+    MinExtension {
+        layer: LayerId,
+        reference: LayerId,
+        limit: Dbu,
+    },
+    Overlap {
+        a: LayerId,
+        b: LayerId,
+        limit: Dbu,
+    },
+    MaxDistanceToTap {
+        well: LayerId,
+        tap: LayerId,
+        limit: Dbu,
+    },
+    OffGrid {
+        pitch: Dbu,
+    },
+    /// Bit `i` allows the line at `45 * i` degrees (0, 45, 90, 135).
+    Angle {
+        allowed: u8,
+    },
+    /// Cuts required within `within` of each cut, the cut itself included.
+    RedundantVia {
+        layer: LayerId,
+        min_count: u16,
+        within: Dbu,
+    },
+    /// Clusters larger than `array_threshold` hold every pair to `limit`.
+    ViaArraySpacing {
+        layer: LayerId,
+        array_threshold: u16,
+        limit: Dbu,
+    },
+    MultiPatterning {
+        layer: LayerId,
+        colors: u8,
+        color_spacing: Dbu,
+    },
+}
+
+/// Every DRC rule the deck configures, in deck order.
 #[derive(Debug, Default)]
 pub struct RuleSet {
-    pub min_width: MinWidthTable,
-    pub max_width: MaxWidthTable,
-    pub min_edge_length: MinEdgeLengthTable,
-    pub notch: NotchTable,
-
-    pub min_spacing: MinSpacingTable,
-    pub min_spacing_diff: MinSpacingDiffTable,
-    pub eol_spacing: EolSpacingTable,
-    pub prl_spacing: PrlSpacingTable,
-    pub corner_to_corner: CornerToCornerTable,
-    pub wide_dependent_spacing: WideDependentSpacingTable,
-
-    pub min_area: MinAreaTable,
-    pub min_enclosed_area: MinEnclosedAreaTable,
-    pub cheesing: CheesingTable,
-    pub density: DensityTable,
-
-    pub min_enclosure: MinEnclosureTable,
-    pub asymmetric_enclosure: AsymmetricEnclosureTable,
-    pub min_extension: MinExtensionTable,
-    pub overlap: OverlapTable,
-    pub max_distance_to_tap: MaxDistanceToTapTable,
-
-    pub off_grid: OffGridTable,
-    pub angle: AngleTable,
-
-    pub redundant_via: RedundantViaTable,
-    pub via_array_spacing: ViaArraySpacingTable,
-
-    pub multi_patterning: MultiPatterningTable,
+    pub rules: Vec<(StrId, Rule)>,
 }
 
 impl RuleSet {
-    /// File every rule in the deck into the table for its kind.
+    /// Parse every deck row whose kind is in [`KINDS`]; other kinds belong to
+    /// another domain and are stepped over (the engine refuses kinds no domain spells).
     ///
-    /// Rejects rather than skips any row this crate's [`KINDS`] spells: a
-    /// missing or mistyped parameter, the wrong number of layers, a
-    /// non-positive limit, a duplicate rule id. A kind absent from [`KINDS`]
-    /// belongs to another domain and is stepped over — the engine refuses a
-    /// kind in neither this array nor `crate::erc::ruleset::KINDS` before
-    /// either rule set is built, so that skip is not a silent drop.
-    ///
-    /// Layer resolution and grid conversion are already done by `ingest`;
-    /// nothing here parses text or touches a grid.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one arm per rule kind, in KINDS order; splitting it would put \
-                  half the deck vocabulary out of sight of the other half, which \
-                  is the one thing a reader checking this file needs to compare"
-    )]
+    /// Area limits are stated as the side of the equivalent square and squared here.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
-        // The three area limits — `min_area`, `min_enclosed_area`, `cheesing`
-        // — are stated by the deck as the *side of the equivalent square*,
-        // squared by `square` below, because `ParamValue` has no area variant.
-        // A real PDK area has no integer square root, so the deck author
-        // rounds: the rounding that reports nothing is *down* for the two
-        // minima and *up* for `cheesing`.
         let rules = &deck.rules;
-
-        // Every kind name resolved once, so the per-row match below is `u32`
-        // equality and never a string compare. A kind the run's table has never
-        // seen is `None`, which no `spec.kind` can equal.
-        let kind_id: [Option<StrId>; KINDS.len()] =
-            std::array::from_fn(|at| strings.get(KINDS[at]));
-
         let name_of = |id: StrId| strings.resolve(id).to_owned();
 
-        // Duplicates first, before a single row is filed: two rows sharing an
-        // id produce two `RuleRun` rows attributable to nothing.
         let mut ids: Vec<StrId> = rules.spec.iter().map(|spec| spec.id).collect();
         ids.sort_unstable();
         if let Some(pair) = ids.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(DrcError::DuplicateRule(name_of(pair[0])));
         }
 
-        let value = |spec: &RuleSpec, param: &'static str| -> Result<ParamValue, DrcError> {
-            // `get`, never `intern`: a parameter name the table has never seen
-            // cannot be one the deck spelled, and interning here would hand
-            // back an id that matches nothing.
+        let wrong_type = |spec: &RuleSpec, param| DrcError::WrongParamType {
+            rule: name_of(spec.id),
+            param,
+        };
+        let value = |spec: &RuleSpec, param: &'static str| {
             strings
                 .get(param)
                 .and_then(|interned| rules.param(spec, interned))
@@ -160,15 +164,9 @@ impl RuleSet {
                     param,
                 })
         };
-
-        // A distance, area or count limit of zero passes every shape while
-        // looking configured, so it is refused rather than believed.
-        let length = |spec: &RuleSpec, param: &'static str| -> Result<Dbu, DrcError> {
+        let length = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
             let ParamValue::Length(limit) = value(spec, param)? else {
-                return Err(DrcError::WrongParamType {
-                    rule: name_of(spec.id),
-                    param,
-                });
+                return Err(wrong_type(spec, param));
             };
             if limit.raw() <= 0 {
                 return Err(DrcError::NonPositiveLimit {
@@ -178,34 +176,14 @@ impl RuleSet {
             }
             Ok(limit)
         };
-
-        let square =
-            |spec: &RuleSpec, param: &'static str| -> Result<gpurify_geom::DbuArea, DrcError> {
-                let side = length(spec, param)?;
-                debug_assert!(
-                    side.raw() <= gpurify_geom::MAX_ABS_DBU,
-                    "a side past the coordinate domain squares past the i128 ceiling"
-                );
-                Ok(side.mul_wide(side))
-            };
-
-        let ratio_of = |spec: &RuleSpec, param: &'static str| -> Result<f64, DrcError> {
+        let square = |spec: &RuleSpec, param| length(spec, param).map(|side| side.mul_wide(side));
+        let ratio = |spec: &RuleSpec, param| -> Result<f64, DrcError> {
             let ParamValue::Ratio(limit) = value(spec, param)? else {
-                return Err(DrcError::WrongParamType {
-                    rule: name_of(spec.id),
-                    param,
-                });
+                return Err(wrong_type(spec, param));
             };
-            // `!(x > 0)` rather than `x <= 0`: a NaN limit compares false
-            // against every measurement downstream and reads as a clean rule,
-            // which is the fail-open shape this whole crate is built against.
+            // `!(x > 0)` also rejects NaN, which would compare clean everywhere.
             if !(limit > 0.0) || !limit.is_finite() {
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    reason = "the error reports a rejected limit to a human; the \
-                              truncated form of a non-positive ratio is still \
-                              non-positive"
-                )]
+                #[allow(clippy::cast_possible_truncation, reason = "shown to a human only")]
                 let shown = limit as i64;
                 return Err(DrcError::NonPositiveLimit {
                     rule: name_of(spec.id),
@@ -214,36 +192,22 @@ impl RuleSet {
             }
             Ok(limit)
         };
-
-        // Counts are stored narrower than the deck may state them, so a value
-        // past the column's width is a deck error rather than a wrap.
-        let count = |spec: &RuleSpec, param: &'static str, ceiling: u32| -> Result<u32, DrcError> {
-            let ParamValue::Count(found) = value(spec, param)? else {
-                return Err(DrcError::WrongParamType {
+        let count = |spec: &RuleSpec, param, ceiling: u32| -> Result<u32, DrcError> {
+            match value(spec, param)? {
+                ParamValue::Count(found) if found <= ceiling => Ok(found),
+                _ => Err(wrong_type(spec, param)),
+            }
+        };
+        let positive = |spec: &RuleSpec, found: u32| {
+            if found == 0 {
+                return Err(DrcError::NonPositiveLimit {
                     rule: name_of(spec.id),
-                    param,
-                });
-            };
-            if found > ceiling {
-                return Err(DrcError::WrongParamType {
-                    rule: name_of(spec.id),
-                    param,
+                    limit: 0,
                 });
             }
             Ok(found)
         };
-
-        let flag = |spec: &RuleSpec, param: &'static str| -> Result<bool, DrcError> {
-            let ParamValue::Flag(set) = value(spec, param)? else {
-                return Err(DrcError::WrongParamType {
-                    rule: name_of(spec.id),
-                    param,
-                });
-            };
-            Ok(set)
-        };
-
-        let layers = |spec: &RuleSpec, expected: u32| -> Result<(), DrcError> {
+        let layers = |spec: &RuleSpec, expected: u32| {
             if spec.layer_len == expected {
                 Ok(())
             } else {
@@ -255,293 +219,322 @@ impl RuleSet {
             }
         };
         let layer = |spec: &RuleSpec, nth: usize| rules.layers_of(spec)[nth];
+        // Layer count first, then each parameter in field order.
+        let one = |spec: &RuleSpec| layers(spec, 1).map(|()| layer(spec, 0));
+        let two = |spec: &RuleSpec| layers(spec, 2).map(|()| (layer(spec, 0), layer(spec, 1)));
 
         let mut set = Self::default();
-
         for spec in &rules.spec {
-            // A kind this crate does not spell is another domain's row;
-            // `engine::run::run_checks` is what refuses a kind no domain
-            // spells, so this skip is not a silent drop.
-            let Some(kind) = kind_id.iter().position(|&name| name == Some(spec.kind)) else {
-                continue;
-            };
-
-            deck_arms! { set, spec, kind, layers,
-                0 "min_width" min_width [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
-                1 "max_width" max_width [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
-                2 "min_edge_length" min_edge_length [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
-                3 "notch" notch [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
-                4 "min_spacing" min_spacing [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
-                5 "min_spacing_diff" min_spacing_diff [2] { rule: spec.id, a: layer(spec, 0), b: layer(spec, 1), limit: length(spec, "limit")? }
-                6 "eol_spacing" eol_spacing [1] { rule: spec.id, layer: layer(spec, 0), eol_width: length(spec, "eol_width")?, limit: length(spec, "limit")? }
-                7 "prl_spacing" prl_spacing [1] { rule: spec.id, layer: layer(spec, 0), prl_threshold: length(spec, "prl_threshold")?, limit: length(spec, "limit")? }
-                8 "corner_to_corner" corner_to_corner [1] { rule: spec.id, layer: layer(spec, 0), limit: length(spec, "limit")? }
-                9 "wide_dependent_spacing" wide_dependent_spacing [1] { rule: spec.id, layer: layer(spec, 0), width_threshold: length(spec, "width_threshold")?, limit: length(spec, "limit")? }
-                10 "min_area" min_area [1] { rule: spec.id, layer: layer(spec, 0), limit: square(spec, "limit")? }
-                11 "min_enclosed_area" min_enclosed_area [1] { rule: spec.id, layer: layer(spec, 0), limit: square(spec, "limit")? }
-                12 "cheesing" cheesing [1] { rule: spec.id, layer: layer(spec, 0), max_unslotted: square(spec, "max_unslotted")? }
-                14 "min_enclosure" min_enclosure [2] { rule: spec.id, outer: layer(spec, 0), inner: layer(spec, 1), limit: length(spec, "limit")? }
-                15 "asymmetric_enclosure" asymmetric_enclosure [2] { rule: spec.id, outer: layer(spec, 0), inner: layer(spec, 1), min_one_side: length(spec, "min_one_side")? }
-                16 "min_extension" min_extension [2] { rule: spec.id, layer: layer(spec, 0), reference: layer(spec, 1), limit: length(spec, "limit")? }
-                17 "overlap" overlap [2] { rule: spec.id, a: layer(spec, 0), b: layer(spec, 1), limit: length(spec, "limit")? }
-                18 "max_distance_to_tap" max_distance_to_tap [2] { rule: spec.id, well: layer(spec, 0), tap: layer(spec, 1), limit: length(spec, "limit")? }
-                19 "off_grid" off_grid [0] { rule: spec.id, pitch: length(spec, "pitch")? }
-
-                @rest
-                13 => {
-                    debug_assert_eq!(KINDS[kind], "density");
-                    layers(spec, 1)?;
-                    let window = length(spec, "window")?;
-                    let step = length(spec, "step")?;
-                    let limit = ratio_of(spec, "limit")?;
-                    // Stated, never defaulted: guessing the sense picks the
-                    // reading that reports nothing.
-                    let maximum = flag(spec, "maximum")?;
-                    set.density.rule.push(spec.id);
-                    set.density.layer.push(layer(spec, 0));
-                    set.density.window.push(window);
-                    set.density.step.push(step);
-                    set.density.limit.push(limit);
-                    set.density.sense.push(if maximum {
+            let rule = match strings.resolve(spec.kind) {
+                "min_width" => Rule::MinWidth {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "max_width" => Rule::MaxWidth {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "min_edge_length" => Rule::MinEdgeLength {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "notch" => Rule::Notch {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "min_spacing" => Rule::MinSpacing {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "min_spacing_diff" => {
+                    let (a, b) = two(spec)?;
+                    Rule::MinSpacingDiff {
+                        a,
+                        b,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "eol_spacing" => Rule::EolSpacing {
+                    layer: one(spec)?,
+                    eol_width: length(spec, "eol_width")?,
+                    limit: length(spec, "limit")?,
+                },
+                "prl_spacing" => Rule::PrlSpacing {
+                    layer: one(spec)?,
+                    prl_threshold: length(spec, "prl_threshold")?,
+                    limit: length(spec, "limit")?,
+                },
+                "corner_to_corner" => Rule::CornerToCorner {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "wide_dependent_spacing" => Rule::WideDependentSpacing {
+                    layer: one(spec)?,
+                    width_threshold: length(spec, "width_threshold")?,
+                    limit: length(spec, "limit")?,
+                },
+                "min_area" => Rule::MinArea {
+                    layer: one(spec)?,
+                    limit: square(spec, "limit")?,
+                },
+                "min_enclosed_area" => Rule::MinEnclosedArea {
+                    layer: one(spec)?,
+                    limit: square(spec, "limit")?,
+                },
+                "cheesing" => Rule::Cheesing {
+                    layer: one(spec)?,
+                    max_unslotted: square(spec, "max_unslotted")?,
+                },
+                "density" => {
+                    let layer = one(spec)?;
+                    let (window, step) = (length(spec, "window")?, length(spec, "step")?);
+                    let limit = ratio(spec, "limit")?;
+                    let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
+                        return Err(wrong_type(spec, "maximum"));
+                    };
+                    let sense = if maximum {
                         LimitSense::Maximum
                     } else {
                         LimitSense::Minimum
-                    });
+                    };
+                    Rule::Density {
+                        layer,
+                        window,
+                        step,
+                        limit,
+                        sense,
+                    }
                 }
-                20 => {
-                    debug_assert_eq!(KINDS[kind], "angle");
+                "min_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::MinEnclosure {
+                        outer,
+                        inner,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "asymmetric_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::AsymmetricEnclosure {
+                        outer,
+                        inner,
+                        min_one_side: length(spec, "min_one_side")?,
+                    }
+                }
+                "min_extension" => {
+                    let (layer, reference) = two(spec)?;
+                    Rule::MinExtension {
+                        layer,
+                        reference,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "overlap" => {
+                    let (a, b) = two(spec)?;
+                    Rule::Overlap {
+                        a,
+                        b,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "max_distance_to_tap" => {
+                    let (well, tap) = two(spec)?;
+                    Rule::MaxDistanceToTap {
+                        well,
+                        tap,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "off_grid" => {
                     layers(spec, 0)?;
-                    let start = u32::try_from(set.angle.allowed.len())
-                        .expect("a deck's allowed directions number in the tens");
-                    // One `angle` parameter per allowed direction, so the row's
-                    // whole parameter list is scanned rather than one name
-                    // looked up.
+                    Rule::OffGrid {
+                        pitch: length(spec, "pitch")?,
+                    }
+                }
+                "angle" => {
+                    layers(spec, 0)?;
                     let wanted = strings.get("angle");
+                    let mut allowed = 0u8;
                     for &(param, stated) in rules.params_of(spec) {
                         if Some(param) != wanted {
                             continue;
                         }
                         let ParamValue::Count(degrees) = stated else {
-                            return Err(DrcError::WrongParamType {
-                                rule: name_of(spec.id),
-                                param: "angle",
-                            });
+                            return Err(wrong_type(spec, "angle"));
                         };
-                        // A direction is periodic in a full turn, so the
-                        // reduction is exact and keeps the `i32` cast faithful.
                         let degrees = i32::try_from(degrees % 360).expect("under a full turn");
-                        let direction = grid::Direction::from_degrees(degrees).ok_or_else(|| {
-                            DrcError::UnrepresentableAngle {
+                        if degrees.rem_euclid(45) != 0 {
+                            return Err(DrcError::UnrepresentableAngle {
                                 rule: name_of(spec.id),
                                 degrees,
-                            }
-                        })?;
-                        set.angle.allowed.push(direction);
+                            });
+                        }
+                        allowed |= 1 << (degrees.rem_euclid(180) / 45);
                     }
-                    let end = u32::try_from(set.angle.allowed.len())
-                        .expect("a deck's allowed directions number in the tens");
-                    if end == start {
-                        // An empty allowed set rejects every edge in the
-                        // design, which is not a configuration anyone means.
+                    if allowed == 0 {
                         return Err(DrcError::MissingParam {
                             rule: name_of(spec.id),
                             param: "angle",
                         });
                     }
-                    set.angle.rule.push(spec.id);
-                    set.angle.allowed_start.push(start);
-                    set.angle.allowed_len.push(end - start);
+                    Rule::Angle { allowed }
                 }
-                21 => {
-                    debug_assert_eq!(KINDS[kind], "redundant_via");
-                    layers(spec, 1)?;
-                    let min_count = count(spec, "min_count", u32::from(u16::MAX))?;
-                    if min_count == 0 {
-                        return Err(DrcError::NonPositiveLimit {
-                            rule: name_of(spec.id),
-                            limit: 0,
-                        });
+                "redundant_via" => {
+                    let layer = one(spec)?;
+                    let min_count = positive(spec, count(spec, "min_count", u16::MAX.into())?)?;
+                    Rule::RedundantVia {
+                        layer,
+                        min_count: u16::try_from(min_count).expect("checked against the ceiling"),
+                        within: length(spec, "within")?,
                     }
-                    let within = length(spec, "within")?;
-                    set.redundant_via.rule.push(spec.id);
-                    set.redundant_via.layer.push(layer(spec, 0));
-                    set.redundant_via
-                        .min_count
-                        .push(u16::try_from(min_count).expect("checked against the ceiling"));
-                    set.redundant_via.within.push(within);
                 }
-                22 => {
-                    debug_assert_eq!(KINDS[kind], "via_array_spacing");
-                    layers(spec, 1)?;
-                    // Zero is a legal threshold — it makes every cluster an
-                    // array — so this one is not checked for positivity.
-                    let array_threshold = count(spec, "array_threshold", u32::from(u16::MAX))?;
-                    let limit = length(spec, "limit")?;
-                    set.via_array_spacing.rule.push(spec.id);
-                    set.via_array_spacing.layer.push(layer(spec, 0));
-                    set.via_array_spacing
-                        .array_threshold
-                        .push(u16::try_from(array_threshold).expect("checked against the ceiling"));
-                    set.via_array_spacing.limit.push(limit);
-                }
-                23 => {
-                    debug_assert_eq!(KINDS[kind], "multi_patterning");
-                    layers(spec, 1)?;
-                    let colors = count(spec, "colors", u32::from(u8::MAX))?;
-                    if colors == 0 {
-                        return Err(DrcError::NonPositiveLimit {
-                            rule: name_of(spec.id),
-                            limit: 0,
-                        });
+                "via_array_spacing" => {
+                    let layer = one(spec)?;
+                    // Zero is legal: it makes every cluster an array.
+                    let threshold = count(spec, "array_threshold", u16::MAX.into())?;
+                    Rule::ViaArraySpacing {
+                        layer,
+                        array_threshold: u16::try_from(threshold).expect("checked"),
+                        limit: length(spec, "limit")?,
                     }
-                    let color_spacing = length(spec, "color_spacing")?;
-                    set.multi_patterning.rule.push(spec.id);
-                    set.multi_patterning.layer.push(layer(spec, 0));
-                    set.multi_patterning
-                        .colors
-                        .push(u8::try_from(colors).expect("checked against the ceiling"));
-                    set.multi_patterning.color_spacing.push(color_spacing);
                 }
-                // Unreachable via `KINDS`, but fail closed rather than panic: a
-                // twenty-fifth name with no arm here would otherwise be filed
-                // nowhere and reported as checked.
-                _ => {
-                    return Err(DrcError::UnknownKind {
-                        rule: name_of(spec.id),
-                        kind: name_of(spec.kind),
-                    })
+                "multi_patterning" => {
+                    let layer = one(spec)?;
+                    let colors = positive(spec, count(spec, "colors", u8::MAX.into())?)?;
+                    Rule::MultiPatterning {
+                        layer,
+                        colors: u8::try_from(colors).expect("checked against the ceiling"),
+                        color_spacing: length(spec, "color_spacing")?,
+                    }
                 }
-            }
+                other => {
+                    assert!(
+                        !KINDS.contains(&other),
+                        "KINDS names {other} but it has no arm"
+                    );
+                    continue;
+                }
+            };
+            set.rules.push((spec.id, rule));
         }
-
-        // Every row this crate spells is filed; other domains' rows are skipped
-        // above and excluded from the count.
-        debug_assert_eq!(
-            set.rule_count(),
-            rules
-                .spec
-                .iter()
-                .filter(|spec| kind_id.contains(&Some(spec.kind)))
-                .count(),
-            "a deck row was filed under no kind, so a configured rule would never run"
-        );
         Ok(set)
     }
 
-    /// How many rule rows the set holds, across every table.
-    ///
-    /// The number of [`RuleRun`] rows [`RuleSet::run`] will produce.
+    /// The number of `RuleRun` rows [`RuleSet::run`] produces.
     pub fn rule_count(&self) -> usize {
-        self.min_width.len()
-            + self.max_width.len()
-            + self.min_edge_length.len()
-            + self.notch.len()
-            + self.min_spacing.len()
-            + self.min_spacing_diff.len()
-            + self.eol_spacing.len()
-            + self.prl_spacing.len()
-            + self.corner_to_corner.len()
-            + self.wide_dependent_spacing.len()
-            + self.min_area.len()
-            + self.min_enclosed_area.len()
-            + self.cheesing.len()
-            + self.density.len()
-            + self.min_enclosure.len()
-            + self.asymmetric_enclosure.len()
-            + self.min_extension.len()
-            + self.overlap.len()
-            + self.max_distance_to_tap.len()
-            + self.off_grid.len()
-            + self.angle.len()
-            + self.redundant_via.len()
-            + self.via_array_spacing.len()
-            + self.multi_patterning.len()
+        self.rules.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.rule_count() == 0
-    }
-
-    /// Run every configured rule.
-    ///
-    /// `out` and `runs` are cleared here — the one place they are, since the
-    /// transforms themselves append — and `runs` gains exactly
-    /// [`RuleSet::rule_count`] rows, left in dispatch order.
-    ///
-    /// Infallible: geometry a rule cannot handle is that rule's
-    /// [`Outcome::Refused`](crate::report::Outcome::Refused) row, not the
-    /// run's failure. Everything that could fail the whole run already failed
-    /// in [`RuleSet::from_deck`].
+    /// Run every rule; `out` and `runs` are cleared first, then `runs` gains one
+    /// row per rule, in rule order.
     pub fn run(
         &self,
         design: Design<'_>,
-        scratch: &mut Scratch,
+        s: &mut Scratch,
         out: &mut Violations,
         runs: &mut Vec<RuleRun>,
     ) {
-        // The one place either container is cleared. Column by column because
-        // the table is `SoA` and has no `clear`; capacity is kept.
-        out.rule.clear();
-        out.layer.clear();
-        out.severity.clear();
-        out.at.clear();
-        out.measured.clear();
-        out.limit.clear();
-        out.shape_a.clear();
-        out.shape_b.clear();
+        *out = Violations::default();
         runs.clear();
-        debug_assert!(out.is_empty(), "run started over a table it did not clear");
-
-        let expected = self.rule_count();
-
-        dispatch! { self, design, scratch, out, runs,
-            min_width => width::check_min_width,
-            max_width => width::check_max_width,
-            min_edge_length => width::check_min_edge_length,
-            notch => width::check_notch,
-
-            min_spacing => spacing::check_min_spacing,
-            min_spacing_diff => spacing::check_min_spacing_diff,
-            eol_spacing => spacing::check_eol_spacing,
-            prl_spacing => spacing::check_prl_spacing,
-            corner_to_corner => spacing::check_corner_to_corner,
-            wide_dependent_spacing => spacing::check_wide_dependent_spacing,
-
-            min_area => area::check_min_area,
-            min_enclosed_area => area::check_min_enclosed_area,
-            cheesing => area::check_cheesing,
-            density => area::check_density,
-
-            min_enclosure => overlay::check_min_enclosure,
-            asymmetric_enclosure => overlay::check_asymmetric_enclosure,
-            min_extension => overlay::check_min_extension,
-            overlap => overlay::check_overlap,
-            max_distance_to_tap => overlay::check_max_distance_to_tap,
-
-            off_grid => grid::check_off_grid,
-            angle => grid::check_angle,
-
-            redundant_via => via::check_redundant_via,
-            via_array_spacing => via::check_via_array_spacing,
-
-            multi_patterning => patterning::check_multi_patterning,
+        let store = design.store;
+        for &(id, rule) in &self.rules {
+            let before = out.len();
+            let (outcome, examined) = match rule {
+                Rule::MinWidth { layer, limit } => {
+                    width::facing(store, id, layer, limit, true, true, s, out)
+                }
+                Rule::MaxWidth { layer, limit } => {
+                    width::facing(store, id, layer, limit, true, false, s, out)
+                }
+                Rule::Notch { layer, limit } => {
+                    width::facing(store, id, layer, limit, false, true, s, out)
+                }
+                Rule::MinEdgeLength { layer, limit } => {
+                    width::min_edge_length(store, id, layer, limit, s, out)
+                }
+                Rule::MinSpacing { layer, limit } => {
+                    spacing::min_spacing(store, id, layer, limit, s, out)
+                }
+                Rule::MinSpacingDiff { a, b, limit } => {
+                    spacing::min_spacing_diff(store, id, a, b, limit, s, out)
+                }
+                Rule::EolSpacing {
+                    layer,
+                    eol_width,
+                    limit,
+                } => spacing::eol_spacing(store, id, layer, eol_width, limit, s, out),
+                Rule::PrlSpacing {
+                    layer,
+                    prl_threshold,
+                    limit,
+                } => spacing::prl_spacing(store, id, layer, prl_threshold, limit, s, out),
+                Rule::CornerToCorner { layer, limit } => {
+                    spacing::corner_to_corner(store, id, layer, limit, s, out)
+                }
+                Rule::WideDependentSpacing {
+                    layer,
+                    width_threshold,
+                    limit,
+                } => spacing::wide_dependent(store, id, layer, width_threshold, limit, s, out),
+                Rule::MinArea { layer, limit } => area::min_area(store, id, layer, limit, s, out),
+                Rule::MinEnclosedArea { layer, limit } => {
+                    area::min_enclosed_area(store, id, layer, limit, s, out)
+                }
+                Rule::Cheesing {
+                    layer,
+                    max_unslotted,
+                } => area::cheesing(store, id, layer, max_unslotted, s, out),
+                Rule::Density {
+                    layer,
+                    window,
+                    step,
+                    limit,
+                    sense,
+                } => area::density(store, id, layer, window, step, limit, sense, s, out),
+                Rule::MinEnclosure {
+                    outer,
+                    inner,
+                    limit,
+                } => overlay::enclosure(store, id, outer, inner, limit, false, s, out),
+                Rule::AsymmetricEnclosure {
+                    outer,
+                    inner,
+                    min_one_side,
+                } => overlay::enclosure(store, id, outer, inner, min_one_side, true, s, out),
+                Rule::MinExtension {
+                    layer,
+                    reference,
+                    limit,
+                } => overlay::min_extension(store, id, layer, reference, limit, s, out),
+                Rule::Overlap { a, b, limit } => overlay::overlap(store, id, a, b, limit, s, out),
+                Rule::MaxDistanceToTap { well, tap, limit } => {
+                    overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
+                }
+                Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, out),
+                Rule::Angle { allowed } => grid::angle(store, id, allowed, out),
+                Rule::RedundantVia {
+                    layer,
+                    min_count,
+                    within,
+                } => via::redundant_via(store, id, layer, min_count, within, s, out),
+                Rule::ViaArraySpacing {
+                    layer,
+                    array_threshold,
+                    limit,
+                } => via::via_array_spacing(store, id, layer, array_threshold, limit, s, out),
+                Rule::MultiPatterning {
+                    layer,
+                    colors,
+                    color_spacing,
+                } => patterning::multi_patterning(store, id, layer, colors, color_spacing, s, out),
+            };
+            record_run(runs, out, before, id, outcome, examined);
         }
-
-        // One run row per configured rule row. A missing line above is silent
-        // in the violation table and is exactly what this catches.
-        debug_assert_eq!(
-            runs.len(),
-            expected,
-            "a configured rule produced no run row, which reads as a clean design"
-        );
     }
 }
 
-/// Every rule kind this crate implements, as the deck spells it.
-///
-/// Order matches the field order of [`RuleSet`], so a failure naming index `i`
-/// names `KINDS[i]`. Disjoint from `crate::erc::ruleset::KINDS`: one deck row
-/// must be filed by exactly one domain.
+/// Every rule kind this crate implements, as the deck spells it. Disjoint from
+/// `crate::erc::ruleset::KINDS`.
 pub const KINDS: [&str; 24] = [
     "min_width",
     "max_width",
@@ -568,321 +561,3 @@ pub const KINDS: [&str; 24] = [
     "via_array_spacing",
     "multi_patterning",
 ];
-
-/// The rule-dispatch adapter test: every table holding a row produces exactly
-/// one run row attributable to it.
-#[cfg(test)]
-mod tests {
-    use super::RuleSet;
-    use crate::drc::rules::grid::Direction;
-    use crate::drc::{Design, Scratch};
-    use crate::report::{LimitSense, Outcome, RuleRun, Violations};
-    use crate::topology::{DeviceTable, NetTable};
-    use gpurify_geom::Evaluator;
-    use gpurify_geom::{GeometryStore, LayerId};
-    use gpurify_ingest::StrId;
-    use gpurify_testgen::dbu;
-    use gpurify_testgen::shapes::{area, hole, rect, LayoutBuilder};
-
-    const A: LayerId = LayerId(0);
-    const B: LayerId = LayerId(1);
-
-    use super::KINDS;
-
-    fn id(kind: &str) -> StrId {
-        let index = KINDS
-            .iter()
-            .position(|&name| name == kind)
-            .expect("every rule id in this module names a kind");
-        StrId(u32::try_from(index).expect("twenty-four kinds"))
-    }
-
-    /// Geometry chosen so no rule has an empty population to look at.
-    fn populated_design() -> GeometryStore {
-        let mut layout = LayoutBuilder::new(2);
-        layout.rect(A, 0, 0, 200, 1_000);
-        layout.rect(A, 300, 0, 500, 1_000);
-        layout.rect(A, 600, 0, 800, 200);
-        layout.rect(A, 600, 300, 800, 500);
-        layout.rect(A, 2_000, 2_000, 2_100, 2_100);
-        layout.rect(A, 2_200, 2_200, 2_300, 2_300);
-        layout.shape(A, &rect(5_000, 5_000, 5_400, 5_400));
-        layout.shape(A, &hole(5_100, 5_100, 5_300, 5_300));
-        layout.rect(B, -100, -100, 600, 1_100);
-        layout.rect(B, 3_000, 3_000, 3_100, 3_100);
-        let (store, _ids) = layout.finish();
-        store
-    }
-
-    /// One row in every one of the twenty-four tables, each with a distinct id.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one statement group per rule kind; splitting it would hide the \
-                  fact that this fixture is an exhaustive inventory of RuleSet's \
-                  fields, which is the only reason it exists"
-    )]
-    fn full_deck() -> RuleSet {
-        let mut set = RuleSet::default();
-
-        set.min_width.rule.push(id("min_width"));
-        set.min_width.layer.push(A);
-        set.min_width.limit.push(dbu(1));
-
-        set.max_width.rule.push(id("max_width"));
-        set.max_width.layer.push(A);
-        set.max_width.limit.push(dbu(1_000_000));
-
-        set.min_edge_length.rule.push(id("min_edge_length"));
-        set.min_edge_length.layer.push(A);
-        set.min_edge_length.limit.push(dbu(1));
-
-        set.notch.rule.push(id("notch"));
-        set.notch.layer.push(A);
-        set.notch.limit.push(dbu(1));
-
-        set.min_spacing.rule.push(id("min_spacing"));
-        set.min_spacing.layer.push(A);
-        set.min_spacing.limit.push(dbu(100));
-
-        set.min_spacing_diff.rule.push(id("min_spacing_diff"));
-        set.min_spacing_diff.a.push(A);
-        set.min_spacing_diff.b.push(B);
-        set.min_spacing_diff.limit.push(dbu(100));
-
-        set.eol_spacing.rule.push(id("eol_spacing"));
-        set.eol_spacing.layer.push(A);
-        set.eol_spacing.eol_width.push(dbu(300));
-        set.eol_spacing.limit.push(dbu(100));
-
-        set.prl_spacing.rule.push(id("prl_spacing"));
-        set.prl_spacing.layer.push(A);
-        set.prl_spacing.prl_threshold.push(dbu(1));
-        set.prl_spacing.limit.push(dbu(100));
-
-        set.corner_to_corner.rule.push(id("corner_to_corner"));
-        set.corner_to_corner.layer.push(A);
-        set.corner_to_corner.limit.push(dbu(200));
-
-        set.wide_dependent_spacing
-            .rule
-            .push(id("wide_dependent_spacing"));
-        set.wide_dependent_spacing.layer.push(A);
-        set.wide_dependent_spacing.width_threshold.push(dbu(1));
-        set.wide_dependent_spacing.limit.push(dbu(100));
-
-        set.min_area.rule.push(id("min_area"));
-        set.min_area.layer.push(A);
-        set.min_area.limit.push(area(1));
-
-        set.min_enclosed_area.rule.push(id("min_enclosed_area"));
-        set.min_enclosed_area.layer.push(A);
-        set.min_enclosed_area.limit.push(area(1));
-
-        set.cheesing.rule.push(id("cheesing"));
-        set.cheesing.layer.push(A);
-        set.cheesing.max_unslotted.push(area(1_000_000_000));
-
-        set.density.rule.push(id("density"));
-        set.density.layer.push(A);
-        set.density.window.push(dbu(1_000));
-        set.density.step.push(dbu(500));
-        set.density.limit.push(1.0);
-        set.density.sense.push(LimitSense::Maximum);
-
-        set.min_enclosure.rule.push(id("min_enclosure"));
-        set.min_enclosure.outer.push(B);
-        set.min_enclosure.inner.push(A);
-        set.min_enclosure.limit.push(dbu(1));
-
-        set.asymmetric_enclosure
-            .rule
-            .push(id("asymmetric_enclosure"));
-        set.asymmetric_enclosure.outer.push(B);
-        set.asymmetric_enclosure.inner.push(A);
-        set.asymmetric_enclosure.min_one_side.push(dbu(1));
-
-        set.min_extension.rule.push(id("min_extension"));
-        set.min_extension.layer.push(A);
-        set.min_extension.reference.push(B);
-        set.min_extension.limit.push(dbu(1));
-
-        set.overlap.rule.push(id("overlap"));
-        set.overlap.a.push(A);
-        set.overlap.b.push(B);
-        set.overlap.limit.push(dbu(1));
-
-        set.max_distance_to_tap.rule.push(id("max_distance_to_tap"));
-        set.max_distance_to_tap.well.push(A);
-        set.max_distance_to_tap.tap.push(B);
-        set.max_distance_to_tap.limit.push(dbu(1_000_000));
-
-        set.off_grid.rule.push(id("off_grid"));
-        set.off_grid.pitch.push(dbu(1));
-
-        set.angle.rule.push(id("angle"));
-        set.angle.allowed_start.push(0);
-        set.angle.allowed_len.push(2);
-        set.angle.allowed.push(Direction { dx: 1, dy: 0 });
-        set.angle.allowed.push(Direction { dx: 0, dy: 1 });
-
-        set.redundant_via.rule.push(id("redundant_via"));
-        set.redundant_via.layer.push(A);
-        set.redundant_via.min_count.push(1);
-        set.redundant_via.within.push(dbu(200));
-
-        set.via_array_spacing.rule.push(id("via_array_spacing"));
-        set.via_array_spacing.layer.push(A);
-        set.via_array_spacing.array_threshold.push(0);
-        set.via_array_spacing.limit.push(dbu(200));
-
-        set.multi_patterning.rule.push(id("multi_patterning"));
-        set.multi_patterning.layer.push(A);
-        set.multi_patterning.colors.push(3);
-        set.multi_patterning.color_spacing.push(dbu(100));
-
-        set
-    }
-
-    struct Fixture {
-        store: GeometryStore,
-        derived: Evaluator,
-        nets: NetTable,
-        devices: DeviceTable,
-    }
-
-    impl Fixture {
-        fn new() -> Self {
-            Self {
-                store: populated_design(),
-                derived: Evaluator::default(),
-                nets: NetTable::default(),
-                devices: DeviceTable::default(),
-            }
-        }
-
-        fn design(&self) -> Design<'_> {
-            Design {
-                store: &self.store,
-                derived: &self.derived,
-                nets: &self.nets,
-                devices: &self.devices,
-            }
-        }
-    }
-
-    #[test]
-    fn every_configured_rule_produces_exactly_one_attributable_run_row() {
-        let fixture = Fixture::new();
-        let set = full_deck();
-        let mut scratch = Scratch::default();
-        let mut out = Violations::default();
-        let mut runs: Vec<RuleRun> = Vec::new();
-
-        set.run(fixture.design(), &mut scratch, &mut out, &mut runs);
-
-        assert_eq!(set.rule_count(), KINDS.len());
-        assert_eq!(
-            runs.len(),
-            set.rule_count(),
-            "the run must account for every rule it loaded"
-        );
-
-        let mut seen: Vec<u32> = runs.iter().map(|run| run.rule.0).collect();
-        seen.sort_unstable();
-        let expected: Vec<u32> =
-            (0..u32::try_from(KINDS.len()).expect("twenty-four kinds")).collect();
-        assert_eq!(
-            seen, expected,
-            "every table with a row must be dispatched exactly once"
-        );
-    }
-
-    #[test]
-    fn every_geometric_rule_ran_over_a_population_it_could_measure() {
-        let fixture = Fixture::new();
-        let set = full_deck();
-        let mut scratch = Scratch::default();
-        let mut out = Violations::default();
-        let mut runs: Vec<RuleRun> = Vec::new();
-
-        set.run(fixture.design(), &mut scratch, &mut out, &mut runs);
-
-        for (index, kind) in KINDS.iter().enumerate() {
-            let wanted = StrId(u32::try_from(index).expect("twenty-four kinds"));
-            let run = runs
-                .iter()
-                .find(|run| run.rule == wanted)
-                .unwrap_or_else(|| panic!("{kind} produced no run row"));
-
-            assert_eq!(run.outcome, Outcome::Ran, "{kind} did not run");
-            assert!(
-                run.examined > 0,
-                "{kind} ran but examined nothing, so nothing about it was exercised"
-            );
-        }
-    }
-
-    #[test]
-    fn a_run_clears_the_outputs_it_was_handed() {
-        let fixture = Fixture::new();
-        let set = full_deck();
-        let mut scratch = Scratch::default();
-        let mut out = Violations::default();
-        let mut runs: Vec<RuleRun> = vec![RuleRun {
-            rule: StrId(9_999),
-            outcome: Outcome::Refused,
-            examined: 5,
-            violations: 3,
-        }];
-        out.rule.push(StrId(9_999));
-
-        set.run(fixture.design(), &mut scratch, &mut out, &mut runs);
-
-        assert_eq!(runs.len(), set.rule_count());
-        assert!(
-            runs.iter().all(|run| run.rule != StrId(9_999)),
-            "a stale run row survived into a new run"
-        );
-        assert!(
-            out.rule.iter().all(|&rule| rule != StrId(9_999)),
-            "a stale violation survived into a new run"
-        );
-    }
-
-    #[test]
-    fn an_empty_rule_set_holds_nothing_and_dispatches_nothing() {
-        let fixture = Fixture::new();
-        let set = RuleSet::default();
-        assert!(set.is_empty());
-        assert_eq!(set.rule_count(), 0);
-
-        let mut scratch = Scratch::default();
-        let mut out = Violations::default();
-        let mut runs: Vec<RuleRun> = Vec::new();
-        set.run(fixture.design(), &mut scratch, &mut out, &mut runs);
-
-        assert!(runs.is_empty());
-        assert!(out.rule.is_empty());
-    }
-
-    #[test]
-    fn the_rule_count_is_the_sum_across_every_table() {
-        let mut set = RuleSet::default();
-        assert!(set.is_empty());
-
-        set.min_width.rule.push(StrId(0));
-        set.min_width.layer.push(A);
-        set.min_width.limit.push(dbu(10));
-        assert!(!set.is_empty());
-        assert_eq!(set.rule_count(), 1);
-
-        set.off_grid.rule.push(StrId(1));
-        set.off_grid.pitch.push(dbu(5));
-        assert_eq!(set.rule_count(), 2);
-
-        set.min_width.rule.push(StrId(2));
-        set.min_width.layer.push(B);
-        set.min_width.limit.push(dbu(20));
-        assert_eq!(set.rule_count(), 3);
-    }
-}

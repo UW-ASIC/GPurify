@@ -14,12 +14,11 @@
 
 use crate::common;
 
-use common::{Env, Sink, A, RULE};
-use gpurify_check::drc::rules::via::{
-    check_redundant_via, check_via_array_spacing, RedundantViaTable, ViaArraySpacingTable,
-};
+use common::{Sink, A, RULE};
+use gpurify_check::drc::Rule;
 use gpurify_check::report::{Measurement, Severity, Violation};
 use gpurify_geom::PolyId;
+use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
     assert_clean, assert_has_violation, assert_only_violation, assert_rule_ran, dbu,
@@ -42,13 +41,15 @@ fn cut_row(count: i64, pitch: i64) -> (gpurify_geom::GeometryStore, Vec<PolyId>)
 
 // ------------------------------------------------------------ redundant_via
 
-fn redundant_via_table(min_count: u16, within: i64) -> RedundantViaTable {
-    let mut table = RedundantViaTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.min_count.push(min_count);
-    table.within.push(dbu(within));
-    table
+fn redundant_via_table(min_count: u16, within: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::RedundantVia {
+            layer: A,
+            min_count: min_count,
+            within: dbu(within),
+        },
+    )]
 }
 
 /// Oracle: construct-from-answer. A single cut has a neighbourhood population
@@ -71,15 +72,8 @@ fn a_lone_cut_is_reported_at_the_cut_with_the_count_it_had() {
         Amount::Count(2),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_redundant_via(
-        env.design(&case.store),
-        &redundant_via_table(2, 500),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &redundant_via_table(2, 500));
 
     assert_only_violation(&sink.out, &case.expected);
     let run = assert_rule_ran(&sink.runs, RULE);
@@ -94,28 +88,15 @@ fn a_lone_cut_is_reported_at_the_cut_with_the_count_it_had() {
 /// centre-based reading would call the gap 400 and get both answers wrong.
 #[test]
 fn a_neighbourhood_radius_reaches_exactly_as_far_as_it_says_and_no_further() {
-    let env = Env::default();
     let (store, cuts) = cut_row(2, 400);
 
     let mut reaching = Sink::default();
-    check_redundant_via(
-        env.design(&store),
-        &redundant_via_table(2, 300),
-        &mut reaching.scratch,
-        &mut reaching.out,
-        &mut reaching.runs,
-    );
+    reaching.run(&store, &redundant_via_table(2, 300));
     assert_clean(&reaching.runs, &reaching.out, RULE);
     assert_eq!(assert_rule_ran(&reaching.runs, RULE).examined, 2);
 
     let mut short = Sink::default();
-    check_redundant_via(
-        env.design(&store),
-        &redundant_via_table(2, 299),
-        &mut short.scratch,
-        &mut short.out,
-        &mut short.runs,
-    );
+    short.run(&store, &redundant_via_table(2, 299));
     assert_eq!(
         short.out.rule.len(),
         2,
@@ -144,28 +125,15 @@ fn a_neighbourhood_radius_reaches_exactly_as_far_as_it_says_and_no_further() {
 /// radius only reaches their immediate neighbour.
 #[test]
 fn a_triple_via_requirement_counts_the_cut_itself_among_the_three() {
-    let env = Env::default();
     let (store, cuts) = cut_row(3, 400);
 
     let mut wide = Sink::default();
-    check_redundant_via(
-        env.design(&store),
-        &redundant_via_table(3, 700),
-        &mut wide.scratch,
-        &mut wide.out,
-        &mut wide.runs,
-    );
+    wide.run(&store, &redundant_via_table(3, 700));
     assert_clean(&wide.runs, &wide.out, RULE);
     assert_eq!(assert_rule_ran(&wide.runs, RULE).examined, 3);
 
     let mut narrow = Sink::default();
-    check_redundant_via(
-        env.design(&store),
-        &redundant_via_table(3, 300),
-        &mut narrow.scratch,
-        &mut narrow.out,
-        &mut narrow.runs,
-    );
+    narrow.run(&store, &redundant_via_table(3, 300));
     assert_eq!(
         narrow.out.rule.len(),
         2,
@@ -189,13 +157,15 @@ fn a_triple_via_requirement_counts_the_cut_itself_among_the_three() {
 
 // -------------------------------------------------------- via_array_spacing
 
-fn via_array_table(array_threshold: u16, limit: i64) -> ViaArraySpacingTable {
-    let mut table = ViaArraySpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.array_threshold.push(array_threshold);
-    table.limit.push(dbu(limit));
-    table
+fn via_array_table(array_threshold: u16, limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::ViaArraySpacing {
+            layer: A,
+            array_threshold: array_threshold,
+            limit: dbu(limit),
+        },
+    )]
 }
 
 /// Oracle: construct-from-answer. Four cuts at a pitch of 200 leave gaps of 100
@@ -205,17 +175,10 @@ fn via_array_table(array_threshold: u16, limit: i64) -> ViaArraySpacingTable {
 /// the three adjacent pairs the rule actually judged.
 #[test]
 fn pairs_inside_an_array_exactly_at_the_limit_are_clean() {
-    let env = Env::default();
     let (store, _cuts) = cut_row(4, 200);
     let mut sink = Sink::default();
 
-    check_via_array_spacing(
-        env.design(&store),
-        &via_array_table(3, 100),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &via_array_table(3, 100));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(
@@ -231,17 +194,10 @@ fn pairs_inside_an_array_exactly_at_the_limit_are_clean() {
 /// reporting the cluster loses it.
 #[test]
 fn every_short_pair_inside_an_array_is_its_own_violation_at_its_own_gap() {
-    let env = Env::default();
     let (store, cuts) = cut_row(4, 200);
     let mut sink = Sink::default();
 
-    check_via_array_spacing(
-        env.design(&store),
-        &via_array_table(3, 101),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &via_array_table(3, 101));
 
     assert_eq!(sink.out.rule.len(), 3);
     for index in 0..3usize {
@@ -269,17 +225,10 @@ fn every_short_pair_inside_an_array_is_its_own_violation_at_its_own_gap() {
 /// `examined` count falling to zero is what distinguishes that from a pass.
 #[test]
 fn a_cluster_exactly_at_the_array_threshold_is_not_yet_an_array() {
-    let env = Env::default();
     let (store, _cuts) = cut_row(4, 200);
     let mut sink = Sink::default();
 
-    check_via_array_spacing(
-        env.design(&store),
-        &via_array_table(4, 101),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &via_array_table(4, 101));
 
     assert_eq!(sink.runs.len(), 1);
     assert_eq!(sink.runs[0].examined, 0);

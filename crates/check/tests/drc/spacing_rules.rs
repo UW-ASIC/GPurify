@@ -1,24 +1,13 @@
-//! Spacing family: the six rules built on a candidate-pair prune, and
-//! `parallel_run_length`.
-//!
-//! Two things are asserted everywhere in this file and nowhere else in the
-//! crate. The first is the coordinate: a spacing violation is reported at the
-//! midpoint of the gap, so a rule that finds the right pair and points at the
-//! wrong shape fails here. The second is `examined`, which counts *candidate
-//! pairs* rather than shapes — the number that says whether the prune did
-//! anything, and the number a fail-open prune would quietly shrink.
+//! Spacing family: the six rules built on a candidate-pair prune. Every case
+//! asserts the report point (midpoint of the gap) and `examined` (the population
+//! the rule judged, which a fail-open prune would quietly shrink).
 
 use crate::common;
 
-use common::{Env, Sink, A, B, RULE};
-use gpurify_check::drc::rules::spacing::{
-    check_corner_to_corner, check_eol_spacing, check_min_spacing, check_min_spacing_diff,
-    check_prl_spacing, check_wide_dependent_spacing, parallel_run_length, CornerToCornerTable,
-    EolSpacingTable, MinSpacingDiffTable, MinSpacingTable, PrlSpacingTable,
-    WideDependentSpacingTable,
-};
+use common::{Sink, A, B, RULE};
+use gpurify_check::drc::Rule;
 use gpurify_check::report::{Measurement, Outcome, Severity, Violation};
-use gpurify_geom::Bbox;
+use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
     assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point,
@@ -43,12 +32,14 @@ fn spaced(gap: i64, limit: i64) -> ViolationCase {
     )
 }
 
-fn min_spacing_table(limit: i64) -> MinSpacingTable {
-    let mut table = MinSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(dbu(limit));
-    table
+fn min_spacing_table(limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::MinSpacing {
+            layer: A,
+            limit: dbu(limit),
+        },
+    )]
 }
 
 // -------------------------------------------------------------- min_spacing
@@ -59,16 +50,9 @@ fn min_spacing_table(limit: i64) -> MinSpacingTable {
 #[test]
 fn a_gap_one_unit_under_the_limit_is_reported_at_the_midpoint_of_that_gap() {
     let case = spaced(100, 101);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_min_spacing(
-        env.design(&case.store),
-        &min_spacing_table(101),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &min_spacing_table(101));
 
     assert_only_violation(&sink.out, &case.expected);
     let run = assert_rule_ran(&sink.runs, RULE);
@@ -87,16 +71,9 @@ fn a_gap_one_unit_under_the_limit_is_reported_at_the_midpoint_of_that_gap() {
 #[test]
 fn a_gap_exactly_at_the_limit_is_clean_and_the_pair_was_still_examined() {
     let case = spaced(100, 100);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_min_spacing(
-        env.design(&case.store),
-        &min_spacing_table(100),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &min_spacing_table(100));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -113,15 +90,8 @@ fn two_shapes_of_one_merged_figure_have_no_gap_to_violate() {
     layout.rect(A, 300, 0, 700, 200);
     let (store, _ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_min_spacing(
-        env.design(&store),
-        &min_spacing_table(1_000),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &min_spacing_table(1_000));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(
@@ -155,21 +125,17 @@ fn a_cross_layer_gap_one_unit_under_the_limit_is_reported_at_the_midpoint() {
         Amount::Length(101),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = MinSpacingDiffTable::default();
-    table.rule.push(RULE);
-    table.a.push(A);
-    table.b.push(B);
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::MinSpacingDiff {
+            a: A,
+            b: B,
+            limit: dbu(101),
+        },
+    )];
 
-    check_min_spacing_diff(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_only_violation(&sink.out, &case.expected);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -195,21 +161,17 @@ fn a_cross_layer_gap_exactly_at_the_limit_is_clean_and_the_pair_was_examined() {
         Amount::Length(100),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = MinSpacingDiffTable::default();
-    table.rule.push(RULE);
-    table.a.push(A);
-    table.b.push(B);
-    table.limit.push(dbu(100));
+    let table = vec![(
+        RULE,
+        Rule::MinSpacingDiff {
+            a: A,
+            b: B,
+            limit: dbu(100),
+        },
+    )];
 
-    check_min_spacing_diff(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -230,21 +192,17 @@ fn two_layers_that_meet_have_a_spacing_of_zero_and_have_failed() {
     let upper = layout.rect(B, 100, 100, 200, 200);
     let (store, ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = MinSpacingDiffTable::default();
-    table.rule.push(RULE);
-    table.a.push(A);
-    table.b.push(B);
-    table.limit.push(dbu(50));
+    let table = vec![(
+        RULE,
+        Rule::MinSpacingDiff {
+            a: A,
+            b: B,
+            limit: dbu(50),
+        },
+    )];
 
-    check_min_spacing_diff(
-        env.design(&store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &table);
 
     assert_only_violation(
         &sink.out,
@@ -283,21 +241,17 @@ fn an_end_of_line_one_unit_under_its_enlarged_limit_is_reported_at_the_gap() {
         Amount::Length(101),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = EolSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.eol_width.push(dbu(41));
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::EolSpacing {
+            layer: A,
+            eol_width: dbu(41),
+            limit: dbu(101),
+        },
+    )];
 
-    check_eol_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_only_violation(&sink.out, &case.expected);
     assert_eq!(
@@ -328,21 +282,17 @@ fn a_qualifying_end_of_line_exactly_at_its_limit_is_clean() {
         Amount::Length(100),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = EolSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.eol_width.push(dbu(41));
-    table.limit.push(dbu(100));
+    let table = vec![(
+        RULE,
+        Rule::EolSpacing {
+            layer: A,
+            eol_width: dbu(41),
+            limit: dbu(100),
+        },
+    )];
 
-    check_eol_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -371,21 +321,17 @@ fn an_edge_exactly_at_the_end_of_line_width_is_not_an_end_of_line() {
         Amount::Length(101),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = EolSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.eol_width.push(dbu(40));
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::EolSpacing {
+            layer: A,
+            eol_width: dbu(40),
+            limit: dbu(101),
+        },
+    )];
 
-    check_eol_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_eq!(sink.runs.len(), 1);
     assert_eq!(sink.runs[0].outcome, Outcome::Ran);
@@ -402,22 +348,18 @@ fn an_edge_exactly_at_the_end_of_line_width_is_not_an_end_of_line() {
 #[test]
 fn a_pair_at_the_parallel_run_threshold_is_held_to_the_larger_limit() {
     let case = spaced(100, 101);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = PrlSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.prl_threshold.push(dbu(400));
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::PrlSpacing {
+            layer: A,
+            prl_threshold: dbu(400),
+            limit: dbu(101),
+        },
+    )];
 
-    check_prl_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_only_violation(&sink.out, &case.expected);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -430,22 +372,18 @@ fn a_pair_at_the_parallel_run_threshold_is_held_to_the_larger_limit() {
 #[test]
 fn a_run_one_unit_short_of_the_threshold_is_not_judged_by_this_rule() {
     let case = spaced(100, 101);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = PrlSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.prl_threshold.push(dbu(401));
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::PrlSpacing {
+            layer: A,
+            prl_threshold: dbu(401),
+            limit: dbu(101),
+        },
+    )];
 
-    check_prl_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_eq!(sink.runs.len(), 1);
     assert_eq!(sink.runs[0].outcome, Outcome::Ran);
@@ -456,22 +394,18 @@ fn a_run_one_unit_short_of_the_threshold_is_not_judged_by_this_rule() {
 #[test]
 fn a_qualifying_run_exactly_at_the_larger_limit_is_clean() {
     let case = spaced(100, 100);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = PrlSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.prl_threshold.push(dbu(400));
-    table.limit.push(dbu(100));
+    let table = vec![(
+        RULE,
+        Rule::PrlSpacing {
+            layer: A,
+            prl_threshold: dbu(400),
+            limit: dbu(100),
+        },
+    )];
 
-    check_prl_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -485,7 +419,7 @@ fn a_qualifying_run_exactly_at_the_larger_limit_is_clean() {
 /// triangle — an arbitrary offset would give an irrational distance and the
 /// test would be asserting on the rounding rather than on the measurement.
 ///
-/// `check_corner_to_corner` reports at the *midpoint* of the segment joining
+/// `corner_to_corner` reports at the *midpoint* of the segment joining
 /// the closest vertex pair — the crate-wide convention, and what
 /// `testgen::violation` already computes, so the expected point comes straight
 /// from `case.expected` with no override. A midpoint has no pair order; the
@@ -508,20 +442,16 @@ fn a_diagonal_corner_gap_is_measured_exactly_on_a_pythagorean_offset() {
         Amount::Length(101),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = CornerToCornerTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::CornerToCorner {
+            layer: A,
+            limit: dbu(101),
+        },
+    )];
 
-    check_corner_to_corner(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_only_violation(&sink.out, &case.expected);
     assert_eq!(
@@ -548,20 +478,16 @@ fn a_diagonal_corner_gap_exactly_at_the_limit_is_clean() {
         Amount::Length(100),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = CornerToCornerTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(dbu(100));
+    let table = vec![(
+        RULE,
+        Rule::CornerToCorner {
+            layer: A,
+            limit: dbu(100),
+        },
+    )];
 
-    check_corner_to_corner(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -574,21 +500,17 @@ fn a_diagonal_corner_gap_exactly_at_the_limit_is_clean() {
 #[test]
 fn a_pair_that_overlaps_on_an_axis_is_not_a_corner_to_corner_situation() {
     let case = spaced(100, 101);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = CornerToCornerTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(dbu(1_000));
+    let table = vec![(
+        RULE,
+        Rule::CornerToCorner {
+            layer: A,
+            limit: dbu(1_000),
+        },
+    )];
 
-    check_corner_to_corner(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_eq!(sink.runs.len(), 1);
     assert_eq!(sink.runs[0].outcome, Outcome::Ran);
@@ -604,22 +526,18 @@ fn a_pair_that_overlaps_on_an_axis_is_not_a_corner_to_corner_situation() {
 #[test]
 fn a_pair_containing_a_wide_shape_is_held_to_the_wide_limit() {
     let case = spaced(100, 101);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = WideDependentSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.width_threshold.push(dbu(200));
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::WideDependentSpacing {
+            layer: A,
+            width_threshold: dbu(200),
+            limit: dbu(101),
+        },
+    )];
 
-    check_wide_dependent_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_only_violation(&sink.out, &case.expected);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -631,22 +549,18 @@ fn a_pair_containing_a_wide_shape_is_held_to_the_wide_limit() {
 #[test]
 fn a_qualifying_wide_pair_exactly_at_the_wide_limit_is_clean() {
     let case = spaced(100, 100);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = WideDependentSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.width_threshold.push(dbu(200));
-    table.limit.push(dbu(100));
+    let table = vec![(
+        RULE,
+        Rule::WideDependentSpacing {
+            layer: A,
+            width_threshold: dbu(200),
+            limit: dbu(100),
+        },
+    )];
 
-    check_wide_dependent_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -659,84 +573,21 @@ fn a_qualifying_wide_pair_exactly_at_the_wide_limit_is_clean() {
 #[test]
 fn a_shape_one_unit_narrower_than_the_wide_threshold_does_not_trigger_the_rule() {
     let case = spaced(100, 101);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    let mut table = WideDependentSpacingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.width_threshold.push(dbu(201));
-    table.limit.push(dbu(101));
+    let table = vec![(
+        RULE,
+        Rule::WideDependentSpacing {
+            layer: A,
+            width_threshold: dbu(201),
+            limit: dbu(101),
+        },
+    )];
 
-    check_wide_dependent_spacing(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_eq!(sink.runs.len(), 1);
     assert_eq!(sink.runs[0].outcome, Outcome::Ran);
     assert_eq!(sink.runs[0].examined, 0);
     assert!(sink.out.rule.is_empty());
-}
-
-// ------------------------------------------------------- parallel_run_length
-
-fn bbox(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Bbox {
-    Bbox {
-        xlo: dbu(xlo),
-        ylo: dbu(ylo),
-        xhi: dbu(xhi),
-        yhi: dbu(yhi),
-    }
-}
-
-/// Oracle: closed form. Two boxes separated along x face each other across x,
-/// so the run length is the overlap of their y projections — `[0, 100]` against
-/// `[40, 200]` is 60. The same pair rotated a quarter turn gives the same
-/// answer, which is the check that the axis is chosen from the geometry rather
-/// than hard-coded.
-#[test]
-fn parallel_run_length_is_the_projection_overlap_on_the_facing_axis() {
-    assert_eq!(
-        parallel_run_length(bbox(0, 0, 10, 100), bbox(20, 40, 30, 200)),
-        dbu(60)
-    );
-    assert_eq!(
-        parallel_run_length(bbox(0, 0, 100, 10), bbox(40, 20, 200, 30)),
-        dbu(60)
-    );
-}
-
-/// Oracle: closed form. Two boxes overlapping on neither axis face each other
-/// across neither, so they have no parallel run at all — which is exactly the
-/// corner-to-corner case, and the reason that rule exists separately.
-#[test]
-fn a_diagonally_offset_pair_has_no_parallel_run() {
-    assert_eq!(
-        parallel_run_length(bbox(0, 0, 10, 10), bbox(20, 20, 30, 30)),
-        dbu(0)
-    );
-}
-
-/// Oracle: law. Two shapes run alongside each other for the same distance
-/// whichever one is named first, for any pair. An implementation that projected
-/// only the first operand would pass the fixed cases above and fail here.
-#[test]
-fn parallel_run_length_is_symmetric_in_its_two_operands() {
-    let cases = [
-        (bbox(0, 0, 10, 100), bbox(20, 40, 30, 200)),
-        (bbox(-500, -30, -400, 70), bbox(-100, 0, 0, 1_000)),
-        (bbox(0, 0, 10, 10), bbox(20, 20, 30, 30)),
-        (bbox(0, 0, 100, 10), bbox(40, 20, 200, 30)),
-    ];
-    for (a, b) in cases {
-        assert_eq!(
-            parallel_run_length(a, b),
-            parallel_run_length(b, a),
-            "the run length of {a:?} against {b:?} depends on the operand order"
-        );
-    }
 }
