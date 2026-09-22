@@ -1,7 +1,7 @@
 //! Net labels: their ordering contract and their binding to polygons.
 
-use gpurify_geom::{LayerId, PolyId};
 use gpurify_geom::StrTable;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::Provenance;
 use gpurify_testgen::LayoutBuilder;
 

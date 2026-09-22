@@ -676,7 +676,12 @@ fn read_dialect(
         let got = term_start[row + 1] - term_start[row];
         if got != want {
             let name = b.strings.resolve(b.out.instance_name[row]).to_string();
-            return Err(NetlistError::TerminalCount(b.instance_span[row], name, got, want));
+            return Err(NetlistError::TerminalCount(
+                b.instance_span[row],
+                name,
+                got,
+                want,
+            ));
         }
     }
     Ok(b.out)

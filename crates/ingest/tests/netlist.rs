@@ -3,9 +3,7 @@
 
 use gpurify_geom::StrTable;
 use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::netlist::{
-    spectre, spice, Netlist, NetlistError, RefNetId, SubcktId,
-};
+use gpurify_ingest::netlist::{spectre, spice, Netlist, NetlistError, RefNetId, SubcktId};
 
 /// Two subcircuits, three devices, and terminal and parameter runs of three
 /// different lengths — including an empty one, which is the case a CSR column
@@ -61,8 +59,8 @@ fn two_subcircuits(strings: &mut StrTable) -> Netlist {
 
 /// Device `row`'s terminal nets, in card order.
 fn terminals_of(netlist: &Netlist, row: usize) -> &[RefNetId] {
-    &netlist.terminal_net
-        [netlist.device_terminal_start[row] as usize..netlist.device_terminal_start[row + 1] as usize]
+    &netlist.terminal_net[netlist.device_terminal_start[row] as usize
+        ..netlist.device_terminal_start[row + 1] as usize]
 }
 
 /// Oracle: construct-from-answer. `top` is "the one nothing else instantiates",

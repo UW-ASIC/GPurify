@@ -295,11 +295,26 @@ pub mod gds {
             )
         }
 
-        /// `self` applied after `child`.
-        fn compose(self, child: Self) -> Self {
+        /// `self` applied to a point. `None` on i64 overflow.
+        fn apply(self, x: i64, y: i64) -> Option<(i64, i64)> {
             let (a, b, c, e) = self.linear();
-            Self {
-                mag: self.mag * child.mag,
+            let x2 = a
+                .checked_mul(x)?
+                .checked_add(b.checked_mul(y)?)?
+                .checked_add(self.dx)?;
+            let y2 = c
+                .checked_mul(x)?
+                .checked_add(e.checked_mul(y)?)?
+                .checked_add(self.dy)?;
+            Some((x2, y2))
+        }
+
+        /// `self` applied after `child`. `None` on i64 overflow: nested magnifications
+        /// multiply, and a wrapped value could pass the coordinate bound.
+        fn compose(self, child: Self) -> Option<Self> {
+            let (dx, dy) = self.apply(child.dx, child.dy)?;
+            Some(Self {
+                mag: self.mag.checked_mul(child.mag)?,
                 flip: self.flip ^ child.flip,
                 // A reflecting parent reverses the child's turn as it commutes past it.
                 quadrant: if self.flip {
@@ -307,9 +322,9 @@ pub mod gds {
                 } else {
                     (self.quadrant + child.quadrant) & 3
                 },
-                dx: a * child.dx + b * child.dy + self.dx,
-                dy: c * child.dx + e * child.dy + self.dy,
-            }
+                dx,
+                dy,
+            })
         }
     }
 
@@ -782,9 +797,12 @@ pub mod gds {
         // The centreline leaves the coordinate columns; the outline replaces it.
         let first = vert_start as usize;
         stroke.pts.clear();
-        stroke
-            .pts
-            .extend(lib.xs[first..].iter().copied().zip(lib.ys[first..].iter().copied()));
+        stroke.pts.extend(
+            lib.xs[first..]
+                .iter()
+                .copied()
+                .zip(lib.ys[first..].iter().copied()),
+        );
         lib.xs.truncate(first);
         lib.ys.truncate(first);
 
@@ -1091,7 +1109,10 @@ pub mod gds {
                                 + i64::from(r) * reference.row_step.1,
                             ..reference.place
                         };
-                        self.visit(reference.child, at.compose(placed))?;
+                        let at = at
+                            .compose(placed)
+                            .ok_or(LayoutError::UnsupportedTransform)?;
+                        self.visit(reference.child, at)?;
                     }
                 }
             }
@@ -1114,9 +1135,9 @@ pub mod gds {
             let Some(layer) = self.layer(label.layer, label.texttype)? else {
                 return Ok(());
             };
-            let (a, b, c, e) = at.linear();
-            let x = a * label.x + b * label.y + at.dx;
-            let y = c * label.x + e * label.y + at.dy;
+            let (x, y) = at
+                .apply(label.x, label.y)
+                .ok_or(LayoutError::UnsupportedTransform)?;
             for v in [x, y] {
                 if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
                     return Err(LayoutError::CoordinateOutOfRange(v));
@@ -1140,13 +1161,12 @@ pub mod gds {
             };
             let lib = self.lib;
             let run = elem.vert_start as usize..(elem.vert_start + elem.vert_len) as usize;
-            let (a, b, c, e) = at.linear();
 
             self.rx.clear();
             self.ry.clear();
             let mut worst = 0u64;
             for (&x, &y) in lib.xs[run.clone()].iter().zip(&lib.ys[run]) {
-                let (x, y) = (a * x + b * y + at.dx, c * x + e * y + at.dy);
+                let (x, y) = at.apply(x, y).ok_or(LayoutError::UnsupportedTransform)?;
                 worst = worst.max(x.unsigned_abs()).max(y.unsigned_abs());
                 self.rx.push(x);
                 self.ry.push(y);
@@ -1164,14 +1184,22 @@ pub mod gds {
                 return Err(LayoutError::CoordinateOutOfRange(out));
             }
             self.tx.clear();
-            self.tx.extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
+            self.tx
+                .extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
             self.ty.clear();
-            self.ty.extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
+            self.ty
+                .extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
 
             // A mirror (det < 0) turns a counter-clockwise ring clockwise, which
             // `validate_layer_into` reads as a hole. Reverse `[1..]` so vertex 0,
             // the report point, stays put.
-            debug_assert_eq!(a * e - b * c < 0, at.flip, "det < 0 iff flip");
+            debug_assert!(
+                {
+                    let (a, b, c, e) = at.linear();
+                    (a * e - b * c < 0) == at.flip
+                },
+                "det < 0 iff flip"
+            );
             if at.flip {
                 self.tx[1..].reverse();
                 self.ty[1..].reverse();
@@ -1181,7 +1209,6 @@ pub mod gds {
         }
     }
 }
-
 
 /// Reader tests, and the GDSII round trip. Input is assembled byte by byte from
 /// the Calma stream format, so nothing here reads a value out of the code under
@@ -1660,7 +1687,8 @@ mod tests {
             )],
         );
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(
             layout.store.poly_count(),
             2,
@@ -1844,6 +1872,38 @@ mod tests {
         let once = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         let twice = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
+    }
+
+    /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
+    /// the vertex transform (three). Either is a refusal, never a wrapped coordinate.
+    #[test]
+    fn a_magnification_chain_past_i64_is_refused_rather_than_wrapped() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let mag = |cell| [sref(cell, 0, 0.0, 0, 0).magnified(1_000_000)];
+        let (d, c, b, a) = (mag("D"), mag("C"), mag("B"), mag("A"));
+        let square = [first_layer_square()];
+        for levels in [3, 4] {
+            let chain: [(&str, &[Boundary], &[Ref]); 5] = [
+                ("TOP", &[], &a),
+                ("A", &[], &b),
+                ("B", &[], if levels == 4 { &c } else { &d }),
+                ("C", &[], &d),
+                ("D", &square, &[]),
+            ];
+            let cells = if levels == 4 {
+                &chain[..]
+            } else {
+                &[chain[0], chain[1], chain[2], chain[4]][..]
+            };
+            match gds::read(&gds_hierarchy(cells), &deck, UnknownLayers::Reject) {
+                Err(LayoutError::UnsupportedTransform) => {}
+                other => panic!(
+                    "{levels} levels of 1e6 produced {:?}",
+                    other.map(|l| l.store.poly_count())
+                ),
+            }
+        }
     }
 
     /// The cell every mirroring test below instantiates: a counter-clockwise
@@ -2546,10 +2606,7 @@ mod tests {
             }
 
             // (c)
-            let (before, after) = (
-                &base.provenance.placed,
-                &wrapped.provenance.placed,
-            );
+            let (before, after) = (&base.provenance.placed, &wrapped.provenance.placed);
             assert_eq!(after.len(), before.len(), "{what}: the label count changed");
             for (row, (b, a)) in before.iter().zip(after).enumerate() {
                 let (x, y) = w.apply(b.at.x.raw(), b.at.y.raw());

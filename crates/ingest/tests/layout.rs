@@ -45,7 +45,10 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
 /// read as an empty layout, which would report clean.
 #[test]
 fn a_file_in_no_known_format_is_refused_rather_than_read_as_an_empty_layout() {
-    match read("not-a-layout.bin", b"this is not a layout file, it is a sentence") {
+    match read(
+        "not-a-layout.bin",
+        b"this is not a layout file, it is a sentence",
+    ) {
         Err(LayoutError::UnknownFormat) => {}
         other => panic!("a file in no known format produced {other:?}"),
     }

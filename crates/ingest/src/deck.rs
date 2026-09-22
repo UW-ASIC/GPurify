@@ -445,7 +445,10 @@ fn param_value(
 /// is separated out: a `NaN` is not off the grid, it is off everything.
 fn to_limit(nm: f64, grid: Grid, rule_id: &str) -> Result<Dbu, DeckError> {
     grid.to_dbu(Qty::<Length, NANO>::new(nm)).map_err(|why| {
-        #[expect(clippy::cast_possible_truncation, reason = "the message only names the limit")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the message only names the limit"
+        )]
         let stated = nm as i64;
         match why {
             GridError::NotFinite => {
