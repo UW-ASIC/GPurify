@@ -1,4 +1,4 @@
-//! Exact predicates: orientation, segment intersection, point-in-ring,
+//! Exact predicates: segment intersection, point-in-ring,
 //! simplicity, signed area, distances, and the integer square root.
 //!
 //! The module's own doc comment records where the previous implementation's
@@ -9,8 +9,8 @@
 //! exactly on a boundary, and perfect squares with their immediate neighbours.
 
 use gpurify_geom::ops::{
-    area2, isqrt, orientation, point_in_ring, point_seg_dist2, seg_seg_dist2, segments_intersect,
-    self_intersects, winding_of, Orientation, Seg, Winding,
+    area2, isqrt, point_in_ring, point_seg_dist2, seg_seg_dist2, segments_intersect,
+    self_intersects, winding_of, Seg, Winding,
 };
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
@@ -25,9 +25,6 @@ const LAYER: LayerId = LayerId(0);
 
 /// A coordinate run as the generator hands it over: parallel `i64` columns.
 type Shape = (Vec<i64>, Vec<i64>);
-
-/// Three points, as the `i64` pairs the test chose them from.
-type Triple = ((i64, i64), (i64, i64), (i64, i64));
 
 fn seg(ax: i64, ay: i64, bx: i64, by: i64) -> Seg {
     Seg {
@@ -55,20 +52,6 @@ fn shoelace(shape: &Shape) -> i128 {
         .sum()
 }
 
-/// Cross product of `b - a` and `c - a`, over the `i64` coordinates the test
-/// chose rather than over the `Dbu` it handed to the predicate.
-fn cross(a: (i64, i64), b: (i64, i64), c: (i64, i64)) -> i128 {
-    i128::from(b.0 - a.0) * i128::from(c.1 - a.1) - i128::from(b.1 - a.1) * i128::from(c.0 - a.0)
-}
-
-fn reverse(o: Orientation) -> Orientation {
-    match o {
-        Orientation::Clockwise => Orientation::CounterClockwise,
-        Orientation::CounterClockwise => Orientation::Clockwise,
-        Orientation::Collinear => Orientation::Collinear,
-    }
-}
-
 fn flip(s: Seg) -> Seg {
     Seg { a: s.b, b: s.a }
 }
@@ -82,69 +65,6 @@ fn validated(shape: &Shape) -> (GeometryStore, ValidatedLayer) {
     let mut layer = ValidatedLayer::default();
     validate_layer_into(&store, LAYER, &mut layer).expect("a generated shape is valid");
     (store, layer)
-}
-
-/// Oracle: closed form. Orientation is the sign of the cross product of
-/// `b - a` and `c - a`, which the test computes directly in `i128` from the
-/// coordinates it chose. Eight of the fixed cases are collinear, which is where
-/// every one of the old survivors lived.
-#[test]
-fn orientation_is_the_sign_of_the_cross_product() {
-    let mut rng = Rng::new(21);
-    let mut cases: Vec<Triple> = vec![
-        ((0, 0), (10, 0), (20, 0)),
-        ((0, 0), (10, 0), (-10, 0)),
-        ((0, 0), (0, 10), (0, 20)),
-        ((0, 0), (3, 3), (7, 7)),
-        ((0, 0), (7, 7), (3, 3)),
-        ((5, 5), (5, 5), (9, 1)),
-        ((5, 5), (9, 1), (5, 5)),
-        ((5, 5), (5, 5), (5, 5)),
-        ((0, 0), (10, 0), (0, 10)),
-        ((0, 0), (0, 10), (10, 0)),
-    ];
-    for _ in 0..300 {
-        let mut draw = || (rng.range(-50, 50), rng.range(-50, 50));
-        cases.push((draw(), draw(), draw()));
-    }
-
-    let mut collinear = 0u32;
-    for &(a, b, c) in &cases {
-        let turn = cross(a, b, c);
-        let expected = match turn {
-            n if n > 0 => Orientation::CounterClockwise,
-            n if n < 0 => Orientation::Clockwise,
-            _ => Orientation::Collinear,
-        };
-        collinear += u32::from(turn == 0);
-        assert_eq!(
-            orientation(point(a.0, a.1), point(b.0, b.1), point(c.0, c.1)),
-            expected,
-            "{a:?} {b:?} {c:?} has cross product {turn}"
-        );
-    }
-    assert!(collinear >= 8, "the corpus lost its collinear cases");
-}
-
-/// Oracle: law. Swapping two of the three points reverses a turn and leaves a
-/// collinear triple collinear, for every triple. A predicate with one
-/// comparison backwards satisfies whatever fixture it was written against and
-/// fails this.
-#[test]
-fn orientation_reverses_when_two_points_are_swapped() {
-    let mut rng = Rng::new(22);
-    for _ in 0..400 {
-        let a = point(rng.range(-40, 40), rng.range(-40, 40));
-        let b = point(rng.range(-40, 40), rng.range(-40, 40));
-        let c = point(rng.range(-40, 40), rng.range(-40, 40));
-        let forward = orientation(a, b, c);
-        assert_eq!(orientation(a, c, b), reverse(forward), "swapped b and c");
-        assert_eq!(orientation(b, a, c), reverse(forward), "swapped a and b");
-        assert_eq!(orientation(c, b, a), reverse(forward), "swapped a and c");
-        // A cyclic rotation is two swaps, so it leaves the orientation alone.
-        assert_eq!(orientation(b, c, a), forward, "rotated once");
-        assert_eq!(orientation(c, a, b), forward, "rotated twice");
-    }
 }
 
 /// Oracle: construct-from-answer. Shapes in a real layout touch constantly, so

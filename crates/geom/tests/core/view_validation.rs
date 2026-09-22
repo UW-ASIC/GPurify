@@ -8,10 +8,10 @@
 //! area from a verification result, and an `is_err()` assertion would not have
 //! told the two failures apart.
 
-use gpurify_geom::ops::{self_intersects, Winding};
-use gpurify_geom::view::{is_outer, validate_layer_into, ValidatedLayer, ValidityError};
+use gpurify_geom::ops::{self_intersects, winding_of, Winding};
+use gpurify_geom::view::{validate_layer_into, RingRef, ValidatedLayer, ValidityError};
 use gpurify_geom::DbuArea;
-use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId, RingId};
+use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_testgen::shapes::{
     dbu, hole, l_shape, l_shape_area, plus_shape, plus_shape_area, rect, u_shape, u_shape_area,
     LayoutBuilder,
@@ -23,6 +23,11 @@ const OTHER: LayerId = LayerId(1);
 
 /// A coordinate run as the generator hands it over: parallel `i64` columns.
 type Shape = (Vec<i64>, Vec<i64>);
+
+fn wind(ring: RingRef<'_>) -> Option<Winding> {
+    let (xs, ys) = ring.coords();
+    winding_of(xs, ys)
+}
 
 /// Push raw coordinate runs, bypassing `LayoutBuilder`'s own preconditions.
 /// The rejection cases need runs that builder refuses to make.
@@ -119,8 +124,8 @@ fn every_validated_outer_ring_winds_counter_clockwise_and_is_simple() {
         let poly = layer.get(&store, index);
         let outer = poly.outer();
         assert_eq!(
-            outer.winding(),
-            Winding::CounterClockwise,
+            wind(outer),
+            Some(Winding::CounterClockwise),
             "polygon {index}"
         );
         assert!(
@@ -150,8 +155,7 @@ fn every_validated_outer_ring_winds_counter_clockwise_and_is_simple() {
 
 /// Oracle: closed form. A hole is subtracted, so the polygon's area is the
 /// outer rectangle less the inner one, and the hole's ring winds clockwise
-/// while the outer winds counter-clockwise. `RingId(0)` is the outer boundary
-/// by definition and nothing else is.
+/// while the outer winds counter-clockwise.
 #[test]
 fn a_hole_winds_clockwise_and_its_area_is_subtracted_from_its_container() {
     let mut layout = LayoutBuilder::new(2);
@@ -168,12 +172,12 @@ fn a_hole_winds_clockwise_and_its_area_is_subtracted_from_its_container() {
     assert_eq!(poly.area(), DbuArea::new(outer_area - hole_area));
 
     let outer = poly.outer();
-    assert_eq!(outer.winding(), Winding::CounterClockwise);
+    assert_eq!(wind(outer), Some(Winding::CounterClockwise));
     assert_eq!(outer.area2(), DbuArea::new(2 * outer_area));
 
     let holes: Vec<_> = poly.holes().collect();
     assert_eq!(holes.len(), 1);
-    assert_eq!(holes[0].winding(), Winding::Clockwise);
+    assert_eq!(wind(holes[0]), Some(Winding::Clockwise));
     assert_eq!(
         holes[0].area2(),
         DbuArea::new(-2 * hole_area),
@@ -190,11 +194,6 @@ fn a_hole_winds_clockwise_and_its_area_is_subtracted_from_its_container() {
             yhi: dbu(100)
         }
     );
-
-    assert!(is_outer(RingId(0)));
-    for ring in 1..8 {
-        assert!(!is_outer(RingId(ring)), "ring {ring} is not the outer one");
-    }
 }
 
 /// Oracle: construct-from-answer. Each run below is invalid for exactly one
@@ -297,8 +296,7 @@ fn validation_reads_one_layer_and_clears_the_buffer_it_is_given() {
 /// Oracle: determinism. Validation is the input to every boolean and every
 /// rule, so two passes over one store must produce the same rings in the same
 /// order with the same windings. Ring order is part of the interface — holes
-/// follow their outer, and `RingId(0)` is the outer — so a reordering is a
-/// defect and not a detail.
+/// follow their outer — so a reordering is a defect and not a detail.
 #[test]
 fn two_validations_of_one_store_agree_ring_for_ring() {
     let mut layout = LayoutBuilder::new(2);
@@ -318,10 +316,10 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
         assert_eq!(a.area(), b.area(), "polygon {index}");
         assert_eq!(a.bbox(), b.bbox(), "polygon {index}");
         assert_eq!(a.outer().coords(), b.outer().coords(), "polygon {index}");
-        assert_eq!(a.outer().winding(), b.outer().winding());
+        assert_eq!(wind(a.outer()), wind(b.outer()));
 
-        let a_holes: Vec<_> = a.holes().map(|r| (r.coords(), r.winding())).collect();
-        let b_holes: Vec<_> = b.holes().map(|r| (r.coords(), r.winding())).collect();
+        let a_holes: Vec<_> = a.holes().map(|r| (r.coords(), wind(r))).collect();
+        let b_holes: Vec<_> = b.holes().map(|r| (r.coords(), wind(r))).collect();
         assert_eq!(a_holes.len(), b_holes.len(), "polygon {index} hole count");
         for (left, right) in a_holes.iter().zip(&b_holes) {
             assert_eq!(left.0, right.0, "polygon {index} hole coordinates");

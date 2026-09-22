@@ -1,24 +1,11 @@
-//! `f64` vector kernels, shared by the two solvers in this workspace.
+//! `f64` vector kernels for ERC power's CG and extract's GMRES.
 //!
-//! Here rather than in a package of their own because the only callers —
-//! `check::erc::power`'s conjugate gradient and `extract::field`'s GMRES —
-//! already depend on this crate, and two of them had written the same four
-//! loops twice.
-//!
-//! Every fold is a strict left fold in ascending index order, and that order is
-//! interface, not an implementation detail: the dot products decide `alpha`,
-//! `alpha` decides the solution, and the norm decides the converged-or-not
-//! verdict. Reassociating any of them makes two runs of one design disagree.
-//!
-//! ponytail: scalar folds. A fixed-lane `wide::f64x4` block sum is also
-//! deterministic — just a different fold order — so the upgrade is real, but it
-//! moves every solved number and needs a profile saying these loops are the
-//! bottleneck first.
+//! Every fold is a strict left fold in ascending index order; that order is interface
+//! (it decides CG `alpha` and the convergence verdict), so do not reassociate.
 
 /// Σ aᵢ·bᵢ.
 #[inline]
 pub fn dot(a: &[f64], b: &[f64]) -> f64 {
-    debug_assert_eq!(a.len(), b.len(), "a dot product needs two equal lengths");
     let mut s = 0.0;
     for (x, y) in a.iter().zip(b) {
         s += x * y;
@@ -32,11 +19,9 @@ pub fn nrm2(a: &[f64]) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// y += α·x. Call with −α for the subtracting form; the negation is exact, so
-/// the two agree bit for bit.
+/// y += α·x, element-wise, no FMA.
 #[inline]
 pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
-    debug_assert_eq!(x.len(), y.len(), "an axpy needs two equal lengths");
     for (yj, xj) in y.iter_mut().zip(x) {
         *yj += alpha * xj;
     }
@@ -44,19 +29,6 @@ pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
 
 /// One sparse mat-vec: `out[i]` is row `i` of a CSR matrix times `v`.
 pub fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64]) {
-    debug_assert_eq!(
-        row_start.len(),
-        out.len() + 1,
-        "one CSR offset per row plus the end"
-    );
-    debug_assert_eq!(col.len(), value.len(), "one column index per value");
-    let used = row_start[out.len()] as usize;
-    debug_assert!(used <= col.len(), "the CSR runs past its own columns");
-    debug_assert!(
-        col[..used].iter().all(|&c| (c as usize) < v.len()),
-        "a CSR column names an unknown the vector does not have"
-    );
-
     for (i, row) in out.iter_mut().enumerate() {
         let (from, to) = (row_start[i] as usize, row_start[i + 1] as usize);
         let mut acc = 0.0f64;

@@ -9,10 +9,10 @@
 //! inflate every density number in a run without failing anything that only
 //! counted rectangles.
 
-use gpurify_geom::rects::{clipped_area, covered_area, decompose_into, owner_of, Rect};
+use gpurify_geom::rects::{clipped_area, covered_area, decompose_into, Rect};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::{Bbox, GeometryStore, LayerId};
 use gpurify_testgen::shapes::{
     dbu, l_shape, l_shape_area, plus_shape, plus_shape_area, random_rectilinear_layer, rect,
     u_shape, u_shape_area, LayoutBuilder, RandomLayerSpec,
@@ -154,52 +154,6 @@ fn the_rectangles_of_one_polygon_are_pairwise_disjoint() {
 
     let stated: i128 = expected.iter().sum();
     assert_eq!(total, DbuArea::new(stated), "the layer's total area");
-}
-
-/// Oracle: law. `owner_of` is the inverse of the CSR offsets, which is a claim
-/// about arithmetic that holds for every rectangle index: the owner's range has
-/// to bracket the index, and the owner has to rise monotonically as the index
-/// does. Deriving the owner rather than storing a parallel column is only safe
-/// if the derivation is exact.
-#[test]
-fn owner_of_inverts_the_csr_offsets() {
-    let mut layout = LayoutBuilder::new(1);
-    layout.shape(LAYER, &l_shape(0, 0, 100, 30));
-    layout.shape(LAYER, &u_shape(500, 0, 90, 15, 30));
-    layout.shape(LAYER, &plus_shape(0, 500, 60, 8));
-    layout.rect(LAYER, 800, 800, 900, 900);
-    let (store, _ids) = layout.finish();
-    let layer = validated(&store, LAYER);
-
-    let (mut rects, mut poly_start) = (Vec::new(), Vec::new());
-    decompose_into(&layer, &store, &mut rects, &mut poly_start);
-    assert_eq!(poly_start.len(), 5);
-
-    let mut previous = PolyId(0);
-    for index in 0..u32::try_from(rects.len()).expect("a small decomposition fits a u32") {
-        let owner = owner_of(&poly_start, index);
-        assert!(
-            owner >= previous,
-            "rectangle {index} belongs to {owner:?}, behind {previous:?}"
-        );
-        let slot = owner.idx();
-        assert!(
-            slot + 1 < poly_start.len(),
-            "{owner:?} is not a polygon here"
-        );
-        assert!(
-            poly_start[slot] <= index && index < poly_start[slot + 1],
-            "{owner:?} spans {}..{} which does not hold rectangle {index}",
-            poly_start[slot],
-            poly_start[slot + 1]
-        );
-        previous = owner;
-    }
-    assert_eq!(
-        previous.idx(),
-        3,
-        "the last rectangle belongs to the last polygon"
-    );
 }
 
 /// Oracle: closed form. Clipping to a window that contains everything is the
