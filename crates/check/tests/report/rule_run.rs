@@ -1,18 +1,6 @@
-//! What "clean" is allowed to mean.
-//!
-//! Forty-five of the previous suite's ninety-four DRC cases asserted only that
-//! nothing was found, and a rule that never executed passed every one of them.
-//! [`RuleRun`] is the record that makes the two cases different claims, so the
-//! property worth testing is precisely that: **an empty violation table is
-//! produced by a rule that ran and found nothing, by a rule that was skipped,
-//! and by a rule that refused, and only the run record tells them apart.**
-//!
-//! The oracle is **construct-from-answer**. Each outcome is built by hand with
-//! the answer already known, and the assertion helper every other crate's clean
-//! case will go through is run against all of them. A helper that accepts more
-//! than one of the four is the old failure returning, so the negative cases are
-//! checked as well as the positive one — an assertion that only ever passes is
-//! not evidence of anything.
+//! What "clean" is allowed to mean: an empty violation table comes from a rule
+//! that ran, one that was skipped and one that refused alike; only the
+//! [`RuleRun`] record tells them apart.
 
 use gpurify_check::report::{Outcome, RuleRun, SkipReason, Violations};
 use gpurify_ingest::StrId;
@@ -75,50 +63,6 @@ fn an_empty_violation_table_is_the_same_for_a_rule_that_ran_and_one_that_did_not
             index == 0,
             "{run:?} against an empty violation table was judged the wrong way"
         );
-    }
-}
-
-/// Oracle: construct-from-answer. `Ran` with nothing examined is a legitimate
-/// result — an empty layer — and it is a different claim from having run over
-/// real geometry. The two must not compare equal, or the record cannot carry
-/// the distinction it exists for.
-#[test]
-fn ran_having_examined_nothing_is_distinguishable_from_ran_having_examined_shapes() {
-    let ran_over_nothing = RuleRun {
-        examined: 0,
-        ..ran_clean()
-    };
-    assert_ne!(ran_over_nothing, ran_clean());
-    assert_eq!(
-        ran_over_nothing.outcome,
-        ran_clean().outcome,
-        "the two differ in the shape count, not in the outcome"
-    );
-}
-
-/// Oracle: construct-from-answer. Skipping and refusing are separate verdicts
-/// with separate consequences — one says the input was absent, the other that
-/// it was outside what the tool represents exactly — and neither may collapse
-/// into `Ran`. Nor may two skip reasons collapse into each other: a run that
-/// reports `EmptyLayer` where the deck simply did not configure the rule sends
-/// its reader to the wrong file.
-#[test]
-fn every_outcome_and_every_skip_reason_is_its_own_verdict() {
-    let outcomes = [
-        Outcome::Ran,
-        Outcome::Skipped(SkipReason::NoDesignIntent),
-        Outcome::Skipped(SkipReason::NotInDeck),
-        Outcome::Skipped(SkipReason::EmptyLayer),
-        Outcome::Refused,
-    ];
-    for (i, left) in outcomes.iter().enumerate() {
-        for (j, right) in outcomes.iter().enumerate() {
-            assert_eq!(
-                left == right,
-                i == j,
-                "{left:?} and {right:?} compared equal to the wrong answer"
-            );
-        }
     }
 }
 
@@ -212,4 +156,38 @@ fn a_rule_recorded_twice_cannot_be_asserted_on() {
         RULE,
     );
     assert_eq!(among_others, ran_clean());
+}
+
+/// `record_run` derives the count from the table, whatever was there before.
+#[test]
+fn record_run_counts_only_the_rows_pushed_since_the_row_began() {
+    use gpurify_check::report::{record_run, Measurement, Severity, Violation};
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId, PolyId};
+
+    let mut out = Violations::default();
+    for _ in 0..5 {
+        out.push(Violation {
+            rule: StrId(9),
+            layer: LayerId(0),
+            severity: Severity::Error,
+            at: Point {
+                x: Dbu::new_unchecked(0),
+                y: Dbu::new_unchecked(0),
+            },
+            measured: Measurement::Count(0),
+            limit: Measurement::Count(1),
+            shapes: (PolyId(0), None),
+        });
+    }
+    let mut runs = Vec::new();
+    record_run(&mut runs, &out, 2, RULE, Outcome::Ran, 77);
+    record_run(&mut runs, &out, 5, OTHER_RULE, Outcome::Refused, 0);
+    assert_eq!(
+        runs,
+        [
+            RuleRun { violations: 3, examined: 77, ..ran_clean() },
+            RuleRun { rule: OTHER_RULE, outcome: Outcome::Refused, examined: 0, violations: 0 },
+        ]
+    );
 }

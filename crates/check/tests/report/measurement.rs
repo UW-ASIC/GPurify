@@ -1,15 +1,5 @@
 //! Which side of a limit is a violation, and what stops a `NaN` passing every
-//! rule.
-//!
-//! The oracle is **closed form**: a comparison against a limit has an analytic
-//! answer for every dimension, so the tests are a table of below, equal and
-//! above against both senses, stated once and walked over every variant. There
-//! is nothing to construct and no geometry to generate.
-//!
-//! The equality row is the one that matters most. `Minimum` with `<` where
-//! `<=` was meant flags every shape drawn exactly at its limit, which is most
-//! of a real layout, and a suite built from strictly-below and strictly-above
-//! cases never notices.
+//! rule. Oracle: closed form, below / equal / above against both senses.
 
 use gpurify_check::report::{LimitSense, Measurement};
 use gpurify_geom::Qty;

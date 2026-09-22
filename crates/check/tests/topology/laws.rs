@@ -1,22 +1,6 @@
-//! Metamorphic laws over the whole of extraction.
-//!
-//! Oracle throughout: **law**. Every test here transforms one hand-placed
-//! layout and asserts that the extraction changes in the one way the transform
-//! licenses and in no other. That is the oracle `topology` is shortest of — the
-//! rest of `tests/` is construct-from-answer over `layout_from_netlist`, which
-//! can only say "this generator and this extractor agree", and cannot say
-//! anything at all about geometry the generator never emits.
-//!
-//! The transform is applied **at the store level**, never by re-ingesting a
-//! transformed layout file. A mirrored `SREF` drags in the flattener's
-//! `at.flip` ring reversal and `derived::validate_layer_into`'s winding-derived
-//! hole bit, neither of which is part of any claim below: the subject is
-//! `extract_nets_into` and `recognise_into` over a store, and nothing else.
-//!
-//! `port::bind_ports_into` is deliberately out of scope. It reads
-//! `provenance.labels()`, a `Vec<(PolyId, StrId)>` carrying no coordinate, so
-//! every geometric law is trivially true of it and asserting one would be
-//! coverage theatre.
+//! Metamorphic laws over the whole of extraction: each test transforms one
+//! hand-placed layout at the store level and asserts the extraction changes
+//! only as the transform licenses.
 
 use gpurify_check::topology::device::{recognise_into, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{
