@@ -115,8 +115,8 @@ fn kirchhoffs_current_law_holds_at_every_node_of_a_solved_grid() {
 
         for (node, &into_node) in net_in.iter().enumerate() {
             if grid
-                .fixed_voltage(u32::try_from(node).expect("small"))
-                .is_some()
+                .source_node
+                .contains(&u32::try_from(node).expect("small"))
             {
                 // A pad sources whatever the rest of the grid draws; the law
                 // there is the global one, checked separately below.
@@ -235,12 +235,8 @@ fn a_pad_sits_at_exactly_the_voltage_it_was_fixed_at() {
         millivolts(1_800.0),
         "the pad moved off its fixed voltage"
     );
-    assert_eq!(grid.fixed_voltage(0), Some(millivolts(1_800.0)));
-    assert_eq!(
-        grid.fixed_voltage(1),
-        None,
-        "node 1 is an unknown, not a pad"
-    );
+    assert_eq!(grid.source_node, vec![0], "node 1 is an unknown, not a pad");
+    assert_eq!(grid.source_voltage, vec![millivolts(1_800.0)]);
 }
 
 /// Oracle: construct-from-answer, on the fail-closed path. With no pad the
@@ -359,7 +355,6 @@ fn solving_one_grid_twice_produces_identical_columns() {
     let first = solve(&grid);
     let second = solve(&grid);
 
-    assert_eq!(first.iterations, second.iterations);
     assert_eq!(
         first.relative_residual.to_bits(),
         second.relative_residual.to_bits()

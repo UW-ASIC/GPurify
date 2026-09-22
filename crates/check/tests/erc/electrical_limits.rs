@@ -431,7 +431,6 @@ fn reliability_table(id: StrId, duty_cycle: f64, cap_mv: f64) -> ReliabilityTabl
     ReliabilityTable {
         head: head(id),
         required_lifetime_hours: vec![87_600.0],
-        mechanism: vec![StrId(900)],
         reference_lifetime_hours: vec![10_000.0],
         reference_stress: vec![millivolts(2_000.0)],
         stress_exponent: vec![4.0],

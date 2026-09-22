@@ -1,11 +1,9 @@
 //! Role masks, and the one pass that builds them.
 //!
 //! `NetFacts` is read by six rules and built once, so an error here is six
-//! wrong verdicts with one cause. Two oracles apply. The mask algebra is
-//! checked by law over its whole domain — eight bits is small enough to
-//! enumerate every pair, so "for all masks" is literal rather than sampled. The
-//! fold itself is checked construct-from-answer: a layout emitted from a
-//! netlist must classify back to that netlist's terminals.
+//! wrong verdicts with one cause. The fold is checked construct-from-answer: a
+//! layout emitted from a netlist must classify back to that netlist's
+//! terminals.
 
 use gpurify_check::erc::facts::{classify_nets_into, NetFacts, RoleMask};
 use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
@@ -25,24 +23,10 @@ const NAMED: [(TerminalRole, RoleMask); 7] = [
     (TerminalRole::Collector, RoleMask::COLLECTOR),
 ];
 
-/// Every single-role mask, for exhaustive law checking.
-fn every_mask() -> Vec<RoleMask> {
-    let mut masks: Vec<RoleMask> = NAMED.iter().map(|&(_, mask)| mask).collect();
-    masks.push(RoleMask::PIN);
-    masks.push(RoleMask::NONE);
-    masks.push(RoleMask::ANY);
-    // A few combinations, so the laws are exercised on masks with more than one
-    // bit set as well as on the atoms.
-    masks.push(RoleMask::GATE.union(RoleMask::SOURCE));
-    masks.push(RoleMask::DRAIN.union(RoleMask::PIN));
-    masks.push(RoleMask::ANY.without(RoleMask::GATE));
-    masks
-}
-
 /// Oracle: construct-from-answer. `RoleMask::of` is the single place the
 /// role-to-bit mapping is written down, so the mapping is the thing to pin: the
 /// seven named roles land on the seven named constants, on seven distinct
-/// single bits, and every one of them is inside `ANY`.
+/// single bits.
 ///
 /// The distinctness half is what makes this more than a restatement of the
 /// constants — a mapping that sent two roles to one bit would make
@@ -59,10 +43,6 @@ fn each_named_terminal_role_maps_to_its_own_single_bit() {
             expected.0.count_ones(),
             1,
             "{role:?} must be one bit, not {expected:?}"
-        );
-        assert!(
-            RoleMask::ANY.contains(expected),
-            "ANY must contain {role:?}"
         );
     }
 
@@ -84,8 +64,8 @@ fn each_named_terminal_role_maps_to_its_own_single_bit() {
     );
     assert_eq!(
         bits.iter().fold(0u8, |all, &bit| all | bit),
-        RoleMask::ANY.0,
-        "the eight role bits together must be ANY, or a mask carries a bit no role sets"
+        0xFF,
+        "the eight role bits together must be all eight bits"
     );
 }
 
@@ -102,87 +82,6 @@ fn every_pin_index_collapses_to_the_one_pin_bit() {
             RoleMask::PIN,
             "Pin({index}) must carry no more meaning than Pin(0)"
         );
-    }
-}
-
-/// Oracle: law, over the whole domain. Union is a set union: commutative,
-/// idempotent, and a superset of both operands. Eight bits means these hold for
-/// every pair rather than for the pairs a fixture happened to pick.
-#[test]
-fn union_is_commutative_idempotent_and_contains_both_operands() {
-    for a in every_mask() {
-        assert_eq!(a.union(a), a, "{a:?} union itself is itself");
-        assert_eq!(a.union(RoleMask::NONE), a, "NONE is the identity of union");
-        assert_eq!(a.union(RoleMask::ANY), RoleMask::ANY);
-        for b in every_mask() {
-            let joined = a.union(b);
-            assert_eq!(
-                joined,
-                b.union(a),
-                "union of {a:?} and {b:?} is not commutative"
-            );
-            assert!(joined.contains(a) && joined.contains(b));
-        }
-    }
-}
-
-/// Oracle: law, over the whole domain. `without` removes exactly the bits it
-/// names and nothing else: the result stays inside the original, shares no bit
-/// with what was removed, and putting the removed bits back recovers the
-/// original.
-#[test]
-fn without_removes_exactly_the_bits_it_names() {
-    for a in every_mask() {
-        assert_eq!(a.without(RoleMask::NONE), a);
-        assert_eq!(a.without(RoleMask::ANY), RoleMask::NONE);
-        for b in every_mask() {
-            let stripped = a.without(b);
-            assert!(a.contains(stripped), "{stripped:?} left {a:?}");
-            assert!(
-                !stripped.intersects(b),
-                "{stripped:?} still shares a bit with {b:?}"
-            );
-            assert!(
-                stripped.union(b).contains(a),
-                "removing {b:?} from {a:?} lost a bit that was not {b:?}"
-            );
-        }
-    }
-}
-
-/// Oracle: law, over the whole domain. `intersects` and `without` are two views
-/// of the same fact, so they must agree everywhere: two masks share a bit
-/// exactly when removing one changes the other. Cross-checking the pair is what
-/// catches an implementation that got one of them backwards, which neither
-/// function's own test would notice.
-#[test]
-fn intersects_agrees_with_whether_removal_changes_anything() {
-    for a in every_mask() {
-        for b in every_mask() {
-            assert_eq!(
-                a.intersects(b),
-                a.without(b) != a,
-                "{a:?} and {b:?} disagree between intersects and without"
-            );
-            assert_eq!(a.intersects(b), b.intersects(a), "intersects is symmetric");
-        }
-    }
-}
-
-/// Oracle: law. `NONE` is the empty mask and `ANY` is the full one, and
-/// `is_empty` must agree with both. `is_device_connected` is written as
-/// `mask != NONE` across five rules, so a mask that reported itself empty while
-/// holding a bit would report a connected net as floating.
-#[test]
-fn none_is_the_only_empty_mask_and_any_contains_everything() {
-    assert!(RoleMask::NONE.is_empty());
-    assert!(!RoleMask::ANY.is_empty());
-    assert_eq!(RoleMask::default(), RoleMask::NONE);
-    for mask in every_mask() {
-        assert_eq!(mask.is_empty(), mask == RoleMask::NONE, "{mask:?}");
-        assert!(RoleMask::ANY.contains(mask));
-        assert!(mask.contains(mask), "contains is reflexive");
-        assert!(mask.contains(RoleMask::NONE), "everything contains NONE");
     }
 }
 
@@ -259,45 +158,17 @@ fn role_masks_reproduce_the_netlist_the_layout_was_built_from() {
     for (index, want) in expected.into_iter().enumerate() {
         let net = classified.net(index);
         assert_eq!(
-            classified.facts.role_of(net),
+            classified.facts.role[net.idx()],
             want,
             "net {index} ({net:?}) carries the wrong roles"
         );
     }
 }
 
-/// Oracle: construct-from-answer. Terminals are counted, not devices, so the
-/// column must reproduce the per-net terminal count the spec states: one on the
-/// gate and source nets, two on each of the nets the resistor shares with the
-/// transistor, none on the fifth.
+/// Oracle: construct-from-answer. One row of facts per extracted net.
 #[test]
-fn terminal_counts_reproduce_the_netlists_own_per_net_totals() {
+fn there_is_one_row_of_facts_per_extracted_net() {
     let classified = classify(&mixed_netlist());
-    for (index, want) in [1u32, 1, 2, 2, 0].into_iter().enumerate() {
-        let net = classified.net(index);
-        assert_eq!(
-            classified.facts.terminals[net.0 as usize], want,
-            "net {index} ({net:?}) has the wrong terminal count"
-        );
-    }
-}
-
-/// Oracle: law. Every terminal lands on exactly one net, so summing the per-net
-/// counts must give the netlist's total. Conservation, so it holds for any
-/// spec — and it is what catches a fold that skipped a device family, which is
-/// the failure the mask's own doc comment records the old tree having.
-#[test]
-fn terminal_counts_sum_to_the_number_of_terminals_in_the_netlist() {
-    let spec = mixed_netlist();
-    let classified = classify(&spec);
-
-    let declared: u32 = spec
-        .devices
-        .iter()
-        .map(|device| u32::try_from(device.terminals.len()).expect("a hand-written spec is small"))
-        .sum();
-    let counted: u32 = classified.facts.terminals.iter().sum();
-    assert_eq!(counted, declared, "a terminal was lost or double-counted");
     assert_eq!(
         classified.facts.len(),
         classified.nets.net_count(),

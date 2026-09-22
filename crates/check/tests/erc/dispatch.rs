@@ -23,7 +23,7 @@ use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
-use gpurify_geom::{Evaluator, LayerRef};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::{
     Connectivity, Deck, DeviceRecognition, LayerTable, ProcessStack, RuleSpec, RuleTable,
 };
@@ -77,8 +77,8 @@ fn density(value: f64) -> Qty<CurrentDensity, { prefix::BASE }> {
     reason = "nineteen tables written out once is the point of the test"
 )]
 fn every_kind() -> RuleSet {
-    let base = LayerRef::Base(LayerId(0));
-    let other = LayerRef::Base(LayerId(1));
+    let base = LayerId(0);
+    let other = LayerId(1);
     RuleSet {
         floating_gate: topology::FloatingGateTable {
             head: head(id_of("floating_gate")),
@@ -120,8 +120,6 @@ fn every_kind() -> RuleSet {
         esd_topological: supply::EsdTopologicalTable {
             head: head(id_of("esd_topological")),
             pad: vec![LayerId(0)],
-            clamp_start: vec![0, 0],
-            clamp_model: Vec::new(),
         },
 
         antenna: antenna::AntennaTable {
@@ -183,7 +181,6 @@ fn every_kind() -> RuleSet {
         reliability: reliability::ReliabilityTable {
             head: head(id_of("reliability")),
             required_lifetime_hours: vec![87_600.0],
-            mechanism: vec![StrId(900)],
             reference_lifetime_hours: vec![10_000.0],
             reference_stress: vec![millivolts(2_000.0)],
             stress_exponent: vec![4.0],
@@ -201,14 +198,6 @@ fn every_kind() -> RuleSet {
             head: head(id_of("esd_latchup")),
             pad: vec![LayerId(0)],
             guard_ring: vec![LayerId(1)],
-            clamp_start: vec![0, 0],
-            clamp_model: Vec::new(),
-            clamp_resistance: Vec::new(),
-            clamp_capacity: Vec::new(),
-            clamp_voltage: Vec::new(),
-            required_current: vec![Qty::new(100.0)],
-            max_path_resistance: vec![ohms(2.0)],
-            max_clamp_voltage: vec![millivolts(4_000.0)],
             min_guard_ring_width: vec![dbu(100)],
             max_tap_distance: vec![dbu(100_000)],
         },
