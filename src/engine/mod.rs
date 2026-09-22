@@ -1,7 +1,7 @@
 //! Orchestration: load, extract, then the four checks, once, in order.
 //!
-//! No stage returns an empty result to mean "not attempted": a check that could
-//! not run is a [`StageStatus::Skipped`] carrying its reason.
+//! A check that could not run is a [`StageStatus::Skipped`] carrying its reason,
+//! never an empty result.
 
 pub mod pipeline;
 pub mod run;

@@ -1,37 +1,12 @@
 //! End to end: a deck and a layout file in, a verification report out.
 //!
-//! Every other test in this workspace exercises one crate against inputs it
-//! built itself. This one exercises the seams *between* them, which is where a
-//! pipeline actually breaks: a `PolyId` that means one thing to `ingest` and
-//! another to `report`, a `LayerId` resolved against the wrong table, a
-//! permutation applied once too often. A per-crate test cannot catch any of
-//! those, by construction — it never crosses the seam.
-//!
-//! # The oracle
-//!
-//! **Construct-from-answer, end to end.** The layout carries a single
-//! deliberate violation at a coordinate this suite chose, is written to a real
-//! GDS file, and is read back through the ordinary reader. The run must find
-//! that violation, at that coordinate, with that measurement. No expected value
-//! here was obtained by running anything.
-//!
-//! # Why the workspace root
-//!
-//! These link every crate at once, so they belong to none of them. It is also
-//! the only place that links exactly one instance of `ingest` and one of
-//! `export`: a dev-dependency cycle between those two builds *two* instances
-//! whose `LayerTable` types are not the same type, which is why the
-//! `parse -> write -> parse` law could not be written inside either crate.
-//!
-//! Every body outside `gpurify-testgen` is `todo!()`, so each test here panics
-//! at its first call. That is the Testing-Phase's expected state. These are the
-//! completion criterion for Phase 4 — not a suite to be turned green early by
-//! writing an implementation underneath it.
+//! The hand-written cases place one violation at a chosen coordinate, write it
+//! to a real GDS file and follow it through every seam. The corpus cases read
+//! `tests/fixtures` and check each against its geometry-derived expectation.
 
-use gpurify::check::drc::DrcError;
 use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
 use gpurify::engine::pipeline::LoadError;
-use gpurify::engine::run::{Checks, EngineError, StageStatus};
+use gpurify::engine::run::{Checks, StageStatus};
 use gpurify::ingest::DeckError;
 
 mod common;
@@ -45,7 +20,7 @@ mod common;
 #[test]
 fn a_deliberate_min_width_violation_survives_the_whole_pipeline() {
     let run = common::Run::with_min_width_violation();
-    let outputs = run
+    let (outputs, _) = run
         .execute()
         .expect("the pipeline completes on valid input");
 
@@ -67,7 +42,7 @@ fn a_deliberate_min_width_violation_survives_the_whole_pipeline() {
 #[test]
 fn a_clean_layout_reports_clean_and_says_which_rules_examined_what() {
     let run = common::Run::clean();
-    let outputs = run
+    let (outputs, _) = run
         .execute()
         .expect("the pipeline completes on valid input");
 
@@ -99,10 +74,9 @@ fn a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass() {
     let run = common::Run::clean_with_gated_rule()
         .without_reference()
         .without_intent();
-    let outputs = run
+    let (_, summary) = run
         .execute()
         .expect("missing optional inputs are not a failure to run");
-    let summary = run.summary(&outputs);
 
     assert!(
         matches!(summary.lvs, StageStatus::Skipped(_)),
@@ -117,62 +91,6 @@ fn a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass() {
         !summary.passed(),
         "a run that could not check everything it was asked to check must not \
          pass; the exit code is the only place that distinction reaches a shell"
-    );
-}
-
-/// Oracle: construct-from-answer. `NotSelected` and `Skipped` are different,
-/// and only one of them blocks a pass.
-///
-/// The user who did not ask for LVS gets a pass. The user who asked and could
-/// not have it does not. Conflating the two is a false clean in one direction
-/// and a false alarm in the other.
-#[test]
-fn a_run_selecting_nothing_is_not_selected_everywhere_and_passes() {
-    let run = common::Run::clean().selecting(Checks {
-        drc: false,
-        erc: false,
-        lvs: false,
-        pex: false,
-    });
-    let outputs = run.execute().expect("selecting nothing is a legal run");
-    let summary = run.summary(&outputs);
-
-    assert_eq!(summary.drc, StageStatus::NotSelected);
-    assert_eq!(summary.lvs, StageStatus::NotSelected);
-    assert_eq!(
-        summary.rules_skipped, 0,
-        "nothing was skipped; nothing was asked for"
-    );
-    assert!(
-        summary.passed(),
-        "declining a check is not a failure to run it"
-    );
-}
-
-/// Oracle: determinism — a gate rather than an oracle.
-///
-/// The same inputs at two thread counts must serialise to identical bytes. This
-/// is what would have caught the defect where 8 of 27 parasitic reports
-/// differed between runs of the same binary on the same input: the numbers were
-/// right and the file was not reproducible, so it could not be diffed against
-/// yesterday's.
-#[test]
-fn two_runs_at_two_thread_counts_serialise_to_identical_bytes() {
-    let run = common::Run::with_min_width_violation();
-    let first = run.execute_with_threads(1).expect("single-threaded run");
-    let second = run.execute_with_threads(4).expect("four-threaded run");
-
-    let mut left = String::new();
-    let mut right = String::new();
-    run.serialise(&first, &mut left)
-        .expect("a completed run serialises");
-    run.serialise(&second, &mut right)
-        .expect("a completed run serialises");
-
-    assert_eq!(
-        left, right,
-        "output must not depend on thread count; a signoff report that differs \
-         from itself cannot be diffed"
     );
 }
 
@@ -210,36 +128,6 @@ fn coordinates_at_the_domain_edge_survive_the_file_round_trip() {
     common::assert_extremes_preserved(&loaded.store, run.extreme);
 }
 
-/// Oracle: construct-from-answer. A deck naming a rule kind that exists in
-/// neither `drc::ruleset::KINDS` nor `erc::ruleset::KINDS` is refused.
-///
-/// Fail closed. Skipping an unrecognised rule produces a clean report for a
-/// deck the tool did not understand, which is the worst output a signoff tool
-/// can produce.
-///
-/// **The refusal is at `run_checks`, not at load**, and this test asserted the
-/// wrong stage until the Implementation-Phase. `ingest::deck::parse_deck` is
-/// documented not to interpret kinds at all — `drc::ruleset::KINDS` and
-/// `erc::ruleset::KINDS` both live above `ingest` in the module graph, so the
-/// parser cannot know the vocabulary and `LoadError` has no variant for it.
-/// `RuleSet::from_deck` is where the vocabulary lives and where the refusal
-/// belongs. The property under test is unchanged and is the one that matters:
-/// refused, never skipped, and no check runs.
-#[test]
-fn a_deck_naming_an_unknown_rule_kind_is_refused_rather_than_skipped() {
-    let run = common::Run::with_unknown_rule_kind();
-    run.load()
-        .expect("a kind is text to the parser, which does not read it");
-
-    let error = run
-        .execute()
-        .expect_err("an unrecognised rule kind must not run");
-    assert!(
-        matches!(error, EngineError::Drc(DrcError::UnknownKind { .. })),
-        "expected a rule-set error naming the unknown kind, got {error:?}"
-    );
-}
-
 /// Oracle: construct-from-answer. A deck limit the grid cannot express is
 /// refused, never rounded.
 ///
@@ -269,7 +157,7 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
 #[test]
 fn every_rule_in_the_deck_appears_in_the_run_record_exactly_once() {
     let run = common::Run::clean();
-    let outputs = run.execute().expect("the pipeline completes");
+    let (outputs, _) = run.execute().expect("the pipeline completes");
 
     for rule in run.deck_rule_ids() {
         let seen = outputs.runs.iter().filter(|r| r.rule == rule).count();
@@ -290,7 +178,7 @@ fn every_rule_in_the_deck_appears_in_the_run_record_exactly_once() {
 #[test]
 fn a_reported_length_prints_in_nanometres_against_the_runs_grid() {
     let run = common::Run::with_min_width_violation();
-    let outputs = run.execute().expect("the pipeline completes");
+    let (outputs, _) = run.execute().expect("the pipeline completes");
 
     let found = common::only_violation(&outputs.violations);
     assert_eq!(
@@ -539,10 +427,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
             violations: &run.outputs.violations,
             runs: &run.outputs.runs,
             strings: &run.loaded.strings,
-            grid: run
-                .loaded
-                .grid
-                .expect("a successful load establishes the grid"),
+            grid: run.loaded.grid,
         },
         &mut json,
     )

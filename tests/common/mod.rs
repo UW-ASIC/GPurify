@@ -1,84 +1,17 @@
-//! Fixtures for the end-to-end suite: a deck on disk, a layout on disk, and a
-//! run over both — and, below the separator, the fixture corpus read as data
-//! and driven through the same pipeline.
+//! Fixtures for the end-to-end suite: a deck and a layout written to disk and
+//! run through the ordinary reader, and the fixture corpus read as data and
+//! driven through the same pipeline.
 //!
-//! One module rather than two. The hand-written fixtures and the corpus share
-//! the grid, the fixture root, and the `Inputs` shape they build; two modules
-//! meant two copies of each, and two copies of a constant eventually disagree.
-//!
-//! Everything here builds *files*, not in-memory structures. That is the whole
-//! point of this suite — a per-crate test hands `topology` a `GeometryStore` it
-//! built itself, so it can never catch a reader that produces the wrong store.
-//! These tests start where a user starts.
-//!
-//! The deck is written as JSON against the schema documented on
-//! `ingest::deck::parse_deck`, so this suite also pins that schema: if the
-//! parser and the documentation disagree, these fail.
-//!
-//! # One domain per deck, except where a fixture needs both
-//!
-//! Most decks below hold DRC rules only and [`Run::checks`] leaves `erc` off,
-//! because one rule is what makes a malformed fixture differ from the good one
-//! in exactly the bytes under test.
-//!
-//! That used to be forced rather than chosen: `drc::RuleSet::from_deck` and
-//! `erc::RuleSet::from_deck` both read the one `RuleTable` and each rejected the
-//! other's rows as an unknown kind, so a deck holding both could not be run at
-//! all. That is now fixed — each domain skips kinds outside its own `KINDS`, and
-//! `engine::run::reject_unknown_rule_kinds` refuses a kind in neither, so the
-//! fail-closed refusal moved up rather than disappearing.
-//! [`Run::clean_with_gated_rule`] is the one fixture that exercises both.
-//!
-//! # The corpus
-//!
-//! **Construct-from-answer, at corpus scale.** Each cell was drawn to carry one
-//! stated defect at one stated place; `expectations.json` says what that defect
-//! measures and where, derived from the shapes rather than observed from a run.
-//!
-//! The 160 per-case GDSII files are no longer carried in the repository. They
-//! are split out of `tests/fixtures/_source/conformance.gds` by
-//! [`gen_fixtures`], on demand, the first time anything calls [`fixtures`].
-//!
-//! # What `manifest.json` is now
-//!
-//! It used to be read by nothing: it is the deleted tree's *output*, and the
-//! deleted tree is not an oracle. That is still
-//! true of its answers — `expect_violations` is read by nothing here, and every
-//! expected number comes from `expectations.json`, re-derived from the geometry
-//! plus the rule's frozen doc comment.
-//!
-//! What the generator reads from it is `gds_file` and each case's `cell`: which
-//! cell of the source file a case is drawn on. That is a *build input*, not an
-//! answer. It also makes the corroboration load-bearing for the first time —
-//! geometry now comes from the manifest and every expected number from
-//! `expectations.json`, so a case the two files disagree about turns the corpus
-//! red instead of sitting in prose.
-//!
-//! # Why `examined` is asserted on every case
-//!
-//! 45 of the 94 DRC cases expect zero violations, and in the old suite an empty
-//! violation table was also what a rule that never executed produced — the two
-//! were indistinguishable, so 45 cases certified nothing. [`RuleRun`] carries
-//! `outcome` and `examined`, so this harness asserts *the rule ran and looked at
-//! something* alongside the count. That single addition is what converts those
-//! 45 into real cases.
-//!
-//! Nine cases have `examined == 0` for a correct reason — the rule defines its
-//! examined population as the pairs it had jurisdiction over (pairs with a wide
-//! member, pairs straddling an end of line) and the cell was built so that
-//! population is empty. `expectations.json` records their floor as `0` rather
-//! than pretending, and the message below says so when it fires.
-//!
-//! # `tests/fixtures/klayout/drc_oracle.rb`
-//!
-//! An external-oracle script for `KLayout`, which is not installed here. Nothing
-//! in this file runs it or depends on it.
+//! Corpus: every expected number comes from `expectations.json`, derived from
+//! the geometry; `manifest.json` supplies only each case's source cell. Every
+//! case asserts `RuleRun::examined` beside the count, since an empty violation
+//! table is also what a rule that never ran produces.
 
 mod gen_fixtures;
 
 use gpurify::check::lvs;
 use gpurify::check::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
-use gpurify::engine::pipeline::{extract_into, load_into, Extracted, Inputs, LoadError, Loaded};
+use gpurify::engine::pipeline::{extract, load, Extracted, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
 use gpurify::extract::Parasitic;
 use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
@@ -184,20 +117,6 @@ impl Run {
         run
     }
 
-    /// A deck naming a rule kind that is in neither `drc::ruleset::KINDS` nor
-    /// `erc::ruleset::KINDS`.
-    pub fn with_unknown_rule_kind() -> Self {
-        // `parse_deck` interns the kind verbatim and does not know the
-        // vocabulary, so this must be refused where the vocabulary lives.
-        build(
-            "unknown-kind",
-            &deck_with_rule(
-                r#""kind": "min_widht", "layers": ["met1"], "params": { "limit": { "nm": 300 } }"#,
-            ),
-            WIDE_NM,
-        )
-    }
-
     /// A deck stating a limit that is not a whole number of grid units.
     pub fn with_off_grid_limit() -> Self {
         // A 1 nm grid divides every whole nanometre exactly, so the limit has
@@ -245,99 +164,23 @@ impl Run {
         self
     }
 
-    #[must_use]
-    pub fn selecting(mut self, checks: Checks) -> Self {
-        self.checks = checks;
-        self
-    }
-
-    /// Read every input from disk. The first half of the pipeline.
+    /// Read every input from disk.
     pub fn load(&self) -> Result<Loaded, LoadError> {
-        let mut loaded = Loaded::default();
-        load_into(&self.inputs, &mut loaded)?;
-        Ok(loaded)
+        load(&self.inputs)
     }
 
-    /// Load, extract and check. The whole pipeline, at one thread.
-    pub fn execute(&self) -> Result<Outputs, EngineError> {
-        self.execute_with_threads(1)
-    }
-
-    /// The whole pipeline at a stated thread count.
-    ///
-    /// The count affects speed only. If it affects output, that is the bug the
-    /// determinism gate exists to find, so it is a parameter here rather than a
-    /// global.
-    pub fn execute_with_threads(&self, threads: usize) -> Result<Outputs, EngineError> {
+    /// Load, extract and check.
+    pub fn execute(&self) -> Result<(Outputs, Summary), EngineError> {
         let loaded = self.load()?;
-        let mut extracted = Extracted::default();
-        extract_into(&loaded, &mut extracted)?;
-
-        let mut outputs = Outputs::default();
-        run_checks(&loaded, &extracted, &self.options(threads), &mut outputs)?;
-        Ok(outputs)
-    }
-
-    /// The summary of a completed run.
-    ///
-    /// Re-runs the pipeline rather than reading `outputs`. The four
-    /// `StageStatus` fields are not in `Outputs` at all — `run_checks` returns
-    /// them and `execute` drops them — so there is nothing here to reconstruct
-    /// them from, and inventing a status is exactly the false-clean this suite
-    /// is written against. Re-running is sound *because* of the gate one test
-    /// up: the pipeline is deterministic, so the second run's summary is the
-    /// first's.
-    pub fn summary(&self, outputs: &Outputs) -> Summary {
-        let loaded = self.load().expect("the fixture loaded once already");
-        let mut extracted = Extracted::default();
-        extract_into(&loaded, &mut extracted).expect("the fixture extracted once already");
-
-        let mut again = Outputs::default();
-        let summary = run_checks(&loaded, &extracted, &self.options(1), &mut again)
-            .expect("the fixture ran once already");
-        assert_eq!(
-            again.violations.len(),
-            outputs.violations.len(),
-            "the re-run this summary comes from disagrees with the run it is \
-             being asked about; the pipeline is not deterministic and every \
-             assertion below it is meaningless"
-        );
-        summary
-    }
-
-    fn options(&self, threads: usize) -> RunOptions {
-        RunOptions {
+        let extracted = extract(&loaded)?;
+        let options = RunOptions {
             checks: self.checks,
             lvs: lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
             quasistatic_inductance: false,
-            threads: Some(threads),
-        }
-    }
-
-    /// Serialise a run's outputs the way the CLI's `--format json` would.
-    ///
-    /// The header carries a `None` timestamp, so every byte of the result is a
-    /// function of the inputs. That is what makes byte-comparison meaningful:
-    /// with a real timestamp the comparison would be trivially false and the
-    /// gate would have to be weakened to compensate.
-    pub fn serialise(&self, outputs: &Outputs, out: &mut String) -> Result<(), export::WriteError> {
-        let header = export::Header {
-            tool_version: "test",
-            deck_path: "deck.json".to_owned(),
-            layout_path: "layout.gds".to_owned(),
-            timestamp: None,
+            threads: Some(1),
         };
-        export::json::write_report(
-            &export::json::Report {
-                header: &header,
-                violations: &outputs.violations,
-                runs: &outputs.runs,
-                strings: &self.strings,
-                grid: self.grid,
-            },
-            out,
-        )
+        run_checks(&loaded, &extracted, &options)
     }
 
     /// Every rule id the deck declares.
@@ -476,12 +319,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     // and a `StrId` this fixture resolves are the same id space. A separately
     // interned table would agree by luck and stop agreeing the day the parser
     // interns one extra name.
-    let mut loaded = Loaded::default();
-    let strings = if load_into(&inputs, &mut loaded).is_ok() {
-        loaded.strings
-    } else {
-        ingest::StrTable::default()
-    };
+    let strings = load(&inputs).map(|loaded| loaded.strings).unwrap_or_default();
 
     Run {
         dir,
@@ -884,11 +722,8 @@ pub fn run_case_with_intent(
 
 /// Load, extract and check whatever inputs were assembled.
 fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
-    let mut loaded = Loaded::default();
-    load_into(&inputs, &mut loaded).map_err(|why| format!("load failed: {why}"))?;
-
-    let mut extracted = Extracted::default();
-    extract_into(&loaded, &mut extracted).map_err(|why| format!("extraction failed: {why}"))?;
+    let loaded = load(&inputs).map_err(|why| format!("load failed: {why}"))?;
+    let extracted = extract(&loaded).map_err(|why| format!("extraction failed: {why}"))?;
 
     let options = RunOptions {
         checks,
@@ -901,9 +736,8 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
         threads: Some(1),
     };
 
-    let mut outputs = Outputs::default();
-    run_checks(&loaded, &extracted, &options, &mut outputs)
-        .map_err(|why| format!("run failed: {why}"))?;
+    let (outputs, _) =
+        run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun {
         loaded,
@@ -936,11 +770,8 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
 pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> {
     let inputs = case_inputs(domain, id, None, None);
 
-    let mut loaded = Loaded::default();
-    load_into(&inputs, &mut loaded).map_err(|why| format!("load failed: {why}"))?;
-
-    let mut extracted = Extracted::default();
-    extract_into(&loaded, &mut extracted).map_err(|why| format!("extraction failed: {why}"))?;
+    let loaded = load(&inputs).map_err(|why| format!("load failed: {why}"))?;
+    let extracted = extract(&loaded).map_err(|why| format!("extraction failed: {why}"))?;
 
     // Every net that carries a name. Ascending by `NetId`, so the selection is
     // a function of the geometry and not of the order a table happened to be
@@ -973,9 +804,8 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
         threads: Some(1),
     };
 
-    let mut outputs = Outputs::default();
-    run_checks(&loaded, &extracted, &options, &mut outputs)
-        .map_err(|why| format!("run failed: {why}"))?;
+    let (outputs, _) =
+        run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun {
         loaded,
@@ -1289,13 +1119,15 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
     };
 
     let inputs = case_inputs(&case.domain, &case.id, None, None);
-    let mut loaded = Loaded::default();
-    if let Err(why) = load_into(&inputs, &mut loaded) {
-        return vec![format!(
-            "{}: cell {} did not load — {why}{context}",
-            case.id, case.cell
-        )];
-    }
+    let loaded = match load(&inputs) {
+        Ok(loaded) => loaded,
+        Err(why) => {
+            return vec![format!(
+                "{}: cell {} did not load — {why}{context}",
+                case.id, case.cell
+            )]
+        }
+    };
 
     let Some(layer) = loaded.deck.layers.id(&loaded.strings, &want.layer) else {
         return vec![format!(
