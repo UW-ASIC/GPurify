@@ -12,10 +12,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
-[features]
-default = ["gpu"]
-gpu = ["gpurify-extract/gpu"]
-
 [dev-dependencies]
 gpurify-testgen = { workspace = true }
 
@@ -37,13 +33,7 @@ exclude = ["tools"]
 gpurify-geom = { path = "crates/geom" }
 gpurify-ingest = { path = "crates/ingest" }
 gpurify-check = { path = "crates/check" }
-# `default-features = false`, so a dependant's own `gpu` feature is the only
-# thing that turns the solver's GPU path on. Without it, `extract`'s own
-# `default = ["gpu"]` re-enables the path for every crate that depends on it,
-# feature unification carries that back up, and `--no-default-features` builds
-# Vulkan in regardless — which is what used to happen, and it meant the CPU-only
-# configuration was never actually tested.
-gpurify-extract = { path = "crates/extract", default-features = false }
+gpurify-extract = { path = "crates/extract" }
 gpurify-testgen = { path = "crates/testgen" }
 
 # External dep
@@ -54,20 +44,6 @@ num-complex = "0.4"
 flate2 = "1"
 thiserror = "1"
 wide = "0.7"
-
-# GPU: AOT SPIR-V from GLSL, for `gpurify-extract` only.
-# `default-features = false` drops the `x11` feature, which pulls `x11-dl` and
-# `x11rb` in and makes every binary downstream of `extract` link `-lxcb`. This is a
-# headless compute path with no window-system integration, so it needs none of
-# it — and with it on, `cargo test` outside `nix develop` fails at the link step
-# rather than at compile.
-vulkano = { version = "0.35", default-features = false }
-# `vulkano-shaders` is deliberately absent: it pulls in `shaderc-sys`, which
-# needs a system `libshaderc` or `cmake`, and neither is present outside
-# `nix develop`. Depending on it would make `cargo build` fail for every crate
-# downstream of `extract` outside the dev shell. The P2P Laplace kernel is compiled
-# by `glslc` and committed as SPIR-V; the regeneration command is in
-# `crates/extract/shaders/p2p_laplace.comp`.
 
 # Some are based off preference, some disagree with branch-less programming principles or using SIMD.
 [workspace.lints.clippy]

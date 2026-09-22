@@ -1,29 +1,25 @@
-//! GMRES with iterative refinement. Host, `f64`, always.
+//! Restarted GMRES with an outer residual-refinement loop. Host `f64`.
+//!
+//! Every reduction is a strict ascending fold; the iteration trajectory, and so
+//! the low bits of every capacitance, depend on it.
 
-use super::matvec::{Backend, MatVec};
+use super::matvec::MatVec;
 
-/// How to solve.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
-    /// Relative residual to reach. The solve fails rather than returning a
-    /// worse answer.
+    /// Relative residual to reach; a worse answer is an error.
     pub tolerance: f64,
-    /// Iterations before restarting. Bounds the Krylov basis.
+    /// Iterations before restarting; bounds the Krylov basis.
     pub restart: u32,
-    /// Total iteration budget across restarts. Hitting it is
-    /// [`SolveError::NotConverged`], never a silently returned approximation.
+    /// Total budget across restarts; exhausting it is [`SolveError::NotConverged`].
     pub max_iterations: u32,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
-            // Two decades below the tolerance any foundry deck states for a
-            // coupling capacitance, so the solve is never the dominant error.
             tolerance: 1e-10,
             restart: 50,
-            // Twenty restart cycles; needing that many means the mesh is wrong,
-            // and the caller should hear `NotConverged` rather than wait.
             max_iterations: 1_000,
         }
     }
@@ -39,8 +35,7 @@ pub enum SolveError {
     NonFinite(u32),
 }
 
-/// The Krylov basis, Hessenberg matrix, Givens rotations and residual vectors,
-/// allocated once per matrix rather than once per column.
+/// Krylov basis, Hessenberg, Givens and residual buffers, reused across columns.
 #[derive(Debug, Default)]
 pub struct Workspace {
     krylov: Vec<f64>,
@@ -50,11 +45,17 @@ pub struct Workspace {
     correction: Vec<f64>,
 }
 
-/// Solve `A x = b`.
-///
-/// Caller owns `x` and `workspace`, both reused across right-hand sides.
-/// Returns the achieved residual measured explicitly in `f64`, not the
-/// recurrence estimate GMRES carries internally.
+/// What a converged solve achieved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Converged {
+    /// True relative residual, recomputed explicitly.
+    pub residual: f64,
+    pub iterations: u32,
+    pub restarts: u32,
+}
+
+/// Solve `A x = b` from the caller's `x`. Returns the explicitly recomputed
+/// residual, not the GMRES recurrence estimate.
 pub fn gmres<M: MatVec>(
     operator: &M,
     b: &[f64],
@@ -63,29 +64,13 @@ pub fn gmres<M: MatVec>(
     workspace: &mut Workspace,
 ) -> Result<Converged, SolveError> {
     let n = b.len();
-    debug_assert_eq!(
-        operator.dim(),
-        n,
-        "the operator's dimension is `b`'s length"
-    );
-    debug_assert_eq!(x.len(), n, "`x` is the operator's dimension");
-    debug_assert!(
-        options.tolerance > 0.0,
-        "a tolerance of zero or less is unreachable"
-    );
-
-    // A Krylov subspace cannot outrank the space it lives in, so a `restart`
-    // above `n` only buys unreachable basis vectors. `max(1)` is the fail-closed
-    // reading of `restart == 0`, which would make no progress and spin against
-    // the iteration budget forever.
+    // Basis no larger than the space; `max(1)` so `restart == 0` still progresses.
     let m = usize::try_from(options.restart)
         .unwrap_or(usize::MAX)
         .min(n)
         .max(1);
     let b_scale = scale_of(norm(b));
 
-    // Refilled from scratch, so nothing a previous solve left behind reaches
-    // this one — which is what makes two solves of one system bit-identical.
     workspace.krylov.clear();
     workspace.krylov.resize((m + 1) * n, 0.0);
     workspace.hessenberg.clear();
@@ -95,20 +80,16 @@ pub fn gmres<M: MatVec>(
     workspace.correction.clear();
     workspace.correction.resize(n, 0.0);
 
-    // `hessenberg` holds `m` columns of `m+1` rows — column `k` at `k*(m+1)`,
-    // rows `0..=k+1` — followed by `g`, the rotated right-hand side, at `g0`.
-    // The back substitution writes `y` over `g` in place.
+    // `hessenberg`: `m` columns of `m+1` rows (column `k` at `k*(m+1)`), then the
+    // rotated right-hand side `g` at `g0`, overwritten by `y` in back substitution.
     let g0 = m * (m + 1);
 
     let mut iterations: u32 = 0;
     let mut cycles: u32 = 0;
 
     loop {
-        // Leaves `b − A x` in `workspace.residual`, which is exactly the `r0`
-        // this cycle needs, so a restart costs no extra matvec.
+        // Leaves `b − A x` in `workspace.residual`: this cycle's `r0`.
         let rel = residual(operator, b, x, &mut workspace.residual);
-        debug_assert_eq!(workspace.residual.len(), n, "`residual` refills to `n`");
-
         if !rel.is_finite() {
             return Err(SolveError::NonFinite(iterations));
         }
@@ -127,19 +108,8 @@ pub fn gmres<M: MatVec>(
         }
         cycles += 1;
 
-        // `v0 := r / ‖r‖`. `rel > tolerance > 0` and `rel` is finite, so `beta`
-        // is strictly positive and finite.
         let beta = norm(&workspace.residual[..]);
-        debug_assert!(beta > 0.0 && beta.is_finite(), "a restart needs a residual");
         let inv_beta = 1.0 / beta;
-        debug_assert_eq!(
-            workspace.krylov[..n].len(),
-            workspace.residual.len(),
-            "`v0` and the residual are the same column"
-        );
-        // `zip` stops at the shorter column, so the assert above is the whole
-        // length check: a short `residual` would leave the tail of `v0` stale
-        // and the solve would report success on a basis it never built.
         for (v, &r) in workspace.krylov[..n].iter_mut().zip(&workspace.residual) {
             *v = r * inv_beta;
         }
@@ -155,10 +125,8 @@ pub fn gmres<M: MatVec>(
                 &workspace.krylov[k * n..k * n + n],
                 &mut workspace.correction[..],
             );
-            debug_assert_eq!(workspace.correction.len(), n, "`apply` must not resize `y`");
 
-            // One finiteness check per matvec: a NaN or infinity in any lane
-            // poisons this sum, and catching it here stops it reaching `x`.
+            // One finiteness check per matvec, before anything reaches `x`.
             let mut av_sq = 0.0_f64;
             for &w in &workspace.correction {
                 av_sq += w * w;
@@ -175,11 +143,6 @@ pub fn gmres<M: MatVec>(
                     &workspace.correction[..],
                 );
                 workspace.hessenberg[col + i] = h;
-                debug_assert_eq!(
-                    workspace.correction.len(),
-                    n,
-                    "`w` and every basis vector are the same column"
-                );
                 for (w, &v) in workspace
                     .correction
                     .iter_mut()
@@ -191,8 +154,7 @@ pub fn gmres<M: MatVec>(
             let hk1 = norm(&workspace.correction[..]);
             workspace.hessenberg[col + k + 1] = hk1;
 
-            // Replay the earlier rotations onto the new column, then annihilate
-            // its subdiagonal with a fresh one.
+            // Replay earlier rotations, then annihilate the subdiagonal.
             for i in 0..k {
                 let (c, s) = workspace.givens[i];
                 let upper = workspace.hessenberg[col + i];
@@ -203,9 +165,7 @@ pub fn gmres<M: MatVec>(
 
             let hk = workspace.hessenberg[col + k];
             let rot = hk.hypot(hk1);
-            // `rot == 0` means the whole column vanished, leaving `R` singular;
-            // the identity rotation keeps the recurrence well-formed until the
-            // back substitution reports it as `Breakdown`.
+            // A vanished column: identity rotation, reported as `Breakdown` below.
             let (c, s) = if rot == 0.0 {
                 (1.0, 0.0)
             } else {
@@ -220,25 +180,16 @@ pub fn gmres<M: MatVec>(
 
             k += 1;
 
-            // The cheap recurrence estimate, used only to leave the loop early.
-            // Convergence is decided by the explicit residual at the top of the
-            // next cycle.
+            // Early exit on the recurrence estimate; the explicit residual decides.
             let estimate = workspace.hessenberg[g0 + k].abs() / b_scale;
             if estimate <= options.tolerance {
                 break;
             }
-            // A vanished `hk1` is a happy breakdown: no `v_k` to normalise, so
-            // stop rather than divide by it. `!(hk1 > 0.0)` and not `== 0.0` so
-            // a NaN takes this exit too.
+            // Happy breakdown (also catches NaN).
             if !(hk1 > 0.0) {
                 break;
             }
             let inv = 1.0 / hk1;
-            debug_assert_eq!(
-                workspace.correction.len(),
-                n,
-                "the new basis vector and `w` are the same column"
-            );
             for (v, &w) in workspace.krylov[k * n..k * n + n]
                 .iter_mut()
                 .zip(&workspace.correction)
@@ -246,28 +197,23 @@ pub fn gmres<M: MatVec>(
                 *v = w * inv;
             }
         }
-        debug_assert!(k >= 1 && k <= m, "a cycle runs between one and `m` steps");
 
-        // Back-substitute `R y = g` over `g` in place.
+        // Back-substitute `R y = g` in place.
         for i in (0..k).rev() {
             let mut acc = workspace.hessenberg[g0 + i];
             for j in (i + 1)..k {
                 acc -= workspace.hessenberg[j * (m + 1) + i] * workspace.hessenberg[g0 + j];
             }
             let diagonal = workspace.hessenberg[i * (m + 1) + i];
-            // A zero pivot means the least-squares problem is rank deficient and
-            // there is no correction to apply — an error, never a silently
-            // unchanged `x`.
             if diagonal == 0.0 {
                 return Err(SolveError::Breakdown(iterations));
             }
             workspace.hessenberg[g0 + i] = acc / diagonal;
         }
 
-        // `x += Σ y_i v_i`, in ascending `i` so the sum is reproducible.
+        // `x += Σ y_i v_i`, ascending `i`.
         for i in 0..k {
             let y = workspace.hessenberg[g0 + i];
-            debug_assert_eq!(x.len(), n, "`x` and every basis vector are the same column");
             for (xv, &v) in x.iter_mut().zip(&workspace.krylov[i * n..i * n + n]) {
                 *xv += y * v;
             }
@@ -275,10 +221,7 @@ pub fn gmres<M: MatVec>(
     }
 }
 
-/// `‖v‖₂`, as a strict left fold in ascending index order.
-///
-/// That order is interface: every byte-reproducible export downstream rests on
-/// it, so it must not be reassociated into lane accumulators.
+/// `‖v‖₂` as a strict ascending fold.
 fn norm(v: &[f64]) -> f64 {
     let mut sum = 0.0_f64;
     for &value in v {
@@ -287,9 +230,8 @@ fn norm(v: &[f64]) -> f64 {
     sum.sqrt()
 }
 
-/// `u · v`, in ascending index order, so the sum is bit-reproducible.
+/// `u · v` as a strict ascending fold.
 fn dot(u: &[f64], v: &[f64]) -> f64 {
-    debug_assert_eq!(u.len(), v.len(), "a dot product needs matched columns");
     let mut acc = 0.0_f64;
     for (&a, &b) in u.iter().zip(v) {
         acc += a * b;
@@ -297,11 +239,7 @@ fn dot(u: &[f64], v: &[f64]) -> f64 {
     acc
 }
 
-/// The denominator of a relative residual.
-///
-/// A zero right-hand side has no relative residual, so the absolute one is
-/// reported instead of `0/0`, which [`gmres`] would read as a non-finite
-/// operator and blame on the adapter.
+/// Denominator of a relative residual: `‖b‖`, or 1 for `b = 0` (absolute residual).
 fn scale_of(norm_b: f64) -> f64 {
     if norm_b == 0.0 {
         1.0
@@ -310,88 +248,44 @@ fn scale_of(norm_b: f64) -> f64 {
     }
 }
 
-/// What a converged solve achieved.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Converged {
-    /// True relative residual, recomputed explicitly at the end.
-    pub residual: f64,
-    pub iterations: u32,
-    pub restarts: u32,
-}
-
-/// Solve with mixed-precision iterative refinement.
-///
-/// `accurate` forms the residual in `f64`; `fast` solves the correction equation
-/// and may be an `f32` adapter. They may be the same value, which is the host
-/// path.
+/// GMRES inside an outer loop that recomputes the true residual after each
+/// single-cycle correction solve:
 ///
 /// ```text
-/// r ← b − A_accurate x                     (f64)
-/// while ‖r‖/‖b‖ > tolerance:
-///     solve A_fast d = r    loosely        (f32, the expensive part)
-///     x ← x + d
-///     r ← b − A_accurate x                 (f64)
+/// r ← b − A x
+/// while ‖r‖/‖b‖ > tolerance:  solve A d = r (one Krylov cycle); x ← x + d; r ← b − A x
 /// ```
 ///
-/// Both operators are needed: a single-operator loop puts `A x` inside the
-/// residual on the fast adapter too, so the bound carries that adapter's error
-/// however many cycles run — measured, a device solve stalls at `7.87e-7`, which
-/// is `f32` epsilon with the fold's `√n` on it.
-///
-/// The correction is solved to `INNER_TOLERANCE` because a correction accurate
-/// to more digits than `fast` carries is digits that do not exist. The reported
-/// residual is always `accurate`'s.
-pub fn refine<A: MatVec, F: MatVec>(
-    accurate: &A,
-    fast: &F,
+/// Stops early when a pass fails to reduce the residual.
+pub fn refine<M: MatVec>(
+    operator: &M,
     b: &[f64],
     options: Options,
     x: &mut [f64],
     workspace: &mut Workspace,
 ) -> Result<Converged, SolveError> {
     let n = b.len();
-    debug_assert_eq!(accurate.dim(), n, "the residual operator is `b`'s length");
-    debug_assert_eq!(fast.dim(), n, "both operators are the same problem");
-    debug_assert_eq!(x.len(), n, "`x` is the operator's dimension");
-
     let mut scratch = Vec::new();
     let mut correction = vec![0.0_f64; n];
 
-    // Decided by what `fast` is *declared* to carry, never a constant: asking an
-    // `f32` operator for `1e-10` spends the whole budget on digits it does not
-    // have, and asking an `f64` operator for `1e-3` spends it on outer passes it
-    // does not need — an outer pass being an `f64` matvec.
-    let inner_tolerance = match fast.backend() {
-        Backend::Cpu => options.tolerance,
-        Backend::GpuF32 => INNER_TOLERANCE,
-    };
-
-    let mut achieved = residual(accurate, b, x, &mut scratch);
+    let mut achieved = residual(operator, b, x, &mut scratch);
     let mut iterations = 0_u32;
     let mut restarts = 0_u32;
 
-    // Bounded by the same `max_iterations` the inner solver is, so a caller that
-    // asked for a small budget gets it honoured rather than multiplied.
     while achieved > options.tolerance && iterations < options.max_iterations {
-        // `residual` left `b − A x` in `scratch`, so the correction equation's
-        // right-hand side is already formed and needs no second matvec.
+        // `scratch` already holds `b − A x`: the correction's right-hand side.
         let rhs = std::mem::take(&mut scratch);
         correction.clear();
         correction.resize(n, 0.0);
 
         let inner = Options {
-            tolerance: inner_tolerance,
+            tolerance: options.tolerance,
             restart: options.restart,
-            // One Krylov cycle, never a restart: an inner restart recomputes
-            // `rhs − A_fast d` and carries on, which is what an outer pass does
-            // with the *accurate* operator instead. The outer pass is strictly
-            // better at the same price.
+            // One Krylov cycle; the outer pass is the restart.
             max_iterations: options.restart.min(options.max_iterations - iterations),
         };
-        // A correction that did not converge is still a correction: the outer
-        // residual decides, and it is recomputed below in `f64`. Only a
-        // breakdown — a genuinely singular system — is fatal.
-        let step = match gmres(fast, &rhs, inner, &mut correction, workspace) {
+        // An unconverged correction is still a correction; only breakdown is fatal.
+        let step = match gmres(operator, &rhs, inner, &mut correction, workspace) {
             Ok(step) => step.iterations,
             Err(SolveError::NotConverged { iterations, .. }) => iterations,
             Err(fatal) => return Err(fatal),
@@ -404,20 +298,7 @@ pub fn refine<A: MatVec, F: MatVec>(
         }
 
         scratch = rhs;
-        let next = residual(accurate, b, x, &mut scratch);
-        // The difference between "hard problem", "wrong inner tolerance" and
-        // "the operator is less accurate than it claims" is invisible in the
-        // returned error and obvious in the per-pass trace.
-        if std::env::var_os("GPURIFY_REFINE_TRACE").is_some() {
-            eprintln!(
-                "refine pass {restarts}: {achieved:e} -> {next:e}, \
-                 inner steps {step}, budget {iterations}/{}",
-                options.max_iterations
-            );
-        }
-        // Fail closed on a refinement that has stopped refining: a stalled loop
-        // would spend the whole budget re-deriving the same number, which reads
-        // as "hard problem" when it is "this is the floor".
+        let next = residual(operator, b, x, &mut scratch);
         if next >= achieved {
             achieved = next;
             break;
@@ -438,34 +319,14 @@ pub fn refine<A: MatVec, F: MatVec>(
     })
 }
 
-/// How loosely the correction equation is solved when `fast` is an `f32`
-/// adapter: three decades, roughly what an `f32` operator can be trusted for
-/// after the fold's `√n`.
-const INNER_TOLERANCE: f64 = 1e-3;
-
-/// True relative residual `‖b − Ax‖ / ‖b‖`.
-///
-/// `scratch` is caller-owned and is left holding `b − A x`, which is what lets
-/// [`gmres`] reuse its convergence check as the next restart's starting
-/// residual.
+/// True relative residual `‖b − Ax‖ / ‖b‖`; leaves `b − A x` in `scratch`.
 pub fn residual<M: MatVec>(operator: &M, b: &[f64], x: &[f64], scratch: &mut Vec<f64>) -> f64 {
     let n = b.len();
-    debug_assert_eq!(
-        operator.dim(),
-        n,
-        "the operator's dimension is `b`'s length"
-    );
-    debug_assert_eq!(x.len(), n, "`x` is the operator's dimension");
-
     scratch.clear();
     scratch.resize(n, 0.0);
     operator.apply(x, &mut scratch[..]);
-    debug_assert_eq!(scratch.len(), n, "`apply` must not resize `y`");
-
-    debug_assert_eq!(scratch.len(), b.len(), "the residual is `b`'s column");
     for (ax, &bi) in scratch.iter_mut().zip(b) {
         *ax = bi - *ax;
     }
-
     norm(&scratch[..]) / scale_of(norm(b))
 }

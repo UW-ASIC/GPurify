@@ -9,10 +9,10 @@ use crate::common;
 
 use common::{grid, uniform_stack};
 use gpurify_check::topology::{NetId, NetTable};
-use gpurify_extract::field::henry::bridge::{
+use gpurify_extract::field::filament::self_inductance_bar;
+use gpurify_extract::field::henry::{
     extract_inductance_into, InductMatrix, InductanceError, InductanceOptions,
 };
-use gpurify_extract::field::integrals::filament::self_inductance_bar;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStoreBuilder, LayerId};
 

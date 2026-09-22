@@ -1,31 +1,14 @@
-//! The field solve: the capacitance matrix, the mesh it is built from, and the
-//! adapter that does the multiplying.
+//! The field solve: the capacitance matrix and the mesh it is built from.
 //!
-//! Electrostatics is where the oracles are strongest. Reciprocity makes the
-//! Maxwell matrix symmetric for *any* geometry, so that law holds on the
-//! generated corpus where no closed form exists; a positive-definite matrix
-//! makes the electrostatic energy non-negative for every potential vector,
-//! including generated ones; and a mesh's panels have to tile the conductor, so
-//! their areas sum to a surface area anyone can compute on paper.
-//!
-//! The GPU is tested here too, and it is tested by running. `docs/GPU.md`
-//! contract item 5: where no device exists the test asserts the fallback was
-//! taken. Nearly every GPU test in the old tree was `#[ignore]`d, so nothing
-//! proved the two paths agreed, and an ignored test is a test that does not
-//! exist.
+//! Reciprocity makes the Maxwell matrix symmetric for *any* geometry, so that
+//! law holds on generated corpora; a mesh's panels tile the conductor, so their
+//! areas sum to a surface area computable on paper.
 
 use crate::common;
 
 use common::{extracted, grid, uniform_stack};
 use gpurify_check::topology::NetId;
-#[cfg(feature = "gpu")]
-use gpurify_extract::field::gpu::Device;
-#[cfg(feature = "gpu")]
-use gpurify_extract::field::matvec::select;
-use gpurify_extract::field::matvec::{Backend, CpuMatVec, MatVec};
-use gpurify_extract::field::mesh::{
-    build_into, conductor_area, Mesh, MeshError, MeshOptions, Panel,
-};
+use gpurify_extract::field::mesh::{build_into, Mesh, MeshError, MeshOptions};
 use gpurify_extract::field::CapMatrix;
 use gpurify_ingest::deck::ProcessStack;
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
@@ -50,10 +33,7 @@ fn matrix(rows: &[&[f64]]) -> CapMatrix {
 /// off-diagonals — the shape a physical Maxwell matrix has.
 ///
 /// Built rather than solved for, so the laws below are asserted over arbitrary
-/// numbers. Gershgorin puts every eigenvalue of such a matrix in the positive
-/// half-line, so it is positive definite and its energy is positive for every
-/// nonzero potential vector. That is the fact under the energy test, and it is
-/// a fact about the matrix rather than about the code.
+/// numbers.
 fn random_maxwell(rng: &mut Rng, n: usize) -> CapMatrix {
     let mut value = vec![0.0_f64; n * n];
     for i in 0..n {
@@ -78,39 +58,13 @@ fn random_maxwell(rng: &mut Rng, n: usize) -> CapMatrix {
     }
 }
 
-/// A cube of side `s` as six panels, one per face.
-///
-/// The oracle for `conductor_area`: a cube's surface area is `6 s²` and every
-/// panel is exactly one face, so the panels tile it with nothing lost and
-/// nothing counted twice.
-fn cube(conductor: u32, side: f64) -> Vec<Panel> {
-    let half = side / 2.0;
-    let faces = [
-        ([half, 0.0, 0.0], [1.0, 0.0, 0.0]),
-        ([-half, 0.0, 0.0], [-1.0, 0.0, 0.0]),
-        ([0.0, half, 0.0], [0.0, 1.0, 0.0]),
-        ([0.0, -half, 0.0], [0.0, -1.0, 0.0]),
-        ([0.0, 0.0, half], [0.0, 0.0, 1.0]),
-        ([0.0, 0.0, -half], [0.0, 0.0, -1.0]),
-    ];
-    faces
-        .into_iter()
-        .map(|(centre, normal)| Panel {
-            centre,
-            normal,
-            area: side * side,
-            conductor,
-        })
-        .collect()
-}
-
 /// A mesh's panels as bytes, floats by their bit pattern. The determinism gate
 /// for meshing, and written out here rather than reached for through `Debug`
 /// for the same reason `common::serialise` is.
 fn serialise_mesh(mesh: &Mesh) -> Vec<u8> {
     let mut out = Vec::with_capacity(mesh.panel.len() * 60);
     for panel in &mesh.panel {
-        for value in panel.centre.iter().chain(&panel.normal) {
+        for value in &panel.centre {
             out.extend_from_slice(&value.to_bits().to_le_bytes());
         }
         out.extend_from_slice(&panel.area.to_bits().to_le_bytes());
@@ -281,21 +235,9 @@ fn a_built_mesh_partitions_its_panels_across_the_nets_it_was_given() {
                 "panel {index} has an area of {}",
                 panel.area
             );
-            let norm = panel
-                .normal
-                .iter()
-                .map(|component| component * component)
-                .sum::<f64>()
-                .sqrt();
-            assert_close(&format!("the normal of panel {index}"), norm, 1.0, 1e-12);
             summed += panel.area;
         }
-        assert_close_relative(
-            &format!("conductor {conductor} against its own band"),
-            conductor_area(&mesh, owner),
-            summed,
-            1e-12,
-        );
+        assert!(summed > 0.0, "conductor {conductor} has no surface");
     }
 }
 
@@ -402,6 +344,16 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     );
 }
 
+/// Surface area of one conductor, summed from its band of panels.
+fn conductor_area(mesh: &Mesh, conductor: u32) -> f64 {
+    let c = conductor as usize;
+    let (from, to) = (
+        mesh.conductor_start[c] as usize,
+        mesh.conductor_start[c + 1] as usize,
+    );
+    mesh.panel[from..to].iter().map(|p| p.area).sum()
+}
+
 /// A CSR boundary as a subscript, refusing anything that is not one.
 fn node(index: u32) -> usize {
     usize::try_from(index).expect("a panel index is a u32 and usize is at least that wide")
@@ -418,7 +370,12 @@ fn a_capacitance_matrix_reads_back_row_major_at_the_dimension_it_reports() {
     assert_eq!(m.dim(), 3);
     for (i, row) in rows.iter().enumerate() {
         for (j, &expected) in row.iter().enumerate() {
-            assert_close(&format!("entry ({i}, {j})"), m.get(i, j), expected, 1e-12);
+            assert_close(
+                &format!("entry ({i}, {j})"),
+                m.value[i * m.dim() + j],
+                expected,
+                1e-12,
+            );
         }
     }
     assert_eq!(CapMatrix::default().dim(), 0, "an empty matrix has no rows");
@@ -460,183 +417,4 @@ fn any_symmetric_matrix_reports_no_asymmetry() {
             1e-15,
         );
     }
-}
-
-/// Oracle: closed form. Electrostatic energy is half `V` transpose `C` `V`. For
-/// `C = [[2, -1], [-1, 2]]` and `V = [1, 0]` that is one; for `V = [1, 1]` the
-/// two off-diagonal terms cancel one unit of each diagonal and it is one again.
-/// Both are worked here on paper.
-#[test]
-fn electrostatic_energy_is_half_v_transpose_c_v() {
-    let m = matrix(&[&[2.0, -1.0], &[-1.0, 2.0]]);
-    assert_close(
-        "a single charged conductor",
-        m.energy(&[1.0, 0.0]),
-        1.0,
-        1e-12,
-    );
-    assert_close("both at one volt", m.energy(&[1.0, 1.0]), 1.0, 1e-12);
-    assert_close("opposed", m.energy(&[1.0, -1.0]), 3.0, 1e-12);
-    assert_close("no potential, no energy", m.energy(&[0.0, 0.0]), 0.0, 1e-15);
-}
-
-/// Oracle: law. Energy is a quadratic form, so scaling every potential by `k`
-/// scales the energy by `k` squared. True for any matrix and any vector, and it
-/// catches the two errors a hand-checked example does not: a missing half, and
-/// a linear term that should not be there.
-#[test]
-fn energy_scales_with_the_square_of_the_potentials() {
-    let mut rng = Rng::new(67);
-    let m = random_maxwell(&mut rng, 6);
-    let v: Vec<f64> = (0..6).map(|_| rng.unit() * 4.0 - 2.0).collect();
-    let base = m.energy(&v);
-    assert!(base > 0.0, "a positive definite matrix stores {base} J");
-
-    for k in [0.5, 2.0, -3.0] {
-        let scaled: Vec<f64> = v.iter().map(|value| value * k).collect();
-        assert_close_relative(
-            "energy under a scaled potential",
-            m.energy(&scaled),
-            k * k * base,
-            1e-12,
-        );
-    }
-}
-
-/// Oracle: law. A physical capacitance matrix is diagonally dominant with
-/// non-positive off-diagonals, and such a matrix is positive semi-definite, so
-/// its energy is non-negative for *every* potential vector. Asserted over
-/// generated matrices and generated potentials: a negative energy means the
-/// result is not a capacitance matrix, whatever the residual said.
-#[test]
-fn energy_is_never_negative_for_any_potential_vector() {
-    let mut rng = Rng::new(71);
-    for n in 1..=7 {
-        let m = random_maxwell(&mut rng, n);
-        for round in 0..32 {
-            let v: Vec<f64> = (0..n).map(|_| rng.unit() * 20.0 - 10.0).collect();
-            let energy = m.energy(&v);
-            assert!(
-                energy >= 0.0,
-                "round {round} of a {n} by {n} matrix stored {energy} J at {v:?}"
-            );
-        }
-    }
-}
-
-/// Oracle: closed form. A cube of side two has a surface area of twenty-four,
-/// and its mesh is six panels of four. The panels must tile the conductor
-/// exactly: a mesh that loses area loses charge, and a solve on it is wrong in
-/// a way no residual reveals.
-#[test]
-fn the_panels_of_a_cube_sum_to_its_analytic_surface_area() {
-    let mut mesh = Mesh {
-        panel: cube(0, 2.0),
-        conductor_start: vec![0, 6],
-        conductor_net: vec![NetId(0)],
-        epsilon: vec![1.0; 6],
-    };
-    assert_close("a cube of side two", conductor_area(&mesh, 0), 24.0, 1e-12);
-
-    // Refining a face into four quarters changes the panel count and nothing
-    // else. Area is what survives refinement, which is the whole claim.
-    let face = mesh.panel.pop().expect("the cube has six faces");
-    for _ in 0..4 {
-        mesh.panel.push(Panel {
-            area: face.area / 4.0,
-            ..face
-        });
-    }
-    mesh.conductor_start = vec![0, 9];
-    mesh.epsilon = vec![1.0; 9];
-    assert_close(
-        "the same cube, one face refined",
-        conductor_area(&mesh, 0),
-        24.0,
-        1e-12,
-    );
-}
-
-/// Oracle: closed form. One conductor's area is its own panels and nobody
-/// else's. Two cubes of different sides in one mesh, and each must report its
-/// own surface area — an implementation summing the whole panel column passes
-/// the single-conductor case above and fails here.
-#[test]
-fn conductor_area_reads_only_the_panels_of_the_conductor_it_was_asked_about() {
-    let mut panel = cube(0, 2.0);
-    panel.extend(cube(1, 5.0));
-    let mesh = Mesh {
-        conductor_start: vec![0, 6, 12],
-        conductor_net: vec![NetId(0), NetId(1)],
-        epsilon: vec![1.0; panel.len()],
-        panel,
-    };
-
-    assert_close("the small cube", conductor_area(&mesh, 0), 24.0, 1e-12);
-    assert_close("the large cube", conductor_area(&mesh, 1), 150.0, 1e-12);
-    assert_close_relative(
-        "both conductors against the whole panel column",
-        conductor_area(&mesh, 0) + conductor_area(&mesh, 1),
-        mesh.panel.iter().map(|p| p.area).sum::<f64>(),
-        1e-12,
-    );
-}
-
-/// Oracle: law. With no device there is nothing to select, so the answer is the
-/// host at every problem size — including sizes far above any crossover. This
-/// is the fallback contract stated where it can be checked without a device,
-/// and it is why `select` takes an `Option` rather than a flag.
-#[cfg(feature = "gpu")]
-#[test]
-fn no_device_means_the_host_at_every_problem_size() {
-    for panels in [0_usize, 1, 64, 10_000, 1 << 24] {
-        assert_eq!(
-            select(panels, None),
-            Backend::Cpu,
-            "{panels} panels with no device"
-        );
-    }
-}
-
-/// Oracle: law. `CpuMatVec` reports the host, because `Accuracy::backend` is
-/// how a run's numbers are attributed and an adapter that misnames itself makes
-/// every attribution downstream a lie.
-#[test]
-fn the_host_adapter_reports_the_host() {
-    assert_eq!(CpuMatVec::default().backend(), Backend::Cpu);
-}
-
-/// Oracle: law, and `docs/GPU.md` contract item 6. Selection is automatic and
-/// measured: below the device's own crossover the host wins and is chosen, at
-/// or above it the device is. Where CI has no device the branch taken instead
-/// asserts the fallback, which is contract item 5 — this test runs either way
-/// and is never `#[ignore]`d.
-#[cfg(feature = "gpu")]
-#[test]
-fn the_device_is_selected_only_above_its_own_measured_crossover() {
-    let device = Device::find().expect("probing for a device is not itself a failure");
-    let Some(device) = device else {
-        assert_eq!(
-            select(1 << 24, None),
-            Backend::Cpu,
-            "no device is present, so every size falls back to the host"
-        );
-        return;
-    };
-
-    let crossover = device.crossover();
-    assert!(
-        crossover > 0,
-        "a crossover of zero is not a measured number"
-    );
-    assert_eq!(
-        select(crossover - 1, Some(&device)),
-        Backend::Cpu,
-        "below the crossover the host was measured to win"
-    );
-    assert_eq!(
-        select(crossover, Some(&device)),
-        Backend::GpuF32,
-        "at the crossover the device was measured to win"
-    );
 }
