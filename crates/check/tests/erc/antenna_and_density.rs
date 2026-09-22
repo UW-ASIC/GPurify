@@ -22,7 +22,7 @@ use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_geom::{Bbox, GeometryStore, LayerId};
-use gpurify_geom::{Evaluator, LayerRef};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::{random_rectilinear_layer, RandomLayerSpec};
@@ -74,9 +74,9 @@ fn gate_on_a_long_wire() -> (GeometryStore, NetTable, gpurify_geom::PolyId) {
 fn antenna_table(id: StrId, max_ratio: f64) -> AntennaTable {
     AntennaTable {
         head: head(id),
-        gate: vec![LayerRef::Base(LayerId(2))],
+        gate: vec![LayerId(2)],
         collector_start: vec![0, 1],
-        collector: vec![LayerRef::Base(LayerId(0))],
+        collector: vec![LayerId(0)],
         collector_measure: vec![AntennaMeasure::Area],
         max_ratio: vec![max_ratio],
     }
@@ -177,9 +177,9 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
         design,
         &AntennaElectricalTable {
             head: head(id),
-            gate: vec![LayerRef::Base(LayerId(2))],
+            gate: vec![LayerId(2)],
             collector_start: vec![0, 1],
-            collector: vec![LayerRef::Base(LayerId(0))],
+            collector: vec![LayerId(0)],
             diode: vec![None],
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
@@ -260,14 +260,14 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
             rule: vec![early, late],
             severity: vec![Severity::Error, Severity::Error],
         },
-        gate: vec![LayerRef::Base(LayerId(2)), LayerRef::Base(LayerId(2))],
+        gate: vec![LayerId(2), LayerId(2)],
         // Stage one collects metal 1 alone; stage two collects metal 1 *and*
         // metal 2, because metal 2's etch sees everything already under it.
         collector_start: vec![0, 1, 3],
         collector: vec![
-            LayerRef::Base(LayerId(0)),
-            LayerRef::Base(LayerId(0)),
-            LayerRef::Base(LayerId(3)),
+            LayerId(0),
+            LayerId(0),
+            LayerId(3),
         ],
         collector_measure: vec![AntennaMeasure::Area; 3],
         // Limits below both ratios, so each stage's own measurement lands in the
@@ -331,12 +331,12 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
             rule: stages.to_vec(),
             severity: vec![Severity::Error; 2],
         },
-        gate: vec![LayerRef::Base(LayerId(2)); 2],
+        gate: vec![LayerId(2); 2],
         collector_start: vec![0, 1, 3],
         collector: vec![
-            LayerRef::Base(LayerId(0)),
-            LayerRef::Base(LayerId(0)),
-            LayerRef::Base(LayerId(3)),
+            LayerId(0),
+            LayerId(0),
+            LayerId(3),
         ],
         collector_measure: vec![AntennaMeasure::Area; 3],
         // A ratio strictly above zero violates a zero ceiling, so every stage
@@ -373,7 +373,7 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
 fn density_table(id: StrId, side: i64, min: Option<f64>, max: Option<f64>) -> DensityCmpTable {
     DensityCmpTable {
         head: head(id),
-        layer: vec![LayerRef::Base(LayerId(0))],
+        layer: vec![LayerId(0)],
         window: vec![(dbu(side), dbu(side))],
         step: vec![(dbu(side), dbu(side))],
         min_density: vec![min],

@@ -16,10 +16,10 @@ use crate::common;
 
 use common::{
     assert_skipped_for_intent, declared_supplies, head, limit_net, manufacturing_grid, microamps,
-    millivolts, ohms, operating_temperature, rule, series_chain, solve,
+    millivolts, operating_temperature, rule, series_chain, solve,
 };
 use gpurify_check::erc::facts::IntentMap;
-use gpurify_check::erc::power::{NetNetworks, Solved};
+use gpurify_check::erc::power::Solved;
 use gpurify_check::erc::rules::electrical::{
     check_electromigration, check_em_current_density, check_ir_drop, ElectromigrationTable,
     EmCurrentDensityTable, IrDropTable,
@@ -35,7 +35,7 @@ use gpurify_geom::Evaluator;
 use gpurify_geom::LayerId;
 use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
 use gpurify_ingest::deck::DeviceKind;
-use gpurify_ingest::intent::{DomainId, NetLimits, SupplyRole};
+use gpurify_ingest::intent::{NetLimits, SupplyRole};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_testgen::{dbu, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
 
@@ -104,7 +104,6 @@ fn reliability_table(id: StrId) -> ReliabilityTable {
     ReliabilityTable {
         head: head(id),
         required_lifetime_hours: vec![87_600.0],
-        mechanism: vec![StrId(900)],
         reference_lifetime_hours: vec![10_000.0],
         reference_stress: vec![millivolts(2_000.0)],
         stress_exponent: vec![4.0],
@@ -139,8 +138,6 @@ fn no_intent_file_resolves_to_a_map_that_says_nothing_was_declared() {
         !map.is_usable(),
         "a map with nothing declared has nothing for an intent-gated rule to check against"
     );
-    assert_eq!(map.supply_count(), 0);
-    assert_eq!(map.supply_of(NetId(0)), None);
     assert_eq!(map.nominal_voltage(NetId(0)), None);
     let limits = map.limits_of(NetId(0));
     assert!(
@@ -162,16 +159,6 @@ fn a_map_holding_declared_supplies_is_usable_and_answers_only_about_them() {
 
     assert!(map.declared);
     assert!(map.is_usable());
-    assert_eq!(map.supply_count(), 2);
-    assert_eq!(
-        map.supply_of(NetId(0)),
-        Some((DomainId(0), SupplyRole::Power))
-    );
-    assert_eq!(
-        map.supply_of(NetId(1)),
-        Some((DomainId(0), SupplyRole::Ground))
-    );
-    assert_eq!(map.supply_of(NetId(7)), None);
     assert_eq!(map.nominal_voltage(NetId(0)), Some(millivolts(1_800.0)));
     assert_eq!(map.nominal_voltage(NetId(7)), None);
     assert_eq!(map.limits_of(NetId(0)).max_drop, Some(millivolts(6.0)));
@@ -395,11 +382,6 @@ fn four_domains(case: &NetlistCase, nets: &NetTable, millivolt: [f64; 4]) -> Int
     IntentMap {
         declared: true,
         supply_net: rows.iter().map(|&(net, _)| net).collect(),
-        supply_domain: rows
-            .iter()
-            .enumerate()
-            .map(|(index, _)| DomainId(u32::try_from(index).expect("four domains")))
-            .collect(),
         supply_role: rows
             .iter()
             .map(|&(_, mv)| {
@@ -413,7 +395,6 @@ fn four_domains(case: &NetlistCase, nets: &NetTable, millivolt: [f64; 4]) -> Int
         supply_voltage: rows.iter().map(|&(_, mv)| millivolts(mv)).collect(),
         limit_net: Vec::new(),
         limit: Vec::new(),
-        undeclared: Vec::new(),
     }
 }
 
@@ -483,8 +464,7 @@ fn hv_domain_skips_without_intent_and_flags_the_straddling_device_with_it() {
 /// must skip instead; and with supplies declared it examines every pad net and
 /// every guard ring, and reports the pads that reach no clamp.
 ///
-/// The clamp list is empty, so no device in this layout qualifies as protection
-/// and all four pad nets are unprotected. That count is decided by the spec the
+/// A deck cannot list a clamp model, so all four pad nets are unprotected. That count is decided by the spec the
 /// layout was built from, not read back from the run.
 #[test]
 fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
@@ -496,20 +476,11 @@ fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
         nets: &nets,
         devices: &devices,
     };
-    let networks = NetNetworks::default();
     let id = rule(15);
     let table = EsdLatchupTable {
         head: head(id),
         pad: vec![case.layers.rail],
         guard_ring: vec![case.layers.marker],
-        clamp_start: vec![0, 0],
-        clamp_model: Vec::new(),
-        clamp_resistance: Vec::new(),
-        clamp_capacity: Vec::new(),
-        clamp_voltage: Vec::new(),
-        required_current: vec![Qty::new(100.0)],
-        max_path_resistance: vec![ohms(2.0)],
-        max_clamp_voltage: vec![millivolts(4_000.0)],
         min_guard_ring_width: vec![dbu(100)],
         max_tap_distance: vec![dbu(100_000)],
     };
@@ -519,7 +490,6 @@ fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
     check_esd_latchup(
         design,
         &IntentMap::default(),
-        &networks,
         &table,
         &mut scratch,
         &mut violations,
@@ -532,7 +502,6 @@ fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
     check_esd_latchup(
         design,
         &intent,
-        &networks,
         &table,
         &mut scratch,
         &mut violations,
@@ -547,7 +516,7 @@ fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
     );
     assert_eq!(
         run.violations, 4,
-        "no device in this layout is on the row's clamp list, so no pad has a path"
+        "no clamp can be listed, so no pad has a path"
     );
     assert_eq!(
         violations.rule.iter().filter(|&&r| r == id).count(),

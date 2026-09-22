@@ -23,7 +23,7 @@ use gpurify_check::erc::rules::topology::{check_floating_well, FloatingWellTable
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
-use gpurify_geom::{Evaluator, LayerRef};
+use gpurify_geom::Evaluator;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::{StrId, StrTable};
@@ -119,8 +119,8 @@ fn wells(tapped_well_has_a_tap: bool) -> (Drawn, PolyId) {
 fn floating_well_table(id: StrId) -> FloatingWellTable {
     FloatingWellTable {
         head: head(id),
-        well: vec![LayerRef::Base(LayerId(0))],
-        tap: vec![LayerRef::Base(LayerId(1))],
+        well: vec![LayerId(0)],
+        tap: vec![LayerId(1)],
     }
 }
 
@@ -237,8 +237,8 @@ fn the_point_of_a_region_furthest_from_its_tap_is_reported_with_its_distance() {
         drawn.design(),
         &MissingTieTable {
             head: head(id),
-            region: vec![LayerRef::Base(LayerId(0))],
-            tap: vec![LayerRef::Base(LayerId(1))],
+            region: vec![LayerId(0)],
+            tap: vec![LayerId(1)],
             max_distance: vec![dbu(5_000)],
         },
         &mut scratch,
@@ -275,8 +275,8 @@ fn a_region_within_the_stated_tap_distance_is_clean() {
         drawn.design(),
         &MissingTieTable {
             head: head(id),
-            region: vec![LayerRef::Base(LayerId(0))],
-            tap: vec![LayerRef::Base(LayerId(1))],
+            region: vec![LayerId(0)],
+            tap: vec![LayerId(1)],
             max_distance: vec![dbu(20_000)],
         },
         &mut scratch,
@@ -312,8 +312,8 @@ fn taps(shorted: bool) -> Drawn {
 fn supply_short_table(id: StrId) -> SupplyShortTable {
     SupplyShortTable {
         head: head(id),
-        tap_a: vec![LayerRef::Base(LayerId(2))],
-        tap_b: vec![LayerRef::Base(LayerId(3))],
+        tap_a: vec![LayerId(2)],
+        tap_b: vec![LayerId(3)],
     }
 }
 
@@ -401,7 +401,7 @@ fn soft_connection_table(id: StrId) -> SoftConnectionTable {
     SoftConnectionTable {
         head: head(id),
         soft_start: vec![0, 1],
-        soft: vec![LayerRef::Base(LayerId(2))],
+        soft: vec![LayerId(2)],
     }
 }
 
@@ -608,16 +608,11 @@ fn pads_and_a_clamp() -> (gpurify_testgen::NetlistCase, NetTable, DeviceTable) {
     (case, nets, devices)
 }
 
-/// Oracle: construct-from-answer. The netlist decided which nets the clamp
-/// reaches before a polygon was drawn: nets one and two, and not net zero. So
-/// net zero is the pad whose first discharge goes through a gate oxide, and it
-/// is the one net of the three the rule must name.
-///
-/// The clamp is identified by its model name, taken from the case's own answer
-/// rather than re-interned, so the test cannot pass by matching the wrong
-/// string.
+/// Oracle: construct-from-answer. A deck cannot name a clamp model, so no pad
+/// net is protected: each of the three rails is one pad net, and each is
+/// flagged at one of its own polygons.
 #[test]
-fn a_pad_net_reaching_none_of_the_listed_clamp_models_is_flagged() {
+fn every_pad_net_is_flagged_when_no_clamp_can_be_listed() {
     let (case, nets, devices) = pads_and_a_clamp();
     let derived = Evaluator::default();
     let design = Design {
@@ -633,59 +628,16 @@ fn a_pad_net_reaching_none_of_the_listed_clamp_models_is_flagged() {
         &EsdTopologicalTable {
             head: head(id),
             pad: vec![case.layers.rail],
-            clamp_start: vec![0, 1],
-            clamp_model: vec![case.expected_devices[1].model],
         },
         &mut violations,
         &mut runs,
     );
 
-    assert_eq!(violations.rule.len(), 1);
-    assert_eq!(violations.rule[0], id);
-    assert!(
-        case.expected_net_polys[0].contains(&violations.shape_a[0]),
-        "the violation names {:?}, which is not a polygon of the unprotected net",
-        violations.shape_a[0]
-    );
-    common::assert_at_is_on_a_named_shape(&case.store, &violations, 0);
-
+    assert_eq!(violations.rule.len(), 3);
+    for row in 0..3 {
+        common::assert_at_is_on_a_named_shape(&case.store, &violations, row);
+    }
     let run = assert_rule_ran(&runs, id);
-    assert_eq!(
-        run.examined, 3,
-        "one rail per net, so three distinct pad nets"
-    );
-    assert_eq!(run.violations, 1);
-}
-
-/// Oracle: construct-from-answer. With both models on the clamp list every pad
-/// net reaches something the deck calls protection, so the rule finds nothing —
-/// and `assert_clean` insists it looked at all three pad nets first, which an
-/// empty violation table on its own does not say.
-#[test]
-fn every_pad_net_reaching_a_listed_clamp_model_is_clean() {
-    let (case, nets, devices) = pads_and_a_clamp();
-    let derived = Evaluator::default();
-    let design = Design {
-        store: &case.store,
-        derived: &derived,
-        nets: &nets,
-        devices: &devices,
-    };
-    let id = rule(62);
-    let (mut violations, mut runs) = report();
-    check_esd_topological(
-        design,
-        &EsdTopologicalTable {
-            head: head(id),
-            pad: vec![case.layers.rail],
-            clamp_start: vec![0, 2],
-            clamp_model: vec![
-                case.expected_devices[0].model,
-                case.expected_devices[1].model,
-            ],
-        },
-        &mut violations,
-        &mut runs,
-    );
-    assert_clean(&runs, &violations, id);
+    assert_eq!(run.examined, 3, "one rail per net, so three distinct pad nets");
+    assert_eq!(run.violations, 3);
 }

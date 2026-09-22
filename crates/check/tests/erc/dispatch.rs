@@ -23,7 +23,7 @@ use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
-use gpurify_geom::{Evaluator, LayerRef};
+use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::{
     Connectivity, Deck, DeviceRecognition, LayerTable, ProcessStack, RuleSpec, RuleTable,
 };
@@ -77,8 +77,8 @@ fn density(value: f64) -> Qty<CurrentDensity, { prefix::BASE }> {
     reason = "nineteen tables written out once is the point of the test"
 )]
 fn every_kind() -> RuleSet {
-    let base = LayerRef::Base(LayerId(0));
-    let other = LayerRef::Base(LayerId(1));
+    let base = LayerId(0);
+    let other = LayerId(1);
     RuleSet {
         floating_gate: topology::FloatingGateTable {
             head: head(id_of("floating_gate")),
@@ -120,8 +120,6 @@ fn every_kind() -> RuleSet {
         esd_topological: supply::EsdTopologicalTable {
             head: head(id_of("esd_topological")),
             pad: vec![LayerId(0)],
-            clamp_start: vec![0, 0],
-            clamp_model: Vec::new(),
         },
 
         antenna: antenna::AntennaTable {
@@ -183,7 +181,6 @@ fn every_kind() -> RuleSet {
         reliability: reliability::ReliabilityTable {
             head: head(id_of("reliability")),
             required_lifetime_hours: vec![87_600.0],
-            mechanism: vec![StrId(900)],
             reference_lifetime_hours: vec![10_000.0],
             reference_stress: vec![millivolts(2_000.0)],
             stress_exponent: vec![4.0],
@@ -201,14 +198,6 @@ fn every_kind() -> RuleSet {
             head: head(id_of("esd_latchup")),
             pad: vec![LayerId(0)],
             guard_ring: vec![LayerId(1)],
-            clamp_start: vec![0, 0],
-            clamp_model: Vec::new(),
-            clamp_resistance: Vec::new(),
-            clamp_capacity: Vec::new(),
-            clamp_voltage: Vec::new(),
-            required_current: vec![Qty::new(100.0)],
-            max_path_resistance: vec![ohms(2.0)],
-            max_clamp_voltage: vec![millivolts(4_000.0)],
             min_guard_ring_width: vec![dbu(100)],
             max_tap_distance: vec![dbu(100_000)],
         },
@@ -597,5 +586,28 @@ fn every_kind_the_list_names_is_a_kind_from_deck_recognises() {
             KINDS.contains(&kind),
             "{kind} is gated on design intent but is not a kind the deck can name"
         );
+    }
+}
+
+/// Oracle: construct-from-answer. The shipped deck's `electromigration` rows
+/// span 2 and 4 layers; every layer must carry its own row's Blech limit.
+#[test]
+fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
+    let mut strings = StrTable::default();
+    let deck = gpurify_ingest::deck::parse_deck(
+        include_str!("../../../../pdks/generic_finfet.json"),
+        manufacturing_grid(),
+        &mut strings,
+    )
+    .expect("the shipped deck parses");
+    let rules = RuleSet::from_deck(&deck, &strings).expect("the shipped deck is valid erc");
+    let em = &rules.electromigration;
+    assert_eq!(em.blech_limit.len(), em.layer.len());
+    let expected = [15_000.0, 54_000.0, 54_000.0, 126_750.0, 189_000.0];
+    assert_eq!(em.head.len(), expected.len());
+    for (row, want) in expected.into_iter().enumerate() {
+        let span = em.layer_start[row] as usize..em.layer_start[row + 1] as usize;
+        assert!(span.len() >= 2, "row {row} is multi-layer");
+        assert!(em.blech_limit[span].iter().all(|b| b.raw() == want), "row {row}");
     }
 }

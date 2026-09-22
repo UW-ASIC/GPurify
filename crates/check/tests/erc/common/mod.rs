@@ -19,7 +19,7 @@ use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_check::topology::NetId;
 use gpurify_geom::{prefix, Current, Grid, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_ingest::intent::{DomainId, NetLimits, SupplyRole};
+use gpurify_ingest::intent::{NetLimits, SupplyRole};
 use gpurify_ingest::StrId;
 use gpurify_testgen::point;
 use gpurify_testgen::Rng;
@@ -386,12 +386,10 @@ pub fn declared_supplies(power_net: NetId, ground_net: NetId, nominal_mv: f64) -
     IntentMap {
         declared: true,
         supply_net: vec![first, second],
-        supply_domain: vec![DomainId(0), DomainId(0)],
         supply_role: vec![role_of(first), role_of(second)],
         supply_voltage: vec![voltage_of(first), voltage_of(second)],
         limit_net: Vec::new(),
         limit: Vec::new(),
-        undeclared: Vec::new(),
     }
 }
 
