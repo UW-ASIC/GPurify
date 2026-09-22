@@ -79,9 +79,6 @@ pub fn l_shape_area(arm: i64, thickness: i64) -> i128 {
 
 /// A plus sign centred on `(cx, cy)`: two bars of width `thickness`, each
 /// `2 * arm` long, crossing at the centre.
-///
-/// An odd `thickness` has no integer centre line, which breaks the closed form,
-/// so it is refused.
 #[must_use]
 pub fn plus_shape(cx: i64, cy: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -131,9 +128,6 @@ pub fn plus_shape_area(arm: i64, thickness: i64) -> i128 {
 
 /// A U opening upwards, lower-left corner at `(x, y)`, overall width
 /// `2 * thickness + gap`.
-///
-/// The gap is a notch: an internal spacing within one polygon, a different
-/// measurement from the spacing between two polygons.
 #[must_use]
 pub fn u_shape(x: i64, y: i64, arm: i64, thickness: i64, gap: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(gap > 0, "a U needs a positive gap, got {gap}");
@@ -173,9 +167,6 @@ pub fn u_shape_area(arm: i64, thickness: i64, gap: i64) -> i128 {
 }
 
 /// Accumulates shapes and hands back a store plus the identity of every shape.
-///
-/// [`GeometryStoreBuilder::finish`] sorts rows by layer, so a shape's [`PolyId`]
-/// is not its push order; a push returns a [`Handle`] that [`Ids`] resolves.
 #[derive(Debug)]
 pub struct LayoutBuilder {
     builder: GeometryStoreBuilder,
@@ -216,9 +207,6 @@ impl Ids {
 
 impl LayoutBuilder {
     /// Start a layout over a layer table of `layer_count` layers.
-    ///
-    /// The count comes from the caller, not the geometry: a layer with no
-    /// shapes still needs an empty range, or a rule naming it cannot find it.
     #[must_use]
     pub fn new(layer_count: usize) -> Self {
         Self {
@@ -288,10 +276,6 @@ impl LayoutBuilder {
 }
 
 /// Two rectangles of side `size` facing each other across an exact gap.
-///
-/// Fixes the reported coordinate convention: `at` is the midpoint of the gap,
-/// on the line joining the two facing edges, and a spacing rule must report it.
-/// An odd gap has no integer midpoint, so it is refused rather than rounded.
 pub fn spaced_pair(
     layout: &mut LayoutBuilder,
     layer: LayerId,
@@ -313,11 +297,6 @@ pub fn spaced_pair(
 
 /// One layer of pseudo-random rectilinear geometry at an exactly known
 /// coverage.
-///
-/// A square of side `cell * sqrt(density)` is placed in each `cell`-sided cell
-/// with probability `density`, jittered only within the margin that keeps it
-/// clear of every neighbour — so the covered area is exactly `shapes * side^2`
-/// and no two shapes merge.
 pub fn random_rectilinear_layer(
     layout: &mut LayoutBuilder,
     rng: &mut crate::Rng,

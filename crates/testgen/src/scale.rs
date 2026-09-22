@@ -185,9 +185,6 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
 }
 
 /// Recursively quarter a region, returning its side and every leaf origin.
-///
-/// The gap at each level is `pad * level`, which is what spreads the corpus
-/// over more than one spatial scale.
 fn tile(depth: u8, leaf: i64, pad: i64) -> (i64, Vec<(i64, i64)>) {
     if depth <= 1 {
         return (leaf, vec![(0, 0)]);

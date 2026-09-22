@@ -26,12 +26,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Database units per micrometre for every fixture here: a 1 nm grid.
-///
-/// Stated once because half the assertions convert against it, and a second
-/// copy would eventually disagree with this one. It is also what
-/// `expectations.json` states as `grid_dbu_per_um`, and every `at` coordinate in
-/// that file is a dbu on it — loading the corpus at any other resolution
-/// reinterprets every limit in `params.json`.
 pub const DBU_PER_UM: i64 = 1000;
 
 /// The only layer any fixture draws on, and its GDSII stream pair.
@@ -79,34 +73,17 @@ pub struct Run {
 impl Run {
     /// A layout carrying exactly one minimum-width violation, at a coordinate
     /// this fixture chose.
-    ///
-    /// One violation, not several: an assertion that has to pick a row out of a
-    /// list is an assertion about ordering as well as about the rule, and those
-    /// deserve separate tests.
     pub fn with_min_width_violation() -> Self {
         build("narrow", &min_width_deck(LIMIT_NM), NARROW_NM)
     }
 
     /// The same layout with the narrow shape widened past the limit.
-    ///
-    /// Derived from the violating fixture rather than written independently, so
-    /// the two differ in exactly one dimension of one shape and a failure
-    /// cannot be blamed on anything else.
     pub fn clean() -> Self {
         build("clean", &min_width_deck(LIMIT_NM), WIDE_NM)
     }
 
     /// [`clean`](Self::clean), plus one intent-gated ERC rule the deck actually
     /// asks for, and `erc` selected so it is dispatched.
-    ///
-    /// Pair with [`without_intent`](Self::without_intent). A rule the deck never
-    /// named is never dispatched and records no [`RuleRun`], which reads exactly
-    /// like a rule that ran clean — so a fixture asserting a rule was *skipped*
-    /// has to configure one first.
-    ///
-    /// `ir_drop` is the cheapest of the intent-gated ERC rules to state: zero
-    /// layers, no parameters (`erc::ruleset` line 619). Nothing about the skip
-    /// path is specific to it.
     pub fn clean_with_gated_rule() -> Self {
         let mut run = build(
             "clean-gated",
@@ -132,15 +109,7 @@ impl Run {
         )
     }
 
-    /// Geometry at `±MAX_ABS_DBU`, the edge of the representable domain.
-    ///
-    /// Except that it is not `MAX_ABS_DBU`, and the difference is the test.
-    /// GDSII holds a coordinate in a signed 32-bit field, and
-    /// `export::gds::write_store` refuses anything wider rather than truncating
-    /// it — so the edge reachable *through a file* is `i32::MAX`, not `2^40`.
-    /// Writing this fixture at `MAX_ABS_DBU` would assert on geometry no GDSII
-    /// file can carry, which is a claim about the format rather than about this
-    /// pipeline.
+    /// Geometry at `±i32::MAX`, the widest coordinate a GDSII file can carry.
     pub fn at_domain_edge() -> Self {
         let extreme = i64::from(i32::MAX);
         let mut run = build_with("domain-edge", &min_width_deck(LIMIT_NM), |layout, met1| {
@@ -194,9 +163,6 @@ impl Run {
 
 impl Drop for Run {
     /// Remove the temporary directory.
-    ///
-    /// Best-effort and deliberately silent: a failure to clean up must not turn
-    /// a passing test red, and must not mask the real failure of a failing one.
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
@@ -211,17 +177,6 @@ fn min_width_deck(limit_nm: i64) -> String {
 
 /// The `min_width` deck plus one `ir_drop` row — one rule from each domain —
 /// and the `pex` stack ERC needs before it will dispatch a rule at all.
-///
-/// Kept separate from [`deck_with_rule`] so the single-rule invariant every other
-/// fixture relies on is untouched: only this one pays for the extra rows.
-///
-/// The `pex` section is not decoration. Without a sheet resistance for `met1`,
-/// `erc::power::extract_nets_into` refuses with "layer LayerId(0) carries current
-/// but the process stack gives it no sheet resistance", `run_erc` returns
-/// `StageStatus::Refused`, and **no rule records a `RuleRun` at all** — so a
-/// fixture meant to show rules being *skipped* shows nothing being skipped. The
-/// numbers below are ordinary metal-1 values; nothing asserts on them, they only
-/// have to let the stage start.
 fn min_width_and_ir_drop_deck(limit_nm: i64) -> String {
     format!(
         r#"{{
@@ -267,10 +222,6 @@ fn build(tag: &str, deck: &str, width_nm: i64) -> Run {
 
 /// Write a deck and a layout to a fresh directory, and describe the run over
 /// them.
-///
-/// The deck is parsed here before the layout is written, because the GDSII
-/// writer needs the deck's `LayerTable` to turn a `LayerId` back into a stream
-/// pair — the fixture cannot emit a file the run could not read back.
 fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder, LayerId)) -> Run {
     let dir = scratch_dir(tag);
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
@@ -346,9 +297,6 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
 }
 
 /// A directory no other fixture in this process will touch.
-///
-/// Tests run concurrently in one process, so the process id alone is not
-/// enough — two fixtures built at once would write each other's deck.
 fn scratch_dir(tag: &str) -> PathBuf {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let serial = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -359,10 +307,6 @@ fn scratch_dir(tag: &str) -> PathBuf {
 }
 
 /// The single violation in a table that must contain exactly one.
-///
-/// Asserting the count here rather than in each test means a fixture that
-/// silently produces two violations fails with "expected 1, found 2" instead of
-/// with a confusing mismatch on whichever row happened to sort first.
 pub fn only_violation(violations: &Violations) -> Violation {
     assert_eq!(
         violations.len(),
@@ -399,11 +343,6 @@ pub fn load_bytes(
 }
 
 /// Two stores hold the same geometry.
-///
-/// Compared column by column rather than with `assert_eq!` because
-/// `GeometryStore` has no `PartialEq`.
-/// Compares layer grouping too, since the round trip has to preserve the CSR
-/// layout invariant and not merely the coordinates.
 pub fn assert_stores_equal(left: &GeometryStore, right: &GeometryStore) {
     assert_eq!(left.layer_count(), right.layer_count(), "layer table width");
     assert_eq!(left.poly_count(), right.poly_count(), "polygon count");
@@ -437,10 +376,6 @@ pub fn assert_stores_equal(left: &GeometryStore, right: &GeometryStore) {
 }
 
 /// Every coordinate at `±MAX_ABS_DBU` came back unchanged.
-///
-/// Two halves, and the second is the one that catches a truncation: the extreme
-/// has to be *present*, and nothing may be outside it. A reader that wrapped
-/// `i32::MAX` to a negative would satisfy neither.
 pub fn assert_extremes_preserved(store: &GeometryStore, extreme: Dbu) {
     let mut saw_low = false;
     let mut saw_high = false;
@@ -470,11 +405,6 @@ pub fn assert_extremes_preserved(store: &GeometryStore, extreme: Dbu) {
 }
 
 /// A measurement as a reader sees it.
-///
-/// The same conversion the text report applies, and deliberately not a second
-/// spelling of it: a length is physical against the run's grid, and everything
-/// else prints its own labelled unit because `units` has no `Dbu`-area-to-
-/// physical conversion to apply.
 pub fn render(measured: Measurement, grid: Grid) -> String {
     match measured {
         Measurement::Length(value) => format!("{}", grid.to_length(value)),
@@ -505,11 +435,6 @@ pub struct Domain<C> {
 }
 
 /// A DRC or ERC case: one rule, one cell, a count and a set of findings.
-///
-/// One struct for both domains because the two emit the same shape — a rule
-/// fired, on a layer, at a coordinate, measuring something — which is why
-/// `report` gives them one table. The only difference is the field naming the
-/// rule, and `serde`'s `alias` absorbs it.
 #[derive(Debug, Deserialize)]
 pub struct GeometryCase {
     pub id: String,
@@ -592,10 +517,6 @@ pub struct PerNet {
 }
 
 /// Read `expectations.json`.
-///
-/// Panics rather than returning an error: a corpus that will not parse is not a
-/// test failure to be collected alongside the others, it is the harness having
-/// nothing to say.
 pub fn load_corpus() -> Corpus {
     let path = fixtures().join("expectations.json");
     let text =
@@ -610,30 +531,6 @@ pub use gen_fixtures::fixtures;
 // ---------------------------------------------------------------------------
 
 /// The inputs for one corpus case: its own GDS, the shared deck, the corpus grid.
-///
-/// [`UnknownLayers::Drop`] rather than `Reject`, and the difference is visible:
-/// `LVS_LVT_*` and `LVS_HVT_*` draw GDSII layers 12 and 13, which `params.json`
-/// does not declare at all (finding F6 in `expectations.json`). Rejecting would
-/// stop those four cases at load and replace the finding they carry with an I/O
-/// error. Dropping is fail-open, so it is a deliberate choice made here, in the
-/// harness, and not a default inherited from [`Inputs`].
-///
-/// # `intent` is a parameter, and it used to be the constant `None`
-///
-/// `docs/CORRECTNESS_MAP.md` §3: this one field hardcoded to `None` made
-/// `IntentMap::declared` false on every corpus case, so all six intent-gated ERC
-/// rules recorded `Skipped(NoDesignIntent)` regardless of what was on disk —
-/// F9 is filed as a missing fixture and was really a harness constant. It is now
-/// per-case and still optional; every caller but [`run_case_with_intent`] passes
-/// `None`, so the 160 cases are byte-for-byte the run they were before.
-///
-/// # `reference` is a parameter for the same reason
-///
-/// It was the constant `None` too, so the LVS stage of the engine had never run
-/// on real geometry in this workspace: `run_lvs` returns `Skipped` without a
-/// reference netlist, so `lvs::graph::from_layout_into` was reached only by
-/// `crates/engine/tests/checks.rs` on an `Extracted::default()`. Every caller but
-/// [`run_case_with_reference`] passes `None`, so the corpus cases are unchanged.
 fn case_inputs(
     domain: &str,
     id: &str,
@@ -651,11 +548,6 @@ fn case_inputs(
 }
 
 /// One case's inputs, read from disk by the ordinary reader and parser.
-///
-/// The GDS goes through `ingest::layout::gds` and the deck through
-/// `ingest::deck::parse_deck`, because a harness that built a `GeometryStore`
-/// itself could not catch a reader that produces the wrong one — which is half
-/// of what this corpus is for.
 pub struct CaseRun {
     pub loaded: Loaded,
     pub extracted: Extracted,
@@ -663,25 +555,12 @@ pub struct CaseRun {
 }
 
 /// Load, extract and check one fixture cell against `params.json`.
-///
-/// The layout path is `<domain>/<id>.gds`: the corpus names its files by case
-/// id, and several ids share a cell. [`case_inputs`] carries the rest.
-///
-/// No design intent, which is what every case in `expectations.json` was derived
-/// against. [`run_case_with_intent`] is the same run with one supplied.
 pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, String> {
     run_case_inputs(case_inputs(domain, id, None, None), checks)
 }
 
 /// The same case with a reference netlist beside it, so the LVS stage compares
 /// rather than skipping.
-///
-/// `reference` names a file under `tests/fixtures/` — a tracked one, since the
-/// four generated per-domain directories are what `.gitignore` covers. The path
-/// goes through [`Inputs::reference`] and therefore through
-/// `engine::pipeline::read_reference`, which sniffs the dialect off the file's
-/// own first subcircuit opener; a harness that parsed the netlist itself would
-/// not be exercising the reader a user reaches.
 pub fn run_case_with_reference(
     domain: &str,
     id: &str,
@@ -693,17 +572,6 @@ pub fn run_case_with_reference(
 }
 
 /// The same case with a design intent file written beside it.
-///
-/// `intent_source` is the JSON `ingest::intent::parse_intent` documents — the
-/// format already in the tree, not a second spelling of it. It is written to a
-/// scratch file because [`Inputs::intent`] is a path: intent reaches the engine
-/// through `read_intent`, and a harness that skipped the file would not be
-/// exercising the same code a user does.
-///
-/// Kept off the corpus path deliberately. An intent file keyed by case id under
-/// `tests/fixtures/` would change the outcome of whichever case it named, and
-/// the four cases that expect `Skipped(NoDesignIntent)` are the regression guard
-/// on the gate still working.
 pub fn run_case_with_intent(
     domain: &str,
     id: &str,
@@ -747,26 +615,6 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
 }
 
 /// One case run through the **field solve** rather than the closed form.
-///
-/// The other half of `pex`. [`run_case`] leaves `quasistatic_nets` empty, so
-/// `engine::run::run_pex` takes the analytical branch; naming every net here
-/// takes the other one, which meshes the conductors and solves for the
-/// capacitance matrix.
-///
-/// # Why every net, by name
-///
-/// `run_pex` selects by *name*, through `ports.net_of`, so this can only work
-/// on a cell whose nets are labelled — which is what the `TEXT` records in
-/// `_source/conformance.gds` and the `connectivity.labels` pairing in
-/// `params.json` are for. A cell with no labels yields no names, and the run
-/// refuses rather than silently field-solving nothing; that refusal is returned
-/// here as an error rather than swallowed.
-///
-/// # What this reaches that nothing else does
-///
-/// The whole quasi-static path, including `merge_field_solved_into` and the
-/// `reciprocity_refusal` gate, none of which any other test in the workspace
-/// executes.
 pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> {
     let inputs = case_inputs(domain, id, None, None);
 
@@ -815,10 +663,6 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
 }
 
 /// The coupling capacitance a field solve found in one cell, in attofarads.
-///
-/// Folded over the element column rather than read off a slot, because
-/// `ParasiticNetwork` has none — `net_capacitance` sums ground and coupling
-/// together and nothing splits them, which `expectations.json` records as F13.
 pub fn field_solved_coupling_af(domain: &str, id: &str) -> Result<f64, String> {
     let run = run_case_field_solved(domain, id)?;
     let network = run
@@ -836,16 +680,6 @@ pub fn field_solved_coupling_af(domain: &str, id: &str) -> Result<f64, String> {
 }
 
 /// The deck rule id a case's `rule`/`check` name refers to.
-///
-/// `expectations.json` names the rule *kind*; `params.json` names each row with
-/// a deck id like `met1.min_width`, and a `RuleRun` reports against that id. The
-/// two are not the same string and the mapping is not always one to one — the
-/// deck declares two `density` rows and two `min_enclosure` rows — so it is
-/// written out rather than inferred.
-///
-/// `None` means the case names no deck rule at all: `layer_validity` is a claim
-/// about polygon validation, not a rule kind in either `KINDS`, and those cases
-/// assert a [`ValidityError`] instead.
 fn deck_rule_of(case: &GeometryCase) -> Option<&'static str> {
     // The `min_enclosure` split is the one place the case id is load-bearing:
     // `params.json` declares the kind twice, once for met1-over-met2 and once
@@ -915,9 +749,6 @@ fn deck_rule_of(case: &GeometryCase) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 
 /// Every way case `id` disagreed with what the geometry says it must produce.
-///
-/// A `Vec` rather than an assertion per claim, so one wrong count does not hide
-/// the coordinate that is also wrong, and so the rest of the domain still runs.
 pub fn check_geometry_case(case: &GeometryCase) -> Vec<String> {
     let mut failed = Vec::new();
     let context = context_of(case);
@@ -1070,11 +901,6 @@ pub fn check_geometry_case(case: &GeometryCase) -> Vec<String> {
 }
 
 /// The rule ran and looked at something.
-///
-/// Split out because it is the assertion this whole layer was revived for, and
-/// because its failure message has to distinguish three states a bare count
-/// cannot: never ran, ran over an empty jurisdiction, ran over the wrong
-/// population.
 fn check_examined(
     case: &GeometryCase,
     deck_rule: &str,
@@ -1105,10 +931,6 @@ fn check_examined(
 }
 
 /// A case whose claim is that the tool refuses the geometry.
-///
-/// `polygon_validity` is not a rule kind, so there is no count to compare and no
-/// `RuleRun` to read. The checkable claim is the one `validate_layer_into`
-/// makes: which polygon, and which way it is unrepresentable.
 fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
     let Some(want) = case.expect_validity_error.as_ref() else {
         return vec![format!(
@@ -1170,10 +992,6 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
 }
 
 /// The `expect_validity_error.variant` that claims a layer validates.
-///
-/// Spelled as a variant rather than as an absent field so the case still names
-/// the layer the claim is about, and so `assert: ["validity_error"]` keeps
-/// meaning "this case is about representability" either way.
 const VALID: &str = "Valid";
 
 fn validity_variant(error: ValidityError) -> &'static str {
@@ -1199,25 +1017,6 @@ fn parse_outcome(text: &str) -> Outcome {
 }
 
 /// A reported measurement against the derived one, dimension included.
-///
-/// A mismatched dimension is a failure rather than a panic: `Measurement`
-/// refuses to compare a resistance with a spacing, and a rule reporting the
-/// wrong dimension is exactly the kind of finding this corpus should surface
-/// rather than abort on.
-///
-/// # Exact where the value is exact, relative where it is solved
-///
-/// `Length`, `Area` and `Count` carry integers and compare exactly. The three
-/// electrical dimensions carry an `f64` inside a `Qty`, and every one of them
-/// arrives out of the conjugate-gradient solve in `erc::power` rather than out
-/// of arithmetic on the geometry — so they compare the way `Ratio` does, to a
-/// relative `1e-9`. Exact equality on a solved voltage would be a test of the
-/// iteration order, not of the physics; `1e-9` is far tighter than any defect
-/// this corpus is looking for and far looser than a reassociated sum.
-///
-/// The `_ => false` fallthrough stays: a `Measurement` variant with no arm here
-/// must fail loudly rather than be silently accepted, which is the same
-/// fail-closed rule `Measurement::violates` applies to a dimension mismatch.
 fn measurement_matches(got: Measurement, want: &ExpectedMeasurement) -> bool {
     /// One relative tolerance for every floating-point dimension.
     fn near(value: f64, want: &ExpectedMeasurement) -> bool {
@@ -1245,9 +1044,6 @@ fn measurement_matches(got: Measurement, want: &ExpectedMeasurement) -> bool {
 
 /// What `expectations.json` already knows about a case that is expected to
 /// disagree, appended to every message the case produces.
-///
-/// A reader of CI output should not have to open the corpus to find out that a
-/// failure is a filed defect with a named fix site rather than a surprise.
 fn context_of(case: &GeometryCase) -> String {
     use std::fmt::Write as _;
     let mut context = format!(" [strength: {}", case.strength);
@@ -1269,22 +1065,6 @@ fn context_of(case: &GeometryCase) -> String {
 // ---------------------------------------------------------------------------
 
 /// Every way an LVS case's *layout side* disagreed with the geometry.
-///
-/// Source and drain extract to **distinct** nets: `params.json` derives
-/// `diff_active = diff NOT poly`, lists it — not raw `diff` — as the
-/// conductor, and recognises each MOS on a per-channel marker (`gate_n`,
-/// `gate_p`), so the channel conducts nothing laterally and the two
-/// diffusion flanks are two nets. That is what the `expect_nets` asserted
-/// below encode — `LVS_INV` is 4 nets, not the 3 the old S/D collapse gave —
-/// and `engine::pipeline::extract_into` now *refuses* the collapsing
-/// configuration outright (`topology::device::refuse_conducting_channels`),
-/// so a deck that leaves raw diffusion as the conductor under a MOS marker
-/// fails to extract rather than reporting the short as clean. F1, F2 and F3
-/// are closed; the per-cell derivations live in each case's `note`.
-///
-/// `expect_match` is still not asserted here: this helper runs the layout
-/// side only. The one full comparison against a shipped reference netlist is
-/// `tests/test_all.rs`'s `LVS_CLEAN_MATCH` run against `lvs_inv.cdl`.
 pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
     let mut failed = Vec::new();
     let blocked = format!(
@@ -1346,11 +1126,6 @@ pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// The parasitic totals one cell extracts to, folded by kind.
-///
-/// `ParasiticNetwork::net_capacitance` sums ground and coupling together and
-/// there is nothing for resistance at all (finding F13), so a test asking for
-/// "the area capacitance of this cell" folds the public element columns itself.
-/// That is what this is.
 pub struct Totals {
     pub resistance_ohm: f64,
     pub ground_cap_af: f64,
@@ -1359,13 +1134,6 @@ pub struct Totals {
 
 /// `only: Some(layer)` folds the elements that leave a node on that layer and
 /// nothing else.
-///
-/// The corpus needs the split because one cell carries two conductors: `PEX_DIFF`
-/// is met1 *and* met2, and its two cases derive 1.0 ohm and 0.8 ohm from the two
-/// separately. A whole-cell fold answers 1.8 to both, which agrees with neither
-/// and is not a defect in the extraction. `ParasiticNetwork` has `node_layer`,
-/// so the split is available here even though F13 says nothing on the type
-/// itself produces it.
 pub fn totals_of(run: &CaseRun, only: Option<gpurify::geom::LayerId>) -> Totals {
     let mut totals = Totals {
         resistance_ohm: 0.0,
@@ -1407,11 +1175,6 @@ fn value_of(kind: &str, totals: &Totals) -> Option<f64> {
 }
 
 /// Every way a PEX case disagreed with its closed form.
-///
-/// The three `underivable` coupling cases are not checked here — `ProcessStack`
-/// has no lateral coefficient column (F12), so no absolute number is derivable
-/// from the deck at all. What is derivable about them is a relation between
-/// them, which `check_coupling_laws` states.
 pub fn check_pex_case(case: &PexCase) -> Vec<String> {
     let mut failed = Vec::new();
     let context = format!(
@@ -1601,16 +1364,6 @@ fn check_per_net(
 }
 
 /// The two claims the corpus *can* make about lateral coupling.
-///
-/// `StackJson` carries no lateral coefficient (F12), so no absolute coupling
-/// value is derivable from the deck — but two relations are, and they are exact:
-///
-///  - **1/S.** `PEX_S100`, `PEX_CC` and `PEX_S400` are the same two bars at
-///    100, 200 and 400 nm, so `C·S` is the same number for all three.
-///  - **Rotation invariance.** `PEX_VERT` is `PEX_CC` rotated a quarter turn and
-///    `PEX_M2C` is it moved to met2 at the same thickness and `k`, so all three
-///    must couple identically. The manifest gives `PEX_MET2_COUPLING` 200 aF and
-///    `PEX_COUPLING_C` 160, which no physics permits of the same geometry.
 pub fn check_coupling_laws() -> Vec<String> {
     let mut failed = Vec::new();
     let coupling = |id: &str| -> f64 {
@@ -1665,13 +1418,6 @@ pub fn check_coupling_laws() -> Vec<String> {
 }
 
 /// Turn a domain's collected failures into one assertion.
-///
-/// One `#[test]` per domain rather than one per case, so a single wrong count
-/// does not stop the other 93 from running, and the panic message names every
-/// case that disagreed instead of the first.
-///
-/// Named for the domain rather than `report`, which now sits beside
-/// `gpurify::report` in one module and beside `bench_all`'s own private printer.
 pub fn report_domain(domain: &str, cases: usize, failed: &[String]) {
     assert!(
         failed.is_empty(),

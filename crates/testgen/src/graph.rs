@@ -21,9 +21,6 @@ pub struct GraphCase {
 }
 
 /// Build a graph with the stated component sizes.
-///
-/// `extra_edges` are added *within* components on top of the spanning tree, so
-/// they create cycles without changing the answer.
 #[must_use]
 pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> GraphCase {
     assert!(

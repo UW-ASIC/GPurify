@@ -42,10 +42,6 @@ use std::path::{Path, PathBuf};
 const DBU_PER_UM: i64 = 1000;
 
 /// Every `*.json` under `pdks/`, sorted, discovered by reading the directory.
-///
-/// Sorted so a failure names the same deck on every machine; `pdks/README.md`
-/// is skipped by extension, since the schema lives in JSON and the prose beside
-/// it is not a deck.
 fn deck_files() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("pdks");
     let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -73,9 +69,6 @@ fn name_of(path: &Path) -> &str {
 }
 
 /// Parse one deck, or fail naming the file and the refusal.
-///
-/// The string table comes back with it: layer and rule names are `StrId`s from
-/// here on, and resolving one against a different table is a different name.
 fn load(path: &Path) -> (Deck, StrTable) {
     let source =
         std::fs::read_to_string(path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
@@ -95,11 +88,6 @@ fn load(path: &Path) -> (Deck, StrTable) {
 
 /// Oracle: construct-from-answer. Every shipped deck is a deck: it parses, and
 /// both domains build a rule set from it.
-///
-/// The two `from_deck` calls are the load-bearing half. Parsing only proves the
-/// file is the right *shape*; `RuleSet::from_deck` is where a rule's parameters
-/// are read, and a deck stating `min_spacing` with no `limit` parses cleanly and
-/// dies there.
 #[test]
 fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
     for path in deck_files() {
@@ -116,16 +104,6 @@ fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
 
 /// Oracle: construct-from-answer. A deck configures at least one rule, and
 /// every rule it configures is filed by exactly one domain.
-///
-/// **This is the bug.** A missing `rules` section is not malformed — it is an
-/// empty table, and an empty table dispatches nothing, produces no violation and
-/// no `RuleRun`, and exits zero. The report is indistinguishable from a design
-/// that passed, which is the worst output a signoff tool can produce.
-///
-/// The second assertion closes the same hole one level in: a deck can carry a
-/// hundred rules and still check nothing if every `kind` is misspelled, because
-/// each domain steps over the kinds it does not spell. Rows filed by neither are
-/// rows that exist only in the file.
 #[test]
 fn every_deck_configures_rules_and_every_rule_belongs_to_a_domain() {
     for path in deck_files() {
@@ -156,15 +134,6 @@ fn every_deck_configures_rules_and_every_rule_belongs_to_a_domain() {
 
 /// Oracle: construct-from-answer. Every layer a rule names resolves back to the
 /// same id through the layer table.
-///
-/// A rule pointing at an undeclared layer is a rule over an empty geometry set:
-/// it runs, examines nothing, and reports clean forever. `parse_deck` refuses
-/// the name outright, so what is checked here is the surviving half — that the
-/// id a rule carries indexes a real row and round-trips through
-/// `LayerTable::id`, which is what `derived` and `drc` use to find the geometry.
-///
-/// Parameters are checked as well as the `layers` list: `ParamValue::Layer` is
-/// how a rule names a second layer, and it resolves through the same table.
 #[test]
 fn every_layer_a_rule_names_resolves_in_the_layer_table() {
     for path in deck_files() {
@@ -207,18 +176,6 @@ fn every_layer_a_rule_names_resolves_in_the_layer_table() {
 }
 
 /// Oracle: construct-from-answer, against `erc::power`'s stated refusal.
-///
-/// `power::sheet_resistances` demands a positive, finite sheet resistance for
-/// every conductor *and every via cut* in `connectivity`, and returns
-/// `PowerError::NoSheetResistance` otherwise. That error is not per-rule: it
-/// aborts the whole power stage, so one conductor missing a `pex` row is the
-/// difference between a PDK that runs IR-drop, electromigration and
-/// point-to-point resistance and one that runs none of them.
-///
-/// The condition is copied from that function deliberately, including via cuts,
-/// which carry ohms per cut rather than ohms per square. A zero is the case
-/// worth naming: it is what an absent `pex` row leaves behind, and a zero sheet
-/// resistance shorts a whole rail, which makes a bad power grid read clean.
 #[test]
 fn every_current_carrying_layer_has_a_sheet_resistance() {
     for path in deck_files() {
@@ -260,12 +217,6 @@ fn every_current_carrying_layer_has_a_sheet_resistance() {
 
 /// Oracle: law — the stack is indexed by `LayerId`, so it is as long as the
 /// layer table or it is empty.
-///
-/// `pex::analytical` reads `stack.sheet_res_ohm_sq[layer.idx()]` directly. A
-/// column shorter than the layer table does not fail: the tail layers read a
-/// neighbour's row or fall off the end into a zero, and the parasitics come back
-/// plausible and wrong. `build_stack` sizes every column to `layers.len()` once
-/// the section exists, which is exactly what this pins.
 #[test]
 fn a_pex_stack_that_exists_has_one_row_per_declared_layer() {
     for path in deck_files() {
@@ -304,11 +255,6 @@ fn a_pex_stack_that_exists_has_one_row_per_declared_layer() {
 
 /// Oracle: construct-from-answer. Every via row joins two layers the deck
 /// declares as conductors.
-///
-/// A via whose `connects` names a layer that is not a conductor joins two things
-/// `topology` never unions, so the net stops at that via. The netlist that comes
-/// out is fragmented, LVS reports the fragments as opens, and the geometry was
-/// correct all along.
 #[test]
 fn every_via_joins_two_declared_conductors() {
     for path in deck_files() {
@@ -339,18 +285,6 @@ fn every_via_joins_two_declared_conductors() {
 
 /// Oracle: construct-from-answer. A deck pairs at least one text layer with a
 /// conductor, so a port label has something to bind to.
-///
-/// **This is a bug all four shipped decks had.** `connectivity.labels` is
-/// optional and an absent section is an empty pairing, not an error: every
-/// `TEXT` in the layout is then read, matched against nothing, and discarded as
-/// documentation. `bind_ports_into` returns an empty `PortTable`, and
-/// `export::netlist` writes `.subckt TOP` with no pins at all — a subcircuit
-/// nothing can instantiate, from a run that exits zero. LVS compares it against
-/// a reference whose every pin is missing, which is not a quiet wrong answer but
-/// it is a wrong answer produced by the deck rather than the layout.
-///
-/// A deck could legitimately name its text layers something other than its
-/// routing layers, so what is pinned is only that *some* pairing exists.
 #[test]
 fn every_deck_pairs_a_text_layer_with_a_conductor() {
     for path in deck_files() {
@@ -382,19 +316,6 @@ fn every_deck_pairs_a_text_layer_with_a_conductor() {
 
 /// Oracle: construct-from-answer, against `topology::device`'s stated rule —
 /// "a marker whose positions are not all filled is skipped".
-///
-/// **This is a bug all four shipped decks had.** Every `pgate` recogniser
-/// declared a fourth terminal on `nwell`. A terminal layer that is not a
-/// conductor has no net, so that position never fills, and every marker of that
-/// recogniser is dropped: the PMOS half of a CMOS layout simply does not appear
-/// in the extraction. Nothing reports it, because a device that was never
-/// recognised raises no violation — the run comes back clean with half the
-/// transistors.
-///
-/// Scoped to `Mos` on purpose. `gf180mcu.json` still declares a junction diode
-/// `pn_3p3` across `comp_active` and `nwell`, which is unrecognisable for the
-/// same reason, but whether the cathode should become a conductor or the
-/// recogniser should go is a process question and not one a test may decide.
 #[test]
 fn every_mos_terminal_names_a_conductor() {
     for path in deck_files() {

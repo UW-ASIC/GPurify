@@ -13,10 +13,6 @@ mod common;
 
 /// Oracle: construct-from-answer. One min-width violation, placed at a
 /// coordinate this test chose, carried through every stage.
-///
-/// The assertion is deliberately not "one violation was found". It is *this*
-/// rule, on *this* layer, at *this* point, measuring *this* width against
-/// *this* limit — because a rule flagging the wrong shape passes a count.
 #[test]
 fn a_deliberate_min_width_violation_survives_the_whole_pipeline() {
     let run = common::Run::with_min_width_violation();
@@ -35,10 +31,6 @@ fn a_deliberate_min_width_violation_survives_the_whole_pipeline() {
 
 /// Oracle: construct-from-answer. A correct layout comes back clean *and says
 /// what it checked*.
-///
-/// The second half is the point. An empty violation table is also what a run
-/// that never executed produces, and the previous suite could not tell the two
-/// apart — 45 of its 94 DRC cases passed on exactly that ambiguity.
 #[test]
 fn a_clean_layout_reports_clean_and_says_which_rules_examined_what() {
     let run = common::Run::clean();
@@ -62,13 +54,6 @@ fn a_clean_layout_reports_clean_and_says_which_rules_examined_what() {
 }
 
 /// Oracle: construct-from-answer, on statuses rather than geometry.
-///
-/// Every check is asked for while neither a reference netlist nor a design
-/// intent file is supplied. LVS and the six intent-gated ERC rules cannot run,
-/// the run must say so, and it must **not** pass.
-///
-/// This is the false-clean failure in its most dangerous form, because a CI job
-/// reads the exit code and nothing else.
 #[test]
 fn a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass() {
     let run = common::Run::clean_with_gated_rule()
@@ -95,11 +80,6 @@ fn a_run_missing_its_optional_inputs_reports_skipped_and_does_not_pass() {
 }
 
 /// Oracle: law — `parse -> write -> parse` is the identity on the store.
-///
-/// Stated precisely, because the loose version is false: the *store* round
-/// trips, not the file. Hierarchy is flattened during the read, so writing a
-/// flattened store and reading it back returns the flattened store, never the
-/// original file's cell structure.
 #[test]
 fn a_layout_written_and_read_back_yields_the_same_store() {
     let run = common::Run::with_min_width_violation();
@@ -115,10 +95,6 @@ fn a_layout_written_and_read_back_yields_the_same_store() {
 
 /// Oracle: construct-from-answer. Coordinates at the edge of the representable
 /// domain survive the file round trip exactly.
-///
-/// `Dbu` is `i64` bounded by `MAX_ABS_DBU`; GDS stores coordinates in a
-/// narrower field. A silent truncation moves geometry, and moving geometry
-/// moves verdicts.
 #[test]
 fn coordinates_at_the_domain_edge_survive_the_file_round_trip() {
     let run = common::Run::at_domain_edge();
@@ -130,11 +106,6 @@ fn coordinates_at_the_domain_edge_survive_the_file_round_trip() {
 
 /// Oracle: construct-from-answer. A deck limit the grid cannot express is
 /// refused, never rounded.
-///
-/// Rounding a spacing limit down passes shapes the foundry would reject. That
-/// is why `Grid::to_dbu` is exact-or-rejected, and this is the test that the
-/// decision survives all the way out to a user-visible error rather than being
-/// quietly absorbed somewhere in between.
 #[test]
 fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
     let run = common::Run::with_off_grid_limit();
@@ -150,10 +121,6 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
 
 /// Oracle: law. Every rule the deck declares appears in the run record exactly
 /// once, whatever it found.
-///
-/// Without this a rule can be dropped between `RuleSet::from_deck` and the
-/// dispatcher, and the only symptom is a report quietly missing a check nobody
-/// notices is absent.
 #[test]
 fn every_rule_in_the_deck_appears_in_the_run_record_exactly_once() {
     let run = common::Run::clean();
@@ -173,8 +140,6 @@ fn every_rule_in_the_deck_appears_in_the_run_record_exactly_once() {
 
 /// Oracle: construct-from-answer. A reported length reaches the reader in
 /// nanometres, not database units.
-///
-/// A report saying `200` with no unit is how two tools disagree silently.
 #[test]
 fn a_reported_length_prints_in_nanometres_against_the_runs_grid() {
     let run = common::Run::with_min_width_violation();
@@ -188,28 +153,10 @@ fn a_reported_length_prints_in_nanometres_against_the_runs_grid() {
 }
 
 // ---------------------------------------------------------------------------
-// The fixture corpus.
-//
-// Eleven hand-written cases above, 160 corpus cases below. The eleven place a
-// violation this file chose and follow it through every seam; the 160 read a
-// layout somebody drew for a real PDK and ask whether the tool agrees with the
-// shapes. Neither replaces the other: the eleven would still pass on a tool
-// that got every real rule wrong, and the 160 would still pass on a tool whose
-// JSON writer was not deterministic.
-//
-// Every expectation comes from `tests/fixtures/expectations.json`, whose numbers
-// were derived from the geometry and the frozen doc comments. `manifest.json` —
-// the deleted tree's own output — is not read by anything here.
+// The fixture corpus: every expectation comes from `expectations.json`.
 // ---------------------------------------------------------------------------
 
 /// Oracle: construct-from-answer, over 94 cells drawn with deliberate defects.
-///
-/// Each case asserts three things, and the second is why this layer exists at
-/// all: the count, **that the rule ran and examined a non-empty jurisdiction**,
-/// and for a positive case the measurement and the report coordinate. 45 of the
-/// 94 expect zero violations, and in the old suite that was satisfied by a rule
-/// that never executed — an empty violation table looks identical either way.
-/// `RuleRun::outcome` and `RuleRun::examined` are what tell them apart.
 #[test]
 fn every_drc_case_in_the_corpus_agrees_with_its_geometry() {
     let corpus = common::load_corpus();
@@ -221,15 +168,6 @@ fn every_drc_case_in_the_corpus_agrees_with_its_geometry() {
 }
 
 /// Oracle: construct-from-answer, on connectivity rather than on shapes.
-///
-/// The same three assertions as DRC, plus the layer a finding is reported on:
-/// an ERC violation names a net, and the layer is the cheapest evidence that
-/// the net it named is the one the cell draws.
-///
-/// Four cases expect `Skipped(NoDesignIntent)` rather than a count. That is not
-/// a weaker assertion, it is the one that matters most here — a clean count from
-/// an intent-gated rule with no intent file is a false clean, and asserting the
-/// skip is how this suite refuses to accept one.
 #[test]
 fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
     let corpus = common::load_corpus();
@@ -242,16 +180,6 @@ fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
 
 /// Oracle: construct-from-answer. Each LVS cell draws a stated number of
 /// devices and a stated number of nets.
-///
-/// **The counts assert the split.** F1–F3 are closed: every cell draws its
-/// `licon`s, the pfet recogniser is 3-terminal so every pmos is recognised,
-/// and `diff_active = diff NOT poly` is the conductor, so a MOS channel
-/// conducts nothing laterally and source and drain extract to distinct nets.
-/// The `expect_nets` values below encode exactly that — `LVS_INV` is 4 nets,
-/// where the pre-split extraction gave 3 with VSS shorted through the channel
-/// to Y. `expect_match` stays unasserted in this loop because it runs the
-/// layout side only; the full comparison against `lvs_inv.cdl` is the test
-/// below this one.
 #[test]
 fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
     let corpus = common::load_corpus();
@@ -265,47 +193,6 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
 /// Oracle: construct-from-answer. A real extraction and a real reference netlist
 /// through the LVS stage, and the eight run rows that say which of its checks
 /// executed.
-///
-/// **The first test in this workspace to run the LVS stage on geometry.**
-/// `Inputs::reference` was the constant `None` in every fixture here, so
-/// `run_lvs` returned `Skipped` on every run this project had ever done and
-/// `lvs::graph::from_layout_into` was reached only by
-/// `crates/engine/tests/checks.rs` on an `Extracted::default()` — an empty
-/// extraction, which exercises none of its columns. This one hands it
-/// `LVS_INV`'s four nets, four bound ports and two recognised MOS — source and
-/// drain distinct, per the split `diff_active` conductor — read out of a real
-/// GDS by the ordinary reader, against `lvs_inv.cdl` read by the ordinary
-/// SPICE reader.
-///
-/// # The verdict is `Match`, and that is derived rather than observed
-///
-/// F1–F3 are closed: the layout side extracts the reference's own shape — two
-/// MOS on four nets, source and drain distinct — and both sizes are asserted
-/// below, off the parsed netlist and off the extraction, so a fixture that
-/// loses a card weakens nothing silently. F4 is closed too, and its residual
-/// cause was **not** the S/D asymmetry its name recorded —
-/// `refine::role_code` had already collapsed `Source | Drain => 1` — but the
-/// bulk terminal: a SPICE `M` card states four nets, the deck's MOS
-/// recognisers bind three, so the reference carried a `Bulk` terminal the
-/// layout can never extract and refinement unpaired everything over it.
-/// `lvs::graph::drop_unextracted_bulk` now removes reference bulk terminals
-/// exactly when the layout extracts no bulk at all, and the two graphs are
-/// isomorphic: `Match`. Parameters stay uncompared here — `lvs_inv.cdl`
-/// declares none, so `from_layout_into` emits none (its per-name gate), which
-/// is the same comparison as before with the arity fixed.
-///
-/// # What is asserted independently of those findings
-///
-/// The run rows are. Six checks in `lvs::checks` file eight [`RuleRun`] rows
-/// between them, and until this was wired up **not one of them reached
-/// `Outputs::runs`** — `run_lvs` called `from_layout_into`, `from_reference_into`
-/// and `compare`, and nothing else. So LVS contributed no row at all,
-/// `Summary::rules_skipped` stayed `0` for a domain in which three rows cannot
-/// be configured, and floating nets, label conflicts, merged net seeds and
-/// dangling terminals went unchecked in every run. That is the false-clean shape
-/// `Outputs::runs` documents itself as existing to prevent.
-///
-/// [`RuleRun`]: gpurify::check::report::RuleRun
 #[test]
 fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows() {
     let checks = Checks {
@@ -443,15 +330,6 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
 
 /// Oracle: closed form. Sheet resistance of a known rectangle, parallel-plate
 /// and fringe capacitance of a known area, vias in parallel.
-///
-/// Every number in these 27 cases is an analytic solution over the deck's own
-/// coefficients — `1.0 Ω` is ten squares of 0.1 Ω/sq, `185 aF` is
-/// 25 aF/µm² × 1 µm² plus 40 aF/µm × 4 µm. Nothing was read off a run.
-///
-/// Eight cases are negative: the cell is drawn wrong on purpose and the
-/// extraction must *not* reproduce the correct number. Those assert the
-/// mismatch, which is a weaker claim than a value and is stated as such in the
-/// corpus.
 #[test]
 fn every_pex_case_in_the_corpus_agrees_with_its_closed_form() {
     let corpus = common::load_corpus();
@@ -463,15 +341,6 @@ fn every_pex_case_in_the_corpus_agrees_with_its_closed_form() {
 }
 
 /// Oracle: law. Lateral coupling goes as 1/S and does not depend on the axis.
-///
-/// The three cases these cover are marked `underivable` in the corpus and are
-/// skipped by the test above, for a stated reason: `StackJson` has no lateral
-/// coefficient column, so no absolute coupling value follows from the deck.
-/// A *relation* between them still does, and it is exact — `PEX_S100`,
-/// `PEX_CC` and `PEX_S400` are the same two bars at 100, 200 and 400 nm, and
-/// `PEX_VERT` is `PEX_CC` rotated a quarter turn.
-///
-/// This is what keeps those three from being three cases that assert nothing.
 #[test]
 fn lateral_coupling_halves_when_the_gap_doubles_and_ignores_the_axis() {
     let failed = common::check_coupling_laws();
@@ -498,55 +367,6 @@ const THICKNESS_NM: f64 = 400.0;
 const LENGTH_NM: f64 = 2000.0;
 
 /// Oracle: law, against the **field solve** rather than the closed form.
-///
-/// The other half of `pex`, and until the fixture cells carried net labels it
-/// could not be reached at all: `engine::run::run_pex` selects nets by *name*,
-/// through `ports.net_of`, and no reader produced a name — the GDS reader
-/// skipped every `TEXT`, so `PortTable` was empty in every run this workspace
-/// has ever done. This is the first test that executes `quasistatic::extract_into`
-/// end to end through the engine, and with it `merge_field_solved_into` and the
-/// `reciprocity_refusal` gate.
-///
-/// # Why these laws and not the 1/S one
-///
-/// `lateral_coupling_halves_when_the_gap_doubles_and_ignores_the_axis` asserts
-/// that `C·S` is constant. That is right for the closed form — `analytical::
-/// coupling_capacitance` is literally `coefficient × length / separation` — and
-/// **wrong for a field solve**, which is the point of having one: a real
-/// solution carries fringing, so coupling falls slower than `1/S` and `C·S`
-/// grows with `S`. Asserting 1/S here would be asserting that the field solve
-/// is the parallel-plate approximation.
-///
-/// What survives exactly, and is asserted below:
-///
-///  - **Rotation invariance.** `PEX_VERT` is `PEX_CC` turned a quarter turn.
-///    Same geometry, so the same number.
-///  - **Layer invariance.** `PEX_M2CC` is `PEX_CC` moved from met1 to met2, and
-///    the deck gives both the same thickness and the same `dielectric_k`, so
-///    the field is identical. This settles the corpus's open dispute against
-///    the manifest, which asserts 200 aF for one and 160 for the other: no
-///    physics over this stack produces that ratio, and the solve agrees with
-///    the corpus.
-///
-/// # Why those two are a tolerance and not a bit compare
-///
-/// They were written as `to_bits()` equality first, and that was wrong: the two
-/// runs agree to 29 ULPs — a relative `3e-15` — and not to the bit. Rotating
-/// the geometry rotates the mesh, and a different panel *order* sums the same
-/// contributions in a different order, which `f64` addition does not promise to
-/// commute over. The bound below is `1e-9` relative: six orders looser than the
-/// disagreement actually observed, and still a decade tighter than the `1e-10`
-/// residual `solve::Options::default()` converges each column to — so it is
-/// pinned by the solver's own stated accuracy rather than by a number picked to
-/// make the assertion pass. A real axis or layer dependence would be a
-/// percentage, not a ULP.
-///  - **Monotonicity.** Coupling falls as the gap widens. Weaker than 1/S and
-///    true of any correct solution.
-///  - **The parallel-plate lower bound.** `ε₀·k·t·L/S` is the coupling two
-///    facing plates would have with no fringing at all, and a real conductor
-///    pair couples *more*. This is the assertion that would catch a solve
-///    returning a plausible-looking but too-small number, which no relation
-///    between the cases can catch.
 #[test]
 fn a_field_solve_obeys_the_coupling_laws_a_closed_form_cannot_state() {
     let coupling = |id: &str| -> f64 {
@@ -620,50 +440,12 @@ fn a_field_solve_obeys_the_coupling_laws_a_closed_form_cannot_state() {
 
 /// The design intent `a_corpus_case_with_design_intent_reaches_an_intent_gated_rule`
 /// supplies, in the schema `ingest::intent::parse_intent` documents.
-///
-/// `ERC_HV_n0` is the one net `ERC_HV_CROSS` labels — a `TEXT` record on the
-/// `li_label` layer at (200, 200) — so this declares a supply the extraction
-/// actually produces, which is what `resolve_intent_into` needs before
-/// `IntentMap::is_usable` can be true. 1800 mV is the deck's own
-/// `hv_domain.max_domain_delta`, so nothing here invents a process number.
 const HV_DOMAIN_INTENT: &str = r#"{
   "domains":  { "core": { "voltage_mv": 1800.0 } },
   "supplies": [{ "net": "ERC_HV_n0", "domain": "core", "role": "power" }]
 }"#;
 
 /// Oracle: construct-from-answer, on the harness rather than on geometry.
-///
-/// `docs/CORRECTNESS_MAP.md` §3: `tests/common/mod.rs` hardcoded `intent: None`
-/// for every corpus case, so `IntentMap::declared` was false in every run this
-/// corpus has ever done and all six intent-gated ERC rules recorded
-/// `Skipped(NoDesignIntent)` whatever was on disk. F9 is filed as a missing
-/// fixture and was really a harness constant — an intent file added to
-/// `tests/fixtures/` would have changed nothing.
-///
-/// This test is the proof that the constant is gone: the *same* cell, through
-/// the *same* pipeline, differing only in whether an intent file is passed.
-///
-/// # Both halves are load-bearing
-///
-/// The first half is the anti-vacuity guard, and it is not decoration. A test
-/// that only asserted `Ran` with intent would also pass against a harness that
-/// had deleted the gate entirely, which is the fail-open this whole suite is
-/// written against — `check_hv_domain`'s own doc says that with no domains
-/// declared every device spans a delta of zero and the design reads clean. So
-/// the skip must still be there when intent is absent, and gone when it is not.
-///
-/// The port assertion is the second guard: `resolve_intent_into` re-keys
-/// declared names through `PortTable`, so an intent naming a net this cell does
-/// not label produces an empty `IntentMap`, `is_usable` stays false, and the
-/// rule skips for a reason that has nothing to do with the harness.
-///
-/// # Why `hv_domain`
-///
-/// It is the cheapest of the six to reach: its gate is `intent.is_usable()` and
-/// nothing else, where the four electrical rules also need a converged power
-/// solve. What is proven here is that the gate is unhooked, not that any
-/// particular rule is now covered — no corpus case for the four uncovered kinds
-/// is written by this test.
 #[test]
 fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
     let checks = Checks {
@@ -721,12 +503,6 @@ fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
 // ---------------------------------------------------------------------------
 
 /// Every violation one rule reported, ascending by report point.
-///
-/// `common::only_violation` cannot serve here: these runs enable the whole ERC
-/// domain, so the table carries other rules' findings too. The sort is the
-/// canonical one `Violations::sort_canonical` already establishes — `at.y` then
-/// `at.x` — re-established after the filter so the pairing below is positional
-/// rather than a search.
 fn violations_of(run: &common::CaseRun, rule: &str) -> Vec<gpurify::check::report::Violation> {
     let id = run
         .loaded
@@ -756,10 +532,6 @@ fn layer_of(run: &common::CaseRun, name: &str) -> gpurify::geom::LayerId {
 }
 
 /// A solved electrical measurement against its closed form, to a relative 1e-9.
-///
-/// The same tolerance `common::measurement_matches` uses, and for the same
-/// reason: these numbers come out of a conjugate-gradient solve, so exact
-/// equality would assert the iteration order rather than the physics.
 fn assert_near(got: f64, want: f64, what: &str) {
     assert!(
         (got - want).abs() <= 1e-9 * want.abs().max(1.0),
@@ -768,30 +540,6 @@ fn assert_near(got: f64, want: f64, what: &str) {
 }
 
 /// The design intent that puts `LVS_INV`'s poly rail under an IR-drop limit.
-///
-/// `LVS_INV_n5` is the `TEXT` record on `poly_label` at (200, -50) — the poly
-/// stripe, and the one rail in the corpus whose *device* tap differs from its
-/// *centre* tap, which is what makes the drop non-zero. 1800 mV is the deck's
-/// own `nfet_01v8` domain. The budget is stated on the same net as the limit
-/// because `power::extract_into` reads the two independently: a limit with no
-/// budget injects no current, which is the second half of this test.
-///
-/// # 2000 µA, because the budget is shared per attach point
-///
-/// `power::extract_into` spreads the stated budget over the rail's attach
-/// points — `attach.resize(attach.len() + here, ..)` at `erc/src/power.rs:1708`,
-/// one share per terminal a device lands on the net. This was 1000 µA when the
-/// cell yielded **one** recognised device, so the single gate carried all of it.
-///
-/// F2 and F3 closed: both transistors are recognised now and source no longer
-/// collapses onto drain, so the poly rail carries **two** gates and 1000 µA
-/// would be 500 µA each — 120.5 mV, under the limit, and the Ohm's-law bracket
-/// this test exists for would be met by an absence.
-///
-/// 2000 µA restores the per-gate current to exactly what it was, so the closed
-/// form below is unchanged at 241.0 mV and the test is *stronger*: two nodes
-/// violate where one did. The physical claim is identical; only the number of
-/// gates sharing the rail moved.
 const IR_DROP_INTENT: &str = r#"{
   "domains":  { "core": { "voltage_mv": 1800.0 } },
   "supplies": [{ "net": "LVS_INV_n5", "domain": "core", "role": "power" }],
@@ -806,12 +554,6 @@ const IR_DROP_INTENT_NO_BUDGET: &str = r#"{
 }"#;
 
 /// The same rail and the same 2000 µA, with the limit moved above the drop.
-///
-/// 241.0 mV against 300 mV rather than 200 mV is the *only* difference, so this
-/// is the run that proves `max_drop_mv` participates in the compare at all.
-/// Asserting the limit's value, as the first run does, does not: a rule that
-/// ignored the number and fired whenever the drop exceeded zero would report the
-/// stated limit faithfully and still be wrong.
 const IR_DROP_INTENT_SLACK: &str = r#"{
   "domains":  { "core": { "voltage_mv": 1800.0 } },
   "supplies": [{ "net": "LVS_INV_n5", "domain": "core", "role": "power" }],
@@ -820,46 +562,6 @@ const IR_DROP_INTENT_SLACK: &str = r#"{
 
 /// Oracle: closed form — `V = I·R` over the sheet resistance of a known
 /// rectangle, plus the law that zero current through any resistance drops zero.
-///
-/// # Derivation
-///
-/// `LVS_INV`'s poly is one 50 × 800 stripe, `(200, -50)` to `(250, 750)`. The
-/// only device the cell yields is the nfet: `recognise_into` drops a marker
-/// whose terminal slots are not all bound, and the pfet recogniser names a
-/// fourth terminal on `nwell`, which `params.json` does not list as a
-/// conductor — so the psdm marker is skipped and the poly rail has exactly
-/// **one** attach point. That is what keeps the whole 1000 µA budget on it
-/// rather than half of it.
-///
-/// Two taps, therefore two nodes: the nfet marker taps the stripe at the centre
-/// of the nsdm bbox, `y = 100`, and the rail's own centre tap is
-/// `midpoint(-50, 750) = 350`. Both sit on the stripe's centre line,
-/// `midpoint(200, 250) = 225`. The pad anchor is the centre tap, so the
-/// unknown is the device node.
-///
-/// One edge between them: `ChainProfile` over a rectangle is a single slab of
-/// width 50, the overlap is `350 − 100 = 250`, so `250 / 50 = 5.0` squares at
-/// poly's `sheet_res_ohm_sq = 48.2` gives **241.0 Ω** exactly. 1000 µA through
-/// it is **241.0 mV**, over a stated 200 mV limit, reported at `(225, 100)` on
-/// poly. The pad node itself drops zero and is clean, so `examined` is 2 and
-/// the violation count is 1.
-///
-/// # Why the second run is here
-///
-/// 241.0 mV is arithmetic on four numbers, and a rule that reported the *nominal*
-/// supply instead of the drop would also produce a plausible millivolt figure.
-/// Removing `budget_current_ua` leaves the geometry, the resistance and the
-/// limit identical and makes the current zero; `V = I·R` then says the drop is
-/// zero however large the resistance is. That half needs no arithmetic at all,
-/// and it fails against any implementation that reports a voltage rather than a
-/// drop.
-///
-/// # What this does not cover
-///
-/// The pad anchor is inferred — `Connectivity` has no pad-marker layer, so
-/// `power.rs` takes the centre tap of the rail's widest shape. A real pad at an
-/// end of the stripe would see 8 squares, not 5. This test is derived against
-/// the inference, not against a pad.
 #[test]
 fn a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail() {
     let checks = Checks {
@@ -978,9 +680,6 @@ fn a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail() {
 
 /// `ERC_HV`'s one labelled net at 3300 mV — 1.833× the `bti` row's
 /// characterisation stress, which is what makes the inverse-power term bite.
-///
-/// [`HV_DOMAIN_INTENT`] is the 1800 mV half of the same declaration, and is
-/// reused rather than repeated.
 const HV_OVERSTRESS_INTENT: &str = r#"{
   "domains":  { "core": { "voltage_mv": 3300.0 } },
   "supplies": [{ "net": "ERC_HV_n0", "domain": "core", "role": "power" }]
@@ -988,51 +687,6 @@ const HV_OVERSTRESS_INTENT: &str = r#"{
 
 /// Oracle: closed form — the Arrhenius/inverse-power lifetime model, evaluated
 /// against the deck's own `bti` row.
-///
-/// # Derivation
-///
-/// `ERC_HV` is one met1 bar, `(200, 200)` to `(800, 300)`, plus an nwell square
-/// that is not a conductor. One conductor polygon on one labelled net gives a
-/// grid of exactly **one node, zero edges**, held at the declared voltage — so
-/// `conjugate_gradient` has no unknown to touch and the applied stress is the
-/// declared supply exactly. The node sits at the bar's centre tap, `(500, 250)`,
-/// on met1.
-///
-/// `reliability.rs` hoists three lines above the row loop:
-///
-/// ```text
-/// thermal  = exp(Ea/k_B · (1/T_applied − 1/T_reference))
-/// unit     = reference_lifetime_hours · thermal / duty_cycle
-/// lifetime = unit · (reference_stress / |V|)^stress_exponent
-/// ```
-///
-/// with `Ea = 0.5 eV`, `k_B = 8.617333262e-5 eV/K`, `T_reference = 398.15 K`
-/// from the deck and `T_applied = 358.15 K` from
-/// `engine::run::sign_off_temperature`. That is
-/// `exp(5802.259060872792 × 2.8050997906361183e-4) = 5.09159717249751`, so
-/// `unit = 5091.59717249751 h`.
-///
-/// **Sign check, and it is the half a wrong-signed exponent would fail:** the
-/// part runs 40 K *cooler* than it was characterised at, so it must last
-/// *longer* than its 1000 h reference point, not shorter.
-///
-/// At 1800 mV the stress ratio is exactly 1 and the prediction is the thermal
-/// term alone — 5091.597 h against a 1000 h floor, clean, and clean against the
-/// 3600 mV cap too. At 3300 mV it is `5091.59717249751 × (1800/3300)^4 =
-/// 450.70076740364533 h`, which fires one violation and only one: 3300 mV is
-/// still inside the cap.
-///
-/// The two halves are load-bearing together. 1800 mV alone cannot see
-/// `stress_exponent` at all — any exponent gives 1.0 at the reference stress —
-/// and 3300 mV alone cannot separate the thermal term from the power law.
-///
-/// # What this does not cover
-///
-/// `sign_off_temperature` is a hardcoded 85 °C with nothing in `RunOptions` able
-/// to move it (filed, `crates/engine/src/run.rs:170`), so this test is also an
-/// assertion about a constant. At 125 °C `thermal` would be exactly 1.0 and the
-/// prediction exactly the 1000 h floor — the "never derates" collapse the rule's
-/// own doc comment names.
 #[test]
 fn the_reliability_model_derates_a_cool_part_upward_and_an_overstressed_one_below_its_floor() {
     let checks = Checks {
@@ -1112,42 +766,6 @@ fn the_reliability_model_derates_a_cool_part_upward_and_an_overstressed_one_belo
 }
 
 /// Oracle: closed form on the geometry, for both halves of the rule.
-///
-/// # Derivation
-///
-/// The deck's `esd_latchup` row names `["met1", "nwell"]`, so met1 is the pad
-/// layer and nwell the guard ring, and `examined` is "the number of pad nets
-/// plus the number of guard rings" — one polygon on each layer, so **2**.
-///
-/// **Pad half.** `params.json` can state no `clamp_model` at all: `ParamValue`
-/// carries no string, so `ruleset.rs` builds an empty clamp list. An empty clamp
-/// list degrades the verdict rather than refusing the row — `ClampGraph::resolve`
-/// on an empty edge list is `Ok`, and `lowest_resistance` returns `None` loudly.
-/// The rule's own doc comment says a pad with *no* path is a violation with an
-/// absent measurement rather than an infinite one, which is `Count(0)` against a
-/// required `Count(1)`, reported at the pad's first vertex, `(200, 200)`.
-///
-/// **Ring half.** `ERC_HV`'s nwell is a solid 500 × 500 square, so its bbox min
-/// span is `Length(500)` against a stated `min_guard_ring_width` of 1000 nm, at
-/// its first vertex `(0, 0)`. The tap distance is clean and must stay clean:
-/// the ring's bbox and the pad's bbox overlap, so `separation` is 0 against a
-/// 3000 nm maximum, and a third violation here would mean the separation
-/// arithmetic had inverted.
-///
-/// # The count of 2 is a ceiling, not a statement about `ERC_HV`
-///
-/// The first violation exists because the discharge-path half is *structurally
-/// unable* to find a path, not because this cell lacks ESD protection. When
-/// `ParamValue::Name(StrId)` lands and a clamp becomes spellable, the meaning of
-/// that row changes and the count may drop to 1. This test is a regression guard
-/// on that ceiling and says so here so that a future reader does not read it as
-/// a physics claim.
-///
-/// The ring half is a real geometric finding, and it is also the one shape where
-/// the rule's bbox-min-span measurement is *not* fail-open: for an actual
-/// annulus that span is the outer diameter (`reliability.rs:722`, unfiled), and
-/// `ERC_HV`'s solid square is the degenerate case where the two coincide. This
-/// test therefore derives cleanly and covers nothing of that defect.
 #[test]
 fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell() {
     let checks = Checks {
@@ -1217,11 +835,6 @@ fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell
 }
 
 /// The one supply net in the corpus that carries met1 and can be named.
-///
-/// `ERC_EM_n2` is a `TEXT` record on `li_label` at (350, 50), the lower-left
-/// corner of the second li rectangle, joined to the slender met1 stub through
-/// `mcon`. `LVS_INV` draws no met1 at all, so this is the only cell where the
-/// deck's `met1.electromigration` row has any jurisdiction to open.
 const EM_INTENT: &str = r#"{
   "domains":  { "core": { "voltage_mv": 1800.0 } },
   "supplies": [{ "net": "ERC_EM_n2", "domain": "core", "role": "power" }],
@@ -1229,14 +842,6 @@ const EM_INTENT: &str = r#"{
 }"#;
 
 /// The same rail and the same domain, with no current stated at all.
-///
-/// Declaring a supply without a budget is ordinary — a domain declaration is
-/// what `hv_domain` and `reliability` read, and neither wants a current. The
-/// `max_drop_mv` is here so `IntentMap::limit_net` is non-empty and the run is
-/// usable for exactly the same reason [`EM_INTENT`]'s is: the *only* difference
-/// between the two is `budget_current_ua`, which is the variable
-/// [`a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict`] holds
-/// against [`a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current`].
 const EM_INTENT_NO_BUDGET: &str = r#"{
   "domains":  { "core": { "voltage_mv": 1800.0 } },
   "supplies": [{ "net": "ERC_EM_n2", "domain": "core", "role": "power" }],
@@ -1246,69 +851,6 @@ const EM_INTENT_NO_BUDGET: &str = r#"{
 /// Oracle: law — a rule that cannot compute the quantity it compares must
 /// refuse, because zero is *under* every limit it would compare against and a
 /// clean row is indistinguishable from a checked one.
-///
-/// # The input, and why no number can be derived from it
-///
-/// `ERC_EM_n2` is `{li, met1}`. `params.json` binds device terminals to `poly`
-/// and `diff`, so `DeviceTable::devices_on` — which is terminal-based — returns
-/// nothing for it, and the 1000 µA [`EM_INTENT`] states has nowhere to be
-/// placed. That is not an exotic input: it is the ordinary shape of a supply
-/// rail fed from off-chip through a pad, where the current enters from outside
-/// the extracted netlist.
-///
-/// No substitute number is available, and this is settled rather than
-/// unexplored. Injecting at the inferred pad anchor is refuted by construction —
-/// `power::solve_into` eliminates pad nodes from the unknowns and builds its
-/// right-hand side over the unknowns only, so a pad node's `node_load` is never
-/// read and the solve is all zeros either way. Spreading the budget over the
-/// rail's own taps fabricates load positions, and a uniform spread reads *lower*
-/// per edge than a concentrated distal draw on every edge but one — more
-/// fail-open on exactly the distal segments an EM check exists for. So the
-/// derived outcome is [`Outcome::Refused`], and `examined` is 0 because a row
-/// that refused examined nothing.
-///
-/// # What this test used to assert, and why that was the defect
-///
-/// Until the guard landed this was
-/// `electromigration_reaches_a_verdict_and_the_stated_budget_never_arrives`, and
-/// it pinned `Ran` with `examined == 0` — deliberately, as a tripwire on
-/// `power.rs`'s `if attach.is_empty() { continue; }`, which sat *above* the
-/// first read of `budget_current_ua`. The history is the valuable part: `Ran` +
-/// `examined 0` is not a verdict a reader can act on, and
-/// `RuleRun::examined`'s frozen doc says "clean" has to mean *this rule
-/// executed, examined N shapes, and found nothing*. With N zero, "your budget
-/// never reached the solver" and "this rail is within its electromigration
-/// limit" were the same row.
-///
-/// # Blast radius — three rules, and the third is the worst
-///
-/// All three readers of a branch current are asserted here, on one run, because
-/// the gate is a property of the run and a fix that reached only the rule the
-/// bug was found in would leave the other two silently clean:
-///
-/// - `met1.electromigration` — was `Ran` with `examined 0`.
-/// - `ir_drop` — was `Ran` and clean: zero current leaves every node at its pad
-///   voltage, so every drop is exactly 0.0 and no `max_drop_mv` can be exceeded.
-/// - `em_current_density` — **the worst, and the case no test observed before
-///   this one.** Its `LayerLimits::blech` is `&[]`, so `immortal` is always
-///   false and `examined` counts *every* edge on a limited layer. It reported
-///   `Ran` over the full in-scope population with no findings, which is
-///   byte-identical to what a genuinely checked clean design reports.
-///
-/// `bti` is asserted `Ran` in the same breath, and that is the discrimination:
-/// the guard must not be a blanket refusal of everything that touches the solve.
-/// `check_reliability` deliberately keeps running, because zero current puts
-/// every node at exactly its nominal — the *largest* stress its model can take —
-/// so its verdict is pessimistic rather than wrong.
-///
-/// # This is not the coverage — [`black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal`] is
-///
-/// `ERC_EM_DEV` draws the corpus's first `licon`, tying a recognised nfet's diff
-/// through li and `mcon` onto a met1 rail, so `devices_on` is non-empty and the
-/// budget survives. Black's derating and the Blech product are asserted against
-/// real currents there. The two cells are a controlled pair: same deck row, same
-/// intent shape, differing in exactly whether the limited rail carries a device
-/// terminal.
 #[test]
 fn a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current() {
     let checks = Checks {
@@ -1378,43 +920,6 @@ fn a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current() {
 
 /// Oracle: the gate's own contract — the refusal is conditioned on a *stated*
 /// budget, so a run that states none must still reach a verdict.
-///
-/// # Why this leg exists
-///
-/// It is the false side of the guard, and without it the guard is untested
-/// there: an implementation that refused whenever the solve carried no current —
-/// or refused unconditionally the moment a supply is declared — passes
-/// [`a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current`]
-/// and passes
-/// [`black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal`] too,
-/// because that cell's budget does land.
-///
-/// Declaring a domain without a current is legitimate and common — it is what
-/// `hv_domain` and `reliability` read — and `power::discarded_budget` is
-/// `budget_current_ua.is_some_and(|b| b != 0.0) && sum == 0.0`, so `None` is
-/// false on the first conjunct and the run proceeds.
-///
-/// # The derived outcomes
-///
-/// Same cell, same terminal-less rail, [`EM_INTENT_NO_BUDGET`] differing from
-/// [`EM_INTENT`] in exactly the one field:
-///
-/// - `met1.electromigration` — `Ran`, `examined 0`, clean. No stated current is
-///   no current, so the Blech product `|I|·(L/W)` is 0.0, at or under the deck
-///   row's stated 10.0, and every in-scope edge is immortal. `examined` counts
-///   non-exempt edges.
-/// - `em_current_density` — `Ran`, `examined > 0`, clean. Its `blech` column is
-///   `&[]`, so nothing is immortal and every edge on `li`/`met1`/`met2` counts;
-///   `ERC_EM_n2` is drawn on li and met1, both limited by that row. The bound is
-///   stated as `> 0` rather than as a count because the node and edge count of
-///   the rail is a property of the tap inference, not of this rule's contract —
-///   what this leg needs is that the population is *not* empty, which is what
-///   separates "ran over the whole rail" from "refused" and from "ran over
-///   nothing".
-/// - Clean in both cases because zero is under every limit — which is precisely
-///   why the run *with* a stated budget refuses instead. The pair is what makes
-///   the refusal readable: the same clean row means "checked" here and would
-///   have meant "unchecked" there.
 #[test]
 fn a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict() {
     let checks = Checks {
@@ -1484,12 +989,6 @@ fn a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict() {
 }
 
 /// One intent for `ERC_EM_DEV`, at whatever current the caller wants to state.
-///
-/// `ERC_EM_DEV_n0` is the `TEXT` record on `met1_label` at (600, 50) — the met1
-/// rail's lower-left corner, bound because `poly_contains_point` is
-/// boundary-inclusive. Unlike `ERC_EM_n2` this net reaches a device terminal:
-/// the `mcon` and the `licon` tie it down to the diff the nsdm marker recognises
-/// an nfet on, which is the whole reason the cell was drawn.
 fn em_dev_intent(budget_ua: f64) -> String {
     format!(
         r#"{{
@@ -1503,114 +1002,6 @@ fn em_dev_intent(budget_ua: f64) -> String {
 /// Oracle: closed form — Black's equation's Arrhenius derating against the
 /// deck's own `met1.electromigration` row, and the Blech exemption against the
 /// segment's own slenderness. Three currents on one geometry.
-///
-/// # The geometry, and why it exists
-///
-/// `ERC_EM_DEV` is the corpus's only cell whose electromigration-limited
-/// conductor is on the same net as a device terminal. `ERC_EM_n2` is not — see
-/// [`a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current`],
-/// which pins the refusal that shape now earns — so nothing before this cell
-/// could put a stated budget on a met1 edge at all.
-///
-/// This test is the other half of that controlled pair, and it is the leg that
-/// stops the refusal being drawn too wide: same deck row, same intent shape,
-/// differing in exactly whether the limited rail carries a device terminal. If
-/// the gate ever fires here, it is keyed on something other than a budget that
-/// failed to reach the solve.
-///
-/// The net `ERC_EM_DEV_n0` is three conductor polygons joined by two drawn cuts:
-///
-/// ```text
-/// diff  2/0  (0,   0) - (500,  200)     nsdm 10/0 (-50,-50)-(550,250)
-/// licon 4/0  (380, 60) - (460,  140)    poly 3/0  (200,-50)-(250,250)
-/// li    5/0  (350, 50) - (700,  150)
-/// mcon  6/0  (610, 60) - (690,  140)
-/// met1  7/0  (600, 50) - (700, 1950)    <- the rail under test
-/// ```
-///
-/// The nfet is recognised on the derived `gate_n` channel marker with
-/// `terminals: [poly, diff_active, diff_active]`; `diff_active = diff NOT
-/// poly` splits the drawn diffusion at the gate, so source (left flank) and
-/// drain (right flank) extract as **distinct** nets. The licon lands inside
-/// the drain flank `(250, 0)-(500, 200)`, so `ERC_EM_DEV_n0` carries exactly
-/// one device terminal — the drain — and `power::extract_into` puts the whole
-/// declared budget on its tap. Same arriving current as the pre-split corpus,
-/// where both S and D landed on one net, the budget was halved, and the two
-/// shares scatter-accumulated back onto one node.
-///
-/// # The grid the solve builds
-///
-/// Taps land per shape on its long axis: the drain flank takes its own centre,
-/// the licon tap and the device tap; li takes its centre plus the licon and
-/// mcon taps; met1 (vertical, `100 >= 1900` fails `chain_is_horizontal`) takes
-/// its centre `y = 1000` and the mcon tap `y = 100`. The graph is a tree, so
-/// there is exactly one path from source to load and every edge on it carries
-/// the whole current. The pad anchor is the centre tap of the rail's widest
-/// shape on its **highest** layer — met1, `height_nm` 1300 — so the source is
-/// met1's `y = 1000` node and the load is the diffusion node; the path runs
-/// through every edge between them.
-///
-/// # The one in-scope edge
-///
-/// The deck row names `["met1"]` and a via edge's `edge_layer` is the **cut**
-/// layer, so neither via is in scope and neither is any li or diff edge. The
-/// met1 chain edge is the whole population: `edge_length = 1000 − 100 = 900`,
-/// and `ChainProfile` over a rectangle is one slab of its short dimension, so
-/// `edge_width = 100`.
-///
-/// # Black
-///
-/// ```text
-/// scale   = 0.9 / (1.0 · 8.617333262e-5)      = 10444.066309571028
-/// derate  = exp(scale · (1/358.15 − 1/383.15)) = 6.704133044734676
-/// allowed = 1000 A/m · (100 dbu · 1000/1000) nm · 1e-9 · 1e6 · derate
-///         = 100 µA · 6.704133044734676        = 670.4133044734676 µA
-/// ```
-///
-/// `358.15 K` is `engine::run::sign_off_temperature`'s hardcoded 85 °C and
-/// `383.15 K` is the deck's characterisation point, so the part runs 25 K
-/// **cool** and the limit derates **up**. That is the direction a sign error
-/// inverts. The `1e-9 · 1e6` is nanometres→metres against amps→microamps;
-/// dropping it would read `100 000 µA` and pass everything.
-///
-/// # Blech
-///
-/// `blech_product = |I| · (L / W) = |I| · 9`, against the row's `10.0` µA, and
-/// the exempt side is `<=`. So the segment is immortal below `10/9 = 1.111 µA`
-/// and examined above it — and `examined += u64::from(!immortal)` is what makes
-/// `examined` observable at all.
-///
-/// # The three runs
-///
-/// | budget | product | examined | verdict |
-/// |---|---|---|---|
-/// | 1.0 µA | 9.0 ≤ 10 | **0** | exempt, no compare |
-/// | 500 µA | 4500 | **1** | 500 ≤ 670.41, clean |
-/// | 1000 µA | 9000 | **1** | 1000 > 670.41, **one violation** |
-///
-/// Each pair separates a mechanism the others cannot. 1.0 against 500 is the
-/// Blech exemption alone: both are far inside the derated limit, and only the
-/// exemption moves `examined`. 500 against 1000 is the derated limit alone:
-/// both are examined, and only the compare moves the violation count. And 1000
-/// alone pins the arithmetic — a missing derating would fire at 500 too, an
-/// inverted one would put the limit at 14.9 µA and fire on all three.
-///
-/// The violation is reported at `node_at[edge_from]` — the *lower* of the two
-/// chain positions, `y = 100`, on met1's centre line `x = 650`, hence
-/// `(650, 100)`. Not the shape centre, not a vertex.
-///
-/// # What this does not cover
-///
-/// The four magnitude fail-opens are untouched: this
-/// asserts the closed form the code *states*, at a hardcoded 85 °C corner with
-/// no self-heating and a budget spread uniformly over attach points. What it
-/// adds over the tripwire is that the budget reaches the solve at all, and that
-/// Black and Blech are both evaluated against a real current rather than
-/// against zero.
-///
-/// `max_current_per_cut` stays dead here too: `power.rs` emits every via edge as
-/// `EdgeKind::Via { cuts: 1 }` on the cut layer, and no deck row names `licon`
-/// or `mcon`.
 #[test]
 fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
     let checks = Checks {
@@ -1743,14 +1134,6 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
 }
 
 /// Oracle: law — determinism, on the split extraction path specifically.
-///
-/// `LVS_INV` is the corpus's gate-splitting cell: `diff_active = diff NOT
-/// poly` is materialised by the boolean at load, the channel markers bind
-/// source and drain to two of its pieces, and the four licon cuts merge eight
-/// conductor polygons into four nets. Two independent runs over it must agree
-/// bit-for-bit on every extracted table — net partition, device terminals,
-/// port bindings — or every byte-comparison gate downstream of extraction is
-/// comparing noise.
 #[test]
 fn extracting_the_split_corpus_twice_is_bit_identical() {
     let checks = Checks {

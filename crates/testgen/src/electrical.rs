@@ -8,13 +8,6 @@ use gpurify_geom::{prefix, Qty, Resistance};
 use crate::shapes::dbu;
 
 /// A resistor ladder with a hand-computable end-to-end resistance.
-///
-/// One stage is `series_ohm` in series with two `parallel_ohm` resistors in
-/// parallel, so the total is `rungs * (series_ohm + parallel_ohm / 2)`. The
-/// parallel pair is a genuine multi-edge between the same two nodes.
-///
-/// Stage `k` spans nodes `2k -> 2k+1 -> 2k+2`; the terminals are `0` and
-/// `2 * rungs` and no interior node is a terminal.
 #[derive(Debug)]
 pub struct LadderCase {
     /// One row, ready for `erc::power::effective_resistance_into`.
@@ -28,10 +21,6 @@ pub struct LadderCase {
 }
 
 /// Build a ladder of `rungs` stages between two terminals.
-///
-/// Both resistances must be positive and finite: a zero shorts two nodes and
-/// `erc::power` rejects it, so the case would exercise the error path rather
-/// than the solve.
 #[must_use]
 pub fn ladder_network(rungs: u32, series_ohm: f64, parallel_ohm: f64) -> LadderCase {
     assert!(rungs > 0, "a ladder needs at least one stage");

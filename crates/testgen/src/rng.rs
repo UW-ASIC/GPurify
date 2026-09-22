@@ -40,9 +40,6 @@ impl Rng {
     }
 
     /// A uniform value in `0..bound`.
-    ///
-    /// Rejection sampling, not `% bound`: the modulo is biased towards small
-    /// values whenever `bound` does not divide `2^64`.
     pub fn below(&mut self, bound: u64) -> u64 {
         assert!(bound > 0, "Rng::below needs a positive bound");
         // Largest multiple of `bound` in the draw space; the tail above it is
