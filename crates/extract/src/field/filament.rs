@@ -1,37 +1,95 @@
-//! Analytic and semi-analytic partial-inductance integrals for straight current
-//! filaments — the near-field formulas `FastHenry` relies on for accuracy.
+//! Partial-inductance integrals for straight rectangular current filaments.
 //!
-//! Two regimes, matching the design report's "analytic for the near list,
-//! quadrature for the well-separated smooth part":
-//!
-//!  * **Parallel filaments** (including the exact Grover closed form used for
-//!    validation): a closed-form double integral of the Neumann formula.
-//!  * **Arbitrarily oriented filaments**: Gauss–Legendre cubature of the Neumann
-//!    double line integral (exact in the limit; used only when filaments are not
-//!    parallel and not touching).
-//!  * **Self partial inductance of a rectangular bar**: the classical
-//!    Grover/Rosa closed form.
-//!
-//! Partial inductance between two filaments carrying uniform axial current is
-//!   M = (µ₀/4π) (û₁·û₂) ∫₀^{l₁}∫₀^{l₂} ds dt / |r₁(s) − r₂(t)|.
+//! `M = (µ₀/4π)(û₁·û₂) ∬ ds dt / |r₁(s) − r₂(t)|`: exact Hoer–Love brick for
+//! close parallel pairs, centreline closed form for far parallel pairs,
+//! Gauss–Legendre cubature otherwise; Grover/Rosa closed form for self terms.
 
-use crate::field::constants::MU0_OVER_4PI;
-use crate::field::geometry::Vec3;
+use std::ops::{Add, Div, Mul, Sub};
+
+/// µ₀/4π with the classical µ₀ = 4π×10⁻⁷, as the Grover/Rosa formulas assume.
+const MU0_OVER_4PI: f64 = 1e-7;
+
+/// A 3-D point or vector, metres.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vec3 {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+impl Vec3 {
+    pub const fn new(x: f64, y: f64, z: f64) -> Self {
+        Vec3 { x, y, z }
+    }
+
+    pub fn dot(self, o: Vec3) -> f64 {
+        self.x * o.x + self.y * o.y + self.z * o.z
+    }
+
+    #[must_use]
+    pub fn cross(self, o: Vec3) -> Vec3 {
+        Vec3::new(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
+    }
+
+    pub fn norm(self) -> f64 {
+        self.dot(self).sqrt()
+    }
+
+    pub fn dist(self, o: Vec3) -> f64 {
+        (self - o).norm()
+    }
+
+    /// Unit vector; zero for a zero-length input.
+    #[must_use]
+    pub fn normalized(self) -> Vec3 {
+        let n = self.norm();
+        if n == 0.0 {
+            Vec3::new(0.0, 0.0, 0.0)
+        } else {
+            self / n
+        }
+    }
+}
+
+impl Add for Vec3 {
+    type Output = Vec3;
+    fn add(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.x + o.x, self.y + o.y, self.z + o.z)
+    }
+}
+impl Sub for Vec3 {
+    type Output = Vec3;
+    fn sub(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.x - o.x, self.y - o.y, self.z - o.z)
+    }
+}
+impl Mul<f64> for Vec3 {
+    type Output = Vec3;
+    fn mul(self, s: f64) -> Vec3 {
+        Vec3::new(self.x * s, self.y * s, self.z * s)
+    }
+}
+impl Div<f64> for Vec3 {
+    type Output = Vec3;
+    fn div(self, s: f64) -> Vec3 {
+        Vec3::new(self.x / s, self.y / s, self.z / s)
+    }
+}
 
 /// A straight current filament of finite rectangular cross-section.
 #[derive(Debug, Clone, Copy)]
 pub struct Filament {
-    /// Start point of the filament centre line.
+    /// Centre-line start and end points.
     pub a: Vec3,
-    /// End point of the filament centre line.
     pub b: Vec3,
-    /// Cross-section width [m] (in-plane, perpendicular to axis).
+    /// Cross-section width and thickness, metres.
     pub w: f64,
-    /// Cross-section height/thickness [m].
     pub t: f64,
-    /// Unit direction of the width side of the cross-section (⊥ axis).
-    /// Needed by the exact brick–brick (Hoer–Love) mutual; a canonical
-    /// default is chosen when the caller doesn't care.
+    /// Unit width direction of the cross-section (⊥ axis).
     pub wdir: Vec3,
 }
 
@@ -61,21 +119,12 @@ impl Filament {
     pub fn with_frame(a: Vec3, b: Vec3, w: f64, t: f64, wdir: Vec3) -> Self {
         Filament { a, b, w, t, wdir }
     }
-    #[inline]
     pub fn length(&self) -> f64 {
         (self.b - self.a).norm()
     }
-    #[inline]
+
     pub fn dir(&self) -> Vec3 {
         (self.b - self.a).normalized()
-    }
-    #[inline]
-    pub fn area(&self) -> f64 {
-        self.w * self.t
-    }
-    #[inline]
-    pub fn midpoint(&self) -> Vec3 {
-        (self.a + self.b) * 0.5
     }
 }
 
@@ -122,14 +171,6 @@ pub fn mutual_parallel(f1: &Filament, f2: &Filament) -> f64 {
     let perp = d - axis * along;
     let rho = perp.norm();
     mutual_parallel_reduced(rho, x1, x2, y1.min(y2), y1.max(y2), sign)
-}
-
-/// The classical **Grover closed form** for two equal, exactly-aligned parallel
-/// filaments of length `l` separated by `d`:
-///   M = (µ₀/2π)[ l·asinh(l/d) − √(l²+d²) + d ].
-/// Provided as an independent reference for the validation suite.
-pub fn mutual_parallel_equal_grover(l: f64, d: f64) -> f64 {
-    2.0 * MU0_OVER_4PI * (l * (l / d).asinh() - (l * l + d * d).sqrt() + d)
 }
 
 /// Gauss–Legendre nodes/weights on [-1, 1] (n = 8), enough for well-separated

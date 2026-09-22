@@ -20,7 +20,6 @@
           inherit system overlays;
           config.allowUnfree = true;
         };
-        isLinux = pkgs.stdenv.isLinux;
         rust = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
@@ -38,26 +37,7 @@
             # suite is only as strong as the logic changes it actually catches,
             # and this measures that instead of assuming it. See docs/TESTING.md.
             pkgs.cargo-mutants
-          ]
-          ++ pkgs.lib.optionals isLinux [
-            pkgs.vulkan-loader
-            pkgs.vulkan-headers
-            pkgs.vulkan-validation-layers
-            pkgs.shaderc
-            pkgs.libxcb
-            pkgs.wayland
-            pkgs.wayland-protocols
-            pkgs.libxkbcommon
-            pkgs.libx11
-            pkgs.libxcursor
-            pkgs.libxrandr
-            pkgs.libxi
           ];
-
-          shellHook = pkgs.lib.optionalString isLinux ''
-            export SHADERC_LIB_DIR="${pkgs.shaderc.lib}/lib"
-            export LD_LIBRARY_PATH="/run/opengl-driver/lib:${pkgs.vulkan-loader}/lib:${pkgs.wayland}/lib:${pkgs.libxkbcommon}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          '';
         };
       }
     );

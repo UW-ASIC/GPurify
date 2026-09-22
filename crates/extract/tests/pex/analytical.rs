@@ -22,11 +22,21 @@ use gpurify_extract::analytical::{
     stack_row, via_resistance,
 };
 use gpurify_extract::network::{Parasitic, ParasiticNetwork};
-use gpurify_extract::reduce::total_capacitance;
 use gpurify_geom::DbuArea;
 use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_testgen::{assert_bytes_identical, assert_close, assert_close_relative, dbu, Rng};
+
+/// Every capacitive element summed once, in element order.
+fn total_capacitance(network: &ParasiticNetwork) -> f64 {
+    let mut total = 0.0;
+    for value in &network.value {
+        if let Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) = value {
+            total += q.raw();
+        }
+    }
+    total
+}
 
 /// A node index as a subscript, refusing anything that is not one.
 fn node(index: u32) -> usize {
@@ -337,14 +347,14 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         &mut tripled,
     );
 
-    let base = total_capacitance(&single).raw();
+    let base = total_capacitance(&single);
     assert!(
         base > 0.0,
         "a conductor over a plane has capacitance; the extractor found {base} fF"
     );
     assert_close_relative(
         "three times the coefficients",
-        total_capacitance(&tripled).raw(),
+        total_capacitance(&tripled),
         3.0 * base,
         1e-12,
     );
@@ -719,7 +729,7 @@ fn per_net_capacitance_sums_to_the_total_plus_the_coupling_counted_twice() {
             _ => None,
         })
         .sum();
-    let total = total_capacitance(&network).raw();
+    let total = total_capacitance(&network);
     assert!(total > 0.0, "the corpus extracted no capacitance at all");
     assert_close_relative(
         "per-net capacitance against the network total",

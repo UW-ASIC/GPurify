@@ -9,14 +9,14 @@
 //! small enough to invert on paper, or the right-hand side was formed by
 //! applying the operator to a solution chosen first.
 
-use gpurify_extract::field::matvec::{Backend, MatVec};
+use gpurify_extract::field::matvec::MatVec;
 use gpurify_extract::field::solve::{gmres, refine, residual, Options, SolveError, Workspace};
 use gpurify_testgen::{assert_close, assert_close_relative, Rng};
 
 /// A dense operator, row-major.
 ///
 /// The reference adapter for these tests: it is `f64` throughout, it allocates
-/// nothing in `apply`, and it reports the host, because that is what it is.
+/// nothing in `apply`.
 struct Dense {
     n: usize,
     a: Vec<f64>,
@@ -72,10 +72,6 @@ impl MatVec for Dense {
             *out = (0..self.n).map(|j| self.a[i * self.n + j] * x[j]).sum();
         }
     }
-
-    fn backend(&self) -> Backend {
-        Backend::Cpu
-    }
 }
 
 /// An operator that returns a `NaN` on demand.
@@ -94,10 +90,6 @@ impl MatVec for Poisoned {
 
     fn apply(&self, _x: &[f64], y: &mut [f64]) {
         y.fill(f64::NAN);
-    }
-
-    fn backend(&self) -> Backend {
-        Backend::Cpu
     }
 }
 
@@ -348,7 +340,7 @@ fn refinement_reaches_the_same_solution_as_a_bare_solve() {
 
     let mut refined = vec![0.0; 12];
     let converged =
-        refine(&a, &a, &b, tight(), &mut refined, &mut workspace).expect("refinement converges");
+        refine(&a, &b, tight(), &mut refined, &mut workspace).expect("refinement converges");
 
     for (index, ((&r, &p), &want)) in refined.iter().zip(&plain).zip(&expected).enumerate() {
         assert_close(

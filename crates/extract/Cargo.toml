@@ -10,20 +10,9 @@ gpurify-check = { workspace = true }
 thiserror = { workspace = true }
 num-complex = { workspace = true }
 rayon = { workspace = true }
-# The only GPU dependency in the workspace, and it reaches exactly one module:
-# `field::gpu`. `vulkano-shaders` is deliberately *not* here — it pulls in
-# `shaderc-sys`, which needs a system `libshaderc` or `cmake` to build one, and
-# neither is present outside `nix develop`. The kernel is compiled ahead of time
-# and committed instead; see `shaders/p2p_laplace.comp`.
-vulkano = { workspace = true, optional = true }
-
-[features]
-default = ["gpu"]
-gpu = ["dep:vulkano"]
 
 [dev-dependencies]
 gpurify-testgen = { workspace = true }
-rayon = { workspace = true }
 
 [lints]
 workspace = true
