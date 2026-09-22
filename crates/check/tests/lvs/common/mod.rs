@@ -1,25 +1,7 @@
 //! Graphs built by hand, and the small vocabulary the LVS suite asserts in.
 //!
-//! Everything the matcher consumes is a [`Graph`], whose columns are public, so
-//! a fixture here is a construct-from-answer input in the strict sense: the
-//! structure is decided before anything runs and the expected pairing is a fact
-//! about how the graph was written, not a claim about what refinement returned.
-//!
-//! # Two conventions this module bakes in
-//!
-//! Both are read off the frozen definitions rather than chosen here, and both
-//! are stated because a suite that silently disagrees with the implementation
-//! about them fails for a reason nobody can see.
-//!
-//! - **CSR ranges are `start[i] .. start[i + 1]`**, so an offset column has one
-//!   more entry than the table it indexes. That is the convention
-//!   `core::store` documents for `layer_start` and the one `DeviceRecognition`
-//!   is built with.
-//! - **A node index is a device index below `device_count`, and
-//!   `device_count + net` above it.** `Partition::layout_class` states its own
-//!   order as "devices then nets", and `Partition::pairs` yields bare `u32`
-//!   node indices rather than [`Node`](gpurify_check::lvs::graph::Node)s, so that is
-//!   the numbering they must be in.
+//! Fixtures are construct-from-answer: the expected pairing is a fact about how
+//! the graph was written. CSR ranges are `start[i] .. start[i + 1]`.
 
 #![allow(
     dead_code,
@@ -47,9 +29,6 @@ pub const WIDTH: StrId = StrId(5);
 pub const LENGTH: StrId = StrId(6);
 pub const VDD: StrId = StrId(7);
 pub const VSS: StrId = StrId(8);
-pub const CELL_A: StrId = StrId(9);
-pub const CELL_B: StrId = StrId(10);
-pub const CELL_MISSING: StrId = StrId(11);
 
 /// A width that a `usize` cannot exceed here without the fixture being wrong.
 fn narrow(value: usize) -> u32 {
@@ -439,18 +418,6 @@ fn is_permutation(map: &[u32]) -> bool {
         *slot = true;
     }
     true
-}
-
-/// Node count in the combined index space `Partition` uses: devices then nets.
-#[must_use]
-pub fn node_count(graph: &Graph) -> u32 {
-    narrow(graph.device_kind.len() + graph.net_name.len())
-}
-
-/// The node index of a net, in that same space.
-#[must_use]
-pub fn net_node(graph: &Graph, net: u32) -> u32 {
-    narrow(graph.device_kind.len()) + net
 }
 
 /// The discrepancy list of a mismatch, or a failure naming what came back.

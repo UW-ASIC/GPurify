@@ -19,17 +19,9 @@ pub enum Verdict {
 pub enum Inconclusive {
     /// Refinement hit its round limit.
     RoundLimit,
-    /// A genuine symmetry remained and the run was configured to refuse rather
-    /// than break it.
-    UnresolvedSymmetry,
     /// The reference netlist has no unique top-level subcircuit, so there is
     /// nothing to compare against without guessing.
     AmbiguousTop,
-    /// A subcircuit the layout needs is absent from the reference.
-    MissingSubcircuit(StrId),
-    /// This cell of a hierarchical plan was never compared; the `StrId` is the
-    /// layout cell.
-    UncomparedCell(StrId),
 }
 
 /// One concrete difference, phrased as something a human can act on.
@@ -61,26 +53,20 @@ pub enum Discrepancy {
         layout_value: f64,
         ref_value: f64,
     },
-    /// Both sides have the device, but only `side` declares this parameter, so it
-    /// was never compared. The name-keyed join must visit the symmetric
-    /// difference: skipping it would compare zero parameters and report
-    /// [`Verdict::Match`].
+    /// Both sides have the device, but only `side` declares this parameter.
     UndeclaredParam {
         side: Side,
         layout_device: u32,
         ref_device: u32,
         param: StrId,
     },
-    /// Two nets on one side carry the same declared name; `side` says which
-    /// netlist the two indices are in.
+    /// Never constructed; kept so the engine's rule-id table keeps its order.
     DuplicateName {
         side: Side,
         name: StrId,
         nets: (u32, u32),
     },
-    /// The counts in one refinement class differ. Emitted only when the class
-    /// holds more than one node per side; a smaller one is reported as
-    /// `UnpairedDevice` or `UnpairedNet` instead.
+    /// A refinement class holds more than one node per side and the counts differ.
     ClassImbalance { layout_nodes: u32, ref_nodes: u32 },
 }
 

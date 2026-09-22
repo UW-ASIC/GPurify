@@ -7,7 +7,6 @@
 pub mod checks;
 pub mod compare;
 pub mod graph;
-pub mod hierarchical;
 pub mod reduce;
 pub mod refine;
 pub mod verdict;

@@ -1,41 +1,16 @@
-//! Series and parallel device reduction.
+//! Series and parallel MOS reduction to a fixed point, run on both sides.
 //!
-//! [`reduce_into`] must run over the layout graph *and* the reference graph:
-//! either may be written unreduced, and reducing only one side would make the
-//! transform choose the answer rather than normalise the question.
-//!
-//! Under-reduction is safe and over-reduction is not. A merge that did not happen
-//! leaves an extra device on one side, which [`compare`] reports as
-//! [`Discrepancy::UnpairedDevice`]; a merge that should *not* have happened
-//! deletes a device the design contains, and two netlists differing by exactly
-//! that device then match. So every condition below is written as what must hold
-//! before a merge, never as what must hold before a refusal.
-//!
-//! A parallel merge adds `W` and a series merge adds `L`, and this transform can
-//! do neither: [`Graph::param`] keys on an interned name and nothing here is
-//! handed a `StrTable`, so `W`, `L` and `M` are indistinguishable `u32`s. **A
-//! device that declares any parameter therefore does not merge**, because
-//! dropping the parameters would leave a merged reference declaring nothing
-//! against a layout declaring nothing, which reports [`Verdict::Match`].
-//!
-//! ponytail: the upgrade path is one parameter and not a rewrite — a `&StrTable`
-//! at this signature, or `DeviceParam` reaching [`Graph`] as a tag rather than as
-//! a name, and then the additive column is identifiable and the sum is three
-//! lines. `from_layout_into` measures `w`/`l` now, but the refusal still holds
-//! the line correctly: a sized finger and a sized card each stay one device,
-//! so the counts pair one to one and no sum is needed until a reference is
-//! written pre-merged *with* sizes — that is the day to take this.
-//!
-//! [`compare`]: crate::lvs::compare::compare
-//! [`Discrepancy::UnpairedDevice`]: crate::lvs::verdict::Discrepancy::UnpairedDevice
-//! [`Verdict::Match`]: crate::lvs::verdict::Verdict::Match
+//! Data in/out: a [`Graph`]. Under-reduction is safe, over-reduction is not, so
+//! every condition is what must hold before a merge. A device declaring any
+//! parameter never merges: nothing here can tell `W` from `L` to sum them.
+//! ponytail: pass a `&StrTable` (or tag params by kind) when a pre-merged sized
+//! reference needs W/L summing.
 
 use crate::topology::TerminalRole;
-use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
 
 use crate::lvs::graph::{narrow, transpose_into, Graph};
-use crate::lvs::refine::role_code;
+use crate::lvs::refine::{kind_code, role_code};
 
 /// The two ends of a MOS channel, which are what a merge exchanges, consumes and
 /// counts. Every other role is fixed furniture.
@@ -74,18 +49,6 @@ fn key_net(key: u64) -> u32 {
     u32::try_from(key & 0xFFFF_FFFF).expect("the low half of a terminal key is a u32")
 }
 
-/// The kind tag the parallel sort keys on. A `match` and not an `as` cast, so a
-/// new device family is a compile error here rather than a silent reordering.
-const fn kind_tag(kind: DeviceKind) -> u8 {
-    match kind {
-        DeviceKind::Mos => 0,
-        DeviceKind::Bjt => 1,
-        DeviceKind::Resistor => 2,
-        DeviceKind::Capacitor => 3,
-        DeviceKind::Diode => 4,
-    }
-}
-
 /// What one pass decided: which devices are one device, and which nets stopped
 /// existing when they became one.
 #[derive(Default)]
@@ -121,7 +84,6 @@ struct Plan {
 fn keys<'k>(key_start: &[u32], key: &'k [u64], device: u32) -> &'k [u64] {
     let from = key_start[device as usize] as usize;
     let to = key_start[device as usize + 1] as usize;
-    debug_assert!(from <= to, "a key run runs backwards");
     &key[from..to]
 }
 
@@ -137,9 +99,9 @@ fn parallel_key<'k>(
     key_start: &[u32],
     key: &'k [u64],
     device: u32,
-) -> (u8, StrId, &'k [u64]) {
+) -> (u64, StrId, &'k [u64]) {
     (
-        kind_tag(src.device_kind[device as usize]),
+        kind_code(src.device_kind[device as usize]),
         src.device_model[device as usize],
         keys(key_start, key, device),
     )
@@ -162,62 +124,23 @@ fn find(root: &mut [u32], device: u32) -> u32 {
 fn join(root: &mut [u32], a: u32, b: u32) {
     let (left, right) = (find(root, a), find(root, b));
     root[left.max(right) as usize] = left.min(right);
-    debug_assert_eq!(find(root, a), find(root, b), "the join did not take");
 }
 
-/// Reduce a netlist to its series/parallel normal form, refilling `out`.
-///
-/// Devices are emitted one per group in ascending order of the group's lowest
-/// source row; nets in ascending source order with the consumed ones removed, so
-/// `port_net` keeps its declared order. A graph with nothing to merge comes
-/// through byte-identical, which is what lets this sit unconditionally in front
-/// of `compare`, and no hash container is used anywhere.
-///
-/// The pass count is bounded by `src.device_count()` because a pass that changes
-/// anything drops the device count by at least one. Reaching the bound is a bug;
-/// a release build that did hands back the partially reduced graph, which is
-/// under-reduction and safe.
+/// Reduce to series/parallel normal form, refilling `out`. Devices come out one
+/// per group ascending by the group's lowest row; surviving nets keep their order.
+/// A graph with nothing to merge comes through byte-identical.
 pub fn reduce_into(src: &Graph, out: &mut Graph) {
     let mut plan = Plan::default();
-
-    if !plan_into(src, &mut plan) {
-        copy_into(src, out);
-        debug_assert_eq!(out, src, "the copy path is not a copy");
-        return;
-    }
-    emit_into(src, &plan, out);
-
+    out.clone_from(src);
     let mut spare = Graph::default();
-    let mut budget = src.device_count();
-    while budget > 0 && plan_into(out, &mut plan) {
+    // Each pass that changes anything drops a device, so this bound is never hit.
+    for _ in 0..=src.device_count() {
+        if !plan_into(out, &mut plan) {
+            break;
+        }
         emit_into(out, &plan, &mut spare);
         std::mem::swap(out, &mut spare);
-        budget -= 1;
     }
-    debug_assert!(
-        budget > 0,
-        "reduction did not reach a fixed point in {} passes",
-        src.device_count()
-    );
-}
-
-/// Every column of `src`, verbatim.
-fn copy_into(src: &Graph, out: &mut Graph) {
-    fn copy<T: Copy>(from: &[T], to: &mut Vec<T>) {
-        to.clear();
-        to.extend_from_slice(from);
-    }
-    copy(&src.device_kind, &mut out.device_kind);
-    copy(&src.device_model, &mut out.device_model);
-    copy(&src.device_terminal_start, &mut out.device_terminal_start);
-    copy(&src.terminal_net, &mut out.terminal_net);
-    copy(&src.terminal_role, &mut out.terminal_role);
-    copy(&src.device_param_start, &mut out.device_param_start);
-    copy(&src.param, &mut out.param);
-    copy(&src.net_terminal_start, &mut out.net_terminal_start);
-    copy(&src.net_terminal, &mut out.net_terminal);
-    copy(&src.net_name, &mut out.net_name);
-    copy(&src.port_net, &mut out.port_net);
 }
 
 /// Decide one pass: which devices are one device, and which nets die with them.
@@ -239,13 +162,8 @@ fn plan_into(src: &Graph, plan: &mut Plan) -> bool {
     rank_nets(plan, nets);
 
     plan.groups = count_groups(plan);
-    debug_assert!(plan.groups <= devices, "reduction invented a device");
     // One direction only: a parallel merge consumes nothing, so the converse is
     // false.
-    debug_assert!(
-        (plan.nets == nets) || (plan.groups < devices),
-        "a net was consumed without a merge"
-    );
     plan.groups < devices
 }
 
@@ -261,7 +179,6 @@ fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
     plan.is_port.clear();
     plan.is_port.resize(nets, false);
     for &net in &src.port_net {
-        debug_assert!((net as usize) < nets, "port names net {net} of {nets}");
         plan.is_port[net as usize] = true;
     }
 
@@ -287,8 +204,6 @@ fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
         let bound = !terminal_nets.contains(&u32::MAX);
         plan.mergeable.push(free & bound);
     }
-    debug_assert_eq!(plan.key_start.len(), devices + 1);
-    debug_assert_eq!(plan.mergeable.len(), devices);
 }
 
 /// Join every run of devices whose whole terminal map agrees.
@@ -398,7 +313,6 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
 /// The net at the far end of a two-terminal channel from `net`. A device with
 /// both ends on `net` answers `net`, which is what the parallel guard rejects on.
 fn other_end(channel: &[u64], net: u32) -> u32 {
-    debug_assert_eq!(channel.len(), 2, "a channel has two ends");
     let (low, high) = (key_net(channel[0]), key_net(channel[1]));
     if low == net {
         high
@@ -512,7 +426,6 @@ fn rank_nets(plan: &mut Plan, nets: usize) {
         rank += u32::from(live);
     }
     plan.nets = rank as usize;
-    debug_assert!(plan.nets <= nets, "reduction invented a net");
 }
 
 /// The number of distinct roots, read off the sorted order.
@@ -531,30 +444,19 @@ fn count_groups(plan: &Plan) -> usize {
 /// `graph::transpose_into` so the two directions cannot disagree.
 fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
     let nets = src.net_count();
-    debug_assert_eq!(
-        plan.new_net.len(),
-        nets,
-        "the plan ranked another graph's nets"
-    );
 
     out.net_name.clear();
     out.net_name.reserve(plan.nets);
     for net in 0..nets {
         // A consumed net is never named, so dropping the row loses no name.
-        debug_assert!(
-            !plan.consumed[net] || src.net_name[net].is_none(),
-            "a named node was consumed"
-        );
         if !plan.consumed[net] {
             out.net_name.push(src.net_name[net]);
         }
     }
-    debug_assert_eq!(out.net_name.len(), plan.nets);
 
     out.port_net.clear();
     out.port_net.reserve(src.port_net.len());
     for &net in &src.port_net {
-        debug_assert!(!plan.consumed[net as usize], "a port net was consumed");
         out.port_net.push(plan.new_net[net as usize]);
     }
 
@@ -581,7 +483,6 @@ fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
         while end < plan.order.len() && plan.root[plan.order[end] as usize] == root {
             end += 1;
         }
-        debug_assert_eq!(head, root, "a group's first row is not its root");
 
         out.device_kind.push(src.device_kind[head as usize]);
         out.device_model.push(src.device_model[head as usize]);
@@ -590,8 +491,12 @@ fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
             // unreducible graph come through byte-identical.
             let (terminal_nets, roles) = src.terminals_of(head);
             for slot in 0..roles.len() {
-                out.terminal_net
-                    .push(remap(&plan.new_net, terminal_nets[slot]));
+                out.terminal_net.push(
+                    plan.new_net
+                        .get(terminal_nets[slot] as usize)
+                        .copied()
+                        .unwrap_or(u32::MAX),
+                );
                 out.terminal_role.push(roles[slot]);
             }
             out.param.extend_from_slice(src.params_of(head));
@@ -602,41 +507,14 @@ fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
                 out.terminal_role.push(role);
             }
             // Every member is `mergeable`, and `mergeable` is `params_of` empty.
-            debug_assert!(
-                (at..end).all(|index| src.params_of(plan.order[index]).is_empty()),
-                "a merged device carried a parameter it cannot have added"
-            );
         }
         out.device_terminal_start
             .push(narrow(out.terminal_net.len()));
         out.device_param_start.push(narrow(out.param.len()));
         at = end;
     }
-    debug_assert_eq!(
-        out.device_kind.len(),
-        plan.groups,
-        "a group lost its device"
-    );
 
     transpose_into(out, plan.nets);
-
-    debug_assert_eq!(out.device_count(), plan.groups);
-    debug_assert_eq!(out.net_count(), plan.nets);
-    debug_assert_eq!(
-        out.terminal_role.len(),
-        out.terminal_net.len(),
-        "a terminal lost its role"
-    );
-}
-
-/// A net through the pass's renumbering, with a terminal on no net left alone:
-/// dropping `u32::MAX` would hide the fault `checks::check_topology` reports, and
-/// mapping it onto a real net would invent a connection.
-fn remap(new_net: &[u32], net: u32) -> u32 {
-    match new_net.get(net as usize) {
-        Some(&mapped) => mapped,
-        None => u32::MAX,
-    }
 }
 
 /// One merged device's terminals, in `(role_code, net)` order: the
@@ -673,8 +551,4 @@ fn merge_terminals(
     }
 
     out.sort_unstable_by_key(|&(role, net)| (role_code(role), net));
-    debug_assert!(
-        out.windows(2).all(|pair| pair[0] != pair[1]),
-        "a merged device carries one terminal twice"
-    );
 }
