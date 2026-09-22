@@ -725,6 +725,25 @@ pub mod gds {
         Ok(end)
     }
 
+    /// Whether a ring's vertices run clockwise.
+    ///
+    /// The shoelace sum, accumulated in `i128` rather than `Dbu`: these are raw
+    /// file coordinates, read before the grid has scaled them into the store's
+    /// bounded domain, so the products are not yet known to fit `i64`. A ring
+    /// with zero signed area has no direction and is left alone; `boundary`
+    /// has already refused anything with fewer than three vertices, and
+    /// `geom::view` refuses the degenerate rest.
+    fn ring_is_clockwise(xs: &[i64], ys: &[i64]) -> bool {
+        debug_assert_eq!(xs.len(), ys.len(), "a ring's coordinate runs are parallel");
+        let n = xs.len();
+        let mut area2: i128 = 0;
+        for i in 0..n {
+            let j = if i + 1 == n { 0 } else { i + 1 };
+            area2 += i128::from(xs[i]) * i128::from(ys[j]) - i128::from(xs[j]) * i128::from(ys[i]);
+        }
+        area2 < 0
+    }
+
     /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset
     /// past it.
     fn boundary(
@@ -781,6 +800,26 @@ pub mod gds {
         };
         if !seen_xy || vert_len < 3 {
             return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
+        }
+
+        // Every BOUNDARY and BOX is an outer ring, so it is stored
+        // counter-clockwise whatever order the file listed it in.
+        //
+        // GDSII gives a point list no winding semantics. It also has no record
+        // for a hole: a polygon with one is written as a single keyhole ring
+        // that cuts in and back out, which is why a file can never hand us a
+        // hole as a separate element. `geom::view`, meanwhile, reads a
+        // clockwise ring as a hole and refuses one that no outer contains.
+        // Passing the file's order through therefore made the store's
+        // invariant a property of whoever wrote the file: `KLayout` normalises
+        // its hulls clockwise, so every shape in a KLayout-written library
+        // became an orphan hole and every rule on that layer recorded
+        // `Refused`. Normalising on the way in is what keeps clockwise
+        // meaning *hole* for the one producer that means it, `geom::boolean`,
+        // which reverses a run's direction to mark exactly that.
+        if ring_is_clockwise(&lib.xs[first..], &lib.ys[first..]) {
+            lib.xs[first..].reverse();
+            lib.ys[first..].reverse();
         }
 
         lib.elems.push(Elem {
@@ -1862,6 +1901,63 @@ mod tests {
             layout.provenance.path_of(PolyId(0)),
             PathTable::ROOT,
             "a shape in the top cell came from no instance"
+        );
+    }
+
+    /// Oracle: law — a BOUNDARY's point order does not change what it denotes.
+    ///
+    /// GDSII gives a point list no winding semantics, so the same square listed
+    /// clockwise and counter-clockwise is the same square. `geom::view` reads a
+    /// clockwise ring as a hole, so a reader that passed the file's order
+    /// through turned every shape in a clockwise-wound library into an orphan
+    /// hole: `validate_layer_into` then refused the layer and every rule on it
+    /// recorded `Refused` while examining nothing. That is how a KLayout-written
+    /// library behaved, because `KLayout` normalises its hulls clockwise.
+    ///
+    /// Asserted through `validate_layer_into` rather than on the stored vertex
+    /// order, because the property that matters is that the shape is an outer
+    /// with no holes, not which vertex ended up first.
+    #[test]
+    fn a_clockwise_boundary_is_stored_as_an_outer_not_an_orphan_hole() {
+        use gpurify_geom::ops::{winding_of, Winding};
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+
+        // The same square, listed both ways round.
+        let ccw = boundary(ROWS[0].1, ROWS[0].2, &[0, 400, 400, 0], &[0, 0, 400, 400]);
+        let cw = boundary(ROWS[0].1, ROWS[0].2, &[0, 0, 400, 400], &[0, 400, 400, 0]);
+
+        let mut stored = Vec::new();
+        for element in [ccw, cw] {
+            let bytes = gds_library("TOP", &[element]);
+            let layout =
+                gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+
+            let (xs, ys) = layout.store.poly_verts(PolyId(0));
+            assert_eq!(
+                winding_of(xs, ys),
+                Some(Winding::CounterClockwise),
+                "a BOUNDARY is an outer ring, so it is stored counter-clockwise \
+                 whichever way the file listed it"
+            );
+
+            let mut valid = ValidatedLayer::default();
+            validate_layer_into(&layout.store, LayerId(0), &mut valid).expect(
+                "a lone square is an outer with no holes, so the layer validates \
+                 whichever way its points were listed",
+            );
+            assert_eq!(valid.len(), 1, "one square is one polygon");
+            let polygon = valid.get(&layout.store, 0);
+            assert_eq!(polygon.holes().count(), 0, "a square has no holes");
+            stored.push(polygon.area());
+        }
+
+        assert_eq!(
+            stored[0], stored[1],
+            "the same square listed clockwise and counter-clockwise must have \
+             the same area; GDSII gives its point order no meaning"
         );
     }
 
