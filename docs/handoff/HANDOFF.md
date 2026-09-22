@@ -70,3 +70,7 @@ TESTING.md + tests/fixtures/README.md stale paths; `.github/workflows/ci.yml` gp
 - ERC network builders NOT merged: edge order feeds the solver.
 - ingest: OASIS → `UnknownFormat`; `MissingCell` reported at parse end; error offsets now `usize`.
 - `cargo fmt --all --check` not yet run over the merged tree.
+
+## From the Philis session (downstream consumer)
+- Philis pins GPurify via git default branch; picks up `simplify` only after it lands on main + `cargo update -p gpurify`.
+- Philis's sky130 deck gained licon.7/.9/.11/.14, diff/tap.11, npc, polyc/rbody derived layers — consider porting into `pdks/sky130.json`.
