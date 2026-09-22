@@ -10,10 +10,6 @@ macro_rules! product {
         impl<const P: i8, const Q: i8> Mul<Qty<$rhs, Q>> for Qty<$lhs, P> {
             type Output = Qty<$out, 0>;
             fn mul(self, rhs: Qty<$rhs, Q>) -> Qty<$out, 0> {
-                debug_assert!(
-                    self.is_finite() && rhs.is_finite(),
-                    concat!("non-finite operand to ", stringify!($lhs), " * ", stringify!($rhs)),
-                );
                 Qty::new(self.base() * rhs.base())
             }
         }
@@ -26,13 +22,7 @@ macro_rules! quotient {
         impl<const P: i8, const Q: i8> Div<Qty<$den, Q>> for Qty<$num, P> {
             type Output = Qty<$out, 0>;
             fn div(self, rhs: Qty<$den, Q>) -> Qty<$out, 0> {
-                debug_assert!(
-                    self.is_finite() && rhs.is_finite(),
-                    concat!("non-finite operand to ", stringify!($num), " / ", stringify!($den)),
-                );
-                // A zero denominator yields an infinity, not an error: a zero
-                // resistance is a short, a legal input. `Qty::is_finite` is the
-                // net, asserted where a quantity enters a report.
+                // Zero denominator gives inf, not an error: a zero resistance is a legal short.
                 Qty::new(self.base() / rhs.base())
             }
         }

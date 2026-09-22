@@ -8,7 +8,7 @@
 //! because "regardless of edge order" is precisely the half a fixture with a
 //! sorted edge list cannot check.
 
-use gpurify_geom::connectivity::{component_count, components_into, ComponentLabel};
+use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_testgen::graph::graph_with_partition;
 use gpurify_testgen::Rng;
 
@@ -120,7 +120,6 @@ fn an_empty_edge_list_leaves_every_node_in_its_own_component() {
 /// derived rather than against a rerun of the labelling.
 #[test]
 fn component_count_is_the_number_of_distinct_labels() {
-    assert_eq!(component_count(&[]), 0, "no nodes, no components");
 
     // A path through every node, joined back to front so the edge list is not
     // in index order.
@@ -197,4 +196,9 @@ fn two_runs_agree_and_the_output_buffer_is_refilled_not_appended_to() {
     components_into(case.node_count, &case.edges, &mut labels);
     assert_eq!(labels, first, "the labelling is not reproducible");
     assert_eq!(labels, case.expected);
+}
+
+/// Components are named by their minimum node, the one row labelled with itself.
+fn component_count(labels: &[ComponentLabel]) -> u32 {
+    (0u32..).zip(labels).map(|(i, l)| u32::from(l.0 == i)).sum()
 }

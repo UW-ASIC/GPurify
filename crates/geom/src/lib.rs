@@ -1,9 +1,7 @@
-//! Coordinates, quantities, stored geometry, and the derived-layer evaluator.
+//! Coordinates, quantities, stored geometry, and exact integer geometry on it.
 //!
-//! One crate because every consumer crosses all three boundaries at once: a
-//! caller that wants a [`GeometryStore`] wants [`Dbu`] to read it with and an
-//! [`Evaluator`] to derive layers from it. Three packages that nothing depends
-//! on separately are one package.
+//! Data in: rings in `Dbu` from `ingest`. Data out: a [`GeometryStore`],
+//! [`ValidatedLayer`]s, candidate pairs, booleans, and exact measures.
 
 mod arith;
 mod dbu;
@@ -48,11 +46,10 @@ pub mod rects;
 pub mod store;
 pub mod view;
 pub use bbox::Bbox;
-pub use ids::{LayerId, PolyId, RingId, VertId};
+pub use ids::{LayerId, PolyId};
 pub use observe::{NoObserve, Observer};
 pub use store::{GeometryStore, GeometryStoreBuilder};
 pub use view::{PolygonRef, RingRef, ValidatedLayer};
 
 pub mod expr;
-pub mod prefilter;
 pub use expr::{DerivedError, DerivedExpr, Evaluator, LayerRef};

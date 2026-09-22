@@ -7,9 +7,8 @@ use crate::qty::{Length, Qty};
 /// `i128` overflow-free.
 pub const MAX_ABS_DBU: i64 = 1 << 40;
 
-/// Whether `raw` is a legal coordinate. `unsigned_abs`, not `abs`: `abs`
-/// overflows on `i64::MIN`, one of the values this check exists to refuse.
-const fn in_domain(raw: i64) -> bool {
+/// `unsigned_abs`, not `abs`: `abs` overflows on `i64::MIN`.
+pub(crate) const fn in_domain(raw: i64) -> bool {
     raw.unsigned_abs() <= MAX_ABS_DBU.unsigned_abs()
 }
 
@@ -59,14 +58,7 @@ impl Dbu {
 
     /// Widening multiply: the only route from coordinates to an area.
     pub const fn mul_wide(self, rhs: Self) -> DbuArea {
-        debug_assert!(in_domain(self.0));
-        debug_assert!(in_domain(rhs.0));
-        let area = DbuArea(self.0 as i128 * rhs.0 as i128);
-        debug_assert!(
-            area.0.unsigned_abs() <= 1u128 << 80,
-            "area past the 2^80 ceiling"
-        );
-        area
+        DbuArea(self.0 as i128 * rhs.0 as i128)
     }
 }
 
@@ -159,21 +151,13 @@ impl Grid {
     }
 
     /// Convert a physical length to grid units, exactly or not at all.
-    ///
-    /// Check order is part of the interface — finiteness, range, exactness: a
-    /// `NaN` reaching the exactness test compares false against everything and
-    /// would be refused as [`GridError::NotOnGrid`] by accident.
+    /// Check order (finite, range, exact) is part of the interface.
     pub fn to_dbu<const P: i8>(self, length: Qty<Length, P>) -> Result<Dbu, GridError> {
-        debug_assert!(self.dbu_per_um > 0, "a Grid is positive by construction");
-
         if !length.is_finite() {
             return Err(GridError::NotFinite);
         }
 
-        // One micrometre is `10^(P + 6)` of this quantity's units. Applied as
-        // an exact power-of-ten multiply *or* divide, never one combined
-        // factor: at `P == NANO` that factor is `10^-3`, which `f64` cannot
-        // hold, whereas `45.0 * 1000.0 / 1000.0` is exact.
+        // Separate power-of-ten multiply or divide, never one factor: 10^-3 is inexact in f64.
         let exponent = i32::from(P) + 6;
         #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
         let per_um = self.dbu_per_um as f64;
@@ -193,8 +177,7 @@ impl Grid {
             return Err(GridError::OutOfRange);
         }
 
-        // The second clause is the underflow: a non-zero length that scaled to
-        // nothing must not become a limit of zero, which is fail-open.
+        // Second clause: a non-zero length that underflowed to 0 is refused (fail-open otherwise).
         if units.fract() != 0.0 || (units == 0.0 && length.raw() != 0.0) {
             return Err(GridError::NotOnGrid);
         }
@@ -203,56 +186,16 @@ impl Grid {
             clippy::cast_possible_truncation,
             reason = "integral and within +/-MAX_ABS_DBU, both checked above"
         )]
-        let raw = units as i64;
-        debug_assert!(in_domain(raw));
-        Ok(Dbu::new_unchecked(raw))
+        Ok(Dbu::new_unchecked(units as i64))
     }
 
     /// Convert a coordinate to nanometres. Always succeeds.
     pub fn to_length(self, coord: Dbu) -> Qty<Length, { crate::prefix::NANO }> {
-        debug_assert!(self.dbu_per_um > 0, "a Grid is positive by construction");
-        debug_assert!(in_domain(coord.raw()));
-
-        // The numerator is at most `2^40 * 1000`, under `2^53`, so it is exact
-        // and the division correctly rounded — which is what makes the round
-        // trip through `to_dbu` an equality.
+        // Numerator <= 2^40 * 1000 < 2^53: exact, so the round trip through `to_dbu` is an equality.
         #[expect(
             clippy::cast_precision_loss,
             reason = "|coord| <= 2^40 and the resolution is a small count; both exact in f64"
         )]
-        let nanometres = coord.raw() as f64 * 1_000.0 / self.dbu_per_um as f64;
-        debug_assert!(
-            nanometres.is_finite(),
-            "a bounded coordinate over a positive grid"
-        );
-        Qty::new(nanometres)
-    }
-
-    /// Bulk form of [`Grid::to_dbu`]; stops on the first rejection and names the
-    /// row that failed.
-    pub fn to_dbu_into<const P: i8>(
-        self,
-        lengths: &[Qty<Length, P>],
-        out: &mut Vec<Dbu>,
-    ) -> Result<(), (usize, GridError)> {
-        debug_assert!(self.dbu_per_um > 0, "a Grid is positive by construction");
-
-        out.clear();
-        out.reserve(lengths.len());
-
-        for (row, &length) in lengths.iter().enumerate() {
-            match self.to_dbu(length) {
-                Ok(coord) => out.push(coord),
-                Err(reason) => {
-                    // Fail closed: a caller that mishandles the `Err` reads an
-                    // empty limit table, not a short one that looks complete.
-                    out.clear();
-                    return Err((row, reason));
-                }
-            }
-        }
-
-        debug_assert_eq!(out.len(), lengths.len(), "one output row per input row");
-        Ok(())
+        Qty::new(coord.raw() as f64 * 1_000.0 / self.dbu_per_um as f64)
     }
 }

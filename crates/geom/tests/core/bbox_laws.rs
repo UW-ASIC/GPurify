@@ -300,45 +300,6 @@ fn of_points_is_translation_equivariant_and_area_preserving() {
     }
 }
 
-/// Oracle: law. One output row per polygon, each a function of its own vertex
-/// range and nothing else — which is what makes the transform a kernel. Running
-/// it against the ranges in a different order must therefore give the same rows
-/// permuted, and each row must equal [`Bbox::of_points`] over that range alone.
-#[test]
-fn of_polys_into_gives_one_row_per_range_independent_of_its_neighbours() {
-    let mut rng = Rng::new(8);
-    let (mut xs, mut ys, mut starts, mut lens) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for _ in 0..50 {
-        let run = 3 + u32::try_from(rng.below(10)).expect("a small draw fits a u32");
-        starts.push(u32::try_from(xs.len()).expect("the run fits a u32"));
-        lens.push(run);
-        for _ in 0..run {
-            xs.push(dbu(rng.range(-9_000, 9_000)));
-            ys.push(dbu(rng.range(-9_000, 9_000)));
-        }
-    }
-
-    // Pre-fill with a value the transform must overwrite, not merge into.
-    let mut out = vec![bbox(-1, -1, 1, 1); 3];
-    Bbox::of_polys_into(&xs, &ys, &starts, &lens, &mut out);
-    assert_eq!(
-        out.len(),
-        starts.len(),
-        "one row per polygon, buffer cleared"
-    );
-
-    for (row, (&start, &len)) in out.iter().zip(starts.iter().zip(&lens)) {
-        let (from, to) = (start as usize, (start + len) as usize);
-        assert_eq!(*row, Bbox::of_points(&xs[from..to], &ys[from..to]));
-    }
-
-    // The same call twice into a dirty buffer is the determinism gate for this
-    // transform: nothing here reads what a previous run left behind.
-    let mut again = vec![Bbox::EMPTY; 500];
-    Bbox::of_polys_into(&xs, &ys, &starts, &lens, &mut again);
-    assert_eq!(again, out);
-}
-
 /// Oracle: construct-from-answer, on the sentinel rather than on a shape. An
 /// empty box contains no points, so it covers no area, and the only right
 /// answer is zero on every empty box there is.

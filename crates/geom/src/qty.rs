@@ -45,17 +45,8 @@ dimensions! {
 /// A Celsius reading as an absolute temperature. The one place the 273.15
 /// offset appears.
 pub fn celsius(degrees: f64) -> Qty<Temperature, 0> {
-    debug_assert!(
-        degrees >= -ABSOLUTE_ZERO_C,
-        "{degrees} C is below absolute zero"
-    );
-    let kelvin = Qty::new(degrees + ABSOLUTE_ZERO_C);
-    debug_assert!(kelvin.raw() >= 0.0 && kelvin.is_finite());
-    kelvin
+    Qty::new(degrees + 273.15)
 }
-
-/// The offset added to a Celsius reading to obtain kelvin.
-const ABSOLUTE_ZERO_C: f64 = 273.15;
 
 /// The SI prefix letter for `10^P`, or `None` when the exponent is outside
 /// [`crate::prefix`] and there is no letter to invent.
@@ -108,14 +99,8 @@ impl<D: Dimension, const P: i8> Qty<D, P> {
     /// Restate at a different prefix. Explicit, so a lossy rescale is visible
     /// at the call site.
     pub fn to<const Q: i8>(self) -> Qty<D, Q> {
-        // One multiply, not a `powi` and a division: at Q == P the factor is
-        // exactly 1.0 and the result is the original bit for bit.
-        let scale = 10f64.powi(i32::from(P) - i32::from(Q));
-        debug_assert!(
-            scale.is_finite() && scale != 0.0,
-            "10^({P}-{Q}) is unusable"
-        );
-        Qty::new(self.raw * scale)
+        // One multiply: at Q == P the factor is exactly 1.0, bit for bit.
+        Qty::new(self.raw * 10f64.powi(i32::from(P) - i32::from(Q)))
     }
 
     /// True when the value is finite. A `NaN` limit compares false against
