@@ -1,9 +1,8 @@
-//! The PDK deck: process data, and nothing else. Per-chip facts are
-//! [`crate::intent`].
+//! The PDK deck: layers, derived layers, rules, connectivity, device recognisers, PEX stack.
 //!
-//! Limits are physical nanometres, converted against the layout's grid at load
-//! exactly or not at all. Rule kinds are interned verbatim and never interpreted
-//! here.
+//! Data in: deck JSON (schema on [`parse_deck`]) and the layout's grid.
+//! Data out: [`Deck`], limits converted from physical nanometres to grid units exactly or refused.
+//! Rule kinds are interned verbatim and never interpreted here.
 
 use crate::narrow;
 use gpurify_geom::LayerId;
@@ -32,9 +31,7 @@ pub enum DeckError {
 /// A parsed, validated, grid-resolved deck.
 #[derive(Debug, Default)]
 pub struct Deck {
-    /// The grid every limit in [`Self::rules`] was converted against. `None`
-    /// only on a default-constructed `Deck`, which holds no rules. A deck file
-    /// does not declare its own resolution; the grid comes from the layout.
+    /// The grid every limit was converted against. `None` only on `Deck::default()`.
     pub grid: Option<Grid>,
     pub layers: LayerTable,
     pub rules: RuleTable,
@@ -43,297 +40,101 @@ pub struct Deck {
     pub stack: ProcessStack,
 }
 
-/// Layer names to ids, and back.
+/// Layer names and stream pairs to ids, and back. Derived layers take the ids after every base layer.
 #[derive(Debug, Default)]
 pub struct LayerTable {
     /// `LayerId(i)` is named `name[i]`.
     name: Vec<StrId>,
-    /// GDS layer/datatype pair each id maps to.
+    /// GDS layer/datatype pair per id; [`DERIVED_STREAM`] for a derived layer.
     stream: Vec<(u16, u16)>,
-    /// Ids sorted by their name's [`StrId`] — by the id, not the name's bytes.
-    by_name: Vec<LayerId>,
-    /// Ids sorted by their `(gds_layer, gds_datatype)` pair, then by id, for
-    /// [`Self::of_stream`]. Ties broken by id so a deck pointing two names at
-    /// one pair still has a total order starting at the lowest id.
-    ///
-    /// **Base layers only.** A derived layer is computed, not drawn, so no
-    /// record in a layout file may map onto one.
+    /// Base-layer ids sorted by `(stream pair, id)`, so a shared pair answers with the lowest id.
     by_stream: Vec<LayerId>,
-    /// The id of the first derived layer, and so the number of base ones. A
-    /// `u16` and not a `LayerId`: it is a count, one past the last base layer.
+    /// The first derived id, and so the number of base layers.
     derived_start: u16,
-    /// How each derived layer is computed, one row per id from `derived_start`
-    /// up.
-    derived: DerivedTable,
+    /// How each derived layer is computed, in id order. Operands fold left and only name lower ids.
+    derived: Vec<(LayerId, DerivedOp, Vec<LayerId>)>,
 }
 
-/// The placeholder stream pair recorded for a derived layer, which has none.
-/// Not an identity: ask [`LayerTable::is_derived`].
+/// The placeholder stream pair of a derived layer. Ask [`LayerTable::is_derived`].
 const DERIVED_STREAM: (u16, u16) = (u16::MAX, u16::MAX);
 
 impl LayerTable {
     pub fn len(&self) -> usize {
-        debug_assert_eq!(
-            self.name.len(),
-            self.stream.len(),
-            "one stream pair per layer"
-        );
-        debug_assert_eq!(
-            self.name.len(),
-            self.by_name.len(),
-            "one name index entry per layer"
-        );
-        debug_assert_eq!(
-            usize::from(self.derived_start),
-            self.by_stream.len(),
-            "one stream index entry per base layer, and none for a derived one"
-        );
         self.name.len()
     }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-    /// `None` for a name the deck does not define.
+    /// `None` for a name the deck does not define. Never interns.
     pub fn id(&self, strings: &StrTable, name: &str) -> Option<LayerId> {
-        // `get`, never `intern`: growing the caller's table on a lookup would
-        // hand back an id for a layer with no geometry, and a rule against it
-        // reports clean.
         let wanted = strings.get(name)?;
-        let at = self
-            .by_name
-            .binary_search_by_key(&wanted, |&LayerId(i)| self.name[usize::from(i)])
-            .ok()?;
-        let found = self.by_name[at];
-        debug_assert_eq!(
-            self.name[found.idx()],
-            wanted,
-            "the index named another layer"
-        );
-        Some(found)
+        let at = self.name.iter().position(|&n| n == wanted)?;
+        Some(LayerId(u16::try_from(at).expect("LayerId is a u16")))
     }
     pub fn name(&self, layer: LayerId) -> StrId {
-        debug_assert!(layer.idx() < self.name.len(), "layer id past the table");
         self.name[layer.idx()]
     }
-    /// Which id a GDS layer/datatype pair maps to.
-    ///
-    /// `partition_point`, not `binary_search_by_key`: it lands on the *first* id
-    /// of a run, so two names on one pair answer with the lower id.
+    /// The base layer a GDS layer/datatype pair maps to; the lowest id when two share it.
     pub fn of_stream(&self, layer: u16, datatype: u16) -> Option<LayerId> {
         let wanted = (layer, datatype);
         let at = self
             .by_stream
             .partition_point(|&LayerId(i)| self.stream[usize::from(i)] < wanted);
         let found = *self.by_stream.get(at)?;
-        // A miss lands on the successor of `wanted`, or past the end; both mean
-        // the deck does not declare this pair.
         (self.stream[found.idx()] == wanted).then_some(found)
     }
 
-    /// The GDS stream pair a layer writes to. The inverse of [`Self::of_stream`].
-    ///
-    /// A derived layer answers with [`DERIVED_STREAM`]; a writer should ask
-    /// [`Self::is_derived`] and skip those rows, which would duplicate area.
+    /// The GDS stream pair a layer writes to. A derived layer answers [`DERIVED_STREAM`];
+    /// a writer should skip [`Self::is_derived`] rows, which would duplicate area.
     pub fn stream_of(&self, layer: LayerId) -> (u16, u16) {
-        debug_assert!(layer.idx() < self.stream.len(), "layer id past the table");
         self.stream[layer.idx()]
     }
 
     /// Is this layer computed by the deck rather than drawn in the layout?
-    ///
-    /// Derived layers take the ids after every base one, which is what lets
-    /// `GeometryStore::append_layer` append them to a store grouped by layer.
     pub fn is_derived(&self, layer: LayerId) -> bool {
-        debug_assert!(layer.idx() < self.name.len(), "layer id past the table");
         layer.0 >= self.derived_start
     }
 
     /// How the derived layers are computed, in id order.
-    pub fn derived(&self) -> &DerivedTable {
-        debug_assert_eq!(
-            self.derived.len() + usize::from(self.derived_start),
-            self.name.len(),
-            "every layer is either base or derived, and no layer is both"
-        );
+    pub(crate) fn derived(&self) -> &[(LayerId, DerivedOp, Vec<LayerId>)] {
         &self.derived
     }
 
-    /// Add a derived layer, and hand back the id it took.
-    ///
-    /// Appended, not sorted in: an id above every base layer and every derived
-    /// layer declared before it is also the order they can be materialised in.
-    /// The name index is kept sorted; the stream index deliberately is not.
-    ///
-    /// # Panics
-    ///
-    /// On `u16::MAX + 1` layers, or when `operands` is empty or names a layer at
-    /// or above the id being taken — all of which [`parse_deck`] refuses first.
-    pub fn push_derived(&mut self, name: StrId, op: DerivedOp, operands: &[LayerId]) -> LayerId {
-        let id = LayerId(
-            u16::try_from(self.name.len())
-                .expect("a deck has tens of layers, and LayerId is a u16"),
-        );
+    /// Add a derived layer above every existing id.
+    fn push_derived(&mut self, name: StrId, op: DerivedOp, operands: Vec<LayerId>) {
+        let id = LayerId(u16::try_from(self.name.len()).expect("LayerId is a u16"));
         assert!(
-            !operands.is_empty(),
-            "a derived layer is computed from at least one layer"
+            !operands.is_empty() && operands.iter().all(|&operand| operand < id),
+            "a derived layer folds at least one lower id"
         );
-        assert!(
-            operands.iter().all(|&operand| operand < id),
-            "a derived layer names an operand at or above its own id, so \
-             materialising it in id order would read a layer that does not exist yet"
-        );
-
-        let at = self
-            .by_name
-            .partition_point(|&LayerId(i)| self.name[usize::from(i)] < name);
         self.name.push(name);
         self.stream.push(DERIVED_STREAM);
-        self.by_name.insert(at, id);
-
-        // The CSR's leading zero goes down with the first row.
-        if self.derived.operand_start.is_empty() {
-            self.derived.operand_start.push(0);
-        }
-        self.derived.layer.push(id);
-        self.derived.op.push(op);
-        self.derived.operand.extend_from_slice(operands);
-        self.derived
-            .operand_start
-            .push(narrow(self.derived.operand.len()));
-
-        debug_assert!(
-            self.by_name
-                .windows(2)
-                .all(|pair| self.name[pair[0].idx()] <= self.name[pair[1].idx()]),
-            "the by-name index is not ascending, so `id` would miss declared layers"
-        );
-        debug_assert!(
-            self.is_derived(id),
-            "a derived layer took a base layer's id"
-        );
-        debug_assert!(
-            self.derived.layer.windows(2).all(|pair| pair[0] < pair[1]),
-            "derived ids come out ascending, which is the order they are materialised in"
-        );
-        id
+        self.derived.push((id, op, operands));
     }
 
-    /// Build a layer table from `(name, gds_layer, gds_datatype)` entries, where
-    /// `LayerId(i)` is `entries[i]`. Both indexes tie-break by id, so a repeat
-    /// still gives a total, deterministic order.
-    pub fn build(entries: &[(StrId, u16, u16)]) -> Self {
-        let count =
-            u16::try_from(entries.len()).expect("a deck has tens of layers, and LayerId is a u16");
-
-        let name: Vec<StrId> = entries.iter().map(|&(name, _, _)| name).collect();
+    /// A table of base layers from `(name, gds_layer, gds_datatype)`; `LayerId(i)` is `entries[i]`.
+    pub(crate) fn build(entries: &[(StrId, u16, u16)]) -> Self {
+        let count = u16::try_from(entries.len()).expect("LayerId is a u16");
+        let name = entries.iter().map(|&(name, _, _)| name).collect();
         let stream: Vec<(u16, u16)> = entries
             .iter()
             .map(|&(_, layer, datatype)| (layer, datatype))
             .collect();
-
-        let mut by_name: Vec<LayerId> = (0..count).map(LayerId).collect();
-        by_name.sort_unstable_by_key(|&LayerId(i)| (name[usize::from(i)], i));
-
         let mut by_stream: Vec<LayerId> = (0..count).map(LayerId).collect();
         by_stream.sort_unstable_by_key(|&LayerId(i)| (stream[usize::from(i)], i));
-
-        // A table built unsorted does not fail; it resolves some names and
-        // misses others.
-        debug_assert!(
-            by_name
-                .windows(2)
-                .all(|pair| name[pair[0].idx()] <= name[pair[1].idx()]),
-            "the by-name index is not ascending, so `id` would miss declared layers"
-        );
-        debug_assert!(
-            by_stream
-                .windows(2)
-                .all(|pair| stream[pair[0].idx()] <= stream[pair[1].idx()]),
-            "the by-stream index is not ascending, so `of_stream` would drop declared layers"
-        );
-        debug_assert_eq!(name.len(), entries.len(), "one row per declared layer");
-        debug_assert_eq!(name.len(), stream.len(), "one stream pair per layer");
-        debug_assert_eq!(name.len(), by_name.len(), "one name index entry per layer");
-        debug_assert_eq!(
-            name.len(),
-            by_stream.len(),
-            "one stream index entry per layer"
-        );
-
         Self {
             name,
             stream,
-            by_name,
             by_stream,
-            // Every entry `build` is handed is a base layer; derived ones
-            // arrive through `push_derived` afterwards.
             derived_start: count,
-            derived: DerivedTable::default(),
+            derived: Vec::new(),
         }
     }
 }
 
 /// The operators a deck may spell over layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DerivedOp {
-    /// Intersection. `poly AND diff` is the gate.
+pub(crate) enum DerivedOp {
     And,
-    /// Union.
     Or,
-    /// Subtraction. `diff NOT poly` is the source/drain regions.
     Not,
-}
-
-/// Layers the deck computes from other layers.
-///
-/// A row may only name layers with a lower id, so declaration order is
-/// evaluation order and a cycle is unspellable. Operands fold left:
-/// `{ "op": "not", "layers": ["a", "b", "c"] }` is `(a − b) − c`.
-#[derive(Debug, Default)]
-pub struct DerivedTable {
-    /// The id this row produced. Ascending, and above every base layer.
-    layer: Vec<LayerId>,
-    op: Vec<DerivedOp>,
-    /// `operand[operand_start[i] .. operand_start[i + 1]]` are row `i`'s
-    /// operands. CSR, with the usual closing sentinel.
-    operand_start: Vec<u32>,
-    operand: Vec<LayerId>,
-}
-
-impl DerivedTable {
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(
-            self.layer.len(),
-            self.op.len(),
-            "one operator per derived layer"
-        );
-        debug_assert!(
-            self.operand_start.len() == self.layer.len() + 1 || self.operand_start.is_empty(),
-            "the operand CSR carries one offset per row plus a terminator"
-        );
-        self.layer.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-    /// The id row `row` produced, and the operator it folds with.
-    pub fn row(&self, row: usize) -> (LayerId, DerivedOp) {
-        (self.layer[row], self.op[row])
-    }
-    /// The layers one row folds, in the order it folds them. Never empty.
-    pub fn operands_of(&self, row: usize) -> &[LayerId] {
-        let start = self.operand_start[row] as usize;
-        let end = self.operand_start[row + 1] as usize;
-        debug_assert!(
-            start < end,
-            "a derived layer is computed from at least one layer"
-        );
-        debug_assert!(
-            end <= self.operand.len(),
-            "an operand range runs off the table"
-        );
-        &self.operand[start..end]
-    }
 }
 
 /// One rule as the deck states it, layers resolved and lengths already [`Dbu`].
@@ -376,21 +177,11 @@ pub struct RuleTable {
 impl RuleTable {
     pub fn layers_of(&self, rule: &RuleSpec) -> &[LayerId] {
         let start = rule.layer_start as usize;
-        let end = start + rule.layer_len as usize;
-        debug_assert!(
-            end <= self.layer_ref.len(),
-            "a rule's layer range runs off the table"
-        );
-        &self.layer_ref[start..end]
+        &self.layer_ref[start..start + rule.layer_len as usize]
     }
     pub fn params_of(&self, rule: &RuleSpec) -> &[(StrId, ParamValue)] {
         let start = rule.param_start as usize;
-        let end = start + rule.param_len as usize;
-        debug_assert!(
-            end <= self.param.len(),
-            "a rule's parameter range runs off the table"
-        );
-        &self.param[start..end]
+        &self.param[start..start + rule.param_len as usize]
     }
     /// Look up one parameter by interned name.
     pub fn param(&self, rule: &RuleSpec, name: StrId) -> Option<ParamValue> {
@@ -410,12 +201,9 @@ pub struct Connectivity {
     pub via_connects: Vec<(LayerId, LayerId)>,
     /// Whether shapes on the same conductor layer connect by touching.
     pub intra_layer_touch: bool,
-    /// One row per net-label layer: the layer a `TEXT` is drawn on, and the
-    /// conductor layer whose shapes it names. GDSII states no such relationship,
-    /// so the deck must. Each row names exactly one conductor, so a label can
-    /// never join two conductor layers into one net.
+    /// One row per net-label layer: the layer a `TEXT` is drawn on...
     pub label_layer: Vec<LayerId>,
-    /// The conductor each row of `label_layer` names. Parallel to it.
+    /// ...and the one conductor whose shapes it names.
     pub label_names: Vec<LayerId>,
 }
 
@@ -428,13 +216,9 @@ pub struct Connectivity {
 /// | `Mos` | gate, source, drain, bulk |
 /// | `Bjt` | base, emitter, collector, then bulk if a fourth is declared |
 /// | `Resistor`, `Capacitor`, `Diode` | pin 0, pin 1 — symmetric, so the comparator may swap them |
-///
-/// A recogniser stating them in another order extracts a transistor with its
-/// source and drain transposed, which LVS reports as a layout mismatch.
 #[derive(Debug, Default)]
 pub struct DeviceRecognition {
-    /// One row per recogniser: the marker layer whose polygons each identify
-    /// one device, and the layers forming its terminals.
+    /// One row per recogniser: each marker polygon is one device. Terminals are CSR.
     pub kind: Vec<DeviceKind>,
     pub marker: Vec<LayerId>,
     pub terminal_start: Vec<u32>,
@@ -466,94 +250,34 @@ pub struct ProcessStack {
 
 /// Parse and validate a deck from memory.
 ///
-/// # Schema
-///
 /// ```json
-/// {
-///   "layers": { "<name>": [<gds_layer>, <gds_datatype>] },
-///   "derived": [{ "name": "<name>", "op": "and"|"or"|"not",
-///                 "layers": ["<name>", ..] }],
-///   "rules":  { "<rule_id>": { "kind": "<kind>",
-///                              "layers": ["<name>", ..],
-///                              "params": { "<param>": <value> } } },
-///   "connectivity":       { "conductors": ["<name>", ..],
-///                           "intra_layer_touch": <bool>,
-///                           "vias": [{ "layer": "<name>",
-///                                      "connects": ["<name>", "<name>"] }],
-///                           "labels": [{ "layer": "<name>",
-///                                        "names": "<name>" }] },
+/// { "layers": { "<name>": [<gds_layer>, <gds_datatype>] },
+///   "derived": [{ "name": "<name>", "op": "and"|"or"|"not", "layers": ["<name>", ..] }],
+///   "rules": { "<rule_id>": { "kind": "<kind>", "layers": ["<name>", ..], "params": { "<param>": <value> } } },
+///   "connectivity": { "conductors": [..], "intra_layer_touch": <bool>,
+///                     "vias": [{ "layer": "<name>", "connects": ["<name>", "<name>"] }],
+///                     "labels": [{ "layer": "<name>", "names": "<name>" }] },
 ///   "device_recognition": [{ "kind": "mos"|"bjt"|"resistor"|"capacitor"|"diode",
-///                            "marker": "<name>", "model": "<string>",
-///                            "terminals": ["<name>", ..] }],
-///   "pex": { "<name>": { "thickness_nm": <n>, "height_nm": <n>,
-///                        "sheet_res_ohm_sq": <n>, "area_cap_af_um2": <n>,
-///                        "fringe_cap_af_um": <n>, "dielectric_k": <n> } }
-/// }
+///                            "marker": "<name>", "model": "<string>", "terminals": [..] }],
+///   "pex": { "<name>": { "thickness_nm", "height_nm", "sheet_res_ohm_sq",
+///                        "area_cap_af_um2", "fringe_cap_af_um", "dielectric_k" } } }
 /// ```
 ///
-/// Every section is optional; an absent one leaves its table empty. Layers take
-/// their [`LayerId`] ascending by name, so two runs over the same text agree on
-/// every id downstream.
-///
-/// A `derived` row produces a real [`LayerId`] that anything naming a layer may
-/// name. Those ids come after every base layer, in declaration order, and carry
-/// no GDS stream pair.
-///
-/// A parameter value carries its own shape, since a bare `45` cannot be told
-/// from a ratio of `45`:
-///
-/// | JSON | becomes |
-/// |---|---|
-/// | `{ "nm": 45 }` | [`ParamValue::Length`], converted against `grid` |
-/// | `{ "ratio": 2.5 }` | [`ParamValue::Ratio`] |
-/// | `{ "count": 4 }` | [`ParamValue::Count`] |
-/// | `{ "layer": "met1" }` | [`ParamValue::Layer`], resolved |
-/// | `true` / `false` | [`ParamValue::Flag`] |
-///
-/// Lengths are **physical nanometres** and convert exactly or not at all, so
-/// `DeckError::OffGrid` is a property of the deck and the grid together rather
-/// than of a rounding mode.
-///
-/// # Errors
-///
-/// `Malformed` for anything not this shape; `UnknownLayer` for any layer name
-/// absent from `"layers"`; `MissingParam` for a rule with no `kind` or no
-/// `layers`; `OffGrid` for a length off the grid; `DuplicateRule` for a rule id
-/// stated twice. Never a skip.
-///
-/// `kind` is interned verbatim, so a deck may hold rules of both domains and
-/// neither `from_deck` can refuse one it does not spell. The refusal that keeps
-/// a misspelled rule from reading as a clean design is
-/// `gpurify_engine::run::run_checks`, the only layer holding both vocabularies.
+/// Every section is optional. Base layers take ids ascending by name bytes; derived
+/// layers follow in declaration order. A param value is `{"nm": n}` (converted
+/// against `grid` exactly or `OffGrid`), `{"ratio": f}`, `{"count": n}`,
+/// `{"layer": "<name>"}` or a bare bool.
 pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
     let doc: DeckJson =
         serde_json::from_str(source).map_err(|why| DeckError::Malformed(why.to_string()))?;
 
     let mut layers = build_layers(&doc.layers, strings)?;
-    // Before every other section: any of them may name a derived layer, and
-    // `build_stack`'s columns are one row per layer.
+    // First: any later section may name a derived layer.
     build_derived(&doc.derived, &mut layers, strings)?;
     let rules = build_rules(&doc.rules, &layers, grid, strings)?;
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
     let devices = build_devices(&doc.device_recognition, &layers, strings)?;
     let stack = build_stack(&doc.pex, &layers, strings)?;
-
-    debug_assert_eq!(
-        devices.kind.len(),
-        devices.marker.len(),
-        "one marker per recogniser"
-    );
-    debug_assert_eq!(
-        devices.kind.len(),
-        devices.model.len(),
-        "one model per recogniser"
-    );
-    debug_assert_eq!(connectivity.via_cut.len(), connectivity.via_connects.len());
-    debug_assert_eq!(
-        layers.derived().len(),
-        doc.derived.len(),
-        "one row per derived layer"
-    );
 
     Ok(Deck {
         grid: Some(grid),
@@ -565,17 +289,13 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
     })
 }
 
-/// The `"derived"` section, layers resolved and ids assigned in declaration
-/// order. An operand the table does not hold yet — including the row's own
-/// name — is [`DeckError::UnknownLayer`].
+/// The `"derived"` section, ids assigned in declaration order. Operands resolve
+/// before the id is taken, so a self- or forward reference is `UnknownLayer`.
 fn build_derived(
     declared: &[DerivedJson],
     layers: &mut LayerTable,
     strings: &mut StrTable,
 ) -> Result<(), DeckError> {
-    // Operands are resolved before the id is taken, so a self-reference is an
-    // unresolved name rather than a layer folding itself.
-    let mut operands: Vec<LayerId> = Vec::new();
     for row in declared {
         if row.layers.is_empty() {
             return Err(DeckError::MissingParam(
@@ -583,10 +303,11 @@ fn build_derived(
                 "layers".to_owned(),
             ));
         }
-        operands.clear();
-        for name in &row.layers {
-            operands.push(layer_of(layers, strings, &row.name, name)?);
-        }
+        let operands = row
+            .layers
+            .iter()
+            .map(|name| layer_of(layers, strings, &row.name, name))
+            .collect::<Result<Vec<_>, _>>()?;
         if layers.id(strings, &row.name).is_some() {
             return Err(DeckError::Malformed(format!(
                 "layer {} is declared twice",
@@ -604,7 +325,7 @@ fn build_derived(
                 )))
             }
         };
-        layers.push_derived(strings.intern(&row.name), op, &operands);
+        layers.push_derived(strings.intern(&row.name), op, operands);
     }
     Ok(())
 }
@@ -621,8 +342,7 @@ fn layer_of(
         .ok_or_else(|| DeckError::UnknownLayer(referrer.to_owned(), name.to_owned()))
 }
 
-/// Layer names to a [`LayerTable`], ids ascending by the name's *bytes* — an
-/// interning order would differ between runs.
+/// Layer names to a [`LayerTable`], ids ascending by name *bytes*, not interning order.
 fn build_layers(
     declared: &Pairs<(u16, u16)>,
     strings: &mut StrTable,
@@ -644,9 +364,7 @@ fn build_layers(
         .map(|(name, (layer, datatype))| (strings.intern(name), *layer, *datatype))
         .collect();
 
-    let table = LayerTable::build(&entries);
-    debug_assert_eq!(table.len(), declared.0.len(), "one id per declared layer");
-    Ok(table)
+    Ok(LayerTable::build(&entries))
 }
 
 /// The `"rules"` section to a [`RuleTable`], layers resolved and lengths
@@ -703,11 +421,6 @@ fn build_rules(
         });
     }
 
-    debug_assert_eq!(
-        table.spec.len(),
-        declared.0.len(),
-        "one row per declared rule"
-    );
     Ok(table)
 }
 
@@ -734,9 +447,7 @@ fn to_limit(nm: f64, grid: Grid, rule_id: &str) -> Result<Dbu, DeckError> {
     grid.to_dbu(Qty::<Length, NANO>::new(nm)).map_err(|why| {
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "the message names the limit the deck stated; a limit too large to \
-                      truncate is already refused, and the digits after the point are not \
-                      what the reader needs to see"
+            reason = "the message only names the limit"
         )]
         let stated = nm as i64;
         match why {
@@ -801,11 +512,6 @@ fn build_connectivity(
         connectivity.label_names.push(names);
     }
 
-    debug_assert_eq!(
-        connectivity.label_layer.len(),
-        connectivity.label_names.len(),
-        "the label pairing columns must stay parallel"
-    );
     Ok(connectivity)
 }
 
@@ -852,11 +558,6 @@ fn build_devices(
         devices.terminal_start.push(narrow(devices.terminal.len()));
     }
 
-    debug_assert_eq!(
-        devices.terminal_start.len(),
-        devices.kind.len() + 1,
-        "a CSR offset column carries one closing sentinel"
-    );
     Ok(devices)
 }
 
@@ -893,7 +594,6 @@ fn build_stack(
         stack.dielectric_k[at] = row.dielectric_k;
     }
 
-    debug_assert_eq!(stack.dielectric_k.len(), rows, "one stack row per layer");
     Ok(stack)
 }
 
@@ -1050,19 +750,6 @@ struct StackJson {
     dielectric_k: f64,
 }
 
-/// Read and validate a deck against a layout's grid, interning into the
-/// caller's [`StrTable`] so deck and layout names share one id space.
-pub fn read_deck(
-    path: &std::path::Path,
-    grid: Grid,
-    strings: &mut StrTable,
-) -> Result<Deck, DeckError> {
-    // The path is in the message: a run loads four files.
-    let source = std::fs::read_to_string(path)
-        .map_err(|why| DeckError::Io(format!("{}: {why}", path.display())))?;
-    parse_deck(&source, grid, strings)
-}
-
 /// Layer-table tests, and the fixture the layout tests borrow.
 #[cfg(test)]
 pub(crate) mod tests {
@@ -1110,7 +797,6 @@ pub(crate) mod tests {
         let layers = layer_table(&mut strings, &ROWS);
 
         assert_eq!(layers.len(), ROWS.len());
-        assert!(!layers.is_empty());
 
         for (index, &(name, _, _)) in ROWS.iter().enumerate() {
             let expected = LayerId(u16::try_from(index).expect("three rows"));

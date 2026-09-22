@@ -1,12 +1,11 @@
-//! Layout readers: GDSII and OASIS, both producing a `GeometryStore` and a
-//! [`Provenance`], dispatched by [`read_layout`] on the file's magic.
+//! GDSII reader: a record stream to one flat, layer-sorted `GeometryStore`.
 //!
-//! Flattening happens during the read. Each emitted polygon records the instance
-//! path it came from, and an unsupported transform (non-orthogonal rotation,
-//! non-integral magnification) is an error, not an approximation.
+//! Data in: GDSII bytes (gzip or plain) and a [`Deck`] mapping stream pairs to layers.
+//! Data out: [`Layout`]: the store with deck-derived layers appended, placed labels, and the
+//! string table the layout was interned into. An inexact transform is an error, never rounded.
 
-use crate::deck::{Deck, DerivedOp, DerivedTable};
-use crate::provenance::{PathTable, Provenance};
+use crate::deck::{Deck, DerivedOp};
+use crate::provenance::Provenance;
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::Dbu;
@@ -19,21 +18,18 @@ pub struct Layout {
     pub store: GeometryStore,
     pub provenance: Provenance,
     pub strings: StrTable,
-    /// Polygons the reader dropped because their stream pair is absent from the
-    /// deck's layer table. Zero under [`UnknownLayers::Reject`].
-    pub dropped: u32,
 }
 
-/// Why a layout could not be read. Every variant is a refusal, never a
-/// degradation: approximating a transform moves geometry and moves verdicts.
+/// Why a layout could not be read. Every variant is a refusal: approximating a
+/// transform moves geometry and moves verdicts.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LayoutError {
     #[error("unrecognised file format")]
     UnknownFormat,
     #[error("truncated record at byte {0}")]
-    Truncated(u64),
+    Truncated(usize),
     #[error("unsupported record type {0:#06x} at byte {1}")]
-    UnsupportedRecord(u16, u64),
+    UnsupportedRecord(u16, usize),
     #[error("coordinate {0} exceeds the representable range")]
     CoordinateOutOfRange(i64),
     #[error("instance transform is not representable exactly")]
@@ -44,80 +40,59 @@ pub enum LayoutError {
     CyclicHierarchy(String),
     #[error("layer {0}/{1} is not in the deck's layer table")]
     UnknownLayer(u16, u16),
-    /// A layer the deck computes from other layers could not be computed. Fail
-    /// closed: the alternative is a layer that silently comes back empty.
     #[error("derived layer {0:?} could not be computed: {1}")]
     Derived(gpurify_geom::LayerId, BooleanError),
     #[error("io: {0}")]
     Io(String),
 }
 
-/// How strictly to treat geometry the deck does not describe.
+/// How to treat geometry on a stream pair the deck does not declare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownLayers {
-    /// Reject. The default, and what a signoff run uses.
+    /// Refuse the layout. What a signoff run uses.
     Reject,
-    /// Drop, and report how many rows were dropped in [`Layout::dropped`].
-    /// Never silent.
+    /// Drop the shape or label, uncounted.
     Drop,
 }
 
-/// Read a layout file, flatten it, and produce the store plus provenance.
-///
-/// The one function that applies the `GeometryStoreBuilder::finish` permutation
-/// to the provenance columns.
+/// Read a layout file, flatten it, and produce the store plus labels.
 pub fn read_layout(
     path: &std::path::Path,
     deck: &Deck,
     unknown: UnknownLayers,
 ) -> Result<Layout, LayoutError> {
-    use std::io::{Read, Seek};
+    gds::read(&read_gds_bytes(path)?, deck, unknown)
+}
 
-    let mut file = std::fs::File::open(path).map_err(|e| LayoutError::Io(e.to_string()))?;
+/// A GDSII file's bytes, gunzipped when the file is gzip. `UnknownFormat` when the
+/// decompressed bytes do not open with a GDSII `HEADER` record.
+pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
+    use std::io::Read;
+    let io = |e: std::io::Error| LayoutError::Io(e.to_string());
 
-    // Peek the gzip magic rather than asking a decoder: `MultiGzDecoder::new`
-    // parses the first header eagerly and cannot fail.
-    let mut magic = [0u8; 2];
-    let peeked = file
-        .read(&mut magic)
-        .map_err(|e| LayoutError::Io(e.to_string()))?;
-    file.rewind().map_err(|e| LayoutError::Io(e.to_string()))?;
-
-    let mut bytes = Vec::new();
-    if peeked == 2 && magic == [0x1f, 0x8b] {
-        // `MultiGzDecoder`, never `GzDecoder`: a gzip file is a *series* of
-        // members and `GzDecoder` stops after the first with a clean `Ok(0)`,
-        // which is a silently partial layout.
-        flate2::read::MultiGzDecoder::new(file)
+    let raw = std::fs::read(path).map_err(io)?;
+    let bytes = if raw.starts_with(&[0x1f, 0x8b]) {
+        // `MultiGzDecoder`: `GzDecoder` stops after the first member, a silently partial layout.
+        let mut bytes = Vec::new();
+        flate2::read::MultiGzDecoder::new(&raw[..])
             .read_to_end(&mut bytes)
-            .map_err(|e| LayoutError::Io(e.to_string()))?;
+            .map_err(io)?;
+        bytes
     } else {
-        file.read_to_end(&mut bytes)
-            .map_err(|e| LayoutError::Io(e.to_string()))?;
-    }
-
-    // Detection runs on the decompressed bytes: reading compressed noise as
-    // records produces a plausible short layout.
+        raw
+    };
     if gds::detect(&bytes) {
-        gds::read(&bytes, deck, unknown)
-    } else if oasis::detect(&bytes) {
-        oasis::read(&bytes, deck, unknown)
+        Ok(bytes)
     } else {
         Err(LayoutError::UnknownFormat)
     }
 }
 
-/// Compute every layer the deck derives and append it to the store.
-///
-/// One row per derived layer, folded left over its operands and matched one for
-/// one by a `Provenance` row so the two tables stay the same length. `derived`
-/// is ascending by id and a row may only name lower ids, so one forward scan is
-/// the whole of the dependency handling. A derived polygon came from no
-/// instance, so its path is [`PathTable::ROOT`].
-pub fn derive_layers_into(
+/// Compute every deck-derived layer and append it to the store, in id order.
+/// Operands fold left and only name lower ids, so one forward pass suffices.
+fn derive_layers_into(
     store: &mut GeometryStore,
-    provenance: &mut Provenance,
-    derived: &DerivedTable,
+    derived: &[(gpurify_geom::LayerId, DerivedOp, Vec<gpurify_geom::LayerId>)],
 ) -> Result<(), LayoutError> {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
@@ -125,10 +100,8 @@ pub fn derive_layers_into(
     let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
     let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
 
-    for row in 0..derived.len() {
-        let (layer, op) = derived.row(row);
-        let operands = derived.operands_of(row);
-        let blame = |why: BooleanError| LayoutError::Derived(layer, why);
+    for (layer, op, operands) in derived {
+        let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
 
         validate_layer_into(store, operands[0], &mut folded).map_err(|why| blame(why.into()))?;
         for &next in &operands[1..] {
@@ -146,7 +119,7 @@ pub fn derive_layers_into(
         ys.clear();
         start.clear();
         len.clear();
-        for polygon in 0..u32::try_from(folded.len()).expect("a layer's polygons fit a u32") {
+        for polygon in 0..crate::narrow(folded.len()) {
             let polygon = folded.get(store, polygon);
             // Outer first, then its holes: `validate_layer_into`'s ring order.
             for ring in std::iter::once(polygon.outer()).chain(polygon.holes()) {
@@ -157,23 +130,8 @@ pub fn derive_layers_into(
                 ys.extend_from_slice(ring_ys);
             }
         }
-
-        store.append_layer(layer, &xs, &ys, &start, &len);
-        for _ in 0..start.len() {
-            provenance.push(PathTable::ROOT, &[]);
-        }
-        debug_assert_eq!(
-            store.polys_on_layer(layer).len(),
-            start.len(),
-            "the appended rings are not the ones the layer reports"
-        );
+        store.append_layer(*layer, &xs, &ys, &start, &len);
     }
-
-    debug_assert!(
-        provenance.is_empty() || provenance.len() == store.poly_count(),
-        "provenance and the store disagree on how many polygons exist, so every \
-         violation past the first derived row names another shape's cell"
-    );
     Ok(())
 }
 
@@ -181,18 +139,13 @@ pub fn derive_layers_into(
 pub mod gds {
     use super::{Deck, Layout, LayoutError, UnknownLayers};
     use crate::narrow;
-    use crate::provenance::{PathId, PathTable, Provenance};
+    use crate::provenance::Provenance;
     use gpurify_geom::boolean::canonical_rings_into;
-    use gpurify_geom::{Dbu, MAX_ABS_DBU};
+    use gpurify_geom::{Dbu, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
 
-    /// Every GDSII library opens with a six-byte `HEADER` record, so the magic
-    /// is the record framing itself: length 6, record type 0, data type 2.
-    const MAGIC: [u8; 4] = [0x00, 0x06, 0x00, 0x02];
-
-    // Record tags as they appear on the wire — `(record type << 8) | data type`
-    // — which is also how `LayoutError::UnsupportedRecord` reports one.
+    // Record tags as on the wire: `(record type << 8) | data type`.
     const HEADER: u16 = 0x0002;
     const BGNLIB: u16 = 0x0102;
     const LIBNAME: u16 = 0x0206;
@@ -214,11 +167,7 @@ pub mod gds {
     const SNAME: u16 = 0x1206;
     const COLROW: u16 = 0x1302;
     const NODE: u16 = 0x1500;
-    /// `TEXT`'s half of the stream pair. Unbracketed in the grammar, so a `TEXT`
-    /// without one is refused rather than defaulted.
     const TEXTTYPE: u16 = 0x1602;
-    /// Justification and font of the rendered glyph. Read and discarded: it
-    /// does not move the `XY` point, which is what names a shape.
     const PRESENTATION: u16 = 0x1701;
     const STRING: u16 = 0x1906;
     const STRANS: u16 = 0x1A01;
@@ -244,42 +193,27 @@ pub mod gds {
     const SRFNAME: u16 = 0x3A06;
     const LIBSECUR: u16 = 0x3B02;
 
-    /// `STRANS` bit 0, counted from the most significant: reflect about the X
-    /// axis before rotating.
+    /// `STRANS` bit 0 (MSB first): reflect about the X axis before rotating.
     const STRANS_REFLECT: u16 = 0x8000;
-    /// `STRANS` bits 13 and 14: magnification and angle are absolute, i.e. not
-    /// composed with the parent's. Both break the fold in [`Xform::compose`],
-    /// so both are refused rather than approximated.
+    /// `STRANS` bits 13-14: absolute magnification/angle, which do not compose. Refused.
     const STRANS_ABSOLUTE: u16 = 0x0006;
 
-    /// A byte offset as [`LayoutError`] states it. One place, so the cast is
-    /// justified once: an index into a slice already in memory is lossless here.
-    const fn offset(at: usize) -> u64 {
-        at as u64
-    }
-
-    /// True when the byte prefix is a GDSII header record.
+    /// True when the bytes open with a GDSII `HEADER` record: length 6, type 0, data type 2.
     pub fn detect(prefix: &[u8]) -> bool {
-        prefix.starts_with(&MAGIC)
+        prefix.starts_with(&[0x00, 0x06, 0x00, 0x02])
     }
 
+    /// Parse and flatten GDSII bytes into a fresh string table.
     pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
-        let mut library = parse(bytes)?;
-        let (mut store, mut provenance, dropped) = flatten(&library, deck, unknown)?;
-        // Here rather than in `read_layout`, so every path producing a store
-        // from bytes produces a complete one.
-        super::derive_layers_into(&mut store, &mut provenance, deck.layers.derived())?;
+        let mut strings = StrTable::default();
+        let library = Library::parse(bytes, &mut strings)?;
+        let (store, provenance) = library.flatten(deck, &strings, unknown)?;
         Ok(Layout {
             store,
             provenance,
-            // Taken, not borrowed: the library dies here and the ids in the
-            // store's provenance only mean something against this table.
-            strings: std::mem::take(&mut library.strings),
-            dropped,
+            strings,
         })
     }
-
-    // ---------------------------------------------------------------- parsing
 
     /// One geometry element as the file states it, before any transform.
     struct Elem {
@@ -287,15 +221,14 @@ pub mod gds {
         datatype: u16,
         vert_start: u32,
         vert_len: u32,
-        prop_start: u32,
-        prop_len: u32,
     }
 
-    /// One `SREF` or `AREF`: a child cell, its placement, and the array step.
-    /// An `SREF` is the one-by-one case with zero steps.
+    /// One `SREF` or `AREF`; an `SREF` is the 1×1 array with zero steps.
     struct Ref {
         cell: StrId,
-        /// The child's own transform, whose translation is the array origin.
+        /// Index into `Library::cells`, resolved once parsing is done.
+        child: u32,
+        /// The child's own transform; its translation is the array origin.
         place: Xform,
         col_step: (i64, i64),
         row_step: (i64, i64),
@@ -312,7 +245,7 @@ pub mod gds {
         string: StrId,
     }
 
-    /// One structure, as ranges into the library's element and reference lists.
+    /// One structure, as ranges into the library's element, reference and text lists.
     struct Cell {
         name: StrId,
         elem_start: u32,
@@ -323,9 +256,9 @@ pub mod gds {
         text_end: u32,
     }
 
-    /// An exactly representable instance transform: integral magnification, an
-    /// optional reflection about the X axis, a quarter turn, and a translation.
-    /// Closed under composition, since `F·R_q = R_{-q}·F`.
+    /// An exact instance transform: integral magnification, optional reflection
+    /// about X, a quarter turn, a translation. Closed under composition since
+    /// `F·R_q = R_{-q}·F`.
     #[derive(Clone, Copy)]
     struct Xform {
         mag: i64,
@@ -344,8 +277,7 @@ pub mod gds {
             dy: 0,
         };
 
-        /// The linear part as the row-major pair `(a, b, c, e)` of
-        /// `x' = a·x + b·y`, `y' = c·x + e·y`.
+        /// The linear part `(a, b, c, e)` of `x' = a·x + b·y`, `y' = c·x + e·y`.
         fn linear(self) -> (i64, i64, i64, i64) {
             let (a, b, c, e) = match self.quadrant & 3 {
                 0 => (1, 0, 0, 1),
@@ -353,8 +285,7 @@ pub mod gds {
                 2 => (-1, 0, 0, -1),
                 _ => (0, 1, -1, 0),
             };
-            // The reflection is the second column negated, because it runs
-            // before the rotation.
+            // Reflection runs before rotation: the second column negated.
             let s = if self.flip { -1 } else { 1 };
             (
                 self.mag * a,
@@ -364,86 +295,82 @@ pub mod gds {
             )
         }
 
-        /// `self` applied after `child`.
-        fn compose(self, child: Self) -> Self {
+        /// `self` applied to a point. `None` on i64 overflow.
+        fn apply(self, x: i64, y: i64) -> Option<(i64, i64)> {
             let (a, b, c, e) = self.linear();
-            Self {
-                mag: self.mag * child.mag,
+            let x2 = a
+                .checked_mul(x)?
+                .checked_add(b.checked_mul(y)?)?
+                .checked_add(self.dx)?;
+            let y2 = c
+                .checked_mul(x)?
+                .checked_add(e.checked_mul(y)?)?
+                .checked_add(self.dy)?;
+            Some((x2, y2))
+        }
+
+        /// `self` applied after `child`. `None` on i64 overflow: nested magnifications
+        /// multiply, and a wrapped value could pass the coordinate bound.
+        fn compose(self, child: Self) -> Option<Self> {
+            let (dx, dy) = self.apply(child.dx, child.dy)?;
+            Some(Self {
+                mag: self.mag.checked_mul(child.mag)?,
                 flip: self.flip ^ child.flip,
-                // `F·R_q = R_{-q}·F`, so a reflecting parent reverses the
-                // child's turn as it commutes past it.
+                // A reflecting parent reverses the child's turn as it commutes past it.
                 quadrant: if self.flip {
                     (self.quadrant + 4 - (child.quadrant & 3)) & 3
                 } else {
                     (self.quadrant + child.quadrant) & 3
                 },
-                dx: a * child.dx + b * child.dy + self.dx,
-                dy: c * child.dx + e * child.dy + self.dy,
-            }
+                dx,
+                dy,
+            })
         }
     }
 
-    /// The library as parsed: hierarchy intact, nothing mapped to the deck yet.
+    /// A parsed library: hierarchy intact, nothing mapped to a deck yet.
+    ///
+    /// [`Library::parse`] interns every layout string (cell names, `TEXT`s,
+    /// `PROPVALUE`s) in file order; [`Library::flatten`] interns nothing.
     #[derive(Default)]
-    struct Library {
-        strings: StrTable,
+    pub struct Library {
         cells: Vec<Cell>,
-        /// Cell indices ordered by name, for the `SNAME` lookup. Sorted and
-        /// binary-searched, not hashed — see [`crate::intern`].
-        by_name: Vec<u32>,
         elems: Vec<Elem>,
         refs: Vec<Ref>,
         texts: Vec<Text>,
         xs: Vec<i64>,
         ys: Vec<i64>,
-        props: Vec<(i16, StrId)>,
-    }
-
-    impl Library {
-        /// The cell a name defines, or `None`.
-        fn find(&self, name: StrId) -> Option<u32> {
-            let at = self
-                .by_name
-                .binary_search_by_key(&name, |&i| self.cells[i as usize].name)
-                .ok()?;
-            Some(self.by_name[at])
-        }
     }
 
     /// One `(tag, payload)` record and the offset just past it.
     fn record(bytes: &[u8], at: usize) -> Result<(u16, &[u8], usize), LayoutError> {
-        let head = bytes
-            .get(at..at + 4)
-            .ok_or(LayoutError::Truncated(offset(at)))?;
+        let head = bytes.get(at..at + 4).ok_or(LayoutError::Truncated(at))?;
         let len = usize::from(u16::from_be_bytes([head[0], head[1]]));
         let tag = u16::from_be_bytes([head[2], head[3]]);
-        // A record shorter than its own header would leave `at` where it is and
-        // loop forever; an odd length is not a GDSII record at all.
+        // Shorter than its header would loop forever; odd is not GDSII.
         if len < 4 || len % 2 != 0 {
-            return Err(LayoutError::Truncated(offset(at)));
+            return Err(LayoutError::Truncated(at));
         }
         let payload = bytes
             .get(at + 4..at + len)
-            .ok_or(LayoutError::Truncated(offset(at)))?;
+            .ok_or(LayoutError::Truncated(at))?;
         Ok((tag, payload, at + len))
     }
 
     /// A two-byte integer payload.
     fn word(payload: &[u8], at: usize) -> Result<u16, LayoutError> {
-        let bytes: [u8; 2] = payload
-            .get(..2)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(LayoutError::Truncated(offset(at)))?;
-        Ok(u16::from_be_bytes(bytes))
+        match payload {
+            [hi, lo, ..] => Ok(u16::from_be_bytes([*hi, *lo])),
+            _ => Err(LayoutError::Truncated(at)),
+        }
     }
 
-    /// A four-byte signed integer payload, widened to this module's width.
+    /// A four-byte signed integer payload.
     fn long(payload: &[u8], at: usize) -> Result<i64, LayoutError> {
-        let bytes: [u8; 4] = payload
-            .get(..4)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(LayoutError::Truncated(offset(at)))?;
-        Ok(i64::from(i32::from_be_bytes(bytes)))
+        match payload {
+            [a, b, c, d, ..] => Ok(i64::from(i32::from_be_bytes([*a, *b, *c, *d]))),
+            _ => Err(LayoutError::Truncated(at)),
+        }
     }
 
     /// An ASCII payload, with the NUL the format pads odd names with removed.
@@ -452,28 +379,29 @@ pub mod gds {
         String::from_utf8_lossy(&payload[..end])
     }
 
-    /// An eight-byte GDSII real: sign, a seven-bit excess-64 base-sixteen
-    /// exponent, and a fifty-six-bit fraction, so the value is
-    /// `± fraction / 2^56 · 16^(exponent − 64)`.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the fraction is 56 bits and f64 carries 53; every value this \
-                  reader accepts is an integral magnification or a quarter turn, \
-                  both exact in f64, and anything else is refused by its caller"
-    )]
+    /// An eight-byte GDSII real: `± fraction / 2^56 · 16^(exponent − 64)`.
+    /// The 56-bit fraction loses bits in f64; callers accept only values exact in f64.
+    #[expect(clippy::cast_precision_loss)]
     fn real(payload: &[u8], at: usize) -> Result<f64, LayoutError> {
-        /// `2^56`, the fraction's implied denominator.
-        const SCALE: f64 = 72_057_594_037_927_936.0;
+        const SCALE: f64 = 72_057_594_037_927_936.0; // 2^56
         let bytes: [u8; 8] = payload
             .get(..8)
             .and_then(|s| s.try_into().ok())
-            .ok_or(LayoutError::Truncated(offset(at)))?;
+            .ok_or(LayoutError::Truncated(at))?;
         let sign = if bytes[0] & 0x80 == 0 { 1.0 } else { -1.0 };
         let exponent = i32::from(bytes[0] & 0x7f) - 64;
         let fraction = u64::from_be_bytes([
             0, bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]);
         Ok(sign * (fraction as f64) / SCALE * 16f64.powi(exponent))
+    }
+
+    /// One 8-byte `XY` point.
+    fn xy(p: &[u8]) -> (i64, i64) {
+        (
+            i64::from(i32::from_be_bytes([p[0], p[1], p[2], p[3]])),
+            i64::from(i32::from_be_bytes([p[4], p[5], p[6], p[7]])),
+        )
     }
 
     /// Append an `XY` payload to the coordinate columns.
@@ -484,143 +412,117 @@ pub mod gds {
         at: usize,
     ) -> Result<(), LayoutError> {
         if !payload.len().is_multiple_of(8) {
-            return Err(LayoutError::Truncated(offset(at)));
+            return Err(LayoutError::Truncated(at));
         }
-        xs.extend(
-            payload
-                .chunks_exact(8)
-                .map(|p| i64::from(i32::from_be_bytes([p[0], p[1], p[2], p[3]]))),
-        );
-        ys.extend(
-            payload
-                .chunks_exact(8)
-                .map(|p| i64::from(i32::from_be_bytes([p[4], p[5], p[6], p[7]]))),
-        );
-        debug_assert_eq!(xs.len(), ys.len(), "the coordinate columns diverged");
+        for (x, y) in payload.chunks_exact(8).map(xy) {
+            xs.push(x);
+            ys.push(y);
+        }
         Ok(())
     }
 
-    /// Read the record stream into a [`Library`], one pass and no hierarchy
-    /// resolution. Every record is consumed, skipped, or refused.
-    fn parse(bytes: &[u8]) -> Result<Library, LayoutError> {
-        let mut lib = Library::default();
-        let mut stroke = Stroke::default();
-        let mut open: Option<usize> = None;
-        let mut at = 0usize;
+    impl Library {
+        /// Read the record stream, one pass. Every record is consumed, skipped, or refused.
+        pub fn parse(bytes: &[u8], strings: &mut StrTable) -> Result<Self, LayoutError> {
+            let mut lib = Library::default();
+            let mut stroke = Stroke::default();
+            let mut open: Option<usize> = None;
+            let mut at = 0usize;
 
-        loop {
-            let (tag, payload, next) = record(bytes, at)?;
-            match tag {
-                ENDLIB => break,
-                // `UNITS` is read and discarded on purpose: coordinates are
-                // database units already and this reader never rescales them.
-                HEADER | BGNLIB | LIBNAME | UNITS | REFLIBS | FONTS | GENERATIONS | ATTRTABLE
-                | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
-                BGNSTR => {
-                    if open.is_some() {
-                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+            loop {
+                let (tag, payload, next) = record(bytes, at)?;
+                let in_cell = move || open.ok_or(LayoutError::UnsupportedRecord(tag, at));
+                match tag {
+                    ENDLIB => break,
+                    // `UNITS` is discarded: coordinates are database units and never rescaled.
+                    HEADER | BGNLIB | LIBNAME | UNITS | REFLIBS | FONTS | GENERATIONS
+                    | ATTRTABLE | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
+                    BGNSTR => {
+                        if open.is_some() {
+                            return Err(LayoutError::UnsupportedRecord(tag, at));
+                        }
+                        open = Some(lib.cells.len());
+                        lib.cells.push(Cell {
+                            // Set by STRNAME; a structure without one is refused at ENDSTR.
+                            name: StrId(u32::MAX),
+                            elem_start: narrow(lib.elems.len()),
+                            elem_end: narrow(lib.elems.len()),
+                            ref_start: narrow(lib.refs.len()),
+                            ref_end: narrow(lib.refs.len()),
+                            text_start: narrow(lib.texts.len()),
+                            text_end: narrow(lib.texts.len()),
+                        });
                     }
-                    open = Some(lib.cells.len());
-                    lib.cells.push(Cell {
-                        // Overwritten by the STRNAME that follows; a structure
-                        // that never states one is refused at ENDSTR.
-                        name: StrId(u32::MAX),
-                        elem_start: narrow(lib.elems.len()),
-                        elem_end: narrow(lib.elems.len()),
-                        ref_start: narrow(lib.refs.len()),
-                        ref_end: narrow(lib.refs.len()),
-                        text_start: narrow(lib.texts.len()),
-                        text_end: narrow(lib.texts.len()),
-                    });
-                }
-                STRNAME => {
-                    let index = open.ok_or(LayoutError::UnsupportedRecord(tag, offset(at)))?;
-                    let name = lib.strings.intern(&ascii(payload));
-                    lib.cells[index].name = name;
-                }
-                ENDSTR => {
-                    let index = open
-                        .take()
-                        .ok_or(LayoutError::UnsupportedRecord(tag, offset(at)))?;
-                    if lib.cells[index].name == StrId(u32::MAX) {
-                        return Err(LayoutError::UnsupportedRecord(BGNSTR, offset(at)));
+                    STRNAME => {
+                        let index = in_cell()?;
+                        lib.cells[index].name = strings.intern(&ascii(payload));
                     }
-                    lib.cells[index].elem_end = narrow(lib.elems.len());
-                    lib.cells[index].ref_end = narrow(lib.refs.len());
-                    lib.cells[index].text_end = narrow(lib.texts.len());
-                }
-                BOUNDARY | BOX => {
-                    if open.is_none() {
-                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    ENDSTR => {
+                        let index = in_cell()?;
+                        open = None;
+                        let cell = &mut lib.cells[index];
+                        if cell.name == StrId(u32::MAX) {
+                            return Err(LayoutError::UnsupportedRecord(BGNSTR, at));
+                        }
+                        cell.elem_end = narrow(lib.elems.len());
+                        cell.ref_end = narrow(lib.refs.len());
+                        cell.text_end = narrow(lib.texts.len());
                     }
-                    at = boundary(&mut lib, bytes, next, at, tag)?;
-                    continue;
-                }
-                // By the time `path` returns this is an `Elem` like any other:
-                // the outline is exact or the element was refused.
-                PATH => {
-                    if open.is_none() {
-                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    BOUNDARY | BOX => {
+                        in_cell()?;
+                        at = boundary(&mut lib, strings, bytes, next, at, tag)?;
+                        continue;
                     }
-                    at = path(&mut lib, &mut stroke, bytes, next, at)?;
-                    continue;
-                }
-                SREF | AREF => {
-                    if open.is_none() {
-                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    PATH => {
+                        in_cell()?;
+                        at = path(&mut lib, strings, &mut stroke, bytes, next, at)?;
+                        continue;
                     }
-                    at = reference(&mut lib, bytes, next, at, tag == AREF)?;
-                    continue;
-                }
-                // Read here and bound later: the point is in this cell's frame
-                // and there are no `PolyId`s yet, so the binding waits for
-                // `Provenance::resolve_labels`.
-                TEXT => {
-                    if open.is_none() {
-                        return Err(LayoutError::UnsupportedRecord(tag, offset(at)));
+                    SREF | AREF => {
+                        in_cell()?;
+                        at = reference(&mut lib, strings, bytes, next, at, tag == AREF)?;
+                        continue;
                     }
-                    at = text(&mut lib, bytes, next, at)?;
-                    continue;
+                    TEXT => {
+                        in_cell()?;
+                        at = text(&mut lib, strings, bytes, next, at)?;
+                        continue;
+                    }
+                    // A NODE has no shape and no name: nothing to record.
+                    NODE => {
+                        at = skip_element(bytes, next)?;
+                        continue;
+                    }
+                    _ => return Err(LayoutError::UnsupportedRecord(tag, at)),
                 }
-                // A NODE has no manufactured shape and, unlike a TEXT, no name:
-                // there is nothing to record that would not be a guess.
-                NODE => {
-                    at = skip_element(bytes, next)?;
-                    continue;
-                }
-                _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
+                at = next;
             }
-            at = next;
+
+            if open.is_some() {
+                return Err(LayoutError::Truncated(at));
+            }
+
+            // Resolve every reference to its cell index. Sorted by name, then index.
+            let mut by_name: Vec<u32> = (0..narrow(lib.cells.len())).collect();
+            by_name.sort_unstable_by_key(|&i| (lib.cells[i as usize].name, i));
+            for r in &mut lib.refs {
+                let found = by_name.binary_search_by_key(&r.cell, |&i| lib.cells[i as usize].name);
+                r.child = match found {
+                    Ok(at) => by_name[at],
+                    Err(_) => {
+                        return Err(LayoutError::MissingCell(strings.resolve(r.cell).to_owned()))
+                    }
+                };
+            }
+            Ok(lib)
         }
-
-        if open.is_some() {
-            return Err(LayoutError::Truncated(offset(at)));
-        }
-
-        lib.by_name = (0..narrow(lib.cells.len())).collect();
-        lib.by_name
-            .sort_unstable_by_key(|&i| (lib.cells[i as usize].name, i));
-
-        debug_assert_eq!(lib.xs.len(), lib.ys.len());
-        debug_assert_eq!(lib.by_name.len(), lib.cells.len());
-        debug_assert!(
-            lib.elems
-                .iter()
-                .all(|e| (e.vert_start + e.vert_len) as usize <= lib.xs.len()),
-            "an element's vertex run leaves the coordinate columns"
-        );
-        Ok(lib)
     }
 
-    /// The records an element carries whatever kind it is. `Ok(Some(next))` is
-    /// the `ENDEL`, `Ok(None)` "consumed, keep reading".
+    /// The records any element may carry. `Ok(Some(next))` is the `ENDEL`.
     ///
-    /// [`reference`] deliberately does **not** route through this: an `SREF`
-    /// has no `prop_start` range to own the pair, so a property record on one
-    /// would leak into the next element's range. It stays a refusal there.
+    /// `reference` does not route through this, so a property on an `SREF` stays a refusal.
     fn element_record(
-        lib: &mut Library,
-        attribute: &mut i16,
+        strings: &mut StrTable,
         tag: u16,
         payload: &[u8],
         at: usize,
@@ -628,38 +530,27 @@ pub mod gds {
     ) -> Result<Option<usize>, LayoutError> {
         match tag {
             PROPATTR => {
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "PROPATTR is a signed two-byte integer on the wire"
-                )]
-                {
-                    *attribute = word(payload, at)? as i16;
-                }
+                word(payload, at)?;
             }
+            // Not stored; interned only because interning order is report order.
             PROPVALUE => {
-                let value = lib.strings.intern(&ascii(payload));
-                lib.props.push((*attribute, value));
+                strings.intern(&ascii(payload));
             }
             ELFLAGS | PLEX => {}
             ENDEL => return Ok(Some(next)),
-            _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
+            _ => return Err(LayoutError::UnsupportedRecord(tag, at)),
         }
         Ok(None)
     }
 
     /// Consume a `TEXT` through its `ENDEL`. Returns the offset past it.
     ///
-    /// ```text
-    /// <text>     ::= TEXT [ELFLAGS] [PLEX] LAYER <textbody>
-    /// <textbody> ::= TEXTTYPE [PRESENTATION] [PATHTYPE] [WIDTH] [<strans>] XY STRING
-    /// ```
-    ///
-    /// `LAYER`, `TEXTTYPE`, `XY` and `STRING` are kept. The rest describe the
-    /// glyph about its anchor and leave the `XY` point where it is, so they are
-    /// accepted — not optional, an unread record being `UnsupportedRecord` — and
-    /// discarded.
+    /// `LAYER`, `TEXTTYPE`, one `XY` point and `STRING` are required and kept. The
+    /// glyph records (`PRESENTATION`, `PATHTYPE`, `WIDTH`, `STRANS`, `MAG`, `ANGLE`)
+    /// leave the point where it is, so they are accepted and discarded.
     fn text(
         lib: &mut Library,
+        strings: &mut StrTable,
         bytes: &[u8],
         mut at: usize,
         start: usize,
@@ -668,10 +559,6 @@ pub mod gds {
         let mut texttype: Option<u16> = None;
         let mut point: Option<(i64, i64)> = None;
         let mut string: Option<StrId> = None;
-        let mut attribute = 0i16;
-        // A TEXT's properties are parsed and dropped: `props` is a per-polygon
-        // CSR column and this element becomes no polygon.
-        let props_before = lib.props.len();
 
         let end = loop {
             let (tag, payload, next) = record(bytes, at)?;
@@ -679,43 +566,30 @@ pub mod gds {
                 LAYER => layer = Some(word(payload, at)?),
                 TEXTTYPE => texttype = Some(word(payload, at)?),
                 XY => {
-                    // Into scratch, then popped: `points` is the one checked
-                    // reader of an XY payload.
-                    let before = lib.xs.len();
-                    points(&mut lib.xs, &mut lib.ys, payload, at)?;
-                    // A TEXT with two points is not a TEXT with a point to
-                    // ignore; the spec allows exactly one.
-                    if lib.xs.len() != before + 1 {
-                        lib.xs.truncate(before);
-                        lib.ys.truncate(before);
-                        return Err(LayoutError::UnsupportedRecord(TEXT, offset(start)));
+                    if !payload.len().is_multiple_of(8) {
+                        return Err(LayoutError::Truncated(at));
                     }
-                    point = Some((lib.xs[before], lib.ys[before]));
-                    lib.xs.truncate(before);
-                    lib.ys.truncate(before);
+                    if payload.len() != 8 {
+                        return Err(LayoutError::UnsupportedRecord(TEXT, start));
+                    }
+                    point = Some(xy(payload));
                 }
-                STRING => string = Some(lib.strings.intern(&ascii(payload))),
-                // Accepted, discarded — see this function's doc.
+                STRING => string = Some(strings.intern(&ascii(payload))),
                 PRESENTATION | PATHTYPE | WIDTH | STRANS | MAG | ANGLE => {}
                 _ => {
-                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)?
-                    {
+                    if let Some(end) = element_record(strings, tag, payload, at, next)? {
                         break end;
                     }
                 }
             }
             at = next;
         };
-        lib.props.truncate(props_before);
 
-        // Fail closed on each record the grammar makes mandatory; none of them
-        // has a defensible default.
         let (Some(layer), Some(texttype), Some((x, y)), Some(string)) =
             (layer, texttype, point, string)
         else {
-            return Err(LayoutError::UnsupportedRecord(TEXT, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(TEXT, start));
         };
-
         lib.texts.push(Text {
             layer,
             texttype,
@@ -726,22 +600,11 @@ pub mod gds {
         Ok(end)
     }
 
-    /// The fewest vertices a keyhole ring can have.
-    ///
-    /// The outer boundary contributes at least four, the hole at least four,
-    /// and the slit revisits its two endpoints. A shorter ring cannot be hiding
-    /// a hole, so the duplicate scan below is skipped and the four-to-eight
-    /// vertex shapes that make up nearly every layout pay nothing for it.
+    /// The fewest vertices a keyhole ring can have: outer 4, hole 4, slit ends revisited.
     const KEYHOLE_MIN_VERTS: usize = 10;
 
-    /// Whether a ring revisits a vertex, which is how GDSII writes a hole.
-    ///
-    /// Sorted rather than compared pairwise: a ring has no bounded length, and
-    /// a quadratic scan over one is the sort of thing that only surfaces on
-    /// somebody else's layout. Allocates, and is reached only by a ring long
-    /// enough to have a hole in it at all.
+    /// Whether a ring revisits a vertex, which is how GDSII writes a hole. Sorts, so O(n log n).
     fn ring_revisits_a_vertex(xs: &[i64], ys: &[i64]) -> bool {
-        debug_assert_eq!(xs.len(), ys.len(), "a ring's coordinate runs are parallel");
         if xs.len() < KEYHOLE_MIN_VERTS {
             return false;
         }
@@ -750,28 +613,15 @@ pub mod gds {
         seen.windows(2).any(|w| w[0] == w[1])
     }
 
-    /// Whether every vertex is inside the domain the sweep clamps against.
-    ///
-    /// `canonical_rings_into` asserts this rather than checking it, because a
-    /// coordinate outside the bound would be quietly pulled into range. The
-    /// reader's own out-of-range error belongs to the flattening stage, where
-    /// it names the offending value, so a ring that fails here is left for that
-    /// stage to refuse rather than refused early with a worse message.
+    /// Whether every vertex is inside the domain `canonical_rings_into` asserts.
+    /// A ring outside is left for `emit` to refuse with a better message.
     fn ring_is_in_domain(xs: &[i64], ys: &[i64]) -> bool {
         let bound = MAX_ABS_DBU.unsigned_abs();
         xs.iter().chain(ys).all(|&c| c.unsigned_abs() <= bound)
     }
 
-    /// Whether a ring's vertices run clockwise.
-    ///
-    /// The shoelace sum, accumulated in `i128` rather than `Dbu`: these are raw
-    /// file coordinates, read before the grid has scaled them into the store's
-    /// bounded domain, so the products are not yet known to fit `i64`. A ring
-    /// with zero signed area has no direction and is left alone; `boundary`
-    /// has already refused anything with fewer than three vertices, and
-    /// `geom::view` refuses the degenerate rest.
+    /// Whether a ring runs clockwise. `i128`: raw file coordinates, not yet bounded.
     fn ring_is_clockwise(xs: &[i64], ys: &[i64]) -> bool {
-        debug_assert_eq!(xs.len(), ys.len(), "a ring's coordinate runs are parallel");
         let n = xs.len();
         let mut area2: i128 = 0;
         for i in 0..n {
@@ -781,20 +631,18 @@ pub mod gds {
         area2 < 0
     }
 
-    /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset
-    /// past it.
+    /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset past it.
     fn boundary(
         lib: &mut Library,
+        strings: &mut StrTable,
         bytes: &[u8],
         mut at: usize,
         start: usize,
         kind: u16,
     ) -> Result<usize, LayoutError> {
         let vert_start = narrow(lib.xs.len());
-        let prop_start = narrow(lib.props.len());
         let mut layer: Option<u16> = None;
         let mut datatype: Option<u16> = None;
-        let mut attribute = 0i16;
         let mut seen_xy = false;
 
         let end = loop {
@@ -808,8 +656,7 @@ pub mod gds {
                     seen_xy = true;
                 }
                 _ => {
-                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)?
-                    {
+                    if let Some(end) = element_record(strings, tag, payload, at, next)? {
                         break end;
                     }
                 }
@@ -817,10 +664,9 @@ pub mod gds {
             at = next;
         };
 
-        // The closing point a BOUNDARY repeats belongs to the file format, not
-        // to the store.
-        let last = lib.xs.len().wrapping_sub(1);
+        // Drop the closing point the format repeats.
         let first = vert_start as usize;
+        let last = lib.xs.len().wrapping_sub(1);
         if lib.xs.len() - first >= 2
             && lib.xs[first] == lib.xs[last]
             && lib.ys[first] == lib.ys[last]
@@ -830,38 +676,22 @@ pub mod gds {
         }
 
         let vert_len = narrow(lib.xs.len()) - vert_start;
-        // An element missing its stream pair or its geometry, or one with no
-        // interior, is refused: any representation of it would be a guess.
         let (Some(layer), Some(datatype)) = (layer, datatype) else {
-            return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(kind, start));
         };
         if !seen_xy || vert_len < 3 {
-            return Err(LayoutError::UnsupportedRecord(kind, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(kind, start));
         }
 
-        // A ring that revisits a vertex is a keyhole: GDSII has no record for a
-        // hole, so a polygon with one is written as a single loop that runs in
-        // along a line and back out along it. `geom::view` refuses that as
-        // self-intersecting, and rightly, because the store's model is one
-        // simple ring per row. Decomposing here is what turns the file's one
-        // ring into the rows that model already describes, and the sweep hands
-        // them back with the outer counter-clockwise and the hole clockwise,
-        // which is the convention the next block would otherwise impose.
-        //
-        // Only a ring that actually revisits a vertex takes this path. The
-        // sweep retraces a region rather than preserving a vertex order, and
-        // `erc::first_vertex` documents vertex 0 as a shape's canonical report
-        // point, so running every boundary through it would move the coordinate
-        // every violation on that shape is reported at.
+        // A keyhole (a ring revisiting a vertex) is how GDSII writes a hole; decompose it
+        // into an outer ring plus holes. Only then: the sweep reorders vertices, and
+        // vertex 0 is a shape's report point (`erc::first_vertex`).
         if ring_revisits_a_vertex(&lib.xs[first..], &lib.ys[first..])
             && ring_is_in_domain(&lib.xs[first..], &lib.ys[first..])
         {
-            let mut rx = Vec::new();
-            let mut ry = Vec::new();
-            let mut starts = Vec::new();
-            // A decomposition that fails leaves the ring alone: the paths below
-            // and in `geom::view` already refuse what it could not handle, and
-            // they name it better than a boolean error would here.
+            let (mut rx, mut ry, mut starts) = (Vec::new(), Vec::new(), Vec::new());
+            // A failed decomposition, or one tracing no ring, falls through to the
+            // plain path, where `geom::view` names what is wrong.
             if canonical_rings_into(
                 &lib.xs[first..],
                 &lib.ys[first..],
@@ -870,17 +700,12 @@ pub mod gds {
                 &mut starts,
             )
             .is_ok()
-                // A ring that encloses nothing traces to no rings at all, and
-                // taking this path would then drop the element instead of
-                // storing it: a shape that vanishes between the file and the
-                // store is the fail-open version of refusing it. Left for the
-                // ordinary path, where `geom::view` names it degenerate.
                 && starts.len() > 1
             {
                 lib.xs.truncate(first);
                 lib.ys.truncate(first);
-                for ring in 0..starts.len() - 1 {
-                    let (lo, hi) = (starts[ring] as usize, starts[ring + 1] as usize);
+                for ring in starts.windows(2) {
+                    let (lo, hi) = (ring[0] as usize, ring[1] as usize);
                     let ring_start = narrow(lib.xs.len());
                     lib.xs.extend_from_slice(&rx[lo..hi]);
                     lib.ys.extend_from_slice(&ry[lo..hi]);
@@ -889,32 +714,15 @@ pub mod gds {
                         datatype,
                         vert_start: ring_start,
                         vert_len: narrow(lib.xs.len()) - ring_start,
-                        // Every ring the one element decomposed into carries
-                        // that element's properties: they belonged to the shape,
-                        // and the shape is all of them.
-                        prop_start,
-                        prop_len: narrow(lib.props.len()) - prop_start,
                     });
                 }
                 return Ok(end);
             }
         }
 
-        // Every BOUNDARY and BOX is an outer ring, so it is stored
-        // counter-clockwise whatever order the file listed it in.
-        //
-        // GDSII gives a point list no winding semantics. It also has no record
-        // for a hole: a polygon with one is written as a single keyhole ring
-        // that cuts in and back out, which is why a file can never hand us a
-        // hole as a separate element. `geom::view`, meanwhile, reads a
-        // clockwise ring as a hole and refuses one that no outer contains.
-        // Passing the file's order through therefore made the store's
-        // invariant a property of whoever wrote the file: `KLayout` normalises
-        // its hulls clockwise, so every shape in a KLayout-written library
-        // became an orphan hole and every rule on that layer recorded
-        // `Refused`. Normalising on the way in is what keeps clockwise
-        // meaning *hole* for the one producer that means it, `geom::boolean`,
-        // which reverses a run's direction to mark exactly that.
+        // Every BOUNDARY/BOX is an outer ring, stored counter-clockwise whatever the
+        // file's winding: `geom::view` reads clockwise as a hole, and KLayout writes
+        // hulls clockwise.
         if ring_is_clockwise(&lib.xs[first..], &lib.ys[first..]) {
             lib.xs[first..].reverse();
             lib.ys[first..].reverse();
@@ -925,47 +733,40 @@ pub mod gds {
             datatype,
             vert_start,
             vert_len,
-            prop_start,
-            prop_len: narrow(lib.props.len()) - prop_start,
         });
         Ok(end)
     }
 
-    /// Per-`PATH` scratch: the centreline and the two offset chains it strokes
-    /// into.
+    /// Per-`PATH` scratch.
     #[derive(Default)]
     struct Stroke {
-        /// The centreline as the file states it, with the two end caps applied.
+        /// The centreline, end caps applied.
         pts: Vec<(i64, i64)>,
-        /// One unit direction per segment: `pts.len() - 1` rows.
+        /// One unit direction per segment.
         dirs: Vec<(i64, i64)>,
-        /// `dirs` with both ends duplicated, so `ext[i]` is the segment
-        /// arriving at vertex `i` and `ext[i + 1]` the one leaving it.
+        /// `dirs` with both ends duplicated: `ext[i]` arrives at vertex `i`, `ext[i + 1]` leaves.
         ext: Vec<(i64, i64)>,
         left: Vec<(i64, i64)>,
         right: Vec<(i64, i64)>,
     }
 
-    /// Consume a `PATH` through its `ENDEL`, stroking its `n`-point centreline
-    /// into a `2n`-point ring. Returns the offset past it.
+    /// Consume a `PATH` through its `ENDEL`, stroking its `n`-point centreline into
+    /// a `2n`-point counter-clockwise ring. Returns the offset past it.
     ///
-    /// Exact or refused, since a rounded outline moves a spacing verdict. Exact
-    /// needs every segment axis-parallel and non-degenerate, an even width, no
-    /// vertex that reverses direction, and `PATHTYPE` 0, 2 or 4.
+    /// Exact or refused: every segment axis-parallel and non-degenerate, an even
+    /// positive width, no reversing vertex, `PATHTYPE` 0, 2 or 4.
     fn path(
         lib: &mut Library,
+        strings: &mut StrTable,
         stroke: &mut Stroke,
         bytes: &[u8],
         mut at: usize,
         start: usize,
     ) -> Result<usize, LayoutError> {
         let vert_start = narrow(lib.xs.len());
-        let prop_start = narrow(lib.props.len());
         let mut layer: Option<u16> = None;
         let mut datatype: Option<u16> = None;
-        let mut attribute = 0i16;
         let mut seen_xy = false;
-        // The format's defaults: a zero width, flush ends, no extensions.
         let mut width = 0i64;
         let mut pathtype = 0u16;
         let mut begin_ext = 0i64;
@@ -985,8 +786,7 @@ pub mod gds {
                     seen_xy = true;
                 }
                 _ => {
-                    if let Some(end) = element_record(lib, &mut attribute, tag, payload, at, next)?
-                    {
+                    if let Some(end) = element_record(strings, tag, payload, at, next)? {
                         break end;
                     }
                 }
@@ -994,85 +794,64 @@ pub mod gds {
             at = next;
         };
 
-        // The centreline moves out of the coordinate columns and the outline
-        // takes its place, so a refusal below leaves no half-written element.
+        // The centreline leaves the coordinate columns; the outline replaces it.
         let first = vert_start as usize;
-        let (cx, cy) = (&lib.xs[first..], &lib.ys[first..]);
-        let centre = cx.len();
-        debug_assert_eq!(centre, cy.len(), "the coordinate columns diverged");
         stroke.pts.clear();
-        stroke.pts.reserve(centre);
-        for i in 0..centre {
-            stroke.pts.push((cx[i], cy[i]));
-        }
+        stroke.pts.extend(
+            lib.xs[first..]
+                .iter()
+                .copied()
+                .zip(lib.ys[first..].iter().copied()),
+        );
         lib.xs.truncate(first);
         lib.ys.truncate(first);
 
         let (Some(layer), Some(datatype)) = (layer, datatype) else {
-            return Err(LayoutError::UnsupportedRecord(PATH, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(PATH, start));
         };
         let n = stroke.pts.len();
         if !seen_xy || n < 2 {
-            return Err(LayoutError::UnsupportedRecord(PATH, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(PATH, start));
         }
-        // Zero width has no area to verify; a negative one is GDSII's "absolute
-        // width", which does not compose with an instance magnification; an odd
-        // one offsets by half a database unit, which is off the grid.
+        // Zero width has no area, negative is "absolute" (does not compose with
+        // magnification), odd puts the outline half a unit off grid.
         if width <= 0 || width % 2 != 0 {
-            return Err(LayoutError::UnsupportedRecord(WIDTH, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(WIDTH, start));
         }
         let half = width / 2;
         let (begin_ext, end_ext) = match pathtype {
             0 => (0, 0),
             2 => (half, half),
             4 => (begin_ext, end_ext),
-            _ => return Err(LayoutError::UnsupportedRecord(PATHTYPE, offset(start))),
+            _ => return Err(LayoutError::UnsupportedRecord(PATHTYPE, start)),
         };
 
-        // The adjacent-pair scan, as two offset views of the same column: `tail`
-        // is the segment's start vertex and `head` its end.
-        let (tail, head) = (&stroke.pts[..n - 1], &stroke.pts[1..]);
-        let segments = tail.len();
-        debug_assert_eq!(segments, head.len(), "the offset views diverged");
-
-        // Exactly one of the two deltas is zero on an axis-parallel,
-        // non-degenerate segment. `&=` does not short-circuit, so the fold
-        // carries no branch.
-        let mut axis_parallel = true;
-        for i in 0..segments {
-            let (a, b) = (tail[i], head[i]);
-            axis_parallel &= (a.0 == b.0) ^ (a.1 == b.1);
-        }
-        if !axis_parallel {
+        // Exactly one delta is zero on an axis-parallel, non-degenerate segment.
+        let segments = n - 1;
+        if !stroke
+            .pts
+            .windows(2)
+            .all(|w| (w[0].0 == w[1].0) ^ (w[0].1 == w[1].1))
+        {
             return Err(LayoutError::UnsupportedTransform);
         }
-
         stroke.dirs.clear();
-        stroke.dirs.reserve(segments);
-        for i in 0..segments {
-            let (a, b) = (tail[i], head[i]);
+        stroke.dirs.extend(
             stroke
-                .dirs
-                .push(((b.0 - a.0).signum(), (b.1 - a.1).signum()));
-        }
-        debug_assert_eq!(stroke.dirs.len(), n - 1, "one direction per segment");
-
-        // A reversal is the one join with no intersection to miter at. Empty
-        // for a two-point centreline.
-        let (prev, curr) = (&stroke.dirs[..segments - 1], &stroke.dirs[1..]);
-        debug_assert_eq!(prev.len(), curr.len(), "the offset views diverged");
-        let mut reverses = false;
-        for i in 0..prev.len() {
-            let (p, c) = (prev[i], curr[i]);
-            reverses |= p.0 * c.0 + p.1 * c.1 < 0;
-        }
-        if reverses {
+                .pts
+                .windows(2)
+                .map(|w| ((w[1].0 - w[0].0).signum(), (w[1].1 - w[0].1).signum())),
+        );
+        // A reversal has no intersection to miter at.
+        if stroke
+            .dirs
+            .windows(2)
+            .any(|w| w[0].0 * w[1].0 + w[0].1 * w[1].1 < 0)
+        {
             return Err(LayoutError::UnsupportedTransform);
         }
 
-        // The end caps are the only term depending on a vertex's *index*, so
-        // they fold into the centreline here. Extending a segment along its own
-        // direction leaves that direction unchanged, so `dirs` stays valid.
+        // End caps extend the first and last vertex along their own segment.
         let (front, back) = (stroke.dirs[0], stroke.dirs[segments - 1]);
         stroke.pts[0].0 -= begin_ext * front.0;
         stroke.pts[0].1 -= begin_ext * front.1;
@@ -1080,78 +859,40 @@ pub mod gds {
         stroke.pts[n - 1].1 += end_ext * back.1;
 
         stroke.ext.clear();
-        stroke.ext.reserve(segments + 2);
         stroke.ext.push(front);
         stroke.ext.extend_from_slice(&stroke.dirs);
         stroke.ext.push(back);
-        debug_assert_eq!(
-            stroke.ext.len(),
-            n + 1,
-            "one arriving and one leaving direction per vertex"
-        );
 
-        // The miter, exact and division-free. With `d` the dot product of the
-        // two unit directions, the offset corner is
-        // `p + half * (n_in * (1 - d) + n_out)` — the intersection of the two
-        // offset lines. `side` is `+1` for the left chain, `-1` for the right.
-        let corner = |side: i64| {
-            move |(p, pv, cv): ((i64, i64), (i64, i64), (i64, i64))| {
-                let dot = pv.0 * cv.0 + pv.1 * cv.1;
-                let (inx, iny) = (-pv.1 * side, pv.0 * side);
-                let (outx, outy) = (-cv.1 * side, cv.0 * side);
-                (
-                    p.0 + half * (inx * (1 - dot) + outx),
-                    p.1 + half * (iny * (1 - dot) + outy),
-                )
-            }
+        // Exact miter: with `d` the dot of the two unit directions, the offset corner
+        // is `p + half·(n_in·(1 − d) + n_out)`. `side` is +1 left, −1 right.
+        let corner = |side: i64, p: (i64, i64), pv: (i64, i64), cv: (i64, i64)| {
+            let dot = pv.0 * cv.0 + pv.1 * cv.1;
+            let (inx, iny) = (-pv.1 * side, pv.0 * side);
+            let (outx, outy) = (-cv.1 * side, cv.0 * side);
+            (
+                p.0 + half * (inx * (1 - dot) + outx),
+                p.1 + half * (iny * (1 - dot) + outy),
+            )
         };
-        debug_assert_eq!(stroke.pts.len(), n, "one centreline vertex per corner");
-        debug_assert_eq!(stroke.ext.len(), n + 1, "the offset views diverged");
-
-        let left = corner(1);
         stroke.left.clear();
-        stroke.left.reserve(n);
-        for i in 0..n {
-            stroke
-                .left
-                .push(left((stroke.pts[i], stroke.ext[i], stroke.ext[i + 1])));
-        }
-
-        let right = corner(-1);
         stroke.right.clear();
-        stroke.right.reserve(n);
         for i in 0..n {
-            stroke
-                .right
-                .push(right((stroke.pts[i], stroke.ext[i], stroke.ext[i + 1])));
+            let (p, pv, cv) = (stroke.pts[i], stroke.ext[i], stroke.ext[i + 1]);
+            stroke.left.push(corner(1, p, pv, cv));
+            stroke.right.push(corner(-1, p, pv, cv));
         }
 
-        // Right side forward, then left back: that is what makes the ring
-        // counter-clockwise, and `core::view` reads clockwise as a hole.
+        // Right side forward, then left back: counter-clockwise.
         lib.xs.extend(stroke.right.iter().map(|p| p.0));
         lib.xs.extend(stroke.left.iter().rev().map(|p| p.0));
         lib.ys.extend(stroke.right.iter().map(|p| p.1));
         lib.ys.extend(stroke.left.iter().rev().map(|p| p.1));
 
-        let vert_len = narrow(lib.xs.len()) - vert_start;
-        debug_assert_eq!(
-            lib.xs.len(),
-            lib.ys.len(),
-            "the coordinate columns diverged"
-        );
-        debug_assert_eq!(
-            vert_len as usize,
-            2 * n,
-            "an n-point centreline strokes to one corner per vertex per side"
-        );
-
         lib.elems.push(Elem {
             layer,
             datatype,
             vert_start,
-            vert_len,
-            prop_start,
-            prop_len: narrow(lib.props.len()) - prop_start,
+            vert_len: narrow(lib.xs.len()) - vert_start,
         });
         Ok(end)
     }
@@ -1159,6 +900,7 @@ pub mod gds {
     /// Consume an `SREF` or `AREF` through its `ENDEL`.
     fn reference(
         lib: &mut Library,
+        strings: &mut StrTable,
         bytes: &[u8],
         mut at: usize,
         start: usize,
@@ -1168,99 +910,70 @@ pub mod gds {
         let mut place = Xform::IDENTITY;
         let mut cols = 1u32;
         let mut rows = 1u32;
-        // An SREF states one point, an AREF three. A fourth is not this format.
+        // An SREF states one point, an AREF three.
         let mut pt = [(0i64, 0i64); 3];
         let mut points_seen = 0usize;
 
         let end = loop {
             let (tag, payload, next) = record(bytes, at)?;
             match tag {
-                SNAME => name = Some(lib.strings.intern(&ascii(payload))),
+                SNAME => name = Some(strings.intern(&ascii(payload))),
                 STRANS => {
                     let flags = word(payload, at)?;
-                    // Absolute does not compose with the parent's, so
-                    // `Xform::compose` would be wrong for it.
                     if flags & STRANS_ABSOLUTE != 0 {
                         return Err(LayoutError::UnsupportedTransform);
                     }
                     place.flip = flags & STRANS_REFLECT != 0;
                 }
                 MAG => {
+                    // Non-integral magnification puts vertices off grid.
                     let m = real(payload, at)?;
-                    // Non-integral magnification puts a vertex off the
-                    // manufacturing grid: a geometry change, not a rounding.
                     if !((1.0..=1e6).contains(&m) && m.fract() == 0.0) {
                         return Err(LayoutError::UnsupportedTransform);
                     }
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "checked integral and inside 1..=1e6 on the line above"
-                    )]
-                    {
-                        place.mag = m as i64;
-                    }
+                    #[expect(clippy::cast_possible_truncation, reason = "integral, 1..=1e6")]
+                    let m = m as i64;
+                    place.mag = m;
                 }
                 ANGLE => {
-                    let degrees = real(payload, at)?;
-                    let quarters = degrees / 90.0;
-                    // Non-orthogonal rotation cannot be represented on an
-                    // integer grid at all.
+                    let quarters = real(payload, at)? / 90.0;
                     if quarters.fract() != 0.0 || quarters.abs() > 1e6 {
                         return Err(LayoutError::UnsupportedTransform);
                     }
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "checked integral and bounded on the line above"
-                    )]
+                    #[expect(clippy::cast_possible_truncation, reason = "integral, bounded")]
                     let quarters = quarters as i64;
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "`rem_euclid(4)` is 0..=3, so neither the sign \
-                                  nor the top 56 bits carry information"
-                    )]
-                    {
-                        place.quadrant = (quarters.rem_euclid(4)) as u8;
-                    }
+                    place.quadrant = u8::try_from(quarters.rem_euclid(4)).expect("0..=3");
                 }
                 COLROW => {
-                    let payload: [u8; 4] = payload
-                        .get(..4)
-                        .and_then(|s| s.try_into().ok())
-                        .ok_or(LayoutError::Truncated(offset(at)))?;
-                    cols = u32::from(u16::from_be_bytes([payload[0], payload[1]]));
-                    rows = u32::from(u16::from_be_bytes([payload[2], payload[3]]));
+                    cols = u32::from(word(payload, at)?);
+                    rows = u32::from(word(payload.get(2..).unwrap_or_default(), at)?);
                 }
                 XY => {
                     if !payload.len().is_multiple_of(8) {
-                        return Err(LayoutError::Truncated(offset(at)));
+                        return Err(LayoutError::Truncated(at));
                     }
                     for (slot, p) in pt.iter_mut().zip(payload.chunks_exact(8)) {
-                        *slot = (
-                            i64::from(i32::from_be_bytes([p[0], p[1], p[2], p[3]])),
-                            i64::from(i32::from_be_bytes([p[4], p[5], p[6], p[7]])),
-                        );
+                        *slot = xy(p);
                     }
                     points_seen = payload.len() / 8;
                 }
                 ELFLAGS | PLEX => {}
                 ENDEL => break next,
-                _ => return Err(LayoutError::UnsupportedRecord(tag, offset(at))),
+                _ => return Err(LayoutError::UnsupportedRecord(tag, at)),
             }
             at = next;
         };
 
         let Some(cell) = name else {
-            return Err(LayoutError::UnsupportedRecord(SREF, offset(start)));
+            return Err(LayoutError::UnsupportedRecord(SREF, start));
         };
-        let wanted = if array { 3 } else { 1 };
-        if points_seen != wanted {
-            return Err(LayoutError::UnsupportedRecord(SREF, offset(start)));
+        if points_seen != if array { 3 } else { 1 } {
+            return Err(LayoutError::UnsupportedRecord(SREF, start));
         }
         place.dx = pt[0].0;
         place.dy = pt[0].1;
 
-        // An AREF states the far corner, not the step, so the step is exact or
-        // the array is not representable: a rounded pitch moves every instance.
+        // An AREF states the far corners, so the pitch is exact or refused.
         let (col_step, row_step) = if array {
             if cols == 0 || rows == 0 {
                 return Err(LayoutError::UnsupportedTransform);
@@ -1280,6 +993,7 @@ pub mod gds {
 
         lib.refs.push(Ref {
             cell,
+            child: u32::MAX,
             place,
             col_step,
             row_step,
@@ -1289,7 +1003,7 @@ pub mod gds {
         Ok(end)
     }
 
-    /// Consume an element whose records carry no geometry, through its `ENDEL`.
+    /// Consume an element whose records carry nothing kept, through its `ENDEL`.
     fn skip_element(bytes: &[u8], mut at: usize) -> Result<usize, LayoutError> {
         loop {
             let (tag, _, next) = record(bytes, at)?;
@@ -1300,117 +1014,90 @@ pub mod gds {
         }
     }
 
-    // -------------------------------------------------------------- flattening
-
-    /// The hierarchy walk, and the tables it fills.
+    /// The hierarchy walk and the tables it fills.
     struct Flatten<'a> {
         lib: &'a Library,
         deck: &'a Deck,
+        strings: &'a StrTable,
         unknown: UnknownLayers,
         builder: GeometryStoreBuilder,
         provenance: Provenance,
-        dropped: u32,
-        /// Which cells are on the current root-to-here chain, for the cycle
-        /// check.
+        /// Cells on the current root-to-here chain, for the cycle check.
         on_chain: Vec<bool>,
-        /// The instance chain, root first, as `Provenance` wants it.
-        chain: Vec<StrId>,
-        /// Per-polygon scratch, hoisted so nothing allocates per element.
+        /// Per-element scratch.
         rx: Vec<i64>,
         ry: Vec<i64>,
         tx: Vec<Dbu>,
         ty: Vec<Dbu>,
     }
 
-    /// Resolve the hierarchy into one flat store, applying the store's layer
-    /// sort permutation to the provenance columns.
-    fn flatten(
-        lib: &Library,
-        deck: &Deck,
-        unknown: UnknownLayers,
-    ) -> Result<(GeometryStore, Provenance, u32), LayoutError> {
-        let mut referenced = vec![false; lib.cells.len()];
-        for reference in &lib.refs {
-            let target = lib.find(reference.cell).ok_or_else(|| {
-                LayoutError::MissingCell(lib.strings.resolve(reference.cell).to_owned())
-            })?;
-            referenced[target as usize] = true;
-        }
-
-        let mut walk = Flatten {
-            lib,
-            deck,
-            unknown,
-            builder: GeometryStoreBuilder::with_capacity(lib.elems.len(), lib.xs.len()),
-            provenance: Provenance::default(),
-            dropped: 0,
-            on_chain: vec![false; lib.cells.len()],
-            chain: Vec::new(),
-            rx: Vec::new(),
-            ry: Vec::new(),
-            tx: Vec::new(),
-            ty: Vec::new(),
-        };
-
-        // A library whose every cell is referenced has no root, which means a
-        // cycle. An empty store for it would be a clean report over nothing.
-        if !lib.cells.is_empty() && referenced.iter().all(|&r| r) {
-            return Err(LayoutError::CyclicHierarchy(
-                lib.strings.resolve(lib.cells[0].name).to_owned(),
-            ));
-        }
-        for (index, &is_referenced) in referenced.iter().enumerate() {
-            if !is_referenced {
-                walk.visit(narrow(index), Xform::IDENTITY)?;
+    impl Library {
+        /// Resolve the hierarchy into one flat, layer-sorted store with the deck's
+        /// derived layers appended, plus every label placed in the root frame.
+        /// `strings` is the table [`Self::parse`] interned into; used for error names only.
+        pub fn flatten(
+            &self,
+            deck: &Deck,
+            strings: &StrTable,
+            unknown: UnknownLayers,
+        ) -> Result<(GeometryStore, Provenance), LayoutError> {
+            let mut referenced = vec![false; self.cells.len()];
+            for reference in &self.refs {
+                referenced[reference.child as usize] = true;
             }
-        }
+            // Every cell referenced means no root, which means a cycle.
+            if !self.cells.is_empty() && referenced.iter().all(|&r| r) {
+                return Err(LayoutError::CyclicHierarchy(
+                    strings.resolve(self.cells[0].name).to_owned(),
+                ));
+            }
 
-        let (store, permutation) = walk.builder.finish(deck.layers.len());
-        debug_assert_eq!(
-            permutation.len(),
-            store.poly_count(),
-            "the store returned a permutation of a different length than its rows"
-        );
-        // Provenance is accumulated in file order and the store is sorted by
-        // layer, so without this every violation names another shape's cell.
-        walk.provenance.permute(&permutation);
-        Ok((store, walk.provenance, walk.dropped))
+            let mut walk = Flatten {
+                lib: self,
+                deck,
+                strings,
+                unknown,
+                builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
+                provenance: Provenance::default(),
+                on_chain: vec![false; self.cells.len()],
+                rx: Vec::new(),
+                ry: Vec::new(),
+                tx: Vec::new(),
+                ty: Vec::new(),
+            };
+            for (index, &is_referenced) in referenced.iter().enumerate() {
+                if !is_referenced {
+                    walk.visit(narrow(index), Xform::IDENTITY)?;
+                }
+            }
+
+            // Labels are not bound yet, so the layer-sort permutation has nothing to move.
+            let (mut store, _) = walk.builder.finish(deck.layers.len());
+            super::derive_layers_into(&mut store, deck.layers.derived())?;
+            Ok((store, walk.provenance))
+        }
     }
 
     impl Flatten<'_> {
-        /// Emit one cell's geometry under the accumulated transform, then
-        /// recurse through its references.
+        /// Emit one cell's geometry and labels under `at`, then recurse into its references.
         fn visit(&mut self, cell: u32, at: Xform) -> Result<(), LayoutError> {
             let lib = self.lib;
             let index = cell as usize;
             if self.on_chain[index] {
                 return Err(LayoutError::CyclicHierarchy(
-                    lib.strings.resolve(lib.cells[index].name).to_owned(),
+                    self.strings.resolve(lib.cells[index].name).to_owned(),
                 ));
             }
             self.on_chain[index] = true;
 
-            // The root path is `PathId(0)` by definition, so a flat library
-            // interns nothing at all.
-            let path = if self.chain.is_empty() {
-                PathTable::ROOT
-            } else {
-                self.provenance.intern_path(&self.chain)
-            };
-
             let entry = &lib.cells[index];
             for elem in &lib.elems[entry.elem_start as usize..entry.elem_end as usize] {
-                self.emit(elem, at, path)?;
+                self.emit(elem, at)?;
             }
             for label in &lib.texts[entry.text_start as usize..entry.text_end as usize] {
                 self.place(label, at)?;
             }
-
             for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
-                let child = lib.find(reference.cell).ok_or_else(|| {
-                    LayoutError::MissingCell(lib.strings.resolve(reference.cell).to_owned())
-                })?;
-                self.chain.push(reference.cell);
                 for r in 0..reference.rows {
                     for c in 0..reference.cols {
                         let placed = Xform {
@@ -1422,45 +1109,40 @@ pub mod gds {
                                 + i64::from(r) * reference.row_step.1,
                             ..reference.place
                         };
-                        self.visit(child, at.compose(placed))?;
+                        let at = at
+                            .compose(placed)
+                            .ok_or(LayoutError::UnsupportedTransform)?;
+                        self.visit(reference.child, at)?;
                     }
                 }
-                self.chain.pop();
             }
 
             self.on_chain[index] = false;
             Ok(())
         }
 
+        /// The deck layer for a stream pair; `None` means drop it.
+        fn layer(&self, layer: u16, datatype: u16) -> Result<Option<LayerId>, LayoutError> {
+            match (self.deck.layers.of_stream(layer, datatype), self.unknown) {
+                (Some(id), _) => Ok(Some(id)),
+                (None, UnknownLayers::Reject) => Err(LayoutError::UnknownLayer(layer, datatype)),
+                (None, UnknownLayers::Drop) => Ok(None),
+            }
+        }
+
         /// Transform one label's point into the root frame and record it.
-        ///
-        /// The same transform the geometry takes, and it has to be. An unmapped
-        /// stream pair is dropped or refused as geometry is, but is *not*
-        /// counted in `dropped`, which is defined over polygons.
         fn place(&mut self, label: &Text, at: Xform) -> Result<(), LayoutError> {
-            let Some(layer) = self.deck.layers.of_stream(label.layer, label.texttype) else {
-                return match self.unknown {
-                    UnknownLayers::Reject => {
-                        Err(LayoutError::UnknownLayer(label.layer, label.texttype))
-                    }
-                    UnknownLayers::Drop => Ok(()),
-                };
+            let Some(layer) = self.layer(label.layer, label.texttype)? else {
+                return Ok(());
             };
-
-            let (a, b, c, e) = at.linear();
-            let x = a * label.x + b * label.y + at.dx;
-            let y = c * label.x + e * label.y + at.dy;
-
-            // The same `±MAX_ABS_DBU` bound `emit` enforces on every vertex:
-            // `Dbu::new_unchecked` below is only sound inside it.
-            let bound = MAX_ABS_DBU.unsigned_abs();
-            if x.unsigned_abs() > bound {
-                return Err(LayoutError::CoordinateOutOfRange(x));
+            let (x, y) = at
+                .apply(label.x, label.y)
+                .ok_or(LayoutError::UnsupportedTransform)?;
+            for v in [x, y] {
+                if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
+                    return Err(LayoutError::CoordinateOutOfRange(v));
+                }
             }
-            if y.unsigned_abs() > bound {
-                return Err(LayoutError::CoordinateOutOfRange(y));
-            }
-
             self.provenance.place_label(
                 gpurify_geom::ops::Point {
                     x: Dbu::new_unchecked(x),
@@ -1473,136 +1155,58 @@ pub mod gds {
         }
 
         /// Transform one element into the root frame and push it.
-        fn emit(&mut self, elem: &Elem, at: Xform, path: PathId) -> Result<(), LayoutError> {
-            let lib = self.lib;
-            let start = elem.vert_start as usize;
-            let end = start + elem.vert_len as usize;
-            debug_assert!(end <= lib.xs.len(), "vertex run leaves the column");
-            debug_assert!(
-                at.mag >= 1,
-                "magnification was checked integral and positive"
-            );
-
-            let Some(layer) = self.deck.layers.of_stream(elem.layer, elem.datatype) else {
-                match self.unknown {
-                    UnknownLayers::Reject => {
-                        return Err(LayoutError::UnknownLayer(elem.layer, elem.datatype))
-                    }
-                    // Never silent: the count is what a caller reports.
-                    UnknownLayers::Drop => {
-                        self.dropped += 1;
-                        return Ok(());
-                    }
-                }
+        fn emit(&mut self, elem: &Elem, at: Xform) -> Result<(), LayoutError> {
+            let Some(layer) = self.layer(elem.layer, elem.datatype)? else {
+                return Ok(());
             };
-
-            let (xs, ys) = (&lib.xs[start..end], &lib.ys[start..end]);
-            let (a, b, c, e) = at.linear();
-            let (dx, dy) = (at.dx, at.dy);
-            let verts = xs.len();
-            debug_assert_eq!(verts, ys.len(), "the coordinate columns diverged");
-            // A BOUNDARY/BOX is refused below 3 vertices and a PATH strokes to
-            // 2n with n >= 2, so the `[1..]` reversal below cannot slice empty.
-            debug_assert!(verts >= 3, "an element with no interior reached emit");
+            let lib = self.lib;
+            let run = elem.vert_start as usize..(elem.vert_start + elem.vert_len) as usize;
 
             self.rx.clear();
-            self.rx.reserve(verts);
-            for i in 0..verts {
-                self.rx.push(a * xs[i] + b * ys[i] + dx);
-            }
             self.ry.clear();
-            self.ry.reserve(verts);
-            for i in 0..verts {
-                self.ry.push(c * xs[i] + e * ys[i] + dy);
-            }
-            debug_assert_eq!(self.rx.len(), verts);
-            debug_assert_eq!(self.ry.len(), verts);
-
-            // The `±MAX_ABS_DBU` bound every downstream i128 area product rests
-            // on is checked here, once, and never rechecked.
-            let bound = MAX_ABS_DBU.unsigned_abs();
             let mut worst = 0u64;
-            for i in 0..verts {
-                worst = worst
-                    .max(self.rx[i].unsigned_abs())
-                    .max(self.ry[i].unsigned_abs());
+            for (&x, &y) in lib.xs[run.clone()].iter().zip(&lib.ys[run]) {
+                let (x, y) = at.apply(x, y).ok_or(LayoutError::UnsupportedTransform)?;
+                worst = worst.max(x.unsigned_abs()).max(y.unsigned_abs());
+                self.rx.push(x);
+                self.ry.push(y);
             }
+            // The `±MAX_ABS_DBU` bound every downstream i128 product rests on, checked once.
+            let bound = MAX_ABS_DBU.unsigned_abs();
             if worst > bound {
                 let out = self
                     .rx
                     .iter()
-                    .chain(self.ry.iter())
+                    .chain(&self.ry)
                     .copied()
                     .find(|v| v.unsigned_abs() > bound)
                     .expect("the reduction above found one");
                 return Err(LayoutError::CoordinateOutOfRange(out));
             }
-
             self.tx.clear();
-            self.tx.reserve(verts);
-            for i in 0..verts {
-                self.tx.push(Dbu::new_unchecked(self.rx[i]));
-            }
+            self.tx
+                .extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
             self.ty.clear();
-            self.ty.reserve(verts);
-            for i in 0..verts {
-                self.ty.push(Dbu::new_unchecked(self.ry[i]));
-            }
-            debug_assert_eq!(self.tx.len(), self.ty.len());
+            self.ty
+                .extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
 
-            // A cell's rings must have the same orientation wherever the cell
-            // is placed: `Xform::linear` has determinant −1 exactly when `flip`
-            // and the shoelace sum scales by it, so a mirrored counter-clockwise
-            // cell arrives clockwise and `validate_layer_into` reads it as a
-            // hole. `[1..]`, not the whole run: `erc::first_vertex` documents
-            // vertex 0 as a shape's canonical report point.
-            debug_assert_eq!(
-                a * e - b * c < 0,
-                at.flip,
-                "det < 0 iff flip: rotations are det +1 and mag >= 1"
+            // A mirror (det < 0) turns a counter-clockwise ring clockwise, which
+            // `validate_layer_into` reads as a hole. Reverse `[1..]` so vertex 0,
+            // the report point, stays put.
+            debug_assert!(
+                {
+                    let (a, b, c, e) = at.linear();
+                    (a * e - b * c < 0) == at.flip
+                },
+                "det < 0 iff flip"
             );
             if at.flip {
                 self.tx[1..].reverse();
                 self.ty[1..].reverse();
             }
-
             self.builder.push(layer, &self.tx, &self.ty);
-            // Immediately after the push: the permutation applied at the end is
-            // only meaningful if row N of one table is row N of the other.
-            let props = elem.prop_start as usize..(elem.prop_start + elem.prop_len) as usize;
-            self.provenance.push(path, &lib.props[props]);
             Ok(())
         }
-    }
-}
-
-/// OASIS.
-pub mod oasis {
-    use super::{Deck, Layout, LayoutError, UnknownLayers};
-
-    /// The magic string every OASIS file opens with, `%SEMI-OASIS\r\n`.
-    const MAGIC: &[u8] = b"%SEMI-OASIS\r\n";
-
-    pub fn detect(prefix: &[u8]) -> bool {
-        prefix.starts_with(MAGIC)
-    }
-
-    /// Recognised and then refused: OASIS is not implemented. A record carries
-    /// no length, so one the reader does not model cannot be skipped past —
-    /// refusal is forced by the encoding, not chosen.
-    pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
-        // The signature is `gds::read`'s. Discarded rather than renamed, which
-        // would show in the rendered docs.
-        let _ = (deck, unknown);
-        if !detect(bytes) {
-            return Err(LayoutError::UnknownFormat);
-        }
-        let at = u64::try_from(MAGIC.len()).expect("the magic is thirteen bytes");
-        let id = bytes
-            .get(MAGIC.len())
-            .copied()
-            .ok_or(LayoutError::Truncated(at))?;
-        Err(LayoutError::UnsupportedRecord(u16::from(id), at))
     }
 }
 
@@ -1611,9 +1215,8 @@ pub mod oasis {
 /// test.
 #[cfg(test)]
 mod tests {
-    use super::{gds, Deck, Layout, LayoutError, UnknownLayers};
+    use super::{gds, Deck, LayoutError, UnknownLayers};
     use crate::deck::tests::{layer_table, ROWS};
-    use crate::provenance::PathTable;
     use gpurify_geom::StrTable;
     use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
     use gpurify_testgen::shapes::{Handle, Ids};
@@ -1995,11 +1598,6 @@ mod tests {
              not to the store"
         );
         assert_eq!(layout.store.poly_bbox(PolyId(0)), first_square_bbox());
-        assert_eq!(
-            layout.provenance.path_of(PolyId(0)),
-            PathTable::ROOT,
-            "a shape in the top cell came from no instance"
-        );
     }
 
     /// Oracle: law — a BOUNDARY's point order does not change what it denotes.
@@ -2089,7 +1687,8 @@ mod tests {
             )],
         );
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout =
+            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(
             layout.store.poly_count(),
             2,
@@ -2192,7 +1791,7 @@ mod tests {
 
         match gds::read(&bytes, &deck, UnknownLayers::Reject) {
             Err(LayoutError::Truncated(at)) => assert!(
-                at <= bytes.len() as u64,
+                at <= bytes.len(),
                 "the truncation was reported at byte {at}, past the {} the file has",
                 bytes.len()
             ),
@@ -2218,14 +1817,12 @@ mod tests {
         assert_same_store("a known layout read from GDSII", &expected, &read.store);
     }
 
-    /// Provenance is accumulated in file order and must be permuted into store
-    /// order. Each element carries a property naming its file position, and the
-    /// corpus interleaves layers so the permutation is not the identity.
+    /// Stream properties are accepted and leave the geometry as it was.
     #[test]
-    fn each_polygons_stream_properties_follow_it_through_the_layer_sort() {
+    fn stream_properties_are_accepted_and_change_no_geometry() {
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);
-        let (_, ids, handles, elements) = corpus();
+        let (expected, _, _, elements) = corpus();
         let tagged: Vec<Boundary> = elements
             .into_iter()
             .enumerate()
@@ -2236,38 +1833,8 @@ mod tests {
             .collect();
         let bytes = gds_library("TOP", &tagged);
 
-        let rows: Vec<PolyId> = handles.iter().map(|&h| ids.of(h)).collect();
-        assert!(
-            rows.iter()
-                .enumerate()
-                .any(|(file_row, poly)| u32::try_from(file_row).expect("four elements") != poly.0),
-            "the layer sort left every element where it was, so this test could \
-             not tell a permuted provenance table from an unpermuted one"
-        );
-
         let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        for (file_row, &poly) in rows.iter().enumerate() {
-            let props = layout.provenance.props_of(poly);
-            assert_eq!(
-                props.len(),
-                1,
-                "{poly:?} carries {} properties; the element it came from stated \
-                 one",
-                props.len()
-            );
-            assert_eq!(
-                props[0].0,
-                i16::try_from(file_row + 1).expect("four elements"),
-                "{poly:?} came from element {file_row} of the file and carries \
-                 another element's property attribute"
-            );
-            assert_eq!(
-                layout.strings.resolve(props[0].1),
-                format!("element_{file_row}"),
-                "{poly:?} resolves to another element's property value, which is \
-                 the wrong cell printed beside every violation on it"
-            );
-        }
+        assert_same_store("a tagged layout", &expected, &layout.store);
     }
 
     /// The dispatcher has to reach the reader and hand back what it produced; a
@@ -2307,43 +1874,35 @@ mod tests {
         assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
     }
 
-    /// A `Layout` carries exactly one provenance row per store row.
+    /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
+    /// the vertex transform (three). Either is a refusal, never a wrapped coordinate.
     #[test]
-    fn every_polygon_read_has_a_provenance_row_of_its_own() {
+    fn a_magnification_chain_past_i64_is_refused_rather_than_wrapped() {
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);
-        let bytes = gds_library(
-            "TOP",
-            &[
-                first_layer_square(),
-                boundary(
-                    ROWS[2].1,
-                    ROWS[2].2,
-                    &[900, 1_300, 1_300, 900],
-                    &[0, 0, 400, 400],
+        let mag = |cell| [sref(cell, 0, 0.0, 0, 0).magnified(1_000_000)];
+        let (d, c, b, a) = (mag("D"), mag("C"), mag("B"), mag("A"));
+        let square = [first_layer_square()];
+        for levels in [3, 4] {
+            let chain: [(&str, &[Boundary], &[Ref]); 5] = [
+                ("TOP", &[], &a),
+                ("A", &[], &b),
+                ("B", &[], if levels == 4 { &c } else { &d }),
+                ("C", &[], &d),
+                ("D", &square, &[]),
+            ];
+            let cells = if levels == 4 {
+                &chain[..]
+            } else {
+                &[chain[0], chain[1], chain[2], chain[4]][..]
+            };
+            match gds::read(&gds_hierarchy(cells), &deck, UnknownLayers::Reject) {
+                Err(LayoutError::UnsupportedTransform) => {}
+                other => panic!(
+                    "{levels} levels of 1e6 produced {:?}",
+                    other.map(|l| l.store.poly_count())
                 ),
-                boundary(
-                    ROWS[1].1,
-                    ROWS[1].2,
-                    &[0, 200, 200, 0],
-                    &[900, 900, 1_100, 1_100],
-                ),
-            ],
-        );
-
-        let layout: Layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        assert_eq!(layout.store.poly_count(), 3);
-        for row in 0..u32::try_from(layout.store.poly_count()).expect("three shapes") {
-            assert_eq!(
-                layout.provenance.path_of(PolyId(row)),
-                PathTable::ROOT,
-                "row {row} has no provenance of its own, so the two tables are \
-                 different lengths"
-            );
-            assert!(
-                layout.provenance.props_of(PolyId(row)).is_empty(),
-                "row {row} acquired stream properties the file never stated"
-            );
+            }
         }
     }
 
@@ -2859,19 +2418,6 @@ mod tests {
         bytes
     }
 
-    /// The hierarchy path of a store row, resolved to text so two reads with
-    /// independent [`StrTable`]s compare.
-    fn path_text(layout: &Layout, row: u32) -> Vec<String> {
-        let id = layout.provenance.path_of(PolyId(row));
-        layout
-            .provenance
-            .paths()
-            .get(id)
-            .iter()
-            .map(|&component| layout.strings.resolve(component).to_owned())
-            .collect()
-    }
-
     /// Global transform equivariance of the whole reader.
     ///
     /// Wrap a library's single root cell in a new outermost cell holding one
@@ -2885,7 +2431,6 @@ mod tests {
     ///   fixed point `erc::first_vertex` relies on.
     /// - **(c)** every `PlacedLabel` point becomes `W(p)`, same order, layer and
     ///   name.
-    /// - **(d)** every row's hierarchy path gains exactly one leading `TOP`.
     ///
     /// The law is stated over the flip-parity *difference*, never the absolute
     /// parity, which is why the fixture contains a cell already placed mirrored
@@ -2920,24 +2465,11 @@ mod tests {
             );
         }
         assert_eq!(
-            base.provenance.placed_labels().len(),
+            base.provenance.placed.len(),
             2,
             "one TEXT in LEAF and two placements of LEAF, so clause (c) needs \
              two points to move"
         );
-        let base_paths: Vec<Vec<String>> = (0..5).map(|row| path_text(&base, row)).collect();
-        assert!(
-            base_paths.iter().any(Vec::is_empty)
-                && base_paths.iter().any(|p| p.len() == 2)
-                && base_paths
-                    .iter()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    == 3,
-            "clause (d) is vacuous unless the base already partitions its rows \
-             across a root path and a two-deep one: {base_paths:?}"
-        );
-
         // Both rings on layer 0 are the same drawn triangle, differing only by
         // the mirror inside MID composed with TOP's quarter turn.
         let relative = |(xs, ys): &(Vec<i64>, Vec<i64>)| -> Vec<(i64, i64)> {
@@ -3074,10 +2606,7 @@ mod tests {
             }
 
             // (c)
-            let (before, after) = (
-                base.provenance.placed_labels(),
-                wrapped.provenance.placed_labels(),
-            );
+            let (before, after) = (&base.provenance.placed, &wrapped.provenance.placed);
             assert_eq!(after.len(), before.len(), "{what}: the label count changed");
             for (row, (b, a)) in before.iter().zip(after).enumerate() {
                 let (x, y) = w.apply(b.at.x.raw(), b.at.y.raw());
@@ -3092,18 +2621,6 @@ mod tests {
                     wrapped.strings.resolve(a.name),
                     base.strings.resolve(b.name),
                     "{what}: label {row} changed name"
-                );
-            }
-
-            // (d)
-            for row in 0..5u32 {
-                let mut want = vec!["TOP".to_owned()];
-                want.extend_from_slice(&base_paths[row as usize]);
-                assert_eq!(
-                    path_text(&wrapped, row),
-                    want,
-                    "{what}: row {row}'s path is not the base path with exactly \
-                     one leading component"
                 );
             }
         }

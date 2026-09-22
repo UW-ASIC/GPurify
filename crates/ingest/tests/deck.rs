@@ -7,10 +7,8 @@
 //! half of a deck is tested from inside the crate instead, and the gap is
 //! recorded in `docs/NEED_TESTING.md`.
 
-use gpurify_geom::Grid;
 use gpurify_geom::{StrId, StrTable};
 use gpurify_ingest::deck::{ParamValue, RuleSpec, RuleTable};
-use gpurify_ingest::DeckError;
 
 /// Compare two `ParamValue`. The enum does not derive `PartialEq`, and a float
 /// variant should not get a derived one: `Ratio` is compared to a stated
@@ -178,21 +176,5 @@ fn param_lookup_agrees_with_a_scan_of_the_same_rules_parameters() {
                 panic!("param({name:?}) returned {found:?} where the scan found {expected:?}")
             }
         }
-    }
-}
-
-/// Oracle: construct-from-answer. A deck that cannot be opened is an error, not
-/// an empty deck. That distinction is the whole of "fail closed" here: an empty
-/// deck runs zero rules and reports clean, which is the false-clean result this
-/// tool exists to prevent.
-#[test]
-fn a_deck_that_cannot_be_opened_is_an_error_rather_than_an_empty_deck() {
-    let grid = Grid::new(1_000).expect("1000 database units per micrometre is a legal grid");
-    let mut strings = StrTable::default();
-    let missing = std::path::Path::new("/nonexistent/gpurify/no-such-deck.json");
-
-    match gpurify_ingest::deck::read_deck(missing, grid, &mut strings) {
-        Err(DeckError::Io(_)) => {}
-        other => panic!("an unreadable deck produced {other:?} rather than DeckError::Io"),
     }
 }

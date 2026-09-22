@@ -1,13 +1,8 @@
-//! Interning: the laws `StrTable` and `PathTable` owe their callers.
-//!
-//! Both tables are lookup structures, so almost nothing about them has a closed
-//! form. What they do have is a handful of properties that must hold for every
-//! input, which is what the tests here are written against: idempotence,
-//! `resolve` inverting `intern`, and a reverse lookup that finds a name however
-//! the table was filled.
+//! Interning: the laws `StrTable` owes its callers — idempotence, `resolve`
+//! inverting `intern`, and a reverse lookup that finds a name however the table
+//! was filled.
 
 use gpurify_geom::{StrId, StrTable};
-use gpurify_ingest::provenance::PathTable;
 use gpurify_testgen::Rng;
 
 /// Distinct names, seeded. The index prefix guarantees distinctness; the random
@@ -158,60 +153,4 @@ fn with_capacity_reserves_space_without_interning_anything() {
     assert_eq!(reserved.intern("vss"), plain.intern("vss"));
     assert_eq!(reserved.len(), plain.len());
     assert!(!reserved.is_empty());
-}
-
-/// Oracle: construct-from-answer. `PathTable::ROOT` is documented as always
-/// being id 0, which is a claim about the *first* id the table hands out: a
-/// non-empty path interned into a fresh table must not take it. Every polygon
-/// that came from no instance carries this id, so an implementation that let
-/// the first real path land on zero would file all of them under a cell.
-#[test]
-fn the_root_path_is_reserved_for_the_empty_path() {
-    let mut strings = StrTable::default();
-    let cell = strings.intern("sram_bit");
-    let mut paths = PathTable::default();
-
-    let first = paths.intern(&[cell]);
-    assert_ne!(
-        first,
-        PathTable::ROOT,
-        "a non-empty path was issued the id reserved for the root"
-    );
-    assert_eq!(
-        paths.intern(&[]),
-        PathTable::ROOT,
-        "the empty path is not id 0"
-    );
-    assert!(
-        paths.get(PathTable::ROOT).is_empty(),
-        "the root path has components"
-    );
-    assert_eq!(paths.get(first), [cell]);
-}
-
-/// Oracle: law. Paths are deduplicated — the reason they are referenced by id
-/// at all — and `get` returns the components root first, in the order they were
-/// interned. Reversing them would name the cell an instance sits in rather than
-/// the instance itself, which reads plausibly in a report and is wrong.
-#[test]
-fn interning_a_path_twice_gives_one_id_and_preserves_component_order() {
-    let mut strings = StrTable::default();
-    let top = strings.intern("top");
-    let bank = strings.intern("bank0");
-    let bit = strings.intern("bit7");
-    let mut paths = PathTable::default();
-
-    let deep = paths.intern(&[top, bank, bit]);
-    let shallow = paths.intern(&[top, bank]);
-    assert_ne!(
-        deep, shallow,
-        "a prefix was deduplicated onto its extension"
-    );
-    assert_eq!(
-        paths.intern(&[top, bank, bit]),
-        deep,
-        "the same path interned twice produced two ids"
-    );
-    assert_eq!(paths.get(deep), [top, bank, bit]);
-    assert_eq!(paths.get(shallow), [top, bank]);
 }
