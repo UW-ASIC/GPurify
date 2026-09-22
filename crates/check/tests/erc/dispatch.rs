@@ -599,3 +599,26 @@ fn every_kind_the_list_names_is_a_kind_from_deck_recognises() {
         );
     }
 }
+
+/// Oracle: construct-from-answer. The shipped deck's `electromigration` rows
+/// span 2 and 4 layers; every layer must carry its own row's Blech limit.
+#[test]
+fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
+    let mut strings = StrTable::default();
+    let deck = gpurify_ingest::deck::parse_deck(
+        include_str!("../../../../pdks/generic_finfet.json"),
+        manufacturing_grid(),
+        &mut strings,
+    )
+    .expect("the shipped deck parses");
+    let rules = RuleSet::from_deck(&deck, &strings).expect("the shipped deck is valid erc");
+    let em = &rules.electromigration;
+    assert_eq!(em.blech_limit.len(), em.layer.len());
+    let expected = [15_000.0, 54_000.0, 54_000.0, 126_750.0, 189_000.0];
+    assert_eq!(em.head.len(), expected.len());
+    for (row, want) in expected.into_iter().enumerate() {
+        let span = em.layer_start[row] as usize..em.layer_start[row + 1] as usize;
+        assert!(span.len() >= 2, "row {row} is multi-layer");
+        assert!(em.blech_limit[span].iter().all(|b| b.raw() == want), "row {row}");
+    }
+}

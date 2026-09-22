@@ -464,7 +464,7 @@ impl RuleSet {
                     table
                         .max_current_per_cut
                         .extend(layers.iter().map(|_| per_cut));
-                    table.blech_limit.push(blech);
+                    table.blech_limit.extend(layers.iter().map(|_| blech));
                     table.reference_temperature.push(reference);
                     table.activation_energy_ev.push(activation);
                     table.current_exponent.push(exponent);
@@ -765,7 +765,7 @@ impl RuleSet {
         let table = &self.electromigration;
         debug_assert_eq!(table.max_density.len(), table.layer.len());
         debug_assert_eq!(table.max_current_per_cut.len(), table.layer.len());
-        debug_assert_eq!(table.blech_limit.len(), table.head.len());
+        debug_assert_eq!(table.blech_limit.len(), table.layer.len());
         debug_assert_eq!(table.reference_temperature.len(), table.head.len());
         debug_assert_eq!(table.activation_energy_ev.len(), table.head.len());
         debug_assert_eq!(table.current_exponent.len(), table.head.len());
