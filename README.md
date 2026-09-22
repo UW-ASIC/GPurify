@@ -116,6 +116,28 @@ before  ████████████████████████
 now     ▏                          0 of 94   (0%)
 ```
 
+### Checked against KLayout
+
+An independent reference matters more than our own test suite, so 43 of the 94
+design-rule cases were re-run through KLayout 0.30.8, using the nine rule
+families whose semantics map directly onto KLayout region operations. Both tools
+are scored against the same physics-derived answer, which was worked out from
+the geometry and is independent of either:
+
+```
+GPurify  ███████████████████████████████████████████  43 / 43
+KLayout  ██████████████████████████████████████████   42 / 43
+```
+
+Do not read that as GPurify being more correct. The single difference is
+`DRC_MW_DIAG_FAIL`, a shape drawn at 45 degrees. KLayout measures it at 80.6 nm
+against a 100 nm limit and flags it, correctly. GPurify is rectilinear-only,
+refuses the input, and scores a point only because refusing is the documented
+expectation. KLayout is right about the physics there, and GPurify cannot
+answer at all.
+
+On the other 42, two independently written tools reach the same number.
+
 ### Not every passing test proves the same amount
 
 A suite that reports only pass or fail flatters itself, so each case carries a
@@ -170,6 +192,40 @@ Measured on one release build on an Intel i9-14900HX. Timings are recorded, not
 enforced: no run fails a build for being slow. `cargo test --release --test
 bench_all` reprints these tables on your own machine, including a per-rule
 breakdown of which rule costs what.
+
+### Against KLayout
+
+Same rule (`min_width`, 100 nm, one layer), same files, both tools single
+threaded, median of five runs. Both found identical violation counts at every
+size. The layouts were written by KLayout itself, so this is reproducible
+without any file GPurify prepared for itself:
+
+```
+              KLayout    GPurify     end to end
+   1,000 pt    1061 ms     4.7 ms        226x
+  10,000 pt    1083 ms    13.0 ms         83x
+ 100,000 pt    1309 ms    72.4 ms         18x
+1,000,000 pt   3653 ms   661.9 ms        5.5x
+```
+
+Most of that gap is not the checking. KLayout pays about 1,056 ms of Ruby and Qt
+startup on every invocation, measured with an empty script; GPurify's floor is
+3.8 ms. Subtract each tool's own floor and compare only the geometry work:
+
+```
+ 100,000 pt   KLayout 253 ms   GPurify  68.5 ms   3.7x
+1,000,000 pt  KLayout 2597 ms  GPurify 658.1 ms   3.9x
+```
+
+So the honest number is about four times faster on the actual checking, and
+a much larger margin per invocation in a scripted flow that starts the tool once
+per cell. At a thousand polygons neither tool is doing enough work to measure.
+
+This is one rule on synthetic rectilinear layout. It does not exercise KLayout's
+hierarchical or tiled modes, and it is not a claim about KLayout's DRC engine in
+general. KLayout's DRC is a programmable Ruby DSL, so it can express rules our
+fixed vocabulary of 24 kinds cannot; a rule count is not a comparison between
+the two.
 
 ## Describing your process
 
@@ -231,6 +287,11 @@ numbers came from. Treat every limit as approximately right and unattributed.
 This is a working tool that has not been proven on production silicon. Do not
 sign off a tapeout with it. Specifically:
 
+- Geometry must be rectilinear. A shape drawn at 45 degrees is refused, not
+  approximated, so a layout with diagonal routing cannot be checked at all.
+- A polygon whose hole is written as a keyhole ring, which is how GDSII
+  expresses a hole, is refused as self-intersecting. Holes produced internally
+  by derived-layer booleans are fine; holes arriving from a file are not.
 - The included process files are starting points, not qualified decks. Among
   other gaps, no shipped deck configures the supply-short rule, so a short
   between two supply nets goes unreported by all four.
@@ -269,6 +330,6 @@ a sign-off path is an accuracy problem rather than a speed tradeoff.
 | `tests/fixtures/README.md` | The test corpus and how each expected answer was derived. |
 
 ```sh
-cargo test --workspace                    # 870 tests
+cargo test --workspace                    # 871 tests
 cargo test --release --test bench_all     # the timing tables above
 ```
