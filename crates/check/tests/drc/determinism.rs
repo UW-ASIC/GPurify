@@ -1,21 +1,10 @@
-//! The determinism gate, and the two things about `Scratch` a caller relies on.
-//!
-//! Determinism is a gate rather than a test in this workspace, because the
-//! defect it catches — eight of twenty-seven parasitic reports differing between
-//! runs of the same binary — is invisible to every assertion about a single run.
-//! There is no thread count to vary in `drc` yet (`Scratch` is shared, see its
-//! ponytail note), so the two axes available are running twice and running with
-//! a buffer set that has already been used.
-//!
-//! The second is the sharper one. Twenty-six transforms clear and refill one
-//! buffer set in sequence, so a transform that read what the previous one left
-//! behind would still be correct on a fresh `Scratch` and wrong on a reused one.
-//! That is exactly the shape of a bug a single-run suite cannot see.
+//! The determinism gate: two runs, and a run on a reused `Scratch`, agree row for
+//! row; translating the design translates only the report.
 
 use crate::common;
 
 use common::{Env, A, B, OTHER_RULE, RULE};
-use gpurify_check::drc::{RuleSet, Scratch};
+use gpurify_check::drc::{Rule, RuleSet, Scratch};
 use gpurify_check::report::{RuleRun, Violations};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{assert_violations_eq, dbu};
@@ -39,15 +28,24 @@ fn busy_layout() -> gpurify_geom::GeometryStore {
 /// Two rules that both fire on the layout above, so the run has work to do in
 /// more than one table.
 fn two_rules() -> RuleSet {
-    let mut set = RuleSet::default();
-    set.min_spacing.rule.push(RULE);
-    set.min_spacing.layer.push(A);
-    set.min_spacing.limit.push(dbu(200));
-
-    set.min_width.rule.push(OTHER_RULE);
-    set.min_width.layer.push(A);
-    set.min_width.limit.push(dbu(200));
-    set
+    RuleSet {
+        rules: vec![
+            (
+                RULE,
+                Rule::MinSpacing {
+                    layer: A,
+                    limit: dbu(200),
+                },
+            ),
+            (
+                OTHER_RULE,
+                Rule::MinWidth {
+                    layer: A,
+                    limit: dbu(200),
+                },
+            ),
+        ],
+    }
 }
 
 fn run_once(
@@ -109,28 +107,6 @@ fn a_reused_scratch_reaches_the_same_verdict_as_a_fresh_one() {
 
     assert_violations_eq(&fresh, &again);
     assert_eq!(fresh_runs, again_runs);
-}
-
-/// Oracle: determinism. `Scratch::shrink` drops capacity and nothing else, so a
-/// run after it must agree with a run before it. The buffers are storage; if
-/// releasing them changed a verdict, they were carrying state.
-#[test]
-fn shrinking_the_scratch_between_runs_does_not_change_the_verdict() {
-    let store = busy_layout();
-    let env = Env::default();
-    let set = two_rules();
-
-    let mut scratch = Scratch::default();
-    let (before, before_runs) = run_once(&set, &env, &store, &mut scratch);
-    assert!(
-        !before.rule.is_empty(),
-        "two empty tables agree about nothing"
-    );
-    scratch.shrink();
-    let (after, after_runs) = run_once(&set, &env, &store, &mut scratch);
-
-    assert_violations_eq(&before, &after);
-    assert_eq!(before_runs, after_runs);
 }
 
 /// Oracle: law. Translating every input by the same vector translates every

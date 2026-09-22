@@ -1,19 +1,13 @@
-//! Multi-patterning: `color_into`, and the rule built on it.
-//!
-//! This is the only rule in the crate that can give up, and that is what the
-//! tests here are about. Three outcomes exist because three things can happen —
-//! a colouring was found, none exists, or the search ran out of budget — and
-//! collapsing the third into either of the other two is the defect the module
-//! was written to avoid. A checker reporting "colourable" after giving up is
-//! worse than one reporting nothing.
+//! Multi-patterning: `color_into` and the rule built on it. Complete,
+//! Infeasible and Exhausted are three different claims and must stay distinct.
 
 use crate::common;
 
-use common::{Env, Sink, A, RULE};
-use gpurify_check::drc::rules::patterning::{
-    check_multi_patterning, color_into, Coloring, MultiPatterningTable,
-};
+use common::{Sink, A, RULE};
+use gpurify_check::drc::rules::patterning::{color_into, Coloring};
+use gpurify_check::drc::Rule;
 use gpurify_check::report::Severity;
+use gpurify_ingest::StrId;
 use gpurify_testgen::{
     assert_clean, assert_rule_ran, dbu, layout_with_violation, Amount, Rng, ShapeKind,
     ViolationCase, ViolationShape,
@@ -191,13 +185,15 @@ fn odd_cycle_case() -> ViolationCase {
     )
 }
 
-fn patterning_table(colors: u8, color_spacing: i64) -> MultiPatterningTable {
-    let mut table = MultiPatterningTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.colors.push(colors);
-    table.color_spacing.push(dbu(color_spacing));
-    table
+fn patterning_table(colors: u8, color_spacing: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::MultiPatterning {
+            layer: A,
+            colors: colors,
+            color_spacing: dbu(color_spacing),
+        },
+    )]
 }
 
 /// Oracle: construct-from-answer. Three mutually conflicting shapes need three
@@ -206,7 +202,7 @@ fn patterning_table(colors: u8, color_spacing: i64) -> MultiPatterningTable {
 /// thousand-shape component buries the fix.
 ///
 /// The measurement and the point within the named shape are deliberately not
-/// asserted. `check_multi_patterning` says a violation sits "at the shape named
+/// asserted. `multi_patterning` says a violation sits "at the shape named
 /// by `Coloring::Infeasible`" and says nothing about which quantity it reports
 /// or where on that shape it points, so an expected value for either would be
 /// this test inventing a convention rather than reading one — the gap is
@@ -216,16 +212,9 @@ fn patterning_table(colors: u8, color_spacing: i64) -> MultiPatterningTable {
 #[test]
 fn an_uncolourable_layer_is_one_violation_naming_the_shape_that_could_not_be_placed() {
     let case = odd_cycle_case();
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_multi_patterning(
-        env.design(&case.store),
-        &patterning_table(2, 71),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &patterning_table(2, 71));
 
     assert_eq!(
         sink.out.rule.len(),
@@ -265,16 +254,9 @@ fn an_uncolourable_layer_is_one_violation_naming_the_shape_that_could_not_be_pla
 #[test]
 fn the_same_layer_with_a_third_mask_available_is_clean() {
     let case = odd_cycle_case();
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_multi_patterning(
-        env.design(&case.store),
-        &patterning_table(3, 71),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &patterning_table(3, 71));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(
@@ -292,26 +274,13 @@ fn the_same_layer_with_a_third_mask_available_is_clean() {
 #[test]
 fn one_unit_of_colour_spacing_separates_a_path_from_an_odd_cycle() {
     let case = odd_cycle_case();
-    let env = Env::default();
 
     let mut inside = Sink::default();
-    check_multi_patterning(
-        env.design(&case.store),
-        &patterning_table(2, 71),
-        &mut inside.scratch,
-        &mut inside.out,
-        &mut inside.runs,
-    );
+    inside.run(&case.store, &patterning_table(2, 71));
     assert_eq!(inside.out.rule.len(), 1);
 
     let mut outside = Sink::default();
-    check_multi_patterning(
-        env.design(&case.store),
-        &patterning_table(2, 70),
-        &mut outside.scratch,
-        &mut outside.out,
-        &mut outside.runs,
-    );
+    outside.run(&case.store, &patterning_table(2, 70));
     assert_clean(&outside.runs, &outside.out, RULE);
     assert_eq!(
         assert_rule_ran(&outside.runs, RULE).examined,

@@ -1,12 +1,5 @@
-//! Net extraction against layouts emitted from a netlist that was known first.
-//!
-//! The oracle for almost everything here is construct-from-answer.
-//! `gpurify_testgen::layout_from_netlist` is handed a netlist and emits a
-//! rail-and-stub floorplan realising it, so the correct partition of polygons
-//! into nets — and the correct device rows over it — are fixed before any code
-//! under test runs. There is no closed form for "which shapes are the same
-//! conductor", and a law alone cannot tell a correct partition from a
-//! plausible one, so this is the strongest oracle available to this crate.
+//! Net extraction against layouts emitted from a known netlist
+//! (`gpurify_testgen::layout_from_netlist`): construct-from-answer.
 
 use std::collections::BTreeSet;
 

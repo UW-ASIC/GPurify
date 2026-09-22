@@ -1,12 +1,7 @@
 //! The two edge builders, on geometry small enough to state the answer for.
 //!
-//! Oracle throughout: construct-from-answer. Every configuration below is
-//! placed by hand at coordinates chosen so the correct edge list is decidable
-//! by reading the numbers, and each test contains both a pair that must produce
-//! an edge and a pair that must not. Pairing them is deliberate: an edge
-//! builder that returned nothing at all would satisfy any test that only
-//! checked the non-touching case, which is the shape of half the failures the
-//! previous suite shipped.
+//! Oracle: construct-from-answer; each test holds a pair that must produce an
+//! edge and a pair that must not.
 
 use gpurify_check::topology::net::{intra_layer_edges_into, via_edges_into};
 use gpurify_geom::LayerId;

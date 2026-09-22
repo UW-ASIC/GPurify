@@ -27,12 +27,8 @@
 
 use crate::common;
 
-use common::{Env, Sink};
-use gpurify_check::drc::rules::overlay::{
-    check_asymmetric_enclosure, check_max_distance_to_tap, check_min_enclosure,
-    check_min_extension, check_overlap, AsymmetricEnclosureTable, MaxDistanceToTapTable,
-    MinEnclosureTable, MinExtensionTable, OverlapTable,
-};
+use common::Sink;
+use gpurify_check::drc::Rule;
 use gpurify_check::report::{Measurement, Outcome, RuleRun, SkipReason, Violations};
 use gpurify_geom::MAX_ABS_DBU;
 use gpurify_geom::{GeometryStore, LayerId};
@@ -75,7 +71,7 @@ const RULES_THAT_MUST_FIRE: [StrId; 5] = [ENC, ASYM, EXT, OVL, TAP];
 /// checks `k * COORD_REACH` against the coordinate domain before it builds.
 const COORD_REACH: i64 = 3_000;
 /// The largest limit any table below carries, for the same reason — and it is a
-/// separate bound, because `check_max_distance_to_tap` hands its limit straight
+/// separate bound, because `max_distance_to_tap` hands its limit straight
 /// to `pair_layers` as the prune distance, which `debug_assert`s it against
 /// `MAX_ABS_DBU`.
 const LIMIT_REACH: i64 = 499;
@@ -134,90 +130,71 @@ fn fixture(t: impl Fn(i64, i64) -> (i64, i64)) -> GeometryStore {
 
 /// Every overlay rule over one store, with every limit multiplied by `k`.
 ///
-/// The five calls share one `Violations` and one `Vec<RuleRun>` in this order,
-/// which is what makes "the same sequence" a claim about the family rather than
-/// about five unrelated tables.
+/// `ENC_REFUSED` (against the triangle) is `Refused`; `TAP_EMPTY` (a layer with
+/// no geometry) is `Skipped(EmptyLayer)`.
 fn run_overlay(store: &GeometryStore, k: i64) -> (Violations, Vec<RuleRun>) {
-    let env = Env::default();
     let mut sink = Sink::default();
-
-    let mut enclosure = MinEnclosureTable::default();
-    enclosure.rule.push(ENC);
-    enclosure.outer.push(ENC_OUTER);
-    enclosure.inner.push(ENC_INNER);
-    enclosure.limit.push(dbu(10 * k));
-    // Second row, same inner layer against the triangle: `Outcome::Refused`.
-    enclosure.rule.push(ENC_REFUSED);
-    enclosure.outer.push(BAD);
-    enclosure.inner.push(ENC_INNER);
-    enclosure.limit.push(dbu(10 * k));
-    check_min_enclosure(
-        env.design(store),
-        &enclosure,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
+    sink.run(
+        store,
+        &[
+            (
+                ENC,
+                Rule::MinEnclosure {
+                    outer: ENC_OUTER,
+                    inner: ENC_INNER,
+                    limit: dbu(10 * k),
+                },
+            ),
+            (
+                ENC_REFUSED,
+                Rule::MinEnclosure {
+                    outer: BAD,
+                    inner: ENC_INNER,
+                    limit: dbu(10 * k),
+                },
+            ),
+            (
+                ASYM,
+                Rule::AsymmetricEnclosure {
+                    outer: ENC_OUTER,
+                    inner: ENC_INNER,
+                    min_one_side: dbu(30 * k),
+                },
+            ),
+            (
+                EXT,
+                Rule::MinExtension {
+                    layer: EXT_LINE,
+                    reference: EXT_REF,
+                    limit: dbu(40 * k),
+                },
+            ),
+            (
+                OVL,
+                Rule::Overlap {
+                    a: OVL_A,
+                    b: OVL_B,
+                    limit: dbu(52 * k),
+                },
+            ),
+            (
+                TAP,
+                Rule::MaxDistanceToTap {
+                    well: WELL,
+                    tap: TAP_LAYER,
+                    limit: dbu(499 * k),
+                },
+            ),
+            (
+                TAP_EMPTY,
+                Rule::MaxDistanceToTap {
+                    well: EMPTY,
+                    tap: TAP_LAYER,
+                    limit: dbu(499 * k),
+                },
+            ),
+        ],
     );
-
-    let mut asymmetric = AsymmetricEnclosureTable::default();
-    asymmetric.rule.push(ASYM);
-    asymmetric.outer.push(ENC_OUTER);
-    asymmetric.inner.push(ENC_INNER);
-    asymmetric.min_one_side.push(dbu(30 * k));
-    check_asymmetric_enclosure(
-        env.design(store),
-        &asymmetric,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
-
-    let mut extension = MinExtensionTable::default();
-    extension.rule.push(EXT);
-    extension.layer.push(EXT_LINE);
-    extension.reference.push(EXT_REF);
-    extension.limit.push(dbu(40 * k));
-    check_min_extension(
-        env.design(store),
-        &extension,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
-
-    let mut overlap = OverlapTable::default();
-    overlap.rule.push(OVL);
-    overlap.a.push(OVL_A);
-    overlap.b.push(OVL_B);
-    overlap.limit.push(dbu(52 * k));
-    check_overlap(
-        env.design(store),
-        &overlap,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
-
-    let mut tap = MaxDistanceToTapTable::default();
-    tap.rule.push(TAP);
-    tap.well.push(WELL);
-    tap.tap.push(TAP_LAYER);
-    tap.limit.push(dbu(499 * k));
-    // Second row over a layer with no geometry: `Skipped(EmptyLayer)`, which is
-    // a different claim from judged-and-clean and the only one the violation
-    // table cannot make on its own.
-    tap.rule.push(TAP_EMPTY);
-    tap.well.push(EMPTY);
-    tap.tap.push(TAP_LAYER);
-    tap.limit.push(dbu(499 * k));
-    check_max_distance_to_tap(
-        env.design(store),
-        &tap,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
-
     (sink.out, sink.runs)
 }
 
@@ -443,7 +420,7 @@ fn translating_the_overlay_design_across_the_origin_moves_only_the_report() {
 /// is `mid` being correct, not wrong, so the law drops the clause rather than
 /// weakening it.
 ///
-/// `check_max_distance_to_tap` is the exception on both counts. It reports a raw
+/// `max_distance_to_tap` is the exception on both counts. It reports a raw
 /// vertex, so `at` scales exactly and is asserted. Its measurement is
 /// `ceil(sqrt(k^2 * d2))`, which is `ceil(k * d)` — bounded by
 /// `k * (m - 1) < m' <= k * m` rather than equal to `k * m`, because the ceiling
@@ -455,7 +432,7 @@ fn scaling_the_overlay_geometry_and_deck_together_scales_only_the_measurements()
 
     for k in [2i64, 3, 7] {
         // The scaled *limit* is the tighter bound, not the scaled coordinate:
-        // `check_max_distance_to_tap` passes its limit to `pair_layers` as the
+        // `max_distance_to_tap` passes its limit to `pair_layers` as the
         // prune distance, which `debug_assert`s it against the coordinate
         // domain, so a `k` that overflows the limit panics before it can fail
         // the law.

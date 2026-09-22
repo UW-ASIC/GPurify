@@ -1,37 +1,24 @@
-//! Design rule checking: one table per rule kind, one transform per table.
+//! Design rule checking: a deck's DRC rows as one [`RuleSet`], run row by row.
 //!
-//! A rule that cannot run says so — [`Outcome::Skipped`] when a required input
-//! is absent, [`Outcome::Refused`] when the geometry is outside what this tool
-//! represents exactly. Neither is ever collapsed into a clean result, and an
-//! empty [`Violations`] alone cannot tell a clean design from a rule that never
-//! ran; `record_run` is the one place the two are separated.
+//! Data in: the deck (via [`RuleSet::from_deck`]) and the layout's `GeometryStore`.
+//! Data out: `Violations` plus one `RuleRun` per rule row. A rule that cannot run
+//! says so (`Skipped` / `Refused`); neither is ever collapsed into a clean `Ran`.
 
 pub mod rules;
 pub mod ruleset;
 
-pub use ruleset::RuleSet;
+pub use crate::Design;
+pub use ruleset::{Rule, RuleSet};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
 use gpurify_geom::rects::Rect;
-use gpurify_geom::{PolyId, ValidatedLayer};
-// Imported for the intra-doc links above and in `DrcError`; the rule modules
-// take their own copies.
-#[allow(unused_imports)]
-use crate::report::{Outcome, RuleRun, Violations};
-use gpurify_geom::DbuArea;
+use gpurify_geom::{DbuArea, PolyId, ValidatedLayer};
 
-/// Why a deck could not be turned into a [`RuleSet`].
-///
-/// Construction-time only: a rule that meets geometry it cannot handle records
-/// [`Outcome::Refused`] against itself and the run continues, because one
-/// unrepresentable polygon must not suppress every other rule's verdict.
+/// Why a deck could not be turned into a [`RuleSet`]. Load time only: geometry a
+/// rule cannot handle is that rule's `Refused` row, not an error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DrcError {
-    /// The deck names a rule kind this crate does not implement.
-    ///
-    /// Fail closed: skipping it would leave a deck that looks fully checked and
-    /// is not.
     #[error("rule {rule}: unknown rule kind {kind}")]
     UnknownKind { rule: String, kind: String },
     #[error("rule {rule}: missing required parameter {param}")]
@@ -44,66 +31,34 @@ pub enum DrcError {
         expected: u32,
         found: u32,
     },
-    /// A limit that is zero or negative — a `0` spacing limit passes everything
-    /// silently.
     #[error("rule {rule}: limit {limit} is not positive")]
     NonPositiveLimit { rule: String, limit: i64 },
-    /// An angle no integer edge vector expresses exactly; only multiples of 45
-    /// degrees do.
+    /// Only multiples of 45 degrees are exact integer edge directions.
     #[error("rule {rule}: {degrees} degrees is not exactly representable")]
     UnrepresentableAngle { rule: String, degrees: i32 },
-    /// The deck defines the same rule id twice; two [`RuleRun`] rows sharing an
-    /// id are attributable to nothing.
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
 }
 
-pub use crate::Design;
-
-/// The buffer set every rule transform borrows and refills.
-///
-/// ponytail: one scratch means rules run sequentially — one `&mut Scratch` is
-/// one exclusive borrow, so the dispatcher hands it to one transform at a time.
-/// Splitting it into worker slots is private, but a parallel dispatcher needs a
-/// worker count and there is no route for one to arrive: [`RuleSet::run`] takes
-/// no thread budget and `gpurify_engine::run::run_drc` does not receive
-/// `&RunOptions`, so `RunOptions::threads` cannot reach this crate.
+/// The buffers every rule refills; one `&mut` means rules run sequentially.
 #[derive(Debug, Default)]
 pub struct Scratch {
-    /// Validated geometry of the rule's primary layer.
     layer_a: ValidatedLayer,
-    /// The second operand, for two-layer rules. Never aliases `layer_a`.
     layer_b: ValidatedLayer,
-    /// Boolean result — a merged layer, an intersection, an enclosure region.
+    /// A boolean result: a merged layer.
     layer_out: ValidatedLayer,
     index_a: SpatialIndex,
     index_b: SpatialIndex,
-    /// Candidate pairs from the proximity prune — a superset, still checked
-    /// exactly.
+    /// Candidate pairs from the proximity prune — a superset, checked exactly.
     pairs: Vec<(PolyId, PolyId)>,
-    /// Rectilinear decomposition of `layer_a`, CSR by polygon: polygon `i`'s
-    /// rectangles are `rects[rect_start[i] .. rect_start[i + 1]]`.
+    /// Exact squared distance per candidate pair.
+    dists: Vec<DbuArea>,
+    /// Rectilinear decomposition of `layer_out`, CSR by figure.
     rects: Vec<Rect>,
     rect_start: Vec<u32>,
-    /// Edge list for the rules that group shapes before measuring them.
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,
-    /// Per-group area accumulator.
-    areas: Vec<DbuArea>,
-    /// Per-node scratch for the colouring search.
-    colors: Vec<u8>,
+    /// Per-row flags (wide shapes), per-node colours.
+    bytes: Vec<u8>,
+    facing: rules::width::FacingScratch,
 }
-
-impl Scratch {
-    /// Drop every buffer's capacity.
-    pub fn shrink(&mut self) {
-        // Reassignment rather than per-field `shrink_to_fit`: `ValidatedLayer`
-        // and `SpatialIndex` own their columns privately and expose no way to
-        // release them.
-        *self = Self::default();
-    }
-}
-
-/// Re-exported so the rule modules keep saying `crate::drc::record_run`; the one
-/// implementation is [`crate::report::record_run`].
-pub(crate) use crate::report::record_run;

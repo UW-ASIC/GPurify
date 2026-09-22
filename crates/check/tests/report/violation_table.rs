@@ -1,15 +1,6 @@
 //! The violation table: pushing rows, concatenating tables, and the canonical
-//! order every consumer relies on.
-//!
-//! Oracles here are **law** and **determinism**. A sort permutes its input and
-//! does nothing else; concatenation order is invisible once the canonical sort
-//! has run; sorting an ordered table again changes nothing. Those hold for any
-//! set of rows, so no geometry is needed and the tables are built directly.
-//!
-//! The claim under test in [`Violations::sort_canonical`]'s doc comment is that
-//! the key is *total*, which is why stability is not load-bearing. A test that
-//! sorted one arrangement and checked the result would not touch that claim, so
-//! every ordering test here shuffles first, with a printed seed.
+//! order. Oracles: law and determinism; ordering tests shuffle first, with a
+//! printed seed, because the claim is that the sort key is total.
 
 use gpurify_check::report::{Measurement, Severity, Violation, Violations};
 use gpurify_geom::{LayerId, PolyId};

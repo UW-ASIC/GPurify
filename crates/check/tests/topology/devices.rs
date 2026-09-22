@@ -83,14 +83,6 @@ fn recognise(case: &NetlistCase, recognition: &DeviceRecognition) -> (NetTable, 
 /// four nets, in the same terminal order, with the same model — electrically
 /// indistinguishable, and two separate devices because there are two marker
 /// polygons.
-///
-/// **This names a specific defect.** The old tree deduplicated recognised
-/// devices on the tuple of nets they attached to, so a pair like this merged
-/// into one and every downstream count, from LVS device matching to ERC's
-/// device-connected test, was quietly short by one. Keying on the marker
-/// polygon is the fix, and this is the test that holds it in place: the two
-/// devices below agree on every field the old key looked at and differ only in
-/// their marker.
 #[test]
 fn two_identical_devices_on_two_marker_polygons_are_two_devices_not_one() {
     let mut strings = StrTable::default();
@@ -279,11 +271,6 @@ fn a_reused_device_table_is_refilled_and_an_empty_deck_recognises_nothing() {
 /// sides of the gate, and they are far enough apart that no connectivity rule
 /// can join them. So `Source` and `Drain` name two different nets, and any
 /// binding that keeps one polygon per terminal *layer* reports them as one.
-///
-/// **This names finding F3.** `recognise_into` bound `bind[marker * width + k]`
-/// one slot per layer and kept the lowest `PolyId` under the marker for all of
-/// them, so every extracted MOS in the tree had `Source == Drain` and every LVS
-/// comparison over one was against a transistor with a shorted channel.
 #[test]
 fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
     const MARKER: LayerId = LayerId(0);
@@ -456,23 +443,8 @@ impl Fingers {
 /// Oracle: construct-from-answer. Two transistors under one implant rectangle,
 /// and the recogniser is told the implant is the marker.
 ///
-/// **This names finding F7.** "One polygon on the marker layer is exactly one
-/// device" is the rule this module states, and an implant is drawn one polygon
-/// per *diffusion region*, not per transistor — so on this layout the rule is
-/// arity-wrong before anything runs. There is no slot for the second finger and
-/// no way to invent one: `bind` is `marker × position` wide and the positions are
-/// spent.
-///
-/// What the recogniser must not do is take the first finger and drop the rest.
-/// That answer is a plausible single transistor, wired to whichever regions
-/// happen to hold the two lowest `PolyId`s under the marker, and nothing
-/// downstream can tell it from a layout that really holds one — which is how a
-/// missing transistor reached the corpus instead of a refusal. A marker carrying
-/// *more* of a terminal layer's polygons than the recogniser names positions is
-/// refused exactly as one carrying fewer already was.
-///
-/// The fix for the corpus is on the deck side and is the test below: name a
-/// marker layer that is drawn one polygon per transistor.
+/// A marker carrying more of a terminal layer's polygons than there are
+/// positions is refused, not reported as its first finger.
 #[test]
 fn two_gates_under_one_implant_are_refused_rather_than_reported_as_one_device() {
     let drawn = Fingers::draw();

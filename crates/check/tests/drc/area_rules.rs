@@ -14,12 +14,10 @@
 
 use crate::common;
 
-use common::{Env, Sink, A, B, RULE};
-use gpurify_check::drc::rules::area::{
-    check_cheesing, check_density, check_min_area, check_min_enclosed_area, CheesingTable,
-    DensityTable, MinAreaTable, MinEnclosedAreaTable,
-};
+use common::{Sink, A, B, RULE};
+use gpurify_check::drc::Rule;
 use gpurify_check::report::{LimitSense, Measurement, Outcome, Severity, SkipReason, Violation};
+use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::{area, hole, rect, LayoutBuilder};
 use gpurify_testgen::{
     assert_clean, assert_has_violation, assert_only_violation, assert_rule_ran, dbu,
@@ -43,12 +41,14 @@ fn area_case(measured: i128, limit: i128) -> ViolationCase {
     )
 }
 
-fn min_area_table(limit: i128) -> MinAreaTable {
-    let mut table = MinAreaTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(area(limit));
-    table
+fn min_area_table(limit: i128) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::MinArea {
+            layer: A,
+            limit: area(limit),
+        },
+    )]
 }
 
 // ----------------------------------------------------------------- min_area
@@ -60,16 +60,9 @@ fn min_area_table(limit: i128) -> MinAreaTable {
 #[test]
 fn a_figure_one_square_unit_under_the_limit_is_reported_at_its_centre() {
     let case = area_case(40_000, 40_001);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_min_area(
-        env.design(&case.store),
-        &min_area_table(40_001),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &min_area_table(40_001));
 
     assert_only_violation(&sink.out, &case.expected);
     let run = assert_rule_ran(&sink.runs, RULE);
@@ -83,16 +76,9 @@ fn a_figure_one_square_unit_under_the_limit_is_reported_at_its_centre() {
 #[test]
 fn a_figure_exactly_at_the_area_limit_is_clean() {
     let case = area_case(40_000, 40_000);
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_min_area(
-        env.design(&case.store),
-        &min_area_table(40_000),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &min_area_table(40_000));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -114,15 +100,8 @@ fn two_overlapping_fragments_are_one_figure_whose_area_is_their_union() {
     layout.rect(A, 50, 0, 150, 100);
     let (store, _ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_min_area(
-        env.design(&store),
-        &min_area_table(12_001),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &min_area_table(12_001));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(
@@ -142,15 +121,8 @@ fn a_merged_figure_below_the_limit_is_reported_once_with_its_merged_area() {
     layout.rect(A, 50, 0, 150, 100);
     let (store, _ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_min_area(
-        env.design(&store),
-        &min_area_table(15_001),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &min_area_table(15_001));
 
     assert_eq!(sink.out.rule.len(), 1);
     assert_eq!(sink.out.measured[0], Measurement::Area(area(15_000)));
@@ -176,7 +148,7 @@ fn a_merged_figure_below_the_limit_is_reported_once_with_its_merged_area() {
 /// on every side, and an implementation measuring the wrong one passes nothing
 /// here.
 ///
-/// `check_min_enclosed_area` reports at *a* vertex of the hole ring without
+/// `min_enclosed_area` reports at *a* vertex of the hole ring without
 /// saying which, so the coordinate is asserted against the four the hole has —
 /// `(±50, ±100)` — rather than against a fifth point the interface never
 /// promised. Which of the four is a Definition-Phase gap, recorded in
@@ -198,20 +170,16 @@ fn a_hole_one_square_unit_under_the_limit_is_reported_at_the_hole() {
         Amount::Area(20_001),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = MinEnclosedAreaTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(area(20_001));
+    let table = vec![(
+        RULE,
+        Rule::MinEnclosedArea {
+            layer: A,
+            limit: area(20_001),
+        },
+    )];
 
-    check_min_enclosed_area(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_eq!(sink.out.rule.len(), 1, "the ring has exactly one hole");
     // The centre of the hole's bounding box, per the crate's convention. The
@@ -245,20 +213,16 @@ fn a_hole_exactly_at_the_enclosed_area_limit_is_clean() {
         Amount::Area(20_000),
     );
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = MinEnclosedAreaTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.limit.push(area(20_000));
+    let table = vec![(
+        RULE,
+        Rule::MinEnclosedArea {
+            layer: A,
+            limit: area(20_000),
+        },
+    )];
 
-    check_min_enclosed_area(
-        env.design(&case.store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&case.store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -266,12 +230,14 @@ fn a_hole_exactly_at_the_enclosed_area_limit_is_clean() {
 
 // ----------------------------------------------------------------- cheesing
 
-fn cheesing_table(max_unslotted: i128) -> CheesingTable {
-    let mut table = CheesingTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.max_unslotted.push(area(max_unslotted));
-    table
+fn cheesing_table(max_unslotted: i128) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::Cheesing {
+            layer: A,
+            max_unslotted: area(max_unslotted),
+        },
+    )]
 }
 
 /// Oracle: construct-from-answer. A solid 500-by-400 plate is 200 000 square
@@ -284,15 +250,8 @@ fn an_unslotted_plate_one_square_unit_over_the_limit_is_reported_at_its_centre()
     let plate = layout.rect(A, 0, 0, 500, 400);
     let (store, ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_cheesing(
-        env.design(&store),
-        &cheesing_table(199_999),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &cheesing_table(199_999));
 
     assert_only_violation(
         &sink.out,
@@ -315,15 +274,8 @@ fn a_plate_exactly_at_the_unslotted_limit_is_clean() {
     layout.rect(A, 0, 0, 500, 400);
     let (store, _ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_cheesing(
-        env.design(&store),
-        &cheesing_table(200_000),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &cheesing_table(200_000));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -341,15 +293,8 @@ fn a_slotted_plate_passes_a_limit_its_area_alone_would_fail() {
     layout.shape(A, &hole(200, 150, 300, 250));
     let (store, _ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    check_cheesing(
-        env.design(&store),
-        &cheesing_table(100_000),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &cheesing_table(100_000));
 
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
@@ -380,35 +325,30 @@ fn straddling_hot_spot() -> gpurify_geom::GeometryStore {
     store
 }
 
-fn density_table(window: i64, step: i64, limit: f64, sense: LimitSense) -> DensityTable {
-    let mut table = DensityTable::default();
-    table.rule.push(RULE);
-    table.layer.push(A);
-    table.window.push(dbu(window));
-    table.step.push(dbu(step));
-    table.limit.push(limit);
-    table.sense.push(sense);
-    table
+fn density_table(window: i64, step: i64, limit: f64, sense: LimitSense) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::Density {
+            layer: A,
+            window: dbu(window),
+            step: dbu(step),
+            limit: limit,
+            sense: sense,
+        },
+    )]
 }
 
 /// Oracle: construct-from-answer. The one window whose coverage exceeds 0.2 is
-/// the one spanning `[500, 1500]` on both axes, and `check_density` reports at
+/// the one spanning `[500, 1500]` on both axes, and `density` reports at
 /// the window's *centre*, so the coordinate is `(1000, 1000)`. Nine windows
 /// are evaluated — three step positions per axis over a 2000-unit extent — which
 /// is what `examined` must report.
 #[test]
 fn a_hot_spot_straddling_two_windows_is_caught_by_the_stepped_sweep() {
     let store = straddling_hot_spot();
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_density(
-        env.design(&store),
-        &density_table(1_000, 500, 0.2, LimitSense::Maximum),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &density_table(1_000, 500, 0.2, LimitSense::Maximum));
 
     assert_eq!(
         sink.out.rule.len(),
@@ -438,15 +378,11 @@ fn a_hot_spot_straddling_two_windows_is_caught_by_the_stepped_sweep() {
 #[test]
 fn the_same_hot_spot_is_missed_when_the_window_advances_a_whole_window() {
     let store = straddling_hot_spot();
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_density(
-        env.design(&store),
+    sink.run(
+        &store,
         &density_table(1_000, 1_000, 0.2, LimitSense::Maximum),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
     );
 
     assert_clean(&sink.runs, &sink.out, RULE);
@@ -463,26 +399,19 @@ fn the_same_hot_spot_is_missed_when_the_window_advances_a_whole_window() {
 #[test]
 fn a_window_exactly_at_the_density_limit_is_clean_and_just_over_it_is_not() {
     let store = straddling_hot_spot();
-    let env = Env::default();
 
     let mut clean = Sink::default();
-    check_density(
-        env.design(&store),
+    clean.run(
+        &store,
         &density_table(1_000, 500, 0.25, LimitSense::Maximum),
-        &mut clean.scratch,
-        &mut clean.out,
-        &mut clean.runs,
     );
     assert_clean(&clean.runs, &clean.out, RULE);
     assert_eq!(assert_rule_ran(&clean.runs, RULE).examined, 9);
 
     let mut over = Sink::default();
-    check_density(
-        env.design(&store),
+    over.run(
+        &store,
         &density_table(1_000, 500, 0.2499, LimitSense::Maximum),
-        &mut over.scratch,
-        &mut over.out,
-        &mut over.runs,
     );
     assert_eq!(over.out.rule.len(), 1);
     assert_eq!(over.out.at[0], point(1_000, 1_000));
@@ -496,16 +425,9 @@ fn a_window_exactly_at_the_density_limit_is_clean_and_just_over_it_is_not() {
 #[test]
 fn the_minimum_sense_flags_the_sparse_windows_the_maximum_sense_ignores() {
     let store = straddling_hot_spot();
-    let env = Env::default();
     let mut sink = Sink::default();
 
-    check_density(
-        env.design(&store),
-        &density_table(1_000, 500, 0.2, LimitSense::Minimum),
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
-    );
+    sink.run(&store, &density_table(1_000, 500, 0.2, LimitSense::Minimum));
 
     let run = assert_rule_ran(&sink.runs, RULE);
     assert_eq!(run.examined, 9);
@@ -532,17 +454,19 @@ fn density_over_a_layer_with_no_geometry_is_skipped_not_clean() {
     layout.rect(A, 0, 0, 100, 100);
     let (store, _ids) = layout.finish();
 
-    let env = Env::default();
     let mut sink = Sink::default();
-    let mut table = density_table(1_000, 500, 0.2, LimitSense::Maximum);
-    table.layer[0] = B;
-
-    check_density(
-        env.design(&store),
-        &table,
-        &mut sink.scratch,
-        &mut sink.out,
-        &mut sink.runs,
+    sink.run(
+        &store,
+        &[(
+            RULE,
+            Rule::Density {
+                layer: B,
+                window: dbu(1_000),
+                step: dbu(500),
+                limit: 0.2,
+                sense: LimitSense::Maximum,
+            },
+        )],
     );
 
     assert_eq!(sink.runs.len(), 1);
