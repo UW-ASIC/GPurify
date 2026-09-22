@@ -36,11 +36,12 @@ geometry. Both are now closed — see the next section.
 ## The fixture corpus
 
 The 160 cells the old suite ran against are back, asserted through
-`tests/corpus/`. They are not a fourth oracle: they are construct-from-answer
+`tests/corpus/`, and the corpus has since grown to **167** (drc 94 / erc 30 /
+pex 27 / lvs 16). They are not a fourth oracle: they are construct-from-answer
 (DRC/ERC/LVS) and closed form (PEX) applied to layout somebody drew for a real
 PDK rather than to geometry a generator emitted. Both halves are needed — the
-eleven hand-written end-to-end tests would pass on a tool that got every real
-rule wrong, and the 160 would pass on a tool whose JSON writer was not
+hand-written end-to-end tests would pass on a tool that got every real rule
+wrong, and the 167 would pass on a tool whose JSON writer was not
 deterministic.
 
 **The old tree's answers are still not an oracle.** `manifest.json` is the
@@ -49,7 +50,7 @@ deleted implementation's output and nothing in the suite reads it.
 frozen doc comment, then records the comparison against the manifest in a
 `corroboration` field rather than folding it into the value. Where the two
 disagree the derived value stands and a `dispute` field names which side is
-wrong. 114 of the 160 agree with the manifest and therefore rest on two
+wrong. 115 of the 167 agree with the manifest and therefore rest on two
 independent routes to the same number; 27 disagree and say why.
 `tests/fixtures/README.md` is the full account.
 
@@ -86,20 +87,30 @@ reference netlist ships with the fixtures — the sixteen live only inside
 asserted instead, and they fail on the same three defects a graph mismatch would
 report, one stage earlier and with a readable message.
 
-### Where the corpus is red
+### Where the corpus stands
 
-Red by construction is over; red by defect is not. 122 of the 160 pass:
+All 167 cases pass:
 
-| domain | passing | what the rest say |
-|---|---|---|
-| drc | 91 / 94 | `bbox_only_enclosure` (1), `notch_no_outer_merge` (2) — both `dispute: code_wrong`, both fail open |
-| erc | 23 / 23 | — |
-| lvs | 0 / 16 | one gap, three causes: no cell straps `li` to poly/diff, `nwell` is not a conductor so no pmos is recognised, and both diffusion terminals bind to one net |
-| pex | 8 / 27 | `extract_net_into` drops the first node's resistance, so a one-polygon net extracts 0 Ω; `extract_into` emits no `CouplingCap` at all |
+| domain | passing |
+|---|---|
+| drc | 94 / 94 |
+| erc | 30 / 30 |
+| lvs | 16 / 16 |
+| pex | 27 / 27 |
 
-These are the Implementation-Phase's work list, not expectations to be relaxed.
-A failing case whose `dispute` reads `code_wrong` is the corpus disagreeing with
-the code and being right.
+That is the end of a work list rather than the end of the argument. The four
+defects the corpus used to name — `bbox_only_enclosure`, `notch_no_outer_merge`,
+`extract_net_into` dropping the first node's resistance, and `extract_into`
+emitting no `CouplingCap` — were the Implementation-Phase's job and are done.
+A case whose `dispute` reads `code_wrong` was the corpus disagreeing with the
+code and being right, which is the outcome the split between `manifest.json` and
+`expectations.json` exists to make possible.
+
+**Green is not the same as strong.** `strength` still grades every case, and 56
+of the 167 are something other than `strong`: 13 `blocked`, 11 `vacuous`, 11
+`refused`, 9 `weak`, 7 `skipped`, 5 `underivable`. A suite that reports only its
+pass rate hides exactly that distribution, which is why the grade is a field
+rather than a comment.
 
 ---
 
@@ -233,6 +244,13 @@ before.
 
 ## What the suite covers
 
+Today: **870 tests**, none `#[ignore]`d, all passing, across six crates.
+
+Everything from here to the end of this section is the **Testing-Phase record**,
+kept as written. Read it as history, not as the current shape of the tree: it
+predates both the crate merge and the Implementation-Phase, so its fourteen
+crates are now six and its counts are superseded by the line above.
+
 As the Testing-Phase closed: **678 tests**, none `#[ignore]`d, across fourteen
 crates. `cargo test --workspace --no-run` compiles and
 `cargo clippy --workspace --all-targets` is clean. Every one of the 678 panicked
@@ -241,7 +259,7 @@ was the phase's expected state; the Implementation-Phase is what turns it green.
 
 The table below counts those 678 and is the Testing-Phase record. It does not
 count the workspace-root targets, which belong to no crate: `tests/test_all.rs`
-carries 11 end-to-end tests plus 5 that drive the 160-case fixture corpus,
+carries 11 end-to-end tests plus 5 that drive the fixture corpus,
 `tests/bench_all.rs` 5, and `tests/pdk_decks.rs` 6.
 
 Each test opens with a comment naming its oracle. The counts below are counts of

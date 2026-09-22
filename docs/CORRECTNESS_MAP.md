@@ -37,8 +37,8 @@ Measured through the real join: manifest/expectations `rule`/`check` →
 `manifest.json` and `expectations.json` agree.
 
 - **DRC: 0 of 24 kinds uncovered.** Every kind has 2–10 cases.
-- **ERC: 5 of 18 were uncovered** — `density_cmp`, `electromigration`,
-  `esd_latchup`, `ir_drop`, `reliability`. **Now 4 of 18**: `density_cmp` is
+- **ERC: 5 of 19 were uncovered** — `density_cmp`, `electromigration`,
+  `esd_latchup`, `ir_drop`, `reliability`. **Now 4 of 19**: `density_cmp` is
   covered (2 cases, both `Ran`), and the other four have deck rows, harness arms
   and one corpus case each that asserts `Skipped(NoDesignIntent)` — accounted
   for, not covered. §3 has the detail.
