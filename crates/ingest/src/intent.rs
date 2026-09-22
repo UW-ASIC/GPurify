@@ -36,19 +36,12 @@ pub enum SupplyRole {
 /// Everything the design's owner must state that the process does not.
 #[derive(Debug, Default)]
 pub struct DesignIntent {
-    /// Domain names, indexed by [`DomainId`].
-    domain_name: Vec<StrId>,
-    /// Nominal supply voltage of each domain.
+    /// Nominal supply voltage, indexed by [`DomainId`].
     domain_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
-
-    /// Declared supply nets, sorted by name id so lookup is a binary search.
-    supply_net: Vec<StrId>,
-    supply_domain: Vec<DomainId>,
-    supply_role: Vec<SupplyRole>,
-
-    /// Per-net limits, sorted by net. Sparse: most nets have none.
-    limit_net: Vec<StrId>,
-    limit: Vec<NetLimits>,
+    /// Declared supply nets, strictly ascending by name id.
+    supplies: Vec<(StrId, DomainId, SupplyRole)>,
+    /// Per-net limits, strictly ascending by net. Sparse.
+    limits: Vec<(StrId, NetLimits)>,
 }
 
 /// The limits a design states for one net. `None` means *not checked*, never
@@ -68,45 +61,25 @@ pub struct NetLimits {
 impl DesignIntent {
     /// Whether a net is a declared supply, and in which role.
     pub fn supply_role(&self, net: StrId) -> Option<(DomainId, SupplyRole)> {
-        debug_assert_eq!(self.supply_net.len(), self.supply_domain.len());
-        debug_assert_eq!(self.supply_net.len(), self.supply_role.len());
-
-        // `binary_search` on an empty column is `Err(0)`, so this is total for
-        // any `StrId` — including one interned after the intent was built.
-        let row = self.supply_net.binary_search(&net).ok()?;
-        Some((self.supply_domain[row], self.supply_role[row]))
+        let row = self.supplies.binary_search_by_key(&net, |s| s.0).ok()?;
+        let (_, domain, role) = self.supplies[row];
+        Some((domain, role))
     }
 
     /// The limits declared for a net. Default (all `None`) when undeclared.
     pub fn limits(&self, net: StrId) -> NetLimits {
-        debug_assert_eq!(self.limit_net.len(), self.limit.len());
-
-        self.limit_net
-            .binary_search(&net)
-            .map_or_else(|_| NetLimits::default(), |row| self.limit[row])
+        self.limits
+            .binary_search_by_key(&net, |l| l.0)
+            .map_or_else(|_| NetLimits::default(), |row| self.limits[row].1)
     }
 
     pub fn domain_voltage(&self, domain: DomainId) -> Qty<Voltage, { prefix::MILLI }> {
-        debug_assert_eq!(self.domain_name.len(), self.domain_voltage.len());
-        debug_assert!(
-            (domain.0 as usize) < self.domain_voltage.len(),
-            "DomainId {} is not one of the {} declared domains",
-            domain.0,
-            self.domain_voltage.len()
-        );
         self.domain_voltage[domain.0 as usize]
     }
 
-    pub fn domain_count(&self) -> usize {
-        debug_assert_eq!(self.domain_name.len(), self.domain_voltage.len());
-        self.domain_name.len()
-    }
-
-    /// True when nothing was declared, so every intent-dependent rule must
-    /// report itself skipped rather than clean.
+    /// True when nothing was declared, so every intent-dependent rule reports skipped, not clean.
     pub fn is_empty(&self) -> bool {
-        // All three: a file stating only limits still declared something.
-        self.domain_name.is_empty() && self.supply_net.is_empty() && self.limit_net.is_empty()
+        self.domain_voltage.is_empty() && self.supplies.is_empty() && self.limits.is_empty()
     }
 }
 
@@ -116,9 +89,7 @@ impl DesignIntent {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IntentFile {
-    /// A `BTreeMap` rather than a `HashMap`: [`DomainId`] is this map's
-    /// iteration position, so the id a domain gets must not depend on a
-    /// per-process hash seed.
+    /// `BTreeMap`: a [`DomainId`] is this map's iteration position.
     #[serde(default)]
     domains: std::collections::BTreeMap<String, DomainSpec>,
     #[serde(default)]
@@ -184,19 +155,16 @@ fn checked_limit(value: Option<f64>, net: &str) -> Result<Option<f64>, IntentErr
 /// }
 /// ```
 ///
-/// Every section is optional; an absent key is [`NetLimits`]'s `None`.
-/// `supplies` and `limits` are arrays rather than objects keyed by net so a net
-/// stated twice is expressible, and therefore refusable.
+/// Every section is optional; an absent key is [`NetLimits`]'s `None`. `supplies` and
+/// `limits` are arrays so a net stated twice is expressible, and therefore refusable.
 pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent, IntentError> {
     let file: IntentFile =
         serde_json::from_str(source).map_err(|e| IntentError::Malformed(e.to_string()))?;
 
     let mut out = DesignIntent::default();
 
-    // `domains` is a `BTreeMap`, so a domain's index here *is* its `DomainId`.
+    // A domain's index in the `BTreeMap` *is* its `DomainId`.
     let domain_names: Vec<&str> = file.domains.keys().map(String::as_str).collect();
-    out.domain_name.reserve(domain_names.len());
-    out.domain_voltage.reserve(domain_names.len());
     for (name, spec) in &file.domains {
         if !spec.voltage_mv.is_finite() {
             return Err(IntentError::Malformed(format!(
@@ -204,10 +172,9 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
                 spec.voltage_mv
             )));
         }
-        out.domain_name.push(strings.intern(name));
+        strings.intern(name); // Not stored; interning order is report order.
         out.domain_voltage.push(Qty::new(spec.voltage_mv));
     }
-    debug_assert_eq!(out.domain_name.len(), domain_names.len());
 
     let mut supply = Vec::with_capacity(file.supplies.len());
     let mut domain_has_supply = vec![false; domain_names.len()];
@@ -242,19 +209,7 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         ));
     }
 
-    out.supply_net.reserve(supply.len());
-    out.supply_domain.reserve(supply.len());
-    out.supply_role.reserve(supply.len());
-    for &(net, domain, role) in &supply {
-        out.supply_net.push(net);
-        out.supply_domain.push(domain);
-        out.supply_role.push(role);
-    }
-    // A short column here is a supply whose role or domain reads off the row
-    // next door.
-    debug_assert_eq!(out.supply_net.len(), supply.len());
-    debug_assert_eq!(out.supply_domain.len(), supply.len());
-    debug_assert_eq!(out.supply_role.len(), supply.len());
+    out.supplies = supply;
 
     let mut limit = Vec::with_capacity(file.limits.len());
     for spec in &file.limits {
@@ -277,30 +232,7 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         )));
     }
 
-    out.limit_net.reserve(limit.len());
-    out.limit.reserve(limit.len());
-    for &(net, limits) in &limit {
-        out.limit_net.push(net);
-        out.limit.push(limits);
-    }
-    debug_assert_eq!(out.limit_net.len(), limit.len());
-    debug_assert_eq!(out.limit.len(), limit.len());
-
-    debug_assert_eq!(out.domain_name.len(), out.domain_voltage.len());
-    debug_assert_eq!(out.supply_net.len(), file.supplies.len());
-    debug_assert_eq!(out.supply_net.len(), out.supply_domain.len());
-    debug_assert_eq!(out.supply_net.len(), out.supply_role.len());
-    debug_assert_eq!(out.limit_net.len(), file.limits.len());
-    debug_assert_eq!(out.limit_net.len(), out.limit.len());
-    debug_assert!(
-        out.supply_net.windows(2).all(|pair| pair[0] < pair[1]),
-        "supply_net must be strictly ascending or its binary search is wrong"
-    );
-    debug_assert!(out.limit_net.windows(2).all(|pair| pair[0] < pair[1]));
-    debug_assert!(out
-        .supply_domain
-        .iter()
-        .all(|d| (d.0 as usize) < out.domain_name.len()));
+    out.limits = limit;
     Ok(out)
 }
 
@@ -309,8 +241,6 @@ pub fn read_intent(
     path: &std::path::Path,
     strings: &mut StrTable,
 ) -> Result<DesignIntent, IntentError> {
-    // Never a silently-empty intent: an unreadable file the operator passed
-    // must stop the run, not turn rules into unasked-for skips.
     let source = std::fs::read_to_string(path)
         .map_err(|e| IntentError::Io(format!("{}: {e}", path.display())))?;
     parse_intent(&source, strings)

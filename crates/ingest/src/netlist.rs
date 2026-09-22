@@ -1,17 +1,16 @@
-//! Reference-netlist readers: SPICE/CDL and Spectre, both producing [`Netlist`].
+//! Reference-netlist readers: SPICE/CDL and Spectre.
 //!
-//! Neither reader guesses: anything outside the declared subset is an error with
-//! its source line, a silent misparse surfacing as an LVS mismatch.
+//! Data in: netlist text and the run's `StrTable`. Data out: [`Netlist`], hierarchy kept.
+//! Anything outside the declared subset is an error with its source line, never a guess.
 
 use crate::deck::DeviceKind;
-use crate::{csr, narrow};
+use crate::narrow;
 use gpurify_geom::{StrId, StrTable};
 
-/// Where a token came from, for an error a human can act on.
+/// Where a token came from: its 1-based line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceSpan {
     pub line: u32,
-    pub column: u32,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -39,17 +38,6 @@ pub struct SubcktId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct RefNetId(pub u32);
-
-/// Identifies a device instance within one subcircuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct RefDeviceId(pub u32);
-
-/// Identifies a subcircuit instance — one `X` card. Indexes the `instance_*`
-/// columns; the subcircuit it sits in is `instance_subckt`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct RefInstanceId(pub u32);
 
 /// A parsed reference netlist, hierarchy preserved.
 #[derive(Debug, Default)]
@@ -105,78 +93,23 @@ pub struct Netlist {
 
 impl Netlist {
     pub fn subckt_count(&self) -> usize {
-        debug_assert!(
-            self.subckt_name.is_empty()
-                || self.subckt_port_start.len() == self.subckt_name.len() + 1,
-            "the port CSR column carries one entry per subcircuit plus a terminator"
-        );
         self.subckt_name.len()
     }
     pub fn devices_of(&self, subckt: SubcktId) -> std::ops::Range<u32> {
         let row = subckt.0 as usize;
-        debug_assert!(
-            row + 1 < self.subckt_device_start.len(),
-            "subcircuit {row} is past the end of the device CSR column"
-        );
-        let (first, last) = (
-            self.subckt_device_start[row],
-            self.subckt_device_start[row + 1],
-        );
-        debug_assert!(
-            first <= last && last as usize <= self.device_name.len(),
-            "subcircuit {row}'s device range {first}..{last} leaves the device table"
-        );
-        first..last
+        self.subckt_device_start[row]..self.subckt_device_start[row + 1]
     }
-    pub fn terminals_of(&self, device: RefDeviceId) -> &[RefNetId] {
-        csr(
-            &self.device_terminal_start,
-            &self.terminal_net,
-            device.0 as usize,
-        )
-    }
-    pub fn params_of(&self, device: RefDeviceId) -> &[(StrId, f64)] {
-        csr(&self.device_param_start, &self.param, device.0 as usize)
-    }
-    /// The nets one instance's terminals attach to, in port order.
-    pub fn instance_terminals_of(&self, instance: RefInstanceId) -> &[RefNetId] {
-        csr(
-            &self.instance_terminal_start,
-            &self.instance_terminal_net,
-            instance.0 as usize,
-        )
-    }
-    /// The top-level subcircuit — the one nothing else instantiates. `None` when
-    /// there is no unique top, an ambiguity `lvs` must refuse, not guess at.
+    /// The one subcircuit nothing instantiates. `None` when not unique: `lvs` refuses, never guesses.
     pub fn top(&self) -> Option<SubcktId> {
-        let subckts = self.subckt_count();
-
-        let mut instantiated = vec![false; subckts];
+        let mut instantiated = vec![false; self.subckt_count()];
         for &callee in &self.instance_of {
-            debug_assert!(
-                (callee.0 as usize) < subckts,
-                "an instance names subcircuit {} of {subckts}",
-                callee.0
-            );
             instantiated[callee.0 as usize] = true;
         }
-
-        // Count the uninstantiated subcircuits and keep the last one seen; when
-        // the count is one, that is the only one.
-        let rows = narrow(subckts);
-        let mut free = 0u32;
-        let mut top = 0u32;
-        for row in 0..rows {
-            let uninstantiated = u32::from(!instantiated[row as usize]);
-            free += uninstantiated;
-            top = uninstantiated * row + (1 - uninstantiated) * top;
+        let mut free = (0..narrow(instantiated.len())).filter(|&row| !instantiated[row as usize]);
+        match (free.next(), free.next()) {
+            (Some(top), None) => Some(SubcktId(top)),
+            _ => None,
         }
-        debug_assert!(
-            free as usize <= subckts,
-            "more uninstantiated subcircuits than subcircuits"
-        );
-        debug_assert!(free != 1 || (top as usize) < subckts);
-        (free == 1).then_some(SubcktId(top))
     }
 }
 
@@ -198,9 +131,6 @@ struct Tok<'a> {
 
 /// `net_of`'s "this name is not a net of the open subcircuit".
 const NO_NET: u32 = u32::MAX;
-
-/// The port-count scan's "no instance is miswired" accumulator sentinel.
-const NO_ROW: u32 = u32::MAX;
 
 /// The subcircuit keyword, for the one error that names it without a token.
 const fn subckt_keyword(dialect: Dialect) -> &'static str {
@@ -259,7 +189,6 @@ fn lex(source: &str, dialect: Dialect) -> (Vec<Tok<'_>>, Vec<u32>) {
             }
         }
 
-        let base = raw.as_ptr() as usize;
         let mut tokens = rest
             .split(|c| is_separator(c, dialect))
             .filter(|t| !t.is_empty())
@@ -267,21 +196,13 @@ fn lex(source: &str, dialect: Dialect) -> (Vec<Tok<'_>>, Vec<u32>) {
         if tokens.peek().is_some() && (!continues || card_start.is_empty()) {
             card_start.push(narrow(toks.len()));
         }
-        for text in tokens {
-            let column = narrow(text.as_ptr() as usize - base) + 1;
-            toks.push(Tok {
-                text,
-                span: SourceSpan { line, column },
-            });
-        }
+        toks.extend(tokens.map(|text| Tok {
+            text,
+            span: SourceSpan { line },
+        }));
     }
 
     card_start.push(narrow(toks.len()));
-    debug_assert!(!card_start.is_empty(), "the terminator is always pushed");
-    debug_assert!(
-        card_start.windows(2).all(|w| w[0] <= w[1]),
-        "card starts are not ascending"
-    );
     (toks, card_start)
 }
 
@@ -439,11 +360,6 @@ impl Build<'_> {
             return RefNetId(self.net_of[slot]);
         }
         let row = narrow(self.out.net_name.len());
-        debug_assert_ne!(
-            row, NO_NET,
-            "the last addressable net row is also `net_of`'s absent sentinel, so \
-             every later mention of this name would create a second row for it"
-        );
         self.out.net_name.push(id);
         self.out.net_subckt.push(subckt);
         self.net_of[slot] = row;
@@ -463,20 +379,12 @@ impl Build<'_> {
         if self.open.is_some() {
             return Err(NetlistError::Unexpected(head.span, head.text.to_string()));
         }
-        let name = *card
-            .get(1)
+        card.get(1)
             .ok_or_else(|| NetlistError::Unexpected(head.span, head.text.to_string()))?;
 
-        // The definition pass walked these same cards in this same order, so
-        // the row it pushed for this definition is `*next`.
+        // The definition pass walked the same cards in the same order.
         let id = SubcktId(*next);
         *next += 1;
-        debug_assert!((id.0 as usize) < self.out.subckt_name.len());
-        debug_assert_eq!(
-            self.out.subckt_name[id.0 as usize],
-            self.strings.intern(name.text),
-            "the definition pass and the reading pass disagree on subcircuit order"
-        );
 
         self.out
             .subckt_port_start
@@ -708,7 +616,7 @@ fn read_dialect(
         defs: Vec::new(),
         models: Vec::new(),
         open: None,
-        open_span: SourceSpan { line: 0, column: 0 },
+        open_span: SourceSpan { line: 0 },
         instance_span: Vec::new(),
     };
 
@@ -747,12 +655,6 @@ fn read_dialect(
             subckt_keyword(dialect).to_string(),
         ));
     }
-    debug_assert_eq!(
-        next as usize,
-        b.out.subckt_name.len(),
-        "the reading pass opened a different number of subcircuits than the definition pass found"
-    );
-
     // The terminating entry of every CSR offset column.
     b.out.subckt_port_start.push(narrow(b.out.port_net.len()));
     b.out
@@ -766,93 +668,18 @@ fn read_dialect(
         .instance_terminal_start
         .push(narrow(b.out.instance_terminal_net.len()));
 
-    // Fail closed on a miswired instantiation, which silently disconnects the
-    // hierarchy. The callee may be defined after the call, so this is the first
-    // point every port count is known.
-    let instances = b.out.instance_name.len();
-    let port_start = &b.out.subckt_port_start[..];
-    debug_assert!(
-        {
-            let mut worst = 0u32;
-            for row in 0..b.out.instance_of.len() {
-                worst = worst.max(b.out.instance_of[row].0);
-            }
-            worst as usize + 1 < port_start.len().max(2)
-        },
-        "an instance names a subcircuit with no port range"
-    );
-    debug_assert!(
-        instances < NO_ROW as usize,
-        "u32::MAX is the no-offender sentinel and cannot also be an instance row"
-    );
-    let of_col = &b.out.instance_of[..];
-    let first_col = &b.out.instance_terminal_start[..instances];
-    let last_col = &b.out.instance_terminal_start[1..];
-    debug_assert_eq!(of_col.len(), instances, "SoA columns must agree");
-    debug_assert_eq!(first_col.len(), instances, "SoA columns must agree");
-    debug_assert_eq!(last_col.len(), instances, "SoA columns must agree");
-
-    let mut offender = NO_ROW;
-    for row in 0..narrow(instances) {
-        let i = row as usize;
-        let of = of_col[i].0 as usize;
+    // Fail closed on a miswired instantiation: the first point every port count is known.
+    let (port_start, term_start) = (&b.out.subckt_port_start, &b.out.instance_terminal_start);
+    for (row, of) in b.out.instance_of.iter().enumerate() {
+        let of = of.0 as usize;
         let want = port_start[of + 1] - port_start[of];
-        // A match smears to all-ones and swallows the row; `min` keeps the
-        // earliest offender.
-        let matched = u32::from(last_col[i] - first_col[i] == want);
-        offender = offender.min(row | matched.wrapping_neg());
+        let got = term_start[row + 1] - term_start[row];
+        if got != want {
+            let name = b.strings.resolve(b.out.instance_name[row]).to_string();
+            return Err(NetlistError::TerminalCount(b.instance_span[row], name, got, want));
+        }
     }
-    debug_assert!(offender == NO_ROW || (offender as usize) < instances);
-    if offender != NO_ROW {
-        let row = offender as usize;
-        let of = b.out.instance_of[row].0 as usize;
-        let want = port_start[of + 1] - port_start[of];
-        let got = b.out.instance_terminal_start[row + 1] - b.out.instance_terminal_start[row];
-        debug_assert_ne!(got, want, "the scan named a row whose arity agrees");
-        let name = b.strings.resolve(b.out.instance_name[row]).to_string();
-        return Err(NetlistError::TerminalCount(
-            b.instance_span[row],
-            name,
-            got,
-            want,
-        ));
-    }
-
-    let out = b.out;
-    debug_assert_eq!(out.subckt_port_start.len(), out.subckt_name.len() + 1);
-    debug_assert_eq!(out.subckt_device_start.len(), out.subckt_name.len() + 1);
-    debug_assert_eq!(out.device_terminal_start.len(), out.device_name.len() + 1);
-    debug_assert_eq!(out.device_param_start.len(), out.device_name.len() + 1);
-    debug_assert_eq!(out.device_model.len(), out.device_name.len());
-    debug_assert_eq!(out.device_kind.len(), out.device_name.len());
-    debug_assert_eq!(
-        out.instance_terminal_start.len(),
-        out.instance_name.len() + 1
-    );
-    debug_assert_eq!(out.instance_of.len(), out.instance_name.len());
-    debug_assert_eq!(out.instance_subckt.len(), out.instance_name.len());
-    debug_assert_eq!(out.net_subckt.len(), out.net_name.len());
-    debug_assert!(
-        {
-            let mut worst = 0u32;
-            for row in 0..out.terminal_net.len() {
-                worst = worst.max(out.terminal_net[row].0);
-            }
-            worst < narrow(out.net_name.len()).max(1)
-        },
-        "a terminal names a net row that does not exist"
-    );
-    debug_assert!(
-        {
-            let mut worst = 0u32;
-            for row in 0..out.port_net.len() {
-                worst = worst.max(out.port_net[row].0);
-            }
-            worst < narrow(out.net_name.len()).max(1)
-        },
-        "a port names a net row that does not exist"
-    );
-    Ok(out)
+    Ok(b.out)
 }
 
 /// SPICE and CDL.

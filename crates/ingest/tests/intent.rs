@@ -28,7 +28,6 @@ fn an_absent_intent_declares_nothing_and_every_accessor_says_so() {
         "an intent nobody wrote reported itself non-empty, so the six rules \
          that depend on one would run against nothing and report clean"
     );
-    assert_eq!(intent.domain_count(), 0);
     assert!(
         intent.supply_role(vdd).is_none(),
         "a net nobody declared came back as a supply"

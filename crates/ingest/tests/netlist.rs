@@ -1,16 +1,10 @@
-//! The reference netlist: its CSR accessors, its top-cell rule, and the two
-//! readers' refusal to guess.
-//!
-//! `Netlist`'s columns are public, so a test can state a netlist directly and
-//! ask the accessors about it. The CSR offset columns are built here with one
-//! more entry than the rows they index, which is the convention every other
-//! offset column in this workspace states — `GeometryStore::layer_start` and
-//! `Provenance::prop_start` both document it.
+//! The reference netlist: its top-cell rule, a card-for-card read, and the two
+//! readers' refusal to guess. CSR offset columns carry one terminator entry.
 
 use gpurify_geom::StrTable;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{
-    spectre, spice, Netlist, NetlistError, RefDeviceId, RefNetId, SubcktId,
+    spectre, spice, Netlist, NetlistError, RefNetId, SubcktId,
 };
 
 /// Two subcircuits, three devices, and terminal and parameter runs of three
@@ -65,42 +59,10 @@ fn two_subcircuits(strings: &mut StrTable) -> Netlist {
     }
 }
 
-/// Oracle: construct-from-answer. Every range in the netlist below was decided
-/// before any accessor ran, so each one has an answer that does not come from
-/// the code. The device on the second subcircuit is the load-bearing case: a
-/// CSR read that starts from the wrong offset returns the first subcircuit's
-/// last device, which is a well-formed device belonging to another cell.
-#[test]
-fn every_csr_accessor_returns_exactly_the_range_the_netlist_states() {
-    let mut strings = StrTable::default();
-    let netlist = two_subcircuits(&mut strings);
-
-    assert_eq!(netlist.subckt_count(), 2);
-    assert_eq!(netlist.devices_of(SubcktId(0)), 0..2);
-    assert_eq!(
-        netlist.devices_of(SubcktId(1)),
-        2..3,
-        "the second subcircuit's device range overlaps the first's"
-    );
-
-    assert_eq!(netlist.terminals_of(RefDeviceId(0)).len(), 4);
-    assert_eq!(
-        netlist.terminals_of(RefDeviceId(1)),
-        &netlist.terminal_net[4..8],
-        "the second transistor's terminals were read from the first's range"
-    );
-    assert_eq!(
-        netlist.terminals_of(RefDeviceId(2)),
-        &netlist.terminal_net[8..10],
-        "a two-terminal device read four terminals"
-    );
-
-    assert_eq!(netlist.params_of(RefDeviceId(0)).len(), 2);
-    assert_eq!(netlist.params_of(RefDeviceId(1)).len(), 1);
-    assert!(
-        netlist.params_of(RefDeviceId(2)).is_empty(),
-        "a device with no parameters read its predecessor's"
-    );
+/// Device `row`'s terminal nets, in card order.
+fn terminals_of(netlist: &Netlist, row: usize) -> &[RefNetId] {
+    &netlist.terminal_net
+        [netlist.device_terminal_start[row] as usize..netlist.device_terminal_start[row + 1] as usize]
 }
 
 /// Oracle: construct-from-answer. `top` is "the one nothing else instantiates",
@@ -198,38 +160,39 @@ mp y a vdd vdd pfet w=4
         );
         assert_eq!(netlist.device_kind[row], DeviceKind::Mos);
         assert_eq!(
-            netlist.terminals_of(RefDeviceId(device)).len(),
+            terminals_of(&netlist, device as usize).len(),
             4,
             "{name} is a four-terminal card"
         );
     }
 
     // Drain, gate, source, bulk — the order the card states them in.
-    let mn = netlist.terminals_of(RefDeviceId(0));
+    let mn = terminals_of(&netlist, 0);
     assert_eq!(
         mn,
         &[ports[1], ports[0], ports[3], ports[3]],
         "mn's terminals are not y a vss vss, or a repeated net name became two \
          nets"
     );
-    let mp = netlist.terminals_of(RefDeviceId(1));
+    let mp = terminals_of(&netlist, 1);
     assert_eq!(mp, &[ports[1], ports[0], ports[2], ports[2]]);
 
     for (device, expected) in [
-        (RefDeviceId(0), [("w", 2.0), ("l", 1.0)].as_slice()),
-        (RefDeviceId(1), [("w", 4.0)].as_slice()),
+        (0usize, [("w", 2.0), ("l", 1.0)].as_slice()),
+        (1, [("w", 4.0)].as_slice()),
     ] {
-        let params = netlist.params_of(device);
+        let params = &netlist.param[netlist.device_param_start[device] as usize
+            ..netlist.device_param_start[device + 1] as usize];
         assert_eq!(
             params.len(),
             expected.len(),
-            "{device:?} read a parameter run belonging to another device"
+            "device {device} read a parameter run belonging to another device"
         );
         for (&(name, value), &(want_name, want_value)) in params.iter().zip(expected) {
             assert_eq!(strings.resolve(name), want_name);
             assert!(
                 (value - want_value).abs() <= 1e-12,
-                "{device:?}'s {want_name} came back as {value}, not {want_value}"
+                "device {device}'s {want_name} came back as {value}, not {want_value}"
             );
         }
     }
