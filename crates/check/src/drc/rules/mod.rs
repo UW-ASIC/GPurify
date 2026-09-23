@@ -17,7 +17,8 @@ use crate::report::Outcome;
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::{seg_seg_dist2, Point, Seg};
-use gpurify_geom::{Bbox, GeometryStore, PolyId};
+use gpurify_geom::rects::decompose_into;
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
 
 /// How one rule row ended, and how many of its primitives it examined.
@@ -49,6 +50,47 @@ pub(crate) const fn centre(b: Bbox) -> Point {
     gap_midpoint(b, b)
 }
 
+/// A validated layer cut into disjoint rectangles, CSR by polygon, so region
+/// questions (containment, overlap area) are exact sums.
+#[derive(Debug, Default)]
+pub(crate) struct LayerRects {
+    rects: Vec<Bbox>,
+    start: Vec<u32>,
+    /// Store row offset on the layer to the polygon holding it, holes included.
+    pub(crate) poly_of_row: Vec<u32>,
+    /// Each polygon's outer store row.
+    pub(crate) row: Vec<PolyId>,
+}
+
+impl LayerRects {
+    /// Refill from one layer validated straight from the store.
+    pub(crate) fn build(&mut self, store: &GeometryStore, layer: LayerId, drawn: &ValidatedLayer) {
+        decompose_into(drawn, &mut self.rects, &mut self.start);
+        let first = store.polys_on_layer(layer).start;
+        self.poly_of_row.clear();
+        self.poly_of_row
+            .resize(store.polys_on_layer(layer).len(), u32::MAX);
+        self.row.clear();
+        for poly in 0..u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32") {
+            let rows = drawn.get(poly).rows();
+            for row in rows {
+                self.poly_of_row[(row.0 - first) as usize] = poly;
+            }
+            self.row.push(drawn.get(poly).provenance());
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.row.len()
+    }
+
+    /// Polygon `poly`'s rectangles.
+    pub(crate) fn of(&self, poly: u32) -> &[Bbox] {
+        let i = poly as usize;
+        &self.rects[self.start[i] as usize..self.start[i + 1] as usize]
+    }
+}
+
 /// One closed ring's edges, in vertex order, closing edge last.
 pub(crate) fn ring_segs<'a>(xs: &'a [Dbu], ys: &'a [Dbu]) -> impl Iterator<Item = Seg> + 'a {
     let n = xs.len();
@@ -59,6 +101,20 @@ pub(crate) fn ring_segs<'a>(xs: &'a [Dbu], ys: &'a [Dbu]) -> impl Iterator<Item 
             b: Point { x: xs[j], y: ys[j] },
         }
     })
+}
+
+/// Squared distance from a set of rectangles' sides to one ring's edges.
+pub(crate) fn rects_ring_dist2(rects: &[Bbox], xs: &[Dbu], ys: &[Dbu]) -> i128 {
+    let mut best = i128::MAX;
+    for e in ring_segs(xs, ys) {
+        for r in rects {
+            let (rx, ry) = ([r.xlo, r.xhi, r.xhi, r.xlo], [r.ylo, r.ylo, r.yhi, r.yhi]);
+            for side in ring_segs(&rx, &ry) {
+                best = best.min(seg_seg_dist2(side, e).raw());
+            }
+        }
+    }
+    best
 }
 
 pub(crate) const fn seg_bbox(s: Seg) -> Bbox {

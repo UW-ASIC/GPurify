@@ -144,9 +144,9 @@
   "drc": {
    "cases": 94,
    "by_corroboration": {
-    "manifest_agrees": 72,
+    "manifest_agrees": 71,
     "manifest_count_only": 11,
-    "manifest_disagrees": 11
+    "manifest_disagrees": 12
    },
    "by_strength": {
     "blocked": 2,
@@ -160,9 +160,9 @@
     "convention": 2,
     "fixture_incomplete": 2,
     "fixture_out_of_domain": 2,
-    "manifest_wrong": 3,
+    "manifest_wrong": 4,
     "not_a_rule": 2,
-    "null": 80
+    "null": 79
    },
    "underivable": 0
   },
@@ -2499,26 +2499,39 @@
     "cell": "DRC_AENC_PASS",
     "domain": "drc",
     "rule": "asymmetric_enclosure",
-    "expect_violations": 0,
+    "expect_violations": 1,
     "expect_outcome": "Ran",
     "examined": 1,
     "examined_min": 1,
     "examined_population": "inner_shapes",
-    "violations": [],
+    "violations": [
+     {
+      "measured": {
+       "kind": "Length",
+       "value": 20
+      },
+      "at": [
+       10,
+       70
+      ]
+     }
+    ],
     "provenance": "derived_from_geometry",
-    "corroboration": "manifest_agrees",
-    "dispute": null,
+    "corroboration": "manifest_disagrees",
+    "dispute": "manifest_wrong",
     "strength": "strong",
     "assert": [
      "violation_count",
      "outcome",
-     "examined_min"
+     "examined_min",
+     "measured",
+     "at"
     ],
     "manifest": {
      "expect_violations": 0,
      "measured": []
     },
-    "note": "Margins L20 R180 B20 T180; min(max(20,180), max(20,180)) = 180 >= 100."
+    "note": "Margins L20 R180 B20 T180. Two opposite sides (sky130 m1.5, FreePDK45 OPPOSITE): max(min(20,180), min(20,180)) = 20 < 100, reported on the left strip (first on the tie). The manifest used min(max(L,R), max(B,T)) = 180, which passes a via pushed into a pad corner."
    },
    {
     "id": "DRC_AENC_FAIL",
@@ -2534,11 +2547,11 @@
      {
       "measured": {
        "kind": "Length",
-       "value": 10
+       "value": 50
       },
       "at": [
-       5,
-       100
+       60,
+       25
       ]
      }
     ],
@@ -2559,7 +2572,7 @@
       null
      ]
     },
-    "note": "Side Left; shapes (via1#0, met1#0). The manifest carries no measured value."
+    "note": "max(min(L,R), min(B,T)) = min(B,T) = 50 < 100, reported on the bottom strip (the worse side of the better axis); shapes (via1#0, met1#0). The manifest carries no measured value."
    },
    {
     "id": "DRC_MEA_PASS",
@@ -4444,7 +4457,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "Skipped, not clean \u2014 the corpus path passes intent: None, so `check_electromigration`'s `power.filter(|_| intent.is_usable())` (electrical.rs:868) records Skipped(NoDesignIntent) with examined 0, exactly as ERC_EMIG_MET1 does. THE CELL IS THE POINT, NOT THIS ASSERTION. ERC_EM_DEV was drawn to close the fifth fail-open filed in docs/SIGNATURE_DEFECTS.md: power.rs:1612 does `if attach.is_empty() { continue; }` above the first read of budget_current_ua, and attach comes from devices_on(net), which is TERMINAL-based. ERC_EM_n2 is {li, met1} and carries no device terminal, so ERC_EMIG_MET1's declared budget is discarded and its Ran path examines nothing. ERC_EM_DEV_n0 is diff + li + met1 joined through a drawn licon and a drawn mcon, and the nsdm marker binds an nfet_01v8 whose source and drain both land on that diff \u2014 so devices_on(ERC_EM_DEV_n0) is non-empty and the budget survives. THIS CELL DRAWS THE CORPUS'S FIRST LICON, which is blocking finding F1 ('No fixture cell draws a licon') resolved for this cell only; the cells F1 lists are unchanged. Geometry, all dbu, all multiples of 10 so off_grid (pitch 5) and angle (0/90) are clean: diff 2/0 (0,0)-(500,200); nsdm 10/0 (-50,-50)-(550,250); poly 3/0 (200,-50)-(250,250), 50 overhang each side = poly.diff.min_extension exactly and `violates` is strict, so it passes; licon 4/0 (380,60)-(460,140), strictly inside both diff and li, and x >= 380 clears poly's xhi of 250 so the `licon: poly-li` connectivity row has no host and the gate stays a separate net; li 5/0 (350,50)-(700,150); mcon 6/0 (610,60)-(690,140), strictly inside both li and met1, and x >= 610 clears diff's xhi of 500; met1 7/0 (600,50)-(700,1950), width 100 = met1.min_width exactly and every edge >= 100 = min_edge_length. TEXT 7/5 'ERC_EM_DEV_n0' at (600,50) is the met1 rectangle's lower-left CORNER and binds because GeometryStore::poly_contains_point is boundary-inclusive; TEXT 3/5 'ERC_EM_DEV_n1' at (200,-50) names the gate. Exactly one label per net, so no PortError::ConflictingLabels. No DRC rule in params.json names licon at all, so the new cut adds no DRC host. Topology verified by execution before the cell was authored: devices.len() == 1, kind Mos, model nfet_01v8, terminals [Gate, Source, Drain] = [NetId(1), NetId(0), NetId(0)] (F3 collapses S and D onto the one diff, which is load-bearing HERE \u2014 power.rs counts two terminals on the net, halves the budget and scatter-accumulates both shares back onto one node, so the full declared budget arrives); same_net(diff, li) and same_net(li, met1); net_count 2; ports.net_of('ERC_EM_DEV_n0') == NetId(0). Discrimination: deleting the licon and the mcon gives net_count 4, no joins, the device still recognised, and devices_on(net_of(met1)) EMPTY \u2014 which is precisely the ERC_EM_n2 shape, so the two cuts are what carry the terminal onto the met1 net. THE RAN PATH IS NOW WRITTEN - black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal in tests/test_all.rs, green, every number below derived from the model and the dimensions BEFORE it was executed: chain_is_horizontal((600,50,700,1950)) is 100 >= 1900 = false, so the chain runs in y; met1 taps are the mcon at y=100 and the rail's own centre at y=1000, giving 2 nodes and 1 chain edge, edge_width 100, edge_length 900, 9.0 squares; derate = exp((0.9/8.617333262e-5)*(1/358.15 - 1/383.15)) = 6.704133044734676; allowed = 1000 A/m * 100 nm * derate = 670.4133044734676 uA; the Blech product I*(900/100) clears the 10 uA-um limit for any I above 1.111 uA, so examined is 1 for any realistic budget. A 1000 uA budget is therefore 1 violation at (650,100) on met1 measuring Current(1000.0) against Current(670.4133044734676); a 500 uA budget is 0 violations with examined still 1; and a 1.0 uA budget is a Blech product of 9.0, at or under the stated 10.0 with the exempt side non-strict, so the edge is immortal and examined is 0 with no compare at all. The test runs all three: 1.0-against-500 isolates the Blech exemption (both are far inside the limit, only examined moves) and 500-against-1000 isolates the derating (both are examined, only the violation count moves). The measured current is asserted to a relative 1e-9 rather than exactly - two terminals on one net means the budget is halved and scatter-accumulated back onto one node, and the conjugate-gradient solve leaves about 1e-10 of relative residue on the round trip. Both go through run_case_with_intent, never through this corpus row. The four fail-opens on this rule's magnitude (docs/E2E_AUDIT.md 5.1) are unchanged by this cell \u2014 what it fixes is that the budget reaches the solve at all. Side effects to expect under a firing intent, both filtered out by rule id: em_current_density also fires (li's two chain edges are 100 nm wide, 100 uA allowed, derate 1), and p2p_resistance builds a network for the diff net. THE DECK ROW MUST KEEP NAMING ONE LAYER \u2014 ruleset.rs:586 pushes blech_limit once per row while the other columns extend once per layer, so a two-layer electromigration row trips the debug_assert_eq at electrical.rs:860 and slice-indexes out of bounds at :899 in release, above the intent gate and therefore in every case in the corpus."
+    "note": "Skipped, not clean — the corpus path passes intent: None, so `check_electromigration`'s `power.filter(|_| intent.is_usable())` (electrical.rs:868) records Skipped(NoDesignIntent) with examined 0, exactly as ERC_EMIG_MET1 does. THE CELL IS THE POINT, NOT THIS ASSERTION. ERC_EM_DEV was drawn to close the fifth fail-open filed in docs/SIGNATURE_DEFECTS.md: power.rs:1612 does `if attach.is_empty() { continue; }` above the first read of budget_current_ua, and attach comes from devices_on(net), which is TERMINAL-based. ERC_EM_n2 is {li, met1} and carries no device terminal, so ERC_EMIG_MET1's declared budget is discarded and its Ran path examines nothing. ERC_EM_DEV_n0 is diff + li + met1 joined through a drawn licon and a drawn mcon, and the nsdm marker binds an nfet_01v8 whose source and drain both land on that diff — so devices_on(ERC_EM_DEV_n0) is non-empty and the budget survives. THIS CELL DRAWS THE CORPUS'S FIRST LICON, which is blocking finding F1 ('No fixture cell draws a licon') resolved for this cell only; the cells F1 lists are unchanged. Geometry, all dbu, all multiples of 10 so off_grid (pitch 5) and angle (0/90) are clean: diff 2/0 (0,0)-(500,200); nsdm 10/0 (-50,-50)-(550,250); poly 3/0 (200,-50)-(250,250), 50 overhang each side = poly.diff.min_extension exactly and `violates` is strict, so it passes; licon 4/0 (380,60)-(460,140), strictly inside both diff and li, and x >= 380 clears poly's xhi of 250 so the `licon: poly-li` connectivity row has no host and the gate stays a separate net; li 5/0 (350,50)-(700,150); mcon 6/0 (610,60)-(690,140), strictly inside both li and met1, and x >= 610 clears diff's xhi of 500; met1 7/0 (600,50)-(700,1950), width 100 = met1.min_width exactly and every edge >= 100 = min_edge_length. TEXT 7/5 'ERC_EM_DEV_n0' at (600,50) is the met1 rectangle's lower-left CORNER and binds because GeometryStore::poly_contains_point is boundary-inclusive; TEXT 3/5 'ERC_EM_DEV_n1' at (200,-50) names the gate. Exactly one label per net, so no PortError::ConflictingLabels. No DRC rule in params.json names licon at all, so the new cut adds no DRC host. Topology verified by execution before the cell was authored: devices.len() == 1, kind Mos, model nfet_01v8, terminals [Gate, Source, Drain] = [NetId(1), NetId(0), NetId(0)] (F3 collapses S and D onto the one diff, which is load-bearing HERE — power.rs counts two terminals on the net, halves the budget and scatter-accumulates both shares back onto one node, so the full declared budget arrives); same_net(diff, li) and same_net(li, met1); net_count 2; ports.net_of('ERC_EM_DEV_n0') == NetId(0). Discrimination: deleting the licon and the mcon gives net_count 4, no joins, the device still recognised, and devices_on(net_of(met1)) EMPTY — which is precisely the ERC_EM_n2 shape, so the two cuts are what carry the terminal onto the met1 net. THE RAN PATH IS NOW WRITTEN - black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal in tests/test_all.rs, green, every number below derived from the model and the dimensions BEFORE it was executed: chain_is_horizontal((600,50,700,1950)) is 100 >= 1900 = false, so the chain runs in y; met1 taps are the mcon at y=100 and the rail's own centre at y=1000, giving 2 nodes and 1 chain edge, edge_width 100, edge_length 900, 9.0 squares; derate = exp((0.9/8.617333262e-5)*(1/358.15 - 1/383.15)) = 6.704133044734676; allowed = 1000 A/m * 100 nm * derate = 670.4133044734676 uA; the Blech product I*(900/100) clears the 10 uA-um limit for any I above 1.111 uA, so examined is 1 for any realistic budget. A 1000 uA budget is therefore 1 violation at (650,100) on met1 measuring Current(1000.0) against Current(670.4133044734676); a 500 uA budget is 0 violations with examined still 1; and a 1.0 uA budget is a Blech product of 9.0, at or under the stated 10.0 with the exempt side non-strict, so the edge is immortal and examined is 0 with no compare at all. The test runs all three: 1.0-against-500 isolates the Blech exemption (both are far inside the limit, only examined moves) and 500-against-1000 isolates the derating (both are examined, only the violation count moves). The measured current is asserted to a relative 1e-9 rather than exactly - two terminals on one net means the budget is halved and scatter-accumulated back onto one node, and the conjugate-gradient solve leaves about 1e-10 of relative residue on the round trip. Both go through run_case_with_intent, never through this corpus row. The four fail-opens on this rule's magnitude (docs/E2E_AUDIT.md 5.1) are unchanged by this cell — what it fixes is that the budget reaches the solve at all. Side effects to expect under a firing intent, both filtered out by rule id: em_current_density also fires (li's two chain edges are 100 nm wide, 100 uA allowed, derate 1), and p2p_resistance builds a network for the diff net. THE DECK ROW MUST KEEP NAMING ONE LAYER — ruleset.rs:586 pushes blech_limit once per row while the other columns extend once per layer, so a two-layer electromigration row trips the debug_assert_eq at electrical.rs:860 and slice-indexes out of bounds at :899 in release, above the intent gate and therefore in every case in the corpus."
    }
   ]
  },

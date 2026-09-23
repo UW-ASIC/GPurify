@@ -2,23 +2,25 @@
 //!
 //! Data in: two validated layers and their cross-layer candidate pairs.
 //! Data out: one violation per offending inner shape / pair / well.
-//! Enclosure takes the *best* host (lowest row on a tie); an unhosted inner
-//! shape measures zero, never skipped. Margins are on bounding boxes, which is
-//! optimistic for a concave host (a known fail-open).
+//! Enclosure takes the *best* host polygon (lowest row on a tie) that covers
+//! the inner shape's whole area; an unhosted inner shape measures zero, never
+//! skipped. Extension and overlap still measure bounding boxes, which is
+//! optimistic for a concave shape (a known fail-open).
 
-use super::{centre, mid, ring_segs, Verdict, REFUSED};
+use super::{centre, mid, rects_ring_dist2, ring_segs, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::rects::{clipped_area, covered_area};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
 use std::cmp::Reverse;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Side {
     Left,
     Right,
@@ -55,14 +57,109 @@ fn greater(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
     }
 }
 
-/// The side an enclosure rule compares: the worst side, or for the asymmetric
-/// rule `min(max(left, right), max(bottom, top))`.
-fn enclosure_of(inner: Bbox, outer: Bbox, asymmetric: bool) -> (Dbu, Side) {
-    let [l, r, b, t] = margins(inner, outer);
-    if asymmetric {
-        lesser(greater(l, r), greater(b, t))
-    } else {
-        lesser(lesser(l, r), lesser(b, t))
+/// How far the host reaches past a rectangular `inner` on each side, read
+/// along the side's own strip (projection metric): the nearest host edge,
+/// holes included, facing that side. Exact for any rectilinear host that
+/// contains `inner`.
+fn strips(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Side); 4] {
+    let far = Dbu::new_unchecked(i64::MAX);
+    let [mut l, mut r, mut b, mut t] = [far; 4];
+    for ring in std::iter::once(host.outer()).chain(host.holes()) {
+        let (xs, ys) = ring.coords();
+        for e in ring_segs(xs, ys) {
+            if e.a.x == e.b.x {
+                let (lo, hi) = (e.a.y.min(e.b.y), e.a.y.max(e.b.y));
+                if lo < inner.yhi && hi > inner.ylo {
+                    if e.a.x <= inner.xlo {
+                        l = l.min(inner.xlo - e.a.x);
+                    }
+                    if e.a.x >= inner.xhi {
+                        r = r.min(e.a.x - inner.xhi);
+                    }
+                }
+            } else {
+                let (lo, hi) = (e.a.x.min(e.b.x), e.a.x.max(e.b.x));
+                if lo < inner.xhi && hi > inner.xlo {
+                    if e.a.y <= inner.ylo {
+                        b = b.min(inner.ylo - e.a.y);
+                    }
+                    if e.a.y >= inner.yhi {
+                        t = t.min(e.a.y - inner.yhi);
+                    }
+                }
+            }
+        }
+    }
+    [
+        (l, Side::Left),
+        (r, Side::Right),
+        (b, Side::Bottom),
+        (t, Side::Top),
+    ]
+}
+
+/// Squared distance from the inner region (its rectangles) to the host's
+/// boundary: the euclidean enclosure once the host contains it.
+fn boundary_dist2(inner: &[Bbox], host: PolygonRef<'_>) -> i128 {
+    std::iter::once(host.outer())
+        .chain(host.holes())
+        .map(|ring| {
+            let (xs, ys) = ring.coords();
+            rects_ring_dist2(inner, xs, ys)
+        })
+        .fold(i128::MAX, i128::min)
+}
+
+/// A contained inner polygon's enclosure in `host` and the side to report.
+/// All sides: the euclidean distance to the host's boundary. Asymmetric: the
+/// better axis's worse side, `max(min(left, right), min(bottom, top))`, which
+/// needs a rectangular inner; any other inner falls back to all sides (fails
+/// closed). `None` for the side means "not a rectangle, report at the centre".
+fn enclosure_of(
+    inner: &[Bbox],
+    inner_box: Bbox,
+    host: PolygonRef<'_>,
+    asymmetric: bool,
+) -> (Dbu, Option<Side>) {
+    let boxed = inner.len() == 1;
+    if boxed && asymmetric {
+        let [l, r, b, t] = strips(inner_box, host);
+        let (value, side) = greater(lesser(l, r), lesser(b, t));
+        return (value, Some(side));
+    }
+    let value = isqrt(DbuArea::new(saturate(boundary_dist2(inner, host))));
+    let side = boxed.then(|| {
+        let [l, r, b, t] = strips(inner_box, host);
+        lesser(lesser(l, r), lesser(b, t)).1
+    });
+    (value, side)
+}
+
+/// `isqrt` takes at most `MAX_ABS_DBU²`; a larger distance saturates there.
+fn saturate(d2: i128) -> i128 {
+    d2.min(i128::from(MAX_ABS_DBU) * i128::from(MAX_ABS_DBU))
+}
+
+/// Midpoint of the strip of width `margin` on one side of `inner`.
+fn side_midpoint(inner: Bbox, margin: Dbu, side: Side) -> Point {
+    let (cx, cy) = (mid(inner.xlo, inner.xhi), mid(inner.ylo, inner.yhi));
+    match side {
+        Side::Left => Point {
+            x: mid(inner.xlo - margin, inner.xlo),
+            y: cy,
+        },
+        Side::Right => Point {
+            x: mid(inner.xhi, inner.xhi + margin),
+            y: cy,
+        },
+        Side::Bottom => Point {
+            x: cx,
+            y: mid(inner.ylo - margin, inner.ylo),
+        },
+        Side::Top => Point {
+            x: cx,
+            y: mid(inner.yhi, inner.yhi + margin),
+        },
     }
 }
 
@@ -141,31 +238,10 @@ fn pair_layers(
     true
 }
 
-/// Whether two axis-aligned segments properly cross (touching is not crossing).
-fn segments_cross(a: (Point, Point), b: (Point, Point)) -> bool {
-    crosses_hv(a, b) || crosses_hv(b, a)
-}
-
-fn crosses_hv(h: (Point, Point), v: (Point, Point)) -> bool {
-    let (xlo, xhi) = (h.0.x.min(h.1.x), h.0.x.max(h.1.x));
-    let (ylo, yhi) = (v.0.y.min(v.1.y), v.0.y.max(v.1.y));
-    h.0.y == h.1.y && v.0.x == v.1.x && v.0.x > xlo && v.0.x < xhi && h.0.y > ylo && h.0.y < yhi
-}
-
-/// Whether ring `inner` lies within ring `host` (boundary-inclusive): one vertex
-/// inside and no proper edge crossing. Does not see host holes (fail-open).
-fn ring_contains_ring(store: &GeometryStore, host: PolyId, inner: PolyId) -> bool {
-    let (xs, ys) = store.poly_verts(inner);
-    if !store.poly_contains_point(host, Point { x: xs[0], y: ys[0] }) {
-        return false;
-    }
-    let (hxs, hys) = store.poly_verts(host);
-    !ring_segs(xs, ys)
-        .any(|si| ring_segs(hxs, hys).any(|sh| segments_cross((si.a, si.b), (sh.a, sh.b))))
-}
-
-/// Min enclosure (every side) or asymmetric enclosure (one side per axis), on
-/// the best containing host. `examined` counts inner shapes.
+/// Min enclosure (every side) or asymmetric enclosure (two opposite sides),
+/// per inner polygon on its best host polygon. A host holds the inner only if
+/// it covers all of its area (holes and concave notches count). `examined`
+/// counts inner polygons.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn enclosure(
     store: &GeometryStore,
@@ -180,43 +256,56 @@ pub(crate) fn enclosure(
     if !pair_layers(store, inner_layer, outer, Dbu::new_unchecked(0), s) {
         return REFUSED;
     }
+    let Scratch {
+        validated,
+        pairs,
+        rects_a: inner_rects,
+        rects_b: host_rects,
+        ..
+    } = s;
+    let drawn = validated.get(store, inner_layer).expect("validated above");
+    inner_rects.build(store, inner_layer, drawn);
+    let inner_boxes = drawn.bboxes().to_vec();
+    let hosts = validated.get(store, outer).expect("validated above");
+    host_rects.build(store, outer, hosts);
+    let host_first = store.polys_on_layer(outer).start;
+
     let limit = Measurement::Length(limit);
-    let shapes = store.polys_on_layer(inner_layer);
-    let examined = u64::from(shapes.end - shapes.start);
-    let mut cursor = 0usize;
-    for shape in shapes {
-        let inner = PolyId(shape);
-        let inner_box = store.poly_bbox(inner);
-        let (lo, hi) = run_of(&s.pairs, &mut cursor, inner);
-        // Best host; `Reverse` breaks a tie toward the lowest row. A candidate
-        // that does not contain the shape folds in as `UNHOSTED`.
-        let mut acc = (UNHOSTED, Reverse(u32::MAX));
-        for &(_, candidate) in &s.pairs[lo..hi] {
-            let host_box = store.poly_bbox(candidate);
-            let contained =
-                host_box.contains(inner_box) && ring_contains_ring(store, candidate, inner);
-            let value = if contained {
-                enclosure_of(inner_box, host_box, asymmetric).0.raw()
-            } else {
-                UNHOSTED
-            };
-            acc = acc.max((value, Reverse(candidate.0)));
+    for poly in 0..u32::try_from(inner_rects.len()).expect("a layer indexes polygons with a u32") {
+        let inner = inner_rects.row[poly as usize];
+        let inner_box = inner_boxes[poly as usize];
+        let mine = inner_rects.of(poly);
+        let area = covered_area(mine);
+        let lo = pairs.partition_point(|&(a, _)| a < inner);
+        let hi = pairs.partition_point(|&(a, _)| a <= inner);
+        // Best host; `Reverse` breaks a tie toward the lowest row.
+        let mut acc = (UNHOSTED, Reverse(u32::MAX), None);
+        for &(_, candidate) in &pairs[lo..hi] {
+            let h = host_rects.poly_of_row[(candidate.0 - host_first) as usize];
+            let host = host_rects.row[h as usize];
+            let theirs = host_rects.of(h);
+            let covered = mine
+                .iter()
+                .fold(DbuArea::new(0), |sum, &r| sum + clipped_area(theirs, r));
+            if covered != area {
+                continue;
+            }
+            let (value, side) = enclosure_of(mine, inner_box, hosts.get(h), asymmetric);
+            acc = acc.max((value.raw(), Reverse(host.0), side));
         }
-        let (best, Reverse(host)) = acc;
+        let (best, Reverse(host), side) = acc;
         let measured = Measurement::Length(Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)));
         if !measured.violates(limit, LimitSense::Minimum) {
             continue;
         }
         let hosted = best >= 0;
-        let at = if hosted {
-            let host_box = store.poly_bbox(PolyId(host));
-            strip_midpoint(
+        let at = match side {
+            Some(side) if hosted => side_midpoint(
                 inner_box,
-                host_box,
-                enclosure_of(inner_box, host_box, asymmetric).1,
-            )
-        } else {
-            centre(inner_box)
+                Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)),
+                side,
+            ),
+            _ => centre(inner_box),
         };
         out.push(Violation {
             rule,
@@ -228,7 +317,7 @@ pub(crate) fn enclosure(
             shapes: (inner, hosted.then_some(PolyId(host))),
         });
     }
-    (Outcome::Ran, examined)
+    (Outcome::Ran, inner_rects.len() as u64)
 }
 
 /// The smallest positive protrusion and its side (first on a tie); zero when

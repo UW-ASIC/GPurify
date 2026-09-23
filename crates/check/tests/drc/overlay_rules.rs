@@ -9,7 +9,7 @@ use gpurify_check::drc::Rule;
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason, Violation};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
-use gpurify_testgen::shapes::{l_shape, LayoutBuilder};
+use gpurify_testgen::shapes::{hole, l_shape, LayoutBuilder};
 use gpurify_testgen::{
     assert_clean, assert_only_violation, assert_rule_ran, dbu, layout_with_violation, point,
     Amount, ShapeKind, ViolationCase, ViolationShape,
@@ -231,30 +231,16 @@ fn two_sided_enclosure() -> (gpurify_geom::GeometryStore, PolyId, PolyId) {
     (store, ids.of(inner), ids.of(outer))
 }
 
-/// Oracle: construct-from-answer. `min(max(40, 60), max(100, 100))` is 60, so
-/// the shape has 60 on the better side of its worse axis and a requirement of
-/// 61 fails it by one.
-///
-/// The coordinate is the midpoint of the margin the asymmetric reduction
-/// named — the better side of the worse axis, which the rule now restates for
-/// itself. Here that is the right-hand strip, `x` from 200 to 260 and `y` from
-/// 100 to 200, so the point is `(230, 150)`. It is not a corner of either
-/// shape: the whole claim is that this one side is the one to widen.
+/// Oracle: construct-from-answer. `max(min(40, 60), min(100, 100))` is 100:
+/// the vertical axis has 100 on both sides, so a requirement of 101 fails by
+/// one. Reported on the worse side of that better axis, the bottom strip
+/// `x` 100..200, `y` 0..100, at `(150, 50)`.
 #[test]
-fn an_asymmetric_enclosure_one_unit_under_the_requirement_is_reported_on_the_better_side() {
+fn an_asymmetric_enclosure_one_unit_under_the_requirement_is_reported_on_the_better_axis() {
     let (store, inner, outer) = two_sided_enclosure();
     let mut sink = Sink::default();
 
-    let table = vec![(
-        RULE,
-        Rule::AsymmetricEnclosure {
-            outer: B,
-            inner: A,
-            min_one_side: dbu(61),
-        },
-    )];
-
-    sink.run(&store, &table);
+    sink.run(&store, &asymmetric_table(101));
 
     assert_only_violation(
         &sink.out,
@@ -262,13 +248,128 @@ fn an_asymmetric_enclosure_one_unit_under_the_requirement_is_reported_on_the_bet
             rule: RULE,
             layer: A,
             severity: Severity::Error,
-            at: point(230, 150),
-            measured: Measurement::Length(dbu(60)),
-            limit: Measurement::Length(dbu(61)),
+            at: point(150, 50),
+            measured: Measurement::Length(dbu(100)),
+            limit: Measurement::Length(dbu(101)),
             shapes: (inner, Some(outer)),
         },
     );
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+}
+
+fn asymmetric_table(limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::AsymmetricEnclosure {
+            outer: B,
+            inner: A,
+            min_one_side: dbu(limit),
+        },
+    )]
+}
+
+/// sky130 m1.5: "Mcon must be enclosed by Met1 on two opposite sides by
+/// 0.060 um". A 170 nm mcon pushed into a corner of its pad, 85 nm clear on
+/// the left and bottom and 55 nm on the right and top, has no axis with 60 on
+/// both sides, so it fails. The old `min(max(L, R), max(B, T))` read 85 and
+/// passed it.
+#[test]
+fn sky130_m1_5_an_mcon_pushed_into_a_pad_corner_fails_two_opposite_sides() {
+    let mut layout = LayoutBuilder::new(2);
+    let mcon = layout.rect(A, 85, 85, 255, 255);
+    let met1 = layout.rect(B, 0, 0, 310, 310);
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(60));
+
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            // The worse (right) side of the first best axis, x 255..310.
+            at: point(282, 170),
+            measured: Measurement::Length(dbu(55)),
+            limit: Measurement::Length(dbu(60)),
+            shapes: (ids.of(mcon), Some(ids.of(met1))),
+        },
+    );
+}
+
+/// sky130 m1.4 + m1.5 at their minimum: 60 on the left and right, 30 on the
+/// bottom and top. One axis has 60 on both sides, so m1.5 is met.
+#[test]
+fn sky130_m1_5_sixty_on_two_opposite_sides_passes_with_thirty_on_the_others() {
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 60, 30, 230, 200);
+    layout.rect(B, 0, 0, 290, 230);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(60));
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// A host's hole is not host. A via 100 clear of the pad's outer edge but 20
+/// from a slot on its right and another above has 20 on both axes' near side.
+/// Measured on bounding boxes it read 100 and passed.
+#[test]
+fn an_opposite_sides_enclosure_counts_the_hosts_holes() {
+    let mut layout = LayoutBuilder::new(2);
+    let via = layout.rect(A, 100, 100, 270, 270);
+    let pad = layout.rect(B, 0, 0, 1_000, 1_000);
+    layout.shape(B, &hole(290, 100, 500, 270));
+    layout.shape(B, &hole(100, 290, 270, 500));
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(60));
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(20)));
+    assert_eq!(sink.out.shape_a[0], ids.of(via));
+    assert_eq!(sink.out.shape_b[0], Some(ids.of(pad)));
+}
+
+/// A via sitting in a hole of its pad is on no metal at all: enclosure zero.
+/// The old containment test read only the outer ring and passed it.
+#[test]
+fn an_inner_shape_inside_a_hosts_hole_is_not_enclosed() {
+    let mut layout = LayoutBuilder::new(2);
+    let via = layout.rect(A, 400, 400, 600, 600);
+    layout.rect(B, 0, 0, 1_000, 1_000);
+    layout.shape(B, &hole(300, 300, 700, 700));
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &min_enclosure_table(40));
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(0)));
+    assert_eq!(sink.out.get(0).shapes, (ids.of(via), None));
+}
+
+/// An L-shaped pad around a via at its bend: the bounding box reads 60 of
+/// margin at worst, the metal itself only 42 at the notch's corner (the via's
+/// corner (170, 170) is 30 by 30 from it). All-sides enclosure is euclidean to
+/// the real boundary.
+#[test]
+fn a_min_enclosure_in_an_l_measures_to_the_inner_corner() {
+    let mut layout = LayoutBuilder::new(2);
+    // 1000 arms, 200 thick: the notch is (200, 200) .. (1000, 1000).
+    layout.shape(B, &l_shape(0, 0, 1_000, 200));
+    layout.rect(A, 60, 60, 170, 170);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &min_enclosure_table(42));
+    assert_clean(&sink.runs, &sink.out, RULE);
+    sink.run(&store, &min_enclosure_table(43));
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(42)));
 }
 
 /// Oracle: construct-from-answer, and the whole point of the relaxed form. The
@@ -286,15 +387,7 @@ fn the_relaxed_rule_passes_a_shape_the_symmetric_rule_fails() {
     assert_eq!(symmetric.out.measured[0], Measurement::Length(dbu(40)));
 
     let mut relaxed = Sink::default();
-    let table = vec![(
-        RULE,
-        Rule::AsymmetricEnclosure {
-            outer: B,
-            inner: A,
-            min_one_side: dbu(60),
-        },
-    )];
-    relaxed.run(&store, &table);
+    relaxed.run(&store, &asymmetric_table(60));
     assert_clean(&relaxed.runs, &relaxed.out, RULE);
     assert_eq!(assert_rule_ran(&relaxed.runs, RULE).examined, 1);
 }
