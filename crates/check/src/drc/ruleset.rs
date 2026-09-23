@@ -14,9 +14,16 @@ pub enum Rule {
         layer: LayerId,
         limit: Dbu,
     },
+    /// Wider than `limit` anywhere a `limit + 1` square fits.
     MaxWidth {
         layer: LayerId,
         limit: Dbu,
+    },
+    /// Every merged figure is a `width` x `height` rectangle, either way round.
+    CutSize {
+        layer: LayerId,
+        width: Dbu,
+        height: Dbu,
     },
     MinEdgeLength {
         layer: LayerId,
@@ -51,7 +58,7 @@ pub enum Rule {
         layer: LayerId,
         limit: Dbu,
     },
-    /// Pairs with a shape whose narrowest width is at least `width_threshold`.
+    /// Pairs near the part of a shape where a `width_threshold` square fits.
     WideDependentSpacing {
         layer: LayerId,
         width_threshold: Dbu,
@@ -70,11 +77,20 @@ pub enum Rule {
         layer: LayerId,
         max_unslotted: DbuArea,
     },
-    /// Covered fraction of a `window`-sided square swept in `step`s.
+    /// Covered fraction of a `window`-sided square swept in `step`s over the
+    /// die: the `boundary` layer's extent, or the whole layout's.
     Density {
         layer: LayerId,
+        boundary: Option<LayerId>,
         window: Dbu,
         step: Dbu,
+        limit: f64,
+        sense: LimitSense,
+    },
+    /// Covered fraction of the whole die.
+    GlobalDensity {
+        layer: LayerId,
+        boundary: Option<LayerId>,
         limit: f64,
         sense: LimitSense,
     },
@@ -107,8 +123,10 @@ pub enum Rule {
     OffGrid {
         pitch: Dbu,
     },
-    /// Bit `i` allows the line at `45 * i` degrees (0, 45, 90, 135).
+    /// Bit `i` allows the line at `45 * i` degrees (0, 45, 90, 135), on one
+    /// layer or (`None`) on every layer.
     Angle {
+        layer: Option<LayerId>,
         allowed: u8,
     },
     /// Cuts required within `within` of each cut, the cut itself included.
@@ -229,6 +247,21 @@ impl RuleSet {
         // Layer count first, then each parameter in field order.
         let one = |spec: &RuleSpec| layers(spec, 1).map(|()| layer(spec, 0));
         let two = |spec: &RuleSpec| layers(spec, 2).map(|()| (layer(spec, 0), layer(spec, 1)));
+        // A density layer, then an optional die boundary layer.
+        let bounded = |spec: &RuleSpec| match spec.layer_len {
+            1 => Ok((layer(spec, 0), None)),
+            _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
+        };
+        let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
+            let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
+                return Err(wrong_type(spec, "maximum"));
+            };
+            Ok(if maximum {
+                LimitSense::Maximum
+            } else {
+                LimitSense::Minimum
+            })
+        };
 
         let mut set = Self::default();
         for spec in &rules.spec {
@@ -240,6 +273,11 @@ impl RuleSet {
                 "max_width" => Rule::MaxWidth {
                     layer: one(spec)?,
                     limit: length(spec, "limit")?,
+                },
+                "cut_size" => Rule::CutSize {
+                    layer: one(spec)?,
+                    width: length(spec, "width")?,
+                    height: length(spec, "height")?,
                 },
                 "min_edge_length" => Rule::MinEdgeLength {
                     layer: one(spec)?,
@@ -293,23 +331,24 @@ impl RuleSet {
                     max_unslotted: area_limit(spec, "max_unslotted")?,
                 },
                 "density" => {
-                    let layer = one(spec)?;
+                    let (layer, boundary) = bounded(spec)?;
                     let (window, step) = (length(spec, "window")?, length(spec, "step")?);
-                    let limit = ratio(spec, "limit")?;
-                    let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
-                        return Err(wrong_type(spec, "maximum"));
-                    };
-                    let sense = if maximum {
-                        LimitSense::Maximum
-                    } else {
-                        LimitSense::Minimum
-                    };
                     Rule::Density {
                         layer,
+                        boundary,
                         window,
                         step,
-                        limit,
-                        sense,
+                        limit: ratio(spec, "limit")?,
+                        sense: sense(spec)?,
+                    }
+                }
+                "global_density" => {
+                    let (layer, boundary) = bounded(spec)?;
+                    Rule::GlobalDensity {
+                        layer,
+                        boundary,
+                        limit: ratio(spec, "limit")?,
+                        sense: sense(spec)?,
                     }
                 }
                 "min_enclosure" => {
@@ -359,7 +398,10 @@ impl RuleSet {
                     }
                 }
                 "angle" => {
-                    layers(spec, 0)?;
+                    let layer = match spec.layer_len {
+                        0 => None,
+                        _ => Some(one(spec)?),
+                    };
                     let wanted = strings.get("angle");
                     let mut allowed = 0u8;
                     for &(param, stated) in rules.params_of(spec) {
@@ -384,7 +426,7 @@ impl RuleSet {
                             param: "angle",
                         });
                     }
-                    Rule::Angle { allowed }
+                    Rule::Angle { layer, allowed }
                 }
                 "redundant_via" => {
                     let layer = one(spec)?;
@@ -452,13 +494,18 @@ impl RuleSet {
             let before = out.len();
             let (outcome, examined) = match rule {
                 Rule::MinWidth { layer, limit } => {
-                    width::facing(store, id, layer, limit, true, true, s, out)
+                    width::facing(store, id, layer, limit, true, s, out)
                 }
                 Rule::MaxWidth { layer, limit } => {
-                    width::facing(store, id, layer, limit, true, false, s, out)
+                    width::max_width(store, id, layer, limit, s, out)
                 }
+                Rule::CutSize {
+                    layer,
+                    width,
+                    height,
+                } => width::cut_size(store, id, layer, width, height, s, out),
                 Rule::Notch { layer, limit } => {
-                    width::facing(store, id, layer, limit, false, true, s, out)
+                    width::facing(store, id, layer, limit, false, s, out)
                 }
                 Rule::MinEdgeLength { layer, limit } => {
                     width::min_edge_length(store, id, layer, limit, s, out)
@@ -497,11 +544,27 @@ impl RuleSet {
                 } => area::cheesing(store, id, layer, max_unslotted, s, out),
                 Rule::Density {
                     layer,
+                    boundary,
                     window,
                     step,
                     limit,
                     sense,
-                } => area::density(store, id, layer, window, step, limit, sense, s, out),
+                } => area::density(
+                    store,
+                    id,
+                    (layer, boundary),
+                    (window, step),
+                    limit,
+                    sense,
+                    s,
+                    out,
+                ),
+                Rule::GlobalDensity {
+                    layer,
+                    boundary,
+                    limit,
+                    sense,
+                } => area::global_density(store, id, (layer, boundary), limit, sense, s, out),
                 Rule::MinEnclosure {
                     outer,
                     inner,
@@ -522,7 +585,7 @@ impl RuleSet {
                     overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
                 }
                 Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, out),
-                Rule::Angle { allowed } => grid::angle(store, id, allowed, out),
+                Rule::Angle { layer, allowed } => grid::angle(store, id, layer, allowed, out),
                 Rule::RedundantVia {
                     layer,
                     min_count,
@@ -555,6 +618,7 @@ impl Rule {
         match *self {
             Rule::MinWidth { layer, .. }
             | Rule::MaxWidth { layer, .. }
+            | Rule::CutSize { layer, .. }
             | Rule::MinEdgeLength { layer, .. }
             | Rule::Notch { layer, .. }
             | Rule::MinSpacing { layer, .. }
@@ -565,10 +629,15 @@ impl Rule {
             | Rule::MinArea { layer, .. }
             | Rule::MinEnclosedArea { layer, .. }
             | Rule::Cheesing { layer, .. }
-            | Rule::Density { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. } => [Some(layer), None],
+            Rule::Density {
+                layer, boundary, ..
+            }
+            | Rule::GlobalDensity {
+                layer, boundary, ..
+            } => [Some(layer), boundary],
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
@@ -585,16 +654,18 @@ impl Rule {
             | Rule::MaxDistanceToTap {
                 well: a, tap: b, ..
             } => [Some(a), Some(b)],
-            Rule::OffGrid { .. } | Rule::Angle { .. } => [None, None],
+            Rule::Angle { layer, .. } => [layer, None],
+            Rule::OffGrid { .. } => [None, None],
         }
     }
 }
 
 /// Every rule kind this crate implements, as the deck spells it. Disjoint from
 /// `crate::erc::ruleset::KINDS`.
-pub const KINDS: [&str; 24] = [
+pub const KINDS: [&str; 26] = [
     "min_width",
     "max_width",
+    "cut_size",
     "min_edge_length",
     "notch",
     "min_spacing",
@@ -607,6 +678,7 @@ pub const KINDS: [&str; 24] = [
     "min_enclosed_area",
     "cheesing",
     "density",
+    "global_density",
     "min_enclosure",
     "asymmetric_enclosure",
     "min_extension",

@@ -46,12 +46,12 @@ rule psdm_min_width width(psdm) >= 380nm
 rule hvtp_min_width width(hvtp) >= 380nm
 rule lvtn_min_width width(lvtn) >= 380nm
 rule rpm_min_width width(rpm) >= 1270nm
-rule licon_max_width width(licon) <= 170nm
-rule mcon_max_width width(mcon) <= 170nm
-rule via1_max_width width(via1) <= 150nm
-rule via2_max_width width(via2) <= 200nm
-rule via3_max_width width(via3) <= 200nm
-rule via4_max_width width(via4) <= 800nm
+rule licon_size size(licon) == 170nm x 170nm
+rule mcon_size size(mcon) == 170nm x 170nm
+rule via1_size size(via1) == 150nm x 150nm
+rule via2_size size(via2) == 200nm x 200nm
+rule via3_size size(via3) == 200nm x 200nm
+rule via4_size size(via4) == 800nm x 800nm
 rule nwell_min_spacing space(nwell) >= 1270nm
 rule diff_min_spacing space(diff) >= 270nm
 rule tap_min_spacing space(tap) >= 270nm
@@ -132,6 +132,16 @@ rule li_covers_licon overlap(li, licon) >= 170nm
 rule li_covers_mcon overlap(li, mcon) >= 170nm
 rule manufacturing_grid off_grid(; pitch: 5nm)
 rule allowed_angles angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+rule x.2_diff angle(diff; allowed: [0deg, 90deg])
+rule x.2_tap angle(tap; allowed: [0deg, 90deg])
+rule x.2_poly angle(poly; allowed: [0deg, 90deg])
+rule x.2_licon angle(licon; allowed: [0deg, 90deg])
+rule x.2_li angle(li; allowed: [0deg, 90deg])
+rule x.2_mcon angle(mcon; allowed: [0deg, 90deg])
+rule x.2_via1 angle(via1; allowed: [0deg, 90deg])
+rule x.2_via2 angle(via2; allowed: [0deg, 90deg])
+rule x.2_via3 angle(via3; allowed: [0deg, 90deg])
+rule x.2_via4 angle(via4; allowed: [0deg, 90deg])
 rule floating_gate floating_gate()
 rule floating_nwell floating_well(nwell, tap)
 rule well_soft_connection soft_connection(diff, tap)

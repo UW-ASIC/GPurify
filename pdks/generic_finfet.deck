@@ -20,6 +20,7 @@ layer psdm = gds(94, 20)
 layer ngate = poly and diff and nsdm
 layer pgate = poly and diff and psdm
 layer diff_active = diff not poly
+layer gate = poly and diff
 
 rule nwell_min_width width(nwell) >= 840nm
 rule diff_min_width width(diff) >= 150nm
@@ -55,7 +56,7 @@ rule via4_min_spacing space(via4) >= 800nm
 rule met5_min_spacing space(met5) >= 1600nm
 rule nsdm_min_spacing space(nsdm) >= 380nm
 rule psdm_min_spacing space(psdm) >= 380nm
-rule licon_max_width width(licon) <= 170nm
+rule licon_size size(licon) == 170nm x 170nm
 rule met5_max_width width(met5) <= 30000nm
 rule met1_min_edge_length edge_length(met1) >= 70nm
 rule met1_notch notch(met1) >= 140nm
@@ -90,15 +91,15 @@ rule allowed_edge_angles angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 rule via1_redundant_via redundant_via(via1; within: 500nm) >= 2
 rule via2_array_spacing via_array_space(via2; array: 4) >= 250nm
 rule met1_multi_patterning patterning(met1; colors: 2) >= 280nm
-rule antenna_poly_etch antenna(poly, poly; max_ratio: 400, sidewall: none)
-rule antenna_li_etch antenna(poly, poly, licon, li; max_ratio: 400, sidewall: none)
-rule antenna_met1_etch antenna(poly, poly, licon, li, mcon, met1; max_ratio: 400, sidewall: none)
-rule antenna_met2_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2; max_ratio: 400, sidewall: none)
-rule antenna_met3_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2, via2, met3; max_ratio: 400, sidewall: none)
-rule antenna_met4_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4; max_ratio: 400, sidewall: none)
-rule antenna_met5_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4, via4, met5; max_ratio: 400, sidewall: none)
-rule antenna_met1_sidewall antenna(poly, met1; max_ratio: 800, sidewall: 360nm)
-rule antenna_electrical_full_net antenna_electrical(poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4, via4, met5; max_ratio: 800, diode: none, diode_credit: 0, diode_bonus: 0)
+rule antenna_poly_etch antenna(gate, poly; max_ratio: 400, sidewall: none)
+rule antenna_li_etch antenna(gate, poly, licon, li; max_ratio: 400, sidewall: none)
+rule antenna_met1_etch antenna(gate, poly, licon, li, mcon, met1; max_ratio: 400, sidewall: none)
+rule antenna_met2_etch antenna(gate, poly, licon, li, mcon, met1, via1, met2; max_ratio: 400, sidewall: none)
+rule antenna_met3_etch antenna(gate, poly, licon, li, mcon, met1, via1, met2, via2, met3; max_ratio: 400, sidewall: none)
+rule antenna_met4_etch antenna(gate, poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4; max_ratio: 400, sidewall: none)
+rule antenna_met5_etch antenna(gate, poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4, via4, met5; max_ratio: 400, sidewall: none)
+rule antenna_met1_sidewall antenna(gate, met1; max_ratio: 800, sidewall: 360nm)
+rule antenna_electrical_full_net antenna_electrical(gate, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4, via4, met5; max_ratio: 800, diode: none, diode_credit: 0, diode_bonus: 0)
 rule met1_density_cmp density_cmp(met1; window: 20000nm x 20000nm, step: 10000nm x 10000nm, min: 0.35, max: 0.7, max_delta: 0.15, partial_windows: true, cmp: (target: 0.5, thickness: 360nm, sensitivity: 120nm, max_delta: 40nm))
 rule em_li electromigration(li, licon; max_density: 280A/m, max_current_per_cut: 80uA, blech_limit: 15000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
 rule em_met1 electromigration(met1, mcon; max_density: 1000A/m, max_current_per_cut: 80uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)

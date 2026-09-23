@@ -136,6 +136,7 @@ fn every_kind() -> RuleSet {
             collector: vec![other],
             collector_measure: vec![antenna::AntennaMeasure::Area],
             max_ratio: vec![50.0],
+            stack: antenna::Stack::default(),
         },
         antenna_electrical: antenna::AntennaElectricalTable {
             head: head(id_of("antenna_electrical")),
@@ -146,6 +147,7 @@ fn every_kind() -> RuleSet {
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
             max_ratio: vec![50.0],
+            stack: antenna::Stack::default(),
         },
         density_cmp: antenna::DensityCmpTable {
             head: head(id_of("density_cmp")),

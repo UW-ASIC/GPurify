@@ -6,13 +6,14 @@
 //! within one merged figure (touching shapes) have no gap and are skipped.
 
 use super::{
-    gap_midpoint, label_pairs_into, pair_distances_into, ring_segs, seg_bbox, Verdict, REFUSED,
+    gap_midpoint, label_pairs_into, pair_distances_into, rects_ring_dist2, ring_segs, seg_bbox,
+    SortedRects, Verdict, REFUSED,
 };
+use crate::drc::rules::width::wide_rects_into;
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
-use gpurify_geom::width::narrowest_width;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
@@ -282,10 +283,11 @@ pub(crate) fn corner_to_corner(
     (Outcome::Ran, examined)
 }
 
-/// Wide-metal spacing. `examined` counts separate pairs with a wide member.
-///
-/// Known imprecision (fails closed): a hole row gets the *layer's* "any wide"
-/// verdict, since `ValidatedLayer` has no hole-to-polygon provenance.
+/// Wide-metal spacing, measured from the wide part of a shape: the region
+/// where a `threshold` square fits in the merged layer (sky130 `huge_met1 =
+/// met1.sized(-1.5).sized(1.5)`), not the whole shape. A plate with a thin tab
+/// is still wide where the plate is. `examined` counts separate pairs where
+/// either polygon has a wide part.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn wide_dependent(
     store: &GeometryStore,
@@ -296,37 +298,60 @@ pub(crate) fn wide_dependent(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    const HOLE: u8 = 2;
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    // One flag per store row; counter-clockwise rows are the validated polygons, in order.
-    let rows = store.polys_on_layer(layer);
-    s.bytes.clear();
-    let mut outers = 0u32;
-    for row in rows.clone() {
-        let (xs, ys) = store.poly_verts(PolyId(row));
-        if matches!(winding_of(xs, ys), Some(Winding::CounterClockwise)) {
-            let drawn = s
-                .validated
-                .get(store, layer)
-                .expect("`prepare` validated it");
-            let width = narrowest_width(drawn.get(outers), &mut s.facing);
-            s.bytes.push(u8::from(width >= threshold));
-            outers += 1;
-        } else {
-            s.bytes.push(HOLE);
+    let drawn = s
+        .validated
+        .get(store, layer)
+        .expect("`prepare` validated it");
+    let mut wide = Vec::new();
+    if wide_rects_into(drawn, threshold, &mut wide).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let polys = &s.rects_a;
+    // Each polygon's wide rectangles, CSR: wide ∩ polygon, rectangle by rectangle.
+    let wide = SortedRects::new(wide.into_iter().map(|r| (r, ())).collect());
+    let (mut parts, mut part_start) = (Vec::new(), vec![0u32]);
+    for poly in 0..u32::try_from(polys.len()).expect("a layer indexes polygons with a u32") {
+        for &r in polys.of(poly) {
+            parts.extend(wide.overlapping(r).map(|(clip, ())| clip));
+        }
+        part_start.push(u32::try_from(parts.len()).expect("a layer's rectangles fit a u32"));
+    }
+    let first_row = store.polys_on_layer(layer).start;
+    let wide_of = |row: PolyId| {
+        let poly = polys.poly_of_row[(row.0 - first_row) as usize] as usize;
+        &parts[part_start[poly] as usize..part_start[poly + 1] as usize]
+    };
+
+    let limit2 = limit.mul_wide(limit).raw();
+    let mut examined = 0u64;
+    for &(a, b) in &s.pairs {
+        // A hole row and its own outer are one polygon, never a spacing pair.
+        let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize];
+        let separate = s.labels[(a.0 - first_row) as usize] != s.labels[(b.0 - first_row) as usize]
+            && poly_of(a) != poly_of(b);
+        let (wide_a, wide_b) = (wide_of(a), wide_of(b));
+        if !separate || (wide_a.is_empty() && wide_b.is_empty()) {
+            continue;
+        }
+        examined += 1;
+        let ring = |row: PolyId| store.poly_verts(row);
+        let (axs, ays) = ring(a);
+        let (bxs, bys) = ring(b);
+        let d2 = rects_ring_dist2(wide_a, bxs, bys).min(rects_ring_dist2(wide_b, axs, ays));
+        if d2 < limit2 {
+            out.push(spacing_violation(
+                store,
+                rule,
+                layer,
+                (a, b),
+                DbuArea::new(d2),
+                limit,
+            ));
         }
     }
-    let any_wide = s.bytes.iter().fold(0, |acc, &flag| acc | (flag & 1));
-    for flag in &mut s.bytes {
-        *flag = if *flag == HOLE { any_wide } else { *flag };
-    }
-
-    let first_row = rows.start;
-    let wide = &s.bytes;
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b| {
-        (wide[(a.0 - first_row) as usize] | wide[(b.0 - first_row) as usize]) != 0
-    });
     (Outcome::Ran, examined)
 }

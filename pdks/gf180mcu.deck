@@ -42,6 +42,7 @@ layer ngate = poly2 and comp and nplus
 layer pgate = poly2 and comp and pplus
 layer natgate = poly2 and comp and nat
 layer comp_active = comp not poly2
+layer gate = poly2 and comp
 
 rule DF.1a width(comp) >= 220nm
 rule PL.1 width(poly2) >= 180nm
@@ -66,12 +67,12 @@ rule DN.1 width(dnwell) >= 1700nm
 rule LPW.1 width(lvpwell) >= 600nm
 rule DV.5 width(dualgate) >= 700nm
 rule DF.2b width(comp) <= 100000nm
-rule CO.1_max_size width(contact) <= 220nm
-rule V1.1_max_size width(via1) <= 260nm
-rule V2.1_max_size width(via2) <= 260nm
-rule V3.1_max_size width(via3) <= 260nm
-rule V4.1_max_size width(via4) <= 260nm
-rule V5.1_max_size width(via5) <= 260nm
+rule CO.1 size(contact) == 220nm x 220nm
+rule V1.1 size(via1) == 260nm x 260nm
+rule V2.1 size(via2) == 260nm x 260nm
+rule V3.1 size(via3) == 260nm x 260nm
+rule V4.1 size(via4) == 260nm x 260nm
+rule V5.1 size(via5) == 260nm x 260nm
 rule DF.3a space(comp) >= 280nm
 rule PL.3a space(poly2) >= 240nm
 rule NP.2 space(nplus) >= 400nm
@@ -124,12 +125,12 @@ rule DF.10 hole_area(comp) >= 255025nm2
 rule NP.8b hole_area(nplus) >= 348100nm2
 rule PP.8b hole_area(pplus) >= 348100nm2
 rule ESD.5b hole_area(esd) >= 490000nm2
-rule M1.4 density(metal1; window: 200000nm, step: 100000nm) >= 0.3
-rule M2.4 density(metal2; window: 200000nm, step: 100000nm) >= 0.3
-rule M3.4 density(metal3; window: 200000nm, step: 100000nm) >= 0.3
-rule M4.4 density(metal4; window: 200000nm, step: 100000nm) >= 0.3
-rule M5.4 density(metal5; window: 200000nm, step: 100000nm) >= 0.3
-rule MT.3 density(metaltop; window: 200000nm, step: 100000nm) >= 0.3
+rule M1.4 global_density(metal1) >= 0.3
+rule M2.4 global_density(metal2) >= 0.3
+rule M3.4 global_density(metal3) >= 0.3
+rule M4.4 global_density(metal4) >= 0.3
+rule M5.4 global_density(metal5) >= 0.3
+rule MT.3 global_density(metaltop) >= 0.3
 rule CO.3 enclosure(contact, poly2) >= 70nm
 rule CO.4 enclosure(contact, comp) >= 70nm
 rule CO.6 enclosure(contact, metal1) >= 5nm
@@ -155,18 +156,18 @@ rule V2.2b via_array_space(via2; array: 15) >= 360nm
 rule V3.2b via_array_space(via3; array: 15) >= 360nm
 rule V4.2b via_array_space(via4; array: 15) >= 360nm
 rule V5.2b via_array_space(via5; array: 15) >= 360nm
-rule ANT.1 antenna(poly2, poly2; max_ratio: 200, sidewall: 200nm)
-rule ANT.2 antenna(poly2, metal1; max_ratio: 400, sidewall: 550nm)
-rule ANT.3 antenna(poly2, metal2; max_ratio: 400, sidewall: 550nm)
-rule ANT.4 antenna(poly2, metal3; max_ratio: 400, sidewall: 550nm)
-rule ANT.5 antenna(poly2, metal4; max_ratio: 400, sidewall: 550nm)
-rule ANT.6 antenna(poly2, metal5; max_ratio: 400, sidewall: 550nm)
-rule ANT.8 antenna(poly2, contact; max_ratio: 10, sidewall: none)
-rule ANT.9 antenna(poly2, via1; max_ratio: 20, sidewall: none)
-rule ANT.10 antenna(poly2, via2; max_ratio: 20, sidewall: none)
-rule ANT.11 antenna(poly2, via3; max_ratio: 20, sidewall: none)
-rule ANT.12 antenna(poly2, via4; max_ratio: 20, sidewall: none)
-rule ANT.13 antenna(poly2, via5; max_ratio: 20, sidewall: none)
+rule ANT.1 antenna(gate, poly2; max_ratio: 200, sidewall: 200nm)
+rule ANT.2 antenna(gate, metal1; max_ratio: 400, sidewall: 550nm)
+rule ANT.3 antenna(gate, metal2; max_ratio: 400, sidewall: 550nm)
+rule ANT.4 antenna(gate, metal3; max_ratio: 400, sidewall: 550nm)
+rule ANT.5 antenna(gate, metal4; max_ratio: 400, sidewall: 550nm)
+rule ANT.6 antenna(gate, metal5; max_ratio: 400, sidewall: 550nm)
+rule ANT.8 antenna(gate, contact; max_ratio: 10, sidewall: none)
+rule ANT.9 antenna(gate, via1; max_ratio: 20, sidewall: none)
+rule ANT.10 antenna(gate, via2; max_ratio: 20, sidewall: none)
+rule ANT.11 antenna(gate, via3; max_ratio: 20, sidewall: none)
+rule ANT.12 antenna(gate, via4; max_ratio: 20, sidewall: none)
+rule ANT.13 antenna(gate, via5; max_ratio: 20, sidewall: none)
 rule EM.poly2 em_current_density(poly2; max_density: 1000A/m, max_current_per_cut: 210uA)
 rule EM.metal1 em_current_density(metal1; max_density: 1000A/m, max_current_per_cut: 210uA)
 rule EM.metal2_metal5 em_current_density(metal2, metal3, metal4, metal5; max_density: 1000A/m, max_current_per_cut: 280uA)

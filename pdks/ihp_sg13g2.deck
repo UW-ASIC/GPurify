@@ -52,6 +52,7 @@ layer isonwell = gds(257, 0)
 layer ngate = gatpoly and activ and nsd
 layer pgate = gatpoly and activ and psd
 layer activ_active = activ not gatpoly
+layer gate = gatpoly and activ
 
 rule activ_min_width width(activ) >= 150nm
 rule gatpoly_min_width width(gatpoly) >= 130nm
@@ -79,13 +80,13 @@ rule extblock_min_width width(extblock) >= 310nm
 rule salblock_min_width width(salblock) >= 420nm
 rule mim_min_width width(mim) >= 1140nm
 rule thickgateox_min_width width(thickgateox) >= 860nm
-rule cont_max_width width(cont) <= 160nm
-rule via1_max_width width(via1) <= 190nm
-rule via2_max_width width(via2) <= 190nm
-rule via3_max_width width(via3) <= 190nm
-rule via4_max_width width(via4) <= 190nm
-rule topvia1_max_width width(topvia1) <= 420nm
-rule topvia2_max_width width(topvia2) <= 900nm
+rule cont_size size(cont) == 160nm x 160nm
+rule via1_size size(via1) == 190nm x 190nm
+rule via2_size size(via2) == 190nm x 190nm
+rule via3_size size(via3) == 190nm x 190nm
+rule via4_size size(via4) == 190nm x 190nm
+rule topvia1_size size(topvia1) == 420nm x 420nm
+rule topvia2_size size(topvia2) == 900nm x 900nm
 rule metal1_max_width_without_slit width(metal1) <= 30000nm
 rule metal2_max_width_without_slit width(metal2) <= 30000nm
 rule metal3_max_width_without_slit width(metal3) <= 30000nm
@@ -186,18 +187,18 @@ rule metal5_endcap_over_via4 enclosure(via4, metal5, opposite) >= 50nm
 rule gatpoly_endcap_over_activ extension(gatpoly, activ) >= 180nm
 rule activ_extension_past_gatpoly extension(activ, gatpoly) >= 230nm
 rule thickgateox_extension_over_activ extension(thickgateox, activ) >= 270nm
-rule activ_min_local_density density(activ; window: 800000nm, step: 400000nm) >= 0.25
-rule activ_max_local_density density(activ; window: 800000nm, step: 400000nm) <= 0.65
-rule metal1_min_local_density density(metal1; window: 800000nm, step: 400000nm) >= 0.25
-rule metal1_max_local_density density(metal1; window: 800000nm, step: 400000nm) <= 0.75
-rule metal2_min_local_density density(metal2; window: 800000nm, step: 400000nm) >= 0.25
-rule metal2_max_local_density density(metal2; window: 800000nm, step: 400000nm) <= 0.75
-rule metal3_min_local_density density(metal3; window: 800000nm, step: 400000nm) >= 0.25
-rule metal3_max_local_density density(metal3; window: 800000nm, step: 400000nm) <= 0.75
-rule metal4_min_local_density density(metal4; window: 800000nm, step: 400000nm) >= 0.25
-rule metal4_max_local_density density(metal4; window: 800000nm, step: 400000nm) <= 0.75
-rule metal5_min_local_density density(metal5; window: 800000nm, step: 400000nm) >= 0.25
-rule metal5_max_local_density density(metal5; window: 800000nm, step: 400000nm) <= 0.75
+rule activ_min_local_density density(activ, prboundary; window: 800000nm, step: 400000nm) >= 0.25
+rule activ_max_local_density density(activ, prboundary; window: 800000nm, step: 400000nm) <= 0.65
+rule metal1_min_local_density density(metal1, prboundary; window: 800000nm, step: 400000nm) >= 0.25
+rule metal1_max_local_density density(metal1, prboundary; window: 800000nm, step: 400000nm) <= 0.75
+rule metal2_min_local_density density(metal2, prboundary; window: 800000nm, step: 400000nm) >= 0.25
+rule metal2_max_local_density density(metal2, prboundary; window: 800000nm, step: 400000nm) <= 0.75
+rule metal3_min_local_density density(metal3, prboundary; window: 800000nm, step: 400000nm) >= 0.25
+rule metal3_max_local_density density(metal3, prboundary; window: 800000nm, step: 400000nm) <= 0.75
+rule metal4_min_local_density density(metal4, prboundary; window: 800000nm, step: 400000nm) >= 0.25
+rule metal4_max_local_density density(metal4, prboundary; window: 800000nm, step: 400000nm) <= 0.75
+rule metal5_min_local_density density(metal5, prboundary; window: 800000nm, step: 400000nm) >= 0.25
+rule metal5_max_local_density density(metal5, prboundary; window: 800000nm, step: 400000nm) <= 0.75
 rule cont_array_space via_array_space(cont; array: 24) >= 200nm
 rule via1_array_space via_array_space(via1; array: 15) >= 290nm
 rule via2_array_space via_array_space(via2; array: 15) >= 290nm
@@ -205,20 +206,20 @@ rule via3_array_space via_array_space(via3; array: 15) >= 290nm
 rule via4_array_space via_array_space(via4; array: 15) >= 290nm
 rule manufacturing_grid off_grid(; pitch: 5nm)
 rule octagonal_geometry angle(; allowed: [0deg, 45deg, 90deg, 135deg])
-rule antenna_cumulative_metal_through_metal1 antenna(gatpoly, metal1; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal2 antenna(gatpoly, metal1, metal2; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal3 antenna(gatpoly, metal1, metal2, metal3; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal4 antenna(gatpoly, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal5 antenna(gatpoly, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_topmetal1 antenna(gatpoly, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_topmetal2 antenna(gatpoly, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_via_through_via1 antenna(gatpoly, via1; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_via2 antenna(gatpoly, via1, via2; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_via3 antenna(gatpoly, via1, via2, via3; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_via4 antenna(gatpoly, via1, via2, via3, via4; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_topvia1 antenna(gatpoly, via1, via2, via3, via4, topvia1; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_topvia2 antenna(gatpoly, via1, via2, via3, via4, topvia1, topvia2; max_ratio: 20, sidewall: none)
-rule antenna_cont antenna(gatpoly, cont; max_ratio: 20, sidewall: none)
+rule antenna_cumulative_metal_through_metal1 antenna(gate, metal1; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_metal_through_metal2 antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_metal_through_metal3 antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_metal_through_metal4 antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_metal_through_metal5 antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_metal_through_topmetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_metal_through_topmetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none)
+rule antenna_cumulative_via_through_via1 antenna(gate, via1; max_ratio: 20, sidewall: none)
+rule antenna_cumulative_via_through_via2 antenna(gate, via1, via2; max_ratio: 20, sidewall: none)
+rule antenna_cumulative_via_through_via3 antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none)
+rule antenna_cumulative_via_through_via4 antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none)
+rule antenna_cumulative_via_through_topvia1 antenna(gate, via1, via2, via3, via4, topvia1; max_ratio: 20, sidewall: none)
+rule antenna_cumulative_via_through_topvia2 antenna(gate, via1, via2, via3, via4, topvia1, topvia2; max_ratio: 20, sidewall: none)
+rule antenna_cont antenna(gate, cont; max_ratio: 20, sidewall: none)
 rule em_metal1_and_cont em_current_density(metal1, cont; max_density: 1000A/m, max_current_per_cut: 300uA)
 rule em_metal2_to_metal5_and_via1_to_via4 em_current_density(metal2, metal3, metal4, metal5, via1, via2, via3, via4; max_density: 2000A/m, max_current_per_cut: 400uA)
 rule em_topmetal1_and_topvia1 em_current_density(topmetal1, topvia1; max_density: 15000A/m, max_current_per_cut: 1400uA)

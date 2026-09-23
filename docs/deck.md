@@ -187,7 +187,8 @@ deck always finishes loading.
 | Check | What it flags |
 |---|---|
 | `width(L) >= len` | A shape narrower than the limit anywhere. |
-| `width(L) <= len` | A shape wider than the limit. |
+| `width(L) <= len` | Any part of a shape wider than the limit in every direction, counting touching shapes as one (a plate with a thin tab is as wide as the plate). |
+| `size(L) == len x len` | A cut that is not exactly that rectangle, either way round. Touching cuts count as one shape, so two abutting squares are a slot. |
 | `edge_length(L) >= len` | An edge shorter than the limit. |
 | `notch(L) >= len` | A gap narrower than the limit between two parts of the same shape. |
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
@@ -195,18 +196,21 @@ deck always finishes loading.
 | `eol_space(L; eol_width: len) >= len` | Space from an end of line (an edge shorter than `eol_width`) below the limit. |
 | `prl_space(L; prl: len) >= len` | Two shapes that run side by side for at least `prl`, closer than the limit. |
 | `corner_space(L) >= len` | Two shapes whose corners are closer than the limit. |
-| `wide_space(L; width: len) >= len` | Space below the limit next to a shape at least `width` wide. |
+| `wide_space(L; width: len) >= len` | Space below the limit from the part of a shape at least `width` wide (where a `width` square fits), as sky130's huge metal. |
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |
 | `cheesing(L) <= area` | A shape larger than the limit with no slot in it. |
-| `density(L; window: len, step: len) >= frac` | A window, swept in steps, with less coverage than the limit. Use `<=` for a maximum. |
-| `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side. |
-| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on the required sides. |
+| `density(L; window: len, step: len) >= frac` | A window, swept in steps across the whole layout, with less coverage than the limit. Use `<=` for a maximum. A window hanging past the edge counts the outside as empty. |
+| `density(L, boundary; window: len, step: len) >= frac` | The same, with the windows tiling the extent of the `boundary` layer (the die outline). |
+| `global_density(L) >= frac` | Coverage of the whole layout below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
+| `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side, measured to the outer shape's real edges, holes included. |
+| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (sky130 m1.5 "two opposite sides"). |
 | `extension(A, B) >= len` | `A` not extending past `B` by the limit, as poly past diffusion. |
 | `overlap(A, B) >= len` | `A` and `B` overlapping by less than the limit. |
-| `tap_distance(well, tap) <= len` | Part of a well further than the limit from a tap. |
+| `tap_distance(well, tap) <= len` | Any point of a well further than the limit from a tap. |
 | `off_grid(; pitch: len)` | A vertex off the manufacturing grid. |
-| `angle(; allowed: [0deg, 90deg])` | An edge at an angle not in the list (multiples of 45°). |
+| `angle(; allowed: [0deg, 90deg])` | An edge at an angle not in the list (multiples of 45°), on any layer. |
+| `angle(L; allowed: [0deg, 90deg])` | The same, on layer `L` only. |
 | `redundant_via(L; within: len) >= count` | A cut with fewer than `count` cuts, itself included, within `within`. |
 | `via_array_space(L; array: count) >= len` | Cuts in a cluster larger than `array`, closer than the limit. |
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |
@@ -237,7 +241,7 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 
 | Check | What it flags |
 |---|---|
-| `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none)` | A gate connected to more collector area than `max_ratio` times its own. |
+| `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none)` | A gate connected to more collector area than `max_ratio` times its own, counting only what is connected when the highest collector is etched. With `sidewall`, collector area is perimeter times that thickness. Name the gate as a derived `poly and diffusion` layer. |
 | `antenna_electrical(gate, collectors…; max_ratio: n, diode: layer \| none, diode_credit: n, diode_bonus: n)` | The cumulative antenna ratio, with credit for protection diodes. |
 | `density_cmp(L; window: len x len, step: len x len, min: frac \| none, max: frac \| none, max_delta: frac \| none, partial_windows: true \| false, cmp: none \| (target: frac, thickness: len, sensitivity: len, max_delta: len))` | Metal density out of range, a jump between neighbouring windows, or a predicted polish thickness out of range. |
 | `electromigration(layers…; max_density: current per width, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: n)` | A wire or cut carrying more current than its rated limit at the operating temperature. Needs `--intent`. |

@@ -59,6 +59,8 @@ pub(crate) struct Scratch {
     /// Per-row flags (wide shapes), per-node colours.
     bytes: Vec<u8>,
     facing: gpurify_geom::width::FacingScratch,
+    rects_a: rules::LayerRects,
+    rects_b: rules::LayerRects,
 }
 
 /// Each layer validated at most once per run, kept until the last rule that

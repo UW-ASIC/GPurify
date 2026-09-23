@@ -209,6 +209,16 @@ pub(crate) const KINDS: &[Kind] = &[
     // DRC.
     drc("width", Cmp::Ge, "min_width", &[0], LIMIT, &[]),
     drc("width", Cmp::Le, "max_width", &[0], LIMIT, &[]),
+    // Exact cut size, `size(licon) == 170nm x 170nm`: every merged figure is
+    // exactly that rectangle, either way round.
+    drc(
+        "size",
+        Cmp::Eq,
+        "cut_size",
+        &[0],
+        Some(p("", "width", Dim::LengthPair("height"))),
+        &[],
+    ),
     drc("edge_length", Cmp::Ge, "min_edge_length", &[0], LIMIT, &[]),
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),
@@ -255,13 +265,41 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "max_unslotted", Dim::Area)),
         &[],
     ),
+    // Windows tile the die: a second layer names the die boundary
+    // (`density(met1, prBoundary; ..)`), else the whole layout's extent.
     Kind {
         fixed: &[("maximum", false)],
+        more: true,
         ..drc("density", Cmp::Ge, "density", &[0], DENSITY_LIMIT, DENSITY)
     },
     Kind {
         fixed: &[("maximum", true)],
+        more: true,
         ..drc("density", Cmp::Le, "density", &[0], DENSITY_LIMIT, DENSITY)
+    },
+    Kind {
+        fixed: &[("maximum", false)],
+        more: true,
+        ..drc(
+            "global_density",
+            Cmp::Ge,
+            "global_density",
+            &[0],
+            DENSITY_LIMIT,
+            &[],
+        )
+    },
+    Kind {
+        fixed: &[("maximum", true)],
+        more: true,
+        ..drc(
+            "global_density",
+            Cmp::Le,
+            "global_density",
+            &[0],
+            DENSITY_LIMIT,
+            &[],
+        )
     },
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),
@@ -299,6 +337,15 @@ pub(crate) const KINDS: &[Kind] = &[
         Cmp::Absent,
         "angle",
         &[],
+        None,
+        &[p("allowed", "angle", Dim::AngleList)],
+    ),
+    // One layer's edges: `angle(diff; allowed: [0deg, 90deg])` (sky130 x.2).
+    drc(
+        "angle",
+        Cmp::Absent,
+        "angle",
+        &[0],
         None,
         &[p("allowed", "angle", Dim::AngleList)],
     ),

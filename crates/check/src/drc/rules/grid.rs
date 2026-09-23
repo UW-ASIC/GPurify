@@ -1,5 +1,5 @@
 //! Grid family: off-grid vertices and disallowed edge angles, over every
-//! polygon in the store, reported at the vertex.
+//! polygon in the store (angles: or one layer's), reported at the vertex.
 //!
 //! Data in: the store's coordinate columns. Data out: one violation per
 //! offending vertex (off-grid) or edge (angle, at the vertex it leaves).
@@ -7,7 +7,7 @@
 use super::{ring_segs, Verdict};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::ops::Point;
-use gpurify_geom::{Dbu, GeometryStore, PolyId};
+use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
 /// Chebyshev distance from `(x, y)` to the nearest `pitch` lattice point; zero
@@ -65,17 +65,22 @@ fn line_bit(dx: i64, dy: i64) -> u8 {
     u8::from(dy == 0) | u8::from(dx == dy) << 1 | u8::from(dx == 0) << 2 | u8::from(dx == -dy) << 3
 }
 
-/// Every non-zero edge must lie along an `allowed` line. Measured as the count
-/// of allowed lines matched (zero) against a limit of one. `examined` counts
-/// non-zero edges.
+/// Every non-zero edge on `layer` (every layer when `None`) must lie along an
+/// `allowed` line. Measured as the count of allowed lines matched (zero)
+/// against a limit of one. `examined` counts non-zero edges.
 pub(crate) fn angle(
     store: &GeometryStore,
     rule: StrId,
+    layer: Option<LayerId>,
     allowed: u8,
     out: &mut Violations,
 ) -> Verdict {
     let mut examined = 0u64;
-    for poly in store_polys(store) {
+    let polys: Box<dyn Iterator<Item = PolyId>> = match layer {
+        Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
+        None => Box::new(store_polys(store)),
+    };
+    for poly in polys {
         let (xs, ys) = store.poly_verts(poly);
         for seg in ring_segs(xs, ys) {
             let (dx, dy) = (seg.b.x.raw() - seg.a.x.raw(), seg.b.y.raw() - seg.a.y.raw());

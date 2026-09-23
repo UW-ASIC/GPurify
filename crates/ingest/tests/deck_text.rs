@@ -150,6 +150,52 @@ fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
         ],
     );
     expect("a.1", "angle", &[], &["angle=#0", "angle=#90", "angle=#45"]);
+    let (deck, strings) = ok("rule x.2 angle(poly; allowed: [0deg, 90deg])\n");
+    assert_eq!(
+        rules(&deck, &strings)[0],
+        (
+            "x.2".to_owned(),
+            "angle".to_owned(),
+            vec!["poly".to_owned()],
+            vec!["angle=#0".to_owned(), "angle=#90".to_owned()],
+        )
+    );
+}
+
+/// gf180 M1.4 "Metal1 minimum density 30 % over the entire die", and a
+/// windowed row whose die is a named boundary layer.
+#[test]
+fn die_density_lowers_with_an_optional_boundary_layer() {
+    let (deck, strings) = ok("rule M1.4 global_density(met1) >= 30%\n\
+         rule M1.k global_density(met1, met3) <= 60%\n\
+         rule M1.j density(met1, met3; window: 800um, step: 400um) >= 35%\n");
+    let got = rules(&deck, &strings);
+    assert_eq!(got[0].1, "global_density");
+    assert_eq!(got[0].2, ["met1"]);
+    assert_eq!(got[0].3, ["limit=0.3", "maximum=false"]);
+    assert_eq!(got[1].2, ["met1", "met3"]);
+    assert_eq!(got[1].3, ["limit=0.6", "maximum=true"]);
+    assert_eq!(got[2].1, "density");
+    assert_eq!(got[2].2, ["met1", "met3"]);
+}
+
+/// sky130 licon.1 "min and max L and W of licon: 0.17": one exact square.
+#[test]
+fn an_exact_cut_size_lowers_to_both_sides() {
+    let (deck, strings) = ok("rule licon.1 size(licon) == 0.17um x 0.17um\n\
+         rule ct.slot size(licon) == 170nm x 510nm\n");
+    let got = rules(&deck, &strings);
+    assert_eq!(
+        got[0],
+        (
+            "licon.1".to_owned(),
+            "cut_size".to_owned(),
+            vec!["licon".to_owned()],
+            vec!["width=170dbu".to_owned(), "height=170dbu".to_owned()],
+        )
+    );
+    assert_eq!(got[1].3, ["width=170dbu", "height=510dbu"]);
+    one_error("rule licon.1 size(licon) >= 170nm x 170nm\n", "==");
 }
 
 #[test]

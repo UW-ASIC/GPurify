@@ -17,6 +17,7 @@ use crate::common;
 use common::{Sink, A, B, RULE};
 use gpurify_check::drc::Rule;
 use gpurify_check::report::{LimitSense, Measurement, Outcome, Severity, SkipReason, Violation};
+use gpurify_geom::LayerId;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::{area, hole, rect, LayoutBuilder};
 use gpurify_testgen::{
@@ -329,6 +330,7 @@ fn density_table(window: i64, step: i64, limit: f64, sense: LimitSense) -> Vec<(
         RULE,
         Rule::Density {
             layer: A,
+            boundary: None,
             window: dbu(window),
             step: dbu(step),
             limit,
@@ -443,14 +445,56 @@ fn the_minimum_sense_flags_the_sparse_windows_the_maximum_sense_ignores() {
     );
 }
 
-/// Oracle: construct-from-answer, fail closed. A density fraction over an empty
-/// extent has no denominator, so the rule refuses to answer rather than
-/// answering zero — and `Skipped` is a different claim from `Ran` with nothing
-/// found, which is the whole reason `Outcome` is not a boolean.
+/// An empty layer on a non-empty die has density zero everywhere: a maximum
+/// rule runs clean over every window and a minimum rule flags every one. Only
+/// an empty layout, with no die at all, is `Skipped`.
 #[test]
-fn density_over_a_layer_with_no_geometry_is_skipped_not_clean() {
+fn an_empty_layer_has_density_zero_over_the_die() {
     let mut layout = LayoutBuilder::new(2);
-    layout.rect(A, 0, 0, 100, 100);
+    layout.rect(A, 0, 0, 2_000, 1_000);
+    let (store, _ids) = layout.finish();
+    let on_b = |sense| {
+        vec![(
+            RULE,
+            Rule::Density {
+                layer: B,
+                boundary: None,
+                window: dbu(1_000),
+                step: dbu(1_000),
+                limit: 0.2,
+                sense,
+            },
+        )]
+    };
+
+    let mut sink = Sink::default();
+    sink.run(&store, &on_b(LimitSense::Maximum));
+    assert_clean(&sink.runs, &sink.out, RULE);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
+
+    sink.run(&store, &on_b(LimitSense::Minimum));
+    assert_eq!(sink.out.len(), 2);
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.0));
+
+    let (empty, _) = LayoutBuilder::new(2).finish();
+    sink.run(&empty, &on_b(LimitSense::Minimum));
+    assert_eq!(
+        sink.runs[0].outcome,
+        Outcome::Skipped(SkipReason::EmptyLayer)
+    );
+    assert!(sink.out.rule.is_empty());
+}
+
+/// IHP M1.j / gf180 M1.4 tile the chip boundary (`tile_boundary = chip`), not
+/// the metal's own extent. Metal filling the left half of a 4 x 2 um die at
+/// 100 % passes a 30 % minimum when only its own extent is windowed; the empty
+/// right half of the die fails it.
+#[test]
+fn ihp_m1_j_density_windows_tile_the_die_not_the_layer() {
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 2_000, 2_000);
+    // The die boundary.
+    layout.rect(B, 0, 0, 4_000, 2_000);
     let (store, _ids) = layout.finish();
 
     let mut sink = Sink::default();
@@ -459,19 +503,49 @@ fn density_over_a_layer_with_no_geometry_is_skipped_not_clean() {
         &[(
             RULE,
             Rule::Density {
-                layer: B,
-                window: dbu(1_000),
-                step: dbu(500),
-                limit: 0.2,
-                sense: LimitSense::Maximum,
+                layer: A,
+                boundary: Some(B),
+                window: dbu(2_000),
+                step: dbu(2_000),
+                limit: 0.3,
+                sense: LimitSense::Minimum,
             },
         )],
     );
 
-    assert_eq!(sink.runs.len(), 1);
-    assert_eq!(
-        sink.runs[0].outcome,
-        Outcome::Skipped(SkipReason::EmptyLayer)
-    );
-    assert!(sink.out.rule.is_empty());
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.at[0], point(3_000, 1_000));
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.0));
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
+}
+
+/// gf180 M1.4: "Metal1 minimum density 30 % over the entire die". A die
+/// 20 % covered fails; the same metal on a die half the size (40 %) passes.
+#[test]
+fn gf180_m1_4_whole_die_density() {
+    let rule = |boundary| {
+        vec![(
+            RULE,
+            Rule::GlobalDensity {
+                layer: A,
+                boundary: Some(boundary),
+                limit: 0.3,
+                sense: LimitSense::Minimum,
+            },
+        )]
+    };
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(A, 0, 0, 2_000, 1_000);
+    layout.rect(B, 0, 0, 10_000, 1_000);
+    layout.rect(LayerId(2), 0, 0, 5_000, 1_000);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &rule(B));
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.2));
+    assert_eq!(sink.out.at[0], point(5_000, 500));
+
+    sink.run(&store, &rule(LayerId(2)));
+    assert_clean(&sink.runs, &sink.out, RULE);
 }
