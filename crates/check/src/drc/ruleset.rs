@@ -14,9 +14,16 @@ pub enum Rule {
         layer: LayerId,
         limit: Dbu,
     },
+    /// Wider than `limit` anywhere a `limit + 1` square fits.
     MaxWidth {
         layer: LayerId,
         limit: Dbu,
+    },
+    /// Every merged figure is a `width` x `height` rectangle, either way round.
+    CutSize {
+        layer: LayerId,
+        width: Dbu,
+        height: Dbu,
     },
     MinEdgeLength {
         layer: LayerId,
@@ -241,6 +248,11 @@ impl RuleSet {
                     layer: one(spec)?,
                     limit: length(spec, "limit")?,
                 },
+                "cut_size" => Rule::CutSize {
+                    layer: one(spec)?,
+                    width: length(spec, "width")?,
+                    height: length(spec, "height")?,
+                },
                 "min_edge_length" => Rule::MinEdgeLength {
                     layer: one(spec)?,
                     limit: length(spec, "limit")?,
@@ -452,13 +464,18 @@ impl RuleSet {
             let before = out.len();
             let (outcome, examined) = match rule {
                 Rule::MinWidth { layer, limit } => {
-                    width::facing(store, id, layer, limit, true, true, s, out)
+                    width::facing(store, id, layer, limit, true, s, out)
                 }
                 Rule::MaxWidth { layer, limit } => {
-                    width::facing(store, id, layer, limit, true, false, s, out)
+                    width::max_width(store, id, layer, limit, s, out)
                 }
+                Rule::CutSize {
+                    layer,
+                    width,
+                    height,
+                } => width::cut_size(store, id, layer, width, height, s, out),
                 Rule::Notch { layer, limit } => {
-                    width::facing(store, id, layer, limit, false, true, s, out)
+                    width::facing(store, id, layer, limit, false, s, out)
                 }
                 Rule::MinEdgeLength { layer, limit } => {
                     width::min_edge_length(store, id, layer, limit, s, out)
@@ -555,6 +572,7 @@ impl Rule {
         match *self {
             Rule::MinWidth { layer, .. }
             | Rule::MaxWidth { layer, .. }
+            | Rule::CutSize { layer, .. }
             | Rule::MinEdgeLength { layer, .. }
             | Rule::Notch { layer, .. }
             | Rule::MinSpacing { layer, .. }
@@ -592,9 +610,10 @@ impl Rule {
 
 /// Every rule kind this crate implements, as the deck spells it. Disjoint from
 /// `crate::erc::ruleset::KINDS`.
-pub const KINDS: [&str; 24] = [
+pub const KINDS: [&str; 25] = [
     "min_width",
     "max_width",
+    "cut_size",
     "min_edge_length",
     "notch",
     "min_spacing",

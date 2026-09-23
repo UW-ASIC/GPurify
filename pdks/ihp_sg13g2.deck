@@ -79,13 +79,13 @@ rule extblock_min_width width(extblock) >= 310nm
 rule salblock_min_width width(salblock) >= 420nm
 rule mim_min_width width(mim) >= 1140nm
 rule thickgateox_min_width width(thickgateox) >= 860nm
-rule cont_max_width width(cont) <= 160nm
-rule via1_max_width width(via1) <= 190nm
-rule via2_max_width width(via2) <= 190nm
-rule via3_max_width width(via3) <= 190nm
-rule via4_max_width width(via4) <= 190nm
-rule topvia1_max_width width(topvia1) <= 420nm
-rule topvia2_max_width width(topvia2) <= 900nm
+rule cont_size size(cont) == 160nm x 160nm
+rule via1_size size(via1) == 190nm x 190nm
+rule via2_size size(via2) == 190nm x 190nm
+rule via3_size size(via3) == 190nm x 190nm
+rule via4_size size(via4) == 190nm x 190nm
+rule topvia1_size size(topvia1) == 420nm x 420nm
+rule topvia2_size size(topvia2) == 900nm x 900nm
 rule metal1_max_width_without_slit width(metal1) <= 30000nm
 rule metal2_max_width_without_slit width(metal2) <= 30000nm
 rule metal3_max_width_without_slit width(metal3) <= 30000nm

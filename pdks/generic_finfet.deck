@@ -55,7 +55,7 @@ rule via4_min_spacing space(via4) >= 800nm
 rule met5_min_spacing space(met5) >= 1600nm
 rule nsdm_min_spacing space(nsdm) >= 380nm
 rule psdm_min_spacing space(psdm) >= 380nm
-rule licon_max_width width(licon) <= 170nm
+rule licon_size size(licon) == 170nm x 170nm
 rule met5_max_width width(met5) <= 30000nm
 rule met1_min_edge_length edge_length(met1) >= 70nm
 rule met1_notch notch(met1) >= 140nm

@@ -151,6 +151,25 @@ fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
     expect("a.1", "angle", &[], &["angle=#0", "angle=#90", "angle=#45"]);
 }
 
+/// sky130 licon.1 "min and max L and W of licon: 0.17": one exact square.
+#[test]
+fn an_exact_cut_size_lowers_to_both_sides() {
+    let (deck, strings) = ok("rule licon.1 size(licon) == 0.17um x 0.17um\n\
+         rule ct.slot size(licon) == 170nm x 510nm\n");
+    let got = rules(&deck, &strings);
+    assert_eq!(
+        got[0],
+        (
+            "licon.1".to_owned(),
+            "cut_size".to_owned(),
+            vec!["licon".to_owned()],
+            vec!["width=170dbu".to_owned(), "height=170dbu".to_owned()],
+        )
+    );
+    assert_eq!(got[1].3, ["width=170dbu", "height=510dbu"]);
+    one_error("rule licon.1 size(licon) >= 170nm x 170nm\n", "==");
+}
+
 #[test]
 fn erc_named_arguments_convert_to_engine_units_and_none_leaves_a_param_out() {
     let (deck, strings) = ok("rule em.li warning electromigration(li, licon,

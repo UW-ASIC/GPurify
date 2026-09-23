@@ -1,4 +1,4 @@
-//! The twenty-four rule kinds, one function per kind, grouped by what they measure.
+//! The twenty-five rule kinds, one function per kind, grouped by what they measure.
 //!
 //! Data in: one rule row's parameters, the store and a `Scratch`.
 //! Data out: violations appended to `out`, and the row's [`Verdict`].
@@ -84,10 +84,56 @@ impl LayerRects {
         self.row.len()
     }
 
+    /// Every rectangle labelled with its polygon's outer row.
+    pub(crate) fn labelled(&self) -> Vec<(Bbox, PolyId)> {
+        (0..self.len())
+            .flat_map(|poly| {
+                let row = self.row[poly];
+                self.of(u32::try_from(poly).expect("a layer indexes polygons with a u32"))
+                    .iter()
+                    .map(move |&r| (r, row))
+            })
+            .collect()
+    }
+
     /// Polygon `poly`'s rectangles.
     pub(crate) fn of(&self, poly: u32) -> &[Bbox] {
         let i = poly as usize;
         &self.rects[self.start[i] as usize..self.start[i + 1] as usize]
+    }
+}
+
+/// Labelled rectangles sorted by `xlo`, for "which of these overlap that" with
+/// positive area.
+pub(crate) struct SortedRects<T> {
+    by_xlo: Vec<(Bbox, T)>,
+    /// The widest rectangle: how far left of a query a hit can start.
+    reach: i64,
+}
+
+impl<T: Copy> SortedRects<T> {
+    pub(crate) fn new(mut by_xlo: Vec<(Bbox, T)>) -> Self {
+        by_xlo.sort_unstable_by_key(|&(r, _)| r.xlo);
+        let reach = by_xlo
+            .iter()
+            .map(|(r, _)| (r.xhi - r.xlo).raw())
+            .max()
+            .unwrap_or(0);
+        Self { by_xlo, reach }
+    }
+
+    /// Each rectangle overlapping `q` with positive area, clipped to `q`.
+    pub(crate) fn overlapping(&self, q: Bbox) -> impl Iterator<Item = (Bbox, T)> + '_ {
+        let lo = self
+            .by_xlo
+            .partition_point(|(r, _)| r.xlo.raw() < q.xlo.raw() - self.reach);
+        let hi = self.by_xlo.partition_point(|(r, _)| r.xlo < q.xhi);
+        self.by_xlo[lo..hi.max(lo)]
+            .iter()
+            .filter_map(move |&(r, label)| {
+                let c = r.intersection(q)?;
+                (c.xlo < c.xhi && c.ylo < c.yhi).then_some((c, label))
+            })
     }
 }
 

@@ -7,7 +7,7 @@
 
 use super::{
     gap_midpoint, label_pairs_into, pair_distances_into, rects_ring_dist2, ring_segs, seg_bbox,
-    Verdict, REFUSED,
+    SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
 use crate::drc::Scratch;
@@ -312,23 +312,11 @@ pub(crate) fn wide_dependent(
     s.rects_a.build(store, layer, drawn);
     let polys = &s.rects_a;
     // Each polygon's wide rectangles, CSR: wide ∩ polygon, rectangle by rectangle.
-    wide.sort_unstable_by_key(|r| r.xlo);
-    let reach = wide
-        .iter()
-        .map(|r| (r.xhi - r.xlo).raw())
-        .max()
-        .unwrap_or(0);
+    let wide = SortedRects::new(wide.into_iter().map(|r| (r, ())).collect());
     let (mut parts, mut part_start) = (Vec::new(), vec![0u32]);
     for poly in 0..u32::try_from(polys.len()).expect("a layer indexes polygons with a u32") {
         for &r in polys.of(poly) {
-            let lo = wide.partition_point(|w| w.xlo.raw() < r.xlo.raw() - reach);
-            let hi = wide.partition_point(|w| w.xlo < r.xhi);
-            parts.extend(
-                wide[lo..hi]
-                    .iter()
-                    .filter_map(|&w| w.intersection(r))
-                    .filter(|c| c.xlo < c.xhi && c.ylo < c.yhi),
-            );
+            parts.extend(wide.overlapping(r).map(|(clip, ())| clip));
         }
         part_start.push(u32::try_from(parts.len()).expect("a layer's rectangles fit a u32"));
     }

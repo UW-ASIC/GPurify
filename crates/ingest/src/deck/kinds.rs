@@ -207,6 +207,16 @@ pub(crate) const KINDS: &[Kind] = &[
     // DRC.
     drc("width", Cmp::Ge, "min_width", &[0], LIMIT, &[]),
     drc("width", Cmp::Le, "max_width", &[0], LIMIT, &[]),
+    // Exact cut size, `size(licon) == 170nm x 170nm`: every merged figure is
+    // exactly that rectangle, either way round.
+    drc(
+        "size",
+        Cmp::Eq,
+        "cut_size",
+        &[0],
+        Some(p("", "width", Dim::LengthPair("height"))),
+        &[],
+    ),
     drc("edge_length", Cmp::Ge, "min_edge_length", &[0], LIMIT, &[]),
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),

@@ -4,7 +4,7 @@
 //! Data in: one validated rectilinear layer. Data out: one violation per offending
 //! polygon (per edge for min edge length). Exact on the whole input domain.
 
-use super::{mid, ring_segs, Verdict, REFUSED};
+use super::{mid, ring_segs, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
@@ -12,7 +12,7 @@ use gpurify_geom::ops::{Point, Winding};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::{Bbox, Dbu, MAX_ABS_DBU};
+use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId, PolyId, PolygonRef};
 use gpurify_ingest::StrId;
 
@@ -244,19 +244,17 @@ fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
     }
 }
 
-/// Min width, max width (`violated_below == false`) and notch
-/// (`material_between == false`). One violation per offending figure.
+/// Min width and notch (`material_between == false`). One violation per
+/// offending figure.
 ///
 /// A notch is measured on the self-merged layer (touching rectangles are one U);
 /// a width on the rows as drawn. `examined` is the pre-merge polygon count.
-#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
     layer: LayerId,
     limit: Dbu,
     material_between: bool,
-    violated_below: bool,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
@@ -279,12 +277,7 @@ pub(crate) fn facing(
         let Some((measured, at)) = narrowest_facing(poly, material_between, &mut s.facing) else {
             continue;
         };
-        let violated = if violated_below {
-            measured < limit
-        } else {
-            measured > limit
-        };
-        if violated {
+        if measured < limit {
             out.push(Violation {
                 rule,
                 layer,
@@ -297,6 +290,121 @@ pub(crate) fn facing(
         }
     }
     (Outcome::Ran, polys)
+}
+
+/// Max width: one violation per region of the merged layer where a `limit + 1`
+/// square fits, so a plate with a thin tab is as wide as the plate and two
+/// abutting rectangles are as wide as their union. Reported at the region's
+/// narrowest facing pair, on the lowest drawn row under it. `examined` counts
+/// drawn polygons.
+pub(crate) fn max_width(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    let polys = drawn.len() as u64;
+    let mut wide = Vec::new();
+    if wide_rects_into(drawn, limit + Dbu::new_unchecked(1), &mut wide).is_err() {
+        return REFUSED;
+    }
+    if wide.is_empty() {
+        return (Outcome::Ran, polys);
+    }
+    s.rects_a.build(store, layer, drawn);
+    let merged = rects_layer(&wide)
+        .and_then(|regions| union_into(&regions, &ValidatedLayer::default(), &mut s.layer_out));
+    if merged.is_err() {
+        return REFUSED;
+    }
+    let owners = SortedRects::new(s.rects_a.labelled());
+    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    for idx in 0..u32::try_from(s.layer_out.len()).expect("a layer indexes polygons with a u32") {
+        let poly = s.layer_out.get(idx);
+        let (measured, at) = narrowest_facing(poly, true, &mut s.facing)
+            .expect("every validated polygon has a facing pair across its own material");
+        let i = idx as usize;
+        let owner = s.rects[s.rect_start[i] as usize..s.rect_start[i + 1] as usize]
+            .iter()
+            .flat_map(|&r| owners.overlapping(r))
+            .map(|(_, row)| row)
+            .min()
+            .expect("a wide region lies on drawn material");
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at,
+            measured: Measurement::Length(measured),
+            limit: Measurement::Length(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, polys)
+}
+
+/// Exact cut size: every merged figure must be a `width` x `height` rectangle,
+/// either way round (sky130 licon.1 "min and max L and W", IHP Cnt.a). A wrong
+/// side reports that side against its target; a non-rectangle with the right
+/// box reports its area against `width * height`. `examined` counts figures.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn cut_size(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    width: Dbu,
+    height: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    let (short, long) = (width.min(height), width.max(height));
+    let figures = &s.layer_out;
+    for idx in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
+        let poly = figures.get(idx);
+        let b = poly.bbox();
+        let (bs, bl) = (b.width().min(b.height()), b.width().max(b.height()));
+        let rectangle = poly.outer().coords().0.len() == 4 && poly.holes().next().is_none();
+        let (measured, limit) = if bs != short {
+            (Measurement::Length(bs), Measurement::Length(short))
+        } else if bl != long {
+            (Measurement::Length(bl), Measurement::Length(long))
+        } else if !rectangle {
+            let area = std::iter::once(poly.outer())
+                .chain(poly.holes())
+                .fold(0i128, |sum, ring| sum + ring.area2().raw())
+                / 2;
+            (
+                Measurement::Area(DbuArea::new(area)),
+                Measurement::Area(short.mul_wide(long)),
+            )
+        } else {
+            continue;
+        };
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: Point {
+                x: mid(b.xlo, b.xhi),
+                y: mid(b.ylo, b.yhi),
+            },
+            measured,
+            limit,
+            shapes: (poly.provenance(), None),
+        });
+    }
+    (Outcome::Ran, figures.len() as u64)
 }
 
 /// One violation per edge shorter than `limit`, at its midpoint. `examined`

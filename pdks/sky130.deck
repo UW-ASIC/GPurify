@@ -46,12 +46,12 @@ rule psdm_min_width width(psdm) >= 380nm
 rule hvtp_min_width width(hvtp) >= 380nm
 rule lvtn_min_width width(lvtn) >= 380nm
 rule rpm_min_width width(rpm) >= 1270nm
-rule licon_max_width width(licon) <= 170nm
-rule mcon_max_width width(mcon) <= 170nm
-rule via1_max_width width(via1) <= 150nm
-rule via2_max_width width(via2) <= 200nm
-rule via3_max_width width(via3) <= 200nm
-rule via4_max_width width(via4) <= 800nm
+rule licon_size size(licon) == 170nm x 170nm
+rule mcon_size size(mcon) == 170nm x 170nm
+rule via1_size size(via1) == 150nm x 150nm
+rule via2_size size(via2) == 200nm x 200nm
+rule via3_size size(via3) == 200nm x 200nm
+rule via4_size size(via4) == 800nm x 800nm
 rule nwell_min_spacing space(nwell) >= 1270nm
 rule diff_min_spacing space(diff) >= 270nm
 rule tap_min_spacing space(tap) >= 270nm

@@ -66,12 +66,12 @@ rule DN.1 width(dnwell) >= 1700nm
 rule LPW.1 width(lvpwell) >= 600nm
 rule DV.5 width(dualgate) >= 700nm
 rule DF.2b width(comp) <= 100000nm
-rule CO.1_max_size width(contact) <= 220nm
-rule V1.1_max_size width(via1) <= 260nm
-rule V2.1_max_size width(via2) <= 260nm
-rule V3.1_max_size width(via3) <= 260nm
-rule V4.1_max_size width(via4) <= 260nm
-rule V5.1_max_size width(via5) <= 260nm
+rule CO.1 size(contact) == 220nm x 220nm
+rule V1.1 size(via1) == 260nm x 260nm
+rule V2.1 size(via2) == 260nm x 260nm
+rule V3.1 size(via3) == 260nm x 260nm
+rule V4.1 size(via4) == 260nm x 260nm
+rule V5.1 size(via5) == 260nm x 260nm
 rule DF.3a space(comp) >= 280nm
 rule PL.3a space(poly2) >= 240nm
 rule NP.2 space(nplus) >= 400nm
