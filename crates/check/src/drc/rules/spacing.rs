@@ -13,7 +13,6 @@ use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
-use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
@@ -49,13 +48,13 @@ fn spacing_violation(
 /// Validate, index, prune at `limit`, measure every candidate pair, and label
 /// the layer's merged figures (pairs at distance zero). `false` is `Refused`.
 fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
-    if validate_layer_into(store, layer, &mut s.layer_a).is_err() {
+    if s.validated.get(store, layer).is_none() {
         return false;
     }
     let rows = store.polys_on_layer(layer);
     SpatialIndex::build_into(store, layer, &mut s.index_a);
     candidate_pairs_into(store, &s.index_a, limit, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, &mut s.dists);
+    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
     label_pairs_into(
         rows.start,
         rows.end - rows.start,
@@ -123,15 +122,13 @@ pub(crate) fn min_spacing_diff(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if validate_layer_into(store, a_layer, &mut s.layer_a).is_err()
-        || validate_layer_into(store, b_layer, &mut s.layer_b).is_err()
-    {
+    if s.validated.get(store, a_layer).is_none() || s.validated.get(store, b_layer).is_none() {
         return REFUSED;
     }
     SpatialIndex::build_into(store, a_layer, &mut s.index_a);
     SpatialIndex::build_into(store, b_layer, &mut s.index_b);
     cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, &mut s.dists);
+    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
     let limit2 = limit.mul_wide(limit);
     for (&pair, &d2) in s.pairs.iter().zip(&s.dists) {
         if d2 < limit2 {
@@ -299,18 +296,22 @@ pub(crate) fn wide_dependent(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
+    const HOLE: u8 = 2;
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
     // One flag per store row; counter-clockwise rows are the validated polygons, in order.
-    const HOLE: u8 = 2;
     let rows = store.polys_on_layer(layer);
     s.bytes.clear();
     let mut outers = 0u32;
     for row in rows.clone() {
         let (xs, ys) = store.poly_verts(PolyId(row));
         if matches!(winding_of(xs, ys), Some(Winding::CounterClockwise)) {
-            let width = narrowest_width(s.layer_a.get(outers), &mut s.facing);
+            let drawn = s
+                .validated
+                .get(store, layer)
+                .expect("`prepare` validated it");
+            let width = narrowest_width(drawn.get(outers), &mut s.facing);
             s.bytes.push(u8::from(width >= threshold));
             outers += 1;
         } else {

@@ -13,7 +13,6 @@ use crate::report::{
 };
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
-use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
@@ -133,9 +132,7 @@ fn pair_layers(
     distance: Dbu,
     s: &mut Scratch,
 ) -> bool {
-    if validate_layer_into(store, a, &mut s.layer_a).is_err()
-        || validate_layer_into(store, b, &mut s.layer_b).is_err()
-    {
+    if s.validated.get(store, a).is_none() || s.validated.get(store, b).is_none() {
         return false;
     }
     SpatialIndex::build_into(store, a, &mut s.index_a);

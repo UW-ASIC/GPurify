@@ -431,7 +431,17 @@ impl RuleSet {
         *out = Violations::default();
         runs.clear();
         let s = &mut Scratch::default();
-        for &(id, rule) in &self.rules {
+        // The last rule reading each layer; its validation is dropped after that rule.
+        let mut last_use: Vec<usize> = Vec::new();
+        for (at, (_, rule)) in self.rules.iter().enumerate() {
+            for layer in rule.layers().into_iter().flatten() {
+                if last_use.len() <= layer.idx() {
+                    last_use.resize(layer.idx() + 1, 0);
+                }
+                last_use[layer.idx()] = at;
+            }
+        }
+        for (at, &(id, rule)) in self.rules.iter().enumerate() {
             let before = out.len();
             let (outcome, examined) = match rule {
                 Rule::MinWidth { layer, limit } => {
@@ -523,6 +533,52 @@ impl RuleSet {
                 } => patterning::multi_patterning(store, id, layer, colors, color_spacing, s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
+            for layer in rule.layers().into_iter().flatten() {
+                if last_use[layer.idx()] == at {
+                    s.validated.forget(layer);
+                }
+            }
+        }
+    }
+}
+
+impl Rule {
+    /// Every layer the rule reads.
+    fn layers(&self) -> [Option<LayerId>; 2] {
+        match *self {
+            Rule::MinWidth { layer, .. }
+            | Rule::MaxWidth { layer, .. }
+            | Rule::MinEdgeLength { layer, .. }
+            | Rule::Notch { layer, .. }
+            | Rule::MinSpacing { layer, .. }
+            | Rule::EolSpacing { layer, .. }
+            | Rule::PrlSpacing { layer, .. }
+            | Rule::CornerToCorner { layer, .. }
+            | Rule::WideDependentSpacing { layer, .. }
+            | Rule::MinArea { layer, .. }
+            | Rule::MinEnclosedArea { layer, .. }
+            | Rule::Cheesing { layer, .. }
+            | Rule::Density { layer, .. }
+            | Rule::RedundantVia { layer, .. }
+            | Rule::ViaArraySpacing { layer, .. }
+            | Rule::MultiPatterning { layer, .. } => [Some(layer), None],
+            Rule::MinSpacingDiff { a, b, .. }
+            | Rule::Overlap { a, b, .. }
+            | Rule::MinEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::AsymmetricEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::MinExtension {
+                layer: a,
+                reference: b,
+                ..
+            }
+            | Rule::MaxDistanceToTap {
+                well: a, tap: b, ..
+            } => [Some(a), Some(b)],
+            Rule::OffGrid { .. } | Rule::Angle { .. } => [None, None],
         }
     }
 }

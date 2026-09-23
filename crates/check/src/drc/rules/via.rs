@@ -15,7 +15,7 @@ use gpurify_ingest::StrId;
 fn measured_pairs(store: &GeometryStore, layer: LayerId, radius: Dbu, s: &mut Scratch) {
     SpatialIndex::build_into(store, layer, &mut s.index_a);
     candidate_pairs_into(store, &s.index_a, radius, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, &mut s.dists);
+    pair_distances_into(store, &s.pairs, radius, &mut s.dists);
 }
 
 /// Every cut needs `min_count` cuts (itself included) within `within`, nearest
