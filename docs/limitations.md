@@ -19,7 +19,6 @@ result from them is weaker than it looks.
 | `enclosure(inner, outer, opposite)` | An inner shape that is not a rectangle is held to the every-side limit instead. |
 | `extension`, `overlap` | Measure bounding boxes, so an L-shaped shape can pass. |
 | `wide_space` | Does not also hold shapes attached to the wide part (sky130 m1.3b "within 0.28 µm of huge metal") to the wide spacing. |
-| `tap_distance`, `missing_tie` | A point inside a wide tap is measured to the tap's edge, which can over-report by up to half the tap's width. |
 | `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
 | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
