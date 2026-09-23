@@ -377,16 +377,16 @@ pex M9 thickness 80nm height 824nm sheet 0.355822ohm dielectric 0 area_cap 0aF/u
 #   WELL.GATE.EX.2 vertical, GATE not interacting SRAMDRC, >= 7nm
 #     (a gate crosses the well edge, so a two-axis extension would flag every cell)
 #
-# needs: forbidden (any overlap, or any shape at all, is an error)
-#   rule GCUT.AUX.1 forbidden(GCUT.not_interacting(GATE))
-#   rule NSELECT.PSELECT.AUX.1 forbidden(NSELECT and PSELECT)
-#   rule VT.AUX.2 forbidden((SLVT and LVT) or (SLVT and SRAMVT) or (LVT and SRAMVT))
-#   rule SDT.ACTIVE.AUX.3 forbidden(SDT.outside(ACTIVE))
-#   rule SDT.LISD.AUX.4 forbidden(SDT not LISD)   (an enclosure limit must be positive)
-#   rule SRAM.ACTIVE.AUX.2 forbidden(ACTIVE.outside(SRAMDRC).interacting(SRAMDRC))
-#     (as written this is empty: "outside and touching" is the intent)
+# Presence rules.
+rule GCUT.AUX.1 forbidden(GCUT.not_interacting(GATE))
+rule NSELECT.PSELECT.AUX.1 forbidden(NSELECT and PSELECT)
+rule VT.AUX.2 forbidden((SLVT and LVT) or (SLVT and SRAMVT) or (LVT and SRAMVT))
+rule SDT.ACTIVE.AUX.3 forbidden(SDT.outside(ACTIVE))
+rule SDT.LISD.AUX.4 inside(SDT, LISD)
+# ACTIVE outside SRAMDRC that touches it.
+rule SRAM.ACTIVE.AUX.2 forbidden(ACTIVE.outside(SRAMDRC).interacting(SRAMDRC))
 #
-# needs: same/diff-net spacing
+# needs: net spacing that is directional (S.2A) or between two layers:
 #   rule ACTIVE.S.2A space(ACTIVE; different_net) >= 92nm   (horizontal only)
 #   rule LIG.LISD.S.6 space(LIG, LISD; different_net) >= 14nm
 #   rule LIG.LISD.S.7 corner_space(LIG, LISD; different_net) >= 15nm

@@ -584,40 +584,43 @@ pex metal5 thickness 550nm height 5830nm sheet 0.09ohm dielectric 4 area_cap 5.7
 pex via5_nomim thickness 900nm height 6380nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
 pex metaltop_con thickness 1002.5nm height 7280nm sheet 0.04ohm dielectric 4 area_cap 4.8793aF/um2 fringe_cap 9.595aF/um
 
+# --- Presence rules ---
+rule LPW.12 forbidden(lvpwell and nwell)
+rule NW.4 forbidden(nwell and lvpwell)
+rule NW.6 forbidden(nwell_res.interacting(dnwell))
+rule DV.7 forbidden(comp_dv not dualgate)
+rule PL.9 forbidden((poly2 and dualgate).interacting(poly2 not dualgate))
+rule PL.11 forbidden(v5_xtor.not_interacting(dualgate))
+rule PL.12 forbidden(comp.interacting(v5_xtor) not v5_xtor)
+rule SB.8 forbidden(contact.inside(sab))
+rule ESD.3b forbidden(esd and pcomp)
+rule ESD.7 forbidden(esd and pcomp)
+rule ESD.9 inside(esd, dualgate)
+rule CO.10 forbidden(contact and gate)
+rule CO.11 forbidden(contact not (comp or poly2))
+rule MIMTM.10 forbidden(via4.interacting(metal5_mim))
+rule NAT.10 forbidden(nwell.inside(nat))
+rule NAT.11 forbidden((ncomp and nat).outside(poly2))
+rule NAT.12 forbidden(poly2.interacting(nat).not_interacting(comp and nat))
+rule V1.3a inside(via1, metal1)
+rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
+
 # --- Rules that need a check kind the language does not have yet ---
-# needs: same/diff-net spacing
-#   rule DN.2b space(dnwell; different_net) >= 5.42um
-#   rule LPW.2a_3.3V space(lvpwell; different_net) >= 1.4um
-#   rule LPW.2a_5V space(lvpwell_hv; different_net) >= 1.7um
-#   rule NW.2b_3.3V space(nwell; different_net) >= 1.4um
-#   rule NW.2b_5V space(nwell_hv; different_net) >= 1.7um
-# needs: forbidden
-#   rule LPW.12 forbidden(lvpwell and nwell)
-#   rule NW.4 forbidden(nwell and lvpwell)
-#   rule NW.6 forbidden(nwell_res.interacting(dnwell))
-#   rule DF.12 forbidden(comp.not_interacting(schottky_diode) not nplus not pplus)
-#   rule DV.7 forbidden(comp_dv not dualgate)
-#   rule PL.9 forbidden(poly2.interacting(poly2 not dualgate).interacting(poly2 and dualgate))
-#   rule PL.11 forbidden(v5_xtor.not_interacting(dualgate))
-#   rule PL.12 forbidden(comp.interacting(v5_xtor) not v5_xtor)
-#   rule SB.8 forbidden(contact.inside(sab))
-#   rule ESD.3b forbidden(esd and pcomp)
-#   rule ESD.7 forbidden(esd and pcomp)
-#   rule ESD.9 forbidden(esd not dualgate)
-#   rule CO.10 forbidden(contact and gate)
-#   rule CO.11 forbidden(contact not comp not poly2)
-#   rule MIMTM.10 forbidden(via4.interacting(metal5_mim))
-#   rule NAT.10 forbidden(nwell.inside(nat))
-#   rule NAT.11 forbidden((ncomp and nat).outside(poly2))
-#   rule NAT.12 forbidden(poly2.interacting(nat).not_interacting(comp and nat))
-# needs: must-contain
+# needs: same/diff-net spacing. Net spacing takes a conductor, and the wells
+# are not conductors in this deck (no well-tap connection):
+#   rule DN.2b space(dnwell; nets: different) >= 5.42um
+#   rule LPW.2a_3.3V space(lvpwell; nets: different) >= 1.4um
+#   rule LPW.2a_5V space(lvpwell_hv; nets: different) >= 1.7um
+#   rule NW.2b_3.3V space(nwell; nets: different) >= 1.4um
+#   rule NW.2b_5V space(nwell_hv; nets: different) >= 1.7um
+# DF.12 (COMP not under Nplus or Pplus): the schottky marker it exempts is not declared.
+#   rule DF.12 forbidden(comp.not_interacting(schottky_diode) not (nplus or pplus))
+# Which layer holds which is not confirmed against the manual:
 #   rule LPW.5 must_contain(dnwell, lvpwell.inside(res_mk))
-#   rule V1.3a must_contain(metal1, via1)            # zero overlap: inside
 #   rule MIMTM.7 must_contain(cap_mk, fusetop)
 #   rule NAT.8 must_contain(dualgate, nat_hv)
 #   rule DN.3 (every DNWELL directly surrounded by a PCOMP guard ring tied to substrate)
 # needs: edge checks (butting edges, gate length along the channel, edge-direction enclosure)
-#   rule DF.11 edge_length(ncomp.edges() and pcomp.edges()) >= 300nm
 #   rule PL.2_3.3V gate length (poly2 edges on the gate) >= 280nm
 #   rule PL.2_5V gate length >= 600nm (5V n), 500nm (5V p), 700nm (6V n), 550nm (6V p)
 #   rule NAT.4 / NAT.5 native gate length >= 1.8um
