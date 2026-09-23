@@ -7,10 +7,12 @@
 use super::{mid, ring_segs, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::boolean::union_into;
+use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
 use gpurify_geom::ops::{Point, Winding};
-use gpurify_geom::view::ValidatedLayer;
-use gpurify_geom::Dbu;
+use gpurify_geom::rects::decompose_into;
+use gpurify_geom::store::GeometryStoreBuilder;
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::{Bbox, Dbu, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId, PolyId, PolygonRef};
 use gpurify_ingest::StrId;
 
@@ -195,13 +197,6 @@ fn narrowest_facing(
         .min_by_key(|&(gap, _)| gap)
 }
 
-/// The narrowest width of a validated polygon, holes included.
-pub(crate) fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu {
-    narrowest_facing(poly, true, scratch)
-        .expect("every validated polygon has a facing pair across its own material")
-        .0
-}
-
 /// The store rows of a layer's validated polygons, in validated order: one
 /// polygon per counter-clockwise row, ascending.
 fn outer_rows(store: &GeometryStore, layer: LayerId) -> impl Iterator<Item = PolyId> + '_ {
@@ -343,4 +338,77 @@ pub(crate) fn min_edge_length(
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// The parts of a layer at least `w` wide, as disjoint rectangles: the union of
+/// every axis-aligned `w`-square inside the merged layer (`KLayout`
+/// `sized(-w/2).sized(w/2)`). Eroding by a `w - 1` square leaves a
+/// positive-area anchor exactly where a `w`-square fits on the integer grid,
+/// so a shape exactly `w` wide counts as wide.
+pub(crate) fn wide_rects_into(
+    drawn: &ValidatedLayer,
+    w: Dbu,
+    out: &mut Vec<Bbox>,
+) -> Result<(), BooleanError> {
+    out.clear();
+    let extent = drawn
+        .bboxes()
+        .iter()
+        .fold(Bbox::EMPTY, |acc, &b| acc.union(b));
+    if extent.is_empty() {
+        return Ok(());
+    }
+    let k = w.raw() - 1;
+    let shift =
+        |v: Dbu, by: i64| Dbu::new_unchecked((v.raw() + by).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let mut start = Vec::new();
+    let mut scratch = ValidatedLayer::default();
+    if k == 0 {
+        union_into(drawn, &ValidatedLayer::default(), &mut scratch)?;
+        decompose_into(&scratch, out, &mut start);
+        return Ok(());
+    }
+    // ponytail: a frame clamped at the coordinate domain's edge erodes shapes
+    // touching it; layouts never reach 2^40.
+    let frame = rects_layer(&[Bbox {
+        xlo: shift(extent.xlo, -k),
+        ylo: shift(extent.ylo, -k),
+        xhi: shift(extent.xhi, k),
+        yhi: shift(extent.yhi, k),
+    }])?;
+    // Anchors p where p + [0, k]² leaves the layer: the complement dragged
+    // left and down by k.
+    subtraction_into(&frame, drawn, &mut scratch)?;
+    decompose_into(&scratch, out, &mut start);
+    for r in out.iter_mut() {
+        r.xlo = shift(r.xlo, -k);
+        r.ylo = shift(r.ylo, -k);
+    }
+    let blocked = rects_layer(out)?;
+    subtraction_into(&frame, &blocked, &mut scratch)?;
+    decompose_into(&scratch, out, &mut start);
+    for r in out.iter_mut() {
+        r.xhi = shift(r.xhi, k);
+        r.yhi = shift(r.yhi, k);
+    }
+    let grown = rects_layer(out)?;
+    union_into(&grown, &ValidatedLayer::default(), &mut scratch)?;
+    decompose_into(&scratch, out, &mut start);
+    Ok(())
+}
+
+/// Rectangles, possibly overlapping, as one validated layer.
+fn rects_layer(rects: &[Bbox]) -> Result<ValidatedLayer, BooleanError> {
+    let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
+    for r in rects {
+        builder.push(
+            LayerId(0),
+            &[r.xlo, r.xhi, r.xhi, r.xlo],
+            &[r.ylo, r.ylo, r.yhi, r.yhi],
+        );
+    }
+    let (store, _) = builder.finish(1);
+    let mut out = ValidatedLayer::default();
+    validate_layer_into(&store, LayerId(0), &mut out)?;
+    Ok(out)
 }

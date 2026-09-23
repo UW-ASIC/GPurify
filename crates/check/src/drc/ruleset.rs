@@ -51,7 +51,7 @@ pub enum Rule {
         layer: LayerId,
         limit: Dbu,
     },
-    /// Pairs with a shape whose narrowest width is at least `width_threshold`.
+    /// Pairs near the part of a shape where a `width_threshold` square fits.
     WideDependentSpacing {
         layer: LayerId,
         width_threshold: Dbu,
