@@ -218,7 +218,7 @@ pub fn recognise_into(
             SpatialIndex::build_into(store, layer, &mut terminal_index);
             cross_layer_pairs_into(store, &marker_index, &terminal_index, touching, &mut pairs);
             // Box-only hits must not bind: a spurious low-id pair would win.
-            retain_intersecting_into(store, &pairs, &mut exact);
+            retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
 
             // `exact` ascends by `(marker, terminal)`: the r-th polygon under a
             // marker fills the r-th position naming this layer.

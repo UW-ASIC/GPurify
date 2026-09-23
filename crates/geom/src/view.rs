@@ -104,6 +104,15 @@ impl<'a> PolygonRef<'a> {
         self.layer.poly_bbox[self.idx as usize]
     }
 
+    /// The store row of the outer, then of each hole. Meaningful only for a
+    /// layer validated straight from the store, not for a boolean result.
+    pub fn rows(self) -> impl Iterator<Item = PolyId> + 'a {
+        let layer = self.layer;
+        let start = layer.poly_ring_start[self.idx as usize] as usize;
+        let len = layer.poly_ring_len[self.idx as usize] as usize;
+        layer.ring_poly[start..start + len].iter().copied()
+    }
+
     /// The store row to blame a finding on; for a boolean result, the lowest
     /// contributing [`PolyId`].
     pub fn provenance(self) -> PolyId {

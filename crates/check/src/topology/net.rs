@@ -7,7 +7,8 @@
 use crate::topology::csr_run;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{segments_intersect, Point, Seg};
+use gpurify_geom::ops::{segments_intersect, winding_of, Point, Seg, Winding};
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
@@ -42,6 +43,68 @@ pub struct NetTable {
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,
     scratch: EdgeScratch,
+    /// Hole rows bound to their outers, over every layer of the store.
+    pub(crate) holes: Holes,
+}
+
+/// A store keeps a polygon's hole as its own clockwise row. This binds each
+/// hole row to its outer, so nothing drawn inside a hole touches the ring.
+#[derive(Debug, Default)]
+pub(crate) struct Holes {
+    /// Owning outer of each hole row; `NO_OWNER` for every other row.
+    owner: Vec<u32>,
+    /// `(outer, hole)`, ascending.
+    of: Vec<(PolyId, PolyId)>,
+    layer: ValidatedLayer,
+}
+
+const NO_OWNER: u32 = u32::MAX;
+
+impl Holes {
+    /// Rebind for `layers` of `store`. A layer that fails validation keeps its
+    /// rows as drawn: DRC reports the invalid shape.
+    pub(crate) fn build(
+        &mut self,
+        store: &GeometryStore,
+        layers: impl IntoIterator<Item = LayerId>,
+    ) {
+        self.owner.clear();
+        self.owner.resize(store.poly_count(), NO_OWNER);
+        self.of.clear();
+        for layer in layers {
+            let clockwise = store.polys_on_layer(layer).any(|row| {
+                let (xs, ys) = store.poly_verts(PolyId(row));
+                winding_of(xs, ys) == Some(Winding::Clockwise)
+            });
+            if !clockwise || validate_layer_into(store, layer, &mut self.layer).is_err() {
+                continue;
+            }
+            for polygon in 0..u32::try_from(self.layer.len()).expect("a layer's polygons fit a u32")
+            {
+                let mut rows = self.layer.get(polygon).rows();
+                let outer = rows.next().expect("a polygon has an outer ring");
+                for hole in rows {
+                    self.owner[hole.idx()] = outer.0;
+                    self.of.push((outer, hole));
+                }
+            }
+        }
+        self.of.sort_unstable();
+    }
+
+    fn is_hole(&self, poly: PolyId) -> bool {
+        self.owner
+            .get(poly.idx())
+            .is_some_and(|&owner| owner != NO_OWNER)
+    }
+
+    fn of(&self, outer: PolyId) -> impl Iterator<Item = PolyId> + '_ {
+        let from = self.of.partition_point(|&(o, _)| o < outer);
+        self.of[from..]
+            .iter()
+            .take_while(move |&&(o, _)| o == outer)
+            .map(|&(_, h)| h)
+    }
 }
 
 impl NetTable {
@@ -111,14 +174,33 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
     let rows = store.poly_count();
     let node_count = u32::try_from(rows).expect("a polygon index fits a PolyId");
 
+    out.holes.build(
+        store,
+        (0..store.layer_count()).map(|l| LayerId(u16::try_from(l).expect("a layer id fits a u16"))),
+    );
     out.edges.clear();
     if connectivity.intra_layer_touch {
         for &layer in &connectivity.conductors {
-            intra_layer_edges_append(store, layer, &mut out.scratch, &mut out.edges);
+            intra_layer_edges_append(store, &out.holes, layer, &mut out.scratch, &mut out.edges);
         }
     }
     for (&cut, &connects) in connectivity.via_cut.iter().zip(&connectivity.via_connects) {
-        via_edges_append(store, cut, connects, &mut out.scratch, &mut out.edges);
+        via_edges_append(
+            store,
+            &out.holes,
+            cut,
+            connects,
+            &mut out.scratch,
+            &mut out.edges,
+        );
+    }
+    // A hole row is part of its outer's polygon, so it shares the outer's net.
+    for &layer in &connectivity.conductors {
+        for (outer, hole) in out.holes.of.iter().copied() {
+            if store.poly_layer(outer) == layer {
+                out.edges.push((outer.0.min(hole.0), outer.0.max(hole.0)));
+            }
+        }
     }
 
     components_into(node_count, &out.edges, &mut out.labels);
@@ -152,24 +234,41 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
     rebuild_index(&out.poly_net, &mut out.net_start, &mut out.polys);
 }
 
-/// Whether two of the store's polygons share at least one point. The exact
-/// re-test behind every bounding-box prune: merging on a box alone is fail-open.
-fn polys_intersect(store: &GeometryStore, a: PolyId, b: PolyId) -> bool {
+/// Whether two of the store's polygons share at least one point, holes
+/// excluded. The exact re-test behind every bounding-box prune: merging on a
+/// box alone is fail-open. A hole row is never a polygon of its own here.
+fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -> bool {
+    if holes.is_hole(a) || holes.is_hole(b) {
+        return false;
+    }
     let (ax, ay) = store.poly_verts(a);
     let (bx, by) = store.poly_verts(b);
     if ax.is_empty() || bx.is_empty() {
         return false;
     }
+    // A hole's edge is the polygon's boundary too.
+    let meet = std::iter::once(a).chain(holes.of(a)).any(|ra| {
+        let (rax, ray) = store.poly_verts(ra);
+        std::iter::once(b).chain(holes.of(b)).any(|rb| {
+            let (rbx, rby) = store.poly_verts(rb);
+            rings_meet(rax, ray, rbx, rby)
+        })
+    });
     // Boundaries that do not meet are nested or disjoint, so one vertex decides;
-    // it is off the other boundary, so inclusive containment is strict here.
-    rings_meet(ax, ay, bx, by)
-        || store.poly_contains_point(b, Point { x: ax[0], y: ay[0] })
-        || store.poly_contains_point(a, Point { x: bx[0], y: by[0] })
+    // it is off every boundary, so inclusive containment is strict here.
+    meet || in_material(store, holes, b, Point { x: ax[0], y: ay[0] })
+        || in_material(store, holes, a, Point { x: bx[0], y: by[0] })
+}
+
+/// Inside the outer ring and inside none of its holes.
+fn in_material(store: &GeometryStore, holes: &Holes, outer: PolyId, p: Point) -> bool {
+    store.poly_contains_point(outer, p) && !holes.of(outer).any(|h| store.poly_contains_point(h, p))
 }
 
 /// The pairs of `pairs` whose polygons really intersect, in input order.
 pub(crate) fn retain_intersecting_into(
     store: &GeometryStore,
+    holes: &Holes,
     pairs: &[(PolyId, PolyId)],
     out: &mut Vec<(PolyId, PolyId)>,
 ) {
@@ -178,7 +277,7 @@ pub(crate) fn retain_intersecting_into(
         pairs
             .iter()
             .copied()
-            .filter(|&(a, b)| polys_intersect(store, a, b)),
+            .filter(|&(a, b)| polys_intersect(store, holes, a, b)),
     );
 }
 
@@ -293,11 +392,14 @@ struct EdgeScratch {
 /// Edges `a < b` from shapes touching on one conductor layer.
 pub fn intra_layer_edges_into(store: &GeometryStore, layer: LayerId, out: &mut Vec<(u32, u32)>) {
     out.clear();
-    intra_layer_edges_append(store, layer, &mut EdgeScratch::default(), out);
+    let mut holes = Holes::default();
+    holes.build(store, [layer]);
+    intra_layer_edges_append(store, &holes, layer, &mut EdgeScratch::default(), out);
 }
 
 fn intra_layer_edges_append(
     store: &GeometryStore,
+    holes: &Holes,
     layer: LayerId,
     scratch: &mut EdgeScratch,
     out: &mut Vec<(u32, u32)>,
@@ -310,7 +412,7 @@ fn intra_layer_edges_append(
         Dbu::new_unchecked(0),
         &mut scratch.pairs,
     );
-    retain_intersecting_into(store, &scratch.pairs, &mut scratch.touching);
+    retain_intersecting_into(store, holes, &scratch.pairs, &mut scratch.touching);
     out.extend(scratch.touching.iter().map(|&(a, b)| (a.0, b.0)));
 }
 
@@ -323,12 +425,22 @@ pub fn via_edges_into(
     out: &mut Vec<(u32, u32)>,
 ) {
     out.clear();
-    via_edges_append(store, cut, connects, &mut EdgeScratch::default(), out);
+    let mut holes = Holes::default();
+    holes.build(store, [cut, connects.0, connects.1]);
+    via_edges_append(
+        store,
+        &holes,
+        cut,
+        connects,
+        &mut EdgeScratch::default(),
+        out,
+    );
 }
 
 /// Sorts and dedups only the rows it appends; earlier layers' rows stay put.
 fn via_edges_append(
     store: &GeometryStore,
+    holes: &Holes,
     cut: LayerId,
     (lower, upper): (LayerId, LayerId),
     scratch: &mut EdgeScratch,
@@ -347,8 +459,8 @@ fn via_edges_append(
         on_upper,
         ..
     } = scratch;
-    cuts_landing_on(store, cut_index, lower, index, pairs, on_lower);
-    cuts_landing_on(store, cut_index, upper, index, pairs, on_upper);
+    cuts_landing_on(store, holes, cut_index, lower, index, pairs, on_lower);
+    cuts_landing_on(store, holes, cut_index, upper, index, pairs, on_upper);
 
     // Both lists ascend by `(cut, conductor)`: merge on the cut column.
     let base = out.len();
@@ -384,6 +496,7 @@ fn via_edges_append(
 /// Every `(cut, conductor)` pair where the cut really lands, ascending.
 fn cuts_landing_on(
     store: &GeometryStore,
+    holes: &Holes,
     cut_index: &SpatialIndex,
     layer: LayerId,
     index: &mut SpatialIndex,
@@ -392,7 +505,7 @@ fn cuts_landing_on(
 ) {
     SpatialIndex::build_into(store, layer, index);
     cross_layer_pairs_into(store, cut_index, index, Dbu::new_unchecked(0), pairs);
-    retain_intersecting_into(store, pairs, out);
+    retain_intersecting_into(store, holes, pairs, out);
 }
 
 #[cfg(test)]

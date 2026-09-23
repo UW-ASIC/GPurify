@@ -80,7 +80,10 @@ impl Provenance {
                         & (label.at.x.raw() <= box_of.xhi.raw())
                         & (label.at.y.raw() >= box_of.ylo.raw())
                         & (label.at.y.raw() <= box_of.yhi.raw());
-                    if inside_box && store.poly_contains_point(poly, label.at) {
+                    if inside_box
+                        && store.poly_contains_point(poly, label.at)
+                        && !in_hole_of(store, connectivity.label_names[row], poly, label.at)
+                    {
                         bound = Some(poly);
                         break 'rows;
                     }
@@ -101,4 +104,39 @@ impl Provenance {
         }
         Ok(())
     }
+}
+
+/// Whether `p` sits in a hole of `poly` rather than on its material: a hole row
+/// is never a label target, and neither is an outer whose smaller hole row on the
+/// same layer holds `p` strictly. A point on a hole's edge is material.
+// ponytail: scans the layer's rows per candidate; holes are rare, a bound hole table is the upgrade.
+fn in_hole_of(store: &GeometryStore, layer: LayerId, poly: PolyId, p: Point) -> bool {
+    use gpurify_geom::ops::{area2, winding_of, Winding};
+    let (xs, ys) = store.poly_verts(poly);
+    if winding_of(xs, ys) == Some(Winding::Clockwise) {
+        return true;
+    }
+    let outer_area = area2(xs, ys).raw().abs();
+    store.polys_on_layer(layer).any(|row| {
+        let hole = PolyId(row);
+        let (hx, hy) = store.poly_verts(hole);
+        winding_of(hx, hy) == Some(Winding::Clockwise)
+            && area2(hx, hy).raw().abs() < outer_area
+            && store.poly_contains_point(poly, Point { x: hx[0], y: hy[0] })
+            && store.poly_contains_point(hole, p)
+            && !on_ring(hx, hy, p)
+    })
+}
+
+/// Whether `p` lies on an edge of the ring.
+fn on_ring(xs: &[gpurify_geom::Dbu], ys: &[gpurify_geom::Dbu], p: Point) -> bool {
+    let n = xs.len();
+    (0..n).any(|i| {
+        let j = if i + 1 == n { 0 } else { i + 1 };
+        let (ax, ay, bx, by) = (xs[i].raw(), ys[i].raw(), xs[j].raw(), ys[j].raw());
+        let (px, py) = (p.x.raw(), p.y.raw());
+        let cross =
+            i128::from(bx - ax) * i128::from(py - ay) - i128::from(by - ay) * i128::from(px - ax);
+        cross == 0 && px >= ax.min(bx) && px <= ax.max(bx) && py >= ay.min(by) && py <= ay.max(by)
+    })
 }

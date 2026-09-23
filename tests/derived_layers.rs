@@ -217,3 +217,58 @@ fn no_gds_stream_pair_maps_onto_a_derived_layer() {
         "a derived layer's placeholder stream pair is not a stream pair"
     );
 }
+
+/// Oracle: construct-from-answer. Four diffusion bands closing into a guard
+/// ring become one derived polygon with a hole; two islands drawn inside the
+/// hole touch nothing, so the layer is three nets. Reported by the Philis
+/// session: the hole was extracted as solid and every inner net merged.
+#[test]
+fn a_ring_on_a_derived_layer_keeps_its_hole_for_net_extraction() {
+    let deck = deck(
+        r#"{
+  "layers": { "diff": [2, 0], "poly": [3, 0] },
+  "derived": [ { "name": "sd", "op": "not", "layers": ["diff", "poly"] } ],
+  "connectivity": { "conductors": ["sd"], "intra_layer_touch": true, "vias": [] }
+}"#,
+    );
+    const SD: LayerId = LayerId(2);
+
+    let mut layout = LayoutBuilder::new(deck.layers.len());
+    // The ring: outer (0,0)-(2000,2000), hole (200,200)-(1800,1800).
+    layout.rect(DIFF, 0, 0, 2000, 200);
+    layout.rect(DIFF, 0, 1800, 2000, 2000);
+    layout.rect(DIFF, 0, 200, 200, 1800);
+    layout.rect(DIFF, 1800, 200, 2000, 1800);
+    // Two islands inside the hole, apart from each other and from the ring.
+    layout.rect(DIFF, 500, 500, 700, 700);
+    layout.rect(DIFF, 1200, 1200, 1400, 1400);
+    let (base, _ids) = layout.finish();
+
+    let store = round_trip(&base, &deck);
+    let mut nets = gpurify_check::topology::NetTable::default();
+    gpurify_check::topology::net::extract_nets_into(&store, &deck.connectivity, &mut nets);
+
+    let island_a = store
+        .polys_on_layer(SD)
+        .find(|&row| store.poly_bbox(PolyId(row)).xlo.raw() == 500)
+        .expect("island A is on sd");
+    let island_b = store
+        .polys_on_layer(SD)
+        .find(|&row| store.poly_bbox(PolyId(row)).xlo.raw() == 1200)
+        .expect("island B is on sd");
+    let ring = store
+        .polys_on_layer(SD)
+        .find(|&row| store.poly_bbox(PolyId(row)).xhi.raw() == 2000)
+        .expect("the ring is on sd");
+    let (a, b, r) = (
+        nets.net_of(PolyId(island_a)),
+        nets.net_of(PolyId(island_b)),
+        nets.net_of(PolyId(ring)),
+    );
+    assert_ne!(
+        a, b,
+        "two islands inside the hole touch nothing, so they are two nets"
+    );
+    assert_ne!(a, r, "an island inside the hole does not touch the ring");
+    assert_ne!(b, r, "an island inside the hole does not touch the ring");
+}
