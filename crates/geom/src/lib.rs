@@ -3,6 +3,9 @@
 //! Data in: rings in `Dbu` from `ingest`. Data out: a [`GeometryStore`],
 //! [`ValidatedLayer`]s, candidate pairs, booleans, and exact measures.
 
+// fearless_simd kernels must inline into the `target_feature` fn `dispatch!` makes.
+#![allow(clippy::inline_always)]
+
 mod arith;
 mod dbu;
 mod qty;

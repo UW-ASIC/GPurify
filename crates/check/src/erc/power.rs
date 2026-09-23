@@ -448,7 +448,7 @@ fn cholesky_inverse_into(a: &mut [f64], n: usize, out: &mut Vec<f64>) -> bool {
 }
 
 /// Shared with the field solver; their fold order is part of the result.
-use gpurify_geom::linalg::{axpy, dot, nrm2 as norm, spmv};
+use gpurify_geom::linalg::{axpy, dot, nrm2 as norm, spmv, xpay};
 
 /// Assemble the reduced Laplacian (CSR, diagonal first in each row) and its
 /// inverse diagonal from `scratch.branch`, which is in unknown space.
@@ -691,9 +691,7 @@ fn conjugate_gradient(scratch: &mut SolveScratch, config: SolveConfig) -> Result
         precondition((l_start, l_col, l_val, l_diag), inv_diag, r, z);
         let next = dot(r, z);
         let beta = next / rz;
-        for i in 0..unknowns {
-            p[i] = z[i] + beta * p[i];
-        }
+        xpay(z, beta, p);
         rz = next;
         residual = norm(r);
         iterations += 1;
