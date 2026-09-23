@@ -16,11 +16,6 @@ fn two_subcircuits(strings: &mut StrTable) -> Netlist {
         port_net: vec![nets[0], nets[1], nets[0], nets[4]],
         subckt_device_start: vec![0, 2, 3],
 
-        device_name: vec![
-            strings.intern("M1"),
-            strings.intern("M2"),
-            strings.intern("R1"),
-        ],
         device_model: vec![
             strings.intern("nfet"),
             strings.intern("pfet"),
@@ -149,7 +144,6 @@ mp y a vdd vdd pfet w=4
     assert_eq!(netlist.devices_of(SubcktId(0)), 0..2);
     for (device, name, model) in [(0u32, "mn", "nfet"), (1, "mp", "pfet")] {
         let row = device as usize;
-        assert_eq!(strings.resolve(netlist.device_name[row]), name);
         assert_eq!(
             strings.resolve(netlist.device_model[row]),
             model,

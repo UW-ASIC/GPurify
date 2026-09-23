@@ -156,10 +156,15 @@ fn label_binding_matches_a_brute_force_scan() {
             } else {
                 let mut alone = Provenance::default();
                 alone.place_label(p, TEXT, name);
-                assert!(alone.resolve_labels(&store, &connectivity).is_err(), "{p:?} is on nothing");
+                assert!(
+                    alone.resolve_labels(&store, &connectivity).is_err(),
+                    "{p:?} is on nothing"
+                );
             }
         }
-        bound.resolve_labels(&store, &connectivity).expect("every label is on a shape");
+        bound
+            .resolve_labels(&store, &connectivity)
+            .expect("every label is on a shape");
         want.sort_by_key(|&(poly, _)| poly);
         assert_eq!(bound.labels(), want.as_slice());
     }

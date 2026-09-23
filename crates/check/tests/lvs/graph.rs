@@ -248,7 +248,6 @@ fn one_subcircuit() -> Netlist {
         port_net: vec![RefNetId(0), RefNetId(1)],
         subckt_device_start: vec![0, 2],
 
-        device_name: vec![StrId(40), StrId(41)],
         device_model: vec![RES, NCH],
         device_kind: vec![DeviceKind::Resistor, DeviceKind::Mos],
         device_terminal_start: vec![0, 2, 6],
