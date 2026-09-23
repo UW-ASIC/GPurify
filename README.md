@@ -88,17 +88,18 @@ unit, and a typo is an error with a line and column, never a rule that silently
 does nothing. There are 24 design-rule kinds and 19 electrical-rule kinds.
 [docs/deck.md](docs/deck.md) covers the language and every rule.
 
-Four decks ship in `pdks/` to start from:
+Four decks ship in `pdks/`, each citing the rule manual release its numbers
+come from and using the foundry's rule ids:
 
-| File | Layers | Rules | Devices |
+| File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 49 | 177 | 5 |
-| `gf180mcu` | 38 | 136 | 6 |
-| `sky130` | 21 | 114 | 3 |
-| `generic_finfet` | 17 | 105 | 2 |
+| `ihp_sg13g2` | 62 | 413 | 10 |
+| `gf180mcu` | 55 | 228 | 27 |
+| `sky130` | 51 | 222 | 22 |
+| `generic_finfet` (ASAP7) | 45 | 168 | 0 |
 
-None is signoff quality, and none records which PDK release its numbers came
-from.
+None has been compared against foundry signoff. What each leaves out is
+listed at the end of the deck and in [docs/limitations.md](docs/limitations.md#shipped-decks).
 
 ## The same input gives the same file
 

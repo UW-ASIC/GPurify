@@ -1,274 +1,806 @@
-grid 1nm
+# IHP SG13G2 (IHP-Open-PDK, 130 nm SiGe BiCMOS, 1.2 V / 3.3 V CMOS, 5 thin + 2 thick Al metals)
+#
+# Sources, all from https://github.com/IHP-GmbH/IHP-Open-PDK (branch main):
+#  [LR]  SG13G2 Layout Rules Rev. 0.4 (2024-12-19),
+#        ihp-sg13g2/libs.doc/doc/SG13G2_os_layout_rules.pdf, last changed in commit e261c6d592
+#        Every rule id and limit below is from its tables unless marked otherwise.
+#  [PS]  SG13G2 Process Specification Rev. 1.2 (2023-12-20),
+#        ihp-sg13g2/libs.doc/doc/SG13G2_os_process_spec.pdf, last changed in commit 5de3340987
+#        (supply voltages §1, sheet and via resistances §2.13/2.14, current limits
+#        §2.15, layer thicknesses §2.16, measured capacitance §2.17, εr Fig. 1.1.1).
+#  [DRC] Open KLayout deck, ihp-sg13g2/libs.tech/klayout/tech/drc, last changed in commit 3e4a6c5021
+#        (layers_def.drc for GDS numbers, density.drc for window step and die
+#        boundary, docs/main_rules.md + extra_rules.md cross-checked against [LR]).
+#  [LVS] Open KLayout LVS, ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks, last changed in commit 6ff43baf32
+#        (device recognition layers and model names).
+#  [ITF] ihp-sg13g2/libs.tech/parasitics/itf/sg13g2_typ.itf, last changed in commit 26a376352f
+#        (Activ sheet resistance, field-oxide εr).
+#
+# Grid: [LR] §3.1, "All features are on a drawing grid of 5 nm".
 
-layer activ = gds(1, 0)
-layer activ_mask = gds(1, 20)
-layer biwind = gds(3, 0)
-layer gatpoly = gds(5, 0)
-layer cont = gds(6, 0)
-layer nsd = gds(7, 0)
-layer nsd_block = gds(7, 21)
-layer metal1 = gds(8, 0)
-layer metal1_res = gds(8, 29)
-layer passiv = gds(9, 0)
-layer metal2 = gds(10, 0)
-layer baspoly = gds(13, 0)
-layer psd = gds(14, 0)
-layer via1 = gds(19, 0)
-layer res = gds(24, 0)
-layer trans = gds(26, 0)
-layer ind = gds(27, 0)
-layer salblock = gds(28, 0)
-layer via2 = gds(29, 0)
-layer metal3 = gds(30, 0)
-layer nwell = gds(31, 0)
-layer nbulay = gds(32, 0)
-layer emwind = gds(33, 0)
-layer deepco = gds(35, 0)
-layer mim = gds(36, 0)
-layer edgeseal = gds(39, 0)
-layer substrate = gds(40, 0)
-layer dfpad = gds(41, 0)
-layer thickgateox = gds(44, 0)
-layer pwell = gds(46, 0)
-layer pwell_block = gds(46, 21)
-layer via3 = gds(49, 0)
-layer metal4 = gds(50, 0)
-layer empoly = gds(55, 0)
-layer via4 = gds(66, 0)
-layer metal5 = gds(67, 0)
-layer recog = gds(99, 0)
-layer recog_diode = gds(99, 31)
-layer extblock = gds(111, 0)
-layer topvia1 = gds(125, 0)
-layer topmetal1 = gds(126, 0)
-layer polyres = gds(128, 0)
-layer vmim = gds(129, 0)
-layer topvia2 = gds(133, 0)
-layer topmetal2 = gds(134, 0)
-layer colwind = gds(139, 0)
-layer emwihv = gds(156, 0)
-layer prboundary = gds(189, 0)
-layer isonwell = gds(257, 0)
-layer ngate = gatpoly and activ and nsd
-layer pgate = gatpoly and activ and psd
-layer activ_active = activ not gatpoly
-layer gate = gatpoly and activ
+grid 5nm
 
-rule activ_min_width width(activ) >= 150nm
-rule gatpoly_min_width width(gatpoly) >= 130nm
-rule cont_min_width width(cont) >= 160nm
-rule metal1_min_width width(metal1) >= 160nm
-rule metal2_min_width width(metal2) >= 200nm
-rule metal3_min_width width(metal3) >= 200nm
-rule metal4_min_width width(metal4) >= 200nm
-rule metal5_min_width width(metal5) >= 200nm
-rule via1_min_width width(via1) >= 190nm
-rule via2_min_width width(via2) >= 190nm
-rule via3_min_width width(via3) >= 190nm
-rule via4_min_width width(via4) >= 190nm
-rule topvia1_min_width width(topvia1) >= 420nm
-rule topmetal1_min_width width(topmetal1) >= 1640nm
-rule topvia2_min_width width(topvia2) >= 900nm
-rule topmetal2_min_width width(topmetal2) >= 2000nm
-rule passiv_min_width width(passiv) >= 2100nm
-rule nwell_min_width width(nwell) >= 620nm
-rule nbulay_min_width width(nbulay) >= 1000nm
-rule pwell_block_min_width width(pwell_block) >= 620nm
-rule psd_min_width width(psd) >= 310nm
-rule nsd_block_min_width width(nsd_block) >= 310nm
-rule extblock_min_width width(extblock) >= 310nm
-rule salblock_min_width width(salblock) >= 420nm
-rule mim_min_width width(mim) >= 1140nm
-rule thickgateox_min_width width(thickgateox) >= 860nm
-rule cont_size size(cont) == 160nm x 160nm
-rule via1_size size(via1) == 190nm x 190nm
-rule via2_size size(via2) == 190nm x 190nm
-rule via3_size size(via3) == 190nm x 190nm
-rule via4_size size(via4) == 190nm x 190nm
-rule topvia1_size size(topvia1) == 420nm x 420nm
-rule topvia2_size size(topvia2) == 900nm x 900nm
-rule metal1_max_width_without_slit width(metal1) <= 30000nm
-rule metal2_max_width_without_slit width(metal2) <= 30000nm
-rule metal3_max_width_without_slit width(metal3) <= 30000nm
-rule metal4_max_width_without_slit width(metal4) <= 30000nm
-rule metal5_max_width_without_slit width(metal5) <= 30000nm
-rule topmetal1_max_width_without_slit width(topmetal1) <= 30000nm
-rule topmetal2_max_width_without_slit width(topmetal2) <= 30000nm
-rule activ_min_space space(activ) >= 210nm
-rule gatpoly_min_space space(gatpoly) >= 180nm
-rule cont_min_space space(cont) >= 180nm
-rule metal1_min_space space(metal1) >= 180nm
-rule metal2_min_space space(metal2) >= 210nm
-rule metal3_min_space space(metal3) >= 210nm
-rule metal4_min_space space(metal4) >= 210nm
-rule metal5_min_space space(metal5) >= 210nm
-rule via1_min_space space(via1) >= 220nm
-rule via2_min_space space(via2) >= 220nm
-rule via3_min_space space(via3) >= 220nm
-rule via4_min_space space(via4) >= 220nm
-rule topvia1_min_space space(topvia1) >= 420nm
-rule topmetal1_min_space space(topmetal1) >= 1640nm
-rule topvia2_min_space space(topvia2) >= 1060nm
-rule topmetal2_min_space space(topmetal2) >= 2000nm
-rule passiv_min_space space(passiv) >= 3500nm
-rule psd_min_space space(psd) >= 310nm
-rule nsd_block_min_space space(nsd_block) >= 310nm
-rule extblock_min_space space(extblock) >= 310nm
-rule salblock_min_space space(salblock) >= 420nm
-rule pwell_block_min_space space(pwell_block) >= 620nm
-rule mim_min_space space(mim) >= 600nm
-rule activ_notch notch(activ) >= 210nm
-rule gatpoly_notch notch(gatpoly) >= 180nm
-rule metal1_notch notch(metal1) >= 180nm
-rule metal2_notch notch(metal2) >= 210nm
-rule metal3_notch notch(metal3) >= 210nm
-rule metal4_notch notch(metal4) >= 210nm
-rule metal5_notch notch(metal5) >= 210nm
-rule topmetal1_notch notch(topmetal1) >= 1640nm
-rule topmetal2_notch notch(topmetal2) >= 2000nm
-rule passiv_notch notch(passiv) >= 3500nm
-rule psd_notch notch(psd) >= 310nm
-rule nsd_block_notch notch(nsd_block) >= 310nm
-rule extblock_notch notch(extblock) >= 310nm
-rule salblock_notch notch(salblock) >= 420nm
-rule pwell_block_notch notch(pwell_block) >= 620nm
-rule salblock_space_to_cont space(salblock, cont) >= 200nm
-rule res_space_to_cont space(res, cont) >= 120nm
-rule pwell_block_space_to_nwell space(pwell_block, nwell) >= 620nm
-rule nsd_block_space_to_psd space(nsd_block, psd) >= 310nm
-rule extblock_space_to_psd space(extblock, psd) >= 310nm
-rule metal1_wide_space wide_space(metal1; width: 300nm) >= 220nm
-rule metal1_very_wide_space wide_space(metal1; width: 10000nm) >= 600nm
-rule metal2_wide_space wide_space(metal2; width: 390nm) >= 240nm
-rule metal2_very_wide_space wide_space(metal2; width: 10000nm) >= 600nm
-rule metal3_wide_space wide_space(metal3; width: 390nm) >= 240nm
-rule metal3_very_wide_space wide_space(metal3; width: 10000nm) >= 600nm
-rule metal4_wide_space wide_space(metal4; width: 390nm) >= 240nm
-rule metal4_very_wide_space wide_space(metal4; width: 10000nm) >= 600nm
-rule metal5_wide_space wide_space(metal5; width: 390nm) >= 240nm
-rule metal5_very_wide_space wide_space(metal5; width: 10000nm) >= 600nm
-rule activ_min_area area(activ) >= 121801nm2
-rule gatpoly_min_area area(gatpoly) >= 90000nm2
-rule metal1_min_area area(metal1) >= 90000nm2
-rule metal2_min_area area(metal2) >= 143641nm2
-rule metal3_min_area area(metal3) >= 143641nm2
-rule metal4_min_area area(metal4) >= 143641nm2
-rule metal5_min_area area(metal5) >= 143641nm2
-rule psd_min_area area(psd) >= 250000nm2
-rule mim_min_area area(mim) >= 1299600nm2
-rule activ_min_enclosed_area hole_area(activ) >= 149769nm2
-rule psd_min_enclosed_area hole_area(psd) >= 250000nm2
-rule activ_enclosure_of_cont enclosure(cont, activ) >= 70nm
-rule gatpoly_enclosure_of_cont enclosure(cont, gatpoly) >= 70nm
-rule metal1_enclosure_of_via1 enclosure(via1, metal1) >= 10nm
-rule metal2_enclosure_of_via1 enclosure(via1, metal2) >= 5nm
-rule metal2_enclosure_of_via2 enclosure(via2, metal2) >= 5nm
-rule metal3_enclosure_of_via2 enclosure(via2, metal3) >= 5nm
-rule metal3_enclosure_of_via3 enclosure(via3, metal3) >= 5nm
-rule metal4_enclosure_of_via3 enclosure(via3, metal4) >= 5nm
-rule metal4_enclosure_of_via4 enclosure(via4, metal4) >= 5nm
-rule metal5_enclosure_of_via4 enclosure(via4, metal5) >= 5nm
-rule metal5_enclosure_of_topvia1 enclosure(topvia1, metal5) >= 100nm
-rule topmetal1_enclosure_of_topvia1 enclosure(topvia1, topmetal1) >= 420nm
-rule topmetal1_enclosure_of_topvia2 enclosure(topvia2, topmetal1) >= 500nm
-rule topmetal2_enclosure_of_topvia2 enclosure(topvia2, topmetal2) >= 500nm
-rule metal5_enclosure_of_mim enclosure(mim, metal5) >= 600nm
-rule mim_enclosure_of_topvia1 enclosure(topvia1, mim) >= 360nm
-rule topmetal2_enclosure_of_passiv enclosure(passiv, topmetal2) >= 2100nm
-rule metal1_endcap_over_cont enclosure(cont, metal1, opposite) >= 50nm
-rule metal1_endcap_over_via1 enclosure(via1, metal1, opposite) >= 50nm
-rule metal2_endcap_over_via1 enclosure(via1, metal2, opposite) >= 50nm
-rule metal2_endcap_over_via2 enclosure(via2, metal2, opposite) >= 50nm
-rule metal3_endcap_over_via2 enclosure(via2, metal3, opposite) >= 50nm
-rule metal3_endcap_over_via3 enclosure(via3, metal3, opposite) >= 50nm
-rule metal4_endcap_over_via3 enclosure(via3, metal4, opposite) >= 50nm
-rule metal4_endcap_over_via4 enclosure(via4, metal4, opposite) >= 50nm
-rule metal5_endcap_over_via4 enclosure(via4, metal5, opposite) >= 50nm
-rule gatpoly_endcap_over_activ extension(gatpoly, activ) >= 180nm
-rule activ_extension_past_gatpoly extension(activ, gatpoly) >= 230nm
-rule thickgateox_extension_over_activ extension(thickgateox, activ) >= 270nm
-rule activ_min_local_density density(activ, prboundary; window: 800000nm, step: 400000nm) >= 0.25
-rule activ_max_local_density density(activ, prboundary; window: 800000nm, step: 400000nm) <= 0.65
-rule metal1_min_local_density density(metal1, prboundary; window: 800000nm, step: 400000nm) >= 0.25
-rule metal1_max_local_density density(metal1, prboundary; window: 800000nm, step: 400000nm) <= 0.75
-rule metal2_min_local_density density(metal2, prboundary; window: 800000nm, step: 400000nm) >= 0.25
-rule metal2_max_local_density density(metal2, prboundary; window: 800000nm, step: 400000nm) <= 0.75
-rule metal3_min_local_density density(metal3, prboundary; window: 800000nm, step: 400000nm) >= 0.25
-rule metal3_max_local_density density(metal3, prboundary; window: 800000nm, step: 400000nm) <= 0.75
-rule metal4_min_local_density density(metal4, prboundary; window: 800000nm, step: 400000nm) >= 0.25
-rule metal4_max_local_density density(metal4, prboundary; window: 800000nm, step: 400000nm) <= 0.75
-rule metal5_min_local_density density(metal5, prboundary; window: 800000nm, step: 400000nm) >= 0.25
-rule metal5_max_local_density density(metal5, prboundary; window: 800000nm, step: 400000nm) <= 0.75
-rule cont_array_space via_array_space(cont; array: 24) >= 200nm
-rule via1_array_space via_array_space(via1; array: 15) >= 290nm
-rule via2_array_space via_array_space(via2; array: 15) >= 290nm
-rule via3_array_space via_array_space(via3; array: 15) >= 290nm
-rule via4_array_space via_array_space(via4; array: 15) >= 290nm
-rule manufacturing_grid off_grid(; pitch: 5nm)
-rule octagonal_geometry angle(; allowed: [0deg, 45deg, 90deg, 135deg])
-rule antenna_cumulative_metal_through_metal1 antenna(gate, metal1; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal2 antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal3 antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal4 antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_metal5 antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_topmetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_metal_through_topmetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none)
-rule antenna_cumulative_via_through_via1 antenna(gate, via1; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_via2 antenna(gate, via1, via2; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_via3 antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_via4 antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_topvia1 antenna(gate, via1, via2, via3, via4, topvia1; max_ratio: 20, sidewall: none)
-rule antenna_cumulative_via_through_topvia2 antenna(gate, via1, via2, via3, via4, topvia1, topvia2; max_ratio: 20, sidewall: none)
-rule antenna_cont antenna(gate, cont; max_ratio: 20, sidewall: none)
-rule em_metal1_and_cont em_current_density(metal1, cont; max_density: 1000A/m, max_current_per_cut: 300uA)
-rule em_metal2_to_metal5_and_via1_to_via4 em_current_density(metal2, metal3, metal4, metal5, via1, via2, via3, via4; max_density: 2000A/m, max_current_per_cut: 400uA)
-rule em_topmetal1_and_topvia1 em_current_density(topmetal1, topvia1; max_density: 15000A/m, max_current_per_cut: 1400uA)
-rule em_topmetal2_and_topvia2 em_current_density(topmetal2, topvia2; max_density: 16000A/m, max_current_per_cut: 10000uA)
+# ---- Layers ([DRC] layers_def.drc; [LR] §2 layer table) ----
+layer activ          = gds(1, 0)
+layer activ_mask     = gds(1, 20)
+layer activ_filler   = gds(1, 22)
+layer gatpoly        = gds(5, 0)
+layer gatpoly_filler = gds(5, 22)
+layer cont           = gds(6, 0)
+layer nsd            = gds(7, 0)
+layer nsd_block      = gds(7, 21)
+layer metal1         = gds(8, 0)
+layer metal1_filler  = gds(8, 22)
+layer metal1_slit    = gds(8, 24)
+layer metal1_label   = gds(8, 25)
+layer passiv         = gds(9, 0)
+layer metal2         = gds(10, 0)
+layer metal2_filler  = gds(10, 22)
+layer metal2_slit    = gds(10, 24)
+layer metal2_label   = gds(10, 25)
+layer psd            = gds(14, 0)
+layer via1           = gds(19, 0)
+layer res            = gds(24, 0)
+layer trans          = gds(26, 0)
+layer ind            = gds(27, 0)
+layer salblock       = gds(28, 0)
+layer via2           = gds(29, 0)
+layer metal3         = gds(30, 0)
+layer metal3_filler  = gds(30, 22)
+layer metal3_slit    = gds(30, 24)
+layer metal3_label   = gds(30, 25)
+layer nwell          = gds(31, 0)
+layer nbulay         = gds(32, 0)
+layer nbulay_block   = gds(32, 21)
+layer mim            = gds(36, 0)
+layer edgeseal       = gds(39, 0)
+layer dfpad          = gds(41, 0)
+layer thickgateox    = gds(44, 0)
+layer pwell_block    = gds(46, 21)
+layer via3           = gds(49, 0)
+layer metal4         = gds(50, 0)
+layer metal4_filler  = gds(50, 22)
+layer metal4_slit    = gds(50, 24)
+layer metal4_label   = gds(50, 25)
+layer via4           = gds(66, 0)
+layer metal5         = gds(67, 0)
+layer metal5_filler  = gds(67, 22)
+layer metal5_slit    = gds(67, 24)
+layer metal5_label   = gds(67, 25)
+layer recog_esd      = gds(99, 30)
+layer recog_diode    = gds(99, 31)
+layer extblock       = gds(111, 0)
+layer topvia1        = gds(125, 0)
+layer topmetal1      = gds(126, 0)
+layer topmetal1_filler = gds(126, 22)
+layer topmetal1_slit = gds(126, 24)
+layer topmetal1_label = gds(126, 25)
+layer polyres        = gds(128, 0)
+layer topvia2        = gds(133, 0)
+layer topmetal2      = gds(134, 0)
+layer topmetal2_filler = gds(134, 22)
+layer topmetal2_slit = gds(134, 24)
+layer topmetal2_label = gds(134, 25)
+layer lbe            = gds(157, 0)
+layer prboundary     = gds(189, 0)
+
+# ---- Derived layers ([LR] §4.2; device layers after [LVS]) ----
+layer gate      = gatpoly and activ
+layer res_mk    = polyres or res
+# nSD = NOT (pSD OR nSD:block); N+Activ / P+Activ.
+layer nact      = (activ not psd) not nsd_block
+layer pact      = activ and psd
+# The conducting Activ, split by implant and well so taps are their own layers.
+layer nsd_c     = (nact not gatpoly) not nwell
+layer ntap      = (nact not gatpoly) and nwell
+layer psd_c     = (pact not gatpoly) and nwell
+layer ptap      = (pact not gatpoly) not nwell
+layer gatpoly_c = gatpoly not res_mk
+layer pact_nw   = pact and nwell
+layer pact_pw   = (pact not nwell) not pwell_block
+layer nact_pw   = (nact not nwell) not pwell_block
+layer nact_out  = nact not nwell
+# nBuLay = (((NWell >= 3.0 um) sized by 1.0 um/side) OR nBuLay:drawing) AND NOT nBuLay:block
+layer nbl_pre   = (nwell.sized(-1500nm).sized(1500nm)).sized(1000nm) or nbulay
+layer nbl       = nbl_pre not nbulay_block
+
+# MOS gates ([LVS] general_derivations / mos_derivations).
+layer mos_exc   = ((((recog_esd or recog_diode) or pwell_block) or trans) or salblock) or extblock
+layer gate_dev  = (gate not res_mk) not mos_exc
+layer ngate     = (gate_dev not psd) not nsd_block
+layer pgate     = (gate_dev and psd) and nwell
+layer ngate_lv  = ngate not thickgateox
+layer ngate_hv  = ngate and thickgateox
+layer pgate_lv  = pgate not thickgateox
+layer pgate_hv  = pgate and thickgateox
+# PFET/NFET gates for the pSD rules; nBuLay-isolated NWell gates are varicaps.
+layer gate_nw   = (gate and nwell) not nbulay
+layer gate_pw   = (gate not psd) not nwell
+
+# Poly resistors ([LVS] res_derivations): the body is the GatPoly under PolyRes.
+layer rbody      = gatpoly and polyres
+layer rsil_body  = ((rbody and res) not psd) not salblock
+layer rppd_body  = ((rbody and psd) and salblock) not nsd
+layer rhigh_body = ((rbody and psd) and nsd) and salblock
+layer rsil_poly  = gatpoly.interacting(rsil_body)
+layer rppd_poly  = gatpoly.interacting(rppd_body)
+layer rhigh_poly = gatpoly.interacting(rhigh_body)
+
+# ESD diodes ([LVS] esd_derivations): diodevdd has P+Activ in NWell, diodevss does not.
+layer esd_vdd = recog_esd.interacting(psd_c).not_interacting(gatpoly).not_interacting(nbulay)
+layer esd_vss = recog_esd.interacting(nsd_c).not_interacting(psd_c).not_interacting(gatpoly).not_interacting(nbulay)
+
+# TopVia1 on MIM lands on the MIM top plate, not on Metal5 ([LVS] cap_derivations).
+layer topvia1_m5 = topvia1 not mim
+
+# Density layers ([DRC] density.drc: drawing or filler, less slits).
+layer activ_den     = (activ or activ_filler) or activ_mask
+layer gatpoly_den   = gatpoly or gatpoly_filler
+layer metal1_den    = (metal1 or metal1_filler) not metal1_slit
+layer metal2_den    = (metal2 or metal2_filler) not metal2_slit
+layer metal3_den    = (metal3 or metal3_filler) not metal3_slit
+layer metal4_den    = (metal4 or metal4_filler) not metal4_slit
+layer metal5_den    = (metal5 or metal5_filler) not metal5_slit
+layer topmetal1_den = (topmetal1 or topmetal1_filler) not topmetal1_slit
+layer topmetal2_den = (topmetal2 or topmetal2_filler) not topmetal2_slit
+
+# Metal that needs slits: slits removed, pads (Slt.e), MIM (Slt.e1) and IND (Slt.e2) exempt.
+layer metal1_wide    = ((metal1 not metal1_slit) not dfpad) not (mim or ind)
+layer metal2_wide    = ((metal2 not metal2_slit) not dfpad) not (mim or ind)
+layer metal3_wide    = ((metal3 not metal3_slit) not dfpad) not (mim or ind)
+layer metal4_wide    = ((metal4 not metal4_slit) not dfpad) not (mim or ind)
+layer metal5_wide    = ((metal5 not metal5_slit) not dfpad) not (mim or ind)
+layer topmetal1_wide = ((topmetal1 not topmetal1_slit) not dfpad) not (mim or ind)
+layer topmetal2_wide = ((topmetal2 not topmetal2_slit) not dfpad) not (mim or ind)
+
+layer pad = passiv and dfpad
+
+# Rule operands ([LR] wording in the rule comments).
+layer iso_pwell = nwell.holes() and nbulay
+layer pact_nw_lv = pact_nw not thickgateox
+layer pact_nw_hv = pact_nw and thickgateox
+layer nact_out_lv = nact_out not thickgateox
+layer nact_out_hv = nact_out and thickgateox
+layer ntie_lv = (nact and nwell) not thickgateox
+layer ntie_hv = (nact and nwell) and thickgateox
+layer pact_pw_lv = pact_pw not thickgateox
+layer pact_pw_hv = pact_pw and thickgateox
+layer nact_pw_lv = nact_pw not thickgateox
+layer nact_pw_hv = nact_pw and thickgateox
+layer nwell_unrel_pwb = nwell.not_interacting(pwell_block)
+layer nact_unrel_nbl = nact.not_interacting(nbl)
+layer pact_unrel_nbl = pact.not_interacting(nbl)
+layer nbl_unrel_nblb = nbl_pre.not_interacting(nbulay_block)
+layer afil_in_pwb = activ_filler.inside(pwell_block)
+layer activ_tgo = activ.interacting(thickgateox)
+layer activ_no_tgo = activ.not_interacting(thickgateox)
+layer gate_tgo = gate.interacting(thickgateox)
+layer gate_no_tgo = gate.not_interacting(thickgateox)
+layer gate_hv = gate and thickgateox
+layer gatpoly_field_only = gatpoly.not_interacting(activ)
+layer activ_no_poly = activ.not_interacting(gatpoly)
+layer pact_whole_nw = activ.inside(psd).inside(nwell)
+layer pact_whole_pw = activ.inside(psd).outside(nwell)
+layer nact_unrel_pw = activ.not_interacting(psd).outside(nwell)
+layer nact_unrel_nw = activ.not_interacting(psd).inside(nwell)
+layer ntap_abutted = ntap.interacting(psd_c)
+layer ptap_abutted = ptap.interacting(nsd_c)
+layer pfet_gate_lv = gate_nw not thickgateox
+layer pfet_gate_hv = gate_nw and thickgateox
+layer nfet_gate_lv = gate_pw not thickgateox
+layer nfet_gate_hv = gate_pw and thickgateox
+layer psd_unrel_nsdb = psd.not_interacting(nsd_block)
+layer psd_unrel_ext = psd.not_interacting(extblock)
+layer activ_unrel_sal = activ.not_interacting(salblock)
+layer gatpoly_unrel_sal = gatpoly.not_interacting(salblock)
+layer cont_activ = cont and activ
+layer cont_poly = cont and gatpoly
+layer cont_nact = cont and nact
+layer cont_pact = cont and pact
+layer sal_rppd = salblock.interacting(rppd_body)
+layer sal_rhigh = salblock.interacting(rhigh_body)
+layer iso_pwell_activ = activ and iso_pwell
+layer nsdb_iso = nsd_block.inside(iso_pwell)
+layer topvia1_mim = topvia1.interacting(mim)
+layer topmetal1_unrel_mim = topmetal1.not_interacting(mim)
+
+# ======================= 5 Physical layer rules =======================
+
+# 5.1 NWell
+rule NW.a  width(nwell) >= 620nm
+rule NW.b  space(nwell) >= 620nm
+rule NW.b.notch notch(nwell) >= 620nm
+rule NW.c  enclosure(pact_nw_lv, nwell) >= 310nm
+rule NW.c1 enclosure(pact_nw_hv, nwell) >= 620nm
+rule NW.d  space(nwell, nact_out_lv) >= 310nm
+rule NW.d1 space(nwell, nact_out_hv) >= 620nm
+rule NW.e  enclosure(ntie_lv, nwell) >= 240nm
+rule NW.e1 enclosure(ntie_hv, nwell) >= 620nm
+rule NW.f  space(nwell, pact_pw_lv) >= 240nm
+rule NW.f1 space(nwell, pact_pw_hv) >= 620nm
+
+# 5.2 PWell:block (PWB.d: overlap with NWell is allowed, so PWB.c holds unrelated NWell only)
+rule PWB.a  width(pwell_block) >= 620nm
+rule PWB.b  space(pwell_block) >= 620nm
+rule PWB.b.notch notch(pwell_block) >= 620nm
+rule PWB.c  space(pwell_block, nwell_unrel_pwb) >= 620nm
+rule PWB.e  space(pwell_block, nact_pw_lv) >= 310nm
+rule PWB.e1 space(pwell_block, nact_pw_hv) >= 620nm
+rule PWB.f  space(pwell_block, pact_pw_lv) >= 240nm
+rule PWB.f1 space(pwell_block, pact_pw_hv) >= 620nm
+
+# 5.3 nBuLay (drawn and generated, [LR] §4.2)
+rule NBL.a width(nbl) >= 1um
+rule NBL.b space(nbl) >= 1.5um
+rule NBL.b.notch notch(nbl) >= 1.5um
+rule NBL.e space(nbl, nact_unrel_nbl) >= 1um
+rule NBL.f space(nbl, pact_unrel_nbl) >= 500nm
+
+# 5.4 nBuLay:block
+rule NBLB.a width(nbulay_block) >= 1.5um
+rule NBLB.b space(nbulay_block) >= 1um
+rule NBLB.b.notch notch(nbulay_block) >= 1um
+rule NBLB.c enclosure(nbulay_block, nbl_pre) >= 1um
+rule NBLB.d space(nbulay_block, nbl_unrel_nblb) >= 1.5um
+
+# 5.5 Activ
+rule Act.a width(activ) >= 150nm
+rule Act.b space(activ) >= 210nm
+rule Act.b.notch notch(activ) >= 210nm
+rule Act.c extension(activ, gatpoly) >= 230nm
+rule Act.d area(activ) >= 0.122um2
+rule Act.e hole_area(activ) >= 0.15um2
+
+# 5.6 Activ:filler
+rule AFil.a  width(activ_filler) <= 5um
+rule AFil.a1 width(activ_filler) >= 1um
+rule AFil.b  space(activ_filler) >= 420nm
+rule AFil.c.Cont    space(activ_filler, cont) >= 1.1um
+rule AFil.c.GatPoly space(activ_filler, gatpoly) >= 1.1um
+rule AFil.c1 space(activ_filler, activ) >= 420nm
+rule AFil.d.NWell   space(activ_filler, nwell) >= 1um
+rule AFil.d.nBuLay  space(activ_filler, nbl) >= 1um
+rule AFil.e  space(activ_filler, trans) >= 1um
+rule AFil.j.nSDblock  enclosure(afil_in_pwb, nsd_block) >= 250nm
+rule AFil.j.SalBlock  enclosure(afil_in_pwb, salblock) >= 250nm
+rule AFil.g  global_density(activ_den, prboundary) >= 35%
+rule AFil.g1 global_density(activ_den, prboundary) <= 55%
+# Window 800 um, step half a window ([DRC] density.drc), tiled over prBoundary.
+rule AFil.g2 density(activ_den, prboundary; window: 800um, step: 400um) >= 25%
+rule AFil.g3 density(activ_den, prboundary; window: 800um, step: 400um) <= 65%
+
+# 5.7 ThickGateOx
+rule TGO.a enclosure(activ_tgo, thickgateox) >= 270nm
+rule TGO.b space(thickgateox, activ_no_tgo) >= 270nm
+rule TGO.c enclosure(gate_tgo, thickgateox) >= 340nm
+rule TGO.d space(thickgateox, gate_no_tgo) >= 340nm
+rule TGO.e space(thickgateox) >= 860nm
+rule TGO.e.notch notch(thickgateox) >= 860nm
+rule TGO.f width(thickgateox) >= 860nm
+
+# 5.8 GatPoly
+rule Gat.a  width(gatpoly) >= 130nm
+rule Gat.a1 width(ngate_lv) >= 130nm
+rule Gat.a2 width(pgate_lv) >= 130nm
+rule Gat.b  space(gatpoly) >= 180nm
+rule Gat.b.notch notch(gatpoly) >= 180nm
+rule Gat.b1 space(gate_hv) >= 250nm
+rule Gat.c  extension(gatpoly, activ) >= 180nm
+# Gat.d, partial: poly that touches no Activ, and Activ that touches no poly.
+rule Gat.d  space(gatpoly_field_only, activ) >= 70nm
+rule Gat.d.2 space(gatpoly, activ_no_poly) >= 70nm
+rule Gat.e  area(gatpoly) >= 0.09um2
+
+# 5.9 GatPoly:filler
+rule GFil.a width(gatpoly_filler) <= 5um
+rule GFil.b width(gatpoly_filler) >= 700nm
+rule GFil.c space(gatpoly_filler) >= 800nm
+rule GFil.d.Activ    space(gatpoly_filler, activ) >= 1.1um
+rule GFil.d.GatPoly  space(gatpoly_filler, gatpoly) >= 1.1um
+rule GFil.d.Cont     space(gatpoly_filler, cont) >= 1.1um
+rule GFil.d.pSD      space(gatpoly_filler, psd) >= 1.1um
+rule GFil.d.nSDblock space(gatpoly_filler, nsd_block) >= 1.1um
+rule GFil.d.SalBlock space(gatpoly_filler, salblock) >= 1.1um
+rule GFil.e.NWell    space(gatpoly_filler, nwell) >= 1.1um
+rule GFil.e.nBuLay   space(gatpoly_filler, nbl) >= 1.1um
+rule GFil.f space(gatpoly_filler, trans) >= 1.1um
+rule GFil.g global_density(gatpoly_den, prboundary) >= 15%
+rule GFil.j extension(gatpoly_filler, activ_filler) >= 180nm
+
+# 5.10 pSD (abutted ties, where Activ crosses a pSD edge, are left to pSD.e/f)
+rule pSD.a  width(psd) >= 310nm
+rule pSD.b  space(psd) >= 310nm
+rule pSD.b.notch notch(psd) >= 310nm
+rule pSD.c  enclosure(pact_whole_nw, psd) >= 180nm
+rule pSD.c1 enclosure(pact_whole_pw, psd) >= 30nm
+rule pSD.d  space(psd, nact_unrel_pw) >= 180nm
+rule pSD.d1 space(psd, nact_unrel_nw) >= 30nm
+rule pSD.g.NWellTie     area(ntap_abutted) >= 0.09um2
+rule pSD.g.SubstrateTie area(ptap_abutted) >= 0.09um2
+rule pSD.i  enclosure(pfet_gate_lv, psd) >= 300nm
+rule pSD.i1 enclosure(pfet_gate_hv, psd) >= 400nm
+rule pSD.j  space(psd, nfet_gate_lv) >= 300nm
+rule pSD.j1 space(psd, nfet_gate_hv) >= 400nm
+rule pSD.k  area(psd) >= 0.25um2
+rule pSD.l  hole_area(psd) >= 0.25um2
+rule pSD.m  space(psd, rsil_poly) >= 180nm
+rule pSD.n  enclosure(rppd_poly, psd) >= 180nm
+
+# 5.11 nSD:block (nSDB.d: overlap with pSD is allowed)
+rule nSDB.a width(nsd_block) >= 310nm
+rule nSDB.b space(nsd_block) >= 310nm
+rule nSDB.b.notch notch(nsd_block) >= 310nm
+rule nSDB.c space(nsd_block, psd_unrel_nsdb) >= 310nm
+
+# 5.12 EXTBlock (poly resistors overlap it with pSD, so EXTB.c holds unrelated pSD)
+rule EXTB.a width(extblock) >= 310nm
+rule EXTB.b space(extblock) >= 310nm
+rule EXTB.b.notch notch(extblock) >= 310nm
+rule EXTB.c space(extblock, psd_unrel_ext) >= 310nm
+
+# 5.13 SalBlock
+rule Sal.a width(salblock) >= 420nm
+rule Sal.b space(salblock) >= 420nm
+rule Sal.b.notch notch(salblock) >= 420nm
+rule Sal.c.Activ   extension(salblock, activ) >= 200nm
+rule Sal.c.GatPoly extension(salblock, gatpoly) >= 200nm
+rule Sal.d.Activ   space(salblock, activ_unrel_sal) >= 200nm
+rule Sal.d.GatPoly space(salblock, gatpoly_unrel_sal) >= 200nm
+rule Sal.e space(salblock, cont) >= 200nm
+
+# 5.14 Cont (min and max width 0.16 also admits a 0.16 um wide ContBar, 5.15)
+rule Cnt.a     width(cont) >= 160nm
+rule Cnt.a.max width(cont) <= 160nm
+rule Cnt.b  space(cont) >= 180nm
+# "More than 4 rows and more than 4 columns" read as more than 24 cuts in a cluster:
+# every 5x5 array is held, and so is a 4xN (N >= 7) one, which is stricter than the manual.
+rule Cnt.b1 via_array_space(cont; array: 24) >= 200nm
+rule Cnt.c  enclosure(cont_activ, activ) >= 70nm
+rule Cnt.d  enclosure(cont_poly, gatpoly) >= 70nm
+rule Cnt.e  space(cont_poly, activ) >= 140nm
+rule Cnt.f  space(cont_activ, gatpoly) >= 110nm
+rule Cnt.g1 space(psd, cont_nact) >= 90nm
+rule Cnt.g2 enclosure(cont_pact, psd) >= 90nm
+
+# 5.16 Metal1
+rule M1.a  width(metal1) >= 160nm
+rule M1.b  space(metal1) >= 180nm
+rule M1.b.notch notch(metal1) >= 180nm
+rule M1.c1 enclosure(cont, metal1, opposite) >= 50nm
+rule M1.d  area(metal1) >= 0.09um2
+rule M1.j  global_density(metal1_den, prboundary) >= 35%
+rule M1.k  global_density(metal1_den, prboundary) <= 60%
+
+# 5.17 Metal(n=2-5) and 5.20 Via(n=2-4): Metal(n) encloses Via(n-1) below and Via(n) above.
+let thin_metals = [(2, metal2, via1, metal2_den), (3, metal3, via2, metal3_den), (4, metal4, via3, metal4_den), (5, metal5, via4, metal5_den)]
+for (n, m, below, den) in thin_metals {
+    rule M{n}.a width(m) >= 200nm
+    rule M{n}.b space(m) >= 210nm
+    rule M{n}.b.notch notch(m) >= 210nm
+    rule M{n}.c enclosure(below, m) >= 5nm
+    rule M{n}.c1 enclosure(below, m, opposite) >= 50nm
+    rule M{n}.d area(m) >= 0.144um2
+    rule M{n}.j global_density(den, prboundary) >= 35%
+    rule M{n}.k global_density(den, prboundary) <= 60%
+}
+
+# 5.18 Metal(n=1-5):filler
+let fillers = [(1, metal1, metal1_filler, metal1_den), (2, metal2, metal2_filler, metal2_den), (3, metal3, metal3_filler, metal3_den), (4, metal4, metal4_filler, metal4_den), (5, metal5, metal5_filler, metal5_den)]
+for (n, m, fill, den) in fillers {
+    rule M{n}Fil.a1 width(fill) >= 1um
+    rule M{n}Fil.a2 width(fill) <= 5um
+    rule M{n}Fil.b space(fill) >= 420nm
+    rule M{n}Fil.c space(fill, m) >= 420nm
+    rule M{n}Fil.d space(fill, trans) >= 1um
+    rule M{n}Fil.h density(den, prboundary; window: 800um, step: 400um) >= 25%
+    rule M{n}Fil.k density(den, prboundary; window: 800um, step: 400um) <= 75%
+}
+
+# 5.19 Via1 and 5.20 Via(n=2-4): Metal(n) below encloses Via(n).
+# "More than 3 rows and more than 3 columns" read as more than 15 cuts in a cluster:
+# every 4x4 array is held, and so is a 3xN (N >= 6) one, which is stricter than the manual.
+rule V1.a  size(via1) == 190nm x 190nm
+rule V1.b  space(via1) >= 220nm
+rule V1.b1 via_array_space(via1; array: 15) >= 290nm
+rule V1.c  enclosure(via1, metal1) >= 10nm
+rule V1.c1 enclosure(via1, metal1, opposite) >= 50nm
+let vias = [(2, via2, metal2), (3, via3, metal3), (4, via4, metal4)]
+for (n, v, m) in vias {
+    rule V{n}.a  size(v) == 190nm x 190nm
+    rule V{n}.b  space(v) >= 220nm
+    rule V{n}.b1 via_array_space(v; array: 15) >= 290nm
+    rule V{n}.c  enclosure(v, m) >= 5nm
+    rule V{n}.c1 enclosure(v, m, opposite) >= 50nm
+}
+
+# 5.21 TopVia1
+rule TV1.a size(topvia1) == 420nm x 420nm
+rule TV1.b space(topvia1) >= 420nm
+rule TV1.c enclosure(topvia1, metal5) >= 100nm
+rule TV1.d enclosure(topvia1, topmetal1) >= 420nm
+
+# 5.22 TopMetal1
+rule TM1.a width(topmetal1) >= 1.64um
+rule TM1.b space(topmetal1) >= 1.64um
+rule TM1.b.notch notch(topmetal1) >= 1.64um
+rule TM1.c global_density(topmetal1_den, prboundary) >= 25%
+rule TM1.d global_density(topmetal1_den, prboundary) <= 70%
+
+# 5.24 TopVia2
+rule TV2.a size(topvia2) == 900nm x 900nm
+rule TV2.b space(topvia2) >= 1.06um
+rule TV2.c enclosure(topvia2, topmetal1) >= 500nm
+rule TV2.d enclosure(topvia2, topmetal2) >= 500nm
+
+# 5.25 TopMetal2
+rule TM2.a width(topmetal2) >= 2um
+rule TM2.b space(topmetal2) >= 2um
+rule TM2.b.notch notch(topmetal2) >= 2um
+rule TM2.c global_density(topmetal2_den, prboundary) >= 25%
+rule TM2.d global_density(topmetal2_den, prboundary) <= 70%
+
+# 5.23 / 5.26 TopMetal(1,2):filler
+let top_fillers = [(1, topmetal1, topmetal1_filler), (2, topmetal2, topmetal2_filler)]
+for (n, m, fill) in top_fillers {
+    rule TM{n}Fil.a  width(fill) >= 5um
+    rule TM{n}Fil.a1 width(fill) <= 10um
+    rule TM{n}Fil.b  space(fill) >= 3um
+    rule TM{n}Fil.c  space(fill, m) >= 3um
+    rule TM{n}Fil.d  space(fill, trans) >= 4.9um
+}
+
+# 5.27 Passiv
+rule Pas.a width(passiv) >= 2.1um
+rule Pas.b space(passiv) >= 3.5um
+rule Pas.b.notch notch(passiv) >= 3.5um
+rule Pas.c enclosure(passiv, topmetal2) >= 2.1um
+
+# ======================= 6 Device rules =======================
+
+# 6.2 Rsil
+rule Rsil.a width(rsil_body) >= 500nm
+rule Rsil.b space(res, cont) >= 120nm
+rule Rsil.d space(psd, rsil_poly) >= 180nm
+rule Rsil.e enclosure(rsil_poly, extblock) >= 180nm
+rule Rsil.f width(res) >= 500nm
+
+# 6.3 Rppd
+rule Rppd.a width(rppd_body) >= 500nm
+rule Rppd.b enclosure(rppd_poly, psd) >= 180nm
+rule Rppd.c space(sal_rppd, cont) >= 200nm
+rule Rppd.d enclosure(rppd_poly, extblock) >= 180nm
+rule Rppd.e width(sal_rppd) >= 500nm
+
+# 6.4 Rhigh
+rule Rhi.a width(rhigh_body) >= 500nm
+rule Rhi.c.pSD enclosure(rhigh_poly, psd) >= 180nm
+rule Rhi.c.nSD enclosure(rhigh_poly, nsd) >= 180nm
+rule Rhi.d space(sal_rhigh, cont) >= 200nm
+rule Rhi.e enclosure(rhigh_poly, extblock) >= 180nm
+rule Rhi.f width(sal_rhigh) >= 500nm
+
+# 6.5 nmosi (Iso-PWell-Activ: Activ in an NWell hole over nBuLay)
+rule nmosi.b enclosure(iso_pwell_activ, nbl) >= 1.24um
+rule nmosi.c space(nwell, iso_pwell_activ) >= 390nm
+rule nmosi.f width(nsdb_iso) >= 620nm
+
+# 6.9 Pads
+rule Pad.a1 width(pad) <= 150um
+rule Pad.d  space(pad, edgeseal) >= 7.5um
+
+# 6.10 Sealring (EdgeSeal-X = X and EdgeSeal)
+layer activ_chip = activ not edgeseal
+layer es_activ = activ and edgeseal
+layer es_psd = psd and edgeseal
+layer es_metal1 = metal1 and edgeseal
+layer es_metal2 = metal2 and edgeseal
+layer es_metal3 = metal3 and edgeseal
+layer es_metal4 = metal4 and edgeseal
+layer es_metal5 = metal5 and edgeseal
+layer es_topmetal1 = topmetal1 and edgeseal
+layer es_topmetal2 = topmetal2 and edgeseal
+layer es_cont = cont and edgeseal
+layer es_via1 = via1 and edgeseal
+layer es_via2 = via2 and edgeseal
+layer es_via3 = via3 and edgeseal
+layer es_via4 = via4 and edgeseal
+layer es_topvia1 = topvia1 and edgeseal
+layer es_topvia2 = topvia2 and edgeseal
+let seal_layers = [(Activ, es_activ), (pSD, es_psd), (Metal1, es_metal1), (Metal2, es_metal2), (Metal3, es_metal3), (Metal4, es_metal4), (Metal5, es_metal5), (TopMetal1, es_topmetal1), (TopMetal2, es_topmetal2)]
+for (name, l) in seal_layers {
+    rule Seal.a_{name} width(l) >= 3.5um
+    rule Seal.b_{name} space(activ_chip, l) >= 4.9um
+}
+let seal_cuts = [(Cont, es_cont, 160nm), (Via1, es_via1, 190nm), (Via2, es_via2, 190nm), (Via3, es_via3, 190nm), (Via4, es_via4, 190nm), (TopVia1, es_topvia1, 420nm), (TopVia2, es_topvia2, 900nm)]
+for (name, c, w) in seal_cuts {
+    rule Seal.c.{name}     width(c) >= w
+    rule Seal.c.{name}.max width(c) <= w
+    rule Seal.d.{name}     enclosure(c, es_activ) >= 1.3um
+}
+
+# 6.11 MIM
+rule MIM.a width(mim) >= 1.14um
+rule MIM.b space(mim) >= 600nm
+rule MIM.c enclosure(mim, metal5) >= 600nm
+rule MIM.d enclosure(topvia1_mim, mim) >= 360nm
+rule MIM.e space(topmetal1_unrel_mim, mim) >= 600nm
+rule MIM.f area(mim) >= 1.3um2
+
+# ======================= 7 Special rules =======================
+
+# 7.3 Metal slits
+let slits = [(M1, metal1, metal1_slit, metal1_wide), (M2, metal2, metal2_slit, metal2_wide), (M3, metal3, metal3_slit, metal3_wide), (M4, metal4, metal4_slit, metal4_wide), (M5, metal5, metal5_slit, metal5_wide), (TM1, topmetal1, topmetal1_slit, topmetal1_wide), (TM2, topmetal2, topmetal2_slit, topmetal2_wide)]
+for (name, m, slit, wide) in slits {
+    rule Slt.a.{name} width(slit) >= 2.8um
+    rule Slt.b.{name} width(slit) <= 20um
+    rule Slt.c.{name} width(wide) <= 30um
+    rule Slt.f.{name} enclosure(slit, m) >= 1um
+}
+rule Slt.g.M5   space(metal5_slit, mim) >= 600nm
+rule Slt.g.TM1  space(topmetal1_slit, mim) >= 600nm
+rule Slt.h1.Cont space(metal1_slit, cont) >= 300nm
+rule Slt.h1.Via1 space(metal1_slit, via1) >= 300nm
+let slit_vias = [(M2, metal2_slit, via1, via2), (M3, metal3_slit, via2, via3), (M4, metal4_slit, via3, via4), (M5, metal5_slit, via4, topvia1)]
+for (name, slit, below, above) in slit_vias {
+    rule Slt.h2.{name}.below space(slit, below) >= 300nm
+    rule Slt.h2.{name}.above space(slit, above) >= 300nm
+}
+rule Slt.h3.TopVia1 space(topmetal1_slit, topvia1) >= 1um
+rule Slt.h3.TopVia2 space(topmetal1_slit, topvia2) >= 1um
+rule Slt.h4 space(topmetal2_slit, topvia2) >= 1um
+
+# 9 Localized backside etching
+rule LBE.a  width(lbe) >= 100um
+rule LBE.b  width(lbe) <= 1500um
+rule LBE.b2 area(lbe) >= 30000um2
+rule LBE.c  space(lbe) >= 100um
+rule LBE.c.notch notch(lbe) >= 100um
+rule LBE.e.dfPad  space(lbe, dfpad) >= 50um
+rule LBE.e.Passiv space(lbe, passiv) >= 50um
+rule LBE.f  space(lbe, activ) >= 30um
+rule LBE.i  global_density(lbe, prboundary) <= 20%
+
+# 3.1 Grid and angles. The tool refuses 45-degree geometry outright, so the
+# 45-degree variants (Gat.g, M*.g, M*.i) have nothing to measure.
+rule OffGrid off_grid(; pitch: 5nm)
+rule Angle angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+let cuts_90 = [(Cont, cont), (Via1, via1), (Via2, via2), (Via3, via3), (Via4, via4), (TopVia1, topvia1), (TopVia2, topvia2)]
+for (name, c) in cuts_90 {
+    rule Angle.{name} angle(c; allowed: [0deg, 90deg])
+}
+
+# 7.1 Antenna rules, without a protection diode (the stricter limits).
+# One row per etch step, collecting everything standing at that step.
+# Ant.a: GatPoly over field over gate area; GatPoly here includes the gate
+# itself, so the limit is 200 + 1.
+rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none)
+rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none)
+rule Ant.b_Metal1    antenna(gate, metal1; max_ratio: 200, sidewall: none)
+rule Ant.b_Metal2    antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none)
+rule Ant.b_Metal3    antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none)
+rule Ant.b_Metal4    antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none)
+rule Ant.b_Metal5    antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none)
+rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none)
+rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none)
+rule Ant.d_Via1    antenna(gate, via1; max_ratio: 20, sidewall: none)
+rule Ant.d_Via2    antenna(gate, via1, via2; max_ratio: 20, sidewall: none)
+rule Ant.d_Via3    antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none)
+rule Ant.d_Via4    antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none)
+rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none)
+rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none)
+
+# ======================= Electrical rules =======================
+
+# 7.2 Latch-up: LU.a, LU.b.
+rule LU.a missing_tie(pact_nw, ntap; max_distance: 20um)
+rule LU.b missing_tie(nact_pw, ptap; max_distance: 20um)
+rule floating_nwell floating_well(nwell, ntap)
+rule supply_short supply_short(ntap, ptap)
+
+# [PS] §2.15 maximum current densities (11 years at 105 C); the narrow-line
+# IMAX values equal JMAX times the upper width of their range.
+rule EM.Metal1    em_current_density(metal1, cont; max_density: 1mA/um, max_current_per_cut: 0.3mA)
+rule EM.Metal2    em_current_density(metal2, via1; max_density: 2mA/um, max_current_per_cut: 0.4mA)
+rule EM.Metal3    em_current_density(metal3, via2; max_density: 2mA/um, max_current_per_cut: 0.4mA)
+rule EM.Metal4    em_current_density(metal4, via3; max_density: 2mA/um, max_current_per_cut: 0.4mA)
+rule EM.Metal5    em_current_density(metal5, via4; max_density: 2mA/um, max_current_per_cut: 0.4mA)
+rule EM.TopMetal1 em_current_density(topmetal1, topvia1_m5; max_density: 15mA/um, max_current_per_cut: 1.4mA)
+rule EM.TopMetal2 em_current_density(topmetal2, topvia2; max_density: 16mA/um, max_current_per_cut: 10mA)
+
+# [PS] §1: thin oxide for 1.2 V logic, thick oxide for a 3.3 V supply. The
+# PDK publishes no absolute maximum, so the nominal supply is the limit.
+let lv_mos = ["sg13_lv_nmos", "sg13_lv_pmos"]
+let hv_mos = ["sg13_hv_nmos", "sg13_hv_pmos"]
+rule GOX.lv gate_oxide(; models: lv_mos, max: 1.2V)
+rule GOX.hv gate_oxide(; models: hv_mos, max: 3.3V)
+rule VDS.lv drain_source(; models: lv_mos, max: 1.2V)
+rule VDS.hv drain_source(; models: hv_mos, max: 3.3V)
+
+# [LR] §6.8 / [LVS]: pad nets must reach both rails through the ESD diodes.
+rule ESD.pad esd_topological(dfpad; clamps: ["diodevdd_2kv", "diodevss_2kv"])
+
 rule floating_gate floating_gate()
-rule ir_drop ir_drop()
-rule multiple_drivers multiple_drivers(; max: 1)
 rule tie_high_low warning tie_high_low()
-rule soft_connection_through_activ soft_connection(activ)
-rule unconnected_conductor unconnected_pin(activ, gatpoly, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2)
+rule multiple_drivers multiple_drivers(; max: 1)
+rule ir_drop ir_drop()
+rule unconnected_conductor unconnected_pin(gatpoly_c, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2)
 
-connect conductors [activ_active, gatpoly, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2]
+# ======================= Connectivity =======================
+
+# Bottom-up: the antenna rows cut the stack at each etch step in this order.
+connect conductors [nsd_c, psd_c, ntap, ptap, gatpoly_c, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2]
 connect touch_within_layer
-connect via cont [activ_active, metal1]
-connect via cont [gatpoly, metal1]
+connect via cont [nsd_c, metal1]
+connect via cont [psd_c, metal1]
+connect via cont [ntap, metal1]
+connect via cont [ptap, metal1]
+connect via cont [gatpoly_c, metal1]
 connect via via1 [metal1, metal2]
 connect via via2 [metal2, metal3]
 connect via via3 [metal3, metal4]
 connect via via4 [metal4, metal5]
-connect via topvia1 [metal5, topmetal1]
+connect via topvia1_m5 [metal5, topmetal1]
 connect via topvia2 [topmetal1, topmetal2]
-connect label metal1 names metal1
-connect label metal2 names metal2
-connect label metal3 names metal3
-connect label metal4 names metal4
-connect label metal5 names metal5
-connect label topmetal1 names topmetal1
-connect label topmetal2 names topmetal2
+connect label metal1_label names metal1
+connect label metal2_label names metal2
+connect label metal3_label names metal3
+connect label metal4_label names metal4
+connect label metal5_label names metal5
+connect label topmetal1_label names topmetal1
+connect label topmetal2_label names topmetal2
 
-device mos ngate model "sg13_lv_nmos" terminals [gatpoly, activ_active, activ_active]
-device mos pgate model "sg13_lv_pmos" terminals [gatpoly, activ_active, activ_active]
-device bjt trans model "npn13G2" terminals [metal1, metal2, activ_active]
-device resistor res model "res_rsil" terminals [gatpoly, gatpoly]
-device capacitor mim model "cap_cmim" terminals [metal5, topmetal1]
+# ======================= Devices ([LVS] model names) =======================
 
-pex activ thickness 400nm height 0nm sheet 7ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex activ_active thickness 400nm height 0nm sheet 7ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex gatpoly thickness 160nm height 400nm sheet 7ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex cont thickness 640nm height 400nm sheet 17ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex metal1 thickness 420nm height 1040nm sheet 0.11ohm dielectric 4.1 area_cap 34.9aF/um2 fringe_cap 31.6aF/um
-pex via1 thickness 540nm height 1460nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex metal2 thickness 490nm height 2000nm sheet 0.088ohm dielectric 4.1 area_cap 18.1aF/um2 fringe_cap 44.7aF/um
-pex via2 thickness 540nm height 2490nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex metal3 thickness 490nm height 3030nm sheet 0.088ohm dielectric 4.1 area_cap 12aF/um2 fringe_cap 44.8aF/um
-pex via3 thickness 540nm height 3520nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex metal4 thickness 490nm height 4060nm sheet 0.088ohm dielectric 4.1 area_cap 8.94aF/um2 fringe_cap 45aF/um
-pex via4 thickness 540nm height 4550nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex metal5 thickness 490nm height 5090nm sheet 0.088ohm dielectric 4.1 area_cap 7.13aF/um2 fringe_cap 43.7aF/um
-pex topvia1 thickness 850nm height 5580nm sheet 2.2ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex topmetal1 thickness 2000nm height 6430nm sheet 0.018ohm dielectric 4.1 area_cap 5.64aF/um2 fringe_cap 50.8aF/um
-pex topvia2 thickness 2800nm height 8430nm sheet 1.1ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
-pex topmetal2 thickness 3000nm height 11230nm sheet 0.011ohm dielectric 4.1 area_cap 3.23aF/um2 fringe_cap 41.8aF/um
+device mos ngate_lv model "sg13_lv_nmos" terminals [gatpoly_c, nsd_c, nsd_c]
+device mos ngate_hv model "sg13_hv_nmos" terminals [gatpoly_c, nsd_c, nsd_c]
+device mos pgate_lv model "sg13_lv_pmos" terminals [gatpoly_c, psd_c, psd_c]
+device mos pgate_hv model "sg13_hv_pmos" terminals [gatpoly_c, psd_c, psd_c]
+device resistor rsil_body  model "rsil"  terminals [gatpoly_c, gatpoly_c]
+device resistor rppd_body  model "rppd"  terminals [gatpoly_c, gatpoly_c]
+device resistor rhigh_body model "rhigh" terminals [gatpoly_c, gatpoly_c]
+# Top plate reaches TopMetal1 through TopVia1 on the MIM; bottom plate is Metal5.
+device capacitor mim model "cap_cmim" terminals [topmetal1, metal5]
+# ESD diodes as the LVS extracts them (bjt3: base, emitter, collector).
+device bjt esd_vdd model "diodevdd_2kv" terminals [ntap, psd_c, ptap]
+device bjt esd_vss model "diodevss_2kv" terminals [ptap, nsd_c, ntap]
+
+# ======================= Parasitic stack =======================
+# Heights above the silicon under the 400 nm STI, from [PS] §2.16: STI 400,
+# ILD0 640, Metal1 420, ILD1-4 540, Metal2-5 490, TopVia1 ILD 850, TopMetal1 2000,
+# TopVia2 ILD 2800, TopMetal2 3000; GatPoly 160.
+# Sheet resistance: [PS] §2.13 targets (GatPoly = Rsil 7.0), Activ from [ITF];
+# a cut's value is its resistance per cut, [PS] §2.14 (Cont on Activ 17, on poly 15).
+# εr: 4.1 above the field oxide, 3.95 for it ([PS] Fig. 1.1.1).
+# Area capacitance to substrate: Metal1 is the measured [PS] §2.17 CAMET1SUB,
+# 37 aF/um2. [PS] publishes no other layer's substrate or fringe capacitance, so
+# the others are parallel-plate ε0·εr/height from the heights above, and fringe
+# is 0 (not published).
+pex nsd_c      thickness 400nm height 0nm sheet 1ohm dielectric 3.95 area_cap 0aF/um2 fringe_cap 0aF/um
+pex psd_c      thickness 400nm height 0nm sheet 1ohm dielectric 3.95 area_cap 0aF/um2 fringe_cap 0aF/um
+pex ntap       thickness 400nm height 0nm sheet 1ohm dielectric 3.95 area_cap 0aF/um2 fringe_cap 0aF/um
+pex ptap       thickness 400nm height 0nm sheet 1ohm dielectric 3.95 area_cap 0aF/um2 fringe_cap 0aF/um
+pex gatpoly_c  thickness 160nm height 400nm sheet 7ohm dielectric 4.1 area_cap 87.43aF/um2 fringe_cap 0aF/um
+pex cont       thickness 640nm height 400nm sheet 17ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal1     thickness 420nm height 1040nm sheet 0.11ohm dielectric 4.1 area_cap 37aF/um2 fringe_cap 0aF/um
+pex via1       thickness 540nm height 1460nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal2     thickness 490nm height 2000nm sheet 0.088ohm dielectric 4.1 area_cap 18.15aF/um2 fringe_cap 0aF/um
+pex via2       thickness 540nm height 2490nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal3     thickness 490nm height 3030nm sheet 0.088ohm dielectric 4.1 area_cap 11.98aF/um2 fringe_cap 0aF/um
+pex via3       thickness 540nm height 3520nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal4     thickness 490nm height 4060nm sheet 0.088ohm dielectric 4.1 area_cap 8.94aF/um2 fringe_cap 0aF/um
+pex via4       thickness 540nm height 4550nm sheet 9ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal5     thickness 490nm height 5090nm sheet 0.088ohm dielectric 4.1 area_cap 7.13aF/um2 fringe_cap 0aF/um
+pex topvia1_m5 thickness 850nm height 5580nm sheet 2.2ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex topmetal1  thickness 2000nm height 6430nm sheet 0.018ohm dielectric 4.1 area_cap 5.65aF/um2 fringe_cap 0aF/um
+pex topvia2    thickness 2800nm height 8430nm sheet 1.1ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex topmetal2  thickness 3000nm height 11230nm sheet 0.011ohm dielectric 4.1 area_cap 3.23aF/um2 fringe_cap 0aF/um
+
+# ======================= Rules waiting on a check kind =======================
+# Uncomment when the kind lands. Text is the intended rule.
+
+# needs: same/diff-net spacing
+# rule NW.b1 space(nwell; different_net) >= 1.8um
+# rule NBL.c space(nbl; different_net) >= 3.2um
+# rule NBL.d space(nbl, nwell; different_net) >= 2.2um
+
+# needs: width x PRL spacing table (width strictly greater, run strictly greater)
+# rule M1.e prl_table(metal1; width: > 300nm, prl: > 1um) >= 220nm
+# rule M1.f prl_table(metal1; width: > 10um, prl: > 10um) >= 600nm
+# for (n, m, below, den) in thin_metals {
+#     rule M{n}.e prl_table(m; width: > 390nm, prl: > 1um) >= 240nm
+#     rule M{n}.f prl_table(m; width: > 10um, prl: > 10um) >= 600nm
+# }
+# rule TM2.bR prl_table(topmetal2; width: > 5um, prl: > 50um) >= 5um   # recommended; not inside IND
+
+# needs: forbidden (any shape on the layer is a violation)
+# layer biwind  = gds(3, 0)
+# layer pemwind = gds(11, 0)
+# layer baspoly = gds(13, 0)
+# layer deepco  = gds(35, 0)
+# layer pempoly = gds(53, 0)
+# layer empoly  = gds(55, 0)
+# layer ldmos   = gds(57, 0)
+# layer pbiwind = gds(58, 0)
+# layer nodrc   = gds(62, 0)
+# layer flash   = gds(71, 0)
+# layer colwind = gds(139, 0)
+# rule forbidden.BiWind  forbidden(biwind)
+# rule forbidden.PEmWind forbidden(pemwind)
+# rule forbidden.BasPoly forbidden(baspoly)
+# rule forbidden.DeepCo  forbidden(deepco)
+# rule forbidden.PEmPoly forbidden(pempoly)
+# rule forbidden.EmPoly  forbidden(empoly)
+# rule forbidden.LDMOS   forbidden(ldmos)
+# rule forbidden.PBiWind forbidden(pbiwind)
+# rule forbidden.NoDRC   forbidden(nodrc)
+# rule forbidden.Flash   forbidden(flash)
+# rule forbidden.ColWind forbidden(colwind)
+# rule Cnt.g  forbidden(cont not (activ or gatpoly))
+# rule Cnt.h  forbidden(cont not metal1)          # also M1.c, enclosure 0
+# rule Cnt.j  forbidden(cont and gate)
+# rule nSDB.e forbidden(nsd_block and cont)       # space 0
+# rule MIM.h  forbidden(topvia1.interacting(mim) not mim)
+# rule Pad.i  forbidden(dfpad not topmetal2)
+# rule Pin.e  forbidden(gds(8, 2) not metal1)     # and Pin.a/b/f/g/h for the other pin layers
+
+# needs: must-contain / shape class
+# rule Gat.f  rectangles_only(gate)               # no 45 or 90 degree bends on Activ
+# rule Rhi.b  identical(psd.interacting(rhigh_body), nsd)
+# rule Rsil.c extension(res, gatpoly) >= 0nm      # RES must reach across the GatPoly
+
+# needs: edge checks (channel length across the gate, abutted-tie edges)
+# rule Gat.a3 channel_length(ngate_hv) >= 450nm
+# rule Gat.a4 channel_length(pgate_hv) >= 400nm
+# rule pSD.e  abutted_overlap(psd, activ) >= 300nm
+# rule pSD.f  abutted_extension(activ, psd) >= 300nm
+# rule AFil.i space(activ_filler, pwell_block.edges()) >= 1.5um
+
+# needs: maximum area / maximum extension / per-chip totals
+# rule MIM.g  area(mim) <= 5625um2
+# rule LBE.b1 area(lbe) <= 250000um2
+# rule LU.c   max_extension(ntap.interacting(psd_c), cont) <= 6um
+# rule LU.c1  max_extension(ptap.interacting(nsd_c), cont) <= 6um
+# rule LU.d   max_extension(ntap, cont) <= 6um
+# rule LU.d1  max_extension(ptap, cont) <= 6um
+
+# needs: text conditions (device recognition by TEXT label)
+# layer text = gds(63, 0)
+# layer nmoscl_2 = recog_esd.with_text(text, "nmoscl_2")
+# layer nmoscl_4 = recog_esd.with_text(text, "nmoscl_4")
+# device diode nmoscl_2 model "nmoscl_2" terminals [ntap, ptap]
+# device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
+# rule ESD.pad esd_topological(dfpad; clamps: ["diodevdd_2kv", "diodevss_2kv", "nmoscl_2", "nmoscl_4"])
+
+# ======================= Not carried, and why =======================
+# - Antenna: the rows above hold every gate to the unprotected limits; Ant.e/f
+#   (20000 and 500 with a protection diode of at least Ant.g 0.16 um2) switch the
+#   limit on diode presence, which antenna_electrical's linear credit cannot state,
+#   so gates with a diode over-report. IHP sums one ratio per layer, each over the
+#   gate area connected at that layer's step; the rows here divide all collected
+#   metal by the gate area at the highest step, which can under-report a gate that
+#   is joined to others only on a higher metal.
+# - Sheet and fringe capacitances other than Metal1-substrate are not in [PS];
+#   metal-to-metal area capacitances ([PS] §2.17, 68 aF/um2 M(n)-M(n+1), 42.5
+#   TopMetal1-Metal5, 13 TopMetal2-TopMetal1) have no field in the pex row.
+# - Electromigration with lifetime (Black's equation): [PS] gives current limits
+#   only, no activation energy or current exponent.
+# - well_bias: MOS recognisers carry no bulk terminal (wells are not nets here).
+# - esd_latchup: [LR] gives no guard-ring width or tap distance for pads.
+# - ESD devices diodevdd_4kv/diodevss_4kv (two bases) and the isolated
+#   idiodevdd/idiodevss (nBuLay) are not recognised; a pad using only them is
+#   reported unclamped. scr1, nmoscl_2/4, isolbox, rfmos, moscap, SVaricap,
+#   schottky_nbl1, dantenna/dpantenna need TEXT labels or Recog:diode wiring to
+#   two well nets. npn13G2/L/V (npnG2.*) need emitter-window layers and
+#   substrate as a net. Metal resistors res_metal1..res_topmetal2 need each
+#   metal split at its :res marker.
+# - Cnt.b1, V*.b1 are approximated by cut counts (see above). ContBar rules
+#   CntB.* need a square/bar shape class; Cnt.a admits 0.16 um wide bars.
+# - Seal.e/f/k/l/m/n, Padb.*, Padc.* (bump/pillar options), Pad.*R, npn*.bR/cR,
+#   MIM.gR, TM2.bR and other "R" rules are recommended or option-specific.
+# - Slt.i (6 % slit density in plates over 35 x 35 um), GFil.i (GatPoly:nofill
+#   400 x 400) and TSV_G.* (TSV option) are not expressible.
+# - NWell >= 3.0 um for the generated nBuLay is read as "wider than 3.0 um": a
+#   well exactly 3.0 um wide generates none.
+# - Abutted ties (N+ and P+ Activ touching under one silicide) extract as two
+#   nets, since Activ is split by implant; tie them through Cont as LU.c/d expect.
+# - Gat.d is partial: poly crossing one Activ and passing near another is not held.
