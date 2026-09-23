@@ -435,14 +435,57 @@ pub fn via_edges_into(
     );
 }
 
+/// Every `(cut, lower, upper)` a via cut joins, one row per cut and pair,
+/// ascending by cut. Unlike [`via_edges_into`], a stack of cuts is not merged.
+pub fn via_cuts_into(
+    store: &GeometryStore,
+    cut: LayerId,
+    connects: (LayerId, LayerId),
+    out: &mut Vec<(u32, u32, u32)>,
+) {
+    out.clear();
+    let mut holes = Holes::default();
+    holes.build(store, [cut, connects.0, connects.1]);
+    via_landings(
+        store,
+        &holes,
+        cut,
+        connects,
+        &mut EdgeScratch::default(),
+        |c, low, high| out.push((c.0, low.0, high.0)),
+    );
+}
+
 /// Sorts and dedups only the rows it appends; earlier layers' rows stay put.
 fn via_edges_append(
     store: &GeometryStore,
     holes: &Holes,
     cut: LayerId,
-    (lower, upper): (LayerId, LayerId),
+    connects: (LayerId, LayerId),
     scratch: &mut EdgeScratch,
     out: &mut Vec<(u32, u32)>,
+) {
+    let base = out.len();
+    via_landings(store, holes, cut, connects, scratch, |_, low, high| {
+        out.push((low.0, high.0));
+    });
+
+    // A stack of cuts over one pair of shapes is one edge.
+    let mut tail = out.split_off(base);
+    tail.sort_unstable();
+    tail.dedup();
+    out.append(&mut tail);
+}
+
+/// Call `emit(cut, lower, upper)` for every pair of conductors a cut lands on,
+/// ascending by cut.
+fn via_landings(
+    store: &GeometryStore,
+    holes: &Holes,
+    cut: LayerId,
+    (lower, upper): (LayerId, LayerId),
+    scratch: &mut EdgeScratch,
+    mut emit: impl FnMut(PolyId, PolyId, PolyId),
 ) {
     SpatialIndex::build_into(store, cut, &mut scratch.cut_index);
     if scratch.cut_index.is_empty() {
@@ -461,7 +504,6 @@ fn via_edges_append(
     cuts_landing_on(store, holes, cut_index, upper, index, pairs, on_upper);
 
     // Both lists ascend by `(cut, conductor)`: merge on the cut column.
-    let base = out.len();
     let (mut lo, mut hi) = (0usize, 0usize);
     while lo < on_lower.len() && hi < on_upper.len() {
         let (a, b) = (on_lower[lo].0, on_upper[hi].0);
@@ -477,18 +519,12 @@ fn via_edges_append(
         let hi_end = hi + on_upper[hi..].partition_point(|&(c, _)| c == a);
         for &(_, low_poly) in &on_lower[lo..lo_end] {
             for &(_, high_poly) in &on_upper[hi..hi_end] {
-                out.push((low_poly.0, high_poly.0));
+                emit(a, low_poly, high_poly);
             }
         }
         lo = lo_end;
         hi = hi_end;
     }
-
-    // A stack of cuts over one pair of shapes is one edge.
-    let mut tail = out.split_off(base);
-    tail.sort_unstable();
-    tail.dedup();
-    out.append(&mut tail);
 }
 
 /// Every `(cut, conductor)` pair where the cut really lands, ascending.

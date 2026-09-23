@@ -39,6 +39,16 @@ result from them is weaker than it looks.
 - Voltage-aware electrical checks: gate oxide and drain-source overstress,
   well bias, missing level shifters between power domains.
 
+## Power grid
+
+- Each supply net is fed from one point: the centre of its highest, then
+  widest, shape. A rail fed from several pads reads more drop and more current
+  near that point than it really has.
+- A net's current budget is shared equally among the devices on it, so one
+  device that draws more than its share reads cooler than it is.
+- `electromigration` and `reliability` use one temperature for the whole run,
+  85 °C, with no self-heating.
+
 ## Shipped decks
 
 The decks in `pdks/` are starting points, not qualified decks, and none
@@ -53,8 +63,10 @@ records which PDK release its numbers came from.
 
 ## Test coverage
 
-`electromigration`, `esd_latchup`, `ir_drop` and `reliability` run and report,
-but no test yet checks their numbers against an independent answer. Many
-other rules have limits that are foundry conventions rather than physics, so
-their tests prove the rule runs and measures, not that the limit is right for
-your process.
+`ir_drop`, `electromigration` and `reliability` are checked against numbers
+worked out by hand from Ohm's law, Black's equation with the Blech exemption,
+and the power-law and Arrhenius lifetime model, including values exactly at
+the limit. `esd_latchup` runs and reports, but no test yet checks its numbers
+against an independent answer. Many other rules have limits that are foundry
+conventions rather than physics, so their tests prove the rule runs and
+measures, not that the limit is right for your process.

@@ -55,7 +55,8 @@ pub struct EsdLatchupTable {
 }
 
 /// Every node's predicted lifetime against the required one, plus the absolute
-/// voltage cap. A row whose model is unusable or not finite is refused.
+/// voltage cap. A row whose model is unusable is refused; an unstressed node
+/// lasts forever and passes.
 ///
 /// No `discarded_budget` gate: with no current every node sits at nominal, the
 /// largest stress, which is the fail-closed direction.
@@ -109,8 +110,9 @@ pub fn check_reliability(
         if usable {
             hour.clear();
             for &stress in voltage {
+                // A node at 0 V (a ground rail) is unstressed: infinite hours.
                 let h = unit * (reference_stress / stress.raw().abs()).powf(exponent);
-                sound &= h.is_finite();
+                sound &= !h.is_nan();
                 hour.push(h);
             }
         }
@@ -138,7 +140,7 @@ pub fn check_reliability(
                 push(out, applied, cap_limit);
             }
             let hours = Measurement::Ratio(hour[node]);
-            if hours.violates(required_limit, LimitSense::Minimum) {
+            if hour[node].is_finite() && hours.violates(required_limit, LimitSense::Minimum) {
                 push(out, hours, required_limit);
             }
         }
