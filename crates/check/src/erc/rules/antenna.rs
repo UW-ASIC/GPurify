@@ -155,6 +155,9 @@ fn attach(
     scratch: &mut Scratch,
 ) -> bool {
     let store = design.store;
+    if store.polys_on_layer(layer).is_empty() {
+        return true;
+    }
     if validate_layer_into(store, layer, &mut scratch.layer_a).is_err() {
         return false;
     }
