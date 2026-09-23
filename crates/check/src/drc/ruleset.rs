@@ -176,7 +176,15 @@ impl RuleSet {
             }
             Ok(limit)
         };
-        let square = |spec: &RuleSpec, param| length(spec, param).map(|side| side.mul_wide(side));
+        let square = |spec: &RuleSpec, param| match value(spec, param)? {
+            ParamValue::Area(area) if area.raw() > 0 => Ok(area),
+            ParamValue::Area(area) => Err(DrcError::NonPositiveLimit {
+                rule: name_of(spec.id),
+                limit: i64::try_from(area.raw()).unwrap_or(i64::MIN),
+            }),
+            // A JSON deck states the side of the equivalent square.
+            _ => length(spec, param).map(|side| side.mul_wide(side)),
+        };
         let ratio = |spec: &RuleSpec, param| -> Result<f64, DrcError> {
             let ParamValue::Ratio(limit) = value(spec, param)? else {
                 return Err(wrong_type(spec, param));

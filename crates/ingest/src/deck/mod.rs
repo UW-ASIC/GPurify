@@ -1,15 +1,22 @@
 //! The PDK deck: layers, derived layers, rules, connectivity, device recognisers, PEX stack.
 //!
-//! Data in: deck JSON (schema on [`parse_deck`]) and the layout's grid.
+//! Data in: deck text (see `docs/DECK_LANGUAGE.md`) and the layout's grid.
 //! Data out: [`Deck`], limits converted from physical nanometres to grid units exactly or refused.
 //! Rule kinds are interned verbatim and never interpreted here.
 
 use crate::narrow;
 use gpurify_geom::LayerId;
-use gpurify_geom::{prefix::NANO, Dbu, Grid, GridError, Length, Qty};
+use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, GridError, Length, Qty};
 use gpurify_geom::{StrId, StrTable};
-use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
+
+mod json;
+mod kinds;
+mod lex;
+mod parse;
+
+pub use json::parse_deck;
+pub use parse::{parse_deck_dsl, Diagnostic};
 
 /// Why a deck was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -26,6 +33,23 @@ pub enum DeckError {
     DuplicateRule(String),
     #[error("io: {0}")]
     Io(String),
+    /// The deck text did not parse; each diagnostic points at its span.
+    #[error("{}", parse::render(.file, .diagnostics))]
+    Invalid {
+        file: String,
+        diagnostics: Vec<Diagnostic>,
+    },
+}
+
+impl DeckError {
+    /// Name the file the diagnostics point into.
+    #[must_use]
+    pub fn in_file(mut self, path: &str) -> Self {
+        if let Self::Invalid { file, .. } = &mut self {
+            path.clone_into(file);
+        }
+        self
+    }
 }
 
 /// A parsed, validated, grid-resolved deck.
@@ -156,6 +180,8 @@ pub enum ParamValue {
     Ratio(f64),
     Count(u32),
     Flag(bool),
+    /// An area, already in square grid units.
+    Area(DbuArea),
     /// A layer, for rules parameterised by one.
     Layer(LayerId),
 }
@@ -243,29 +269,10 @@ pub struct ProcessStack {
     pub dielectric_k: Vec<f64>,
 }
 
-/// Parse and validate a deck from memory.
-///
-/// ```json
-/// { "layers": { "<name>": [<gds_layer>, <gds_datatype>] },
-///   "derived": [{ "name": "<name>", "op": "and"|"or"|"not", "layers": ["<name>", ..] }],
-///   "rules": { "<rule_id>": { "kind": "<kind>", "layers": ["<name>", ..], "params": { "<param>": <value> } } },
-///   "connectivity": { "conductors": [..], "intra_layer_touch": <bool>,
-///                     "vias": [{ "layer": "<name>", "connects": ["<name>", "<name>"] }],
-///                     "labels": [{ "layer": "<name>", "names": "<name>" }] },
-///   "device_recognition": [{ "kind": "mos"|"bjt"|"resistor"|"capacitor"|"diode",
-///                            "marker": "<name>", "model": "<string>", "terminals": [..] }],
-///   "pex": { "<name>": { "thickness_nm", "height_nm", "sheet_res_ohm_sq",
-///                        "area_cap_af_um2", "fringe_cap_af_um", "dielectric_k" } } }
-/// ```
-///
-/// Every section is optional. Base layers take ids ascending by name bytes; derived
-/// layers follow in declaration order. A param value is `{"nm": n}` (converted
-/// against `grid` exactly or `OffGrid`), `{"ratio": f}`, `{"count": n}`,
-/// `{"layer": "<name>"}` or a bare bool.
-pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
-    let doc: DeckJson =
-        serde_json::from_str(source).map_err(|why| DeckError::Malformed(why.to_string()))?;
-
+/// Lower a parsed deck to a [`Deck`]. Base layers take ids ascending by name
+/// bytes; derived layers follow in declaration order. Strings are interned in
+/// section order, so the same deck text always yields the same [`StrId`]s.
+fn build(doc: &DeckSrc, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
     let mut layers = build_layers(&doc.layers, strings)?;
     // First: any later section may name a derived layer.
     build_derived(&doc.derived, &mut layers, strings)?;
@@ -286,7 +293,7 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
 /// The `"derived"` section, ids assigned in declaration order. Operands resolve
 /// before the id is taken, so a self- or forward reference is `UnknownLayer`.
 fn build_derived(
-    declared: &[DerivedJson],
+    declared: &[DerivedSrc],
     layers: &mut LayerTable,
     strings: &mut StrTable,
 ) -> Result<(), DeckError> {
@@ -364,7 +371,7 @@ fn build_layers(
 /// The `"rules"` section to a [`RuleTable`], layers resolved and lengths
 /// converted. Rules keep the order the deck states them in.
 fn build_rules(
-    declared: &Pairs<RuleJson>,
+    declared: &Pairs<RuleSrc>,
     layers: &LayerTable,
     grid: Grid,
     strings: &mut StrTable,
@@ -420,18 +427,19 @@ fn build_rules(
 
 /// One stated parameter to its converted [`ParamValue`].
 fn param_value(
-    stated: &ParamJson,
+    stated: &ParamSrc,
     rule_id: &str,
     layers: &LayerTable,
     grid: Grid,
     strings: &StrTable,
 ) -> Result<ParamValue, DeckError> {
     Ok(match *stated {
-        ParamJson::Flag(flag) => ParamValue::Flag(flag),
-        ParamJson::Ratio(ratio) => ParamValue::Ratio(ratio),
-        ParamJson::Count(count) => ParamValue::Count(count),
-        ParamJson::Nm(nm) => ParamValue::Length(to_limit(nm, grid, rule_id)?),
-        ParamJson::Layer(ref name) => ParamValue::Layer(layer_of(layers, strings, rule_id, name)?),
+        ParamSrc::Flag(flag) => ParamValue::Flag(flag),
+        ParamSrc::Ratio(ratio) => ParamValue::Ratio(ratio),
+        ParamSrc::Count(count) => ParamValue::Count(count),
+        ParamSrc::Nm(nm) => ParamValue::Length(to_limit(nm, grid, rule_id)?),
+        ParamSrc::Area(area) => ParamValue::Area(area),
+        ParamSrc::Layer(ref name) => ParamValue::Layer(layer_of(layers, strings, rule_id, name)?),
     })
 }
 
@@ -455,7 +463,7 @@ fn to_limit(nm: f64, grid: Grid, rule_id: &str) -> Result<Dbu, DeckError> {
 
 /// The `"connectivity"` section, layers resolved.
 fn build_connectivity(
-    declared: &ConnectivityJson,
+    declared: &ConnectivitySrc,
     layers: &LayerTable,
     strings: &StrTable,
 ) -> Result<Connectivity, DeckError> {
@@ -512,7 +520,7 @@ fn build_connectivity(
 /// The `"device_recognition"` section, as the CSR [`DeviceRecognition`] holds.
 /// Terminal order is the role, and this preserves the deck's order.
 fn build_devices(
-    declared: &[DeviceJson],
+    declared: &[DeviceSrc],
     layers: &LayerTable,
     strings: &mut StrTable,
 ) -> Result<DeviceRecognition, DeckError> {
@@ -560,7 +568,7 @@ fn build_devices(
 /// Every column is `layers.len()` long once the section exists at all;
 /// `pex::stack_row` indexes it directly. An omitted layer keeps its zero.
 fn build_stack(
-    declared: &Pairs<StackJson>,
+    declared: &Pairs<StackSrc>,
     layers: &LayerTable,
     strings: &StrTable,
 ) -> Result<ProcessStack, DeckError> {
@@ -591,37 +599,12 @@ fn build_stack(
     Ok(stack)
 }
 
-/// The key/value pairs of a JSON object, in file order and with repeats kept:
-/// `serde_json::Map` collapses a repeated key and would drop a duplicate rule.
-struct Pairs<T>(Vec<(String, T)>);
+/// Key/value pairs in file order, repeats kept, so a duplicate rule id is still seen.
+pub(crate) struct Pairs<T>(pub(crate) Vec<(String, T)>);
 
 impl<T> Default for Pairs<T> {
     fn default() -> Self {
         Self(Vec::new())
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Pairs<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct PairVisitor<T>(std::marker::PhantomData<T>);
-
-        impl<'de, T: Deserialize<'de>> Visitor<'de> for PairVisitor<T> {
-            type Value = Pairs<T>;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a JSON object")
-            }
-
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Pairs<T>, M::Error> {
-                let mut pairs = Vec::with_capacity(map.size_hint().unwrap_or(0));
-                while let Some(entry) = map.next_entry::<String, T>()? {
-                    pairs.push(entry);
-                }
-                Ok(Pairs(pairs))
-            }
-        }
-
-        deserializer.deserialize_map(PairVisitor(std::marker::PhantomData))
     }
 }
 
@@ -631,21 +614,21 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Pairs<T> {
 /// a deck with no connectivity, which reports a clean LVS for a broken chip.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct DeckJson {
+struct DeckSrc {
     #[serde(default)]
     layers: Pairs<(u16, u16)>,
     /// An array, not an object: declaration order decides the ids rows take and
     /// therefore which may name which.
     #[serde(default)]
-    derived: Vec<DerivedJson>,
+    derived: Vec<DerivedSrc>,
     #[serde(default)]
-    rules: Pairs<RuleJson>,
+    rules: Pairs<RuleSrc>,
     #[serde(default)]
-    connectivity: ConnectivityJson,
+    connectivity: ConnectivitySrc,
     #[serde(default)]
-    device_recognition: Vec<DeviceJson>,
+    device_recognition: Vec<DeviceSrc>,
     #[serde(default)]
-    pex: Pairs<StackJson>,
+    pex: Pairs<StackSrc>,
     /// Consumer-owned: a downstream tool keeps its layer roles and construction
     /// dimensions in the deck it hands us. Named so such a deck parses and the
     /// section is ignored — an anonymous escape hatch would also swallow the
@@ -659,22 +642,25 @@ struct DeckJson {
 /// the rule instead of a serde message naming a byte offset.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RuleJson {
+struct RuleSrc {
     kind: Option<String>,
     layers: Option<Vec<String>>,
     #[serde(default)]
-    params: Pairs<ParamJson>,
+    params: Pairs<ParamSrc>,
 }
 
 /// A parameter value carries its own shape — `45` alone cannot be told from a
 /// ratio of `45`.
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum ParamJson {
+enum ParamSrc {
     Nm(f64),
     Ratio(f64),
     Count(u32),
     Layer(String),
+    /// Already on the grid; only the deck text states an area.
+    #[serde(skip)]
+    Area(DbuArea),
     /// Untagged: `true` is a flag and no other variant is a bare boolean.
     #[serde(untagged)]
     Flag(bool),
@@ -682,20 +668,20 @@ enum ParamJson {
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct ConnectivityJson {
+struct ConnectivitySrc {
     #[serde(default)]
     conductors: Vec<String>,
     #[serde(default)]
     intra_layer_touch: bool,
     #[serde(default)]
-    vias: Vec<ViaJson>,
+    vias: Vec<ViaSrc>,
     #[serde(default)]
-    labels: Vec<LabelJson>,
+    labels: Vec<LabelSrc>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ViaJson {
+struct ViaSrc {
     layer: String,
     connects: (String, String),
 }
@@ -703,14 +689,14 @@ struct ViaJson {
 /// One `connectivity.labels` row: a text layer and the conductor it names.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LabelJson {
+struct LabelSrc {
     layer: String,
     names: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DeviceJson {
+struct DeviceSrc {
     kind: String,
     marker: String,
     model: String,
@@ -721,7 +707,7 @@ struct DeviceJson {
 /// layers it folds.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DerivedJson {
+struct DerivedSrc {
     name: String,
     op: String,
     layers: Vec<String>,
@@ -729,7 +715,7 @@ struct DerivedJson {
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct StackJson {
+struct StackSrc {
     #[serde(default)]
     thickness_nm: f64,
     #[serde(default)]
@@ -751,7 +737,7 @@ pub(crate) mod tests {
     use gpurify_geom::Grid;
     use gpurify_geom::LayerId;
 
-    /// The `"cell"` key is the one consumer-owned name [`DeckJson`] admits; any
+    /// The `"cell"` key is the one consumer-owned name [`DeckSrc`] admits; any
     /// other unknown key must still die in `deny_unknown_fields`, or a
     /// misspelled section is a deck missing that section and a clean report.
     #[test]

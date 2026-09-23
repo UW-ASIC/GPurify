@@ -29,6 +29,9 @@ layer licon = gds(66, 44)
 layer li    = gds(67, 20)
 layer mcon  = gds(67, 44)
 layer met1  = gds(68, 20)
+layer met2  = gds(69, 20)
+layer met3  = gds(70, 20)
+layer met1_label = gds(68, 5)
 layer nsdm  = gds(93, 44)
 layer psdm  = gds(94, 20)
 
@@ -41,7 +44,6 @@ rule m1.1     width(met1)             >= 140nm
 rule m1.4     enclosure(mcon, met1)   >= 30nm
 rule m1.5     enclosure(mcon, met1, opposite) >= 60nm
 rule m1.6     area(met1)              >= 0.083um2
-rule licon.1  cut_size(licon)         == 170nm x 170nm
 
 let metals = [(met1, 140nm), (met2, 140nm), (met3, 300nm)]
 for (m, w) in metals {
@@ -59,9 +61,12 @@ connect via mcon  [li, met1]
 
 device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, diff_active]
 
-pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9
-    area_cap 25.8aF/um2 fringe_cap 40.5aF/um
+connect label met1_label names met1
+
+pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
 ```
+
+(`tests/deck_text.rs` in `ingest` parses this example.)
 
 ## Lexical
 
@@ -70,9 +75,12 @@ pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9
   and `{name}` interpolation inside a `for` body.
 - Strings: `"..."`, no escapes except `\"` and `\\`. Only model names use them.
 - Numbers: decimal, optional fraction and exponent. A number is always
-  followed by a unit, except a **count** (unsigned integer) and a **scalar**
-  (a dimensionless ratio or exponent, written with a fraction or as `%`).
-- Newlines end a statement unless inside `(`, `[` or `{`.
+  followed by a unit, except a **count** (unsigned integer), a **scalar**
+  (a dimensionless ratio or exponent, bare, integer or not) and a
+  **fraction** (bare 0–1, or with `%`). A `-` before a number negates it.
+- Newlines end a statement unless inside `(` or `[`. A `for` body's `{ }`
+  keeps them: each statement in it is its own line. A statement that does not
+  fit on one line continues inside the parentheses of its check.
 
 ## Units
 
@@ -95,10 +103,19 @@ dimension; each parameter declares the dimension it accepts.
 | fraction | `%` (0–100) or a scalar 0–1 |
 | angle | `deg` |
 
-Lengths must land on the grid: `grid 5nm` makes `142nm` an error. Values are
-converted to the engine's internal units exactly as the JSON reader did; the
-conversion is the proof, because the corpus output must be byte-identical
-after `deck convert`.
+Rule lengths must land on the grid: `grid 5nm` makes `142nm` an error, and an
+area must be a multiple of the grid squared. `grid` is stated once, before the
+first rule length. A rule length must also be exact on the layout's grid (the
+`--grid` of the run). PEX thicknesses and heights are vertical and are not
+grid-checked.
+
+Each dimension converts, exactly, to the one unit the engine stores: lengths to
+layout grid units, areas to square grid units, voltage to mV, current to uA,
+current per width to A/m, resistance to ohm, temperature to K, energy to eV,
+time to h. A value is read as an exact decimal and scaled by a power of ten, so
+`0.14um` and `140nm` are the same bits. `deck convert` writes every value in
+the engine's unit with the shortest text that round-trips, which is why the
+corpus output is byte-identical after conversion.
 
 ## Statements
 
@@ -112,10 +129,17 @@ rule      = "rule" RULE_ID [ "warning" ] check
 for       = "for" pattern "in" list "{" { stmt NEWLINE } "}"
 connect   = "connect" ( "conductors" layer_list
                       | "touch_within_layer"
-                      | "via" IDENT layer_list )
+                      | "via" IDENT layer_list
+                      | "label" IDENT "names" IDENT )
 device    = "device" DEVICE_KIND IDENT "model" STRING "terminals" layer_list
 pex       = "pex" IDENT { PEX_KEY value }
+PEX_KEY   = "thickness" | "height" | "sheet" | "dielectric" | "area_cap" | "fringe_cap"
 ```
+
+`connect label T names C` says a `TEXT` on layer `T` names the conductor `C`.
+A `pex` line states all six keys, once each: thickness and height (length),
+sheet (resistance per square, `ohm`), dielectric (scalar), area_cap
+(`aF/um2`), fringe_cap (`aF/um`).
 
 `let` binds a value (quantity, layer, list or tuple) that later statements
 read. Names are bound once; rebinding is an error. `for` expands its body once
@@ -123,7 +147,8 @@ per element of a list written in the deck, so a loop is bounded by the
 deck's own text.
 
 Layers must be declared before use and derived layers may only name layers
-above them. A cycle cannot be written.
+above them. A cycle cannot be written. Base layers take ids in name order
+(as the JSON reader did), derived layers after them in declaration order.
 
 ### Layer expressions
 
@@ -132,7 +157,11 @@ layer_expr = term { ("and" | "or" | "not") term }     # left fold, as today
 term       = IDENT | "(" layer_expr ")" | term "." op
 ```
 
-Available now: `and`, `or`, `not`.
+Available now: `and`, `or`, `not`. A run of one operator is one n-ary derived
+layer (`a and b and c`). A change of operator or a parenthesised
+sub-expression becomes a hidden intermediate layer named `name#1`, `name#2`,
+..., which no deck text can name. A layer statement needs at least one
+operator; `layer x = met1` is an error.
 
 Reserved for the derived-operation work (each is an error saying "not yet
 supported" until the engine implements it, never silently ignored):
@@ -152,10 +181,16 @@ named_args = IDENT ":" value { "," IDENT ":" value }
 CMP        = ">=" | "<=" | "=="
 ```
 
+Layer arguments and named arguments may also be separated by `,` (the
+`electromigration` example above), and a kind with no layers writes
+`off_grid(; pitch: 5nm)`. A bare word matching the kind's modifier
+(`opposite`) is not a layer.
+
 The comparison supplies the kind's `limit` parameter. `>=` is only legal on a
 minimum kind, `<=` on a maximum kind; the wrong one is an error, not a flip.
 Named arguments are matched by name, all are required, and each is checked
-against its declared dimension.
+against its declared dimension. The kind table is one static table in
+`crates/ingest/src/deck/kinds.rs`: a new engine kind is one row there.
 
 ## Kind table
 
@@ -195,7 +230,9 @@ The JSON `angle` repeated an `angle` count per allowed direction; the deck
 writes the set, `allowed: [0deg, 90deg]`, each a multiple of 45°. The limits
 of `min_area`, `min_enclosed_area` and `cheesing` were lengths in JSON (the
 side of the equivalent square); the deck writes an area, and `deck convert`
-squares it. JSON `density`'s `maximum: true` is `<=`, `false` is `>=`.
+squares it. The deck lowers an area to `ParamValue::Area` in square grid
+units, which `drc` takes as is, so a real PDK area no longer has to be floored
+to a whole-nanometre side. JSON `density`'s `maximum: true` is `<=`, `false` is `>=`.
 
 ### ERC
 
@@ -205,12 +242,12 @@ default supplied.
 
 | Kind | Layers | Parameters | JSON |
 |---|---|---|---|
-| `antenna(gate, metal; max_ratio: scalar, sidewall: len \| none)` | 2 | | `antenna` |
-| `antenna_electrical(layers…; max_ratio, diode: layer \| none, diode_credit: scalar, diode_bonus: scalar)` | n | | `antenna_electrical` |
+| `antenna(gate, collectors…; max_ratio: scalar, sidewall: len \| none)` | 2+ | | `antenna` |
+| `antenna_electrical(gate, collectors…; max_ratio: scalar, diode: layer \| none, diode_credit: scalar, diode_bonus: scalar)` | 2+ | | `antenna_electrical` |
 | `density_cmp(L; window: len x len, step: len x len, min: frac \| none, max: frac \| none, max_delta: frac \| none, partial_windows: bool, cmp: none \| (target: frac, thickness: len, sensitivity: len, max_delta: len))` | 1 | | `density_cmp` |
-| `electromigration(layers…; max_density: A/m, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: scalar)` | n | | `electromigration` |
-| `em_current_density(layers…; max_density, max_current_per_cut)` | n | | `em_current_density` |
-| `esd_latchup(pad, diff; min_guard_ring_width: len, max_tap_distance: len)` | 2 | | `esd_latchup` |
+| `electromigration(layers…; max_density: current per width, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: scalar)` | 1+ | | `electromigration` |
+| `em_current_density(layers…; max_density: current per width, max_current_per_cut: current)` | 1+ | | `em_current_density` |
+| `esd_latchup(pad, guard_ring; min_guard_ring_width: len, max_tap_distance: len)` | 2 | | `esd_latchup` |
 | `esd_topological(pad)` | 1 | | `esd_topological` |
 | `floating_gate()` | 0 | | `floating_gate` |
 | `floating_well(well, tap)` | 2 | | `floating_well` |
@@ -220,10 +257,10 @@ default supplied.
 | `multiple_drivers(; max: count)` | 0 | | `multiple_drivers` |
 | `p2p_resistance(; max: resistance)` | 0 | | `p2p_resistance` |
 | `reliability(; required_lifetime: h, reference_lifetime: h, reference_stress: voltage, stress_exponent: scalar, reference_temperature: temp, activation_energy: eV, max_abs_voltage: voltage, duty_cycle: frac)` | 0 | | `reliability` |
-| `soft_connection(A, B)` | 2 | | `soft_connection` |
-| `supply_short()` | 0 | | `supply_short` |
+| `soft_connection(layers…)` | 1+ | | `soft_connection` |
+| `supply_short(tap_a, tap_b)` | 2 | | `supply_short` |
 | `tie_high_low()` | 0 | | `tie_high_low` |
-| `unconnected_pin(layers…)` | n | | `unconnected_pin` |
+| `unconnected_pin(layers…)` | 1+ | | `unconnected_pin` |
 
 `none` is an explicit absence and only legal where the table says so. It is
 not a default: leaving the argument out is still an error.
@@ -236,6 +273,30 @@ JSON listed enclosure layers outer first (`["met1", "mcon"]`); the deck writes
 `enclosure(inner, outer)`, so `deck convert` swaps them.
 
 `warning` after the rule id sets the severity. Without it a rule is an error.
+Only ERC kinds read a severity, so `warning` on a DRC kind is an error.
+
+`density_cmp`'s `cmp:` is `none` or `(target: frac, thickness: len,
+sensitivity: len, max_delta: len)`; `sensitivity` may be negative.
+
+Not yet in the engine, so not in the table: `cut_size` (`== 170nm x 170nm`),
+per-layer `angle`, global density and antenna sidewall/staging. Each lands as
+one table row when its engine kind does.
+
+### Engine parameter names
+
+The deck's names differ from the engine's where the engine's were long:
+`prl` is `prl_threshold`, `width` (`wide_space`) is `width_threshold`,
+`array` is `array_threshold`, the `redundant_via` limit is `min_count`, the
+`patterning` limit is `color_spacing`, the opposite-enclosure limit is
+`min_one_side`, the `cheesing` limit is `max_unslotted`, `sidewall` is
+`sidewall_thickness`, `diode` is `diode_layer`, `window`/`step` of
+`density_cmp` are `window_x`/`window_y` and `step_x`/`step_y`, `min`/`max`/
+`max_delta` are `min_density`/`max_density`/`max_neighbour_delta`,
+`partial_windows` is `include_partial_windows`, `activation_energy` is
+`activation_energy_ev`, `max` is `max_drivers` (`multiple_drivers`) and
+`max_resistance` (`p2p_resistance`), `max_delta` (`hv_domain`) is
+`max_domain_delta`, and `required_lifetime`/`reference_lifetime` are
+`*_hours`.
 
 ## Errors
 
@@ -254,11 +315,17 @@ The parser keeps going after an error and reports every one it finds, up to
 ## Implementation notes
 
 - Hand-written lexer and recursive-descent parser in `crates/ingest/src/deck/`.
-  No parser-generator or diagnostics crate. Errors are a `Vec<DeckError>` with
-  byte spans; the caret rendering is a few lines.
+  No parser-generator or diagnostics crate. A refused deck is
+  `DeckError::Invalid`, a `Vec<Diagnostic>` with byte spans, lines and
+  columns; the caret rendering is a few lines. A `for` body reports an error
+  once, not once per element.
 - The parser lowers into the same `Deck` the JSON reader builds. No second IR.
 - `for`/`let` are expanded during parsing; the lowered `Deck` never sees them.
 - `gpurify deck convert <json>` exists only until every deck in `pdks/` and
   `tests/fixtures/` is converted and the gate passes, then it and the JSON
-  reader are deleted in the same commit.
+  reader are deleted in the same commit. It wrote `grid 5nm` where every rule
+  length was a multiple of 5 nm and `grid 1nm` otherwise (sky130 and
+  ihp_sg13g2, whose area limits are squares of odd sides). The JSON decks'
+  consumer-owned `cell` section has no deck-language form; no deck here used
+  it.
 - Design intent (`--intent`) stays JSON for now. It is per-design, not per-process.
