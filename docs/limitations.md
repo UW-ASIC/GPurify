@@ -50,11 +50,11 @@ Each deck in `pdks/` names, in its header, the rule manual and open decks its
 numbers come from, pinned to a release or commit. Rule ids are the foundry's.
 None has been compared against foundry signoff results.
 
-- Rules that need a check the language does not have yet (a forbidden
-  overlap, a shape that must contain another, same-net or different-net
-  spacing, width-by-run-length tables, butting-edge rules, rules that depend
-  on direction) are written out, commented, in a block at the end of each
-  deck. Each deck also lists the manual rules it leaves out, and why.
+- Rules that need a check the language does not have yet are written out,
+  commented, near the end of each deck with the reason: net spacing between
+  two layers or on wells (no deck connects wells as nets), rules that depend
+  on direction, shape-class and exact-count rules, gate-length rules, and
+  maximum areas. Each deck also lists the manual rules it leaves out, and why.
 - Diodes, bipolar transistors, well resistors and MOS capacitors whose
   terminal is a well or the substrate are not recognised, because no deck
   connects wells or the substrate as nets. For the same reason no transistor
@@ -65,8 +65,10 @@ None has been compared against foundry signoff results.
   documents (sky130's model limits, the nominal supplies for gf180mcu and
   IHP), not an absolute maximum rating.
 - sky130: the periphery rules also apply inside SRAM cores (`areaid.ce`).
-  The implant-enclosure rules nsd/psd.5a, 5b and 7 are checked only on
-  diffusion and taps that butt nothing. poly.4 measures corner to corner
+  The implant-enclosure rules nsd/psd.5a and 5b on diffusion and taps that
+  butt each other are measured straight out from each edge (see
+  `enclosure(E, L)` above); nsd/psd.7 is checked only on shapes that butt
+  nothing. poly.4 measures corner to corner
   where the manual measures parallel edges only, so it can over-report, and
   covers only poly that touches no diffusion.
 - IHP: parasitic area capacitance other than Metal1 is computed from the

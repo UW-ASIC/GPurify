@@ -617,7 +617,7 @@ rule VDS.lv drain_source(; models: lv_mos, max: 1.2V)
 rule VDS.hv drain_source(; models: hv_mos, max: 3.3V)
 
 # [LR] §6.8 / [LVS]: pad nets must reach both rails through the ESD diodes.
-rule ESD.pad esd_topological(dfpad; clamps: ["diodevdd_2kv", "diodevss_2kv"])
+rule ESD.pad esd_topological(dfpad; clamps: ["diodevdd_2kv", "diodevss_2kv", "nmoscl_2", "nmoscl_4"])
 
 rule floating_gate floating_gate()
 rule tie_high_low warning tie_high_low()
@@ -695,65 +695,77 @@ pex topmetal1  thickness 2000nm height 6430nm sheet 0.018ohm dielectric 4.1 area
 pex topvia2    thickness 2800nm height 8430nm sheet 1.1ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
 pex topmetal2  thickness 3000nm height 11230nm sheet 0.011ohm dielectric 4.1 area_cap 3.23aF/um2 fringe_cap 0aF/um
 
+# ======================= Presence, tables and text =======================
+# Metal1 and Metal2-5 spacing by width and parallel run [LR]: M1.e 0.22 when a
+# line is wider than 0.3um and the run longer than 1um, M1.f 0.6 past 10um and
+# 10um; the first row and column are M1.b / M{n}.b.
+rule M1.e space_table(metal1; prl: [0um, 1um], width: [0um, 300nm], space: [[180nm, 180nm], [180nm, 220nm]])
+rule M1.f space_table(metal1; prl: [0um, 10um], width: [0um, 10um], space: [[180nm, 180nm], [180nm, 600nm]])
+for (n, m, below, den) in thin_metals {
+    rule M{n}.e space_table(m; prl: [0um, 1um], width: [0um, 390nm], space: [[210nm, 210nm], [210nm, 240nm]])
+    rule M{n}.f space_table(m; prl: [0um, 10um], width: [0um, 10um], space: [[210nm, 210nm], [210nm, 600nm]])
+}
+
+# Forbidden layers [LR] §3.2: any shape on them is an error.
+layer biwind  = gds(3, 0)
+layer pemwind = gds(11, 0)
+layer baspoly = gds(13, 0)
+layer deepco  = gds(35, 0)
+layer pempoly = gds(53, 0)
+layer empoly  = gds(55, 0)
+layer ldmos   = gds(57, 0)
+layer pbiwind = gds(58, 0)
+layer nodrc   = gds(62, 0)
+layer flash   = gds(71, 0)
+layer colwind = gds(139, 0)
+rule forbidden.BiWind  forbidden(biwind)
+rule forbidden.PEmWind forbidden(pemwind)
+rule forbidden.BasPoly forbidden(baspoly)
+rule forbidden.DeepCo  forbidden(deepco)
+rule forbidden.PEmPoly forbidden(pempoly)
+rule forbidden.EmPoly  forbidden(empoly)
+rule forbidden.LDMOS   forbidden(ldmos)
+rule forbidden.PBiWind forbidden(pbiwind)
+rule forbidden.NoDRC   forbidden(nodrc)
+rule forbidden.Flash   forbidden(flash)
+rule forbidden.ColWind forbidden(colwind)
+rule Cnt.g  forbidden(cont not (activ or gatpoly))
+rule Cnt.h  inside(cont, metal1)
+rule Cnt.j  forbidden(cont and gate)
+rule nSDB.e forbidden(nsd_block and cont)
+rule MIM.h  forbidden(topvia1.interacting(mim) not mim)
+rule Pad.i  inside(dfpad, topmetal2)
+layer metal1_pin = gds(8, 2)
+rule Pin.e  inside(metal1_pin, metal1)
+
+# ESD clamps recognised by their text [LVS].
+layer text = gds(63, 0)
+layer nmoscl_2 = recog_esd.with_text(text, "nmoscl_2")
+layer nmoscl_4 = recog_esd.with_text(text, "nmoscl_4")
+device diode nmoscl_2 model "nmoscl_2" terminals [ntap, ptap]
+device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
+
 # ======================= Rules waiting on a check kind =======================
-# Uncomment when the kind lands. Text is the intended rule.
+# Net spacing takes one conductor layer; NWell and NBuLay are not conductors
+# here (no well-tap connection), and NBL.d is two layers:
+# rule NW.b1 space(nwell; nets: different) >= 1.8um
+# rule NBL.c space(nbl; nets: different) >= 3.2um
+# rule NBL.d space(nbl, nwell; nets: different) >= 2.2um
+# TM2.bR is recommended and excludes IND:
+# rule TM2.bR space_table(topmetal2; prl: [0um, 50um], width: [0um, 5um], space: [[2um, 2um], [2um, 5um]])
+# Pin.a/b/f/g/h: the other pin layers, as Pin.e.
 
-# needs: same/diff-net spacing
-# rule NW.b1 space(nwell; different_net) >= 1.8um
-# rule NBL.c space(nbl; different_net) >= 3.2um
-# rule NBL.d space(nbl, nwell; different_net) >= 2.2um
-
-# needs: width x PRL spacing table (width strictly greater, run strictly greater)
-# rule M1.e prl_table(metal1; width: > 300nm, prl: > 1um) >= 220nm
-# rule M1.f prl_table(metal1; width: > 10um, prl: > 10um) >= 600nm
-# for (n, m, below, den) in thin_metals {
-#     rule M{n}.e prl_table(m; width: > 390nm, prl: > 1um) >= 240nm
-#     rule M{n}.f prl_table(m; width: > 10um, prl: > 10um) >= 600nm
-# }
-# rule TM2.bR prl_table(topmetal2; width: > 5um, prl: > 50um) >= 5um   # recommended; not inside IND
-
-# needs: forbidden (any shape on the layer is a violation)
-# layer biwind  = gds(3, 0)
-# layer pemwind = gds(11, 0)
-# layer baspoly = gds(13, 0)
-# layer deepco  = gds(35, 0)
-# layer pempoly = gds(53, 0)
-# layer empoly  = gds(55, 0)
-# layer ldmos   = gds(57, 0)
-# layer pbiwind = gds(58, 0)
-# layer nodrc   = gds(62, 0)
-# layer flash   = gds(71, 0)
-# layer colwind = gds(139, 0)
-# rule forbidden.BiWind  forbidden(biwind)
-# rule forbidden.PEmWind forbidden(pemwind)
-# rule forbidden.BasPoly forbidden(baspoly)
-# rule forbidden.DeepCo  forbidden(deepco)
-# rule forbidden.PEmPoly forbidden(pempoly)
-# rule forbidden.EmPoly  forbidden(empoly)
-# rule forbidden.LDMOS   forbidden(ldmos)
-# rule forbidden.PBiWind forbidden(pbiwind)
-# rule forbidden.NoDRC   forbidden(nodrc)
-# rule forbidden.Flash   forbidden(flash)
-# rule forbidden.ColWind forbidden(colwind)
-# rule Cnt.g  forbidden(cont not (activ or gatpoly))
-# rule Cnt.h  forbidden(cont not metal1)          # also M1.c, enclosure 0
-# rule Cnt.j  forbidden(cont and gate)
-# rule nSDB.e forbidden(nsd_block and cont)       # space 0
-# rule MIM.h  forbidden(topvia1.interacting(mim) not mim)
-# rule Pad.i  forbidden(dfpad not topmetal2)
-# rule Pin.e  forbidden(gds(8, 2) not metal1)     # and Pin.a/b/f/g/h for the other pin layers
-
-# needs: must-contain / shape class
+# needs: shape class, identical layers, full-crossing extension
 # rule Gat.f  rectangles_only(gate)               # no 45 or 90 degree bends on Activ
 # rule Rhi.b  identical(psd.interacting(rhigh_body), nsd)
 # rule Rsil.c extension(res, gatpoly) >= 0nm      # RES must reach across the GatPoly
 
-# needs: edge checks (channel length across the gate, abutted-tie edges)
+# needs: channel length across the gate, and the abutted-tie rules' exact reading
 # rule Gat.a3 channel_length(ngate_hv) >= 450nm
 # rule Gat.a4 channel_length(pgate_hv) >= 400nm
 # rule pSD.e  abutted_overlap(psd, activ) >= 300nm
 # rule pSD.f  abutted_extension(activ, psd) >= 300nm
-# rule AFil.i space(activ_filler, pwell_block.edges()) >= 1.5um
+# rule AFil.i space(activ_filler, pwell_block.edges()) >= 1.5um   # shape to edge
 
 # needs: maximum area / maximum extension / per-chip totals
 # rule MIM.g  area(mim) <= 5625um2
@@ -762,14 +774,6 @@ pex topmetal2  thickness 3000nm height 11230nm sheet 0.011ohm dielectric 4.1 are
 # rule LU.c1  max_extension(ptap.interacting(nsd_c), cont) <= 6um
 # rule LU.d   max_extension(ntap, cont) <= 6um
 # rule LU.d1  max_extension(ptap, cont) <= 6um
-
-# needs: text conditions (device recognition by TEXT label)
-# layer text = gds(63, 0)
-# layer nmoscl_2 = recog_esd.with_text(text, "nmoscl_2")
-# layer nmoscl_4 = recog_esd.with_text(text, "nmoscl_4")
-# device diode nmoscl_2 model "nmoscl_2" terminals [ntap, ptap]
-# device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
-# rule ESD.pad esd_topological(dfpad; clamps: ["diodevdd_2kv", "diodevss_2kv", "nmoscl_2", "nmoscl_4"])
 
 # ======================= Not carried, and why =======================
 # - Antenna: the rows above hold every gate to the unprotected limits; Ant.e/f

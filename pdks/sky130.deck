@@ -71,6 +71,8 @@ layer npc = gds(95, 20)
 layer areaid_ce = gds(81, 2)
 layer areaid_sc = gds(81, 4)
 layer areaid_ed = gds(81, 19)
+layer pnp = gds(82, 44)
+layer tunm = gds(80, 20)
 
 # Text layers [S2]: the label purpose, the pin purpose, and text on drawing
 layer poly_label = gds(66, 5)
@@ -340,6 +342,11 @@ for (m, id, w, huge, hs) in metals {
     rule {id}.2.notch notch(m) >= w
     rule {huge} wide_space(m; width: 3um) >= hs
 }
+# Features attached to huge metal within 0.28um (met1, met2) or 0.4um (met3, met4).
+rule m1.3a wide_space(met1; width: 3um, attached: 280nm) >= 280nm
+rule m2.3a wide_space(met2; width: 3um, attached: 280nm) >= 280nm
+rule m3.3c wide_space(met3; width: 3um, attached: 400nm) >= 400nm
+rule m4.5a wide_space(met4; width: 3um, attached: 400nm) >= 400nm
 rule m1.6 area(met1) >= 0.083um2
 rule m2.6 area(met2) >= 0.0676um2
 rule m3.6 area(met3) >= 0.24um2
@@ -544,50 +551,59 @@ pex met4 thickness 845nm height 4021.1nm sheet 0.047ohm dielectric 4.0 area_cap 
 pex via4_m4 thickness 505nm height 4866.1nm sheet 0.38ohm dielectric 4.0 area_cap 0aF/um2 fringe_cap 0aF/um
 pex met5 thickness 1260nm height 5371.1nm sheet 0.029ohm dielectric 3.9 area_cap 6.32aF/um2 fringe_cap 38.85aF/um
 
-# --- Rules waiting on a check kind (syntax provisional; uncomment when the kind lands) ---
-# needs: forbidden (non-empty is an error)
-# rule x.10 forbidden((poly_rs or diff_rs) and licon)
-# rule dnwell.4 forbidden(dnwell and pnp)                       # declare pnp = gds(82, 44)
-# rule licon.6 forbidden(licon.interacting(tap).not_inside(tap))
-# rule licon.17 forbidden((licon and poly) and difftap)
-# rule licon.18 forbidden(poly_licon not npc)
-# rule ct.4 forbidden(mcon not li)
-# rule poly.12 forbidden((poly not nwell_lv) and tap)
-# rule poly.15 forbidden(poly and diff_rs)
-# rule nsd.8 forbidden((nsdm and pdifftap) or (psdm and ndifftap))
-# rule nsd.9 forbidden(difftap not (nsdm or psdm))
-# rule rpm.8 forbidden(poly.interacting(rpm).not_inside(rpm))
-# rule varac.7 forbidden(nwell.interacting(var_channel) and pdiff)
-# rule nwell.9 forbidden(hv_nwell not hvi)
-# rule difftap.21 forbidden(difftap.interacting(hvi).not_inside(hvi))
-# rule poly.14 forbidden(gate.interacting(hvi).not_inside(hvi))
-# rule hvi.4 forbidden(hvi and tunm)                             # declare tunm = gds(80, 20)
-# rule hvntm.9 forbidden(hvntm and areaid_ce)
-# rule capm.7 forbidden(capm not capm.rectangles())
-# needs: must-contain (every outer shape holds at least N inner shapes)
-# rule licon.4 must_contain(licon, li) >= 1
-# rule licon.16 must_contain(tap, licon) >= 1
-# rule licon.16 must_contain(source_diff, licon) >= 1          # source_diff needs device terminals
-# rule hvntm.10 must_contain(hvntm, hvi) >= 1
-# rule rpm.1g must_contain(prec_terminal_0p35, licon) == 1     # 1h 1, 1i 2, 1j 4, 1k 8
-# needs: same/different-net spacing
-# rule nwell.7 space(nwell, dnwell; net: different) >= 4.5um
-# rule nwell.8 space(hv_nwell, nwell; net: different) >= 2um
-# rule hv.nwell.1 space(shv_nwell, nwell; net: different) >= 2.5um   # shv_nwell needs text "shv_nwell"
-# rule vhvi.8 space(vhv_nwell, nwell; net: different) >= 11.24um
-# needs: edge checks (butting edges)
-# rule nsd.6 enclosure(butting_edge, nsdm) >= 0nm
-# rule licon.5b space(tap_licon, tap.edges() and diff.edges()) >= 60nm
-# rule difftap.7 space(butting_edge, difftap.edges() not butting_edge) >= 130nm
-# rule poly.6 space(gate, tap_abutting_diff) >= 300nm
-# rule hvntm.6b space(ptap_butting_edge, hvntm) >= 0nm
+# --- Presence rules [S1] ---
+# A straddle is the part of a shape on the other layer touching its part off it.
+rule x.10 forbidden((poly_rs or diff_rs) and licon)
+rule dnwell.4 forbidden(dnwell and pnp)
+rule licon.4 forbidden(licon.outside(li) or licon.outside(poly or difftap))
+rule licon.6 forbidden((licon and tap).interacting(licon not tap))
+rule licon.16 contains(tap, licon) >= 1
+rule licon.17 forbidden((licon and poly) and difftap)
+rule licon.18 inside(poly_licon, npc)
+rule ct.4 inside(mcon, li)
+rule poly.12 forbidden((poly not nwell_lv) and tap)
+rule poly.14 forbidden((gate and hvi).interacting(gate not hvi))
+rule poly.15 forbidden(poly and diff_rs)
+rule nsd.8 forbidden((nsdm and pdifftap) or (psdm and ndifftap))
+rule nsd.9 forbidden(difftap not (nsdm or psdm))
+rule rpm.8 forbidden((poly and rpm).interacting(poly not rpm))
+rule varac.7 forbidden(nwell.interacting(var_channel) and pdiff)
+rule nwell.9 inside(hv_nwell, hvi)
+rule difftap.21 forbidden((difftap and hvi).interacting(difftap not hvi))
+rule hvi.4 forbidden(hvi and tunm)
+rule hvntm.9 forbidden(hvntm and areaid_ce)
+rule hvntm.10 forbidden(hvntm.outside(hvi))
+
+# --- Butting edges [S1], as [S3] writes them ---
+layer butt = tap.edges() and diff.edges()
+rule difftap.4 length(butt) >= 290nm
+rule difftap.5 space(butt) >= 400nm
+rule difftap.7 space((tap.edges() not diff.edges()).not_interacting(diff), diff.edges()) >= 130nm
+rule difftap.7.diff space((diff.edges() not tap.edges()).not_interacting(tap), tap.edges()) >= 130nm
+rule nsd.5a.butted enclosure(diff.interacting(tap).interacting(nsdm).edges() not tap.edges(), nsdm) >= 125nm
+rule psd.5a.butted enclosure(diff.interacting(tap).interacting(psdm).edges() not tap.edges(), psdm) >= 125nm
+rule nsd.5b.butted enclosure(tap.interacting(diff).interacting(nsdm).edges() not diff.edges(), nsdm) >= 125nm
+rule psd.5b.butted enclosure(tap.interacting(diff).interacting(psdm).edges() not diff.edges(), psdm) >= 125nm
+rule nsd.6 forbidden(butt.outside_part(nsdm or psdm))
+rule licon.5b space(licon.inside(tap).edges(), butt) >= 60nm
+rule poly.6 space(gate, tap.interacting(diff)) >= 300nm
+rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
+
+# --- Rules waiting on a check kind ---
+# capm.7 "only rectangular capacitors": no selection by shape class.
+# licon.16 on source diff: needs the source terminal as a layer.
+# rpm.1g-1k "only N licons in the prec_resistor_terminal": an exact count and
+#   the terminal layers.
+# nwell.7 (nwell to dnwell on separate nets, 4.5um), nwell.8 (hv_nwell to
+#   nwell, 2um), hv.nwell.1 (2.5um), vhvi.8 (11.24um): net spacing takes one
+#   layer, and wells are not conductors in this deck (no well-tap connection).
 
 # --- Left out ---
 # Not expressible yet: difftap.2/2b (channel width, 0.42/0.36um: needs W, not
-# width), difftap.4/5/16 (tap bound by diffusion), poly.10/11 (corner and turn
+# width), difftap.16 (tap bound by diffusion), poly.10/11 (corner and turn
 # rules), poly.13 (gate length inside hvi, 0.5um: needs L, not width),
 # lvtn.3b (S/D direction spacing), lvtn.10 (enclosure excluding coincident
-# edges), npc.5 (maximum enclosure), licon.2b/2c/2d (slotted-licon spacing by
+# edges), difftap.6 (edges cannot be extended), npc.5 (maximum enclosure), licon.2b/2c/2d (slotted-licon spacing by
 # edge length), rpm.1b-1f (exact resistor widths), varac.2/6 (tap-width and
 # varactor-tap spacing), hv.* and vhvi.* (net propagation of high voltage),
 # m1.pd.1-m4.pd.1 and x.18 (recommended only; pd.1's "oxide pattern density"

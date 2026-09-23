@@ -1,5 +1,6 @@
-//! Rules `pdks/sky130.deck` states from the SKY130 periphery manual, each drawn
-//! by hand at the manual's limit and one grid step (5 nm) inside it.
+//! Rules `pdks/sky130.deck` states from the SKY130 periphery manual (and a few
+//! from the gf180mcu and IHP SG13G2 decks), each drawn by hand at the manual's
+//! limit and one grid step (5 nm) inside it.
 //!
 //! Oracle: the manual's own number. Each pass layout sits exactly on the limit
 //! the manual states, so a rule that measured one step wrong, or read the wrong
@@ -23,10 +24,17 @@ fn grid() -> Grid {
     Grid::new(1_000).expect("1000 database units per micrometre is a legal grid")
 }
 
+const SKY130: &str = include_str!("../pdks/sky130.deck");
+const GF180: &str = include_str!("../pdks/gf180mcu.deck");
+const IHP: &str = include_str!("../pdks/ihp_sg13g2.deck");
+
 fn sky130() -> (Deck, StrTable) {
-    let source = include_str!("../pdks/sky130.deck");
+    load(SKY130)
+}
+
+fn load(source: &str) -> (Deck, StrTable) {
     let mut strings = StrTable::default();
-    let deck = parse_deck(source, grid(), &mut strings).expect("pdks/sky130.deck parses");
+    let deck = parse_deck(source, grid(), &mut strings).expect("the shipped deck parses");
     (deck, strings)
 }
 
@@ -38,7 +46,7 @@ fn draw(deck: &Deck, strings: &StrTable, rects: &[(&str, i64, i64, i64, i64)]) -
         let layer: LayerId = deck
             .layers
             .id(strings, name)
-            .unwrap_or_else(|| panic!("sky130.deck declares no layer {name}"));
+            .unwrap_or_else(|| panic!("the deck declares no layer {name}"));
         layout.rect(layer, xlo, ylo, xhi, yhi);
     }
     let (base, _) = layout.finish();
@@ -56,8 +64,8 @@ fn draw(deck: &Deck, strings: &StrTable, rects: &[(&str, i64, i64, i64, i64)]) -
 
 /// Run the DRC set over `rects` and return the violation count and runs of
 /// rule `id`.
-fn run(id: &str, rects: &[(&str, i64, i64, i64, i64)]) -> (u32, Vec<RuleRun>) {
-    let (deck, strings) = sky130();
+fn run(source: &str, id: &str, rects: &[(&str, i64, i64, i64, i64)]) -> (u32, Vec<RuleRun>) {
+    let (deck, strings) = load(source);
     let store = draw(&deck, &strings, rects);
     let rules = RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
     let (mut out, mut runs) = (Violations::default(), Vec::new());
@@ -67,18 +75,28 @@ fn run(id: &str, rects: &[(&str, i64, i64, i64, i64)]) -> (u32, Vec<RuleRun>) {
         .into_iter()
         .filter(|r| strings.resolve(r.rule) == id)
         .collect();
-    assert!(!mine.is_empty(), "sky130.deck has no rule {id}");
+    assert!(!mine.is_empty(), "the deck has no rule {id}");
     let count = mine.iter().map(|r| r.violations).sum();
     (count, mine)
 }
 
-/// `rects` passes rule `id` and the rule examined something; `failing` does not.
+/// `rects` passes sky130 rule `id` and the rule examined something; `failing` does not.
 fn at_limit(
     id: &str,
     passing: &[(&str, i64, i64, i64, i64)],
     failing: &[(&str, i64, i64, i64, i64)],
 ) {
-    let (count, runs) = run(id, passing);
+    at_limit_in(SKY130, id, passing, failing);
+}
+
+/// [`at_limit`] for the deck `source`.
+fn at_limit_in(
+    source: &str,
+    id: &str,
+    passing: &[(&str, i64, i64, i64, i64)],
+    failing: &[(&str, i64, i64, i64, i64)],
+) {
+    let (count, runs) = run(source, id, passing);
     assert!(
         runs.iter()
             .all(|r| r.outcome == Outcome::Ran && r.examined > 0),
@@ -88,7 +106,7 @@ fn at_limit(
         count, 0,
         "{id} flags a layout exactly at the manual's limit"
     );
-    let (count, _) = run(id, failing);
+    let (count, _) = run(source, id, failing);
     assert!(
         count > 0,
         "{id} passes a layout 5 nm inside the manual's limit"
@@ -195,4 +213,71 @@ fn a_poly_resistor_has_two_distinct_heads() {
     assert_eq!(model, "sky130_fd_pr__res_generic_po");
     assert_eq!(nets.len(), 2);
     assert_ne!(nets[0], nets[1], "the resistor's heads are shorted");
+}
+
+/// difftap.4: min tap bound by one diffusion, the butting edge, 0.290 um.
+#[test]
+fn difftap_4_butting_edge_290nm() {
+    let pass = [("diff", 0, 0, 1000, 500), ("tap", 1000, 0, 1500, 290)];
+    let fail = [("diff", 0, 0, 1000, 500), ("tap", 1000, 0, 1500, 285)];
+    at_limit("difftap.4", &pass, &fail);
+}
+
+/// nsd.5a on a diff butting a tap: enclosure by nsdm of every edge but the
+/// butting one, 0.125 um. The nsdm stops at the butting edge.
+#[test]
+fn nsd_5a_butted_diff_enclosed_by_125nm() {
+    let base = [("diff", 0, 0, 1000, 500), ("tap", 1000, 0, 1300, 500)];
+    let pass = [base[0], base[1], ("nsdm", -125, -125, 1000, 625)];
+    let fail = [base[0], base[1], ("nsdm", -120, -125, 1000, 625)];
+    at_limit("nsd.5a.butted", &pass, &fail);
+}
+
+/// m1.3a: spacing of met1 attached to huge met1 within 0.28 um, 0.280 um. The
+/// line is 280 above the plate and 280 beside the finger's attached part.
+#[test]
+fn m1_3a_attached_to_huge_metal_280nm() {
+    let base = [("met1", 0, 0, 4000, 4000), ("met1", 1000, 4000, 1140, 5000)];
+    let pass = [base[0], base[1], ("met1", 1420, 4280, 1560, 4600)];
+    let fail = [base[0], base[1], ("met1", 1415, 4280, 1560, 4600)];
+    at_limit("m1.3a", &pass, &fail);
+}
+
+/// licon.16: every tap encloses a licon; one touching the tap's edge from
+/// inside is enclosed, one 5 nm across it is not.
+#[test]
+fn licon_16_tap_encloses_a_licon() {
+    let pass = [("tap", 0, 0, 500, 500), ("licon", 330, 165, 500, 335)];
+    let fail = [("tap", 0, 0, 500, 500), ("licon", 335, 165, 505, 335)];
+    at_limit("licon.16", &pass, &fail);
+}
+
+/// gf180 DF.11: min length of a butting COMP edge (N+ COMP to P+ COMP), 0.3 um.
+#[test]
+fn gf180_df_11_butting_comp_edge_300nm() {
+    let implants = [
+        ("nplus", -100, -100, 1000, 400),
+        ("pplus", 1000, -100, 2100, 400),
+    ];
+    let pass = [implants[0], implants[1], ("comp", 0, 0, 2000, 300)];
+    let fail = [implants[0], implants[1], ("comp", 0, 0, 2000, 295)];
+    at_limit_in(GF180, "DF.11", &pass, &fail);
+}
+
+/// IHP M1.e: 0.22 um between Metal1 lines when one is wider than 0.3 um and
+/// they run alongside for more than 1 um.
+#[test]
+fn ihp_m1_e_wide_line_long_run_220nm() {
+    let wide = ("metal1", 0, 0, 305, 1005);
+    let pass = [wide, ("metal1", 525, 0, 725, 1005)];
+    let fail = [wide, ("metal1", 520, 0, 720, 1005)];
+    at_limit_in(IHP, "M1.e", &pass, &fail);
+}
+
+/// IHP Cnt.h: Cont must be covered by Metal1 (enclosure 0).
+#[test]
+fn ihp_cnt_h_metal1_covers_cont() {
+    let pass = [("cont", 0, 0, 160, 160), ("metal1", 0, 0, 160, 160)];
+    let fail = [("cont", 0, 0, 160, 160), ("metal1", 5, 0, 165, 160)];
+    at_limit_in(IHP, "Cnt.h", &pass, &fail);
 }
