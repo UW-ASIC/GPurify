@@ -12,7 +12,7 @@ use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::NetId;
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
-use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
 use gpurify_geom::{Dbu, DbuArea};
 
@@ -224,63 +224,16 @@ pub fn check_missing_tie(
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    let mut taps: Vec<Seg> = Vec::new();
-    let mut grid = TapGrid::default();
-    let mut stack: Vec<Cell> = Vec::new();
-
     for row in 0..table.head.len() {
         let before = out.len();
         let rule = table.head.rule[row];
-        // A tap layer that will not validate is refused, never read as empty.
-        if validate_layer_into(design.store, table.tap[row], &mut scratch.layer_b).is_err() {
-            record_run(runs, out, before, rule, Outcome::Refused, 0);
-            continue;
-        }
-        let tap = &scratch.layer_b;
-
         let limit = table.max_distance[row];
-        let limit2 = limit.mul_wide(limit);
-
-        // Holes too: a ring-shaped tap ties along its inner boundary.
-        taps.clear();
-        for idx in 0..tap.len() {
-            let idx = u32::try_from(idx).expect("a validated layer's polygons fit a u32");
-            let poly = tap.get(idx);
-            push_ring_edges(poly.outer(), &mut taps);
-            for hole in poly.holes() {
-                push_ring_edges(hole, &mut taps);
-            }
-        }
-        // Coincident edges measure alike; keyed undirected because abutting
-        // taps run a shared edge in opposite directions.
-        taps.sort_unstable_by_key(undirected);
-        taps.dedup_by_key(|s| undirected(s));
-        TapGrid::build_into(&taps, &mut grid);
-
-        let region_rows = design.store.polys_on_layer(table.region[row]);
-        let examined = u64::from(region_rows.end - region_rows.start);
-        for poly in region_rows {
-            let poly = PolyId(poly);
-            let (xs, ys) = design.store.poly_verts(poly);
-            let Some((&x0, &y0)) = xs.first().zip(ys.first()) else {
-                continue;
-            };
-            // No taps at all: the sentinel, whose root is `MAX_ABS_DBU`.
-            let (at, worst) = if taps.is_empty() {
-                (Point { x: x0, y: y0 }, NO_TAP_IN_RANGE)
-            } else {
-                // `limit2` is the search's floor, so a region under the limit
-                // prunes without descending.
-                furthest_from_taps(
-                    xs,
-                    ys,
-                    design.store.poly_bbox(poly),
-                    limit2,
-                    &grid,
-                    &mut stack,
-                )
-            };
-            if worst > limit2 {
+        let examined = untied_points(
+            design.store,
+            (table.region[row], table.tap[row]),
+            limit,
+            &mut scratch.layer_b,
+            |poly, at, worst| {
                 out.push(Violation {
                     rule,
                     layer: design.store.poly_layer(poly),
@@ -290,10 +243,68 @@ pub fn check_missing_tie(
                     limit: Measurement::Length(limit),
                     shapes: (poly, None),
                 });
-            }
-        }
-        record_run(runs, out, before, rule, Outcome::Ran, examined);
+            },
+        );
+        // A tap layer that will not validate is refused, never read as empty.
+        let (outcome, examined) = examined.map_or((Outcome::Refused, 0), |n| (Outcome::Ran, n));
+        record_run(runs, out, before, rule, outcome, examined);
     }
+}
+
+/// Every row on `region` whose furthest point from the `tap` layer (every
+/// point of the polygon, not only its vertices; distance to the taps' edges,
+/// holes included) is more than `limit`: `each(row, point, distance²)`.
+/// Returns the region row count, or `None` when the tap layer will not
+/// validate. A region with no tap at all measures `MAX_ABS_DBU`.
+pub(crate) fn untied_points(
+    store: &GeometryStore,
+    (region, tap): (LayerId, LayerId),
+    limit: Dbu,
+    tap_layer: &mut ValidatedLayer,
+    mut each: impl FnMut(PolyId, Point, DbuArea),
+) -> Option<u64> {
+    validate_layer_into(store, tap, tap_layer).ok()?;
+    let limit2 = limit.mul_wide(limit);
+
+    // Holes too: a ring-shaped tap ties along its inner boundary.
+    let mut taps: Vec<Seg> = Vec::new();
+    for idx in 0..tap_layer.len() {
+        let idx = u32::try_from(idx).expect("a validated layer's polygons fit a u32");
+        let poly = tap_layer.get(idx);
+        push_ring_edges(poly.outer(), &mut taps);
+        for hole in poly.holes() {
+            push_ring_edges(hole, &mut taps);
+        }
+    }
+    // Coincident edges measure alike; keyed undirected because abutting
+    // taps run a shared edge in opposite directions.
+    taps.sort_unstable_by_key(undirected);
+    taps.dedup_by_key(|s| undirected(s));
+    let mut grid = TapGrid::default();
+    TapGrid::build_into(&taps, &mut grid);
+    let mut stack: Vec<Cell> = Vec::new();
+
+    let region_rows = store.polys_on_layer(region);
+    let examined = u64::from(region_rows.end - region_rows.start);
+    for poly in region_rows {
+        let poly = PolyId(poly);
+        let (xs, ys) = store.poly_verts(poly);
+        let Some((&x0, &y0)) = xs.first().zip(ys.first()) else {
+            continue;
+        };
+        // No taps at all: the sentinel, whose root is `MAX_ABS_DBU`.
+        let (at, worst) = if taps.is_empty() {
+            (Point { x: x0, y: y0 }, NO_TAP_IN_RANGE)
+        } else {
+            // `limit2` is the search's floor, so a region under the limit
+            // prunes without descending.
+            furthest_from_taps(xs, ys, store.poly_bbox(poly), limit2, &grid, &mut stack)
+        };
+        if worst > limit2 {
+            each(poly, at, worst);
+        }
+    }
+    Some(examined)
 }
 
 /// Flag every net that is a gate and a source and not a drain. `examined`

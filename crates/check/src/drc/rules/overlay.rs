@@ -9,6 +9,7 @@
 
 use super::{centre, mid, rects_ring_dist2, ring_segs, Verdict, REFUSED};
 use crate::drc::Scratch;
+use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
@@ -190,34 +191,11 @@ fn strip_midpoint(inner: Bbox, outer: Bbox, side: Side) -> Point {
 /// Below the most negative real margin (`-2 * MAX_ABS_DBU`): seeds the host fold.
 const UNHOSTED: i64 = -(1 << 42);
 
-/// "No tap in reach": `MAX_ABS_DBU²`, a perfect square, so it reports as
-/// `MAX_ABS_DBU` and over-reports (fails closed).
-const OUT_OF_REACH: i128 = 1 << 80;
-
-fn point_box_dist2(x: Dbu, y: Dbu, b: Bbox) -> i128 {
-    let dx = i128::from((b.xlo.raw() - x.raw()).max(x.raw() - b.xhi.raw()).max(0));
-    let dy = i128::from((b.ylo.raw() - y.raw()).max(y.raw() - b.yhi.raw()).max(0));
-    dx * dx + dy * dy
-}
-
 /// `sqrt(d2)` rounded **up**, so an exceeded limit reads as exceeded.
 fn ceil_sqrt(d2: i128) -> Dbu {
     let root = isqrt(DbuArea::new(d2));
     let exact = root.mul_wide(root).raw() == d2;
     Dbu::new_unchecked(root.raw() + i64::from(!exact))
-}
-
-/// The run of `pairs` (strictly ascending) whose first element is `a`; the
-/// cursor only moves forward as `a` ascends.
-fn run_of(pairs: &[(PolyId, PolyId)], cursor: &mut usize, a: PolyId) -> (usize, usize) {
-    while *cursor < pairs.len() && pairs[*cursor].0 < a {
-        *cursor += 1;
-    }
-    let lo = *cursor;
-    while *cursor < pairs.len() && pairs[*cursor].0 == a {
-        *cursor += 1;
-    }
-    (lo, *cursor)
 }
 
 /// Validate both layers and prune their cross-layer pairs at `distance` into
@@ -403,9 +381,16 @@ pub(crate) fn overlap(
     (Outcome::Ran, s.pairs.len() as u64)
 }
 
-/// Max distance from every well vertex to the nearest tap box, reported at the
-/// farthest vertex (first on a tie). `examined` counts wells; an empty well layer
-/// is `Skipped(EmptyLayer)`, a well layer with no taps is not.
+/// Max distance from any point of a well to the nearest tap (IHP LU.a/b,
+/// gf180 DF.13/14: "any portion .. within 20 um of a tie"), with the ERC
+/// `missing_tie` search: exact furthest point over the whole polygon, distance
+/// to the taps' edges. Reported at that point, rounded up. `examined` counts
+/// wells; an empty well layer is `Skipped(EmptyLayer)`, a well layer with no
+/// taps is not.
+///
+/// ponytail: a point inside a tap measures to the tap's edge, not zero, so a
+/// well interior under a wide tap over-reports by up to half the tap's width
+/// (fails closed); an inside test per probe fixes it if it ever matters.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn max_distance_to_tap(
     store: &GeometryStore,
@@ -416,46 +401,29 @@ pub(crate) fn max_distance_to_tap(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let wells = store.polys_on_layer(well_layer);
-    let examined = u64::from(wells.end - wells.start);
-    if examined == 0 {
+    if store.polys_on_layer(well_layer).is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    if !pair_layers(store, well_layer, tap, reach, s) {
+    if s.validated.get(store, well_layer).is_none() {
         return REFUSED;
     }
     let limit = Measurement::Length(reach);
-    let mut cursor = 0usize;
-    for well_row in wells {
-        let well = PolyId(well_row);
-        let (lo, hi) = run_of(&s.pairs, &mut cursor, well);
-        let taps = &s.pairs[lo..hi];
-        let (xs, ys) = store.poly_verts(well);
-        let mut worst = (i128::MIN, 0usize);
-        for (vertex, (&x, &y)) in xs.iter().zip(ys).enumerate() {
-            let nearest = taps
-                .iter()
-                .map(|&(_, tap)| point_box_dist2(x, y, store.poly_bbox(tap)))
-                .fold(OUT_OF_REACH, i128::min);
-            if nearest > worst.0 {
-                worst = (nearest, vertex);
-            }
-        }
-        let measured = Measurement::Length(ceil_sqrt(worst.0));
-        if measured.violates(limit, LimitSense::Maximum) {
+    let examined = untied_points(
+        store,
+        (well_layer, tap),
+        reach,
+        &mut s.layer_out,
+        |well, at, worst| {
             out.push(Violation {
                 rule,
                 layer: well_layer,
                 severity: Severity::Error,
-                at: Point {
-                    x: xs[worst.1],
-                    y: ys[worst.1],
-                },
-                measured,
+                at,
+                measured: Measurement::Length(ceil_sqrt(worst.raw())),
                 limit,
                 shapes: (well, None),
             });
-        }
-    }
-    (Outcome::Ran, examined)
+        },
+    );
+    examined.map_or(REFUSED, |n| (Outcome::Ran, n))
 }

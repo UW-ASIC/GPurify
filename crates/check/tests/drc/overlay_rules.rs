@@ -693,3 +693,34 @@ fn an_empty_well_layer_is_skipped_rather_than_reported_clean() {
     );
     assert!(sink.out.rule.is_empty());
 }
+
+/// IHP LU.a: "Max. distance from any point of N+Activ to the nearest
+/// substrate tie 20 um" (`nact.not(ptap.sized(20))`). A 46 um strip tied at
+/// both ends has every vertex inside a tie, but its middle is 21 um from
+/// either one. The old rule measured vertices only and passed it.
+#[test]
+fn ihp_lu_a_the_middle_of_a_well_tied_at_both_ends_is_too_far() {
+    let mut layout = LayoutBuilder::new(2);
+    let well = layout.rect(A, 0, 0, 46_000, 2_000);
+    layout.rect(B, 0, 0, 2_000, 2_000);
+    layout.rect(B, 44_000, 0, 46_000, 2_000);
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(
+        &store,
+        &[(
+            RULE,
+            Rule::MaxDistanceToTap {
+                well: A,
+                tap: B,
+                limit: dbu(20_000),
+            },
+        )],
+    );
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(21_000)));
+    assert_eq!(sink.out.at[0].x, dbu(23_000));
+    assert_eq!(sink.out.shape_a[0], ids.of(well));
+}
