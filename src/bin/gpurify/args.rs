@@ -21,7 +21,7 @@ pub struct Cli {
     pub format: Format,
     /// `None` is stdout.
     pub output: Option<PathBuf>,
-    /// Run twice at two thread counts and fail if the reports differ.
+    /// Run twice and fail if the two reports differ.
     pub check_determinism: bool,
 }
 
@@ -44,7 +44,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut deck: Option<&str> = None;
     let mut format = Format::Text;
     let mut output: Option<&str> = None;
-    let mut threads: Option<usize> = None;
     let mut grid: Option<u32> = None;
     let mut check_determinism = false;
     let mut strict_layers = true;
@@ -78,13 +77,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
                             "unknown --format {other}; expected text, json, spef or dspf"
                         ))
                     }
-                }
-            }
-            "--threads" => {
-                let raw = value()?;
-                match raw.parse().ok().filter(|count| *count > 0) {
-                    Some(count) => threads = Some(count),
-                    None => return usage(format!("--threads wants a positive count, not {raw:?}")),
                 }
             }
             "--grid" => {
@@ -192,7 +184,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             lvs: gpurify_check::lvs::CompareOptions::default(),
             quasistatic_nets: quasistatic,
             quasistatic_inductance,
-            threads,
         },
         format,
         output: output.map(PathBuf::from),
@@ -213,7 +204,7 @@ mod tests {
     #[test]
     fn a_full_command_line_reaches_every_field() {
         let cli = parse_str(
-            "pex top.gds --deck d.json --grid 1000 --format spef --output o --threads 4 \
+            "pex top.gds --deck d.json --grid 1000 --format spef --output o \
              --check-determinism --no-strict-layers --quasistatic vdd --quasistatic clk \
              --quasistatic-inductance",
         )
@@ -226,7 +217,6 @@ mod tests {
         );
         assert_eq!(cli.format, Format::Spef);
         assert_eq!(cli.output.as_deref().and_then(|p| p.to_str()), Some("o"));
-        assert_eq!(cli.options.threads, Some(4));
         assert!(cli.check_determinism);
         assert_eq!(
             cli.inputs.unknown_layers,
@@ -277,10 +267,6 @@ mod tests {
             (
                 "drc t --deck d --format gds",
                 "unknown --format gds; expected text, json, spef or dspf",
-            ),
-            (
-                "drc t --deck d --threads 0",
-                "--threads wants a positive count, not \"0\"",
             ),
             (
                 "drc t --deck d --grid 1.5",

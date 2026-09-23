@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut cli = match args::parse(&argv) {
+    let cli = match args::parse(&argv) {
         Ok(cli) => cli,
         Err(error) => return fail(&error),
     };
@@ -20,12 +20,6 @@ fn main() -> ExitCode {
     };
 
     if cli.check_determinism {
-        // Any other worker count than the first pass used.
-        cli.options.threads = if cli.options.threads == Some(2) {
-            Some(1)
-        } else {
-            Some(2)
-        };
         let (second_summary, second_text) = match render(&cli) {
             Ok(second) => second,
             Err(code) => return code,
@@ -33,8 +27,8 @@ fn main() -> ExitCode {
         if second_summary != summary || second_text != text {
             eprintln!(
                 "--check-determinism: two runs of the same inputs produced \
-                 different reports, so the output depends on how the work \
-                 was divided rather than on the design"
+                 different reports, so the output depends on something other \
+                 than the design"
             );
             return ExitCode::FAILURE;
         }

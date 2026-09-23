@@ -147,7 +147,6 @@ impl Run {
             lvs: lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
             quasistatic_inductance: false,
-            threads: Some(1),
         };
         run_checks(&loaded, &extracted, &options)
     }
@@ -608,7 +607,6 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
         // set of expected numbers.
         quasistatic_nets: Vec::new(),
         quasistatic_inductance: false,
-        threads: Some(1),
     };
 
     let (outputs, _) =
@@ -656,7 +654,6 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
         lvs: gpurify::check::lvs::CompareOptions::default(),
         quasistatic_nets: named,
         quasistatic_inductance: false,
-        threads: Some(1),
     };
 
     let (outputs, _) =

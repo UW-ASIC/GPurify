@@ -35,7 +35,6 @@ fn options(checks: Checks) -> RunOptions {
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
         quasistatic_inductance: false,
-        threads: Some(1),
     }
 }
 

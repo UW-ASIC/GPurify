@@ -149,7 +149,6 @@ fn every_rule_in_the_deck_timed_on_its_own() {
             lvs: gpurify::check::lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
             quasistatic_inductance: false,
-            threads: Some(1),
         };
         let start = Instant::now();
         let mut record = None;

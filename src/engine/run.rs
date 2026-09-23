@@ -42,8 +42,6 @@ pub struct RunOptions {
     pub quasistatic_nets: Vec<String>,
     /// Also solve the quasi-static nets for inductance. Off leaves output unchanged.
     pub quasistatic_inductance: bool,
-    /// Worker threads. Output must be byte-identical at any value.
-    pub threads: Option<usize>,
 }
 
 /// Whether a check ran, and if not, why. `Skipped` is not a quieter `Ran`.
