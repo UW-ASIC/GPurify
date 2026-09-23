@@ -216,8 +216,7 @@ impl GridBuilder {
 /// A pad at node zero and `resistors` identical resistors in series, with the
 /// whole load drawn at the far end.
 ///
-/// The closed form is Ohm's law over a series chain, which is one of the three
-/// oracles named in `docs/TESTING.md`.
+/// The closed form is Ohm's law over a series chain, an independent oracle.
 #[must_use]
 pub fn series_chain(resistors: u32, ohm: f64, nominal_mv: f64, load_ua: f64) -> PowerGrid {
     let mut builder = GridBuilder::new();
@@ -360,7 +359,7 @@ pub fn probe_of(
 ///
 /// Built directly rather than through `resolve_intent_into`, because
 /// `DesignIntent`'s fields are private and its only producer is `read_intent`,
-/// which takes a path — see `docs/NEED_TESTING.md`. The map is what every
+/// which takes a path. The map is what every
 /// intent-gated rule actually reads, so this is the input under test.
 #[must_use]
 pub fn declared_supplies(power_net: NetId, ground_net: NetId, nominal_mv: f64) -> IntentMap {

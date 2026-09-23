@@ -1,6 +1,6 @@
 //! The PDK deck: layers, derived layers, rules, connectivity, device recognisers, PEX stack.
 //!
-//! Data in: deck text (see `docs/DECK_LANGUAGE.md`) and the layout's grid.
+//! Data in: deck text (see `docs/deck.md`) and the layout's grid.
 //! Data out: [`Deck`], limits converted from physical nanometres to grid units exactly or refused.
 //! Rule kinds are interned verbatim and never interpreted here.
 

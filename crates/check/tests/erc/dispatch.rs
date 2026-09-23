@@ -445,9 +445,7 @@ fn running_one_rule_set_twice_produces_identical_rows() {
 /// Three of the nineteen kinds take neither — `floating_gate`, `tie_high_low`
 /// and `ir_drop` are configuration and nothing else — so a deck of those is the
 /// one shape [`RuleSet::from_deck`] can be handed from outside this workspace.
-/// The parameter *names* the other sixteen expect are an Implementation-Phase
-/// choice that no frozen signature states, which is why the rows below carry
-/// none; see `docs/NEED_TESTING.md`.
+/// The rows below carry no parameters; each kind's own tests cover those.
 fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) {
     let ids: Vec<StrId> = rows.iter().map(|&(id, _)| strings.intern(id)).collect();
     let spec = rows

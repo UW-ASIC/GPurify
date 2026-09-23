@@ -125,8 +125,8 @@ fn rects(sides: &[(i64, i64)]) -> GeometryStore {
 /// resistor and a net of one polygon emitted none at all. Every resistance case
 /// in `tests/fixtures/expectations.json` is a one-polygon net, so every
 /// resistance this workspace had ever extracted was zero — and zero is also
-/// what an extractor that never looked at the cell produces, which is the
-/// fail-open shape `docs/VOCABULARY.md` §3 names.
+/// what an extractor that never looked at the cell produces, so a zero
+/// here would fail open.
 ///
 /// A wire has resistance whether or not a second polygon happens to sit beside
 /// it. No model gets to lose it.

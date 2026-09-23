@@ -494,7 +494,7 @@ fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
 // ---------------------------------------------------------------------------
 // The four intent-gated ERC rules, on their *ran* path.
 //
-// `docs/CORRECTNESS_MAP.md` §3: `electromigration`, `esd_latchup`, `ir_drop`
+// `electromigration`, `esd_latchup`, `ir_drop`
 // and `reliability` each have one corpus case, and every one of them asserts
 // `Skipped(NoDesignIntent)`. Those cases are regression guards on the gate and
 // stay exactly as they are — they run through `common::run_case`, which passes

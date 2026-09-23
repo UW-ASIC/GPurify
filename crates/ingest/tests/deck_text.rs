@@ -257,7 +257,7 @@ pex met1 thickness 360nm height 1.376um sheet 0.125ohm dielectric 3.9 area_cap 2
 
 #[test]
 fn the_example_in_the_language_spec_parses() {
-    let spec = include_str!("../../../docs/DECK_LANGUAGE.md");
+    let spec = include_str!("../../../docs/deck.md");
     let start = spec.find("```\n# sky130 (excerpt)").expect("the example") + 4;
     let example = &spec[start..start + spec[start..].find("```").expect("closed")];
     let deck =

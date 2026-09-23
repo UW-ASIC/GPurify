@@ -242,8 +242,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         grid: Some(grid),
         // No reference netlist and no design intent exist yet, so `Inputs`
         // starts without them and `without_reference` / `without_intent` are
-        // idempotent. See `docs/NEED_TESTING.md`: writing either one needs a
-        // deck holding rules of both domains, which cannot currently be parsed.
+        // idempotent.
         reference: None,
         intent: None,
         ..Inputs::default()

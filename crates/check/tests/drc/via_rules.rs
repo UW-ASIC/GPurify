@@ -1,7 +1,7 @@
 //! Via family: `redundant_via` and `via_array_spacing`.
 //!
 //! Both rules count cuts rather than measuring one, and both are policies
-//! rather than physical limits (`docs/NEED_TESTING.md`), so what is definitive
+//! rather than physical limits, so what is definitive
 //! about them is the arithmetic: which cuts are in a neighbourhood, and which
 //! pairs are inside a cluster large enough to be an array. Both hinge on the
 //! same inclusive-at-the-limit boundary, and both are tested one unit either

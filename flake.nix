@@ -35,7 +35,7 @@
             pkgs.pkg-config
             # Mutation testing is the acceptance gate for the test suite: a
             # suite is only as strong as the logic changes it actually catches,
-            # and this measures that instead of assuming it. See docs/TESTING.md.
+            # and this measures that instead of assuming it.
             pkgs.cargo-mutants
           ];
         };

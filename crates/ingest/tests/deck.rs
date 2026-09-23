@@ -4,8 +4,7 @@
 //! `RuleTable` is the one part of a deck a test can build: its columns are
 //! public and it derives `Default`. `LayerTable` is not — every field is
 //! private and `parse_deck` is its only producer — so the layer-resolution
-//! half of a deck is tested from inside the crate instead, and the gap is
-//! recorded in `docs/NEED_TESTING.md`.
+//! half of a deck is tested from inside the crate instead.
 
 use gpurify_geom::{StrId, StrTable};
 use gpurify_ingest::deck::{ParamValue, RuleSpec, RuleTable};

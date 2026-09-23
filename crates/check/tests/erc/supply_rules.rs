@@ -569,8 +569,7 @@ fn a_net_that_also_holds_a_drain_is_not_tied_off() {
 ///
 /// The two recognisers are told apart by their terminal layers — a MOS column
 /// carries no pin stubs and a diode column carries no gate stub — so each marker
-/// polygon is exactly one device. That is the reading recorded in
-/// `docs/NEED_TESTING.md` under `DeviceRecognition`.
+/// polygon is exactly one device.
 fn pads_and_a_clamp() -> (gpurify_testgen::NetlistCase, NetTable, DeviceTable) {
     let mut strings = StrTable::default();
     let spec = NetlistSpec {
