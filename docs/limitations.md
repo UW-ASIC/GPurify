@@ -46,19 +46,37 @@ result from them is weaker than it looks.
 
 ## Shipped decks
 
-The decks in `pdks/` are starting points, not qualified decks, and none
-records which PDK release its numbers came from.
+Each deck in `pdks/` names, in its header, the rule manual and open decks its
+numbers come from, pinned to a release or commit. Rule ids are the foundry's.
+None has been compared against foundry signoff results.
 
-- Rule ids are descriptive (`met1_min_width`) rather than the foundry's rule
-  numbers.
-- No shipped deck configures `supply_short`, so a short between two supplies
-  goes unreported.
-- No shipped deck declares an ESD clamp device, so none carries
-  `esd_topological` or `esd_latchup`, and none carries the voltage rules
-  (`gate_oxide` and the rest). Add `device` statements for your clamp and
-  I/O devices and the rows that name them.
-- `sky130.deck` lacks about 35 rules from the periphery rule manual, among
-  them licon.5a to licon.18, difftap.8 to difftap.11, npc and the poly resistor rules.
+- Rules that need a check the language does not have yet (a forbidden
+  overlap, a shape that must contain another, same-net or different-net
+  spacing, width-by-run-length tables, butting-edge rules, rules that depend
+  on direction) are written out, commented, in a block at the end of each
+  deck. Each deck also lists the manual rules it leaves out, and why.
+- Diodes, bipolar transistors, well resistors and MOS capacitors whose
+  terminal is a well or the substrate are not recognised, because no deck
+  connects wells or the substrate as nets. For the same reason no transistor
+  has a bulk terminal, so no deck carries `well_bias`.
+- No deck carries `esd_latchup`: none of the manuals states a pad guard-ring
+  width and tap distance in the form the rule takes.
+- `gate_oxide` and `drain_source` use the operating voltages the PDK
+  documents (sky130's model limits, the nominal supplies for gf180mcu and
+  IHP), not an absolute maximum rating.
+- sky130: the periphery rules also apply inside SRAM cores (`areaid.ce`).
+  The implant-enclosure rules nsd/psd.5a, 5b and 7 are checked only on
+  diffusion and taps that butt nothing. poly.4 measures corner to corner
+  where the manual measures parallel edges only, so it can over-report, and
+  covers only poly that touches no diffusion.
+- IHP: parasitic area capacitance other than Metal1 is computed from the
+  documented layer heights and dielectric constants, and fringe capacitance
+  is zero. A gate with an antenna diode is held to the no-diode limit.
+- `generic_finfet` is ASAP7, a predictive process no fab builds. It
+  recognises no transistors and extracts no capacitance: the manual gives no
+  resistance for the gate and local-interconnect layers and no capacitance at
+  all. Its metal heights are stacked from the manual's widths and the 2:1
+  aspect ratio, not from a published cross-section.
 
 ## Test coverage
 
