@@ -48,6 +48,12 @@ pub(crate) enum Dim {
     Models,
     /// `(name: value, ..)`, a nested set of params.
     Group(&'static [Param]),
+    /// `same` or `different`; `same` is the engine flag.
+    Nets,
+    /// `[a, b, ..]`, lengths; one engine param per element.
+    LengthList,
+    /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
+    LengthRows,
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -373,6 +379,59 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "color_spacing", Dim::Length)),
         &[p("colors", "colors", Dim::Count)],
     ),
+    // Every shape (or edge) of the layer is a violation: `forbidden(licon and poly and diff)`.
+    drc("forbidden", Cmp::Absent, "forbidden", &[0], None, &[]),
+    // Each outer shape holds at least `count` inner shapes entirely: `contains(tap, licon) >= 1`.
+    drc(
+        "contains",
+        Cmp::Ge,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "min_count", Dim::Count)),
+        &[],
+    ),
+    // Every inner shape lies entirely inside the outer layer: `inside(poly_licon, npc)`.
+    drc("inside", Cmp::Absent, "must_be_inside", &[0, 1], None, &[]),
+    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b).
+    drc(
+        "space",
+        Cmp::Ge,
+        "net_spacing",
+        &[0],
+        LIMIT,
+        &[p("nets", "same_net", Dim::Nets)],
+    ),
+    // Spacing by width and parallel run length, a LEF `SPACINGTABLE`.
+    drc(
+        "space_table",
+        Cmp::Absent,
+        "spacing_table",
+        &[0],
+        None,
+        &[
+            p("prl", "prl", Dim::LengthList),
+            p("width", "width", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
+    // Wide spacing measured from the wide part and what is attached to it
+    // within `attached` (sky130 m1.3a).
+    drc(
+        "wide_space",
+        Cmp::Ge,
+        "attached_wide_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("width", "width_threshold", Dim::Length),
+            p("attached", "attached", Dim::Length),
+        ],
+    ),
+    // Edge layers.
+    drc("length", Cmp::Ge, "edge_min_length", &[0], LIMIT, &[]),
+    drc("space", Cmp::Ge, "edge_spacing", &[0], LIMIT, &[]),
+    drc("space", Cmp::Ge, "edge_spacing", &[0, 1], LIMIT, &[]),
+    drc("enclosure", Cmp::Ge, "edge_enclosure", &[0, 1], LIMIT, &[]),
     // ERC.
     erc(
         "antenna",
@@ -549,6 +608,13 @@ pub(crate) const PEX: [(&str, Dim); 6] = [
     ("fringe_cap", Dim::CapPerLength),
 ];
 
-/// Engine kinds whose layer arguments may be edge layers; every other kind
-/// refuses one when the deck is read.
-pub(crate) const EDGE_KINDS: &[&str] = &[];
+/// Engine kinds whose layer arguments may be edge layers, and what each engine
+/// layer slot takes: `Some(true)` edges, `Some(false)` polygons, `None` either.
+/// Every other kind refuses an edge layer when the deck is read. A kind named
+/// `edge_*` takes only edges, so a polygon argument picks its polygon twin.
+pub(crate) const EDGE_KINDS: &[(&str, &[Option<bool>])] = &[
+    ("forbidden", &[None]),
+    ("edge_min_length", &[Some(true)]),
+    ("edge_spacing", &[Some(true), Some(true)]),
+    ("edge_enclosure", &[Some(true), Some(false)]),
+];

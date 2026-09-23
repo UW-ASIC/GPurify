@@ -30,6 +30,7 @@ impl Sink {
     pub fn run(&mut self, store: &GeometryStore, rules: &[(StrId, Rule)]) {
         let set = RuleSet {
             rules: rules.to_vec(),
+            ..RuleSet::default()
         };
         set.run(store, &mut self.out, &mut self.runs);
     }

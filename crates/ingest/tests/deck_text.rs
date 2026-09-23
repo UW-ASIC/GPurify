@@ -560,3 +560,203 @@ fn an_error_renders_file_line_column_and_a_caret() {
          rule m1.1 width(met1) >= 60\n                         ^^"
     );
 }
+
+/// The presence, net, table and attached-wide rows lower to their engine
+/// kinds; which `space` and `wide_space` row is meant is read off the named
+/// arguments given.
+#[test]
+fn presence_net_table_and_attached_rows_lower() {
+    let (deck, strings) = ok("rule f forbidden(met3)\n\
+         rule c contains(diff, licon) >= 2\n\
+         rule i inside(licon, diff)\n\
+         connect conductors [met1]\n\
+         rule s space(met1) >= 140nm\n\
+         rule n space(met1; nets: same) >= 200nm\n\
+         rule w wide_space(met1; width: 3um) >= 280nm\n\
+         rule a wide_space(met1; width: 3um, attached: 280nm) >= 280nm\n\
+         rule t space_table(met1; prl: [0um, 1um], width: [0um, 300nm], \
+            space: [[180nm, 180nm], [180nm, 220nm]])\n");
+    let got = rules(&deck, &strings);
+    let row = |id: &str| got.iter().find(|r| r.0 == id).expect(id).clone();
+    let text = |items: &[&str]| items.iter().map(|&s| s.to_owned()).collect::<Vec<_>>();
+    assert_eq!(row("f").1, "forbidden");
+    assert_eq!(
+        (row("c").1, row("c").2, row("c").3),
+        (
+            "must_contain".to_owned(),
+            text(&["diff", "licon"]),
+            text(&["min_count=#2"])
+        )
+    );
+    assert_eq!(
+        (row("i").1, row("i").2),
+        ("must_be_inside".to_owned(), text(&["licon", "diff"]))
+    );
+    assert_eq!(row("s").1, "min_spacing");
+    assert_eq!(
+        (row("n").1, row("n").3),
+        (
+            "net_spacing".to_owned(),
+            text(&["same_net=true", "limit=200dbu"])
+        )
+    );
+    assert_eq!(row("w").1, "wide_dependent_spacing");
+    assert_eq!(
+        (row("a").1, row("a").3),
+        (
+            "attached_wide_spacing".to_owned(),
+            text(&["width_threshold=3000dbu", "attached=280dbu", "limit=280dbu"])
+        )
+    );
+    assert_eq!(
+        (row("t").1, row("t").3),
+        (
+            "spacing_table".to_owned(),
+            text(&[
+                "prl=0dbu",
+                "prl=1000dbu",
+                "width=0dbu",
+                "width=300dbu",
+                "space=180dbu",
+                "space=180dbu",
+                "space=180dbu",
+                "space=220dbu",
+            ])
+        )
+    );
+    one_error(
+        "rule n space(met1; nets: some) >= 1um\n",
+        "needs same or different",
+    );
+}
+
+/// A spacing table must say what every pair needs, and never less for a wider
+/// shape or a longer run.
+#[test]
+fn a_spacing_table_is_complete_and_monotone() {
+    let table = |prl: &str, width: &str, space: &str| {
+        format!("rule t space_table(met1; prl: {prl}, width: {width}, space: {space})\n")
+    };
+    let rows = "[[180nm, 180nm], [180nm, 220nm]]";
+    one_error(
+        &table("[100nm, 1um]", "[0um, 300nm]", rows),
+        "`prl` starts at 0",
+    );
+    one_error(
+        &table("[0um, 1um]", "[0um, 0um]", rows),
+        "`width` must rise strictly",
+    );
+    one_error(
+        &table("[0um, 1um]", "[0um, 300nm]", "[[180nm, 180nm]]"),
+        "one row per width: 2, got 1",
+    );
+    one_error(
+        &table("[0um, 1um]", "[0um, 300nm]", "[[180nm, 180nm], [180nm]]"),
+        "one cell per run length: 2, got 1",
+    );
+    one_error(
+        &table(
+            "[0um, 1um]",
+            "[0um, 300nm]",
+            "[[180nm, 170nm], [180nm, 220nm]]",
+        ),
+        "cannot fall along a row or down a column",
+    );
+    one_error(
+        &table(
+            "[0um, 1um]",
+            "[0um, 300nm]",
+            "[[180nm, 220nm], [180nm, 200nm]]",
+        ),
+        "cannot fall along a row or down a column",
+    );
+    one_error(
+        &table(
+            "[0um, 1um]",
+            "[0um, 300nm]",
+            "[[180, 180nm], [180nm, 220nm]]",
+        ),
+        "needs a length",
+    );
+}
+
+/// A rule may take a layer expression where it takes a layer; it becomes a
+/// derived layer of its own.
+#[test]
+fn a_rule_argument_may_be_a_layer_expression() {
+    let (deck, strings) = ok("rule x.1 forbidden(licon and poly and (diff or met1))\n\
+         rule x.2 space(met1.sized(10nm), met2) >= 100nm\n\
+         rule x.3 width(met1) >= 100nm\n");
+    let got = rules(&deck, &strings);
+    for (spec, id) in deck.rules.spec.iter().zip(["x.1", "x.2"]) {
+        let layer = deck.rules.layers_of(spec)[0];
+        assert!(deck.layers.is_derived(layer), "{id} reads a derived layer");
+    }
+    assert_eq!(got[1].2[1], "met2");
+    assert_eq!(got[2].2, ["met1"]);
+    one_error(
+        "rule x.1 forbidden(licon and nothing)\n",
+        "unknown layer `nothing`",
+    );
+}
+
+/// Edge checks take edge layers where they say so, and an edge layer picks
+/// the edge form of `space` and `enclosure`.
+#[test]
+fn edge_checks_take_edge_layers_in_their_edge_slots() {
+    let (deck, strings) = ok("layer e = diff.edges() not poly.edges()\n\
+         rule l length(e) >= 290nm\n\
+         rule s1 space(e) >= 400nm\n\
+         rule s2 space(e, poly.edges()) >= 130nm\n\
+         rule en enclosure(e, met1) >= 125nm\n\
+         rule f forbidden(e.outside_part(met1))\n\
+         rule p space(diff, poly) >= 100nm\n\
+         rule q enclosure(licon, diff) >= 40nm\n");
+    let kinds: Vec<String> = rules(&deck, &strings).into_iter().map(|r| r.1).collect();
+    assert_eq!(
+        kinds,
+        [
+            "edge_min_length",
+            "edge_spacing",
+            "edge_spacing",
+            "edge_enclosure",
+            "forbidden",
+            "min_spacing_diff",
+            "min_enclosure"
+        ]
+    );
+    one_error(
+        "rule l length(met1) >= 1um\n",
+        "takes an edge layer; `met1` is polygons",
+    );
+    one_error(
+        "layer e = diff.edges()\nrule s space(e, met1) >= 1um\n",
+        "takes an edge layer; `met1` is polygons",
+    );
+    one_error(
+        "layer e = diff.edges()\nrule en enclosure(e, e) >= 1um\n",
+        "`e` is an edge layer",
+    );
+}
+
+/// `with_text` reads a drawn text layer and a quoted pattern.
+#[test]
+fn a_text_selection_needs_a_drawn_layer_and_a_pattern() {
+    let (deck, strings) = ok("layer label = gds(68, 5)\n\
+         layer vdd = met1.with_text(label, \"VDD*\")\n\
+         layer other = met1.without_text(label, \"VDD?\")\n");
+    let vdd = deck.layers.id(&strings, "vdd").expect("vdd");
+    assert!(deck.layers.is_derived(vdd) && !deck.layers.is_edges(vdd));
+    one_error(
+        "layer x = met1 and met2\nlayer y = met1.with_text(x, \"A\")\n",
+        "`x` is derived; text is drawn on a GDS layer",
+    );
+    one_error(
+        "layer y = met1.with_text(met2, VDD)\n",
+        "expected a text pattern in quotes",
+    );
+    one_error(
+        "layer y = met1.with_text(met2, \"\")\n",
+        "an empty pattern matches no text",
+    );
+}

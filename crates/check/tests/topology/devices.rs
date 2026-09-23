@@ -704,6 +704,8 @@ fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
     const DIFF: LayerId = LayerId(2);
 
     let mut layout = LayoutBuilder::new(3);
+    // A marker over nothing, drawn first: row 0, outside the overlap.
+    let stray = layout.rect(CHANNEL, 5_000, 0, 5_050, 200);
     let channel = layout.rect(CHANNEL, 200, 0, 250, 200);
     layout.rect(POLY, 200, -50, 250, 250);
     // One diffusion rectangle spanning the channel: the collapsing shape.
@@ -736,17 +738,11 @@ fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
     };
     assert_eq!(marker, CHANNEL, "the refusal names the marker layer");
     assert_eq!(conductor, DIFF, "the refusal names the source/drain layer");
-    // The named polygon is the lowest store row contributing to the overlap —
-    // the marker or the diffusion — which pins the refusal to the drawing and
-    // to nothing else. Both are acceptable names for one defect; what the
-    // assertion rules out is a polygon outside the overlap entirely.
-    assert!(
-        poly == ids.of(channel) || poly == ids.of(diff),
-        "the refusal names {poly:?}, which is neither the channel {:?} nor the \
-         diffusion {:?} that overlap",
-        ids.of(channel),
-        ids.of(diff)
-    );
+    // The named polygon is the lowest store row contributing to the overlap,
+    // the marker or the diffusion. The stray marker is the layer's row 0 and
+    // the overlap's own first row number, but it is not under the overlap.
+    assert_ne!(ids.of(stray), poly);
+    assert_eq!(poly, ids.of(channel).min(ids.of(diff)));
 }
 
 /// Oracle: construct-from-answer. A non-rectilinear source/drain layer is a

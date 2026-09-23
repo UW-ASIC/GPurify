@@ -86,13 +86,19 @@ pub(crate) fn facing(
     {
         return REFUSED;
     }
-    let figures = if material_between {
-        drawn
+    // A merged figure's own provenance is a row of the boolean's scratch store.
+    let (figures, owners) = if material_between {
+        (drawn, Vec::new())
     } else {
-        &s.layer_out
+        s.rects_a.build(store, layer, drawn);
+        (&s.layer_out, owners_of(&s.layer_out, &s.rects_a))
     };
     for idx in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
         let poly = figures.get(idx);
+        let owner = owners
+            .get(idx as usize)
+            .copied()
+            .unwrap_or_else(|| poly.provenance());
         // A convex shape has no notch, and that is not a violation.
         let Some((measured, at)) = narrowest_facing(poly, material_between, &mut s.facing) else {
             continue;
@@ -105,7 +111,7 @@ pub(crate) fn facing(
                 at,
                 measured: Measurement::Length(measured),
                 limit: Measurement::Length(limit),
-                shapes: (poly.provenance(), None),
+                shapes: (owner, None),
             });
         }
     }

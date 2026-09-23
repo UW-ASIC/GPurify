@@ -273,6 +273,8 @@ struct Parser<'a> {
     layout: Grid,
     /// The rule being parsed, prefixed to its errors.
     context: String,
+    /// Layer expressions lowered so far among the current rule's arguments.
+    inline: u32,
     touch: bool,
     out: DeckSrc,
 }
@@ -303,6 +305,7 @@ impl<'a> Parser<'a> {
             deck_grid: None,
             layout,
             context: String::new(),
+            inline: 0,
             touch: false,
             out: DeckSrc::default(),
         }
@@ -637,6 +640,39 @@ impl<'a> Parser<'a> {
             "with_length" => {
                 let (lo, hi) = self.bounds(op, Dim::Length)?;
                 (DerivedOp::WithLength(lo, hi), Some(true), None)
+            }
+            "with_text" | "without_text" => {
+                self.expect("(")?;
+                let at = self.peek();
+                let texts = self.layer_word()?;
+                if !self.out.layers.iter().any(|(name, _)| *name == texts) {
+                    return Err(self.err_tok(
+                        at,
+                        &format!("`{texts}` is derived; text is drawn on a GDS layer"),
+                    ));
+                }
+                self.expect(",")?;
+                let t = self.peek();
+                if t.tok != Tok::Str {
+                    return Err(self.err_tok(
+                        t,
+                        &format!("expected a text pattern in quotes, found {}", self.found(t)),
+                    ));
+                }
+                self.bump();
+                let pattern = self.string(t)?;
+                if pattern.is_empty() {
+                    return Err(self.err_tok(t, "an empty pattern matches no text"));
+                }
+                self.expect(")")?;
+                let text = u32::try_from(self.out.texts.len()).expect("a deck has few patterns");
+                self.out.texts.push(pattern);
+                let keep = op == "with_text";
+                (
+                    DerivedOp::WithText { keep, text },
+                    Some(false),
+                    Some(LExpr::Layer(texts)),
+                )
             }
             _ => return Err(self.err(span, &format!("unknown layer operation `.{op}`"))),
         };
@@ -978,6 +1014,7 @@ impl<'a> Parser<'a> {
             return Err(self.err_tok(t, &format!("duplicate rule id `{id}`")));
         }
         self.context.clone_from(&id);
+        self.inline = 0;
         let warning = self.is("warning").then(|| self.bump());
         let (name, name_span) = self.ident("a check kind")?;
         self.expect("(")?;
@@ -1002,6 +1039,7 @@ impl<'a> Parser<'a> {
             name_span,
             &mut positional,
             cmp.as_ref().map(|c| (c.0, c.1)),
+            &named,
         )?;
         if let (Some(t), false) = (warning, kind.warns) {
             return Err(self.err_tok(
@@ -1010,23 +1048,36 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let edges_ok = EDGE_KINDS.contains(&kind.engine);
+        let slots = EDGE_KINDS
+            .iter()
+            .find(|(engine, _)| *engine == kind.engine)
+            .map_or(&[][..], |&(_, slots)| slots);
         let extra = if kind.more {
             &positional[kind.layers.len()..]
         } else {
             &[]
         };
         let mut layers = Vec::with_capacity(positional.len());
-        for value in kind
+        for (at, value) in kind
             .layers
             .iter()
             .map(|&slot| &positional[usize::from(slot)])
             .chain(extra)
+            .enumerate()
         {
-            layers.push(if edges_ok {
-                self.any_layer_name(value)?
-            } else {
-                self.layer_name(value)?
+            layers.push(match slots.get(at).copied().unwrap_or(Some(false)) {
+                Some(false) => self.layer_name(value)?,
+                None => self.any_layer_name(value)?,
+                Some(true) => {
+                    let layer = self.any_layer_name(value)?;
+                    if !self.edge_layers.contains(&layer) {
+                        return Err(self.err(
+                            value.span(),
+                            &format!("`{name}` here takes an edge layer; `{layer}` is polygons"),
+                        ));
+                    }
+                    layer
+                }
             });
         }
 
@@ -1038,6 +1089,9 @@ impl<'a> Parser<'a> {
             (name_span.0, name_span.1),
             &mut params,
         )?;
+        if kind.engine == "spacing_table" {
+            self.spacing_table(&named)?;
+        }
         if let (Some(limit), Some((_, _, value))) = (kind.limit, &cmp) {
             self.param(
                 value,
@@ -1124,7 +1178,7 @@ impl<'a> Parser<'a> {
                     "expected `name: value` (layers come before named arguments)",
                 ));
             } else {
-                positional.push(self.value()?);
+                positional.push(self.positional()?);
             }
             let t = self.peek();
             if !(self.is(",") || self.is(";") || self.is(")")) {
@@ -1135,6 +1189,41 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A rule's layer argument: a value, or a layer expression lowered to a
+    /// derived layer named `<rule id>@<k>`, which no deck text can name.
+    fn positional(&mut self) -> R<Val> {
+        let t = self.peek();
+        let next = self.peek_at(1);
+        let word = t.tok == Tok::Ident && !self.text(t).contains('.');
+        let ends = next.tok == Tok::Punct && [",", ";", ")"].contains(&self.text(next));
+        if (word && ends) || !(t.tok == Tok::Ident || self.is("(")) {
+            return self.value();
+        }
+        let expr = self.layer_expr()?;
+        let span = (t.start, self.toks[self.pos - 1].end);
+        let edges = self.edges_of(&expr);
+        let (op, operands) = match expr {
+            LExpr::Layer(name) => return Ok(Val::Word { name, span }),
+            LExpr::Op(op, operands) | LExpr::Group(op, operands) | LExpr::Call(op, operands) => {
+                (op, operands)
+            }
+        };
+        self.inline += 1;
+        let name = format!("{}@{}", self.context, self.inline);
+        let mut count = 0;
+        let layers = self.lower_operands(&name, operands, &mut count);
+        self.out.derived.push(DerivedSrc {
+            name: name.clone(),
+            op,
+            layers,
+        });
+        if edges {
+            self.edge_layers.insert(name.clone());
+        }
+        self.layers.insert(name.clone());
+        Ok(Val::Word { name, span })
+    }
+
     /// The table row for a kind name, its layer count, modifier and comparison.
     fn pick(
         &mut self,
@@ -1142,10 +1231,29 @@ impl<'a> Parser<'a> {
         span: (u32, u32),
         positional: &mut Vec<Val>,
         cmp: Option<(Cmp, (u32, u32))>,
+        named: &[Named],
     ) -> R<&'static Kind> {
-        let rows: Vec<&'static Kind> = KINDS.iter().filter(|k| k.name == name).collect();
+        let mut rows: Vec<&'static Kind> = KINDS.iter().filter(|k| k.name == name).collect();
         if rows.is_empty() {
             return Err(self.err(span, &format!("unknown check kind `{name}`")));
+        }
+        // An edge layer first picks the edge rows, a polygon layer the others;
+        // when none fits, the layer check names the mismatch.
+        let edges = matches!(positional.first(),
+            Some(Val::Word { name, .. }) if self.edge_layers.contains(name));
+        let fitting: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|k| {
+                if edges {
+                    EDGE_KINDS.iter().any(|(engine, _)| *engine == k.engine)
+                } else {
+                    !k.engine.starts_with("edge_")
+                }
+            })
+            .collect();
+        if !fitting.is_empty() {
+            rows = fitting;
         }
         // A trailing bare word the kind knows as a modifier (`opposite`).
         let modifier = match positional.last() {
@@ -1177,7 +1285,21 @@ impl<'a> Parser<'a> {
             ));
         }
         let given = cmp.map_or(Cmp::Absent, |c| c.0);
-        if let Some(&kind) = by_arity.iter().find(|k| k.cmp == given) {
+        // Rows alike but for their named arguments: the one knowing the most
+        // of those given, the first on a tie.
+        let known = |k: &Kind| {
+            named
+                .iter()
+                .filter(|arg| k.params.iter().any(|p| p.name == arg.name))
+                .count()
+        };
+        let mut best: Option<&'static Kind> = None;
+        for &kind in by_arity.iter().filter(|k| k.cmp == given) {
+            if best.is_none_or(|b| known(kind) > known(b)) {
+                best = Some(kind);
+            }
+        }
+        if let Some(kind) = best {
             return Ok(kind);
         }
         let legal: Vec<&str> = by_arity.iter().map(|k| cmp_text(k.cmp)).collect();
@@ -1322,6 +1444,29 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::Nets => match value {
+                Val::Word { name, .. } if name == "same" || name == "different" => {
+                    ParamSrc::Value(ParamValue::Flag(name == "same"))
+                }
+                other => return Err(self.wrong(other, "same or different", label)),
+            },
+            Dim::LengthList => {
+                for item in self.lengths(value, label)? {
+                    out.push((engine, ParamSrc::Value(ParamValue::Length(item))));
+                }
+                return Ok(());
+            }
+            Dim::LengthRows => {
+                let Val::List(rows, _) = value else {
+                    return Err(self.wrong(value, "a list of rows of lengths", label));
+                };
+                for row in rows {
+                    for item in self.lengths(row, label)? {
+                        out.push((engine, ParamSrc::Value(ParamValue::Length(item))));
+                    }
+                }
+                return Ok(());
+            }
             Dim::Group(inner) => {
                 let Val::Group(named, span) = value else {
                     return Err(self.wrong(value, "named arguments `(name: value, ..)`", label));
@@ -1341,6 +1486,84 @@ impl<'a> Parser<'a> {
             dim => ParamSrc::Value(ParamValue::Ratio(self.physical(value, dim, label)?)),
         };
         out.push((engine, converted));
+        Ok(())
+    }
+
+    /// `[a, b, ..]`, a non-empty list of lengths.
+    fn lengths(&mut self, value: &Val, label: &str) -> R<Vec<Dbu>> {
+        let Val::List(items, span) = value else {
+            return Err(self.wrong(value, "a list of lengths", label));
+        };
+        if items.is_empty() {
+            return Err(self.err(*span, &format!("`{label}` needs at least one length")));
+        }
+        items.iter().map(|item| self.length(item, label)).collect()
+    }
+
+    /// A spacing table is complete and monotone: `prl` and `width` start at
+    /// zero and rise, `space` has one row per width and one cell per run
+    /// length, and no cell is below the one before it in its row or column.
+    fn spacing_table(&mut self, named: &[Named]) -> R<()> {
+        let arg = |key: &str| {
+            named
+                .iter()
+                .find(|arg| arg.name == key)
+                .map(|arg| arg.value.clone())
+                .expect("`named` checked every parameter is given")
+        };
+        let (prl, width, space) = (arg("prl"), arg("width"), arg("space"));
+        let mut counts = [0; 2];
+        for (count, (value, key)) in counts.iter_mut().zip([(&prl, "prl"), (&width, "width")]) {
+            let steps = self.lengths(value, key)?;
+            if steps[0].raw() != 0 {
+                return Err(self.err(
+                    value.span(),
+                    &format!("`{key}` starts at 0, so every pair has a row and a column"),
+                ));
+            }
+            if steps.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(self.err(value.span(), &format!("`{key}` must rise strictly")));
+            }
+            *count = steps.len();
+        }
+        let [columns, rows] = counts;
+        let Val::List(lines, span) = &space else {
+            return Err(self.wrong(&space, "a list of rows of lengths", "space"));
+        };
+        if lines.len() != rows {
+            return Err(self.err(
+                *span,
+                &format!(
+                    "`space` needs one row per width: {rows}, got {}",
+                    lines.len()
+                ),
+            ));
+        }
+        let mut above: Vec<Dbu> = Vec::new();
+        for line in lines {
+            let cells = self.lengths(line, "space")?;
+            if cells.len() != columns {
+                return Err(self.err(
+                    line.span(),
+                    &format!(
+                        "a `space` row needs one cell per run length: {columns}, got {}",
+                        cells.len()
+                    ),
+                ));
+            }
+            if cells[0].raw() <= 0 {
+                return Err(self.err(line.span(), "a spacing must be positive"));
+            }
+            let falls = cells.windows(2).any(|pair| pair[1] < pair[0])
+                || above.iter().zip(&cells).any(|(up, cell)| cell < up);
+            if falls {
+                return Err(self.err(
+                    line.span(),
+                    "`space` cannot fall along a row or down a column",
+                ));
+            }
+            above = cells;
+        }
         Ok(())
     }
 
@@ -1684,5 +1907,8 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::AngleList => "a list of angles",
         Dim::Models => "a list of model names",
         Dim::Group(_) => "named arguments",
+        Dim::Nets => "same or different",
+        Dim::LengthList => "a list of lengths",
+        Dim::LengthRows => "a list of rows of lengths",
     }
 }

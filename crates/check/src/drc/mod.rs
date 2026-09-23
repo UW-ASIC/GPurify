@@ -37,6 +37,8 @@ pub enum DrcError {
     UnrepresentableAngle { rule: String, degrees: i32 },
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
+    #[error("rule {0}: the spacing table is not complete and monotone")]
+    BadTable(String),
 }
 
 /// The buffers every rule refills; one `&mut` means rules run sequentially.
