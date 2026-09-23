@@ -1,7 +1,7 @@
 //! Deck text to the parsed deck the lowering reads. `let` and `for` are
 //! expanded here; every error carries a span, and parsing continues past one.
 
-use super::kinds::{Cmp, Dim, Kind, Param, KINDS, PEX, UNITS};
+use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
     build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, LabelSrc,
@@ -261,8 +261,9 @@ struct Parser<'a> {
     errors: Vec<Diagnostic>,
     /// `let` and `for` bindings, innermost last.
     env: Vec<(String, Val)>,
-    /// Layers declared so far.
+    /// Layers declared so far, and which of them are edge layers.
     layers: HashSet<String>,
+    edge_layers: HashSet<String>,
     /// Every `layer`/`let` name in the file and where it is declared, for
     /// reporting a use before its declaration.
     ahead: HashMap<String, u32>,
@@ -296,6 +297,7 @@ impl<'a> Parser<'a> {
             errors,
             env: Vec::new(),
             layers: HashSet::new(),
+            edge_layers: HashSet::new(),
             ahead,
             rule_ids: HashSet::new(),
             deck_grid: None,
@@ -482,11 +484,17 @@ impl<'a> Parser<'a> {
             self.out.layers.push((name.clone(), (layer, datatype)));
         } else {
             let expr = self.layer_expr()?;
+            if self.edges_of(&expr) {
+                self.edge_layers.insert(name.clone());
+            }
             match expr {
                 LExpr::Layer(_) => {
-                    return Err(self.err(span, "a derived layer needs an operator (and, or, not)"))
+                    return Err(self.err(
+                        span,
+                        "a derived layer needs an operator (and, or, not) or an operation (`.sized(..)`)",
+                    ))
                 }
-                LExpr::Op(op, operands) | LExpr::Group(op, operands) => {
+                LExpr::Op(op, operands) | LExpr::Group(op, operands) | LExpr::Call(op, operands) => {
                     let mut count = 0;
                     let operands = self.lower_operands(&name, operands, &mut count);
                     self.out.derived.push(DerivedSrc {
@@ -518,8 +526,11 @@ impl<'a> Parser<'a> {
     fn layer_expr(&mut self) -> R<LExpr> {
         let mut left = self.layer_term()?;
         while let Some(&(_, op)) = OPS.iter().find(|(word, _)| self.is(word)) {
-            self.bump();
+            let at = self.bump();
             let right = self.layer_term()?;
+            if self.edges_of(&left) != self.edges_of(&right) {
+                return Err(self.err_tok(at, "cannot combine an edge layer with a polygon layer"));
+            }
             left = match left {
                 LExpr::Op(prev, mut operands) if prev == op => {
                     operands.push(right);
@@ -532,7 +543,8 @@ impl<'a> Parser<'a> {
     }
 
     fn layer_term(&mut self) -> R<LExpr> {
-        let term = if self.eat("(") {
+        let mut method = None;
+        let mut term = if self.eat("(") {
             let inner = self.layer_expr()?;
             self.expect(")")?;
             // A parenthesised chain is its own row, never merged into the outer one.
@@ -543,39 +555,156 @@ impl<'a> Parser<'a> {
         } else {
             let (word, span) = self.ident("a layer")?;
             // `met1.sized(..)` lexes as one word.
-            if let Some((base, op)) = word.split_once('.') {
-                let op_span = (span.0 + u32::try_from(base.len()).unwrap_or(0), span.1);
-                return Err(self.reserved(op, op_span));
-            }
-            let value = self.resolve(word, span);
-            LExpr::Layer(self.layer_name(&value)?)
+            let base = match word.split_once('.') {
+                Some((base, op)) => {
+                    let at = span.0 + u32::try_from(base.len()).unwrap_or(0);
+                    method = Some((op.to_owned(), (at, span.1)));
+                    base.to_owned()
+                }
+                None => word,
+            };
+            let end = span.0 + u32::try_from(base.len()).unwrap_or(0);
+            let value = self.resolve(base, (span.0, end));
+            LExpr::Layer(self.any_layer_name(&value)?)
         };
-        if self.is(".") {
-            let dot = self.bump();
-            let t = self.peek();
-            let op = self.text(t).to_owned();
-            return Err(self.reserved(&op, (dot.start, t.end)));
+        loop {
+            let (op, span) = match method.take() {
+                Some(pending) => pending,
+                None if self.is(".") => {
+                    let dot = self.bump();
+                    let t = self.peek();
+                    if t.tok != Tok::Ident {
+                        return Err(self.err_tok(t, "expected a layer operation after `.`"));
+                    }
+                    self.bump();
+                    (self.text(t).to_owned(), (dot.start, t.end))
+                }
+                None => return Ok(term),
+            };
+            term = self.call(term, &op, span)?;
         }
-        Ok(term)
     }
 
-    fn reserved(&mut self, op: &str, span: (u32, u32)) -> Stop {
-        const RESERVED: [&str; 9] = [
-            "sized",
-            "interacting",
-            "not_interacting",
-            "inside",
-            "outside",
-            "holes",
-            "extents",
-            "with_area",
-            "with_width",
-        ];
-        let op = op.split('.').next().unwrap_or(op);
-        if RESERVED.contains(&op) {
-            self.err(span, &format!("`.{op}` is not yet supported"))
-        } else {
-            self.err(span, &format!("unknown layer operation `.{op}`"))
+    /// One `.op(..)` applied to `receiver`.
+    fn call(&mut self, receiver: LExpr, op: &str, span: (u32, u32)) -> R<LExpr> {
+        let edges = self.edges_of(&receiver);
+        // Which receiver the op takes: `Some(true)` edges, `Some(false)` polygons, `None` either.
+        let (derived, takes_edges, argument) = match op {
+            "sized" => {
+                self.expect("(")?;
+                let value = self.value()?;
+                let by = self.length(&value, "sized")?;
+                self.expect(")")?;
+                (DerivedOp::Sized(by), Some(false), None)
+            }
+            "interacting" | "not_interacting" | "inside" | "outside" | "inside_part"
+            | "outside_part" => {
+                self.expect("(")?;
+                let at = self.peek();
+                let other = self.layer_expr()?;
+                self.expect(")")?;
+                if self.edges_of(&other) {
+                    return Err(self.err_tok(at, &format!("`.{op}` takes a polygon layer")));
+                }
+                let (derived, takes) = match op {
+                    "interacting" => (DerivedOp::Interacting(true), None),
+                    "not_interacting" => (DerivedOp::Interacting(false), None),
+                    "inside" => (DerivedOp::Inside, Some(false)),
+                    "outside" => (DerivedOp::Outside, Some(false)),
+                    "inside_part" => (DerivedOp::Part(true), Some(true)),
+                    _ => (DerivedOp::Part(false), Some(true)),
+                };
+                (derived, takes, Some(other))
+            }
+            "holes" | "extents" | "edges" => {
+                self.expect("(")?;
+                self.expect(")")?;
+                let derived = match op {
+                    "holes" => DerivedOp::Holes,
+                    "extents" => DerivedOp::Extents,
+                    _ => DerivedOp::Edges,
+                };
+                (derived, Some(false), None)
+            }
+            "with_area" => {
+                let (lo, hi) = self.bounds(op, Dim::Area)?;
+                (DerivedOp::WithArea(lo, hi), Some(false), None)
+            }
+            "with_width" => {
+                let (lo, hi) = self.bounds(op, Dim::Length)?;
+                (DerivedOp::WithWidth(lo, hi), Some(false), None)
+            }
+            "with_length" => {
+                let (lo, hi) = self.bounds(op, Dim::Length)?;
+                (DerivedOp::WithLength(lo, hi), Some(true), None)
+            }
+            _ => return Err(self.err(span, &format!("unknown layer operation `.{op}`"))),
+        };
+        if let Some(want) = takes_edges.filter(|&want| want != edges) {
+            let (want, got) = if want {
+                ("an edge layer", "polygons")
+            } else {
+                ("a polygon layer", "edges")
+            };
+            return Err(self.err(span, &format!("`.{op}` needs {want}, not {got}")));
+        }
+        let mut operands = vec![receiver];
+        operands.extend(argument);
+        Ok(LExpr::Call(derived, operands))
+    }
+
+    /// `(cmp value {, cmp value})`: at most one lower and one upper bound, or one
+    /// `==`. Inclusive, in grid units (square grid units for an area).
+    fn bounds(&mut self, op: &str, dim: Dim) -> R<(i128, i128)> {
+        let open = self.expect("(")?;
+        let (mut lo, mut hi) = (None, None);
+        loop {
+            let t = self.peek();
+            let cmp = self.text(t);
+            if t.tok != Tok::Punct || ![">=", ">", "<=", "<", "=="].contains(&cmp) {
+                return Err(self.err_tok(
+                    t,
+                    &format!("expected a bound such as `>= 1um`, found {}", self.found(t)),
+                ));
+            }
+            self.bump();
+            let value = self.value()?;
+            let n = if dim == Dim::Area {
+                self.area(&value, op)?.raw()
+            } else {
+                i128::from(self.length(&value, op)?.raw())
+            };
+            let (low, high) = match cmp {
+                ">=" => (Some(n), None),
+                ">" => (Some(n + 1), None),
+                "<=" => (None, Some(n)),
+                "<" => (None, Some(n - 1)),
+                _ => (Some(n), Some(n)),
+            };
+            if (low.is_some() && lo.is_some()) || (high.is_some() && hi.is_some()) {
+                return Err(self.err_tok(t, &format!("`.{op}` takes one bound on each side")));
+            }
+            lo = lo.or(low);
+            hi = hi.or(high);
+            if !self.eat(",") {
+                break;
+            }
+        }
+        let close = self.expect(")")?;
+        let (lo, hi) = (lo.unwrap_or(i128::MIN), hi.unwrap_or(i128::MAX));
+        if lo > hi {
+            return Err(self.err((open.start, close.end), "the range is empty"));
+        }
+        Ok((lo, hi))
+    }
+
+    /// Whether a layer expression is edges.
+    fn edges_of(&self, expr: &LExpr) -> bool {
+        match expr {
+            LExpr::Layer(name) => self.edge_layers.contains(name),
+            LExpr::Op(op, operands) | LExpr::Group(op, operands) | LExpr::Call(op, operands) => op
+                .makes_edges()
+                .unwrap_or_else(|| self.edges_of(&operands[0])),
         }
     }
 
@@ -586,7 +715,7 @@ impl<'a> Parser<'a> {
             .into_iter()
             .map(|operand| match operand {
                 LExpr::Layer(layer) => layer,
-                LExpr::Op(op, inner) | LExpr::Group(op, inner) => {
+                LExpr::Op(op, inner) | LExpr::Group(op, inner) | LExpr::Call(op, inner) => {
                     let layers = self.lower_operands(name, inner, count);
                     *count += 1;
                     let hidden = format!("{name}#{count}");
@@ -881,14 +1010,24 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        let edges_ok = EDGE_KINDS.contains(&kind.engine);
+        let extra = if kind.more {
+            &positional[kind.layers.len()..]
+        } else {
+            &[]
+        };
         let mut layers = Vec::with_capacity(positional.len());
-        for &slot in kind.layers {
-            layers.push(self.layer_name(&positional[usize::from(slot)])?);
-        }
-        if kind.more {
-            for extra in &positional[kind.layers.len()..] {
-                layers.push(self.layer_name(extra)?);
-            }
+        for value in kind
+            .layers
+            .iter()
+            .map(|&slot| &positional[usize::from(slot)])
+            .chain(extra)
+        {
+            layers.push(if edges_ok {
+                self.any_layer_name(value)?
+            } else {
+                self.layer_name(value)?
+            });
         }
 
         let mut params = Vec::new();
@@ -1465,8 +1604,20 @@ impl<'a> Parser<'a> {
         items.iter().map(|item| self.layer_name(item)).collect()
     }
 
-    /// A declared layer's name.
+    /// A declared polygon layer's name.
     fn layer_name(&mut self, value: &Val) -> R<String> {
+        let name = self.any_layer_name(value)?;
+        if self.edge_layers.contains(&name) {
+            return Err(self.err(
+                value.span(),
+                &format!("`{name}` is an edge layer; only a check that takes edges can use it"),
+            ));
+        }
+        Ok(name)
+    }
+
+    /// A declared layer's name, polygons or edges.
+    fn any_layer_name(&mut self, value: &Val) -> R<String> {
         match value {
             Val::Word { name, .. } if self.layers.contains(name) => Ok(name.clone()),
             Val::Word { name, span } => {
@@ -1490,6 +1641,8 @@ enum LExpr {
     Op(DerivedOp, Vec<LExpr>),
     /// A parenthesised fold, kept apart from the chain around it.
     Group(DerivedOp, Vec<LExpr>),
+    /// `receiver.op(argument)`: the receiver, then the layer argument if any.
+    Call(DerivedOp, Vec<LExpr>),
 }
 
 fn cmp_text(cmp: Cmp) -> &'static str {

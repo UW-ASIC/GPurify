@@ -4,11 +4,18 @@
 //! Data out: [`gds::Library::flatten`]'s store with deck-derived layers appended, and placed
 //! labels. An inexact transform is an error, never rounded.
 
-use crate::deck::{Deck, DerivedOp};
+use crate::deck::{Deck, DerivedOp, LayerTable};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
+use gpurify_geom::derive::{
+    edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
+    inside_into, interacting_into, merge_into, outside_into, sized_into, with_area_into,
+    with_length_into, with_width_into, EdgeOp,
+};
+use gpurify_geom::ops::Seg;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
+use gpurify_geom::LayerId;
 
 /// Why a layout could not be read. Every variant is a refusal: approximating a
 /// transform moves geometry and moves verdicts.
@@ -71,30 +78,110 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
-/// Operands fold left and only name lower ids, so one forward pass suffices.
-fn derive_layers_into(
-    store: &mut GeometryStore,
-    derived: &[(gpurify_geom::LayerId, DerivedOp, Vec<gpurify_geom::LayerId>)],
-) -> Result<(), LayoutError> {
+/// Operands only name lower ids, so one forward pass suffices.
+fn derive_layers_into(store: &mut GeometryStore, layers: &LayerTable) -> Result<(), LayoutError> {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
     let mut combined = ValidatedLayer::default();
+    let mut raw = ValidatedLayer::default();
+    let (mut edges, mut edges_out) = (Vec::<Seg>::new(), Vec::<Seg>::new());
     let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
     let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
 
-    for (layer, op, operands) in derived {
+    for (layer, op, operands) in layers.derived() {
         let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
+        // An operand's polygons, merged: selections and sizing read whole shapes.
+        let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
+            validate_layer_into(store, id, &mut raw)?;
+            merge_into(&raw, out)
+        };
 
-        validate_layer_into(store, operands[0], &mut folded).map_err(|why| blame(why.into()))?;
-        for &next in &operands[1..] {
-            validate_layer_into(store, next, &mut operand).map_err(|why| blame(why.into()))?;
-            match op {
-                DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
-                DerivedOp::Or => union_into(&folded, &operand, &mut combined),
-                DerivedOp::Not => subtraction_into(&folded, &operand, &mut combined),
+        if layers.is_edges(*layer) {
+            let receiver = operands[0];
+            match *op {
+                DerivedOp::Edges => {
+                    merged(receiver, &mut folded).map_err(blame)?;
+                    edges_into(&folded, &mut edges);
+                }
+                DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                    let how = match op {
+                        DerivedOp::And => EdgeOp::And,
+                        DerivedOp::Or => EdgeOp::Or,
+                        _ => EdgeOp::Not,
+                    };
+                    edges.clear();
+                    edges.extend_from_slice(store.edges_on_layer(receiver));
+                    for &next in &operands[1..] {
+                        edge_boolean_into(&edges, store.edges_on_layer(next), how, &mut edges_out);
+                        std::mem::swap(&mut edges, &mut edges_out);
+                    }
+                }
+                DerivedOp::Interacting(keep) => {
+                    merged(operands[1], &mut operand).map_err(blame)?;
+                    edge_interacting_into(
+                        store.edges_on_layer(receiver),
+                        &operand,
+                        keep,
+                        &mut edges,
+                    );
+                }
+                DerivedOp::Part(inside) => {
+                    merged(operands[1], &mut operand).map_err(blame)?;
+                    edge_part_into(store.edges_on_layer(receiver), &operand, inside, &mut edges);
+                }
+                DerivedOp::WithLength(lo, hi) => {
+                    with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
+                }
+                _ => unreachable!("the parser gives an edge result only to edge operations"),
             }
-            .map_err(blame)?;
-            std::mem::swap(&mut folded, &mut combined);
+            store.append_edges(*layer, &edges);
+            continue;
+        }
+
+        match *op {
+            DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                validate_layer_into(store, operands[0], &mut folded)
+                    .map_err(|why| blame(why.into()))?;
+                for &next in &operands[1..] {
+                    validate_layer_into(store, next, &mut operand)
+                        .map_err(|why| blame(why.into()))?;
+                    match op {
+                        DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
+                        DerivedOp::Or => union_into(&folded, &operand, &mut combined),
+                        _ => subtraction_into(&folded, &operand, &mut combined),
+                    }
+                    .map_err(blame)?;
+                    std::mem::swap(&mut folded, &mut combined);
+                }
+            }
+            _ => {
+                merged(operands[0], &mut operand).map_err(blame)?;
+                if let Some(&other) = operands.get(1) {
+                    merged(other, &mut combined).map_err(blame)?;
+                }
+                let (a, b) = (&operand, &combined);
+                match *op {
+                    DerivedOp::Sized(by) => sized_into(a, by, &mut folded),
+                    DerivedOp::Interacting(keep) => {
+                        interacting_into(a, b, keep, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::Inside => inside_into(a, b, &mut folded),
+                    DerivedOp::Outside => outside_into(a, b, &mut folded),
+                    DerivedOp::Holes => holes_into(a, &mut folded),
+                    DerivedOp::Extents => extents_into(a, &mut folded),
+                    DerivedOp::WithArea(lo, hi) => {
+                        with_area_into(a, lo..=hi, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::WithWidth(lo, hi) => {
+                        with_width_into(a, lo..=hi, &mut folded);
+                        Ok(())
+                    }
+                    _ => unreachable!("the parser gives an edge operation an edge result"),
+                }
+                .map_err(blame)?;
+            }
         }
 
         xs.clear();
@@ -1091,7 +1178,7 @@ pub mod gds {
 
             // Labels are not bound yet, so the layer-sort permutation has nothing to move.
             let (mut store, _) = walk.builder.finish(deck.layers.len());
-            super::derive_layers_into(&mut store, deck.layers.derived())?;
+            super::derive_layers_into(&mut store, &deck.layers)?;
             Ok((store, walk.provenance))
         }
     }
@@ -2730,6 +2817,124 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every derived operation through the deck text and the flattener. `met1`
+    /// is an L: a 4 um arm `[0,4]x[0,10]` and a 2 um arm `[0,10]x[0,2]` (um).
+    /// `met2` holds s1 inside the L, s2 touching its 4 um arm from outside, s3
+    /// far away, and s4 straddling the 2 um arm's end. Expected areas and
+    /// lengths are worked out by hand from those coordinates.
+    #[test]
+    fn every_derived_operation_reads_through_the_deck_into_the_store() {
+        let deck_text = "grid 1nm
+layer met1 = gds(68, 20)
+layer met2 = gds(69, 20)
+layer huge = met1.sized(-1um).sized(1um)
+layer near = met2.interacting(met1)
+layer apart = met2.not_interacting(met1)
+layer inner = met2.inside(met1)
+layer out = met2.outside(met1)
+layer big = met2.with_area(>= 4um2)
+layer small = met2.with_area(< 4um2)
+layer narrow = met1.with_width(< 3um)
+layer box = met1.extents()
+layer gaps = met1.holes()
+layer e = met1.edges()
+layer e_in = e.inside_part(met2)
+layer long = e.with_length(>= 10um)
+rule huge.w width(huge) >= 1um
+";
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(deck_text, grid, &mut strings).expect("parses");
+        let bytes = gds_library(
+            "TOP",
+            &[
+                boundary(
+                    68,
+                    20,
+                    &[0, 10000, 10000, 4000, 4000, 0],
+                    &[0, 0, 2000, 2000, 10000, 10000],
+                ),
+                boundary(69, 20, &[1000, 3000, 3000, 1000], &[5000, 5000, 7000, 7000]),
+                boundary(69, 20, &[4000, 6000, 6000, 4000], &[3000, 3000, 5000, 5000]),
+                boundary(69, 20, &[20000, 21000, 21000, 20000], &[0, 0, 1000, 1000]),
+                boundary(
+                    69,
+                    20,
+                    &[8000, 12000, 12000, 8000],
+                    &[-1000, -1000, 1000, 1000],
+                ),
+            ],
+        );
+        let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
+        let (store, _) = library
+            .flatten(&deck, &strings, UnknownLayers::Reject)
+            .expect("flattens");
+        let id = |name: &str| deck.layers.id(&strings, name).expect(name);
+        let um2 = 1_000_000i128;
+        let area = |name: &str| -> i128 {
+            store
+                .polys_on_layer(id(name))
+                .map(|row| {
+                    let (xs, ys) = store.poly_verts(PolyId(row));
+                    gpurify_geom::ops::area2(xs, ys).raw()
+                })
+                .sum::<i128>()
+                / 2
+        };
+        let count = |name: &str| store.polys_on_layer(id(name)).len();
+
+        assert_eq!(
+            area("huge"),
+            40 * um2,
+            "the 2 um arm is not wider than 2 um"
+        );
+        assert_eq!((count("near"), area("near")), (3, 16 * um2));
+        assert_eq!((count("apart"), area("apart")), (1, um2));
+        assert_eq!((count("inner"), area("inner")), (1, 4 * um2));
+        assert_eq!(
+            (count("out"), area("out")),
+            (2, 5 * um2),
+            "touching is outside"
+        );
+        assert_eq!(count("big"), 3);
+        assert_eq!(count("small"), 1);
+        assert_eq!(
+            area("narrow"),
+            52 * um2,
+            "the whole L, 2 um at its narrowest"
+        );
+        assert_eq!(area("box"), 100 * um2);
+        assert_eq!(count("gaps"), 0);
+
+        let length = |name: &str| -> i64 {
+            store
+                .edges_on_layer(id(name))
+                .iter()
+                .map(|s| (s.b.x - s.a.x).abs().raw() + (s.b.y - s.a.y).abs().raw())
+                .sum()
+        };
+        assert!(deck.layers.is_edges(id("e")) && deck.layers.is_edges(id("long")));
+        assert!(!deck.layers.is_edges(id("huge")));
+        assert_eq!(
+            (store.edges_on_layer(id("e")).len(), length("e")),
+            (6, 40_000)
+        );
+        assert_eq!(
+            length("e_in"),
+            2000 + 1000,
+            "the L's bottom and end inside s4"
+        );
+        assert_eq!(store.edges_on_layer(id("long")).len(), 2);
+        assert_eq!(
+            store.polys_on_layer(id("e")).len(),
+            0,
+            "an edge layer has no polygons"
+        );
+
+        let rule = &deck.rules.spec[0];
+        assert_eq!(deck.rules.layers_of(rule), [id("huge")]);
     }
 
     /// Flatten timing: 4000 placements (every quarter turn, half mirrored) of a

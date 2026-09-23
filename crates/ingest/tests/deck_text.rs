@@ -401,15 +401,80 @@ fn rebinding_a_name_is_an_error() {
 }
 
 #[test]
-fn a_reserved_derived_operation_is_not_yet_supported() {
+fn layer_operations_chain_and_a_rule_can_name_the_result() {
+    let (deck, strings) = ok("layer huge = met1.sized(-1500nm).sized(1500nm)\n\
+         layer x = (met1 and met2).holes() or met3.extents()\n\
+         layer gate = poly.interacting(diff).not_interacting(licon)\n\
+         layer active = diff.with_area(>= 1um2, < 4um2).with_width(== 150nm)\n\
+         rule m1.3 width(huge) >= 3um\n");
+    let huge = deck.layers.id(&strings, "huge").expect("huge");
+    assert!(deck.layers.is_derived(huge) && !deck.layers.is_edges(huge));
+    // huge, huge#1; x and three hidden rows; gate, gate#1; active, active#1.
+    assert_eq!(deck.layers.len(), 8 + 10);
+    let spec = &deck.rules.spec[0];
+    assert_eq!(deck.rules.layers_of(spec), [huge]);
+}
+
+#[test]
+fn edge_layers_are_typed_and_only_edge_operations_take_them() {
+    let (deck, strings) = ok("layer e = diff.edges()\n\
+         layer butt = e and poly.edges()\n\
+         layer e_in = e.inside_part(met1).with_length(<= 1um)\n\
+         layer touch = e.interacting(met1)\n");
+    for name in ["e", "butt", "e_in", "touch"] {
+        let id = deck.layers.id(&strings, name).expect(name);
+        assert!(deck.layers.is_edges(id), "{name} is edges");
+    }
     one_error(
-        "layer big = met1.sized(10nm)\n",
-        "`.sized` is not yet supported",
+        "layer e = diff.edges()\nrule w width(e) >= 100nm\n",
+        "`e` is an edge layer; only a check that takes edges can use it",
     );
     one_error(
-        "layer big = (met1 and met2).holes()\n",
-        "`.holes` is not yet supported",
+        "layer e = diff.edges()\nconnect conductors [e]\n",
+        "`e` is an edge layer",
     );
+    one_error(
+        "layer e = diff.edges()\nlayer x = e and met1\n",
+        "cannot combine an edge layer with a polygon layer",
+    );
+    one_error(
+        "layer e = diff.edges()\nlayer x = e.sized(10nm)\n",
+        "`.sized` needs a polygon layer, not edges",
+    );
+    one_error(
+        "layer x = met1.with_length(>= 10nm)\n",
+        "`.with_length` needs an edge layer, not polygons",
+    );
+    one_error(
+        "layer e = diff.edges()\nlayer x = met1.inside(e)\n",
+        "`.inside` takes a polygon layer",
+    );
+}
+
+#[test]
+fn a_layer_operation_checks_its_arguments() {
+    one_error(
+        "layer x = met1.sized(3nm)\n",
+        "is not a multiple of the grid",
+    );
+    one_error(
+        "layer x = met1.grow(10nm)\n",
+        "unknown layer operation `.grow`",
+    );
+    one_error(
+        "layer x = met1.with_area(> 4um2, < 1um2)\n",
+        "the range is empty",
+    );
+    one_error(
+        "layer x = met1.with_area(>= 1um2, > 2um2)\n",
+        "takes one bound on each side",
+    );
+    one_error(
+        "layer x = met1.with_width(150nm)\n",
+        "expected a bound such as `>= 1um`",
+    );
+    one_error("layer x = met1.with_area(>= 1um)\n", "needs an area");
+    one_error("layer x = met1\n", "a derived layer needs an operator");
 }
 
 #[test]

@@ -16,6 +16,8 @@ use crate::{Dbu, MAX_ABS_DBU};
 pub enum BooleanError {
     #[error("input is not rectilinear; arbitrary-angle geometry is unsupported")]
     NotRectilinear,
+    #[error("a sized coordinate leaves the representable range")]
+    OutOfRange,
     #[error(transparent)]
     Validity(#[from] ValidityError),
 }
