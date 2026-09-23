@@ -1,11 +1,13 @@
-//! The comparison driver: refine, then read the partition as a verdict.
+//! The comparison driver: drop unextracted bulk, reduce, refine, then read the
+//! partition as a verdict.
 //!
-//! Data in: reduced layout and reference graphs. Data out: a [`Verdict`] whose
+//! Data in: the layout and reference graphs as projected. Data out: a [`Verdict`] whose
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::graph::{narrow, Graph, LayoutGraph, RefGraph};
-use crate::lvs::refine::{refine_into, role_code, Partition, TieBreak};
+use crate::lvs::graph::{drop_unextracted_bulk, narrow, Graph};
+use crate::lvs::reduce::reduce;
+use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
@@ -16,46 +18,37 @@ use std::cmp::Ordering;
 pub struct CompareOptions {
     /// Bound on refinement rounds; exceeding it is [`Inconclusive::RoundLimit`].
     pub max_rounds: u32,
-    pub tie_break: TieBreak,
     /// Relative parameter tolerance: `|a - b| <= tol * max(|a|, |b|)`.
     pub param_tolerance: f64,
-    /// Also require paired nets to carry the same declared name.
-    pub match_names: bool,
 }
 
 impl Default for CompareOptions {
     fn default() -> Self {
         Self {
             max_rounds: 1000,
-            tie_break: TieBreak::LowestIndex,
             param_tolerance: 0.02,
-            match_names: false,
         }
     }
 }
 
-/// Compare one cell; `scratch` is refinement state reused across cells.
-pub fn compare(
-    layout: &LayoutGraph,
-    reference: &RefGraph,
-    options: CompareOptions,
-    scratch: &mut Partition,
-) -> Verdict {
-    if !refine_into(&layout.0, &reference.0, options.max_rounds, scratch) {
+/// Compare one cell. Reference `Bulk` terminals are dropped when the layout
+/// extracts none (a 3-terminal MOS recogniser), then both sides are reduced.
+/// A symmetry refinement cannot break pairs the lowest node index on each side.
+pub fn compare(layout: &Graph, reference: &Graph, options: CompareOptions) -> Verdict {
+    let mut declared = reference.clone();
+    drop_unextracted_bulk(layout, &mut declared);
+    let (layout, reference) = (reduce(layout), reduce(&declared));
+    let mut partition = Partition::default();
+    if !refine_into(&layout, &reference, options.max_rounds, &mut partition) {
         return Verdict::Inconclusive(Inconclusive::RoundLimit);
     }
-    interpret(&layout.0, &reference.0, scratch, options)
+    interpret(&layout, &reference, &partition, options.param_tolerance)
 }
 
 /// A node no class paired with anything.
 const UNPAIRED: u32 = u32::MAX;
 
-fn interpret(
-    layout: &Graph,
-    reference: &Graph,
-    partition: &Partition,
-    options: CompareOptions,
-) -> Verdict {
+fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance: f64) -> Verdict {
     let layout_devices = narrow(layout.device_count());
     let ref_devices = narrow(reference.device_count());
     let mut found: Vec<Discrepancy> = Vec::new();
@@ -91,34 +84,25 @@ fn interpret(
 
     // A proposed pairing is a candidate until terminals and parameters agree.
     let mut scratch = JoinScratch::default();
-    for &(layout_node, ref_node) in &pairs {
-        if layout_node < layout_devices {
-            compare_identity(layout, reference, (layout_node, ref_node), &mut found);
-            compare_terminals(
-                layout,
-                reference,
-                (layout_node, ref_node),
-                (layout_devices, ref_devices),
-                &layout_mate,
-                &mut scratch,
-                &mut found,
-            );
-            compare_params(
-                layout,
-                reference,
-                (layout_node, ref_node),
-                options.param_tolerance,
-                &mut scratch,
-                &mut found,
-            );
-        } else if options.match_names {
-            compare_net_name(
-                layout,
-                reference,
-                (layout_node - layout_devices, ref_node - ref_devices),
-                &mut found,
-            );
-        }
+    for &(layout_node, ref_node) in pairs.iter().filter(|pair| pair.0 < layout_devices) {
+        compare_identity(layout, reference, (layout_node, ref_node), &mut found);
+        compare_terminals(
+            layout,
+            reference,
+            (layout_node, ref_node),
+            (layout_devices, ref_devices),
+            &layout_mate,
+            &mut scratch,
+            &mut found,
+        );
+        compare_params(
+            layout,
+            reference,
+            (layout_node, ref_node),
+            tolerance,
+            &mut scratch,
+            &mut found,
+        );
     }
 
     report_unpaired(layout, &layout_mate, Side::Layout, &mut found);
@@ -312,29 +296,6 @@ const fn undeclared_param(pair: (u32, u32), side: Side, param: StrId) -> Discrep
         layout_device: pair.0,
         ref_device: pair.1,
         param,
-    }
-}
-
-/// One paired net's declared names, when the run asked for them to agree.
-fn compare_net_name(
-    layout: &Graph,
-    reference: &Graph,
-    nets: (u32, u32),
-    found: &mut Vec<Discrepancy>,
-) {
-    let layout_name = layout.net_name[nets.0 as usize];
-    let ref_name = reference.net_name[nets.1 as usize];
-    if layout_name != ref_name {
-        found.push(Discrepancy::UnpairedNet {
-            side: Side::Layout,
-            net: nets.0,
-            name: layout_name,
-        });
-        found.push(Discrepancy::UnpairedNet {
-            side: Side::Reference,
-            net: nets.1,
-            name: ref_name,
-        });
     }
 }
 

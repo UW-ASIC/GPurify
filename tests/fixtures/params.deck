@@ -1,0 +1,95 @@
+grid 5nm
+
+layer nwell = gds(1, 0)
+layer diff = gds(2, 0)
+layer poly = gds(3, 0)
+layer licon = gds(4, 0)
+layer li = gds(5, 0)
+layer mcon = gds(6, 0)
+layer met1 = gds(7, 0)
+layer via1 = gds(8, 0)
+layer met2 = gds(9, 0)
+layer nsdm = gds(10, 0)
+layer psdm = gds(11, 0)
+layer diode = gds(14, 0)
+layer diff_label = gds(2, 5)
+layer poly_label = gds(3, 5)
+layer li_label = gds(5, 5)
+layer met1_label = gds(7, 5)
+layer met2_label = gds(9, 5)
+layer diff_active = diff not poly
+layer gate = poly and diff
+layer gate_n = gate and nsdm
+layer gate_p = gate and psdm
+
+rule met1.min_width width(met1) >= 100nm
+rule met1.max_width width(met1) <= 5000nm
+rule met1.min_edge_length edge_length(met1) >= 100nm
+rule met1.notch notch(met1) >= 100nm
+rule met1.min_spacing space(met1) >= 100nm
+rule met1.met2.min_spacing space(met1, met2) >= 100nm
+rule met1.eol_spacing eol_space(met1; eol_width: 200nm) >= 150nm
+rule met1.prl_spacing prl_space(met1; prl: 500nm) >= 200nm
+rule met1.corner_to_corner corner_space(met1) >= 150nm
+rule met1.wide_dependent_spacing wide_space(met1; width: 300nm) >= 200nm
+rule met1.min_area area(met1) >= 40000nm2
+rule met1.min_enclosed_area hole_area(met1) >= 40000nm2
+rule met1.cheesing cheesing(met1) <= 2250000nm2
+rule met1.min_density density(met1; window: 2000nm, step: 2000nm) >= 0.3
+rule met1.max_density density(met1; window: 2000nm, step: 2000nm) <= 0.8
+rule met1.met2.min_enclosure enclosure(met2, met1) >= 50nm
+rule nwell.diff.min_enclosure enclosure(diff, nwell) >= 50nm
+rule met1.via1.asymmetric_enclosure enclosure(via1, met1, opposite) >= 100nm
+rule poly.diff.min_extension extension(poly, diff) >= 50nm
+rule met1.met2.overlap overlap(met1, met2) >= 50nm
+rule diff.li.max_distance_to_tap tap_distance(diff, li) <= 3000nm
+rule off_grid off_grid(; pitch: 5nm)
+rule angle angle(; allowed: [0deg, 90deg])
+rule via1.redundant_via redundant_via(via1; within: 500nm) >= 2
+rule via1.via_array_spacing via_array_space(via1; array: 3) >= 200nm
+rule met1.multi_patterning patterning(met1; colors: 2) >= 100nm
+rule poly.met1.antenna antenna(poly, met1; max_ratio: 100, sidewall: none)
+rule poly.antenna_electrical antenna_electrical(poly, li, met1, met2; max_ratio: 400, diode: diode, diode_credit: 0, diode_bonus: 0)
+rule met1.density_cmp density_cmp(met1; window: 1000nm x 1000nm, step: 1000nm x 1000nm, min: 0.2, max: 0.85, max_delta: 0.5, partial_windows: true, cmp: (target: 0.5, thickness: 400nm, sensitivity: 200nm, max_delta: 50nm))
+rule em_current_density em_current_density(li, met1, met2; max_density: 1000A/m, max_current_per_cut: 100uA)
+rule met1.electromigration electromigration(met1; max_density: 1000A/m, max_current_per_cut: 100uA, blech_limit: 10uA, reference_temperature: 383.15K, activation_energy: 0.9eV, current_exponent: 1)
+rule esd_topological esd_topological(met1)
+rule esd_latchup esd_latchup(met1, nwell; min_guard_ring_width: 1000nm, max_tap_distance: 3000nm)
+rule floating_gate floating_gate()
+rule nwell.floating_well floating_well(nwell, nsdm)
+rule hv_domain hv_domain(; max_delta: 1800mV, isolation: none)
+rule ir_drop ir_drop()
+rule bti reliability(; required_lifetime: 1000h, reference_lifetime: 1000h, reference_stress: 1800mV, stress_exponent: 4, reference_temperature: 398.15K, activation_energy: 0.5eV, max_abs_voltage: 3600mV, duty_cycle: 1)
+rule diff.li.missing_tie missing_tie(diff, li; max_distance: 2000nm)
+rule multiple_drivers multiple_drivers(; max: 1)
+rule p2p_resistance p2p_resistance(; max: 10ohm)
+rule nwell.soft_connection soft_connection(nwell)
+rule supply_short supply_short(nsdm, psdm)
+rule tie_high_low tie_high_low()
+rule met1.unconnected_pin unconnected_pin(met1)
+
+connect conductors [diff_active, poly, li, met1, met2]
+connect touch_within_layer
+connect via licon [diff_active, li]
+connect via licon [poly, li]
+connect via mcon [li, met1]
+connect via via1 [met1, met2]
+connect label diff_label names diff_active
+connect label poly_label names poly
+connect label li_label names li
+connect label met1_label names met1
+connect label met2_label names met2
+
+device mos gate_n model "nfet_01v8" terminals [poly, diff_active, diff_active]
+device mos gate_p model "pfet_01v8" terminals [poly, diff_active, diff_active]
+
+pex nwell thickness 100nm height 0nm sheet 3000ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex diff thickness 100nm height 0nm sheet 120ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex diff_active thickness 100nm height 0nm sheet 120ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex poly thickness 200nm height 200nm sheet 48.2ohm dielectric 3.9 area_cap 106aF/um2 fringe_cap 55aF/um
+pex licon thickness 500nm height 400nm sheet 152ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex li thickness 100nm height 900nm sheet 12.2ohm dielectric 3.9 area_cap 37aF/um2 fringe_cap 41aF/um
+pex mcon thickness 300nm height 1000nm sheet 9.3ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met1 thickness 400nm height 1300nm sheet 0.1ohm dielectric 3.9 area_cap 25aF/um2 fringe_cap 40aF/um
+pex via1 thickness 300nm height 1700nm sheet 5ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met2 thickness 400nm height 2000nm sheet 0.08ohm dielectric 3.9 area_cap 15aF/um2 fringe_cap 30aF/um

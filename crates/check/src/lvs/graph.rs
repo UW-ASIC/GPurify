@@ -58,14 +58,6 @@ impl Graph {
     }
 }
 
-/// The layout side, a newtype so the two sides cannot be swapped at a call site.
-#[derive(Debug, Default, PartialEq)]
-pub struct LayoutGraph(pub Graph);
-
-/// The reference side.
-#[derive(Debug, Default, PartialEq)]
-pub struct RefGraph(pub Graph);
-
 /// The SPICE parameter name each measured [`DeviceParam`] compares under.
 const fn spice_param_name(param: DeviceParam) -> &'static str {
     match param {
@@ -77,22 +69,21 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
     }
 }
 
-/// Project a `topology` extraction into `out`. Device row `k` is `DeviceId(k)`,
+/// Project a `topology` extraction. Device row `k` is `DeviceId(k)`,
 /// net row `k` is `NetId(k)`; `port_net` is ascending.
 ///
 /// A measured parameter is emitted in metres (area in m²) only when its SPICE
 /// name is already interned in `strings` (so the reference can declare it) and a
 /// grid is given; otherwise it is omitted.
-pub fn from_layout_into(
+pub fn from_layout(
     nets: &NetTable,
     devices: &DeviceTable,
     ports: &PortTable,
     strings: &StrTable,
     grid: Option<Grid>,
-    out: &mut LayoutGraph,
-) {
+) -> Graph {
     let net_count = nets.net_count();
-    let graph = &mut out.0;
+    let mut graph = Graph::default();
 
     graph.device_kind.clone_from(&devices.kind);
     graph.device_model.clone_from(&devices.model);
@@ -146,7 +137,8 @@ pub fn from_layout_into(
         }
     }
 
-    transpose_into(graph, net_count);
+    transpose_into(&mut graph, net_count);
+    graph
 }
 
 /// Build the net-side incidence from the device-side one, in place. Terminals
@@ -183,16 +175,10 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
         .truncate(graph.net_terminal_start[net_count] as usize);
 }
 
-/// Project one subcircuit of a reference netlist into `out`. Roles come from card
+/// Project one subcircuit of a reference netlist. Roles come from card
 /// position ([`card_role`]); `port_net` keeps the subcircuit's port order.
-pub fn from_reference_into(
-    netlist: &Netlist,
-    subckt: SubcktId,
-    strings: &StrTable,
-    out: &mut RefGraph,
-) {
-    let _ = strings;
-    let graph = &mut out.0;
+pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
+    let mut graph = Graph::default();
     let devices = netlist.devices_of(subckt);
     let (first, last) = (devices.start as usize, devices.end as usize);
 
@@ -264,17 +250,17 @@ pub fn from_reference_into(
             .map(|net| rank[net.0 as usize]),
     );
 
-    transpose_into(graph, net_count as usize);
+    transpose_into(&mut graph, net_count as usize);
+    graph
 }
 
 /// Drop every reference `Bulk` terminal when no layout terminal is `Bulk` (the
 /// deck extracts none). Side-wide, so a missing bulk strap still mismatches.
 /// Only terminals are dropped, never nets.
-pub fn drop_unextracted_bulk(layout: &LayoutGraph, reference: &mut RefGraph) {
-    if layout.0.terminal_role.contains(&TerminalRole::Bulk) {
+pub(crate) fn drop_unextracted_bulk(layout: &Graph, graph: &mut Graph) {
+    if layout.terminal_role.contains(&TerminalRole::Bulk) {
         return;
     }
-    let graph = &mut reference.0;
     if !graph.terminal_role.contains(&TerminalRole::Bulk) {
         return;
     }

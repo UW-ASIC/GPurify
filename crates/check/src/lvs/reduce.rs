@@ -126,21 +126,22 @@ fn join(root: &mut [u32], a: u32, b: u32) {
     root[left.max(right) as usize] = left.min(right);
 }
 
-/// Reduce to series/parallel normal form, refilling `out`. Devices come out one
-/// per group ascending by the group's lowest row; surviving nets keep their order.
-/// A graph with nothing to merge comes through byte-identical.
-pub fn reduce_into(src: &Graph, out: &mut Graph) {
+/// Reduce to series/parallel normal form. Devices come out one per group
+/// ascending by the group's lowest row; surviving nets keep their order. A graph
+/// with nothing to merge comes through byte-identical.
+pub fn reduce(src: &Graph) -> Graph {
     let mut plan = Plan::default();
-    out.clone_from(src);
+    let mut out = src.clone();
     let mut spare = Graph::default();
     // Each pass that changes anything drops a device, so this bound is never hit.
     for _ in 0..=src.device_count() {
-        if !plan_into(out, &mut plan) {
+        if !plan_into(&out, &mut plan) {
             break;
         }
-        emit_into(out, &plan, &mut spare);
-        std::mem::swap(out, &mut spare);
+        emit_into(&out, &plan, &mut spare);
+        std::mem::swap(&mut out, &mut spare);
     }
+    out
 }
 
 /// Decide one pass: which devices are one device, and which nets die with them.

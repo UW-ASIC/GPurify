@@ -7,7 +7,7 @@ use gpurify_geom::{Dbu, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
 
-/// One configured DRC rule. Every limit is positive; area limits are squared.
+/// One configured DRC rule. Every limit is positive; area limits are in square grid units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Rule {
     MinWidth {
@@ -140,7 +140,7 @@ impl RuleSet {
     /// Parse every deck row whose kind is in [`KINDS`]; other kinds belong to
     /// another domain and are stepped over (the engine refuses kinds no domain spells).
     ///
-    /// Area limits are stated as the side of the equivalent square and squared here.
+    /// Area limits arrive as areas (`ParamValue::Area`).
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -176,7 +176,14 @@ impl RuleSet {
             }
             Ok(limit)
         };
-        let square = |spec: &RuleSpec, param| length(spec, param).map(|side| side.mul_wide(side));
+        let area_limit = |spec: &RuleSpec, param| match value(spec, param)? {
+            ParamValue::Area(area) if area.raw() > 0 => Ok(area),
+            ParamValue::Area(area) => Err(DrcError::NonPositiveLimit {
+                rule: name_of(spec.id),
+                limit: i64::try_from(area.raw()).unwrap_or(i64::MIN),
+            }),
+            _ => Err(wrong_type(spec, param)),
+        };
         let ratio = |spec: &RuleSpec, param| -> Result<f64, DrcError> {
             let ParamValue::Ratio(limit) = value(spec, param)? else {
                 return Err(wrong_type(spec, param));
@@ -275,15 +282,15 @@ impl RuleSet {
                 },
                 "min_area" => Rule::MinArea {
                     layer: one(spec)?,
-                    limit: square(spec, "limit")?,
+                    limit: area_limit(spec, "limit")?,
                 },
                 "min_enclosed_area" => Rule::MinEnclosedArea {
                     layer: one(spec)?,
-                    limit: square(spec, "limit")?,
+                    limit: area_limit(spec, "limit")?,
                 },
                 "cheesing" => Rule::Cheesing {
                     layer: one(spec)?,
-                    max_unslotted: square(spec, "max_unslotted")?,
+                    max_unslotted: area_limit(spec, "max_unslotted")?,
                 },
                 "density" => {
                     let layer = one(spec)?;

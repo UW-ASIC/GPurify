@@ -5,13 +5,11 @@
 
 use crate::engine::pipeline::{Extracted, Inputs, Loaded};
 use gpurify_check::lvs::verdict::Inconclusive;
-use gpurify_check::lvs::{Discrepancy, Verdict};
-use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use gpurify_check::lvs::Verdict;
+use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_extract::ParasiticNetwork;
-use gpurify_geom::ops::Point;
-use gpurify_geom::{celsius, prefix, Dbu, Qty, Temperature};
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
-use gpurify_ingest::{StrId, StrTable};
+use gpurify_geom::{celsius, prefix, Qty, Temperature};
+use gpurify_geom::{Bbox, GeometryStore, LayerId};
 
 /// Which checks to run.
 #[allow(clippy::struct_excessive_bools)]
@@ -289,72 +287,40 @@ fn run_lvs(
         );
     };
 
-    let mut layout = gpurify_check::lvs::LayoutGraph::default();
-    gpurify_check::lvs::graph::from_layout_into(
+    let layout = gpurify_check::lvs::graph::from_layout(
         &extracted.nets,
         &extracted.devices,
         &extracted.ports,
         &loaded.strings,
         Some(loaded.grid),
-        &mut layout,
     );
-
     append_stage(out, |violations, runs| {
-        gpurify_check::lvs::checks::check_floating_nets(
+        gpurify_check::lvs::check_layout(
+            &layout,
             &extracted.nets,
             &extracted.devices,
             &extracted.ports,
+            &loaded.strings,
             violations,
             runs,
         );
-        gpurify_check::lvs::checks::check_label_conflicts(
-            &extracted.nets,
-            &extracted.ports,
-            violations,
-            runs,
-        );
-        gpurify_check::lvs::checks::check_net_seed_conflicts(
-            &extracted.nets,
-            &extracted.ports,
-            violations,
-            runs,
-        );
-        gpurify_check::lvs::checks::check_device_counts(&extracted.devices, violations, runs);
-        gpurify_check::lvs::checks::check_parametric(&extracted.devices, violations, runs);
-        gpurify_check::lvs::checks::check_topology(&layout, violations, runs);
-        name_lvs_check_rows(&loaded.strings, violations, runs);
     });
 
     let verdict = match reference.top() {
         // Guessing which subcircuit was meant is the one thing a comparison must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
-        Some(top) => {
-            let mut declared = gpurify_check::lvs::RefGraph::default();
-            gpurify_check::lvs::graph::from_reference_into(
-                reference,
-                top,
-                &loaded.strings,
-                &mut declared,
-            );
-            // A 3-terminal MOS recogniser extracts no bulk; the reference's
-            // fourth net must not unpair the comparison.
-            gpurify_check::lvs::graph::drop_unextracted_bulk(&layout, &mut declared);
-
-            let mut reduced_layout = gpurify_check::lvs::LayoutGraph::default();
-            gpurify_check::lvs::reduce::reduce_into(&layout.0, &mut reduced_layout.0);
-            let mut expected = gpurify_check::lvs::RefGraph::default();
-            gpurify_check::lvs::reduce::reduce_into(&declared.0, &mut expected.0);
-
-            let mut partition = gpurify_check::lvs::refine::Partition::default();
-            gpurify_check::lvs::compare(&reduced_layout, &expected, options.lvs, &mut partition)
-        }
+        Some(top) => gpurify_check::lvs::compare(
+            &layout,
+            &gpurify_check::lvs::graph::from_reference(reference, top),
+            options.lvs,
+        ),
     };
 
     let status = match &verdict {
         Verdict::Match => StageStatus::Ran,
         // Concluded; the failure is carried by the error rows.
         Verdict::Mismatch(found) => {
-            record_discrepancies(found, &loaded.strings, &mut out.violations);
+            gpurify_check::lvs::record_discrepancies(found, &loaded.strings, &mut out.violations);
             StageStatus::Ran
         }
         Verdict::Inconclusive(why) => {
@@ -363,115 +329,6 @@ fn run_lvs(
     };
     out.lvs = Some(verdict);
     status
-}
-
-/// The rule id of each [`Discrepancy`] variant, in declaration order.
-pub(crate) const LVS_RULE_IDS: [&str; 7] = [
-    "lvs.unpaired_device",
-    "lvs.unpaired_net",
-    "lvs.terminal_mismatch",
-    "lvs.parameter_mismatch",
-    "lvs.undeclared_param",
-    "lvs.duplicate_name",
-    "lvs.class_imbalance",
-];
-
-/// The rule id of each of `lvs::checks`' eight run rows. Row `k` is filed under
-/// the sentinel `StrId(u32::MAX - k)`.
-pub(crate) const LVS_CHECK_RULE_IDS: [&str; 8] = [
-    "lvs.floating_net",
-    "lvs.label_conflict",
-    "lvs.net_seed_conflict",
-    "lvs.device_count_mos",
-    "lvs.device_count_bjt",
-    "lvs.parametric",
-    "lvs.terminal_net",
-    "lvs.terminal_count",
-];
-
-/// Replace every sentinel rule id with the interned one. An id this table does
-/// not know is left as is, so `resolve` panics rather than misattributing it.
-fn name_lvs_check_rows(strings: &StrTable, violations: &mut Violations, runs: &mut [RuleRun]) {
-    debug_assert!(
-        runs.iter()
-            .zip(0u32..)
-            .all(|(run, k)| run.rule == StrId(u32::MAX - k)),
-        "lvs::checks changed its sentinel order; LVS_CHECK_RULE_IDS no longer lines up"
-    );
-    let named = |id: StrId| {
-        LVS_CHECK_RULE_IDS
-            .get((u32::MAX - id.0) as usize)
-            .and_then(|name| strings.get(name))
-            .unwrap_or(id)
-    };
-    for run in runs.iter_mut() {
-        run.rule = named(run.rule);
-    }
-    for rule in &mut violations.rule {
-        *rule = named(*rule);
-    }
-}
-
-/// An LVS finding has no layer, place or shape: past-the-end sentinels.
-const NO_LAYER: LayerId = LayerId(u16::MAX);
-const NO_LOCATION: Point = Point {
-    x: Dbu::new_unchecked(0),
-    y: Dbu::new_unchecked(0),
-};
-const NO_SHAPE: PolyId = PolyId(u32::MAX);
-
-/// One error row per discrepancy, which is how a mismatch fails [`Summary::passed`].
-fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut Violations) {
-    for discrepancy in found {
-        let (measured, limit) = lvs_measurement(discrepancy);
-        out.push(Violation {
-            rule: lvs_rule_id(discrepancy, strings),
-            layer: NO_LAYER,
-            severity: Severity::Error,
-            at: NO_LOCATION,
-            measured,
-            limit,
-            shapes: (NO_SHAPE, None),
-        });
-    }
-}
-
-/// Falls back to `StrId(u32::MAX)`, which `resolve` panics on, rather than
-/// attributing the row to whatever was interned first.
-fn lvs_rule_id(discrepancy: &Discrepancy, strings: &StrTable) -> StrId {
-    let name = match discrepancy {
-        Discrepancy::UnpairedDevice { .. } => LVS_RULE_IDS[0],
-        Discrepancy::UnpairedNet { .. } => LVS_RULE_IDS[1],
-        Discrepancy::TerminalMismatch { .. } => LVS_RULE_IDS[2],
-        Discrepancy::ParameterMismatch { .. } => LVS_RULE_IDS[3],
-        Discrepancy::UndeclaredParam { .. } => LVS_RULE_IDS[4],
-        Discrepancy::DuplicateName { .. } => LVS_RULE_IDS[5],
-        Discrepancy::ClassImbalance { .. } => LVS_RULE_IDS[6],
-    };
-    strings.get(name).unwrap_or(StrId(u32::MAX))
-}
-
-/// `(layout side, reference side)`. Only two variants carry numbers; the rest
-/// (and a non-finite parameter) report `Count(1)` against `Count(0)`.
-fn lvs_measurement(discrepancy: &Discrepancy) -> (Measurement, Measurement) {
-    match *discrepancy {
-        Discrepancy::ParameterMismatch {
-            layout_value,
-            ref_value,
-            ..
-        } if layout_value.is_finite() && ref_value.is_finite() => (
-            Measurement::Ratio(layout_value),
-            Measurement::Ratio(ref_value),
-        ),
-        Discrepancy::ClassImbalance {
-            layout_nodes,
-            ref_nodes,
-        } => (
-            Measurement::Count(layout_nodes),
-            Measurement::Count(ref_nodes),
-        ),
-        _ => (Measurement::Count(1), Measurement::Count(0)),
-    }
 }
 
 /// Analytical extraction of the whole design; with `quasistatic_nets`, those nets

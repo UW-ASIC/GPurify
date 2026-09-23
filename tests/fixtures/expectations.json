@@ -2,7 +2,7 @@
  "$schema_version": 1,
  "purpose": "Physics-derived expectations for the fixture corpus. Replaces the claims in `manifest.json`, which is kept untouched as the historical record. Every number here was derived from the geometry and the frozen doc comments, then compared with the manifest; the comparison result is in `corroboration`, never folded into the value.",
  "gds_file": "_source/conformance.gds",
- "deck": "params.json",
+ "deck": "params.deck",
  "grid_dbu_per_um": 1000,
  "coordinate_unit": "dbu (1 dbu = 1 nm on this grid); all `at` points are [x, y] in dbu",
  "vocabulary": {

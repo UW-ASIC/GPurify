@@ -64,34 +64,25 @@ impl Provenance {
         store: &GeometryStore,
         connectivity: &crate::deck::Connectivity,
     ) -> Result<(), LabelError> {
-        for index in 0..self.placed.len() {
-            let label = self.placed[index];
-            let mut bound = None;
+        let mut bound: Vec<Option<PolyId>> = vec![None; self.placed.len()];
+        let mut pending = Vec::new();
+        for (&text, &conductor) in connectivity
+            .label_layer
+            .iter()
+            .zip(&connectivity.label_names)
+        {
+            // An earlier row's binding stands.
+            pending.clear();
+            pending.extend(
+                (0..self.placed.len())
+                    .filter(|&i| bound[i].is_none() && self.placed[i].layer == text),
+            );
+            bind_on_layer(store, conductor, &self.placed, &mut pending, &mut bound);
+        }
 
-            // ponytail: labels × polygons-on-layer scan, bbox-pruned; a point query on the spatial index is the upgrade.
-            'rows: for row in 0..connectivity.label_layer.len() {
-                if connectivity.label_layer[row] != label.layer {
-                    continue;
-                }
-                for poly in store.polys_on_layer(connectivity.label_names[row]) {
-                    let poly = PolyId(poly);
-                    let box_of = store.poly_bbox(poly);
-                    let inside_box = (label.at.x.raw() >= box_of.xlo.raw())
-                        & (label.at.x.raw() <= box_of.xhi.raw())
-                        & (label.at.y.raw() >= box_of.ylo.raw())
-                        & (label.at.y.raw() <= box_of.yhi.raw());
-                    if inside_box
-                        && store.poly_contains_point(poly, label.at)
-                        && !in_hole_of(store, connectivity.label_names[row], poly, label.at)
-                    {
-                        bound = Some(poly);
-                        break 'rows;
-                    }
-                }
-            }
-
-            match bound {
-                Some(poly) => self.label(poly, label.name),
+        for (label, poly) in self.placed.iter().zip(bound) {
+            match poly {
+                Some(poly) => self.labelled.push((poly, label.name)),
                 None if connectivity.label_layer.contains(&label.layer) => {
                     return Err(LabelError::Unplaced {
                         layer: label.layer,
@@ -102,28 +93,70 @@ impl Provenance {
                 None => {}
             }
         }
+        // Stable: equal ids keep arrival order, as `label` would have.
+        self.labelled.sort_by_key(|&(poly, _)| poly);
         Ok(())
     }
 }
 
+/// For each label in `pending`, the lowest-id polygon on `layer` holding it on
+/// material, or `None`. A sweep in x: labels in x order, polygons entering by
+/// `xlo` and leaving past `xhi`, so each label tests only the boxes spanning its x.
+fn bind_on_layer(
+    store: &GeometryStore,
+    layer: LayerId,
+    placed: &[PlacedLabel],
+    pending: &mut [usize],
+    bound: &mut [Option<PolyId>],
+) {
+    let first = store.polys_on_layer(layer).start;
+    let boxes = store.layer_bboxes(layer);
+    let mut by_xlo: Vec<u32> = (0..crate::narrow(boxes.len())).collect();
+    by_xlo.sort_unstable_by_key(|&i| boxes[i as usize].xlo);
+    pending.sort_unstable_by_key(|&i| placed[i].at.x);
+
+    let (mut entered, mut active, mut hits) = (0, Vec::new(), Vec::new());
+    for &label in pending.iter() {
+        let p = placed[label].at;
+        while let Some(&i) = by_xlo
+            .get(entered)
+            .filter(|&&i| boxes[i as usize].xlo <= p.x)
+        {
+            active.push(i);
+            entered += 1;
+        }
+        active.retain(|&i| boxes[i as usize].xhi >= p.x);
+
+        hits.clear();
+        hits.extend(active.iter().filter_map(|&i| {
+            let b = boxes[i as usize];
+            let poly = PolyId(first + i);
+            (b.ylo <= p.y && p.y <= b.yhi && store.poly_contains_point(poly, p)).then_some(poly)
+        }));
+        hits.sort_unstable();
+        bound[label] = hits
+            .iter()
+            .copied()
+            .find(|&poly| !in_hole_of(store, poly, p, &hits));
+    }
+}
+
 /// Whether `p` sits in a hole of `poly` rather than on its material: a hole row
-/// is never a label target, and neither is an outer whose smaller hole row on the
-/// same layer holds `p` strictly. A point on a hole's edge is material.
-// ponytail: scans the layer's rows per candidate; holes are rare, a bound hole table is the upgrade.
-fn in_hole_of(store: &GeometryStore, layer: LayerId, poly: PolyId, p: Point) -> bool {
+/// is never a label target, and neither is an outer holding a smaller hole row
+/// that holds `p` strictly. `hits` is every row on the layer containing `p`, so
+/// every candidate hole. A point on a hole's edge is material.
+fn in_hole_of(store: &GeometryStore, poly: PolyId, p: Point, hits: &[PolyId]) -> bool {
     use gpurify_geom::ops::{area2, winding_of, Winding};
     let (xs, ys) = store.poly_verts(poly);
     if winding_of(xs, ys) == Some(Winding::Clockwise) {
         return true;
     }
     let outer_area = area2(xs, ys).raw().abs();
-    store.polys_on_layer(layer).any(|row| {
-        let hole = PolyId(row);
+    hits.iter().any(|&hole| {
         let (hx, hy) = store.poly_verts(hole);
         winding_of(hx, hy) == Some(Winding::Clockwise)
             && area2(hx, hy).raw().abs() < outer_area
             && store.poly_contains_point(poly, Point { x: hx[0], y: hy[0] })
-            && store.poly_contains_point(hole, p)
             && !on_ring(hx, hy, p)
     })
 }

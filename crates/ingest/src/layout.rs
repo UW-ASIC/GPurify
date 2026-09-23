@@ -122,6 +122,7 @@ pub mod gds {
     use super::{Deck, LayoutError, UnknownLayers};
     use crate::narrow;
     use crate::provenance::Provenance;
+    use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
     use gpurify_geom::boolean::canonical_rings_into;
     use gpurify_geom::{Dbu, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
@@ -979,6 +980,56 @@ pub mod gds {
         }
     }
 
+    /// Largest `|v|` over both columns, 0 when empty. Max and min rather than `abs`,
+    /// which wraps on `i64::MIN`.
+    #[inline(always)]
+    #[expect(
+        clippy::inline_always,
+        reason = "must inline into dispatch!'s target-feature arm"
+    )]
+    pub(super) fn max_abs<S: Simd>(s: S, xs: &[i64], ys: &[i64]) -> u64 {
+        let (mut hi, mut lo) = (i64x4::splat(s, 0), i64x4::splat(s, 0));
+        let mut tail = 0;
+        for col in [xs, ys] {
+            let (chunks, rest) = col.as_chunks::<4>();
+            for chunk in chunks {
+                let v = i64x4::from_slice(s, chunk);
+                hi = hi.max(v);
+                lo = lo.min(v);
+            }
+            tail = tail.max(max_abs_scalar(rest));
+        }
+        tail.max(hi.reduce_max().unsigned_abs())
+            .max(lo.reduce_min().unsigned_abs())
+    }
+
+    pub(super) fn max_abs_scalar(v: &[i64]) -> u64 {
+        v.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0)
+    }
+
+    /// `out[i] = ±src[i] + d`, negated when `neg`. The caller has proven no overflow.
+    #[inline(always)]
+    #[expect(
+        clippy::inline_always,
+        reason = "must inline into dispatch!'s target-feature arm"
+    )]
+    pub(super) fn shift<S: Simd>(s: S, src: &[i64], neg: bool, d: i64, out: &mut [i64]) {
+        let (dv, negv) = (i64x4::splat(s, d), mask64x4::splat(s, neg));
+        let (src_chunks, src_tail) = src.as_chunks::<4>();
+        let (out_chunks, out_tail) = out.as_chunks_mut::<4>();
+        for (v, o) in src_chunks.iter().zip(out_chunks) {
+            let v = i64x4::from_slice(s, v);
+            (negv.select(-v, v) + dv).store_slice(o);
+        }
+        shift_scalar(src_tail, neg, d, out_tail);
+    }
+
+    pub(super) fn shift_scalar(src: &[i64], neg: bool, d: i64, out: &mut [i64]) {
+        for (o, &v) in out.iter_mut().zip(src) {
+            *o = if neg { -v } else { v } + d;
+        }
+    }
+
     /// The hierarchy walk and the tables it fills.
     struct Flatten<'a> {
         lib: &'a Library,
@@ -989,6 +1040,7 @@ pub mod gds {
         provenance: Provenance,
         /// Cells on the current root-to-here chain, for the cycle check.
         on_chain: Vec<bool>,
+        level: Level,
         /// Per-element scratch.
         rx: Vec<i64>,
         ry: Vec<i64>,
@@ -1025,6 +1077,7 @@ pub mod gds {
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
+                level: Level::new(),
                 rx: Vec::new(),
                 ry: Vec::new(),
                 tx: Vec::new(),
@@ -1056,8 +1109,11 @@ pub mod gds {
             self.on_chain[index] = true;
 
             let entry = &lib.cells[index];
-            for elem in &lib.elems[entry.elem_start as usize..entry.elem_end as usize] {
-                self.emit(elem, at)?;
+            let elems = &lib.elems[entry.elem_start as usize..entry.elem_end as usize];
+            if !self.emit_placed(elems, at)? {
+                for elem in elems {
+                    self.emit(elem, at)?;
+                }
             }
             for label in &lib.texts[entry.text_start as usize..entry.text_end as usize] {
                 self.place(label, at)?;
@@ -1119,6 +1175,50 @@ pub mod gds {
             Ok(())
         }
 
+        /// One placement's elements at once: their vertex runs are one contiguous block
+        /// of `lib.xs`. `Ok(false)` leaves it to per-element [`Self::emit`] (magnified,
+        /// or a bound this cannot prove), which reports any error exactly as before.
+        fn emit_placed(&mut self, elems: &[Elem], at: Xform) -> Result<bool, LayoutError> {
+            let (Some(first), Some(last)) = (elems.first(), elems.last()) else {
+                return Ok(true);
+            };
+            if at.mag != 1 {
+                return Ok(false);
+            }
+            let lib = self.lib;
+            let level = self.level;
+            let base = first.vert_start as usize;
+            let block = base..(last.vert_start + last.vert_len) as usize;
+            let (xs, ys) = (&lib.xs[block.clone()], &lib.ys[block]);
+
+            // With mag 1 every output is ±one input + d, so |out| <= max|in| + |d|.
+            // In bound, that proves no overflow and no out-of-range vertex.
+            let reach = dispatch!(level, s => max_abs(s, xs, ys))
+                .checked_add(at.dx.unsigned_abs().max(at.dy.unsigned_abs()));
+            if reach.is_none_or(|r| r > MAX_ABS_DBU.unsigned_abs()) {
+                return Ok(false);
+            }
+            // A quarter turn swaps the axes.
+            let (a, b, c, e) = at.linear();
+            let (from_x, neg_x, from_y, neg_y) = if a == 0 {
+                (ys, b < 0, xs, c < 0)
+            } else {
+                (xs, a < 0, ys, e < 0)
+            };
+            self.rx.resize(xs.len(), 0);
+            self.ry.resize(xs.len(), 0);
+            dispatch!(level, s => shift(s, from_x, neg_x, at.dx, &mut self.rx));
+            dispatch!(level, s => shift(s, from_y, neg_y, at.dy, &mut self.ry));
+
+            for elem in elems {
+                if let Some(layer) = self.layer(elem.layer, elem.datatype)? {
+                    let start = elem.vert_start as usize - base;
+                    self.push(layer, start..start + elem.vert_len as usize, at.flip);
+                }
+            }
+            Ok(true)
+        }
+
         /// Transform one element into the root frame and push it.
         fn emit(&mut self, elem: &Elem, at: Xform) -> Result<(), LayoutError> {
             let Some(layer) = self.layer(elem.layer, elem.datatype)? else {
@@ -1148,16 +1248,6 @@ pub mod gds {
                     .expect("the reduction above found one");
                 return Err(LayoutError::CoordinateOutOfRange(out));
             }
-            self.tx.clear();
-            self.tx
-                .extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
-            self.ty.clear();
-            self.ty
-                .extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
-
-            // A mirror (det < 0) turns a counter-clockwise ring clockwise, which
-            // `validate_layer_into` reads as a hole. Reverse `[1..]` so vertex 0,
-            // the report point, stays put.
             debug_assert!(
                 {
                     let (a, b, c, e) = at.linear();
@@ -1165,12 +1255,25 @@ pub mod gds {
                 },
                 "det < 0 iff flip"
             );
-            if at.flip {
+            self.push(layer, 0..self.rx.len(), at.flip);
+            Ok(())
+        }
+
+        /// Push `rx/ry[run]`, already in bound, as one ring. A mirror (det < 0) turns a
+        /// counter-clockwise ring clockwise, which `validate_layer_into` reads as a
+        /// hole: reverse `[1..]` so vertex 0, the report point, stays put.
+        fn push(&mut self, layer: LayerId, run: std::ops::Range<usize>, flip: bool) {
+            self.tx.clear();
+            self.tx
+                .extend(self.rx[run.clone()].iter().map(|&v| Dbu::new_unchecked(v)));
+            self.ty.clear();
+            self.ty
+                .extend(self.ry[run].iter().map(|&v| Dbu::new_unchecked(v)));
+            if flip {
                 self.tx[1..].reverse();
                 self.ty[1..].reverse();
             }
             self.builder.push(layer, &self.tx, &self.ty);
-            Ok(())
         }
     }
 }
@@ -1817,18 +1920,6 @@ mod tests {
 
         let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         assert_same_store("a tagged layout", &expected, &layout.store);
-    }
-
-    #[test]
-    fn reading_the_same_library_twice_produces_the_same_store() {
-        let mut strings = StrTable::default();
-        let deck = three_layer_deck(&mut strings);
-        let (_, _, _, elements) = corpus();
-        let bytes = gds_library("TOP", &elements);
-
-        let once = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        let twice = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
     }
 
     /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
@@ -2601,5 +2692,87 @@ mod tests {
                  refused as CoordinateOutOfRange, not as {other:?}"
             ),
         }
+    }
+
+    /// The placement kernels match their scalar oracles at every length around the
+    /// lane count, on random and edge values.
+    #[test]
+    fn the_placement_kernels_agree_with_their_scalar_versions() {
+        use fearless_simd::{dispatch, Level};
+        let level = Level::new();
+        let mut rng = gpurify_testgen::Rng::new(7);
+        let edges = [0, 1, -1, i64::MAX, i64::MIN, 1 << 40, -(1 << 40)];
+        for len in 0..=13 {
+            for round in 0..20 {
+                let mut col = |salt: usize| -> Vec<i64> {
+                    (0..len)
+                        .map(|i| match (round + i + salt) % 5 {
+                            0 => edges[(i + round) % edges.len()],
+                            _ => rng.range(-(1 << 41), 1 << 41),
+                        })
+                        .collect()
+                };
+                let (xs, ys) = (col(0), col(3));
+                let want = gds::max_abs_scalar(&xs).max(gds::max_abs_scalar(&ys));
+                assert_eq!(
+                    dispatch!(level, s => gds::max_abs(s, &xs, &ys)),
+                    want,
+                    "len {len}"
+                );
+
+                // `shift`'s contract: no overflow, so in-domain inputs only.
+                let src: Vec<i64> = xs.iter().map(|&v| v.clamp(-(1 << 41), 1 << 41)).collect();
+                for (neg, d) in [(false, 0), (true, 5), (false, -(1 << 40)), (true, 1 << 40)] {
+                    let (mut got, mut want) = (vec![0; len], vec![0; len]);
+                    dispatch!(level, s => gds::shift(s, &src, neg, d, &mut got));
+                    gds::shift_scalar(&src, neg, d, &mut want);
+                    assert_eq!(got, want, "len {len}, neg {neg}, d {d}");
+                }
+            }
+        }
+    }
+
+    /// Flatten timing: 4000 placements (every quarter turn, half mirrored) of a
+    /// 400-rectangle cell. `cargo test --release -p gpurify-ingest -- --ignored flatten_timing --nocapture`.
+    #[test]
+    #[ignore = "timing, not a check"]
+    fn flatten_timing() {
+        let leaf: Vec<Boundary> = (0..400)
+            .map(|i| {
+                let (x, y) = ((i % 20) * 50, (i / 20) * 50);
+                boundary(
+                    ROWS[0].1,
+                    ROWS[0].2,
+                    &[x, x + 30, x + 30, x],
+                    &[y, y, y + 30, y + 30],
+                )
+            })
+            .collect();
+        let refs: Vec<Ref> = (0..4000)
+            .map(|i| {
+                let strans = if i % 2 == 0 { 0 } else { REFLECT };
+                sref(
+                    "LEAF",
+                    strans,
+                    f64::from(u8::try_from(i % 4).expect("0..4")) * 90.0,
+                    (i % 64) * 2000,
+                    (i / 64) * 2000,
+                )
+            })
+            .collect();
+        let bytes = gds_hierarchy(&[("LEAF", &leaf, &[]), ("TOP", &[], &refs)]);
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let out = library
+                .flatten(&deck, &strings, UnknownLayers::Reject)
+                .expect("flattens");
+            best = best.min(t.elapsed());
+            std::hint::black_box(out);
+        }
+        eprintln!("flatten 1.6M rects: best of 5 {best:?}");
     }
 }

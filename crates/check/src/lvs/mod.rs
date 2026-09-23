@@ -5,12 +5,13 @@
 //! reason; there is no code path from "gave up" to "matched".
 
 pub mod checks;
-pub mod compare;
+mod compare;
 pub mod graph;
 pub mod reduce;
-pub mod refine;
+mod refine;
 pub mod verdict;
 
+pub use checks::{check_layout, intern_rule_ids, record_discrepancies};
 pub use compare::{compare, CompareOptions};
-pub use graph::{Graph, LayoutGraph, RefGraph};
+pub use graph::Graph;
 pub use verdict::{Discrepancy, Verdict};
