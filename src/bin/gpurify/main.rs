@@ -9,11 +9,6 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    if let [deck, convert, json] = argv.as_slice() {
-        if deck == "deck" && convert == "convert" {
-            return convert_deck(json);
-        }
-    }
     let cli = match args::parse(&argv) {
         Ok(cli) => cli,
         Err(error) => return fail(&error),
@@ -113,24 +108,6 @@ fn render(cli: &args::Cli) -> Result<(Summary, String), ExitCode> {
     };
     written.map_err(|error| fail(&error))?;
     Ok((summary, text))
-}
-
-/// `gpurify deck convert <json>`: write `<stem>.deck` beside the JSON deck.
-fn convert_deck(json: &str) -> ExitCode {
-    let path = std::path::Path::new(json);
-    let converted = std::fs::read_to_string(path)
-        .map_err(|why| gpurify_ingest::DeckError::Io(format!("{json}: {why}")))
-        .and_then(|source| gpurify_ingest::deck::to_deck_text(&source));
-    let text = match converted {
-        Ok(text) => text,
-        Err(error) => return fail(&error),
-    };
-    let out = path.with_extension("deck");
-    if let Err(error) = std::fs::write(&out, text) {
-        eprintln!("{}: {error}", out.display());
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
 }
 
 fn fail(error: &dyn std::error::Error) -> ExitCode {

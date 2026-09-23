@@ -1,7 +1,7 @@
 //! The deck language: what it accepts, what it lowers to, and every error class.
 
 use gpurify_geom::{Grid, StrTable};
-use gpurify_ingest::deck::{parse_deck_dsl, Deck, DeckError, ParamValue};
+use gpurify_ingest::deck::{parse_deck, Deck, DeckError, ParamValue};
 use std::fmt::Write as _;
 
 fn grid() -> Grid {
@@ -22,7 +22,7 @@ layer met3 = gds(70, 20)
 fn parse(body: &str) -> Result<(Deck, StrTable), DeckError> {
     let mut strings = StrTable::default();
     let source = format!("{HEAD}{body}");
-    parse_deck_dsl(&source, grid(), &mut strings).map(|deck| (deck, strings))
+    parse_deck(&source, grid(), &mut strings).map(|deck| (deck, strings))
 }
 
 fn ok(body: &str) -> (Deck, StrTable) {
@@ -260,8 +260,8 @@ fn the_example_in_the_language_spec_parses() {
     let spec = include_str!("../../../docs/DECK_LANGUAGE.md");
     let start = spec.find("```\n# sky130 (excerpt)").expect("the example") + 4;
     let example = &spec[start..start + spec[start..].find("```").expect("closed")];
-    let deck = parse_deck_dsl(example, grid(), &mut StrTable::default())
-        .unwrap_or_else(|why| panic!("{why}"));
+    let deck =
+        parse_deck(example, grid(), &mut StrTable::default()).unwrap_or_else(|why| panic!("{why}"));
     assert_eq!(deck.rules.spec.len(), 10);
 }
 
@@ -396,7 +396,7 @@ fn errors_are_collected_and_capped_at_fifty() {
 fn an_error_renders_file_line_column_and_a_caret() {
     let mut strings = StrTable::default();
     let source = "grid 5nm\nlayer met1 = gds(68, 20)\nrule m1.1 width(met1) >= 60\n";
-    let error = parse_deck_dsl(source, grid(), &mut strings)
+    let error = parse_deck(source, grid(), &mut strings)
         .expect_err("a bare number")
         .in_file("pdks/x.deck");
     assert_eq!(

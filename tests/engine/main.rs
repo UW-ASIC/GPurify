@@ -11,7 +11,7 @@ use gpurify_check::drc::DrcError;
 use gpurify_check::lvs::verdict::{Discrepancy, Side};
 use gpurify_check::lvs::{CompareOptions, Verdict};
 use gpurify_geom::{GeometryStore, GeometryStoreBuilder, Grid, LayerId};
-use gpurify_ingest::deck::{parse_deck_dsl, Connectivity, Deck, DeviceKind, RuleSpec};
+use gpurify_ingest::deck::{parse_deck, Connectivity, Deck, DeviceKind, RuleSpec};
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::{Provenance, StrId, StrTable};
 use gpurify_testgen::shapes::dbu;
@@ -118,7 +118,7 @@ fn extraction_partitions_by_touch_and_accepts_an_empty_design() {
 #[test]
 fn a_deck_that_leaves_raw_diffusion_conducting_under_a_mos_marker_is_refused() {
     let mut strings = StrTable::default();
-    let deck = parse_deck_dsl(
+    let deck = parse_deck(
         "grid 1nm
 layer diff = gds(65, 20)
 layer poly = gds(66, 20)

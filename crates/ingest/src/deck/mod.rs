@@ -6,31 +6,21 @@
 
 use crate::narrow;
 use gpurify_geom::LayerId;
-use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, GridError, Length, Qty};
+use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{StrId, StrTable};
-use serde::Deserialize;
 
-mod json;
 mod kinds;
 mod lex;
 mod parse;
 
-pub use json::{parse_deck, to_deck_text};
-pub use parse::{parse_deck_dsl, Diagnostic};
+pub use parse::{parse_deck, Diagnostic};
 
 /// Why a deck was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum DeckError {
+    /// Two statements that parse alone but contradict each other.
     #[error("malformed deck: {0}")]
     Malformed(String),
-    #[error("rule {0} refers to unknown layer {1}")]
-    UnknownLayer(String, String),
-    #[error("rule {0}: limit {1} nm is not an exact multiple of the grid")]
-    OffGrid(String, i64),
-    #[error("rule {0} is missing required parameter {1}")]
-    MissingParam(String, String),
-    #[error("duplicate rule id {0}")]
-    DuplicateRule(String),
     #[error("io: {0}")]
     Io(String),
     /// The deck text did not parse; each diagnostic points at its span.
@@ -271,15 +261,24 @@ pub struct ProcessStack {
 
 /// Lower a parsed deck to a [`Deck`]. Base layers take ids ascending by name
 /// bytes; derived layers follow in declaration order. Strings are interned in
-/// section order, so the same deck text always yields the same [`StrId`]s.
-fn build(doc: &DeckSrc, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
-    let mut layers = build_layers(&doc.layers, strings)?;
+/// section order, so the same deck text always yields the same [`StrId`]s. The
+/// parser has already checked every name and value; what fails here is a
+/// relation between statements.
+fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
+    let mut layers = build_layers(&doc.layers, strings);
     // First: any later section may name a derived layer.
-    build_derived(&doc.derived, &mut layers, strings)?;
-    let rules = build_rules(&doc.rules, &layers, grid, strings)?;
+    for row in &doc.derived {
+        let operands = row
+            .layers
+            .iter()
+            .map(|name| layer_of(&layers, strings, name))
+            .collect();
+        layers.push_derived(strings.intern(&row.name), row.op, operands);
+    }
+    let rules = build_rules(&doc.rules, &layers, strings);
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
-    let devices = build_devices(&doc.device_recognition, &layers, strings)?;
-    let stack = build_stack(&doc.pex, &layers, strings)?;
+    let devices = build_devices(&doc.devices, &layers, strings);
+    let stack = build_stack(&doc.pex, &layers, strings);
 
     Ok(Deck {
         layers,
@@ -290,292 +289,140 @@ fn build(doc: &DeckSrc, grid: Grid, strings: &mut StrTable) -> Result<Deck, Deck
     })
 }
 
-/// The `"derived"` section, ids assigned in declaration order. Operands resolve
-/// before the id is taken, so a self- or forward reference is `UnknownLayer`.
-fn build_derived(
-    declared: &[DerivedSrc],
-    layers: &mut LayerTable,
-    strings: &mut StrTable,
-) -> Result<(), DeckError> {
-    for row in declared {
-        if row.layers.is_empty() {
-            return Err(DeckError::MissingParam(
-                row.name.clone(),
-                "layers".to_owned(),
-            ));
-        }
-        let operands = row
-            .layers
-            .iter()
-            .map(|name| layer_of(layers, strings, &row.name, name))
-            .collect::<Result<Vec<_>, _>>()?;
-        if layers.id(strings, &row.name).is_some() {
-            return Err(DeckError::Malformed(format!(
-                "layer {} is declared twice",
-                row.name
-            )));
-        }
-        let op = match row.op.as_str() {
-            "and" => DerivedOp::And,
-            "or" => DerivedOp::Or,
-            "not" => DerivedOp::Not,
-            other => {
-                return Err(DeckError::Malformed(format!(
-                    "derived: unknown operator {other} on layer {}",
-                    row.name
-                )))
-            }
-        };
-        layers.push_derived(strings.intern(&row.name), op, operands);
-    }
-    Ok(())
-}
-
-/// Resolve one layer name, naming what referred to it when it is not declared.
-fn layer_of(
-    layers: &LayerTable,
-    strings: &StrTable,
-    referrer: &str,
-    name: &str,
-) -> Result<LayerId, DeckError> {
+/// A layer name the parser has already resolved.
+fn layer_of(layers: &LayerTable, strings: &StrTable, name: &str) -> LayerId {
     layers
         .id(strings, name)
-        .ok_or_else(|| DeckError::UnknownLayer(referrer.to_owned(), name.to_owned()))
+        .expect("the parser admits only declared layers")
 }
 
 /// Layer names to a [`LayerTable`], ids ascending by name *bytes*, not interning order.
-fn build_layers(
-    declared: &Pairs<(u16, u16)>,
-    strings: &mut StrTable,
-) -> Result<LayerTable, DeckError> {
-    let mut sorted: Vec<&(String, (u16, u16))> = declared.0.iter().collect();
+fn build_layers(declared: &[(String, (u16, u16))], strings: &mut StrTable) -> LayerTable {
+    let mut sorted: Vec<&(String, (u16, u16))> = declared.iter().collect();
     sorted.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-
-    for pair in sorted.windows(2) {
-        if pair[0].0 == pair[1].0 {
-            return Err(DeckError::Malformed(format!(
-                "layer {} is declared twice",
-                pair[0].0
-            )));
-        }
-    }
-
     let entries: Vec<(StrId, u16, u16)> = sorted
         .iter()
         .map(|(name, (layer, datatype))| (strings.intern(name), *layer, *datatype))
         .collect();
-
-    Ok(LayerTable::build(&entries))
+    LayerTable::build(&entries)
 }
 
-/// The `"rules"` section to a [`RuleTable`], layers resolved and lengths
-/// converted. Rules keep the order the deck states them in.
-fn build_rules(
-    declared: &Pairs<RuleSrc>,
-    layers: &LayerTable,
-    grid: Grid,
-    strings: &mut StrTable,
-) -> Result<RuleTable, DeckError> {
+/// The rules to a [`RuleTable`], in deck order.
+fn build_rules(declared: &[RuleSrc], layers: &LayerTable, strings: &mut StrTable) -> RuleTable {
     let mut table = RuleTable {
-        spec: Vec::with_capacity(declared.0.len()),
+        spec: Vec::with_capacity(declared.len()),
         ..RuleTable::default()
     };
-    let mut seen: Vec<StrId> = Vec::with_capacity(declared.0.len());
-
-    for (rule_id, rule) in &declared.0 {
-        let id = strings.intern(rule_id);
-        if seen.contains(&id) {
-            return Err(DeckError::DuplicateRule(rule_id.clone()));
-        }
-        seen.push(id);
-
-        let kind = rule
-            .kind
-            .as_deref()
-            .ok_or_else(|| DeckError::MissingParam(rule_id.clone(), "kind".to_owned()))?;
-        let rule_layers = rule
-            .layers
-            .as_deref()
-            .ok_or_else(|| DeckError::MissingParam(rule_id.clone(), "layers".to_owned()))?;
-
+    for rule in declared {
+        let id = strings.intern(&rule.id);
         let layer_start = table.layer_ref.len();
-        for name in rule_layers {
-            table
-                .layer_ref
-                .push(layer_of(layers, strings, rule_id, name)?);
+        for name in &rule.layers {
+            table.layer_ref.push(layer_of(layers, strings, name));
         }
-
         let param_start = table.param.len();
-        for (name, stated) in &rule.params.0 {
-            let value = param_value(stated, rule_id, layers, grid, strings)?;
-            let name = strings.intern(name);
-            table.param.push((name, value));
+        for (name, stated) in &rule.params {
+            let value = match *stated {
+                ParamSrc::Value(value) => value,
+                ParamSrc::Layer(ref layer) => ParamValue::Layer(layer_of(layers, strings, layer)),
+            };
+            table.param.push((strings.intern(name), value));
         }
-
         table.spec.push(RuleSpec {
             id,
-            kind: strings.intern(kind),
+            kind: strings.intern(rule.kind),
             layer_start: narrow(layer_start),
             layer_len: narrow(table.layer_ref.len() - layer_start),
             param_start: narrow(param_start),
             param_len: narrow(table.param.len() - param_start),
         });
     }
-
-    Ok(table)
+    table
 }
 
-/// One stated parameter to its converted [`ParamValue`].
-fn param_value(
-    stated: &ParamSrc,
-    rule_id: &str,
-    layers: &LayerTable,
-    grid: Grid,
-    strings: &StrTable,
-) -> Result<ParamValue, DeckError> {
-    Ok(match *stated {
-        ParamSrc::Flag(flag) => ParamValue::Flag(flag),
-        ParamSrc::Ratio(ratio) => ParamValue::Ratio(ratio),
-        ParamSrc::Count(count) => ParamValue::Count(count),
-        ParamSrc::Nm(nm) => ParamValue::Length(to_limit(nm, grid, rule_id)?),
-        ParamSrc::Area(area) => ParamValue::Area(area),
-        ParamSrc::Layer(ref name) => ParamValue::Layer(layer_of(layers, strings, rule_id, name)?),
-    })
-}
-
-/// A physical nanometre limit to grid units, exactly or not at all. `NotFinite`
-/// is separated out: a `NaN` is not off the grid, it is off everything.
-fn to_limit(nm: f64, grid: Grid, rule_id: &str) -> Result<Dbu, DeckError> {
-    grid.to_dbu(Qty::<Length, NANO>::new(nm)).map_err(|why| {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "the message only names the limit"
-        )]
-        let stated = nm as i64;
-        match why {
-            GridError::NotFinite => {
-                DeckError::Malformed(format!("rule {rule_id}: limit is not a finite number"))
-            }
-            _ => DeckError::OffGrid(rule_id.to_owned(), stated),
-        }
-    })
-}
-
-/// The `"connectivity"` section, layers resolved.
+/// Connectivity, layers resolved; a label row must name a drawn layer and a conductor.
 fn build_connectivity(
     declared: &ConnectivitySrc,
     layers: &LayerTable,
     strings: &StrTable,
 ) -> Result<Connectivity, DeckError> {
+    let layer = |name: &str| layer_of(layers, strings, name);
     let mut connectivity = Connectivity {
-        conductors: Vec::with_capacity(declared.conductors.len()),
-        via_cut: Vec::with_capacity(declared.vias.len()),
-        via_connects: Vec::with_capacity(declared.vias.len()),
+        conductors: declared.conductors.iter().map(|name| layer(name)).collect(),
+        via_cut: declared.vias.iter().map(|via| layer(&via.layer)).collect(),
+        via_connects: declared
+            .vias
+            .iter()
+            .map(|via| (layer(&via.connects.0), layer(&via.connects.1)))
+            .collect(),
         intra_layer_touch: declared.intra_layer_touch,
         label_layer: Vec::with_capacity(declared.labels.len()),
         label_names: Vec::with_capacity(declared.labels.len()),
     };
-
-    for name in &declared.conductors {
-        connectivity
-            .conductors
-            .push(layer_of(layers, strings, "connectivity", name)?);
-    }
-    for via in &declared.vias {
-        connectivity
-            .via_cut
-            .push(layer_of(layers, strings, "connectivity", &via.layer)?);
-        connectivity.via_connects.push((
-            layer_of(layers, strings, "connectivity", &via.connects.0)?,
-            layer_of(layers, strings, "connectivity", &via.connects.1)?,
-        ));
-    }
     for label in &declared.labels {
-        let names = layer_of(layers, strings, "connectivity", &label.names)?;
+        let names = layer(&label.names);
         // Fail closed here rather than as `topology::port`'s `OrphanLabel`: at
         // run time nothing can say which deck row was wrong.
         if !connectivity.conductors.contains(&names) {
             return Err(DeckError::Malformed(format!(
-                "connectivity: label layer {} names {}, which is not a conductor",
+                "connect label {} names {}, which is not a conductor",
                 label.layer, label.names
             )));
         }
-        let text = layer_of(layers, strings, "connectivity", &label.layer)?;
+        let text = layer(&label.layer);
         // A `TEXT` record carries a stream pair and a derived layer has none,
         // so such a pairing can never bind a label — silently, at run time.
         if layers.is_derived(text) {
             return Err(DeckError::Malformed(format!(
-                "connectivity: label layer {} is a derived layer, which carries no \
-                 text records",
+                "connect label {}: a derived layer carries no text records",
                 label.layer
             )));
         }
         connectivity.label_layer.push(text);
         connectivity.label_names.push(names);
     }
-
     Ok(connectivity)
 }
 
-/// The `"device_recognition"` section, as the CSR [`DeviceRecognition`] holds.
-/// Terminal order is the role, and this preserves the deck's order.
+/// Device recognisers, as the CSR [`DeviceRecognition`] holds. Terminal order
+/// is the role, and this preserves the deck's order.
 fn build_devices(
     declared: &[DeviceSrc],
     layers: &LayerTable,
     strings: &mut StrTable,
-) -> Result<DeviceRecognition, DeckError> {
+) -> DeviceRecognition {
     let mut devices = DeviceRecognition::default();
     if declared.is_empty() {
         // Sentinel included: a `terminal_start` of `[0]` would claim a
         // recogniser row the empty `kind` column does not have.
-        return Ok(devices);
+        return devices;
     }
-
     devices.terminal_start.push(0);
     for device in declared {
-        devices.kind.push(match device.kind.as_str() {
-            "mos" => DeviceKind::Mos,
-            "bjt" => DeviceKind::Bjt,
-            "resistor" => DeviceKind::Resistor,
-            "capacitor" => DeviceKind::Capacitor,
-            "diode" => DeviceKind::Diode,
-            other => {
-                return Err(DeckError::Malformed(format!(
-                    "device_recognition: unknown device kind {other}"
-                )))
-            }
-        });
-        devices.marker.push(layer_of(
-            layers,
-            strings,
-            "device_recognition",
-            &device.marker,
-        )?);
+        devices.kind.push(device.kind);
+        devices
+            .marker
+            .push(layer_of(layers, strings, &device.marker));
         devices.model.push(strings.intern(&device.model));
         for name in &device.terminals {
-            devices
-                .terminal
-                .push(layer_of(layers, strings, "device_recognition", name)?);
+            devices.terminal.push(layer_of(layers, strings, name));
         }
         devices.terminal_start.push(narrow(devices.terminal.len()));
     }
-
-    Ok(devices)
+    devices
 }
 
-/// The `"pex"` section, as a column per parameter indexed by [`LayerId`].
+/// The PEX stack, a column per parameter indexed by [`LayerId`].
 ///
-/// Every column is `layers.len()` long once the section exists at all;
-/// `pex::stack_row` indexes it directly. An omitted layer keeps its zero.
+/// Every column is `layers.len()` long once any `pex` row exists;
+/// `pex::stack_row` indexes it directly. A layer with no row keeps its zero.
 fn build_stack(
-    declared: &Pairs<StackSrc>,
+    declared: &[(String, StackSrc)],
     layers: &LayerTable,
     strings: &StrTable,
-) -> Result<ProcessStack, DeckError> {
-    if declared.0.is_empty() {
-        return Ok(ProcessStack::default());
+) -> ProcessStack {
+    if declared.is_empty() {
+        return ProcessStack::default();
     }
-
     let rows = layers.len();
     let mut stack = ProcessStack {
         thickness_nm: vec![0.0; rows],
@@ -585,9 +432,8 @@ fn build_stack(
         fringe_cap_af_um: vec![0.0; rows],
         dielectric_k: vec![0.0; rows],
     };
-
-    for (name, row) in &declared.0 {
-        let at = layer_of(layers, strings, "pex", name)?.idx();
+    for (name, row) in declared {
+        let at = layer_of(layers, strings, name).idx();
         stack.thickness_nm[at] = row.thickness_nm;
         stack.height_nm[at] = row.height_nm;
         stack.sheet_res_ohm_sq[at] = row.sheet_res_ohm_sq;
@@ -595,168 +441,83 @@ fn build_stack(
         stack.fringe_cap_af_um[at] = row.fringe_cap_af_um;
         stack.dielectric_k[at] = row.dielectric_k;
     }
-
-    Ok(stack)
+    stack
 }
 
-/// Key/value pairs in file order, repeats kept, so a duplicate rule id is still seen.
-pub(crate) struct Pairs<T>(pub(crate) Vec<(String, T)>);
-
-impl<T> Default for Pairs<T> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
-
-/// The deck file, as JSON states it. The schema is on [`parse_deck`].
-///
-/// `deny_unknown_fields` on every struct here: a misspelled `"conectivity"` is
-/// a deck with no connectivity, which reports a clean LVS for a broken chip.
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+/// The deck as the parser states it: names unresolved, values converted.
+#[derive(Default)]
 struct DeckSrc {
-    #[serde(default)]
-    layers: Pairs<(u16, u16)>,
-    /// An array, not an object: declaration order decides the ids rows take and
-    /// therefore which may name which.
-    #[serde(default)]
+    /// Base layers in statement order, with their GDS pair.
+    layers: Vec<(String, (u16, u16))>,
+    /// In declaration order, which decides the ids they take.
     derived: Vec<DerivedSrc>,
-    #[serde(default)]
-    rules: Pairs<RuleSrc>,
-    #[serde(default)]
+    rules: Vec<RuleSrc>,
     connectivity: ConnectivitySrc,
-    #[serde(default)]
-    device_recognition: Vec<DeviceSrc>,
-    #[serde(default)]
-    pex: Pairs<StackSrc>,
-    /// Consumer-owned: a downstream tool keeps its layer roles and construction
-    /// dimensions in the deck it hands us. Named so such a deck parses and the
-    /// section is ignored — an anonymous escape hatch would also swallow the
-    /// misspelled real sections `deny_unknown_fields` exists to catch.
-    #[allow(dead_code)]
-    #[serde(default)]
-    cell: serde_json::Value,
+    devices: Vec<DeviceSrc>,
+    pex: Vec<(String, StackSrc)>,
 }
 
-/// `kind` and `layers` are `Option`, so their absence is `MissingParam` naming
-/// the rule instead of a serde message naming a byte offset.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RuleSrc {
-    kind: Option<String>,
-    layers: Option<Vec<String>>,
-    #[serde(default)]
-    params: Pairs<ParamSrc>,
+    id: String,
+    /// The engine kind name.
+    kind: &'static str,
+    layers: Vec<String>,
+    params: Vec<(&'static str, ParamSrc)>,
 }
 
-/// A parameter value carries its own shape — `45` alone cannot be told from a
-/// ratio of `45`.
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// A converted value, or a layer still to resolve.
 enum ParamSrc {
-    Nm(f64),
-    Ratio(f64),
-    Count(u32),
+    Value(ParamValue),
     Layer(String),
-    /// Already on the grid; only the deck text states an area.
-    #[serde(skip)]
-    Area(DbuArea),
-    /// Untagged: `true` is a flag and no other variant is a bare boolean.
-    #[serde(untagged)]
-    Flag(bool),
 }
 
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[derive(Default)]
 struct ConnectivitySrc {
-    #[serde(default)]
     conductors: Vec<String>,
-    #[serde(default)]
     intra_layer_touch: bool,
-    #[serde(default)]
     vias: Vec<ViaSrc>,
-    #[serde(default)]
     labels: Vec<LabelSrc>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ViaSrc {
     layer: String,
     connects: (String, String),
 }
 
-/// One `connectivity.labels` row: a text layer and the conductor it names.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+/// `connect label <layer> names <conductor>`.
 struct LabelSrc {
     layer: String,
     names: String,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct DeviceSrc {
-    kind: String,
+    kind: DeviceKind,
     marker: String,
     model: String,
     terminals: Vec<String>,
 }
 
-/// One `derived` row: the name the computed layer takes, the operator, and the
-/// layers it folds.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+/// `layer <name> = a op b op ..`, one operator folded left.
 struct DerivedSrc {
     name: String,
-    op: String,
+    op: DerivedOp,
     layers: Vec<String>,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct StackSrc {
-    #[serde(default)]
     thickness_nm: f64,
-    #[serde(default)]
     height_nm: f64,
-    #[serde(default)]
     sheet_res_ohm_sq: f64,
-    #[serde(default)]
     area_cap_af_um2: f64,
-    #[serde(default)]
     fringe_cap_af_um: f64,
-    #[serde(default)]
     dielectric_k: f64,
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{parse_deck, DeckError, LayerTable, StrTable};
-    use gpurify_geom::Grid;
+    use super::{LayerTable, StrTable};
     use gpurify_geom::LayerId;
-
-    /// The `"cell"` key is the one consumer-owned name [`DeckSrc`] admits; any
-    /// other unknown key must still die in `deny_unknown_fields`, or a
-    /// misspelled section is a deck missing that section and a clean report.
-    #[test]
-    fn a_cell_section_parses_ignored_while_a_misspelled_section_still_fails() {
-        let grid = Grid::new(1_000).expect("a positive resolution is a legal grid");
-
-        let carried = r#"{"layers": {"met1": [68, 20]}, "cell": {"roles": {"met1": "route"}}}"#;
-        let deck = parse_deck(carried, grid, &mut StrTable::default())
-            .expect("a deck carrying a consumer-owned cell section must parse");
-        assert_eq!(deck.layers.len(), 1, "the cell section leaked into parsing");
-
-        let misspelled = r#"{"layers": {"met1": [68, 20]}, "rulez": {}}"#;
-        let error = parse_deck(misspelled, grid, &mut StrTable::default())
-            .expect_err("an unknown key that is not `cell` must still fail closed");
-        assert!(
-            matches!(error, DeckError::Malformed(_)),
-            "a misspelled section was {error:?}, not a malformed-deck refusal"
-        );
-    }
 
     /// Build a layer table from `(name, gds layer, gds datatype)` rows.
     pub(crate) fn layer_table(strings: &mut StrTable, rows: &[(&str, u16, u16)]) -> LayerTable {

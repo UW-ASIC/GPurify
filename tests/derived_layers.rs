@@ -17,7 +17,7 @@
 
 use gpurify_geom::Grid;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_ingest::deck::{parse_deck_dsl, Deck};
+use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::gds::write_store;
@@ -31,7 +31,7 @@ fn grid() -> Grid {
 
 /// Parse a deck, failing with the parser's own message.
 fn deck(source: &str) -> Deck {
-    parse_deck_dsl(source, grid(), &mut StrTable::default()).expect("the deck fixture parses")
+    parse_deck(source, grid(), &mut StrTable::default()).expect("the deck fixture parses")
 }
 
 /// The bounding box of every polygon on one layer, ascending by row.

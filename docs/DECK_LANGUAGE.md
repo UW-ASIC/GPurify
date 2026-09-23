@@ -319,11 +319,11 @@ The parser keeps going after an error and reports every one it finds, up to
   `DeckError::Invalid`, a `Vec<Diagnostic>` with byte spans, lines and
   columns; the caret rendering is a few lines. A `for` body reports an error
   once, not once per element.
-- The parser lowers into the same `Deck` the JSON reader builds. No second IR.
+- The parser lowers into the same `Deck` the JSON reader built. No second IR.
 - `for`/`let` are expanded during parsing; the lowered `Deck` never sees them.
-- `gpurify deck convert <json>` exists only until every deck in `pdks/` and
-  `tests/fixtures/` is converted and the gate passes, then it and the JSON
-  reader are deleted in the same commit. It wrote `grid 5nm` where every rule
+- `gpurify deck convert <json>` converted every deck in `pdks/` and
+  `tests/fixtures/`, the gate passed byte-identical, and then it and the JSON
+  reader were deleted in one commit. It wrote `grid 5nm` where every rule
   length was a multiple of 5 nm and `grid 1nm` otherwise (sky130 and
   ihp_sg13g2, whose area limits are squares of odd sides). The JSON decks'
   consumer-owned `cell` section has no deck-language form; no deck here used

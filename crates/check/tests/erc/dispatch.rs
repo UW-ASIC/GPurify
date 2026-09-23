@@ -589,7 +589,7 @@ fn every_kind_the_list_names_is_a_kind_from_deck_recognises() {
 #[test]
 fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
     let mut strings = StrTable::default();
-    let deck = gpurify_ingest::deck::parse_deck_dsl(
+    let deck = gpurify_ingest::deck::parse_deck(
         include_str!("../../../../pdks/generic_finfet.deck"),
         manufacturing_grid(),
         &mut strings,

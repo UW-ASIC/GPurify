@@ -75,7 +75,7 @@ fn load(path: &Path) -> (Deck, StrTable) {
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
     let mut strings = StrTable::default();
 
-    match gpurify::ingest::deck::parse_deck_dsl(&source, grid, &mut strings) {
+    match gpurify::ingest::deck::parse_deck(&source, grid, &mut strings) {
         Ok(deck) => (deck, strings),
         Err(why) => panic!(
             "{} does not parse: {why}. A deck this tool ships is an input a user \

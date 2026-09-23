@@ -4,15 +4,29 @@
 use super::kinds::{Cmp, Dim, Kind, Param, KINDS, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
-    build, Deck, DeckError, DeckSrc, DerivedSrc, DeviceSrc, LabelSrc, Pairs, ParamSrc, RuleSrc,
-    StackSrc, ViaSrc,
+    build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, LabelSrc,
+    ParamSrc, ParamValue, RuleSrc, StackSrc, ViaSrc,
 };
-use gpurify_geom::{prefix::NANO, DbuArea, Grid, Qty, StrTable};
+use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 /// Parsing stops after this many errors.
 const MAX_ERRORS: usize = 50;
+
+const OPS: [(&str, DerivedOp); 3] = [
+    ("and", DerivedOp::And),
+    ("or", DerivedOp::Or),
+    ("not", DerivedOp::Not),
+];
+
+const DEVICES: [(&str, DeviceKind); 5] = [
+    ("mos", DeviceKind::Mos),
+    ("bjt", DeviceKind::Bjt),
+    ("resistor", DeviceKind::Resistor),
+    ("capacitor", DeviceKind::Capacitor),
+    ("diode", DeviceKind::Diode),
+];
 
 /// One error, located in the deck text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +92,7 @@ pub(crate) fn render(file: &str, diagnostics: &[Diagnostic]) -> String {
 
 /// Parse deck text and lower it to a [`Deck`]. Lengths are checked against the
 /// deck's `grid` and converted against the layout's `grid` exactly.
-pub fn parse_deck_dsl(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
+pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
     let mut errors = Vec::new();
     let toks = lex(source, &mut errors);
     let mut parser = Parser::new(source, toks, grid, errors);
@@ -94,7 +108,7 @@ pub fn parse_deck_dsl(source: &str, grid: Grid, strings: &mut StrTable) -> Resul
             diagnostics,
         });
     }
-    build(&parser.out, grid, strings)
+    build(&parser.out, strings)
 }
 
 /// A value as written, before a parameter gives it a dimension.
@@ -460,7 +474,7 @@ impl<'a> Parser<'a> {
             self.expect(",")?;
             let datatype = self.gds_number()?;
             self.expect(")")?;
-            self.out.layers.0.push((name.clone(), (layer, datatype)));
+            self.out.layers.push((name.clone(), (layer, datatype)));
         } else {
             let expr = self.layer_expr()?;
             match expr {
@@ -472,7 +486,7 @@ impl<'a> Parser<'a> {
                     let operands = self.lower_operands(&name, operands, &mut count);
                     self.out.derived.push(DerivedSrc {
                         name: name.clone(),
-                        op: op.to_owned(),
+                        op,
                         layers: operands,
                     });
                 }
@@ -498,7 +512,7 @@ impl<'a> Parser<'a> {
     /// `term { op term }`, same operators folding into one row.
     fn layer_expr(&mut self) -> R<LExpr> {
         let mut left = self.layer_term()?;
-        while let Some(op) = ["and", "or", "not"].into_iter().find(|op| self.is(op)) {
+        while let Some(&(_, op)) = OPS.iter().find(|(word, _)| self.is(word)) {
             self.bump();
             let right = self.layer_term()?;
             left = match left {
@@ -573,7 +587,7 @@ impl<'a> Parser<'a> {
                     let hidden = format!("{name}#{count}");
                     self.out.derived.push(DerivedSrc {
                         name: hidden.clone(),
-                        op: op.to_owned(),
+                        op,
                         layers,
                     });
                     hidden
@@ -717,14 +731,14 @@ impl<'a> Parser<'a> {
 
     fn device(&mut self) -> R<()> {
         let (kind, span) = self.ident("a device kind")?;
-        if !["mos", "bjt", "resistor", "capacitor", "diode"].contains(&kind.as_str()) {
+        let Some(&(_, kind)) = DEVICES.iter().find(|(word, _)| *word == kind) else {
             return Err(self.err(
                 span,
                 &format!(
                     "unknown device kind `{kind}`; expected mos, bjt, resistor, capacitor or diode"
                 ),
             ));
-        }
+        };
         let marker = self.layer_word()?;
         self.expect("model")?;
         let t = self.peek();
@@ -738,7 +752,7 @@ impl<'a> Parser<'a> {
         let model = self.string(t)?;
         self.expect("terminals")?;
         let terminals = self.layer_list()?;
-        self.out.device_recognition.push(DeviceSrc {
+        self.out.devices.push(DeviceSrc {
             kind,
             marker,
             model,
@@ -766,7 +780,7 @@ impl<'a> Parser<'a> {
 
     fn pex(&mut self) -> R<()> {
         let layer = self.layer_word()?;
-        if self.out.pex.0.iter().any(|(name, _)| *name == layer) {
+        if self.out.pex.iter().any(|(name, _)| *name == layer) {
             return Err(self.err_tok(
                 self.toks[self.pos - 1],
                 &format!("`{layer}` already has a pex row"),
@@ -803,7 +817,7 @@ impl<'a> Parser<'a> {
         }
         let [thickness_nm, height_nm, sheet_res_ohm_sq, dielectric_k, area_cap_af_um2, fringe_cap_af_um] =
             row.map(Option::unwrap_or_default);
-        self.out.pex.0.push((
+        self.out.pex.push((
             layer,
             StackSrc {
                 thickness_nm,
@@ -893,19 +907,17 @@ impl<'a> Parser<'a> {
         params.extend(
             kind.fixed
                 .iter()
-                .map(|&(flag, on)| (flag.to_owned(), ParamSrc::Flag(on))),
+                .map(|&(flag, on)| (flag, ParamSrc::Value(ParamValue::Flag(on)))),
         );
         if warning.is_some() {
-            params.push(("warning".to_owned(), ParamSrc::Flag(true)));
+            params.push(("warning", ParamSrc::Value(ParamValue::Flag(true))));
         }
-        self.out.rules.0.push((
+        self.out.rules.push(RuleSrc {
             id,
-            RuleSrc {
-                kind: Some(kind.engine.to_owned()),
-                layers: Some(layers),
-                params: Pairs(params),
-            },
-        ));
+            kind: kind.engine,
+            layers,
+            params,
+        });
         Ok(())
     }
 
@@ -1052,7 +1064,7 @@ impl<'a> Parser<'a> {
         params: &'static [Param],
         owner: &str,
         owner_span: (u32, u32),
-        out: &mut Vec<(String, ParamSrc)>,
+        out: &mut Vec<(&'static str, ParamSrc)>,
     ) -> R<()> {
         let mut failed = false;
         for (at, arg) in given.iter().enumerate() {
@@ -1092,7 +1104,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Convert one value to its engine param(s).
-    fn param(&mut self, value: &Val, param: Param, out: &mut Vec<(String, ParamSrc)>) -> R<()> {
+    fn param(
+        &mut self,
+        value: &Val,
+        param: Param,
+        out: &mut Vec<(&'static str, ParamSrc)>,
+    ) -> R<()> {
         let label = param.name;
         if matches!(value, Val::Word { name, .. } if name == "none") {
             if param.none {
@@ -1100,14 +1117,14 @@ impl<'a> Parser<'a> {
             }
             return Err(self.err(value.span(), &format!("`{label}` cannot be none")));
         }
-        let engine = param.engine.to_owned();
+        let engine = param.engine;
         let converted = match param.dim {
-            Dim::Length => ParamSrc::Nm(self.length(value, label)?),
-            Dim::Area => ParamSrc::Area(self.area(value, label)?),
-            Dim::Count => ParamSrc::Count(self.count(value, label)?),
+            Dim::Length => ParamSrc::Value(ParamValue::Length(self.length(value, label)?)),
+            Dim::Area => ParamSrc::Value(ParamValue::Area(self.area(value, label)?)),
+            Dim::Count => ParamSrc::Value(ParamValue::Count(self.count(value, label)?)),
             Dim::Bool => match value {
                 Val::Word { name, .. } if name == "true" || name == "false" => {
-                    ParamSrc::Flag(name == "true")
+                    ParamSrc::Value(ParamValue::Flag(name == "true"))
                 }
                 other => return Err(self.wrong(other, "true or false", label)),
             },
@@ -1118,8 +1135,8 @@ impl<'a> Parser<'a> {
                 };
                 let a = self.length(a, label)?;
                 let b = self.length(b, label)?;
-                out.push((engine, ParamSrc::Nm(a)));
-                out.push((second.to_owned(), ParamSrc::Nm(b)));
+                out.push((engine, ParamSrc::Value(ParamValue::Length(a))));
+                out.push((second, ParamSrc::Value(ParamValue::Length(b))));
                 return Ok(());
             }
             Dim::AngleList => {
@@ -1139,7 +1156,7 @@ impl<'a> Parser<'a> {
                             "an angle is a whole, non-negative number of degrees",
                         ));
                     };
-                    out.push((engine.clone(), ParamSrc::Count(whole)));
+                    out.push((engine, ParamSrc::Value(ParamValue::Count(whole))));
                 }
                 return Ok(());
             }
@@ -1157,9 +1174,9 @@ impl<'a> Parser<'a> {
                         &format!("`{label}` is a fraction: 0 to 1, or 0% to 100%"),
                     ));
                 }
-                ParamSrc::Ratio(v)
+                ParamSrc::Value(ParamValue::Ratio(v))
             }
-            dim => ParamSrc::Ratio(self.physical(value, dim, label)?),
+            dim => ParamSrc::Value(ParamValue::Ratio(self.physical(value, dim, label)?)),
         };
         out.push((engine, converted));
         Ok(())
@@ -1251,7 +1268,7 @@ impl<'a> Parser<'a> {
     }
 
     /// A rule length: on the deck grid, then converted to the layout grid.
-    fn length(&mut self, value: &Val, label: &str) -> R<f64> {
+    fn length(&mut self, value: &Val, label: &str) -> R<Dbu> {
         let nm = self.quantity(value, Dim::Length, label)?;
         let grid = self
             .deck_grid
@@ -1262,18 +1279,14 @@ impl<'a> Parser<'a> {
                 &format!("{} is not a multiple of the grid", value.shown()),
             ));
         }
-        let f = nm.f64();
-        if self
-            .layout
-            .to_dbu(Qty::<gpurify_geom::Length, NANO>::new(f))
-            .is_err()
-        {
-            return Err(self.err(
-                value.span(),
-                &format!("{} is not on the layout's grid", value.shown()),
-            ));
-        }
-        Ok(f)
+        self.layout
+            .to_dbu(Qty::<gpurify_geom::Length, NANO>::new(nm.f64()))
+            .map_err(|_| {
+                self.err(
+                    value.span(),
+                    &format!("{} is not on the layout's grid", value.shown()),
+                )
+            })
     }
 
     /// An area: a multiple of the grid squared, converted to square layout units.
@@ -1447,9 +1460,9 @@ impl<'a> Parser<'a> {
 enum LExpr {
     Layer(String),
     /// A left fold of one operator.
-    Op(&'static str, Vec<LExpr>),
+    Op(DerivedOp, Vec<LExpr>),
     /// A parenthesised fold, kept apart from the chain around it.
-    Group(&'static str, Vec<LExpr>),
+    Group(DerivedOp, Vec<LExpr>),
 }
 
 fn cmp_text(cmp: Cmp) -> &'static str {

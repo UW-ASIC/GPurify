@@ -215,7 +215,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     // below. A malformed deck has no layer table, so its layout is an empty
     // library that `load` reads before refusing the deck.
     let mut scratch_strings = ingest::StrTable::default();
-    let parsed = ingest::deck::parse_deck_dsl(deck_source, grid, &mut scratch_strings).ok();
+    let parsed = ingest::deck::parse_deck(deck_source, grid, &mut scratch_strings).ok();
     let met1 = parsed
         .as_ref()
         .and_then(|deck| deck.layers.id(&scratch_strings, "met1"))
@@ -542,7 +542,7 @@ pub struct CaseRun {
     pub outputs: Outputs,
 }
 
-/// Load, extract and check one fixture cell against `params.json`.
+/// Load, extract and check one fixture cell against `params.deck`.
 pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, String> {
     run_case_inputs(case_inputs(domain, id, None, None), checks)
 }
@@ -668,7 +668,7 @@ pub fn field_solved_coupling_af(domain: &str, id: &str) -> Result<f64, String> {
 /// The deck rule id a case's `rule`/`check` name refers to.
 fn deck_rule_of(case: &GeometryCase) -> Option<&'static str> {
     // The `min_enclosure` split is the one place the case id is load-bearing:
-    // `params.json` declares the kind twice, once for met1-over-met2 and once
+    // `params.deck` declares the kind twice, once for met1-over-met2 and once
     // for nwell-over-diff, and both rows run on a `DRC_WE_*` cell. The corpus
     // note on each of those three cases says "select the nwell.diff row".
     if case.id.starts_with("DRC_WE_") {
@@ -768,7 +768,7 @@ pub fn check_geometry_case(case: &GeometryCase) -> Vec<String> {
     let Some(rule) = run.loaded.strings.get(deck_rule) else {
         failed.push(format!(
             "{}: the deck never interned a rule named {deck_rule}, so nothing in \
-             params.json configures the {} this case is about{context}",
+             params.deck configures the {} this case is about{context}",
             case.id, case.rule
         ));
         return failed;
@@ -939,7 +939,7 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
 
     let Some(layer) = loaded.deck.layers.id(&loaded.strings, &want.layer) else {
         return vec![format!(
-            "{}: params.json declares no layer named {}{context}",
+            "{}: params.deck declares no layer named {}{context}",
             case.id, want.layer
         )];
     };
