@@ -1,0 +1,179 @@
+grid 1nm
+
+layer nwell = gds(64, 20)
+layer diff = gds(65, 20)
+layer tap = gds(65, 44)
+layer poly = gds(66, 20)
+layer licon = gds(66, 44)
+layer li = gds(67, 20)
+layer mcon = gds(67, 44)
+layer met1 = gds(68, 20)
+layer via1 = gds(68, 44)
+layer met2 = gds(69, 20)
+layer via2 = gds(69, 44)
+layer met3 = gds(70, 20)
+layer via3 = gds(70, 44)
+layer met4 = gds(71, 20)
+layer via4 = gds(71, 44)
+layer met5 = gds(72, 20)
+layer hvtp = gds(78, 44)
+layer rpm = gds(86, 20)
+layer nsdm = gds(93, 44)
+layer psdm = gds(94, 20)
+layer lvtn = gds(125, 44)
+layer ngate = poly and diff and nsdm
+layer pgate = poly and diff and psdm
+layer diff_active = diff not poly
+
+rule nwell_min_width width(nwell) >= 840nm
+rule diff_min_width width(diff) >= 150nm
+rule tap_min_width width(tap) >= 150nm
+rule poly_min_width width(poly) >= 150nm
+rule licon_min_width width(licon) >= 170nm
+rule li_min_width width(li) >= 170nm
+rule mcon_min_width width(mcon) >= 170nm
+rule met1_min_width width(met1) >= 140nm
+rule via1_min_width width(via1) >= 150nm
+rule met2_min_width width(met2) >= 140nm
+rule via2_min_width width(via2) >= 200nm
+rule met3_min_width width(met3) >= 300nm
+rule via3_min_width width(via3) >= 200nm
+rule met4_min_width width(met4) >= 300nm
+rule via4_min_width width(via4) >= 800nm
+rule met5_min_width width(met5) >= 1600nm
+rule nsdm_min_width width(nsdm) >= 380nm
+rule psdm_min_width width(psdm) >= 380nm
+rule hvtp_min_width width(hvtp) >= 380nm
+rule lvtn_min_width width(lvtn) >= 380nm
+rule rpm_min_width width(rpm) >= 1270nm
+rule licon_max_width width(licon) <= 170nm
+rule mcon_max_width width(mcon) <= 170nm
+rule via1_max_width width(via1) <= 150nm
+rule via2_max_width width(via2) <= 200nm
+rule via3_max_width width(via3) <= 200nm
+rule via4_max_width width(via4) <= 800nm
+rule nwell_min_spacing space(nwell) >= 1270nm
+rule diff_min_spacing space(diff) >= 270nm
+rule tap_min_spacing space(tap) >= 270nm
+rule poly_min_spacing space(poly) >= 210nm
+rule licon_min_spacing space(licon) >= 170nm
+rule li_min_spacing space(li) >= 170nm
+rule mcon_min_spacing space(mcon) >= 190nm
+rule met1_min_spacing space(met1) >= 140nm
+rule via1_min_spacing space(via1) >= 170nm
+rule met2_min_spacing space(met2) >= 140nm
+rule via2_min_spacing space(via2) >= 200nm
+rule met3_min_spacing space(met3) >= 300nm
+rule via3_min_spacing space(via3) >= 200nm
+rule met4_min_spacing space(met4) >= 300nm
+rule via4_min_spacing space(via4) >= 800nm
+rule met5_min_spacing space(met5) >= 1600nm
+rule nsdm_min_spacing space(nsdm) >= 380nm
+rule psdm_min_spacing space(psdm) >= 380nm
+rule hvtp_min_spacing space(hvtp) >= 380nm
+rule lvtn_min_spacing space(lvtn) >= 380nm
+rule rpm_min_spacing space(rpm) >= 840nm
+rule nwell_notch notch(nwell) >= 1270nm
+rule diff_notch notch(diff) >= 270nm
+rule tap_notch notch(tap) >= 270nm
+rule poly_notch notch(poly) >= 210nm
+rule li_notch notch(li) >= 170nm
+rule met1_notch notch(met1) >= 140nm
+rule met2_notch notch(met2) >= 140nm
+rule met3_notch notch(met3) >= 300nm
+rule met4_notch notch(met4) >= 300nm
+rule met5_notch notch(met5) >= 1600nm
+rule nsdm_notch notch(nsdm) >= 380nm
+rule psdm_notch notch(psdm) >= 380nm
+rule hvtp_notch notch(hvtp) >= 380nm
+rule lvtn_notch notch(lvtn) >= 380nm
+rule rpm_notch notch(rpm) >= 840nm
+rule poly_to_tap_spacing space(poly, tap) >= 55nm
+rule rpm_to_nsdm_spacing space(rpm, nsdm) >= 200nm
+rule lvtn_to_hvtp_spacing space(lvtn, hvtp) >= 380nm
+rule met1_wide_metal_spacing wide_space(met1; width: 3000nm) >= 280nm
+rule met2_wide_metal_spacing wide_space(met2; width: 3000nm) >= 280nm
+rule met3_wide_metal_spacing wide_space(met3; width: 3000nm) >= 400nm
+rule met4_wide_metal_spacing wide_space(met4; width: 3000nm) >= 400nm
+rule li_min_area area(li) >= 55696nm2
+rule met1_min_area area(met1) >= 82944nm2
+rule met2_min_area area(met2) >= 67600nm2
+rule met3_min_area area(met3) >= 239121nm2
+rule met4_min_area area(met4) >= 239121nm2
+rule met5_min_area area(met5) >= 4000000nm2
+rule nsdm_min_area area(nsdm) >= 264196nm2
+rule psdm_min_area area(psdm) >= 254016nm2
+rule hvtp_min_area area(hvtp) >= 264196nm2
+rule lvtn_min_area area(lvtn) >= 264196nm2
+rule met1_min_hole_area hole_area(met1) >= 139876nm2
+rule met2_min_hole_area hole_area(met2) >= 139876nm2
+rule nsdm_min_hole_area hole_area(nsdm) >= 264196nm2
+rule psdm_min_hole_area hole_area(psdm) >= 264196nm2
+rule hvtp_min_hole_area hole_area(hvtp) >= 264196nm2
+rule lvtn_min_hole_area hole_area(lvtn) >= 264196nm2
+rule met1_encloses_mcon enclosure(mcon, met1) >= 30nm
+rule met1_encloses_via1 enclosure(via1, met1) >= 55nm
+rule met2_encloses_via1 enclosure(via1, met2) >= 55nm
+rule met2_encloses_via2 enclosure(via2, met2) >= 40nm
+rule met3_encloses_via2 enclosure(via2, met3) >= 65nm
+rule met3_encloses_via3 enclosure(via3, met3) >= 60nm
+rule met4_encloses_via3 enclosure(via3, met4) >= 65nm
+rule met4_encloses_via4 enclosure(via4, met4) >= 190nm
+rule met5_encloses_via4 enclosure(via4, met5) >= 310nm
+rule met1_encloses_mcon_one_side enclosure(mcon, met1, opposite) >= 60nm
+rule met1_encloses_via1_one_side enclosure(via1, met1, opposite) >= 85nm
+rule met2_encloses_via1_one_side enclosure(via1, met2, opposite) >= 85nm
+rule met2_encloses_via2_one_side enclosure(via2, met2, opposite) >= 85nm
+rule met3_encloses_via3_one_side enclosure(via3, met3, opposite) >= 90nm
+rule li_encloses_licon_one_side enclosure(licon, li, opposite) >= 80nm
+rule poly_endcap_over_diff extension(poly, diff) >= 130nm
+rule diff_overhang_of_poly extension(diff, poly) >= 250nm
+rule li_covers_licon overlap(li, licon) >= 170nm
+rule li_covers_mcon overlap(li, mcon) >= 170nm
+rule manufacturing_grid off_grid(; pitch: 5nm)
+rule allowed_angles angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+rule floating_gate floating_gate()
+rule floating_nwell floating_well(nwell, tap)
+rule well_soft_connection soft_connection(diff, tap)
+rule floating_interconnect unconnected_pin(poly, li, met1, met2, met3, met4, met5)
+rule tied_net warning tie_high_low()
+rule ir_drop ir_drop()
+rule driver_contention multiple_drivers(; max: 1)
+
+connect conductors [diff_active, tap, poly, li, met1, met2, met3, met4, met5]
+connect touch_within_layer
+connect via licon [diff_active, li]
+connect via licon [tap, li]
+connect via licon [poly, li]
+connect via mcon [li, met1]
+connect via via1 [met1, met2]
+connect via via2 [met2, met3]
+connect via via3 [met3, met4]
+connect via via4 [met4, met5]
+connect label li names li
+connect label met1 names met1
+connect label met2 names met2
+connect label met3 names met3
+connect label met4 names met4
+connect label met5 names met5
+
+device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, diff_active]
+device mos pgate model "sky130_fd_pr__pfet_01v8" terminals [poly, diff_active, diff_active]
+device resistor rpm model "sky130_fd_pr__res_high_po" terminals [poly, poly]
+
+pex diff thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex diff_active thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex tap thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex poly thickness 180nm height 326.2nm sheet 48.2ohm dielectric 3.9 area_cap 106.13aF/um2 fringe_cap 55.27aF/um
+pex licon thickness 610nm height 326.2nm sheet 585ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex li thickness 100nm height 936.1nm sheet 12.8ohm dielectric 3.9 area_cap 36.99aF/um2 fringe_cap 40.7aF/um
+pex mcon thickness 340nm height 1036.1nm sheet 9.3ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met1 thickness 360nm height 1376.1nm sheet 0.125ohm dielectric 3.9 area_cap 25.78aF/um2 fringe_cap 40.57aF/um
+pex via1 thickness 270nm height 1736.1nm sheet 4.5ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met2 thickness 360nm height 2006.1nm sheet 0.125ohm dielectric 3.9 area_cap 17.5aF/um2 fringe_cap 37.76aF/um
+pex via2 thickness 420nm height 2366.1nm sheet 3.41ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met3 thickness 845nm height 2786.1nm sheet 0.047ohm dielectric 3.9 area_cap 12.37aF/um2 fringe_cap 40.99aF/um
+pex via3 thickness 390nm height 3631.1nm sheet 3.41ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met4 thickness 845nm height 4021.1nm sheet 0.047ohm dielectric 3.9 area_cap 8.42aF/um2 fringe_cap 36.68aF/um
+pex via4 thickness 505nm height 4866.1nm sheet 0.38ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met5 thickness 1260nm height 5371.1nm sheet 0.029ohm dielectric 3.9 area_cap 6.32aF/um2 fringe_cap 38.85aF/um

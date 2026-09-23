@@ -1,0 +1,163 @@
+grid 5nm
+
+layer nwell = gds(64, 20)
+layer diff = gds(65, 20)
+layer poly = gds(66, 20)
+layer licon = gds(66, 44)
+layer li = gds(67, 20)
+layer mcon = gds(67, 44)
+layer met1 = gds(68, 20)
+layer via1 = gds(68, 44)
+layer met2 = gds(69, 20)
+layer via2 = gds(69, 44)
+layer met3 = gds(70, 20)
+layer via3 = gds(70, 44)
+layer met4 = gds(71, 20)
+layer via4 = gds(71, 44)
+layer met5 = gds(72, 20)
+layer nsdm = gds(93, 44)
+layer psdm = gds(94, 20)
+layer ngate = poly and diff and nsdm
+layer pgate = poly and diff and psdm
+layer diff_active = diff not poly
+
+rule nwell_min_width width(nwell) >= 840nm
+rule diff_min_width width(diff) >= 150nm
+rule poly_min_width width(poly) >= 150nm
+rule licon_min_width width(licon) >= 170nm
+rule li_min_width width(li) >= 170nm
+rule mcon_min_width width(mcon) >= 170nm
+rule met1_min_width width(met1) >= 140nm
+rule via1_min_width width(via1) >= 150nm
+rule met2_min_width width(met2) >= 140nm
+rule via2_min_width width(via2) >= 200nm
+rule met3_min_width width(met3) >= 300nm
+rule via3_min_width width(via3) >= 200nm
+rule met4_min_width width(met4) >= 300nm
+rule via4_min_width width(via4) >= 800nm
+rule met5_min_width width(met5) >= 1600nm
+rule nsdm_min_width width(nsdm) >= 380nm
+rule psdm_min_width width(psdm) >= 380nm
+rule nwell_min_spacing space(nwell) >= 1270nm
+rule diff_min_spacing space(diff) >= 270nm
+rule poly_min_spacing space(poly) >= 210nm
+rule licon_min_spacing space(licon) >= 170nm
+rule li_min_spacing space(li) >= 170nm
+rule mcon_min_spacing space(mcon) >= 190nm
+rule met1_min_spacing space(met1) >= 140nm
+rule via1_min_spacing space(via1) >= 170nm
+rule met2_min_spacing space(met2) >= 140nm
+rule via2_min_spacing space(via2) >= 200nm
+rule met3_min_spacing space(met3) >= 300nm
+rule via3_min_spacing space(via3) >= 200nm
+rule met4_min_spacing space(met4) >= 300nm
+rule via4_min_spacing space(via4) >= 800nm
+rule met5_min_spacing space(met5) >= 1600nm
+rule nsdm_min_spacing space(nsdm) >= 380nm
+rule psdm_min_spacing space(psdm) >= 380nm
+rule licon_max_width width(licon) <= 170nm
+rule met5_max_width width(met5) <= 30000nm
+rule met1_min_edge_length edge_length(met1) >= 70nm
+rule met1_notch notch(met1) >= 140nm
+rule li_notch notch(li) >= 170nm
+rule poly_to_diff_min_spacing space(poly, diff) >= 75nm
+rule nwell_to_diff_min_spacing space(nwell, diff) >= 340nm
+rule met1_eol_spacing eol_space(met1; eol_width: 200nm) >= 170nm
+rule met1_prl_spacing prl_space(met1; prl: 600nm) >= 190nm
+rule met1_corner_to_corner corner_space(met1) >= 140nm
+rule met1_wide_dependent_spacing wide_space(met1; width: 3000nm) >= 280nm
+rule diff_min_area area(diff) >= 70225nm2
+rule li_min_area area(li) >= 55225nm2
+rule met1_min_area area(met1) >= 81225nm2
+rule met2_min_area area(met2) >= 81225nm2
+rule met3_min_area area(met3) >= 235225nm2
+rule met4_min_area area(met4) >= 235225nm2
+rule met5_min_area area(met5) >= 4000000nm2
+rule met1_min_enclosed_area hole_area(met1) >= 90000nm2
+rule met5_cheesing cheesing(met5) <= 900000000nm2
+rule met1_min_density density(met1; window: 700000nm, step: 70000nm) >= 0.35
+rule met1_max_density density(met1; window: 700000nm, step: 70000nm) <= 0.7
+rule met1_encloses_mcon enclosure(mcon, met1) >= 30nm
+rule li_encloses_licon enclosure(licon, li) >= 80nm
+rule met2_encloses_via1 enclosure(via1, met2) >= 55nm
+rule nwell_encloses_diff enclosure(diff, nwell) >= 180nm
+rule met1_encloses_mcon_one_side enclosure(mcon, met1, opposite) >= 60nm
+rule poly_endcap_over_diff extension(poly, diff) >= 130nm
+rule li_licon_overlap overlap(li, licon) >= 170nm
+rule nwell_max_distance_to_tap tap_distance(nwell, diff) <= 15000nm
+rule manufacturing_grid off_grid(; pitch: 5nm)
+rule allowed_edge_angles angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+rule via1_redundant_via redundant_via(via1; within: 500nm) >= 2
+rule via2_array_spacing via_array_space(via2; array: 4) >= 250nm
+rule met1_multi_patterning patterning(met1; colors: 2) >= 280nm
+rule antenna_poly_etch antenna(poly, poly; max_ratio: 400, sidewall: none)
+rule antenna_li_etch antenna(poly, poly, licon, li; max_ratio: 400, sidewall: none)
+rule antenna_met1_etch antenna(poly, poly, licon, li, mcon, met1; max_ratio: 400, sidewall: none)
+rule antenna_met2_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2; max_ratio: 400, sidewall: none)
+rule antenna_met3_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2, via2, met3; max_ratio: 400, sidewall: none)
+rule antenna_met4_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4; max_ratio: 400, sidewall: none)
+rule antenna_met5_etch antenna(poly, poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4, via4, met5; max_ratio: 400, sidewall: none)
+rule antenna_met1_sidewall antenna(poly, met1; max_ratio: 800, sidewall: 360nm)
+rule antenna_electrical_full_net antenna_electrical(poly, licon, li, mcon, met1, via1, met2, via2, met3, via3, met4, via4, met5; max_ratio: 800, diode: none, diode_credit: 0, diode_bonus: 0)
+rule met1_density_cmp density_cmp(met1; window: 20000nm x 20000nm, step: 10000nm x 10000nm, min: 0.35, max: 0.7, max_delta: 0.15, partial_windows: true, cmp: (target: 0.5, thickness: 360nm, sensitivity: 120nm, max_delta: 40nm))
+rule em_li electromigration(li, licon; max_density: 280A/m, max_current_per_cut: 80uA, blech_limit: 15000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met1 electromigration(met1, mcon; max_density: 1000A/m, max_current_per_cut: 80uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met2 electromigration(met2, via1; max_density: 1000A/m, max_current_per_cut: 60uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met3_met4 electromigration(met3, via2, met4, via3; max_density: 2350A/m, max_current_per_cut: 110uA, blech_limit: 126750uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met5 electromigration(met5, via4; max_density: 3500A/m, max_current_per_cut: 1800uA, blech_limit: 189000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule peak_current_li em_current_density(li, licon; max_density: 420A/m, max_current_per_cut: 120uA)
+rule peak_current_met1 em_current_density(met1, mcon; max_density: 1500A/m, max_current_per_cut: 120uA)
+rule peak_current_met2 em_current_density(met2, via1; max_density: 1500A/m, max_current_per_cut: 90uA)
+rule peak_current_met3_met4 em_current_density(met3, via2, met4, via3; max_density: 3525A/m, max_current_per_cut: 165uA)
+rule peak_current_met5 em_current_density(met5, via4; max_density: 5250A/m, max_current_per_cut: 2700uA)
+rule esd_latchup_pad esd_latchup(met5, diff; min_guard_ring_width: 420nm, max_tap_distance: 15000nm)
+rule esd_pad_reaches_clamp esd_topological(met5)
+rule floating_gate floating_gate()
+rule floating_nwell floating_well(nwell, diff)
+rule gate_oxide_domain_delta hv_domain(; max_delta: 1980mV, isolation: none)
+rule ir_drop ir_drop()
+rule nwell_missing_tie missing_tie(nwell, diff; max_distance: 15000nm)
+rule multiple_drivers multiple_drivers(; max: 1)
+rule p2p_resistance p2p_resistance(; max: 1000ohm)
+rule bti_pmos reliability(; required_lifetime: 87600h, reference_lifetime: 87600h, reference_stress: 1800mV, stress_exponent: 3, reference_temperature: 398K, activation_energy: 0.6eV, max_abs_voltage: 1980mV, duty_cycle: 0.5)
+rule hci_nmos reliability(; required_lifetime: 87600h, reference_lifetime: 87600h, reference_stress: 1800mV, stress_exponent: 5, reference_temperature: 298K, activation_energy: 0.1eV, max_abs_voltage: 1980mV, duty_cycle: 0.1)
+rule tddb_gate_oxide reliability(; required_lifetime: 87600h, reference_lifetime: 87600h, reference_stress: 1800mV, stress_exponent: 40, reference_temperature: 398K, activation_energy: 0.8eV, max_abs_voltage: 1980mV, duty_cycle: 1)
+rule soft_connection_through_diff soft_connection(diff)
+rule soft_connection_through_poly warning soft_connection(poly)
+rule tie_high_low warning tie_high_low()
+rule unconnected_routing_pin unconnected_pin(li, met1, met2, met3, met4, met5)
+
+connect conductors [diff_active, poly, li, met1, met2, met3, met4, met5]
+connect touch_within_layer
+connect via licon [diff_active, li]
+connect via licon [poly, li]
+connect via mcon [li, met1]
+connect via via1 [met1, met2]
+connect via via2 [met2, met3]
+connect via via3 [met3, met4]
+connect via via4 [met4, met5]
+connect label li names li
+connect label met1 names met1
+connect label met2 names met2
+connect label met3 names met3
+connect label met4 names met4
+connect label met5 names met5
+
+device mos ngate model "nfet" terminals [poly, diff_active, diff_active]
+device mos pgate model "pfet" terminals [poly, diff_active, diff_active]
+
+pex diff thickness 150nm height 0nm sheet 8ohm dielectric 4.2 area_cap 940aF/um2 fringe_cap 250aF/um
+pex diff_active thickness 150nm height 0nm sheet 8ohm dielectric 4.2 area_cap 940aF/um2 fringe_cap 250aF/um
+pex poly thickness 200nm height 150nm sheet 48.2ohm dielectric 4.2 area_cap 106aF/um2 fringe_cap 55aF/um
+pex licon thickness 780nm height 150nm sheet 15ohm dielectric 4.2 area_cap 0aF/um2 fringe_cap 0aF/um
+pex li thickness 100nm height 930nm sheet 12.8ohm dielectric 4.2 area_cap 37aF/um2 fringe_cap 40aF/um
+pex mcon thickness 345nm height 1030nm sheet 9ohm dielectric 4.2 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met1 thickness 360nm height 1375nm sheet 0.125ohm dielectric 4.1 area_cap 25aF/um2 fringe_cap 40aF/um
+pex via1 thickness 270nm height 1735nm sheet 4.5ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met2 thickness 360nm height 2005nm sheet 0.125ohm dielectric 4.1 area_cap 17aF/um2 fringe_cap 38aF/um
+pex via2 thickness 420nm height 2365nm sheet 3.4ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met3 thickness 845nm height 2785nm sheet 0.047ohm dielectric 3.6 area_cap 12aF/um2 fringe_cap 35aF/um
+pex via3 thickness 390nm height 3630nm sheet 3.4ohm dielectric 3.6 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met4 thickness 845nm height 4020nm sheet 0.047ohm dielectric 3.6 area_cap 10aF/um2 fringe_cap 33aF/um
+pex via4 thickness 505nm height 4865nm sheet 2ohm dielectric 3.6 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met5 thickness 1260nm height 5370nm sheet 0.029ohm dielectric 3.6 area_cap 9aF/um2 fringe_cap 32aF/um

@@ -15,7 +15,7 @@ mod kinds;
 mod lex;
 mod parse;
 
-pub use json::parse_deck;
+pub use json::{parse_deck, to_deck_text};
 pub use parse::{parse_deck_dsl, Diagnostic};
 
 /// Why a deck was rejected.

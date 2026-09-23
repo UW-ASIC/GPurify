@@ -1,0 +1,220 @@
+grid 5nm
+
+layer dnwell = gds(12, 0)
+layer nwell = gds(21, 0)
+layer lvpwell = gds(204, 0)
+layer comp = gds(22, 0)
+layer dualgate = gds(55, 0)
+layer poly2 = gds(30, 0)
+layer nplus = gds(32, 0)
+layer pplus = gds(31, 0)
+layer sab = gds(49, 0)
+layer esd = gds(24, 0)
+layer contact = gds(33, 0)
+layer metal1 = gds(34, 0)
+layer via1 = gds(35, 0)
+layer metal2 = gds(36, 0)
+layer via2 = gds(38, 0)
+layer metal3 = gds(42, 0)
+layer via3 = gds(40, 0)
+layer metal4 = gds(46, 0)
+layer via4 = gds(41, 0)
+layer metal5 = gds(81, 0)
+layer via5 = gds(82, 0)
+layer metaltop = gds(53, 0)
+layer pad = gds(37, 0)
+layer resistor = gds(62, 0)
+layer fhres = gds(227, 0)
+layer fusetop = gds(75, 0)
+layer nat = gds(5, 0)
+layer mvsd = gds(210, 0)
+layer mvpsd = gds(11, 39)
+layer schottky_diode = gds(241, 0)
+layer zener = gds(178, 0)
+layer res_mk = gds(110, 5)
+layer cap_mk = gds(117, 5)
+layer mos_cap_mk = gds(166, 5)
+layer diode_mk = gds(115, 5)
+layer lvs_bjt = gds(118, 5)
+layer v5_xtor = gds(112, 1)
+layer border = gds(63, 0)
+layer ngate = poly2 and comp and nplus
+layer pgate = poly2 and comp and pplus
+layer natgate = poly2 and comp and nat
+layer comp_active = comp not poly2
+
+rule DF.1a width(comp) >= 220nm
+rule PL.1 width(poly2) >= 180nm
+rule NP.1 width(nplus) >= 400nm
+rule PP.1 width(pplus) >= 400nm
+rule SB.1 width(sab) >= 420nm
+rule ESD.1 width(esd) >= 600nm
+rule CO.1_min_size width(contact) >= 220nm
+rule M1.1 width(metal1) >= 230nm
+rule M2.1 width(metal2) >= 280nm
+rule M3.1 width(metal3) >= 280nm
+rule M4.1 width(metal4) >= 280nm
+rule M5.1 width(metal5) >= 280nm
+rule MT.1 width(metaltop) >= 440nm
+rule V1.1_min_size width(via1) >= 260nm
+rule V2.1_min_size width(via2) >= 260nm
+rule V3.1_min_size width(via3) >= 260nm
+rule V4.1_min_size width(via4) >= 260nm
+rule V5.1_min_size width(via5) >= 260nm
+rule NW.1a width(nwell) >= 860nm
+rule DN.1 width(dnwell) >= 1700nm
+rule LPW.1 width(lvpwell) >= 600nm
+rule DV.5 width(dualgate) >= 700nm
+rule DF.2b width(comp) <= 100000nm
+rule CO.1_max_size width(contact) <= 220nm
+rule V1.1_max_size width(via1) <= 260nm
+rule V2.1_max_size width(via2) <= 260nm
+rule V3.1_max_size width(via3) <= 260nm
+rule V4.1_max_size width(via4) <= 260nm
+rule V5.1_max_size width(via5) <= 260nm
+rule DF.3a space(comp) >= 280nm
+rule PL.3a space(poly2) >= 240nm
+rule NP.2 space(nplus) >= 400nm
+rule PP.2 space(pplus) >= 400nm
+rule SB.2 space(sab) >= 420nm
+rule ESD.2 space(esd) >= 600nm
+rule CO.2a space(contact) >= 250nm
+rule M1.2a space(metal1) >= 230nm
+rule M2.2a space(metal2) >= 280nm
+rule M3.2a space(metal3) >= 280nm
+rule M4.2a space(metal4) >= 280nm
+rule M5.2a space(metal5) >= 280nm
+rule MT.2a space(metaltop) >= 460nm
+rule V1.2a space(via1) >= 260nm
+rule V2.2a space(via2) >= 260nm
+rule V3.2a space(via3) >= 260nm
+rule V4.2a space(via4) >= 260nm
+rule V5.2a space(via5) >= 260nm
+rule NW.2a space(nwell) >= 600nm
+rule DN.2a space(dnwell) >= 2500nm
+rule LPW.2b space(lvpwell) >= 860nm
+rule DV.2 space(dualgate) >= 440nm
+rule DF.3a_notch notch(comp) >= 280nm
+rule PL.3a_notch notch(poly2) >= 240nm
+rule M1.2a_notch notch(metal1) >= 230nm
+rule M2.2a_notch notch(metal2) >= 280nm
+rule M3.2a_notch notch(metal3) >= 280nm
+rule M4.2a_notch notch(metal4) >= 280nm
+rule M5.2a_notch notch(metal5) >= 280nm
+rule MT.2a_notch notch(metaltop) >= 460nm
+rule SB.4 space(sab, contact) >= 150nm
+rule M1.2b wide_space(metal1; width: 10000nm) >= 300nm
+rule M2.2b wide_space(metal2; width: 10000nm) >= 300nm
+rule M3.2b wide_space(metal3; width: 10000nm) >= 300nm
+rule M4.2b wide_space(metal4; width: 10000nm) >= 300nm
+rule M5.2b wide_space(metal5; width: 10000nm) >= 300nm
+rule MT.2b wide_space(metaltop; width: 10000nm) >= 600nm
+rule DF.9 area(comp) >= 202500nm2
+rule NP.8a area(nplus) >= 348100nm2
+rule PP.8a area(pplus) >= 348100nm2
+rule SB.13 area(sab) >= 1988100nm2
+rule ESD.5a area(esd) >= 490000nm2
+rule M1.3 area(metal1) >= 144400nm2
+rule M2.3 area(metal2) >= 144400nm2
+rule M3.3 area(metal3) >= 144400nm2
+rule M4.3 area(metal4) >= 144400nm2
+rule M5.3 area(metal5) >= 144400nm2
+rule MT.4 area(metaltop) >= 562500nm2
+rule DF.10 hole_area(comp) >= 255025nm2
+rule NP.8b hole_area(nplus) >= 348100nm2
+rule PP.8b hole_area(pplus) >= 348100nm2
+rule ESD.5b hole_area(esd) >= 490000nm2
+rule M1.4 density(metal1; window: 200000nm, step: 100000nm) >= 0.3
+rule M2.4 density(metal2; window: 200000nm, step: 100000nm) >= 0.3
+rule M3.4 density(metal3; window: 200000nm, step: 100000nm) >= 0.3
+rule M4.4 density(metal4; window: 200000nm, step: 100000nm) >= 0.3
+rule M5.4 density(metal5; window: 200000nm, step: 100000nm) >= 0.3
+rule MT.3 density(metaltop; window: 200000nm, step: 100000nm) >= 0.3
+rule CO.3 enclosure(contact, poly2) >= 70nm
+rule CO.4 enclosure(contact, comp) >= 70nm
+rule CO.6 enclosure(contact, metal1) >= 5nm
+rule V2.3 enclosure(via2, metal2) >= 10nm
+rule V3.3 enclosure(via3, metal3) >= 10nm
+rule V4.3 enclosure(via4, metal4) >= 10nm
+rule V5.3 enclosure(via5, metal5) >= 10nm
+rule V1.4 enclosure(via1, metal2) >= 10nm
+rule V2.4 enclosure(via2, metal3) >= 10nm
+rule V3.4 enclosure(via3, metal4) >= 10nm
+rule V4.4 enclosure(via4, metal5) >= 10nm
+rule V5.4 enclosure(via5, metaltop) >= 10nm
+rule DV.1 enclosure(dnwell, dualgate) >= 500nm
+rule PL.4 extension(poly2, comp) >= 220nm
+rule DF.6 extension(comp, poly2) >= 240nm
+rule SB.11 overlap(sab, comp) >= 220nm
+rule DF.13 tap_distance(nwell, nplus) <= 20000nm
+rule GRID off_grid(; pitch: 5nm)
+rule ACUTE angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+rule CO.2b via_array_space(contact; array: 15) >= 280nm
+rule V1.2b via_array_space(via1; array: 15) >= 360nm
+rule V2.2b via_array_space(via2; array: 15) >= 360nm
+rule V3.2b via_array_space(via3; array: 15) >= 360nm
+rule V4.2b via_array_space(via4; array: 15) >= 360nm
+rule V5.2b via_array_space(via5; array: 15) >= 360nm
+rule ANT.1 antenna(poly2, poly2; max_ratio: 200, sidewall: 200nm)
+rule ANT.2 antenna(poly2, metal1; max_ratio: 400, sidewall: 550nm)
+rule ANT.3 antenna(poly2, metal2; max_ratio: 400, sidewall: 550nm)
+rule ANT.4 antenna(poly2, metal3; max_ratio: 400, sidewall: 550nm)
+rule ANT.5 antenna(poly2, metal4; max_ratio: 400, sidewall: 550nm)
+rule ANT.6 antenna(poly2, metal5; max_ratio: 400, sidewall: 550nm)
+rule ANT.8 antenna(poly2, contact; max_ratio: 10, sidewall: none)
+rule ANT.9 antenna(poly2, via1; max_ratio: 20, sidewall: none)
+rule ANT.10 antenna(poly2, via2; max_ratio: 20, sidewall: none)
+rule ANT.11 antenna(poly2, via3; max_ratio: 20, sidewall: none)
+rule ANT.12 antenna(poly2, via4; max_ratio: 20, sidewall: none)
+rule ANT.13 antenna(poly2, via5; max_ratio: 20, sidewall: none)
+rule EM.poly2 em_current_density(poly2; max_density: 1000A/m, max_current_per_cut: 210uA)
+rule EM.metal1 em_current_density(metal1; max_density: 1000A/m, max_current_per_cut: 210uA)
+rule EM.metal2_metal5 em_current_density(metal2, metal3, metal4, metal5; max_density: 1000A/m, max_current_per_cut: 280uA)
+rule EM.metaltop em_current_density(metaltop; max_density: 1800A/m, max_current_per_cut: 280uA)
+rule ESD.pad_reaches_clamp esd_topological(pad)
+rule floating_gate floating_gate()
+rule NW.floating_nwell floating_well(nwell, nplus)
+rule hv_domain_3p3 hv_domain(; max_delta: 3630mV, isolation: dnwell)
+rule ir_drop ir_drop()
+rule multiple_drivers multiple_drivers(; max: 1)
+rule tie_high_low warning tie_high_low()
+rule MT.unconnected warning unconnected_pin(metaltop)
+
+connect conductors [comp_active, poly2, metal1, metal2, metal3, metal4, metal5, metaltop]
+connect touch_within_layer
+connect via contact [comp_active, metal1]
+connect via contact [poly2, metal1]
+connect via via1 [metal1, metal2]
+connect via via2 [metal2, metal3]
+connect via via3 [metal3, metal4]
+connect via via4 [metal4, metal5]
+connect via via5 [metal5, metaltop]
+connect label metal1 names metal1
+connect label metal2 names metal2
+connect label metal3 names metal3
+connect label metal4 names metal4
+connect label metal5 names metal5
+connect label metaltop names metaltop
+
+device mos ngate model "nmos_3p3" terminals [poly2, comp_active, comp_active]
+device mos pgate model "pmos_3p3" terminals [poly2, comp_active, comp_active]
+device mos natgate model "nmos_6p0_nat" terminals [poly2, comp_active, comp_active]
+device capacitor mos_cap_mk model "nmoscap_3p3" terminals [poly2, comp_active]
+device resistor resistor model "ppolyf_u_1k" terminals [poly2, poly2]
+device diode diode_mk model "pn_3p3" terminals [comp_active, nwell]
+
+pex comp thickness 300nm height 14.5nm sheet 7ohm dielectric 11.7 area_cap 0aF/um2 fringe_cap 0aF/um
+pex comp_active thickness 300nm height 14.5nm sheet 7ohm dielectric 11.7 area_cap 0aF/um2 fringe_cap 0aF/um
+pex poly2 thickness 200nm height 320nm sheet 7.3ohm dielectric 4 area_cap 110.67aF/um2 fringe_cap 50.72aF/um
+pex contact thickness 915.5nm height 314.5nm sheet 8ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal1 thickness 550nm height 1230nm sheet 0.09ohm dielectric 4 area_cap 29.304aF/um2 fringe_cap 39.431aF/um
+pex via1 thickness 600nm height 1780nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal2 thickness 550nm height 2380nm sheet 0.09ohm dielectric 4 area_cap 15.016aF/um2 fringe_cap 33.298aF/um
+pex via2 thickness 600nm height 2930nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal3 thickness 550nm height 3530nm sheet 0.09ohm dielectric 4 area_cap 10.094aF/um2 fringe_cap 30.021aF/um
+pex via3 thickness 600nm height 4080nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal4 thickness 550nm height 4680nm sheet 0.09ohm dielectric 4 area_cap 7.602aF/um2 fringe_cap 28.153aF/um
+pex via4 thickness 600nm height 5230nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal5 thickness 550nm height 5830nm sheet 0.09ohm dielectric 4 area_cap 5.798aF/um2 fringe_cap 30.386aF/um
+pex via5 thickness 900nm height 6380nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metaltop thickness 1002.5nm height 7280nm sheet 0.04ohm dielectric 4 area_cap 4.8793aF/um2 fringe_cap 9.595aF/um

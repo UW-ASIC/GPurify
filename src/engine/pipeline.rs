@@ -82,7 +82,8 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     // Layout strings are interned before the deck's, which fixes every StrId.
     let mut strings = StrTable::default();
     let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
-    let deck = gpurify_ingest::deck::parse_deck(&source, grid, &mut strings)?;
+    let deck = gpurify_ingest::deck::parse_deck_dsl(&source, grid, &mut strings)
+        .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?;
     let (store, mut provenance) = library.flatten(&deck, &strings, inputs.unknown_layers)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
 
