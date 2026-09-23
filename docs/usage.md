@@ -85,7 +85,9 @@ Six electrical rules need facts about the chip that no process deck can know:
 }
 ```
 
-Net names are the text labels in your layout. A limit you leave out on a net
+Net names are the text labels in your layout. A ground net sits at 0 V and its
+drop is how far it rises (ground bounce); `max_drop_fraction` is a fraction of
+its domain's voltage for either role. A limit you leave out on a net
 means that net is not checked for it, not that it is unlimited. A current
 budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.

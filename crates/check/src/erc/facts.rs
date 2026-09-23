@@ -111,10 +111,25 @@ pub struct IntentMap {
 }
 
 impl IntentMap {
-    /// The nominal voltage of a declared supply net.
+    /// A declared supply net's role and its domain's nominal voltage.
+    pub fn supply(&self, net: NetId) -> Option<(SupplyRole, Qty<Voltage, { prefix::MILLI }>)> {
+        let row = self.supply_net.binary_search(&net).ok()?;
+        Some((self.supply_role[row], self.supply_voltage[row]))
+    }
+
+    /// The voltage a declared supply net is held at.
     pub fn nominal_voltage(&self, net: NetId) -> Option<Qty<Voltage, { prefix::MILLI }>> {
         let row = self.supply_net.binary_search(&net).ok()?;
-        Some(self.supply_voltage[row])
+        Some(self.held_at(row))
+    }
+
+    /// Supply row `row`'s voltage: its domain's nominal for power, zero for
+    /// ground.
+    pub fn held_at(&self, row: usize) -> Qty<Voltage, { prefix::MILLI }> {
+        match self.supply_role[row] {
+            SupplyRole::Power => self.supply_voltage[row],
+            SupplyRole::Ground => Qty::new(0.0),
+        }
     }
 
     /// The limits declared for a net. All-`None` means *not checked*, never

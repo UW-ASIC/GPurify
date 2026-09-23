@@ -821,7 +821,7 @@ pub fn extract_into(
         let poly = shape[owner];
         out.node_poly.push(poly);
         out.node_net.push(intent.supply_net[supply]);
-        out.node_nominal.push(intent.supply_voltage[supply]);
+        out.node_nominal.push(intent.held_at(supply));
         out.node_layer.push(store.poly_layer(poly));
         out.node_at
             .push(tap_point(store.poly_bbox(poly), taps.node_along[i]));
@@ -866,7 +866,7 @@ pub fn extract_into(
                 .expect("every shape carries a tap at its own centre");
         out.source_node
             .push(u32::try_from(at).expect("a node index is a u32"));
-        out.source_voltage.push(intent.supply_voltage[supply]);
+        out.source_voltage.push(intent.held_at(supply));
     }
 
     push_edges(
