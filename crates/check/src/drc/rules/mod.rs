@@ -1,4 +1,4 @@
-//! The twenty-five rule kinds, one function per kind, grouped by what they measure.
+//! The twenty-six rule kinds, one function per kind, grouped by what they measure.
 //!
 //! Data in: one rule row's parameters, the store and a `Scratch`.
 //! Data out: violations appended to `out`, and the row's [`Verdict`].

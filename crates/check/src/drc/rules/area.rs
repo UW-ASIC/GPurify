@@ -1,4 +1,6 @@
-//! Area family: min area, min enclosed (hole) area, cheesing, windowed density.
+//! Area family: min area, min enclosed (hole) area, cheesing, windowed and
+//! whole-die density. Density windows tile the die (a boundary layer's extent,
+//! or the whole layout's), never just the measured layer's own extent.
 //!
 //! Data in: one layer, self-merged into connected figures (exact union) and
 //! decomposed into disjoint rectangles (canonical). Data out: one violation per
@@ -177,42 +179,80 @@ pub(crate) fn min_enclosed_area(
     (Outcome::Ran, examined)
 }
 
-/// Density: a `side`-square window swept over the merged layer's extent in
-/// `step`s; one violation per offending window, at its centre. `examined`
-/// counts windows. An empty layer is `Skipped(EmptyLayer)`: its density is
-/// undefined, not zero.
+/// The die: the `boundary` layer's extent, or every layer's.
+fn die_of(store: &GeometryStore, boundary: Option<LayerId>) -> Bbox {
+    let extent = |layer: LayerId| {
+        store
+            .layer_bboxes(layer)
+            .iter()
+            .fold(Bbox::EMPTY, |acc, &b| acc.union(b))
+    };
+    match boundary {
+        Some(layer) => extent(layer),
+        None => (0..store.layer_count()).fold(Bbox::EMPTY, |die, layer| {
+            die.union(extent(LayerId(
+                u16::try_from(layer).expect("a LayerId is a u16"),
+            )))
+        }),
+    }
+}
+
+/// The merged layer's rectangles clipped to the die, into `s.rects`.
+/// `false` is `Refused`.
+fn merge_within(store: &GeometryStore, layer: LayerId, die: Bbox, s: &mut Scratch) -> bool {
+    if !merge_layer(store, layer, s) {
+        return false;
+    }
+    s.rects.retain_mut(|r| match r.intersection(die) {
+        Some(c) if c.xlo < c.xhi && c.ylo < c.yhi => {
+            *r = c;
+            true
+        }
+        _ => false,
+    });
+    true
+}
+
+/// A window no polygon claims is blamed on the layer's first row, or on no
+/// shape when the layer is empty.
+fn first_row_or_none(store: &GeometryStore, layer: LayerId) -> u32 {
+    let rows = store.polys_on_layer(layer);
+    if rows.is_empty() {
+        u32::MAX
+    } else {
+        rows.start
+    }
+}
+
+/// Density: a `side`-square window swept over the die in `step`s, each window's
+/// covered area inside the die over the whole window, so a window hanging past
+/// the die counts the outside as empty (the `KLayout` default, `padding_zero`).
+/// One violation per offending window, at its centre. An empty layer on a
+/// non-empty die has density zero. `examined` counts windows; an empty die is
+/// `Skipped(EmptyLayer)`.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn density(
     store: &GeometryStore,
     rule: StrId,
-    layer: LayerId,
-    window: Dbu,
-    step: Dbu,
+    (layer, boundary): (LayerId, Option<LayerId>),
+    (window, step): (Dbu, Dbu),
     limit: f64,
     sense: LimitSense,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    const EMPTY: Verdict = (Outcome::Skipped(SkipReason::EmptyLayer), 0);
-    if store.polys_on_layer(layer).is_empty() {
-        return EMPTY;
+    let die = die_of(store, boundary);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    if !merge_layer(store, layer, s) {
+    if !merge_within(store, layer, die, s) {
         return REFUSED;
-    }
-    let extent = s
-        .layer_out
-        .bboxes()
-        .iter()
-        .fold(Bbox::EMPTY, |acc, &b| acc.union(b));
-    if extent.is_empty() {
-        return EMPTY;
     }
 
     let (side, stride) = (window.raw(), step.raw());
-    let (x0, y0) = (extent.xlo.raw(), extent.ylo.raw());
-    let cols = positions(extent.xhi.raw() - x0, side, stride);
-    let ways = positions(extent.yhi.raw() - y0, side, stride);
+    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
+    let cols = positions(die.xhi.raw() - x0, side, stride);
+    let ways = positions(die.yhi.raw() - y0, side, stride);
     // A sweep leaving the coordinate domain is refused: clamping the window would
     // shrink the numerator but not the denominator.
     let (xmax, ymax) = (
@@ -228,6 +268,7 @@ pub(crate) fn density(
 
     let denominator = to_f64(i128::from(side) * i128::from(side));
     let mut owners = Owners::new(store, layer);
+    let fallback = first_row_or_none(store, layer);
     let grid = WindowGrid {
         x0,
         y0,
@@ -241,9 +282,8 @@ pub(crate) fn density(
         if !Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
             return;
         }
-        // A window enclosing no polygon is attributed to the layer's first row.
         let owner = match owners.lowest_within(window) {
-            u32::MAX => store.polys_on_layer(layer).start,
+            u32::MAX => fallback,
             row => row,
         };
         out.push(Violation {
@@ -257,6 +297,40 @@ pub(crate) fn density(
         });
     });
     (Outcome::Ran, sweep)
+}
+
+/// Whole-die density (gf180 M1.4 "30 % over the entire die", IHP M1.j/k): the
+/// merged layer's area inside the die over the die's area, one violation at the
+/// die's centre. `examined` is one; an empty die is `Skipped(EmptyLayer)`.
+pub(crate) fn global_density(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, boundary): (LayerId, Option<LayerId>),
+    limit: f64,
+    sense: LimitSense,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, boundary);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    if !merge_within(store, layer, die, s) {
+        return REFUSED;
+    }
+    let fraction = to_f64(covered_area(&s.rects).raw()) / to_f64(die.area().raw());
+    if Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(die),
+            measured: Measurement::Ratio(fraction),
+            limit: Measurement::Ratio(limit),
+            shapes: (PolyId(first_row_or_none(store, layer)), None),
+        });
+    }
+    (Outcome::Ran, 1)
 }
 
 /// A density sweep: `cols x ways` windows of `side`, origins `stride` apart

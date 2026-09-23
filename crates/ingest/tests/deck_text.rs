@@ -151,6 +151,23 @@ fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
     expect("a.1", "angle", &[], &["angle=#0", "angle=#90", "angle=#45"]);
 }
 
+/// gf180 M1.4 "Metal1 minimum density 30 % over the entire die", and a
+/// windowed row whose die is a named boundary layer.
+#[test]
+fn die_density_lowers_with_an_optional_boundary_layer() {
+    let (deck, strings) = ok("rule M1.4 global_density(met1) >= 30%\n\
+         rule M1.k global_density(met1, met3) <= 60%\n\
+         rule M1.j density(met1, met3; window: 800um, step: 400um) >= 35%\n");
+    let got = rules(&deck, &strings);
+    assert_eq!(got[0].1, "global_density");
+    assert_eq!(got[0].2, ["met1"]);
+    assert_eq!(got[0].3, ["limit=0.3", "maximum=false"]);
+    assert_eq!(got[1].2, ["met1", "met3"]);
+    assert_eq!(got[1].3, ["limit=0.6", "maximum=true"]);
+    assert_eq!(got[2].1, "density");
+    assert_eq!(got[2].2, ["met1", "met3"]);
+}
+
 /// sky130 licon.1 "min and max L and W of licon: 0.17": one exact square.
 #[test]
 fn an_exact_cut_size_lowers_to_both_sides() {

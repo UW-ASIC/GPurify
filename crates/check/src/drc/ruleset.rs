@@ -77,11 +77,20 @@ pub enum Rule {
         layer: LayerId,
         max_unslotted: DbuArea,
     },
-    /// Covered fraction of a `window`-sided square swept in `step`s.
+    /// Covered fraction of a `window`-sided square swept in `step`s over the
+    /// die: the `boundary` layer's extent, or the whole layout's.
     Density {
         layer: LayerId,
+        boundary: Option<LayerId>,
         window: Dbu,
         step: Dbu,
+        limit: f64,
+        sense: LimitSense,
+    },
+    /// Covered fraction of the whole die.
+    GlobalDensity {
+        layer: LayerId,
+        boundary: Option<LayerId>,
         limit: f64,
         sense: LimitSense,
     },
@@ -236,6 +245,21 @@ impl RuleSet {
         // Layer count first, then each parameter in field order.
         let one = |spec: &RuleSpec| layers(spec, 1).map(|()| layer(spec, 0));
         let two = |spec: &RuleSpec| layers(spec, 2).map(|()| (layer(spec, 0), layer(spec, 1)));
+        // A density layer, then an optional die boundary layer.
+        let bounded = |spec: &RuleSpec| match spec.layer_len {
+            1 => Ok((layer(spec, 0), None)),
+            _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
+        };
+        let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
+            let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
+                return Err(wrong_type(spec, "maximum"));
+            };
+            Ok(if maximum {
+                LimitSense::Maximum
+            } else {
+                LimitSense::Minimum
+            })
+        };
 
         let mut set = Self::default();
         for spec in &rules.spec {
@@ -305,23 +329,24 @@ impl RuleSet {
                     max_unslotted: area_limit(spec, "max_unslotted")?,
                 },
                 "density" => {
-                    let layer = one(spec)?;
+                    let (layer, boundary) = bounded(spec)?;
                     let (window, step) = (length(spec, "window")?, length(spec, "step")?);
-                    let limit = ratio(spec, "limit")?;
-                    let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
-                        return Err(wrong_type(spec, "maximum"));
-                    };
-                    let sense = if maximum {
-                        LimitSense::Maximum
-                    } else {
-                        LimitSense::Minimum
-                    };
                     Rule::Density {
                         layer,
+                        boundary,
                         window,
                         step,
-                        limit,
-                        sense,
+                        limit: ratio(spec, "limit")?,
+                        sense: sense(spec)?,
+                    }
+                }
+                "global_density" => {
+                    let (layer, boundary) = bounded(spec)?;
+                    Rule::GlobalDensity {
+                        layer,
+                        boundary,
+                        limit: ratio(spec, "limit")?,
+                        sense: sense(spec)?,
                     }
                 }
                 "min_enclosure" => {
@@ -514,11 +539,27 @@ impl RuleSet {
                 } => area::cheesing(store, id, layer, max_unslotted, s, out),
                 Rule::Density {
                     layer,
+                    boundary,
                     window,
                     step,
                     limit,
                     sense,
-                } => area::density(store, id, layer, window, step, limit, sense, s, out),
+                } => area::density(
+                    store,
+                    id,
+                    (layer, boundary),
+                    (window, step),
+                    limit,
+                    sense,
+                    s,
+                    out,
+                ),
+                Rule::GlobalDensity {
+                    layer,
+                    boundary,
+                    limit,
+                    sense,
+                } => area::global_density(store, id, (layer, boundary), limit, sense, s, out),
                 Rule::MinEnclosure {
                     outer,
                     inner,
@@ -583,10 +624,15 @@ impl Rule {
             | Rule::MinArea { layer, .. }
             | Rule::MinEnclosedArea { layer, .. }
             | Rule::Cheesing { layer, .. }
-            | Rule::Density { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. } => [Some(layer), None],
+            Rule::Density {
+                layer, boundary, ..
+            }
+            | Rule::GlobalDensity {
+                layer, boundary, ..
+            } => [Some(layer), boundary],
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
@@ -610,7 +656,7 @@ impl Rule {
 
 /// Every rule kind this crate implements, as the deck spells it. Disjoint from
 /// `crate::erc::ruleset::KINDS`.
-pub const KINDS: [&str; 25] = [
+pub const KINDS: [&str; 26] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -626,6 +672,7 @@ pub const KINDS: [&str; 25] = [
     "min_enclosed_area",
     "cheesing",
     "density",
+    "global_density",
     "min_enclosure",
     "asymmetric_enclosure",
     "min_extension",
