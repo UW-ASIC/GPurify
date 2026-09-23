@@ -10,6 +10,7 @@ use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
+use gpurify_testgen::assertions::net_partition;
 use gpurify_testgen::shapes::LayoutBuilder;
 
 // The layer table. Five conductors, one cut, one marker — the marker is
@@ -450,7 +451,8 @@ fn a_rigid_motion_of_every_vertex_leaves_the_extraction_bit_identical() {
 
         let (moved_nets, moved_devices) = extract(&moved_store, &recognition);
         assert_eq!(
-            moved_nets, nets,
+            net_partition(&moved_nets),
+            net_partition(&nets),
             "{name}: the net partition changed under an isometry"
         );
         assert_device_columns_agree(&devices, &moved_devices, 1, (1, 1), name);
@@ -724,7 +726,8 @@ fn an_anisotropic_integer_scale_moves_only_the_measured_area() {
 
     let (scaled_nets, scaled_devices) = extract(&scaled_store, &recognition);
     assert_eq!(
-        scaled_nets, nets,
+        net_partition(&scaled_nets),
+        net_partition(&nets),
         "scaling every coordinate changed the net partition"
     );
     // The fixture's channel runs along x — the flanking diffusion is offset in

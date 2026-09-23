@@ -1,9 +1,8 @@
-//! Writers: GDS, SPEF, DSPF and JSON.
+//! Writers: SPEF, DSPF and JSON.
 //!
 //! Every writer appends to a caller's buffer, iterates the canonical order its
 //! table guarantees (never sorts), and formats floats through [`json::format_f64`].
 
-pub mod gds;
 pub mod json;
 pub mod parasitic;
 

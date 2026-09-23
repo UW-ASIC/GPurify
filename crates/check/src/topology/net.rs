@@ -69,18 +69,6 @@ impl NetTable {
         let (a, b) = (self.net_of(a), self.net_of(b));
         a != NetId::NONE && a == b
     }
-
-    /// Build from a per-polygon net assignment, trusted as canonical: a
-    /// skipped id becomes an empty net, which extraction never produces.
-    #[must_use]
-    pub fn from_assignment(poly_net: &[NetId]) -> Self {
-        let mut table = Self {
-            poly_net: poly_net.to_vec(),
-            ..Self::default()
-        };
-        rebuild_index(poly_net, &mut table.net_start, &mut table.polys);
-        table
-    }
 }
 
 /// Rebuild the reverse CSR index from a per-polygon net assignment.
@@ -114,17 +102,6 @@ fn rebuild_index(poly_net: &[NetId], net_start: &mut Vec<u32>, polys: &mut Vec<P
         *slot += 1;
     }
 }
-
-/// Equal when the partition is equal; scratch is not part of the value.
-impl PartialEq for NetTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.poly_net == other.poly_net
-            && self.net_start == other.net_start
-            && self.polys == other.polys
-    }
-}
-
-impl Eq for NetTable {}
 
 /// Extract nets from geometry; caller owns `out`, cleared and refilled.
 ///
@@ -420,39 +397,30 @@ fn cuts_landing_on(
 
 #[cfg(test)]
 mod tests {
-    use super::{rings_meet_direct, rings_meet_sweep, NetId, NetTable, DIRECT_PAIR_BUDGET};
+    use super::{rebuild_index, rings_meet_direct, rings_meet_sweep, NetId, DIRECT_PAIR_BUDGET};
     use gpurify_geom::Dbu;
     use gpurify_geom::PolyId;
 
-    /// Reads the private columns directly: every public accessor reads the CSR
-    /// under test, so a matching pair of errors could cancel.
     #[test]
     fn a_stated_assignment_builds_the_reverse_index_it_implies() {
         let none = NetId::NONE;
-        let table = NetTable::from_assignment(&[NetId(1), NetId(0), NetId(1), none, NetId(0)]);
-
-        assert_eq!(table.net_start, [0, 2, 4], "two nets of two polygons each");
+        let (mut net_start, mut polys) = (Vec::new(), Vec::new());
+        rebuild_index(
+            &[NetId(1), NetId(0), NetId(1), none, NetId(0)],
+            &mut net_start,
+            &mut polys,
+        );
+        assert_eq!(net_start, [0, 2, 4], "two nets of two polygons each");
         assert_eq!(
-            table.polys,
+            polys,
             [PolyId(1), PolyId(4), PolyId(0), PolyId(2)],
             "each net's polygons must come back ascending"
         );
-        assert_eq!(
-            table.poly_net,
-            [NetId(1), NetId(0), NetId(1), none, NetId(0)],
-            "the forward column is the caller's, unrenumbered"
-        );
 
         // A store holding nothing but markers and cuts has no nets at all.
-        let nothing = NetTable::from_assignment(&[none, none]);
-        assert_eq!(nothing.net_start, [0]);
-        assert!(nothing.polys.is_empty());
-
-        assert_eq!(
-            table,
-            NetTable::from_assignment(&[NetId(1), NetId(0), NetId(1), none, NetId(0)])
-        );
-        assert_ne!(table, nothing);
+        rebuild_index(&[none, none], &mut net_start, &mut polys);
+        assert_eq!(net_start, [0]);
+        assert!(polys.is_empty());
     }
 
     /// A star of `n` vertices centred on `(cx, cy)`, alternating between two

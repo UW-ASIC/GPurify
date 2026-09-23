@@ -329,34 +329,3 @@ fn a_polygon_contains_the_points_on_its_boundary_as_well_as_its_interior() {
         );
     }
 }
-
-/// Oracle: construct-from-answer. `push_rect` is stated sugar over `push` —
-/// same layer, same four CCW vertices from the lower-left corner — so a store
-/// built through it must be indistinguishable from one built through `push`
-/// with those vertices written out.
-#[test]
-fn push_rect_stores_the_same_polygon_its_expanded_push_would() {
-    let mut sugared = GeometryStoreBuilder::default();
-    let row = sugared.push_rect(LayerId(0), dbu(3), dbu(-7), dbu(10), dbu(20));
-    assert_eq!(row, 0, "push_rect must return push's pre-sort row index");
-    let (sugared, _) = sugared.finish(1);
-
-    let mut spelled = GeometryStoreBuilder::default();
-    spelled.push(
-        LayerId(0),
-        &[dbu(3), dbu(13), dbu(13), dbu(3)],
-        &[dbu(-7), dbu(-7), dbu(13), dbu(13)],
-    );
-    let (spelled, _) = spelled.finish(1);
-
-    assert_eq!(
-        sugared.poly_verts(PolyId(0)),
-        spelled.poly_verts(PolyId(0)),
-        "push_rect expanded to different vertices than the CCW rectangle it states"
-    );
-    assert_eq!(
-        sugared.poly_bbox(PolyId(0)),
-        spelled.poly_bbox(PolyId(0)),
-        "the two identical rectangles disagree on their bounding box"
-    );
-}

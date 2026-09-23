@@ -13,6 +13,7 @@ use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_testgen::shapes::polygon_area;
 use gpurify_testgen::shapes::{
     dbu, l_shape, l_shape_area, plus_shape, plus_shape_area, random_rectilinear_layer, rect,
     u_shape, u_shape_area, LayoutBuilder, RandomLayerSpec,
@@ -146,7 +147,7 @@ fn the_rectangles_of_one_polygon_are_pairwise_disjoint() {
         let index32 = u32::try_from(index).expect("eighty polygons fit a u32");
         assert_eq!(
             covered_area(own),
-            layer.get(index32).area(),
+            polygon_area(layer.get(index32)),
             "polygon {index} is not covered exactly"
         );
         total = total + covered_area(own);

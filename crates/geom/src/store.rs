@@ -160,12 +160,6 @@ impl GeometryStoreBuilder {
         row
     }
 
-    /// Append an axis-aligned rectangle (corner plus extents), wound CCW.
-    pub fn push_rect(&mut self, layer: LayerId, x: Dbu, y: Dbu, w: Dbu, h: Dbu) -> u32 {
-        let (x2, y2) = (x + w, y + h);
-        self.push(layer, &[x, x2, x2, x], &[y, y, y2, y2])
-    }
-
     /// Stable counting sort by layer, then bounding boxes.
     ///
     /// Returns `permutation[new_row] == old_row`. `layer_count` comes from the

@@ -136,9 +136,17 @@ fn a_deck_that_leaves_raw_diffusion_conducting_under_a_mos_marker_is_refused() {
     let (diff, poly, nsdm) = (layer("diff"), layer("poly"), layer("nsdm"));
 
     let mut builder = GeometryStoreBuilder::default();
-    builder.push_rect(diff, dbu(0), dbu(0), dbu(500), dbu(200));
-    builder.push_rect(poly, dbu(200), dbu(-50), dbu(50), dbu(300));
-    builder.push_rect(nsdm, dbu(-50), dbu(-50), dbu(600), dbu(300));
+    for (layer, [xlo, ylo, xhi, yhi]) in [
+        (diff, [0, 0, 500, 200]),
+        (poly, [200, -50, 250, 250]),
+        (nsdm, [-50, -50, 550, 250]),
+    ] {
+        builder.push(
+            layer,
+            &[xlo, xhi, xhi, xlo].map(dbu),
+            &[ylo, ylo, yhi, yhi].map(dbu),
+        );
+    }
     let (store, _) = builder.finish(deck.layers.len());
 
     let mut loaded = empty_loaded(store, deck);

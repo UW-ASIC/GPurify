@@ -12,6 +12,7 @@ use gpurify_geom::ops::{self_intersects, winding_of, Winding};
 use gpurify_geom::view::{validate_layer_into, RingRef, ValidatedLayer, ValidityError};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
+use gpurify_testgen::shapes::polygon_area;
 use gpurify_testgen::shapes::{
     dbu, hole, l_shape, l_shape_area, plus_shape, plus_shape_area, rect, u_shape, u_shape_area,
     LayoutBuilder,
@@ -50,7 +51,7 @@ fn validate(store: &GeometryStore, layer: LayerId) -> Result<ValidatedLayer, Val
 /// promises rows are grouped by layer, not the order rows take within one.
 fn total_area(layer: &ValidatedLayer) -> DbuArea {
     (0..u32::try_from(layer.len()).expect("a test layer fits a u32"))
-        .map(|index| layer.get(index).area())
+        .map(|index| polygon_area(layer.get(index)))
         .fold(DbuArea::new(0), |total, area| total + area)
 }
 
@@ -85,7 +86,7 @@ fn a_validated_polygon_has_the_area_its_generator_states() {
     for ((shape, area), handle) in cases.iter().zip(handles) {
         let id = ids.of(handle);
         let poly = layer.get(id.0 - first_row);
-        assert_eq!(poly.area(), DbuArea::new(*area), "{shape:?}");
+        assert_eq!(polygon_area(poly), DbuArea::new(*area), "{shape:?}");
         assert_eq!(poly.bbox(), store.poly_bbox(id));
         assert_eq!(poly.holes().count(), 0, "none of these have holes");
     }
@@ -146,7 +147,7 @@ fn every_validated_outer_ring_winds_counter_clockwise_and_is_simple() {
         // With no holes, the polygon's area is half its outer ring's doubled
         // signed area — the only place the halving happens.
         assert_eq!(
-            poly.area() + poly.area(),
+            polygon_area(poly) + polygon_area(poly),
             outer.area2(),
             "polygon {index} area is not half its outer ring"
         );
@@ -169,7 +170,7 @@ fn a_hole_winds_clockwise_and_its_area_is_subtracted_from_its_container() {
 
     let outer_area = 100 * 100i128;
     let hole_area = 40 * 30i128;
-    assert_eq!(poly.area(), DbuArea::new(outer_area - hole_area));
+    assert_eq!(polygon_area(poly), DbuArea::new(outer_area - hole_area));
 
     let outer = poly.outer();
     assert_eq!(wind(outer), Some(Winding::CounterClockwise));
@@ -313,7 +314,7 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
 
     for index in 0..u32::try_from(first.len()).expect("a handful of polygons fit a u32") {
         let (a, b) = (first.get(index), second.get(index));
-        assert_eq!(a.area(), b.area(), "polygon {index}");
+        assert_eq!(polygon_area(a), polygon_area(b), "polygon {index}");
         assert_eq!(a.bbox(), b.bbox(), "polygon {index}");
         assert_eq!(a.outer().coords(), b.outer().coords(), "polygon {index}");
         assert_eq!(wind(a.outer()), wind(b.outer()));
@@ -336,7 +337,7 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
         .find(|poly| poly.holes().count() == 2)
         .expect("one polygon has two holes");
     assert_eq!(
-        perforated.area(),
+        polygon_area(perforated),
         DbuArea::new(200 * 200 - 40 * 40 - 80 * 50),
         "both holes must be subtracted"
     );

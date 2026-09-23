@@ -7,7 +7,7 @@ use gpurify_ingest::{Provenance, StrId};
 
 /// Named nets. `net`/`name` ascend by [`NetId`]; `by_name`/`by_name_net` are
 /// the same rows ascending by `(name, net)`.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct PortTable {
     net: Vec<NetId>,
     name: Vec<StrId>,

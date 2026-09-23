@@ -17,8 +17,8 @@ use gpurify::extract::Parasitic;
 use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
 use gpurify::geom::{Dbu, Grid};
 use gpurify::geom::{GeometryStore, LayerId, PolyId};
+use gpurify::ingest;
 use gpurify::ingest::layout::UnknownLayers;
-use gpurify::{export, ingest};
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
@@ -248,7 +248,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     let layout_path = dir.join("layout.gds");
     if let Some(deck) = &parsed {
         let mut bytes = Vec::new();
-        export::gds::write_store(&store, &deck.layers, "TOP", &mut bytes)
+        gpurify_testgen::gds::write_store(&store, &deck.layers, "TOP", &mut bytes)
             .expect("a fixture emits geometry this writer accepts");
         std::fs::write(&layout_path, &bytes).expect("the scratch directory is writable");
     }

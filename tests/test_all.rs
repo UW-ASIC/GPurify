@@ -86,7 +86,7 @@ fn a_layout_written_and_read_back_yields_the_same_store() {
     let original = run.load().expect("the fixture is a valid layout");
 
     let mut bytes = Vec::new();
-    gpurify::export::gds::write_store(&original.store, &original.deck.layers, "TOP", &mut bytes)
+    gpurify_testgen::gds::write_store(&original.store, &original.deck.layers, "TOP", &mut bytes)
         .expect("a store read from GDS can be written back to GDS");
 
     let round_tripped = common::load_bytes(&bytes, &original.deck).expect("re-read");
@@ -1145,12 +1145,16 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
     let first = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
     let second = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
 
+    use gpurify_testgen::assertions::{net_partition, port_names};
     assert_eq!(
-        first.extracted.nets, second.extracted.nets,
+        net_partition(&first.extracted.nets),
+        net_partition(&second.extracted.nets),
         "two extractions of one layout disagree on the net partition"
     );
+    assert_eq!(first.extracted.ports.len(), second.extracted.ports.len());
     assert_eq!(
-        first.extracted.ports, second.extracted.ports,
+        port_names(&first.extracted.ports, &first.extracted.nets),
+        port_names(&second.extracted.ports, &second.extracted.nets),
         "two extractions of one layout disagree on the port bindings"
     );
     // `DeviceTable` carries no `PartialEq`; its public columns are the value.

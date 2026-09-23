@@ -32,7 +32,7 @@
 use gpurify::geom::Grid;
 use gpurify::geom::LayerId;
 use gpurify::ingest::deck::{Deck, DeviceKind, ParamValue};
-use gpurify::ingest::StrTable;
+use gpurify::ingest::{StrId, StrTable};
 use std::path::{Path, PathBuf};
 
 /// The grid every deck in `pdks/` is authored against — `pdks/README.md` states
@@ -132,6 +132,15 @@ fn every_deck_configures_rules_and_every_rule_belongs_to_a_domain() {
     }
 }
 
+/// A layer's name, found through the table's name lookup; panics when no name
+/// resolves to it.
+fn layer_name<'a>(deck: &Deck, strings: &'a StrTable, layer: LayerId) -> &'a str {
+    (0..strings.len())
+        .map(|i| strings.resolve(StrId(u32::try_from(i).expect("a StrId is u32"))))
+        .find(|name| deck.layers.id(strings, name) == Some(layer))
+        .unwrap_or_else(|| panic!("no name resolves to {layer:?}"))
+}
+
 /// Oracle: construct-from-answer. Every layer a rule names resolves back to the
 /// same id through the layer table.
 #[test]
@@ -161,15 +170,7 @@ fn every_layer_a_rule_names_resolves_in_the_layer_table() {
                     layer.idx(),
                     deck.layers.len()
                 );
-                let name = strings.resolve(deck.layers.name(layer));
-                assert_eq!(
-                    deck.layers.id(&strings, name),
-                    Some(layer),
-                    "{deck_name}: rule {rule} names layer {name}, which does not \
-                     resolve back to the id it was given; the name index and the \
-                     name column disagree, so some lookups of this layer find it \
-                     and others do not"
-                );
+                layer_name(&deck, &strings, layer);
             }
         }
     }
@@ -189,7 +190,7 @@ fn every_current_carrying_layer_has_a_sheet_resistance() {
             .chain(&deck.connectivity.via_cut);
 
         for &layer in carrying {
-            let name = strings.resolve(deck.layers.name(layer));
+            let name = layer_name(&deck, &strings, layer);
             let ohms = deck
                 .stack
                 .sheet_res_ohm_sq
@@ -269,9 +270,9 @@ fn every_via_joins_two_declared_conductors() {
             .iter()
             .zip(&deck.connectivity.via_connects)
         {
-            let cut_name = strings.resolve(deck.layers.name(cut));
+            let cut_name = layer_name(&deck, &strings, cut);
             for joined in [lower, upper] {
-                let name = strings.resolve(deck.layers.name(joined));
+                let name = layer_name(&deck, &strings, joined);
                 assert!(
                     is_conductor(joined),
                     "{deck_name}: via {cut_name} joins {name}, which the deck does \
@@ -305,7 +306,7 @@ fn every_deck_pairs_a_text_layer_with_a_conductor() {
             "{deck_name}: the label pairing columns are not parallel"
         );
         for &named in &deck.connectivity.label_names {
-            let name = strings.resolve(deck.layers.name(named));
+            let name = layer_name(&deck, &strings, named);
             assert!(
                 deck.connectivity.conductors.contains(&named),
                 "{deck_name}: a label row names {name}, which is not a conductor"
@@ -331,7 +332,7 @@ fn every_mos_terminal_names_a_conductor() {
             let span =
                 devices.terminal_start[row] as usize..devices.terminal_start[row + 1] as usize;
             for &terminal in &devices.terminal[span] {
-                let name = strings.resolve(deck.layers.name(terminal));
+                let name = layer_name(&deck, &strings, terminal);
                 assert!(
                     deck.connectivity.conductors.contains(&terminal),
                     "{deck_name}: the {model} recogniser puts a terminal on \

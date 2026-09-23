@@ -6,7 +6,7 @@
 
 use gpurify_geom::ops::Point;
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
-use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId, PolygonRef};
 
 /// Wrap an `i64` as a coordinate. `MAX_ABS_DBU` is the bound that keeps every
 /// `i128` area product from overflowing.
@@ -436,4 +436,14 @@ mod tests {
         assert!(plus_shape_area(100, 30) < 200 * 200);
         assert!(u_shape_area(100, 20, 40) < (2 * 20 + 40) * 100);
     }
+}
+
+/// Signed area of a validated polygon: the outer ring minus its holes.
+#[must_use]
+pub fn polygon_area(poly: PolygonRef<'_>) -> DbuArea {
+    // Holes wind CW, so their doubled areas are already negative.
+    let doubled = poly
+        .holes()
+        .fold(poly.outer().area2(), |total, hole| total + hole.area2());
+    DbuArea::new(doubled.raw() / 2)
 }

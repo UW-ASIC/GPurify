@@ -3,5 +3,6 @@
 mod arith;
 mod dbu;
 mod grid;
+mod intern;
 mod qty;
 mod serde;

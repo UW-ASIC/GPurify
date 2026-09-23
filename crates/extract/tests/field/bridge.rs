@@ -8,6 +8,7 @@
 use crate::common;
 
 use common::{grid, uniform_stack};
+use gpurify_check::topology::net::extract_nets_into;
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_extract::field::filament::self_inductance_bar;
 use gpurify_extract::field::henry::{
@@ -15,6 +16,7 @@ use gpurify_extract::field::henry::{
 };
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStoreBuilder, LayerId};
+use gpurify_ingest::deck::Connectivity;
 
 fn dbu(raw: i64) -> Dbu {
     Dbu::new(raw).expect("a test coordinate is in the coordinate domain")
@@ -23,9 +25,19 @@ fn dbu(raw: i64) -> Dbu {
 /// One 10 µm × 1 µm bar on layer 0 of a 1 nm grid, assigned to net 0.
 fn one_bar() -> (gpurify_geom::GeometryStore, NetTable) {
     let mut builder = GeometryStoreBuilder::default();
-    builder.push_rect(LayerId(0), dbu(0), dbu(0), dbu(10_000), dbu(1_000));
+    builder.push(
+        LayerId(0),
+        &[dbu(0), dbu(10_000), dbu(10_000), dbu(0)],
+        &[dbu(0), dbu(0), dbu(1_000), dbu(1_000)],
+    );
     let (store, _) = builder.finish(1);
-    (store, NetTable::from_assignment(&[NetId(0)]))
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0)],
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    (store, nets)
 }
 
 /// Oracle: closed form. The bridge builds one filament for the bar, so the

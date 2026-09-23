@@ -1,7 +1,28 @@
 //! Assertions over violation tables, rule runs and float comparisons.
 
 use gpurify_check::report::{Outcome, RuleRun, Violation, Violations};
+use gpurify_check::topology::{NetId, NetTable, PortTable};
+use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
+
+/// The net partition as comparable data: each net's polygons, by `NetId`.
+#[must_use]
+pub fn net_partition(nets: &NetTable) -> Vec<Vec<PolyId>> {
+    (0..nets.net_count())
+        .map(|n| {
+            nets.polys_of(NetId(u32::try_from(n).expect("a NetId is u32")))
+                .to_vec()
+        })
+        .collect()
+}
+
+/// The port bindings as comparable data: each net's name, by `NetId`.
+#[must_use]
+pub fn port_names(ports: &PortTable, nets: &NetTable) -> Vec<Option<StrId>> {
+    (0..nets.net_count())
+        .map(|n| ports.name_of(NetId(u32::try_from(n).expect("a NetId is u32"))))
+        .collect()
+}
 
 /// Assert two `f64` agree to an absolute tolerance.
 pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {

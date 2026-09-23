@@ -81,7 +81,8 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
     } else {
         raw
     };
-    if gds::detect(&bytes) {
+    // A GDSII `HEADER` record: length 6, type 0, data type 2.
+    if bytes.starts_with(&[0x00, 0x06, 0x00, 0x02]) {
         Ok(bytes)
     } else {
         Err(LayoutError::UnknownFormat)
@@ -197,11 +198,6 @@ pub mod gds {
     const STRANS_REFLECT: u16 = 0x8000;
     /// `STRANS` bits 13-14: absolute magnification/angle, which do not compose. Refused.
     const STRANS_ABSOLUTE: u16 = 0x0006;
-
-    /// True when the bytes open with a GDSII `HEADER` record: length 6, type 0, data type 2.
-    pub fn detect(prefix: &[u8]) -> bool {
-        prefix.starts_with(&[0x00, 0x06, 0x00, 0x02])
-    }
 
     /// Parse and flatten GDSII bytes into a fresh string table.
     pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
@@ -1219,6 +1215,7 @@ mod tests {
     use crate::deck::tests::{layer_table, ROWS};
     use gpurify_geom::StrTable;
     use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
+    use gpurify_testgen::shapes::polygon_area;
     use gpurify_testgen::shapes::{Handle, Ids};
     use gpurify_testgen::{dbu, LayoutBuilder};
 
@@ -1647,7 +1644,7 @@ mod tests {
             assert_eq!(valid.len(), 1, "one square is one polygon");
             let polygon = valid.get(0);
             assert_eq!(polygon.holes().count(), 0, "a square has no holes");
-            stored.push(polygon.area());
+            stored.push(polygon_area(polygon));
         }
 
         assert_eq!(
@@ -1704,7 +1701,7 @@ mod tests {
         let polygon = valid.get(0);
         assert_eq!(polygon.holes().count(), 1, "and it has one hole");
         assert_eq!(
-            polygon.area().raw(),
+            polygon_area(polygon).raw(),
             1000 * 1000 - 400 * 400,
             "outer minus hole; a decomposition that dropped the hole would \
              leave the whole square and still validate"

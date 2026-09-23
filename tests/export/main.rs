@@ -4,7 +4,7 @@
 //! parasitic network of exact binary fractions.
 
 use gpurify::export::json::{format_f64, Report};
-use gpurify::export::{gds, json, parasitic, Header, WriteError};
+use gpurify::export::{json, parasitic, Header, WriteError};
 use gpurify_check::report::{
     Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
 };
@@ -15,6 +15,7 @@ use gpurify_geom::{Grid, LayerId, Qty};
 use gpurify_ingest::deck::{Connectivity, Deck, LayerTable};
 use gpurify_ingest::layout::{gds as reader, UnknownLayers};
 use gpurify_ingest::{Provenance, StrTable};
+use gpurify_testgen::gds;
 use gpurify_testgen::{dbu, point, LayoutBuilder};
 
 const CONDUCTOR: LayerId = LayerId(0);
@@ -254,7 +255,6 @@ fn an_empty_store_writes_a_library_the_reader_reads_back_empty() {
     let mut bytes = Vec::new();
     gds::write_store(&store, &LayerTable::default(), "TOP", &mut bytes).expect("writable");
     assert_eq!(bytes.len() % 2, 0);
-    assert!(reader::detect(&bytes));
     let layout = reader::read(&bytes, &Deck::default(), UnknownLayers::Reject)
         .expect("the reader accepts the writer's library");
     assert_eq!(layout.store.poly_count(), 0);

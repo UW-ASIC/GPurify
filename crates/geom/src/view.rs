@@ -110,15 +110,6 @@ impl<'a> PolygonRef<'a> {
         let ring = self.layer.poly_ring_start[self.idx as usize] as usize;
         self.layer.ring_poly[ring]
     }
-
-    /// Signed area of the outer boundary minus the holes.
-    pub fn area(self) -> DbuArea {
-        // Holes wind CW, so their doubled areas are already negative.
-        let doubled = self
-            .holes()
-            .fold(self.outer().area2(), |total, hole| total + hole.area2());
-        DbuArea::new(doubled.raw() / 2)
-    }
 }
 
 /// One validated closed ring.

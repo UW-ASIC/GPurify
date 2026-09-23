@@ -68,9 +68,6 @@ impl LayerTable {
         let at = self.name.iter().position(|&n| n == wanted)?;
         Some(LayerId(u16::try_from(at).expect("LayerId is a u16")))
     }
-    pub fn name(&self, layer: LayerId) -> StrId {
-        self.name[layer.idx()]
-    }
     /// The base layer a GDS layer/datatype pair maps to; the lowest id when two share it.
     pub fn of_stream(&self, layer: u16, datatype: u16) -> Option<LayerId> {
         let wanted = (layer, datatype);
@@ -804,11 +801,6 @@ pub(crate) mod tests {
                 layers.id(&strings, name),
                 Some(expected),
                 "{name} did not resolve to the id it was declared at"
-            );
-            assert_eq!(
-                strings.resolve(layers.name(expected)),
-                name,
-                "{expected:?} named the wrong layer"
             );
         }
 

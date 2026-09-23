@@ -137,20 +137,3 @@ fn two_interning_orders_give_the_same_set_of_ids_and_the_same_names_back() {
         assert_eq!(reverse.resolve(id), name.as_str());
     }
 }
-
-/// Oracle: law. Capacity is not content. A table built with room for a thousand
-/// names holds none of them, and behaves identically to a default one — which
-/// is what stops `with_capacity` pre-filling the span column and shifting every
-/// id by the reservation.
-#[test]
-fn with_capacity_reserves_space_without_interning_anything() {
-    let mut reserved = StrTable::with_capacity(1024, 16_384);
-    assert!(reserved.is_empty(), "a reserved table already held names");
-    assert_eq!(reserved.len(), 0);
-
-    let mut plain = StrTable::default();
-    assert_eq!(reserved.intern("vdd"), plain.intern("vdd"));
-    assert_eq!(reserved.intern("vss"), plain.intern("vss"));
-    assert_eq!(reserved.len(), plain.len());
-    assert!(!reserved.is_empty());
-}

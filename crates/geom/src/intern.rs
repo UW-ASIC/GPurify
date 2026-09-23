@@ -17,13 +17,6 @@ pub struct StrTable {
 }
 
 impl StrTable {
-    pub fn with_capacity(names: usize, _bytes: usize) -> Self {
-        Self {
-            names: Vec::with_capacity(names),
-            ids: HashMap::with_capacity(names),
-        }
-    }
-
     /// Intern a name, returning the existing id if it is already present.
     pub fn intern(&mut self, name: &str) -> StrId {
         if let Some(&id) = self.ids.get(name) {

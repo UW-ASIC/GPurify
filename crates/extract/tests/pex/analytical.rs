@@ -16,7 +16,8 @@
 use crate::common;
 
 use common::{extracted, grid, resistance_ohm, serialise, uniform_stack};
-use gpurify_check::topology::{DeviceTable, NetId, NetTable};
+use gpurify_check::topology::net::extract_nets_into;
+use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_extract::analytical::{
     coupling_capacitance, extract_into, extract_net_into, ground_capacitance, segment_resistance,
     stack_row, via_resistance,
@@ -366,6 +367,18 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
 /// The order survives: `finish` counting-sorts by layer and every rectangle here
 /// is on the same one, so `PolyId(i)` is `sides[i]` and the assignment below can
 /// name them positionally.
+/// Nets by extraction: layer 0 conducts, touching shapes join.
+fn layer0_nets(store: &GeometryStore) -> NetTable {
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0)],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(store, &connectivity, &mut nets);
+    nets
+}
+
 fn rects(sides: &[(i64, i64)]) -> GeometryStore {
     let mut builder = GeometryStoreBuilder::with_capacity(sides.len(), 4 * sides.len());
     for &(width, height) in sides {
@@ -398,7 +411,7 @@ fn rects(sides: &[(i64, i64)]) -> GeometryStore {
 #[test]
 fn a_net_of_one_polygon_still_carries_that_polygons_resistance() {
     let store = rects(&[(2_000, 200)]);
-    let nets = NetTable::from_assignment(&[NetId(0)]);
+    let nets = layer0_nets(&store);
 
     let mut network = ParasiticNetwork::default();
     extract_into(
@@ -439,7 +452,7 @@ fn the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances() {
     const SIDES: [(i64, i64); 3] = [(2_000, 200), (5_000, 100), (300, 300)];
 
     let store = rects(&SIDES);
-    let nets = NetTable::from_assignment(&[NetId(0); SIDES.len()]);
+    let nets = layer0_nets(&store);
 
     let mut network = ParasiticNetwork::default();
     extract_into(
@@ -516,10 +529,10 @@ fn via_stack(cuts: i64) -> (GeometryStore, Connectivity, NetTable) {
     // One net for the two plates; the cuts are on none, which is what a cut
     // layer absent from `conductors` gets and the whole reason `vias_into`
     // exists.
-    let mut assignment = vec![NetId::NONE; store.poly_count()];
-    assignment[0] = NetId(0);
-    assignment[store.poly_count() - 1] = NetId(0);
-    (store, connectivity, NetTable::from_assignment(&assignment))
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert_eq!(nets.net_count(), 1, "the cuts join the two plates");
+    (store, connectivity, nets)
 }
 
 /// One via stack extracted, with only the cut layer conducting.

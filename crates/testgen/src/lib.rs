@@ -2,6 +2,7 @@
 
 pub mod assertions;
 pub mod electrical;
+pub mod gds;
 pub mod graph;
 pub mod netlist;
 pub mod rng;

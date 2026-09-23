@@ -1,10 +1,9 @@
-//! GDSII writer: the other half of `parse -> write -> parse`, used to write
-//! test layouts.
+//! GDSII writer: the other half of `parse -> write -> parse`, for test layouts.
+//! An error names what the format cannot represent.
 //!
 //! Data in: a flattened [`GeometryStore`] and the deck's [`LayerTable`]. Data out:
 //! a one-cell GDSII library.
 
-use crate::export::WriteError;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::LayerTable;
@@ -49,7 +48,7 @@ pub fn write_store(
     layers: &LayerTable,
     cell_name: &str,
     out: &mut Vec<u8>,
-) -> Result<(), WriteError> {
+) -> Result<(), &'static str> {
     put_library_head(out, cell_name)?;
     put_record(out, BGNSTR, &TIMESTAMPS)?;
     put_ascii(out, STRNAME, cell_name)?;
@@ -69,9 +68,7 @@ pub fn write_store(
         // Fail closed: a row on a layer the deck never declared has no stream
         // pair, and inventing one puts geometry on a layer nobody is watching.
         if layer.idx() >= layers.len() {
-            return Err(WriteError::Unrepresentable(
-                "a layer the deck's table does not declare",
-            ));
+            return Err("a layer the deck's table does not declare");
         }
         let (number, datatype) = layers.stream_of(layer);
         for row in range {
@@ -86,7 +83,7 @@ pub fn write_store(
 // ----------------------------------------------------------------- the format
 
 /// `HEADER`, `BGNLIB`, `LIBNAME` and `UNITS` — everything before the first cell.
-fn put_library_head(out: &mut Vec<u8>, name: &str) -> Result<(), WriteError> {
+fn put_library_head(out: &mut Vec<u8>, name: &str) -> Result<(), &'static str> {
     put_record(out, HEADER, &VERSION.to_be_bytes())?;
     put_record(out, BGNLIB, &TIMESTAMPS)?;
     put_ascii(out, LIBNAME, name)?;
@@ -106,11 +103,9 @@ fn put_boundary(
     datatype: u16,
     xs: &[Dbu],
     ys: &[Dbu],
-) -> Result<(), WriteError> {
+) -> Result<(), &'static str> {
     if xs.len() < 3 {
-        return Err(WriteError::Unrepresentable(
-            "a boundary with fewer than three vertices",
-        ));
+        return Err("a boundary with fewer than three vertices");
     }
 
     let mut worst = 0u64;
@@ -120,9 +115,7 @@ fn put_boundary(
             .max(y.raw().unsigned_abs());
     }
     if worst > COORD_LIMIT {
-        return Err(WriteError::Unrepresentable(
-            "a coordinate wider than a GDSII 32-bit database unit",
-        ));
+        return Err("a coordinate wider than a GDSII 32-bit database unit");
     }
 
     payload.clear();
@@ -155,25 +148,25 @@ fn pack((x, y): (Dbu, Dbu)) -> [u8; 8] {
 }
 
 /// A record header: the total length including these four bytes, then the tag.
-fn put_head(out: &mut Vec<u8>, tag: u16, payload_len: usize) -> Result<(), WriteError> {
-    let len = u16::try_from(payload_len + 4)
-        .map_err(|_| WriteError::Unrepresentable("a GDSII record longer than 65535 bytes"))?;
+fn put_head(out: &mut Vec<u8>, tag: u16, payload_len: usize) -> Result<(), &'static str> {
+    let len =
+        u16::try_from(payload_len + 4).map_err(|_| "a GDSII record longer than 65535 bytes")?;
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(&tag.to_be_bytes());
     Ok(())
 }
 
-fn put_record(out: &mut Vec<u8>, tag: u16, payload: &[u8]) -> Result<(), WriteError> {
+fn put_record(out: &mut Vec<u8>, tag: u16, payload: &[u8]) -> Result<(), &'static str> {
     put_head(out, tag, payload.len())?;
     out.extend_from_slice(payload);
     Ok(())
 }
 
 /// A name record, padded to an even length with the NUL the format uses.
-fn put_ascii(out: &mut Vec<u8>, tag: u16, text: &str) -> Result<(), WriteError> {
+fn put_ascii(out: &mut Vec<u8>, tag: u16, text: &str) -> Result<(), &'static str> {
     // Refused rather than written as bytes no reader can resolve.
     if !text.is_ascii() {
-        return Err(WriteError::Unrepresentable("a name outside ASCII"));
+        return Err("a name outside ASCII");
     }
     let padding = text.len() % 2;
     put_head(out, tag, text.len() + padding)?;

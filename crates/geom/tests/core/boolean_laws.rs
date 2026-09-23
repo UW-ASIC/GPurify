@@ -26,6 +26,7 @@ use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{GeometryStore, LayerId};
+use gpurify_testgen::shapes::polygon_area;
 use gpurify_testgen::shapes::{l_shape, l_shape_area, rect, u_shape, u_shape_area, LayoutBuilder};
 use gpurify_testgen::Rng;
 
@@ -38,7 +39,7 @@ fn zero() -> DbuArea {
 
 fn total_area(layer: &ValidatedLayer) -> DbuArea {
     (0..u32::try_from(layer.len()).expect("a test layer fits a u32"))
-        .map(|index| layer.get(index).area())
+        .map(|index| polygon_area(layer.get(index)))
         .fold(zero(), |total, area| total + area)
 }
 
@@ -365,7 +366,7 @@ fn two_runs_of_one_boolean_produce_the_same_polygons_in_the_same_order() {
     let first: Vec<_> = (0..u32::try_from(buffer.len()).expect("a small layer fits a u32"))
         .map(|index| {
             let poly = buffer.get(index);
-            (poly.bbox(), poly.area(), poly.holes().count())
+            (poly.bbox(), polygon_area(poly), poly.holes().count())
         })
         .collect();
 
@@ -373,7 +374,7 @@ fn two_runs_of_one_boolean_produce_the_same_polygons_in_the_same_order() {
     let second: Vec<_> = (0..u32::try_from(buffer.len()).expect("a small layer fits a u32"))
         .map(|index| {
             let poly = buffer.get(index);
-            (poly.bbox(), poly.area(), poly.holes().count())
+            (poly.bbox(), polygon_area(poly), poly.holes().count())
         })
         .collect();
 
