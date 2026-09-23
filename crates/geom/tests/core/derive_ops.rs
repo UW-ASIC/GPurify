@@ -8,7 +8,7 @@ use gpurify_geom::derive::{
 };
 use gpurify_geom::ops::{Point, Seg};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::{Dbu, DbuArea, GeometryStoreBuilder, LayerId, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, GeometryStoreBuilder, LayerId, MAX_ABS_DBU};
 
 fn d(v: i64) -> Dbu {
     Dbu::new(v).expect("in domain")
@@ -297,11 +297,11 @@ fn with_area_selects_on_the_area_net_of_holes() {
     ]);
     let holed = layer(&[(&[0, 4, 4, 0], &[0, 0, 4, 4]), (&hx, &hy)]);
     let mut got = ValidatedLayer::default();
-    with_area_into(&l, DbuArea::new(5), DbuArea::new(9), &mut got);
+    with_area_into(&l, 5..=9, &mut got);
     assert_eq!(boxes(&got), [(10, 0, 13, 3)]);
-    with_area_into(&holed, DbuArea::new(12), DbuArea::new(12), &mut got);
+    with_area_into(&holed, 12..=12, &mut got);
     assert_eq!(got.len(), 1, "4x4 minus 2x2 is 12");
-    with_area_into(&holed, DbuArea::new(16), DbuArea::new(16), &mut got);
+    with_area_into(&holed, 16..=16, &mut got);
     assert!(got.is_empty(), "the hole is not area");
 }
 
@@ -312,9 +312,9 @@ fn with_width_selects_on_the_narrowest_width() {
         (&[20, 23, 23, 20], &[0, 0, 10, 10]),           // 3 x 10
     ]);
     let mut got = ValidatedLayer::default();
-    with_width_into(&l, d(3), d(i64::from(u32::MAX)), &mut got);
+    with_width_into(&l, 3..=i128::MAX, &mut got);
     assert_eq!(boxes(&got), [(20, 0, 23, 10)], "the L is 2 wide at its arm");
-    with_width_into(&l, d(0), d(2), &mut got);
+    with_width_into(&l, 0..=2, &mut got);
     assert_eq!(boxes(&got), [(0, 0, 10, 10)]);
 }
 
@@ -414,7 +414,7 @@ fn edge_interacting_takes_whole_edges_that_touch_and_with_length_filters() {
     );
     assert_eq!(sorted(&no), [(30, 0, 30, 10)]);
     let mut kept = Vec::new();
-    with_length_into(&a, d(5), d(9), &mut kept);
+    with_length_into(&a, 5..=9, &mut kept);
     assert_eq!(sorted(&kept), [(20, 0, 20, 5)]);
 }
 

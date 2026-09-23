@@ -102,6 +102,50 @@ Derived layers combine earlier layers with `and`, `or` and `not`, left to
 right; use parentheses to group. A layer must be declared before anything
 uses it.
 
+Operations follow a layer after a `.` and chain left to right:
+
+```
+layer huge_met1 = met1.sized(-1.5um).sized(1.5um)   # the parts of met1 wider than 3um
+layer tap_gate  = poly.interacting(tap).not_interacting(licon)
+layer big_diff  = (diff not poly).with_area(>= 1um2, < 4um2)
+layer butt      = nsdm.edges() and psdm.edges()
+```
+
+Shapes that touch or overlap count as one shape before an operation looks at
+them. Operations on shapes:
+
+| Operation | Result |
+|---|---|
+| `.sized(len)` | Every shape grown by `len` on all sides, corners square. A negative `len` shrinks, and a part no wider than twice the shrink disappears. `.sized(-a).sized(a)` keeps the parts wider than `2a`. |
+| `.interacting(L)` | The shapes that touch or overlap a shape on `L`. Sharing only a corner counts. |
+| `.not_interacting(L)` | The shapes that do not. |
+| `.inside(L)` | The shapes entirely covered by `L`. A shape may touch `L`'s boundary from inside. |
+| `.outside(L)` | The shapes sharing no area with `L`. A shape that only touches `L` is outside. |
+| `.holes()` | Each hole, filled. A hole with an island in it is filled over the island. |
+| `.extents()` | The bounding box of each shape. |
+| `.with_area(bounds)` | The shapes whose area, not counting holes, is within the bounds. |
+| `.with_width(bounds)` | The shapes whose narrowest width, as `width` measures it, is within the bounds. |
+| `.edges()` | The boundary of each shape, as an edge layer. |
+
+Bounds are one or two comparisons with `>=`, `>`, `<=`, `<`, or a single `==`:
+`with_area(>= 1um2)`, `with_width(> 1um, <= 3um)`. Bounds that nothing can
+satisfy are an error.
+
+An edge layer holds the boundary segments of shapes, each knowing which side
+its shape was on. It combines only with other edge layers:
+
+| Operation | Result |
+|---|---|
+| `E and F` | The parts of `E` that coincide with `F`, whichever side each shape is on. The edges where two layers butt are `A.edges() and B.edges()`. |
+| `E not F` | The parts of `E` that do not coincide with `F`. |
+| `E or F` | Both, with the shared parts once. |
+| `.inside_part(L)` | The parts of each edge strictly inside `L`. Parts on `L`'s boundary are in neither this nor `outside_part`. |
+| `.outside_part(L)` | The parts of each edge strictly outside `L`. |
+| `.interacting(L)` / `.not_interacting(L)` | The whole edges that touch or lie in a shape on `L`, or that do not. |
+| `.with_length(bounds)` | The edges whose length is within the bounds. |
+
+A check that takes an edge layer says so. Every other check refuses one.
+
 ## Rules
 
 ```

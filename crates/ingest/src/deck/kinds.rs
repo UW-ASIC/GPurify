@@ -459,3 +459,7 @@ pub(crate) const PEX: [(&str, Dim); 6] = [
     ("area_cap", Dim::CapPerArea),
     ("fringe_cap", Dim::CapPerLength),
 ];
+
+/// Engine kinds whose layer arguments may be edge layers; every other kind
+/// refuses one when the deck is read.
+pub(crate) const EDGE_KINDS: &[&str] = &[];

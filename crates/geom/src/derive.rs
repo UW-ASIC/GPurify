@@ -15,7 +15,8 @@ use crate::rects::decompose_into;
 use crate::store::GeometryStoreBuilder;
 use crate::view::{validate_layer_into, PolygonRef, ValidatedLayer};
 use crate::width::{narrowest_width, FacingScratch};
-use crate::{narrow, Dbu, DbuArea};
+use crate::{narrow, Dbu};
+use std::ops::RangeInclusive;
 
 const ONLY: LayerId = LayerId(0);
 
@@ -118,24 +119,24 @@ pub fn extents_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), 
     merged(builder, out)
 }
 
-/// `KLayout` `with_area(lo, hi)`, both bounds inclusive: polygons whose area,
-/// holes excluded, is in `lo..=hi`.
-pub fn with_area_into(a: &ValidatedLayer, lo: DbuArea, hi: DbuArea, out: &mut ValidatedLayer) {
+/// `KLayout` `with_area`: polygons whose area in square grid units, holes
+/// excluded, is in `range`.
+pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let keep: Vec<bool> = (0..narrow(a.len()))
         .map(|idx| {
             let twice: i128 = a.poly_rings(idx).map(|r| r.area2().raw()).sum();
-            (lo.raw()..=hi.raw()).contains(&(twice / 2))
+            range.contains(&(twice / 2))
         })
         .collect();
     a.select_into(&keep, out);
 }
 
-/// Polygons whose narrowest width, as the `width` rule measures it, is in
-/// `lo..=hi`.
-pub fn with_width_into(a: &ValidatedLayer, lo: Dbu, hi: Dbu, out: &mut ValidatedLayer) {
+/// Polygons whose narrowest width in grid units, as the `width` rule measures
+/// it, is in `range`.
+pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let mut scratch = FacingScratch::default();
     let keep: Vec<bool> = (0..narrow(a.len()))
-        .map(|idx| (lo..=hi).contains(&narrowest_width(a.get(idx), &mut scratch)))
+        .map(|idx| range.contains(&i128::from(narrowest_width(a.get(idx), &mut scratch).raw())))
         .collect();
     a.select_into(&keep, out);
 }
@@ -513,11 +514,11 @@ pub fn edge_interacting_into(a: &[Seg], b: &ValidatedLayer, keep: bool, out: &mu
     }
 }
 
-/// `KLayout` `with_length(lo, hi)`, both bounds inclusive.
-pub fn with_length_into(a: &[Seg], lo: Dbu, hi: Dbu, out: &mut Vec<Seg>) {
+/// `KLayout` `with_length`: edges whose length in grid units is in `range`.
+pub fn with_length_into(a: &[Seg], range: RangeInclusive<i128>, out: &mut Vec<Seg>) {
     out.clear();
     out.extend(a.iter().filter(|s| {
         let r = run_of(**s);
-        (lo.raw()..=hi.raw()).contains(&(r.hi - r.lo))
+        range.contains(&i128::from(r.hi - r.lo))
     }));
 }

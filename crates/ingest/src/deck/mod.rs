@@ -101,6 +101,17 @@ impl LayerTable {
         layer.0 >= self.derived_start
     }
 
+    /// Is this an edge layer (directed segments, not polygons)? Only a check
+    /// that says it takes edges accepts one.
+    pub fn is_edges(&self, layer: LayerId) -> bool {
+        let Some(row) = layer.idx().checked_sub(usize::from(self.derived_start)) else {
+            return false;
+        };
+        let (_, op, operands) = &self.derived[row];
+        op.makes_edges()
+            .unwrap_or_else(|| self.is_edges(operands[0]))
+    }
+
     /// How the derived layers are computed, in id order.
     pub(crate) fn derived(&self) -> &[(LayerId, DerivedOp, Vec<LayerId>)] {
         &self.derived
@@ -138,12 +149,52 @@ impl LayerTable {
     }
 }
 
-/// The operators a deck may spell over layers.
+/// The operators a deck may spell over layers. `and`/`or`/`not` fold over
+/// every operand; a method takes its receiver, then its layer argument if any.
+/// Bounds are inclusive, in grid units (square grid units for an area).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DerivedOp {
     And,
     Or,
     Not,
+    /// Grow, or shrink when negative.
+    Sized(Dbu),
+    /// `interacting` (`true`) or `not_interacting`.
+    Interacting(bool),
+    Inside,
+    Outside,
+    Holes,
+    Extents,
+    WithArea(i128, i128),
+    WithWidth(i128, i128),
+    /// Polygons to their boundary edges.
+    Edges,
+    /// `inside_part` (`true`) or `outside_part`, on edges.
+    Part(bool),
+    WithLength(i128, i128),
+}
+
+impl DerivedOp {
+    /// Whether the result is edges: `Some` when the op decides, `None` when it
+    /// keeps its receiver's kind.
+    pub(crate) fn makes_edges(self) -> Option<bool> {
+        match self {
+            Self::Edges => Some(true),
+            Self::Sized(_)
+            | Self::Inside
+            | Self::Outside
+            | Self::Holes
+            | Self::Extents
+            | Self::WithArea(..)
+            | Self::WithWidth(..) => Some(false),
+            Self::And
+            | Self::Or
+            | Self::Not
+            | Self::Interacting(_)
+            | Self::Part(_)
+            | Self::WithLength(..) => None,
+        }
+    }
 }
 
 /// One rule as the deck states it, layers resolved and lengths already [`Dbu`].
