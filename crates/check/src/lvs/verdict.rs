@@ -60,12 +60,6 @@ pub enum Discrepancy {
         ref_device: u32,
         param: StrId,
     },
-    /// Never constructed; kept so the engine's rule-id table keeps its order.
-    DuplicateName {
-        side: Side,
-        name: StrId,
-        nets: (u32, u32),
-    },
     /// A refinement class holds more than one node per side and the counts differ.
     ClassImbalance { layout_nodes: u32, ref_nodes: u32 },
 }
