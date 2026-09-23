@@ -126,6 +126,8 @@ enum Val {
         name: String,
         span: (u32, u32),
     },
+    /// A quoted string: a device model name.
+    Str(String, (u32, u32)),
     List(Vec<Val>, (u32, u32)),
     Tuple(Vec<Val>, (u32, u32)),
     Group(Vec<Named>, (u32, u32)),
@@ -137,6 +139,7 @@ impl Val {
         match self {
             Val::Num { span, .. }
             | Val::Word { span, .. }
+            | Val::Str(_, span)
             | Val::List(_, span)
             | Val::Tuple(_, span)
             | Val::Group(_, span)
@@ -149,6 +152,7 @@ impl Val {
         match &mut self {
             Val::Num { span, .. }
             | Val::Word { span, .. }
+            | Val::Str(_, span)
             | Val::List(_, span)
             | Val::Tuple(_, span)
             | Val::Group(_, span)
@@ -171,6 +175,7 @@ impl Val {
                 }
             }
             Val::Word { name, .. } => format!("`{name}`"),
+            Val::Str(text, _) => format!("\"{text}\""),
             Val::List(..) => "a list".to_owned(),
             Val::Tuple(..) => "a tuple".to_owned(),
             Val::Group(..) => "named arguments".to_owned(),
@@ -1299,6 +1304,24 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::Models => {
+                let Val::List(items, _) = value else {
+                    return Err(self.wrong(value, "a list of model names", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(
+                        value.span(),
+                        &format!("`{label}` needs at least one model; write none for no models"),
+                    ));
+                }
+                for item in items {
+                    let Val::Str(model, _) = item else {
+                        return Err(self.wrong(item, "a model name in quotes", label));
+                    };
+                    out.push((engine, ParamSrc::Model(model.clone())));
+                }
+                return Ok(());
+            }
             Dim::Group(inner) => {
                 let Val::Group(named, span) = value else {
                     return Err(self.wrong(value, "named arguments `(name: value, ..)`", label));
@@ -1514,6 +1537,10 @@ impl<'a> Parser<'a> {
                 let name = self.text(t).to_owned();
                 Ok(self.resolve(name, (t.start, t.end)))
             }
+            Tok::Str => {
+                self.bump();
+                Ok(Val::Str(self.string(t)?, (t.start, t.end)))
+            }
             Tok::Punct if self.text(t) == "[" => {
                 self.bump();
                 let items = self.items("]")?;
@@ -1655,6 +1682,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Layer => "a layer",
         Dim::LengthPair(_) => "a pair of lengths",
         Dim::AngleList => "a list of angles",
+        Dim::Models => "a list of model names",
         Dim::Group(_) => "named arguments",
     }
 }

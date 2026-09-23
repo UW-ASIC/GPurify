@@ -6,7 +6,7 @@
 
 use crate::topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::{prefix, Qty, Voltage};
-use gpurify_ingest::intent::{DesignIntent, NetLimits, SupplyRole};
+use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, SupplyRole};
 
 /// Which terminal roles are present on a net, one bit per role. Every
 /// `Pin(_)` is one bit: a symmetric device's pin index carries no meaning.
@@ -103,6 +103,8 @@ pub struct IntentMap {
     /// Declared supply nets, ascending (the lookups binary-search it).
     pub supply_net: Vec<NetId>,
     pub supply_role: Vec<SupplyRole>,
+    /// The domain each supply net belongs to.
+    pub supply_domain: Vec<DomainId>,
     /// Nominal voltage of each supply net's domain.
     pub supply_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
     /// Nets with declared limits, ascending. Not disjoint from `supply_net`.
@@ -111,10 +113,25 @@ pub struct IntentMap {
 }
 
 impl IntentMap {
-    /// The nominal voltage of a declared supply net.
+    /// A declared supply net's role and its domain's nominal voltage.
+    pub fn supply(&self, net: NetId) -> Option<(SupplyRole, Qty<Voltage, { prefix::MILLI }>)> {
+        let row = self.supply_net.binary_search(&net).ok()?;
+        Some((self.supply_role[row], self.supply_voltage[row]))
+    }
+
+    /// The voltage a declared supply net is held at.
     pub fn nominal_voltage(&self, net: NetId) -> Option<Qty<Voltage, { prefix::MILLI }>> {
         let row = self.supply_net.binary_search(&net).ok()?;
-        Some(self.supply_voltage[row])
+        Some(self.held_at(row))
+    }
+
+    /// Supply row `row`'s voltage: its domain's nominal for power, zero for
+    /// ground.
+    pub fn held_at(&self, row: usize) -> Qty<Voltage, { prefix::MILLI }> {
+        match self.supply_role[row] {
+            SupplyRole::Power => self.supply_voltage[row],
+            SupplyRole::Ground => Qty::new(0.0),
+        }
     }
 
     /// The limits declared for a net. All-`None` means *not checked*, never
@@ -133,7 +150,7 @@ impl IntentMap {
 }
 
 /// Re-key design intent onto extracted nets; `out` is cleared and refilled.
-/// `None` leaves `declared == false`, which is how six rules report skipped.
+/// `None` leaves `declared == false`, which is how the intent rules report skipped.
 pub fn resolve_intent_into(
     intent: Option<&DesignIntent>,
     ports: &PortTable,
@@ -156,6 +173,7 @@ pub fn resolve_intent_into(
         if let Some((domain, role)) = intent.supply_role(name) {
             out.supply_net.push(net);
             out.supply_role.push(role);
+            out.supply_domain.push(domain);
             out.supply_voltage.push(intent.domain_voltage(domain));
         }
         let limits = intent.limits(name);

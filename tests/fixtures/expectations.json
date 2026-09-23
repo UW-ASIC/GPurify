@@ -3927,40 +3927,25 @@
     "cell": "ERC_ESD",
     "domain": "erc",
     "check": "esd_missing",
-    "expect_violations": 1,
-    "expect_outcome": "Ran",
-    "examined": 1,
-    "examined_min": 1,
+    "expect_violations": 0,
+    "expect_outcome": "Skipped(NoDesignIntent)",
+    "examined": 0,
+    "examined_min": 0,
     "examined_population": "pad_nets",
-    "violations": [
-     {
-      "measured": {
-       "kind": "Count",
-       "value": 0
-      },
-      "at": [
-       0,
-       0
-      ],
-      "layer": "met1"
-     }
-    ],
-    "provenance": "derived_from_geometry",
-    "corroboration": "manifest_agrees",
-    "dispute": null,
-    "strength": "weak",
+    "violations": [],
+    "provenance": "underivable",
+    "corroboration": "manifest_disagrees",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
-     "examined_min",
-     "measured",
-     "at",
-     "layer"
+     "examined_min"
     ],
     "manifest": {
      "expect_violations": 1
     },
-    "note": "The answer is right but the test does not discriminate: `EsdTopologicalTable::clamp_model` is ALWAYS empty - `from_deck`'s arm closes the CSR without pushing anything, because a clamp is a device model NAME and `ParamValue` carries no string. So `protected` is false for every pad net on every input, and this rule flags 100% of pad nets unconditionally. It would report 1 for a pad with a perfect clamp on it."
+    "note": "`check_esd_topological` needs to know which nets are the rails, so it tests `intent.is_usable()`. The corpus runs without design intent, so the rule records Skipped(NoDesignIntent) with examined = 0. A pad is judged by its clamp path to a power and a ground supply, which geometry alone cannot name."
    },
    {
     "id": "ERC_ESD_PASS",
@@ -3968,15 +3953,15 @@
     "domain": "erc",
     "check": "esd_missing",
     "expect_violations": 0,
-    "expect_outcome": "Ran",
+    "expect_outcome": "Skipped(NoDesignIntent)",
     "examined": 0,
     "examined_min": 0,
     "examined_population": "pad_nets",
     "violations": [],
-    "provenance": "derived_from_geometry",
+    "provenance": "underivable",
     "corroboration": "manifest_agrees",
-    "dispute": null,
-    "strength": "vacuous",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
@@ -3985,7 +3970,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "LVS_INV has no met1 shape, so there are zero pad nets. A test asserting examined > 0 here will fail, correctly: the clean pass is 'the rule found nothing to look at', not 'the rule checked a pad and it was protected'."
+    "note": "`check_esd_topological` needs to know which nets are the rails, so it tests `intent.is_usable()`. The corpus runs without design intent, so the rule records Skipped(NoDesignIntent) with examined = 0. A pad is judged by its clamp path to a power and a ground supply, which geometry alone cannot name."
    },
    {
     "id": "ERC_HV_CROSS",
@@ -4137,7 +4122,7 @@
      {
       "measured": {
        "kind": "Resistance",
-       "value": 538.9
+       "value": 545.0
       },
       "at": [
        250,
@@ -4161,7 +4146,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "RE-DERIVED WITH F2+F3, and the case is no longer vacuous - it is now the only ERC case in the corpus that measures a resistance against its limit. The old 0/0 held because LVS_INV extracted ONE device: the pfet declared a fourth terminal on nwell, which is not a conductor, so it bound NetId::NONE and was never recognised. With both transistors recognised the poly rail (200,-50)-(250,750) carries BOTH gates, so it is the one net with two device attach points and the only row `power::extract_nets_into` emits - examined 1, not 0. DERIVATION, from the shapes and the deck, not from a run: the two marker centres are nsdm (250,100) and psdm (250,600); `tap_on` clamps each onto the poly rail's long axis, and the shape's own centre tap sits at y=350, so the chain is three nodes at y = 100, 350, 600. Each segment is 250 nm long over a 50 nm wide rail = 5 squares, and poly is 48.2 ohm/sq, so each edge is 241 ohm and the effective resistance between the two gate taps is 482 ohm. The deck limit is 10.0 ohm, so exactly one violation, reported at the first node of the worst pair - `tap_point` puts it on the rail's centre line at (225, 100) - on layer poly. 482 ohm across a gate rail is physically ordinary and 10 ohm is a severe limit for poly; the deck is not re-tuned here, because tuning it to keep the id's -PASS promise would be fitting the expectation to the run. The corpus consequence is real and is recorded rather than papered over: there is now no p2p case that passes non-vacuously, and ERC_P2P_FAIL is still blocked by F1. SECOND VIOLATION ADDED WITH F1, and it is a consequence of correct connectivity rather than a change of rule. Once the four licon cuts exist, net Y is li (350,50)-(450,650) + diff_active (250,0)-(500,200) + diff_active (250,500)-(500,700), and it carries the nfet drain and the pfet drain - a second net with two device attach points, so examined goes 1 -> 2. DERIVATION of the 538.9 ohm, from the shapes and the deck: the li box is 100 x 600, so `chain_is_horizontal` is false and its chain runs in y over a 100 nm profile; each diff_active box is 250 x 200, so both chains run in x over a 200 nm profile. Taps on li: its own centre y=350, and the centre of each overlap with a diffusion, y=125 and y=575. Taps on each diff_active: its own centre x=375, the overlap centre x=400, and the device tap - `tap_on(host, marker centre)` clamps nsdm (250,100) and psdm (250,600) onto the long axis - x=250. So li spends 225+225 nm over 100 nm = 4.5 squares at 12.2 ohm/sq = 54.9 ohm, each diff_active spends 125+25 nm over 200 nm = 0.75 squares at 120 ohm/sq = 90 ohm, and each of the two licon cuts is one square of the cut layer at 152 ohm/sq. The 9 nodes carry 8 edges, so the network is a tree and the effective resistance between the two device taps is the path sum: 90 + 152 + 54.9 + 152 + 90 = 538.9 ohm, against the deck's 10.0 ohm limit. Reported at the first node of the worst pair, which is the nfet tap - `tap_point` puts it on that diff_active's centre line at (250, 100) - on layer diff_active. A 538.9 ohm drain net over 120 ohm/sq diffusion is physically ordinary; the deck is not re-tuned to keep the id's -PASS promise, for the same reason recorded above."
+    "note": "Two nets carry two device attach points. The poly gate rail (200,-50)-(250,750) taps the two marker centres and its own centre, y = 100, 350, 600: two edges of 250/50 = 5 squares at 48.2 ohm/sq, 482 ohm between the gates, at (225, 100) on poly. Net Y is li (350,50)-(450,650) joined by licon cuts at y = 100 and y = 600 to the two right-hand diff_active boxes; each via is tapped under its cut. li spends 250 + 250 nm over 100 nm = 5 squares at 12.2 ohm/sq = 61.0 ohm, each diff_active 150 nm from the device tap (x = 250) to the cut (x = 400) over 200 nm = 0.75 squares at 120 ohm/sq = 90 ohm, and each cut is 152 ohm: 90 + 152 + 61 + 152 + 90 = 545.0 ohm, at (250, 100) on diff_active. Both exceed the deck's 10 ohm limit; the id's -PASS predates the second net and the deck is not re-tuned to keep it."
    },
    {
     "id": "ERC_DENSITY_CMP_PASS",
@@ -4344,7 +4329,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "The gate, not the rule. `check_ir_drop` is `power.filter(|_| intent.is_usable())` (erc/src/rules/electrical.rs:320); the corpus path passes intent: None (`case_inputs`), so IntentMap::declared is false AND an empty power_grid makes `power` None at engine/src/run.rs:663 - both halves fail independently. `skip_rows` records Skipped(NoDesignIntent) with examined 0. Before this case params.json carried no `ir_drop` row at all, so `ir_drop.head.is_empty()` was true, the dispatcher never fired, and NO RuleRun existed - which is weaker than Skipped, it is invisible. This case asserts the rule is at least accounted for. It is NOT coverage of the rule: 0 violations here is a skip, not a clean design. The ran path is derived and unwritten. LVS_INV's poly rail is the only rail in the corpus whose device tap differs from its centre tap - every implant marker in conformance.gds is concentric with the diff it covers, so tap_on(host, marker_centre) == tap_on(host, host) on every diff net and TapTable::finish dedups the load onto the pad, giving a drop of identically zero; LVS_INV's poly runs to y=750 to reach the (unrecognised, F2) pfet, so its centre tap is y=350 while the nfet marker taps it at y=100. Two nodes, one edge of 250/50 = 5.0 squares at poly's 48.2 ohm/sq = 241.0 ohm, and a 1000 uA budget gives V = I*R = 241.0 mV at (225, 100) on poly, with node 1 clean. It cannot live here: the corpus path cannot carry intent, and `measurement_matches` in tests/common/mod.rs has no Voltage, Current or Resistance arm, so no corpus case can ever assert an electrical measurement. Write it against `run_case_with_intent` with max_drop_mv 100 (fires) and 300 (clean); a third run with no budget_current_ua is the arithmetic-free law that zero current through any resistance produces zero drop."
+    "note": "Skipped: the corpus runs without design intent, so ir_drop records Skipped(NoDesignIntent) with examined 0, which is not a clean result. The ran path on this cell is a_stated_current_budget_drops_ohms_law_across_a_known_poly_rail in tests/test_all.rs; closed-form ladder, divider, boundary and ground-rail cases are in tests/erc_closed_form.rs."
    },
    {
     "id": "ERC_RELIABILITY",
@@ -4369,7 +4354,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "`check_reliability`'s gate is `power.filter(|_| intent.is_usable())` (reliability.rs:211). `check_geometry_case` routes through `run_case`, which passes intent: None, so IntentMap::declared is false and the row records Skipped(NoDesignIntent) with examined = 0. This case is the regression guard on the gate, not coverage of the Arrhenius model. The model is derived and unwritten: ERC_HV is one conductor polygon (nwell is not in connectivity.conductors) on one labelled net, so the grid is one node held at the declared voltage exactly, with zero unknowns for conjugate_gradient to touch. With the `bti` row's Ea = 0.5 eV, T_ref = 398.15 K and engine::run::sign_off_temperature = 358.15 K, thermal = exp((0.5/8.617333262e-5)*(1/358.15 - 1/398.15)) = 5.09159717249751, so unit = 5091.59717249751 h at exactly V_ref. Arrhenius sign check: the part runs cooler than it was characterised, so it lasts longer. A 1800 mV supply predicts 5091.597 h - clean against the 1000 h floor and clean against the 3600 mV cap. A 3300 mV supply predicts 5091.59717249751 * (1800/3300)^4 = 450.70076740364533 h and fires one violation, Ratio(450.70076740364533) against Ratio(1000.0), at (500, 250) on met1 - the centre tap of the 600x100 met1 bar. Write it against `run_case_with_intent`. Two degeneracies to close when doing so: duty_cycle is 1.0 so the duty column is never exercised, and required_lifetime_hours == reference_lifetime_hours == 1000 so swapping the two columns is invisible - raising required to 2000 fixes the second for free and moves no predicted lifetime. A third intent at 3900 mV would be the only thing that exercises max_abs_voltage. Also unasserted here: check_reliability's doc says the applied stress is 'the worst solved node voltage on each domain' but the body emits per node with no per-domain max taken, and `examined` is the whole grid's node count hoisted above the row loop rather than the count evaluated for that row. A one-node grid cannot tell either apart."
+    "note": "Skipped: the corpus runs without design intent, so reliability records Skipped(NoDesignIntent) with examined 0. The ran path on this cell is the_reliability_model_derates_a_cool_part_upward_and_an_overstressed_one_below_its_floor in tests/test_all.rs; tests/erc_closed_form.rs checks the lifetime model at its reference point and with a Celsius rating, a duty cycle and a 0 V ground rail."
    },
    {
     "id": "ERC_ESD_LATCHUP",
@@ -4419,7 +4404,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "Skipped, not clean, and the skip is the only claim this corpus can make about this kind. `check_electromigration` spends `power.filter(|_| intent.is_usable())` above the row loop (electrical.rs:868); the corpus path passes intent: None, so skip_rows records Skipped(NoDesignIntent) with examined 0. This case is a tripwire, not coverage: the day per-case intent lands it flips to Ran and goes red, which forces the derivation below to be finished rather than assumed. NO ABSOLUTE VIOLATION COUNT IS DERIVABLE FOR THIS RULE TODAY. Four fail-opens land on it and three point the same way: (a) engine::run::sign_off_temperature is 85 C hard-coded with nothing in Inputs or RunOptions able to override it, so a 125 C part reads its limit 18.7x too generous at n=1 and 4.33x at n=2; (b) one temperature for the whole run, no thermal solve and no self-heating, so +5 K of Joule rise is a further 1.49x at n=1; (a) and (b) compose as ONE temperature error, not two factors - the true composite at a 125 C corner with 5 K self-heat is exp((0.9/8.617333262e-5)*(1/358.15 - 1/403.15)) = 25.92x at n=1 and 5.09x at n=2, which is about 8 percent BELOW the 27.97x that multiplying the two separately-quoted factors gives, because 1/T is convex and the second increment is taken off an already-shifted base; (c) power::extract_into spreads the net budget uniformly over A attach points (share = budget/attach.len(), there being no per-instance column on IntentMap), understating the current at a concentrated draw by up to A. At a realistic corner the composite is around 100x, all on the pass-more side, and there is no operating point at which it is protective. The fourth, the pad anchor at power.rs:1680, has been REWRITTEN since docs/E2E_AUDIT.md 5.1 was written - it is now the centre tap of the rail's widest shape on its highest conducting layer, one anchor where a real rail has many, which majorizes trunk currents edge by edge and therefore errs CLOSED for this rule; E2E_AUDIT 5.1's 'all four err in the same direction' is stale at HEAD, and it does not cancel (c), which understates a leaf edge while this overstates the trunk. What survives all four unconditionally is the outcome, the examined population and the DIRECTION: a violation this rule reports is real, a clean one is not evidence. Those are what this case asserts; the direction bound has nowhere to live but this note, because GeometryCase carries only expect_violations (exact) and examined_min (one-sided), and adding expect_violations_min is a harness signature change to weigh on its own. For when the ran path is written: ERC_EM's met1 is 80 dbu wide and 500 long, chain_is_horizontal is false so edge_width = 80, allowed = 1000 A/m * 8e-8 m = 80 uA derated by exp((0.9/8.617333262e-5)*(1/358.15 - 1/383.15)) = 6.7041 to 536.3 uA, and Blech slenderness 200/80 = 2.5 puts the 10 uA-um exemption below 4 uA. THE PRECEDING SENTENCE USED TO SAY examined equals the in-scope edge count for any realistic budget, AND THAT IS WRONG - it was contradicted by an independent blind re-derivation and the code sides with the re-derivation. examined is 0, for EVERY intent, because the declared budget never reaches the solve: power.rs:1612 does `if attach.is_empty() { continue; }` above the first read of budget_current_ua at :1626, and attach is filled from devices_on(net), which is terminal-based. params.json binds terminals to poly/diff; ERC_EM_n2 is {li, met1} and carries none. So every branch current is zero, blech_product = 0 is under any limit, every branch is immortal, and electrical.rs:598's `examined += u64::from(!immortal)` totals zero while the outcome is still Ran. That is a FIFTH fail-open, distinct from the four above and worse: it discards the input rather than biasing it, and Ran-with-examined-0 is indistinguishable from a rule with nothing in scope. FIXED, and this note is kept because the wrong derivation above is worth reading next to its refutation. power::discarded_budget (crates/erc/src/power.rs) now detects the discarded budget exactly - a net declaring a non-zero budget_current_ua whose node_load column sums to 0.0 - and check_ir_drop, check_em_current_density and check_electromigration return Outcome::Refused rather than a silent clean. check_reliability deliberately still Ran: zero current puts every node at nominal, which is the maximum stress that model takes, so it was already fail-closed. The dead 'if attach.is_empty()' guard is gone. Covered by a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current and a_terminal_less_rail_with_no_stated_budget_still_reaches_a_verdict in tests/test_all.rs; real Black/Blech coverage is black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal on ERC_EM_DEV. ERC_EM is also the only EM-family cell whose supply net is declarable by name (TEXT ERC_EM_n2 on li_label at (350,50), joined to the slender met1 through mcon), and LVS_INV draws no met1 at all. THE DECK ROW MUST KEEP NAMING ONE LAYER: ruleset.rs:586 pushes blech_limit once per row while layer/max_density/max_current_per_cut extend once per layer, so a 2-layer row trips the debug_assert_eq at electrical.rs:860 and slice-indexes out of bounds at :899 in release - and both sit ABOVE the intent gate, so it would panic every case in the corpus, in both profiles. The two existing unit tests build one-layer tables by hand and never go through from_deck, which is why this has zero coverage. Filed in docs/SIGNATURE_DEFECTS.md."
+    "note": "Skipped: the corpus runs without design intent. With intent, ERC_EM_n2 carries no device terminal, so a stated budget never reaches the solve and the current rules refuse rather than pass; see a_discarded_current_budget_refuses_the_rules_that_read_a_branch_current in tests/test_all.rs."
    },
    {
     "id": "ERC_EMIG_DEV",
@@ -4444,7 +4429,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "Skipped, not clean \u2014 the corpus path passes intent: None, so `check_electromigration`'s `power.filter(|_| intent.is_usable())` (electrical.rs:868) records Skipped(NoDesignIntent) with examined 0, exactly as ERC_EMIG_MET1 does. THE CELL IS THE POINT, NOT THIS ASSERTION. ERC_EM_DEV was drawn to close the fifth fail-open filed in docs/SIGNATURE_DEFECTS.md: power.rs:1612 does `if attach.is_empty() { continue; }` above the first read of budget_current_ua, and attach comes from devices_on(net), which is TERMINAL-based. ERC_EM_n2 is {li, met1} and carries no device terminal, so ERC_EMIG_MET1's declared budget is discarded and its Ran path examines nothing. ERC_EM_DEV_n0 is diff + li + met1 joined through a drawn licon and a drawn mcon, and the nsdm marker binds an nfet_01v8 whose source and drain both land on that diff \u2014 so devices_on(ERC_EM_DEV_n0) is non-empty and the budget survives. THIS CELL DRAWS THE CORPUS'S FIRST LICON, which is blocking finding F1 ('No fixture cell draws a licon') resolved for this cell only; the cells F1 lists are unchanged. Geometry, all dbu, all multiples of 10 so off_grid (pitch 5) and angle (0/90) are clean: diff 2/0 (0,0)-(500,200); nsdm 10/0 (-50,-50)-(550,250); poly 3/0 (200,-50)-(250,250), 50 overhang each side = poly.diff.min_extension exactly and `violates` is strict, so it passes; licon 4/0 (380,60)-(460,140), strictly inside both diff and li, and x >= 380 clears poly's xhi of 250 so the `licon: poly-li` connectivity row has no host and the gate stays a separate net; li 5/0 (350,50)-(700,150); mcon 6/0 (610,60)-(690,140), strictly inside both li and met1, and x >= 610 clears diff's xhi of 500; met1 7/0 (600,50)-(700,1950), width 100 = met1.min_width exactly and every edge >= 100 = min_edge_length. TEXT 7/5 'ERC_EM_DEV_n0' at (600,50) is the met1 rectangle's lower-left CORNER and binds because GeometryStore::poly_contains_point is boundary-inclusive; TEXT 3/5 'ERC_EM_DEV_n1' at (200,-50) names the gate. Exactly one label per net, so no PortError::ConflictingLabels. No DRC rule in params.json names licon at all, so the new cut adds no DRC host. Topology verified by execution before the cell was authored: devices.len() == 1, kind Mos, model nfet_01v8, terminals [Gate, Source, Drain] = [NetId(1), NetId(0), NetId(0)] (F3 collapses S and D onto the one diff, which is load-bearing HERE \u2014 power.rs counts two terminals on the net, halves the budget and scatter-accumulates both shares back onto one node, so the full declared budget arrives); same_net(diff, li) and same_net(li, met1); net_count 2; ports.net_of('ERC_EM_DEV_n0') == NetId(0). Discrimination: deleting the licon and the mcon gives net_count 4, no joins, the device still recognised, and devices_on(net_of(met1)) EMPTY \u2014 which is precisely the ERC_EM_n2 shape, so the two cuts are what carry the terminal onto the met1 net. THE RAN PATH IS NOW WRITTEN - black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal in tests/test_all.rs, green, every number below derived from the model and the dimensions BEFORE it was executed: chain_is_horizontal((600,50,700,1950)) is 100 >= 1900 = false, so the chain runs in y; met1 taps are the mcon at y=100 and the rail's own centre at y=1000, giving 2 nodes and 1 chain edge, edge_width 100, edge_length 900, 9.0 squares; derate = exp((0.9/8.617333262e-5)*(1/358.15 - 1/383.15)) = 6.704133044734676; allowed = 1000 A/m * 100 nm * derate = 670.4133044734676 uA; the Blech product I*(900/100) clears the 10 uA-um limit for any I above 1.111 uA, so examined is 1 for any realistic budget. A 1000 uA budget is therefore 1 violation at (650,100) on met1 measuring Current(1000.0) against Current(670.4133044734676); a 500 uA budget is 0 violations with examined still 1; and a 1.0 uA budget is a Blech product of 9.0, at or under the stated 10.0 with the exempt side non-strict, so the edge is immortal and examined is 0 with no compare at all. The test runs all three: 1.0-against-500 isolates the Blech exemption (both are far inside the limit, only examined moves) and 500-against-1000 isolates the derating (both are examined, only the violation count moves). The measured current is asserted to a relative 1e-9 rather than exactly - two terminals on one net means the budget is halved and scatter-accumulated back onto one node, and the conjugate-gradient solve leaves about 1e-10 of relative residue on the round trip. Both go through run_case_with_intent, never through this corpus row. The four fail-opens on this rule's magnitude (docs/E2E_AUDIT.md 5.1) are unchanged by this cell \u2014 what it fixes is that the budget reaches the solve at all. Side effects to expect under a firing intent, both filtered out by rule id: em_current_density also fires (li's two chain edges are 100 nm wide, 100 uA allowed, derate 1), and p2p_resistance builds a network for the diff net. THE DECK ROW MUST KEEP NAMING ONE LAYER \u2014 ruleset.rs:586 pushes blech_limit once per row while the other columns extend once per layer, so a two-layer electromigration row trips the debug_assert_eq at electrical.rs:860 and slice-indexes out of bounds at :899 in release, above the intent gate and therefore in every case in the corpus."
+    "note": "Skipped: the corpus runs without design intent. ERC_EM_DEV ties an nfet's diffusion through licon and mcon to a 100 nm met1 rail so its budget reaches the solve; black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal in tests/test_all.rs runs it with intent (1000 uA exceeds the derated 670.4 uA, 500 uA is clean, 1 uA is Blech-immortal)."
    }
   ]
  },

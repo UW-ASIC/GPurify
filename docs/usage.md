@@ -7,7 +7,7 @@ gpurify <command> <layout.gds> --deck <process.deck> --grid <n> [options]
 | Command | Checks | Needs |
 |---|---|---|
 | `drc` | Design rules: width, spacing, enclosure, area, density, grid, angle, vias | the deck |
-| `erc` | Electrical rules: antenna, ties, floating gates and wells, shorts, power grid | the deck; `--intent` for six of them |
+| `erc` | Electrical rules: antenna, ties, floating gates and wells, shorts, power grid | the deck; `--intent` for the voltage, ESD and power-grid rules |
 | `lvs` | The layout's devices and connections against your schematic | `--reference <netlist>` |
 | `pex` | Parasitic resistance, capacitance and, optionally, inductance | the deck's `pex` lines |
 | `all` | All four | a check whose input is missing is reported as skipped, never as passed |
@@ -67,9 +67,11 @@ missing input, a file that could not be read.
 
 ## Design intent
 
-Six electrical rules need facts about the chip that no process deck can know:
+Some electrical rules need facts about the chip that no process deck can know:
 `ir_drop`, `em_current_density`, `electromigration`, `reliability`,
-`hv_domain` and `esd_latchup`. Without `--intent` they report skipped.
+`hv_domain`, `esd_latchup`, `esd_topological`, `gate_oxide`, `drain_source`,
+`well_bias`, `missing_level_shifter` and `domain_crossing`. Without
+`--intent` they report skipped.
 
 ```json
 {
@@ -85,10 +87,20 @@ Six electrical rules need facts about the chip that no process deck can know:
 }
 ```
 
-Net names are the text labels in your layout. A limit you leave out on a net
+Net names are the text labels in your layout. A ground net sits at 0 V and its
+drop is how far it rises (ground bounce); `max_drop_fraction` is a fraction of
+its domain's voltage for either role. A limit you leave out on a net
 means that net is not checked for it, not that it is unlimited. A current
 budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.
+
+The supplies also set the voltages the overstress and domain rules check. A
+power net sits at its domain's voltage and a ground net at 0 V. Every other
+net can reach anything between the lowest and highest supply connected to it
+through transistor source and drain, resistors, diodes and bipolar
+transistors; gates and capacitors pass nothing. Each power net's domain is
+the power domain of the signals it drives, so give every separately powered
+supply its own domain. A file may declare at most 64 domains.
 
 ## Parasitics
 

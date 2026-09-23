@@ -386,6 +386,7 @@ pub fn declared_supplies(power_net: NetId, ground_net: NetId, nominal_mv: f64) -
         declared: true,
         supply_net: vec![first, second],
         supply_role: vec![role_of(first), role_of(second)],
+        supply_domain: vec![gpurify_ingest::intent::DomainId(0); 2],
         supply_voltage: vec![voltage_of(first), voltage_of(second)],
         limit_net: Vec::new(),
         limit: Vec::new(),

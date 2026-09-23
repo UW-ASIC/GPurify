@@ -24,7 +24,8 @@ result from them is weaker than it looks.
 | `tap_distance` | Measures from the corners of the well, so a point midway between two taps can be too far and still pass. `missing_tie` measures the exact furthest point and does not have this problem. |
 | `antenna` | Sidewall (perimeter) collectors are refused, which blocks gf180 and sky130 style rules. Diodes are credited before the metal that reaches them exists. |
 | `angle` | Applies to every layer at once, so you cannot allow 45° on metal while forbidding it on diffusion and vias. |
-| `esd_topological`, `esd_latchup` | A deck cannot describe an ESD clamp, so every pad net is flagged. These rules are not usable for signoff. |
+| `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
+| `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
 
 ## Checks that do not exist yet
 
@@ -38,8 +39,18 @@ result from them is weaker than it looks.
 - Spacing that depends on whether two shapes are on the same net, spacing
   tables indexed by width and run length, and rules conditional on text
   labels.
-- Voltage-aware electrical checks: gate oxide and drain-source overstress,
-  well bias, missing level shifters between power domains.
+- A way to state the voltage or domain of an input signal in the intent file,
+  and checks for inputs driven from a powered-down domain.
+
+## Power grid
+
+- Each supply net is fed from one point: the centre of its highest, then
+  widest, shape. A rail fed from several pads reads more drop and more current
+  near that point than it really has.
+- A net's current budget is shared equally among the devices on it, so one
+  device that draws more than its share reads cooler than it is.
+- `electromigration` and `reliability` use one temperature for the whole run,
+  85 °C, with no self-heating.
 
 ## Shipped decks
 
@@ -50,18 +61,19 @@ records which PDK release its numbers came from.
   numbers.
 - No shipped deck configures `supply_short`, so a short between two supplies
   goes unreported.
+- No shipped deck declares an ESD clamp device, so none carries
+  `esd_topological` or `esd_latchup`, and none carries the voltage rules
+  (`gate_oxide` and the rest). Add `device` statements for your clamp and
+  I/O devices and the rows that name them.
 - `sky130.deck` lacks about 35 rules from the periphery rule manual, among
   them licon.5a to licon.18, difftap.8 to difftap.11, npc and the poly resistor rules.
 
 ## Test coverage
 
-`electromigration`, `esd_latchup`, `ir_drop` and `reliability` run and report,
-but no test yet checks their numbers against an independent answer. Many
-other rules have limits that are foundry conventions rather than physics, so
-their tests prove the rule runs and measures, not that the limit is right for
-your process.
-
-## Speed
-
-LVS on a highly symmetric design can take many refinement rounds, one per
-ambiguous match it has to break.
+`ir_drop`, `electromigration` and `reliability` are checked against numbers
+worked out by hand from Ohm's law, Black's equation with the Blech exemption,
+and the power-law and Arrhenius lifetime model, including values exactly at
+the limit. `esd_latchup` runs and reports, but no test yet checks its numbers
+against an independent answer. Many other rules have limits that are foundry
+conventions rather than physics, so their tests prove the rule runs and
+measures, not that the limit is right for your process.

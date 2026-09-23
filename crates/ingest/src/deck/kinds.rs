@@ -44,6 +44,8 @@ pub(crate) enum Dim {
     LengthPair(&'static str),
     /// `[0deg, 90deg]`; one engine param per element, in degrees.
     AngleList,
+    /// `["model", ..]`, device model names; one engine param per element.
+    Models,
     /// `(name: value, ..)`, a nested set of params.
     Group(&'static [Param]),
 }
@@ -392,9 +394,15 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("min_guard_ring_width", "min_guard_ring_width", Dim::Length),
             p("max_tap_distance", "max_tap_distance", Dim::Length),
+            p("clamps", "clamp", Dim::Models),
         ],
     ),
-    erc("esd_topological", &[0], false, &[]),
+    erc(
+        "esd_topological",
+        &[0],
+        false,
+        &[p("clamps", "clamp", Dim::Models)],
+    ),
     erc("floating_gate", &[], false, &[]),
     erc("floating_well", &[0, 1], false, &[]),
     erc(
@@ -448,6 +456,40 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("supply_short", &[0, 1], false, &[]),
     erc("tie_high_low", &[], false, &[]),
     erc("unconnected_pin", &[0], true, &[]),
+    erc(
+        "gate_oxide",
+        &[],
+        false,
+        &[
+            p("models", "model", Dim::Models),
+            p("max", "max_voltage", Dim::Voltage),
+        ],
+    ),
+    erc(
+        "drain_source",
+        &[],
+        false,
+        &[
+            p("models", "model", Dim::Models),
+            p("max", "max_voltage", Dim::Voltage),
+        ],
+    ),
+    erc(
+        "well_bias",
+        &[],
+        false,
+        &[
+            opt("pmos", "pmos", Dim::Models),
+            opt("nmos", "nmos", Dim::Models),
+        ],
+    ),
+    erc(
+        "missing_level_shifter",
+        &[],
+        false,
+        &[opt("shifters", "shifter", Dim::Models)],
+    ),
+    erc("domain_crossing", &[], false, &[]),
 ];
 
 /// The six PEX keys, each required once per `pex` statement.

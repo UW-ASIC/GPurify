@@ -1,13 +1,14 @@
 //! Supply, substrate and pad integrity: topological but geometry-aware, and
 //! independent of design intent (a supply short is an n-tie and a p-tie on one
-//! conductor, provable from the deck's tap markers).
+//! conductor, provable from the deck's tap markers), except the ESD path, which
+//! needs to know which nets are the rails.
 //!
 //! Data in: the store, nets, devices, [`NetFacts`]. Data out: violations and
 //! one run per row.
 
-use crate::erc::facts::{NetFacts, RoleMask};
+use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
-use crate::erc::{first_vertex, push_net_violations, record_run, Design, Scratch};
+use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::NetId;
 use gpurify_geom::connectivity::components_into;
@@ -15,6 +16,8 @@ use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
 use gpurify_geom::{Dbu, DbuArea};
+use gpurify_ingest::intent::SupplyRole;
+use gpurify_ingest::StrId;
 
 /// One conductor carrying both tap layers.
 #[derive(Debug, Default)]
@@ -49,13 +52,59 @@ pub struct TieHighLowTable {
     pub head: RuleHead,
 }
 
-/// A pad net reaching no protection device. A deck cannot name a clamp model,
-/// so every pad net is flagged.
+/// A pad net with no chain of clamp devices to both a power and a ground supply.
 #[derive(Debug, Default)]
 pub struct EsdTopologicalTable {
     pub head: RuleHead,
     /// Marker layer whose polygons are pads.
     pub pad: Vec<LayerId>,
+    /// Clamp device models per row, CSR.
+    pub clamp_start: Vec<u32>,
+    pub clamp: Vec<StrId>,
+}
+
+/// How many of the two rail kinds (power, ground) `pad` reaches through
+/// devices of the `clamps` models: a clamp from the pad to a supply, then any
+/// chain of clamps between supplies (rail clamps). Another signal net is not a
+/// path. `seen` and `stack` are scratch.
+pub(crate) fn clamp_rails(
+    design: Design<'_>,
+    intent: &IntentMap,
+    clamps: &[StrId],
+    pad: NetId,
+    seen: &mut Vec<bool>,
+    stack: &mut Vec<NetId>,
+) -> u32 {
+    let devices = design.devices;
+    // ponytail: O(nets) reset per pad net; pads are few.
+    seen.clear();
+    seen.resize(design.nets.net_count(), false);
+    stack.clear();
+    stack.push(pad);
+    seen[pad.idx()] = true;
+    let (mut power, mut ground) = (false, false);
+    while let Some(net) = stack.pop() {
+        match intent.supply_net.binary_search(&net) {
+            Ok(row) => match intent.supply_role[row] {
+                SupplyRole::Power => power = true,
+                SupplyRole::Ground => ground = true,
+            },
+            Err(_) if net != pad => continue,
+            Err(_) => {}
+        }
+        for &device in devices.devices_on(net) {
+            if !clamps.contains(&devices.model[device.0 as usize]) {
+                continue;
+            }
+            for &next in devices.terminals_of(device).0 {
+                if next != NetId::NONE && !seen[next.idx()] {
+                    seen[next.idx()] = true;
+                    stack.push(next);
+                }
+            }
+        }
+    }
+    u32::from(power) + u32::from(ground)
 }
 
 /// One bit-or of `bit` per polygon on `layers` into its net's slot of
@@ -333,31 +382,45 @@ pub fn check_tie_high_low(
     }
 }
 
-/// Flag every pad net: a deck cannot list a clamp model, so none is protected.
+/// Flag every pad net that [`clamp_rails`] finds short of both rails.
+/// Measured is the rail kinds reached, limit 2.
 pub fn check_esd_topological(
     design: Design<'_>,
+    intent: &IntentMap,
     table: &EsdTopologicalTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    if !intent.is_usable() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
     let nets = design.nets.net_count();
     let mut on_a_pad: Vec<u32> = Vec::new();
+    let (mut seen, mut stack) = (Vec::new(), Vec::new());
     for row in 0..table.head.len() {
         let before = out.len();
         let rule = table.head.rule[row];
+        let clamps =
+            &table.clamp[table.clamp_start[row] as usize..table.clamp_start[row + 1] as usize];
         on_a_pad.clear();
         on_a_pad.resize(nets + 1, 0);
         mark_nets(design, table.pad[row], 1, &mut on_a_pad);
         let pad_nets = nets_marked(&on_a_pad, 1);
-        push_net_violations(
-            design,
-            &pad_nets,
-            rule,
-            table.head.severity[row],
-            Measurement::Count(0),
-            Measurement::Count(1),
-            out,
-        );
+        for &net in &pad_nets {
+            let rails = clamp_rails(design, intent, clamps, NetId(net), &mut seen, &mut stack);
+            if rails < 2 {
+                push_net_violations(
+                    design,
+                    &[net],
+                    rule,
+                    table.head.severity[row],
+                    Measurement::Count(rails),
+                    Measurement::Count(2),
+                    out,
+                );
+            }
+        }
         let examined = u64::try_from(pad_nets.len()).expect("a net count fits a u64");
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }

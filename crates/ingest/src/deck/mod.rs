@@ -225,6 +225,8 @@ pub enum ParamValue {
     Area(DbuArea),
     /// A layer, for rules parameterised by one.
     Layer(LayerId),
+    /// A device model name a `device` statement declares, interned.
+    Model(StrId),
 }
 
 /// Every rule in the deck, `SoA`.
@@ -326,6 +328,19 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
             .collect();
         layers.push_derived(strings.intern(&row.name), row.op, operands);
     }
+    // A misspelt model would match no device and silently check nothing.
+    for rule in &doc.rules {
+        for (_, stated) in &rule.params {
+            if let ParamSrc::Model(model) = stated {
+                if !doc.devices.iter().any(|device| device.model == *model) {
+                    return Err(DeckError::Malformed(format!(
+                        "rule {}: model \"{model}\" is not declared by any device statement",
+                        rule.id
+                    )));
+                }
+            }
+        }
+    }
     let rules = build_rules(&doc.rules, &layers, strings);
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
     let devices = build_devices(&doc.devices, &layers, strings);
@@ -375,6 +390,7 @@ fn build_rules(declared: &[RuleSrc], layers: &LayerTable, strings: &mut StrTable
             let value = match *stated {
                 ParamSrc::Value(value) => value,
                 ParamSrc::Layer(ref layer) => ParamValue::Layer(layer_of(layers, strings, layer)),
+                ParamSrc::Model(ref model) => ParamValue::Model(strings.intern(model)),
             };
             table.param.push((strings.intern(name), value));
         }
@@ -520,6 +536,7 @@ struct RuleSrc {
 enum ParamSrc {
     Value(ParamValue),
     Layer(String),
+    Model(String),
 }
 
 #[derive(Default)]

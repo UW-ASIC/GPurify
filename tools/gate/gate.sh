@@ -6,7 +6,7 @@ set -u
 S=${S:?set S to a scratch dir holding golden_base}
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "${1:-$HERE/../..}" && pwd)
-MAIN=$(cd "$HERE/../.." && pwd)
+MAIN=$(cd "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
 (cd "$REPO" && CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
   cargo build --release --bin gpurify 2>&1 | grep -E '^error' | head -20)
 OUT=$(mktemp -d "$S/golden_new.XXXX")

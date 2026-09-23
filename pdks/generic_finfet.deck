@@ -110,8 +110,6 @@ rule peak_current_met1 em_current_density(met1, mcon; max_density: 1500A/m, max_
 rule peak_current_met2 em_current_density(met2, via1; max_density: 1500A/m, max_current_per_cut: 90uA)
 rule peak_current_met3_met4 em_current_density(met3, via2, met4, via3; max_density: 3525A/m, max_current_per_cut: 165uA)
 rule peak_current_met5 em_current_density(met5, via4; max_density: 5250A/m, max_current_per_cut: 2700uA)
-rule esd_latchup_pad esd_latchup(met5, diff; min_guard_ring_width: 420nm, max_tap_distance: 15000nm)
-rule esd_pad_reaches_clamp esd_topological(met5)
 rule floating_gate floating_gate()
 rule floating_nwell floating_well(nwell, diff)
 rule gate_oxide_domain_delta hv_domain(; max_delta: 1980mV, isolation: none)
