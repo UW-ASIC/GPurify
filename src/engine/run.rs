@@ -248,89 +248,30 @@ fn run_erc(
         ));
     }
 
-    let design = gpurify_check::erc::Design {
-        store: &loaded.store,
-        nets: &extracted.nets,
-        devices: &extracted.devices,
+    let inputs = gpurify_check::erc::Inputs {
+        design: gpurify_check::Design {
+            store: &loaded.store,
+            nets: &extracted.nets,
+            devices: &extracted.devices,
+        },
+        ports: &extracted.ports,
+        intent: loaded.intent.as_ref(),
+        process: gpurify_check::erc::Process {
+            grid,
+            stack: &loaded.deck.stack,
+            connectivity: &loaded.deck.connectivity,
+        },
+        die,
+        temperature: sign_off_temperature(),
     };
-    let process = gpurify_check::erc::power::Process {
-        grid,
-        stack: &loaded.deck.stack,
-        connectivity: &loaded.deck.connectivity,
-    };
-
-    let mut facts = gpurify_check::erc::NetFacts::default();
-    gpurify_check::erc::classify_nets_into(&extracted.nets, &extracted.devices, &mut facts);
-
-    let mut intent = gpurify_check::erc::IntentMap::default();
-    gpurify_check::erc::resolve_intent_into(
-        loaded.intent.as_ref(),
-        &extracted.ports,
-        &extracted.nets,
-        &mut intent,
-    );
-
-    let mut networks = gpurify_check::erc::NetNetworks::default();
-    let mut power_grid = gpurify_check::erc::PowerGrid::default();
-    if let Err(error) = gpurify_check::erc::power::extract_nets_into(
-        &loaded.store,
-        &extracted.nets,
-        &extracted.devices,
-        process,
-        &mut networks,
-    )
-    .and_then(|()| {
-        gpurify_check::erc::power::extract_into(
-            &loaded.store,
-            &extracted.nets,
-            &extracted.devices,
-            &intent,
-            process,
-            &mut power_grid,
-        )
-    }) {
-        return Ok(StageStatus::Refused(error.to_string()));
-    }
-
-    // `None` means no declared supply; the electrical rules record themselves skipped.
-    let mut solution = gpurify_check::erc::PowerSolution::default();
-    let power = if power_grid.is_empty() {
-        None
-    } else {
-        let mut solve_scratch = gpurify_check::erc::power::SolveScratch::default();
-        if let Err(error) = gpurify_check::erc::power::solve_into(
-            &power_grid,
-            gpurify_check::erc::power::SolveConfig::default(),
-            &mut solve_scratch,
-            &mut solution,
-        ) {
-            return Ok(StageStatus::Refused(error.to_string()));
-        }
-        Some(gpurify_check::erc::Solved {
-            grid: &power_grid,
-            solution: &solution,
-        })
-    };
-
-    let mut scratch = gpurify_check::erc::Scratch::default();
+    let mut result = Ok(());
     append_stage(out, |violations, runs| {
-        rules.run(
-            gpurify_check::erc::RunInputs {
-                design,
-                facts: &facts,
-                intent: &intent,
-                networks: &networks,
-                power,
-                die,
-                grid,
-                operating_temperature: sign_off_temperature(),
-            },
-            &mut scratch,
-            violations,
-            runs,
-        );
+        result = gpurify_check::erc::check(&rules, inputs, violations, runs);
     });
-    Ok(StageStatus::Ran)
+    Ok(result.map_or_else(
+        |error| StageStatus::Refused(error.to_string()),
+        |()| StageStatus::Ran,
+    ))
 }
 
 /// The six layout-only checks on the unreduced graph, then a flat comparison of

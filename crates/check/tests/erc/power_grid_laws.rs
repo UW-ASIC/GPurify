@@ -15,7 +15,7 @@ use crate::common;
 use common::{
     microamps, millivolts, parallel_bundle, random_grid, series_chain, solve, GridBuilder,
 };
-use gpurify_check::erc::power::{self, PowerError, PowerSolution, SolveConfig};
+use gpurify_check::erc::power::{self, PowerError, PowerSolution};
 use gpurify_testgen::{assert_close, assert_close_relative};
 
 /// Oracle: closed form. Resistances in series add, so the drop at the `k`th
@@ -254,7 +254,7 @@ fn a_grid_with_no_pad_is_refused_rather_than_solved() {
 
     let mut scratch = power::SolveScratch::default();
     let mut solution = PowerSolution::default();
-    let result = power::solve_into(&grid, SolveConfig::default(), &mut scratch, &mut solution);
+    let result = power::solve_into(&grid, &mut scratch, &mut solution);
     assert_eq!(result, Err(PowerError::Unanchored));
 }
 
@@ -275,7 +275,7 @@ fn an_island_no_pad_reaches_is_refused_and_named() {
 
     let mut scratch = power::SolveScratch::default();
     let mut solution = PowerSolution::default();
-    let result = power::solve_into(&grid, SolveConfig::default(), &mut scratch, &mut solution);
+    let result = power::solve_into(&grid, &mut scratch, &mut solution);
     assert_eq!(result, Err(PowerError::UnanchoredIsland(2)));
 }
 
@@ -296,7 +296,7 @@ fn a_zero_resistance_edge_is_refused_rather_than_shorted() {
 
     let mut scratch = power::SolveScratch::default();
     let mut solution = PowerSolution::default();
-    let result = power::solve_into(&grid, SolveConfig::default(), &mut scratch, &mut solution);
+    let result = power::solve_into(&grid, &mut scratch, &mut solution);
     assert_eq!(result, Err(PowerError::BadResistance(1)));
 }
 
@@ -355,10 +355,6 @@ fn solving_one_grid_twice_produces_identical_columns() {
     let first = solve(&grid);
     let second = solve(&grid);
 
-    assert_eq!(
-        first.relative_residual.to_bits(),
-        second.relative_residual.to_bits()
-    );
     let bits = |values: &[gpurify_geom::Qty<gpurify_geom::Voltage, -3>]| {
         values.iter().map(|v| v.raw().to_bits()).collect::<Vec<_>>()
     };
@@ -391,20 +387,8 @@ fn one_scratch_solving_two_grids_gives_each_its_own_answer() {
 
     let mut scratch = power::SolveScratch::default();
     let mut solution = PowerSolution::default();
-    power::solve_into(
-        &first_grid,
-        SolveConfig::default(),
-        &mut scratch,
-        &mut solution,
-    )
-    .expect("the chain is anchored");
-    power::solve_into(
-        &second_grid,
-        SolveConfig::default(),
-        &mut scratch,
-        &mut solution,
-    )
-    .expect("the bundle is anchored");
+    power::solve_into(&first_grid, &mut scratch, &mut solution).expect("the chain is anchored");
+    power::solve_into(&second_grid, &mut scratch, &mut solution).expect("the bundle is anchored");
 
     assert_eq!(solution.node_voltage.len(), alone.node_voltage.len());
     for node in 0..alone.node_voltage.len() {

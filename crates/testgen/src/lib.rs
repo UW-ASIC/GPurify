@@ -1,7 +1,6 @@
 //! Generators and oracles for the `GPUVerify` test suite.
 
 pub mod assertions;
-pub mod electrical;
 pub mod gds;
 pub mod graph;
 pub mod netlist;
@@ -14,7 +13,6 @@ pub use assertions::{
     assert_bytes_identical, assert_clean, assert_close, assert_close_relative,
     assert_has_violation, assert_only_violation, assert_rule_ran, assert_violations_eq,
 };
-pub use electrical::{ladder_network, LadderCase};
 pub use graph::{graph_with_partition, GraphCase};
 pub use netlist::{layout_from_netlist, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
 pub use rng::Rng;

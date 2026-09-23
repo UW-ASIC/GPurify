@@ -13,7 +13,7 @@
 
 use gpurify_check::erc::facts::IntentMap;
 use gpurify_check::erc::power;
-use gpurify_check::erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution, SolveConfig};
+use gpurify_check::erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution};
 use gpurify_check::erc::ruleset::RuleHead;
 use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_check::topology::NetId;
@@ -297,7 +297,7 @@ pub fn random_grid(seed: u64, nodes: u32, chords: u32) -> PowerGrid {
 pub fn solve(grid: &PowerGrid) -> PowerSolution {
     let mut scratch = power::SolveScratch::default();
     let mut solution = PowerSolution::default();
-    power::solve_into(grid, SolveConfig::default(), &mut scratch, &mut solution)
+    power::solve_into(grid, &mut scratch, &mut solution)
         .expect("this grid is anchored and every resistance is positive");
     solution
 }

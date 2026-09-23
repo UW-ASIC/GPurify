@@ -127,7 +127,7 @@ fn no_intent_file_resolves_to_a_map_that_says_nothing_was_declared() {
     let ports = gpurify_check::topology::PortTable::default();
     let nets = NetTable::default();
     let mut map = IntentMap::default();
-    gpurify_check::erc::resolve_intent_into(None, &ports, &nets, &mut map);
+    gpurify_check::erc::facts::resolve_intent_into(None, &ports, &nets, &mut map);
 
     assert!(
         !map.declared,
