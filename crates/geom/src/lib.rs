@@ -40,6 +40,7 @@ pub(crate) fn narrow(rows: usize) -> u32 {
 pub mod bbox;
 pub mod boolean;
 pub mod connectivity;
+pub mod derive;
 pub mod ids;
 pub mod index;
 pub mod linalg;

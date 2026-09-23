@@ -61,8 +61,25 @@ impl ValidatedLayer {
         &self.poly_bbox
     }
 
+    /// The polygons whose `keep` flag is set, in order, into `out` (cleared and refilled).
+    pub fn select_into(&self, keep: &[bool], out: &mut ValidatedLayer) {
+        assert_eq!(keep.len(), self.len(), "one flag per polygon");
+        out.reset();
+        for (idx, _) in keep.iter().enumerate().filter(|(_, &k)| k) {
+            let span_start = crate::narrow(out.ring_vert_start.len());
+            let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
+            for ring in start..start + len {
+                let RingRef { xs, ys } = self.ring(ring);
+                out.push_ring(xs, ys, self.ring_poly[ring as usize]);
+            }
+            out.poly_ring_start.push(span_start);
+            out.poly_ring_len.push(len);
+            out.poly_bbox.push(self.poly_bbox[idx]);
+        }
+    }
+
     /// Every ring of one polygon, outer first.
-    pub(crate) fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
+    pub fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
         let start = self.poly_ring_start[idx as usize];
         let len = self.poly_ring_len[idx as usize];
         (start..start + len).map(move |ring| self.ring(ring))
