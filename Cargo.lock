@@ -61,6 +61,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
+name = "fearless_simd"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3772b63c40606beea8fe1f7b06a60de27ceb9bfc2d9dad3427368ca41dc7e62"
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -88,6 +94,7 @@ dependencies = [
 name = "gpurify-check"
 version = "0.1.0"
 dependencies = [
+ "fearless_simd",
  "gpurify-geom",
  "gpurify-ingest",
  "gpurify-testgen",
@@ -99,6 +106,7 @@ dependencies = [
 name = "gpurify-extract"
 version = "0.1.0"
 dependencies = [
+ "fearless_simd",
  "gpurify-check",
  "gpurify-geom",
  "gpurify-ingest",
@@ -112,6 +120,7 @@ dependencies = [
 name = "gpurify-geom"
 version = "0.1.0"
 dependencies = [
+ "fearless_simd",
  "gpurify-testgen",
  "serde",
  "serde_json",
@@ -122,6 +131,7 @@ dependencies = [
 name = "gpurify-ingest"
 version = "0.1.0"
 dependencies = [
+ "fearless_simd",
  "flate2",
  "gpurify-geom",
  "gpurify-testgen",

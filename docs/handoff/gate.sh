@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # usage: gate.sh [repo-dir]  -> builds release bin in that tree, reruns corpus, diffs vs golden_base
-S=/tmp/claude-1000/-home-omare-Documents-Projects-Rust-GPurify/35498cb0-197f-47ef-9353-f5a68560d8eb/scratchpad
+S=${S:?set S to a scratch dir holding golden.sh and golden_base}
 REPO=${1:-/home/omare/Documents/Projects/Rust/GPurify}
 cd $REPO && CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release --no-default-features --bin gpurify 2>&1 | grep -E '^error|warning: unused' | head -20
 OUT=$(mktemp -d $S/golden_new.XXXX)

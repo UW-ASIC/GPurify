@@ -149,8 +149,34 @@ Do not hand-vectorise on a hunch. The order is fixed:
    slower is a normal outcome: report the number and keep the scalar version.**
 
 Below a few hundred elements the scalar loop is the right answer, and saying so
-is a complete result. `wide` is the stable-SIMD dependency (already used by
-`pex`); prefer autovectorisation over intrinsics.
+is a complete result.
+
+`fearless_simd` is the SIMD dependency. A kernel has one shape:
+
+```rust
+/// Public entry: dispatches once, on the whole slice.
+pub fn axpy(a: f64, x: &[f64], y: &mut [f64]) {
+    dispatch!(Level::new(), s => axpy_simd(s, a, x, y));
+}
+
+#[inline(always)]
+fn axpy_simd<S: Simd>(s: S, a: f64, x: &[f64], y: &mut [f64]) {
+    let av = f64x4::splat(s, a);
+    let (xc, xt) = x.as_chunks::<4>();
+    let (yc, yt) = y.as_chunks_mut::<4>();
+    for (xv, yv) in xc.iter().zip(yc) {
+        (f64x4::from_slice(s, yv) + av * f64x4::from_slice(s, xv)).store_slice(yv);
+    }
+    axpy_scalar(a, xt, yt); // tail = the reference implementation
+}
+```
+
+Dispatch at the collection, never per element: a kernel that runs on a
+five-vertex ring is dispatched once for the layer, not once per ring. Keep the
+scalar version as the tail and as the oracle in a differential test. Floats:
+separate `*` and `+`, never `mul_add` (FMA changes bits); never reassociate a
+sum. i64 lanes have no fast multiply on AVX2 and there are no i128 lanes, so an
+exact product that needs i128 stays scalar.
 
 ---
 

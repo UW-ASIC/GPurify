@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 gpurify-geom = { workspace = true }
 thiserror = { workspace = true }
+fearless_simd = { workspace = true }
 flate2 = { workspace = true }
 # `parse_deck` and `parse_intent` read JSON — the deck and the design intent are
 # the only two text formats in `ingest` that are not a stream of records.

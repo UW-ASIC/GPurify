@@ -43,7 +43,7 @@ rayon = "1"
 num-complex = "0.4"
 flate2 = "1"
 thiserror = "1"
-wide = "0.7"
+fearless_simd = "1"
 
 # Some are based off preference, some disagree with branch-less programming principles or using SIMD.
 [workspace.lints.clippy]

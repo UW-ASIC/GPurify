@@ -8,6 +8,7 @@ gpurify-geom = { workspace = true }
 gpurify-ingest = { workspace = true }
 gpurify-check = { workspace = true }
 thiserror = { workspace = true }
+fearless_simd = { workspace = true }
 num-complex = { workspace = true }
 rayon = { workspace = true }
 
