@@ -163,6 +163,13 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
 
     let mut out = DesignIntent::default();
 
+    // ponytail: a domain is one bit of a u64 in ERC's voltage propagation; widen the mask past 64.
+    if file.domains.len() > 64 {
+        return Err(IntentError::Malformed(format!(
+            "{} domains declared; at most 64 are supported",
+            file.domains.len()
+        )));
+    }
     // A domain's index in the `BTreeMap` *is* its `DomainId`.
     let domain_names: Vec<&str> = file.domains.keys().map(String::as_str).collect();
     for (name, spec) in &file.domains {

@@ -600,11 +600,11 @@ fn pads_and_a_clamp() -> (gpurify_testgen::NetlistCase, NetTable, DeviceTable) {
     (case, nets, devices)
 }
 
-/// Oracle: construct-from-answer. A deck cannot name a clamp model, so no pad
-/// net is protected: each of the three rails is one pad net, and each is
-/// flagged at one of its own polygons.
+/// Oracle: construct-from-answer. Without intent no net is known to be a
+/// rail, so a pad cannot be shown to reach one: the rule skips rather than
+/// report every pad clean or every pad flagged.
 #[test]
-fn every_pad_net_is_flagged_when_no_clamp_can_be_listed() {
+fn esd_topological_skips_without_intent() {
     let (case, nets, devices) = pads_and_a_clamp();
     let design = Design {
         store: &case.store,
@@ -615,22 +615,20 @@ fn every_pad_net_is_flagged_when_no_clamp_can_be_listed() {
     let (mut violations, mut runs) = report();
     check_esd_topological(
         design,
+        &gpurify_check::erc::facts::IntentMap::default(),
         &EsdTopologicalTable {
             head: head(id),
             pad: vec![case.layers.rail],
+            clamp_start: vec![0, 1],
+            clamp: vec![case.expected_devices[1].model],
         },
         &mut violations,
         &mut runs,
     );
 
-    assert_eq!(violations.rule.len(), 3);
-    for row in 0..3 {
-        common::assert_at_is_on_a_named_shape(&case.store, &violations, row);
-    }
-    let run = assert_rule_ran(&runs, id);
+    assert!(violations.rule.is_empty());
     assert_eq!(
-        run.examined, 3,
-        "one rail per net, so three distinct pad nets"
+        runs[0].outcome,
+        gpurify_check::report::Outcome::Skipped(gpurify_check::report::SkipReason::NoDesignIntent)
     );
-    assert_eq!(run.violations, 3);
 }

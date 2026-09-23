@@ -3927,40 +3927,25 @@
     "cell": "ERC_ESD",
     "domain": "erc",
     "check": "esd_missing",
-    "expect_violations": 1,
-    "expect_outcome": "Ran",
-    "examined": 1,
-    "examined_min": 1,
+    "expect_violations": 0,
+    "expect_outcome": "Skipped(NoDesignIntent)",
+    "examined": 0,
+    "examined_min": 0,
     "examined_population": "pad_nets",
-    "violations": [
-     {
-      "measured": {
-       "kind": "Count",
-       "value": 0
-      },
-      "at": [
-       0,
-       0
-      ],
-      "layer": "met1"
-     }
-    ],
-    "provenance": "derived_from_geometry",
-    "corroboration": "manifest_agrees",
-    "dispute": null,
-    "strength": "weak",
+    "violations": [],
+    "provenance": "underivable",
+    "corroboration": "manifest_disagrees",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
-     "examined_min",
-     "measured",
-     "at",
-     "layer"
+     "examined_min"
     ],
     "manifest": {
      "expect_violations": 1
     },
-    "note": "The answer is right but the test does not discriminate: `EsdTopologicalTable::clamp_model` is ALWAYS empty - `from_deck`'s arm closes the CSR without pushing anything, because a clamp is a device model NAME and `ParamValue` carries no string. So `protected` is false for every pad net on every input, and this rule flags 100% of pad nets unconditionally. It would report 1 for a pad with a perfect clamp on it."
+    "note": "`check_esd_topological` needs to know which nets are the rails, so it tests `intent.is_usable()`. The corpus runs without design intent, so the rule records Skipped(NoDesignIntent) with examined = 0. A pad is judged by its clamp path to a power and a ground supply, which geometry alone cannot name."
    },
    {
     "id": "ERC_ESD_PASS",
@@ -3968,15 +3953,15 @@
     "domain": "erc",
     "check": "esd_missing",
     "expect_violations": 0,
-    "expect_outcome": "Ran",
+    "expect_outcome": "Skipped(NoDesignIntent)",
     "examined": 0,
     "examined_min": 0,
     "examined_population": "pad_nets",
     "violations": [],
-    "provenance": "derived_from_geometry",
+    "provenance": "underivable",
     "corroboration": "manifest_agrees",
-    "dispute": null,
-    "strength": "vacuous",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
@@ -3985,7 +3970,7 @@
     "manifest": {
      "expect_violations": 0
     },
-    "note": "LVS_INV has no met1 shape, so there are zero pad nets. A test asserting examined > 0 here will fail, correctly: the clean pass is 'the rule found nothing to look at', not 'the rule checked a pad and it was protected'."
+    "note": "`check_esd_topological` needs to know which nets are the rails, so it tests `intent.is_usable()`. The corpus runs without design intent, so the rule records Skipped(NoDesignIntent) with examined = 0. A pad is judged by its clamp path to a power and a ground supply, which geometry alone cannot name."
    },
    {
     "id": "ERC_HV_CROSS",

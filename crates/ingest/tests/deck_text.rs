@@ -81,6 +81,7 @@ fn rules(deck: &Deck, strings: &StrTable) -> Vec<(String, String, Vec<String>, V
                         ParamValue::Count(c) => format!("#{c}"),
                         ParamValue::Flag(f) => format!("{f}"),
                         ParamValue::Layer(l) => names[l.idx()].clone(),
+                        ParamValue::Model(m) => format!("\"{}\"", strings.resolve(m)),
                     };
                     format!("{}={value}", strings.resolve(name))
                 })
@@ -185,6 +186,49 @@ rule cmp density_cmp(met1; window: 50um x 40um, step: 25um x 20um, min: 20%, max
             "min_density=0.2",
             "include_partial_windows=false",
         ]
+    );
+}
+
+#[test]
+fn model_lists_lower_to_one_param_per_model_and_must_name_a_device() {
+    let (deck, strings) = ok(r#"device mos poly model "nfet" terminals [poly, diff, diff]
+device mos met3 model "pfet" terminals [poly, diff, diff]
+rule ox gate_oxide(; models: ["nfet", "pfet"], max: 1.98V)
+rule wb well_bias(; pmos: ["pfet"], nmos: none)
+rule ls missing_level_shifter(; shifters: none)
+rule esd esd_topological(met1; clamps: ["nfet"])
+let both = ["nfet", "pfet"]
+rule ds drain_source(; models: both, max: 3.3V)
+"#);
+    let got = rules(&deck, &strings);
+    assert_eq!(
+        got[0].3,
+        [r#"model="nfet""#, r#"model="pfet""#, "max_voltage=1980"]
+    );
+    assert_eq!(got[1].3, [r#"pmos="pfet""#]);
+    assert!(got[2].3.is_empty());
+    assert_eq!(got[3].3, [r#"clamp="nfet""#]);
+    assert_eq!(
+        got[4].3,
+        [r#"model="nfet""#, r#"model="pfet""#, "max_voltage=3300"]
+    );
+
+    one_error(
+        "rule ox gate_oxide(; models: [nfet], max: 1.98V)",
+        "a model name in quotes",
+    );
+    one_error(
+        "rule ox gate_oxide(; models: [], max: 1.98V)",
+        "needs at least one model",
+    );
+    let typo = parse(
+        r#"device mos poly model "nfet" terminals [poly, diff, diff]
+rule ox gate_oxide(; models: ["nfet_typo"], max: 1.98V)
+"#,
+    );
+    assert!(
+        matches!(typo, Err(DeckError::Malformed(ref why)) if why.contains("nfet_typo")),
+        "a model no device declares checks nothing and must be refused"
     );
 }
 

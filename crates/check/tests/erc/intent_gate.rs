@@ -28,6 +28,7 @@ use gpurify_check::erc::rules::reliability::{
     check_esd_latchup, check_hv_domain, check_reliability, EsdLatchupTable, HvDomainTable,
     ReliabilityTable,
 };
+use gpurify_check::erc::voltage::{propagate_into, NetVoltage};
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
@@ -390,6 +391,7 @@ fn four_domains(case: &NetlistCase, nets: &NetTable, millivolt: [f64; 4]) -> Int
                 }
             })
             .collect(),
+        supply_domain: (0..4).map(gpurify_ingest::intent::DomainId).collect(),
         supply_voltage: rows.iter().map(|&(_, mv)| millivolts(mv)).collect(),
         limit_net: Vec::new(),
         limit: Vec::new(),
@@ -420,6 +422,7 @@ fn hv_domain_skips_without_intent_and_flags_the_straddling_device_with_it() {
     check_hv_domain(
         design,
         &IntentMap::default(),
+        &NetVoltage::default(),
         &table,
         &mut violations,
         &mut runs,
@@ -427,8 +430,17 @@ fn hv_domain_skips_without_intent_and_flags_the_straddling_device_with_it() {
     assert_skipped_for_intent(&runs, &violations, id);
 
     let intent = four_domains(&case, &nets, [3_300.0, 0.0, 0.0, 0.0]);
+    let mut voltage = NetVoltage::default();
+    propagate_into(&nets, &devices, &intent, &mut voltage);
     let (mut violations, mut runs) = empty_report();
-    check_hv_domain(design, &intent, &table, &mut violations, &mut runs);
+    check_hv_domain(
+        design,
+        &intent,
+        &voltage,
+        &table,
+        &mut violations,
+        &mut runs,
+    );
 
     let run = common::run_of(&runs, id);
     assert_eq!(run.outcome, Outcome::Ran);
@@ -460,8 +472,9 @@ fn hv_domain_skips_without_intent_and_flags_the_straddling_device_with_it() {
 /// must skip instead; and with supplies declared it examines every pad net and
 /// every guard ring, and reports the pads that reach no clamp.
 ///
-/// A deck cannot list a clamp model, so all four pad nets are unprotected. That count is decided by the spec the
-/// layout was built from, not read back from the run.
+/// No device is of the listed clamp model, so all four pad nets are
+/// unprotected. That count is decided by the spec the layout was built from,
+/// not read back from the run.
 #[test]
 fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
     let (case, nets, devices) = one_transistor();
@@ -477,6 +490,8 @@ fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
         guard_ring: vec![case.layers.marker],
         min_guard_ring_width: vec![dbu(100)],
         max_tap_distance: vec![dbu(100_000)],
+        clamp_start: vec![0, 1],
+        clamp: vec![rule(99)],
     };
 
     let mut scratch = Scratch::default();
@@ -510,7 +525,7 @@ fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
     );
     assert_eq!(
         run.violations, 4,
-        "no clamp can be listed, so no pad has a path"
+        "no device is a clamp, so no pad has a path"
     );
     assert_eq!(
         violations.rule.iter().filter(|&&r| r == id).count(),
