@@ -1,7 +1,7 @@
 //! The one place a polygon lives.
 //!
 //! Data in: rings as `(LayerId, xs, ys)` in arrival order, via [`GeometryStoreBuilder::push`].
-//! Data out: [`GeometryStore`], SoA columns grouped by layer, plus the arrival permutation.
+//! Data out: [`GeometryStore`], one column per field, rows grouped by layer, plus the arrival permutation.
 
 use crate::bbox::Bbox;
 use crate::ids::{LayerId, PolyId};

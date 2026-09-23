@@ -114,7 +114,7 @@ pub(crate) fn point_in_coords(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
 
 /// One edge of a closed run, carrying the x-interval the sweep orders it on.
 #[derive(Debug, Clone, Copy)]
-struct SweptEdge {
+pub(crate) struct SweptEdge {
     /// Leftmost x. The sort key, and what the binary search compares against.
     xlo: Dbu,
     /// Rightmost x. Where this edge's sweep window closes.
@@ -148,6 +148,11 @@ fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptE
 /// Sweep by `xlo`, testing only edges whose x-intervals overlap: same verdict as
 /// all pairs. Not Shamos–Hoey, whose neighbour argument fails on rectilinear degeneracies.
 pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
+    self_intersects_with(xs, ys, &mut Vec::new())
+}
+
+/// [`self_intersects`] with the edge buffer passed in, for a caller looping over rings.
+pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<SweptEdge>) -> bool {
     let n = xs.len();
     // Under four edges, every pair shares a vertex.
     if n < 4 {
@@ -155,7 +160,7 @@ pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
     }
     let last = u32::try_from(n - 1).expect("a coordinate run is under 2^32 vertices");
 
-    let mut edges: Vec<SweptEdge> = Vec::with_capacity(n);
+    edges.clear();
     for (i, id) in (0..n - 1).zip(0u32..) {
         edges.push(swept_edge(xs, ys, i, i + 1, id));
     }

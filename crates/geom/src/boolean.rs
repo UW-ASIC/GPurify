@@ -727,7 +727,7 @@ mod tests {
 
     /// Oracle: closed form — a keyhole ring denotes an outer minus its hole.
     ///
-    /// The input is the ring KLayout writes for a 1000x1000 square with a
+    /// The input is the ring `KLayout` writes for a 1000x1000 square with a
     /// 400x400 hole: one weakly simple loop that runs in to the hole along
     /// `y = 700` and back out along the same line. `validate_layer_into`
     /// refuses it, so a reader that passed it through refused every layer it
