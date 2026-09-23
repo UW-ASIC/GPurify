@@ -390,8 +390,7 @@ fn a_bipolars_emitter_and_collector_are_not_interchangeable() {
 /// name the layout cannot measure), and must never read as agreement.
 ///
 /// A parameter one side declares and the other does not is not evidence of
-/// agreement; it is a parameter that was never checked, which is the fail-open
-/// shape `docs/VOCABULARY.md` §3 names. The verdict must not be `Match`, and the
+/// agreement; it is a parameter that was never checked, which would fail open. The verdict must not be `Match`, and the
 /// report must name the side that declared it.
 #[test]
 fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
@@ -543,4 +542,21 @@ fn a_comparison_gives_the_same_verdict_on_every_run() {
         first, second,
         "the same comparison produced two different reports"
     );
+}
+
+/// Oracle: construct-from-answer. Twelve hundred floating nets beside one
+/// device are twelve hundred interchangeable nets, each needing its own
+/// tie-break, against a budget of a thousand rounds. The graphs are equal, so
+/// the answer is a match; a budget spent per tie-break says `RoundLimit`.
+#[test]
+fn more_symmetries_than_the_round_budget_still_match() {
+    use gpurify_check::topology::TerminalRole::{Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(1_203);
+    builder.device(DeviceKind::Mos, NCH, &[(Gate, 0), (Source, 1), (Drain, 2)]);
+    let graph = builder.finish();
+    let options = CompareOptions {
+        max_rounds: 1_000,
+        ..decisive()
+    };
+    assert_eq!(compare(&graph, &graph, options), Verdict::Match);
 }

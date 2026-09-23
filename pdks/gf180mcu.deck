@@ -172,7 +172,6 @@ rule EM.poly2 em_current_density(poly2; max_density: 1000A/m, max_current_per_cu
 rule EM.metal1 em_current_density(metal1; max_density: 1000A/m, max_current_per_cut: 210uA)
 rule EM.metal2_metal5 em_current_density(metal2, metal3, metal4, metal5; max_density: 1000A/m, max_current_per_cut: 280uA)
 rule EM.metaltop em_current_density(metaltop; max_density: 1800A/m, max_current_per_cut: 280uA)
-rule ESD.pad_reaches_clamp esd_topological(pad)
 rule floating_gate floating_gate()
 rule NW.floating_nwell floating_well(nwell, nplus)
 rule hv_domain_3p3 hv_domain(; max_delta: 3630mV, isolation: dnwell)

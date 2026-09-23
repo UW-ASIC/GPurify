@@ -5,7 +5,9 @@
 
 use crate::erc::facts::IntentMap;
 use crate::erc::power::Solved;
+use crate::erc::rules::supply::clamp_rails;
 use crate::erc::ruleset::RuleHead;
+use crate::erc::voltage::NetVoltage;
 use crate::erc::{first_vertex, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId};
@@ -13,6 +15,7 @@ use gpurify_geom::ops::{point_in_ring, segments_intersect, Point, Seg};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{prefix, Dbu, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_ingest::StrId;
 
 /// Lifetime under sustained voltage stress: inverse power law times
 /// Arrhenius, per row. The applied stress comes from the solve.
@@ -42,12 +45,15 @@ pub struct HvDomainTable {
     pub isolation: Vec<Option<LayerId>>,
 }
 
-/// Pads without a discharge path, and guard rings too narrow or too far from
-/// a supply tap.
+/// Pads without a clamp path to both rails, and guard rings too narrow or too
+/// far from a supply tap.
 #[derive(Debug, Default)]
 pub struct EsdLatchupTable {
     pub head: RuleHead,
     pub pad: Vec<LayerId>,
+    /// Clamp device models per row, CSR.
+    pub clamp_start: Vec<u32>,
+    pub clamp: Vec<StrId>,
     pub guard_ring: Vec<LayerId>,
     pub min_guard_ring_width: Vec<Dbu>,
     /// Furthest a guard ring may be from a declared supply.
@@ -55,7 +61,8 @@ pub struct EsdLatchupTable {
 }
 
 /// Every node's predicted lifetime against the required one, plus the absolute
-/// voltage cap. A row whose model is unusable or not finite is refused.
+/// voltage cap. A row whose model is unusable is refused; an unstressed node
+/// lasts forever and passes.
 ///
 /// No `discarded_budget` gate: with no current every node sits at nominal, the
 /// largest stress, which is the fail-closed direction.
@@ -109,8 +116,9 @@ pub fn check_reliability(
         if usable {
             hour.clear();
             for &stress in voltage {
+                // A node at 0 V (a ground rail) is unstressed: infinite hours.
                 let h = unit * (reference_stress / stress.raw().abs()).powf(exponent);
-                sound &= h.is_finite();
+                sound &= !h.is_nan();
                 hour.push(h);
             }
         }
@@ -138,7 +146,7 @@ pub fn check_reliability(
                 push(out, applied, cap_limit);
             }
             let hours = Measurement::Ratio(hour[node]);
-            if hours.violates(required_limit, LimitSense::Minimum) {
+            if hour[node].is_finite() && hours.violates(required_limit, LimitSense::Minimum) {
                 push(out, hours, required_limit);
             }
         }
@@ -146,12 +154,14 @@ pub fn check_reliability(
     }
 }
 
-/// Flag every device whose terminals span more than `max_domain_delta`. A
-/// device with a terminal on an undeclared net is not examined; an isolation
-/// layer that will not validate refuses the row.
+/// Flag every device whose terminals span domains more than
+/// `max_domain_delta` apart, each terminal taking the domains of the supplies
+/// that reach it. A device with a terminal no supply reaches is not examined;
+/// an isolation layer that will not validate refuses the row.
 pub fn check_hv_domain(
     design: Design<'_>,
     intent: &IntentMap,
+    voltage: &NetVoltage,
     table: &HvDomainTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
@@ -181,7 +191,7 @@ pub fn check_hv_domain(
         for index in 0..devices.len() {
             let device = DeviceId(u32::try_from(index).expect("a device table indexes with u32"));
             let (terminal_nets, _) = devices.terminals_of(device);
-            let Some(spread) = domain_spread(intent, terminal_nets) else {
+            let Some(spread) = domain_spread(voltage, terminal_nets) else {
                 continue;
             };
             examined += 1;
@@ -204,9 +214,10 @@ pub fn check_hv_domain(
     }
 }
 
-/// Flag every pad net (no clamp model can be listed, so none has a discharge
-/// path) and every guard ring narrower than `min_guard_ring_width` or further
-/// than `max_tap_distance` from a declared supply.
+/// Flag every pad net short of a clamp path to both rails (as
+/// `esd_topological`) and every guard ring narrower than
+/// `min_guard_ring_width` or further than `max_tap_distance` from a declared
+/// supply.
 pub fn check_esd_latchup(
     design: Design<'_>,
     intent: &IntentMap,
@@ -233,6 +244,7 @@ pub fn check_esd_latchup(
             .extend(nets.polys_of(net).iter().map(|&poly| store.poly_bbox(poly)));
     }
 
+    let (mut seen, mut stack) = (Vec::new(), Vec::new());
     let absent = (
         Measurement::Count(0),
         Measurement::Count(1),
@@ -246,6 +258,8 @@ pub fn check_esd_latchup(
         let mut examined = 0u64;
 
         let pad_layer = table.pad[row];
+        let clamps =
+            &table.clamp[table.clamp_start[row] as usize..table.clamp_start[row + 1] as usize];
         for poly in store.polys_on_layer(pad_layer) {
             let pad = PolyId(poly);
             let net = nets.net_of(pad);
@@ -254,15 +268,18 @@ pub fn check_esd_latchup(
             }
             scratch.net_marks[net.idx()] = generation;
             examined += 1;
-            out.push(Violation {
-                rule,
-                layer: pad_layer,
-                severity,
-                at: first_vertex(store, pad),
-                measured: absent.0,
-                limit: absent.1,
-                shapes: (pad, None),
-            });
+            let rails = clamp_rails(design, intent, clamps, net, &mut seen, &mut stack);
+            if rails < 2 {
+                out.push(Violation {
+                    rule,
+                    layer: pad_layer,
+                    severity,
+                    at: first_vertex(store, pad),
+                    measured: Measurement::Count(rails),
+                    limit: Measurement::Count(2),
+                    shapes: (pad, None),
+                });
+            }
         }
 
         let ring_layer = table.guard_ring[row];
@@ -306,18 +323,20 @@ pub fn check_esd_latchup(
     }
 }
 
-/// The widest nominal spread across a device's terminals; `None` when any
-/// terminal is on an undeclared net.
+/// The widest nominal spread across a device's terminals; `None` when no
+/// supply reaches some terminal.
 fn domain_spread(
-    intent: &IntentMap,
+    voltage: &NetVoltage,
     terminal_nets: &[NetId],
 ) -> Option<Qty<Voltage, { prefix::MILLI }>> {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for &net in terminal_nets {
-        let millivolts = intent.nominal_voltage(net)?.raw();
-        lo = lo.min(millivolts);
-        hi = hi.max(millivolts);
+        if !voltage.known(net) {
+            return None;
+        }
+        lo = lo.min(voltage.nominal_lo[net.idx()]);
+        hi = hi.max(voltage.nominal_hi[net.idx()]);
     }
     (hi >= lo).then(|| Qty::new(hi - lo))
 }

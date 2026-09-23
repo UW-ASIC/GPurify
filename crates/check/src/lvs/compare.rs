@@ -16,7 +16,8 @@ use std::cmp::Ordering;
 /// How to run a comparison.
 #[derive(Debug, Clone, Copy)]
 pub struct CompareOptions {
-    /// Bound on refinement rounds; exceeding it is [`Inconclusive::RoundLimit`].
+    /// Bound on refinement rounds in a row between tie-breaks; exceeding it is
+    /// [`Inconclusive::RoundLimit`].
     pub max_rounds: u32,
     /// Relative parameter tolerance: `|a - b| <= tol * max(|a|, |b|)`.
     pub param_tolerance: f64,

@@ -487,8 +487,7 @@ fn a_reliability_duty_cycle_outside_the_unit_interval_is_refused() {
 /// a rule reporting the same wrong number five times.
 ///
 /// Only the rows measuring a voltage are the cap's; the lifetime half of this
-/// rule reports against a different limit and is read by
-/// `docs/NEED_TESTING.md`, not here. There must be exactly five of them,
+/// rule reports against a different limit and is not checked here. There must be exactly five of them,
 /// because the grid has five nodes and every one of them is over the cap.
 #[test]
 fn a_node_over_the_absolute_voltage_cap_is_reported_with_its_own_voltage() {

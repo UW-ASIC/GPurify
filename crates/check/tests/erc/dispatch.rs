@@ -16,8 +16,9 @@ use crate::common;
 use common::{head, manufacturing_grid, operating_temperature, rule};
 use gpurify_check::erc::facts::{IntentMap, NetFacts};
 use gpurify_check::erc::power::NetNetworks;
-use gpurify_check::erc::rules::{antenna, electrical, reliability, supply, topology};
+use gpurify_check::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
 use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
+use gpurify_check::erc::voltage::NetVoltage;
 use gpurify_check::erc::{Design, ErcError, Scratch};
 use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
@@ -36,17 +37,23 @@ fn id_of(kind: &str) -> StrId {
         .iter()
         .position(|&k| k == kind)
         .unwrap_or_else(|| panic!("{kind} is not a kind this crate implements"));
-    rule(u32::try_from(index).expect("nineteen kinds"))
+    rule(u32::try_from(index).expect("twenty-four kinds"))
 }
 
-/// The six kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 6] = [
+/// The kinds that cannot answer their question without design intent.
+const INTENT_GATED: [&str; 12] = [
+    "domain_crossing",
+    "drain_source",
     "electromigration",
     "em_current_density",
     "esd_latchup",
+    "esd_topological",
+    "gate_oxide",
     "hv_domain",
     "ir_drop",
+    "missing_level_shifter",
     "reliability",
+    "well_bias",
 ];
 
 fn ohms(value: f64) -> Qty<Resistance, { prefix::BASE }> {
@@ -69,11 +76,10 @@ fn density(value: f64) -> Qty<CurrentDensity, { prefix::BASE }> {
     Qty::new(value)
 }
 
-/// One row of every one of the nineteen kinds, all naming layers that exist in
-/// the store below.
+/// One row of every kind, all naming layers that exist in the store below.
 #[allow(
     clippy::too_many_lines,
-    reason = "nineteen tables written out once is the point of the test"
+    reason = "every table written out once is the point of the test"
 )]
 fn every_kind() -> RuleSet {
     let base = LayerId(0);
@@ -119,6 +125,8 @@ fn every_kind() -> RuleSet {
         esd_topological: supply::EsdTopologicalTable {
             head: head(id_of("esd_topological")),
             pad: vec![LayerId(0)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
         },
 
         antenna: antenna::AntennaTable {
@@ -201,6 +209,36 @@ fn every_kind() -> RuleSet {
             guard_ring: vec![LayerId(1)],
             min_guard_ring_width: vec![dbu(100)],
             max_tap_distance: vec![dbu(100_000)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
+        },
+
+        gate_oxide: domain::ModelLimitTable {
+            head: head(id_of("gate_oxide")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+            max_voltage: vec![millivolts(1_980.0)],
+        },
+        drain_source: domain::ModelLimitTable {
+            head: head(id_of("drain_source")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+            max_voltage: vec![millivolts(1_980.0)],
+        },
+        well_bias: domain::WellBiasTable {
+            head: head(id_of("well_bias")),
+            pmos_start: vec![0, 1],
+            pmos: vec![rule(900)],
+            nmos_start: vec![0, 0],
+            nmos: Vec::new(),
+        },
+        missing_level_shifter: domain::MissingLevelShifterTable {
+            head: head(id_of("missing_level_shifter")),
+            shifter_start: vec![0, 0],
+            shifter: Vec::new(),
+        },
+        domain_crossing: domain::DomainCrossingTable {
+            head: head(id_of("domain_crossing")),
         },
     }
 }
@@ -211,6 +249,7 @@ struct Cell {
     nets: NetTable,
     devices: DeviceTable,
     facts: NetFacts,
+    voltage: NetVoltage,
     networks: NetNetworks,
 }
 
@@ -225,6 +264,7 @@ impl Cell {
             nets: NetTable::default(),
             devices: DeviceTable::default(),
             facts: NetFacts::default(),
+            voltage: NetVoltage::default(),
             networks: NetNetworks::default(),
         }
     }
@@ -238,6 +278,7 @@ impl Cell {
             },
             facts: &self.facts,
             intent,
+            voltage: &self.voltage,
             networks: &self.networks,
             power: None,
             die: Bbox {
@@ -252,8 +293,8 @@ impl Cell {
     }
 }
 
-/// Oracle: construct-from-answer. Nineteen configured rows must produce
-/// nineteen run rows, one per row, each attributable to its own rule id. This
+/// Oracle: construct-from-answer. One configured row per kind must produce
+/// one run row per kind, one per row, each attributable to its own rule id. This
 /// comparison is named in `RuleSet::len`'s own doc comment as the thing that
 /// catches a transform returning early without recording itself — the exact
 /// shape of a false-clean result.
@@ -290,13 +331,13 @@ fn every_configured_rule_row_produces_exactly_one_run_row() {
     assert_eq!(ids.len(), runs.len(), "two run rows share one rule id");
 }
 
-/// Oracle: construct-from-answer. With no design intent the six gated kinds
-/// must say so and the thirteen others must run anyway. Both halves matter: a
+/// Oracle: construct-from-answer. With no design intent the gated kinds
+/// must say so and the others must run anyway. Both halves matter: a
 /// gated rule reporting clean is the failure this crate is built against, and
 /// an ungated rule skipping would quietly stop checking a design that needs no
 /// intent file at all.
 #[test]
-fn without_intent_exactly_the_six_gated_kinds_record_themselves_skipped() {
+fn without_intent_exactly_the_gated_kinds_record_themselves_skipped() {
     let rules = every_kind();
     let cell = Cell::new();
     let intent = IntentMap::default();
@@ -444,12 +485,10 @@ fn running_one_rule_set_twice_produces_identical_rows() {
 /// A deck holding one rule row per `(id, kind)` pair, with no layers and no
 /// parameters.
 ///
-/// Three of the nineteen kinds take neither — `floating_gate`, `tie_high_low`
+/// Some kinds take neither — `floating_gate`, `tie_high_low`
 /// and `ir_drop` are configuration and nothing else — so a deck of those is the
 /// one shape [`RuleSet::from_deck`] can be handed from outside this workspace.
-/// The parameter *names* the other sixteen expect are an Implementation-Phase
-/// choice that no frozen signature states, which is why the rows below carry
-/// none; see `docs/NEED_TESTING.md`.
+/// The rows below carry no parameters; each kind's own tests cover those.
 fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) {
     let ids: Vec<StrId> = rows.iter().map(|&(id, _)| strings.intern(id)).collect();
     let spec = rows

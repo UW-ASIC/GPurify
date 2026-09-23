@@ -5,7 +5,7 @@
 ```
 _source/conformance.gds   every cell, in one file
 drc/  erc/  lvs/  pex/    94 + 23 + 16 + 27 single-cell extracts of the same cells
-params.json               the deck: layers, rules, limits, connectivity, process stack
+params.deck               the deck: layers, rules, limits, connectivity, process stack
 klayout/drc_oracle.rb     a KLayout script from the old tree; not used by this suite
 manifest.json             the OLD tree's answers. Historical record. Do not edit.
 expectations.json         the re-derived answers. What the harness reads.
@@ -49,7 +49,7 @@ same failure as trusting them.
 
 ### The 45 vacuous DRC cases
 
-`docs/TESTING.md` records the corpus's known weakness: of the 94 DRC cases, 45
+The corpus's known weakness: of the 94 DRC cases, 45
 expect zero violations, and in the old suite an empty violation table was also
 what a rule that never ran produced. `report::RuleRun` can finally tell the
 difference, so every case here carries `expect_outcome` and `examined_min`

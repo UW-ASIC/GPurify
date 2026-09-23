@@ -1,7 +1,7 @@
 //! The layout-only checks, and the `RuleRun` discipline they are the crate's
 //! only carrier of.
 //!
-//! `docs/TESTING.md` records why: half the DRC corpus of the suite this project
+//! Why: half the DRC corpus of the suite this project
 //! replaced asserted only that nothing was found, so a rule that never executed
 //! passed every one of them. A clean result is therefore two claims, not one —
 //! *this rule ran, it examined N things, and it found nothing* — and both are

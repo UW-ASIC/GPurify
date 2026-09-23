@@ -228,7 +228,6 @@ rule floating_gate floating_gate()
 rule ir_drop ir_drop()
 rule multiple_drivers multiple_drivers(; max: 1)
 rule tie_high_low warning tie_high_low()
-rule esd_pad_reaches_clamp esd_topological(dfpad)
 rule soft_connection_through_activ soft_connection(activ)
 rule unconnected_conductor unconnected_pin(activ, gatpoly, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2)
 

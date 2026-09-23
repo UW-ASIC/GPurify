@@ -13,7 +13,7 @@
 
 use crate::erc::centre;
 use crate::erc::facts::IntentMap;
-use crate::topology::net::{intra_layer_edges_into, via_edges_into};
+use crate::topology::net::{intra_layer_edges_into, via_cuts_into};
 use crate::topology::{csr_run, DeviceTable, NetId, NetTable};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::Point;
@@ -754,8 +754,9 @@ pub fn extract_into(
     }
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
-    let both_noded =
-        |&(a, b, _): &Link| shape_of_poly[a as usize] != NONE && shape_of_poly[b as usize] != NONE;
+    let both_noded = |&(a, b, _, _): &Link| {
+        shape_of_poly[a as usize] != NONE && shape_of_poly[b as usize] != NONE
+    };
     links.metal.retain(both_noded);
     links.via.retain(both_noded);
 
@@ -820,7 +821,7 @@ pub fn extract_into(
         let poly = shape[owner];
         out.node_poly.push(poly);
         out.node_net.push(intent.supply_net[supply]);
-        out.node_nominal.push(intent.supply_voltage[supply]);
+        out.node_nominal.push(intent.held_at(supply));
         out.node_layer.push(store.poly_layer(poly));
         out.node_at
             .push(tap_point(store.poly_bbox(poly), taps.node_along[i]));
@@ -865,7 +866,7 @@ pub fn extract_into(
                 .expect("every shape carries a tap at its own centre");
         out.source_node
             .push(u32::try_from(at).expect("a node index is a u32"));
-        out.source_voltage.push(intent.supply_voltage[supply]);
+        out.source_voltage.push(intent.held_at(supply));
     }
 
     push_edges(
@@ -944,7 +945,7 @@ fn push_edges(
         tap_point(host, taps.node_along[n])
     };
     let [(metal, metal_req), (via, via_req)] = links;
-    for (link, &(a, b, layer)) in metal.iter().enumerate() {
+    for (link, &(a, b, layer, _)) in metal.iter().enumerate() {
         let (from, to) = (
             taps.req_node[metal_req + 2 * link],
             taps.req_node[metal_req + 2 * link + 1],
@@ -962,7 +963,7 @@ fn push_edges(
             kind: EdgeKind::Metal,
         });
     }
-    for (link, &(a, b, cut)) in via.iter().enumerate() {
+    for (link, &(a, b, cut, _)) in via.iter().enumerate() {
         // One square of the cut layer per cut; each cut is its own edge.
         push(Edge {
             from: taps.req_node[via_req + 2 * link],
@@ -1217,15 +1218,17 @@ fn sheet_resistances(process: Process<'_>, layers: usize) -> Result<Vec<f64>, Po
     Ok(sheet)
 }
 
-/// Two connected polygons and the layer joining them.
-type Link = (u32, u32, LayerId);
+/// Two connected polygons, the layer joining them, and the cut polygon both
+/// ends are tapped under (`NONE` for a metal touch, tapped where they meet).
+type Link = (u32, u32, LayerId, u32);
 
 /// Every connection between two conductor polygons, by kind.
 #[derive(Debug, Default)]
 struct Connections {
     /// Touching pairs on one conductor layer, with that layer.
     metal: Vec<Link>,
-    /// Pairs joined by one cut, with the cut layer (four cuts, four rows).
+    /// Pairs joined by one cut, with the cut layer and the cut (four cuts,
+    /// four rows).
     via: Vec<Link>,
 }
 
@@ -1234,6 +1237,7 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
     out.via.clear();
 
     let mut pairs: Vec<(u32, u32)> = Vec::new();
+    let mut cuts: Vec<(u32, u32, u32)> = Vec::new();
     let touching: &[LayerId] = if connectivity.intra_layer_touch {
         &connectivity.conductors
     } else {
@@ -1242,12 +1246,14 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
     for &layer in touching {
         intra_layer_edges_into(store, layer, &mut pairs);
         out.metal.reserve(pairs.len());
-        out.metal.extend(pairs.iter().map(|&(a, b)| (a, b, layer)));
+        out.metal
+            .extend(pairs.iter().map(|&(a, b)| (a, b, layer, NONE)));
     }
     for (row, &cut) in connectivity.via_cut.iter().enumerate() {
-        via_edges_into(store, cut, connectivity.via_connects[row], &mut pairs);
-        out.via.reserve(pairs.len());
-        out.via.extend(pairs.iter().map(|&(a, b)| (a, b, cut)));
+        via_cuts_into(store, cut, connectivity.via_connects[row], &mut cuts);
+        out.via.reserve(cuts.len());
+        out.via
+            .extend(cuts.iter().map(|&(poly, a, b)| (a, b, cut, poly)));
     }
 }
 
@@ -1286,8 +1292,8 @@ impl TapTable {
         index
     }
 
-    /// Request both ends of every link (`a` then `b`, each where the other
-    /// lands on it); returns the first request index.
+    /// Request both ends of every link (`a` then `b`): under the cut for a
+    /// via, else where the other shape lands; returns the first request index.
     fn push_links(
         &mut self,
         store: &GeometryStore,
@@ -1295,10 +1301,16 @@ impl TapTable {
         shape_of: impl Fn(u32) -> u32,
     ) -> usize {
         let first = self.req_shape.len();
-        for &(a, b, _) in links {
+        for &(a, b, _, cut) in links {
             let (host_a, host_b) = (store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
-            self.push(shape_of(a), tap_on(host_a, host_b));
-            self.push(shape_of(b), tap_on(host_b, host_a));
+            let (at_a, at_b) = if cut == NONE {
+                (host_b, host_a)
+            } else {
+                let under = store.poly_bbox(PolyId(cut));
+                (under, under)
+            };
+            self.push(shape_of(a), tap_on(host_a, at_a));
+            self.push(shape_of(b), tap_on(host_b, at_b));
         }
         first
     }
@@ -1546,7 +1558,7 @@ pub fn extract_nets_into(
     // Links sorted by net (both ends share it) so each net's run is a slice.
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
-    let by_net = |&(a, b, layer): &Link| (nets.net_of(PolyId(a)).0, a, b, layer.0);
+    let by_net = |&(a, b, layer, cut): &Link| (nets.net_of(PolyId(a)).0, a, b, layer.0, cut);
     links.metal.sort_unstable_by_key(by_net);
     links.via.sort_unstable_by_key(by_net);
 
@@ -1649,7 +1661,7 @@ pub fn extract_nets_into(
 
 /// One net's run of a link list sorted by net.
 fn net_slice<'a>(links: &'a [Link], net: u32, nets: &NetTable) -> &'a [Link] {
-    let of = |&(a, _, _): &Link| nets.net_of(PolyId(a)).0;
+    let of = |&(a, _, _, _): &Link| nets.net_of(PolyId(a)).0;
     let from = links.partition_point(|link| of(link) < net);
     let to = from + links[from..].partition_point(|link| of(link) == net);
     &links[from..to]

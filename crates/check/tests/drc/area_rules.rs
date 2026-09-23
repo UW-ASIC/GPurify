@@ -152,8 +152,7 @@ fn a_merged_figure_below_the_limit_is_reported_once_with_its_merged_area() {
 /// `min_enclosed_area` reports at *a* vertex of the hole ring without
 /// saying which, so the coordinate is asserted against the four the hole has —
 /// `(±50, ±100)` — rather than against a fifth point the interface never
-/// promised. Which of the four is a Definition-Phase gap, recorded in
-/// `docs/NEED_TESTING.md`.
+/// promised. Which of the four is not specified.
 #[test]
 fn a_hole_one_square_unit_under_the_limit_is_reported_at_the_hole() {
     let case = layout_with_violation(

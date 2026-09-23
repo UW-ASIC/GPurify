@@ -1,11 +1,12 @@
-//! The nineteen tables, the deck parser that fills them, and the dispatcher.
+//! The twenty-four tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
 
 use crate::erc::facts::{IntentMap, NetFacts};
 use crate::erc::power::{NetNetworks, Solved};
-use crate::erc::rules::{antenna, electrical, reliability, supply, topology};
+use crate::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
+use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
@@ -15,18 +16,22 @@ use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule kind this crate implements, as the deck spells it. Any other
 /// kind belongs to another domain and is stepped over.
-pub const KINDS: [&str; 19] = [
+pub const KINDS: [&str; 24] = [
     "antenna",
     "antenna_electrical",
     "density_cmp",
+    "domain_crossing",
+    "drain_source",
     "electromigration",
     "em_current_density",
     "esd_latchup",
     "esd_topological",
     "floating_gate",
     "floating_well",
+    "gate_oxide",
     "hv_domain",
     "ir_drop",
+    "missing_level_shifter",
     "missing_tie",
     "multiple_drivers",
     "p2p_resistance",
@@ -35,6 +40,7 @@ pub const KINDS: [&str; 19] = [
     "supply_short",
     "tie_high_low",
     "unconnected_pin",
+    "well_bias",
 ];
 
 /// The two columns every rule table has.
@@ -81,6 +87,12 @@ pub struct RuleSet {
     pub reliability: reliability::ReliabilityTable,
     pub hv_domain: reliability::HvDomainTable,
     pub esd_latchup: reliability::EsdLatchupTable,
+
+    pub gate_oxide: domain::ModelLimitTable,
+    pub drain_source: domain::ModelLimitTable,
+    pub well_bias: domain::WellBiasTable,
+    pub missing_level_shifter: domain::MissingLevelShifterTable,
+    pub domain_crossing: domain::DomainCrossingTable,
 }
 
 /// Everything one run reads, borrowed.
@@ -89,6 +101,8 @@ pub struct RunInputs<'a> {
     pub design: Design<'a>,
     pub facts: &'a NetFacts,
     pub intent: &'a IntentMap,
+    /// What each net can reach from the declared supplies.
+    pub voltage: &'a NetVoltage,
     pub networks: &'a NetNetworks,
     /// The solved supply grid, or `None` when intent declared no supplies.
     pub power: Option<Solved<'a>>,
@@ -263,6 +277,35 @@ impl Row<'_> {
         }
     }
 
+    /// Every model named by a repeated `param`, in deck order; empty when absent.
+    fn models(&self, param: &'static str) -> Result<Vec<StrId>, ErcError> {
+        let Some(name) = self.strings.get(param) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for &(key, value) in self.rules.params_of(self.spec) {
+            if key == name {
+                match value {
+                    ParamValue::Model(model) => out.push(model),
+                    _ => return Err(self.wrong_type(param)),
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// At least one model.
+    fn need_models(&self, param: &'static str) -> Result<Vec<StrId>, ErcError> {
+        let models = self.models(param)?;
+        if models.is_empty() {
+            return Err(ErcError::MissingParam {
+                rule: self.name(),
+                param,
+            });
+        }
+        Ok(models)
+    }
+
     fn flag(&self, param: &'static str, absent: bool) -> Result<bool, ErcError> {
         match self.find(param) {
             None => Ok(absent),
@@ -421,18 +464,68 @@ impl RuleSet {
                     let layers = row.layers(2)?;
                     let min_guard_ring_width = row.length("min_guard_ring_width")?;
                     let max_tap_distance = row.length("max_tap_distance")?;
+                    let clamps = row.need_models("clamp")?;
                     let table = &mut set.esd_latchup;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
+                    table.clamp.extend(clamps);
+                    close_csr(&mut table.clamp_start, table.clamp.len());
                     table.guard_ring.push(layers[1]);
                     table.min_guard_ring_width.push(min_guard_ring_width);
                     table.max_tap_distance.push(max_tap_distance);
                 }
                 "esd_topological" => {
                     let layers = row.layers(1)?;
+                    let clamps = row.need_models("clamp")?;
                     let table = &mut set.esd_topological;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
+                    table.clamp.extend(clamps);
+                    close_csr(&mut table.clamp_start, table.clamp.len());
+                }
+                kind @ ("gate_oxide" | "drain_source") => {
+                    row.layers(0)?;
+                    let models = row.need_models("model")?;
+                    let max_voltage = Qty::new(row.positive("max_voltage")?);
+                    let table = if kind == "gate_oxide" {
+                        &mut set.gate_oxide
+                    } else {
+                        &mut set.drain_source
+                    };
+                    row.head(&mut table.head)?;
+                    table.model.extend(models);
+                    close_csr(&mut table.model_start, table.model.len());
+                    table.max_voltage.push(max_voltage);
+                }
+                "well_bias" => {
+                    row.layers(0)?;
+                    let pmos = row.models("pmos")?;
+                    let nmos = row.models("nmos")?;
+                    // A row naming no model would check nothing.
+                    if pmos.is_empty() && nmos.is_empty() {
+                        return Err(ErcError::MissingParam {
+                            rule: row.name(),
+                            param: "pmos",
+                        });
+                    }
+                    let table = &mut set.well_bias;
+                    row.head(&mut table.head)?;
+                    table.pmos.extend(pmos);
+                    close_csr(&mut table.pmos_start, table.pmos.len());
+                    table.nmos.extend(nmos);
+                    close_csr(&mut table.nmos_start, table.nmos.len());
+                }
+                "missing_level_shifter" => {
+                    row.layers(0)?;
+                    let shifters = row.models("shifter")?;
+                    let table = &mut set.missing_level_shifter;
+                    row.head(&mut table.head)?;
+                    table.shifter.extend(shifters);
+                    close_csr(&mut table.shifter_start, table.shifter.len());
+                }
+                "domain_crossing" => {
+                    row.layers(0)?;
+                    row.head(&mut set.domain_crossing.head)?;
                 }
                 "floating_gate" => {
                     row.layers(0)?;
@@ -578,6 +671,11 @@ impl RuleSet {
             &self.reliability.head,
             &self.hv_domain.head,
             &self.esd_latchup.head,
+            &self.gate_oxide.head,
+            &self.drain_source.head,
+            &self.well_bias.head,
+            &self.missing_level_shifter.head,
+            &self.domain_crossing.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -601,6 +699,7 @@ impl RuleSet {
             design,
             facts,
             intent,
+            voltage,
             networks,
             power,
             die,
@@ -617,7 +716,7 @@ impl RuleSet {
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);
         supply::check_missing_tie(design, &self.missing_tie, scratch, out, runs);
         supply::check_tie_high_low(design, facts, &self.tie_high_low, out, runs);
-        supply::check_esd_topological(design, &self.esd_topological, out, runs);
+        supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);
         antenna::check_antenna_electrical(design, &self.antenna_electrical, scratch, out, runs);
@@ -658,7 +757,20 @@ impl RuleSet {
             out,
             runs,
         );
-        reliability::check_hv_domain(design, intent, &self.hv_domain, out, runs);
+        reliability::check_hv_domain(design, intent, voltage, &self.hv_domain, out, runs);
         reliability::check_esd_latchup(design, intent, &self.esd_latchup, scratch, out, runs);
+
+        domain::check_gate_oxide(design, intent, voltage, &self.gate_oxide, out, runs);
+        domain::check_drain_source(design, intent, voltage, &self.drain_source, out, runs);
+        domain::check_well_bias(design, intent, voltage, &self.well_bias, out, runs);
+        domain::check_missing_level_shifter(
+            design,
+            intent,
+            voltage,
+            &self.missing_level_shifter,
+            out,
+            runs,
+        );
+        domain::check_domain_crossing(design, intent, voltage, &self.domain_crossing, out, runs);
     }
 }

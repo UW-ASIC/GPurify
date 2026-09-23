@@ -494,7 +494,7 @@ fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
 // ---------------------------------------------------------------------------
 // The four intent-gated ERC rules, on their *ran* path.
 //
-// `docs/CORRECTNESS_MAP.md` §3: `electromigration`, `esd_latchup`, `ir_drop`
+// `electromigration`, `esd_latchup`, `ir_drop`
 // and `reliability` each have one corpus case, and every one of them asserts
 // `Skipped(NoDesignIntent)`. Those cases are regression guards on the gate and
 // stay exactly as they are — they run through `common::run_case`, which passes
@@ -825,11 +825,11 @@ fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell
 
     assert_eq!(
         pad.measured,
-        Measurement::Count(0),
-        "no clamp is spellable from a deck, so the pad has no discharge path at \
-         all — and an absent path is Count(0), not an infinite resistance"
+        Measurement::Count(1),
+        "the pad net is ERC_HV_n0, the declared power supply, so it reaches the \
+         power rail by being it; ERC_HV has no clamp device, so no ground rail"
     );
-    assert_eq!(pad.limit, Measurement::Count(1));
+    assert_eq!(pad.limit, Measurement::Count(2));
     assert_eq!(at_of(pad), (200, 200));
     assert_eq!(pad.layer, layer_of(&run, "met1"));
     assert_eq!(pad.severity, Severity::Error);

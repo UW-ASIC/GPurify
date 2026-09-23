@@ -5,11 +5,7 @@
 //! [`Parasitic`], and the builders that assemble a [`ProcessStack`] and a
 //! [`NetTable`] from the scale corpus.
 //!
-//! The serialiser is written out rather than reached for through `Debug`
-//! because `Qty`'s `Debug` is a frozen signature over a `todo!()` body until
-//! the Implementation-Phase (see `docs/NEED_TESTING.md`), and a determinism
-//! check that panics inside its own comparison proves nothing. Bits are the
-//! honest form anyway: `to_bits` distinguishes two `f64` that print the same.
+//! The serialiser writes bits rather than going through `Debug`: `to_bits` distinguishes two `f64` that print the same.
 
 #![allow(dead_code, reason = "each test binary links only the fixtures it uses")]
 
