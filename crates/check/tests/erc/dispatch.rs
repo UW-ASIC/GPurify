@@ -625,18 +625,35 @@ fn every_kind_the_list_names_is_a_kind_from_deck_recognises() {
     }
 }
 
-/// Oracle: construct-from-answer. The shipped deck's `electromigration` rows
-/// span 2 and 4 layers; every layer must carry its own row's Blech limit.
+/// Five `electromigration` rows spanning 2 and 4 layers.
+const EM_DECK: &str = "grid 5nm
+layer li = gds(1, 0)
+layer licon = gds(2, 0)
+layer met1 = gds(3, 0)
+layer mcon = gds(4, 0)
+layer met2 = gds(5, 0)
+layer via1 = gds(6, 0)
+layer met3 = gds(7, 0)
+layer via2 = gds(8, 0)
+layer met4 = gds(9, 0)
+layer via3 = gds(10, 0)
+layer met5 = gds(11, 0)
+layer via4 = gds(12, 0)
+rule em_li electromigration(li, licon; max_density: 280A/m, max_current_per_cut: 80uA, blech_limit: 15000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met1 electromigration(met1, mcon; max_density: 1000A/m, max_current_per_cut: 80uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met2 electromigration(met2, via1; max_density: 1000A/m, max_current_per_cut: 60uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met3_met4 electromigration(met3, via2, met4, via3; max_density: 2350A/m, max_current_per_cut: 110uA, blech_limit: 126750uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met5 electromigration(met5, via4; max_density: 3500A/m, max_current_per_cut: 1800uA, blech_limit: 189000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+";
+
+/// Oracle: construct-from-answer. `electromigration` rows spanning 2 and 4
+/// layers; every layer must carry its own row's Blech limit.
 #[test]
 fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
     let mut strings = StrTable::default();
-    let deck = gpurify_ingest::deck::parse_deck(
-        include_str!("../../../../pdks/generic_finfet.deck"),
-        manufacturing_grid(),
-        &mut strings,
-    )
-    .expect("the shipped deck parses");
-    let rules = RuleSet::from_deck(&deck, &strings).expect("the shipped deck is valid erc");
+    let deck = gpurify_ingest::deck::parse_deck(EM_DECK, manufacturing_grid(), &mut strings)
+        .expect("the deck parses");
+    let rules = RuleSet::from_deck(&deck, &strings).expect("the deck is valid erc");
     let em = &rules.electromigration;
     assert_eq!(em.blech_limit.len(), em.layer.len());
     let expected = [15_000.0, 54_000.0, 54_000.0, 126_750.0, 189_000.0];
