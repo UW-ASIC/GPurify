@@ -45,6 +45,7 @@ fn two_rules() -> RuleSet {
                 },
             ),
         ],
+        ..RuleSet::default()
     }
 }
 

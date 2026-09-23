@@ -125,6 +125,8 @@ them. Operations on shapes:
 | `.extents()` | The bounding box of each shape. |
 | `.with_area(bounds)` | The shapes whose area, not counting holes, is within the bounds. |
 | `.with_width(bounds)` | The shapes whose narrowest width, as `width` measures it, is within the bounds. |
+| `.with_text(T, "pattern")` | The shapes holding a text on layer `T` that matches `pattern`, as IHP picks devices by their text. `*` matches any run of characters and `?` one; everything else matches itself, case included. A text on a shape's edge counts. `T` must be a drawn layer. |
+| `.without_text(T, "pattern")` | The shapes holding no such text. |
 | `.edges()` | The boundary of each shape, as an edge layer. |
 
 Bounds are one or two comparisons with `>=`, `>`, `<=`, `<`, or a single `==`:
@@ -144,7 +146,12 @@ its shape was on. It combines only with other edge layers:
 | `.interacting(L)` / `.not_interacting(L)` | The whole edges that touch or lie in a shape on `L`, or that do not. |
 | `.with_length(bounds)` | The edges whose length is within the bounds. |
 
-A check that takes an edge layer says so. Every other check refuses one.
+A check that takes an edge layer says so (see [Edge checks](#edge-checks)).
+Every other check refuses one.
+
+Wherever a rule takes a layer, it can take a layer expression instead:
+`forbidden(licon and poly and (diff or tap))` is the same as declaring that
+layer and naming it.
 
 ## Rules
 
@@ -197,6 +204,10 @@ deck always finishes loading.
 | `prl_space(L; prl: len) >= len` | Two shapes that run side by side for at least `prl`, closer than the limit. |
 | `corner_space(L) >= len` | Two shapes whose corners are closer than the limit. |
 | `wide_space(L; width: len) >= len` | Space below the limit from the part of a shape at least `width` wide (where a `width` square fits), as sky130's huge metal. |
+| `wide_space(L; width: len, attached: len) >= len` | The same, also from the rest of the shape within `attached` of its wide part, as sky130 m1.3a "features attached to or extending from huge_met1 for a distance of up to 0.28 µm". |
+| `space(L; nets: same) >= len` | Two shapes on the same net closer than the limit, as gf180 NW.2a. Nets are the extracted ones, joined through vias and other layers. `L` must be a conductor. |
+| `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
+| `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |
 | `cheesing(L) <= area` | A shape larger than the limit with no slot in it. |
@@ -214,6 +225,43 @@ deck always finishes loading.
 | `redundant_via(L; within: len) >= count` | A cut with fewer than `count` cuts, itself included, within `within`. |
 | `via_array_space(L; array: count) >= len` | Cuts in a cluster larger than `array`, closer than the limit. |
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |
+| `forbidden(L)` | Every shape on `L`, reported with its area. Write the forbidden overlap as the layer: `forbidden(licon and poly and (diff or tap))`. On an edge layer, every edge. |
+| `contains(outer, inner) >= count` | An `outer` shape holding fewer than `count` `inner` shapes entirely, as sky130 licon.16 "every tap must enclose at least one licon". An inner shape across the outer's edge is not held, and touching inner shapes count as one. |
+| `inside(inner, outer)` | An `inner` shape not entirely inside `outer`, reported with the area left outside, as licon.18 "npc must enclose poly_licon". Touching `outer`'s edge from inside is inside. |
+
+A spacing table, as a LEF `SPACINGTABLE PARALLELRUNLENGTH` or IHP Metal1
+M1.b/e/f:
+
+```
+rule M1.bef space_table(met1;
+    prl:   [0um, 1um, 10um],
+    width: [0um, 0.3um, 10um],
+    space: [[180nm, 180nm, 180nm],
+            [180nm, 220nm, 220nm],
+            [180nm, 220nm, 600nm]])
+```
+
+A pair of shapes needs the cell in the last row whose `width` the wider shape
+exceeds and the last column whose `prl` the two shapes' run alongside each
+other exceeds; the first row and column always apply. "Exceeds" is strict, as
+the foundry writes "wider than 0.3 µm": a shape exactly 0.3 µm wide is in the
+first row. A row's width is measured on the part of the shape that wide, so a
+thin tab of a wide plate is held to the thin row. `prl` and `width` start at
+0 and rise, there is one row per width and one cell per run length, and no
+cell is smaller than the one before it in its row or column.
+
+### Edge checks
+
+These take an edge layer, such as the butting edges `tap.edges() and
+diff.edges()`. A finding is placed on the edge and names no shape.
+
+| Check | What it flags |
+|---|---|
+| `length(E) >= len` | An edge shorter than the limit, as sky130 difftap.4 "min tap bound by one diffusion" on the butting edges. |
+| `space(E) >= len` | Two parallel edges of `E` closer than the limit, measured edge to edge and end to end, whatever side their shapes are on. Edges that touch are not measured. As difftap.5 "min tap bound by two diffusions". |
+| `space(E, F) >= len` | The same between an edge of `E` and one of `F`, as difftap.7. |
+| `enclosure(E, L) >= len` | An edge whose outside is not covered by `L` for the limit, measured straight out from the edge along its length, as n/psd.5a "enclosure of diff by nsdm, except for butting edge" with `diff.edges() not tap.edges()`. |
+| `forbidden(E)` | Every edge, as n/psd.6 `forbidden((tap.edges() and diff.edges()).outside_part(psdm))`. |
 
 ## Electrical rules
 

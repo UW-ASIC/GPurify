@@ -1,8 +1,9 @@
 //! The rule set: one [`Rule`] per deck row, the deck parser, and the driver.
 
-use crate::drc::rules::{area, grid, overlay, patterning, spacing, via, width};
+use crate::drc::rules::{area, edge, grid, overlay, patterning, presence, spacing, via, width};
 use crate::drc::{DrcError, Scratch};
-use crate::report::{record_run, LimitSense, RuleRun, Violations};
+use crate::report::{record_run, LimitSense, Outcome, RuleRun, Violations};
+use crate::topology::NetTable;
 use gpurify_geom::{Dbu, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
@@ -146,12 +147,103 @@ pub enum Rule {
         colors: u8,
         color_spacing: Dbu,
     },
+    /// Every shape and every edge on the layer.
+    Forbidden {
+        layer: LayerId,
+    },
+    /// Each merged `outer` figure entirely holds at least `min_count` merged
+    /// `inner` figures.
+    MustContain {
+        outer: LayerId,
+        inner: LayerId,
+        min_count: u32,
+    },
+    /// Each merged `inner` figure lies entirely inside `outer`.
+    MustBeInside {
+        inner: LayerId,
+        outer: LayerId,
+    },
+    /// Pairs on the same net (`same_net`), or on different nets, closer than `limit`.
+    NetSpacing {
+        layer: LayerId,
+        same_net: bool,
+        limit: Dbu,
+    },
+    /// Spacing by width and parallel run length: `RuleSet::tables[table]`.
+    SpacingTable {
+        layer: LayerId,
+        table: u32,
+    },
+    /// Wide-metal spacing measured from the wide part grown by `attached`
+    /// within its own figure.
+    AttachedWideSpacing {
+        layer: LayerId,
+        width_threshold: Dbu,
+        attached: Dbu,
+        limit: Dbu,
+    },
+    /// An edge shorter than `limit`.
+    EdgeMinLength {
+        layer: LayerId,
+        limit: Dbu,
+    },
+    /// Two edges closer than `limit`, from `a` to `b` (or within `a`).
+    EdgeSpacing {
+        a: LayerId,
+        b: Option<LayerId>,
+        limit: Dbu,
+    },
+    /// The strip `limit` deep outside each edge not covered by `outer`.
+    EdgeEnclosure {
+        edges: LayerId,
+        outer: LayerId,
+        limit: Dbu,
+    },
+}
+
+/// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
+/// for a pair is `space[row][column]`, with `row` the last width exceeded by
+/// the wider shape and `column` the last run length exceeded by the pair; the
+/// first row and column always apply. Cells never fall along a row or column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpacingTable {
+    pub prl: Vec<Dbu>,
+    pub width: Vec<Dbu>,
+    /// Row-major, `width.len()` rows of `prl.len()` cells.
+    pub space: Vec<Dbu>,
+}
+
+impl SpacingTable {
+    /// Whether the table is complete and monotone, as the struct states.
+    pub fn is_valid(&self) -> bool {
+        let starts_and_rises = |steps: &[Dbu]| {
+            steps.first().is_some_and(|first| first.raw() == 0)
+                && steps.windows(2).all(|pair| pair[0] < pair[1])
+        };
+        let columns = self.prl.len();
+        starts_and_rises(&self.prl)
+            && starts_and_rises(&self.width)
+            && self.space.len() == columns * self.width.len()
+            && self.space.iter().all(|cell| cell.raw() > 0)
+            && self
+                .space
+                .chunks(columns)
+                .all(|row| row.windows(2).all(|p| p[0] <= p[1]))
+            && self.space.windows(columns + 1).all(|w| w[0] <= w[columns])
+    }
+
+    /// The cell at `row`, `column`.
+    pub(crate) fn at(&self, row: usize, column: usize) -> Dbu {
+        self.space[row * self.prl.len() + column]
+    }
 }
 
 /// Every DRC rule the deck configures, in deck order.
 #[derive(Debug, Default)]
 pub struct RuleSet {
     pub rules: Vec<(StrId, Rule)>,
+    /// The tables [`Rule::SpacingTable`] names.
+    pub tables: Vec<SpacingTable>,
 }
 
 impl RuleSet {
@@ -456,6 +548,87 @@ impl RuleSet {
                         color_spacing: length(spec, "color_spacing")?,
                     }
                 }
+                "forbidden" => Rule::Forbidden { layer: one(spec)? },
+                "must_contain" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::MustContain {
+                        outer,
+                        inner,
+                        min_count: positive(spec, count(spec, "min_count", u32::MAX)?)?,
+                    }
+                }
+                "must_be_inside" => {
+                    let (inner, outer) = two(spec)?;
+                    Rule::MustBeInside { inner, outer }
+                }
+                "net_spacing" => {
+                    let layer = one(spec)?;
+                    let ParamValue::Flag(same_net) = value(spec, "same_net")? else {
+                        return Err(wrong_type(spec, "same_net"));
+                    };
+                    Rule::NetSpacing {
+                        layer,
+                        same_net,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "spacing_table" => {
+                    let layer = one(spec)?;
+                    let lengths = |param: &'static str| -> Result<Vec<Dbu>, DrcError> {
+                        let wanted = strings.get(param);
+                        rules
+                            .params_of(spec)
+                            .iter()
+                            .filter(|&&(name, _)| Some(name) == wanted)
+                            .map(|&(_, stated)| match stated {
+                                ParamValue::Length(length) => Ok(length),
+                                _ => Err(wrong_type(spec, param)),
+                            })
+                            .collect()
+                    };
+                    let table = SpacingTable {
+                        prl: lengths("prl")?,
+                        width: lengths("width")?,
+                        space: lengths("space")?,
+                    };
+                    if !table.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.tables.push(table);
+                    Rule::SpacingTable {
+                        layer,
+                        table: u32::try_from(set.tables.len() - 1).expect("a deck has few tables"),
+                    }
+                }
+                "attached_wide_spacing" => Rule::AttachedWideSpacing {
+                    layer: one(spec)?,
+                    width_threshold: length(spec, "width_threshold")?,
+                    attached: length(spec, "attached")?,
+                    limit: length(spec, "limit")?,
+                },
+                "edge_min_length" => Rule::EdgeMinLength {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "edge_spacing" => {
+                    let (a, b) = match spec.layer_len {
+                        1 => (one(spec)?, None),
+                        _ => two(spec).map(|(a, b)| (a, Some(b)))?,
+                    };
+                    Rule::EdgeSpacing {
+                        a,
+                        b,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "edge_enclosure" => {
+                    let (edges, outer) = two(spec)?;
+                    Rule::EdgeEnclosure {
+                        edges,
+                        outer,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -474,9 +647,20 @@ impl RuleSet {
         self.rules.len()
     }
 
-    /// Run every rule; `out` and `runs` are cleared first, then `runs` gains one
-    /// row per rule, in rule order.
+    /// [`Self::run_with_nets`] without nets: a rule that reads them is `Refused`.
     pub fn run(&self, store: &GeometryStore, out: &mut Violations, runs: &mut Vec<RuleRun>) {
+        self.run_with_nets(store, None, out, runs);
+    }
+
+    /// Run every rule; `out` and `runs` are cleared first, then `runs` gains one
+    /// row per rule, in rule order. `nets` is the store's extraction.
+    pub fn run_with_nets(
+        &self,
+        store: &GeometryStore,
+        nets: Option<&NetTable>,
+        out: &mut Violations,
+        runs: &mut Vec<RuleRun>,
+    ) {
         *out = Violations::default();
         runs.clear();
         let s = &mut Scratch::default();
@@ -533,7 +717,15 @@ impl RuleSet {
                     layer,
                     width_threshold,
                     limit,
-                } => spacing::wide_dependent(store, id, layer, width_threshold, limit, s, out),
+                } => spacing::wide_dependent(
+                    store,
+                    id,
+                    layer,
+                    (width_threshold, Dbu::new_unchecked(0)),
+                    limit,
+                    s,
+                    out,
+                ),
                 Rule::MinArea { layer, limit } => area::min_area(store, id, layer, limit, s, out),
                 Rule::MinEnclosedArea { layer, limit } => {
                     area::min_enclosed_area(store, id, layer, limit, s, out)
@@ -601,6 +793,51 @@ impl RuleSet {
                     colors,
                     color_spacing,
                 } => patterning::multi_patterning(store, id, layer, colors, color_spacing, s, out),
+                Rule::Forbidden { layer } => presence::forbidden(store, id, layer, s, out),
+                Rule::MustContain {
+                    outer,
+                    inner,
+                    min_count,
+                } => presence::must_contain(store, id, outer, inner, min_count, s, out),
+                Rule::MustBeInside { inner, outer } => {
+                    presence::must_be_inside(store, id, inner, outer, s, out)
+                }
+                Rule::NetSpacing {
+                    layer,
+                    same_net,
+                    limit,
+                } => match nets {
+                    Some(nets) => {
+                        spacing::net_spacing(store, nets, id, layer, same_net, limit, s, out)
+                    }
+                    None => (Outcome::Refused, 0),
+                },
+                Rule::SpacingTable { layer, table } => {
+                    spacing::spacing_table(store, id, layer, &self.tables[table as usize], s, out)
+                }
+                Rule::AttachedWideSpacing {
+                    layer,
+                    width_threshold,
+                    attached,
+                    limit,
+                } => spacing::wide_dependent(
+                    store,
+                    id,
+                    layer,
+                    (width_threshold, attached),
+                    limit,
+                    s,
+                    out,
+                ),
+                Rule::EdgeMinLength { layer, limit } => {
+                    edge::min_length(store, id, layer, limit, out)
+                }
+                Rule::EdgeSpacing { a, b, limit } => edge::spacing(store, id, a, b, limit, out),
+                Rule::EdgeEnclosure {
+                    edges,
+                    outer,
+                    limit,
+                } => edge::enclosure(store, id, edges, outer, limit, s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -631,7 +868,13 @@ impl Rule {
             | Rule::Cheesing { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
-            | Rule::MultiPatterning { layer, .. } => [Some(layer), None],
+            | Rule::MultiPatterning { layer, .. }
+            | Rule::Forbidden { layer }
+            | Rule::NetSpacing { layer, .. }
+            | Rule::SpacingTable { layer, .. }
+            | Rule::AttachedWideSpacing { layer, .. }
+            | Rule::EdgeMinLength { layer, .. } => [Some(layer), None],
+            Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
             }
@@ -653,6 +896,13 @@ impl Rule {
             }
             | Rule::MaxDistanceToTap {
                 well: a, tap: b, ..
+            }
+            | Rule::MustContain {
+                outer: a, inner: b, ..
+            }
+            | Rule::MustBeInside { inner: a, outer: b }
+            | Rule::EdgeEnclosure {
+                edges: a, outer: b, ..
             } => [Some(a), Some(b)],
             Rule::Angle { layer, .. } => [layer, None],
             Rule::OffGrid { .. } => [None, None],
@@ -662,7 +912,7 @@ impl Rule {
 
 /// Every rule kind this crate implements, as the deck spells it. Disjoint from
 /// `crate::erc::ruleset::KINDS`.
-pub const KINDS: [&str; 26] = [
+pub const KINDS: [&str; 35] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -689,4 +939,13 @@ pub const KINDS: [&str; 26] = [
     "redundant_via",
     "via_array_spacing",
     "multi_patterning",
+    "forbidden",
+    "must_contain",
+    "must_be_inside",
+    "net_spacing",
+    "spacing_table",
+    "attached_wide_spacing",
+    "edge_min_length",
+    "edge_spacing",
+    "edge_enclosure",
 ];

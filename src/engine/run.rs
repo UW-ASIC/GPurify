@@ -161,7 +161,7 @@ pub fn run_checks(
 
     let mut out = Outputs::default();
     let drc = if options.checks.drc {
-        run_drc(loaded, &mut out)?
+        run_drc(loaded, extracted, &mut out)?
     } else {
         StageStatus::NotSelected
     };
@@ -220,10 +220,14 @@ fn append_stage(out: &mut Outputs, run: impl FnOnce(&mut Violations, &mut Vec<Ru
     out.runs.append(&mut runs);
 }
 
-fn run_drc(loaded: &Loaded, out: &mut Outputs) -> Result<StageStatus, EngineError> {
+fn run_drc(
+    loaded: &Loaded,
+    extracted: &Extracted,
+    out: &mut Outputs,
+) -> Result<StageStatus, EngineError> {
     let rules = gpurify_check::drc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
     append_stage(out, |violations, runs| {
-        rules.run(&loaded.store, violations, runs);
+        rules.run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
     });
     Ok(StageStatus::Ran)
 }

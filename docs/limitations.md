@@ -18,23 +18,19 @@ result from them is weaker than it looks.
 |---|---|
 | `enclosure(inner, outer, opposite)` | An inner shape that is not a rectangle is held to the every-side limit instead. |
 | `extension`, `overlap` | Measure bounding boxes, so an L-shaped shape can pass. |
-| `wide_space` | Does not also hold shapes attached to the wide part (sky130 m1.3b "within 0.28 µm of huge metal") to the wide spacing. |
+| `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
 | `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
 | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
 
 ## Checks that do not exist yet
 
-- No check takes an edge layer yet, so edge layers can be derived but not
-  checked.
-- Derived layers have no selection by text label, net, angle or shape class
+- Derived layers have no selection by net, angle or shape class
   (rectangles, squares), no `covering`/`overlapping`, and `sized` grows both
   axes by the same amount.
-- A rule that flags any overlap between two layers at all, and a rule that
-  requires every shape on one layer to contain a shape on another.
-- Spacing that depends on whether two shapes are on the same net, spacing
-  tables indexed by width and run length, and rules conditional on text
-  labels.
+- Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
+  allowed to extend beyond their abutting edge" cannot be written.
+- Spacing that depends on the voltage between two nets.
 - A way to state the voltage or domain of an input signal in the intent file,
   and checks for inputs driven from a powered-down domain.
 

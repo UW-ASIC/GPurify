@@ -1,4 +1,4 @@
-//! The twenty-six rule kinds, one function per kind, grouped by what they measure.
+//! The rule kinds, one function per kind, grouped by what they measure.
 //!
 //! Data in: one rule row's parameters, the store and a `Scratch`.
 //! Data out: violations appended to `out`, and the row's [`Verdict`].
@@ -6,9 +6,11 @@
 //! and angle). A layer that fails to validate is `Refused`, never a clean `Ran`.
 
 pub mod area;
+pub mod edge;
 pub mod grid;
 pub mod overlay;
 pub mod patterning;
+pub mod presence;
 pub mod spacing;
 pub mod via;
 pub mod width;
