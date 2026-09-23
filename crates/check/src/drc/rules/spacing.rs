@@ -8,11 +8,11 @@
 use super::{
     gap_midpoint, label_pairs_into, pair_distances_into, ring_segs, seg_bbox, Verdict, REFUSED,
 };
-use crate::drc::rules::width::narrowest_width;
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
+use gpurify_geom::width::narrowest_width;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;

@@ -47,6 +47,7 @@ pub mod ops;
 pub mod rects;
 pub mod store;
 pub mod view;
+pub mod width;
 pub use bbox::Bbox;
 pub use ids::{LayerId, PolyId};
 pub use store::{GeometryStore, GeometryStoreBuilder};
