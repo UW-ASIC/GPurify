@@ -513,16 +513,19 @@ fn sky130_licon_1_a_slot_is_not_a_licon() {
 #[test]
 fn sky130_licon_1_a_square_passes_and_two_abutting_squares_do_not() {
     let mut layout = LayoutBuilder::new(1);
-    layout.rect(A, 0, 0, 170, 170);
-    layout.rect(A, 1_000, 0, 1_170, 170);
-    layout.rect(A, 1_170, 0, 1_340, 170);
-    let (store, _ids) = layout.finish();
+    // The good square is drawn first but lies right of the slot.
+    layout.rect(A, 5_000, 0, 5_170, 170);
+    let first = layout.rect(A, 0, 0, 170, 170);
+    layout.rect(A, 170, 0, 340, 170);
+    let (store, ids) = layout.finish();
 
     let mut sink = Sink::default();
     sink.run(&store, &cut_size_table(170, 170));
 
     assert_eq!(sink.out.len(), 1);
     assert_eq!(sink.out.measured[0], Measurement::Length(dbu(340)));
+    // Blamed on a drawn row of the slot, not on the merge's own numbering.
+    assert_eq!(sink.out.shape_a[0], ids.of(first));
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
 }
 

@@ -4,7 +4,7 @@
 //! Data in: one validated rectilinear layer. Data out: one violation per offending
 //! polygon (per edge for min edge length). Exact on the whole input domain.
 
-use super::{mid, ring_segs, SortedRects, Verdict, REFUSED};
+use super::{mid, owners_of, ring_segs, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
@@ -322,19 +322,11 @@ pub(crate) fn max_width(
     if merged.is_err() {
         return REFUSED;
     }
-    let owners = SortedRects::new(s.rects_a.labelled());
-    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
-    for idx in 0..u32::try_from(s.layer_out.len()).expect("a layer indexes polygons with a u32") {
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    for (idx, owner) in (0..).zip(owners) {
         let poly = s.layer_out.get(idx);
         let (measured, at) = narrowest_facing(poly, true, &mut s.facing)
             .expect("every validated polygon has a facing pair across its own material");
-        let i = idx as usize;
-        let owner = s.rects[s.rect_start[i] as usize..s.rect_start[i + 1] as usize]
-            .iter()
-            .flat_map(|&r| owners.overlapping(r))
-            .map(|(_, row)| row)
-            .min()
-            .expect("a wide region lies on drawn material");
         out.push(Violation {
             rule,
             layer,
@@ -368,9 +360,10 @@ pub(crate) fn cut_size(
     if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
         return REFUSED;
     }
+    s.rects_a.build(store, layer, drawn);
     let (short, long) = (width.min(height), width.max(height));
     let figures = &s.layer_out;
-    for idx in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
+    for (idx, owner) in (0..).zip(owners_of(figures, &s.rects_a)) {
         let poly = figures.get(idx);
         let b = poly.bbox();
         let (bs, bl) = (b.width().min(b.height()), b.width().max(b.height()));
@@ -401,7 +394,7 @@ pub(crate) fn cut_size(
             },
             measured,
             limit,
-            shapes: (poly.provenance(), None),
+            shapes: (owner, None),
         });
     }
     (Outcome::Ran, figures.len() as u64)

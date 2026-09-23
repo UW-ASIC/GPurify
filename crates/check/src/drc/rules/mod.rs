@@ -137,6 +137,26 @@ impl<T: Copy> SortedRects<T> {
     }
 }
 
+/// The lowest drawn row under each figure of `figures`, a boolean result whose
+/// own `provenance` is a row of the boolean's scratch store, not of the
+/// layout; `PolyId(u32::MAX)` for a figure over nothing drawn.
+pub(crate) fn owners_of(figures: &ValidatedLayer, drawn: &LayerRects) -> Vec<PolyId> {
+    let under = SortedRects::new(drawn.labelled());
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(figures, &mut rects, &mut start);
+    start
+        .windows(2)
+        .map(|span| {
+            rects[span[0] as usize..span[1] as usize]
+                .iter()
+                .flat_map(|&r| under.overlapping(r))
+                .map(|(_, row)| row)
+                .min()
+                .unwrap_or(PolyId(u32::MAX))
+        })
+        .collect()
+}
+
 /// One closed ring's edges, in vertex order, closing edge last.
 pub(crate) fn ring_segs<'a>(xs: &'a [Dbu], ys: &'a [Dbu]) -> impl Iterator<Item = Seg> + 'a {
     let n = xs.len();
