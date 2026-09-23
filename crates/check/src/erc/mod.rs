@@ -149,6 +149,8 @@ pub struct Scratch {
     solve: power::SolveScratch,
     probes: Vec<(u32, u32, Qty<Resistance, { prefix::BASE }>)>,
     boxes: Vec<Bbox>,
+    /// An antenna row's nets at its etch step.
+    staged_nets: crate::topology::NetTable,
 }
 
 /// A point on a polygon for a violation: vertex zero, which lies on the shape

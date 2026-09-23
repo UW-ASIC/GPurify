@@ -541,6 +541,17 @@ impl RuleSet {
                 _ => {}
             }
         }
+        for stack in [&mut set.antenna.stack, &mut set.antenna_electrical.stack] {
+            let from = &deck.connectivity;
+            stack.conductors.clone_from(&from.conductors);
+            stack.vias = from
+                .via_cut
+                .iter()
+                .zip(&from.via_connects)
+                .map(|(&cut, &(a, b))| (cut, a, b))
+                .collect();
+            stack.intra_layer_touch = from.intra_layer_touch;
+        }
         Ok(set)
     }
 

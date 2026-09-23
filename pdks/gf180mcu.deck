@@ -42,6 +42,7 @@ layer ngate = poly2 and comp and nplus
 layer pgate = poly2 and comp and pplus
 layer natgate = poly2 and comp and nat
 layer comp_active = comp not poly2
+layer gate = poly2 and comp
 
 rule DF.1a width(comp) >= 220nm
 rule PL.1 width(poly2) >= 180nm
@@ -155,18 +156,18 @@ rule V2.2b via_array_space(via2; array: 15) >= 360nm
 rule V3.2b via_array_space(via3; array: 15) >= 360nm
 rule V4.2b via_array_space(via4; array: 15) >= 360nm
 rule V5.2b via_array_space(via5; array: 15) >= 360nm
-rule ANT.1 antenna(poly2, poly2; max_ratio: 200, sidewall: 200nm)
-rule ANT.2 antenna(poly2, metal1; max_ratio: 400, sidewall: 550nm)
-rule ANT.3 antenna(poly2, metal2; max_ratio: 400, sidewall: 550nm)
-rule ANT.4 antenna(poly2, metal3; max_ratio: 400, sidewall: 550nm)
-rule ANT.5 antenna(poly2, metal4; max_ratio: 400, sidewall: 550nm)
-rule ANT.6 antenna(poly2, metal5; max_ratio: 400, sidewall: 550nm)
-rule ANT.8 antenna(poly2, contact; max_ratio: 10, sidewall: none)
-rule ANT.9 antenna(poly2, via1; max_ratio: 20, sidewall: none)
-rule ANT.10 antenna(poly2, via2; max_ratio: 20, sidewall: none)
-rule ANT.11 antenna(poly2, via3; max_ratio: 20, sidewall: none)
-rule ANT.12 antenna(poly2, via4; max_ratio: 20, sidewall: none)
-rule ANT.13 antenna(poly2, via5; max_ratio: 20, sidewall: none)
+rule ANT.1 antenna(gate, poly2; max_ratio: 200, sidewall: 200nm)
+rule ANT.2 antenna(gate, metal1; max_ratio: 400, sidewall: 550nm)
+rule ANT.3 antenna(gate, metal2; max_ratio: 400, sidewall: 550nm)
+rule ANT.4 antenna(gate, metal3; max_ratio: 400, sidewall: 550nm)
+rule ANT.5 antenna(gate, metal4; max_ratio: 400, sidewall: 550nm)
+rule ANT.6 antenna(gate, metal5; max_ratio: 400, sidewall: 550nm)
+rule ANT.8 antenna(gate, contact; max_ratio: 10, sidewall: none)
+rule ANT.9 antenna(gate, via1; max_ratio: 20, sidewall: none)
+rule ANT.10 antenna(gate, via2; max_ratio: 20, sidewall: none)
+rule ANT.11 antenna(gate, via3; max_ratio: 20, sidewall: none)
+rule ANT.12 antenna(gate, via4; max_ratio: 20, sidewall: none)
+rule ANT.13 antenna(gate, via5; max_ratio: 20, sidewall: none)
 rule EM.poly2 em_current_density(poly2; max_density: 1000A/m, max_current_per_cut: 210uA)
 rule EM.metal1 em_current_density(metal1; max_density: 1000A/m, max_current_per_cut: 210uA)
 rule EM.metal2_metal5 em_current_density(metal2, metal3, metal4, metal5; max_density: 1000A/m, max_current_per_cut: 280uA)

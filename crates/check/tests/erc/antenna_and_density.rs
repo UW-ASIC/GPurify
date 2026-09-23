@@ -16,7 +16,7 @@ use crate::common;
 use common::{head, rule};
 use gpurify_check::erc::rules::antenna::{
     check_antenna, check_antenna_electrical, check_density_cmp, AntennaElectricalTable,
-    AntennaMeasure, AntennaTable, DensityCmpTable,
+    AntennaMeasure, AntennaTable, DensityCmpTable, Stack,
 };
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
@@ -78,6 +78,7 @@ fn antenna_table(id: StrId, max_ratio: f64) -> AntennaTable {
         collector: vec![LayerId(0)],
         collector_measure: vec![AntennaMeasure::Area],
         max_ratio: vec![max_ratio],
+        stack: Stack::default(),
     }
 }
 
@@ -177,6 +178,7 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
             max_ratio: vec![3.0],
+            stack: Stack::default(),
         },
         &mut scratch,
         &mut violations,
@@ -260,6 +262,7 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
         // Limits below both ratios, so each stage's own measurement lands in the
         // table and can be read rather than inferred from a verdict.
         max_ratio: vec![1.0, 1.0],
+        stack: Stack::default(),
     };
 
     let mut scratch = Scratch::default();
@@ -323,6 +326,7 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
         // A ratio strictly above zero violates a zero ceiling, so every stage
         // that collects anything at all lands in the table.
         max_ratio: vec![f64::MIN_POSITIVE; 2],
+        stack: Stack::default(),
     };
 
     let mut scratch = Scratch::default();
@@ -348,6 +352,128 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
         ratios[0],
         ratios[1]
     );
+}
+
+/// One antenna row over `stack`, run against empty finished nets (the row
+/// builds its own at its etch step).
+fn run_staged(
+    store: &GeometryStore,
+    stack: Stack,
+    gate: LayerId,
+    collectors: &[LayerId],
+    measure: AntennaMeasure,
+    max_ratio: f64,
+) -> (Violations, Vec<RuleRun>) {
+    let nets = NetTable::default();
+    let devices = DeviceTable::default();
+    let design = Design {
+        store,
+        nets: &nets,
+        devices: &devices,
+    };
+    let table = AntennaTable {
+        head: head(rule(90)),
+        gate: vec![gate],
+        collector_start: vec![0, u32::try_from(collectors.len()).expect("few")],
+        collector: collectors.to_vec(),
+        collector_measure: vec![measure; collectors.len()],
+        max_ratio: vec![max_ratio],
+        stack,
+    };
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    (violations, runs)
+}
+
+/// gf180 ANT.2: metal1 *perimeter* area (perimeter x 0.55 um thickness) over
+/// the gate area, at most 400. The gate is the derived `poly2 and comp` shape,
+/// not a conductor: it joins the net through the poly it sits on. A 1 mm x
+/// 0.2 um wire on a 1 um2 gate collects 2 * 1000.2 um * 0.55 um = 1100.22
+/// um2, a ratio of 1100.22. The old rule refused every sidewall row and saw no
+/// net on a derived gate.
+#[test]
+fn gf180_ant_2_sidewall_area_of_metal1_over_a_derived_gate() {
+    let (poly, gate, contact, metal1) = (LayerId(0), LayerId(1), LayerId(2), LayerId(3));
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(poly, 0, 0, 3_000, 1_000);
+    let gate_poly = layout.rect(gate, 0, 0, 1_000, 1_000);
+    layout.rect(contact, 2_400, 400, 2_600, 600);
+    layout.rect(metal1, 2_000, 400, 1_002_000, 600);
+    let (store, ids) = layout.finish();
+    let stack = Stack {
+        conductors: vec![poly, metal1],
+        vias: vec![(contact, poly, metal1)],
+        intra_layer_touch: true,
+    };
+
+    let (violations, runs) = run_staged(
+        &store,
+        stack,
+        gate,
+        &[metal1],
+        AntennaMeasure::Sidewall {
+            thickness: dbu(550),
+        },
+        400.0,
+    );
+
+    assert_eq!(violations.rule.len(), 1);
+    assert_eq!(violations.shape_a[0], ids.of(gate_poly));
+    assert_close_relative(
+        "the sidewall ratio",
+        measured_ratio(&violations, 0),
+        1100.22,
+        1e-12,
+    );
+    assert_eq!(assert_rule_ran(&runs, rule(90)).examined, 1);
+}
+
+/// SVRF/KLayout antenna decks `CONNECT` layer by layer between ratio checks:
+/// at the metal1 etch, metal2 does not exist yet. Gate A carries a 6 um2 metal1
+/// plate (ratio 6); gate B, joined to it only through metal2, carries 1 um2.
+/// On the finished net the two gates share 7 um2 of metal1 over 2 um2 of gate,
+/// 3.5, under a limit of 4. At the metal1 etch gate A stands alone at 6.
+#[test]
+fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() {
+    let (poly, contact, metal1, via1, metal2) =
+        (LayerId(0), LayerId(1), LayerId(2), LayerId(3), LayerId(4));
+    let mut layout = LayoutBuilder::new(5);
+    let gate_a = layout.rect(poly, 0, 0, 1_000, 1_000);
+    layout.rect(poly, 10_000, 0, 11_000, 1_000);
+    layout.rect(contact, 400, 400, 600, 600);
+    layout.rect(contact, 10_400, 400, 10_600, 600);
+    layout.rect(metal1, 0, 0, 6_000, 1_000);
+    layout.rect(metal1, 10_000, 0, 11_000, 1_000);
+    layout.rect(via1, 5_400, 400, 5_600, 600);
+    layout.rect(via1, 10_400, 400, 10_600, 600);
+    layout.rect(metal2, 5_000, 0, 11_000, 1_000);
+    let (store, ids) = layout.finish();
+    let stack = || Stack {
+        conductors: vec![poly, metal1, metal2],
+        vias: vec![(contact, poly, metal1), (via1, metal1, metal2)],
+        intra_layer_touch: true,
+    };
+
+    let (violations, runs) =
+        run_staged(&store, stack(), poly, &[metal1], AntennaMeasure::Area, 4.0);
+    assert_eq!(violations.rule.len(), 1);
+    assert_eq!(violations.shape_a[0], ids.of(gate_a));
+    assert_close_relative("gate A alone", measured_ratio(&violations, 0), 6.0, 1e-12);
+    assert_eq!(assert_rule_ran(&runs, rule(90)).examined, 2);
+
+    // At the metal2 etch the two gates are one net: 7 um2 of metal1 plus 6 um2
+    // of metal2 over 2 um2 of gate.
+    let (violations, _) = run_staged(
+        &store,
+        stack(),
+        poly,
+        &[metal1, metal2],
+        AntennaMeasure::Area,
+        4.0,
+    );
+    assert_eq!(violations.rule.len(), 1);
+    assert_close_relative("both gates", measured_ratio(&violations, 0), 6.5, 1e-12);
 }
 
 /// A die-sized window over one layer, with only the bound the caller states.
