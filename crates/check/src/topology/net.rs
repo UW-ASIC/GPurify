@@ -194,22 +194,20 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
             &mut out.edges,
         );
     }
-    // A hole row is part of its outer's polygon, so it shares the outer's net.
-    for &layer in &connectivity.conductors {
-        for (outer, hole) in out.holes.of.iter().copied() {
-            if store.poly_layer(outer) == layer {
-                out.edges.push((outer.0.min(hole.0), outer.0.max(hole.0)));
-            }
-        }
-    }
-
-    components_into(node_count, &out.edges, &mut out.labels);
-
     // A conductor the store's layer table lacks panics rather than being skipped.
     let mut conducts = vec![false; store.layer_count()];
     for &layer in &connectivity.conductors {
         conducts[layer.idx()] = true;
     }
+
+    // A hole row is part of its outer's polygon, so it shares the outer's net.
+    for &(outer, hole) in &out.holes.of {
+        if conducts[store.poly_layer(outer).idx()] {
+            out.edges.push((outer.0.min(hole.0), outer.0.max(hole.0)));
+        }
+    }
+
+    components_into(node_count, &out.edges, &mut out.labels);
 
     // Labels to dense net ids. A label is its component's minimum polygon index,
     // so walking ascending makes the numbering canonical.

@@ -158,7 +158,8 @@ pub fn recognise_into(
     }
 
     let mut marker_index = SpatialIndex::default();
-    let mut terminal_index = SpatialIndex::default();
+    // One index per terminal layer, shared by every recogniser naming it.
+    let mut terminal_index: Vec<(LayerId, SpatialIndex)> = Vec::new();
     let mut pairs: Vec<(PolyId, PolyId)> = Vec::new();
     let mut exact: Vec<(PolyId, PolyId)> = Vec::new();
     let mut bind: Vec<NetId> = Vec::new();
@@ -215,8 +216,17 @@ pub fn recognise_into(
                     )
                 });
 
-            SpatialIndex::build_into(store, layer, &mut terminal_index);
-            cross_layer_pairs_into(store, &marker_index, &terminal_index, touching, &mut pairs);
+            let at = terminal_index
+                .iter()
+                .position(|(built, _)| *built == layer)
+                .unwrap_or_else(|| {
+                    let mut index = SpatialIndex::default();
+                    SpatialIndex::build_into(store, layer, &mut index);
+                    terminal_index.push((layer, index));
+                    terminal_index.len() - 1
+                });
+            let index = &terminal_index[at].1;
+            cross_layer_pairs_into(store, &marker_index, index, touching, &mut pairs);
             // Box-only hits must not bind: a spurious low-id pair would win.
             retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
 
