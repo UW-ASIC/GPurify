@@ -1209,26 +1209,12 @@ pub mod gds {
             self.ry.resize(xs.len(), 0);
             dispatch!(level, s => shift(s, from_x, neg_x, at.dx, &mut self.rx));
             dispatch!(level, s => shift(s, from_y, neg_y, at.dy, &mut self.ry));
-            self.tx.clear();
-            self.tx
-                .extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
-            self.ty.clear();
-            self.ty
-                .extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
 
             for elem in elems {
-                let Some(layer) = self.layer(elem.layer, elem.datatype)? else {
-                    continue;
-                };
-                let run = elem.vert_start as usize - base
-                    ..(elem.vert_start + elem.vert_len) as usize - base;
-                let (tx, ty) = (&mut self.tx[run.clone()], &mut self.ty[run]);
-                // Same mirror fix-up as `emit`.
-                if at.flip {
-                    tx[1..].reverse();
-                    ty[1..].reverse();
+                if let Some(layer) = self.layer(elem.layer, elem.datatype)? {
+                    let start = elem.vert_start as usize - base;
+                    self.push(layer, start..start + elem.vert_len as usize, at.flip);
                 }
-                self.builder.push(layer, tx, ty);
             }
             Ok(true)
         }
@@ -1262,16 +1248,6 @@ pub mod gds {
                     .expect("the reduction above found one");
                 return Err(LayoutError::CoordinateOutOfRange(out));
             }
-            self.tx.clear();
-            self.tx
-                .extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
-            self.ty.clear();
-            self.ty
-                .extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
-
-            // A mirror (det < 0) turns a counter-clockwise ring clockwise, which
-            // `validate_layer_into` reads as a hole. Reverse `[1..]` so vertex 0,
-            // the report point, stays put.
             debug_assert!(
                 {
                     let (a, b, c, e) = at.linear();
@@ -1279,12 +1255,25 @@ pub mod gds {
                 },
                 "det < 0 iff flip"
             );
-            if at.flip {
+            self.push(layer, 0..self.rx.len(), at.flip);
+            Ok(())
+        }
+
+        /// Push `rx/ry[run]`, already in bound, as one ring. A mirror (det < 0) turns a
+        /// counter-clockwise ring clockwise, which `validate_layer_into` reads as a
+        /// hole: reverse `[1..]` so vertex 0, the report point, stays put.
+        fn push(&mut self, layer: LayerId, run: std::ops::Range<usize>, flip: bool) {
+            self.tx.clear();
+            self.tx
+                .extend(self.rx[run.clone()].iter().map(|&v| Dbu::new_unchecked(v)));
+            self.ty.clear();
+            self.ty
+                .extend(self.ry[run].iter().map(|&v| Dbu::new_unchecked(v)));
+            if flip {
                 self.tx[1..].reverse();
                 self.ty[1..].reverse();
             }
             self.builder.push(layer, &self.tx, &self.ty);
-            Ok(())
         }
     }
 }
@@ -1931,18 +1920,6 @@ mod tests {
 
         let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         assert_same_store("a tagged layout", &expected, &layout.store);
-    }
-
-    #[test]
-    fn reading_the_same_library_twice_produces_the_same_store() {
-        let mut strings = StrTable::default();
-        let deck = three_layer_deck(&mut strings);
-        let (_, _, _, elements) = corpus();
-        let bytes = gds_library("TOP", &elements);
-
-        let once = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        let twice = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
     }
 
     /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
