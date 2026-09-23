@@ -18,11 +18,10 @@
 use crate::common;
 
 use common::{mos_and_bjt, permute, GraphBuilder, LENGTH, NCH, PCH, VSS, WIDTH};
-use gpurify_check::lvs::compare::{compare, CompareOptions};
-use gpurify_check::lvs::graph::{Graph, LayoutGraph, RefGraph};
-use gpurify_check::lvs::reduce::reduce_into;
-use gpurify_check::lvs::refine::Partition;
+use gpurify_check::lvs::graph::Graph;
+use gpurify_check::lvs::reduce::reduce;
 use gpurify_check::lvs::verdict::Verdict;
+use gpurify_check::lvs::{compare, CompareOptions};
 use gpurify_check::topology::TerminalRole::{self, Bulk, Drain, Gate, Pin, Source};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
@@ -95,12 +94,6 @@ fn terminals(graph: &Graph, device: u32) -> Vec<(TerminalRole, u32)> {
     roles.iter().copied().zip(nets.iter().copied()).collect()
 }
 
-fn reduced(src: &Graph) -> Graph {
-    let mut out = Graph::default();
-    reduce_into(src, &mut out);
-    out
-}
-
 /// Oracle: construct-from-answer. The fixture is two transistors whose channel
 /// meets at one internal node and whose gates are strapped, which is one
 /// transistor of twice the length drawn as two fingers. The merged device's
@@ -108,7 +101,7 @@ fn reduced(src: &Graph) -> Graph {
 /// share, and the two channel ends that are *not* the internal node.
 #[test]
 fn two_transistors_in_series_with_tied_gates_become_one() {
-    let out = reduced(&series_pair(0));
+    let out = reduce(&series_pair(0));
 
     assert_eq!(out.device_count(), 1, "the strapped pair is one device");
     // Net 2 was the internal node and is consumed; 0, 1, 3, 4, 5 rank down to
@@ -129,7 +122,7 @@ fn two_transistors_in_series_with_tied_gates_become_one() {
 #[test]
 fn the_same_pair_with_its_gates_on_two_nets_stays_two_devices() {
     let src = series_pair(5);
-    let out = reduced(&src);
+    let out = reduce(&src);
 
     assert_eq!(out.device_count(), 2, "two gate nets are two transistors");
     assert_eq!(out, src, "an unreducible graph is passed through unchanged");
@@ -141,7 +134,7 @@ fn the_same_pair_with_its_gates_on_two_nets_stays_two_devices() {
 /// them.
 #[test]
 fn two_transistors_in_parallel_become_one() {
-    let out = reduced(&parallel_pair(NCH, 1, 2));
+    let out = reduce(&parallel_pair(NCH, 1, 2));
 
     assert_eq!(out.device_count(), 1);
     assert_eq!(out.net_count(), 4, "a parallel merge consumes no net");
@@ -156,7 +149,7 @@ fn two_transistors_in_parallel_become_one() {
 /// with the upper one's source and drain exchanged are still one device.
 #[test]
 fn a_parallel_pair_merges_with_its_channel_ends_exchanged() {
-    let out = reduced(&parallel_pair(NCH, 2, 1));
+    let out = reduce(&parallel_pair(NCH, 2, 1));
 
     assert_eq!(out.device_count(), 1);
     assert_eq!(
@@ -171,7 +164,7 @@ fn a_parallel_pair_merges_with_its_channel_ends_exchanged() {
 #[test]
 fn a_different_model_on_one_side_blocks_the_parallel_merge() {
     let src = parallel_pair(PCH, 1, 2);
-    let out = reduced(&src);
+    let out = reduce(&src);
 
     assert_eq!(out.device_count(), 2, "two models are two devices");
     assert_eq!(out, src);
@@ -196,8 +189,8 @@ fn a_shared_node_that_is_a_port_blocks_the_series_merge() {
     builder.port(2);
     let src = builder.finish();
 
-    assert_eq!(reduced(&src).device_count(), 2, "a port is not internal");
-    assert_eq!(reduced(&src), src);
+    assert_eq!(reduce(&src).device_count(), 2, "a port is not internal");
+    assert_eq!(reduce(&src), src);
 }
 
 /// Oracle: construct-from-answer. A name on the node is a human saying they care
@@ -221,11 +214,11 @@ fn a_shared_node_that_carries_a_declared_name_blocks_the_series_merge() {
     let src = builder.finish();
 
     assert_eq!(
-        reduced(&src).device_count(),
+        reduce(&src).device_count(),
         2,
         "a named node is not internal"
     );
-    assert_eq!(reduced(&src), src);
+    assert_eq!(reduce(&src), src);
 }
 
 /// Oracle: construct-from-answer. A third terminal on the node means current can
@@ -250,11 +243,11 @@ fn a_shared_node_with_a_third_terminal_blocks_the_series_merge() {
     let src = builder.finish();
 
     assert_eq!(
-        reduced(&src).device_count(),
+        reduce(&src).device_count(),
         3,
         "the node has somewhere else to go"
     );
-    assert_eq!(reduced(&src), src);
+    assert_eq!(reduce(&src), src);
 }
 
 /// Oracle: construct-from-answer. Reduction is transitive: three fingers over two
@@ -274,7 +267,7 @@ fn three_in_series_reduce_to_one() {
             &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 5)],
         );
     }
-    let out = reduced(&builder.finish());
+    let out = reduce(&builder.finish());
 
     assert_eq!(out.device_count(), 1);
     assert_eq!(out.net_count(), 4, "both internal nodes are consumed");
@@ -304,7 +297,7 @@ fn a_series_merge_that_creates_a_parallel_pair_reduces_again() {
     }
     builder.port(1);
     builder.port(3);
-    let out = reduced(&builder.finish());
+    let out = reduce(&builder.finish());
 
     assert_eq!(out.device_count(), 1, "two passes, not one");
     assert_eq!(out.net_count(), 4);
@@ -321,8 +314,8 @@ fn reducing_an_already_reduced_graph_changes_nothing() {
         parallel_pair(NCH, 1, 2),
         series_pair_tight(),
     ] {
-        let once = reduced(&src);
-        let twice = reduced(&once);
+        let once = reduce(&src);
+        let twice = reduce(&once);
         assert_eq!(twice, once, "reduction is not idempotent");
     }
 }
@@ -343,11 +336,11 @@ fn an_unreducible_graph_comes_through_byte_identical() {
         series_pair(5),
         parallel_pair(PCH, 1, 2),
     ] {
-        assert_eq!(reduced(&src), src);
+        assert_eq!(reduce(&src), src);
     }
 }
 
-/// Oracle: construct-from-answer. `reduce_into` is handed no string table, so
+/// Oracle: construct-from-answer. `reduce` is handed no string table, so
 /// nothing here can tell `W` from `L` from `M` — and the two are not
 /// interchangeable, since a parallel merge adds widths and a series merge adds
 /// lengths. A device that declares a parameter therefore does not merge. Since
@@ -372,27 +365,8 @@ fn a_declared_parameter_blocks_the_merge_rather_than_being_invented() {
     }
     let src = builder.finish();
 
-    assert_eq!(reduced(&src).device_count(), 2, "W was invented");
-    assert_eq!(reduced(&src), src);
-}
-
-/// Oracle: determinism. Two runs over one graph agree column for column, and a
-/// reused output buffer that already holds a longer graph is cleared rather than
-/// appended to.
-#[test]
-fn two_runs_over_one_graph_produce_the_same_columns() {
-    let src = series_pair(0);
-
-    let mut first = Graph::default();
-    reduce_into(&src, &mut first);
-
-    // Dirty on purpose, and with a *larger* graph, so a column that is appended
-    // to rather than cleared keeps rows nothing wrote.
-    let mut second = Graph::default();
-    reduce_into(&mos_and_bjt(), &mut second);
-    reduce_into(&src, &mut second);
-
-    assert_eq!(second, first);
+    assert_eq!(reduce(&src).device_count(), 2, "W was invented");
+    assert_eq!(reduce(&src), src);
 }
 
 /// Oracle: law. The two devices of a merge group are exchangeable, so exchanging
@@ -404,7 +378,7 @@ fn exchanging_two_devices_of_one_group_does_not_move_the_result() {
         let nets: Vec<u32> = (0..u32::try_from(src.net_count()).expect("small")).collect();
         let swapped = permute(&src, &[1, 0], &nets);
         assert_ne!(swapped, src, "the permutation did nothing to permute");
-        assert_eq!(reduced(&swapped), reduced(&src));
+        assert_eq!(reduce(&swapped), reduce(&src));
     }
 }
 
@@ -420,9 +394,11 @@ fn exchanging_two_devices_of_one_group_does_not_move_the_result() {
 /// and that is correct.
 #[test]
 fn a_reduced_layout_matches_an_already_reduced_reference() {
-    let mut layout = LayoutGraph::default();
-    reduce_into(&series_pair_tight(), &mut layout.0);
-    assert_eq!(layout.0.device_count(), 1, "the layout side did not reduce");
+    assert_eq!(
+        reduce(&series_pair_tight()).device_count(),
+        1,
+        "the layout side did not reduce"
+    );
 
     let mut builder = GraphBuilder::new(4);
     builder.device(
@@ -430,15 +406,10 @@ fn a_reduced_layout_matches_an_already_reduced_reference() {
         NCH,
         &[(Drain, 3), (Gate, 1), (Source, 0), (Bulk, 2)],
     );
-    let mut reference = RefGraph::default();
-    reduce_into(&builder.finish(), &mut reference.0);
-
-    let mut partition = Partition::default();
     let verdict = compare(
-        &layout,
-        &reference,
+        &series_pair_tight(),
+        &builder.finish(),
         CompareOptions::default(),
-        &mut partition,
     );
     assert_eq!(verdict, Verdict::Match, "{verdict:?}");
 }

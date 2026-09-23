@@ -490,11 +490,6 @@ pub fn flip(discrepancy: &Discrepancy) -> Discrepancy {
             ref_device: layout_device,
             param,
         },
-        Discrepancy::DuplicateName { side, name, nets } => Discrepancy::DuplicateName {
-            side: flip_side(side),
-            name,
-            nets,
-        },
         Discrepancy::ClassImbalance {
             layout_nodes,
             ref_nodes,
@@ -579,7 +574,6 @@ pub fn blames_net(discrepancy: &Discrepancy, side: Side, index: u32) -> bool {
         Discrepancy::UnpairedNet {
             side: found, net, ..
         } => found == side && net == index,
-        Discrepancy::DuplicateName { nets, .. } => nets.0 == index || nets.1 == index,
         _ => false,
     }
 }

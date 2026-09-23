@@ -13,21 +13,18 @@ use common::{
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
     stacked_pair_with_params, GraphBuilder, NCH, NPN, VDD, VSS, WIDTH,
 };
-use gpurify_check::lvs::refine::{Partition, TieBreak};
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
-use gpurify_check::lvs::{compare, CompareOptions, LayoutGraph, RefGraph};
+use gpurify_check::lvs::{compare, CompareOptions};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
 use gpurify_testgen::Rng;
 
-/// Options that resolve every tie and never run out of rounds, so a verdict is
-/// about the graphs rather than about the budget.
+/// Options that never run out of rounds, so a verdict is about the graphs
+/// rather than about the budget.
 fn decisive() -> CompareOptions {
     CompareOptions {
         max_rounds: 512,
-        tie_break: TieBreak::LowestIndex,
         param_tolerance: 1e-6,
-        match_names: false,
     }
 }
 
@@ -36,13 +33,7 @@ fn decisive() -> CompareOptions {
 /// other test in this file is a perturbation away from it.
 #[test]
 fn a_netlist_compared_against_itself_matches() {
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(stacked_pair()),
-        &RefGraph(stacked_pair()),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&stacked_pair(), &stacked_pair(), decisive());
     assert_eq!(verdict, Verdict::Match);
 }
 
@@ -56,14 +47,7 @@ fn reflexivity_holds_over_generated_graphs() {
         let devices = 3 + u32::try_from(seed).expect("a small seed");
         let layout = random_graph(&mut Rng::new(seed), devices, devices + 2);
         let reference = random_graph(&mut Rng::new(seed), devices, devices + 2);
-
-        let mut scratch = Partition::default();
-        let verdict = compare(
-            &LayoutGraph(layout),
-            &RefGraph(reference),
-            decisive(),
-            &mut scratch,
-        );
+        let verdict = compare(&layout, &reference, decisive());
         assert_eq!(verdict, Verdict::Match, "seed {seed} differs from itself");
     }
 }
@@ -75,13 +59,7 @@ fn reflexivity_holds_over_generated_graphs() {
 #[test]
 fn relabelling_the_rows_of_a_netlist_does_not_change_the_verdict() {
     let relabelled = permute(&stacked_pair(), &[1, 0], &[3, 5, 0, 4, 2, 1]);
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(relabelled),
-        &RefGraph(stacked_pair()),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&relabelled, &stacked_pair(), decisive());
     assert_eq!(verdict, Verdict::Match);
 }
 
@@ -92,19 +70,8 @@ fn relabelling_the_rows_of_a_netlist_does_not_change_the_verdict() {
 /// device, which is a wrong answer that reads like a right one.
 #[test]
 fn swapping_the_two_sides_reverses_every_side_in_the_report() {
-    let mut scratch = Partition::default();
-    let forward = compare(
-        &LayoutGraph(mos_and_bjt()),
-        &RefGraph(mos_and_bjt_without_the_bjt()),
-        decisive(),
-        &mut scratch,
-    );
-    let backward = compare(
-        &LayoutGraph(mos_and_bjt_without_the_bjt()),
-        &RefGraph(mos_and_bjt()),
-        decisive(),
-        &mut scratch,
-    );
+    let forward = compare(&mos_and_bjt(), &mos_and_bjt_without_the_bjt(), decisive());
+    let backward = compare(&mos_and_bjt_without_the_bjt(), &mos_and_bjt(), decisive());
 
     let flipped: Vec<Discrepancy> = discrepancies(&forward).iter().map(flip).collect();
     assert_same_discrepancies(discrepancies(&backward), &flipped);
@@ -117,13 +84,7 @@ fn swapping_the_two_sides_reverses_every_side_in_the_report() {
 /// what sends an engineer to the wrong instance.
 #[test]
 fn a_deleted_device_is_reported_as_unpaired_on_the_side_that_still_has_it() {
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(mos_and_bjt()),
-        &RefGraph(mos_and_bjt_without_the_bjt()),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&mos_and_bjt(), &mos_and_bjt_without_the_bjt(), decisive());
 
     let found = discrepancies(&verdict);
     assert!(
@@ -151,13 +112,7 @@ fn a_deleted_device_is_reported_as_unpaired_on_the_side_that_still_has_it() {
 /// a claim about which rows, not about how many.
 #[test]
 fn the_nets_orphaned_by_a_deleted_device_are_reported_by_index() {
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(mos_and_bjt()),
-        &RefGraph(mos_and_bjt_without_the_bjt()),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&mos_and_bjt(), &mos_and_bjt_without_the_bjt(), decisive());
 
     let found = discrepancies(&verdict);
     let unpaired: Vec<u32> = (0..7u32)
@@ -200,14 +155,7 @@ fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
         &[(Gate, 4), (Source, 2), (Drain, 5), (Bulk, 3)],
     );
     let swapped = builder.finish();
-
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(stacked_pair()),
-        &RefGraph(swapped),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&stacked_pair(), &swapped, decisive());
 
     let found = discrepancies(&verdict);
     assert!(!found.is_empty(), "a mismatch with nothing to act on");
@@ -221,10 +169,7 @@ fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
     // kind is a finding about something that is not in the input.
     for discrepancy in found {
         assert!(
-            !matches!(
-                discrepancy,
-                Discrepancy::ParameterMismatch { .. } | Discrepancy::DuplicateName { .. }
-            ),
+            !matches!(discrepancy, Discrepancy::ParameterMismatch { .. }),
             "{discrepancy:?} names a parameter or a name, and this fixture has neither"
         );
     }
@@ -239,13 +184,10 @@ fn a_swapped_terminal_is_blamed_on_the_device_whose_terminal_moved() {
 fn a_parameter_beyond_tolerance_is_reported_with_both_values() {
     let mut options = decisive();
     options.param_tolerance = 0.01;
-
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(stacked_pair_with_params(&[(WIDTH, 1.0)], &[])),
-        &RefGraph(stacked_pair_with_params(&[(WIDTH, 1.5)], &[])),
+        &stacked_pair_with_params(&[(WIDTH, 1.0)], &[]),
+        &stacked_pair_with_params(&[(WIDTH, 1.5)], &[]),
         options,
-        &mut scratch,
     );
 
     assert_same_discrepancies(
@@ -300,14 +242,7 @@ fn a_mos_written_source_for_drain_is_the_same_transistor() {
         );
         builder.finish()
     };
-
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(anchored(1, 2)),
-        &RefGraph(anchored(2, 1)),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&anchored(1, 2), &anchored(2, 1), decisive());
     assert_eq!(
         verdict,
         Verdict::Match,
@@ -354,7 +289,7 @@ fn a_reference_bulk_the_deck_cannot_extract_is_dropped_and_the_swap_still_pairs(
         sized,
     );
     anchor(&mut builder);
-    let layout = LayoutGraph(builder.finish());
+    let layout = builder.finish();
 
     // Reference: the card's four terminals, source and drain exchanged, the
     // same declared sizes.
@@ -366,19 +301,9 @@ fn a_reference_bulk_the_deck_cannot_extract_is_dropped_and_the_swap_still_pairs(
         sized,
     );
     anchor(&mut builder);
-    let mut reference = RefGraph(builder.finish());
+    let reference = builder.finish();
 
-    // Before the drop the extra Bulk neighbour splits the device classes and
-    // nothing pairs — the exact corpus failure.
-    let mut scratch = Partition::default();
-    assert_ne!(
-        compare(&layout, &reference, decisive(), &mut scratch),
-        Verdict::Match,
-        "a reference bulk terminal with no layout counterpart cannot pair"
-    );
-
-    gpurify_check::lvs::graph::drop_unextracted_bulk(&layout, &mut reference);
-    let verdict = compare(&layout, &reference, decisive(), &mut scratch);
+    let verdict = compare(&layout, &reference, decisive());
     assert_eq!(
         verdict,
         Verdict::Match,
@@ -387,23 +312,22 @@ fn a_reference_bulk_the_deck_cannot_extract_is_dropped_and_the_swap_still_pairs(
     );
 
     // Fail-closed boundary: a layout that *does* extract bulk keeps the
-    // reference's, and a comparison across the arity difference still reports.
-    let bulked = || {
+    // reference's, so a bulk on the wrong net still reports.
+    let bulked = |bulk: u32| {
         let mut builder = GraphBuilder::new(6);
         builder.device_with_params(
             DeviceKind::Mos,
             NCH,
-            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, bulk)],
             sized,
         );
         anchor(&mut builder);
         builder.finish()
     };
-    let bulked_layout = LayoutGraph(bulked());
-    let mut bulked_reference = RefGraph(bulked());
-    gpurify_check::lvs::graph::drop_unextracted_bulk(&bulked_layout, &mut bulked_reference);
-    assert_eq!(
-        bulked_reference.0, bulked_layout.0,
+    assert_eq!(compare(&bulked(3), &bulked(3), decisive()), Verdict::Match);
+    assert_ne!(
+        compare(&bulked(3), &bulked(4), decisive()),
+        Verdict::Match,
         "a layout that extracts bulk must leave the reference's bulk alone"
     );
 }
@@ -444,14 +368,7 @@ fn a_bipolars_emitter_and_collector_are_not_interchangeable() {
         );
         builder.finish()
     };
-
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(anchored(1, 2)),
-        &RefGraph(anchored(2, 1)),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&anchored(1, 2), &anchored(2, 1), decisive());
     assert_ne!(
         verdict,
         Verdict::Match,
@@ -478,12 +395,10 @@ fn a_bipolars_emitter_and_collector_are_not_interchangeable() {
 /// report must name the side that declared it.
 #[test]
 fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(stacked_pair_with_params(&[], &[])),
-        &RefGraph(stacked_pair_with_params(&[(WIDTH, 1.0)], &[])),
+        &stacked_pair_with_params(&[], &[]),
+        &stacked_pair_with_params(&[(WIDTH, 1.0)], &[]),
         decisive(),
-        &mut scratch,
     );
 
     assert_ne!(
@@ -510,12 +425,10 @@ fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
 /// terminals.
 #[test]
 fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(stacked_pair_with_params(&[(WIDTH, 1.0)], &[])),
-        &RefGraph(stacked_pair_with_params(&[], &[])),
+        &stacked_pair_with_params(&[(WIDTH, 1.0)], &[]),
+        &stacked_pair_with_params(&[], &[]),
         decisive(),
-        &mut scratch,
     );
 
     assert_same_discrepancies(
@@ -537,69 +450,30 @@ fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
 fn a_parameter_inside_tolerance_is_not_a_difference() {
     let mut options = decisive();
     options.param_tolerance = 0.01;
-
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(stacked_pair_with_params(&[(WIDTH, 1.0)], &[])),
-        &RefGraph(stacked_pair_with_params(&[(WIDTH, 1.005)], &[])),
+        &stacked_pair_with_params(&[(WIDTH, 1.0)], &[]),
+        &stacked_pair_with_params(&[(WIDTH, 1.005)], &[]),
         options,
-        &mut scratch,
     );
     assert_eq!(verdict, Verdict::Match);
 }
 
-/// Oracle: construct-from-answer. Names are off by default, which is stated in
-/// [`CompareOptions::match_names`]'s own documentation and is a behavioural
-/// choice rather than a formatting one: a layout may name its nets differently
-/// from its schematic, and requiring agreement turns a naming convention into an
-/// LVS failure. The two graphs here differ only in what net 0 is called.
+/// Oracle: construct-from-answer. Names are never compared: a layout may name
+/// its nets differently from its schematic. The two graphs here differ only in
+/// what net 0 is called.
 #[test]
-fn the_default_options_do_not_require_the_two_sides_to_agree_on_net_names() {
-    assert!(
-        !CompareOptions::default().match_names,
-        "names must not be compared unless a run asks for it"
-    );
-
-    let mut scratch = Partition::default();
+fn net_names_do_not_have_to_agree() {
+    let named_stack = |name| {
+        let mut graph = stacked_pair();
+        graph.net_name[0] = Some(name);
+        graph
+    };
     let verdict = compare(
-        &LayoutGraph(named_stack(VDD)),
-        &RefGraph(named_stack(VSS)),
+        &named_stack(VDD),
+        &named_stack(VSS),
         CompareOptions::default(),
-        &mut scratch,
     );
     assert_eq!(verdict, Verdict::Match);
-}
-
-/// Oracle: construct-from-answer. Turning name matching on makes the same pair
-/// of graphs a mismatch, and it is net 0 — the only net whose name differs —
-/// that the report names.
-#[test]
-fn asking_for_name_matching_makes_a_renamed_net_a_difference() {
-    let mut options = decisive();
-    options.match_names = true;
-
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(named_stack(VDD)),
-        &RefGraph(named_stack(VSS)),
-        options,
-        &mut scratch,
-    );
-
-    let found = discrepancies(&verdict);
-    assert!(
-        found
-            .iter()
-            .any(|d| blames_net(d, Side::Layout, 0) || blames_net(d, Side::Reference, 0)),
-        "the renamed net is not named in the report: {found:#?}"
-    );
-}
-
-/// The stacked pair with net 0 given a name and the rest anonymous.
-fn named_stack(name: gpurify_ingest::StrId) -> gpurify_check::lvs::Graph {
-    let mut graph = stacked_pair();
-    graph.net_name[0] = Some(name);
-    graph
 }
 
 /// Oracle: construct-from-answer. A chain of twenty-four devices needs about a
@@ -610,14 +484,7 @@ fn named_stack(name: gpurify_ingest::StrId) -> gpurify_check::lvs::Graph {
 fn a_round_limit_reached_is_inconclusive_and_never_a_mismatch() {
     let mut options = decisive();
     options.max_rounds = 1;
-
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(chain(24)),
-        &RefGraph(chain(24)),
-        options,
-        &mut scratch,
-    );
+    let verdict = compare(&chain(24), &chain(24), options);
     assert_eq!(verdict, Verdict::Inconclusive(Inconclusive::RoundLimit));
 }
 
@@ -627,13 +494,7 @@ fn a_round_limit_reached_is_inconclusive_and_never_a_mismatch() {
 /// implementation that always returns the answer the test wants.
 #[test]
 fn the_same_chain_matches_once_the_round_limit_is_generous() {
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(chain(24)),
-        &RefGraph(chain(24)),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&chain(24), &chain(24), decisive());
     assert_eq!(verdict, Verdict::Match);
 }
 
@@ -645,14 +506,7 @@ fn no_round_budget_makes_a_netlist_differ_from_itself() {
     for budget in 1..=20u32 {
         let mut options = decisive();
         options.max_rounds = budget;
-
-        let mut scratch = Partition::default();
-        let verdict = compare(
-            &LayoutGraph(chain(24)),
-            &RefGraph(chain(24)),
-            options,
-            &mut scratch,
-        );
+        let verdict = compare(&chain(24), &chain(24), options);
         assert!(
             verdict == Verdict::Match || verdict == Verdict::Inconclusive(Inconclusive::RoundLimit),
             "budget {budget} produced {verdict:?} for a netlist against itself"
@@ -665,13 +519,7 @@ fn no_round_budget_makes_a_netlist_differ_from_itself() {
 /// the circuit.
 #[test]
 fn the_same_symmetric_structure_matches_when_the_tie_break_may_fire() {
-    let mut scratch = Partition::default();
-    let verdict = compare(
-        &LayoutGraph(differential_pair()),
-        &RefGraph(differential_pair()),
-        decisive(),
-        &mut scratch,
-    );
+    let verdict = compare(&differential_pair(), &differential_pair(), decisive());
     assert_eq!(verdict, Verdict::Match);
 }
 
@@ -681,27 +529,11 @@ fn the_same_symmetric_structure_matches_when_the_tie_break_may_fire() {
 /// this is where "byte-identical across two runs" lands for `lvs`.
 #[test]
 fn a_comparison_gives_the_same_verdict_on_every_run() {
-    let mut scratch = Partition::default();
-    let first = compare(
-        &LayoutGraph(mos_and_bjt()),
-        &RefGraph(mos_and_bjt_without_the_bjt()),
-        decisive(),
-        &mut scratch,
-    );
+    let first = compare(&mos_and_bjt(), &mos_and_bjt_without_the_bjt(), decisive());
 
-    compare(
-        &LayoutGraph(chain(9)),
-        &RefGraph(differential_pair()),
-        decisive(),
-        &mut scratch,
-    );
+    compare(&chain(9), &differential_pair(), decisive());
 
-    let second = compare(
-        &LayoutGraph(mos_and_bjt()),
-        &RefGraph(mos_and_bjt_without_the_bjt()),
-        decisive(),
-        &mut scratch,
-    );
+    let second = compare(&mos_and_bjt(), &mos_and_bjt_without_the_bjt(), decisive());
 
     // `Verdict` derives `PartialEq`, so the two reports are compared as values.
     // The `Debug` strings this replaced would have called two discrepancy lists

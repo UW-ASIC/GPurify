@@ -7,20 +7,42 @@
 //! *this rule ran, it examined N things, and it found nothing* — and both are
 //! asserted here every time.
 //!
-//! One of `checks`'s six functions is reachable from outside the crate.
-//! `check_floating_nets`, `check_label_conflicts` and `check_net_seed_conflicts`
-//! take a `NetTable` or a `PortTable`; `check_device_counts` and
-//! `check_parametric` take a `DeviceTable`. All three types hold private fields
-//! and offer no constructor, so no test outside `topology` can build one. Only
-//! `check_topology` takes a [`LayoutGraph`], whose columns are public, and it is
-//! what this file covers. The gap is recorded in `docs/NEED_TESTING.md`.
+//! The extracted tables hold private fields and offer no constructor, so these
+//! tests run [`check_layout`] over empty tables and a hand-built graph, and read
+//! back the two structural rows (`lvs.terminal_net`, `lvs.terminal_count`).
 
 use crate::common;
 
 use common::{mos_and_bjt, stacked_pair};
-use gpurify_check::lvs::checks::check_topology;
-use gpurify_check::lvs::LayoutGraph;
+use gpurify_check::lvs::{check_layout, intern_rule_ids, Graph};
 use gpurify_check::report::{Outcome, RuleRun, Violations};
+use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
+use gpurify_ingest::StrTable;
+
+/// The structural rows `check_layout` writes for `graph`, and their violations.
+fn check_topology(graph: &Graph, out: &mut Violations, runs: &mut Vec<RuleRun>) {
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let mut all = Vec::new();
+    check_layout(
+        graph,
+        &NetTable::default(),
+        &DeviceTable::default(),
+        &PortTable::default(),
+        &strings,
+        out,
+        &mut all,
+    );
+    let structural = [
+        strings.get("lvs.terminal_net"),
+        strings.get("lvs.terminal_count"),
+    ];
+    assert_eq!(all.len(), 8, "check_layout writes eight rows");
+    runs.extend(
+        all.into_iter()
+            .filter(|run| structural.contains(&Some(run.rule))),
+    );
+}
 
 /// Assert a rule reported itself as having executed over a non-empty input, and
 /// that the rows it wrote are the rows it says it wrote.
@@ -68,7 +90,7 @@ fn a_well_formed_graph_is_structurally_clean_and_the_check_says_it_looked() {
     ] {
         let mut out = Violations::default();
         let mut runs = Vec::new();
-        check_topology(&LayoutGraph(graph), &mut out, &mut runs);
+        check_topology(&graph, &mut out, &mut runs);
         assert!(out.is_empty(), "{name}: a clean graph produced findings");
         assert_ran(&runs, &out, 0);
     }
@@ -93,7 +115,7 @@ fn a_terminal_naming_a_net_that_does_not_exist_is_found() {
 
     let mut out = Violations::default();
     let mut runs = Vec::new();
-    check_topology(&LayoutGraph(graph), &mut out, &mut runs);
+    check_topology(&graph, &mut out, &mut runs);
 
     assert_ran(&runs, &out, 1);
 }
@@ -128,7 +150,7 @@ fn a_graph_with_devices_but_no_terminal_csr_refuses_rather_than_reporting_clean(
 
     let mut out = Violations::default();
     let mut runs = Vec::new();
-    check_topology(&LayoutGraph(graph), &mut out, &mut runs);
+    check_topology(&graph, &mut out, &mut runs);
 
     let terminal_count = runs
         .iter()

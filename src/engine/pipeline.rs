@@ -111,12 +111,7 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
 /// Intern every LVS report rule id, so `run_checks` (which borrows `Loaded`
 /// shared) can find them.
 pub fn intern_report_ids(strings: &mut StrTable) {
-    for id in crate::engine::run::LVS_RULE_IDS
-        .iter()
-        .chain(crate::engine::run::LVS_CHECK_RULE_IDS.iter())
-    {
-        strings.intern(id);
-    }
+    gpurify_check::lvs::intern_rule_ids(strings);
 }
 
 /// Read a reference netlist. The first subcircuit opener picks the dialect

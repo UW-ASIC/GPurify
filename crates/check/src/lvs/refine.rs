@@ -13,25 +13,19 @@ pub(crate) struct ClassId(pub(crate) u32);
 
 /// Refinement state for both graphs; node index is devices first, then nets.
 #[derive(Debug, Default)]
-pub struct Partition {
+pub(crate) struct Partition {
     pub(crate) layout_class: Vec<ClassId>,
     ref_class: Vec<ClassId>,
     next_layout: Vec<ClassId>,
     next_ref: Vec<ClassId>,
     signature: Vec<(u64, u32)>,
+    spare: Vec<(u64, u32)>,
     /// Nodes per class on each side, and the lowest node index in each
     /// (`u32::MAX` when empty). Valid after a refinement that did not exhaust.
     pub(crate) layout_tally: Vec<u32>,
     pub(crate) ref_tally: Vec<u32>,
     layout_first: Vec<u32>,
     pub(crate) ref_first: Vec<u32>,
-}
-
-/// How to break a genuine symmetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TieBreak {
-    /// Lowest node index on each side.
-    LowestIndex,
 }
 
 /// Splitmix64's finaliser.
@@ -122,6 +116,7 @@ fn signature_round(
     layout_class: &[ClassId],
     ref_class: &[ClassId],
     signature: &mut Vec<(u64, u32)>,
+    spare: &mut Vec<(u64, u32)>,
     next: &mut Vec<ClassId>,
 ) -> u32 {
     let total = layout_class.len() + ref_class.len();
@@ -132,8 +127,7 @@ fn signature_round(
     push_signatures(layout, layout_class, 0, signature);
     push_signatures(reference, ref_class, split, signature);
 
-    // Ties break on the node index, so an unstable sort is deterministic.
-    signature.sort_unstable();
+    sort_by_hash(signature, spare);
 
     next.clear();
     next.resize(total, ClassId(0));
@@ -146,6 +140,45 @@ fn signature_round(
         next[node as usize] = ClassId(count - 1);
     }
     count
+}
+
+/// Below this many signatures a plain comparison sort wins.
+const RADIX_MIN: usize = 1 << 12;
+
+/// Sort ascending by hash. Order among equal hashes is not fixed, and nothing
+/// reads it: numbering only groups equal hashes. Above [`RADIX_MIN`], one
+/// scatter on the top bits (about four hashes per bucket, as mixed hashes are
+/// uniform) then a sort per bucket.
+fn sort_by_hash(items: &mut Vec<(u64, u32)>, spare: &mut Vec<(u64, u32)>) {
+    if items.len() < RADIX_MIN {
+        items.sort_unstable_by_key(|&(hash, _)| hash);
+        return;
+    }
+    let bits = (items.len() / 4).ilog2().min(20);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "at most 20 bits survive the shift"
+    )]
+    let bucket = |hash: u64| (hash >> (64 - bits)) as usize;
+    let mut start = vec![0u32; (1 << bits) + 1];
+    for &(hash, _) in items.iter() {
+        start[bucket(hash) + 1] += 1;
+    }
+    for at in 1..start.len() {
+        start[at] += start[at - 1];
+    }
+    spare.clear();
+    spare.resize(items.len(), (0, 0));
+    let mut cursor = start.clone();
+    for &item in items.iter() {
+        let slot = &mut cursor[bucket(item.0)];
+        spare[*slot as usize] = item;
+        *slot += 1;
+    }
+    for run in start.windows(2) {
+        spare[run[0] as usize..run[1] as usize].sort_unstable_by_key(|&(hash, _)| hash);
+    }
+    std::mem::swap(items, spare);
 }
 
 /// Something lands in the class and it is not exactly one node per side.
@@ -201,6 +234,7 @@ pub(crate) fn refine_into(
             &out.layout_class,
             &out.ref_class,
             &mut out.signature,
+            &mut out.spare,
             &mut out.next_layout,
         );
 
@@ -246,4 +280,85 @@ pub(crate) fn refine_into(
         class_count = count + 1;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sort_by_hash, RADIX_MIN};
+
+    fn items(seed: u64, n: usize) -> Vec<(u64, u32)> {
+        let mut z = seed;
+        (0..n)
+            .map(|i| {
+                z = super::mix(z.wrapping_add(0x9e37_79b9_7f4a_7c15));
+                // Few distinct values in odd seeds, so equal hashes are exercised.
+                let hash = if seed.is_multiple_of(2) { z } else { z % 7 };
+                (hash, u32::try_from(i).expect("small"))
+            })
+            .collect()
+    }
+
+    /// The radix path orders hashes as a comparison sort does.
+    #[test]
+    fn radix_sort_agrees_with_a_comparison_sort() {
+        let mut spare = Vec::new();
+        for seed in 0..6u64 {
+            for n in [
+                0,
+                1,
+                2,
+                RADIX_MIN - 1,
+                RADIX_MIN,
+                RADIX_MIN + 1,
+                3 * RADIX_MIN + 7,
+            ] {
+                let mut want = items(seed, n);
+                let mut got = want.clone();
+                want.sort_unstable();
+                sort_by_hash(&mut got, &mut spare);
+                assert!(got.is_sorted_by_key(|&(hash, _)| hash), "seed {seed} n {n}");
+                got.sort_unstable();
+                assert_eq!(got, want, "seed {seed} n {n}");
+            }
+        }
+    }
+
+    /// Thread CPU time in ns; a loaded machine distorts it far less than wall time.
+    fn cpu_ns() -> u64 {
+        let stat = std::fs::read_to_string("/proc/thread-self/schedstat").unwrap_or_default();
+        stat.split_whitespace()
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// `cargo test --release -p gpurify-check --lib radix_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing, run by hand"]
+    fn radix_bench() {
+        let mut spare = Vec::new();
+        for n in [2_000usize, 20_000, 200_000, 2_000_000] {
+            let source = items(2, n);
+            let reps = (4_000_000 / n).max(3);
+            let (mut a, mut b) = (0u64, 0u64);
+            for _ in 0..reps {
+                let mut v = source.clone();
+                let t = cpu_ns();
+                v.sort_unstable();
+                a += cpu_ns() - t;
+                std::hint::black_box(&v);
+                let mut v = source.clone();
+                let t = cpu_ns();
+                sort_by_hash(&mut v, &mut spare);
+                b += cpu_ns() - t;
+                std::hint::black_box(&v);
+            }
+            let reps = reps as u64;
+            println!(
+                "n={n}: sort_unstable {} us, radix {} us",
+                a / 1000 / reps,
+                b / 1000 / reps
+            );
+        }
+    }
 }
