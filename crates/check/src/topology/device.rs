@@ -4,6 +4,7 @@
 //! marker is the channel, not the implant.
 //! Data in: `GeometryStore`, `NetTable`, `DeviceRecognition`. Data out: `DeviceTable`.
 
+use crate::drc::rules::{owners_of, LayerRects};
 use crate::topology::csr_run;
 use crate::topology::net::{retain_intersecting_into, NetId, NetTable};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
@@ -419,10 +420,17 @@ pub fn refuse_conducting_channels(
             validate_layer_into(store, layer, &mut conductor_area).map_err(BooleanError::from)?;
             intersection_into(&marker_area, &conductor_area, &mut overlap)?;
             if !overlap.is_empty() {
+                // The overlap's own rows are the boolean's scratch store's.
+                let mut drawn = LayerRects::default();
+                let mut owner = PolyId(u32::MAX);
+                for (id, area) in [(marker, &marker_area), (layer, &conductor_area)] {
+                    drawn.build(store, id, area);
+                    owner = owner.min(owners_of(&overlap, &drawn)[0]);
+                }
                 return Err(ChannelError::ConductingChannel {
                     marker,
                     conductor: layer,
-                    poly: overlap.get(0).provenance(),
+                    poly: owner,
                 });
             }
         }

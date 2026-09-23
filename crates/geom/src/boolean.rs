@@ -1,8 +1,8 @@
 //! Exact rectilinear booleans by an x-sweep with nonzero-winding occupancy.
 //!
 //! Data in: [`ValidatedLayer`] operands (or one raw GDS ring for [`canonical_rings_into`]).
-//! Data out: a [`ValidatedLayer`], outer rings CCW, holes CW; provenance is the
-//! lowest contributing `PolyId`. Non-rectilinear input is refused, never approximated.
+//! Data out: a [`ValidatedLayer`], outer rings CCW, holes CW; its rows are the
+//! scratch store's, not the operands'. Non-rectilinear input is refused, never approximated.
 
 use core::cmp::Ordering;
 

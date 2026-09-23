@@ -34,7 +34,8 @@ pub struct ValidatedLayer {
     verts_y: Vec<Dbu>,
     ring_vert_start: Vec<u32>,
     ring_vert_len: Vec<u32>,
-    /// Provenance; for a boolean result, the lowest contributing [`PolyId`].
+    /// The store row each ring was validated from; for a boolean result, a row
+    /// of the boolean's own scratch store, which names no layout shape.
     ring_poly: Vec<PolyId>,
     /// Ring 0 of each span is the outer (CCW); the rest are holes (CW).
     poly_ring_start: Vec<u32>,
@@ -131,8 +132,9 @@ impl<'a> PolygonRef<'a> {
         layer.ring_poly[start..start + len].iter().copied()
     }
 
-    /// The store row to blame a finding on; for a boolean result, the lowest
-    /// contributing [`PolyId`].
+    /// The store row of the outer ring. Only a layer validated straight from
+    /// the store has layout rows; a boolean result's rows are its scratch
+    /// store's, so find its owner in the layout instead.
     pub fn provenance(self) -> PolyId {
         let ring = self.layer.poly_ring_start[self.idx as usize] as usize;
         self.layer.ring_poly[ring]

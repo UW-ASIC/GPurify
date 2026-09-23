@@ -551,3 +551,34 @@ fn a_cut_size_accepts_either_orientation_and_refuses_a_non_rectangle() {
         Measurement::Area(gpurify_geom::DbuArea::new(510 * 100 + 100 * 70))
     );
 }
+
+/// Oracle: construct-from-answer. The notch is measured on the merged layer,
+/// whose figures are numbered by the merge's own scratch store: here the plain
+/// square left of the U is its figure 0 and the U its figure 1. The finding
+/// must name the U's lowest drawn row, the base drawn first, not row 1 (the
+/// U's left arm), which is what the scratch number would read as.
+#[test]
+fn a_notch_names_the_lowest_drawn_row_of_its_own_figure() {
+    let mut layout = LayoutBuilder::new(1);
+    let base = layout.rect(A, 1_000, 0, 1_300, 100);
+    layout.rect(A, 1_000, 100, 1_110, 500);
+    layout.rect(A, 1_190, 100, 1_300, 500);
+    let square = layout.rect(A, 0, 0, 100, 100);
+    let (store, ids) = layout.finish();
+    assert!(ids.of(base) < ids.of(square), "the base is drawn first");
+
+    let mut sink = Sink::default();
+    sink.run(
+        &store,
+        &[(
+            RULE,
+            Rule::Notch {
+                layer: A,
+                limit: dbu(81),
+            },
+        )],
+    );
+
+    assert_eq!(sink.out.len(), 1, "one notch, in the U");
+    assert_eq!(sink.out.shape_a[0], ids.of(base));
+}
