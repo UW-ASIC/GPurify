@@ -149,6 +149,16 @@ fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
         ],
     );
     expect("a.1", "angle", &[], &["angle=#0", "angle=#90", "angle=#45"]);
+    let (deck, strings) = ok("rule x.2 angle(poly; allowed: [0deg, 90deg])\n");
+    assert_eq!(
+        rules(&deck, &strings)[0],
+        (
+            "x.2".to_owned(),
+            "angle".to_owned(),
+            vec!["poly".to_owned()],
+            vec!["angle=#0".to_owned(), "angle=#90".to_owned()],
+        )
+    );
 }
 
 /// gf180 M1.4 "Metal1 minimum density 30 % over the entire die", and a

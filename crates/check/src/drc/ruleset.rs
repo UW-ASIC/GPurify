@@ -123,8 +123,10 @@ pub enum Rule {
     OffGrid {
         pitch: Dbu,
     },
-    /// Bit `i` allows the line at `45 * i` degrees (0, 45, 90, 135).
+    /// Bit `i` allows the line at `45 * i` degrees (0, 45, 90, 135), on one
+    /// layer or (`None`) on every layer.
     Angle {
+        layer: Option<LayerId>,
         allowed: u8,
     },
     /// Cuts required within `within` of each cut, the cut itself included.
@@ -396,7 +398,10 @@ impl RuleSet {
                     }
                 }
                 "angle" => {
-                    layers(spec, 0)?;
+                    let layer = match spec.layer_len {
+                        0 => None,
+                        _ => Some(one(spec)?),
+                    };
                     let wanted = strings.get("angle");
                     let mut allowed = 0u8;
                     for &(param, stated) in rules.params_of(spec) {
@@ -421,7 +426,7 @@ impl RuleSet {
                             param: "angle",
                         });
                     }
-                    Rule::Angle { allowed }
+                    Rule::Angle { layer, allowed }
                 }
                 "redundant_via" => {
                     let layer = one(spec)?;
@@ -580,7 +585,7 @@ impl RuleSet {
                     overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
                 }
                 Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, out),
-                Rule::Angle { allowed } => grid::angle(store, id, allowed, out),
+                Rule::Angle { layer, allowed } => grid::angle(store, id, layer, allowed, out),
                 Rule::RedundantVia {
                     layer,
                     min_count,
@@ -649,7 +654,8 @@ impl Rule {
             | Rule::MaxDistanceToTap {
                 well: a, tap: b, ..
             } => [Some(a), Some(b)],
-            Rule::OffGrid { .. } | Rule::Angle { .. } => [None, None],
+            Rule::Angle { layer, .. } => [layer, None],
+            Rule::OffGrid { .. } => [None, None],
         }
     }
 }

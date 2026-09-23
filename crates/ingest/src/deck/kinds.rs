@@ -338,6 +338,15 @@ pub(crate) const KINDS: &[Kind] = &[
         None,
         &[p("allowed", "angle", Dim::AngleList)],
     ),
+    // One layer's edges: `angle(diff; allowed: [0deg, 90deg])` (sky130 x.2).
+    drc(
+        "angle",
+        Cmp::Absent,
+        "angle",
+        &[0],
+        None,
+        &[p("allowed", "angle", Dim::AngleList)],
+    ),
     drc(
         "redundant_via",
         Cmp::Ge,
