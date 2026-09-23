@@ -76,16 +76,6 @@ impl ParasiticNetwork {
         self.value.push(value);
     }
 
-    /// Total capacitance on one net, ground plus coupling. See [`Self::capacitance_per_net`].
-    pub fn net_capacitance(&self, net: NetId) -> Qty<Capacitance, { prefix::FEMTO }> {
-        Qty::new(
-            self.capacitance_per_net()
-                .get(net.0 as usize)
-                .copied()
-                .unwrap_or(0.0),
-        )
-    }
-
     /// Every net's total capacitance in fF, indexed by `NetId`, in one pass.
     ///
     /// Each net's sum is a strict fold in element order, so the bits are fixed.

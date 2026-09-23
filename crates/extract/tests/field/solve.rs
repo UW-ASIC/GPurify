@@ -2,14 +2,13 @@
 //!
 //! The solver takes its operator as a generic parameter, which is the whole
 //! reason this file needs no mesh and no physics: a small dense matrix written
-//! out here is a legal [`MatVec`], its exact solution is arithmetic, and the
+//! out here is a legal operator, its exact solution is arithmetic, and the
 //! solver is exercised independently of everything it normally multiplies.
 //!
 //! Nothing here consults an implementation for an answer. Either the matrix is
 //! small enough to invert on paper, or the right-hand side was formed by
 //! applying the operator to a solution chosen first.
 
-use gpurify_extract::field::matvec::MatVec;
 use gpurify_extract::field::solve::{gmres, refine, residual, Options, SolveError, Workspace};
 use gpurify_testgen::{assert_close, assert_close_relative, Rng};
 
@@ -60,36 +59,13 @@ impl Dense {
     }
 }
 
-impl MatVec for Dense {
-    fn dim(&self) -> usize {
-        self.n
-    }
-
+impl Dense {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
         assert_eq!(x.len(), self.n, "x is the operator's dimension");
         assert_eq!(y.len(), self.n, "y is the operator's dimension");
         for (i, out) in y.iter_mut().enumerate() {
             *out = (0..self.n).map(|j| self.a[i * self.n + j] * x[j]).sum();
         }
-    }
-}
-
-/// An operator that returns a `NaN` on demand.
-///
-/// Not a plausible physical operator, and that is the point: `SolveError` names
-/// a non-finite value as one of the three things a solve can fail on, so
-/// something has to produce one.
-struct Poisoned {
-    n: usize,
-}
-
-impl MatVec for Poisoned {
-    fn dim(&self) -> usize {
-        self.n
-    }
-
-    fn apply(&self, _x: &[f64], y: &mut [f64]) {
-        y.fill(f64::NAN);
     }
 }
 
@@ -115,13 +91,13 @@ fn the_residual_of_an_exact_solution_is_zero_and_of_a_zero_guess_is_one() {
 
     assert_close(
         "the residual at the exact solution",
-        residual(&a, &b, &x, &mut scratch),
+        residual(op(&a), &b, &x, &mut scratch),
         0.0,
         1e-15,
     );
     assert_close(
         "the residual at the zero guess",
-        residual(&a, &b, &[0.0, 0.0], &mut scratch),
+        residual(op(&a), &b, &[0.0, 0.0], &mut scratch),
         1.0,
         1e-15,
     );
@@ -141,7 +117,7 @@ fn the_residual_is_linear_in_the_error_it_measures() {
     let doubled: Vec<f64> = x.iter().map(|value| value * 2.0).collect();
     assert_close(
         "the residual at twice the solution",
-        residual(&a, &b, &doubled, &mut scratch),
+        residual(op(&a), &b, &doubled, &mut scratch),
         1.0,
         1e-12,
     );
@@ -149,7 +125,7 @@ fn the_residual_is_linear_in_the_error_it_measures() {
     let tripled: Vec<f64> = x.iter().map(|value| value * 3.0).collect();
     assert_close(
         "the residual at three times the solution",
-        residual(&a, &b, &tripled, &mut scratch),
+        residual(op(&a), &b, &tripled, &mut scratch),
         2.0,
         1e-12,
     );
@@ -165,7 +141,7 @@ fn the_identity_operator_solves_to_the_right_hand_side_itself() {
     let mut workspace = Workspace::default();
 
     let converged =
-        gmres(&a, &b, tight(), &mut x, &mut workspace).expect("the identity system converges");
+        gmres(op(&a), &b, tight(), &mut x, &mut workspace).expect("the identity system converges");
     for (index, (&got, &want)) in x.iter().zip(&b).enumerate() {
         assert_close(&format!("component {index}"), got, want, 1e-12);
     }
@@ -192,7 +168,7 @@ fn a_diagonal_system_solves_component_by_component() {
 
     let mut x = vec![0.0; n];
     let mut workspace = Workspace::default();
-    gmres(&operator, &b, tight(), &mut x, &mut workspace).expect("a diagonal system converges");
+    gmres(op(&operator), &b, tight(), &mut x, &mut workspace).expect("a diagonal system converges");
 
     for (index, ((&got, &rhs), &d)) in x.iter().zip(&b).zip(&diagonal).enumerate() {
         assert_close_relative(&format!("component {index}"), got, rhs / d, 1e-10);
@@ -214,7 +190,7 @@ fn gmres_recovers_a_solution_the_right_hand_side_was_built_from() {
         let b = a.rhs_for(&expected);
 
         let mut x = vec![0.0; n];
-        let converged = gmres(&a, &b, tight(), &mut x, &mut workspace)
+        let converged = gmres(op(&a), &b, tight(), &mut x, &mut workspace)
             .unwrap_or_else(|error| panic!("a {n} by {n} dominant system failed: {error}"));
 
         for (index, (&got, &want)) in x.iter().zip(&expected).enumerate() {
@@ -248,13 +224,13 @@ fn the_reported_residual_is_the_one_residual_recomputes() {
         let a = Dense::random_dominant(&mut rng, n);
         let b: Vec<f64> = (0..n).map(|_| rng.unit() * 2.0 - 1.0).collect();
         let mut x = vec![0.0; n];
-        let converged = gmres(&a, &b, tight(), &mut x, &mut workspace)
+        let converged = gmres(op(&a), &b, tight(), &mut x, &mut workspace)
             .unwrap_or_else(|error| panic!("a {n} by {n} dominant system failed: {error}"));
 
         assert_close(
             &format!("the reported residual of a {n} by {n} solve"),
             converged.residual,
-            residual(&a, &b, &x, &mut scratch),
+            residual(op(&a), &b, &x, &mut scratch),
             1e-14,
         );
     }
@@ -282,7 +258,7 @@ fn exhausting_the_iteration_budget_is_an_error_and_not_an_approximation() {
 
     let mut x = vec![0.0; 4];
     let mut workspace = Workspace::default();
-    let error = gmres(&a, &b, options, &mut x, &mut workspace)
+    let error = gmres(op(&a), &b, options, &mut x, &mut workspace)
         .expect_err("one iteration cannot reach a tolerance of 1e-14 on this system");
 
     match error {
@@ -309,12 +285,13 @@ fn exhausting_the_iteration_budget_is_an_error_and_not_an_approximation() {
 /// would have caught it.
 #[test]
 fn an_operator_producing_a_non_finite_value_fails_rather_than_returning_one() {
-    let a = Poisoned { n: 3 };
+    // `SolveError` names a non-finite value as a failure, so something has to produce one.
+    let poisoned = |_: &[f64], y: &mut [f64]| y.fill(f64::NAN);
     let b = [1.0, 1.0, 1.0];
     let mut x = vec![0.0; 3];
     let mut workspace = Workspace::default();
 
-    let error = gmres(&a, &b, tight(), &mut x, &mut workspace)
+    let error = gmres(poisoned, &b, tight(), &mut x, &mut workspace)
         .expect_err("an operator returning NaN cannot produce a solution");
     assert!(
         matches!(error, SolveError::NonFinite(_)),
@@ -336,11 +313,11 @@ fn refinement_reaches_the_same_solution_as_a_bare_solve() {
     let mut workspace = Workspace::default();
 
     let mut plain = vec![0.0; 12];
-    gmres(&a, &b, tight(), &mut plain, &mut workspace).expect("the bare solve converges");
+    gmres(op(&a), &b, tight(), &mut plain, &mut workspace).expect("the bare solve converges");
 
     let mut refined = vec![0.0; 12];
     let converged =
-        refine(&a, &b, tight(), &mut refined, &mut workspace).expect("refinement converges");
+        refine(op(&a), &b, tight(), &mut refined, &mut workspace).expect("refinement converges");
 
     for (index, ((&r, &p), &want)) in refined.iter().zip(&plain).zip(&expected).enumerate() {
         assert_close(
@@ -375,18 +352,18 @@ fn solving_the_same_system_twice_gives_bit_identical_answers() {
     let mut workspace = Workspace::default();
 
     let mut first = vec![0.0; 20];
-    let first_result = gmres(&a, &b, tight(), &mut first, &mut workspace)
+    let first_result = gmres(op(&a), &b, tight(), &mut first, &mut workspace)
         .expect("a twenty by twenty dominant system converges");
 
     // A different system in between, so the workspace genuinely carries other
     // state into the repeat rather than being untouched.
     let mut interference = vec![0.0; 20];
     let other = a.rhs_for(&[1.0_f64; 20]);
-    gmres(&a, &other, tight(), &mut interference, &mut workspace)
+    gmres(op(&a), &other, tight(), &mut interference, &mut workspace)
         .expect("the interfering system converges");
 
     let mut second = vec![0.0; 20];
-    let second_result = gmres(&a, &b, tight(), &mut second, &mut workspace)
+    let second_result = gmres(op(&a), &b, tight(), &mut second, &mut workspace)
         .expect("a twenty by twenty dominant system converges");
 
     for (index, (&x, &y)) in first.iter().zip(&second).enumerate() {
@@ -422,7 +399,7 @@ fn restarting_bounds_the_krylov_basis_without_changing_the_answer() {
     for restart in [3_u32, 8, 24, 100] {
         let mut x = vec![0.0; 24];
         let converged = gmres(
-            &a,
+            op(&a),
             &b,
             Options {
                 tolerance: 1e-11,
@@ -471,4 +448,9 @@ fn the_default_solve_options_are_internally_coherent() {
         options.max_iterations,
         options.restart
     );
+}
+
+/// The solver's operator form of a dense matrix.
+fn op(a: &Dense) -> impl Fn(&[f64], &mut [f64]) + Copy + '_ {
+    move |x, y| a.apply(x, y)
 }

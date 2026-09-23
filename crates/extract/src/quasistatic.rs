@@ -4,8 +4,8 @@
 //! Data out: one node per net carrying the Maxwell matrix (row sum to ground,
 //! `-C_ij` coupling), plus a second node per net for series L and R when asked.
 
-pub use crate::field::henry::{InductMatrix, InductanceError, InductanceOptions};
-pub use crate::field::{matvec, mesh, solve, Accuracy, CapMatrix};
+pub use crate::field::henry::{InductMatrix, InductanceError};
+pub use crate::field::{mesh, solve, Accuracy, CapMatrix};
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::{NetId, NetTable};
@@ -22,12 +22,11 @@ pub fn extract_into(
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
-    options: solve::Options,
     matrix: &mut CapMatrix,
     out: &mut ParasiticNetwork,
 ) -> Result<Accuracy, solve::SolveError> {
     out.clear();
-    let accuracy = crate::field::extract_into(store, nets, selected, stack, grid, options, matrix)?;
+    let accuracy = crate::field::extract_into(store, nets, selected, stack, grid, matrix)?;
 
     let n = matrix.net.len();
     push_anchors(store, nets, &matrix.net, out);
@@ -66,13 +65,10 @@ pub fn extract_inductance_into(
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
-    options: &InductanceOptions,
     matrix: &mut InductMatrix,
     out: &mut ParasiticNetwork,
 ) -> Result<(), InductanceError> {
-    crate::field::henry::extract_inductance_into(
-        store, nets, selected, stack, grid, options, matrix,
-    )?;
+    crate::field::henry::extract_inductance_into(store, nets, selected, stack, grid, matrix)?;
 
     if out.node_net.is_empty() {
         push_anchors(store, nets, &matrix.net, out);

@@ -551,7 +551,6 @@ fn run_pex(
         gpurify_extract::analytical::extract_into(
             &loaded.store,
             &extracted.nets,
-            &extracted.devices,
             &loaded.deck.connectivity,
             &loaded.deck.stack,
             grid,
@@ -577,7 +576,6 @@ fn run_pex(
         gpurify_extract::analytical::extract_into(
             &loaded.store,
             &extracted.nets,
-            &extracted.devices,
             &loaded.deck.connectivity,
             &loaded.deck.stack,
             grid,
@@ -592,7 +590,6 @@ fn run_pex(
             &selected,
             &loaded.deck.stack,
             grid,
-            gpurify_extract::quasistatic::solve::Options::default(),
             &mut matrix,
             &mut solved,
         )?;
@@ -609,7 +606,6 @@ fn run_pex(
                 &selected,
                 &loaded.deck.stack,
                 grid,
-                &gpurify_extract::quasistatic::InductanceOptions::default(),
                 &mut inductance,
                 &mut solved,
             ) {
@@ -817,8 +813,6 @@ pub enum EngineError {
     Erc(#[from] gpurify_check::erc::ErcError),
     #[error(transparent)]
     Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
-    #[error(transparent)]
-    Mesh(#[from] gpurify_extract::quasistatic::mesh::MeshError),
 }
 
 /// [`merge_field_solved_into`] and [`reciprocity_refusal`] are private, so their
@@ -828,7 +822,6 @@ mod tests {
     use super::{merge_field_solved_into, reciprocity_refusal};
     use gpurify_check::topology::NetId;
     use gpurify_extract::network::NodeId;
-    use gpurify_extract::quasistatic::matvec::Backend;
     use gpurify_extract::quasistatic::Accuracy;
     use gpurify_extract::{Parasitic, ParasiticNetwork};
     use gpurify_geom::LayerId;
@@ -870,16 +863,14 @@ mod tests {
         // Net 0's two elements survived; net 1's single analytical element was
         // replaced by the solve's, not added to it.
         assert_eq!(out.element_count(), 3);
-        assert!((out.net_capacitance(NetId(0)).raw() - 1.0).abs() < f64::EPSILON);
-        assert!((out.net_capacitance(NetId(1)).raw() - 2.0).abs() < f64::EPSILON);
+        assert!((out.capacitance_per_net()[0] - 1.0).abs() < f64::EPSILON);
+        assert!((out.capacitance_per_net()[1] - 2.0).abs() < f64::EPSILON);
     }
 
     fn accuracy(asymmetry: f64) -> Accuracy {
         Accuracy {
-            residual: 1e-12,
             tolerance: 1e-10,
             iterations: 7,
-            backend: Backend::Cpu,
             asymmetry,
         }
     }

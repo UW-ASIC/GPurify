@@ -154,7 +154,7 @@ fn mutual_parallel_reduced(rho: f64, x1: f64, x2: f64, y1: f64, y2: f64, sign: f
 
 /// Mutual partial inductance [H] between two parallel filaments given as 3-D
 /// segments. Panics-free: falls back through the reduced closed form.
-pub fn mutual_parallel(f1: &Filament, f2: &Filament) -> f64 {
+pub(crate) fn mutual_parallel(f1: &Filament, f2: &Filament) -> f64 {
     let u1 = f1.dir();
     let u2 = f2.dir();
     let sign = u1.dot(u2).signum();
@@ -200,7 +200,7 @@ const GL8_W: [f64; 8] = [
 /// orientation, by Gauss–Legendre cubature of the Neumann double integral.
 /// Accurate for non-touching pairs; the parallel closed form is preferred when
 /// applicable.
-pub fn mutual_quadrature(f1: &Filament, f2: &Filament) -> f64 {
+pub(crate) fn mutual_quadrature(f1: &Filament, f2: &Filament) -> f64 {
     let l1 = f1.length();
     let l2 = f2.length();
     let u1 = f1.dir();
@@ -318,7 +318,7 @@ fn brick_to_brick(
 /// when the geometry is outside the formula's domain (non-parallel axes,
 /// skewed cross-sections, degenerate tape/line cross-sections) — callers fall
 /// back to the centreline formulas, which are the correct limits there.
-pub fn mutual_brick(fj: &Filament, fm: &Filament) -> Option<f64> {
+pub(crate) fn mutual_brick(fj: &Filament, fm: &Filament) -> Option<f64> {
     let zj = fj.dir();
     if zj.dot(fm.dir()).abs() < 1.0 - 1e-9 {
         return None;
@@ -370,7 +370,7 @@ pub fn mutual_brick(fj: &Filament, fm: &Filament) -> Option<f64> {
 /// Dispatch: exact brick–brick (Hoer–Love) for close parallel filaments where
 /// the finite cross-section matters, centreline closed form for parallel
 /// filaments that are far (or degenerate), quadrature otherwise.
-pub fn mutual(f1: &Filament, f2: &Filament) -> f64 {
+pub(crate) fn mutual(f1: &Filament, f2: &Filament) -> f64 {
     let c = f1.dir().dot(f2.dir()).abs();
     if c > 1.0 - 1e-9 {
         // Perpendicular separation of the centre lines: the centreline formula
@@ -401,7 +401,7 @@ pub fn self_inductance_bar(l: f64, w: f64, t: f64) -> f64 {
 }
 
 /// Self partial inductance [H] of a [`Filament`].
-pub fn self_inductance(f: &Filament) -> f64 {
+pub(crate) fn self_inductance(f: &Filament) -> f64 {
     self_inductance_bar(f.length(), f.w, f.t)
 }
 

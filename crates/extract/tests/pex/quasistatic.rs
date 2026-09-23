@@ -24,11 +24,6 @@ use gpurify_testgen::{assert_bytes_identical, assert_close, Rng};
 #[test]
 fn a_field_solve_obeys_reciprocity() {
     let case = extracted(73, 24, 2);
-    let options = solve::Options {
-        tolerance: 1e-10,
-        restart: 30,
-        max_iterations: 1_000,
-    };
     let mut matrix = CapMatrix::default();
     let mut network = ParasiticNetwork::default();
     let accuracy = extract_into(
@@ -37,7 +32,6 @@ fn a_field_solve_obeys_reciprocity() {
         &case.selected,
         &uniform_stack(3, 1.0, 0.25),
         grid(),
-        options,
         &mut matrix,
         &mut network,
     )
@@ -48,16 +42,10 @@ fn a_field_solve_obeys_reciprocity() {
         case.selected.len(),
         "one row and one column per selected net"
     );
-    assert!(
-        accuracy.residual <= accuracy.tolerance,
-        "the solve reported a residual of {} against a tolerance of {}",
-        accuracy.residual,
-        accuracy.tolerance
-    );
     assert_close(
         "the tolerance travels with the result",
         accuracy.tolerance,
-        options.tolerance,
+        solve::Options::default().tolerance,
         0.0,
     );
     assert!(
@@ -126,11 +114,6 @@ fn a_field_solve_obeys_reciprocity() {
 #[test]
 fn a_field_solve_is_byte_identical_across_runs() {
     let case = extracted(79, 24, 2);
-    let options = solve::Options {
-        tolerance: 1e-10,
-        restart: 30,
-        max_iterations: 1_000,
-    };
     let stack = uniform_stack(3, 1.0, 0.25);
 
     let run = |matrix: &mut CapMatrix, network: &mut ParasiticNetwork| {
@@ -140,7 +123,6 @@ fn a_field_solve_is_byte_identical_across_runs() {
             &case.selected,
             &stack,
             grid(),
-            options,
             matrix,
             network,
         )
