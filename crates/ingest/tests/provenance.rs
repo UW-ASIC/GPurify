@@ -107,3 +107,60 @@ fn a_label_binds_to_its_split_flank_and_one_on_the_channel_refuses_the_load() {
         "the refusal names the label's layer and point"
     );
 }
+
+/// Oracle: brute force. Random overlapping rectangles on two conductors paired
+/// with one text layer, in row order; each label binds where a scan of rows,
+/// then polygons by id, first finds it inside (edge inclusive).
+#[test]
+fn label_binding_matches_a_brute_force_scan() {
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::Dbu;
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_testgen::Rng;
+
+    const TEXT: LayerId = LayerId(2);
+    let rows = [LayerId(0), LayerId(1)];
+    let connectivity = Connectivity {
+        conductors: rows.to_vec(),
+        label_layer: vec![TEXT, TEXT],
+        label_names: rows.to_vec(),
+        ..Connectivity::default()
+    };
+    let mut rng = Rng::new(11);
+    let mut strings = StrTable::default();
+    let names: Vec<_> = (0..60).map(|i| strings.intern(&i.to_string())).collect();
+    for _ in 0..30 {
+        let mut layout = LayoutBuilder::new(3);
+        for _ in 0..rng.range(0, 40) {
+            let layer = rows[usize::from(rng.below(2) == 1)];
+            let (x, y) = (rng.range(0, 1000), rng.range(0, 1000));
+            layout.rect(layer, x, y, x + rng.range(1, 300), y + rng.range(1, 300));
+        }
+        let (store, _) = layout.finish();
+
+        let mut bound = Provenance::default();
+        let mut want = Vec::new();
+        for &name in &names {
+            let p = Point {
+                x: Dbu::new(rng.range(0, 1300)).expect("in range"),
+                y: Dbu::new(rng.range(0, 1300)).expect("in range"),
+            };
+            let hit = rows
+                .iter()
+                .flat_map(|&layer| store.polys_on_layer(layer))
+                .map(PolyId)
+                .find(|&poly| store.poly_contains_point(poly, p));
+            if let Some(poly) = hit {
+                bound.place_label(p, TEXT, name);
+                want.push((poly, name));
+            } else {
+                let mut alone = Provenance::default();
+                alone.place_label(p, TEXT, name);
+                assert!(alone.resolve_labels(&store, &connectivity).is_err(), "{p:?} is on nothing");
+            }
+        }
+        bound.resolve_labels(&store, &connectivity).expect("every label is on a shape");
+        want.sort_by_key(|&(poly, _)| poly);
+        assert_eq!(bound.labels(), want.as_slice());
+    }
+}
