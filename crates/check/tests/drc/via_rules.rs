@@ -46,7 +46,7 @@ fn redundant_via_table(min_count: u16, within: i64) -> Vec<(StrId, Rule)> {
         RULE,
         Rule::RedundantVia {
             layer: A,
-            min_count: min_count,
+            min_count,
             within: dbu(within),
         },
     )]
@@ -162,7 +162,7 @@ fn via_array_table(array_threshold: u16, limit: i64) -> Vec<(StrId, Rule)> {
         RULE,
         Rule::ViaArraySpacing {
             layer: A,
-            array_threshold: array_threshold,
+            array_threshold,
             limit: dbu(limit),
         },
     )]
