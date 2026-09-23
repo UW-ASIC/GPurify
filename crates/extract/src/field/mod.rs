@@ -6,7 +6,7 @@
 
 pub mod filament;
 pub mod henry;
-pub mod matvec;
+mod matvec;
 pub mod mesh;
 pub mod solve;
 
@@ -52,12 +52,9 @@ impl CapMatrix {
 /// What a solve achieved, measured in `f64`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Accuracy {
-    /// Relative residual reached (worst column).
-    pub residual: f64,
     /// Residual asked for.
     pub tolerance: f64,
     pub iterations: u32,
-    pub backend: matvec::Backend,
     /// [`CapMatrix::asymmetry`] of the result.
     pub asymmetry: f64,
 }
@@ -72,7 +69,6 @@ pub fn extract_into(
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
-    options: solve::Options,
     matrix: &mut CapMatrix,
 ) -> Result<Accuracy, solve::SolveError> {
     matrix.net.clear();
@@ -83,41 +79,36 @@ pub fn extract_into(
 
     let mut mesh = mesh::Mesh::default();
     let meshing = mesh_options(store, nets, &order, stack, grid);
-    // No `SolveError` variant for a mesh failure; refuse at iteration zero
-    // rather than return an empty matrix.
-    mesh::build_into(store, nets, &order, stack, meshing, grid, &mut mesh)
-        .map_err(|_| solve::SolveError::Breakdown(0))?;
+    mesh::build_into(store, nets, &order, stack, meshing, grid, &mut mesh)?;
 
     let n = order.len();
     matrix.net.extend_from_slice(&order);
     matrix.value.resize(n * n, 0.0);
 
     let operator = matvec::CpuMatVec::build(&mesh);
-    let (residual, iterations) = columns_into(&operator, &mesh, options, matrix)?;
+    let options = solve::Options::default();
+    let iterations = columns_into(&operator, &mesh, options, matrix)?;
 
     Ok(Accuracy {
-        residual,
         tolerance: options.tolerance,
         iterations,
-        backend: matvec::Backend::Cpu,
         asymmetry: matrix.asymmetry(),
     })
 }
 
-/// One solve per conductor into a sized [`CapMatrix`]; returns the worst
-/// residual and the total iteration count.
+/// One solve per conductor into a sized [`CapMatrix`]; returns the total
+/// iteration count.
 fn columns_into(
     operator: &matvec::CpuMatVec,
     mesh: &mesh::Mesh,
     options: solve::Options,
     matrix: &mut CapMatrix,
-) -> Result<(f64, u32), solve::SolveError> {
+) -> Result<u32, solve::SolveError> {
     let n = mesh.conductor_net.len();
     let panels = mesh.panel.len();
     let mut workspace = solve::Workspace::default();
     let mut potential = Vec::with_capacity(panels);
     let mut charge = vec![0.0_f64; panels];
-    let mut residual = 0.0_f64;
     let mut iterations = 0_u32;
 
     for column in 0..n {
@@ -132,8 +123,8 @@ fn columns_into(
 
         // Zero initial guess, never a warm start: columns stay independent.
         charge.fill(0.0);
-        let converged = solve::refine(operator, &potential, options, &mut charge, &mut workspace)?;
-        residual = residual.max(converged.residual);
+        let apply = |x: &[f64], y: &mut [f64]| operator.apply(x, y);
+        let converged = solve::refine(apply, &potential, options, &mut charge, &mut workspace)?;
         iterations = iterations.saturating_add(converged.iterations);
 
         for row in 0..n {
@@ -151,7 +142,7 @@ fn columns_into(
             matrix.value[row * n + column] = total;
         }
     }
-    Ok((residual, iterations))
+    Ok(iterations)
 }
 
 /// Refuse rather than mesh beyond this many panels: the matvec is dense.

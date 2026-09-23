@@ -77,22 +77,17 @@ fn net_capacitance_is_the_sum_of_the_capacitive_elements_on_that_net() {
 
     assert_close(
         "net 0, two grounds and a coupling",
-        network.net_capacitance(NetId(0)).raw(),
+        cap(&network, 0),
         4.5,
         1e-12,
     );
     assert_close(
         "net 1, its own ground and the same coupling",
-        network.net_capacitance(NetId(1)).raw(),
+        cap(&network, 1),
         10.75,
         1e-12,
     );
-    assert_close(
-        "a net with no elements",
-        network.net_capacitance(NetId(2)).raw(),
-        0.0,
-        1e-12,
-    );
+    assert_close("a net with no elements", cap(&network, 2), 0.0, 1e-12);
 }
 
 /// Oracle: law. Capacitance to ground is additive, so a network with every
@@ -111,14 +106,14 @@ fn net_capacitance_is_additive_over_the_elements_pushed() {
         twice.push(NodeId(index), None, value);
     }
 
-    let single = once.net_capacitance(NetId(0)).raw();
+    let single = cap(&once, 0);
     assert!(
         single > 0.0,
         "eight positive capacitances summed to {single}"
     );
     assert_close_relative(
         "every element pushed twice",
-        twice.net_capacitance(NetId(0)).raw(),
+        cap(&twice, 0),
         2.0 * single,
         1e-12,
     );
@@ -182,14 +177,14 @@ fn sort_canonical_is_idempotent_and_preserves_every_row() {
         );
     }
     let elements = network.element_count();
-    let capacitance = network.net_capacitance(NetId(0)).raw();
+    let capacitance = cap(&network, 0);
 
     network.sort_canonical();
     let once = serialise(&network);
     assert_eq!(network.element_count(), elements, "sorting dropped a row");
     assert_close_relative(
         "capacitance either side of a sort",
-        network.net_capacitance(NetId(0)).raw(),
+        cap(&network, 0),
         capacitance,
         1e-12,
     );
@@ -231,7 +226,7 @@ fn sort_canonical_orders_by_from_then_by_to_with_ground_first() {
 /// Oracle: law. The one-pass per-net totals are the per-net sums bit for bit,
 /// coupling counts on both nets, and a node past the column counts nowhere.
 #[test]
-fn capacitance_per_net_matches_net_capacitance_bit_for_bit() {
+fn capacitance_per_net_matches_a_per_net_fold_bit_for_bit() {
     let mut rng = Rng::new(97);
     let nets = [NetId(0), NetId(0), NetId(2), NetId(3), NetId(3)];
     let mut network = nodes_across(&nets);
@@ -247,18 +242,36 @@ fn capacitance_per_net_matches_net_capacitance_bit_for_bit() {
     network.push(NodeId(9), None, ground(100.0));
     network.sort_canonical();
 
+    // Oracle: one strict fold per net over every element, the definition.
     let all = network.capacitance_per_net();
     assert_eq!(all.len(), 4, "indexed up to the highest net present");
-    for net in 0..5_u32 {
-        assert_eq!(
-            all.get(net as usize).copied().unwrap_or(0.0).to_bits(),
-            network.net_capacitance(NetId(net)).raw().to_bits(),
-            "net {net}"
-        );
+    let net_of = |node: NodeId| network.node_net.get(node.0 as usize).copied();
+    for (net, &total) in all.iter().enumerate() {
+        let net = Some(NetId(u32::try_from(net).expect("small")));
+        let mut expected = 0.0_f64;
+        for row in 0..network.element_count() {
+            let (Parasitic::GroundCap(q) | Parasitic::CouplingCap(q)) = network.value[row] else {
+                continue;
+            };
+            let near = net_of(network.from[row]);
+            let far = network.to[row].map_or(near, net_of);
+            if near == net || far == net {
+                expected += q.raw();
+            }
+        }
+        assert_eq!(total.to_bits(), expected.to_bits(), "net {net:?}");
     }
     assert_eq!(all[1].to_bits(), 0.0_f64.to_bits(), "net 1 has no node");
     assert!(
         all.iter().all(|&c| c < 100.0),
         "the dangling element counted"
     );
+}
+
+fn cap(network: &ParasiticNetwork, net: usize) -> f64 {
+    network
+        .capacitance_per_net()
+        .get(net)
+        .copied()
+        .unwrap_or(0.0)
 }

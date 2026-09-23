@@ -7,7 +7,6 @@ use crate::engine::pipeline::{Extracted, Inputs, Loaded};
 use gpurify_check::lvs::verdict::Inconclusive;
 use gpurify_check::lvs::{Discrepancy, Verdict};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use gpurify_extract::network::NodeId;
 use gpurify_extract::ParasiticNetwork;
 use gpurify_geom::ops::Point;
 use gpurify_geom::{celsius, prefix, Dbu, Qty, Temperature};
@@ -547,17 +546,15 @@ fn run_pex(
 ) -> Result<StageStatus, EngineError> {
     let grid = loaded.grid;
     let mut network = ParasiticNetwork::default();
-    if options.quasistatic_nets.is_empty() {
-        gpurify_extract::analytical::extract_into(
-            &loaded.store,
-            &extracted.nets,
-            &extracted.devices,
-            &loaded.deck.connectivity,
-            &loaded.deck.stack,
-            grid,
-            &mut network,
-        );
-    } else {
+    gpurify_extract::analytical::extract_into(
+        &loaded.store,
+        &extracted.nets,
+        &loaded.deck.connectivity,
+        &loaded.deck.stack,
+        grid,
+        &mut network,
+    );
+    if !options.quasistatic_nets.is_empty() {
         let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
         for name in &options.quasistatic_nets {
             // `get`, never `intern`: a name the run never saw is not a net.
@@ -573,17 +570,6 @@ fn run_pex(
             selected.push(net);
         }
 
-        let mut coarse = ParasiticNetwork::default();
-        gpurify_extract::analytical::extract_into(
-            &loaded.store,
-            &extracted.nets,
-            &extracted.devices,
-            &loaded.deck.connectivity,
-            &loaded.deck.stack,
-            grid,
-            &mut coarse,
-        );
-
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
         let mut solved = ParasiticNetwork::default();
         let accuracy = gpurify_extract::quasistatic::extract_into(
@@ -592,7 +578,6 @@ fn run_pex(
             &selected,
             &loaded.deck.stack,
             grid,
-            gpurify_extract::quasistatic::solve::Options::default(),
             &mut matrix,
             &mut solved,
         )?;
@@ -609,7 +594,6 @@ fn run_pex(
                 &selected,
                 &loaded.deck.stack,
                 grid,
-                &gpurify_extract::quasistatic::InductanceOptions::default(),
                 &mut inductance,
                 &mut solved,
             ) {
@@ -617,7 +601,7 @@ fn run_pex(
             }
         }
 
-        merge_field_solved_into(&coarse, &solved, &mut network);
+        gpurify_extract::quasistatic::overlay(&mut network, &solved);
     }
 
     out.parasitics = Some(network);
@@ -634,164 +618,6 @@ fn reciprocity_refusal(accuracy: &gpurify_extract::quasistatic::Accuracy) -> Opt
             accuracy.asymmetry, accuracy.tolerance, accuracy.iterations
         )
     })
-}
-
-/// The node id a source row keeps when it did not survive the merge.
-///
-/// `u32::MAX` is past the end of any [`ParasiticNetwork`], so an escaped remap
-/// trips a bounds check where `0` would silently name the first node.
-const DROPPED_NODE: u32 = u32::MAX;
-
-/// Overlay a field-solved network on an analytical one, into `out`.
-///
-/// Membership is read off `solved`, not off the selection: a net the caller
-/// selected but the mesh produced no node for keeps its analytical rows.
-///
-/// [`ParasiticNetwork`] requires every net's nodes to occupy one contiguous
-/// ascending range of `node_net`. Both inputs arrive that way and the surviving
-/// net sets are disjoint, so the two-way merge reproduces it — hence a merge and
-/// not a concatenation. Element order is not, so `sort_canonical` closes.
-fn merge_field_solved_into(
-    analytical: &ParasiticNetwork,
-    solved: &ParasiticNetwork,
-    out: &mut ParasiticNetwork,
-) {
-    debug_assert!(
-        analytical.node_net.is_sorted(),
-        "an analytical network whose nets are not one ascending range each"
-    );
-    debug_assert!(
-        solved.node_net.is_sorted(),
-        "a field-solved network whose nets are not one ascending range each"
-    );
-
-    // `ParasiticNetwork::clear` is `pub(crate)` to `pex`, so the five columns
-    // are cleared by name here; the caller's allocation survives.
-    out.node_net.clear();
-    out.node_layer.clear();
-    out.from.clear();
-    out.to.clear();
-    out.value.clear();
-
-    let (coarse_nodes, fine_nodes) = (analytical.node_count(), solved.node_count());
-    let (coarse_elements, fine_elements) = (analytical.element_count(), solved.element_count());
-
-    // Which nets the solve produced nodes for, one dense byte per net. Both
-    // columns ascend, so the last row of each is its maximum.
-    let highest_net = analytical
-        .node_net
-        .last()
-        .map_or(0, |net| net.0)
-        .max(solved.node_net.last().map_or(0, |net| net.0));
-    let mut replaced = vec![0_u8; highest_net as usize + 1];
-    for i in 0..fine_nodes {
-        replaced[solved.node_net[i].0 as usize] = 1;
-    }
-
-    let mut coarse_map = vec![DROPPED_NODE; coarse_nodes];
-    let mut fine_map = vec![DROPPED_NODE; fine_nodes];
-    out.node_net.reserve(coarse_nodes + fine_nodes);
-    out.node_layer.reserve(coarse_nodes + fine_nodes);
-
-    let mut coarse = 0_usize;
-    let mut fine = 0_usize;
-    loop {
-        // Skip the analytical rows of every net the solve replaced.
-        while coarse < coarse_nodes && replaced[analytical.node_net[coarse].0 as usize] != 0 {
-            coarse += 1;
-        }
-
-        let next_coarse = analytical.node_net.get(coarse).copied();
-        let next_fine = solved.node_net.get(fine).copied();
-        let take_coarse = match (next_coarse, next_fine) {
-            (None, None) => break,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            // Never equal — a net present in both was skipped above — so the
-            // tie-break is unreachable and either side would do.
-            (Some(left), Some(right)) => left <= right,
-        };
-
-        let id = u32::try_from(out.node_net.len()).expect("a NodeId is a u32");
-        let (source, row) = if take_coarse {
-            coarse_map[coarse] = id;
-            coarse += 1;
-            (analytical, coarse - 1)
-        } else {
-            fine_map[fine] = id;
-            fine += 1;
-            (solved, fine - 1)
-        };
-        out.node_net.push(source.node_net[row]);
-        out.node_layer.push(source.node_layer[row]);
-    }
-    debug_assert_eq!(
-        fine, fine_nodes,
-        "a field-solved node reached no merged row"
-    );
-
-    out.from.reserve(coarse_elements + fine_elements);
-    out.to.reserve(coarse_elements + fine_elements);
-    out.value.reserve(coarse_elements + fine_elements);
-
-    // An analytical element survives when its nodes did. `analytical::
-    // extract_into` emits nothing spanning two nets, so its endpoints agree on
-    // survival — asserted, because one that spanned would be dropped silently.
-    for i in 0..coarse_elements {
-        let from = coarse_map[analytical.from[i].0 as usize];
-        let to = analytical.to[i].map(|node| coarse_map[node.0 as usize]);
-        debug_assert!(
-            to.is_none_or(|far| (far == DROPPED_NODE) == (from == DROPPED_NODE)),
-            "an analytical element spans a field-solved net and an analytical one"
-        );
-        if from != DROPPED_NODE {
-            out.push(NodeId(from), to.map(NodeId), analytical.value[i]);
-        }
-    }
-
-    // Every field-solved node survived, so only the renumbering applies.
-    for i in 0..fine_elements {
-        let from = fine_map[solved.from[i].0 as usize];
-        let to = solved.to[i].map(|node| fine_map[node.0 as usize]);
-        debug_assert_ne!(
-            from, DROPPED_NODE,
-            "a field-solved element lost its near node"
-        );
-        debug_assert!(
-            to.is_none_or(|far| far != DROPPED_NODE),
-            "a field-solved element lost its far node"
-        );
-        out.push(NodeId(from), to.map(NodeId), solved.value[i]);
-    }
-
-    out.sort_canonical();
-
-    debug_assert!(
-        out.node_net.is_sorted(),
-        "the merge broke the range-per-net invariant every writer scans on"
-    );
-    debug_assert_eq!(
-        out.node_count(),
-        coarse_nodes + fine_nodes - replaced_node_count(analytical, &replaced),
-        "the merged node columns do not account for every source row"
-    );
-    debug_assert!(
-        out.element_count() <= coarse_elements + fine_elements,
-        "the merge invented an element"
-    );
-}
-
-/// How many analytical nodes the solve replaced.
-///
-/// A fold rather than a counter threaded through the merge, which would be
-/// checking the merge against itself.
-fn replaced_node_count(analytical: &ParasiticNetwork, replaced: &[u8]) -> usize {
-    let n = analytical.node_net.len();
-    let mut count = 0_usize;
-    for i in 0..n {
-        count += usize::from(replaced[analytical.node_net[i].0 as usize]);
-    }
-    count
 }
 
 /// Load, extract and check in one call.
@@ -817,69 +643,18 @@ pub enum EngineError {
     Erc(#[from] gpurify_check::erc::ErcError),
     #[error(transparent)]
     Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
-    #[error(transparent)]
-    Mesh(#[from] gpurify_extract::quasistatic::mesh::MeshError),
 }
 
-/// [`merge_field_solved_into`] and [`reciprocity_refusal`] are private, so their
-/// checks live beside them.
+/// [`reciprocity_refusal`] is private, so its check lives beside it.
 #[cfg(test)]
 mod tests {
-    use super::{merge_field_solved_into, reciprocity_refusal};
-    use gpurify_check::topology::NetId;
-    use gpurify_extract::network::NodeId;
-    use gpurify_extract::quasistatic::matvec::Backend;
+    use super::reciprocity_refusal;
     use gpurify_extract::quasistatic::Accuracy;
-    use gpurify_extract::{Parasitic, ParasiticNetwork};
-    use gpurify_geom::LayerId;
-    use gpurify_geom::Qty;
-
-    fn ground(ff: f64) -> Parasitic {
-        Parasitic::GroundCap(Qty::new(ff))
-    }
-
-    #[test]
-    fn a_field_solved_net_replaces_its_analytical_rows_and_the_others_survive() {
-        // Net 0 has two nodes, net 1 has one. Ascending and contiguous, which
-        // is what `analytical::extract_into` promises.
-        let mut analytical = ParasiticNetwork {
-            node_net: vec![NetId(0), NetId(0), NetId(1)],
-            node_layer: vec![LayerId(0); 3],
-            ..ParasiticNetwork::default()
-        };
-        analytical.push(NodeId(0), None, ground(1.0));
-        analytical.push(
-            NodeId(0),
-            Some(NodeId(1)),
-            Parasitic::Resistance(Qty::new(10.0)),
-        );
-        analytical.push(NodeId(2), None, ground(7.0));
-
-        // The solve was asked for net 1 and meshed it into two nodes.
-        let mut solved = ParasiticNetwork {
-            node_net: vec![NetId(1), NetId(1)],
-            node_layer: vec![LayerId(0); 2],
-            ..ParasiticNetwork::default()
-        };
-        solved.push(NodeId(0), None, ground(2.0));
-
-        let mut out = ParasiticNetwork::default();
-        merge_field_solved_into(&analytical, &solved, &mut out);
-
-        assert_eq!(out.node_net, vec![NetId(0), NetId(0), NetId(1), NetId(1)]);
-        // Net 0's two elements survived; net 1's single analytical element was
-        // replaced by the solve's, not added to it.
-        assert_eq!(out.element_count(), 3);
-        assert!((out.net_capacitance(NetId(0)).raw() - 1.0).abs() < f64::EPSILON);
-        assert!((out.net_capacitance(NetId(1)).raw() - 2.0).abs() < f64::EPSILON);
-    }
 
     fn accuracy(asymmetry: f64) -> Accuracy {
         Accuracy {
-            residual: 1e-12,
             tolerance: 1e-10,
             iterations: 7,
-            backend: Backend::Cpu,
             asymmetry,
         }
     }

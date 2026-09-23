@@ -3,8 +3,6 @@
 //! Every reduction is a strict ascending fold; the iteration trajectory, and so
 //! the low bits of every capacitance, depend on it.
 
-use super::matvec::MatVec;
-
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     /// Relative residual to reach; a worse answer is an error.
@@ -33,6 +31,8 @@ pub enum SolveError {
     Breakdown(u32),
     #[error("the operator produced a non-finite value at iteration {0}")]
     NonFinite(u32),
+    #[error(transparent)]
+    Mesh(#[from] super::mesh::MeshError),
 }
 
 /// Krylov basis, Hessenberg, Givens and residual buffers, reused across columns.
@@ -56,8 +56,8 @@ pub struct Converged {
 
 /// Solve `A x = b` from the caller's `x`. Returns the explicitly recomputed
 /// residual, not the GMRES recurrence estimate.
-pub fn gmres<M: MatVec>(
-    operator: &M,
+pub fn gmres(
+    operator: impl Fn(&[f64], &mut [f64]) + Copy,
     b: &[f64],
     options: Options,
     x: &mut [f64],
@@ -121,7 +121,7 @@ pub fn gmres<M: MatVec>(
         while k < m && iterations < options.max_iterations {
             iterations += 1;
 
-            operator.apply(
+            operator(
                 &workspace.krylov[k * n..k * n + n],
                 &mut workspace.correction[..],
             );
@@ -257,8 +257,8 @@ fn scale_of(norm_b: f64) -> f64 {
 /// ```
 ///
 /// Stops early when a pass fails to reduce the residual.
-pub fn refine<M: MatVec>(
-    operator: &M,
+pub fn refine(
+    operator: impl Fn(&[f64], &mut [f64]) + Copy,
     b: &[f64],
     options: Options,
     x: &mut [f64],
@@ -320,11 +320,16 @@ pub fn refine<M: MatVec>(
 }
 
 /// True relative residual `‖b − Ax‖ / ‖b‖`; leaves `b − A x` in `scratch`.
-pub fn residual<M: MatVec>(operator: &M, b: &[f64], x: &[f64], scratch: &mut Vec<f64>) -> f64 {
+pub fn residual(
+    operator: impl Fn(&[f64], &mut [f64]),
+    b: &[f64],
+    x: &[f64],
+    scratch: &mut Vec<f64>,
+) -> f64 {
     let n = b.len();
     scratch.clear();
     scratch.resize(n, 0.0);
-    operator.apply(x, &mut scratch[..]);
+    operator(x, &mut scratch[..]);
     for (ax, &bi) in scratch.iter_mut().zip(b) {
         *ax = bi - *ax;
     }

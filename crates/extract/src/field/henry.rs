@@ -18,18 +18,9 @@ use gpurify_ingest::deck::ProcessStack;
 use num_complex::Complex64;
 use rayon::prelude::*;
 
-#[derive(Debug, Clone, Copy)]
-pub struct InductanceOptions {
-    /// The single frequency the impedance is extracted at, Hz. Positive.
-    pub frequency_hz: f64,
-}
-
-impl Default for InductanceOptions {
-    /// 1 MHz: skin effect negligible on chip, ωL still well above round-off next to R.
-    fn default() -> Self {
-        InductanceOptions { frequency_hz: 1e6 }
-    }
-}
+/// The one frequency the impedance is extracted at: 1 MHz, where skin effect is
+/// negligible on chip and ωL is still well above round-off next to R.
+const FREQUENCY_HZ: f64 = 1e6;
 
 /// Per-net self inductance (H) and series resistance (Ω), one row per selected
 /// net in ascending [`NetId`] order.
@@ -66,7 +57,6 @@ pub fn extract_inductance_into(
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
-    options: &InductanceOptions,
     out: &mut InductMatrix,
 ) -> Result<(), InductanceError> {
     out.net.clear();
@@ -154,7 +144,7 @@ pub fn extract_inductance_into(
         out.net.push(net);
     }
 
-    let f = options.frequency_hz;
+    let f = FREQUENCY_HZ;
     let z = port_impedance_diagonal(&set, nodes.len(), &ports, f)?;
     let w = 2.0 * std::f64::consts::PI * f;
     for zp in z {
