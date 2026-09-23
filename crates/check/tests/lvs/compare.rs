@@ -543,3 +543,20 @@ fn a_comparison_gives_the_same_verdict_on_every_run() {
         "the same comparison produced two different reports"
     );
 }
+
+/// Oracle: construct-from-answer. Twelve hundred floating nets beside one
+/// device are twelve hundred interchangeable nets, each needing its own
+/// tie-break, against a budget of a thousand rounds. The graphs are equal, so
+/// the answer is a match; a budget spent per tie-break says `RoundLimit`.
+#[test]
+fn more_symmetries_than_the_round_budget_still_match() {
+    use gpurify_check::topology::TerminalRole::{Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(1_203);
+    builder.device(DeviceKind::Mos, NCH, &[(Gate, 0), (Source, 1), (Drain, 2)]);
+    let graph = builder.finish();
+    let options = CompareOptions {
+        max_rounds: 1_000,
+        ..decisive()
+    };
+    assert_eq!(compare(&graph, &graph, options), Verdict::Match);
+}

@@ -58,8 +58,3 @@ but no test yet checks their numbers against an independent answer. Many
 other rules have limits that are foundry conventions rather than physics, so
 their tests prove the rule runs and measures, not that the limit is right for
 your process.
-
-## Speed
-
-LVS on a highly symmetric design can take many refinement rounds, one per
-ambiguous match it has to break.
