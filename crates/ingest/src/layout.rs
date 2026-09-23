@@ -5,17 +5,19 @@
 //! labels. An inexact transform is an error, never rounded.
 
 use crate::deck::{Deck, DerivedOp, LayerTable};
+use crate::provenance::PlacedLabel;
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
     edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
     inside_into, interacting_into, merge_into, outside_into, sized_into, with_area_into,
     with_length_into, with_width_into, EdgeOp,
 };
-use gpurify_geom::ops::Seg;
-use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
+use gpurify_geom::view::{validate_layer_into, PolygonRef, RingRef, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
 use gpurify_geom::LayerId;
+use gpurify_geom::{Bbox, StrTable};
 
 /// Why a layout could not be read. Every variant is a refusal: approximating a
 /// transform moves geometry and moves verdicts.
@@ -78,8 +80,14 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
-/// Operands only name lower ids, so one forward pass suffices.
-fn derive_layers_into(store: &mut GeometryStore, layers: &LayerTable) -> Result<(), LayoutError> {
+/// Operands only name lower ids, so one forward pass suffices. `labels` are
+/// the placed texts, named in `strings`, that `with_text` reads.
+fn derive_layers_into(
+    store: &mut GeometryStore,
+    layers: &LayerTable,
+    labels: &[PlacedLabel],
+    strings: &StrTable,
+) -> Result<(), LayoutError> {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
     let mut combined = ValidatedLayer::default();
@@ -156,7 +164,10 @@ fn derive_layers_into(store: &mut GeometryStore, layers: &LayerTable) -> Result<
             }
             _ => {
                 merged(operands[0], &mut operand).map_err(blame)?;
-                if let Some(&other) = operands.get(1) {
+                // `with_text` reads the texts on its layer argument, not its shapes.
+                if let (Some(&other), false) =
+                    (operands.get(1), matches!(op, DerivedOp::WithText { .. }))
+                {
                     merged(other, &mut combined).map_err(blame)?;
                 }
                 let (a, b) = (&operand, &combined);
@@ -176,6 +187,31 @@ fn derive_layers_into(store: &mut GeometryStore, layers: &LayerTable) -> Result<
                     }
                     DerivedOp::WithWidth(lo, hi) => {
                         with_width_into(a, lo..=hi, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::WithText { keep, text } => {
+                        let pattern = layers.text(text);
+                        let matching: Vec<Point> = labels
+                            .iter()
+                            .filter(|label| {
+                                label.layer == operands[1]
+                                    && glob_matches(pattern, strings.resolve(label.name))
+                            })
+                            .map(|label| label.at)
+                            .collect();
+                        // ponytail: every matching text against every shape; index the
+                        // points by x if a layer carries thousands of texts.
+                        let flags: Vec<bool> = (0..crate::narrow(a.len()))
+                            .map(|idx| {
+                                let poly = a.get(idx);
+                                let holds = matching.iter().any(|&p| {
+                                    poly.bbox().contains(Bbox::point(p.x, p.y))
+                                        && on_material(poly, p)
+                                });
+                                holds == keep
+                            })
+                            .collect();
+                        a.select_into(&flags, &mut folded);
                         Ok(())
                     }
                     _ => unreachable!("the parser gives an edge operation an edge result"),
@@ -202,6 +238,56 @@ fn derive_layers_into(store: &mut GeometryStore, layers: &LayerTable) -> Result<
         store.append_layer(*layer, &xs, &ys, &start, &len);
     }
     Ok(())
+}
+
+/// Whether `p` lies on the polygon's material, its boundary included.
+fn on_material(poly: PolygonRef<'_>, p: Point) -> bool {
+    let on_ring = |ring: RingRef<'_>| {
+        let (xs, ys) = ring.coords();
+        (0..xs.len()).any(|i| {
+            let j = (i + 1) % xs.len();
+            let edge = Seg {
+                a: Point { x: xs[i], y: ys[i] },
+                b: Point { x: xs[j], y: ys[j] },
+            };
+            point_seg_dist2(p, edge).raw() == 0
+        })
+    };
+    point_in_ring(poly.outer(), p)
+        && poly
+            .holes()
+            .all(|hole| !point_in_ring(hole, p) || on_ring(hole))
+}
+
+/// A glob over the whole text: `*` matches any run, `?` one character, and
+/// every other character itself.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let (pattern, text): (Vec<char>, Vec<char>) =
+        (pattern.chars().collect(), text.chars().collect());
+    let (mut p, mut t) = (0, 0);
+    // The last `*` and the text position it was tried at, to widen on a miss.
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((at, from)) => {
+                    p = at + 1;
+                    t = from + 1;
+                    star = Some((at, from + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 /// GDSII: a record stream of `(length, tag, payload)`.
@@ -1178,7 +1264,7 @@ pub mod gds {
 
             // Labels are not bound yet, so the layer-sort permutation has nothing to move.
             let (mut store, _) = walk.builder.finish(deck.layers.len());
-            super::derive_layers_into(&mut store, &deck.layers)?;
+            super::derive_layers_into(&mut store, &deck.layers, &walk.provenance.placed, strings)?;
             Ok((store, walk.provenance))
         }
     }
@@ -2979,5 +3065,89 @@ rule huge.w width(huge) >= 1um
             std::hint::black_box(out);
         }
         eprintln!("flatten 1.6M rects: best of 5 {best:?}");
+    }
+
+    /// IHP picks devices by their text (`ext_interacting_with_text(..,
+    /// "npn13G2*")`). Squares labelled "npn13G2" and, on the square's edge,
+    /// "npn13G2L" match the glob; "pnpMPA" does not. An L whose label sits in
+    /// its notch, inside its bounding box but off the shape, holds no text, and
+    /// a matching string on another text layer is not read.
+    #[test]
+    fn with_text_keeps_the_shapes_holding_a_matching_text() {
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(
+            "grid 5nm
+layer activ = gds(1, 0)
+layer text = gds(63, 0)
+layer other = gds(63, 25)
+layer npn = activ.with_text(text, \"npn13G2*\")
+layer rest = activ.without_text(text, \"npn13G2*\")
+",
+            grid,
+            &mut strings,
+        )
+        .expect("the deck parses");
+        let square = |x: i64| boundary(1, 0, &[x, x + 100, x + 100, x], &[0, 0, 100, 100]);
+        let l_shape = boundary(
+            1,
+            0,
+            &[600, 900, 900, 700, 700, 600],
+            &[0, 0, 100, 100, 400, 400],
+        );
+        let bytes = gds_labelled(
+            "TOP",
+            &[square(0), square(200), square(400), l_shape, square(1_000)],
+            &[
+                label(63, 0, 50, 50, "npn13G2"),
+                label(63, 0, 300, 50, "npn13G2L"),
+                label(63, 0, 450, 50, "pnpMPA"),
+                label(63, 0, 800, 300, "npn13G2"),
+                label(63, 25, 1_050, 50, "npn13G2"),
+            ],
+        );
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("reads");
+        let boxes = |name: &str| {
+            let layer = deck.layers.id(&strings, name).expect("declared");
+            layout
+                .store
+                .polys_on_layer(layer)
+                .map(|row| {
+                    let b = layout.store.poly_bbox(PolyId(row));
+                    (b.xlo.raw(), b.xhi.raw(), b.yhi.raw())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(boxes("npn"), [(0, 100, 100), (200, 300, 100)]);
+        assert_eq!(
+            boxes("rest"),
+            [(400, 500, 100), (600, 900, 400), (1_000, 1_100, 100)]
+        );
+    }
+
+    #[test]
+    fn a_glob_matches_the_whole_text() {
+        use super::glob_matches;
+        for (pattern, text) in [
+            ("VDD", "VDD"),
+            ("VDD*", "VDD"),
+            ("VDD*", "VDDIO"),
+            ("*IO", "VDDIO"),
+            ("V?D", "VDD"),
+            ("a*b*c", "axxbyyc"),
+            ("*", ""),
+        ] {
+            assert!(glob_matches(pattern, text), "{pattern} {text}");
+        }
+        for (pattern, text) in [
+            ("VDD", "VDDIO"),
+            ("VDD", "vdd"),
+            ("V?D", "VD"),
+            ("*IO", "VDDIOX"),
+            ("a*b*c", "axxbyy"),
+            ("[V]DD", "VDD"),
+        ] {
+            assert!(!glob_matches(pattern, text), "{pattern} {text}");
+        }
     }
 }

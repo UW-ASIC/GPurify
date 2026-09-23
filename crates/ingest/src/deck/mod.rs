@@ -65,6 +65,8 @@ pub struct LayerTable {
     derived_start: u16,
     /// How each derived layer is computed, in id order. Operands fold left and only name lower ids.
     derived: Vec<(LayerId, DerivedOp, Vec<LayerId>)>,
+    /// The text patterns [`DerivedOp::WithText`] names, `*` any run, `?` one character.
+    texts: Vec<String>,
 }
 
 /// The placeholder stream pair of a derived layer. Ask [`LayerTable::is_derived`].
@@ -117,6 +119,11 @@ impl LayerTable {
         &self.derived
     }
 
+    /// Text pattern `text` of a [`DerivedOp::WithText`].
+    pub(crate) fn text(&self, text: u32) -> &str {
+        &self.texts[text as usize]
+    }
+
     /// Add a derived layer above every existing id.
     fn push_derived(&mut self, name: StrId, op: DerivedOp, operands: Vec<LayerId>) {
         let id = LayerId(u16::try_from(self.name.len()).expect("LayerId is a u16"));
@@ -145,6 +152,7 @@ impl LayerTable {
             by_stream,
             derived_start: count,
             derived: Vec::new(),
+            texts: Vec::new(),
         }
     }
 }
@@ -172,6 +180,12 @@ pub(crate) enum DerivedOp {
     /// `inside_part` (`true`) or `outside_part`, on edges.
     Part(bool),
     WithLength(i128, i128),
+    /// `with_text` (`keep`) or `without_text`: the shapes holding a text on the
+    /// layer argument that matches [`LayerTable::text`] `text`.
+    WithText {
+        keep: bool,
+        text: u32,
+    },
 }
 
 impl DerivedOp {
@@ -186,7 +200,8 @@ impl DerivedOp {
             | Self::Holes
             | Self::Extents
             | Self::WithArea(..)
-            | Self::WithWidth(..) => Some(false),
+            | Self::WithWidth(..)
+            | Self::WithText { .. } => Some(false),
             Self::And
             | Self::Or
             | Self::Not
@@ -328,6 +343,7 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
             .collect();
         layers.push_derived(strings.intern(&row.name), row.op, operands);
     }
+    layers.texts.clone_from(&doc.texts);
     // A misspelt model would match no device and silently check nothing.
     for rule in &doc.rules {
         for (_, stated) in &rule.params {
@@ -343,6 +359,20 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
     }
     let rules = build_rules(&doc.rules, &layers, strings);
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
+    // Only a conductor's shapes carry a net; any other layer would read as all
+    // different nets, or none the same.
+    for rule in doc.rules.iter().filter(|rule| rule.kind == "net_spacing") {
+        let layer = &rule.layers[0];
+        if !connectivity
+            .conductors
+            .contains(&layer_of(&layers, strings, layer))
+        {
+            return Err(DeckError::Malformed(format!(
+                "rule {}: net spacing on {layer}, which is not a conductor",
+                rule.id
+            )));
+        }
+    }
     let devices = build_devices(&doc.devices, &layers, strings);
     let stack = build_stack(&doc.pex, &layers, strings);
 
@@ -518,6 +548,8 @@ struct DeckSrc {
     layers: Vec<(String, (u16, u16))>,
     /// In declaration order, which decides the ids they take.
     derived: Vec<DerivedSrc>,
+    /// Text patterns, indexed by [`DerivedOp::WithText`].
+    texts: Vec<String>,
     rules: Vec<RuleSrc>,
     connectivity: ConnectivitySrc,
     devices: Vec<DeviceSrc>,
