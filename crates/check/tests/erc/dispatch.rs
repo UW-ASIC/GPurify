@@ -604,7 +604,9 @@ fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
         let span = em.layer_start[row] as usize..em.layer_start[row + 1] as usize;
         assert!(span.len() >= 2, "row {row} is multi-layer");
         assert!(
-            em.blech_limit[span].iter().all(|b| b.raw() == want),
+            em.blech_limit[span]
+                .iter()
+                .all(|b| b.raw().to_bits() == f64::to_bits(want)),
             "row {row}"
         );
     }

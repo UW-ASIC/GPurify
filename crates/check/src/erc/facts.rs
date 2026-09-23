@@ -43,7 +43,7 @@ impl RoleMask {
         self.0 & other.0 == other.0
     }
 
-    pub const fn intersects(self, other: Self) -> bool {
+    pub(crate) const fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
     }
 

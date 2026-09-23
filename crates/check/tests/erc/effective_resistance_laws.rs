@@ -12,7 +12,7 @@ use crate::common;
 use common::{one_row_network, probe_of};
 use gpurify_check::erc::power::{self, NetNetworks, SolveScratch};
 use gpurify_geom::{prefix, Qty, Resistance};
-use gpurify_testgen::{assert_close, assert_close_relative, ladder_network, Rng};
+use gpurify_testgen::{assert_close, assert_close_relative, Rng};
 
 type Probe = (u32, u32, Qty<Resistance, { prefix::BASE }>);
 
@@ -56,21 +56,27 @@ fn a_single_edge_reports_its_own_resistance() {
     assert_close_relative("a lone resistor", probes[0].2.raw(), 47.0, 1e-9);
 }
 
-/// Oracle: closed form. `gpurify_testgen::ladder_network` states its own
-/// answer: a stage is one series resistor and a parallel pair, so `rungs`
-/// stages are `rungs * (series + parallel / 2)`. Its interior nodes are not
-/// terminals, so an implementation Kron-eliminating them must land on the same
-/// number — which is the invariance `power::effective_resistance_into` claims.
+/// Oracle: closed form. A stage is one series resistor and a parallel pair, so
+/// `rungs` stages are `rungs * (series + parallel / 2)`. The interior nodes are
+/// not terminals, so Kron-eliminating them must land on the same number.
 #[test]
 fn a_resistor_ladder_matches_its_series_parallel_closed_form() {
+    let (series, parallel) = (1.5, 3.0);
     for rungs in [1u32, 2, 7] {
-        let case = ladder_network(rungs, 1.5, 3.0);
-        let probes = probe(&case.networks);
-        let measured = probe_of(&probes, case.terminals.0, case.terminals.1);
+        let mut edges = Vec::new();
+        for stage in 0..rungs {
+            let a = 2 * stage;
+            edges.push((a, a + 1, series));
+            edges.push((a + 1, a + 2, parallel));
+            edges.push((a + 1, a + 2, parallel));
+        }
+        let networks = one_row_network(2 * rungs + 1, &[0, 2 * rungs], &edges);
+        let probes = probe(&networks);
+        let measured = probe_of(&probes, 0, 2 * rungs);
         assert_close_relative(
             &format!("a {rungs}-stage ladder"),
             measured.raw(),
-            case.expected_ohm,
+            f64::from(rungs) * (series + parallel / 2.0),
             1e-9,
         );
     }

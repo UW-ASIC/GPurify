@@ -1,25 +1,114 @@
 //! Electrical rule checking: one table per rule kind, one transform per table.
 //!
-//! Data in: a [`RuleSet`] from the deck, and a [`RunInputs`] (design, net facts,
-//! intent, per-net networks, the solved supply grid).
-//! Data out: violations and one `RuleRun` per configured row. Six kinds need
-//! design intent and record themselves skipped, never clean, without it.
+//! Data in: a [`RuleSet`] from the deck and the extracted design ([`Inputs`]).
+//! Data out: violations and one `RuleRun` per configured row, from [`check`].
+//! Six kinds need design intent and record themselves skipped, never clean,
+//! without it. The submodules stay public for the integration tests.
 
 pub mod facts;
 pub mod power;
 pub mod rules;
 pub mod ruleset;
 
-pub use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts, RoleMask};
-pub use power::{NetNetworks, PowerError, PowerGrid, PowerSolution, Process, Solved};
-pub use ruleset::{RuleHead, RuleSet, RunInputs, KINDS};
+pub use power::{PowerError, Process};
+pub use ruleset::{RuleSet, KINDS};
 
 use crate::report::{Outcome, RuleRun, Violations};
+use crate::topology::PortTable;
+use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts};
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::ops::Point;
-use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance};
+use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance, Temperature};
 use gpurify_geom::{Bbox, GeometryStore, PolyId, ValidatedLayer};
+use gpurify_ingest::intent::DesignIntent;
 use gpurify_ingest::StrId;
+use power::{NetNetworks, PowerGrid, PowerSolution, Solved};
+use ruleset::{RuleHead, RunInputs};
+
+/// What one ERC run reads, borrowed.
+#[derive(Debug, Clone, Copy)]
+pub struct Inputs<'a> {
+    pub design: Design<'a>,
+    pub ports: &'a PortTable,
+    /// `None` skips the six intent rules.
+    pub intent: Option<&'a DesignIntent>,
+    pub process: Process<'a>,
+    /// The die boundary: the denominator of every density.
+    pub die: Bbox,
+    /// The applied sign-off temperature, absolute.
+    pub temperature: Qty<Temperature, { prefix::BASE }>,
+}
+
+/// Classify nets, resolve intent, build the per-net networks and the supply
+/// grid, solve it, then run every row. An error means no rule ran: the grid
+/// could not be built or solved, and nothing was written to `out` or `runs`.
+pub fn check(
+    rules: &RuleSet,
+    inputs: Inputs<'_>,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) -> Result<(), PowerError> {
+    let Inputs {
+        design,
+        ports,
+        intent,
+        process,
+        die,
+        temperature,
+    } = inputs;
+    let mut facts = NetFacts::default();
+    classify_nets_into(design.nets, design.devices, &mut facts);
+    let mut intent_map = IntentMap::default();
+    resolve_intent_into(intent, ports, design.nets, &mut intent_map);
+
+    let mut networks = NetNetworks::default();
+    power::extract_nets_into(
+        design.store,
+        design.nets,
+        design.devices,
+        process,
+        &mut networks,
+    )?;
+    let mut grid = PowerGrid::default();
+    power::extract_into(
+        design.store,
+        design.nets,
+        design.devices,
+        &intent_map,
+        process,
+        &mut grid,
+    )?;
+
+    // No declared supply: no grid, and the electrical rules record themselves skipped.
+    let mut scratch = Scratch::default();
+    let mut solution = PowerSolution::default();
+    let power = if grid.is_empty() {
+        None
+    } else {
+        power::solve_into(&grid, &mut scratch.solve, &mut solution)?;
+        Some(Solved {
+            grid: &grid,
+            solution: &solution,
+        })
+    };
+
+    rules.run(
+        RunInputs {
+            design,
+            facts: &facts,
+            intent: &intent_map,
+            networks: &networks,
+            power,
+            die,
+            grid: process.grid,
+            operating_temperature: temperature,
+        },
+        &mut scratch,
+        out,
+        runs,
+    );
+    Ok(())
+}
 
 /// Boltzmann's constant in eV/K: activation energies are stated in eV.
 pub(crate) const BOLTZMANN_EV_PER_K: f64 = 8.617_333_262e-5;
