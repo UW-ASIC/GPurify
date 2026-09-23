@@ -174,7 +174,6 @@ fn reference_with_one_transistor() -> Netlist {
         subckt_port_start: vec![0, 0],
         port_net: Vec::new(),
         subckt_device_start: vec![0, 1],
-        device_name: vec![StrId(3)],
         device_model: vec![StrId(1)],
         device_kind: vec![DeviceKind::Mos],
         device_terminal_start: vec![0, 4],

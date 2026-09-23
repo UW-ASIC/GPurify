@@ -51,7 +51,6 @@ pub struct Netlist {
     pub subckt_device_start: Vec<u32>,
 
     /// One row per device instance.
-    pub device_name: Vec<StrId>,
     pub device_model: Vec<StrId>,
     pub device_kind: Vec<crate::deck::DeviceKind>,
     /// Terminals, CSR into `terminal_net`.
@@ -74,17 +73,11 @@ pub struct Netlist {
     /// expanded: `w=1u` is `1e-6` and a bare `w=1` is one metre.
     pub param: Vec<(StrId, f64)>,
 
-    /// One row per subcircuit instance — an `X` card — in file order.
-    pub instance_name: Vec<StrId>,
-    /// The subcircuit each instance instantiates — the callee.
+    /// One row per subcircuit instance, an `X` card, in file order: the callee.
     pub instance_of: Vec<SubcktId>,
     /// The subcircuit each instance sits in — the caller. With `instance_of`,
     /// the only cell-to-cell edge, so the only place a cycle can be stated.
     pub instance_subckt: Vec<SubcktId>,
-    /// Terminals, CSR into `instance_terminal_net`. Positional, matching the
-    /// instantiated subcircuit's `port_net` order.
-    pub instance_terminal_start: Vec<u32>,
-    pub instance_terminal_net: Vec<RefNetId>,
 
     /// One row per net.
     pub net_name: Vec<StrId>,
@@ -344,8 +337,9 @@ struct Build<'a> {
     /// The open subcircuit and the `net_name` row its nets start at.
     open: Option<(SubcktId, u32)>,
     open_span: SourceSpan,
-    /// Where each instance was written, for the arity check at end of file.
-    instance_span: Vec<SourceSpan>,
+    /// Per instance: where it was written, its name and terminal count, for the
+    /// arity check at end of file.
+    instances: Vec<(SourceSpan, StrId, u32)>,
 }
 
 impl Build<'_> {
@@ -391,7 +385,7 @@ impl Build<'_> {
             .push(narrow(self.out.port_net.len()));
         self.out
             .subckt_device_start
-            .push(narrow(self.out.device_name.len()));
+            .push(narrow(self.out.device_model.len()));
         self.open = Some((id, narrow(self.out.net_name.len())));
         self.open_span = head.span;
 
@@ -442,7 +436,8 @@ impl Build<'_> {
                 model.text.to_string(),
             ));
         }
-        let name = self.strings.intern(head.text);
+        // Not stored; interned only because interning order is report order.
+        self.strings.intern(head.text);
         let model = self.strings.intern(model.text);
         self.out
             .device_terminal_start
@@ -450,7 +445,6 @@ impl Build<'_> {
         self.out
             .device_param_start
             .push(narrow(self.out.param.len()));
-        self.out.device_name.push(name);
         self.out.device_model.push(model);
         self.out.device_kind.push(kind);
 
@@ -490,16 +484,12 @@ impl Build<'_> {
             .map_err(|_| NetlistError::UndefinedSubckt(cell.span, cell.text.to_string()))?;
 
         let name = self.strings.intern(head.text);
-        self.out
-            .instance_terminal_start
-            .push(narrow(self.out.instance_terminal_net.len()));
-        self.out.instance_name.push(name);
         self.out.instance_of.push(of);
         self.out.instance_subckt.push(subckt);
-        self.instance_span.push(head.span);
+        self.instances.push((head.span, name, narrow(nets.len())));
+        // Not stored, but a net named only on an `X` card must still exist.
         for net in nets {
-            let net = self.net(net.text, subckt);
-            self.out.instance_terminal_net.push(net);
+            self.net(net.text, subckt);
         }
         Ok(())
     }
@@ -617,7 +607,7 @@ fn read_dialect(
         models: Vec::new(),
         open: None,
         open_span: SourceSpan { line: 0 },
-        instance_span: Vec::new(),
+        instances: Vec::new(),
     };
 
     let card = |c: usize| &toks[card_start[c] as usize..card_start[c + 1] as usize];
@@ -659,29 +649,20 @@ fn read_dialect(
     b.out.subckt_port_start.push(narrow(b.out.port_net.len()));
     b.out
         .subckt_device_start
-        .push(narrow(b.out.device_name.len()));
+        .push(narrow(b.out.device_model.len()));
     b.out
         .device_terminal_start
         .push(narrow(b.out.terminal_net.len()));
     b.out.device_param_start.push(narrow(b.out.param.len()));
-    b.out
-        .instance_terminal_start
-        .push(narrow(b.out.instance_terminal_net.len()));
 
     // Fail closed on a miswired instantiation: the first point every port count is known.
-    let (port_start, term_start) = (&b.out.subckt_port_start, &b.out.instance_terminal_start);
-    for (row, of) in b.out.instance_of.iter().enumerate() {
+    let port_start = &b.out.subckt_port_start;
+    for (&(span, name, got), of) in b.instances.iter().zip(&b.out.instance_of) {
         let of = of.0 as usize;
         let want = port_start[of + 1] - port_start[of];
-        let got = term_start[row + 1] - term_start[row];
         if got != want {
-            let name = b.strings.resolve(b.out.instance_name[row]).to_string();
-            return Err(NetlistError::TerminalCount(
-                b.instance_span[row],
-                name,
-                got,
-                want,
-            ));
+            let name = b.strings.resolve(name).to_string();
+            return Err(NetlistError::TerminalCount(span, name, got, want));
         }
     }
     Ok(b.out)
