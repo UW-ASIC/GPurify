@@ -2,13 +2,14 @@
 //!
 //! Data in: a [`RuleSet`] from the deck and the extracted design ([`Inputs`]).
 //! Data out: violations and one `RuleRun` per configured row, from [`check`].
-//! Six kinds need design intent and record themselves skipped, never clean,
+//! Kinds that need design intent record themselves skipped, never clean,
 //! without it. The submodules stay public for the integration tests.
 
 pub mod facts;
 pub mod power;
 pub mod rules;
 pub mod ruleset;
+pub mod voltage;
 
 pub use power::{PowerError, Process};
 pub use ruleset::{RuleSet, KINDS};
@@ -30,7 +31,7 @@ use ruleset::{RuleHead, RunInputs};
 pub struct Inputs<'a> {
     pub design: Design<'a>,
     pub ports: &'a PortTable,
-    /// `None` skips the six intent rules.
+    /// `None` skips the intent rules.
     pub intent: Option<&'a DesignIntent>,
     pub process: Process<'a>,
     /// The die boundary: the denominator of every density.
@@ -60,6 +61,8 @@ pub fn check(
     classify_nets_into(design.nets, design.devices, &mut facts);
     let mut intent_map = IntentMap::default();
     resolve_intent_into(intent, ports, design.nets, &mut intent_map);
+    let mut voltage = voltage::NetVoltage::default();
+    voltage::propagate_into(design.nets, design.devices, &intent_map, &mut voltage);
 
     let mut networks = NetNetworks::default();
     power::extract_nets_into(
@@ -97,6 +100,7 @@ pub fn check(
             design,
             facts: &facts,
             intent: &intent_map,
+            voltage: &voltage,
             networks: &networks,
             power,
             die,

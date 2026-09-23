@@ -11,3 +11,4 @@ mod p2p_resistance_rule;
 mod power_grid_laws;
 mod supply_rules;
 mod topological_rules;
+mod voltage_rules;

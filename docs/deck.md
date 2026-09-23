@@ -172,6 +172,25 @@ deck always finishes loading.
 Every parameter below is required. Where a parameter may be absent, write
 `none`; leaving it out is still an error.
 
+`models` is a list of device model names in quotes, each declared by a
+`device` statement: `["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__pfet_01v8"]`.
+A name no device declares is an error.
+
+The voltage rules read what each net can reach from the supplies in the
+intent file (see [usage.md](usage.md#design-intent)). A device whose terminals
+no supply reaches through a transistor channel, resistor or diode is not
+checked.
+
+```
+let thin = ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__pfet_01v8"]
+rule ox.thin  gate_oxide(; models: thin, max: 1.98V)
+rule ds.thin  drain_source(; models: thin, max: 1.98V)
+rule wb       well_bias(; pmos: ["sky130_fd_pr__pfet_01v8"], nmos: ["sky130_fd_pr__nfet_01v8"])
+rule ls       missing_level_shifter(; shifters: ["ls_nfet", "ls_pfet"])
+rule xing     domain_crossing()
+rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
+```
+
 | Check | What it flags |
 |---|---|
 | `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none)` | A gate connected to more collector area than `max_ratio` times its own. |
@@ -182,9 +201,9 @@ Every parameter below is required. Where a parameter may be absent, write
 | `ir_drop()` | A node whose voltage drop or overvoltage exceeds its net's stated limit. Needs `--intent`. |
 | `p2p_resistance(; max: resistance)` | Two points on one net further apart in resistance than the limit. |
 | `reliability(; required_lifetime: h, reference_lifetime: h, reference_stress: voltage, stress_exponent: n, reference_temperature: temp, activation_energy: eV, max_abs_voltage: voltage, duty_cycle: frac)` | A device whose predicted lifetime is below `required_lifetime`. Needs `--intent`. |
-| `hv_domain(; max_delta: voltage, isolation: layer \| none)` | A device whose terminals span more than `max_delta` between supplies. Needs `--intent`. |
-| `esd_latchup(pad, guard_ring; min_guard_ring_width: len, max_tap_distance: len)` | A guard ring too narrow or too far from a supply tap, and every pad net (as `esd_topological`). Needs `--intent`. |
-| `esd_topological(pad)` | Every net on a pad. Clamps cannot be described yet, so every pad is flagged; see [limitations.md](limitations.md). |
+| `hv_domain(; max_delta: voltage, isolation: layer \| none)` | A device whose terminals reach supply domains more than `max_delta` apart, directly or through other devices' channels. Needs `--intent`. |
+| `esd_latchup(pad, guard_ring; min_guard_ring_width: len, max_tap_distance: len, clamps: models)` | A guard ring too narrow or too far from a supply tap, and a pad net short of a clamp path (as `esd_topological`). Needs `--intent`. |
+| `esd_topological(pad; clamps: models)` | A pad net with no path through `clamps` devices to both a power and a ground supply. The path is a clamp from the pad to a supply, then any rail clamps between supplies. Needs `--intent`. |
 | `floating_gate()` | A net that only connects to gates. |
 | `floating_well(well, tap)` | A well with no tap in it. |
 | `missing_tie(well, diff; max_distance: len)` | A region further than `max_distance` from a tap. |
@@ -193,6 +212,11 @@ Every parameter below is required. Where a parameter may be absent, write
 | `supply_short(tap_a, tap_b)` | A net that touches both kinds of tap, such as an n-tap and a p-tap. |
 | `tie_high_low()` | A net that reaches a gate and a transistor source but no drain: a gate tied straight to a rail instead of through a tie cell. |
 | `unconnected_pin(layers…)` | A shape on the listed layers that reaches no device. |
+| `gate_oxide(; models: models, max: voltage)` | A device of those models whose gate can differ from its source, drain or bulk by more than `max`. Needs `--intent`. |
+| `drain_source(; models: models, max: voltage)` | A device of those models whose drain can differ from its source by more than `max`. Needs `--intent`. |
+| `well_bias(; pmos: models \| none, nmos: models \| none)` | A `pmos` device whose well can sit below its source or drain, or an `nmos` device whose substrate can sit above them. Needs `--intent`. |
+| `missing_level_shifter(; shifters: models \| none)` | A transistor whose gate is driven from a power domain its source and drain are not in, unless its model is one of `shifters`. Needs `--intent`. |
+| `domain_crossing()` | A device whose source-to-drain path joins two power domains. Needs `--intent`. |
 
 ## Connectivity
 
