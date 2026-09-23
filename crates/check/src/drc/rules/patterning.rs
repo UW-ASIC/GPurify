@@ -9,7 +9,6 @@ use super::{centre, label_pairs_into, pair_distances_into, Verdict};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
-use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
@@ -160,7 +159,7 @@ fn two_color_into(adj_start: &[u32], adj: &[u32], out: &mut Vec<u8>) -> Coloring
     let n = out.len();
     let mut frontier: Vec<u32> = Vec::with_capacity(n);
     let mut head = 0usize;
-    for root_id in 0..n as u32 {
+    for root_id in 0..u32::try_from(n).expect("node ids are u32") {
         let root = root_id as usize;
         if out[root] != UNCOLORED {
             continue;
@@ -319,13 +318,13 @@ pub(crate) fn multi_patterning(
     if examined == 0 {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    if validate_layer_into(store, layer, &mut s.layer_a).is_err() {
+    if s.validated.get(store, layer).is_none() {
         return (Outcome::Refused, examined);
     }
     let (first_row, node_count) = (shapes.start, shapes.end - shapes.start);
     SpatialIndex::build_into(store, layer, &mut s.index_a);
     candidate_pairs_into(store, &s.index_a, spacing, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, &mut s.dists);
+    pair_distances_into(store, &s.pairs, spacing, &mut s.dists);
     // Touching rows print as one shape: merge them (skipping this could create
     // an odd cycle). A figure is named by its lowest row.
     label_pairs_into(

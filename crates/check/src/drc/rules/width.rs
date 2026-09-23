@@ -9,7 +9,7 @@ use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::{Point, Winding};
-use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::view::ValidatedLayer;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId, PolygonRef};
 use gpurify_ingest::StrId;
@@ -265,17 +265,16 @@ pub(crate) fn facing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if validate_layer_into(store, layer, &mut s.layer_a).is_err() {
+    let Some(drawn) = s.validated.get(store, layer) else {
         return REFUSED;
-    }
-    let polys = s.layer_a.len() as u64;
-    if !material_between
-        && union_into(&s.layer_a, &ValidatedLayer::default(), &mut s.layer_out).is_err()
+    };
+    let polys = drawn.len() as u64;
+    if !material_between && union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err()
     {
         return REFUSED;
     }
     let figures = if material_between {
-        &s.layer_a
+        drawn
     } else {
         &s.layer_out
     };
@@ -315,15 +314,15 @@ pub(crate) fn min_edge_length(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if validate_layer_into(store, layer, &mut s.layer_a).is_err() {
+    let Some(drawn) = s.validated.get(store, layer) else {
         return REFUSED;
-    }
-    let polys = u32::try_from(s.layer_a.len()).expect("a layer indexes polygons with a u32");
+    };
+    let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
     let mut rows = outer_rows(store, layer);
     let mut examined = 0u64;
     for idx in 0..polys {
         let shape = rows.next().expect("one store row per validated polygon");
-        for (a, b) in poly_edges(s.layer_a.get(idx)) {
+        for (a, b) in poly_edges(drawn.get(idx)) {
             examined += 1;
             // Rectilinear: one term is zero.
             let length = (b.x - a.x).abs() + (b.y - a.y).abs();

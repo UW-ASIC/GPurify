@@ -332,8 +332,8 @@ fn density_table(window: i64, step: i64, limit: f64, sense: LimitSense) -> Vec<(
             layer: A,
             window: dbu(window),
             step: dbu(step),
-            limit: limit,
-            sense: sense,
+            limit,
+            sense,
         },
     )]
 }

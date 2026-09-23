@@ -190,7 +190,7 @@ fn patterning_table(colors: u8, color_spacing: i64) -> Vec<(StrId, Rule)> {
         RULE,
         Rule::MultiPatterning {
             layer: A,
-            colors: colors,
+            colors,
             color_spacing: dbu(color_spacing),
         },
     )]
