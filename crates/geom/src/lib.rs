@@ -40,16 +40,11 @@ pub mod connectivity;
 pub mod ids;
 pub mod index;
 pub mod linalg;
-pub mod observe;
 pub mod ops;
 pub mod rects;
 pub mod store;
 pub mod view;
 pub use bbox::Bbox;
 pub use ids::{LayerId, PolyId};
-pub use observe::{NoObserve, Observer};
 pub use store::{GeometryStore, GeometryStoreBuilder};
 pub use view::{PolygonRef, RingRef, ValidatedLayer};
-
-pub mod expr;
-pub use expr::{DerivedError, DerivedExpr, Evaluator, LayerRef};

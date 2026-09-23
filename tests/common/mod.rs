@@ -270,7 +270,9 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     // and a `StrId` this fixture resolves are the same id space. A separately
     // interned table would agree by luck and stop agreeing the day the parser
     // interns one extra name.
-    let strings = load(&inputs).map(|loaded| loaded.strings).unwrap_or_default();
+    let strings = load(&inputs)
+        .map(|loaded| loaded.strings)
+        .unwrap_or_default();
 
     Run {
         dir,

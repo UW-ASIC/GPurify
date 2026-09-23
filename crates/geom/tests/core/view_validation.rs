@@ -48,9 +48,9 @@ fn validate(store: &GeometryStore, layer: LayerId) -> Result<ValidatedLayer, Val
 
 /// Sum of every polygon's area. Order-independent, which matters: the store
 /// promises rows are grouped by layer, not the order rows take within one.
-fn total_area(store: &GeometryStore, layer: &ValidatedLayer) -> DbuArea {
+fn total_area(layer: &ValidatedLayer) -> DbuArea {
     (0..u32::try_from(layer.len()).expect("a test layer fits a u32"))
-        .map(|index| layer.get(store, index).area())
+        .map(|index| layer.get(index).area())
         .fold(DbuArea::new(0), |total, area| total + area)
 }
 
@@ -84,7 +84,7 @@ fn a_validated_polygon_has_the_area_its_generator_states() {
     let first_row = store.polys_on_layer(LAYER).start;
     for ((shape, area), handle) in cases.iter().zip(handles) {
         let id = ids.of(handle);
-        let poly = layer.get(&store, id.0 - first_row);
+        let poly = layer.get(id.0 - first_row);
         assert_eq!(poly.area(), DbuArea::new(*area), "{shape:?}");
         assert_eq!(poly.bbox(), store.poly_bbox(id));
         assert_eq!(poly.holes().count(), 0, "none of these have holes");
@@ -121,7 +121,7 @@ fn every_validated_outer_ring_winds_counter_clockwise_and_is_simple() {
     assert_eq!(layer.len(), 120);
 
     for index in 0..120u32 {
-        let poly = layer.get(&store, index);
+        let poly = layer.get(index);
         let outer = poly.outer();
         assert_eq!(
             wind(outer),
@@ -165,7 +165,7 @@ fn a_hole_winds_clockwise_and_its_area_is_subtracted_from_its_container() {
     let layer = validate(&store, LAYER).expect("a rectangle with a hole in it is valid");
 
     assert_eq!(layer.len(), 1, "an outer and its hole are one polygon");
-    let poly = layer.get(&store, 0);
+    let poly = layer.get(0);
 
     let outer_area = 100 * 100i128;
     let hole_area = 40 * 30i128;
@@ -280,13 +280,13 @@ fn validation_reads_one_layer_and_clears_the_buffer_it_is_given() {
     let mut buffer = ValidatedLayer::default();
     validate_layer_into(&store, LAYER, &mut buffer).expect("six rectangles are valid");
     assert_eq!(buffer.len(), 6);
-    assert_eq!(total_area(&store, &buffer), DbuArea::new(6 * 50 * 50));
+    assert_eq!(total_area(&buffer), DbuArea::new(6 * 50 * 50));
 
     // The same buffer, reused. Six stale rows must not survive into a
     // two-polygon layer, and the areas must be the narrow layer's.
     validate_layer_into(&store, OTHER, &mut buffer).expect("two rectangles are valid");
     assert_eq!(buffer.len(), 2, "the buffer was appended to, not cleared");
-    assert_eq!(total_area(&store, &buffer), DbuArea::new(2 * 20 * 20));
+    assert_eq!(total_area(&buffer), DbuArea::new(2 * 20 * 20));
 
     // And back again: reuse is symmetric, not a one-way shrink.
     validate_layer_into(&store, LAYER, &mut buffer).expect("six rectangles are still valid");
@@ -312,7 +312,7 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
     assert_eq!(first.len(), second.len());
 
     for index in 0..u32::try_from(first.len()).expect("a handful of polygons fit a u32") {
-        let (a, b) = (first.get(&store, index), second.get(&store, index));
+        let (a, b) = (first.get(index), second.get(index));
         assert_eq!(a.area(), b.area(), "polygon {index}");
         assert_eq!(a.bbox(), b.bbox(), "polygon {index}");
         assert_eq!(a.outer().coords(), b.outer().coords(), "polygon {index}");
@@ -332,7 +332,7 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
     // by hole count, because the order rows take within a layer is not part of
     // the store's interface.
     let perforated = (0..3)
-        .map(|index| first.get(&store, index))
+        .map(|index| first.get(index))
         .find(|poly| poly.holes().count() == 2)
         .expect("one polygon has two holes");
     assert_eq!(

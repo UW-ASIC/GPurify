@@ -47,94 +47,6 @@ pub fn subtraction_into(
     combine_into(a, b, out, |in_a, in_b| in_a & !in_b)
 }
 
-/// Grow (`amount > 0`) or shrink (`amount < 0`) by an exact L-infinity square
-/// kernel, which keeps rectilinear input rectilinear.
-pub fn offset_into(
-    a: &ValidatedLayer,
-    amount: crate::Dbu,
-    out: &mut ValidatedLayer,
-) -> Result<(), BooleanError> {
-    let amt = amount.raw();
-    let mut sweep = Sweep::default();
-    let mut rings = Rings::default();
-    collect_rings(a, &mut rings);
-
-    let mut edges = Vec::new();
-    vedges_into(&rings, &mut edges);
-    let mut xs = Vec::new();
-    axis_into(&edges, &mut xs);
-
-    let mut region = Slabs::default();
-    occupancy(&edges, &xs, &mut sweep, &mut region);
-
-    // An empty operand has no slab and emits nothing.
-    if amt == 0 || xs.len() < 2 {
-        return emit(&xs, &region, &mut sweep, out);
-    }
-    if amt > 0 {
-        let mut grown = Vec::new();
-        grown_edges_into(&xs, &region, amt, &mut grown);
-        let mut gxs = Vec::new();
-        axis_into(&grown, &mut gxs);
-        let mut dilated = Slabs::default();
-        occupancy(&grown, &gxs, &mut sweep, &mut dilated);
-        return emit(&gxs, &dilated, &mut sweep, out);
-    }
-
-    // Erosion = complement of the dilated complement, over the operand's box grown
-    // by `|amt| + 1` (anything farther cannot reach the operand).
-    let reach = -amt;
-    let margin = reach + 1;
-    let (mut ylo, mut yhi) = (i64::MAX, i64::MIN);
-    for edge in &edges {
-        ylo = ylo.min(edge.ylo);
-        yhi = yhi.max(edge.yhi);
-    }
-    let universe = [
-        VEdge {
-            x: clamp_dbu(xs[0] - margin),
-            ylo: clamp_dbu(ylo - margin),
-            yhi: clamp_dbu(yhi + margin),
-            delta: 1,
-        },
-        VEdge {
-            x: clamp_dbu(xs[xs.len() - 1] + margin),
-            ylo: clamp_dbu(ylo - margin),
-            yhi: clamp_dbu(yhi + margin),
-            delta: -1,
-        },
-    ];
-
-    let mut uxs = xs.clone();
-    uxs.push(universe[0].x);
-    uxs.push(universe[1].x);
-    sort_dedup(&mut uxs);
-
-    let mut complement = Slabs::default();
-    difference_over(&uxs, &universe, &edges, &mut sweep, &mut complement);
-
-    let mut grown = Vec::new();
-    grown_edges_into(&uxs, &complement, reach, &mut grown);
-
-    let mut rxs = Vec::new();
-    axis_into(&grown, &mut rxs);
-    rxs.extend_from_slice(&xs);
-    sort_dedup(&mut rxs);
-
-    let mut eroded = Slabs::default();
-    difference_over(&rxs, &edges, &grown, &mut sweep, &mut eroded);
-    emit(&rxs, &eroded, &mut sweep, out)
-}
-
-/// `p` minus `q`, both swept over the same axis.
-fn difference_over(axis: &[i64], p: &[VEdge], q: &[VEdge], sweep: &mut Sweep, out: &mut Slabs) {
-    let mut sp = Slabs::default();
-    let mut sq = Slabs::default();
-    occupancy(p, axis, sweep, &mut sp);
-    occupancy(q, axis, sweep, &mut sq);
-    combine_slabs(axis.len(), &sp, &sq, |in_p, in_q| in_p & !in_q, sweep, out);
-}
-
 // Between two consecutive axis x the occupied set is a constant list of
 // y-intervals; a set operation combines those lists slab by slab.
 
@@ -185,10 +97,6 @@ impl Slabs {
         self.start.push(ring_mark(self.ivals.len()));
     }
 
-    fn count(&self) -> usize {
-        self.start.len().saturating_sub(1)
-    }
-
     fn slab(&self, c: usize) -> &[(i64, i64)] {
         &self.ivals[self.start[c] as usize..self.start[c + 1] as usize]
     }
@@ -222,11 +130,6 @@ struct Sweep {
     /// `emit`'s per-ring `map_into` destinations.
     col_x: Vec<Dbu>,
     col_y: Vec<Dbu>,
-}
-
-/// Clamp a shape [`offset_into`] grew past `±MAX_ABS_DBU` to the domain edge.
-fn clamp_dbu(value: i64) -> i64 {
-    value.clamp(-MAX_ABS_DBU, MAX_ABS_DBU)
 }
 
 fn sort_dedup(values: &mut Vec<i64>) {
@@ -412,37 +315,6 @@ fn combine_slabs(
         }
         out.close_slab();
     }
-}
-
-/// Every vertical edge of a region dilated by an L-infinity square: each slab
-/// rectangle grown by `amount` on all sides (dilation distributes over union).
-fn grown_edges_into(xs: &[i64], region: &Slabs, amount: i64, out: &mut Vec<VEdge>) {
-    out.clear();
-    out.reserve(2 * region.ivals.len());
-
-    for c in 0..region.count() {
-        let x0 = clamp_dbu(xs[c] - amount);
-        let x1 = clamp_dbu(xs[c + 1] + amount);
-        for &(lo, hi) in region.slab(c) {
-            let ylo = clamp_dbu(lo - amount);
-            let yhi = clamp_dbu(hi + amount);
-            // CCW rectangle: winding +1 inside, so overlaps union.
-            out.push(VEdge {
-                x: x0,
-                ylo,
-                yhi,
-                delta: 1,
-            });
-            out.push(VEdge {
-                x: x1,
-                ylo,
-                yhi,
-                delta: -1,
-            });
-        }
-    }
-
-    out.sort_unstable_by_key(|edge| edge.x);
 }
 
 /// Every boundary segment of a slab list, interior on the left (so outers come
@@ -749,7 +621,7 @@ fn combine_into(
 /// GDSII writes a polygon with holes as one weakly simple *keyhole* ring, which
 /// [`validate_layer_into`] refuses as self-intersecting. Retracing it through the
 /// sweep cancels the slit and yields the outer and holes, for any number of holes.
-/// Raw `i64` file coordinates; asserted inside `±MAX_ABS_DBU`, since the sweep clamps.
+/// Raw `i64` file coordinates; asserted inside `±MAX_ABS_DBU`.
 pub fn canonical_rings_into(
     xs: &[i64],
     ys: &[i64],
@@ -807,12 +679,9 @@ const RESULT_LAYER: LayerId = LayerId(0);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::GeometryStore;
     use crate::DbuArea;
 
-    /// Area of a result layer, read without a store — the boolean's own rings
-    /// are the only thing a caller of [`offset_into`] can reach when the result
-    /// coordinates exist in no store row.
+    /// Area of a result layer, read from its own rings.
     fn area(layer: &ValidatedLayer) -> i128 {
         let mut doubled = 0i128;
         for idx in 0..u32::try_from(layer.len()).expect("a test layer fits a u32") {
@@ -822,109 +691,6 @@ mod tests {
         }
         debug_assert!(doubled % 2 == 0, "a rectilinear area is an integer");
         doubled / 2
-    }
-
-    fn square(half: i64) -> (GeometryStore, ValidatedLayer) {
-        let mut builder = GeometryStoreBuilder::with_capacity(1, 4);
-        let xs = [-half, half, half, -half].map(Dbu::new_unchecked);
-        let ys = [-half, -half, half, half].map(Dbu::new_unchecked);
-        builder.push(RESULT_LAYER, &xs, &ys);
-        let (store, _) = builder.finish(1);
-        let mut layer = ValidatedLayer::default();
-        validate_layer_into(&store, RESULT_LAYER, &mut layer).expect("a square is valid");
-        (store, layer)
-    }
-
-    /// An L-infinity offset of a square by `r` is a square of side `2 * (half +
-    /// r)`, for either sign of `r`. Nothing else in the tree exercises a
-    /// non-zero offset, because a grown result's coordinates exist in no store
-    /// row and the integration tests read results through one.
-    #[test]
-    fn offsetting_a_square_gives_the_square_the_closed_form_names() {
-        let (_store, a) = square(100);
-        let mut out = ValidatedLayer::default();
-
-        for amount in [-99i64, -40, -1, 0, 1, 40, 250] {
-            offset_into(&a, Dbu::new_unchecked(amount), &mut out).expect("a square is rectilinear");
-            let side = 2 * (100 + amount);
-            assert_eq!(
-                area(&out),
-                i128::from(side) * i128::from(side),
-                "offsetting a 200x200 square by {amount}"
-            );
-            assert_eq!(out.len(), 1, "an offset square is one polygon at {amount}");
-        }
-    }
-
-    /// A shrink by more than the half-width leaves nothing, and "nothing" has
-    /// to be an empty layer rather than a layer of empty polygons — an empty
-    /// clean result and a result that was never computed have to stay
-    /// distinguishable.
-    #[test]
-    fn shrinking_past_the_half_width_leaves_nothing() {
-        let (_store, a) = square(100);
-        let mut out = ValidatedLayer::default();
-        offset_into(&a, Dbu::new_unchecked(-100), &mut out).expect("a square is rectilinear");
-        assert!(out.is_empty(), "a square shrunk to nothing kept polygons");
-        assert_eq!(area(&out), 0);
-    }
-
-    /// An L is the union of two bars, so growing it is the union of the two
-    /// grown bars, and eroding it is the L inset by the same amount — the
-    /// reflex corner is the one place a square kernel and a round one would
-    /// disagree, and the one this module's erosion is derived rather than
-    /// written.
-    #[test]
-    fn offsetting_an_l_agrees_with_the_two_bars_it_is_made_of() {
-        let mut builder = GeometryStoreBuilder::with_capacity(1, 6);
-        let xs = [0i64, 90, 90, 20, 20, 0].map(Dbu::new_unchecked);
-        let ys = [0i64, 0, 20, 20, 90, 90].map(Dbu::new_unchecked);
-        builder.push(RESULT_LAYER, &xs, &ys);
-        let (store, _) = builder.finish(1);
-        let mut a = ValidatedLayer::default();
-        validate_layer_into(&store, RESULT_LAYER, &mut a).expect("an L is valid");
-        assert_eq!(area(&a), 90 * 20 + 20 * 70);
-
-        let mut out = ValidatedLayer::default();
-        offset_into(&a, Dbu::new_unchecked(5), &mut out).expect("an L is rectilinear");
-        // `[-5, 95] x [-5, 25]` and `[-5, 25] x [-5, 95]`, overlapping in the
-        // `30 x 30` corner they share.
-        assert_eq!(area(&out), 100 * 30 + 30 * 100 - 30 * 30);
-        assert_eq!(out.len(), 1, "a grown L is still one polygon");
-
-        offset_into(&a, Dbu::new_unchecked(-5), &mut out).expect("an L is rectilinear");
-        // `[5, 85] x [5, 15]` and `[5, 15] x [15, 85]`.
-        assert_eq!(area(&out), 80 * 10 + 10 * 70);
-        assert_eq!(out.len(), 1, "an eroded L is still one polygon");
-    }
-
-    /// Growing distributes over union, so growing two squares far enough apart
-    /// to stay apart is two grown squares, and growing them until they touch is
-    /// one.
-    #[test]
-    fn growing_merges_two_squares_exactly_when_they_meet() {
-        let mut builder = GeometryStoreBuilder::with_capacity(2, 8);
-        for centre in [0i64, 300] {
-            let xs = [centre - 50, centre + 50, centre + 50, centre - 50].map(Dbu::new_unchecked);
-            let ys = [-50, -50, 50, 50].map(Dbu::new_unchecked);
-            builder.push(RESULT_LAYER, &xs, &ys);
-        }
-        let (store, _) = builder.finish(1);
-        let mut a = ValidatedLayer::default();
-        validate_layer_into(&store, RESULT_LAYER, &mut a).expect("two squares are valid");
-
-        // The squares span [-50, 50] and [250, 350], so the gap is 200 and each
-        // side of it has to close by 100 for them to meet.
-        let mut out = ValidatedLayer::default();
-        offset_into(&a, Dbu::new_unchecked(50), &mut out).expect("a square is rectilinear");
-        assert_eq!(out.len(), 2, "the gap of 200 is still open at a grow of 50");
-        assert_eq!(area(&out), 2 * 200 * 200);
-
-        offset_into(&a, Dbu::new_unchecked(100), &mut out).expect("a square is rectilinear");
-        assert_eq!(out.len(), 1, "the gap of 200 closes at a grow of 100");
-        // They meet edge to edge at x = 150, so the union is one 600 x 300
-        // rectangle and not two overlapping squares.
-        assert_eq!(area(&out), 600 * 300);
     }
 
     /// `DbuArea` is the tree's area type and this module's own laws are stated
@@ -986,8 +752,8 @@ mod tests {
             let mut area2 = 0i128;
             for i in 0..n {
                 let (a, b) = (lo + i, lo + (i + 1) % n);
-                area2 += i128::from(rx[a]) * i128::from(ry[b])
-                    - i128::from(rx[b]) * i128::from(ry[a]);
+                area2 +=
+                    i128::from(rx[a]) * i128::from(ry[b]) - i128::from(rx[b]) * i128::from(ry[a]);
             }
             signed.push(area2 / 2);
         }

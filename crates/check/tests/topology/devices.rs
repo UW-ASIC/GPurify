@@ -10,7 +10,6 @@ use gpurify_check::topology::device::recognise_into;
 use gpurify_check::topology::{
     extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole,
 };
-use gpurify_geom::Evaluator;
 use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrTable;
@@ -69,13 +68,7 @@ fn recognise(case: &NetlistCase, recognition: &DeviceRecognition) -> (NetTable, 
     let mut nets = NetTable::default();
     extract_nets_into(&case.store, &case.connectivity, &mut nets);
     let mut devices = DeviceTable::default();
-    recognise_into(
-        &case.store,
-        &Evaluator::default(),
-        &nets,
-        recognition,
-        &mut devices,
-    );
+    recognise_into(&case.store, &nets, recognition, &mut devices);
     (nets, devices)
 }
 
@@ -225,15 +218,14 @@ fn a_reused_device_table_is_refilled_and_an_empty_deck_recognises_nothing() {
 
     let mut nets = NetTable::default();
     extract_nets_into(&case.store, &case.connectivity, &mut nets);
-    let evaluator = Evaluator::default();
 
     let mut devices = DeviceTable::default();
-    recognise_into(&case.store, &evaluator, &nets, &recognition, &mut devices);
+    recognise_into(&case.store, &nets, &recognition, &mut devices);
     let markers = devices.marker.clone();
     assert_eq!(markers.len(), 2, "the layout holds two marker polygons");
     assert!(!devices.is_empty());
 
-    recognise_into(&case.store, &evaluator, &nets, &recognition, &mut devices);
+    recognise_into(&case.store, &nets, &recognition, &mut devices);
     assert_eq!(
         devices.marker, markers,
         "a reused DeviceTable appended a second copy instead of being refilled"
@@ -246,7 +238,6 @@ fn a_reused_device_table_is_refilled_and_an_empty_deck_recognises_nothing() {
 
     recognise_into(
         &case.store,
-        &evaluator,
         &nets,
         &DeviceRecognition::default(),
         &mut devices,
@@ -311,13 +302,7 @@ fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
         model: vec![strings.intern("nch")],
     };
     let mut devices = DeviceTable::default();
-    recognise_into(
-        &store,
-        &Evaluator::default(),
-        &nets,
-        &recognition,
-        &mut devices,
-    );
+    recognise_into(&store, &nets, &recognition, &mut devices);
 
     assert_eq!(devices.len(), 1, "one marker polygon is one device");
     assert_eq!(devices.marker, [marker], "the device names its marker");
@@ -429,13 +414,7 @@ impl Fingers {
         let mut strings = StrTable::default();
         let recognition = Self::recogniser(marker, &mut strings);
         let mut devices = DeviceTable::default();
-        recognise_into(
-            &self.store,
-            &Evaluator::default(),
-            nets,
-            &recognition,
-            &mut devices,
-        );
+        recognise_into(&self.store, nets, &recognition, &mut devices);
         devices
     }
 }

@@ -6,7 +6,6 @@ use gpurify_check::topology::device::{recognise_into, DeviceMeasure, DeviceParam
 use gpurify_check::topology::{
     extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole,
 };
-use gpurify_geom::Evaluator;
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
@@ -180,13 +179,7 @@ fn extract(store: &GeometryStore, recognition: &DeviceRecognition) -> (NetTable,
     let mut nets = NetTable::default();
     extract_nets_into(store, &connectivity(), &mut nets);
     let mut devices = DeviceTable::default();
-    recognise_into(
-        store,
-        &Evaluator::default(),
-        &nets,
-        recognition,
-        &mut devices,
-    );
+    recognise_into(store, &nets, recognition, &mut devices);
     (nets, devices)
 }
 

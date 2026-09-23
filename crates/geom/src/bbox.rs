@@ -132,7 +132,10 @@ impl Bbox {
 
     /// Each span clamped at zero before the product, so `EMPTY` measures 0, not `2^82`.
     pub const fn area(self) -> DbuArea {
-        let (w, h) = (self.xhi.raw() - self.xlo.raw(), self.yhi.raw() - self.ylo.raw());
+        let (w, h) = (
+            self.xhi.raw() - self.xlo.raw(),
+            self.yhi.raw() - self.ylo.raw(),
+        );
         let w = if w > 0 { w } else { 0 };
         let h = if h > 0 { h } else { 0 };
         DbuArea::new(w as i128 * h as i128)

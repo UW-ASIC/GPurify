@@ -5,7 +5,9 @@
 
 use gpurify::export::json::{format_f64, Report};
 use gpurify::export::{gds, json, parasitic, Header, WriteError};
-use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
+use gpurify_check::report::{
+    Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
+};
 use gpurify_check::topology::{bind_ports_into, extract_nets_into, NetId, NetTable, PortTable};
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
@@ -136,14 +138,26 @@ impl World {
     fn spef(&self) -> Result<String, WriteError> {
         let mut out = String::new();
         let world = self;
-        parasitic::write_spef(&world.parasitics, &world.ports, &world.strings, &world.header, &mut out)?;
+        parasitic::write_spef(
+            &world.parasitics,
+            &world.ports,
+            &world.strings,
+            &world.header,
+            &mut out,
+        )?;
         Ok(out)
     }
 
     fn dspf(&self) -> Result<String, WriteError> {
         let mut out = String::new();
         let world = self;
-        parasitic::write_dspf(&world.parasitics, &world.ports, &world.strings, &world.header, &mut out)?;
+        parasitic::write_dspf(
+            &world.parasitics,
+            &world.ports,
+            &world.strings,
+            &world.header,
+            &mut out,
+        )?;
         Ok(out)
     }
 }

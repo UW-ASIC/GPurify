@@ -22,7 +22,6 @@ use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_geom::{Bbox, GeometryStore, LayerId};
-use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::{random_rectilinear_layer, RandomLayerSpec};
@@ -89,11 +88,9 @@ fn antenna_table(id: StrId, max_ratio: f64) -> AntennaTable {
 #[test]
 fn a_per_stage_antenna_ratio_is_the_collecting_area_over_the_gate_area() {
     let (store, nets, gate) = gate_on_a_long_wire();
-    let derived = Evaluator::default();
     let devices = DeviceTable::default();
     let design = Design {
         store: &store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -133,11 +130,9 @@ fn a_per_stage_antenna_ratio_is_the_collecting_area_over_the_gate_area() {
 #[test]
 fn an_antenna_ratio_under_its_limit_is_clean() {
     let (store, nets, _) = gate_on_a_long_wire();
-    let derived = Evaluator::default();
     let devices = DeviceTable::default();
     let design = Design {
         store: &store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -162,11 +157,9 @@ fn an_antenna_ratio_under_its_limit_is_clean() {
 #[test]
 fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
     let (store, nets, gate) = gate_on_a_long_wire();
-    let derived = Evaluator::default();
     let devices = DeviceTable::default();
     let design = Design {
         store: &store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -246,11 +239,9 @@ fn gate_under_a_two_level_stack() -> (GeometryStore, NetTable, gpurify_geom::Pol
 #[test]
 fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_at_it() {
     let (store, nets, gate) = gate_under_a_two_level_stack();
-    let derived = Evaluator::default();
     let devices = DeviceTable::default();
     let design = Design {
         store: &store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -264,11 +255,7 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
         // Stage one collects metal 1 alone; stage two collects metal 1 *and*
         // metal 2, because metal 2's etch sees everything already under it.
         collector_start: vec![0, 1, 3],
-        collector: vec![
-            LayerId(0),
-            LayerId(0),
-            LayerId(3),
-        ],
+        collector: vec![LayerId(0), LayerId(0), LayerId(3)],
         collector_measure: vec![AntennaMeasure::Area; 3],
         // Limits below both ratios, so each stage's own measurement lands in the
         // table and can be read rather than inferred from a verdict.
@@ -317,11 +304,9 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
 #[test]
 fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did() {
     let (store, nets, _) = gate_under_a_two_level_stack();
-    let derived = Evaluator::default();
     let devices = DeviceTable::default();
     let design = Design {
         store: &store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -333,11 +318,7 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
         },
         gate: vec![LayerId(2); 2],
         collector_start: vec![0, 1, 3],
-        collector: vec![
-            LayerId(0),
-            LayerId(0),
-            LayerId(3),
-        ],
+        collector: vec![LayerId(0), LayerId(0), LayerId(3)],
         collector_measure: vec![AntennaMeasure::Area; 3],
         // A ratio strictly above zero violates a zero ceiling, so every stage
         // that collects anything at all lands in the table.
@@ -398,12 +379,10 @@ fn run_density(
     die: Bbox,
     table: &DensityCmpTable,
 ) -> (Violations, Vec<RuleRun>) {
-    let derived = Evaluator::default();
     let nets = NetTable::default();
     let devices = DeviceTable::default();
     let design = Design {
         store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };

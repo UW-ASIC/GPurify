@@ -438,8 +438,8 @@ fn self_intersects_finds_a_crossing_and_accepts_every_generated_shape() {
 /// passes on rectangles and fails here.
 #[test]
 fn point_in_ring_includes_the_boundary_and_excludes_the_reflex_notch() {
-    let (store, layer) = validated(&l_shape(0, 0, 100, 30));
-    let ring = layer.get(&store, 0).outer();
+    let (_, layer) = validated(&l_shape(0, 0, 100, 30));
+    let ring = layer.get(0).outer();
 
     for inside in [point(50, 15), point(15, 50), point(15, 15), point(29, 29)] {
         assert!(point_in_ring(ring, inside), "{inside:?} is in the L");
@@ -490,14 +490,14 @@ fn point_in_ring_is_invariant_under_translation() {
         .map(|_| (rng.range(-20, 100), rng.range(-20, 120)))
         .collect();
 
-    let (here_store, here_layer) = validated(&u_shape(0, 0, 100, 20, 40));
-    let here_ring = here_layer.get(&here_store, 0).outer();
+    let (_, here_layer) = validated(&u_shape(0, 0, 100, 20, 40));
+    let here_ring = here_layer.get(0).outer();
 
     let mut agreed_inside = 0u32;
     for _ in 0..8 {
         let (dx, dy) = (rng.range(-500_000, 500_000), rng.range(-500_000, 500_000));
-        let (there_store, there_layer) = validated(&u_shape(dx, dy, 100, 20, 40));
-        let there_ring = there_layer.get(&there_store, 0).outer();
+        let (_, there_layer) = validated(&u_shape(dx, dy, 100, 20, 40));
+        let there_ring = there_layer.get(0).outer();
 
         for &(x, y) in &probes {
             let here = point_in_ring(here_ring, point(x, y));

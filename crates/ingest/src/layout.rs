@@ -120,7 +120,7 @@ fn derive_layers_into(
         start.clear();
         len.clear();
         for polygon in 0..crate::narrow(folded.len()) {
-            let polygon = folded.get(store, polygon);
+            let polygon = folded.get(polygon);
             // Outer first, then its holes: `validate_layer_into`'s ring order.
             for ring in std::iter::once(polygon.outer()).chain(polygon.holes()) {
                 let (ring_xs, ring_ys) = ring.coords();
@@ -1645,7 +1645,7 @@ mod tests {
                  whichever way its points were listed",
             );
             assert_eq!(valid.len(), 1, "one square is one polygon");
-            let polygon = valid.get(&layout.store, 0);
+            let polygon = valid.get(0);
             assert_eq!(polygon.holes().count(), 0, "a square has no holes");
             stored.push(polygon.area());
         }
@@ -1701,7 +1701,7 @@ mod tests {
             .expect("a keyhole denotes an outer and the hole it contains");
 
         assert_eq!(valid.len(), 1, "the two rings are one polygon");
-        let polygon = valid.get(&layout.store, 0);
+        let polygon = valid.get(0);
         assert_eq!(polygon.holes().count(), 1, "and it has one hole");
         assert_eq!(
             polygon.area().raw(),

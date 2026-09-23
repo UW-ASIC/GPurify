@@ -54,10 +54,7 @@ fn check_canonical(network: &ParasiticNetwork) -> Result<(), WriteError> {
 }
 
 /// The net a node sits on, and the node's index within that net's run.
-fn node_place(
-    network: &ParasiticNetwork,
-    node: NodeId,
-) -> Result<(NetId, usize), WriteError> {
+fn node_place(network: &ParasiticNetwork, node: NodeId) -> Result<(NetId, usize), WriteError> {
     let nets = &network.node_net[..];
     let row = node.0 as usize;
     let net = *nets.get(row).ok_or(WriteError::Unrepresentable(

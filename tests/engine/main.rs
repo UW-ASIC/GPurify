@@ -4,7 +4,9 @@
 mod gen_fixtures;
 
 use gpurify::engine::pipeline::{extract, load, ExtractError, Inputs, LoadError, Loaded};
-use gpurify::engine::run::{run, run_checks, Checks, EngineError, RunOptions, StageStatus, Summary};
+use gpurify::engine::run::{
+    run, run_checks, Checks, EngineError, RunOptions, StageStatus, Summary,
+};
 use gpurify_check::drc::DrcError;
 use gpurify_check::lvs::verdict::{Discrepancy, Side};
 use gpurify_check::lvs::{CompareOptions, Verdict};
@@ -62,7 +64,10 @@ fn unreadable_inputs(grid: Option<Grid>) -> Inputs {
 /// the layout; a failed load reaches no later stage.
 #[test]
 fn a_load_fails_on_the_grid_then_the_deck_before_the_layout() {
-    assert!(matches!(load(&unreadable_inputs(None)), Err(LoadError::NoGrid)));
+    assert!(matches!(
+        load(&unreadable_inputs(None)),
+        Err(LoadError::NoGrid)
+    ));
     assert!(matches!(
         load(&unreadable_inputs(Some(grid()))),
         Err(LoadError::Deck(_))
@@ -100,7 +105,11 @@ fn extraction_partitions_by_touch_and_accepts_an_empty_design() {
     let empty = extract(&empty_loaded(GeometryStore::default(), Deck::default()))
         .expect("an empty design is extractable");
     assert_eq!(
-        (empty.nets.net_count(), empty.devices.len(), empty.ports.len()),
+        (
+            empty.nets.net_count(),
+            empty.devices.len(),
+            empty.ports.len()
+        ),
         (0, 0, 0)
     );
 }
@@ -191,7 +200,10 @@ fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
     assert_eq!(out.runs.len(), 8);
     assert_eq!((summary.rules_clean, summary.rules_skipped), (5, 3));
     let Some(Verdict::Mismatch(found)) = &out.lvs else {
-        panic!("a one-device reference against an empty layout is a mismatch: {:?}", out.lvs);
+        panic!(
+            "a one-device reference against an empty layout is a mismatch: {:?}",
+            out.lvs
+        );
     };
     assert!(found.contains(&Discrepancy::UnpairedDevice {
         side: Side::Reference,
@@ -206,7 +218,10 @@ fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
         }
     )));
     assert_eq!(out.violations.len(), found.len());
-    assert_eq!((summary.errors as usize, summary.warnings), (found.len(), 0));
+    assert_eq!(
+        (summary.errors as usize, summary.warnings),
+        (found.len(), 0)
+    );
     assert!(!summary.passed());
 }
 
@@ -295,13 +310,64 @@ fn the_pass_criterion_table() {
     let refused = || StageStatus::Refused("not rectilinear".to_string());
     let cases = [
         ("clean", clean.clone(), true),
-        ("a skipped rule", Summary { rules_skipped: 1, ..clean.clone() }, false),
-        ("an error", Summary { violations: 1, errors: 1, ..clean.clone() }, false),
-        ("a warning", Summary { violations: 1, warnings: 1, ..clean.clone() }, true),
-        ("drc skipped", Summary { drc: skipped(), ..clean.clone() }, false),
-        ("erc refused", Summary { erc: refused(), ..clean.clone() }, false),
-        ("lvs skipped", Summary { lvs: skipped(), ..clean.clone() }, false),
-        ("pex refused", Summary { pex: refused(), ..clean.clone() }, false),
+        (
+            "a skipped rule",
+            Summary {
+                rules_skipped: 1,
+                ..clean.clone()
+            },
+            false,
+        ),
+        (
+            "an error",
+            Summary {
+                violations: 1,
+                errors: 1,
+                ..clean.clone()
+            },
+            false,
+        ),
+        (
+            "a warning",
+            Summary {
+                violations: 1,
+                warnings: 1,
+                ..clean.clone()
+            },
+            true,
+        ),
+        (
+            "drc skipped",
+            Summary {
+                drc: skipped(),
+                ..clean.clone()
+            },
+            false,
+        ),
+        (
+            "erc refused",
+            Summary {
+                erc: refused(),
+                ..clean.clone()
+            },
+            false,
+        ),
+        (
+            "lvs skipped",
+            Summary {
+                lvs: skipped(),
+                ..clean.clone()
+            },
+            false,
+        ),
+        (
+            "pex refused",
+            Summary {
+                pex: refused(),
+                ..clean.clone()
+            },
+            false,
+        ),
         (
             "nothing selected",
             Summary {

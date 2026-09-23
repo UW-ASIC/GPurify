@@ -4,7 +4,7 @@
 //! from disk, in one string table) and [`Extracted`] (nets, devices, ports).
 
 use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
-use gpurify_geom::{Evaluator, GeometryStore, Grid};
+use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{Deck, DesignIntent, Provenance, StrTable};
@@ -54,7 +54,6 @@ pub struct Loaded {
 /// Everything derived from what was loaded, shared read-only by all four checks.
 #[derive(Debug, Default)]
 pub struct Extracted {
-    pub derived: Evaluator,
     pub nets: NetTable,
     pub devices: DeviceTable,
     pub ports: PortTable,
@@ -168,7 +167,6 @@ fn spectre_by_opener(source: &str) -> Option<bool> {
 /// read nets and ports bind to them.
 pub fn extract(loaded: &Loaded) -> Result<Extracted, ExtractError> {
     let mut out = Extracted::default();
-    out.derived.evaluate(&loaded.store)?;
 
     // A MOS channel marker over live conductor would fuse source and drain into
     // one net and report the short as clean, so it is refused before nets exist.
@@ -184,7 +182,6 @@ pub fn extract(loaded: &Loaded) -> Result<Extracted, ExtractError> {
     );
     gpurify_check::topology::device::recognise_into(
         &loaded.store,
-        &out.derived,
         &out.nets,
         &loaded.deck.devices,
         &mut out.devices,
@@ -211,8 +208,6 @@ pub enum LoadError {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ExtractError {
-    #[error(transparent)]
-    Derived(#[from] gpurify_geom::DerivedError),
     #[error(transparent)]
     Port(#[from] gpurify_check::topology::port::PortError),
     #[error(transparent)]

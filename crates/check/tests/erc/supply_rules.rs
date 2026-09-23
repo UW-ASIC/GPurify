@@ -23,7 +23,6 @@ use gpurify_check::erc::rules::topology::{check_floating_well, FloatingWellTable
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
-use gpurify_geom::Evaluator;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::{StrId, StrTable};
@@ -36,7 +35,6 @@ use gpurify_testgen::{
 /// A hand-drawn layout, extracted under a stated connectivity.
 struct Drawn {
     store: GeometryStore,
-    derived: Evaluator,
     nets: NetTable,
     devices: DeviceTable,
 }
@@ -47,7 +45,6 @@ impl Drawn {
         gpurify_check::topology::extract_nets_into(&store, connectivity, &mut nets);
         Self {
             store,
-            derived: Evaluator::default(),
             nets,
             devices: DeviceTable::default(),
         }
@@ -56,7 +53,6 @@ impl Drawn {
     fn design(&self) -> Design<'_> {
         Design {
             store: &self.store,
-            derived: &self.derived,
             nets: &self.nets,
             devices: &self.devices,
         }
@@ -479,7 +475,6 @@ fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
     let mut devices = DeviceTable::default();
     gpurify_check::topology::device::recognise_into(
         &case.store,
-        &Evaluator::default(),
         &nets,
         &case.recognition,
         &mut devices,
@@ -490,7 +485,6 @@ fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
     (
         Drawn {
             store: case.store,
-            derived: Evaluator::default(),
             nets,
             devices,
         },
@@ -600,7 +594,6 @@ fn pads_and_a_clamp() -> (gpurify_testgen::NetlistCase, NetTable, DeviceTable) {
     let mut devices = DeviceTable::default();
     gpurify_check::topology::device::recognise_into(
         &case.store,
-        &Evaluator::default(),
         &nets,
         &case.recognition,
         &mut devices,
@@ -614,10 +607,8 @@ fn pads_and_a_clamp() -> (gpurify_testgen::NetlistCase, NetTable, DeviceTable) {
 #[test]
 fn every_pad_net_is_flagged_when_no_clamp_can_be_listed() {
     let (case, nets, devices) = pads_and_a_clamp();
-    let derived = Evaluator::default();
     let design = Design {
         store: &case.store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -638,6 +629,9 @@ fn every_pad_net_is_flagged_when_no_clamp_can_be_listed() {
         common::assert_at_is_on_a_named_shape(&case.store, &violations, row);
     }
     let run = assert_rule_ran(&runs, id);
-    assert_eq!(run.examined, 3, "one rail per net, so three distinct pad nets");
+    assert_eq!(
+        run.examined, 3,
+        "one rail per net, so three distinct pad nets"
+    );
     assert_eq!(run.violations, 3);
 }

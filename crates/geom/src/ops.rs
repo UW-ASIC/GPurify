@@ -271,7 +271,6 @@ fn ceil_sq_div(a: u128, d: u128) -> u128 {
     let lo = (ll & HALF) | (mid << 64);
     let hi = hh + (hl >> 64) + (hl >> 64) + (mid >> 64);
 
-
     let mut rem: u128 = 0;
     let mut quo: u128 = 0;
     for word in [hi, lo] {

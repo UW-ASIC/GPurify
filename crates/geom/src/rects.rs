@@ -1,10 +1,10 @@
 //! Rectilinear decomposition into disjoint rectangles, so areas sum exactly.
 //!
 //! Data in: a [`ValidatedLayer`].
-//! Data out: `Vec<Rect>` plus CSR `poly_start`, canonical vertical slabs.
+//! Data out: `Vec<Bbox>` plus CSR `poly_start`, canonical vertical slabs.
 
 use crate::view::{RingRef, ValidatedLayer};
-use crate::{Dbu, DbuArea};
+use crate::{Bbox, Dbu, DbuArea};
 
 /// One edge as `(xlo, xhi, y)`. A vertical edge has `xlo == xhi`, so it never
 /// satisfies the slab predicate and its `y` is never read.
@@ -26,33 +26,10 @@ fn collect_ring(ring: RingRef<'_>, edges: &mut Vec<Span>, slabs: &mut Vec<Dbu>) 
     edges.push((x0.min(x1), x0.max(x1), ys[n - 1]));
 }
 
-/// One axis-aligned rectangle of a decomposition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rect {
-    pub xlo: Dbu,
-    pub ylo: Dbu,
-    pub xhi: Dbu,
-    pub yhi: Dbu,
-}
-
-impl Rect {
-    /// Widths reach `2^41`, so this multiplies spans in `i128`, not via `mul_wide`.
-    pub const fn area(self) -> DbuArea {
-        let w = (self.xhi.raw() - self.xlo.raw()) as i128;
-        let h = (self.yhi.raw() - self.ylo.raw()) as i128;
-        DbuArea::new(w * h)
-    }
-}
-
 /// Decompose every polygon on a validated layer into disjoint rectangles by
 /// vertical slabs (canonical). Polygon `i` owns `rects[poly_start[i] ..
 /// poly_start[i + 1]]`; each slab's rectangles ascend in y.
-pub fn decompose_into(
-    layer: &ValidatedLayer,
-    store: &crate::store::GeometryStore,
-    rects: &mut Vec<Rect>,
-    poly_start: &mut Vec<u32>,
-) {
+pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start: &mut Vec<u32>) {
     rects.clear();
     poly_start.clear();
     poly_start.push(0);
@@ -64,7 +41,7 @@ pub fn decompose_into(
 
     for idx in 0..layer.len() {
         let row = u32::try_from(idx).expect("a layer's polygon count fits a u32");
-        let poly = layer.get(store, row);
+        let poly = layer.get(row);
 
         edges.clear();
         slabs.clear();
@@ -96,7 +73,7 @@ pub fn decompose_into(
             cuts.sort_unstable();
 
             // Even-odd fill: interior between crossings 1-2, 3-4, ...
-            rects.extend(cuts.chunks_exact(2).map(|pair| Rect {
+            rects.extend(cuts.chunks_exact(2).map(|pair| Bbox {
                 xlo: x0,
                 ylo: pair[0],
                 xhi: x1,
@@ -109,7 +86,7 @@ pub fn decompose_into(
 }
 
 /// Total area of disjoint rectangles.
-pub fn covered_area(rects: &[Rect]) -> DbuArea {
+pub fn covered_area(rects: &[Bbox]) -> DbuArea {
     let mut total = DbuArea::new(0);
     for r in rects {
         total = total + r.area();
@@ -118,7 +95,7 @@ pub fn covered_area(rects: &[Rect]) -> DbuArea {
 }
 
 /// Area of rectangles clipped to a window, per axis `max(0, min(hi) - max(lo))`.
-pub fn clipped_area(rects: &[Rect], window: crate::bbox::Bbox) -> DbuArea {
+pub fn clipped_area(rects: &[Bbox], window: Bbox) -> DbuArea {
     let (wxlo, wylo) = (window.xlo.raw(), window.ylo.raw());
     let (wxhi, wyhi) = (window.xhi.raw(), window.yhi.raw());
     let mut total = DbuArea::new(0);

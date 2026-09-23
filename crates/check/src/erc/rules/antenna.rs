@@ -14,7 +14,7 @@ use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violat
 use crate::topology::NetId;
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::area2;
-use gpurify_geom::rects::{clipped_area, decompose_into, Rect};
+use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
@@ -395,7 +395,7 @@ pub fn check_density_cmp(
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    let mut rects: Vec<Rect> = Vec::new();
+    let mut rects: Vec<Bbox> = Vec::new();
     let mut rect_start: Vec<u32> = Vec::new();
     let mut density: Vec<f64> = Vec::new();
     let mut owners: Vec<u32> = Vec::new();
@@ -429,7 +429,7 @@ pub fn check_density_cmp(
             record_run(runs, out, violations_before, rule, Outcome::Refused, 0);
             continue;
         }
-        decompose_into(layer_b, design.store, &mut rects, &mut rect_start);
+        decompose_into(layer_b, &mut rects, &mut rect_start);
 
         let nx = positions(die.xhi.raw() - die.xlo.raw(), step.0.raw());
         let ny = positions(die.yhi.raw() - die.ylo.raw(), step.1.raw());

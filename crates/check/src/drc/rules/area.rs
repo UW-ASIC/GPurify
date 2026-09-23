@@ -20,7 +20,7 @@ use gpurify_ingest::StrId;
 fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Result<(), BooleanError> {
     validate_layer_into(store, layer, &mut s.layer_a)?;
     union_into(&s.layer_a, &s.layer_a, &mut s.layer_out)?;
-    decompose_into(&s.layer_out, store, &mut s.rects, &mut s.rect_start);
+    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
     Ok(())
 }
 
@@ -52,7 +52,7 @@ fn report_figures(
         let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
         let area = covered_area(rects);
         let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
-        let has_hole = s.layer_out.get(store, index).holes().next().is_some();
+        let has_hole = s.layer_out.get(index).holes().next().is_some();
         if !violates(area, has_hole) {
             continue;
         }
@@ -128,7 +128,7 @@ pub(crate) fn min_enclosed_area(
     let mut examined = 0u64;
     for figure in 0..s.layer_out.len() {
         let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
-        for hole in s.layer_out.get(store, index).holes() {
+        for hole in s.layer_out.get(index).holes() {
             examined += 1;
             // A hole winds clockwise; a rectilinear ring's doubled area is even.
             let area = DbuArea::new(-hole.area2().raw() / 2);

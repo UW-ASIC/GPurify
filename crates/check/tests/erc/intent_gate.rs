@@ -31,7 +31,6 @@ use gpurify_check::erc::rules::reliability::{
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
-use gpurify_geom::Evaluator;
 use gpurify_geom::LayerId;
 use gpurify_geom::{prefix, CurrentDensity, Qty, Temperature};
 use gpurify_ingest::deck::DeviceKind;
@@ -360,7 +359,6 @@ fn one_transistor() -> (NetlistCase, NetTable, DeviceTable) {
     let mut devices = DeviceTable::default();
     gpurify_check::topology::device::recognise_into(
         &case.store,
-        &Evaluator::default(),
         &nets,
         &case.recognition,
         &mut devices,
@@ -406,10 +404,8 @@ fn four_domains(case: &NetlistCase, nets: &NetTable, millivolt: [f64; 4]) -> Int
 #[test]
 fn hv_domain_skips_without_intent_and_flags_the_straddling_device_with_it() {
     let (case, nets, devices) = one_transistor();
-    let derived = Evaluator::default();
     let design = Design {
         store: &case.store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };
@@ -469,10 +465,8 @@ fn hv_domain_skips_without_intent_and_flags_the_straddling_device_with_it() {
 #[test]
 fn esd_latchup_skips_without_intent_and_counts_pads_and_rings_with_it() {
     let (case, nets, devices) = one_transistor();
-    let derived = Evaluator::default();
     let design = Design {
         store: &case.store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };

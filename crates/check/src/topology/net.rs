@@ -197,7 +197,12 @@ pub(crate) fn retain_intersecting_into(
     out: &mut Vec<(PolyId, PolyId)>,
 ) {
     out.clear();
-    out.extend(pairs.iter().copied().filter(|&(a, b)| polys_intersect(store, a, b)));
+    out.extend(
+        pairs
+            .iter()
+            .copied()
+            .filter(|&(a, b)| polys_intersect(store, a, b)),
+    );
 }
 
 /// The closed segment from vertex `i` of a ring to the next one, wrapping.
@@ -206,7 +211,10 @@ fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     let next = if i + 1 == xs.len() { 0 } else { i + 1 };
     Seg {
         a: Point { x: xs[i], y: ys[i] },
-        b: Point { x: xs[next], y: ys[next] },
+        b: Point {
+            x: xs[next],
+            y: ys[next],
+        },
     }
 }
 
@@ -258,8 +266,12 @@ fn rings_meet_sweep(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
     let (mut ia, mut ib) = (0usize, 0usize);
     while ia < n || ib < m {
         // `i64::MAX` is outside `MAX_ABS_DBU`, so a spent side never wins.
-        let key_a = order_a.get(ia).map_or(i64::MAX, |&i| span_a[i as usize].0.raw());
-        let key_b = order_b.get(ib).map_or(i64::MAX, |&i| span_b[i as usize].0.raw());
+        let key_a = order_a
+            .get(ia)
+            .map_or(i64::MAX, |&i| span_a[i as usize].0.raw());
+        let key_b = order_b
+            .get(ib)
+            .map_or(i64::MAX, |&i| span_b[i as usize].0.raw());
         let sweep_x = key_a.min(key_b);
 
         live_a.retain(|&i| span_a[i as usize].1.raw() >= sweep_x);
@@ -315,7 +327,12 @@ fn intra_layer_edges_append(
 ) {
     SpatialIndex::build_into(store, layer, &mut scratch.index);
     // Distance zero counts touching: shapes sharing only an edge are one conductor.
-    candidate_pairs_into(store, &scratch.index, Dbu::new_unchecked(0), &mut scratch.pairs);
+    candidate_pairs_into(
+        store,
+        &scratch.index,
+        Dbu::new_unchecked(0),
+        &mut scratch.pairs,
+    );
     retain_intersecting_into(store, &scratch.pairs, &mut scratch.touching);
     out.extend(scratch.touching.iter().map(|&(a, b)| (a.0, b.0)));
 }
@@ -403,9 +420,7 @@ fn cuts_landing_on(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        rings_meet_direct, rings_meet_sweep, NetId, NetTable, DIRECT_PAIR_BUDGET,
-    };
+    use super::{rings_meet_direct, rings_meet_sweep, NetId, NetTable, DIRECT_PAIR_BUDGET};
     use gpurify_geom::Dbu;
     use gpurify_geom::PolyId;
 

@@ -95,7 +95,8 @@ impl Violations {
     /// `shape_a`, `shape_b`, then every remaining field. The key is total, so
     /// the order depends only on the set of rows, not on input or thread count.
     pub fn sort_canonical(&mut self) {
-        let rows = u32::try_from(self.rule.len()).expect("a violation table indexes rows with a u32");
+        let rows =
+            u32::try_from(self.rule.len()).expect("a violation table indexes rows with a u32");
         let mut perm: Vec<u32> = (0..rows).collect();
         perm.sort_by_cached_key(|&row| self.row_key(row as usize));
 

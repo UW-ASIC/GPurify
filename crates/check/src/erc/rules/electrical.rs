@@ -252,7 +252,11 @@ fn check_branches(
     let mut examined = 0u64;
     for edge in 0..power.edge_count() {
         // First mention of a repeated layer wins; other layers are out of scope.
-        let Some(limit_row) = limits.layer.iter().position(|&l| l == power.edge_layer[edge]) else {
+        let Some(limit_row) = limits
+            .layer
+            .iter()
+            .position(|&l| l == power.edge_layer[edge])
+        else {
             continue;
         };
         let current =

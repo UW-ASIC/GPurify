@@ -22,13 +22,11 @@
 //! agree", which needs only the *empty* result to be expressible. That is what
 //! lets the identity and commutativity laws below run at all.
 
-use gpurify_geom::boolean::{intersection_into, offset_into, subtraction_into, union_into};
+use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{GeometryStore, LayerId};
-use gpurify_testgen::shapes::{
-    dbu, l_shape, l_shape_area, rect, u_shape, u_shape_area, LayoutBuilder,
-};
+use gpurify_testgen::shapes::{l_shape, l_shape_area, rect, u_shape, u_shape_area, LayoutBuilder};
 use gpurify_testgen::Rng;
 
 const A: LayerId = LayerId(0);
@@ -38,9 +36,9 @@ fn zero() -> DbuArea {
     DbuArea::new(0)
 }
 
-fn total_area(store: &GeometryStore, layer: &ValidatedLayer) -> DbuArea {
+fn total_area(layer: &ValidatedLayer) -> DbuArea {
     (0..u32::try_from(layer.len()).expect("a test layer fits a u32"))
-        .map(|index| layer.get(store, index).area())
+        .map(|index| layer.get(index).area())
         .fold(zero(), |total, area| total + area)
 }
 
@@ -53,31 +51,26 @@ fn validated(store: &GeometryStore, layer: LayerId) -> ValidatedLayer {
 /// Region equality, expressed so that only an empty result has to be
 /// representable: two regions are equal when neither has area the other lacks
 /// and their areas agree.
-fn assert_same_region(
-    store: &GeometryStore,
-    left: &ValidatedLayer,
-    right: &ValidatedLayer,
-    what: &str,
-) {
+fn assert_same_region(left: &ValidatedLayer, right: &ValidatedLayer, what: &str) {
     let mut scratch = ValidatedLayer::default();
 
     subtraction_into(left, right, &mut scratch).expect("rectilinear operands");
     assert_eq!(
-        total_area(store, &scratch),
+        total_area(&scratch),
         zero(),
         "{what}: the left region has area the right one does not"
     );
 
     subtraction_into(right, left, &mut scratch).expect("rectilinear operands");
     assert_eq!(
-        total_area(store, &scratch),
+        total_area(&scratch),
         zero(),
         "{what}: the right region has area the left one does not"
     );
 
     assert_eq!(
-        total_area(store, left),
-        total_area(store, right),
+        total_area(left),
+        total_area(right),
         "{what}: the two regions differ in area"
     );
 }
@@ -107,18 +100,18 @@ fn disjoint_layers() -> (GeometryStore, DbuArea, DbuArea) {
 fn a_layer_unioned_intersected_and_subtracted_with_itself_behaves() {
     let (store, area_a, _) = disjoint_layers();
     let a = validated(&store, A);
-    assert_eq!(total_area(&store, &a), area_a, "the operand's own area");
+    assert_eq!(total_area(&a), area_a, "the operand's own area");
 
     let mut out = ValidatedLayer::default();
 
     union_into(&a, &a, &mut out).expect("rectilinear operands");
-    assert_same_region(&store, &out, &a, "self-union is not idempotent");
+    assert_same_region(&out, &a, "self-union is not idempotent");
 
     intersection_into(&a, &a, &mut out).expect("rectilinear operands");
-    assert_same_region(&store, &out, &a, "self-intersection is not idempotent");
+    assert_same_region(&out, &a, "self-intersection is not idempotent");
 
     subtraction_into(&a, &a, &mut out).expect("rectilinear operands");
-    assert_eq!(total_area(&store, &out), zero(), "a minus a has area");
+    assert_eq!(total_area(&out), zero(), "a minus a has area");
     assert!(out.is_empty(), "a minus a should hold no polygons at all");
     assert_eq!(out.len(), 0);
 }
@@ -139,16 +132,16 @@ fn area_is_conserved_under_union_and_intersection() {
     intersection_into(&a, &b, &mut meet).expect("rectilinear operands");
 
     assert_eq!(
-        total_area(&store, &union) + total_area(&store, &meet),
+        total_area(&union) + total_area(&meet),
         area_a + area_b,
         "inclusion-exclusion does not hold"
     );
     assert_eq!(
-        total_area(&store, &meet),
+        total_area(&meet),
         zero(),
         "disjoint layers cannot intersect"
     );
-    assert_eq!(total_area(&store, &union), area_a + area_b);
+    assert_eq!(total_area(&union), area_a + area_b);
     assert_eq!(
         union.len(),
         a.len() + b.len(),
@@ -182,12 +175,12 @@ fn the_intersection_is_a_subset_and_the_union_a_superset_of_each_operand() {
         (&b, &join, "b escapes a union b"),
     ] {
         subtraction_into(smaller, larger, &mut escaped).expect("rectilinear operands");
-        assert_eq!(total_area(&store, &escaped), zero(), "{what}");
+        assert_eq!(total_area(&escaped), zero(), "{what}");
     }
 
     subtraction_into(&a, &b, &mut escaped).expect("rectilinear operands");
     assert_eq!(
-        total_area(&store, &escaped),
+        total_area(&escaped),
         area_a,
         "b takes nothing from a when the two are disjoint, so the four empty \
          differences above are a result and not a subtraction that never fires"
@@ -209,11 +202,11 @@ fn union_and_intersection_commute() {
 
     union_into(&a, &b, &mut forward).expect("rectilinear operands");
     union_into(&b, &a, &mut backward).expect("rectilinear operands");
-    assert_same_region(&store, &forward, &backward, "union does not commute");
+    assert_same_region(&forward, &backward, "union does not commute");
 
     intersection_into(&a, &b, &mut forward).expect("rectilinear operands");
     intersection_into(&b, &a, &mut backward).expect("rectilinear operands");
-    assert_same_region(&store, &forward, &backward, "intersection does not commute");
+    assert_same_region(&forward, &backward, "intersection does not commute");
 }
 
 /// Oracle: law. `(a − b) ∪ (a ∩ b) == a`: difference and intersection partition
@@ -233,10 +226,10 @@ fn difference_and_intersection_partition_the_first_operand() {
     intersection_into(&a, &b, &mut meet).expect("rectilinear operands");
     union_into(&difference, &meet, &mut rebuilt).expect("rectilinear operands");
 
-    assert_same_region(&store, &rebuilt, &a, "the operand was not recovered");
+    assert_same_region(&rebuilt, &a, "the operand was not recovered");
     assert_eq!(
-        total_area(&store, &difference) + total_area(&store, &meet),
-        total_area(&store, &a),
+        total_area(&difference) + total_area(&meet),
+        total_area(&a),
         "the two parts do not sum to the whole"
     );
 }
@@ -261,26 +254,18 @@ fn identical_layers_union_and_intersect_to_themselves_and_subtract_to_nothing() 
     let (a, b) = (validated(&store, A), validated(&store, B));
 
     let expected = DbuArea::new(120 * 80 + l_shape_area(100, 40) + u_shape_area(90, 20, 30));
-    assert_eq!(total_area(&store, &a), expected);
-    assert_eq!(total_area(&store, &b), expected);
+    assert_eq!(total_area(&a), expected);
+    assert_eq!(total_area(&b), expected);
 
     let mut out = ValidatedLayer::default();
 
     union_into(&a, &b, &mut out).expect("rectilinear operands");
-    assert_eq!(
-        total_area(&store, &out),
-        expected,
-        "the union double-counted"
-    );
-    assert_same_region(&store, &out, &a, "union of a region with itself");
+    assert_eq!(total_area(&out), expected, "the union double-counted");
+    assert_same_region(&out, &a, "union of a region with itself");
 
     intersection_into(&a, &b, &mut out).expect("rectilinear operands");
-    assert_eq!(
-        total_area(&store, &out),
-        expected,
-        "the intersection lost area"
-    );
-    assert_same_region(&store, &out, &a, "intersection of a region with itself");
+    assert_eq!(total_area(&out), expected, "the intersection lost area");
+    assert_same_region(&out, &a, "intersection of a region with itself");
 
     subtraction_into(&a, &b, &mut out).expect("rectilinear operands");
     assert!(out.is_empty(), "identical layers leave nothing behind");
@@ -305,27 +290,24 @@ fn a_contained_layer_unions_to_its_container_and_intersects_to_itself() {
 
     let area_a = DbuArea::new(2 * 1_000 * 1_000);
     let area_b = DbuArea::new(300 * 300 + 400 * 300 + 800 * 800);
-    assert_eq!(total_area(&store, &a), area_a);
-    assert_eq!(total_area(&store, &b), area_b);
+    assert_eq!(total_area(&a), area_a);
+    assert_eq!(total_area(&b), area_b);
 
     let mut out = ValidatedLayer::default();
     union_into(&a, &b, &mut out).expect("rectilinear operands");
-    assert_same_region(&store, &out, &a, "the container swallowed the contained");
-    assert_eq!(total_area(&store, &out), area_a);
+    assert_same_region(&out, &a, "the container swallowed the contained");
+    assert_eq!(total_area(&out), area_a);
 
     intersection_into(&a, &b, &mut out).expect("rectilinear operands");
-    assert_same_region(&store, &out, &b, "the contained survived intact");
-    assert_eq!(total_area(&store, &out), area_b);
+    assert_same_region(&out, &b, "the contained survived intact");
+    assert_eq!(total_area(&out), area_b);
 
     // Inclusion-exclusion again, now with a non-empty intersection.
     let mut meet = ValidatedLayer::default();
     let mut join = ValidatedLayer::default();
     intersection_into(&a, &b, &mut meet).expect("rectilinear operands");
     union_into(&a, &b, &mut join).expect("rectilinear operands");
-    assert_eq!(
-        total_area(&store, &join) + total_area(&store, &meet),
-        area_a + area_b
-    );
+    assert_eq!(total_area(&join) + total_area(&meet), area_a + area_b);
 }
 
 /// Oracle: law. A boolean is a statement about regions, so translating every
@@ -340,7 +322,7 @@ fn a_boolean_result_is_invariant_under_translation_of_every_input() {
         let (a, b) = (validated(&base_store, A), validated(&base_store, B));
         let mut out = ValidatedLayer::default();
         union_into(&a, &b, &mut out).expect("rectilinear operands");
-        (total_area(&base_store, &out), out.len())
+        (total_area(&out), out.len())
     };
 
     for _ in 0..8 {
@@ -354,46 +336,21 @@ fn a_boolean_result_is_invariant_under_translation_of_every_input() {
         let (store, _ids) = layout.finish();
 
         let (a, b) = (validated(&store, A), validated(&store, B));
-        assert_eq!(total_area(&store, &a), area_a, "shifted by ({dx}, {dy})");
-        assert_eq!(total_area(&store, &b), area_b, "shifted by ({dx}, {dy})");
+        assert_eq!(total_area(&a), area_a, "shifted by ({dx}, {dy})");
+        assert_eq!(total_area(&b), area_b, "shifted by ({dx}, {dy})");
 
         let mut out = ValidatedLayer::default();
         union_into(&a, &b, &mut out).expect("rectilinear operands");
         assert_eq!(
-            (total_area(&store, &out), out.len()),
+            (total_area(&out), out.len()),
             base_union,
             "the union changed when every input moved by ({dx}, {dy})"
         );
     }
 }
 
-/// Oracle: law. Growing by nothing is the identity, and it is the one offset
-/// whose result is expressible as spans over the input store. A non-zero offset
-/// produces coordinates that exist in no store, so it cannot be read back — the
-/// same representation defect the header records.
-#[test]
-fn an_offset_of_zero_is_the_identity() {
-    let (store, area_a, _) = disjoint_layers();
-    let a = validated(&store, A);
-
-    let mut out = ValidatedLayer::default();
-    offset_into(&a, dbu(0), &mut out).expect("rectilinear operand");
-    assert_eq!(
-        total_area(&store, &out),
-        area_a,
-        "a zero offset changed area"
-    );
-    assert_eq!(
-        out.len(),
-        a.len(),
-        "a zero offset changed the polygon count"
-    );
-    assert_same_region(&store, &out, &a, "a zero offset moved the region");
-}
-
-/// Oracle: determinism. A derived-layer expression tree chains these, so a
-/// boolean that produced its polygons in a different order on a second run
-/// would make every downstream report non-reproducible. Run the same union
+/// Oracle: determinism. A boolean that produced its polygons in a different order
+/// on a second run would make every report non-reproducible. Run the same union
 /// twice into a buffer that already holds a different result, which is exactly
 /// how a caller reuses one.
 #[test]
@@ -407,7 +364,7 @@ fn two_runs_of_one_boolean_produce_the_same_polygons_in_the_same_order() {
     union_into(&a, &b, &mut buffer).expect("rectilinear operands");
     let first: Vec<_> = (0..u32::try_from(buffer.len()).expect("a small layer fits a u32"))
         .map(|index| {
-            let poly = buffer.get(&store, index);
+            let poly = buffer.get(index);
             (poly.bbox(), poly.area(), poly.holes().count())
         })
         .collect();
@@ -415,7 +372,7 @@ fn two_runs_of_one_boolean_produce_the_same_polygons_in_the_same_order() {
     union_into(&a, &b, &mut buffer).expect("rectilinear operands");
     let second: Vec<_> = (0..u32::try_from(buffer.len()).expect("a small layer fits a u32"))
         .map(|index| {
-            let poly = buffer.get(&store, index);
+            let poly = buffer.get(index);
             (poly.bbox(), poly.area(), poly.holes().count())
         })
         .collect();

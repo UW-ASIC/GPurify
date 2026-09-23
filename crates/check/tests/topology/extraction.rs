@@ -7,7 +7,6 @@ use gpurify_check::topology::device::recognise_into;
 use gpurify_check::topology::{
     extract_nets_into, DeviceId, DeviceTable, NetId, NetTable, TerminalRole,
 };
-use gpurify_geom::Evaluator;
 use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::StrTable;
@@ -122,13 +121,7 @@ fn a_layout_emitted_from_a_netlist_extracts_back_to_that_netlist() {
     assert_extracts_to_its_netlist(&case, &nets);
 
     let mut devices = DeviceTable::default();
-    recognise_into(
-        &case.store,
-        &Evaluator::default(),
-        &nets,
-        &case.recognition,
-        &mut devices,
-    );
+    recognise_into(&case.store, &nets, &case.recognition, &mut devices);
 
     // `case.recognition` holds one recogniser row per device and both name the
     // same marker layer, so the expected count of two rests on a recogniser

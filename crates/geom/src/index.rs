@@ -137,7 +137,14 @@ impl Level {
 
     /// File every box whose extent lies in `min_ext ..= cell` under every cell it
     /// overlaps, as a CSR bucket table over `extent`.
-    fn build_into(&mut self, bboxes: &[Bbox], first_row: u32, extent: Bbox, cell: i64, min_ext: i64) {
+    fn build_into(
+        &mut self,
+        bboxes: &[Bbox],
+        first_row: u32,
+        extent: Bbox,
+        cell: i64,
+        min_ext: i64,
+    ) {
         self.clear();
         self.cell = cell;
         self.extent = extent;
@@ -294,8 +301,20 @@ fn gather_level<const SAME: bool>(
     // Whole cells with `pad > distance`: rounds up (fail closed); the bucket
     // test below takes the slop back out.
     let pad = (distance.raw() / cell + 1) * cell;
-    let (c0, c1) = cell_span(a_box.xlo.raw() - pad, a_box.xhi.raw() + pad, ox, cell, grid.nx);
-    let (r0, r1) = cell_span(a_box.ylo.raw() - pad, a_box.yhi.raw() + pad, oy, cell, grid.ny);
+    let (c0, c1) = cell_span(
+        a_box.xlo.raw() - pad,
+        a_box.xhi.raw() + pad,
+        ox,
+        cell,
+        grid.nx,
+    );
+    let (r0, r1) = cell_span(
+        a_box.ylo.raw() - pad,
+        a_box.yhi.raw() + pad,
+        oy,
+        cell,
+        grid.ny,
+    );
 
     for r in r0..=r1 {
         let base = r as usize * grid.nx as usize;

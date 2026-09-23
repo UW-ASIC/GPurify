@@ -245,7 +245,7 @@ pub fn check_missing_tie(
         taps.clear();
         for idx in 0..tap.len() {
             let idx = u32::try_from(idx).expect("a validated layer's polygons fit a u32");
-            let poly = tap.get(design.store, idx);
+            let poly = tap.get(idx);
             push_ring_edges(poly.outer(), &mut taps);
             for hole in poly.holes() {
                 push_ring_edges(hole, &mut taps);

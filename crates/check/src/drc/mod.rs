@@ -12,8 +12,7 @@ pub use ruleset::{Rule, RuleSet};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
-use gpurify_geom::rects::Rect;
-use gpurify_geom::{DbuArea, PolyId, ValidatedLayer};
+use gpurify_geom::{Bbox, DbuArea, PolyId, ValidatedLayer};
 
 /// Why a deck could not be turned into a [`RuleSet`]. Load time only: geometry a
 /// rule cannot handle is that rule's `Refused` row, not an error.
@@ -54,7 +53,7 @@ pub struct Scratch {
     /// Exact squared distance per candidate pair.
     dists: Vec<DbuArea>,
     /// Rectilinear decomposition of `layer_out`, CSR by figure.
-    rects: Vec<Rect>,
+    rects: Vec<Bbox>,
     rect_start: Vec<u32>,
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,

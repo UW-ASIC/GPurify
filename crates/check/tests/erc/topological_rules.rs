@@ -23,7 +23,6 @@ use gpurify_check::erc::rules::topology::{
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, Severity, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
-use gpurify_geom::Evaluator;
 use gpurify_geom::PolyId;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
@@ -36,7 +35,6 @@ use gpurify_testgen::{
 /// four transforms in `rules::topology` read.
 struct Extracted {
     case: NetlistCase,
-    derived: Evaluator,
     nets: NetTable,
     devices: DeviceTable,
     facts: NetFacts,
@@ -45,13 +43,11 @@ struct Extracted {
 fn extract(spec: &NetlistSpec) -> Extracted {
     let mut strings = StrTable::default();
     let case = layout_from_netlist(spec, Floorplan::default(), &mut strings);
-    let derived = Evaluator::default();
     let mut nets = NetTable::default();
     gpurify_check::topology::extract_nets_into(&case.store, &case.connectivity, &mut nets);
     let mut devices = DeviceTable::default();
     gpurify_check::topology::device::recognise_into(
         &case.store,
-        &derived,
         &nets,
         &case.recognition,
         &mut devices,
@@ -60,7 +56,6 @@ fn extract(spec: &NetlistSpec) -> Extracted {
     classify_nets_into(&nets, &devices, &mut facts);
     Extracted {
         case,
-        derived,
         nets,
         devices,
         facts,
@@ -71,7 +66,6 @@ impl Extracted {
     fn design(&self) -> Design<'_> {
         Design {
             store: &self.case.store,
-            derived: &self.derived,
             nets: &self.nets,
             devices: &self.devices,
         }

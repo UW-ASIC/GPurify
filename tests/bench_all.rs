@@ -58,7 +58,11 @@ fn stage_timings_across_the_scale_corpus() {
         row("testgen::scale_corpus", n, elapsed);
         let (_, elapsed) = timed(|| {
             let mut nets = NetTable::default();
-            gpurify::check::topology::extract_nets_into(&corpus.store, &corpus.connectivity, &mut nets);
+            gpurify::check::topology::extract_nets_into(
+                &corpus.store,
+                &corpus.connectivity,
+                &mut nets,
+            );
         });
         row("topology::extract_nets", n, elapsed);
         let (_, elapsed) = timed(|| pairs_on(&corpus.store, LayerId(0)));
@@ -184,14 +188,16 @@ fn every_rule_in_the_deck_timed_on_its_own() {
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
-        rows.iter().any(|(_, _, record, _)| record.is_some_and(|run| run.examined > 0)),
+        rows.iter()
+            .any(|(_, _, record, _)| record.is_some_and(|run| run.examined > 0)),
         "no rule examined anything, so the table would time a deck that never reached the layout"
     );
 
     rows.sort_by_key(|row| std::cmp::Reverse(row.0));
     println!("\n  rule                             outcome                   examined          rule      whole call");
     for (rule_only, id, record, call) in rows {
-        let outcome = record.map_or_else(|| "NoRecord".to_owned(), |run| format!("{:?}", run.outcome));
+        let outcome =
+            record.map_or_else(|| "NoRecord".to_owned(), |run| format!("{:?}", run.outcome));
         let examined = record.map_or(0, |run| run.examined);
         println!("  {id:<32} {outcome:<24} {examined:>8} {rule_only:>13?} {call:>15?}");
     }

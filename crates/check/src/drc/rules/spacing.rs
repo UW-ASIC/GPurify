@@ -310,7 +310,7 @@ pub(crate) fn wide_dependent(
     for row in rows.clone() {
         let (xs, ys) = store.poly_verts(PolyId(row));
         if matches!(winding_of(xs, ys), Some(Winding::CounterClockwise)) {
-            let width = narrowest_width(s.layer_a.get(store, outers), &mut s.facing);
+            let width = narrowest_width(s.layer_a.get(outers), &mut s.facing);
             s.bytes.push(u8::from(width >= threshold));
             outers += 1;
         } else {

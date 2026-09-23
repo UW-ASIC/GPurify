@@ -186,8 +186,17 @@ fn record_run_counts_only_the_rows_pushed_since_the_row_began() {
     assert_eq!(
         runs,
         [
-            RuleRun { violations: 3, examined: 77, ..ran_clean() },
-            RuleRun { rule: OTHER_RULE, outcome: Outcome::Refused, examined: 0, violations: 0 },
+            RuleRun {
+                violations: 3,
+                examined: 77,
+                ..ran_clean()
+            },
+            RuleRun {
+                rule: OTHER_RULE,
+                outcome: Outcome::Refused,
+                examined: 0,
+                violations: 0
+            },
         ]
     );
 }

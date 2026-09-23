@@ -12,7 +12,7 @@ use crate::topology::{DeviceId, NetId};
 use gpurify_geom::ops::{point_in_ring, segments_intersect, Point, Seg};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{prefix, Dbu, Qty, Temperature, Voltage};
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_geom::{Bbox, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
 
 /// Lifetime under sustained voltage stress: inverse power law times
 /// Arrhenius, per row. The applied stress comes from the solve.
@@ -187,7 +187,7 @@ pub fn check_hv_domain(
             examined += 1;
             let marker = devices.marker[index];
             let measured = Measurement::Voltage(spread);
-            let exempt = encloses(store, &isolation, store.poly_bbox(marker));
+            let exempt = encloses(&isolation, store.poly_bbox(marker));
             if !exempt & measured.violates(limit, LimitSense::Maximum) {
                 out.push(Violation {
                     rule,
@@ -323,9 +323,9 @@ fn domain_spread(
 }
 
 /// True when one polygon of `isolation` covers all of `inner`, exactly.
-fn encloses(store: &GeometryStore, isolation: &ValidatedLayer, inner: Bbox) -> bool {
+fn encloses(isolation: &ValidatedLayer, inner: Bbox) -> bool {
     (0..isolation.len())
-        .map(|idx| isolation.get(store, u32::try_from(idx).expect("a layer indexes with u32")))
+        .map(|idx| isolation.get(u32::try_from(idx).expect("a layer indexes with u32")))
         .any(|poly| poly.bbox().contains(inner) && covers(poly, inner))
 }
 

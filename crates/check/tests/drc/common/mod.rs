@@ -9,7 +9,6 @@ use gpurify_check::drc::{Design, Rule, RuleSet, Scratch};
 use gpurify_check::report::{RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::Evaluator;
 use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
@@ -23,7 +22,6 @@ pub const B: LayerId = LayerId(1);
 /// The tables a [`Design`] borrows; empty topology in every geometric test.
 #[derive(Debug, Default)]
 pub struct Env {
-    pub derived: Evaluator,
     pub nets: NetTable,
     pub devices: DeviceTable,
 }
@@ -32,7 +30,6 @@ impl Env {
     pub fn design<'a>(&'a self, store: &'a GeometryStore) -> Design<'a> {
         Design {
             store,
-            derived: &self.derived,
             nets: &self.nets,
             devices: &self.devices,
         }

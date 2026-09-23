@@ -120,7 +120,6 @@ fn an_empty_edge_list_leaves_every_node_in_its_own_component() {
 /// derived rather than against a rerun of the labelling.
 #[test]
 fn component_count_is_the_number_of_distinct_labels() {
-
     // A path through every node, joined back to front so the edge list is not
     // in index order.
     let path: Vec<(u32, u32)> = (1..50u32).map(|n| (50 - n, 49 - n)).collect();

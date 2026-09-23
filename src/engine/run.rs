@@ -233,7 +233,6 @@ fn run_drc(
     let rules = gpurify_check::drc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
     let design = gpurify_check::drc::Design {
         store: &loaded.store,
-        derived: &extracted.derived,
         nets: &extracted.nets,
         devices: &extracted.devices,
     };
@@ -264,7 +263,6 @@ fn run_erc(
 
     let design = gpurify_check::erc::Design {
         store: &loaded.store,
-        derived: &extracted.derived,
         nets: &extracted.nets,
         devices: &extracted.devices,
     };

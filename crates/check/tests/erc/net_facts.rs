@@ -7,7 +7,6 @@
 
 use gpurify_check::erc::facts::{classify_nets_into, NetFacts, RoleMask};
 use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
-use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
@@ -100,7 +99,6 @@ fn classify(spec: &NetlistSpec) -> Classified {
     let mut devices = DeviceTable::default();
     gpurify_check::topology::device::recognise_into(
         &case.store,
-        &Evaluator::default(),
         &nets,
         &case.recognition,
         &mut devices,

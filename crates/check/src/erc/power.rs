@@ -1591,7 +1591,11 @@ pub fn extract_nets_into(
         }
         taps.finish(shapes);
 
-        terminal.extend(attach.iter().map(|&request| taps.req_node[request as usize]));
+        terminal.extend(
+            attach
+                .iter()
+                .map(|&request| taps.req_node[request as usize]),
+        );
         terminal.sort_unstable();
         terminal.dedup();
         // Under two attach points: no pair to measure, so no row.
@@ -1744,7 +1748,12 @@ pub fn solve_into(
         ..
     } = &mut *scratch;
     pairs.clear();
-    pairs.extend(grid.edge_from.iter().copied().zip(grid.edge_to.iter().copied()));
+    pairs.extend(
+        grid.edge_from
+            .iter()
+            .copied()
+            .zip(grid.edge_to.iter().copied()),
+    );
     components_into(node_width, pairs, labels);
     reached.clear();
     reached.resize(nodes, false);

@@ -23,7 +23,6 @@ use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
 use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
-use gpurify_geom::Evaluator;
 use gpurify_ingest::deck::{
     Connectivity, Deck, DeviceRecognition, LayerTable, ProcessStack, RuleSpec, RuleTable,
 };
@@ -207,7 +206,6 @@ fn every_kind() -> RuleSet {
 /// Everything a run borrows, over a two-layer layout the size of the die.
 struct Cell {
     store: gpurify_geom::GeometryStore,
-    derived: Evaluator,
     nets: NetTable,
     devices: DeviceTable,
     facts: NetFacts,
@@ -222,7 +220,6 @@ impl Cell {
         let (store, _) = layout.finish();
         Self {
             store,
-            derived: Evaluator::default(),
             nets: NetTable::default(),
             devices: DeviceTable::default(),
             facts: NetFacts::default(),
@@ -234,7 +231,6 @@ impl Cell {
         RunInputs {
             design: Design {
                 store: &self.store,
-                derived: &self.derived,
                 nets: &self.nets,
                 devices: &self.devices,
             },
@@ -608,6 +604,9 @@ fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
     for (row, want) in expected.into_iter().enumerate() {
         let span = em.layer_start[row] as usize..em.layer_start[row + 1] as usize;
         assert!(span.len() >= 2, "row {row} is multi-layer");
-        assert!(em.blech_limit[span].iter().all(|b| b.raw() == want), "row {row}");
+        assert!(
+            em.blech_limit[span].iter().all(|b| b.raw() == want),
+            "row {row}"
+        );
     }
 }

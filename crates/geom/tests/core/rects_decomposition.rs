@@ -9,7 +9,7 @@
 //! inflate every density number in a run without failing anything that only
 //! counted rectangles.
 
-use gpurify_geom::rects::{clipped_area, covered_area, decompose_into, Rect};
+use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, LayerId};
@@ -36,7 +36,7 @@ fn bbox(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Bbox {
 /// Do two rectangles share interior area? Computed here from the bounds, so it
 /// does not go through [`Bbox`] and cannot agree with a broken decomposition
 /// for the same reason a broken `overlaps` would.
-fn interiors_meet(a: Rect, b: Rect) -> bool {
+fn interiors_meet(a: Bbox, b: Bbox) -> bool {
     a.xlo < b.xhi && b.xlo < a.xhi && a.ylo < b.yhi && b.ylo < a.yhi
 }
 
@@ -72,7 +72,7 @@ fn a_decomposition_covers_exactly_the_area_of_the_polygon_it_came_from() {
     let (mut rects, mut poly_start) = (Vec::new(), Vec::new());
     for (index, (shape, area)) in cases.iter().enumerate() {
         let layer = validated(&store, LayerId(u16::try_from(index).expect("fits a u16")));
-        decompose_into(&layer, &store, &mut rects, &mut poly_start);
+        decompose_into(&layer, &mut rects, &mut poly_start);
 
         assert_eq!(poly_start.len(), 2, "one polygon means two CSR offsets");
         assert_eq!(poly_start[0], 0);
@@ -120,7 +120,7 @@ fn the_rectangles_of_one_polygon_are_pairwise_disjoint() {
     let layer = validated(&store, LAYER);
 
     let (mut rects, mut poly_start) = (Vec::new(), Vec::new());
-    decompose_into(&layer, &store, &mut rects, &mut poly_start);
+    decompose_into(&layer, &mut rects, &mut poly_start);
     assert_eq!(poly_start.len(), layer.len() + 1);
 
     let mut total = DbuArea::new(0);
@@ -146,7 +146,7 @@ fn the_rectangles_of_one_polygon_are_pairwise_disjoint() {
         let index32 = u32::try_from(index).expect("eighty polygons fit a u32");
         assert_eq!(
             covered_area(own),
-            layer.get(&store, index32).area(),
+            layer.get(index32).area(),
             "polygon {index} is not covered exactly"
         );
         total = total + covered_area(own);
@@ -172,7 +172,7 @@ fn clipped_area_is_the_covered_area_inside_the_window_and_nothing_outside_it() {
     let layer = validated(&store, LAYER);
 
     let (mut rects, mut poly_start) = (Vec::new(), Vec::new());
-    decompose_into(&layer, &store, &mut rects, &mut poly_start);
+    decompose_into(&layer, &mut rects, &mut poly_start);
     let covered = covered_area(&rects);
     assert_eq!(covered, DbuArea::new(200 * 50 + 100 * 100));
 
@@ -233,7 +233,7 @@ fn clipped_area_is_monotone_and_bounded_by_the_window_and_the_shapes() {
     );
 
     let (mut rects, mut poly_start) = (Vec::new(), Vec::new());
-    decompose_into(&layer, &store, &mut rects, &mut poly_start);
+    decompose_into(&layer, &mut rects, &mut poly_start);
     let covered = covered_area(&rects);
     assert_eq!(
         covered,
@@ -281,12 +281,12 @@ fn two_decompositions_of_one_layer_produce_the_same_rectangles_in_the_same_order
     let other = validated(&store, LayerId(1));
 
     let (mut rects, mut poly_start) = (Vec::new(), Vec::new());
-    decompose_into(&layer, &store, &mut rects, &mut poly_start);
+    decompose_into(&layer, &mut rects, &mut poly_start);
     let (first_rects, first_start) = (rects.clone(), poly_start.clone());
 
     // Reuse the buffers for a different layer, then come back. Stale rows from
     // the wider layer must not survive into the narrower one or back again.
-    decompose_into(&other, &store, &mut rects, &mut poly_start);
+    decompose_into(&other, &mut rects, &mut poly_start);
     assert_eq!(
         poly_start.len(),
         2,
@@ -299,7 +299,7 @@ fn two_decompositions_of_one_layer_produce_the_same_rectangles_in_the_same_order
     );
     assert_eq!(covered_area(&rects), DbuArea::new(100));
 
-    decompose_into(&layer, &store, &mut rects, &mut poly_start);
+    decompose_into(&layer, &mut rects, &mut poly_start);
     assert_eq!(rects, first_rects, "the decomposition is not reproducible");
     assert_eq!(poly_start, first_start, "the offsets are not reproducible");
     assert!(

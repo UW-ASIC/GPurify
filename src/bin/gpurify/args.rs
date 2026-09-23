@@ -139,7 +139,11 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         ("--intent", intent.is_some(), takes_intent),
         ("--reference", reference.is_some(), takes_reference),
         ("--quasistatic", !quasistatic.is_empty(), takes_quasistatic),
-        ("--quasistatic-inductance", quasistatic_inductance, takes_quasistatic),
+        (
+            "--quasistatic-inductance",
+            quasistatic_inductance,
+            takes_quasistatic,
+        ),
     ] {
         if given && !allowed {
             return usage(format!("{subcommand} takes no {flag}"));
@@ -150,7 +154,11 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     }
     // A check with no parasitic network would write an empty file that reads as clean.
     if matches!(format, Format::Spef | Format::Dspf) && !checks.pex {
-        let name = if format == Format::Spef { "spef" } else { "dspf" };
+        let name = if format == Format::Spef {
+            "spef"
+        } else {
+            "dspf"
+        };
         return usage(format!(
             "--format {name} is not something this check produces"
         ));
@@ -212,7 +220,10 @@ mod tests {
         .expect("a legal command line");
         assert_eq!(cli.inputs.layout.to_str(), Some("top.gds"));
         assert_eq!(cli.inputs.deck.to_str(), Some("d.json"));
-        assert_eq!(cli.inputs.grid.map(gpurify_geom::Grid::dbu_per_um), Some(1000));
+        assert_eq!(
+            cli.inputs.grid.map(gpurify_geom::Grid::dbu_per_um),
+            Some(1000)
+        );
         assert_eq!(cli.format, Format::Spef);
         assert_eq!(cli.output.as_deref().and_then(|p| p.to_str()), Some("o"));
         assert_eq!(cli.options.threads, Some(4));
@@ -238,27 +249,57 @@ mod tests {
             cli.inputs.unknown_layers,
             gpurify_ingest::layout::UnknownLayers::Reject
         );
-        assert_eq!(parse_str("all t --deck d").expect("legal").options.checks, Checks::ALL);
+        assert_eq!(
+            parse_str("all t --deck d").expect("legal").options.checks,
+            Checks::ALL
+        );
     }
 
     #[test]
     fn every_malformed_command_line_is_refused_with_its_message() {
         let cases = [
             ("", "expected a subcommand: drc, erc, lvs, pex or all"),
-            ("dcr t --deck d", "unknown subcommand dcr; expected drc, erc, lvs, pex or all"),
-            ("drc --deck d", "drc needs a layout file: drc <layout> --deck <deck>"),
+            (
+                "dcr t --deck d",
+                "unknown subcommand dcr; expected drc, erc, lvs, pex or all",
+            ),
+            (
+                "drc --deck d",
+                "drc needs a layout file: drc <layout> --deck <deck>",
+            ),
             ("drc t", "--deck <deck> is required"),
-            ("drc t u --deck d", "one layout file, but a second was given: u"),
+            (
+                "drc t u --deck d",
+                "one layout file, but a second was given: u",
+            ),
             ("drc t --deck", "--deck wants a value"),
             ("drc t --deck d --nonsense", "unknown option --nonsense"),
-            ("drc t --deck d --format gds", "unknown --format gds; expected text, json, spef or dspf"),
-            ("drc t --deck d --threads 0", "--threads wants a positive count, not \"0\""),
-            ("drc t --deck d --grid 1.5", "--grid wants a positive count of database units per micrometre, not \"1.5\""),
+            (
+                "drc t --deck d --format gds",
+                "unknown --format gds; expected text, json, spef or dspf",
+            ),
+            (
+                "drc t --deck d --threads 0",
+                "--threads wants a positive count, not \"0\"",
+            ),
+            (
+                "drc t --deck d --grid 1.5",
+                "--grid wants a positive count of database units per micrometre, not \"1.5\"",
+            ),
             ("drc t --deck d --intent i", "drc takes no --intent"),
             ("erc t --deck d --reference r", "erc takes no --reference"),
-            ("all t --deck d --quasistatic-inductance", "all takes no --quasistatic-inductance"),
-            ("lvs t --deck d", "lvs requires a reference netlist (--reference)"),
-            ("drc t --deck d --format dspf", "--format dspf is not something this check produces"),
+            (
+                "all t --deck d --quasistatic-inductance",
+                "all takes no --quasistatic-inductance",
+            ),
+            (
+                "lvs t --deck d",
+                "lvs requires a reference netlist (--reference)",
+            ),
+            (
+                "drc t --deck d --format dspf",
+                "--format dspf is not something this check produces",
+            ),
         ];
         for (argv, message) in cases {
             assert_eq!(parse_str(argv).err().as_deref(), Some(message), "{argv:?}");

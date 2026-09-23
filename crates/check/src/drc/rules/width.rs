@@ -280,7 +280,7 @@ pub(crate) fn facing(
         &s.layer_out
     };
     for idx in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
-        let poly = figures.get(store, idx);
+        let poly = figures.get(idx);
         // A convex shape has no notch, and that is not a violation.
         let Some((measured, at)) = narrowest_facing(poly, material_between, &mut s.facing) else {
             continue;
@@ -323,7 +323,7 @@ pub(crate) fn min_edge_length(
     let mut examined = 0u64;
     for idx in 0..polys {
         let shape = rows.next().expect("one store row per validated polygon");
-        for (a, b) in poly_edges(s.layer_a.get(store, idx)) {
+        for (a, b) in poly_edges(s.layer_a.get(idx)) {
             examined += 1;
             // Rectilinear: one term is zero.
             let length = (b.x - a.x).abs() + (b.y - a.y).abs();

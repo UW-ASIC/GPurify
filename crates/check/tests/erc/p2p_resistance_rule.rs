@@ -15,7 +15,6 @@ use gpurify_check::erc::rules::electrical::{check_p2p_resistance, P2pResistanceT
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
-use gpurify_geom::Evaluator;
 use gpurify_geom::{prefix, Qty, Resistance};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_testgen::{assert_clean, assert_close_relative, point, LayoutBuilder};
@@ -52,12 +51,10 @@ fn run(
     networks: &NetNetworks,
     rules: &P2pResistanceTable,
 ) -> (Violations, Vec<RuleRun>) {
-    let derived = Evaluator::default();
     let nets = NetTable::default();
     let devices = DeviceTable::default();
     let design = Design {
         store,
-        derived: &derived,
         nets: &nets,
         devices: &devices,
     };

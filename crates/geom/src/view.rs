@@ -50,8 +50,8 @@ impl ValidatedLayer {
         self.len() == 0
     }
 
-    /// Borrow one validated polygon. `_store` is unused.
-    pub fn get<'a>(&'a self, _store: &'a GeometryStore, idx: u32) -> PolygonRef<'a> {
+    /// Borrow one validated polygon.
+    pub fn get(&self, idx: u32) -> PolygonRef<'_> {
         PolygonRef { layer: self, idx }
     }
 
@@ -88,7 +88,8 @@ pub struct PolygonRef<'a> {
 impl<'a> PolygonRef<'a> {
     /// The outer boundary, wound CCW.
     pub fn outer(self) -> RingRef<'a> {
-        self.layer.ring(self.layer.poly_ring_start[self.idx as usize])
+        self.layer
+            .ring(self.layer.poly_ring_start[self.idx as usize])
     }
 
     /// The holes, wound CW, ascending by store row.

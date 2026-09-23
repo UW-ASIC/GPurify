@@ -10,7 +10,6 @@ use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::area2;
 use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::Evaluator;
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
@@ -143,7 +142,6 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 /// ascending [`PolyId`] order; a marker with too few or too many is skipped.
 pub fn recognise_into(
     store: &GeometryStore,
-    _derived: &Evaluator,
     nets: &NetTable,
     recognition: &DeviceRecognition,
     out: &mut DeviceTable,
@@ -414,7 +412,7 @@ pub fn refuse_conducting_channels(
                 return Err(ChannelError::ConductingChannel {
                     marker,
                     conductor: layer,
-                    poly: overlap.get(store, 0).provenance(),
+                    poly: overlap.get(0).provenance(),
                 });
             }
         }
