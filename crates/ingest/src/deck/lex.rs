@@ -12,7 +12,7 @@ pub(crate) enum Tok {
         unit_at: u32,
     },
     Str,
-    /// One of `( ) [ ] { } , ; : = - . >= <= ==`.
+    /// One of `( ) [ ] { } , ; : = - . > < >= <= ==`.
     Punct,
     Newline,
     Eof,
@@ -116,7 +116,8 @@ pub(crate) fn lex(source: &str, errors: &mut Vec<Diagnostic>) -> Vec<Token> {
                 at += 2;
                 push(&mut out, Tok::Punct, start, at);
             }
-            b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'=' | b'-' | b'.' => {
+            b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'=' | b'-' | b'.'
+            | b'>' | b'<' => {
                 match c {
                     b'(' | b'[' => depth += 1,
                     b')' | b']' => depth = depth.saturating_sub(1),

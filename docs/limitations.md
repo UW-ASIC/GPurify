@@ -26,9 +26,11 @@ result from them is weaker than it looks.
 
 ## Checks that do not exist yet
 
-- Derived layers only support `and`, `or` and `not`. Sizing, `interacting`,
-  `inside`/`outside`, holes and edge operations are reserved words in the deck
-  and are refused until they exist. About a third of sky130's rules need them.
+- No check takes an edge layer yet, so edge layers can be derived but not
+  checked.
+- Derived layers have no selection by text label, net, angle or shape class
+  (rectangles, squares), no `covering`/`overlapping`, and `sized` grows both
+  axes by the same amount.
 - A rule that flags any overlap between two layers at all, and a rule that
   requires every shape on one layer to contain a shape on another.
 - Spacing that depends on whether two shapes are on the same net, spacing

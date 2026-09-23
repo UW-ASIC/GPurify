@@ -58,7 +58,7 @@ pub(crate) struct Scratch {
     labels: Vec<ComponentLabel>,
     /// Per-row flags (wide shapes), per-node colours.
     bytes: Vec<u8>,
-    facing: rules::width::FacingScratch,
+    facing: gpurify_geom::width::FacingScratch,
     rects_a: rules::LayerRects,
     rects_b: rules::LayerRects,
 }
