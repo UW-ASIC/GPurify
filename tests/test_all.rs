@@ -90,7 +90,7 @@ fn a_layout_written_and_read_back_yields_the_same_store() {
         .expect("a store read from GDS can be written back to GDS");
 
     let round_tripped = common::load_bytes(&bytes, &original.deck).expect("re-read");
-    common::assert_stores_equal(&original.store, &round_tripped.store);
+    common::assert_stores_equal(&original.store, &round_tripped);
 }
 
 /// Oracle: construct-from-answer. Coordinates at the edge of the representable

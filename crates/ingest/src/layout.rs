@@ -1,24 +1,14 @@
 //! GDSII reader: a record stream to one flat, layer-sorted `GeometryStore`.
 //!
 //! Data in: GDSII bytes (gzip or plain) and a [`Deck`] mapping stream pairs to layers.
-//! Data out: [`Layout`]: the store with deck-derived layers appended, placed labels, and the
-//! string table the layout was interned into. An inexact transform is an error, never rounded.
+//! Data out: [`gds::Library::flatten`]'s store with deck-derived layers appended, and placed
+//! labels. An inexact transform is an error, never rounded.
 
 use crate::deck::{Deck, DerivedOp};
-use crate::provenance::Provenance;
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
-use gpurify_geom::StrTable;
-
-/// Everything a verification run needs from a layout file.
-#[derive(Debug, Default)]
-pub struct Layout {
-    pub store: GeometryStore,
-    pub provenance: Provenance,
-    pub strings: StrTable,
-}
 
 /// Why a layout could not be read. Every variant is a refusal: approximating a
 /// transform moves geometry and moves verdicts.
@@ -53,15 +43,6 @@ pub enum UnknownLayers {
     Reject,
     /// Drop the shape or label, uncounted.
     Drop,
-}
-
-/// Read a layout file, flatten it, and produce the store plus labels.
-pub fn read_layout(
-    path: &std::path::Path,
-    deck: &Deck,
-    unknown: UnknownLayers,
-) -> Result<Layout, LayoutError> {
-    gds::read(&read_gds_bytes(path)?, deck, unknown)
 }
 
 /// A GDSII file's bytes, gunzipped when the file is gzip. `UnknownFormat` when the
@@ -138,7 +119,7 @@ fn derive_layers_into(
 
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
-    use super::{Deck, Layout, LayoutError, UnknownLayers};
+    use super::{Deck, LayoutError, UnknownLayers};
     use crate::narrow;
     use crate::provenance::Provenance;
     use gpurify_geom::boolean::canonical_rings_into;
@@ -198,18 +179,6 @@ pub mod gds {
     const STRANS_REFLECT: u16 = 0x8000;
     /// `STRANS` bits 13-14: absolute magnification/angle, which do not compose. Refused.
     const STRANS_ABSOLUTE: u16 = 0x0006;
-
-    /// Parse and flatten GDSII bytes into a fresh string table.
-    pub fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
-        let mut strings = StrTable::default();
-        let library = Library::parse(bytes, &mut strings)?;
-        let (store, provenance) = library.flatten(deck, &strings, unknown)?;
-        Ok(Layout {
-            store,
-            provenance,
-            strings,
-        })
-    }
 
     /// One geometry element as the file states it, before any transform.
     struct Elem {
@@ -1219,6 +1188,25 @@ mod tests {
     use gpurify_testgen::shapes::{Handle, Ids};
     use gpurify_testgen::{dbu, LayoutBuilder};
 
+    #[derive(Debug)]
+    struct Layout {
+        store: GeometryStore,
+        provenance: crate::Provenance,
+        strings: StrTable,
+    }
+
+    /// Parse and flatten into a fresh string table.
+    fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
+        let mut strings = StrTable::default();
+        let library = gds::Library::parse(bytes, &mut strings)?;
+        let (store, provenance) = library.flatten(deck, &strings, unknown)?;
+        Ok(Layout {
+            store,
+            provenance,
+            strings,
+        })
+    }
+
     const HEADER: u16 = 0x0002;
     const BGNLIB: u16 = 0x0102;
     const LIBNAME: u16 = 0x0206;
@@ -1574,8 +1562,7 @@ mod tests {
         let deck = three_layer_deck(&mut strings);
         let bytes = gds_library("TOP", &[first_layer_square()]);
 
-        let layout =
-            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
 
         assert_eq!(layout.store.poly_count(), 1);
         assert_eq!(
@@ -1625,8 +1612,7 @@ mod tests {
         let mut stored = Vec::new();
         for element in [ccw, cw] {
             let bytes = gds_library("TOP", &[element]);
-            let layout =
-                gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+            let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
 
             let (xs, ys) = layout.store.poly_verts(PolyId(0));
             assert_eq!(
@@ -1684,8 +1670,7 @@ mod tests {
             )],
         );
 
-        let layout =
-            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(
             layout.store.poly_count(),
             2,
@@ -1722,7 +1707,7 @@ mod tests {
             ],
         );
 
-        match gds::read(&bytes, &deck, UnknownLayers::Reject) {
+        match read(&bytes, &deck, UnknownLayers::Reject) {
             Err(LayoutError::UnknownLayer(99, 7)) => {}
             other => panic!(
                 "an undeclared stream pair under Reject produced {:?} rather than \
@@ -1731,7 +1716,7 @@ mod tests {
             ),
         }
 
-        let dropped = gds::read(&bytes, &deck, UnknownLayers::Drop).expect("Drop never refuses");
+        let dropped = read(&bytes, &deck, UnknownLayers::Drop).expect("Drop never refuses");
         assert_eq!(
             dropped.store.poly_count(),
             1,
@@ -1771,8 +1756,8 @@ mod tests {
             ],
         );
 
-        let rejecting = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("all layers known");
-        let dropping = gds::read(&bytes, &deck, UnknownLayers::Drop).expect("all layers known");
+        let rejecting = read(&bytes, &deck, UnknownLayers::Reject).expect("all layers known");
+        let dropping = read(&bytes, &deck, UnknownLayers::Drop).expect("all layers known");
         assert_eq!(rejecting.store.poly_count(), 3);
         assert_same_store("Reject against Drop", &rejecting.store, &dropping.store);
     }
@@ -1786,7 +1771,7 @@ mod tests {
         let mut bytes = gds_library("TOP", &[first_layer_square()]);
         bytes.pop().expect("the library is not empty");
 
-        match gds::read(&bytes, &deck, UnknownLayers::Reject) {
+        match read(&bytes, &deck, UnknownLayers::Reject) {
             Err(LayoutError::Truncated(at)) => assert!(
                 at <= bytes.len(),
                 "the truncation was reported at byte {at}, past the {} the file has",
@@ -1808,7 +1793,7 @@ mod tests {
         let (expected, _, _, elements) = corpus();
         let bytes = gds_library("TOP", &elements);
 
-        let read = gds::read(&bytes, &deck, UnknownLayers::Reject)
+        let read = read(&bytes, &deck, UnknownLayers::Reject)
             .expect("a library built to the format specification");
         assert_eq!(read.store.poly_count(), elements.len());
         assert_same_store("a known layout read from GDSII", &expected, &read.store);
@@ -1830,35 +1815,10 @@ mod tests {
             .collect();
         let bytes = gds_library("TOP", &tagged);
 
-        let layout = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         assert_same_store("a tagged layout", &expected, &layout.store);
     }
 
-    /// The dispatcher has to reach the reader and hand back what it produced; a
-    /// `read_layout` returning `Layout::default()` satisfies its refusal tests.
-    #[test]
-    fn read_layout_dispatches_a_gdsii_file_onto_the_gdsii_reader() {
-        let mut strings = StrTable::default();
-        let deck = three_layer_deck(&mut strings);
-        let (expected, _, _, elements) = corpus();
-        let path = std::env::temp_dir().join(format!(
-            "gpurify-ingest-{}-dispatch.gds",
-            std::process::id()
-        ));
-        std::fs::write(&path, gds_library("TOP", &elements)).expect("scratch write");
-
-        let read = super::read_layout(&path, &deck, UnknownLayers::Reject);
-        let _ = std::fs::remove_file(&path);
-
-        let layout = read.expect("a library built to the format specification");
-        assert_same_store(
-            "a known layout through read_layout",
-            &expected,
-            &layout.store,
-        );
-    }
-
-    /// The same bytes read twice must produce the same store.
     #[test]
     fn reading_the_same_library_twice_produces_the_same_store() {
         let mut strings = StrTable::default();
@@ -1866,8 +1826,8 @@ mod tests {
         let (_, _, _, elements) = corpus();
         let bytes = gds_library("TOP", &elements);
 
-        let once = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        let twice = gds::read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
+        let once = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
+        let twice = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
     }
 
@@ -1893,7 +1853,7 @@ mod tests {
             } else {
                 &[chain[0], chain[1], chain[2], chain[4]][..]
             };
-            match gds::read(&gds_hierarchy(cells), &deck, UnknownLayers::Reject) {
+            match read(&gds_hierarchy(cells), &deck, UnknownLayers::Reject) {
                 Err(LayoutError::UnsupportedTransform) => {}
                 other => panic!(
                     "{levels} levels of 1e6 produced {:?}",
@@ -1940,8 +1900,7 @@ mod tests {
             ),
         ]);
 
-        let layout =
-            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(
             layout.store.poly_count(),
             2,
@@ -1994,8 +1953,7 @@ mod tests {
             ),
         ]);
 
-        let layout =
-            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(layout.store.poly_count(), 2);
         assert_eq!(
             verts(&layout.store, 0),
@@ -2033,8 +1991,7 @@ mod tests {
             ),
         ]);
 
-        let layout =
-            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(layout.store.poly_count(), 4);
 
         // Each row: the drawn triangle through `R_q · diag(1, −1)`, offset by
@@ -2090,8 +2047,7 @@ mod tests {
             ),
         ]);
 
-        let layout =
-            gds::read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
         assert_eq!(layout.store.poly_count(), 2, "one row per leaf placement");
 
         // (0,0), (200,0), (0,100) through `(−y, −x)` is (0,0), (0,−200),
@@ -2172,8 +2128,7 @@ mod tests {
 
     /// Read a library and bind its labels, returning the resolved column.
     fn bound_labels(bytes: &[u8], deck: &Deck) -> Result<Vec<(PolyId, String)>, crate::LabelError> {
-        let mut layout =
-            gds::read(bytes, deck, UnknownLayers::Reject).expect("a well-formed library");
+        let mut layout = read(bytes, deck, UnknownLayers::Reject).expect("a well-formed library");
         layout
             .provenance
             .resolve_labels(&layout.store, &deck.connectivity)?;
@@ -2443,7 +2398,7 @@ mod tests {
         let mut strings = StrTable::default();
         let deck = three_layer_deck(&mut strings);
 
-        let base = gds::read(&nested_mirror_library(None), &deck, UnknownLayers::Reject)
+        let base = read(&nested_mirror_library(None), &deck, UnknownLayers::Reject)
             .expect("the unwrapped library is well formed");
 
         // ---- anti-vacuity: every clause is quantified over rows, layers and
@@ -2549,7 +2504,7 @@ mod tests {
                 "W#{index} (mag {}, reflect {}, q {}, d ({}, {}))",
                 w.mag, w.reflect, w.quarters, w.dx, w.dy
             );
-            let wrapped = gds::read(
+            let wrapped = read(
                 &nested_mirror_library(Some(w)),
                 &deck,
                 UnknownLayers::Reject,
@@ -2631,7 +2586,7 @@ mod tests {
             dx: 0,
             dy: 0,
         };
-        match gds::read(
+        match read(
             &nested_mirror_library(Some(overflow)),
             &deck,
             UnknownLayers::Reject,

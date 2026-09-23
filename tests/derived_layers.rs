@@ -54,9 +54,14 @@ fn boxes_on(store: &GeometryStore, layer: LayerId) -> Vec<(i64, i64, i64, i64)> 
 fn round_trip(store: &GeometryStore, deck: &Deck) -> GeometryStore {
     let mut bytes = Vec::new();
     write_store(store, &deck.layers, "TOP", &mut bytes).expect("base geometry is writable");
-    gds::read(&bytes, deck, UnknownLayers::Reject)
-        .expect("a layout the deck describes reads back")
-        .store
+    {
+        let mut strings = gpurify_ingest::StrTable::default();
+        let library =
+            gds::Library::parse(&bytes, &mut strings).expect("the writer's library parses");
+        library.flatten(deck, &strings, UnknownLayers::Reject)
+    }
+    .expect("a layout the deck describes reads back")
+    .0
 }
 
 /// A deck declaring `diff_active = diff NOT poly` over two base layers.

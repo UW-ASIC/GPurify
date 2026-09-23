@@ -463,7 +463,6 @@ fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) 
         })
         .collect();
     let deck = Deck {
-        grid: None,
         layers: LayerTable::default(),
         rules: RuleTable {
             spec,

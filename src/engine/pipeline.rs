@@ -70,25 +70,20 @@ impl Extracted {
     }
 }
 
-/// Read every input. The grid is checked before any file is opened, and the deck
-/// is read before the layout because layers are mapped during the layout read.
+/// Read every input. The grid is checked before any file is opened.
 pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     let grid = inputs.grid.ok_or(LoadError::NoGrid)?;
 
     let source = std::fs::read_to_string(&inputs.deck).map_err(|why| {
         gpurify_ingest::DeckError::Io(format!("{}: {why}", inputs.deck.display()))
     })?;
+    let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
 
-    // Parsed twice: `read_layout` owns the table it interns into, so the first
-    // parse only maps layers. `LayerId`s come from sorted names, so both agree.
-    let staging = gpurify_ingest::deck::parse_deck(&source, grid, &mut StrTable::default())?;
-    let layout =
-        gpurify_ingest::layout::read_layout(&inputs.layout, &staging, inputs.unknown_layers)?;
-
-    let mut strings = layout.strings;
+    // Layout strings are interned before the deck's, which fixes every StrId.
+    let mut strings = StrTable::default();
+    let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
     let deck = gpurify_ingest::deck::parse_deck(&source, grid, &mut strings)?;
-    let store = layout.store;
-    let mut provenance = layout.provenance;
+    let (store, mut provenance) = library.flatten(&deck, &strings, inputs.unknown_layers)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
 
     let reference = match &inputs.reference {

@@ -255,9 +255,13 @@ fn an_empty_store_writes_a_library_the_reader_reads_back_empty() {
     let mut bytes = Vec::new();
     gds::write_store(&store, &LayerTable::default(), "TOP", &mut bytes).expect("writable");
     assert_eq!(bytes.len() % 2, 0);
-    let layout = reader::read(&bytes, &Deck::default(), UnknownLayers::Reject)
+    let mut strings = gpurify_ingest::StrTable::default();
+    let library =
+        reader::Library::parse(&bytes, &mut strings).expect("the writer's library parses");
+    let (store, _) = library
+        .flatten(&Deck::default(), &strings, UnknownLayers::Reject)
         .expect("the reader accepts the writer's library");
-    assert_eq!(layout.store.poly_count(), 0);
+    assert_eq!(store.poly_count(), 0);
 }
 
 #[test]

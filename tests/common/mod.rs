@@ -231,9 +231,8 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
 
     // Parsed with a throwaway string table: this one exists only to reach
     // `layers`, and the ids the *run* reports against come from its own load
-    // below. A malformed deck has no layer table at all, which is why the
-    // layout is written on a default `LayerTable` in that case — those
-    // fixtures are read by `load`, which never reaches the layout.
+    // below. A malformed deck has no layer table, so its layout is an empty
+    // library that `load` reads before refusing the deck.
     let mut scratch_strings = ingest::StrTable::default();
     let parsed = ingest::deck::parse_deck(deck_source, grid, &mut scratch_strings).ok();
     let met1 = parsed
@@ -246,12 +245,15 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     let (store, _ids) = layout.finish();
 
     let layout_path = dir.join("layout.gds");
-    if let Some(deck) = &parsed {
-        let mut bytes = Vec::new();
-        gpurify_testgen::gds::write_store(&store, &deck.layers, "TOP", &mut bytes)
-            .expect("a fixture emits geometry this writer accepts");
-        std::fs::write(&layout_path, &bytes).expect("the scratch directory is writable");
-    }
+    let no_layers = ingest::deck::LayerTable::default();
+    let (store, layers) = match &parsed {
+        Some(deck) => (store, &deck.layers),
+        None => (LayoutBuilder::new(0).finish().0, &no_layers),
+    };
+    let mut bytes = Vec::new();
+    gpurify_testgen::gds::write_store(&store, layers, "TOP", &mut bytes)
+        .expect("a fixture emits geometry this writer accepts");
+    std::fs::write(&layout_path, &bytes).expect("the scratch directory is writable");
 
     let inputs = Inputs {
         layout: layout_path,
@@ -340,8 +342,11 @@ pub fn rule_run(runs: &[RuleRun], strings: &ingest::StrTable, name: &str) -> Rul
 pub fn load_bytes(
     bytes: &[u8],
     deck: &ingest::Deck,
-) -> Result<ingest::layout::Layout, ingest::layout::LayoutError> {
-    ingest::layout::gds::read(bytes, deck, ingest::layout::UnknownLayers::Reject)
+) -> Result<GeometryStore, ingest::layout::LayoutError> {
+    let mut strings = ingest::StrTable::default();
+    let library = ingest::layout::gds::Library::parse(bytes, &mut strings)?;
+    let (store, _) = library.flatten(deck, &strings, ingest::layout::UnknownLayers::Reject)?;
+    Ok(store)
 }
 
 /// Two stores hold the same geometry.

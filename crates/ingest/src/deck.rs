@@ -31,8 +31,6 @@ pub enum DeckError {
 /// A parsed, validated, grid-resolved deck.
 #[derive(Debug, Default)]
 pub struct Deck {
-    /// The grid every limit was converted against. `None` only on `Deck::default()`.
-    pub grid: Option<Grid>,
     pub layers: LayerTable,
     pub rules: RuleTable,
     pub connectivity: Connectivity,
@@ -277,7 +275,6 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
     let stack = build_stack(&doc.pex, &layers, strings)?;
 
     Ok(Deck {
-        grid: Some(grid),
         layers,
         rules,
         connectivity,

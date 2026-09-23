@@ -1,7 +1,7 @@
-//! `read_layout` on whole files: refusals, and gzip.
+//! `read_gds_bytes` on whole files: refusals, and gzip.
 
-use gpurify_ingest::layout::{read_layout, Layout, LayoutError, UnknownLayers};
-use gpurify_ingest::Deck;
+use gpurify_ingest::layout::{gds, read_gds_bytes, LayoutError};
+use gpurify_ingest::StrTable;
 use std::io::Write;
 
 /// A scratch path unique to this process and this test.
@@ -9,12 +9,12 @@ fn scratch(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("gpurify-ingest-{}-{name}", std::process::id()))
 }
 
-fn read(name: &str, bytes: &[u8]) -> Result<Layout, LayoutError> {
+fn read(name: &str, bytes: &[u8]) -> Result<(), LayoutError> {
     let path = scratch(name);
     std::fs::write(&path, bytes).expect("scratch write");
-    let result = read_layout(&path, &Deck::default(), UnknownLayers::Reject);
+    let result = read_gds_bytes(&path);
     let _ = std::fs::remove_file(&path);
-    result
+    gds::Library::parse(&result?, &mut StrTable::default()).map(|_| ())
 }
 
 /// An empty GDSII library, record by record from the stream format spec.
@@ -58,7 +58,7 @@ fn a_file_in_no_known_format_is_refused_rather_than_read_as_an_empty_layout() {
 #[test]
 fn a_layout_that_cannot_be_opened_is_an_error_rather_than_an_empty_store() {
     let missing = std::path::Path::new("/nonexistent/gpurify/no-such-layout.gds");
-    match read_layout(missing, &Deck::default(), UnknownLayers::Reject) {
+    match read_gds_bytes(missing) {
         Err(LayoutError::Io(_)) => {}
         other => panic!("an unreadable layout produced {other:?} rather than LayoutError::Io"),
     }
