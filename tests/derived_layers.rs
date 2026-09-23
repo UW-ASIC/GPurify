@@ -17,7 +17,7 @@
 
 use gpurify_geom::Grid;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_ingest::deck::{parse_deck, Deck};
+use gpurify_ingest::deck::{parse_deck_dsl, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::gds::write_store;
@@ -31,7 +31,7 @@ fn grid() -> Grid {
 
 /// Parse a deck, failing with the parser's own message.
 fn deck(source: &str) -> Deck {
-    parse_deck(source, grid(), &mut StrTable::default()).expect("the deck fixture parses")
+    parse_deck_dsl(source, grid(), &mut StrTable::default()).expect("the deck fixture parses")
 }
 
 /// The bounding box of every polygon on one layer, ascending by row.
@@ -65,12 +65,11 @@ fn round_trip(store: &GeometryStore, deck: &Deck) -> GeometryStore {
 }
 
 /// A deck declaring `diff_active = diff NOT poly` over two base layers.
-const SUBTRACTION_DECK: &str = r#"{
-  "layers": { "diff": [2, 0], "poly": [3, 0] },
-  "derived": [
-    { "name": "diff_active", "op": "not", "layers": ["diff", "poly"] }
-  ]
-}"#;
+const SUBTRACTION_DECK: &str = "grid 1nm
+layer diff = gds(2, 0)
+layer poly = gds(3, 0)
+layer diff_active = diff not poly
+";
 
 const DIFF: LayerId = LayerId(0);
 const POLY: LayerId = LayerId(1);
@@ -133,13 +132,13 @@ fn a_derived_layer_may_be_built_on_an_earlier_derived_layer() {
     const IN_WINDOW: LayerId = LayerId(4);
 
     let deck = deck(
-        r#"{
-  "layers": { "diff": [2, 0], "poly": [3, 0], "window": [4, 0] },
-  "derived": [
-    { "name": "diff_active", "op": "not", "layers": ["diff", "poly"] },
-    { "name": "sd_in_window", "op": "and", "layers": ["diff_active", "window"] }
-  ]
-}"#,
+        "grid 1nm
+layer diff = gds(2, 0)
+layer poly = gds(3, 0)
+layer window = gds(4, 0)
+layer diff_active = diff not poly
+layer sd_in_window = diff_active and window
+",
     );
 
     let mut layout = LayoutBuilder::new(deck.layers.len());
@@ -225,11 +224,13 @@ fn no_gds_stream_pair_maps_onto_a_derived_layer() {
 #[test]
 fn a_ring_on_a_derived_layer_keeps_its_hole_for_net_extraction() {
     let deck = deck(
-        r#"{
-  "layers": { "diff": [2, 0], "poly": [3, 0] },
-  "derived": [ { "name": "sd", "op": "not", "layers": ["diff", "poly"] } ],
-  "connectivity": { "conductors": ["sd"], "intra_layer_touch": true, "vias": [] }
-}"#,
+        "grid 1nm
+layer diff = gds(2, 0)
+layer poly = gds(3, 0)
+layer sd = diff not poly
+connect conductors [sd]
+connect touch_within_layer
+",
     );
     const SD: LayerId = LayerId(2);
 

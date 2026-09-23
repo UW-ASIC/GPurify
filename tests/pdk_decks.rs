@@ -36,18 +36,18 @@ use gpurify::ingest::{StrId, StrTable};
 use std::path::{Path, PathBuf};
 
 /// The grid every deck in `pdks/` is authored against — `pdks/README.md` states
-/// it, and a limit that is not an exact multiple of it is `DeckError::OffGrid`
-/// rather than a rounded limit. Loading at this resolution is therefore itself
+/// it, and a limit that is not an exact multiple of it is refused, not
+/// rounded. Loading at this resolution is therefore itself
 /// a check that the published numbers land on the pitch they claim.
 const DBU_PER_UM: i64 = 1000;
 
-/// Every `*.json` under `pdks/`, sorted, discovered by reading the directory.
+/// Every `*.deck` under `pdks/`, sorted, discovered by reading the directory.
 fn deck_files() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("pdks");
     let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|why| panic!("pdks/ must be readable at {}: {why}", dir.display()))
         .map(|entry| entry.expect("a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "deck"))
         .collect();
     found.sort();
 
@@ -75,7 +75,7 @@ fn load(path: &Path) -> (Deck, StrTable) {
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
     let mut strings = StrTable::default();
 
-    match gpurify::ingest::deck::parse_deck(&source, grid, &mut strings) {
+    match gpurify::ingest::deck::parse_deck_dsl(&source, grid, &mut strings) {
         Ok(deck) => (deck, strings),
         Err(why) => panic!(
             "{} does not parse: {why}. A deck this tool ships is an input a user \
