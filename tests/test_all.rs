@@ -114,7 +114,8 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
         .expect_err("a limit off the manufacturing grid must not load");
 
     assert!(
-        matches!(error, LoadError::Deck(DeckError::OffGrid(_, _))),
+        matches!(&error, LoadError::Deck(DeckError::Invalid { diagnostics, .. })
+            if diagnostics[0].message.contains("not on the layout's grid")),
         "expected an off-grid rejection, got {error:?}"
     );
 }
@@ -307,7 +308,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         &gpurify::export::json::Report {
             header: &gpurify::export::Header {
                 tool_version: "test",
-                deck_path: "params.json".to_owned(),
+                deck_path: "params.deck".to_owned(),
                 layout_path: "LVS_CLEAN_MATCH.gds".to_owned(),
                 timestamp: None,
             },
@@ -528,7 +529,7 @@ fn layer_of(run: &common::CaseRun, name: &str) -> gpurify::geom::LayerId {
         .deck
         .layers
         .id(&run.loaded.strings, name)
-        .unwrap_or_else(|| panic!("params.json declares no layer named {name}"))
+        .unwrap_or_else(|| panic!("params.deck declares no layer named {name}"))
 }
 
 /// A solved electrical measurement against its closed form, to a relative 1e-9.

@@ -399,7 +399,7 @@ impl Fingers {
     }
 
     /// A three-terminal MOS recogniser on `marker`, `[poly, active, active]` —
-    /// the shape `tests/fixtures/params.json` states.
+    /// the shape `tests/fixtures/params.deck` states.
     fn recogniser(marker: LayerId, strings: &mut StrTable) -> DeviceRecognition {
         DeviceRecognition {
             kind: vec![DeviceKind::Mos],

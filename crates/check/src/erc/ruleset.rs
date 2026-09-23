@@ -419,12 +419,6 @@ impl RuleSet {
                 }
                 "esd_latchup" => {
                     let layers = row.layers(2)?;
-                    // Validated but unused: they qualify clamp devices, and a
-                    // deck cannot name a clamp model (`ParamValue` has no
-                    // string), so every pad is flagged as unprotected.
-                    row.positive("required_current")?;
-                    row.positive("max_path_resistance")?;
-                    row.positive("max_clamp_voltage")?;
                     let min_guard_ring_width = row.length("min_guard_ring_width")?;
                     let max_tap_distance = row.length("max_tap_distance")?;
                     let table = &mut set.esd_latchup;
