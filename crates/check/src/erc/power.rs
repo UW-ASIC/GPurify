@@ -14,7 +14,7 @@
 use crate::erc::centre;
 use crate::erc::facts::IntentMap;
 use crate::topology::net::{intra_layer_edges_into, via_edges_into};
-use crate::topology::{DeviceTable, NetId, NetTable};
+use crate::topology::{csr_run, DeviceTable, NetId, NetTable};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
@@ -139,31 +139,28 @@ impl NetNetworks {
 
     /// One row's nodes: position and tapped polygon.
     pub fn nodes_of(&self, row: u32) -> (&[Point], &[PolyId]) {
-        let run = csr_run(&self.node_start, row);
-        (&self.node_at[run.clone()], &self.node_poly[run])
+        let (from, to) = csr_run(&self.node_start, row as usize);
+        (&self.node_at[from..to], &self.node_poly[from..to])
     }
 
     /// One row's terminal node indices, ascending.
     pub fn terminals_of(&self, row: u32) -> &[u32] {
-        &self.terminal[csr_run(&self.terminal_start, row)]
+        let (from, to) = csr_run(&self.terminal_start, row as usize);
+        &self.terminal[from..to]
     }
 
     /// One row's edges: endpoints and resistance.
     pub fn edges_of(&self, row: u32) -> (&[u32], &[u32], &[Qty<Resistance, { prefix::BASE }>]) {
-        let run = csr_run(&self.edge_start, row);
+        let (from, to) = csr_run(&self.edge_start, row as usize);
         (
-            &self.edge_from[run.clone()],
-            &self.edge_to[run.clone()],
-            &self.edge_resistance[run],
+            &self.edge_from[from..to],
+            &self.edge_to[from..to],
+            &self.edge_resistance[from..to],
         )
     }
 }
 
 /// One row's run in a CSR offset column; a row past the table panics.
-fn csr_run(start: &[u32], row: u32) -> std::ops::Range<usize> {
-    start[row as usize] as usize..start[row as usize + 1] as usize
-}
-
 /// Solver stopping rule: relative residual tolerance and iteration cap.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveConfig {

@@ -199,7 +199,7 @@ pub enum SkipReason {
 
 /// Close out one rule row: append its [`RuleRun`] with the violation count
 /// derived as `out.len() - violations_before` (saturating at `u32::MAX`).
-pub fn record_run(
+pub(crate) fn record_run(
     runs: &mut Vec<RuleRun>,
     out: &Violations,
     violations_before: usize,

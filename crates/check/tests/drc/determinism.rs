@@ -1,10 +1,10 @@
-//! The determinism gate: two runs, and a run on a reused `Scratch`, agree row for
-//! row; translating the design translates only the report.
+//! The determinism gate: two runs agree row for row; translating the design
+//! translates only the report.
 
 use crate::common;
 
-use common::{Env, A, B, OTHER_RULE, RULE};
-use gpurify_check::drc::{Rule, RuleSet, Scratch};
+use common::{A, B, OTHER_RULE, RULE};
+use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{RuleRun, Violations};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{assert_violations_eq, dbu};
@@ -48,15 +48,10 @@ fn two_rules() -> RuleSet {
     }
 }
 
-fn run_once(
-    set: &RuleSet,
-    env: &Env,
-    store: &gpurify_geom::GeometryStore,
-    scratch: &mut Scratch,
-) -> (Violations, Vec<RuleRun>) {
+fn run_once(set: &RuleSet, store: &gpurify_geom::GeometryStore) -> (Violations, Vec<RuleRun>) {
     let mut out = Violations::default();
     let mut runs = Vec::new();
-    set.run(env.design(store), scratch, &mut out, &mut runs);
+    set.run(store, &mut out, &mut runs);
     out.sort_canonical();
     (out, runs)
 }
@@ -69,11 +64,10 @@ fn run_once(
 #[test]
 fn two_runs_of_one_design_produce_identical_violations_and_identical_run_rows() {
     let store = busy_layout();
-    let env = Env::default();
     let set = two_rules();
 
-    let (first, first_runs) = run_once(&set, &env, &store, &mut Scratch::default());
-    let (second, second_runs) = run_once(&set, &env, &store, &mut Scratch::default());
+    let (first, first_runs) = run_once(&set, &store);
+    let (second, second_runs) = run_once(&set, &store);
 
     assert!(
         !first.rule.is_empty(),
@@ -81,32 +75,6 @@ fn two_runs_of_one_design_produce_identical_violations_and_identical_run_rows() 
     );
     assert_violations_eq(&first, &second);
     assert_eq!(first_runs, second_runs);
-}
-
-/// Oracle: determinism. One `Scratch` is threaded through all twenty-four
-/// transforms and through every run in a long-lived process, so a run against a
-/// buffer set that has already been filled must reach the same verdict as one
-/// against a fresh set. A transform reading what its predecessor left behind is
-/// correct on the first run and wrong on every later one, which is a defect no
-/// single-run assertion can see.
-#[test]
-fn a_reused_scratch_reaches_the_same_verdict_as_a_fresh_one() {
-    let store = busy_layout();
-    let env = Env::default();
-    let set = two_rules();
-
-    let (fresh, fresh_runs) = run_once(&set, &env, &store, &mut Scratch::default());
-    assert!(
-        !fresh.rule.is_empty(),
-        "two empty tables agree about nothing"
-    );
-
-    let mut reused = Scratch::default();
-    let (_warmup, _warmup_runs) = run_once(&set, &env, &store, &mut reused);
-    let (again, again_runs) = run_once(&set, &env, &store, &mut reused);
-
-    assert_violations_eq(&fresh, &again);
-    assert_eq!(fresh_runs, again_runs);
 }
 
 /// Oracle: law. Translating every input by the same vector translates every
@@ -117,10 +85,9 @@ fn a_reused_scratch_reaches_the_same_verdict_as_a_fresh_one() {
 #[test]
 fn translating_the_whole_design_translates_the_report_and_changes_nothing_else() {
     const SHIFT: i64 = 1_000_000;
-    let env = Env::default();
     let set = two_rules();
 
-    let (origin, origin_runs) = run_once(&set, &env, &busy_layout(), &mut Scratch::default());
+    let (origin, origin_runs) = run_once(&set, &busy_layout());
     assert!(
         !origin.rule.is_empty(),
         "a translation invariance that holds over no rows holds over nothing"
@@ -136,7 +103,7 @@ fn translating_the_whole_design_translates_the_report_and_changes_nothing_else()
     }
     moved_layout.rect(B, SHIFT - 100, SHIFT - 100, SHIFT + 3_100, SHIFT + 3_100);
     let (moved_store, _ids) = moved_layout.finish();
-    let (moved, moved_runs) = run_once(&set, &env, &moved_store, &mut Scratch::default());
+    let (moved, moved_runs) = run_once(&set, &moved_store);
 
     assert_eq!(
         origin_runs, moved_runs,

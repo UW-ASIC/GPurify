@@ -1,9 +1,9 @@
 //! The rule set: one [`Rule`] per deck row, the deck parser, and the driver.
 
 use crate::drc::rules::{area, grid, overlay, patterning, spacing, via, width};
-use crate::drc::{Design, DrcError, Scratch};
+use crate::drc::{DrcError, Scratch};
 use crate::report::{record_run, LimitSense, RuleRun, Violations};
-use gpurify_geom::{Dbu, DbuArea, LayerId};
+use gpurify_geom::{Dbu, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
 
@@ -427,16 +427,10 @@ impl RuleSet {
 
     /// Run every rule; `out` and `runs` are cleared first, then `runs` gains one
     /// row per rule, in rule order.
-    pub fn run(
-        &self,
-        design: Design<'_>,
-        s: &mut Scratch,
-        out: &mut Violations,
-        runs: &mut Vec<RuleRun>,
-    ) {
+    pub fn run(&self, store: &GeometryStore, out: &mut Violations, runs: &mut Vec<RuleRun>) {
         *out = Violations::default();
         runs.clear();
-        let store = design.store;
+        let s = &mut Scratch::default();
         for &(id, rule) in &self.rules {
             let before = out.len();
             let (outcome, examined) = match rule {

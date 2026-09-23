@@ -13,8 +13,7 @@ pub mod topology;
 use gpurify_geom::GeometryStore;
 use topology::{DeviceTable, NetTable};
 
-/// Everything a rule reads about the layout, borrowed for one run. DRC reads
-/// only `store`.
+/// Everything an ERC rule reads about the layout, borrowed for one run.
 #[derive(Debug, Clone, Copy)]
 pub struct Design<'a> {
     pub store: &'a GeometryStore,

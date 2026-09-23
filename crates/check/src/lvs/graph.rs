@@ -4,16 +4,11 @@
 //! Data out: a [`Graph`] with CSR incidence in both directions.
 
 use crate::topology::device::{DeviceMeasure, DeviceParam};
-use crate::topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
+use crate::topology::{csr_run, DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::Grid;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::{StrId, StrTable};
-
-/// One row's run in a CSR offset column; a row past the table panics.
-fn csr_run(start: &[u32], row: usize) -> (usize, usize) {
-    (start[row] as usize, start[row + 1] as usize)
-}
 
 /// A row count as a `u32` id; panics rather than truncating.
 pub(crate) fn narrow(value: usize) -> u32 {

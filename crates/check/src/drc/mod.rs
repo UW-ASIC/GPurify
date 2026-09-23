@@ -7,7 +7,6 @@
 pub mod rules;
 pub mod ruleset;
 
-pub use crate::Design;
 pub use ruleset::{Rule, RuleSet};
 
 use gpurify_geom::connectivity::ComponentLabel;
@@ -41,7 +40,7 @@ pub enum DrcError {
 
 /// The buffers every rule refills; one `&mut` means rules run sequentially.
 #[derive(Debug, Default)]
-pub struct Scratch {
+pub(crate) struct Scratch {
     layer_a: ValidatedLayer,
     layer_b: ValidatedLayer,
     /// A boolean result: a merged layer.

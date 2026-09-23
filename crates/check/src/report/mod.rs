@@ -8,4 +8,5 @@ pub mod measure;
 pub mod violation;
 
 pub use measure::{LimitSense, Measurement};
-pub use violation::{record_run, Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
+pub(crate) use violation::record_run;
+pub use violation::{Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
