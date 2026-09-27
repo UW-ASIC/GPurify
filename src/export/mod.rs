@@ -1,9 +1,10 @@
-//! Writers: SPEF, DSPF and JSON.
+//! Writers: SPICE, SPEF, DSPF and JSON.
 //!
 //! Every writer appends to a caller's buffer, iterates the canonical order its
 //! table guarantees (never sorts), and formats floats through [`json::format_f64`].
 
 pub mod json;
+pub mod netlist;
 pub mod parasitic;
 
 /// A row index narrowed to the `u32` every id in this pipeline is made of.

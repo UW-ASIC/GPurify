@@ -14,7 +14,7 @@ use gpurify_extract::ParasiticNetwork;
 use gpurify_ingest::StrTable;
 
 /// Between a net's name and the node's index within it (`*DELIMITER :`).
-const DELIMITER: char = ':';
+pub(crate) const DELIMITER: char = ':';
 
 /// SPICE node zero, the far end of a ground capacitance in DSPF.
 const GROUND: &str = "0";
@@ -54,7 +54,10 @@ fn check_canonical(network: &ParasiticNetwork) -> Result<(), WriteError> {
 }
 
 /// The net a node sits on, and the node's index within that net's run.
-fn node_place(network: &ParasiticNetwork, node: NodeId) -> Result<(NetId, usize), WriteError> {
+pub(crate) fn node_place(
+    network: &ParasiticNetwork,
+    node: NodeId,
+) -> Result<(NetId, usize), WriteError> {
     let nets = &network.node_net[..];
     let row = node.0 as usize;
     let net = *nets.get(row).ok_or(WriteError::Unrepresentable(
@@ -111,7 +114,7 @@ const fn as_henries(value: Parasitic) -> Option<f64> {
 
 /// A SPICE card's prefix letter, counter slot, magnitude and unit suffix. The
 /// suffix matters: SPICE reads a bare number as SI.
-const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {
+pub(crate) const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {
     match value {
         Parasitic::Resistance(q) => ('R', 0, q.raw(), ""),
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => ('C', 1, q.raw(), "f"),
