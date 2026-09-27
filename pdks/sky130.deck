@@ -20,6 +20,13 @@
 #        (sheet resistances), and the stack diagram docs/_static/metal_stack.svg (dielectric k)
 #   [S7] SKY130 device details, docs/rules/device-details.rst in [S1]'s repository
 #        (operating voltages, device model names)
+#   [S8] sky130_fd_sc_hd technology LEF, sky130A/libs.ref/sky130_fd_sc_hd/techlef/
+#        sky130_fd_sc_hd__nom.tlef, open_pdks as volare build fa87f8f4bbcc7255b6f0c0fb506960f531ae2392
+#        (DCCURRENTDENSITY AVERAGE, Iavg_max at Tj = 90C; MAXIMUMDENSITY and its window)
+#   [S9] The same volare build's extraction decks: Magic sky130A/libs.tech/magic/sky130A.tech
+#        (ndiode, ndiodelvt: the diode layers and their substrate terminal) and KLayout
+#        sky130A/libs.tech/klayout/lvs/sky130.lvs (ndiode_terminal_n and the four
+#        pw2nd variants by hvi and lvtn)
 #
 # Rule ids are the manual's: nwell.1, licon.5a, m1.4. The n+/p+ implant rules,
 # which the manual groups as "n/psd.x", are nsd.x and psd.x here, as [S3] names them.
@@ -71,6 +78,7 @@ layer npc = gds(95, 20)
 layer areaid_ce = gds(81, 2)
 layer areaid_sc = gds(81, 4)
 layer areaid_ed = gds(81, 19)
+layer areaid_diode = gds(81, 23)
 layer pnp = gds(82, 44)
 layer tunm = gds(80, 20)
 
@@ -104,6 +112,11 @@ layer licon_pd = licon and psd
 layer licon_nt = licon and ntap
 layer licon_pt = licon and ptap
 layer licon_po = licon and poly_c
+# The p-substrate [S9]: every diffusion footprint outside the wells, one net
+# (`connect global`), tied to each p-tap outside deep n-well. A p-tap inside
+# dnwell sits in an isolated p-well, not the substrate, and stays off it.
+layer psub = ((diff or tap) not nwell) not dnwell
+layer psub_tie = ptap not dnwell
 # A via3 (via4) landing on capm (cap2m) is the MiM top-plate contact, not a met3 (met4) via.
 layer via3_m3 = via3 not capm
 layer via4_m4 = via4 not cap2m
@@ -194,6 +207,15 @@ layer rbody_nd = ((diff and diff_rs) and nsdm) not hvi
 layer rbody_pd = ((diff and diff_rs) and psdm) not hvi
 layer rbody_nd_hv = (diff and diff_rs) and nsdm and hvi
 layer rbody_pd_hv = (diff and diff_rs) and psdm and hvi
+# n+ diffusion diodes to the substrate [S9]: diff and nsdm under areaid.diode,
+# no poly, psdm or hvtp, outside both wells and away from areaid.ed; hvi and
+# lvtn pick the variant.
+layer ndiode = ((((diff and nsdm) and areaid_diode) not poly) not psdm) not hvtp
+layer ndiode_sub = ((ndiode not nwell) not dnwell).not_interacting(areaid_ed)
+layer diode_pw2nd_05v5 = (ndiode_sub not hvi) not lvtn
+layer diode_pw2nd_05v5_lvt = (ndiode_sub not hvi) and lvtn
+layer diode_pw2nd_05v5_nvt = (ndiode_sub and hvi) and lvtn
+layer diode_pw2nd_11v0 = (ndiode_sub and hvi) not lvtn
 layer cap_var_lvt = (var_lvt not hvi)
 layer cap_var_hvt = (var_hvt not hvi)
 layer cap_var_5v = var_channel and hvi
@@ -463,6 +485,23 @@ rule vgs.g5v0 gate_oxide(; models: g5_fets, max: 5.5V)
 rule vgs.esd_nfet gate_oxide(; models: ["sky130_fd_pr__esd_nfet_g5v0d10v5"], max: 5V)
 rule vds.d10v5 drain_source(; models: g5d10_fets, max: 11V)
 
+# Electromigration, average current at Tj = 90C [S8]: each metal per um of
+# width, paired with the cut below it per cut. via3/via4 are the metal vias,
+# not the MiM top-plate contacts.
+rule EM.met1_mcon em_current_density(met1, mcon; max_density: 2.8mA/um, max_current_per_cut: 0.36mA)
+rule EM.met2_via1 em_current_density(met2, via; max_density: 2.8mA/um, max_current_per_cut: 0.29mA)
+rule EM.met3_via2 em_current_density(met3, via2; max_density: 6.8mA/um, max_current_per_cut: 0.48mA)
+rule EM.met4_via3 em_current_density(met4, via3_m3; max_density: 6.8mA/um, max_current_per_cut: 0.48mA)
+rule EM.met5_via4 em_current_density(met5, via4_m4; max_density: 10.17mA/um, max_current_per_cut: 2.49mA)
+
+# Maximum metal density [S8]: 700um windows stepped by 70um, met1-met4 (met5
+# states none). The router's limit, not a sign-off rule ([S1] m1.pd.1-m4.pd.1
+# are recommended only), so an ERC warning over whole windows only.
+rule m1.density warning density_cmp(met1; window: 700um x 700um, step: 70um x 70um, min: none, max: 0.7, max_delta: none, partial_windows: false, cmp: none)
+rule m2.density warning density_cmp(met2; window: 700um x 700um, step: 70um x 70um, min: none, max: 0.7, max_delta: none, partial_windows: false, cmp: none)
+rule m3.density warning density_cmp(met3; window: 700um x 700um, step: 70um x 70um, min: none, max: 0.7, max_delta: none, partial_windows: false, cmp: none)
+rule m4.density warning density_cmp(met4; window: 700um x 700um, step: 70um x 70um, min: none, max: 0.7, max_delta: none, partial_windows: false, cmp: none)
+
 # --- Connectivity, bottom up ---
 connect conductors [nsd, psd, ntap, ptap, poly_c, li_c, met1, met2, met3, met4, met5]
 connect touch_within_layer
@@ -470,6 +509,8 @@ connect via licon_nd [nsd, li_c]
 connect via licon_pd [psd, li_c]
 connect via licon_nt [ntap, li_c]
 connect via licon_pt [ptap, li_c]
+connect global psub
+connect via psub_tie [ptap, psub]
 connect via licon_po [poly_c, li_c]
 connect via mcon [li_c, met1]
 connect via via [met1, met2]
@@ -515,6 +556,11 @@ device resistor rbody_pd model "sky130_fd_pr__res_generic_pd" terminals [psd, ps
 device resistor rbody_nd_hv model "sky130_fd_pr__res_generic_nd__hv" terminals [nsd, nsd]
 device resistor rbody_pd_hv model "sky130_fd_pr__res_generic_pd__hv" terminals [psd, psd]
 device resistor li_res model "sky130_fd_pr__res_generic_l1" terminals [li_c, li_c]
+# Diodes: anode (the substrate), then cathode.
+device diode diode_pw2nd_05v5 model "sky130_fd_pr__diode_pw2nd_05v5" terminals [psub, nsd]
+device diode diode_pw2nd_05v5_lvt model "sky130_fd_pr__diode_pw2nd_05v5_lvt" terminals [psub, nsd]
+device diode diode_pw2nd_05v5_nvt model "sky130_fd_pr__diode_pw2nd_05v5_nvt" terminals [psub, nsd]
+device diode diode_pw2nd_11v0 model "sky130_fd_pr__diode_pw2nd_11v0" terminals [psub, nsd]
 # MiM: top plate (the metal above, through the plate contact), then the bottom plate.
 device capacitor capm model "sky130_fd_pr__cap_mim_m3_1" terminals [met4, met3]
 device capacitor cap2m model "sky130_fd_pr__cap_mim_m3_2" terminals [met5, met4]
@@ -614,11 +660,11 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 #   ([S3] gives capm.2b as a bottom-plate spacing of 1.2um that needs same-net
 #   selection; capm.5 0.14um is via3 to capm, which conflicts with capm.4 over
 #   the plate, so it waits on a clearer source).
-# Devices: diodes (pw2nd, pd2nw), bipolars (npn, pnp), the native nfets
-#   (03v3_nvt, 05v0_nvt, areaid.le) and the 20V devices need the well or
-#   substrate as a net, which this deck does not connect; VPP capacitors are
-#   fixed cells with no marker a recogniser can use. MOS bulk terminals are left
-#   off for the same reason, so well_bias has nothing to examine and is not
+# Devices: the substrate is a net (psub), but the n-well is not, so pd2nw,
+#   the bipolars (npn, pnp) and the 20V devices still wait, as do the native
+#   nfets (03v3_nvt, 05v0_nvt, areaid.le). VPP capacitors are fixed cells
+#   with no marker a recogniser can use. MOS bulk terminals are left off until
+#   the n-well is a net too, so well_bias has nothing to examine and is not
 #   configured.
 # Latch-up: esd_latchup needs a guard-ring width and tap distance that [S1]
 #   does not state.
