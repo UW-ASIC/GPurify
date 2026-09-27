@@ -314,7 +314,10 @@ fn report_unpaired(graph: &Graph, mate: &[u32], side: Side, found: &mut Vec<Disc
         }
     }
     for (net, &partner) in mate[devices..].iter().enumerate() {
-        if partner == UNPAIRED {
+        // No terminal and no name: no netlist can state such a net, so it has
+        // nothing to pair with (`lvs.floating_net` reports it on the layout).
+        let invisible = graph.terminals_on(narrow(net)).is_empty() && graph.net_name[net].is_none();
+        if partner == UNPAIRED && !invisible {
             found.push(Discrepancy::UnpairedNet {
                 side,
                 net: narrow(net),

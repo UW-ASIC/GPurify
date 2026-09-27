@@ -391,3 +391,68 @@ fn the_pass_criterion_table() {
         assert_eq!(summary.passed(), passes, "{what}: {summary:?}");
     }
 }
+
+/// Oracle: construct-from-answer, on the shipped sky130 deck. One NMOS and no
+/// p-tap: the substrate under the diffusion is a net of its own (`connect
+/// global psub`) with no terminal (bulks are off) and no label. It is always
+/// there and floats only in the model, and no netlist can name it, so LVS
+/// neither pairs it nor calls it floating: the NMOS matches its reference.
+/// Reported by the Philis session.
+#[test]
+fn a_substrate_with_nothing_on_it_does_not_fail_lvs() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/pdks/sky130.deck"))
+        .expect("the shipped deck is readable");
+    let mut strings = StrTable::default();
+    let deck = parse_deck(&source, grid(), &mut strings).expect("sky130.deck parses");
+    let id = |name| deck.layers.id(&strings, name).expect("a sky130 layer");
+    let mut layout = LayoutBuilder::new(deck.layers.len());
+    layout.rect(id("diff"), 0, 0, 1_000, 1_000);
+    layout.rect(id("nsdm"), -200, -200, 1_200, 1_200);
+    layout.rect(id("poly"), 450, -200, 600, 1_200);
+    let (base, _) = layout.finish();
+
+    let mut bytes = Vec::new();
+    gpurify_testgen::gds::write_store(&base, &deck.layers, "TOP", &mut bytes).expect("writable");
+    let (store, provenance) = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)
+        .expect("parses")
+        .flatten(
+            &deck,
+            &strings,
+            gpurify_ingest::layout::UnknownLayers::Reject,
+        )
+        .expect("reads back");
+    gpurify::engine::pipeline::intern_report_ids(&mut strings);
+    let nets: Vec<StrId> = ["d", "g", "s"].map(|n| strings.intern(n)).into();
+    let reference = Netlist {
+        subckt_name: vec![strings.intern("top")],
+        subckt_port_start: vec![0, 0],
+        subckt_device_start: vec![0, 1],
+        device_model: vec![strings.intern("sky130_fd_pr__nfet_01v8")],
+        device_kind: vec![DeviceKind::Mos],
+        device_terminal_start: vec![0, 3],
+        terminal_net: vec![RefNetId(0), RefNetId(1), RefNetId(2)],
+        device_param_start: vec![0, 0],
+        net_name: nets,
+        net_subckt: vec![SubcktId(0); 3],
+        ..Netlist::default()
+    };
+    let loaded = Loaded {
+        strings,
+        grid: grid(),
+        deck,
+        store,
+        provenance,
+        reference: Some(reference),
+        intent: None,
+    };
+    let extracted = extract(&loaded).expect("extracts");
+    let (out, summary) =
+        run_checks(&loaded, &extracted, &options(Checks { lvs: true, ..NONE })).expect("runs");
+    assert_eq!(summary.lvs, StageStatus::Ran);
+    assert!(matches!(out.lvs, Some(Verdict::Match)), "{:?}", out.lvs);
+    assert!(
+        out.violations.is_empty(),
+        "no floating net: {:?}",
+        out.violations.rule
+    );
+}
