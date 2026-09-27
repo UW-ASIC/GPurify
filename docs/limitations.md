@@ -55,15 +55,20 @@ None has been compared against foundry signoff results.
   two layers or on wells (no deck connects wells as nets), rules that depend
   on direction, shape-class and exact-count rules, gate-length rules, and
   maximum areas. Each deck also lists the manual rules it leaves out, and why.
-- Diodes, bipolar transistors, well resistors and MOS capacitors whose
-  terminal is a well or the substrate are not recognised, because no deck
-  connects wells or the substrate as nets. For the same reason no transistor
-  has a bulk terminal, so no deck carries `well_bias`.
+- Devices whose terminal is a well are not recognised, because no deck
+  connects a well as a net; sky130 connects the p-substrate (`connect global
+  psub`), so its pw2nd diodes are, but not pd2nw or the bipolars. No
+  transistor has a bulk terminal yet, so no deck carries `well_bias`. The
+  substrate carries no modelled current: a supply reached only through it is
+  an island to the power grid, and a field solve refuses a net that holds it.
 - No deck carries `esd_latchup`: none of the manuals states a pad guard-ring
   width and tap distance in the form the rule takes.
 - `gate_oxide` and `drain_source` use the operating voltages the PDK
   documents (sky130's model limits, the nominal supplies for gf180mcu and
   IHP), not an absolute maximum rating.
+- sky130: maximum metal density (met1-met4, 70% in 700um windows) is the
+  standard-cell tech LEF's router limit, not a manual rule, so it is an ERC
+  warning over whole windows, not a DRC error.
 - sky130: the periphery rules also apply inside SRAM cores (`areaid.ce`).
   The implant-enclosure rules nsd/psd.5a and 5b on diffusion and taps that
   butt each other are measured straight out from each edge (see

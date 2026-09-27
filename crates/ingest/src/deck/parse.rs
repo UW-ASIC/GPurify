@@ -859,7 +859,7 @@ impl<'a> Parser<'a> {
     }
 
     fn connect(&mut self) -> R<()> {
-        let (what, span) = self.ident("conductors, touch_within_layer, via or label")?;
+        let (what, span) = self.ident("conductors, touch_within_layer, global, via or label")?;
         match what.as_str() {
             "conductors" => {
                 let layers = self.layer_list()?;
@@ -870,6 +870,10 @@ impl<'a> Parser<'a> {
                     return Err(self.err(span, "touch_within_layer is already stated"));
                 }
                 self.out.connectivity.intra_layer_touch = true;
+            }
+            "global" => {
+                let layer = self.layer_word()?;
+                self.out.connectivity.global.push(layer);
             }
             "via" => {
                 let layer = self.layer_word()?;
@@ -892,7 +896,7 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(self.err(
                     span,
-                    &format!("unknown connect `{what}`; expected conductors, touch_within_layer, via or label"),
+                    &format!("unknown connect `{what}`; expected conductors, touch_within_layer, global, via or label"),
                 ))
             }
         }

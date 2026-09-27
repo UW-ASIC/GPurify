@@ -273,3 +273,72 @@ connect touch_within_layer
     assert_ne!(a, r, "an island inside the hole does not touch the ring");
     assert_ne!(b, r, "an island inside the hole does not touch the ring");
 }
+
+/// Oracle: construct-from-answer, on the shipped sky130 deck. A 1 um x 1 um n+
+/// diffusion under `areaid.diode` is a `pw2nd_05v5` diode: its anode is the
+/// substrate net, which the p-tap beside it joins through `psub_tie`, and its
+/// area is the junction's, 1 um^2. A p-tap inside deep n-well sits in an
+/// isolated p-well, so it stays off the substrate net.
+#[test]
+fn a_sky130_pw2nd_diode_has_its_anode_on_the_substrate() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_check::topology::{DeviceId, DeviceTable, NetTable};
+
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/pdks/sky130.deck"))
+        .expect("the shipped deck is readable");
+    let mut strings = StrTable::default();
+    let deck = parse_deck(&source, grid(), &mut strings).expect("sky130.deck parses");
+    let id = |name| deck.layers.id(&strings, name).expect("a sky130 layer");
+
+    let mut layout = LayoutBuilder::new(deck.layers.len());
+    layout.rect(id("diff"), 0, 0, 1_000, 1_000);
+    layout.rect(id("nsdm"), -200, -200, 1_200, 1_200);
+    layout.rect(id("areaid_diode"), 0, 0, 1_000, 1_000);
+    layout.rect(id("tap"), 2_000, 0, 2_500, 1_000);
+    layout.rect(id("psdm"), 1_900, -100, 2_600, 1_100);
+    // The isolated p-well's tap, well away inside deep n-well.
+    layout.rect(id("dnwell"), 10_000, 0, 16_000, 6_000);
+    layout.rect(id("tap"), 12_000, 2_000, 12_500, 3_000);
+    layout.rect(id("psdm"), 11_900, 1_900, 12_600, 3_100);
+    let (base, _) = layout.finish();
+    let store = round_trip(&base, &deck);
+
+    let mut nets = NetTable::default();
+    gpurify_check::topology::net::extract_nets_into(&store, &deck.connectivity, &mut nets);
+    let mut devices = DeviceTable::default();
+    gpurify_check::topology::device::recognise_into(&store, &nets, &deck.devices, &mut devices);
+
+    let net_on = |layer, xlo| {
+        let row = store
+            .polys_on_layer(id(layer))
+            .find(|&row| store.poly_bbox(PolyId(row)).xlo.raw() == xlo)
+            .expect("a shape at that x");
+        nets.net_of(PolyId(row))
+    };
+    assert_eq!(devices.len(), 1, "one diode, nothing else");
+    assert_eq!(
+        Some(devices.model[0]),
+        strings.get("sky130_fd_pr__diode_pw2nd_05v5")
+    );
+    let (terminals, _) = devices.terminals_of(DeviceId(0));
+    assert_eq!(
+        terminals[0],
+        net_on("ptap", 2_000),
+        "anode: the substrate, joined by the p-tap"
+    );
+    assert_eq!(terminals[1], net_on("nsd", 0), "cathode: the n+ diffusion");
+    assert_ne!(terminals[0], terminals[1]);
+    assert_ne!(
+        net_on("ptap", 12_000),
+        terminals[0],
+        "a p-tap in deep n-well is an isolated p-well, not the substrate"
+    );
+    assert_eq!(
+        devices.params_of(DeviceId(0)),
+        &[(
+            DeviceParam::Area,
+            DeviceMeasure::Area(gpurify_geom::DbuArea::new(1_000_000))
+        )],
+        "the junction's area"
+    );
+}

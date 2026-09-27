@@ -3,13 +3,16 @@
 //! Data in: nets, devices, [`NetFacts`]. Data out: violations and one run per
 //! row. Nothing here re-derives connectivity.
 
+use crate::drc::rules::{owners_of, LayerRects, SortedRects};
 use crate::erc::facts::{NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
-use crate::erc::{centre, first_vertex, push_net_violations, record_run, Design, Scratch};
+use crate::erc::{first_vertex, push_net_violations, record_run, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId, PortTable, TerminalRole};
-use gpurify_geom::ops::{winding_of, Winding};
-use gpurify_geom::Dbu;
+use gpurify_geom::boolean::union_into;
+use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::DbuArea;
 use gpurify_geom::{LayerId, PolyId};
 
 /// A gate net with nothing driving it: its role mask is exactly
@@ -95,8 +98,10 @@ pub fn check_floating_gate(
     }
 }
 
-/// Flag every well ring (counter-clockwise) that no tap lies in. Exact
-/// containment; a hole ring is neither examined nor tied by a tap inside it.
+/// Flag every well that no tap lies in. A well is a figure of the merged well
+/// layer, so bands drawn abutting are one well. A tap ties the figure that
+/// covers all of its area (exact: a tap in a hole or a notch ties nothing).
+/// `examined` counts wells; a violation names the well's lowest drawn row.
 pub fn check_floating_well(
     design: Design<'_>,
     table: &FloatingWellTable,
@@ -104,98 +109,70 @@ pub fn check_floating_well(
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    let mut ring_well: Vec<bool> = Vec::new();
-    let mut ring_order: Vec<u32> = Vec::new();
-    let mut tied: Vec<bool> = Vec::new();
+    let mut merged = ValidatedLayer::default();
+    let (mut well_rects, mut well_start) = (Vec::new(), Vec::new());
+    let (mut tap_rects, mut tap_start) = (Vec::new(), Vec::new());
+    let mut drawn = LayerRects::default();
 
     for row in 0..table.head.len() {
         let before = out.len();
         let rule = table.head.rule[row];
         let well_layer = table.well[row];
+        let store = design.store;
 
-        // A tap is only tested for containment, so its box is enough.
-        scratch.boxes.clear();
-        scratch
-            .boxes
-            .extend_from_slice(design.store.layer_bboxes(table.tap[row]));
+        if validate_layer_into(store, well_layer, &mut scratch.layer_a).is_err()
+            || validate_layer_into(store, table.tap[row], &mut scratch.layer_b).is_err()
+            || union_into(&scratch.layer_a, &ValidatedLayer::default(), &mut merged).is_err()
+        {
+            record_run(runs, out, before, rule, Outcome::Refused, 0);
+            continue;
+        }
+        decompose_into(&merged, &mut well_rects, &mut well_start);
+        decompose_into(&scratch.layer_b, &mut tap_rects, &mut tap_start);
+        let span = |start: &[u32], i: usize| start[i] as usize..start[i + 1] as usize;
+        let wells = merged.len();
+        let by_well = SortedRects::new(
+            (0..wells)
+                .flat_map(|w| {
+                    well_rects[span(&well_start, w)]
+                        .iter()
+                        .map(move |&r| (r, w))
+                })
+                .collect(),
+        );
 
-        // Row `k` is store row `polys.start + k`.
-        let polys = design.store.polys_on_layer(well_layer);
-        let boxes = design.store.layer_bboxes(well_layer);
-        let ring_count = polys.len();
-
-        // A separate pass: the hole puncturing a well may sit at a later row.
-        ring_well.clear();
-        ring_well.extend(polys.clone().map(|id| {
-            let (xs, ys) = design.store.poly_verts(PolyId(id));
-            winding_of(xs, ys) == Some(Winding::CounterClockwise)
-        }));
-
-        // Stab order: ascending low x, ties by row. The prefix with
-        // `xlo <= p.x` is a superset of the rings containing `p`.
-        ring_order.clear();
-        ring_order.extend(0..u32::try_from(ring_count).expect("a store row is a u32"));
-        ring_order.sort_unstable_by_key(|&k| (boxes[k as usize].xlo.raw(), k));
-
-        tied.clear();
-        tied.resize(ring_count, false);
-
-        // Each tap ties the innermost ring (smallest box) holding its centre;
-        // a tap in a hole ties the hole, not the well.
-        for &tap in &scratch.boxes {
-            let probe = centre(tap);
-            let end = ring_order.partition_point(|&k| boxes[k as usize].xlo.raw() <= probe.x.raw());
-            let mut best = u32::MAX;
-            let mut best_area = 0i128;
-            for &k in &ring_order[..end] {
-                let box_ = boxes[k as usize];
-                if probe.x.raw() > box_.xhi.raw()
-                    || probe.y.raw() < box_.ylo.raw()
-                    || probe.y.raw() > box_.yhi.raw()
-                {
-                    continue;
-                }
-                // No smaller than the best cannot be inner to it.
-                let area = box_.area().raw();
-                if best != u32::MAX && area >= best_area {
-                    continue;
-                }
-                let (xs, ys) = design.store.poly_verts(PolyId(polys.start + k));
-                if !inside_ring(xs, ys, probe.x, probe.y) {
-                    continue;
-                }
-                best = k;
-                best_area = area;
-            }
-            if best == u32::MAX {
+        let mut tied = vec![false; wells];
+        for tap in 0..scratch.layer_b.len() {
+            let mine = &tap_rects[span(&tap_start, tap)];
+            let Some(&first) = mine.first() else {
                 continue;
+            };
+            let area = covered_area(mine);
+            for (_, w) in by_well.overlapping(first) {
+                let theirs = &well_rects[span(&well_start, w)];
+                let covered = mine
+                    .iter()
+                    .fold(DbuArea::new(0), |sum, &r| sum + clipped_area(theirs, r));
+                tied[w] |= covered == area;
             }
-            // The whole tap box must be inside, and a hole ties nothing.
-            tied[best as usize] |= ring_well[best as usize] && boxes[best as usize].contains(tap);
         }
 
-        // Store order, so the report follows the layer.
-        let mut examined = 0u64;
-        for k in 0..ring_count {
-            if !ring_well[k] {
+        drawn.build(store, well_layer, &scratch.layer_a);
+        for (w, well) in owners_of(&merged, &drawn).into_iter().enumerate() {
+            if tied[w] {
                 continue;
             }
-            examined += 1;
-            if tied[k] {
-                continue;
-            }
-            let well = PolyId(polys.start + u32::try_from(k).expect("a store row is a u32"));
             out.push(Violation {
                 rule,
                 layer: well_layer,
                 severity: table.head.severity[row],
-                at: first_vertex(design.store, well),
+                at: first_vertex(store, well),
                 measured: Measurement::Count(0),
                 limit: Measurement::Count(1),
                 shapes: (well, None),
             });
         }
-        record_run(runs, out, before, rule, Outcome::Ran, examined);
+        record_run(runs, out, before, rule, Outcome::Ran, wells as u64);
     }
 }
 
@@ -316,32 +293,4 @@ pub fn check_unconnected_pin(
         }
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
-}
-
-/// Whether a point lies strictly inside a ring: even-odd ray cast toward +x,
-/// exact in `i128`.
-///
-/// Boundary follows the half-open crossing rule, unlike `supply::point_in_region`
-/// (boundary inclusive): a tap on a well's edge must not tie it. Keep both.
-fn inside_ring(xs: &[Dbu], ys: &[Dbu], px: Dbu, py: Dbu) -> bool {
-    let n = xs.len();
-    if n < 3 {
-        return false;
-    }
-    let ys = &ys[..n];
-    let mut crossings = 0u32;
-    let mut ax = xs[n - 1];
-    let mut ay = ys[n - 1];
-    for i in 0..n {
-        let (bx, by) = (xs[i], ys[i]);
-        // `(b - a) x (p - a)`, widened: operands reach 2^41.
-        let side = i128::from(bx.raw() - ax.raw()) * i128::from(py.raw() - ay.raw())
-            - i128::from(by.raw() - ay.raw()) * i128::from(px.raw() - ax.raw());
-        let up = by.raw() > ay.raw();
-        let straddles = (ay.raw() > py.raw()) != (by.raw() > py.raw());
-        crossings += u32::from(straddles & ((side > 0) == up));
-        ax = bx;
-        ay = by;
-    }
-    crossings & 1 == 1
 }

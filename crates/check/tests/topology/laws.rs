@@ -118,6 +118,7 @@ fn connectivity() -> Connectivity {
         via_cut: vec![CUT],
         via_connects: vec![(M1, M2)],
         intra_layer_touch: true,
+        global: Vec::new(),
         label_layer: Vec::new(),
         label_names: Vec::new(),
     }

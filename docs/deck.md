@@ -326,6 +326,17 @@ connect label met1_label names met1                # text on met1_label names th
 Name your nets with text labels in the layout. LVS, SPEF and the intent file
 all refer to nets by those names.
 
+```
+connect global psub                                # every psub shape is one net: the substrate
+connect via psub_tie [ptap, psub]                  # taps join it like any cut
+```
+
+A global layer is one net however many shapes it holds, and a device terminal
+can name it (a diode's anode, later a MOS bulk). It is net-only, not a
+conductor: it carries no modelled current and no parasitics, so neither it nor
+a via into it needs a sheet resistance, and it cannot also be listed in
+`connect conductors`.
+
 ## Devices
 
 ```

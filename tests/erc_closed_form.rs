@@ -54,6 +54,9 @@ struct Layers {
     met2: LayerId,
     poly: LayerId,
     mk: LayerId,
+    /// A net-only layer and a cut into it, when the rules declare them.
+    sub: Option<LayerId>,
+    tie: Option<LayerId>,
 }
 
 /// What one ERC run reported.
@@ -109,6 +112,8 @@ fn erc(
         met2: layer("met2"),
         poly: layer("poly"),
         mk: layer("mk"),
+        sub: deck.layers.id(&strings, "sub"),
+        tie: deck.layers.id(&strings, "tie"),
     };
     let mut layout = LayoutBuilder::new(deck.layers.len());
     let labels = draw(layers, &mut layout);
@@ -241,6 +246,60 @@ fn ir_drop_on_a_series_ladder_is_ohms_law_and_strict_at_the_limit() {
             assert_eq!(millivolts(bound), limit);
         }
     }
+}
+
+/// A supply ring is one polygon with a hole, and the store keeps the hole as a
+/// clockwise row of its own. That row is no conductor, so it is no grid node:
+/// made one, nothing links it and the whole ERC stage is refused as an island.
+/// Reported by the Philis session (a VDD guard ring).
+#[test]
+fn a_supply_ring_with_a_hole_solves() {
+    let report = erc(
+        "rule ir ir_drop()\n",
+        &intent(
+            1800.0,
+            &[("VDD", "power")],
+            r#"{"net":"VDD","max_drop_mv":100,"budget_current_ua":1000}"#,
+        ),
+        |l, layout| {
+            let ring = layout.rect(l.met1, 0, 0, 4_000, 4_000);
+            layout.shape(
+                l.met1,
+                &gpurify_testgen::shapes::hole(1_000, 1_000, 3_000, 3_000),
+            );
+            load_at(l, layout, 3_000, 0);
+            vec![(ring, "VDD")]
+        },
+    );
+    let run = report.run("ir");
+    assert_eq!(run.outcome, Outcome::Ran);
+    assert_eq!(run.examined, 2, "the pad and the load tap, not the hole");
+}
+
+/// A cut into a global (net-only) layer joins the net but is no grid link: the
+/// substrate has no node, so a tie from the rail into it must not become one.
+/// Every per-net network is built for `p2p_resistance`, so this ran into a
+/// shape index the network never assigned. Reported by the Philis session (a
+/// p-tap ring tied to sky130's `psub`).
+#[test]
+fn a_via_into_a_global_layer_is_no_grid_link() {
+    let report = erc(
+        "layer sub = gds(6, 0)\nlayer tie = gds(7, 0)\nconnect global sub\nconnect via tie [met1, sub]\nrule ir ir_drop()\n",
+        &intent(
+            1800.0,
+            &[("VDD", "power")],
+            r#"{"net":"VDD","max_drop_mv":100,"budget_current_ua":1000}"#,
+        ),
+        |l, layout| {
+            let (sub, tie) = (l.sub.expect("declared"), l.tie.expect("declared"));
+            let bar = layout.rect(l.met1, 0, 0, 4_000, 1_000);
+            layout.rect(sub, 0, 0, 4_000, 1_000);
+            layout.rect(tie, 200, 200, 400, 400);
+            load_at(l, layout, 3_000, 0);
+            vec![(bar, "VDD")]
+        },
+    );
+    assert_eq!(report.run("ir").outcome, Outcome::Ran);
 }
 
 /// Two 12 um x 1 um bars, met2 (pad, centre x = 6000) above met1, joined by

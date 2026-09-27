@@ -4,7 +4,7 @@
 //! produces violations and exactly one `RuleRun` per configured row.
 
 use crate::erc::facts::{IntentMap, NetFacts};
-use crate::erc::power::{NetNetworks, Solved};
+use crate::erc::power::{NetNetworks, Power};
 use crate::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
@@ -108,7 +108,7 @@ pub struct RunInputs<'a> {
     pub voltage: &'a NetVoltage,
     pub networks: &'a NetNetworks,
     /// The solved supply grid, or `None` when intent declared no supplies.
-    pub power: Option<Solved<'a>>,
+    pub power: Power<'a>,
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
     pub grid: Grid,

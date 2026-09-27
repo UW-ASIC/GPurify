@@ -151,8 +151,9 @@ fn graph_violation(
     }
 }
 
-/// Nets with no device terminal on them; a named (port) net is not floating.
-/// Panics when a device terminal names a net past `nets`.
+/// Nets with no device terminal on them; a named (port) net is not floating,
+/// nor is the substrate alone (a global-layer net: always there, it floats
+/// only in the model). Panics when a device terminal names a net past `nets`.
 fn check_floating_nets(
     nets: &NetTable,
     devices: &DeviceTable,
@@ -169,7 +170,8 @@ fn check_floating_nets(
     let mut lowest: Vec<PolyId> = (0..net_count)
         .map(|row| {
             let net = NetId(row);
-            let named = u32::from(ports.name_of(net).is_some()).wrapping_neg();
+            let named =
+                u32::from(ports.name_of(net).is_some() || nets.is_global_only(net)).wrapping_neg();
             PolyId(first_poly(nets, net).0 | named)
         })
         .collect();

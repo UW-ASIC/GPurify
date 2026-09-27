@@ -41,8 +41,9 @@ pub struct Inputs<'a> {
 }
 
 /// Classify nets, resolve intent, build the per-net networks and the supply
-/// grid, solve it, then run every row. An error means no rule ran: the grid
-/// could not be built or solved, and nothing was written to `out` or `runs`.
+/// grid, solve it, then run every row. A failed solve refuses only the rows
+/// that read it. An error means no rule ran: a network could not be built,
+/// and nothing was written to `out` or `runs`.
 pub fn check(
     rules: &RuleSet,
     inputs: Inputs<'_>,
@@ -86,12 +87,13 @@ pub fn check(
     let mut scratch = Scratch::default();
     let mut solution = PowerSolution::default();
     let power = if grid.is_empty() {
-        None
+        Ok(None)
     } else {
-        power::solve_into(&grid, &mut scratch.solve, &mut solution)?;
-        Some(Solved {
-            grid: &grid,
-            solution: &solution,
+        power::solve_into(&grid, &mut scratch.solve, &mut solution).map(|()| {
+            Some(Solved {
+                grid: &grid,
+                solution: &solution,
+            })
         })
     };
 

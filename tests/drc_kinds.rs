@@ -577,3 +577,21 @@ fn a_ring_is_enclosed_by_a_ring_drawn_as_bands() {
     short.extend(ring("nsdm", 125, 100));
     assert_eq!(run(deck, &short).of("E"), vec![(len(100), len(125))]);
 }
+
+/// Width is the merged figure's: a 170 nm strip drawn inside a 1 um square adds
+/// no width of its own, while the same strip alone is too narrow. Reported by
+/// the Philis session (an implant fill drawn inside a band).
+#[test]
+fn a_narrow_shape_drawn_inside_a_wide_one_is_not_a_width_violation() {
+    let deck = "grid 1nm\nlayer psdm = gds(94, 20)\nrule psd.1 width(psdm) >= 380nm\n";
+    let nested = run(
+        deck,
+        &[
+            ("psdm", [0, 0, 1_000, 1_000]),
+            ("psdm", [200, 0, 370, 1_000]),
+        ],
+    );
+    assert_eq!(nested.of("psd.1"), vec![]);
+    let alone = run(deck, &[("psdm", [200, 0, 370, 1_000])]);
+    assert_eq!(alone.of("psd.1"), vec![(len(170), len(380))]);
+}

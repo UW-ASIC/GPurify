@@ -65,10 +65,9 @@ fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
 }
 
 /// Min width and notch (`material_between == false`). One violation per
-/// offending figure.
-///
-/// A notch is measured on the self-merged layer (touching rectangles are one U);
-/// a width on the rows as drawn. `examined` is the pre-merge polygon count.
+/// offending figure of the self-merged layer: touching rectangles are one U,
+/// and a rectangle drawn inside another adds no width of its own. `examined`
+/// is the pre-merge polygon count.
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
@@ -82,23 +81,14 @@ pub(crate) fn facing(
         return REFUSED;
     };
     let polys = drawn.len() as u64;
-    if !material_between && union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err()
-    {
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
         return REFUSED;
     }
     // A merged figure's own provenance is a row of the boolean's scratch store.
-    let (figures, owners) = if material_between {
-        (drawn, Vec::new())
-    } else {
-        s.rects_a.build(store, layer, drawn);
-        (&s.layer_out, owners_of(&s.layer_out, &s.rects_a))
-    };
-    for idx in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
-        let poly = figures.get(idx);
-        let owner = owners
-            .get(idx as usize)
-            .copied()
-            .unwrap_or_else(|| poly.provenance());
+    s.rects_a.build(store, layer, drawn);
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    for (idx, owner) in (0..).zip(owners) {
+        let poly = s.layer_out.get(idx);
         // A convex shape has no notch, and that is not a violation.
         let Some((measured, at)) = narrowest_facing(poly, material_between, &mut s.facing) else {
             continue;

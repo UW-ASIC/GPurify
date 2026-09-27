@@ -300,6 +300,10 @@ pub struct Connectivity {
     pub via_connects: Vec<(LayerId, LayerId)>,
     /// Whether shapes on the same conductor layer connect by touching.
     pub intra_layer_touch: bool,
+    /// Net-only layers, each one net however many shapes it holds (the
+    /// substrate). Not conductors: they carry no modelled current and no
+    /// parasitics, so they need no sheet resistance, nor do vias into them.
+    pub global: Vec<LayerId>,
     /// One row per net-label layer: the layer a `TEXT` is drawn on...
     pub label_layer: Vec<LayerId>,
     /// ...and the one conductor whose shapes it names.
@@ -472,9 +476,19 @@ fn build_connectivity(
             .map(|via| (layer(&via.connects.0), layer(&via.connects.1)))
             .collect(),
         intra_layer_touch: declared.intra_layer_touch,
+        global: declared.global.iter().map(|name| layer(name)).collect(),
         label_layer: Vec::with_capacity(declared.labels.len()),
         label_names: Vec::with_capacity(declared.labels.len()),
     };
+    if let Some(name) = declared
+        .global
+        .iter()
+        .find(|name| connectivity.conductors.contains(&layer(name)))
+    {
+        return Err(DeckError::Malformed(format!(
+            "connect global {name}: a global layer is net-only, not a conductor"
+        )));
+    }
     for label in &declared.labels {
         let names = layer(&label.names);
         // Fail closed here rather than as `topology::port`'s `OrphanLabel`: at
@@ -595,6 +609,7 @@ enum ParamSrc {
 struct ConnectivitySrc {
     conductors: Vec<String>,
     intra_layer_touch: bool,
+    global: Vec<String>,
     vias: Vec<ViaSrc>,
     labels: Vec<LabelSrc>,
 }

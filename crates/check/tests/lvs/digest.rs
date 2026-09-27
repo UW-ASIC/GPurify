@@ -1,7 +1,9 @@
 //! Byte-identity lock on the whole comparison: every verdict of a seeded corpus,
 //! folded into one hash twice: as listed, and with each report's lines sorted.
 //! Class numbering orders `ClassImbalance`, so a numbering change moves only the
-//! first; a change in what is reported moves both.
+//! first; a change in what is reported moves both. Last moved when a net with
+//! no terminal and no name stopped being reported unpaired: the same 188 of
+//! 325 verdicts match, and only those lines left the reports.
 
 use crate::common::{chain, differential_pair, permute, random_graph, GraphBuilder, NCH, PCH};
 use gpurify_check::lvs::{compare, CompareOptions, Graph, Verdict};
@@ -88,14 +90,14 @@ fn the_seeded_corpus_verdicts_are_unchanged() {
     assert_eq!(verdicts.len(), 325);
     assert_eq!(
         digest(&verdicts, |v| format!("{v:?}")),
-        7_113_623_324_654_528_209
+        12_557_331_768_539_182_788
     );
 }
 
 /// What each report says, whatever its order.
 #[test]
 fn the_seeded_corpus_verdicts_say_the_same_in_any_order() {
-    assert_eq!(digest(&corpus(), canonical), 4_005_297_915_974_074_596);
+    assert_eq!(digest(&corpus(), canonical), 7_852_899_496_541_594_499);
 }
 
 /// `cargo test --release -p gpurify-check --test lvs dump_corpus -- --ignored`

@@ -183,11 +183,17 @@ fn every_current_carrying_layer_has_a_sheet_resistance() {
         let (deck, strings) = load(&path);
         let deck_name = name_of(&path);
 
-        let carrying = deck
-            .connectivity
-            .conductors
-            .iter()
-            .chain(&deck.connectivity.via_cut);
+        // A cut into a global (net-only) layer carries nothing, as in erc::power.
+        let connectivity = &deck.connectivity;
+        let global = |layer: &LayerId| connectivity.global.contains(layer);
+        let carrying = connectivity.conductors.iter().chain(
+            connectivity
+                .via_cut
+                .iter()
+                .zip(&connectivity.via_connects)
+                .filter(|(_, (a, b))| !global(a) && !global(b))
+                .map(|(cut, _)| cut),
+        );
 
         for &layer in carrying {
             let name = layer_name(&deck, &strings, layer);
@@ -262,7 +268,11 @@ fn every_via_joins_two_declared_conductors() {
         let (deck, strings) = load(&path);
         let deck_name = name_of(&path);
 
-        let is_conductor = |layer: LayerId| deck.connectivity.conductors.contains(&layer);
+        // A global layer conducts in extraction too, as one net.
+        let is_conductor = |layer: LayerId| {
+            deck.connectivity.conductors.contains(&layer)
+                || deck.connectivity.global.contains(&layer)
+        };
 
         for (&cut, &(lower, upper)) in deck
             .connectivity
