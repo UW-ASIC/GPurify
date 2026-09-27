@@ -9,6 +9,7 @@ use crate::erc::rules::{antenna, domain, electrical, reliability, supply, topolo
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
+use crate::topology::PortTable;
 use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec, RuleTable};
@@ -100,6 +101,8 @@ pub struct RuleSet {
 pub struct RunInputs<'a> {
     pub design: Design<'a>,
     pub facts: &'a NetFacts,
+    /// Labelled nets: driven from outside the cell.
+    pub ports: &'a PortTable,
     pub intent: &'a IntentMap,
     /// What each net can reach from the declared supplies.
     pub voltage: &'a NetVoltage,
@@ -529,7 +532,9 @@ impl RuleSet {
                 }
                 "floating_gate" => {
                     row.layers(0)?;
+                    let labels_are_ports = row.flag("labels_are_ports", false)?;
                     row.head(&mut set.floating_gate.head)?;
+                    set.floating_gate.labels_are_ports.push(labels_are_ports);
                 }
                 "floating_well" => {
                     let layers = row.layers(2)?;
@@ -698,6 +703,7 @@ impl RuleSet {
         let RunInputs {
             design,
             facts,
+            ports,
             intent,
             voltage,
             networks,
@@ -707,7 +713,7 @@ impl RuleSet {
             operating_temperature,
         } = inputs;
 
-        topology::check_floating_gate(design, facts, &self.floating_gate, out, runs);
+        topology::check_floating_gate(design, facts, ports, &self.floating_gate, out, runs);
         topology::check_floating_well(design, &self.floating_well, scratch, out, runs);
         topology::check_multiple_drivers(design, &self.multiple_drivers, scratch, out, runs);
         topology::check_unconnected_pin(design, facts, &self.unconnected_pin, out, runs);

@@ -55,7 +55,7 @@ rule em_current_density em_current_density(li, met1, met2; max_density: 1000A/m,
 rule met1.electromigration electromigration(met1; max_density: 1000A/m, max_current_per_cut: 100uA, blech_limit: 10uA, reference_temperature: 383.15K, activation_energy: 0.9eV, current_exponent: 1)
 rule esd_topological esd_topological(met1; clamps: ["nfet_01v8"])
 rule esd_latchup esd_latchup(met1, nwell; min_guard_ring_width: 1000nm, max_tap_distance: 3000nm, clamps: ["nfet_01v8"])
-rule floating_gate floating_gate()
+rule floating_gate floating_gate(; labels_are_ports: false)
 rule nwell.floating_well floating_well(nwell, nsdm)
 rule hv_domain hv_domain(; max_delta: 1800mV, isolation: none)
 rule ir_drop ir_drop()

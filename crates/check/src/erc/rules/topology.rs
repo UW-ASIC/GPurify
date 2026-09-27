@@ -7,7 +7,7 @@ use crate::erc::facts::{NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{centre, first_vertex, push_net_violations, record_run, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::{DeviceId, NetId, TerminalRole};
+use crate::topology::{DeviceId, NetId, PortTable, TerminalRole};
 use gpurify_geom::ops::{winding_of, Winding};
 use gpurify_geom::Dbu;
 use gpurify_geom::{LayerId, PolyId};
@@ -17,6 +17,9 @@ use gpurify_geom::{LayerId, PolyId};
 #[derive(Debug, Default)]
 pub struct FloatingGateTable {
     pub head: RuleHead,
+    /// Per row: a labelled net is a port, driven from outside the cell. Off by
+    /// default, since a layout may label internal nets too.
+    pub labels_are_ports: Vec<bool>,
 }
 
 /// A well with no tap tying it to a supply.
@@ -44,11 +47,13 @@ pub struct UnconnectedPinTable {
     pub layer: Vec<LayerId>,
 }
 
-/// Flag every net whose only terminals are gates. `examined` counts nets
-/// carrying a gate terminal.
+/// Flag every net whose only terminals are gates, skipping labelled nets on a
+/// row that treats labels as ports. `examined` counts nets carrying a gate
+/// terminal.
 pub fn check_floating_gate(
     design: Design<'_>,
     facts: &NetFacts,
+    ports: &PortTable,
     table: &FloatingGateTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
@@ -63,13 +68,23 @@ pub fn check_floating_gate(
         .filter(|&(_, &role)| role == RoleMask::GATE)
         .map(|(net, _)| net)
         .collect();
+    let unlabelled: Vec<u32> = flagged
+        .iter()
+        .copied()
+        .filter(|&net| ports.name_of(NetId(net)).is_none())
+        .collect();
 
     for row in 0..table.head.len() {
         let before = out.len();
         let rule = table.head.rule[row];
+        let nets = if table.labels_are_ports[row] {
+            &unlabelled
+        } else {
+            &flagged
+        };
         push_net_violations(
             design,
-            &flagged,
+            nets,
             rule,
             table.head.severity[row],
             Measurement::Count(0),

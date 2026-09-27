@@ -99,6 +99,7 @@ pub fn check(
         RunInputs {
             design,
             facts: &facts,
+            ports,
             intent: &intent_map,
             voltage: &voltage,
             networks: &networks,

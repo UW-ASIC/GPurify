@@ -619,7 +619,7 @@ rule VDS.hv drain_source(; models: hv_mos, max: 3.3V)
 # [LR] §6.8 / [LVS]: pad nets must reach both rails through the ESD diodes.
 rule ESD.pad esd_topological(dfpad; clamps: ["diodevdd_2kv", "diodevss_2kv", "nmoscl_2", "nmoscl_4"])
 
-rule floating_gate floating_gate()
+rule floating_gate floating_gate(; labels_are_ports: false)
 rule tie_high_low warning tie_high_low()
 rule multiple_drivers multiple_drivers(; max: 1)
 rule ir_drop ir_drop()

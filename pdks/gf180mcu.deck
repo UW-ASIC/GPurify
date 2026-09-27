@@ -489,7 +489,7 @@ rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_
 rule LU.9_10 supply_short(ntap, ptap)
 rule floating_nwell floating_well(nwell, ntap)
 rule floating_lvpwell floating_well(lvpwell_in_dn, pcomp_lvp)
-rule floating_gate floating_gate()
+rule floating_gate floating_gate(; labels_are_ports: false)
 rule tie_high_low warning tie_high_low()
 rule multiple_drivers multiple_drivers(; max: 1)
 rule ir_drop ir_drop()

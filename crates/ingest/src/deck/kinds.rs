@@ -509,7 +509,12 @@ pub(crate) const KINDS: &[Kind] = &[
         false,
         &[p("clamps", "clamp", Dim::Models)],
     ),
-    erc("floating_gate", &[], false, &[]),
+    erc(
+        "floating_gate",
+        &[],
+        false,
+        &[p("labels_are_ports", "labels_are_ports", Dim::Bool)],
+    ),
     erc("floating_well", &[0, 1], false, &[]),
     erc(
         "hv_domain",

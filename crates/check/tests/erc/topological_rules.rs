@@ -22,7 +22,7 @@ use gpurify_check::erc::rules::topology::{
 };
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, Severity, Violations};
-use gpurify_check::topology::{DeviceTable, NetTable, TerminalRole};
+use gpurify_check::topology::{bind_ports_into, DeviceTable, NetTable, PortTable, TerminalRole};
 use gpurify_geom::PolyId;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
@@ -138,7 +138,11 @@ fn a_net_carrying_only_a_gate_is_flagged_at_its_own_polygon() {
     check_floating_gate(
         extracted.design(),
         &extracted.facts,
-        &FloatingGateTable { head: head(id) },
+        &PortTable::default(),
+        &FloatingGateTable {
+            head: head(id),
+            labels_are_ports: vec![false],
+        },
         &mut violations,
         &mut runs,
     );
@@ -187,10 +191,62 @@ fn a_gate_net_that_a_drain_also_reaches_is_clean() {
     check_floating_gate(
         extracted.design(),
         &extracted.facts,
-        &FloatingGateTable { head: head(id) },
+        &PortTable::default(),
+        &FloatingGateTable {
+            head: head(id),
+            labels_are_ports: vec![false],
+        },
         &mut violations,
         &mut runs,
     );
+    assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: construct-from-answer. The gate-only net of the first test, now
+/// labelled. A label alone names a net, so it still floats; on a row that
+/// treats labels as ports it is a block input driven from outside, so it is
+/// clean.
+#[test]
+fn a_labelled_gate_only_net_is_clean_only_where_labels_are_ports() {
+    let extracted = extract(&NetlistSpec {
+        nets: 4,
+        devices: vec![mos(
+            "nch",
+            vec![
+                (TerminalRole::Gate, 0),
+                (TerminalRole::Source, 1),
+                (TerminalRole::Drain, 2),
+                (TerminalRole::Bulk, 3),
+            ],
+        )],
+    });
+    let mut strings = StrTable::default();
+    let mut labels = gpurify_ingest::Provenance::default();
+    labels.label(extracted.lowest_poly(0), strings.intern("in"));
+    let mut ports = PortTable::default();
+    bind_ports_into(&extracted.nets, &labels, &mut ports).expect("one label, one net");
+
+    let id = rule(42);
+    let run = |labels_are_ports| {
+        let mut violations = Violations::default();
+        let mut runs = Vec::new();
+        check_floating_gate(
+            extracted.design(),
+            &extracted.facts,
+            &ports,
+            &FloatingGateTable {
+                head: head(id),
+                labels_are_ports: vec![labels_are_ports],
+            },
+            &mut violations,
+            &mut runs,
+        );
+        (violations, runs)
+    };
+
+    let (violations, _) = run(false);
+    assert_one_violation_on(&extracted, &violations, id, 0);
+    let (violations, runs) = run(true);
     assert_clean(&runs, &violations, id);
 }
 

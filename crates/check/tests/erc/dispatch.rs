@@ -21,7 +21,7 @@ use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
 use gpurify_check::erc::voltage::NetVoltage;
 use gpurify_check::erc::{Design, ErcError, Scratch};
 use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
-use gpurify_check::topology::{DeviceTable, NetTable};
+use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
 use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{
@@ -87,6 +87,7 @@ fn every_kind() -> RuleSet {
     RuleSet {
         floating_gate: topology::FloatingGateTable {
             head: head(id_of("floating_gate")),
+            labels_are_ports: vec![false],
         },
         floating_well: topology::FloatingWellTable {
             head: head(id_of("floating_well")),
@@ -249,6 +250,7 @@ struct Cell {
     nets: NetTable,
     devices: DeviceTable,
     facts: NetFacts,
+    ports: PortTable,
     voltage: NetVoltage,
     networks: NetNetworks,
 }
@@ -264,6 +266,7 @@ impl Cell {
             nets: NetTable::default(),
             devices: DeviceTable::default(),
             facts: NetFacts::default(),
+            ports: PortTable::default(),
             voltage: NetVoltage::default(),
             networks: NetNetworks::default(),
         }
@@ -277,6 +280,7 @@ impl Cell {
                 devices: &self.devices,
             },
             facts: &self.facts,
+            ports: &self.ports,
             intent,
             voltage: &self.voltage,
             networks: &self.networks,
