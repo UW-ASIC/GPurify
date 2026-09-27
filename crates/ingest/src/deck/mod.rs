@@ -115,6 +115,18 @@ impl LayerTable {
     }
 
     /// How the derived layers are computed, in id order.
+    pub fn name(&self, layer: LayerId) -> StrId {
+        self.name[layer.idx()]
+    }
+
+    /// The layers a derived layer is computed from; empty for a base layer.
+    pub fn operands(&self, layer: LayerId) -> &[LayerId] {
+        layer
+            .idx()
+            .checked_sub(usize::from(self.derived_start))
+            .map_or(&[], |row| &self.derived[row].2)
+    }
+
     pub(crate) fn derived(&self) -> &[(LayerId, DerivedOp, Vec<LayerId>)] {
         &self.derived
     }

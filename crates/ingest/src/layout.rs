@@ -5,7 +5,7 @@
 //! labels. An inexact transform is an error, never rounded.
 
 use crate::deck::{Deck, DerivedOp, LayerTable};
-use crate::provenance::PlacedLabel;
+use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
     edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
@@ -77,6 +77,19 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
     } else {
         Err(LayoutError::UnknownFormat)
     }
+}
+
+/// Compute `deck`'s derived layers into a store built in memory from its base
+/// layers, as [`gds::Library::flatten`] does after reading a stream. `with_text`
+/// reads `provenance`'s placed labels; bind them afterwards with
+/// [`Provenance::resolve_labels`].
+pub fn derive_layers(
+    store: &mut GeometryStore,
+    deck: &Deck,
+    provenance: &Provenance,
+    strings: &StrTable,
+) -> Result<(), LayoutError> {
+    derive_layers_into(store, &deck.layers, &provenance.placed, strings)
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
