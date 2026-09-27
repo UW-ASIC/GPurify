@@ -92,13 +92,13 @@ impl Holes {
         self.of.sort_unstable();
     }
 
-    fn is_hole(&self, poly: PolyId) -> bool {
+    pub(crate) fn is_hole(&self, poly: PolyId) -> bool {
         self.owner
             .get(poly.idx())
             .is_some_and(|&owner| owner != NO_OWNER)
     }
 
-    fn of(&self, outer: PolyId) -> impl Iterator<Item = PolyId> + '_ {
+    pub(crate) fn of(&self, outer: PolyId) -> impl Iterator<Item = PolyId> + '_ {
         let from = self.of.partition_point(|&(o, _)| o < outer);
         self.of[from..]
             .iter()
@@ -259,7 +259,7 @@ fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -
 }
 
 /// Inside the outer ring and inside none of its holes.
-fn in_material(store: &GeometryStore, holes: &Holes, outer: PolyId, p: Point) -> bool {
+pub(crate) fn in_material(store: &GeometryStore, holes: &Holes, outer: PolyId, p: Point) -> bool {
     store.poly_contains_point(outer, p) && !holes.of(outer).any(|h| store.poly_contains_point(h, p))
 }
 

@@ -53,6 +53,8 @@ pub(crate) struct Scratch {
     pairs: Vec<(PolyId, PolyId)>,
     /// Exact squared distance per candidate pair.
     dists: Vec<DbuArea>,
+    /// Hole rows bound to their outers, for the layers of the current rule.
+    holes: crate::topology::net::Holes,
     /// Rectilinear decomposition of `layer_out`, CSR by figure.
     rects: Vec<Bbox>,
     rect_start: Vec<u32>,

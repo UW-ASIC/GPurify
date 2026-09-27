@@ -5,7 +5,7 @@
 //! two masks by bipartiteness (never gives up), three or more by DSATUR with
 //! backtracking under a budget. Running out of budget is `Refused`, never clean.
 
-use super::{centre, label_pairs_into, pair_distances_into, Verdict};
+use super::{centre, join_nested, label_pairs_into, pair_distances_into, Verdict};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
@@ -325,6 +325,8 @@ pub(crate) fn multi_patterning(
     SpatialIndex::build_into(store, layer, &mut s.index_a);
     candidate_pairs_into(store, &s.index_a, spacing, &mut s.pairs);
     pair_distances_into(store, &s.pairs, spacing, &mut s.dists);
+    s.holes.build(store, [layer]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
     // Touching rows print as one shape: merge them (skipping this could create
     // an odd cycle). A figure is named by its lowest row.
     label_pairs_into(

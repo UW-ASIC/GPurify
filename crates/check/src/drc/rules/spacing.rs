@@ -6,8 +6,8 @@
 //! within one merged figure (touching shapes) have no gap and are skipped.
 
 use super::{
-    gap_midpoint, label_pairs_into, pair_distances_into, rects_ring_dist2, ring_segs, seg_bbox,
-    LayerRects, SortedRects, Verdict, REFUSED,
+    gap_midpoint, join_nested, label_pairs_into, pair_distances_into, rects_ring_dist2, ring_segs,
+    seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
 use crate::drc::ruleset::SpacingTable;
@@ -59,6 +59,8 @@ fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -
     SpatialIndex::build_into(store, layer, &mut s.index_a);
     candidate_pairs_into(store, &s.index_a, limit, &mut s.pairs);
     pair_distances_into(store, &s.pairs, limit, &mut s.dists);
+    s.holes.build(store, [layer]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
     label_pairs_into(
         rows.start,
         rows.end - rows.start,
@@ -133,6 +135,8 @@ pub(crate) fn min_spacing_diff(
     SpatialIndex::build_into(store, b_layer, &mut s.index_b);
     cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
     pair_distances_into(store, &s.pairs, limit, &mut s.dists);
+    s.holes.build(store, [a_layer, b_layer]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
     let limit2 = limit.mul_wide(limit);
     for (&pair, &d2) in s.pairs.iter().zip(&s.dists) {
         if d2 < limit2 {

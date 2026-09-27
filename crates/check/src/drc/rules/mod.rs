@@ -16,6 +16,7 @@ pub mod via;
 pub mod width;
 
 use crate::report::Outcome;
+use crate::topology::net::{in_material, Holes};
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::{seg_seg_dist2, Point, Seg};
@@ -253,6 +254,34 @@ pub(crate) fn pair_distances_into(
         return;
     }
     dispatch!(Level::new(), simd => capped_distances(simd, store, pairs, dists));
+}
+
+/// Zero the distance of every pair that overlaps without its boundaries
+/// meeting: a shape nested in another's material, or an outer and its own
+/// hole. Boundary distance alone reads either as a gap. A shape inside a hole
+/// keeps its distance to that hole, which is a real gap.
+pub(crate) fn join_nested(
+    store: &GeometryStore,
+    holes: &Holes,
+    pairs: &[(PolyId, PolyId)],
+    dists: &mut [DbuArea],
+) {
+    let vertex = |p: PolyId| {
+        let (xs, ys) = store.poly_verts(p);
+        Point { x: xs[0], y: ys[0] }
+    };
+    for (&(a, b), d2) in pairs.iter().zip(dists) {
+        if d2.raw() == 0 {
+            continue;
+        }
+        let own_hole = holes.of(a).any(|h| h == b) || holes.of(b).any(|h| h == a);
+        let nested = !holes.is_hole(a)
+            && !holes.is_hole(b)
+            && (in_material(store, holes, a, vertex(b)) || in_material(store, holes, b, vertex(a)));
+        if own_hole || nested {
+            *d2 = DbuArea::new(0);
+        }
+    }
 }
 
 /// Gaps are capped here so `gx² + gy²` is exact in f64 (at most 2^53).

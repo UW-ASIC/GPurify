@@ -498,3 +498,49 @@ fn nsd_5a_is_measured_on_every_edge_but_the_butting_one() {
         "the bottom edge's midpoint"
     );
 }
+
+// ------------------------------------------------------- nested figures
+
+/// A pad dropped inside a wider shape of the same layer is one figure with it:
+/// boundary distance alone reads the pad's inset as a 100 nm gap. Reported by
+/// the Philis session (a via landing pad on a rail).
+#[test]
+fn a_shape_nested_in_another_is_not_a_spacing_gap() {
+    let deck = "grid 1nm\nlayer m1 = gds(8, 0)\nrule M1.b space(m1) >= 180nm\n";
+    let nested = run(
+        deck,
+        &[("m1", [0, 0, 5900, 500]), ("m1", [2800, 100, 3100, 400])],
+    );
+    assert_eq!(nested.of("M1.b"), vec![]);
+}
+
+/// A derived guard ring is one polygon with a hole. Its ring width is not a
+/// gap, and an island in the hole is spaced from the hole's edge only.
+#[test]
+fn a_holed_polygon_is_spaced_from_its_hole_edge_only() {
+    let deck = "grid 1nm\nlayer m1 = gds(8, 0)\nlayer cut = gds(9, 0)\nlayer d = m1 not cut\nrule S space(d) >= 180nm\n";
+    let ring = [
+        ("m1", [0, 0, 2000, 150]),
+        ("m1", [0, 1850, 2000, 2000]),
+        ("m1", [0, 150, 150, 1850]),
+        ("m1", [1850, 150, 2000, 1850]),
+    ];
+    assert_eq!(
+        run(deck, &ring).of("S"),
+        vec![],
+        "150 nm ring width is not a gap"
+    );
+
+    let mut centred = ring.to_vec();
+    centred.push(("m1", [900, 900, 1100, 1100]));
+    assert_eq!(
+        run(deck, &centred).of("S"),
+        vec![],
+        "750 nm from the hole edge"
+    );
+
+    // Wrong implementation: joining everything inside the outer ring hides this.
+    let mut near = ring.to_vec();
+    near.push(("m1", [200, 900, 400, 1100]));
+    assert_eq!(run(deck, &near).of("S"), vec![(len(50), len(180))]);
+}
