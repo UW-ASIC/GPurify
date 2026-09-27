@@ -15,7 +15,7 @@ use crate::common;
 
 use common::{head, manufacturing_grid, operating_temperature, rule};
 use gpurify_check::erc::facts::{IntentMap, NetFacts};
-use gpurify_check::erc::power::NetNetworks;
+use gpurify_check::erc::power::{NetNetworks, PowerError};
 use gpurify_check::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
 use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
 use gpurify_check::erc::voltage::NetVoltage;
@@ -284,7 +284,7 @@ impl Cell {
             intent,
             voltage: &self.voltage,
             networks: &self.networks,
-            power: None,
+            power: Ok(None),
             die: Bbox {
                 xlo: dbu(0),
                 ylo: dbu(0),
@@ -382,6 +382,42 @@ fn without_intent_exactly_the_gated_kinds_record_themselves_skipped() {
 /// run row at all, and that silence is correct: nothing claims the rule was
 /// checked. It is a different silence from a skip, which claims the rule was
 /// wanted and could not run.
+/// A failed solve (here an island no pad reaches) refuses exactly the rows
+/// that read the solve, and every other rule still runs as it would have:
+/// one bad rail must not hide an antenna or a floating gate.
+#[test]
+fn a_failed_solve_refuses_only_the_grid_rules() {
+    const GRID: [&str; 4] = [
+        "ir_drop",
+        "em_current_density",
+        "electromigration",
+        "reliability",
+    ];
+    let rules = every_kind();
+    let cell = Cell::new();
+    let intent = IntentMap::default();
+    let outcomes = |power| {
+        let mut inputs = cell.inputs(&intent);
+        inputs.power = power;
+        let (mut violations, mut runs) = (Violations::default(), Vec::new());
+        rules.run(inputs, &mut Scratch::default(), &mut violations, &mut runs);
+        KINDS
+            .iter()
+            .map(|&kind| (kind, common::run_of(&runs, id_of(kind)).outcome))
+            .collect::<Vec<_>>()
+    };
+
+    let solved = outcomes(Ok(None));
+    let failed = outcomes(Err(PowerError::UnanchoredIsland(7)));
+    for ((kind, before), (_, after)) in solved.into_iter().zip(failed) {
+        if GRID.contains(&kind) {
+            assert_eq!(after, Outcome::Refused, "{kind} reads the solve");
+        } else {
+            assert_eq!(after, before, "{kind} does not read the solve");
+        }
+    }
+}
+
 #[test]
 fn a_kind_the_deck_did_not_configure_produces_no_run_row() {
     let rules = RuleSet::default();

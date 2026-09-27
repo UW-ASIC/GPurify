@@ -4,11 +4,13 @@
 //! violations and one run per row. All three kinds skip without intent.
 
 use crate::erc::facts::IntentMap;
-use crate::erc::power::Solved;
+use crate::erc::power::Power;
 use crate::erc::rules::supply::clamp_rails;
 use crate::erc::ruleset::RuleHead;
 use crate::erc::voltage::NetVoltage;
-use crate::erc::{first_vertex, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K};
+use crate::erc::{
+    fill_rows, first_vertex, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K,
+};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId};
 use gpurify_geom::ops::{point_in_ring, segments_intersect, Point, Seg};
@@ -67,13 +69,17 @@ pub struct EsdLatchupTable {
 /// No `discarded_budget` gate: with no current every node sits at nominal, the
 /// largest stress, which is the fail-closed direction.
 pub fn check_reliability(
-    power: Option<Solved<'_>>,
+    power: Power<'_>,
     intent: &IntentMap,
     operating_temperature: Qty<Temperature, { prefix::BASE }>,
     table: &ReliabilityTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    let Ok(power) = power else {
+        fill_rows(&table.head, Outcome::Refused, out, runs);
+        return;
+    };
     let Some(solved) = power.filter(|_| intent.is_usable()) else {
         skip_rows(&table.head, out, runs);
         return;

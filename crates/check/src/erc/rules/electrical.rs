@@ -6,7 +6,7 @@
 
 use crate::erc::facts::IntentMap;
 use crate::erc::power::{
-    discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, PowerGrid, Solved,
+    discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, Power, PowerGrid, Solved,
 };
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{fill_rows, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K};
@@ -147,15 +147,19 @@ fn report_node(
 }
 
 /// The solve every grid rule reads, or `None` after recording every row: skipped
-/// without a solve or usable intent, refused when a stated budget never reached
-/// the solve (zero current would pass every limit).
+/// without a solve or usable intent, refused when the solve failed or a stated
+/// budget never reached it (zero current would pass every limit).
 fn solved_or_fill<'a>(
-    power: Option<Solved<'a>>,
+    power: Power<'a>,
     intent: &IntentMap,
     head: &RuleHead,
     out: &Violations,
     runs: &mut Vec<RuleRun>,
 ) -> Option<Solved<'a>> {
+    let Ok(power) = power else {
+        fill_rows(head, Outcome::Refused, out, runs);
+        return None;
+    };
     let Some(solved) = power.filter(|_| intent.is_usable()) else {
         skip_rows(head, out, runs);
         return None;
@@ -170,7 +174,7 @@ fn solved_or_fill<'a>(
 /// Node voltages against each net's stated absolute drop, fractional drop and
 /// overvoltage. A node whose net states none is not examined.
 pub fn check_ir_drop(
-    power: Option<Solved<'_>>,
+    power: Power<'_>,
     intent: &IntentMap,
     table: &IrDropTable,
     out: &mut Violations,
@@ -345,7 +349,7 @@ fn check_current_rows(
 /// Branch currents against each layer's instantaneous limit. An edge on an
 /// unlimited layer is not examined.
 pub fn check_em_current_density(
-    power: Option<Solved<'_>>,
+    power: Power<'_>,
     intent: &IntentMap,
     grid: Grid,
     table: &EmCurrentDensityTable,
@@ -405,7 +409,7 @@ fn arrhenius_derating(
 /// open for a hot wire; upgrade is a per-edge temperature column on
 /// [`PowerGrid`].
 pub fn check_electromigration(
-    power: Option<Solved<'_>>,
+    power: Power<'_>,
     intent: &IntentMap,
     grid: Grid,
     operating_temperature: Qty<Temperature, { prefix::BASE }>,

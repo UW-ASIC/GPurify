@@ -176,12 +176,18 @@ fn ir_drop_skips_without_intent_and_examines_every_limited_node_with_it() {
     let table = IrDropTable { head: head(id) };
 
     let (mut violations, mut runs) = empty_report();
-    check_ir_drop(None, &supply_intent(), &table, &mut violations, &mut runs);
+    check_ir_drop(
+        Ok(None),
+        &supply_intent(),
+        &table,
+        &mut violations,
+        &mut runs,
+    );
     assert_skipped_for_intent(&runs, &violations, id);
 
     let (mut violations, mut runs) = empty_report();
     check_ir_drop(
-        Some(powered.solved()),
+        Ok(Some(powered.solved())),
         &IntentMap::default(),
         &table,
         &mut violations,
@@ -191,7 +197,7 @@ fn ir_drop_skips_without_intent_and_examines_every_limited_node_with_it() {
 
     let (mut violations, mut runs) = empty_report();
     check_ir_drop(
-        Some(powered.solved()),
+        Ok(Some(powered.solved())),
         &supply_intent(),
         &table,
         &mut violations,
@@ -223,7 +229,7 @@ fn em_current_density_skips_without_intent_and_examines_limited_edges_with_it() 
 
     let (mut violations, mut runs) = empty_report();
     check_em_current_density(
-        None,
+        Ok(None),
         &supply_intent(),
         manufacturing_grid(),
         &table,
@@ -234,7 +240,7 @@ fn em_current_density_skips_without_intent_and_examines_limited_edges_with_it() 
 
     let (mut violations, mut runs) = empty_report();
     check_em_current_density(
-        Some(powered.solved()),
+        Ok(Some(powered.solved())),
         &supply_intent(),
         manufacturing_grid(),
         &table,
@@ -260,7 +266,7 @@ fn electromigration_skips_without_intent_and_reaches_the_edges_with_it() {
 
     let (mut violations, mut runs) = empty_report();
     check_electromigration(
-        None,
+        Ok(None),
         &supply_intent(),
         manufacturing_grid(),
         operating_temperature(),
@@ -272,7 +278,7 @@ fn electromigration_skips_without_intent_and_reaches_the_edges_with_it() {
 
     let (mut violations, mut runs) = empty_report();
     check_electromigration(
-        Some(powered.solved()),
+        Ok(Some(powered.solved())),
         &supply_intent(),
         manufacturing_grid(),
         operating_temperature(),
@@ -299,7 +305,7 @@ fn reliability_skips_without_intent_and_evaluates_nodes_with_it() {
 
     let (mut violations, mut runs) = empty_report();
     check_reliability(
-        None,
+        Ok(None),
         &supply_intent(),
         operating_temperature(),
         &table,
@@ -310,7 +316,7 @@ fn reliability_skips_without_intent_and_evaluates_nodes_with_it() {
 
     let (mut violations, mut runs) = empty_report();
     check_reliability(
-        Some(powered.solved()),
+        Ok(Some(powered.solved())),
         &IntentMap::default(),
         operating_temperature(),
         &table,
@@ -321,7 +327,7 @@ fn reliability_skips_without_intent_and_evaluates_nodes_with_it() {
 
     let (mut violations, mut runs) = empty_report();
     check_reliability(
-        Some(powered.solved()),
+        Ok(Some(powered.solved())),
         &supply_intent(),
         operating_temperature(),
         &table,

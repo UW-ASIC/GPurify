@@ -93,10 +93,10 @@ fn ir_drop_reports_each_node_that_exceeds_its_nets_absolute_limit() {
 
     let (mut violations, mut runs) = report();
     check_ir_drop(
-        Some(Solved {
+        Ok(Some(Solved {
             grid: &grid,
             solution: &solution,
-        }),
+        })),
         &intent,
         &IrDropTable { head: head(id) },
         &mut violations,
@@ -144,10 +144,10 @@ fn ir_drop_applies_the_fractional_limit_against_the_domains_nominal() {
 
     let (mut violations, mut runs) = report();
     check_ir_drop(
-        Some(Solved {
+        Ok(Some(Solved {
             grid: &grid,
             solution: &solution,
-        }),
+        })),
         &intent,
         &IrDropTable { head: head(id) },
         &mut violations,
@@ -198,10 +198,10 @@ fn ir_drop_reports_a_node_sitting_above_its_domains_nominal() {
 
     let (mut violations, mut runs) = report();
     check_ir_drop(
-        Some(Solved {
+        Ok(Some(Solved {
             grid: &grid,
             solution: &solution,
-        }),
+        })),
         &intent,
         &IrDropTable { head: head(id) },
         &mut violations,
@@ -275,7 +275,7 @@ fn em_current_density_examines_only_the_edges_on_a_limited_layer() {
         let id = rule(23);
         let (mut violations, mut runs) = report();
         check_em_current_density(
-            Some(solved),
+            Ok(Some(solved)),
             &intent_with(NetLimits::default()),
             manufacturing_grid(),
             &density_table(id, LayerId(1), limit),
@@ -316,7 +316,7 @@ fn em_current_density_reports_everything_below_a_tiny_limit_and_nothing_below_a_
     let strict = rule(24);
     let (mut violations, mut runs) = report();
     check_em_current_density(
-        Some(solved),
+        Ok(Some(solved)),
         &intent_with(NetLimits::default()),
         manufacturing_grid(),
         &density_table(strict, LayerId(0), 1e-30),
@@ -334,7 +334,7 @@ fn em_current_density_reports_everything_below_a_tiny_limit_and_nothing_below_a_
     let (violations, runs) = {
         let (mut v, mut r) = report();
         check_em_current_density(
-            Some(solved),
+            Ok(Some(solved)),
             &intent_with(NetLimits::default()),
             manufacturing_grid(),
             &density_table(lax, LayerId(0), 1e30),
@@ -387,7 +387,7 @@ fn an_electromigration_reference_temperature_that_is_not_absolute_is_refused() {
     let good = rule(26);
     let (mut violations, mut runs) = report();
     check_electromigration(
-        Some(solved),
+        Ok(Some(solved)),
         &intent_with(NetLimits::default()),
         manufacturing_grid(),
         operating_temperature(),
@@ -405,7 +405,7 @@ fn an_electromigration_reference_temperature_that_is_not_absolute_is_refused() {
         let id = rule(27 + u32::try_from(index).expect("two rows"));
         let (mut violations, mut runs) = report();
         check_electromigration(
-            Some(solved),
+            Ok(Some(solved)),
             &intent_with(NetLimits::default()),
             manufacturing_grid(),
             operating_temperature(),
@@ -459,7 +459,7 @@ fn a_reliability_duty_cycle_outside_the_unit_interval_is_refused() {
         let id = rule(30 + u32::try_from(index).expect("two rows"));
         let (mut violations, mut runs) = report();
         check_reliability(
-            Some(solved),
+            Ok(Some(solved)),
             &intent_with(NetLimits::default()),
             operating_temperature(),
             &reliability_table(id, duty, 1_950.0),
@@ -497,10 +497,10 @@ fn a_node_over_the_absolute_voltage_cap_is_reported_with_its_own_voltage() {
 
     let (mut violations, mut runs) = report();
     check_reliability(
-        Some(Solved {
+        Ok(Some(Solved {
             grid: &grid,
             solution: &solution,
-        }),
+        })),
         &intent_with(NetLimits::default()),
         operating_temperature(),
         &reliability_table(id, 0.5, 1_000.0),

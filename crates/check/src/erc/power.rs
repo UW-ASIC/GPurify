@@ -693,6 +693,10 @@ pub struct Solved<'a> {
     pub solution: &'a PowerSolution,
 }
 
+/// What the grid rules read: the solve, `None` with no declared supply, or why
+/// the solve failed (those rows are refused; every other rule still runs).
+pub type Power<'a> = Result<Option<Solved<'a>>, PowerError>;
+
 /// True when some net states a non-zero `budget_current_ua` and carries no
 /// load on the grid (the budget never reached the solve, e.g. a rail with no
 /// device terminal, or a limited net that is not a supply). Exact: the loads
@@ -739,7 +743,12 @@ pub fn extract_into(
     let mut shape: Vec<PolyId> = Vec::new();
     let mut supply_start: Vec<u32> = vec![0];
     for (supply, &net) in intent.supply_net.iter().enumerate() {
-        shape.extend(conducting(store, &conductor, nets.polys_of(net)));
+        // A hole row shares its outer's net but is no conductor: as a node,
+        // nothing would link it and the solve would refuse it as an island.
+        shape.extend(
+            conducting(store, &conductor, nets.polys_of(net))
+                .filter(|&poly| !nets.holes.is_hole(poly)),
+        );
         supply_of_shape.resize(
             shape.len(),
             u32::try_from(supply).expect("a supply row is a u32"),
@@ -1190,12 +1199,18 @@ fn conductor_mask(connectivity: &Connectivity, layers: usize) -> Vec<bool> {
 
 /// Sheet resistance of every current-carrying layer, indexed by layer. A
 /// missing, non-positive or non-finite value refuses (zero would short a rail).
+/// A cut into a global layer carries nothing: the grid has no node there.
 fn sheet_resistances(process: Process<'_>, layers: usize) -> Result<Vec<f64>, PowerError> {
-    let carrying = process
-        .connectivity
-        .conductors
-        .iter()
-        .chain(&process.connectivity.via_cut);
+    let connectivity = process.connectivity;
+    let global = |layer: &LayerId| connectivity.global.contains(layer);
+    let carrying = connectivity.conductors.iter().chain(
+        connectivity
+            .via_cut
+            .iter()
+            .zip(&connectivity.via_connects)
+            .filter(move |(_, (a, b))| !global(a) && !global(b))
+            .map(|(cut, _)| cut),
+    );
     let bound = carrying
         .clone()
         .map(|l| l.idx() + 1)
@@ -1548,7 +1563,11 @@ pub fn extract_nets_into(
     for net in 0..nets.net_count() {
         let id = NetId(u32::try_from(net).expect("a net id is a u32"));
         let first = candidate.len();
-        candidate.extend(conducting(store, &conductor, nets.polys_of(id)));
+        // No node for a hole row, as in `extract_into`.
+        candidate.extend(
+            conducting(store, &conductor, nets.polys_of(id))
+                .filter(|&poly| !nets.holes.is_hole(poly)),
+        );
         for (index, &poly) in candidate[first..].iter().enumerate() {
             shape_in_row[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
         }
@@ -1556,8 +1575,14 @@ pub fn extract_nets_into(
     }
 
     // Links sorted by net (both ends share it) so each net's run is a slice.
+    // Only links between two noded shapes: a cut into a global layer lands on
+    // a shape the network has no node for.
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
+    let both_noded =
+        |&(a, b, _, _): &Link| shape_in_row[a as usize] != NONE && shape_in_row[b as usize] != NONE;
+    links.metal.retain(both_noded);
+    links.via.retain(both_noded);
     let by_net = |&(a, b, layer, cut): &Link| (nets.net_of(PolyId(a)).0, a, b, layer.0, cut);
     links.metal.sort_unstable_by_key(by_net);
     links.via.sort_unstable_by_key(by_net);
