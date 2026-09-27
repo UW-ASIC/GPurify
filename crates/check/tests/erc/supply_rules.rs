@@ -204,6 +204,55 @@ fn a_tap_in_the_notch_of_an_l_shaped_well_does_not_tie_it() {
     assert_eq!(assert_rule_ran(&runs, id).examined, 1);
 }
 
+/// Oracle: construct-from-answer. A square well ring drawn as four abutting
+/// bands is one well, so one tap on one band ties all four; judging each band
+/// on its own flags the three untapped ones. A tap drawn only in the ring's
+/// hole ties nothing, and the one well is named by its lowest drawn row.
+/// Reported by the Philis session (an n-well isolation ring).
+#[test]
+fn a_well_ring_drawn_as_bands_is_one_well() {
+    let run = |tap: [i64; 4]| {
+        let mut layout = LayoutBuilder::new(2);
+        let bands = [
+            layout.rect(LayerId(0), 0, 0, 8_000, 2_000),
+            layout.rect(LayerId(0), 0, 6_000, 8_000, 8_000),
+            layout.rect(LayerId(0), 0, 2_000, 2_000, 6_000),
+            layout.rect(LayerId(0), 6_000, 2_000, 8_000, 6_000),
+        ];
+        let [xlo, ylo, xhi, yhi] = tap;
+        layout.rect(LayerId(1), xlo, ylo, xhi, yhi);
+        let (store, ids) = layout.finish();
+        let lowest = bands.iter().map(|&b| ids.of(b)).min().expect("four bands");
+        let drawn = Drawn::new(store, &no_connectivity());
+        let id = rule(53);
+        let (mut violations, mut runs) = report();
+        check_floating_well(
+            drawn.design(),
+            &floating_well_table(id),
+            &mut Scratch::default(),
+            &mut violations,
+            &mut runs,
+        );
+        assert_eq!(
+            assert_rule_ran(&runs, id).examined,
+            1,
+            "four bands, one well"
+        );
+        (violations, lowest)
+    };
+
+    let (violations, _) = run([3_000, 6_500, 5_000, 7_500]);
+    assert_eq!(
+        violations.rule.len(),
+        0,
+        "a tap on the top band ties the ring"
+    );
+
+    let (violations, lowest) = run([3_000, 3_000, 5_000, 5_000]);
+    assert_eq!(violations.rule.len(), 1, "a tap in the hole ties nothing");
+    assert_eq!(violations.shape_a[0], lowest);
+}
+
 // ------------------------------------------------------------------ missing tie
 
 /// Oracle: construct-from-answer, exact in both columns. The region is a
