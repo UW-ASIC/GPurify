@@ -63,7 +63,9 @@ fn greater(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
 /// holes included, facing that side. Exact for any rectilinear host that
 /// contains `inner`.
 fn strips(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Side); 4] {
-    let far = Dbu::new_unchecked(i64::MAX);
+    // The widest margin the domain holds, 2^41: no real one exceeds it. Built
+    // by `Sub`, as every margin is, since `new_unchecked` asserts 2^40.
+    let far = Dbu::new_unchecked(MAX_ABS_DBU) - Dbu::new_unchecked(-MAX_ABS_DBU);
     let [mut l, mut r, mut b, mut t] = [far; 4];
     for ring in std::iter::once(host.outer()).chain(host.holes()) {
         let (xs, ys) = ring.coords();
