@@ -22,9 +22,7 @@
 
 use crate::common;
 
-use gpurify_check::lvs::compare::{compare, CompareOptions};
-use gpurify_check::lvs::refine::Partition;
-use gpurify_check::lvs::{LayoutGraph, RefGraph, Verdict};
+use gpurify_check::lvs::{compare, CompareOptions, Verdict};
 use gpurify_check::topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitter, Gate, Source};
 use gpurify_ingest::deck::DeviceKind;
 
@@ -47,13 +45,10 @@ fn a_mos_in_the_two_documented_terminal_orders_is_one_device() {
         // on the net it landed on above; only the slot moved.
         &[(Drain, 2), (Gate, 0), (Source, 1), (Bulk, 3)],
     );
-
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(layout.finish()),
-        &RefGraph(reference.finish()),
+        &layout.finish(),
+        &reference.finish(),
         CompareOptions::default(),
-        &mut scratch,
     );
     assert_eq!(verdict, Verdict::Match, "one MOS, two terminal orders");
 }
@@ -75,13 +70,10 @@ fn a_bjt_in_the_two_documented_terminal_orders_is_one_device() {
         common::NCH,
         &[(Collector, 2), (Base, 0), (Emitter, 1)],
     );
-
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(layout.finish()),
-        &RefGraph(reference.finish()),
+        &layout.finish(),
+        &reference.finish(),
         CompareOptions::default(),
-        &mut scratch,
     );
     assert_eq!(verdict, Verdict::Match, "one BJT, two terminal orders");
 }
@@ -121,13 +113,10 @@ fn reordering_the_slots_does_not_excuse_a_terminal_on_the_wrong_net() {
         // Card order, untouched.
         &[(Drain, 5), (Gate, 4), (Source, 2), (Bulk, 3)],
     );
-
-    let mut scratch = Partition::default();
     let verdict = compare(
-        &LayoutGraph(layout.finish()),
-        &RefGraph(reference.finish()),
+        &layout.finish(),
+        &reference.finish(),
         CompareOptions::default(),
-        &mut scratch,
     );
     assert_ne!(verdict, Verdict::Match, "a gate on the wrong net matched");
 }

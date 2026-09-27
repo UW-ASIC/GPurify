@@ -15,6 +15,7 @@ use gpurify_geom::LayerId;
 use gpurify_geom::{
     prefix, Current, CurrentDensity, Dbu, Grid, Qty, Resistance, Temperature, Voltage,
 };
+use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
 /// Worst effective resistance between any two device attach points of a net.
@@ -184,20 +185,28 @@ pub fn check_ir_drop(
         let head = (table.head.rule[row], table.head.severity[row]);
         let mut examined = 0u64;
         for node in 0..grid.node_count() {
-            let limits = intent.limits_of(grid.node_net[node]);
+            let net = grid.node_net[node];
+            let limits = intent.limits_of(net);
             let stated = limits.max_drop.is_some()
                 | limits.max_drop_fraction.is_some()
                 | limits.max_overvoltage.is_some();
             examined += u64::from(stated);
 
-            let drop = solved.solution.node_drop[node];
-            // Magnitude: a signed nominal would flip the ground rail's sense.
-            let nominal = grid.node_nominal[node].raw().abs();
+            let (role, domain) = intent
+                .supply(net)
+                .expect("every grid node is on a declared supply");
+            // A loss moves toward the other rail: down for power, up for ground.
+            let drop = match role {
+                SupplyRole::Power => solved.solution.node_drop[node],
+                SupplyRole::Ground => -solved.solution.node_drop[node],
+            };
             if let Some(limit) = limits.max_drop {
                 report_node(out, grid, node, head, drop, limit);
             }
+            // A fraction of the domain, for a ground rail as for its power rail.
             if let Some(fraction) = limits.max_drop_fraction {
-                report_node(out, grid, node, head, drop, Qty::new(nominal * fraction));
+                let limit = Qty::new(domain.raw().abs() * fraction);
+                report_node(out, grid, node, head, drop, limit);
             }
             // Overvoltage is a negative drop.
             if let Some(limit) = limits.max_overvoltage {

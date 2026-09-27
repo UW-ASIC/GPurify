@@ -1,0 +1,436 @@
+# ASAP7, the predictive 7 nm FinFET PDK (Arizona State University and ARM).
+# It is the only FinFET PDK with a public design rule manual, so it stands in
+# for "a generic FinFET process" here. It is predictive: no fab builds it.
+#
+# Sources (every number below comes from one of these):
+#   [DRM] ASAP7 PDK Design Rule Manual, PDK release 1p7,
+#         docs/asap7_drm_201207a.pdf in
+#         https://github.com/The-OpenROAD-Project/asap7_pdk_r1p7
+#         at commit 1ff7649bbf423207f6f70293dc1cf630cd477365 (2023-11-02).
+#         Rule ids are the DRM's, table by table (3.1 to 3.19).
+#   [MAP] cdslib/asap7_TechLib_10/asap7_TechLib_08.layermap, same repo and
+#         commit: GDS layer and datatype of every drawn, label and pin layer.
+#         The DRM's "Mask ID" column (Table 2.x.1) is the GDS layer number.
+#   [MEJ] L.T. Clark et al., "ASAP7: A 7-nm finFET predictive process design
+#         kit", Microelectronics Journal 53 (2016) 105-115,
+#         doi:10.1016/j.mejo.2016.04.006 (Table 1 widths and patterning;
+#         section 4.4: metal and via aspect ratio 2:1).
+#   [RC]  OpenROAD-flow-scripts flow/platforms/asap7/setRC.tcl at commit
+#         09df6d28c6af8aa479bf4784930484a1b5fb4196: per-length wire resistance
+#         and per-cut via resistance, in the ASAP7 liberty unit (kohm, per
+#         pulling_resistance_unit in asap7sc7p5t_SEQ_RVT_TT_nldm_220123.lib).
+#
+# Many DRM rules are directional (a horizontal and a vertical limit). The
+# deck language has no direction, so such a pair is written as one rule at
+# the smaller limit, under the id of the rule that owns that limit: it only
+# flags real violations, and misses the stricter direction. Each such row
+# says so, and the stricter half is under "needs: directional" below.
+
+# The DRM states no manufacturing grid. 1 nm is the resolution this tool
+# loads shipped decks at; the DRM's 13.5 nm SRAM rules are off it and are
+# left out (listed at the end).
+grid 1nm
+
+# Front end [DRM Table 2.1.1, MAP]
+layer WELL = gds(1, 0)
+layer FIN = gds(2, 0)
+layer GATE = gds(7, 0)
+layer DUMMY = gds(8, 0)
+layer GCUT = gds(10, 0)
+layer ACTIVE = gds(11, 0)
+layer NSELECT = gds(12, 0)
+layer PSELECT = gds(13, 0)
+layer SDT = gds(88, 0)
+layer SLVT = gds(97, 0)
+layer LVT = gds(98, 0)
+layer SRAMVT = gds(110, 0)
+
+# Middle of line [DRM Table 2.2.1, MAP]
+layer LIG = gds(16, 0)
+layer LISD = gds(17, 0)
+layer V0 = gds(18, 0)
+
+# Back end [DRM Table 2.3.1, MAP]. Pad 96 is from the DRM's mask id only; the
+# layermap has no Pad row.
+layer M1 = gds(19, 0)
+layer V1 = gds(21, 0)
+layer M2 = gds(20, 0)
+layer V2 = gds(25, 0)
+layer M3 = gds(30, 0)
+layer V3 = gds(35, 0)
+layer M4 = gds(40, 0)
+layer V4 = gds(45, 0)
+layer M5 = gds(50, 0)
+layer V5 = gds(55, 0)
+layer M6 = gds(60, 0)
+layer V6 = gds(65, 0)
+layer M7 = gds(70, 0)
+layer V7 = gds(75, 0)
+layer M8 = gds(80, 0)
+layer V8 = gds(85, 0)
+layer M9 = gds(90, 0)
+layer V9 = gds(95, 0)
+layer PAD = gds(96, 0)
+
+# Markers [DRM Table 2.4.1, MAP]
+layer SRAMDRC = gds(99, 0)
+layer BOUNDARY = gds(100, 0)
+
+# Labels: the "label" purpose, datatype 2 [MAP]
+layer M1_LABEL = gds(19, 2)
+layer M2_LABEL = gds(20, 2)
+layer M3_LABEL = gds(30, 2)
+layer M4_LABEL = gds(40, 2)
+layer M5_LABEL = gds(50, 2)
+layer M6_LABEL = gds(60, 2)
+layer M7_LABEL = gds(70, 2)
+layer M8_LABEL = gds(80, 2)
+layer M9_LABEL = gds(90, 2)
+
+# DRM terms: "GATE not cut by GCUT", a channel (GATE over ACTIVE), SRAM and
+# logic halves of a layer by whether it touches SRAMDRC.
+layer GATE_UNCUT = GATE not GCUT
+layer CHANNEL = GATE_UNCUT and ACTIVE
+layer GATE_FIELD = GATE_UNCUT.not_interacting(ACTIVE)
+layer ACTIVE_LOGIC = ACTIVE.not_interacting(SRAMDRC)
+layer ACTIVE_SRAM = ACTIVE.interacting(SRAMDRC)
+layer ACTIVE_IN_WELL = ACTIVE.outside(SRAMDRC).interacting(WELL)
+layer ACTIVE_OUT_WELL = ACTIVE.outside(SRAMDRC).outside(WELL)
+layer SELECT = NSELECT or PSELECT
+layer SDT_LOGIC = SDT.not_interacting(SRAMDRC)
+layer SDT_SRAM = SDT.interacting(SRAMDRC)
+layer LIG_LOGIC = LIG.outside(SRAMDRC)
+layer LIG_SRAM = LIG.interacting(SRAMDRC)
+layer V0_LISD = V0.interacting(LISD).not_interacting(LIG)
+layer V0_LIG = V0.interacting(LIG) not V0.inside(LISD)
+layer LIG_LISD = LIG and LISD
+layer LIG_GATE = LIG_LOGIC and GATE_UNCUT
+layer LIG_GATE_SRAM = LIG_SRAM and GATE_UNCUT
+layer V0_LIG_OVERLAP = V0_LIG and LIG
+layer GCUT_FREE_GATE = GATE.not_interacting(GCUT)
+# The logic ACTIVE each implant must enclose (3.7).
+layer ACTIVE_NSELECT = ACTIVE_LOGIC.interacting(NSELECT)
+layer ACTIVE_PSELECT = ACTIVE_LOGIC.interacting(PSELECT)
+layer ACTIVE_SLVT = ACTIVE_LOGIC.interacting(SLVT)
+layer ACTIVE_LVT = ACTIVE_LOGIC.interacting(LVT)
+layer ACTIVE_SRAMVT = ACTIVE_LOGIC.interacting(SRAMVT)
+# ACTIVE.LUP.1: a tap is ACTIVE of the well's own type, a MOS is ACTIVE under
+# a gate.
+layer NTAP = (ACTIVE and NSELECT and WELL).not_interacting(GATE)
+layer PTAP = ((ACTIVE and PSELECT) not WELL).not_interacting(GATE)
+layer PMOS_ACTIVE = (ACTIVE and PSELECT and WELL).interacting(GATE)
+layer NMOS_ACTIVE = ((ACTIVE and NSELECT) not WELL).interacting(GATE)
+
+# 3.1 Geometry
+rule GEOMETRY.NONORTHOGONAL angle(; allowed: [0deg, 90deg])
+
+# 3.2 WELL. W.2 (vertical 54) at the smaller limit; W.1 is horizontal 108.
+rule WELL.W.2 width(WELL) >= 54nm
+# S.2 (horizontal 54); S.1 is vertical 108.
+rule WELL.S.2 space(WELL) >= 54nm
+rule WELL.A.1A area(WELL) >= 5832nm2
+rule WELL.A.1B hole_area(WELL) >= 5832nm2
+
+# 3.3 FIN. FIN.W.1 is an exact 7 nm (vertical) width: at least 7 nm across,
+# and nowhere wider than 7 nm in every direction.
+rule FIN.W.1 width(FIN) >= 7nm
+rule FIN.W.1.max width(FIN) <= 7nm
+# FIN.S.1 is an exact 27 nm pitch; with FIN.W.1's 7 nm that leaves 20 nm.
+rule FIN.S.1 space(FIN) >= 20nm
+
+# 3.4 GATE. GATE.W.1 is an exact 20 nm (horizontal) width.
+rule GATE.W.1 width(GATE) >= 20nm
+rule GATE.W.1.max width(GATE) <= 20nm
+rule GATE.S.2 space(GATE) >= 34nm
+rule GATE.ACTIVE.EX.1 extension(GATE_UNCUT, ACTIVE) >= 4nm
+rule GATE.ACTIVE.EX.2 extension(ACTIVE, GATE_UNCUT) >= 25nm
+rule GATE.ACTIVE.S.4 space(ACTIVE, GATE_FIELD) >= 9nm
+
+# 3.5 ACTIVE. W.3 (horizontal 16) at the smaller limit; W.1 is vertical 27.
+rule ACTIVE.W.3 width(ACTIVE) >= 16nm
+# S.1 (vertical 27); S.2B is horizontal 38.
+rule ACTIVE.S.1 space(ACTIVE) >= 27nm
+rule ACTIVE.FIN.EX.1 extension(ACTIVE, FIN) >= 10nm
+rule ACTIVE.WELL.S.4 space(ACTIVE_OUT_WELL, WELL) >= 27nm
+rule ACTIVE.WELL.EN.1 enclosure(ACTIVE_IN_WELL, WELL) >= 27nm
+rule ACTIVE.A.1A area(ACTIVE_LOGIC) >= 864nm2
+rule ACTIVE.A.1B hole_area(ACTIVE_LOGIC) >= 864nm2
+rule SRAM.ACTIVE.A.2A area(ACTIVE_SRAM) >= 432nm2
+rule SRAM.ACTIVE.A.2B hole_area(ACTIVE_SRAM) >= 432nm2
+# ACTIVE.AUX.1: inside NSELECT or PSELECT with no coincident edge, which on a
+# 1 nm grid is at least 1 nm of enclosure.
+rule ACTIVE.AUX.1 enclosure(ACTIVE, SELECT) >= 1nm
+# ACTIVE.LUP.1: MOS active within 30 um of a tap. Measured to any tap of the
+# well's type, not only one in the same well.
+rule ACTIVE.LUP.1.PMOS missing_tie(PMOS_ACTIVE, NTAP; max_distance: 30um)
+rule ACTIVE.LUP.1.NMOS missing_tie(NMOS_ACTIVE, PTAP; max_distance: 30um)
+
+# 3.6 GCUT. GCUT.ACTIVE.S.1 also flags GCUT over a channel (GCUT.AUX.3).
+rule GCUT.W.1 width(GCUT) >= 17nm
+rule GCUT.ACTIVE.S.1 space(GCUT, CHANNEL) >= 4nm
+rule GCUT.GATE.EX.1 extension(GCUT, GATE) >= 17nm
+rule GCUT.GATE.S.2 space(GCUT, GCUT_FREE_GATE) >= 17nm
+
+# 3.7 NSELECT, and the same rules for PSELECT, SLVT, LVT and SRAMVT.
+# W.2 (vertical 54) at the smaller limit; W.1 is horizontal 108. ACTIVE.EN.2
+# (vertical 27) likewise; ACTIVE.EN.1 is horizontal 46. GATE.EX.1 and EX.2
+# are both 7 nm.
+let implants = [(NSELECT, ACTIVE_NSELECT), (PSELECT, ACTIVE_PSELECT), (SLVT, ACTIVE_SLVT), (LVT, ACTIVE_LVT), (SRAMVT, ACTIVE_SRAMVT)]
+for (L, a) in implants {
+    rule {L}.W.2 width(L) >= 54nm
+    rule {L}.ACTIVE.EN.2 enclosure(a, L) >= 27nm
+    rule {L}.GATE.EX.1 extension(L, GATE_UNCUT) >= 7nm
+}
+
+# 3.8 SDT. SDT.W.1 (horizontal 24) is the smaller limit for logic SDT, and
+# SRAM.SDT.W.4 (vertical 17) for SRAM SDT. SDT.GATE.S.2 also flags the
+# overlap and touch of SDT.GATE.AUX.1.
+rule SDT.W.1 width(SDT_LOGIC) >= 24nm
+rule SRAM.SDT.W.4 width(SDT_SRAM) >= 17nm
+rule SDT.GATE.S.2 space(SDT, GATE) >= 5nm
+
+# 3.9 LISD. An end of line is an edge of at most 36 nm. S.2 (tip to side, 25)
+# is written as end-of-line spacing to anything; S.3 tip to tip is 27.
+rule LISD.W.1 width(LISD) >= 24nm
+rule LISD.S.1 space(LISD) >= 18nm
+rule LISD.S.2 eol_space(LISD; eol_width: 37nm) >= 25nm
+rule LISD.A.1 area(LISD) >= 648nm2
+
+# 3.10 LIG
+rule LIG.W.1 width(LIG) >= 16nm
+rule LIG.S.1 space(LIG) >= 18nm
+rule LIG.S.2 eol_space(LIG; eol_width: 37nm) >= 25nm
+rule LIG.GATE.S.10 space(LIG, CHANNEL) >= 5nm
+rule LIG.A.1 area(LIG) >= 324nm2
+rule LIG.LISD.A.2 area(LIG_LISD) >= 128nm2
+rule LIG.GATE.A.3 area(LIG_GATE) >= 320nm2
+rule SRAM.LIG.GATE.A.4 area(LIG_GATE_SRAM) >= 240nm2
+rule LIG.LISD.OV.1 overlap(LIG, LISD) >= 8nm
+rule SRAM.LIG.GATE.OV.2 overlap(LIG_SRAM, GATE_UNCUT) >= 15nm
+
+# 3.11 V0. V0.S.1 is 18 nm on one track, 27 nm across unaligned tracks;
+# written at 18. V0.S.2 (23, both with end-cap) is the smallest
+# corner-to-corner limit. V0.M1.EN.1 and V0.LISD.EN.2 also hold the via
+# inside M1 and LISD (V0.AUX.1).
+rule V0.W.1 width(V0) >= 18nm
+rule V0.S.1 space(V0) >= 18nm
+rule V0.S.2 corner_space(V0) >= 23nm
+rule V0.M1.EN.1 enclosure(V0, M1, opposite) >= 5nm
+rule V0.LISD.EN.2 enclosure(V0_LISD, LISD, opposite) >= 3nm
+rule V0.LIG.A.1 area(V0_LIG_OVERLAP) >= 288nm2
+
+# 3.12 M1-M3, the same rules on each. An end of line is an edge of at most
+# 36 nm; S.2 (tip to side, 25) as end-of-line spacing to anything.
+let euv_metals = [M1, M2, M3]
+for m in euv_metals {
+    rule {m}.W.1 width(m) >= 18nm
+    rule {m}.S.1 space(m) >= 18nm
+    rule {m}.S.2 eol_space(m; eol_width: 37nm) >= 25nm
+    rule {m}.S.6 corner_space(m) >= 20nm
+    rule {m}.A.1 area(m) >= 504nm2
+}
+
+# 3.13 V1-V3. V1.S.1 as V0.S.1; V1.S.2 (23) the smallest corner limit.
+let euv_vias = [(V1, M1, M2), (V2, M2, M3), (V3, M3, M4)]
+for (v, below, above) in euv_vias {
+    rule {v}.W.1 width(v) >= 18nm
+    rule {v}.S.1 space(v) >= 18nm
+    rule {v}.S.2 corner_space(v) >= 23nm
+}
+# V1.M1.EN.1 is 5 nm on two opposite sides and 2 nm on the others; V2.M2.EN.1
+# and V3.M3.EN.1 are 5 nm on two opposite sides. The upper metal: 5 nm on
+# two opposite sides (V1.M2.EN.2, and V2 into M3 by the section's rule), and
+# 11 nm for V3 into M4 (V3.M4.EN.2).
+rule V1.M1.EN.1 enclosure(V1, M1, opposite) >= 5nm
+rule V1.M1.EN.1.ALL enclosure(V1, M1) >= 2nm
+rule V2.M2.EN.1 enclosure(V2, M2, opposite) >= 5nm
+rule V3.M3.EN.1 enclosure(V3, M3, opposite) >= 5nm
+rule V1.M2.EN.2 enclosure(V1, M2, opposite) >= 5nm
+rule V2.M3.EN.2 enclosure(V2, M3, opposite) >= 5nm
+rule V3.M4.EN.2 enclosure(V3, M4, opposite) >= 11nm
+
+# 3.14 M4-M5 and 3.16 M6-M7 (SADP). W.1 is the across-track minimum, W.2 the
+# across-track maximum (a wider shape is wider in every direction, since W.5
+# makes it at least 44 nm along the track). S.1 is the across-track spacing
+# at the smaller limit; S.2 along the track is 40.
+let sadp_metals = [(M4, 24nm, 480nm), (M5, 24nm, 480nm), (M6, 32nm, 640nm), (M7, 32nm, 640nm)]
+for (m, w, wmax) in sadp_metals {
+    rule {m}.W.1 width(m) >= w
+    rule {m}.W.2 width(m) <= wmax
+    rule {m}.S.1 space(m) >= w
+}
+
+# 3.15 V4-V5 and 3.17 V6-V7 (LELE). W.1 is an exact width: at least w across,
+# nowhere wider than w in every direction. S.1 and S.2 (same and different
+# net) share one value, so one row. Each via is enclosed 11 nm on two
+# opposite sides by the metal below (EN.1) and above (EN.2).
+let lele_vias = [(V4, M4, M5, 24nm, 33nm), (V5, M5, M6, 24nm, 33nm), (V6, M6, M7, 32nm, 45nm), (V7, M7, M8, 32nm, 45nm)]
+for (v, below, above, w, s) in lele_vias {
+    rule {v}.W.1 width(v) >= w
+    rule {v}.W.1.max width(v) <= w
+    rule {v}.S.1 space(v) >= s
+    rule {v}.S.3 corner_space(v) >= s
+    rule {v}.{below}.EN.1 enclosure(v, below, opposite) >= 11nm
+    rule {v}.{above}.EN.2 enclosure(v, above, opposite) >= 11nm
+}
+
+# 3.18 M8-M9. W.5 is printed "Maximum width ... >= 2000"; read as a maximum
+# (the tech LEF has MAXWIDTH 2.0). S.4 to S.8 are spacings from a shape whose
+# width reaches the stated band.
+let se_metals = [M8, M9]
+for m in se_metals {
+    rule {m}.W.1 width(m) >= 40nm
+    rule {m}.W.5 width(m) <= 2000nm
+    rule {m}.S.1 space(m) >= 40nm
+    rule {m}.S.4 wide_space(m; width: 60nm) >= 60nm
+    rule {m}.S.5 wide_space(m; width: 80nm) >= 80nm
+    rule {m}.S.6 wide_space(m; width: 120nm) >= 120nm
+    rule {m}.S.7 wide_space(m; width: 500nm) >= 500nm
+    rule {m}.S.8 wide_space(m; width: 1000nm) >= 1000nm
+    rule {m}.A.1 area(m) >= 7520nm2
+    rule {m}.L.1 edge_length(m) >= 40nm
+}
+
+# 3.19 V8-V9. V8.W.1 is exactly 40 nm across (40x40, 40x120 or 120x40).
+let se_vias = [(V8, M8, M9), (V9, M9, PAD)]
+for (v, below, above) in se_vias {
+    rule {v}.W.1 width(v) >= 40nm
+    rule {v}.W.1.max width(v) <= 40nm
+    rule {v}.S.1 space(v) >= 57nm
+    rule {v}.S.2 corner_space(v) >= 57nm
+    rule {v}.{below}.EN.1 enclosure(v, below, opposite) >= 20nm
+    rule {v}.{above}.EN.2 enclosure(v, above, opposite) >= 20nm
+}
+
+# Electrical: the voltage-drop limits come from the intent file, not the DRM.
+rule ir_drop ir_drop()
+
+# Connectivity. Only M1-M9 and V1-V8 carry current here: they are the layers
+# [RC] gives a resistance for. GATE, LIG, LISD, SDT, V0 and PAD have no
+# published resistance, so they are not conductors, and transistors are not
+# extracted (see "needs" below).
+connect conductors [M1, M2, M3, M4, M5, M6, M7, M8, M9]
+connect touch_within_layer
+connect via V1 [M1, M2]
+connect via V2 [M2, M3]
+connect via V3 [M3, M4]
+connect via V4 [M4, M5]
+connect via V5 [M5, M6]
+connect via V6 [M6, M7]
+connect via V7 [M7, M8]
+connect via V8 [M8, M9]
+connect label M1_LABEL names M1
+connect label M2_LABEL names M2
+connect label M3_LABEL names M3
+connect label M4_LABEL names M4
+connect label M5_LABEL names M5
+connect label M6_LABEL names M6
+connect label M7_LABEL names M7
+connect label M8_LABEL names M8
+connect label M9_LABEL names M9
+
+# Parasitic stack.
+#   sheet: [RC] resistance per um (kohm/um) times the DRM minimum width, e.g.
+#          M1 0.0704175 kohm/um x 0.018 um = 1.2675 ohm/sq. A via's sheet is
+#          [RC]'s resistance per cut.
+#   thickness: [MEJ] 4.4, aspect ratio 2:1 on the DRM minimum width.
+#   height: the metal and via thicknesses stacked from the bottom of M1. The
+#          height of M1 above the substrate and the capping layers between
+#          levels are not published, so heights are relative to M1.
+#   dielectric, area_cap, fringe_cap: not published in readable form (the
+#          QRC tech file in asap7sc7p5t_28 is compiled). Written as 0, so
+#          capacitance is not extracted from this deck; resistance is.
+pex M1 thickness 36nm height 0nm sheet 1.2675ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V1 thickness 36nm height 36nm sheet 17.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M2 thickness 36nm height 72nm sheet 0.534829ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V2 thickness 36nm height 108nm sheet 17.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M3 thickness 36nm height 144nm sheet 0.563166ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V3 thickness 36nm height 180nm sheet 17.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M4 thickness 48nm height 216nm sheet 0.432876ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V4 thickness 48nm height 264nm sheet 11.8ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M5 thickness 48nm height 312nm sheet 0.455844ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V5 thickness 48nm height 360nm sheet 11.8ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M6 thickness 64nm height 408nm sheet 0.380147ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V6 thickness 64nm height 472nm sheet 8.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M7 thickness 64nm height 536nm sheet 0.400307ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V7 thickness 64nm height 600nm sheet 8.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M8 thickness 80nm height 664nm sheet 0.337906ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex V8 thickness 80nm height 744nm sheet 6.3ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M9 thickness 80nm height 824nm sheet 0.355822ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+
+# needs: directional (a limit along x or y only). The stricter halves of the
+# pairs written above at the smaller limit:
+#   WELL.W.1 horizontal width(WELL) >= 108nm; WELL.S.1 vertical space(WELL) >= 108nm
+#   FIN.W.2 horizontal width(FIN) >= 108nm
+#   GATE.W.2 vertical width(GATE) >= 40nm
+#   ACTIVE.W.1 vertical width(ACTIVE) >= 27nm; ACTIVE.S.2B horizontal space(ACTIVE) >= 38nm
+#   {L}.W.1 horizontal width >= 108nm; {L}.ACTIVE.EN.1 horizontal enclosure >= 46nm
+#   SDT.W.2 vertical width(SDT_LOGIC) >= 27nm; SDT.S.1 horizontal space(SDT) >= 30nm
+#   SDT.ACTIVE.OV.1 vertical overlap(SDT, ACTIVE) >= 27nm; SDT.LISD.OV.2 vertical overlap(SDT, LISD) >= 27nm
+#   SRAM.SDT.ACTIVE.OV.3 / SRAM.SDT.LISD.OV.4 vertical overlap >= 17nm
+#   GCUT.S.3 vertical space(GCUT) >= 35nm
+#   LIG.GATE.S.9A vertical space(LIG, GATE_UNCUT) >= 14nm; LIG.GATE.S.9B horizontal >= 17nm
+#   LIG.GCUT.S.11 vertical space(LIG, GCUT) >= 5nm
+#   M4-M7 .W.5 along-track width >= 44nm; .S.2/.S.3/.S.4 along-track space >= 40nm
+#   M4-M7 .S.5 parallel run length on adjacent tracks >= 44nm
+#   WELL.GATE.EX.1 horizontal extension(WELL, GATE_UNCUT) >= 7nm;
+#   WELL.GATE.EX.2 vertical, GATE not interacting SRAMDRC, >= 7nm
+#     (a gate crosses the well edge, so a two-axis extension would flag every cell)
+#
+# Presence rules.
+rule GCUT.AUX.1 forbidden(GCUT.not_interacting(GATE))
+rule NSELECT.PSELECT.AUX.1 forbidden(NSELECT and PSELECT)
+rule VT.AUX.2 forbidden((SLVT and LVT) or (SLVT and SRAMVT) or (LVT and SRAMVT))
+rule SDT.ACTIVE.AUX.3 forbidden(SDT.outside(ACTIVE))
+rule SDT.LISD.AUX.4 inside(SDT, LISD)
+# ACTIVE outside SRAMDRC that touches it.
+rule SRAM.ACTIVE.AUX.2 forbidden(ACTIVE.outside(SRAMDRC).interacting(SRAMDRC))
+#
+# needs: net spacing that is directional (S.2A) or between two layers:
+#   rule ACTIVE.S.2A space(ACTIVE; different_net) >= 92nm   (horizontal only)
+#   rule LIG.LISD.S.6 space(LIG, LISD; different_net) >= 14nm
+#   rule LIG.LISD.S.7 corner_space(LIG, LISD; different_net) >= 15nm
+#   rule LIG.SDT.S.8 space(LIG, SDT; different_net) >= 14nm
+#
+# needs: edge checks (spacing classed by the length of both facing edges)
+#   rule LISD.S.3 / LIG.S.3 / M1-M3.S.3 tip-to-tip, both edges 24-36nm: >= 27nm
+#   rule LIG.S.4 / M1-M3.S.4 tip-to-tip, both edges < 24nm: >= 31nm
+#   rule LIG.S.5 / M1-M3.S.5 tip-to-tip, one 24-36nm and one < 24nm: >= 31nm
+#   rule SRAM.LISD.S.4 tip-to-tip inside SRAMDRC, both edges <= 36nm: >= 27nm
+#   rule M8/M9.S.2 tip-to-side >= 43nm; .S.3 tip-to-tip (both < 80nm) >= 46nm
+#   rule V0-V3.S.3 corner, both vias without 5nm end-cap >= 30nm; .S.4 one with, one without >= 27nm
+#   rule LIG.GATE.EX.1 extension(LIG_LOGIC, GATE_UNCUT) >= 1nm on both opposite sides
+#     (extension measures one box side; a flush side reads as no protrusion)
+#
+# needs: width by length
+#   rule M8/M9.W.2 width >= 60nm when length >= 400nm and < 1200nm
+#   rule M8/M9.W.3 width >= 80nm when length >= 1200nm and < 1800nm
+#   rule M8/M9.W.4 width >= 120nm when length >= 1800nm
+#
+# needs: sourced MOL and gate resistance. GATE, LISD, LIG and V0 have no
+# published sheet or contact resistance, so they cannot be conductors, and a
+# MOS terminal must be one. With them, the recognisers would be (layers per
+# [DRM] 2.1, models per the PDK cells in cdslib/asap7_TechLib_10):
+#   layer SD = (ACTIVE not GATE) and SDT
+#   device mos (CHANNEL and NSELECT) not (SLVT or LVT or SRAMVT) model "nmos_rvt" terminals [GATE_UNCUT, SD, SD]
+#   device mos CHANNEL and NSELECT and LVT model "nmos_lvt" ...; and SLVT "nmos_slvt", SRAMVT "nmos_sram"
+#   device mos (CHANNEL and PSELECT) not (SLVT or LVT or SRAMVT) model "pmos_rvt" ...; and "pmos_lvt", "pmos_slvt", "pmos_sram"
+#   rule supply_short supply_short(NTAP, PTAP)
+#
+# Not written, with the reason:
+#   SRAM.ACTIVE.WELL.S.5, SRAM.ACTIVE.WELL.EN.2, SRAM.NSELECT.ACTIVE.EN.3/4:
+#     13.5 nm, off the 1 nm grid.
+#   FIN.S.1, GATE.S.1, GATE.S.3: exact pitches; only the spacing they imply is
+#     written. ACTIVE.W.2, SDT.W.3: width in multiples of 27 nm.
+#   M4-M7 .W.3/.W.4 (odd multiples of track width), .AUX.1/.AUX.2 (track grid),
+#     FIN.AUX.1, GATE.AUX.1/2, M4.AUX.3 (no bends), GATE.ACTIVE.AUX.3,
+#     GCUT.AUX.2, LIG.GATE.AUX.1, SDT.ACTIVE.AUX.2, V0.LIG.AUX.2, M4.AUX.4,
+#     ACTIVE.AUX.3 (no vertical notch), V0.M1.AUX.3, V1.M2.AUX.2, V4.M5.AUX.2,
+#     V6.M7.AUX.2 (via as wide as the metal): edge and alignment conditions.
+#   V0.LIG.EN.4 (LIG enclosed by V0): the table's wording is ambiguous.
+#   V0.LISD.EN.3 (V0 partly in LISD, touching LIG): needs "partly inside".
+#   Multi-patterning colour spacing for SADP M4-M7 and LELE V4-V7: the DRM
+#     states the patterning (Table 2.3.1) but no same-mask spacing.
+#   Antenna, density, electromigration, reliability, ESD and latch-up limits
+#     other than ACTIVE.LUP.1: not in the DRM. The previous version of this
+#     file carried such rows with invented numbers; they are gone.

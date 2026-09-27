@@ -11,9 +11,7 @@ use common::{grid, uniform_stack};
 use gpurify_check::topology::net::extract_nets_into;
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_extract::field::filament::self_inductance_bar;
-use gpurify_extract::field::henry::{
-    extract_inductance_into, InductMatrix, InductanceError, InductanceOptions,
-};
+use gpurify_extract::field::henry::{extract_inductance_into, InductMatrix, InductanceError};
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStoreBuilder, LayerId};
 use gpurify_ingest::deck::Connectivity;
@@ -48,16 +46,8 @@ fn a_single_bar_matches_the_grover_closed_form() {
     let (store, nets) = one_bar();
     let stack = uniform_stack(1, 1.0, 0.25);
     let mut out = InductMatrix::default();
-    extract_inductance_into(
-        &store,
-        &nets,
-        &[NetId(0)],
-        &stack,
-        grid(),
-        &InductanceOptions::default(),
-        &mut out,
-    )
-    .expect("one bar over a stated stack solves");
+    extract_inductance_into(&store, &nets, &[NetId(0)], &stack, grid(), &mut out)
+        .expect("one bar over a stated stack solves");
 
     assert_eq!(out.net, vec![NetId(0)], "one row for the one selected net");
     let l = out.l_henry[0];
@@ -83,11 +73,10 @@ fn a_single_bar_matches_the_grover_closed_form() {
 fn two_extractions_are_bit_identical() {
     let (store, nets) = one_bar();
     let stack = uniform_stack(1, 1.0, 0.25);
-    let options = InductanceOptions::default();
     let mut first = InductMatrix::default();
     let mut second = InductMatrix::default();
     for out in [&mut first, &mut second] {
-        extract_inductance_into(&store, &nets, &[NetId(0)], &stack, grid(), &options, out)
+        extract_inductance_into(&store, &nets, &[NetId(0)], &stack, grid(), out)
             .expect("one bar over a stated stack solves");
     }
 
@@ -114,16 +103,8 @@ fn a_layer_with_no_sheet_resistance_is_refused_by_name() {
     let mut stack = uniform_stack(1, 1.0, 0.25);
     stack.sheet_res_ohm_sq[0] = 0.0;
     let mut out = InductMatrix::default();
-    let error = extract_inductance_into(
-        &store,
-        &nets,
-        &[NetId(0)],
-        &stack,
-        grid(),
-        &InductanceOptions::default(),
-        &mut out,
-    )
-    .expect_err("a zero sheet resistance is a refusal, not a skip");
+    let error = extract_inductance_into(&store, &nets, &[NetId(0)], &stack, grid(), &mut out)
+        .expect_err("a zero sheet resistance is a refusal, not a skip");
 
     match error {
         InductanceError::NoSheetResistance(layer) => assert_eq!(layer, 0),

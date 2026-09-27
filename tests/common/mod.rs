@@ -96,15 +96,10 @@ impl Run {
 
     /// A deck stating a limit that is not a whole number of grid units.
     pub fn with_off_grid_limit() -> Self {
-        // A 1 nm grid divides every whole nanometre exactly, so the limit has
-        // to be fractional to be off it. Written as `0.5` rather than as a
-        // sub-nanometre integer because the schema's `nm` value is a number,
-        // not an integer, and a rounding parser would accept this one silently.
+        // On the deck's own 0.5 nm grid, so it is the layout's 1 nm grid that refuses it.
         build(
             "off-grid",
-            &deck_with_rule(
-                r#""kind": "min_width", "layers": ["met1"], "params": { "limit": { "nm": 300.5 } }"#,
-            ),
+            &deck_with_rule("0.5nm", "width(met1) >= 300.5nm"),
             WIDE_NM,
         )
     }
@@ -169,39 +164,26 @@ impl Drop for Run {
 
 /// The deck every well-formed fixture uses: one layer, one `min_width` rule.
 fn min_width_deck(limit_nm: i64) -> String {
-    deck_with_rule(&format!(
-        r#""kind": "min_width", "layers": ["met1"], "params": {{ "limit": {{ "nm": {limit_nm} }} }}"#
-    ))
+    deck_with_rule("1nm", &format!("width(met1) >= {limit_nm}nm"))
 }
 
 /// The `min_width` deck plus one `ir_drop` row — one rule from each domain —
 /// and the `pex` stack ERC needs before it will dispatch a rule at all.
 fn min_width_and_ir_drop_deck(limit_nm: i64) -> String {
     format!(
-        r#"{{
-  "layers": {{ "met1": [{}, {}] }},
-  "rules": {{
-    "{RULE}": {{ "kind": "min_width", "layers": ["met1"], "params": {{ "limit": {{ "nm": {limit_nm} }} }} }},
-    "supply_ir_drop": {{ "kind": "ir_drop", "layers": [], "params": {{}} }}
-  }},
-  "connectivity": {{ "conductors": ["met1"], "intra_layer_touch": true, "vias": [] }},
-  "pex": {{ "met1": {{ "thickness_nm": 200, "height_nm": 100,
-                       "sheet_res_ohm_sq": 0.08, "area_cap_af_um2": 40,
-                       "fringe_cap_af_um": 20, "dielectric_k": 3.9 }} }}
-}}"#,
-        MET1.0, MET1.1
+        "{}rule supply_ir_drop ir_drop()\n\
+         pex met1 thickness 200nm height 100nm sheet 0.08ohm dielectric 3.9 \
+         area_cap 40aF/um2 fringe_cap 20aF/um\n",
+        min_width_deck(limit_nm)
     )
 }
 
-/// The deck with its one rule's body substituted, so a malformed fixture
+/// The deck with its one rule's check substituted, so a malformed fixture
 /// differs from the good one in exactly the bytes under test.
-fn deck_with_rule(body: &str) -> String {
+fn deck_with_rule(grid: &str, check: &str) -> String {
     format!(
-        r#"{{
-  "layers": {{ "met1": [{}, {}] }},
-  "rules": {{ "{RULE}": {{ {body} }} }},
-  "connectivity": {{ "conductors": ["met1"], "intra_layer_touch": true, "vias": [] }}
-}}"#,
+        "grid {grid}\nlayer met1 = gds({}, {})\nrule {RULE} {check}\n\
+         connect conductors [met1]\nconnect touch_within_layer\n",
         MET1.0, MET1.1
     )
 }
@@ -225,7 +207,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     let dir = scratch_dir(tag);
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
 
-    let deck_path = dir.join("deck.json");
+    let deck_path = dir.join("rules.deck");
     std::fs::write(&deck_path, deck_source).expect("the scratch directory is writable");
 
     // Parsed with a throwaway string table: this one exists only to reach
@@ -260,8 +242,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         grid: Some(grid),
         // No reference netlist and no design intent exist yet, so `Inputs`
         // starts without them and `without_reference` / `without_intent` are
-        // idempotent. See `docs/NEED_TESTING.md`: writing either one needs a
-        // deck holding rules of both domains, which cannot currently be parsed.
+        // idempotent.
         reference: None,
         intent: None,
         ..Inputs::default()
@@ -545,7 +526,7 @@ fn case_inputs(
 ) -> Inputs {
     Inputs {
         layout: fixtures().join(domain).join(format!("{id}.gds")),
-        deck: fixtures().join("params.json"),
+        deck: fixtures().join("params.deck"),
         grid: Some(Grid::new(DBU_PER_UM).expect("a thousand dbu per micrometre is a grid")),
         reference,
         intent,
@@ -560,7 +541,7 @@ pub struct CaseRun {
     pub outputs: Outputs,
 }
 
-/// Load, extract and check one fixture cell against `params.json`.
+/// Load, extract and check one fixture cell against `params.deck`.
 pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, String> {
     run_case_inputs(case_inputs(domain, id, None, None), checks)
 }
@@ -686,7 +667,7 @@ pub fn field_solved_coupling_af(domain: &str, id: &str) -> Result<f64, String> {
 /// The deck rule id a case's `rule`/`check` name refers to.
 fn deck_rule_of(case: &GeometryCase) -> Option<&'static str> {
     // The `min_enclosure` split is the one place the case id is load-bearing:
-    // `params.json` declares the kind twice, once for met1-over-met2 and once
+    // `params.deck` declares the kind twice, once for met1-over-met2 and once
     // for nwell-over-diff, and both rows run on a `DRC_WE_*` cell. The corpus
     // note on each of those three cases says "select the nwell.diff row".
     if case.id.starts_with("DRC_WE_") {
@@ -786,7 +767,7 @@ pub fn check_geometry_case(case: &GeometryCase) -> Vec<String> {
     let Some(rule) = run.loaded.strings.get(deck_rule) else {
         failed.push(format!(
             "{}: the deck never interned a rule named {deck_rule}, so nothing in \
-             params.json configures the {} this case is about{context}",
+             params.deck configures the {} this case is about{context}",
             case.id, case.rule
         ));
         return failed;
@@ -957,7 +938,7 @@ fn check_validity_case(case: &GeometryCase, context: &str) -> Vec<String> {
 
     let Some(layer) = loaded.deck.layers.id(&loaded.strings, &want.layer) else {
         return vec![format!(
-            "{}: params.json declares no layer named {}{context}",
+            "{}: params.deck declares no layer named {}{context}",
             case.id, want.layer
         )];
     };

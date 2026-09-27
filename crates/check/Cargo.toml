@@ -8,6 +8,7 @@ gpurify-geom = { workspace = true }
 gpurify-ingest = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+fearless_simd = { workspace = true }
 
 [dev-dependencies]
 gpurify-testgen = { workspace = true }

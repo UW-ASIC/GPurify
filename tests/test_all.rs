@@ -114,7 +114,8 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
         .expect_err("a limit off the manufacturing grid must not load");
 
     assert!(
-        matches!(error, LoadError::Deck(DeckError::OffGrid(_, _))),
+        matches!(&error, LoadError::Deck(DeckError::Invalid { diagnostics, .. })
+            if diagnostics[0].message.contains("not on the layout's grid")),
         "expected an off-grid rejection, got {error:?}"
     );
 }
@@ -307,7 +308,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         &gpurify::export::json::Report {
             header: &gpurify::export::Header {
                 tool_version: "test",
-                deck_path: "params.json".to_owned(),
+                deck_path: "params.deck".to_owned(),
                 layout_path: "LVS_CLEAN_MATCH.gds".to_owned(),
                 timestamp: None,
             },
@@ -493,7 +494,7 @@ fn a_corpus_case_with_design_intent_reaches_an_intent_gated_rule() {
 // ---------------------------------------------------------------------------
 // The four intent-gated ERC rules, on their *ran* path.
 //
-// `docs/CORRECTNESS_MAP.md` §3: `electromigration`, `esd_latchup`, `ir_drop`
+// `electromigration`, `esd_latchup`, `ir_drop`
 // and `reliability` each have one corpus case, and every one of them asserts
 // `Skipped(NoDesignIntent)`. Those cases are regression guards on the gate and
 // stay exactly as they are — they run through `common::run_case`, which passes
@@ -528,7 +529,7 @@ fn layer_of(run: &common::CaseRun, name: &str) -> gpurify::geom::LayerId {
         .deck
         .layers
         .id(&run.loaded.strings, name)
-        .unwrap_or_else(|| panic!("params.json declares no layer named {name}"))
+        .unwrap_or_else(|| panic!("params.deck declares no layer named {name}"))
 }
 
 /// A solved electrical measurement against its closed form, to a relative 1e-9.
@@ -824,11 +825,11 @@ fn an_unclamped_pad_and_an_undersized_guard_ring_are_both_found_on_the_same_cell
 
     assert_eq!(
         pad.measured,
-        Measurement::Count(0),
-        "no clamp is spellable from a deck, so the pad has no discharge path at \
-         all — and an absent path is Count(0), not an infinite resistance"
+        Measurement::Count(1),
+        "the pad net is ERC_HV_n0, the declared power supply, so it reaches the \
+         power rail by being it; ERC_HV has no clamp device, so no ground rail"
     );
-    assert_eq!(pad.limit, Measurement::Count(1));
+    assert_eq!(pad.limit, Measurement::Count(2));
     assert_eq!(at_of(pad), (200, 200));
     assert_eq!(pad.layer, layer_of(&run, "met1"));
     assert_eq!(pad.severity, Severity::Error);

@@ -4,6 +4,7 @@
 //! marker is the channel, not the implant.
 //! Data in: `GeometryStore`, `NetTable`, `DeviceRecognition`. Data out: `DeviceTable`.
 
+use crate::drc::rules::{owners_of, LayerRects};
 use crate::topology::csr_run;
 use crate::topology::net::{retain_intersecting_into, NetId, NetTable};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
@@ -158,7 +159,8 @@ pub fn recognise_into(
     }
 
     let mut marker_index = SpatialIndex::default();
-    let mut terminal_index = SpatialIndex::default();
+    // One index per terminal layer, shared by every recogniser naming it.
+    let mut terminal_index: Vec<(LayerId, SpatialIndex)> = Vec::new();
     let mut pairs: Vec<(PolyId, PolyId)> = Vec::new();
     let mut exact: Vec<(PolyId, PolyId)> = Vec::new();
     let mut bind: Vec<NetId> = Vec::new();
@@ -215,8 +217,17 @@ pub fn recognise_into(
                     )
                 });
 
-            SpatialIndex::build_into(store, layer, &mut terminal_index);
-            cross_layer_pairs_into(store, &marker_index, &terminal_index, touching, &mut pairs);
+            let at = terminal_index
+                .iter()
+                .position(|(built, _)| *built == layer)
+                .unwrap_or_else(|| {
+                    let mut index = SpatialIndex::default();
+                    SpatialIndex::build_into(store, layer, &mut index);
+                    terminal_index.push((layer, index));
+                    terminal_index.len() - 1
+                });
+            let index = &terminal_index[at].1;
+            cross_layer_pairs_into(store, &marker_index, index, touching, &mut pairs);
             // Box-only hits must not bind: a spurious low-id pair would win.
             retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
 
@@ -409,10 +420,17 @@ pub fn refuse_conducting_channels(
             validate_layer_into(store, layer, &mut conductor_area).map_err(BooleanError::from)?;
             intersection_into(&marker_area, &conductor_area, &mut overlap)?;
             if !overlap.is_empty() {
+                // The overlap's own rows are the boolean's scratch store's.
+                let mut drawn = LayerRects::default();
+                let mut owner = PolyId(u32::MAX);
+                for (id, area) in [(marker, &marker_area), (layer, &conductor_area)] {
+                    drawn.build(store, id, area);
+                    owner = owner.min(owners_of(&overlap, &drawn)[0]);
+                }
                 return Err(ChannelError::ConductingChannel {
                     marker,
                     conductor: layer,
-                    poly: overlap.get(0).provenance(),
+                    poly: owner,
                 });
             }
         }

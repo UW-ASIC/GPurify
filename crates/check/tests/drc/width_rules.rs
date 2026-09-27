@@ -1,11 +1,11 @@
-//! Width family: `min_width`, `max_width`, `min_edge_length`, `notch`. Each case
+//! Width family: `min_width`, `max_width`, `cut_size`, `min_edge_length`, `notch`. Each case
 //! is one geometry against the limit at its answer (clean) and one unit past it.
 
 use crate::common;
 
 use common::{Sink, A, RULE};
 use gpurify_check::drc::Rule;
-use gpurify_check::report::{Severity, Violation};
+use gpurify_check::report::{Measurement, Severity, Violation};
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
@@ -416,4 +416,169 @@ fn a_convex_shape_has_no_notch_to_report() {
     sink.run(&store, &table);
 
     assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+// ---------------------------------------------- max_width by region, cut_size
+
+fn max_width_table(limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::MaxWidth {
+            layer: A,
+            limit: dbu(limit),
+        },
+    )]
+}
+
+/// IHP Slt.c: metal wider than 30 um must be slotted, so an unslotted
+/// `max_width` of 30 um. A 40 um plate with a 0.2 um tab is 40 um wide where
+/// the plate is; the old rule read the polygon's narrowest width (the tab) and
+/// passed it.
+#[test]
+fn ihp_slt_c_a_plate_with_a_thin_tab_is_as_wide_as_the_plate() {
+    let mut layout = LayoutBuilder::new(1);
+    let plate = layout.push(
+        A,
+        &[0, 40_000, 40_000, 20_200, 20_200, 20_000, 20_000, 0],
+        &[0, 0, 40_000, 40_000, 41_000, 41_000, 40_000, 40_000],
+    );
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &max_width_table(30_000));
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(40_000)));
+    assert_eq!(sink.out.get(0).shapes, (ids.of(plate), None));
+}
+
+/// Two abutting 20 um rectangles are one 40 um plate on the merged layer.
+#[test]
+fn two_abutting_narrow_rectangles_are_as_wide_as_their_union() {
+    let mut layout = LayoutBuilder::new(1);
+    let first = layout.rect(A, 0, 0, 20_000, 40_000);
+    layout.rect(A, 20_000, 0, 40_000, 40_000);
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &max_width_table(30_000));
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(40_000)));
+    assert_eq!(sink.out.get(0).shapes, (ids.of(first), None));
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
+}
+
+fn cut_size_table(width: i64, height: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::CutSize {
+            layer: A,
+            width: dbu(width),
+            height: dbu(height),
+        },
+    )]
+}
+
+/// sky130 licon.1: "min and max L and W of licon: 0.17 um". A 0.17 x 0.34 slot
+/// passes a 0.17 min width and a 0.17 max width (its narrowest width is 0.17);
+/// it is not a licon.
+#[test]
+fn sky130_licon_1_a_slot_is_not_a_licon() {
+    let mut layout = LayoutBuilder::new(1);
+    let slot = layout.rect(A, 0, 0, 170, 340);
+    let (store, ids) = layout.finish();
+
+    let mut widths = Sink::default();
+    widths.run(&store, &max_width_table(170));
+    assert_clean(&widths.runs, &widths.out, RULE);
+
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_size_table(170, 170));
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(85, 170),
+            measured: Measurement::Length(dbu(340)),
+            limit: Measurement::Length(dbu(170)),
+            shapes: (ids.of(slot), None),
+        },
+    );
+}
+
+/// The licon itself, and two licons drawn abutting (one 0.34 slot once merged).
+#[test]
+fn sky130_licon_1_a_square_passes_and_two_abutting_squares_do_not() {
+    let mut layout = LayoutBuilder::new(1);
+    // The good square is drawn first but lies right of the slot.
+    layout.rect(A, 5_000, 0, 5_170, 170);
+    let first = layout.rect(A, 0, 0, 170, 170);
+    layout.rect(A, 170, 0, 340, 170);
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_size_table(170, 170));
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(340)));
+    // Blamed on a drawn row of the slot, not on the merge's own numbering.
+    assert_eq!(sink.out.shape_a[0], ids.of(first));
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
+}
+
+/// A rectangular cut either way round, and an L inside the right box.
+#[test]
+fn a_cut_size_accepts_either_orientation_and_refuses_a_non_rectangle() {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 170, 510);
+    layout.rect(A, 1_000, 0, 1_510, 170);
+    layout.push(
+        A,
+        &[2_000, 2_510, 2_510, 2_100, 2_100, 2_000],
+        &[0, 0, 100, 100, 170, 170],
+    );
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_size_table(170, 510));
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(
+        sink.out.measured[0],
+        Measurement::Area(gpurify_geom::DbuArea::new(510 * 100 + 100 * 70))
+    );
+}
+
+/// Oracle: construct-from-answer. The notch is measured on the merged layer,
+/// whose figures are numbered by the merge's own scratch store: here the plain
+/// square left of the U is its figure 0 and the U its figure 1. The finding
+/// must name the U's lowest drawn row, the base drawn first, not row 1 (the
+/// U's left arm), which is what the scratch number would read as.
+#[test]
+fn a_notch_names_the_lowest_drawn_row_of_its_own_figure() {
+    let mut layout = LayoutBuilder::new(1);
+    let base = layout.rect(A, 1_000, 0, 1_300, 100);
+    layout.rect(A, 1_000, 100, 1_110, 500);
+    layout.rect(A, 1_190, 100, 1_300, 500);
+    let square = layout.rect(A, 0, 0, 100, 100);
+    let (store, ids) = layout.finish();
+    assert!(ids.of(base) < ids.of(square), "the base is drawn first");
+
+    let mut sink = Sink::default();
+    sink.run(
+        &store,
+        &[(
+            RULE,
+            Rule::Notch {
+                layer: A,
+                limit: dbu(81),
+            },
+        )],
+    );
+
+    assert_eq!(sink.out.len(), 1, "one notch, in the U");
+    assert_eq!(sink.out.shape_a[0], ids.of(base));
 }

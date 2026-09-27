@@ -7,9 +7,10 @@
 use crate::bbox::Bbox;
 use crate::ids::{LayerId, PolyId};
 use crate::index::{candidate_pairs_into, SpatialIndex};
-use crate::ops::{point_in_coords, self_intersects, winding_of, Point, Winding};
+use crate::ops::{point_in_coords, self_intersects_with, winding_of, Point, SweptEdge, Winding};
 use crate::store::GeometryStore;
 use crate::{Dbu, DbuArea};
+use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
 
 /// Why a polygon could not be validated; never a silently skipped row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -33,7 +34,8 @@ pub struct ValidatedLayer {
     verts_y: Vec<Dbu>,
     ring_vert_start: Vec<u32>,
     ring_vert_len: Vec<u32>,
-    /// Provenance; for a boolean result, the lowest contributing [`PolyId`].
+    /// The store row each ring was validated from; for a boolean result, a row
+    /// of the boolean's own scratch store, which names no layout shape.
     ring_poly: Vec<PolyId>,
     /// Ring 0 of each span is the outer (CCW); the rest are holes (CW).
     poly_ring_start: Vec<u32>,
@@ -60,8 +62,25 @@ impl ValidatedLayer {
         &self.poly_bbox
     }
 
+    /// The polygons whose `keep` flag is set, in order, into `out` (cleared and refilled).
+    pub fn select_into(&self, keep: &[bool], out: &mut ValidatedLayer) {
+        assert_eq!(keep.len(), self.len(), "one flag per polygon");
+        out.reset();
+        for (idx, _) in keep.iter().enumerate().filter(|(_, &k)| k) {
+            let span_start = crate::narrow(out.ring_vert_start.len());
+            let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
+            for ring in start..start + len {
+                let RingRef { xs, ys } = self.ring(ring);
+                out.push_ring(xs, ys, self.ring_poly[ring as usize]);
+            }
+            out.poly_ring_start.push(span_start);
+            out.poly_ring_len.push(len);
+            out.poly_bbox.push(self.poly_bbox[idx]);
+        }
+    }
+
     /// Every ring of one polygon, outer first.
-    pub(crate) fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
+    pub fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
         let start = self.poly_ring_start[idx as usize];
         let len = self.poly_ring_len[idx as usize];
         (start..start + len).map(move |ring| self.ring(ring))
@@ -113,8 +132,9 @@ impl<'a> PolygonRef<'a> {
         layer.ring_poly[start..start + len].iter().copied()
     }
 
-    /// The store row to blame a finding on; for a boolean result, the lowest
-    /// contributing [`PolyId`].
+    /// The store row of the outer ring. Only a layer validated straight from
+    /// the store has layout rows; a boolean result's rows are its scratch
+    /// store's, so find its owner in the layout instead.
     pub fn provenance(self) -> PolyId {
         let ring = self.layer.poly_ring_start[self.idx as usize] as usize;
         self.layer.ring_poly[ring]
@@ -160,20 +180,24 @@ pub fn validate_layer_into(
     let mut holes: Vec<PolyId> = Vec::with_capacity(rows_len);
     // Per layer row: its slot in `outers`, or `NOT_OUTER`.
     let mut outer_slot: Vec<u32> = Vec::with_capacity(rows_len);
-    for row in rows.clone() {
-        let poly = PolyId(row);
-        let (xs, ys) = store.poly_verts(poly);
-        match classify_ring(xs, ys, poly)? {
-            Winding::CounterClockwise => {
-                outer_slot.push(u32::try_from(outers.len()).expect("outers fit a u32"));
-                outers.push(poly);
-            }
-            Winding::Clockwise => {
-                outer_slot.push(NOT_OUTER);
-                holes.push(poly);
+    let mut edges = Vec::new();
+    dispatch!(Level::new(), s => {
+        for row in rows.clone() {
+            let poly = PolyId(row);
+            let (xs, ys) = store.poly_verts(poly);
+            match classify_ring(s, xs, ys, poly, &mut edges)? {
+                Winding::CounterClockwise => {
+                    outer_slot.push(u32::try_from(outers.len()).expect("outers fit a u32"));
+                    outers.push(poly);
+                }
+                Winding::Clockwise => {
+                    outer_slot.push(NOT_OUTER);
+                    holes.push(poly);
+                }
             }
         }
-    }
+        Ok::<(), ValidityError>(())
+    })?;
 
     // Pass two: bind each hole to the innermost outer containing it. Distance-zero
     // candidates are every touching pair, and containment implies touching.
@@ -288,29 +312,22 @@ impl ValidatedLayer {
 
 /// Validate one coordinate run and report its winding. Check order is part of the
 /// answer: a bowtie is reported as self-intersecting, not non-rectilinear.
-fn classify_ring(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Result<Winding, ValidityError> {
-    let n = xs.len();
-    if n < 3 {
+#[inline(always)]
+fn classify_ring<S: Simd>(
+    s: S,
+    xs: &[Dbu],
+    ys: &[Dbu],
+    poly: PolyId,
+    edges: &mut Vec<SweptEdge>,
+) -> Result<Winding, ValidityError> {
+    if xs.len() < 3 {
         return Err(ValidityError::Degenerate(poly));
     }
-
-    // Seeded with the last vertex so the closing edge is in the same pass.
-    let (mut px, mut py) = (xs[n - 1], ys[n - 1]);
-    let (mut distinct, mut rectilinear) = (true, true);
-    for i in 0..n {
-        let (x, y) = (xs[i], ys[i]);
-        let same_x = px == x;
-        let same_y = py == y;
-        distinct &= !(same_x & same_y);
-        rectilinear &= same_x | same_y;
-        px = x;
-        py = y;
-    }
-
+    let (distinct, rectilinear) = edge_flags(s, xs, ys);
     if !distinct {
         return Err(ValidityError::Degenerate(poly));
     }
-    if self_intersects(xs, ys) {
+    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, edges) {
         return Err(ValidityError::SelfIntersecting(poly));
     }
     if !rectilinear {
@@ -318,4 +335,149 @@ fn classify_ring(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Result<Winding, Validi
     }
     // A run doubling back on itself has zero area: degenerate.
     winding_of(xs, ys).ok_or(ValidityError::Degenerate(poly))
+}
+
+/// Four distinct vertices alternating vertical and horizontal edges: an axis
+/// box, whose opposite sides never meet, so the self-intersection sweep is moot.
+fn is_rectangle(xs: &[Dbu], ys: &[Dbu]) -> bool {
+    let [x0, x1, x2, x3] = xs else { return false };
+    let [y0, y1, y2, y3] = ys else { return false };
+    (x0 == x1 && y1 == y2 && x2 == x3 && y3 == y0) || (y0 == y1 && x1 == x2 && y2 == y3 && x3 == x0)
+}
+
+/// `(distinct, rectilinear)` over every edge of a closed run of `n >= 1` vertices:
+/// no edge has both ends equal, and every edge keeps x or y.
+#[inline(always)]
+fn edge_flags<S: Simd>(s: S, xs: &[Dbu], ys: &[Dbu]) -> (bool, bool) {
+    let n = xs.len();
+    if n <= 4 {
+        return edge_flags_scalar(xs, ys, xs[0], ys[0]);
+    }
+    let (ax, bx) = (&xs[..n - 1], &xs[1..]);
+    let (ay, by) = (&ys[..n - 1], &ys[1..]);
+    let (axc, _) = ax.as_chunks::<4>();
+    let (bxc, _) = bx.as_chunks::<4>();
+    let (ayc, _) = ay.as_chunks::<4>();
+    let (byc, _) = by.as_chunks::<4>();
+    let lanes = |c: &[Dbu; 4]| i64x4::from_slice(s, &c.map(Dbu::raw));
+    let mut dup = mask64x4::splat(s, false);
+    let mut skew = mask64x4::splat(s, false);
+    for (((ax, bx), ay), by) in axc.iter().zip(bxc).zip(ayc).zip(byc) {
+        let same_x = lanes(ax).simd_eq(lanes(bx));
+        let same_y = lanes(ay).simd_eq(lanes(by));
+        dup |= same_x & same_y;
+        skew |= !(same_x | same_y);
+    }
+    // The tail edges plus the closing edge `n - 1 -> 0`.
+    let done = 4 * axc.len();
+    let (td, tr) = edge_flags_scalar(&xs[done..], &ys[done..], xs[0], ys[0]);
+    (!dup.any_true() & td, !skew.any_true() & tr)
+}
+
+/// Scalar [`edge_flags`] over the open run `xs`, closed back to `(x0, y0)`: the
+/// kernel's tail and its test oracle (`edge_flags_scalar(xs, ys, xs[0], ys[0])`).
+fn edge_flags_scalar(xs: &[Dbu], ys: &[Dbu], x0: Dbu, y0: Dbu) -> (bool, bool) {
+    let (mut distinct, mut rectilinear) = (true, true);
+    let next_x = xs[1..].iter().chain([&x0]);
+    let next_y = ys[1..].iter().chain([&y0]);
+    for (((x, y), nx), ny) in xs.iter().zip(ys).zip(next_x).zip(next_y) {
+        let (same_x, same_y) = (x == nx, y == ny);
+        distinct &= !(same_x & same_y);
+        rectilinear &= same_x | same_y;
+    }
+    (distinct, rectilinear)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{edge_flags, edge_flags_scalar, is_rectangle};
+    use crate::ops::self_intersects;
+
+    /// Every distinct 4-ring over a 3x3 grid: the shortcut claims no ring the
+    /// sweep would call self-intersecting.
+    #[test]
+    fn a_rectangle_never_self_intersects() {
+        let mut rects = 0;
+        for code in 0..9u32.pow(4) {
+            let v: Vec<(i64, i64)> = (0..4)
+                .map(|k| {
+                    let c = i64::from(code / 9u32.pow(k) % 9);
+                    (c % 3, c / 3)
+                })
+                .collect();
+            let xs: Vec<Dbu> = v.iter().map(|p| Dbu::new_unchecked(p.0)).collect();
+            let ys: Vec<Dbu> = v.iter().map(|p| Dbu::new_unchecked(p.1)).collect();
+            if edge_flags_scalar(&xs, &ys, xs[0], ys[0]).0 && is_rectangle(&xs, &ys) {
+                rects += 1;
+                assert!(!self_intersects(&xs, &ys), "{v:?}");
+            }
+        }
+        assert!(rects > 0);
+    }
+    use crate::Dbu;
+    use fearless_simd::{dispatch, Level};
+
+    /// Rings over a three-value alphabet, so equal neighbours (duplicates, axis
+    /// edges) and skew edges all turn up, at every length `1 ..= 13`.
+    #[test]
+    fn edge_flags_match_the_scalar_loop() {
+        for n in 1..=13usize {
+            for seed in 0..512u64 {
+                let draw = |k: u64| {
+                    (0..n as u64)
+                        .map(|i| {
+                            let h = (seed * 31 + i * 7 + k).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                            let v = [0, crate::MAX_ABS_DBU, -crate::MAX_ABS_DBU]
+                                [(h >> 40) as usize % 3];
+                            Dbu::new_unchecked(v)
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let (xs, ys) = (draw(0), draw(1));
+                let got = dispatch!(Level::new(), s => edge_flags(s, &xs, &ys));
+                assert_eq!(
+                    got,
+                    edge_flags_scalar(&xs, &ys, xs[0], ys[0]),
+                    "n={n} seed={seed}"
+                );
+            }
+        }
+    }
+
+    /// `cargo test -p gpurify-geom --release -- --ignored --nocapture bench_`
+    #[test]
+    #[ignore = "timing, not a check"]
+    fn bench_edge_flags() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        for ring in [4i64, 8, 32, 200] {
+            let rings = 400_000 / ring;
+            // A staircase: rectilinear, distinct, so neither loop exits early.
+            let (xs, ys): (Vec<Dbu>, Vec<Dbu>) = (0..ring)
+                .map(|i| (Dbu::new_unchecked((i + 1) / 2), Dbu::new_unchecked(i / 2)))
+                .unzip();
+            let simd = (0..9)
+                .map(|_| {
+                    let t = Instant::now();
+                    dispatch!(Level::new(), s => for _ in 0..rings {
+                        black_box(edge_flags(s, black_box(&xs), black_box(&ys)));
+                    });
+                    t.elapsed()
+                })
+                .min()
+                .unwrap();
+            let scalar = (0..9)
+                .map(|_| {
+                    let t = Instant::now();
+                    for _ in 0..rings {
+                        let (xs, ys) = (black_box(&xs), black_box(&ys));
+                        black_box(edge_flags_scalar(xs, ys, xs[0], ys[0]));
+                    }
+                    t.elapsed()
+                })
+                .min()
+                .unwrap();
+            println!("ring={ring}: simd {simd:?} scalar {scalar:?} (400k verts, best of 9)");
+        }
+    }
 }

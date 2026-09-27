@@ -4,11 +4,20 @@
 //! Data out: [`gds::Library::flatten`]'s store with deck-derived layers appended, and placed
 //! labels. An inexact transform is an error, never rounded.
 
-use crate::deck::{Deck, DerivedOp};
+use crate::deck::{Deck, DerivedOp, LayerTable};
+use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
-use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::derive::{
+    edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
+    inside_into, interacting_into, merge_into, outside_into, sized_into, with_area_into,
+    with_length_into, with_width_into, EdgeOp,
+};
+use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
+use gpurify_geom::view::{validate_layer_into, PolygonRef, RingRef, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
+use gpurify_geom::LayerId;
+use gpurify_geom::{Bbox, StrTable};
 
 /// Why a layout could not be read. Every variant is a refusal: approximating a
 /// transform moves geometry and moves verdicts.
@@ -70,31 +79,158 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
     }
 }
 
+/// Compute `deck`'s derived layers into a store built in memory from its base
+/// layers, as [`gds::Library::flatten`] does after reading a stream. `with_text`
+/// reads `provenance`'s placed labels; bind them afterwards with
+/// [`Provenance::resolve_labels`].
+pub fn derive_layers(
+    store: &mut GeometryStore,
+    deck: &Deck,
+    provenance: &Provenance,
+    strings: &StrTable,
+) -> Result<(), LayoutError> {
+    derive_layers_into(store, &deck.layers, &provenance.placed, strings)
+}
+
 /// Compute every deck-derived layer and append it to the store, in id order.
-/// Operands fold left and only name lower ids, so one forward pass suffices.
+/// Operands only name lower ids, so one forward pass suffices. `labels` are
+/// the placed texts, named in `strings`, that `with_text` reads.
 fn derive_layers_into(
     store: &mut GeometryStore,
-    derived: &[(gpurify_geom::LayerId, DerivedOp, Vec<gpurify_geom::LayerId>)],
+    layers: &LayerTable,
+    labels: &[PlacedLabel],
+    strings: &StrTable,
 ) -> Result<(), LayoutError> {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
     let mut combined = ValidatedLayer::default();
+    let mut raw = ValidatedLayer::default();
+    let (mut edges, mut edges_out) = (Vec::<Seg>::new(), Vec::<Seg>::new());
     let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
     let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
 
-    for (layer, op, operands) in derived {
+    for (layer, op, operands) in layers.derived() {
         let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
+        // An operand's polygons, merged: selections and sizing read whole shapes.
+        let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
+            validate_layer_into(store, id, &mut raw)?;
+            merge_into(&raw, out)
+        };
 
-        validate_layer_into(store, operands[0], &mut folded).map_err(|why| blame(why.into()))?;
-        for &next in &operands[1..] {
-            validate_layer_into(store, next, &mut operand).map_err(|why| blame(why.into()))?;
-            match op {
-                DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
-                DerivedOp::Or => union_into(&folded, &operand, &mut combined),
-                DerivedOp::Not => subtraction_into(&folded, &operand, &mut combined),
+        if layers.is_edges(*layer) {
+            let receiver = operands[0];
+            match *op {
+                DerivedOp::Edges => {
+                    merged(receiver, &mut folded).map_err(blame)?;
+                    edges_into(&folded, &mut edges);
+                }
+                DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                    let how = match op {
+                        DerivedOp::And => EdgeOp::And,
+                        DerivedOp::Or => EdgeOp::Or,
+                        _ => EdgeOp::Not,
+                    };
+                    edges.clear();
+                    edges.extend_from_slice(store.edges_on_layer(receiver));
+                    for &next in &operands[1..] {
+                        edge_boolean_into(&edges, store.edges_on_layer(next), how, &mut edges_out);
+                        std::mem::swap(&mut edges, &mut edges_out);
+                    }
+                }
+                DerivedOp::Interacting(keep) => {
+                    merged(operands[1], &mut operand).map_err(blame)?;
+                    edge_interacting_into(
+                        store.edges_on_layer(receiver),
+                        &operand,
+                        keep,
+                        &mut edges,
+                    );
+                }
+                DerivedOp::Part(inside) => {
+                    merged(operands[1], &mut operand).map_err(blame)?;
+                    edge_part_into(store.edges_on_layer(receiver), &operand, inside, &mut edges);
+                }
+                DerivedOp::WithLength(lo, hi) => {
+                    with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
+                }
+                _ => unreachable!("the parser gives an edge result only to edge operations"),
             }
-            .map_err(blame)?;
-            std::mem::swap(&mut folded, &mut combined);
+            store.append_edges(*layer, &edges);
+            continue;
+        }
+
+        match *op {
+            DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                validate_layer_into(store, operands[0], &mut folded)
+                    .map_err(|why| blame(why.into()))?;
+                for &next in &operands[1..] {
+                    validate_layer_into(store, next, &mut operand)
+                        .map_err(|why| blame(why.into()))?;
+                    match op {
+                        DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
+                        DerivedOp::Or => union_into(&folded, &operand, &mut combined),
+                        _ => subtraction_into(&folded, &operand, &mut combined),
+                    }
+                    .map_err(blame)?;
+                    std::mem::swap(&mut folded, &mut combined);
+                }
+            }
+            _ => {
+                merged(operands[0], &mut operand).map_err(blame)?;
+                // `with_text` reads the texts on its layer argument, not its shapes.
+                if let (Some(&other), false) =
+                    (operands.get(1), matches!(op, DerivedOp::WithText { .. }))
+                {
+                    merged(other, &mut combined).map_err(blame)?;
+                }
+                let (a, b) = (&operand, &combined);
+                match *op {
+                    DerivedOp::Sized(by) => sized_into(a, by, &mut folded),
+                    DerivedOp::Interacting(keep) => {
+                        interacting_into(a, b, keep, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::Inside => inside_into(a, b, &mut folded),
+                    DerivedOp::Outside => outside_into(a, b, &mut folded),
+                    DerivedOp::Holes => holes_into(a, &mut folded),
+                    DerivedOp::Extents => extents_into(a, &mut folded),
+                    DerivedOp::WithArea(lo, hi) => {
+                        with_area_into(a, lo..=hi, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::WithWidth(lo, hi) => {
+                        with_width_into(a, lo..=hi, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::WithText { keep, text } => {
+                        let pattern = layers.text(text);
+                        let matching: Vec<Point> = labels
+                            .iter()
+                            .filter(|label| {
+                                label.layer == operands[1]
+                                    && glob_matches(pattern, strings.resolve(label.name))
+                            })
+                            .map(|label| label.at)
+                            .collect();
+                        // ponytail: every matching text against every shape; index the
+                        // points by x if a layer carries thousands of texts.
+                        let flags: Vec<bool> = (0..crate::narrow(a.len()))
+                            .map(|idx| {
+                                let poly = a.get(idx);
+                                let holds = matching.iter().any(|&p| {
+                                    poly.bbox().contains(Bbox::point(p.x, p.y))
+                                        && on_material(poly, p)
+                                });
+                                holds == keep
+                            })
+                            .collect();
+                        a.select_into(&flags, &mut folded);
+                        Ok(())
+                    }
+                    _ => unreachable!("the parser gives an edge operation an edge result"),
+                }
+                .map_err(blame)?;
+            }
         }
 
         xs.clear();
@@ -117,11 +253,62 @@ fn derive_layers_into(
     Ok(())
 }
 
+/// Whether `p` lies on the polygon's material, its boundary included.
+fn on_material(poly: PolygonRef<'_>, p: Point) -> bool {
+    let on_ring = |ring: RingRef<'_>| {
+        let (xs, ys) = ring.coords();
+        (0..xs.len()).any(|i| {
+            let j = (i + 1) % xs.len();
+            let edge = Seg {
+                a: Point { x: xs[i], y: ys[i] },
+                b: Point { x: xs[j], y: ys[j] },
+            };
+            point_seg_dist2(p, edge).raw() == 0
+        })
+    };
+    point_in_ring(poly.outer(), p)
+        && poly
+            .holes()
+            .all(|hole| !point_in_ring(hole, p) || on_ring(hole))
+}
+
+/// A glob over the whole text: `*` matches any run, `?` one character, and
+/// every other character itself.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let (pattern, text): (Vec<char>, Vec<char>) =
+        (pattern.chars().collect(), text.chars().collect());
+    let (mut p, mut t) = (0, 0);
+    // The last `*` and the text position it was tried at, to widen on a miss.
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((at, from)) => {
+                    p = at + 1;
+                    t = from + 1;
+                    star = Some((at, from + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
+}
+
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
     use super::{Deck, LayoutError, UnknownLayers};
     use crate::narrow;
     use crate::provenance::Provenance;
+    use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
     use gpurify_geom::boolean::canonical_rings_into;
     use gpurify_geom::{Dbu, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
@@ -979,6 +1166,56 @@ pub mod gds {
         }
     }
 
+    /// Largest `|v|` over both columns, 0 when empty. Max and min rather than `abs`,
+    /// which wraps on `i64::MIN`.
+    #[inline(always)]
+    #[expect(
+        clippy::inline_always,
+        reason = "must inline into dispatch!'s target-feature arm"
+    )]
+    pub(super) fn max_abs<S: Simd>(s: S, xs: &[i64], ys: &[i64]) -> u64 {
+        let (mut hi, mut lo) = (i64x4::splat(s, 0), i64x4::splat(s, 0));
+        let mut tail = 0;
+        for col in [xs, ys] {
+            let (chunks, rest) = col.as_chunks::<4>();
+            for chunk in chunks {
+                let v = i64x4::from_slice(s, chunk);
+                hi = hi.max(v);
+                lo = lo.min(v);
+            }
+            tail = tail.max(max_abs_scalar(rest));
+        }
+        tail.max(hi.reduce_max().unsigned_abs())
+            .max(lo.reduce_min().unsigned_abs())
+    }
+
+    pub(super) fn max_abs_scalar(v: &[i64]) -> u64 {
+        v.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0)
+    }
+
+    /// `out[i] = ±src[i] + d`, negated when `neg`. The caller has proven no overflow.
+    #[inline(always)]
+    #[expect(
+        clippy::inline_always,
+        reason = "must inline into dispatch!'s target-feature arm"
+    )]
+    pub(super) fn shift<S: Simd>(s: S, src: &[i64], neg: bool, d: i64, out: &mut [i64]) {
+        let (dv, negv) = (i64x4::splat(s, d), mask64x4::splat(s, neg));
+        let (src_chunks, src_tail) = src.as_chunks::<4>();
+        let (out_chunks, out_tail) = out.as_chunks_mut::<4>();
+        for (v, o) in src_chunks.iter().zip(out_chunks) {
+            let v = i64x4::from_slice(s, v);
+            (negv.select(-v, v) + dv).store_slice(o);
+        }
+        shift_scalar(src_tail, neg, d, out_tail);
+    }
+
+    pub(super) fn shift_scalar(src: &[i64], neg: bool, d: i64, out: &mut [i64]) {
+        for (o, &v) in out.iter_mut().zip(src) {
+            *o = if neg { -v } else { v } + d;
+        }
+    }
+
     /// The hierarchy walk and the tables it fills.
     struct Flatten<'a> {
         lib: &'a Library,
@@ -989,6 +1226,7 @@ pub mod gds {
         provenance: Provenance,
         /// Cells on the current root-to-here chain, for the cycle check.
         on_chain: Vec<bool>,
+        level: Level,
         /// Per-element scratch.
         rx: Vec<i64>,
         ry: Vec<i64>,
@@ -1025,6 +1263,7 @@ pub mod gds {
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
+                level: Level::new(),
                 rx: Vec::new(),
                 ry: Vec::new(),
                 tx: Vec::new(),
@@ -1038,7 +1277,7 @@ pub mod gds {
 
             // Labels are not bound yet, so the layer-sort permutation has nothing to move.
             let (mut store, _) = walk.builder.finish(deck.layers.len());
-            super::derive_layers_into(&mut store, deck.layers.derived())?;
+            super::derive_layers_into(&mut store, &deck.layers, &walk.provenance.placed, strings)?;
             Ok((store, walk.provenance))
         }
     }
@@ -1056,8 +1295,11 @@ pub mod gds {
             self.on_chain[index] = true;
 
             let entry = &lib.cells[index];
-            for elem in &lib.elems[entry.elem_start as usize..entry.elem_end as usize] {
-                self.emit(elem, at)?;
+            let elems = &lib.elems[entry.elem_start as usize..entry.elem_end as usize];
+            if !self.emit_placed(elems, at)? {
+                for elem in elems {
+                    self.emit(elem, at)?;
+                }
             }
             for label in &lib.texts[entry.text_start as usize..entry.text_end as usize] {
                 self.place(label, at)?;
@@ -1119,6 +1361,50 @@ pub mod gds {
             Ok(())
         }
 
+        /// One placement's elements at once: their vertex runs are one contiguous block
+        /// of `lib.xs`. `Ok(false)` leaves it to per-element [`Self::emit`] (magnified,
+        /// or a bound this cannot prove), which reports any error exactly as before.
+        fn emit_placed(&mut self, elems: &[Elem], at: Xform) -> Result<bool, LayoutError> {
+            let (Some(first), Some(last)) = (elems.first(), elems.last()) else {
+                return Ok(true);
+            };
+            if at.mag != 1 {
+                return Ok(false);
+            }
+            let lib = self.lib;
+            let level = self.level;
+            let base = first.vert_start as usize;
+            let block = base..(last.vert_start + last.vert_len) as usize;
+            let (xs, ys) = (&lib.xs[block.clone()], &lib.ys[block]);
+
+            // With mag 1 every output is ±one input + d, so |out| <= max|in| + |d|.
+            // In bound, that proves no overflow and no out-of-range vertex.
+            let reach = dispatch!(level, s => max_abs(s, xs, ys))
+                .checked_add(at.dx.unsigned_abs().max(at.dy.unsigned_abs()));
+            if reach.is_none_or(|r| r > MAX_ABS_DBU.unsigned_abs()) {
+                return Ok(false);
+            }
+            // A quarter turn swaps the axes.
+            let (a, b, c, e) = at.linear();
+            let (from_x, neg_x, from_y, neg_y) = if a == 0 {
+                (ys, b < 0, xs, c < 0)
+            } else {
+                (xs, a < 0, ys, e < 0)
+            };
+            self.rx.resize(xs.len(), 0);
+            self.ry.resize(xs.len(), 0);
+            dispatch!(level, s => shift(s, from_x, neg_x, at.dx, &mut self.rx));
+            dispatch!(level, s => shift(s, from_y, neg_y, at.dy, &mut self.ry));
+
+            for elem in elems {
+                if let Some(layer) = self.layer(elem.layer, elem.datatype)? {
+                    let start = elem.vert_start as usize - base;
+                    self.push(layer, start..start + elem.vert_len as usize, at.flip);
+                }
+            }
+            Ok(true)
+        }
+
         /// Transform one element into the root frame and push it.
         fn emit(&mut self, elem: &Elem, at: Xform) -> Result<(), LayoutError> {
             let Some(layer) = self.layer(elem.layer, elem.datatype)? else {
@@ -1148,16 +1434,6 @@ pub mod gds {
                     .expect("the reduction above found one");
                 return Err(LayoutError::CoordinateOutOfRange(out));
             }
-            self.tx.clear();
-            self.tx
-                .extend(self.rx.iter().map(|&v| Dbu::new_unchecked(v)));
-            self.ty.clear();
-            self.ty
-                .extend(self.ry.iter().map(|&v| Dbu::new_unchecked(v)));
-
-            // A mirror (det < 0) turns a counter-clockwise ring clockwise, which
-            // `validate_layer_into` reads as a hole. Reverse `[1..]` so vertex 0,
-            // the report point, stays put.
             debug_assert!(
                 {
                     let (a, b, c, e) = at.linear();
@@ -1165,12 +1441,25 @@ pub mod gds {
                 },
                 "det < 0 iff flip"
             );
-            if at.flip {
+            self.push(layer, 0..self.rx.len(), at.flip);
+            Ok(())
+        }
+
+        /// Push `rx/ry[run]`, already in bound, as one ring. A mirror (det < 0) turns a
+        /// counter-clockwise ring clockwise, which `validate_layer_into` reads as a
+        /// hole: reverse `[1..]` so vertex 0, the report point, stays put.
+        fn push(&mut self, layer: LayerId, run: std::ops::Range<usize>, flip: bool) {
+            self.tx.clear();
+            self.tx
+                .extend(self.rx[run.clone()].iter().map(|&v| Dbu::new_unchecked(v)));
+            self.ty.clear();
+            self.ty
+                .extend(self.ry[run].iter().map(|&v| Dbu::new_unchecked(v)));
+            if flip {
                 self.tx[1..].reverse();
                 self.ty[1..].reverse();
             }
             self.builder.push(layer, &self.tx, &self.ty);
-            Ok(())
         }
     }
 }
@@ -1817,18 +2106,6 @@ mod tests {
 
         let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
         assert_same_store("a tagged layout", &expected, &layout.store);
-    }
-
-    #[test]
-    fn reading_the_same_library_twice_produces_the_same_store() {
-        let mut strings = StrTable::default();
-        let deck = three_layer_deck(&mut strings);
-        let (_, _, _, elements) = corpus();
-        let bytes = gds_library("TOP", &elements);
-
-        let once = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        let twice = read(&bytes, &deck, UnknownLayers::Reject).expect("well formed");
-        assert_same_store("the GDSII reader run twice", &once.store, &twice.store);
     }
 
     /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
@@ -2600,6 +2877,290 @@ mod tests {
                 "a magnification that leaves the representable domain must be \
                  refused as CoordinateOutOfRange, not as {other:?}"
             ),
+        }
+    }
+
+    /// The placement kernels match their scalar oracles at every length around the
+    /// lane count, on random and edge values.
+    #[test]
+    fn the_placement_kernels_agree_with_their_scalar_versions() {
+        use fearless_simd::{dispatch, Level};
+        let level = Level::new();
+        let mut rng = gpurify_testgen::Rng::new(7);
+        let edges = [0, 1, -1, i64::MAX, i64::MIN, 1 << 40, -(1 << 40)];
+        for len in 0..=13 {
+            for round in 0..20 {
+                let mut col = |salt: usize| -> Vec<i64> {
+                    (0..len)
+                        .map(|i| match (round + i + salt) % 5 {
+                            0 => edges[(i + round) % edges.len()],
+                            _ => rng.range(-(1 << 41), 1 << 41),
+                        })
+                        .collect()
+                };
+                let (xs, ys) = (col(0), col(3));
+                let want = gds::max_abs_scalar(&xs).max(gds::max_abs_scalar(&ys));
+                assert_eq!(
+                    dispatch!(level, s => gds::max_abs(s, &xs, &ys)),
+                    want,
+                    "len {len}"
+                );
+
+                // `shift`'s contract: no overflow, so in-domain inputs only.
+                let src: Vec<i64> = xs.iter().map(|&v| v.clamp(-(1 << 41), 1 << 41)).collect();
+                for (neg, d) in [(false, 0), (true, 5), (false, -(1 << 40)), (true, 1 << 40)] {
+                    let (mut got, mut want) = (vec![0; len], vec![0; len]);
+                    dispatch!(level, s => gds::shift(s, &src, neg, d, &mut got));
+                    gds::shift_scalar(&src, neg, d, &mut want);
+                    assert_eq!(got, want, "len {len}, neg {neg}, d {d}");
+                }
+            }
+        }
+    }
+
+    /// Every derived operation through the deck text and the flattener. `met1`
+    /// is an L: a 4 um arm `[0,4]x[0,10]` and a 2 um arm `[0,10]x[0,2]` (um).
+    /// `met2` holds s1 inside the L, s2 touching its 4 um arm from outside, s3
+    /// far away, and s4 straddling the 2 um arm's end. Expected areas and
+    /// lengths are worked out by hand from those coordinates.
+    #[test]
+    fn every_derived_operation_reads_through_the_deck_into_the_store() {
+        let deck_text = "grid 1nm
+layer met1 = gds(68, 20)
+layer met2 = gds(69, 20)
+layer huge = met1.sized(-1um).sized(1um)
+layer near = met2.interacting(met1)
+layer apart = met2.not_interacting(met1)
+layer inner = met2.inside(met1)
+layer out = met2.outside(met1)
+layer big = met2.with_area(>= 4um2)
+layer small = met2.with_area(< 4um2)
+layer narrow = met1.with_width(< 3um)
+layer box = met1.extents()
+layer gaps = met1.holes()
+layer e = met1.edges()
+layer e_in = e.inside_part(met2)
+layer long = e.with_length(>= 10um)
+rule huge.w width(huge) >= 1um
+";
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(deck_text, grid, &mut strings).expect("parses");
+        let bytes = gds_library(
+            "TOP",
+            &[
+                boundary(
+                    68,
+                    20,
+                    &[0, 10000, 10000, 4000, 4000, 0],
+                    &[0, 0, 2000, 2000, 10000, 10000],
+                ),
+                boundary(69, 20, &[1000, 3000, 3000, 1000], &[5000, 5000, 7000, 7000]),
+                boundary(69, 20, &[4000, 6000, 6000, 4000], &[3000, 3000, 5000, 5000]),
+                boundary(69, 20, &[20000, 21000, 21000, 20000], &[0, 0, 1000, 1000]),
+                boundary(
+                    69,
+                    20,
+                    &[8000, 12000, 12000, 8000],
+                    &[-1000, -1000, 1000, 1000],
+                ),
+            ],
+        );
+        let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
+        let (store, _) = library
+            .flatten(&deck, &strings, UnknownLayers::Reject)
+            .expect("flattens");
+        let id = |name: &str| deck.layers.id(&strings, name).expect(name);
+        let um2 = 1_000_000i128;
+        let area = |name: &str| -> i128 {
+            store
+                .polys_on_layer(id(name))
+                .map(|row| {
+                    let (xs, ys) = store.poly_verts(PolyId(row));
+                    gpurify_geom::ops::area2(xs, ys).raw()
+                })
+                .sum::<i128>()
+                / 2
+        };
+        let count = |name: &str| store.polys_on_layer(id(name)).len();
+
+        assert_eq!(
+            area("huge"),
+            40 * um2,
+            "the 2 um arm is not wider than 2 um"
+        );
+        assert_eq!((count("near"), area("near")), (3, 16 * um2));
+        assert_eq!((count("apart"), area("apart")), (1, um2));
+        assert_eq!((count("inner"), area("inner")), (1, 4 * um2));
+        assert_eq!(
+            (count("out"), area("out")),
+            (2, 5 * um2),
+            "touching is outside"
+        );
+        assert_eq!(count("big"), 3);
+        assert_eq!(count("small"), 1);
+        assert_eq!(
+            area("narrow"),
+            52 * um2,
+            "the whole L, 2 um at its narrowest"
+        );
+        assert_eq!(area("box"), 100 * um2);
+        assert_eq!(count("gaps"), 0);
+
+        let length = |name: &str| -> i64 {
+            store
+                .edges_on_layer(id(name))
+                .iter()
+                .map(|s| (s.b.x - s.a.x).abs().raw() + (s.b.y - s.a.y).abs().raw())
+                .sum()
+        };
+        assert!(deck.layers.is_edges(id("e")) && deck.layers.is_edges(id("long")));
+        assert!(!deck.layers.is_edges(id("huge")));
+        assert_eq!(
+            (store.edges_on_layer(id("e")).len(), length("e")),
+            (6, 40_000)
+        );
+        assert_eq!(
+            length("e_in"),
+            2000 + 1000,
+            "the L's bottom and end inside s4"
+        );
+        assert_eq!(store.edges_on_layer(id("long")).len(), 2);
+        assert_eq!(
+            store.polys_on_layer(id("e")).len(),
+            0,
+            "an edge layer has no polygons"
+        );
+
+        let rule = &deck.rules.spec[0];
+        assert_eq!(deck.rules.layers_of(rule), [id("huge")]);
+    }
+
+    /// Flatten timing: 4000 placements (every quarter turn, half mirrored) of a
+    /// 400-rectangle cell. `cargo test --release -p gpurify-ingest -- --ignored flatten_timing --nocapture`.
+    #[test]
+    #[ignore = "timing, not a check"]
+    fn flatten_timing() {
+        let leaf: Vec<Boundary> = (0..400)
+            .map(|i| {
+                let (x, y) = ((i % 20) * 50, (i / 20) * 50);
+                boundary(
+                    ROWS[0].1,
+                    ROWS[0].2,
+                    &[x, x + 30, x + 30, x],
+                    &[y, y, y + 30, y + 30],
+                )
+            })
+            .collect();
+        let refs: Vec<Ref> = (0..4000)
+            .map(|i| {
+                let strans = if i % 2 == 0 { 0 } else { REFLECT };
+                sref(
+                    "LEAF",
+                    strans,
+                    f64::from(u8::try_from(i % 4).expect("0..4")) * 90.0,
+                    (i % 64) * 2000,
+                    (i / 64) * 2000,
+                )
+            })
+            .collect();
+        let bytes = gds_hierarchy(&[("LEAF", &leaf, &[]), ("TOP", &[], &refs)]);
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let out = library
+                .flatten(&deck, &strings, UnknownLayers::Reject)
+                .expect("flattens");
+            best = best.min(t.elapsed());
+            std::hint::black_box(out);
+        }
+        eprintln!("flatten 1.6M rects: best of 5 {best:?}");
+    }
+
+    /// IHP picks devices by their text (`ext_interacting_with_text(..,
+    /// "npn13G2*")`). Squares labelled "npn13G2" and, on the square's edge,
+    /// "npn13G2L" match the glob; "pnpMPA" does not. An L whose label sits in
+    /// its notch, inside its bounding box but off the shape, holds no text, and
+    /// a matching string on another text layer is not read.
+    #[test]
+    fn with_text_keeps_the_shapes_holding_a_matching_text() {
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(
+            "grid 5nm
+layer activ = gds(1, 0)
+layer text = gds(63, 0)
+layer other = gds(63, 25)
+layer npn = activ.with_text(text, \"npn13G2*\")
+layer rest = activ.without_text(text, \"npn13G2*\")
+",
+            grid,
+            &mut strings,
+        )
+        .expect("the deck parses");
+        let square = |x: i64| boundary(1, 0, &[x, x + 100, x + 100, x], &[0, 0, 100, 100]);
+        let l_shape = boundary(
+            1,
+            0,
+            &[600, 900, 900, 700, 700, 600],
+            &[0, 0, 100, 100, 400, 400],
+        );
+        let bytes = gds_labelled(
+            "TOP",
+            &[square(0), square(200), square(400), l_shape, square(1_000)],
+            &[
+                label(63, 0, 50, 50, "npn13G2"),
+                label(63, 0, 300, 50, "npn13G2L"),
+                label(63, 0, 450, 50, "pnpMPA"),
+                label(63, 0, 800, 300, "npn13G2"),
+                label(63, 25, 1_050, 50, "npn13G2"),
+            ],
+        );
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("reads");
+        let boxes = |name: &str| {
+            let layer = deck.layers.id(&strings, name).expect("declared");
+            layout
+                .store
+                .polys_on_layer(layer)
+                .map(|row| {
+                    let b = layout.store.poly_bbox(PolyId(row));
+                    (b.xlo.raw(), b.xhi.raw(), b.yhi.raw())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(boxes("npn"), [(0, 100, 100), (200, 300, 100)]);
+        assert_eq!(
+            boxes("rest"),
+            [(400, 500, 100), (600, 900, 400), (1_000, 1_100, 100)]
+        );
+    }
+
+    #[test]
+    fn a_glob_matches_the_whole_text() {
+        use super::glob_matches;
+        for (pattern, text) in [
+            ("VDD", "VDD"),
+            ("VDD*", "VDD"),
+            ("VDD*", "VDDIO"),
+            ("*IO", "VDDIO"),
+            ("V?D", "VDD"),
+            ("a*b*c", "axxbyyc"),
+            ("*", ""),
+        ] {
+            assert!(glob_matches(pattern, text), "{pattern} {text}");
+        }
+        for (pattern, text) in [
+            ("VDD", "VDDIO"),
+            ("VDD", "vdd"),
+            ("V?D", "VD"),
+            ("*IO", "VDDIOX"),
+            ("a*b*c", "axxbyy"),
+            ("[V]DD", "VDD"),
+        ] {
+            assert!(!glob_matches(pattern, text), "{pattern} {text}");
         }
     }
 }

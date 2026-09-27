@@ -1,11 +1,11 @@
 //! The one place a polygon lives.
 //!
 //! Data in: rings as `(LayerId, xs, ys)` in arrival order, via [`GeometryStoreBuilder::push`].
-//! Data out: [`GeometryStore`], SoA columns grouped by layer, plus the arrival permutation.
+//! Data out: [`GeometryStore`], one column per field, rows grouped by layer, plus the arrival permutation.
 
 use crate::bbox::Bbox;
 use crate::ids::{LayerId, PolyId};
-use crate::ops::{point_in_coords, Point};
+use crate::ops::{point_in_coords, Point, Seg};
 use crate::Dbu;
 use std::ops::Range;
 
@@ -23,6 +23,11 @@ pub struct GeometryStore {
     poly_bbox: Vec<Bbox>,
 
     layer_start: Vec<u32>,
+
+    /// Edge layers' segments, directed with the material on the left of travel,
+    /// grouped by layer; `edge_layer_start` is CSR like `layer_start`.
+    edges: Vec<Seg>,
+    edge_layer_start: Vec<u32>,
 }
 
 impl GeometryStore {
@@ -66,6 +71,30 @@ impl GeometryStore {
     pub fn poly_contains_point(&self, poly: PolyId, p: Point) -> bool {
         let (xs, ys) = self.poly_verts(poly);
         point_in_coords(xs, ys, p)
+    }
+
+    /// The segments of one edge layer; empty on a polygon layer.
+    pub fn edges_on_layer(&self, layer: LayerId) -> &[Seg] {
+        let (lo, hi) = (
+            self.edge_layer_start[layer.idx()],
+            self.edge_layer_start[layer.idx() + 1],
+        );
+        &self.edges[lo as usize..hi as usize]
+    }
+
+    /// Append one whole edge layer to the tail, as [`Self::append_layer`] does rings.
+    pub fn append_edges(&mut self, layer: LayerId, edges: &[Seg]) {
+        assert!(layer.idx() < self.layer_count(), "layer id past the table");
+        assert_eq!(
+            self.edge_layer_start[layer.idx()] as usize,
+            self.edges.len(),
+            "a layer with edges after it cannot be appended to without moving them"
+        );
+        self.edges.extend_from_slice(edges);
+        let grown = u32::try_from(edges.len()).expect("edge count fits a u32");
+        for offset in &mut self.edge_layer_start[layer.idx() + 1..] {
+            *offset += grown;
+        }
     }
 
     /// Append one whole layer's rings (`vert_start`/`vert_len` index `xs`/`ys`)
@@ -218,6 +247,8 @@ impl GeometryStoreBuilder {
             poly_vert_len,
             poly_bbox,
             layer_start,
+            edges: Vec::new(),
+            edge_layer_start: vec![0; layer_count + 1],
         };
         (store, permutation)
     }

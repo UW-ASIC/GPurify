@@ -1,8 +1,8 @@
 //! Exact rectilinear booleans by an x-sweep with nonzero-winding occupancy.
 //!
 //! Data in: [`ValidatedLayer`] operands (or one raw GDS ring for [`canonical_rings_into`]).
-//! Data out: a [`ValidatedLayer`], outer rings CCW, holes CW; provenance is the
-//! lowest contributing `PolyId`. Non-rectilinear input is refused, never approximated.
+//! Data out: a [`ValidatedLayer`], outer rings CCW, holes CW; its rows are the
+//! scratch store's, not the operands'. Non-rectilinear input is refused, never approximated.
 
 use core::cmp::Ordering;
 
@@ -16,6 +16,8 @@ use crate::{Dbu, MAX_ABS_DBU};
 pub enum BooleanError {
     #[error("input is not rectilinear; arbitrary-angle geometry is unsupported")]
     NotRectilinear,
+    #[error("a sized coordinate leaves the representable range")]
+    OutOfRange,
     #[error(transparent)]
     Validity(#[from] ValidityError),
 }
@@ -727,7 +729,7 @@ mod tests {
 
     /// Oracle: closed form — a keyhole ring denotes an outer minus its hole.
     ///
-    /// The input is the ring KLayout writes for a 1000x1000 square with a
+    /// The input is the ring `KLayout` writes for a 1000x1000 square with a
     /// 400x400 hole: one weakly simple loop that runs in to the hole along
     /// `y = 700` and back out along the same line. `validate_layer_into`
     /// refuses it, so a reader that passed it through refused every layer it

@@ -72,8 +72,8 @@ fn stage_timings_across_the_scale_corpus() {
     // Real, clustered geometry. Not comparable with the sweep: fixed per-run
     // costs dominate at this size.
     let dir = scratch_dir("stages");
-    let deck = dir.join("deck.json");
-    std::fs::write(&deck, unlabelled_deck().to_string()).expect("writable");
+    let deck = dir.join("rules.deck");
+    std::fs::write(&deck, unlabelled_deck().join("\n")).expect("writable");
     let inputs = fixture_inputs(&deck);
     let (loaded, elapsed) = timed(|| load(&inputs).expect("the fixture corpus loads"));
     let n = loaded.store.poly_count();
@@ -94,16 +94,15 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-/// `params.json` without its label pairing: the library's cells all overlap at
-/// the origin, so merged nets would carry conflicting names.
-fn unlabelled_deck() -> serde_json::Value {
-    let source = std::fs::read_to_string(fixtures().join("params.json")).expect("readable");
-    let mut deck: serde_json::Value = serde_json::from_str(&source).expect("JSON");
-    deck["connectivity"]
-        .as_object_mut()
-        .expect("the deck declares connectivity")
-        .remove("labels");
-    deck
+/// `params.deck`'s lines without its label pairing: the library's cells all
+/// overlap at the origin, so merged nets would carry conflicting names.
+fn unlabelled_deck() -> Vec<String> {
+    let source = std::fs::read_to_string(fixtures().join("params.deck")).expect("readable");
+    source
+        .lines()
+        .filter(|line| !line.starts_with("connect label"))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn scratch_dir(tag: &str) -> PathBuf {
@@ -112,7 +111,7 @@ fn scratch_dir(tag: &str) -> PathBuf {
     dir
 }
 
-/// The whole conformance library. `Drop`, because it draws layers `params.json`
+/// The whole conformance library. `Drop`, because it draws layers `params.deck`
 /// never declares.
 fn fixture_inputs(deck: &Path) -> Inputs {
     Inputs {
@@ -133,15 +132,14 @@ const RULE_ITERS: u32 = 50;
 #[test]
 #[ignore = "timing table; run with --release -- --ignored --nocapture"]
 fn every_rule_in_the_deck_timed_on_its_own() {
-    let deck = unlabelled_deck();
-    let rules = deck["rules"].as_object().expect("a rules object").clone();
+    let (rules, base): (Vec<String>, Vec<String>) = unlabelled_deck()
+        .into_iter()
+        .partition(|line| line.starts_with("rule "));
     let dir = scratch_dir("rules");
 
-    let timed_deck = |tag: &str, rows: serde_json::Value, checks: Checks| {
-        let mut one = deck.clone();
-        one["rules"] = rows;
-        let path = dir.join(format!("{tag}.json"));
-        std::fs::write(&path, one.to_string()).expect("writable");
+    let timed_deck = |tag: &str, rule: &str, checks: Checks| {
+        let path = dir.join(format!("{tag}.deck"));
+        std::fs::write(&path, format!("{}\n{rule}\n", base.join("\n"))).expect("writable");
         let loaded = load(&fixture_inputs(&path)).expect("the fixture corpus loads");
         let extracted = extract(&loaded).expect("the fixture corpus extracts");
         let options = RunOptions {
@@ -166,11 +164,10 @@ fn every_rule_in_the_deck_timed_on_its_own() {
         lvs: false,
         pex: false,
     };
-    let empty = || serde_json::Value::Object(serde_json::Map::new());
     let floor = |checks: Checks| {
-        let _cold = timed_deck("baseline", empty(), checks);
+        let _cold = timed_deck("baseline", "", checks);
         (0..3)
-            .map(|_| timed_deck("baseline", empty(), checks).0)
+            .map(|_| timed_deck("baseline", "", checks).0)
             .min()
             .expect("three measurements")
     };
@@ -178,12 +175,18 @@ fn every_rule_in_the_deck_timed_on_its_own() {
     let erc_floor = floor(checks_for(gpurify::check::erc::ruleset::KINDS[0]));
 
     let mut rows = Vec::new();
-    for (id, spec) in &rules {
-        let checks = checks_for(spec["kind"].as_str().expect("every row has a kind"));
-        let one = serde_json::Value::Object([(id.clone(), spec.clone())].into_iter().collect());
-        let (call, record) = timed_deck(id, one, checks);
+    for rule in &rules {
+        // `rule <id> [warning] <kind>(...`; an ERC kind is spelled as the engine spells it.
+        let mut words = rule.split_whitespace().skip(1);
+        let id = words.next().expect("a rule id").to_owned();
+        let kind = words
+            .find(|word| *word != "warning")
+            .and_then(|word| word.split('(').next())
+            .expect("a kind");
+        let checks = checks_for(kind);
+        let (call, record) = timed_deck(&id, rule, checks);
         let floor = if checks.erc { erc_floor } else { drc_floor };
-        rows.push((call.saturating_sub(floor), id.clone(), record, call));
+        rows.push((call.saturating_sub(floor), id, record, call));
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(

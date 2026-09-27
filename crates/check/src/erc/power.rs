@@ -13,7 +13,7 @@
 
 use crate::erc::centre;
 use crate::erc::facts::IntentMap;
-use crate::topology::net::{intra_layer_edges_into, via_edges_into};
+use crate::topology::net::{intra_layer_edges_into, via_cuts_into};
 use crate::topology::{csr_run, DeviceTable, NetId, NetTable};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::Point;
@@ -138,7 +138,7 @@ impl NetNetworks {
     }
 
     /// One row's nodes: position and tapped polygon.
-    pub fn nodes_of(&self, row: u32) -> (&[Point], &[PolyId]) {
+    pub(crate) fn nodes_of(&self, row: u32) -> (&[Point], &[PolyId]) {
         let (from, to) = csr_run(&self.node_start, row as usize);
         (&self.node_at[from..to], &self.node_poly[from..to])
     }
@@ -150,7 +150,10 @@ impl NetNetworks {
     }
 
     /// One row's edges: endpoints and resistance.
-    pub fn edges_of(&self, row: u32) -> (&[u32], &[u32], &[Qty<Resistance, { prefix::BASE }>]) {
+    pub(crate) fn edges_of(
+        &self,
+        row: u32,
+    ) -> (&[u32], &[u32], &[Qty<Resistance, { prefix::BASE }>]) {
         let (from, to) = csr_run(&self.edge_start, row as usize);
         (
             &self.edge_from[from..to],
@@ -160,22 +163,10 @@ impl NetNetworks {
     }
 }
 
-/// One row's run in a CSR offset column; a row past the table panics.
-/// Solver stopping rule: relative residual tolerance and iteration cap.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SolveConfig {
-    pub relative_tolerance: f64,
-    pub max_iterations: u32,
-}
-
-impl Default for SolveConfig {
-    fn default() -> Self {
-        Self {
-            relative_tolerance: 1e-10,
-            max_iterations: 20_000,
-        }
-    }
-}
+/// CG stops once the residual is this fraction of the initial one.
+const RELATIVE_TOLERANCE: f64 = 1e-10;
+/// CG refuses after this many iterations.
+const MAX_ITERATIONS: u32 = 20_000;
 
 /// The solved state of a [`PowerGrid`]: row `i` is node `i` (voltages) or edge
 /// `i` (currents).
@@ -186,7 +177,6 @@ pub struct PowerSolution {
     pub node_drop: Vec<Qty<Voltage, { prefix::MILLI }>>,
     /// Positive from `edge_from` toward `edge_to`.
     pub branch_current: Vec<Qty<Current, { prefix::MICRO }>>,
-    pub relative_residual: f64,
 }
 
 impl PowerSolution {
@@ -198,7 +188,6 @@ impl PowerSolution {
             && self.node_voltage.iter().all(|v| v.is_finite())
             && self.node_drop.iter().all(|v| v.is_finite())
             && self.branch_current.iter().all(|c| c.is_finite())
-            && self.relative_residual.is_finite()
     }
 }
 
@@ -228,7 +217,7 @@ pub struct SolveScratch {
     row_stage: Vec<(u32, f64)>,
     unknown_of_node: Vec<u32>,
     node_of_unknown: Vec<u32>,
-    /// Assembly: row cursors and diagonal, each with one bin slot past the end.
+    /// Assembly: row fill cursors and the diagonal.
     cursor: Vec<u32>,
     diag: Vec<f64>,
     /// Edges in unknown space.
@@ -448,16 +437,15 @@ fn cholesky_inverse_into(a: &mut [f64], n: usize, out: &mut Vec<f64>) -> bool {
 }
 
 /// Shared with the field solver; their fold order is part of the result.
-use gpurify_geom::linalg::{axpy, dot, nrm2 as norm, spmv};
+use gpurify_geom::linalg::{axpy, dot, nrm2 as norm, spmv, xpay};
 
 /// Assemble the reduced Laplacian (CSR, diagonal first in each row) and its
 /// inverse diagonal from `scratch.branch`, which is in unknown space.
 ///
 /// A [`NOT_AN_UNKNOWN`] endpoint (a pad) loads the other end's diagonal and
-/// adds no off-diagonal; its share goes to a bin slot past the end. Duplicate
-/// columns stay duplicated: the mat-vec sums them.
+/// adds no off-diagonal. Duplicate columns stay duplicated: the mat-vec sums
+/// them. Each diagonal accumulates in edge order.
 fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
-    let width = u32::try_from(unknowns).expect("an unknown index is a u32");
     let SolveScratch {
         row_start,
         col,
@@ -470,54 +458,51 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
     } = scratch;
 
     cursor.clear();
-    cursor.resize(unknowns + 1, 0);
+    cursor.resize(unknowns, 0);
     diag.clear();
-    diag.resize(unknowns + 1, 0.0);
-
-    // Off-diagonals per row.
+    diag.resize(unknowns, 0.0);
     for &(a, b, _) in branch.iter() {
-        let both = u32::from((a != NOT_AN_UNKNOWN) & (b != NOT_AN_UNKNOWN));
-        cursor[a.min(width) as usize] += both;
-        cursor[b.min(width) as usize] += both;
+        if a != NOT_AN_UNKNOWN && b != NOT_AN_UNKNOWN {
+            cursor[a as usize] += 1;
+            cursor[b as usize] += 1;
+        }
     }
 
     // Offsets; slot zero of every row is the diagonal.
     row_start.clear();
-    row_start.reserve(unknowns + 1);
+    row_start.push(0);
     let mut running = 0u32;
-    for count in &cursor[..unknowns] {
+    for count in cursor.iter_mut() {
+        let first = running;
+        running += 1 + *count;
         row_start.push(running);
-        running += 1 + count;
+        *count = first + 1;
     }
-    row_start.push(running);
-
     let nnz = running as usize;
     col.clear();
-    col.resize(nnz + 1, 0);
+    col.resize(nnz, 0);
     value.clear();
-    value.resize(nnz + 1, 0.0);
+    value.resize(nnz, 0.0);
     for i in 0..unknowns {
         col[row_start[i] as usize] = u32::try_from(i).expect("an unknown index is a u32");
-        cursor[i] = row_start[i] + 1;
     }
-    cursor[unknowns] = running;
 
-    // Fill: always store, advance only when both ends are unknowns.
     for &(a, b, g) in branch.iter() {
-        let (a_row, b_row) = (a.min(width) as usize, b.min(width) as usize);
-        diag[a_row] += g;
-        diag[b_row] += g;
-
-        let paired = (a != NOT_AN_UNKNOWN) & (b != NOT_AN_UNKNOWN);
-        let both = usize::from(paired);
-        let ka = both * cursor[a_row] as usize + (1 - both) * nnz;
-        col[ka] = b;
-        value[ka] = -g;
-        cursor[a_row] += u32::from(paired);
-        let kb = both * cursor[b_row] as usize + (1 - both) * nnz;
-        col[kb] = a;
-        value[kb] = -g;
-        cursor[b_row] += u32::from(paired);
+        let (a_unknown, b_unknown) = (a != NOT_AN_UNKNOWN, b != NOT_AN_UNKNOWN);
+        if a_unknown {
+            diag[a as usize] += g;
+        }
+        if b_unknown {
+            diag[b as usize] += g;
+        }
+        if a_unknown && b_unknown {
+            for (row, other) in [(a, b), (b, a)] {
+                let k = cursor[row as usize] as usize;
+                col[k] = other;
+                value[k] = -g;
+                cursor[row as usize] += 1;
+            }
+        }
     }
 
     inv_diag.clear();
@@ -613,8 +598,9 @@ fn precondition(
     let (l_start, l_col, l_val, l_diag) = factor;
     let unknowns = z.len();
     if l_diag.is_empty() {
-        for i in 0..unknowns {
-            z[i] = r[i] * inv_diag[i];
+        // No bounds checks, so this autovectorises (one multiply per lane).
+        for ((z, &r), &d) in z.iter_mut().zip(r).zip(inv_diag) {
+            *z = r * d;
         }
         return;
     }
@@ -637,8 +623,8 @@ fn precondition(
 }
 
 /// Preconditioned CG on the assembled system, from the guess in `scratch.x`.
-/// Returns the final residual over the initial one; a `NaN` residual refuses.
-fn conjugate_gradient(scratch: &mut SolveScratch, config: SolveConfig) -> Result<f64, PowerError> {
+/// A `NaN` residual refuses.
+fn conjugate_gradient(scratch: &mut SolveScratch) -> Result<(), PowerError> {
     let unknowns = scratch.x.len();
     factorise_into(scratch, unknowns);
     scratch.z.clear();
@@ -665,20 +651,17 @@ fn conjugate_gradient(scratch: &mut SolveScratch, config: SolveConfig) -> Result
     ap.resize(unknowns, 0.0);
     spmv(row_start, col, value, x, ap);
     r.clear();
-    r.reserve(unknowns);
-    for i in 0..unknowns {
-        r.push(rhs[i] - ap[i]);
-    }
+    r.extend(rhs.iter().zip(ap.iter()).map(|(&b, &ax)| b - ax));
     precondition((l_start, l_col, l_val, l_diag), inv_diag, r, z);
     p.clear();
     p.extend_from_slice(z);
 
     let mut rz = dot(r, z);
     let initial = norm(r);
-    let goal = initial * config.relative_tolerance;
+    let goal = initial * RELATIVE_TOLERANCE;
     let mut residual = initial;
     let mut iterations = 0u32;
-    while residual > goal && iterations < config.max_iterations {
+    while residual > goal && iterations < MAX_ITERATIONS {
         spmv(row_start, col, value, p, ap);
         let pap = dot(p, ap);
         // Non-positive `p·Ap`: the floating-point floor; the test below decides.
@@ -691,22 +674,16 @@ fn conjugate_gradient(scratch: &mut SolveScratch, config: SolveConfig) -> Result
         precondition((l_start, l_col, l_val, l_diag), inv_diag, r, z);
         let next = dot(r, z);
         let beta = next / rz;
-        for i in 0..unknowns {
-            p[i] = z[i] + beta * p[i];
-        }
+        xpay(z, beta, p);
         rz = next;
         residual = norm(r);
         iterations += 1;
     }
 
     if !(residual <= goal) {
-        return Err(PowerError::NotConverged(config.max_iterations));
+        return Err(PowerError::NotConverged(MAX_ITERATIONS));
     }
-    Ok(if initial > 0.0 {
-        residual / initial
-    } else {
-        0.0
-    })
+    Ok(())
 }
 
 /// A grid and its solution, borrowed together.
@@ -721,21 +698,20 @@ pub struct Solved<'a> {
 /// device terminal, or a limited net that is not a supply). Exact: the loads
 /// sum to the signed budget or to `±0.0`.
 pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
-    intent
-        .limit_net
-        .iter()
-        .zip(&intent.limit)
-        .any(|(&net, limits)| {
-            limits.budget_current_ua.is_some_and(|budget| budget != 0.0)
-                && load_on(grid, net) == 0.0
-        })
-}
-
-/// Total load on one net, over every node.
-fn load_on(grid: &PowerGrid, net: NetId) -> f64 {
-    (0..grid.node_count())
-        .map(|node| f64::from(u8::from(grid.node_net[node] == net)) * grid.node_load[node].raw())
-        .sum()
+    // One pass over the nodes; each limited net's loads summed in node order.
+    let mut load = vec![0.0f64; intent.limit_net.len()];
+    let mut last = (NetId::NONE, None);
+    for (&net, &node_load) in grid.node_net.iter().zip(&grid.node_load) {
+        if net != last.0 {
+            last = (net, intent.limit_net.binary_search(&net).ok());
+        }
+        if let Some(row) = last.1 {
+            load[row] += node_load.raw();
+        }
+    }
+    intent.limit.iter().zip(&load).any(|(limits, &load)| {
+        limits.budget_current_ua.is_some_and(|budget| budget != 0.0) && load == 0.0
+    })
 }
 
 /// Build the supply grid; `out` is cleared and refilled. Only declared
@@ -778,7 +754,7 @@ pub fn extract_into(
     }
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
-    let both_noded = |&(a, b, _): &(u32, u32, LayerId)| {
+    let both_noded = |&(a, b, _, _): &Link| {
         shape_of_poly[a as usize] != NONE && shape_of_poly[b as usize] != NONE
     };
     links.metal.retain(both_noded);
@@ -845,7 +821,7 @@ pub fn extract_into(
         let poly = shape[owner];
         out.node_poly.push(poly);
         out.node_net.push(intent.supply_net[supply]);
-        out.node_nominal.push(intent.supply_voltage[supply]);
+        out.node_nominal.push(intent.held_at(supply));
         out.node_layer.push(store.poly_layer(poly));
         out.node_at
             .push(tap_point(store.poly_bbox(poly), taps.node_along[i]));
@@ -890,89 +866,118 @@ pub fn extract_into(
                 .expect("every shape carries a tap at its own centre");
         out.source_node
             .push(u32::try_from(at).expect("a node index is a u32"));
-        out.source_voltage.push(intent.supply_voltage[supply]);
+        out.source_voltage.push(intent.held_at(supply));
     }
 
-    // Edges, in this order (it is the solver's assembly order): every shape's
-    // chain, then the metal links, then the vias.
-    let mut profile = ChainProfile::default();
+    push_edges(
+        store,
+        process,
+        &sheet,
+        &shape,
+        &taps,
+        [(&links.metal, metal_req), (&links.via, via_req)],
+        &mut ChainProfile::default(),
+        |edge| out.push_edge(edge),
+    );
+    Ok(())
+}
+
+/// One resistor, before it is split into a network's columns.
+#[derive(Clone, Copy)]
+struct Edge {
+    from: u32,
+    to: u32,
+    ohms: f64,
+    width: Dbu,
+    length: Dbu,
+    layer: LayerId,
+    kind: EdgeKind,
+}
+
+impl PowerGrid {
+    fn push_edge(&mut self, edge: Edge) {
+        self.edge_from.push(edge.from);
+        self.edge_to.push(edge.to);
+        self.edge_resistance.push(Qty::new(edge.ohms));
+        self.edge_width.push(edge.width);
+        self.edge_length.push(edge.length);
+        self.edge_layer.push(edge.layer);
+        self.edge_kind.push(edge.kind);
+    }
+}
+
+/// Emit one network's edges in the solver's assembly order: every shape's
+/// chain, then the metal links, then the vias. `links` pairs each link list
+/// with its first tap request; node indices are `taps`' own.
+fn push_edges(
+    store: &GeometryStore,
+    process: Process<'_>,
+    sheet: &[f64],
+    shape: &[PolyId],
+    taps: &TapTable,
+    links: [(&[Link], usize); 2],
+    profile: &mut ChainProfile,
+    mut push: impl FnMut(Edge),
+) {
+    let node = |n: usize| u32::try_from(n).expect("a node index is a u32");
     for (index, &poly) in shape.iter().enumerate() {
         let layer = store.poly_layer(poly);
         profile.build(store, poly);
         let (from, to) = taps.chain_of(u32::try_from(index).expect("a shape index is a u32"));
-        for node in from..to.saturating_sub(1) {
-            let (a, b) = (taps.node_along[node], taps.node_along[node + 1]);
-            // Floored at one unit: a zero length would be Blech-immortal.
-            let length = Dbu::new_unchecked((b.raw() - a.raw()).max(1));
+        for n in from..to.saturating_sub(1) {
+            let (a, b) = (taps.node_along[n], taps.node_along[n + 1]);
             let (squares, width) = profile.segment(a, b);
-            out.push_edge(
-                u32::try_from(node).expect("a node index is a u32"),
-                u32::try_from(node + 1).expect("a node index is a u32"),
-                sheet[layer.idx()] * squares,
+            push(Edge {
+                from: node(n),
+                to: node(n + 1),
+                ohms: sheet[layer.idx()] * squares,
                 width,
-                length,
+                // Floored at one unit: a zero length would be Blech-immortal.
+                length: Dbu::new_unchecked((b.raw() - a.raw()).max(1)),
                 layer,
-                EdgeKind::Metal,
-            );
+                kind: EdgeKind::Metal,
+            });
         }
     }
-    for (link, &(a, b, layer)) in links.metal.iter().enumerate() {
-        let width = conductor_width(store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
-        let (node_a, node_b) = (
+    let at = |n: u32| {
+        let n = n as usize;
+        let host = store.poly_bbox(shape[taps.node_shape[n] as usize]);
+        tap_point(host, taps.node_along[n])
+    };
+    let [(metal, metal_req), (via, via_req)] = links;
+    for (link, &(a, b, layer, _)) in metal.iter().enumerate() {
+        let (from, to) = (
             taps.req_node[metal_req + 2 * link],
             taps.req_node[metal_req + 2 * link + 1],
         );
+        let width = conductor_width(store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
         // The shapes touch: the two taps coincide, so this is the floor.
-        let length = run_length(out.node_at[node_a as usize], out.node_at[node_b as usize]);
-        out.push_edge(
-            node_a,
-            node_b,
-            sheet[layer.idx()] * squares(length, width),
+        let length = run_length(at(from), at(to));
+        push(Edge {
+            from,
+            to,
+            ohms: sheet[layer.idx()] * squares(length, width),
             width,
             length,
             layer,
-            EdgeKind::Metal,
-        );
+            kind: EdgeKind::Metal,
+        });
     }
-    for (link, &(a, b, cut)) in links.via.iter().enumerate() {
-        let width = conductor_width(store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
-        let length = via_length(
-            process,
-            store.poly_layer(PolyId(a)),
-            store.poly_layer(PolyId(b)),
-        );
+    for (link, &(a, b, cut, _)) in via.iter().enumerate() {
         // One square of the cut layer per cut; each cut is its own edge.
-        out.push_edge(
-            taps.req_node[via_req + 2 * link],
-            taps.req_node[via_req + 2 * link + 1],
-            sheet[cut.idx()],
-            width,
-            length,
-            cut,
-            EdgeKind::Via,
-        );
-    }
-    Ok(())
-}
-
-impl PowerGrid {
-    fn push_edge(
-        &mut self,
-        from: u32,
-        to: u32,
-        ohms: f64,
-        width: Dbu,
-        length: Dbu,
-        layer: LayerId,
-        kind: EdgeKind,
-    ) {
-        self.edge_from.push(from);
-        self.edge_to.push(to);
-        self.edge_resistance.push(Qty::new(ohms));
-        self.edge_width.push(width);
-        self.edge_length.push(length);
-        self.edge_layer.push(layer);
-        self.edge_kind.push(kind);
+        push(Edge {
+            from: taps.req_node[via_req + 2 * link],
+            to: taps.req_node[via_req + 2 * link + 1],
+            ohms: sheet[cut.idx()],
+            width: conductor_width(store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b))),
+            length: via_length(
+                process,
+                store.poly_layer(PolyId(a)),
+                store.poly_layer(PolyId(b)),
+            ),
+            layer: cut,
+            kind: EdgeKind::Via,
+        });
     }
 }
 
@@ -1213,13 +1218,18 @@ fn sheet_resistances(process: Process<'_>, layers: usize) -> Result<Vec<f64>, Po
     Ok(sheet)
 }
 
+/// Two connected polygons, the layer joining them, and the cut polygon both
+/// ends are tapped under (`NONE` for a metal touch, tapped where they meet).
+type Link = (u32, u32, LayerId, u32);
+
 /// Every connection between two conductor polygons, by kind.
 #[derive(Debug, Default)]
 struct Connections {
     /// Touching pairs on one conductor layer, with that layer.
-    metal: Vec<(u32, u32, LayerId)>,
-    /// Pairs joined by one cut, with the cut layer (four cuts, four rows).
-    via: Vec<(u32, u32, LayerId)>,
+    metal: Vec<Link>,
+    /// Pairs joined by one cut, with the cut layer and the cut (four cuts,
+    /// four rows).
+    via: Vec<Link>,
 }
 
 fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mut Connections) {
@@ -1227,6 +1237,7 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
     out.via.clear();
 
     let mut pairs: Vec<(u32, u32)> = Vec::new();
+    let mut cuts: Vec<(u32, u32, u32)> = Vec::new();
     let touching: &[LayerId] = if connectivity.intra_layer_touch {
         &connectivity.conductors
     } else {
@@ -1235,12 +1246,14 @@ fn connections_into(store: &GeometryStore, connectivity: &Connectivity, out: &mu
     for &layer in touching {
         intra_layer_edges_into(store, layer, &mut pairs);
         out.metal.reserve(pairs.len());
-        out.metal.extend(pairs.iter().map(|&(a, b)| (a, b, layer)));
+        out.metal
+            .extend(pairs.iter().map(|&(a, b)| (a, b, layer, NONE)));
     }
     for (row, &cut) in connectivity.via_cut.iter().enumerate() {
-        via_edges_into(store, cut, connectivity.via_connects[row], &mut pairs);
-        out.via.reserve(pairs.len());
-        out.via.extend(pairs.iter().map(|&(a, b)| (a, b, cut)));
+        via_cuts_into(store, cut, connectivity.via_connects[row], &mut cuts);
+        out.via.reserve(cuts.len());
+        out.via
+            .extend(cuts.iter().map(|&(poly, a, b)| (a, b, cut, poly)));
     }
 }
 
@@ -1279,19 +1292,25 @@ impl TapTable {
         index
     }
 
-    /// Request both ends of every link (`a` then `b`, each where the other
-    /// lands on it); returns the first request index.
+    /// Request both ends of every link (`a` then `b`): under the cut for a
+    /// via, else where the other shape lands; returns the first request index.
     fn push_links(
         &mut self,
         store: &GeometryStore,
-        links: &[(u32, u32, LayerId)],
+        links: &[Link],
         shape_of: impl Fn(u32) -> u32,
     ) -> usize {
         let first = self.req_shape.len();
-        for &(a, b, _) in links {
+        for &(a, b, _, cut) in links {
             let (host_a, host_b) = (store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
-            self.push(shape_of(a), tap_on(host_a, host_b));
-            self.push(shape_of(b), tap_on(host_b, host_a));
+            let (at_a, at_b) = if cut == NONE {
+                (host_b, host_a)
+            } else {
+                let under = store.poly_bbox(PolyId(cut));
+                (under, under)
+            };
+            self.push(shape_of(a), tap_on(host_a, at_a));
+            self.push(shape_of(b), tap_on(host_b, at_b));
         }
         first
     }
@@ -1539,7 +1558,7 @@ pub fn extract_nets_into(
     // Links sorted by net (both ends share it) so each net's run is a slice.
     let mut links = Connections::default();
     connections_into(store, process.connectivity, &mut links);
-    let by_net = |&(a, b, layer): &(u32, u32, LayerId)| (nets.net_of(PolyId(a)).0, a, b, layer.0);
+    let by_net = |&(a, b, layer, cut): &Link| (nets.net_of(PolyId(a)).0, a, b, layer.0, cut);
     links.metal.sort_unstable_by_key(by_net);
     links.via.sort_unstable_by_key(by_net);
 
@@ -1600,7 +1619,6 @@ pub fn extract_nets_into(
             continue;
         }
 
-        let base = out.node_poly.len();
         out.net.push(id);
         out.terminal.extend_from_slice(&terminal);
         for node in 0..taps.node_shape.len() {
@@ -1609,53 +1627,20 @@ pub fn extract_nets_into(
             out.node_at
                 .push(tap_point(store.poly_bbox(poly), taps.node_along[node]));
         }
-
-        let push_edge = |out: &mut NetNetworks, a: u32, b: u32, ohms: f64| {
-            out.edge_from.push(a);
-            out.edge_to.push(b);
-            out.edge_resistance.push(Qty::new(ohms));
-        };
-        for local in 0..shapes {
-            let poly = candidate[from + local];
-            let layer = store.poly_layer(poly);
-            profile.build(store, poly);
-            let (lo, hi) = taps.chain_of(u32::try_from(local).expect("a shape index is a u32"));
-            for node in lo..hi.saturating_sub(1) {
-                let (squares, _) =
-                    profile.segment(taps.node_along[node], taps.node_along[node + 1]);
-                push_edge(
-                    out,
-                    u32::try_from(node).expect("a node index is a u32"),
-                    u32::try_from(node + 1).expect("a node index is a u32"),
-                    sheet[layer.idx()] * squares,
-                );
-            }
-        }
-        for (link, &(a, b, layer)) in metal.iter().enumerate() {
-            let (node_a, node_b) = (
-                taps.req_node[metal_req + 2 * link],
-                taps.req_node[metal_req + 2 * link + 1],
-            );
-            let length = run_length(
-                out.node_at[base + node_a as usize],
-                out.node_at[base + node_b as usize],
-            );
-            let width = conductor_width(store.poly_bbox(PolyId(a)), store.poly_bbox(PolyId(b)));
-            push_edge(
-                out,
-                node_a,
-                node_b,
-                sheet[layer.idx()] * squares(length, width),
-            );
-        }
-        for (link, &(_, _, cut)) in via.iter().enumerate() {
-            push_edge(
-                out,
-                taps.req_node[via_req + 2 * link],
-                taps.req_node[via_req + 2 * link + 1],
-                sheet[cut.idx()],
-            );
-        }
+        push_edges(
+            store,
+            process,
+            &sheet,
+            &candidate[from..to],
+            &taps,
+            [(metal, metal_req), (via, via_req)],
+            &mut profile,
+            |edge| {
+                out.edge_from.push(edge.from);
+                out.edge_to.push(edge.to);
+                out.edge_resistance.push(Qty::new(edge.ohms));
+            },
+        );
 
         out.node_start
             .push(u32::try_from(out.node_poly.len()).expect("a node index is a u32"));
@@ -1675,12 +1660,8 @@ pub fn extract_nets_into(
 }
 
 /// One net's run of a link list sorted by net.
-fn net_slice<'a>(
-    links: &'a [(u32, u32, LayerId)],
-    net: u32,
-    nets: &NetTable,
-) -> &'a [(u32, u32, LayerId)] {
-    let of = |&(a, _, _): &(u32, u32, LayerId)| nets.net_of(PolyId(a)).0;
+fn net_slice<'a>(links: &'a [Link], net: u32, nets: &NetTable) -> &'a [Link] {
+    let of = |&(a, _, _, _): &Link| nets.net_of(PolyId(a)).0;
     let from = links.partition_point(|link| of(link) < net);
     let to = from + links[from..].partition_point(|link| of(link) == net);
     &links[from..to]
@@ -1707,7 +1688,6 @@ fn bad_resistance(resistance: &[Qty<Resistance, { prefix::BASE }>]) -> Result<()
 /// to a meaningless solution.
 pub fn solve_into(
     grid: &PowerGrid,
-    config: SolveConfig,
     scratch: &mut SolveScratch,
     out: &mut PowerSolution,
 ) -> Result<(), PowerError> {
@@ -1838,7 +1818,7 @@ pub fn solve_into(
         )
     }));
     assemble_into(scratch, unknowns);
-    out.relative_residual = conjugate_gradient(scratch, config)?;
+    conjugate_gradient(scratch)?;
 
     // Pads keep their exact fixed voltage.
     for unknown in 0..unknowns {
@@ -2043,11 +2023,7 @@ mod tests {
         builder.finish(1).0
     }
 
-    /// A rectangle is one slab of its own short dimension, so the whole-shape
-    /// integral is the length-to-width ratio the model has always spent on it.
-    /// That is what makes this change invisible to every closed-form test in
-    /// the suite — and what makes those tests unable to see it go wrong, which
-    /// is why this one is here.
+    /// A rectangle is one slab of its short dimension: length over width.
     #[test]
     fn a_rectangle_profiles_to_its_own_length_over_its_own_width() {
         let store = shape(&[0, 400, 400, 0], &[0, 0, 10, 10]);
@@ -2067,12 +2043,8 @@ mod tests {
         );
     }
 
-    /// An L of `100 x 100` on ten-wide arms holds a hundred units of metal
-    /// across the first ten of its span and ten across the remaining ninety, so
-    /// `∫ ds / w(s)` is `10/100 + 90/10 = 9.1` squares. Its bounding box is
-    /// square, so the model this replaced spent `100/100 = 1` — a resistance
-    /// nine times low, which is a drop nine times low, which is fail-open for
-    /// all four rules that read a solved grid.
+    /// A `100 x 100` L on ten-wide arms is `10/100 + 90/10 = 9.1` squares, not
+    /// its square bounding box's 1 (a drop nine times low).
     #[test]
     fn an_l_route_costs_the_squares_its_arms_have_and_not_its_bounding_box() {
         let store = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -2091,11 +2063,7 @@ mod tests {
         );
     }
 
-    /// Rayleigh monotonicity, checked where it is produced rather than where it
-    /// is observed: widening a polygon widens `w(s)` at every `s` it covers, so
-    /// no segment of it can cost more squares than it did. The bounding-box
-    /// model did **not** have this property — widening the short arm of an L
-    /// past its long one flips the chain axis.
+    /// Rayleigh monotonicity: widening a polygon never raises a segment's squares.
     #[test]
     fn widening_a_shape_can_only_lower_the_squares_a_segment_costs() {
         let narrow = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -2116,17 +2084,8 @@ mod tests {
         }
     }
 
-    /// The defining property of an incomplete factorisation with zero fill: `L
-    /// Lᵀ` agrees with the matrix **exactly** wherever the matrix is non-zero,
-    /// and differs from it only where the pattern has a hole. A factor that
-    /// fails this is not a preconditioner for this matrix, and conjugate
-    /// gradients preconditioned by one is a recurrence with no reason to
-    /// converge — which the suite would see as a tolerance failure on some
-    /// design and not on the ones it has.
-    ///
-    /// A four-node cycle with one pad, which is the smallest network that has a
-    /// hole to drop fill into: eliminating node 0 couples 1 and 3, and IC(0) is
-    /// defined by refusing to store that coupling.
+    /// IC(0): `L Lᵀ` equals the matrix wherever the matrix is non-zero. A
+    /// four-node cycle with one pad is the smallest case with a fill hole.
     #[test]
     fn an_incomplete_factor_reproduces_the_matrix_wherever_the_matrix_is_nonzero() {
         const N: usize = 4;
@@ -2217,11 +2176,8 @@ mod tests {
         index
     }
 
-    /// The ring search must return what an exhaustive scan returns, for every
-    /// query, or a device attaches to the wrong node and every drop measured
-    /// through it is measured from the wrong place. Swept over degenerate
-    /// aspect ratios and over markers well outside the extent, because those
-    /// are what the clamped query cell and the slack test exist for.
+    /// The ring search agrees with an exhaustive scan, including degenerate
+    /// aspect ratios and markers outside the extent.
     #[test]
     fn the_ring_search_agrees_with_an_exhaustive_scan() {
         let mut state = 0x2545_F491_4F6C_DD1Du64;
@@ -2260,6 +2216,56 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The bucketed pass agrees with a masked sum over every node per net.
+    #[test]
+    fn discarded_budget_agrees_with_a_per_net_masked_sum() {
+        use super::{discarded_budget, IntentMap, NetId, PowerGrid};
+        use gpurify_geom::Qty;
+        use gpurify_ingest::intent::NetLimits;
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move |m: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % m
+        };
+        for _ in 0..500 {
+            let mut grid = PowerGrid::default();
+            for _ in 0..next(12) {
+                grid.node_net
+                    .push(NetId(u32::try_from(next(4)).expect("small")));
+                // Zeros and cancelling pairs are the interesting loads.
+                let load = [0.0, -0.0, 1.5, -1.5, 2.0][usize::try_from(next(5)).expect("small")];
+                grid.node_load.push(Qty::new(load));
+            }
+            let mut intent = IntentMap::default();
+            for net in 0..5u32 {
+                if next(2) == 0 {
+                    intent.limit_net.push(NetId(net));
+                    let budget =
+                        [None, Some(0.0), Some(3.0)][usize::try_from(next(3)).expect("small")];
+                    intent.limit.push(NetLimits {
+                        budget_current_ua: budget,
+                        ..NetLimits::default()
+                    });
+                }
+            }
+            let naive = intent
+                .limit_net
+                .iter()
+                .zip(&intent.limit)
+                .any(|(&net, limits)| {
+                    let load: f64 = (0..grid.node_net.len())
+                        .map(|n| {
+                            f64::from(u8::from(grid.node_net[n] == net)) * grid.node_load[n].raw()
+                        })
+                        .sum();
+                    limits.budget_current_ua.is_some_and(|b| b != 0.0) && load == 0.0
+                });
+            assert_eq!(discarded_budget(&grid, &intent), naive);
         }
     }
 }

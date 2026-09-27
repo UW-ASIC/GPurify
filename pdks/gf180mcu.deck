@@ -1,0 +1,655 @@
+# GF180MCU: GlobalFoundries 0.18 um 3.3 V / 5 V / 6 V MCU process, open PDK.
+#
+# Stack this deck describes: 1P6M, 9 kA MetalTop, MIM option B (MiM between
+# Metal5 and MetalTop), stack option 16 of the design manual's metal-option
+# table. For another stack, change the metal loops and the MIMTM block.
+#
+# Sources, each pinned to the commit the numbers were read from:
+#   [DRM] GF180MCU design manual, google/gf180mcu-pdk @ df0f549be9c6b9290bd663ab862ea886680f9e30
+#         https://github.com/google/gf180mcu-pdk/tree/main/docs/physical_verification/design_manual/tables_clear
+#         (rendered at https://gf180mcu-pdk.readthedocs.io): layer map (06_Drawn_layer),
+#         rule tables 10..28, 55, 56, device list (69), electromigration (54).
+#   [KL]  GF180MCU KLayout DRC and LVS decks,
+#         google/globalfoundries-pdk-libs-gf180mcu_fd_pr @ b239189ef05aa6c83d241799163695b70f78d0d1
+#         https://github.com/google/globalfoundries-pdk-libs-gf180mcu_fd_pr/tree/main/rules/klayout
+#         (gf180mcu.drc, gf180mcu_antenna.drc, gf180mcu_density.drc, gf180mcu.lvs): rule ids,
+#         the 3.3 V / 5 V split, derived layers and device recognition.
+#   [SPEC] GF180MCU analog specs, google/gf180mcu-pdk @ df0f549, docs/analog/layout/inter_specs
+#         tables 3 (conductor thickness), 4 (dielectric k), 5 (sheet resistance);
+#         docs/analog/model_parameters/LV tables 03, 06, 07 (model names).
+#   [MAG] open_pdks Magic tech file gf180mcu.tech,
+#         RTimothyEdwards/open_pdks @ 931e0cf509908b1fa8d222bbd8e24e4a36526157 (file last changed 2026-06-15)
+#         https://github.com/RTimothyEdwards/open_pdks/blob/master/gf180mcu/magic/gf180mcu.tech
+#         (layer heights, contact resistance, substrate area and fringe caps, typical corner).
+#
+# Rule ids are the manual's. Where the manual gives different 3.3 V and 5 V/6 V
+# limits the id carries the KLayout deck's `_3.3V` / `_5V` suffix; the 3.3 V
+# limit is applied to every shape (it is the smaller one) and the 5 V limit to
+# the shapes touching DUALGATE. Where both are equal the id has no suffix.
+
+grid 5nm                                    # [DRM] GRID: integer multiple of 0.005 um
+
+# Drawn layers [DRM 06_Drawn_layer]
+layer dnwell = gds(12, 0)
+layer nwell = gds(21, 0)
+layer lvpwell = gds(204, 0)
+layer comp = gds(22, 0)
+layer dualgate = gds(55, 0)
+layer poly2 = gds(30, 0)
+layer nplus = gds(32, 0)
+layer pplus = gds(31, 0)
+layer sab = gds(49, 0)
+layer esd = gds(24, 0)
+layer contact = gds(33, 0)
+layer metal1 = gds(34, 0)
+layer via1 = gds(35, 0)
+layer metal2 = gds(36, 0)
+layer via2 = gds(38, 0)
+layer metal3 = gds(42, 0)
+layer via3 = gds(40, 0)
+layer metal4 = gds(46, 0)
+layer via4 = gds(41, 0)
+layer metal5 = gds(81, 0)
+layer via5 = gds(82, 0)
+layer metaltop = gds(53, 0)
+layer pad = gds(37, 0)
+layer resistor = gds(62, 0)
+layer fusetop = gds(75, 0)
+layer nat = gds(5, 0)
+layer mvsd = gds(210, 0)
+layer mvpsd = gds(11, 39)
+layer poly2_dummy = gds(30, 4)
+layer metal1_dummy = gds(34, 4)
+layer metal2_dummy = gds(36, 4)
+layer metal3_dummy = gds(42, 4)
+layer metal4_dummy = gds(46, 4)
+layer metal5_dummy = gds(81, 4)
+layer metaltop_dummy = gds(53, 4)
+
+# Text layers [DRM 06_Drawn_layer, "LABEL drawn at ..."]
+layer comp_label = gds(22, 10)
+layer poly2_label = gds(30, 10)
+layer metal1_label = gds(34, 10)
+layer metal2_label = gds(36, 10)
+layer metal3_label = gds(42, 10)
+layer metal4_label = gds(46, 10)
+layer metal5_label = gds(81, 10)
+layer metaltop_label = gds(53, 10)
+
+# Marking layers [DRM 06_Drawn_layer]
+layer res_mk = gds(110, 5)
+layer v5_xtor = gds(112, 1)
+layer cap_mk = gds(117, 5)
+layer mos_cap_mk = gds(166, 5)
+layer drc_bjt = gds(127, 5)
+layer esd_mk = gds(24, 5)
+layer ldmos_xtor = gds(226, 0)
+layer plfuse = gds(125, 5)
+layer metal1_res = gds(110, 11)
+layer metal2_res = gds(110, 12)
+layer metal3_res = gds(110, 13)
+layer metal6_res = gds(110, 16)
+
+# Derived layers, as the KLayout decks define them [KL]
+layer ncomp = comp and nplus
+layer pcomp = comp and pplus
+layer gate = poly2 and comp
+layer ngate = gate and nplus
+layer pgate = gate and pplus
+layer gate_hv = gate and dualgate
+layer comp_hv = comp.interacting(dualgate)
+layer poly2_hv = poly2.interacting(dualgate).outside(plfuse)
+layer nwell_hv = nwell.interacting(dualgate)
+layer lvpwell_hv = lvpwell.interacting(dualgate)
+layer dnwell_hv = dnwell.interacting(dualgate)
+layer nwell_out_dn = nwell.outside(dnwell)
+layer nwell_in_dn = nwell.interacting(dnwell)
+layer lvpwell_in_dn = lvpwell.inside(dnwell)
+layer lvpwell_out_dn = lvpwell.outside(dnwell)
+layer nwell_res = (nwell_out_dn and res_mk) not comp not poly2
+layer comp_moscap = comp and mos_cap_mk
+layer comp_in_moscap = comp.inside(mos_cap_mk)
+layer comp_nocap = comp not comp_in_moscap
+layer comp_bjt = comp.inside(drc_bjt)
+
+# Well taps (LVS ntap / ptap), and the rest of COMP as source/drain [KL gf180mcu.lvs]
+layer ntap = ncomp.inside(nwell) not res_mk
+layer ptap = pcomp.outside(nwell).outside(dnwell) not res_mk
+layer sd = comp not poly2 not res_mk not ntap not ptap
+layer poly2_con = poly2 not res_mk not plfuse
+layer metal1_con = metal1 not metal1_res
+layer metal2_con = metal2 not metal2_res
+layer metal3_con = metal3 not metal3_res
+layer metaltop_con = metaltop not metal6_res
+# A Via5 landing on the MIM top plate joins FuseTop to MetalTop, not Metal5.
+layer via5_nomim = via5 not fusetop
+
+# COMP classes for the DF rules [KL]
+layer ntap_dn = ncomp.outside(lvpwell).inside(dnwell)
+layer ntap_dn_hv = ntap_dn.interacting(dualgate)
+layer ncomp_notgate = ncomp.not_interacting(gate)
+layer ncomp_dn = ncomp_notgate.interacting(dnwell)
+layer ncomp_dn_hv = ncomp_dn.interacting(dualgate)
+layer pcomp_out_dn = pcomp.outside(dnwell)
+layer pcomp_nw = pcomp_out_dn.interacting(nwell)
+layer pcomp_nw_hv = pcomp_nw.interacting(dualgate)
+layer ncomp_out_dn = ncomp.outside(dnwell)
+layer ncomp_nw = ncomp_out_dn.interacting(nwell)
+layer ncomp_nw_hv = ncomp_nw.interacting(dualgate)
+layer pcomp_dn = pcomp.interacting(dnwell)
+layer pcomp_dn_hv = pcomp_dn.interacting(dualgate)
+layer pcomp_out_nw = pcomp.outside(nwell)
+layer pcomp_lvp = pcomp_out_nw.interacting(lvpwell_in_dn)
+layer pcomp_lvp_hv = pcomp_lvp.interacting(dualgate)
+layer pcomp_in_dn = pcomp.inside(dnwell)
+layer pcomp_dn_nolvp = pcomp_in_dn.outside(lvpwell)
+layer pcomp_dn_nolvp_hv = pcomp_dn_nolvp.interacting(dualgate)
+layer ncomp_in_dn = ncomp.inside(dnwell)
+layer ncomp_lvp = ncomp_in_dn.interacting(lvpwell)
+layer ncomp_lvp_hv = ncomp_lvp.interacting(dualgate)
+layer ncomp_psub = ncomp.outside(nwell).outside(dnwell)
+layer ncomp_psub_hv = ncomp_psub.interacting(dualgate)
+layer pcomp_psub = pcomp.outside(nwell).outside(dnwell)
+layer pcomp_psub_hv = pcomp_psub.interacting(dualgate)
+layer pcomp_in_nw = pcomp.inside(nwell)
+layer pcomp_in_nw_hv = pcomp_in_nw.interacting(dualgate)
+layer ncomp_out_nw = ncomp.outside(nwell)
+layer ncomp_out_nw_hv = ncomp_out_nw.interacting(dualgate)
+layer comp_out_dv = comp.outside(dualgate)
+layer comp_dv = comp_hv not ptap
+layer poly2_field = poly2.not_interacting(comp)
+layer comp_hv_noext = comp_hv.outside(mvsd).outside(mvpsd)
+
+# Implant, SAB and ESD classes [KL]
+layer poly_sab = poly2 and sab
+layer poly_sab_nonp = poly_sab.not_interacting(nplus)
+layer poly_sab_nopp = poly_sab.not_interacting(pplus)
+layer poly_sab_np = poly_sab.interacting(nplus)
+layer poly_sab_pp = poly_sab.not_interacting(resistor).interacting(pplus)
+layer comp_sab = comp and sab
+layer comp_sab_np = comp_sab.interacting(nplus)
+layer comp_sab_pp = comp_sab.interacting(pplus)
+layer sab_field = sab.outside(comp)
+layer comp_nosab = comp.outside(sab)
+layer poly2_on_field = poly2 not comp
+layer sab_off_pf = sab.outside(poly2_on_field)
+layer pf_nosab = poly2_on_field.outside(sab)
+layer sab_off_gate = sab.outside(gate)
+layer gate_nosab = gate.outside(sab)
+layer sab_noesd = sab.outside(esd_mk)
+layer poly2_noesd = poly2.outside(esd_mk)
+layer ncomp_out_esd = ncomp.outside(esd)
+layer implant = nplus or pplus
+layer implant_out_esd = implant.outside(esd)
+
+# Contact classes [KL]
+layer contact_poly = contact.interacting(poly2)
+layer contact_comp = contact.interacting(comp)
+
+# MIM option B: FuseTop over the Metal5 bottom plate [KL MIMTM]
+layer metal5_mim = metal5.interacting(fusetop)
+layer mimtm_virtual = fusetop.sized(1060nm) and metal5_mim
+layer metal5_nomim = metal5.not_interacting(fusetop)
+layer via5_on_mim = via5.interacting(mimtm_virtual)
+layer via5_top = via5.interacting(fusetop)
+layer via5_in_top = via5.inside(fusetop)
+
+# Native Vt [KL NAT]
+layer ncomp_nat = ncomp.outside(nwell).interacting(nat)
+layer comp_out_nat = comp.outside(nat)
+layer nat_hv = nat.interacting(dualgate)
+
+# Poly2 resistors [KL PRES / LRES / HRES]
+layer pres_poly = (poly2 and pplus).interacting(sab).interacting(res_mk).not_interacting(resistor)
+layer lres_poly = (poly2 and nplus).interacting(sab).interacting(res_mk)
+layer hres_poly = poly2.interacting(pplus).interacting(sab).interacting(res_mk).interacting(resistor)
+layer poly2_nosab = poly2.not_interacting(sab)
+layer contact_pres = contact.inside(pres_poly)
+layer contact_lres = contact.inside(lres_poly)
+layer contact_hres = contact.inside(hres_poly)
+layer resistor_h = resistor.interacting(hres_poly)
+
+# Density: the manual counts dummy fill toward coverage [DRM Mn.4, MT.3, PL.8]
+layer poly2_fill = poly2 or poly2_dummy
+layer metal1_fill = metal1 or metal1_dummy
+layer metal2_fill = metal2 or metal2_dummy
+layer metal3_fill = metal3 or metal3_dummy
+layer metal4_fill = metal4 or metal4_dummy
+layer metal5_fill = metal5 or metal5_dummy
+layer metaltop_fill = metaltop or metaltop_dummy
+
+# Device markers, mutually exclusive [KL gf180mcu.lvs; model names DRM 69 / SPEC LV 03, 06, 07]
+layer ng = (ngate not sab not esd_mk).not_interacting(mos_cap_mk)
+layer pg = (pgate not sab not esd_mk).not_interacting(mos_cap_mk)
+layer nfet_03v3_g = ng not dualgate
+layer pfet_03v3_g = pg not dualgate
+layer nfet_06v0_g = ng and dualgate not nat not ldmos_xtor
+layer pfet_06v0_g = pg and dualgate not ldmos_xtor
+layer nfet_06v0_nvt_g = ng and dualgate and nat
+layer nfet_03v3_dss_g = (ngate and esd_mk not dualgate).interacting(sab)
+layer pfet_03v3_dss_g = (pgate and esd_mk not dualgate).interacting(sab)
+layer nfet_06v0_dss_g = (ngate and esd_mk and dualgate).interacting(sab)
+layer pfet_06v0_dss_g = (pgate and esd_mk and dualgate).interacting(sab)
+layer cap_nmos_03v3_b_g = (ngate not dualgate).interacting(mos_cap_mk).inside(nwell)
+layer cap_pmos_03v3_b_g = (pgate not dualgate).interacting(mos_cap_mk).outside(nwell)
+layer cap_nmos_06v0_b_g = (ngate and dualgate).interacting(mos_cap_mk).inside(nwell)
+layer cap_pmos_06v0_b_g = (pgate and dualgate).interacting(mos_cap_mk).outside(nwell)
+layer npolyf_u_r = poly2 and nplus and sab and res_mk
+layer ppolyf_u_r = (poly2 and pplus and sab and res_mk).not_interacting(resistor)
+layer npolyf_s_r = (poly2 and nplus and res_mk).not_interacting(sab)
+layer ppolyf_s_r = (poly2 and pplus and res_mk).not_interacting(sab)
+layer ppolyf_u_1k_r = poly2 and sab and res_mk and resistor not dualgate
+layer ppolyf_u_1k_6p0_r = poly2 and sab and res_mk and resistor and dualgate
+layer nplus_u_r = ncomp and sab and res_mk
+layer pplus_u_r = pcomp and sab and res_mk
+layer nplus_s_r = (ncomp and res_mk).not_interacting(sab)
+layer pplus_s_r = (pcomp and res_mk).not_interacting(sab)
+layer rm1_r = metal1 and metal1_res
+layer rm2_r = metal2 and metal2_res
+layer rm3_r = metal3 and metal3_res
+layer tm9k_r = metaltop and metal6_res
+
+# --- DNWELL [DRM 11, KL] ---
+rule DN.1 width(dnwell) >= 1.7um
+rule DN.2a space(dnwell) >= 2.5um
+
+# --- LVPWELL [DRM 12, KL] ---
+rule LPW.1_3.3V width(lvpwell) >= 600nm
+rule LPW.1_5V width(lvpwell_hv) >= 740nm
+rule LPW.2b space(lvpwell) >= 860nm
+rule LPW.3 enclosure(lvpwell, dnwell) >= 2.5um
+rule LPW.11 space(lvpwell_out_dn, dnwell) >= 1.5um
+
+# --- Nwell [DRM 13, KL] ---
+rule NW.1a width(nwell) >= 860nm
+rule NW.1b width(nwell_res) >= 2um
+rule NW.2a_3.3V space(nwell) >= 600nm
+rule NW.2a_5V space(nwell_hv) >= 740nm
+rule NW.3 space(nwell_out_dn, dnwell) >= 3.1um
+rule NW.5 enclosure(nwell_in_dn, dnwell) >= 500nm
+
+# --- COMP [DRM 14, KL] ---
+rule DF.1a_3.3V width(comp) >= 220nm
+rule DF.1a_5V width(comp_hv) >= 300nm
+rule DF.1c width(comp_moscap) >= 1um
+# DF.2a is channel width; a gate's length is never below it (PL.2, NAT.4), so
+# the narrowest width of the gate shape is the channel width's lower bound.
+rule DF.2a_3.3V width(gate) >= 220nm
+rule DF.2a_5V width(gate_hv) >= 300nm
+rule DF.2b width(comp_nocap) <= 100um
+rule DF.3a_3.3V space(comp) >= 280nm
+rule DF.3a_5V space(comp_hv) >= 360nm
+rule DF.3c_3.3V space(comp_bjt) >= 320nm
+rule DF.4a_3.3V space(ntap_dn, lvpwell_in_dn) >= 120nm
+rule DF.4a_5V space(ntap_dn_hv, lvpwell_in_dn) >= 160nm
+rule DF.4b_3.3V enclosure(ncomp_dn, dnwell) >= 620nm
+rule DF.4b_5V enclosure(ncomp_dn_hv, dnwell) >= 660nm
+rule DF.4c_3.3V enclosure(pcomp_nw, nwell) >= 430nm
+rule DF.4c_5V enclosure(pcomp_nw_hv, nwell) >= 600nm
+rule DF.4d_3.3V enclosure(ncomp_nw, nwell) >= 120nm
+rule DF.4d_5V enclosure(ncomp_nw_hv, nwell) >= 160nm
+rule DF.4e_3.3V enclosure(pcomp_dn, dnwell) >= 930nm
+rule DF.4e_5V enclosure(pcomp_dn_hv, dnwell) >= 1.1um
+rule DF.5_3.3V enclosure(pcomp_lvp, lvpwell_in_dn) >= 120nm
+rule DF.5_5V enclosure(pcomp_lvp_hv, lvpwell_in_dn) >= 160nm
+rule DF.6_3.3V extension(comp, poly2) >= 240nm
+rule DF.6_5V extension(comp_hv_noext, poly2) >= 400nm
+rule DF.7_3.3V space(pcomp_dn_nolvp, lvpwell_in_dn) >= 430nm
+rule DF.7_5V space(pcomp_dn_nolvp_hv, lvpwell_in_dn) >= 600nm
+rule DF.8_3.3V enclosure(ncomp_lvp, lvpwell_in_dn) >= 430nm
+rule DF.8_5V enclosure(ncomp_lvp_hv, lvpwell_in_dn) >= 600nm
+rule DF.9 area(comp) >= 0.2025um2
+rule DF.10 hole_area(comp) >= 0.26um2
+rule DF.13_3.3V tap_distance(pcomp_in_nw, ntap) <= 20um
+rule DF.13_5V tap_distance(pcomp_in_nw_hv, ntap) <= 15um
+rule DF.14_3.3V tap_distance(ncomp_out_nw, ptap) <= 20um
+rule DF.14_5V tap_distance(ncomp_out_nw_hv, ptap) <= 15um
+rule DF.16_3.3V space(ncomp_psub, nwell_out_dn) >= 430nm
+rule DF.16_5V space(ncomp_psub_hv, nwell_out_dn) >= 600nm
+rule DF.17_3.3V space(pcomp_psub, nwell_out_dn) >= 120nm
+rule DF.17_5V space(pcomp_psub_hv, nwell_out_dn) >= 160nm
+rule DF.18 space(pcomp_psub, dnwell) >= 2.5um
+rule DF.19_3.3V space(ncomp_psub, dnwell) >= 3.2um
+rule DF.19_5V space(ncomp_psub_hv, dnwell) >= 3.28um
+
+# --- Dualgate [DRM 15, KL] ---
+rule DV.1 enclosure(dnwell_hv, dualgate) >= 500nm
+rule DV.2 space(dualgate) >= 440nm
+rule DV.3 space(dualgate, comp_out_dv) >= 240nm
+rule DV.5 width(dualgate) >= 700nm
+rule DV.6 enclosure(comp_dv, dualgate) >= 240nm
+rule DV.8 enclosure(poly2_hv, dualgate) >= 400nm
+
+# --- Poly2 [DRM 16, KL; PL.8 from gf180mcu_density.drc] ---
+rule PL.1_3.3V width(poly2) >= 180nm
+rule PL.1_5V width(poly2_hv) >= 200nm
+rule PL.3a space(poly2) >= 240nm
+rule PL.4 extension(poly2, comp) >= 220nm
+# PL.5a/5b hold field poly to COMP; this covers poly shapes with no gate at all.
+rule PL.5a_3.3V space(poly2_field, comp) >= 100nm
+rule PL.5a_5V space(poly2_field, comp_hv) >= 300nm
+rule PL.8 global_density(poly2_fill) >= 14%
+
+# --- Nplus / Pplus [DRM 17, 18, KL] ---
+rule NP.1 width(nplus) >= 400nm
+rule NP.2 space(nplus) >= 400nm
+rule NP.5a enclosure(ngate, nplus) >= 230nm
+rule NP.7 space(nplus, poly_sab_nonp) >= 180nm
+rule NP.8a area(nplus) >= 0.35um2
+rule NP.8b hole_area(nplus) >= 0.35um2
+rule NP.9 enclosure(poly_sab_np, nplus) >= 180nm
+rule NP.10 enclosure(comp_sab_np, nplus) >= 180nm
+rule PP.1 width(pplus) >= 400nm
+rule PP.2 space(pplus) >= 400nm
+rule PP.5a enclosure(pgate, pplus) >= 230nm
+rule PP.7 space(pplus, poly_sab_nopp) >= 180nm
+rule PP.8a area(pplus) >= 0.35um2
+rule PP.8b hole_area(pplus) >= 0.35um2
+rule PP.9 enclosure(poly_sab_pp, pplus) >= 180nm
+rule PP.10 enclosure(comp_sab_pp, pplus) >= 180nm
+
+# --- SAB [DRM 19, KL] ---
+rule SB.1 width(sab) >= 420nm
+rule SB.2 space(sab) >= 420nm
+rule SB.3 space(sab_field, comp_nosab) >= 220nm
+rule SB.4 space(sab, contact) >= 150nm
+rule SB.5a space(sab_off_pf, pf_nosab) >= 300nm
+rule SB.5b space(sab_off_gate, gate_nosab) >= 280nm
+rule SB.6 extension(sab, comp) >= 220nm
+rule SB.7 extension(comp, sab) >= 220nm
+rule SB.9 extension(sab, poly2) >= 220nm
+rule SB.10 extension(poly2, sab) >= 220nm
+rule SB.11 overlap(sab, comp) >= 220nm
+rule SB.12 overlap(sab_noesd, poly2_noesd) >= 220nm
+rule SB.13 area(sab) >= 2um2
+
+# --- ESD implant [DRM 20, KL] ---
+rule ESD.1 width(esd) >= 600nm
+rule ESD.2 space(esd) >= 600nm
+rule ESD.3a space(esd, ncomp_out_esd) >= 600nm
+rule ESD.4b overlap(esd, comp) >= 450nm
+rule ESD.5a area(esd) >= 0.49um2
+rule ESD.5b hole_area(esd) >= 0.49um2
+rule ESD.8 space(esd, implant_out_esd) >= 300nm
+
+# --- Contact [DRM 21, KL] ---
+rule CO.1 size(contact) == 220nm x 220nm
+rule CO.2a space(contact) >= 250nm
+# CO.2b is "4x4 or larger"; a cluster of more than 15 cuts is held to it.
+rule CO.2b via_array_space(contact; array: 15) >= 280nm
+rule CO.3 enclosure(contact_poly, poly2) >= 70nm
+rule CO.4 enclosure(contact_comp, comp) >= 70nm
+rule CO.6 enclosure(contact, metal1) >= 5nm
+rule CO.7 space(contact_comp, gate) >= 150nm
+rule CO.8 space(contact_poly, comp) >= 170nm
+
+# --- Metaln, n = 1..5 [DRM 22, KL; Mn.4 from gf180mcu_density.drc] ---
+let metals = [(M1, metal1, metal1_fill, 230nm), (M2, metal2, metal2_fill, 280nm),
+              (M3, metal3, metal3_fill, 280nm), (M4, metal4, metal4_fill, 280nm),
+              (M5, metal5, metal5_fill, 280nm)]
+for (id, m, fill, w) in metals {
+    rule {id}.1 width(m) >= w
+    rule {id}.2a space(m) >= w
+    rule {id}.2b wide_space(m; width: 10um) >= 300nm
+    rule {id}.3 area(m) >= 0.1444um2
+    rule {id}.4 global_density(fill) >= 30%
+}
+
+# --- Vian, n = 1..5 [DRM 23, KL] ---
+# Vn.3 lower metal overlap: 0.00 for Metal1 (V1.3a, under must-contain
+# below), 0.01 for Metal2..5 (Vn.3b); Vn.4a upper metal overlap: 0.01.
+let vias = [(V1, via1, metal1, metal2), (V2, via2, metal2, metal3),
+            (V3, via3, metal3, metal4), (V4, via4, metal4, metal5),
+            (V5, via5, metal5, metaltop)]
+for (id, v, below, above) in vias {
+    rule {id}.1 size(v) == 260nm x 260nm
+    rule {id}.2a space(v) >= 260nm
+    rule {id}.2b via_array_space(v; array: 15) >= 360nm
+    rule {id}.4a enclosure(v, above) >= 10nm
+}
+let vias_up = [(V2, via2, metal2), (V3, via3, metal3), (V4, via4, metal4), (V5, via5, metal5)]
+for (id, v, below) in vias_up {
+    rule {id}.3b enclosure(v, below) >= 10nm
+}
+
+# --- MetalTop, 9 kA [DRM 24; KL METAL_TOP == "9K"] ---
+rule MT.1 width(metaltop) >= 440nm
+rule MT.2a space(metaltop) >= 460nm
+rule MT.2b wide_space(metaltop; width: 10um) >= 600nm
+rule MT.3 global_density(metaltop_fill) >= 30%
+rule MT.4 area(metaltop) >= 0.5625um2
+
+# --- MIM option B, between Metal5 and MetalTop [KL MIMTM] ---
+rule MIMTM.1 space(metal5_nomim, mimtm_virtual) >= 1.2um
+rule MIMTM.2 enclosure(via5_on_mim, metal5) >= 400nm
+rule MIMTM.3 enclosure(fusetop, mimtm_virtual) >= 600nm
+rule MIMTM.4 enclosure(via5_top, fusetop) >= 400nm
+rule MIMTM.5 space(fusetop, via5_nomim) >= 400nm
+rule MIMTM.6 space(fusetop) >= 600nm
+rule MIMTM.8a area(fusetop) >= 25um2
+rule MIMTM.9 space(via5_in_top) >= 500nm
+
+# --- Native Vt NMOS [DRM 36, KL] ---
+rule NAT.1 enclosure(ncomp_nat, nat) >= 2um
+rule NAT.2 space(nat, comp_out_nat) >= 300nm
+rule NAT.3 space(nat, nwell) >= 500nm
+rule NAT.7 space(nat) >= 740nm
+
+# --- Poly2 resistors [DRM 33, KL] ---
+rule PRES.1 width(pres_poly) >= 800nm
+rule PRES.2 space(pres_poly) >= 400nm
+rule PRES.3 space(pres_poly, comp) >= 600nm
+rule PRES.4 space(pres_poly, poly2_nosab) >= 600nm
+rule PRES.5 enclosure(pres_poly, pplus) >= 300nm
+rule PRES.7 space(contact_pres, sab) >= 220nm
+rule LRES.1 width(lres_poly) >= 800nm
+rule LRES.2 space(lres_poly) >= 400nm
+rule LRES.3 space(lres_poly, comp) >= 600nm
+rule LRES.4 space(lres_poly, poly2_nosab) >= 600nm
+rule LRES.5 enclosure(lres_poly, nplus) >= 300nm
+rule LRES.7 space(contact_lres, sab) >= 220nm
+rule HRES.1 space(resistor_h) >= 400nm
+rule HRES.2 width(hres_poly) >= 1um
+rule HRES.3 space(hres_poly) >= 400nm
+rule HRES.4 enclosure(hres_poly, resistor) >= 400nm
+rule HRES.5 space(resistor_h, poly2_nosab) >= 300nm
+rule HRES.6 space(resistor_h, comp) >= 300nm
+rule HRES.7 enclosure(contact_hres, pplus) >= 200nm
+rule HRES.8 space(contact_hres, sab) >= 220nm
+
+# --- Geometry [DRM 10] ---
+rule OFFGRID off_grid(; pitch: 5nm)
+rule ACUTE angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+
+# --- Antenna [DRM 27, 28: ratio limits; perimeter-area thickness t per layer, 9 kA MetalTop] ---
+rule ANT.1 antenna(gate, poly2_con; max_ratio: 200, sidewall: 200nm)
+let ant_metals = [(ANT.2, metal1_con), (ANT.3, metal2_con), (ANT.4, metal3_con),
+                  (ANT.5, metal4), (ANT.6, metal5)]
+for (id, m) in ant_metals {
+    rule {id} antenna(gate, m; max_ratio: 400, sidewall: 540nm)
+}
+rule ANT.7 antenna(gate, metaltop_con; max_ratio: 400, sidewall: 990nm)
+rule ANT.8 antenna(gate, contact; max_ratio: 10, sidewall: none)
+let ant_vias = [(ANT.9, via1), (ANT.10, via2), (ANT.11, via3), (ANT.12, via4), (ANT.13, via5_nomim)]
+for (id, v) in ant_vias {
+    rule {id} antenna(gate, v; max_ratio: 20, sidewall: none)
+}
+
+# --- Electromigration at 85 C, unidirectional (DC) limits [DRM 54, tables 14.3 and 14.4] ---
+# A cut row's max_density is not read (a cut carries per-cut current); it
+# restates the wire limit because the parameter is required.
+rule EM.14.3_Mn em_current_density(metal1_con, metal2_con, metal3_con, metal4, metal5; max_density: 2.09mA/um, max_current_per_cut: 0.58mA)
+rule EM.14.3_MT em_current_density(metaltop_con; max_density: 3.77mA/um, max_current_per_cut: 0.58mA)
+rule EM.14.4_Vn em_current_density(via1, via2, via3, via4, via5_nomim; max_density: 2.09mA/um, max_current_per_cut: 0.58mA)
+rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_per_cut: 0.43mA)
+
+# --- Electrical ---
+# LU.9 / LU.10: Nwell taps go to the most positive supply and substrate taps to
+# the lowest, so one net carrying both is a supply short [DRM 55].
+rule LU.9_10 supply_short(ntap, ptap)
+rule floating_nwell floating_well(nwell, ntap)
+rule floating_lvpwell floating_well(lvpwell_in_dn, pcomp_lvp)
+rule floating_gate floating_gate(; labels_are_ports: false)
+rule tie_high_low warning tie_high_low()
+rule multiple_drivers multiple_drivers(; max: 1)
+rule ir_drop ir_drop()
+rule unconnected_metaltop warning unconnected_pin(metaltop_con)
+# Pads reach both rails through the SAB (ESD) MOSFETs [DRM 69 "ESD (SAB MOSFET)"].
+rule ESD.clamp_path esd_topological(pad; clamps: ["nfet_03v3_dss", "pfet_03v3_dss", "nfet_06v0_dss", "pfet_06v0_dss"])
+# Operating voltages LV = 3.3 V, HV = 5 V or 6 V [DRM 02_Process_Identification].
+# These are the nominal supplies; the open manual publishes no absolute maximum.
+let lv = ["nfet_03v3", "pfet_03v3", "nfet_03v3_dss", "pfet_03v3_dss"]
+let hv = ["nfet_06v0", "pfet_06v0", "nfet_06v0_nvt", "nfet_06v0_dss", "pfet_06v0_dss"]
+rule OX.3v3 gate_oxide(; models: lv, max: 3.3V)
+rule OX.6v0 gate_oxide(; models: hv, max: 6V)
+rule DS.3v3 drain_source(; models: lv, max: 3.3V)
+rule DS.6v0 drain_source(; models: hv, max: 6V)
+
+# --- Connectivity [KL gf180mcu.lvs connect statements] ---
+connect conductors [sd, ntap, ptap, poly2_con, metal1_con, metal2_con, metal3_con, metal4, metal5, metaltop_con]
+connect touch_within_layer
+connect via contact [sd, metal1_con]
+connect via contact [ntap, metal1_con]
+connect via contact [ptap, metal1_con]
+connect via contact [poly2_con, metal1_con]
+connect via via1 [metal1_con, metal2_con]
+connect via via2 [metal2_con, metal3_con]
+connect via via3 [metal3_con, metal4]
+connect via via4 [metal4, metal5]
+connect via via5_nomim [metal5, metaltop_con]
+connect label comp_label names sd
+connect label poly2_label names poly2_con
+connect label metal1_label names metal1_con
+connect label metal2_label names metal2_con
+connect label metal3_label names metal3_con
+connect label metal4_label names metal4
+connect label metal5_label names metal5
+connect label metaltop_label names metaltop_con
+
+# --- Devices [KL gf180mcu.lvs; model names DRM 69, SPEC LV 03/06/07] ---
+device mos nfet_03v3_g model "nfet_03v3" terminals [poly2_con, sd, sd]
+device mos pfet_03v3_g model "pfet_03v3" terminals [poly2_con, sd, sd]
+# The 5 V devices (V5_XTOR) use the 6 V models [DRM 69].
+device mos nfet_06v0_g model "nfet_06v0" terminals [poly2_con, sd, sd]
+device mos pfet_06v0_g model "pfet_06v0" terminals [poly2_con, sd, sd]
+device mos nfet_06v0_nvt_g model "nfet_06v0_nvt" terminals [poly2_con, sd, sd]
+device mos nfet_03v3_dss_g model "nfet_03v3_dss" terminals [poly2_con, sd, sd]
+device mos pfet_03v3_dss_g model "pfet_03v3_dss" terminals [poly2_con, sd, sd]
+device mos nfet_06v0_dss_g model "nfet_06v0_dss" terminals [poly2_con, sd, sd]
+device mos pfet_06v0_dss_g model "pfet_06v0_dss" terminals [poly2_con, sd, sd]
+device capacitor cap_nmos_03v3_b_g model "cap_nmos_03v3_b" terminals [poly2_con, ntap]
+device capacitor cap_pmos_03v3_b_g model "cap_pmos_03v3_b" terminals [poly2_con, ptap]
+device capacitor cap_nmos_06v0_b_g model "cap_nmos_06v0_b" terminals [poly2_con, ntap]
+device capacitor cap_pmos_06v0_b_g model "cap_pmos_06v0_b" terminals [poly2_con, ptap]
+device resistor npolyf_u_r model "npolyf_u" terminals [poly2_con, poly2_con]
+device resistor ppolyf_u_r model "ppolyf_u" terminals [poly2_con, poly2_con]
+device resistor npolyf_s_r model "npolyf_s" terminals [poly2_con, poly2_con]
+device resistor ppolyf_s_r model "ppolyf_s" terminals [poly2_con, poly2_con]
+# The high-Rs poly resistor is 1k, 2k or 3k by process option (KLayout LVS
+# switch POLY_RES); this deck takes the 1k option.
+device resistor ppolyf_u_1k_r model "ppolyf_u_1k" terminals [poly2_con, poly2_con]
+device resistor ppolyf_u_1k_6p0_r model "ppolyf_u_1k_6p0" terminals [poly2_con, poly2_con]
+device resistor nplus_u_r model "nplus_u" terminals [sd, sd]
+device resistor pplus_u_r model "pplus_u" terminals [sd, sd]
+device resistor nplus_s_r model "nplus_s" terminals [sd, sd]
+device resistor pplus_s_r model "pplus_s" terminals [sd, sd]
+device resistor rm1_r model "rm1" terminals [metal1_con, metal1_con]
+device resistor rm2_r model "rm2" terminals [metal2_con, metal2_con]
+device resistor rm3_r model "rm3" terminals [metal3_con, metal3_con]
+device resistor tm9k_r model "tm9k" terminals [metaltop_con, metaltop_con]
+
+# --- Parasitic stack ---
+# thickness: [SPEC 3] typical (MetalTop 9 kA 1.0025 um, M1..M5 0.55, Poly 0.2);
+#   diffusion and cut thickness and every height: [MAG] `height` lines.
+# sheet: metals [SPEC 5] (M1..M5 0.090, TM 9 kA 0.04 ohm/sq); poly, diffusion
+#   and cuts [MAG] typical `resist` / `contact` (n+ 6.3, p+ 7.0, poly 7.3,
+#   poly contact 8.0, diffusion contact 6.3/5.2, via 4.5 ohm; the larger kept).
+# dielectric: [SPEC 4] IMD, ILD and STI are all k = 4.
+# area/fringe cap to substrate: [MAG] typical `defaultareacap` / `defaultperimeter`;
+#   diffusion caps are left to the device models, as Magic does.
+pex sd thickness 300nm height 14.5nm sheet 7ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex ntap thickness 300nm height 14.5nm sheet 6.3ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex ptap thickness 300nm height 14.5nm sheet 7ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex poly2_con thickness 200nm height 320nm sheet 7.3ohm dielectric 4 area_cap 110.67aF/um2 fringe_cap 50.72aF/um
+pex contact thickness 915.5nm height 314.5nm sheet 8ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal1_con thickness 550nm height 1230nm sheet 0.09ohm dielectric 4 area_cap 29.304aF/um2 fringe_cap 39.431aF/um
+pex via1 thickness 600nm height 1780nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal2_con thickness 550nm height 2380nm sheet 0.09ohm dielectric 4 area_cap 15.016aF/um2 fringe_cap 33.298aF/um
+pex via2 thickness 600nm height 2930nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal3_con thickness 550nm height 3530nm sheet 0.09ohm dielectric 4 area_cap 10.094aF/um2 fringe_cap 30.021aF/um
+pex via3 thickness 600nm height 4080nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal4 thickness 550nm height 4680nm sheet 0.09ohm dielectric 4 area_cap 7.602aF/um2 fringe_cap 28.153aF/um
+pex via4 thickness 600nm height 5230nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metal5 thickness 550nm height 5830nm sheet 0.09ohm dielectric 4 area_cap 5.798aF/um2 fringe_cap 30.386aF/um
+pex via5_nomim thickness 900nm height 6380nm sheet 4.5ohm dielectric 4 area_cap 0aF/um2 fringe_cap 0aF/um
+pex metaltop_con thickness 1002.5nm height 7280nm sheet 0.04ohm dielectric 4 area_cap 4.8793aF/um2 fringe_cap 9.595aF/um
+
+# --- Presence rules ---
+rule LPW.12 forbidden(lvpwell and nwell)
+rule NW.4 forbidden(nwell and lvpwell)
+rule NW.6 forbidden(nwell_res.interacting(dnwell))
+rule DV.7 forbidden(comp_dv not dualgate)
+rule PL.9 forbidden((poly2 and dualgate).interacting(poly2 not dualgate))
+rule PL.11 forbidden(v5_xtor.not_interacting(dualgate))
+rule PL.12 forbidden(comp.interacting(v5_xtor) not v5_xtor)
+rule SB.8 forbidden(contact.inside(sab))
+rule ESD.3b forbidden(esd and pcomp)
+rule ESD.7 forbidden(esd and pcomp)
+rule ESD.9 inside(esd, dualgate)
+rule CO.10 forbidden(contact and gate)
+rule CO.11 forbidden(contact not (comp or poly2))
+rule MIMTM.10 forbidden(via4.interacting(metal5_mim))
+rule NAT.10 forbidden(nwell.inside(nat))
+rule NAT.11 forbidden((ncomp and nat).outside(poly2))
+rule NAT.12 forbidden(poly2.interacting(nat).not_interacting(comp and nat))
+rule V1.3a inside(via1, metal1)
+rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
+
+# --- Rules that need a check kind the language does not have yet ---
+# needs: same/diff-net spacing. Net spacing takes a conductor, and the wells
+# are not conductors in this deck (no well-tap connection):
+#   rule DN.2b space(dnwell; nets: different) >= 5.42um
+#   rule LPW.2a_3.3V space(lvpwell; nets: different) >= 1.4um
+#   rule LPW.2a_5V space(lvpwell_hv; nets: different) >= 1.7um
+#   rule NW.2b_3.3V space(nwell; nets: different) >= 1.4um
+#   rule NW.2b_5V space(nwell_hv; nets: different) >= 1.7um
+# DF.12 (COMP not under Nplus or Pplus): the schottky marker it exempts is not declared.
+#   rule DF.12 forbidden(comp.not_interacting(schottky_diode) not (nplus or pplus))
+# Which layer holds which is not confirmed against the manual:
+#   rule LPW.5 must_contain(dnwell, lvpwell.inside(res_mk))
+#   rule MIMTM.7 must_contain(cap_mk, fusetop)
+#   rule NAT.8 must_contain(dualgate, nat_hv)
+#   rule DN.3 (every DNWELL directly surrounded by a PCOMP guard ring tied to substrate)
+# needs: edge checks (butting edges, gate length along the channel, edge-direction enclosure)
+#   rule PL.2_3.3V gate length (poly2 edges on the gate) >= 280nm
+#   rule PL.2_5V gate length >= 600nm (5V n), 500nm (5V p), 700nm (6V n), 550nm (6V p)
+#   rule NAT.4 / NAT.5 native gate length >= 1.8um
+#   rule ESD.pl ESD 5V/6V NMOS gate length >= 800nm
+#   rule NP.3a..3e, PP.3a..3e implant space to opposite COMP, excluding butted edges (0.16 / 0.08um)
+#   rule NP.5b..5dii, PP.5b..5dii implant extension beyond COMP, excluding butting edges
+#   rule NP.6, PP.6 overlap with COMP butted to the opposite COMP (0.22um, projection)
+#   rule CO.5a, CO.5b implant overlap of a contact on butted COMP (0.1um)
+#   rule CO.6a/6b, Vn.3c/3d, Vn.4b/4c conditional end-of-line and adjacent-edge overlap (0.06um)
+#   rule ESD.4a, ESD.6 ESD implant edge extension (0.24 / 0.45um)
+#   rule PRES.6, LRES.6, HRES.9 SAB overlap of the resistor in its width direction (0.28um)
+
+# --- Left out ---
+# Not expressible, and not one of the kinds above:
+#   SB.14a/14b (square-metric space 0.56um), SB.15a/15b, SB.16, DV.9, NAT.6, NAT.9,
+#   LU.1..LU.5 (tap distance conditional on the well-to-COMP space x/y),
+#   IO.1..IO.4 (I/O latch-up guard rings: the ring-to-pad-COMP distance is
+#   not what esd_latchup measures), MIMTM.8b (maximum area), MIMTM.11,
+#   MT30.* (30 kA top metal only), ANT.14/ANT.15 (MIM-area antenna: the gate
+#   is FuseTop, not a gate), ANT.16 diode credit (MF = 2 thin, 15 thick; the
+#   tool refuses a non-zero credit), DE.*, the LDMOS (MDN/MDP), OTP, eFuse,
+#   SRAM and scribe-line sections.
+# Devices not recognised: every diode (np/pn/nwp/dnwpw/dnwps/sc_diode), the
+#   nwell and pwell resistors, the vertical BJTs and the inversion-mode MOS
+#   capacitors take a terminal on a well or the substrate, which is not a net
+#   here; MIM (cap_mim_1p0fF/1p5fF/2p0fF) is a process option the layout
+#   does not show; LDMOS source and drain are asymmetric layers.
+# well_bias needs a bulk terminal, which needs wells as nets (as above).
+# No number in the open manual: absolute maximum device voltages (the
+#   voltage rows use the nominal 3.3 V and 6 V), electromigration Blech
+#   length and activation energy (electromigration rows are left out; the
+#   instantaneous limits are in the EM.* rows).

@@ -92,8 +92,8 @@ fn fixture(t: impl Fn(i64, i64) -> (i64, i64)) -> GeometryStore {
     };
 
     // Margins 9 left, 29 right, 29 bottom, 30 top. `worst` is the left 9 and
-    // `worst_axis_best_side` is `min(max(9, 29), max(29, 30))` = the right 29,
-    // so the two enclosure rules name two different sides off one geometry.
+    // the two-opposite-sides value is `max(min(9, 29), min(29, 30))` = the
+    // bottom 29, so the two enclosure rules name two different sides.
     rect(&mut layout, ENC_INNER, [-101, -101, -50, -50]);
     // No host anywhere: enclosure zero, `shapes.1 == None`, reported at its own
     // centre. 101 by 103, both odd, so that centre is a floored midpoint too.
@@ -247,10 +247,10 @@ fn assert_base_is_not_vacuous(out: &Violations, runs: &[RuleRun]) {
 /// the translation law below can actually fail.
 const MIDPOINTS: [(i64, i64, i64, i64); 9] = [
     (-110, -101, -106, -105), // min_enclosure, deficient left strip, x
-    (-101, -50, -76, -75),    // both enclosure rules, the inner shape's span, y
+    (-101, -50, -76, -75),    // the inner shape's span: min_enclosure y, asymmetric x
     (-501, -400, -451, -450), // the unhosted shape's own centre, x
     (-403, -300, -352, -351), // the unhosted shape's own centre, y
-    (-50, -21, -36, -35),     // asymmetric_enclosure, the best right strip, x
+    (-130, -101, -116, -115), // asymmetric_enclosure, the bottom strip, y
     (-300, -261, -281, -280), // min_extension, the left overhang, x
     (-251, -200, -226, -225), // min_extension, the shared span, y
     (-751, -700, -726, -725), // overlap, the intersection figure, x
@@ -261,7 +261,7 @@ const MIDPOINTS: [(i64, i64, i64, i64); 9] = [
 const BASE_POINTS: [(i64, i64); 7] = [
     (-106, -76),      // min_enclosure, the hosted inner shape
     (-451, -352),     // min_enclosure, the unhosted one
-    (-36, -76),       // asymmetric_enclosure, the hosted inner shape
+    (-76, -116),      // asymmetric_enclosure, the hosted inner shape
     (-451, -352),     // asymmetric_enclosure, the unhosted one
     (-281, -226),     // min_extension
     (-726, -626),     // overlap

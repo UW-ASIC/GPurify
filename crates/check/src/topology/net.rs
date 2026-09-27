@@ -92,13 +92,13 @@ impl Holes {
         self.of.sort_unstable();
     }
 
-    fn is_hole(&self, poly: PolyId) -> bool {
+    pub(crate) fn is_hole(&self, poly: PolyId) -> bool {
         self.owner
             .get(poly.idx())
             .is_some_and(|&owner| owner != NO_OWNER)
     }
 
-    fn of(&self, outer: PolyId) -> impl Iterator<Item = PolyId> + '_ {
+    pub(crate) fn of(&self, outer: PolyId) -> impl Iterator<Item = PolyId> + '_ {
         let from = self.of.partition_point(|&(o, _)| o < outer);
         self.of[from..]
             .iter()
@@ -194,22 +194,20 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
             &mut out.edges,
         );
     }
-    // A hole row is part of its outer's polygon, so it shares the outer's net.
-    for &layer in &connectivity.conductors {
-        for (outer, hole) in out.holes.of.iter().copied() {
-            if store.poly_layer(outer) == layer {
-                out.edges.push((outer.0.min(hole.0), outer.0.max(hole.0)));
-            }
-        }
-    }
-
-    components_into(node_count, &out.edges, &mut out.labels);
-
     // A conductor the store's layer table lacks panics rather than being skipped.
     let mut conducts = vec![false; store.layer_count()];
     for &layer in &connectivity.conductors {
         conducts[layer.idx()] = true;
     }
+
+    // A hole row is part of its outer's polygon, so it shares the outer's net.
+    for &(outer, hole) in &out.holes.of {
+        if conducts[store.poly_layer(outer).idx()] {
+            out.edges.push((outer.0.min(hole.0), outer.0.max(hole.0)));
+        }
+    }
+
+    components_into(node_count, &out.edges, &mut out.labels);
 
     // Labels to dense net ids. A label is its component's minimum polygon index,
     // so walking ascending makes the numbering canonical.
@@ -261,7 +259,7 @@ fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -
 }
 
 /// Inside the outer ring and inside none of its holes.
-fn in_material(store: &GeometryStore, holes: &Holes, outer: PolyId, p: Point) -> bool {
+pub(crate) fn in_material(store: &GeometryStore, holes: &Holes, outer: PolyId, p: Point) -> bool {
     store.poly_contains_point(outer, p) && !holes.of(outer).any(|h| store.poly_contains_point(h, p))
 }
 
@@ -437,14 +435,57 @@ pub fn via_edges_into(
     );
 }
 
+/// Every `(cut, lower, upper)` a via cut joins, one row per cut and pair,
+/// ascending by cut. Unlike [`via_edges_into`], a stack of cuts is not merged.
+pub fn via_cuts_into(
+    store: &GeometryStore,
+    cut: LayerId,
+    connects: (LayerId, LayerId),
+    out: &mut Vec<(u32, u32, u32)>,
+) {
+    out.clear();
+    let mut holes = Holes::default();
+    holes.build(store, [cut, connects.0, connects.1]);
+    via_landings(
+        store,
+        &holes,
+        cut,
+        connects,
+        &mut EdgeScratch::default(),
+        |c, low, high| out.push((c.0, low.0, high.0)),
+    );
+}
+
 /// Sorts and dedups only the rows it appends; earlier layers' rows stay put.
 fn via_edges_append(
     store: &GeometryStore,
     holes: &Holes,
     cut: LayerId,
-    (lower, upper): (LayerId, LayerId),
+    connects: (LayerId, LayerId),
     scratch: &mut EdgeScratch,
     out: &mut Vec<(u32, u32)>,
+) {
+    let base = out.len();
+    via_landings(store, holes, cut, connects, scratch, |_, low, high| {
+        out.push((low.0, high.0));
+    });
+
+    // A stack of cuts over one pair of shapes is one edge.
+    let mut tail = out.split_off(base);
+    tail.sort_unstable();
+    tail.dedup();
+    out.append(&mut tail);
+}
+
+/// Call `emit(cut, lower, upper)` for every pair of conductors a cut lands on,
+/// ascending by cut.
+fn via_landings(
+    store: &GeometryStore,
+    holes: &Holes,
+    cut: LayerId,
+    (lower, upper): (LayerId, LayerId),
+    scratch: &mut EdgeScratch,
+    mut emit: impl FnMut(PolyId, PolyId, PolyId),
 ) {
     SpatialIndex::build_into(store, cut, &mut scratch.cut_index);
     if scratch.cut_index.is_empty() {
@@ -463,7 +504,6 @@ fn via_edges_append(
     cuts_landing_on(store, holes, cut_index, upper, index, pairs, on_upper);
 
     // Both lists ascend by `(cut, conductor)`: merge on the cut column.
-    let base = out.len();
     let (mut lo, mut hi) = (0usize, 0usize);
     while lo < on_lower.len() && hi < on_upper.len() {
         let (a, b) = (on_lower[lo].0, on_upper[hi].0);
@@ -479,18 +519,12 @@ fn via_edges_append(
         let hi_end = hi + on_upper[hi..].partition_point(|&(c, _)| c == a);
         for &(_, low_poly) in &on_lower[lo..lo_end] {
             for &(_, high_poly) in &on_upper[hi..hi_end] {
-                out.push((low_poly.0, high_poly.0));
+                emit(a, low_poly, high_poly);
             }
         }
         lo = lo_end;
         hi = hi_end;
     }
-
-    // A stack of cuts over one pair of shapes is one edge.
-    let mut tail = out.split_off(base);
-    tail.sort_unstable();
-    tail.dedup();
-    out.append(&mut tail);
 }
 
 /// Every `(cut, conductor)` pair where the cut really lands, ascending.

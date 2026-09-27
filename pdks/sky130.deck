@@ -1,0 +1,624 @@
+# SkyWater SKY130 (sky130A, 5-metal Al back end)
+#
+# Sources. Every number below comes from one of these; the tag after a rule
+# names which when it is not [S1].
+#   [S1] SKY130 periphery rules, google/skywater-pdk docs/rules/periphery/periphery.csv
+#        at commit 9039be3779b9d27bae1aa20a29c6543b354067c0 (file last changed 2020-11-06),
+#        https://github.com/google/skywater-pdk/blob/main/docs/rules/periphery/periphery.csv
+#        rendered at https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+#   [S2] GDS layer map, same repository and commit, docs/rules/gds_layers.csv
+#   [S3] efabless mpw_precheck KLayout deck sky130A_mr.drc (2022.6.30_01.07 release),
+#        https://github.com/efabless/mpw_precheck/blob/main/checks/tech-files/sky130A_mr.drc
+#        (MiM capacitor numbers, which [S1] lists as N/A, and the derived-layer definitions)
+#   [S4] SKY130 antenna rules, Table Ic (S8TM-5R), docs/rules/antenna/table-Ic-antenna-rules-s8tm.csv
+#        in [S1]'s repository
+#   [S5] Magic technology file sky130.tech, RTimothyEdwards/open_pdks at commit
+#        61a056e180dac7dcc6d4eb7529e2231f95105746, sky130/magic/sky130.tech
+#        (layer heights and thicknesses, typical-corner contact resistances, area and
+#        perimeter capacitance, antenna rows for via3/via4/met4/met5)
+#   [S6] SKY130 parasitic tables, docs/rules/rcx/resistance-values.tsv in [S1]'s repository
+#        (sheet resistances), and the stack diagram docs/_static/metal_stack.svg (dielectric k)
+#   [S7] SKY130 device details, docs/rules/device-details.rst in [S1]'s repository
+#        (operating voltages, device model names)
+#
+# Rule ids are the manual's: nwell.1, licon.5a, m1.4. The n+/p+ implant rules,
+# which the manual groups as "n/psd.x", are nsd.x and psd.x here, as [S3] names them.
+# The manual's x.6 makes every intra-layer spacing include a notch check, so each
+# space rule has a notch row, `<id>.notch`. Where one manual rule is two checks,
+# the second is `<id>.<what it covers>`.
+#
+# The rules marked P in the manual apply outside areaid.ce (SRAM core). This deck
+# applies them everywhere, so an SRAM core is held to the periphery numbers.
+
+grid 5nm
+
+# Drawn layers [S2]
+layer dnwell = gds(64, 18)
+layer nwell = gds(64, 20)
+layer diff = gds(65, 20)
+layer tap = gds(65, 44)
+layer diff_rs = gds(65, 13)
+layer poly = gds(66, 20)
+layer poly_rs = gds(66, 13)
+layer licon = gds(66, 44)
+layer li = gds(67, 20)
+layer li_rs = gds(67, 13)
+layer mcon = gds(67, 44)
+layer met1 = gds(68, 20)
+layer via = gds(68, 44)
+layer met2 = gds(69, 20)
+layer via2 = gds(69, 44)
+layer met3 = gds(70, 20)
+layer via3 = gds(70, 44)
+layer met4 = gds(71, 20)
+layer via4 = gds(71, 44)
+layer met5 = gds(72, 20)
+layer pad = gds(76, 20)
+layer nsm = gds(61, 20)
+layer capm = gds(89, 44)
+layer cap2m = gds(97, 44)
+layer hvi = gds(75, 20)
+layer hvtp = gds(78, 44)
+layer hvtr = gds(18, 20)
+layer lvtn = gds(125, 44)
+layer hvntm = gds(125, 20)
+layer ncm = gds(92, 44)
+layer nsdm = gds(93, 44)
+layer psdm = gds(94, 20)
+layer rpm = gds(86, 20)
+layer urpm = gds(79, 20)
+layer npc = gds(95, 20)
+layer areaid_ce = gds(81, 2)
+layer areaid_sc = gds(81, 4)
+layer areaid_ed = gds(81, 19)
+layer pnp = gds(82, 44)
+layer tunm = gds(80, 20)
+
+# Text layers [S2]: the label purpose, the pin purpose, and text on drawing
+layer poly_label = gds(66, 5)
+layer li_label = gds(67, 5)
+layer met1_label = gds(68, 5)
+layer met2_label = gds(69, 5)
+layer met3_label = gds(70, 5)
+layer met4_label = gds(71, 5)
+layer met5_label = gds(72, 5)
+layer li_pin = gds(67, 16)
+layer met1_pin = gds(68, 16)
+layer met2_pin = gds(69, 16)
+layer met3_pin = gds(70, 16)
+layer met4_pin = gds(71, 16)
+layer met5_pin = gds(72, 16)
+
+# Conductors. A resistor body is cut out of the layer it is drawn on, so the
+# two heads of a resistor are two nets.
+layer nsd = ((diff not poly) not diff_rs) and nsdm
+layer psd = ((diff not poly) not diff_rs) and psdm
+layer ntap = tap and nsdm
+layer ptap = tap and psdm
+layer poly_c = poly not poly_rs
+layer li_c = li not li_rs
+
+# Cuts, one per contacted layer, each with its own contact resistance [S5]
+layer licon_nd = licon and nsd
+layer licon_pd = licon and psd
+layer licon_nt = licon and ntap
+layer licon_pt = licon and ptap
+layer licon_po = licon and poly_c
+# A via3 (via4) landing on capm (cap2m) is the MiM top-plate contact, not a met3 (met4) via.
+layer via3_m3 = via3 not capm
+layer via4_m4 = via4 not cap2m
+
+# Shapes the rules name [S1], [S3]
+layer difftap = diff or tap
+layer nwell_filled = nwell or nwell.holes()
+layer nwell_hole = nwell.holes().interacting(dnwell)
+layer gate = poly and diff
+layer nfet = gate and nsdm
+layer pfet = gate and psdm
+layer ndiff = diff and nsdm
+layer pdiff = diff and psdm
+layer ndifftap = difftap and nsdm
+layer pdifftap = difftap and psdm
+layer xfom = difftap not poly
+layer poly_licon = licon.not_interacting(xfom).interacting(poly)
+layer licon_dt = licon.interacting(difftap)
+layer licon_diff = licon.interacting(diff)
+layer iso_tap = tap.not_interacting(diff)
+layer licon_iso_tap = licon.interacting(iso_tap)
+layer ntap_licon = ntap.interacting(licon)
+layer gate_sc = gate.inside(areaid_sc)
+layer gate_nsc = gate.outside(areaid_sc)
+layer poly_res = poly and poly_rs
+layer poly_plain = poly.not_interacting(poly_rs)
+layer poly_field = poly.not_interacting(diff)
+layer poly_off_tap = poly.not_interacting(tap)
+layer poly_out_rpm = poly.outside(rpm)
+layer prec_rpm = (rpm and psdm) and poly.interacting(poly_rs)
+layer prec_res = ((rpm or urpm) and psdm) and poly.interacting(poly_rs)
+layer licon_prec = licon.inside(prec_res)
+layer licon_std = licon.outside(prec_res)
+layer poly_licon_nrpm = poly_licon.outside(rpm).outside(urpm)
+layer li_res = li and li_rs
+layer nwell_lv = nwell not hvi
+layer tap_nwell_lv = tap and nwell_lv
+layer var_channel = (poly and tap) and nwell
+layer licon_var_tap = licon.interacting(tap_nwell_lv)
+layer var_poly = poly.interacting(var_channel)
+layer var_hvt = var_channel.interacting(hvtp)
+layer var_lvt = var_channel.not_interacting(hvtp)
+layer hvt_pfet = pfet.interacting(hvtp)
+layer lvt_pfet = pfet.not_interacting(hvtp)
+layer hvtr_pfet = pfet.interacting(hvtr)
+layer lvtn_gate = gate.interacting(lvtn)
+layer std_gate = gate.not_interacting(lvtn)
+layer lvtn_pfet = pfet.interacting(lvtn)
+layer nwell_ce = nwell and areaid_ce
+layer ncm_pdiff = pdiff.interacting(ncm)
+layer lvtn_gate_or_diff = (gate and lvtn) or diff.interacting(lvtn)
+layer ndiff_body = diff.interacting(nsdm).not_interacting(tap)
+layer pdiff_body = diff.interacting(psdm).not_interacting(tap)
+layer ntap_body = tap.interacting(nsdm).not_interacting(diff)
+layer ptap_body = tap.interacting(psdm).not_interacting(diff)
+layer p_lone = pdifftap.not_interacting(ndifftap)
+layer n_lone = ndifftap.not_interacting(pdifftap)
+layer hv_nwell = nwell.interacting(hvi)
+layer hdiff = diff.inside(hvi).not_interacting(diff_rs)
+layer hndiff = ndiff.inside(hvi)
+layer hpdiff = pdiff.inside(hvi)
+layer hntap = ntap.inside(hvi)
+layer iso_ptap = ptap.not_interacting(diff)
+layer difftap_hv = difftap.interacting(hvi)
+layer difftap_lv = difftap.outside(hvi)
+layer nwell_out_hvi = nwell.outside(hvi)
+layer ndiff_lv = ndiff.outside(hvi)
+layer hvntm_ndiff = hndiff.outside(areaid_ce)
+layer capm_m3_free = met3.not_interacting(capm)
+layer cap2m_m4_free = met4.not_interacting(cap2m)
+
+# Device markers [S5] (Magic's device extraction), models [S7]
+layer ngate = nfet not areaid_ed
+layer pgate = pfet not areaid_ed
+layer nfet_01v8 = (ngate not hvi) not lvtn
+layer nfet_01v8_lvt = (ngate and lvtn) not hvi
+layer nfet_g5v0d10v5 = ngate and hvi
+layer esd_nfet_g5v0d10v5 = (nfet and hvi) and areaid_ed
+layer pfet_01v8 = ((pgate not hvi) not lvtn) not hvtp
+layer pfet_01v8_lvt = (pgate and lvtn) not hvi
+layer pfet_01v8_hvt = (pgate and hvtp) not hvi
+layer pfet_g5v0d10v5 = pgate and hvi
+layer esd_pfet_g5v0d10v5 = (pfet and hvi) and areaid_ed
+layer rbody_po = (poly_res not rpm) not urpm
+layer rbody_high_po = poly_res and rpm
+layer rbody_xhigh_po = poly_res and urpm
+layer rbody_nd = ((diff and diff_rs) and nsdm) not hvi
+layer rbody_pd = ((diff and diff_rs) and psdm) not hvi
+layer rbody_nd_hv = (diff and diff_rs) and nsdm and hvi
+layer rbody_pd_hv = (diff and diff_rs) and psdm and hvi
+layer cap_var_lvt = (var_lvt not hvi)
+layer cap_var_hvt = (var_hvt not hvi)
+layer cap_var_5v = var_channel and hvi
+
+# --- Deep n-well, n-well [S1] ---
+rule dnwell.2 width(dnwell) >= 3um
+rule dnwell.3 space(dnwell) >= 6.3um
+rule dnwell.3.notch notch(dnwell) >= 6.3um
+rule nwell.1 width(nwell) >= 840nm
+rule nwell.2a space(nwell) >= 1270nm
+rule nwell.2a.notch notch(nwell) >= 1270nm
+rule nwell.5 enclosure(dnwell, nwell_filled) >= 400nm
+rule nwell.6 enclosure(nwell_hole, dnwell) >= 1030nm
+
+# --- Vt and core implants [S1] ---
+rule hvtp.1 width(hvtp) >= 380nm
+rule hvtp.2 space(hvtp) >= 380nm
+rule hvtp.2.notch notch(hvtp) >= 380nm
+rule hvtp.3 enclosure(hvt_pfet, hvtp) >= 180nm
+rule hvtp.4 space(lvt_pfet, hvtp) >= 180nm
+rule hvtp.5 area(hvtp) >= 0.265um2
+rule hvtp.6 hole_area(hvtp) >= 0.265um2
+rule hvtr.1 width(hvtr) >= 380nm
+rule hvtr.2 space(hvtp, hvtr) >= 380nm
+rule hvtr.3 enclosure(hvtr_pfet, hvtr) >= 180nm
+rule lvtn.1a width(lvtn) >= 380nm
+rule lvtn.2 space(lvtn) >= 380nm
+rule lvtn.2.notch notch(lvtn) >= 380nm
+rule lvtn.3a space(std_gate, lvtn) >= 180nm
+rule lvtn.4b enclosure(lvtn_gate, lvtn) >= 180nm
+rule lvtn.9 space(lvtn, hvtp) >= 380nm
+rule lvtn.12 space(lvtn, nwell_ce) >= 380nm
+rule lvtn.13 area(lvtn) >= 0.265um2
+rule lvtn.14 hole_area(lvtn) >= 0.265um2
+rule ncm.1 width(ncm) >= 380nm
+rule ncm.2a space(ncm) >= 380nm
+rule ncm.2a.notch notch(ncm) >= 380nm
+rule ncm.3 enclosure(ncm_pdiff, ncm) >= 180nm
+rule ncm.5 space(ncm, lvtn_gate_or_diff) >= 230nm
+rule ncm.6 space(ncm, nfet) >= 200nm
+rule ncm.7 area(ncm) >= 0.265um2
+rule ncm.8 hole_area(ncm) >= 0.265um2
+
+# --- Diffusion and tap [S1] ---
+rule difftap.1 width(diff) >= 150nm
+rule difftap.1.tap width(tap) >= 150nm
+# Abutting diff and tap merge into one shape, so the spacing is between non-abutting ones.
+rule difftap.3 space(difftap) >= 270nm
+rule difftap.3.notch notch(difftap) >= 270nm
+rule difftap.8 enclosure(pdiff, nwell) >= 180nm
+rule difftap.9 space(ndiff, nwell) >= 340nm
+rule difftap.10 enclosure(ntap, nwell) >= 180nm
+rule difftap.11 space(ptap, nwell) >= 130nm
+
+# --- Poly [S1] ---
+rule poly.1a width(poly) >= 150nm
+rule poly.1b width(lvtn_pfet) >= 350nm
+rule poly.2 space(poly) >= 210nm
+rule poly.2.notch notch(poly) >= 210nm
+rule poly.3 width(poly_res) >= 330nm
+# Euclidean, where the manual measures parallel edges only: stricter at corners.
+rule poly.4 space(poly_field, diff) >= 75nm
+rule poly.5 space(poly_off_tap, tap) >= 55nm
+rule poly.7 extension(diff, poly) >= 250nm
+rule poly.8 extension(poly, diff) >= 130nm
+rule poly.9 space(poly_res, poly_plain) >= 480nm
+rule poly.9.difftap space(poly_res, difftap) >= 480nm
+
+# --- P+ poly precision resistor [S1]; prec_resistor as [S3] defines it ---
+rule rpm.1a width(rpm) >= 1270nm
+rule rpm.2 space(rpm) >= 840nm
+rule rpm.2.notch notch(rpm) >= 840nm
+rule rpm.3 enclosure(prec_rpm, rpm) >= 200nm
+rule rpm.4 enclosure(prec_rpm, psdm) >= 110nm
+rule rpm.5 enclosure(prec_rpm, npc) >= 95nm
+rule rpm.6 space(rpm, nsdm) >= 200nm
+rule rpm.7 space(rpm, poly_out_rpm) >= 200nm
+rule rpm.9 space(prec_rpm, hvntm) >= 185nm
+
+# --- Varactor [S1] ---
+rule varac.1 width(var_channel) >= 180nm
+rule varac.3 space(var_lvt, hvtp) >= 180nm
+rule varac.4 space(licon_var_tap, var_channel) >= 250nm
+rule varac.5 enclosure(var_poly, nwell) >= 150nm
+rule varac.8 enclosure(var_hvt, hvtp) >= 255nm
+
+# --- Nitride poly cut [S1] ---
+rule npc.1 width(npc) >= 270nm
+rule npc.2 space(npc) >= 270nm
+rule npc.2.notch notch(npc) >= 270nm
+rule npc.4 space(npc, gate) >= 90nm
+
+# --- N+/P+ implants [S1] ---
+rule nsd.1 width(nsdm) >= 380nm
+rule psd.1 width(psdm) >= 380nm
+rule nsd.2 space(nsdm) >= 380nm
+rule nsd.2.notch notch(nsdm) >= 380nm
+rule psd.2 space(psdm) >= 380nm
+rule psd.2.notch notch(psdm) >= 380nm
+# 5a, 5b and 7 on diff/tap with no butting partner; the butting edge needs edge checks.
+rule nsd.5a enclosure(ndiff_body, nsdm) >= 125nm
+rule psd.5a enclosure(pdiff_body, psdm) >= 125nm
+rule nsd.5b enclosure(ntap_body, nsdm) >= 125nm
+rule psd.5b enclosure(ptap_body, psdm) >= 125nm
+rule nsd.7 space(nsdm, p_lone) >= 130nm
+rule psd.7 space(psdm, n_lone) >= 130nm
+rule nsd.10a area(nsdm) >= 0.265um2
+rule psd.10b area(psdm) >= 0.255um2
+rule nsd.11 hole_area(nsdm) >= 0.265um2
+rule psd.11 hole_area(psdm) >= 0.265um2
+
+# --- Local interconnect contact [S1] ---
+rule licon.1 size(licon_std) == 170nm x 170nm
+rule licon.1b size(licon_prec) == 190nm x 2000nm
+rule licon.2 space(licon) >= 170nm
+rule licon.5a enclosure(licon_diff, diff) >= 40nm
+rule licon.5c enclosure(licon_diff, diff, opposite) >= 60nm
+rule licon.7 enclosure(licon_iso_tap, tap, opposite) >= 120nm
+rule licon.8 enclosure(poly_licon, poly) >= 50nm
+rule licon.8a enclosure(poly_licon, poly, opposite) >= 80nm
+rule licon.9 space(poly_licon_nrpm, psdm) >= 110nm
+rule licon.10 space(licon_var_tap, var_channel) >= 250nm
+rule licon.11 space(licon_dt, gate_nsc) >= 55nm
+rule licon.11a space(licon_dt, gate_sc) >= 50nm
+rule licon.13 space(npc, licon_dt) >= 90nm
+rule licon.14 space(poly_licon, difftap) >= 190nm
+rule licon.15 enclosure(poly_licon, npc) >= 100nm
+
+# --- Local interconnect, mcon [S1] ---
+rule li.1 width(li) >= 170nm
+rule li.3 space(li) >= 170nm
+rule li.3.notch notch(li) >= 170nm
+rule li.5 enclosure(licon, li, opposite) >= 80nm
+rule li.6 area(li) >= 0.0561um2
+rule li.7 width(li_res) >= 290nm
+rule ct.1 size(mcon) == 170nm x 170nm
+rule ct.2 space(mcon) >= 190nm
+
+# --- Metal stack [S1] ---
+# (metal, id prefix, width = space, huge-metal rule id, huge-metal space).
+# huge_metX is the part of metX wider than 3um ([S3]: sized(-1.5).sized(1.5)).
+let metals = [(met1, m1, 140nm, m1.3b, 280nm), (met2, m2, 140nm, m2.3b, 280nm), (met3, m3, 300nm, m3.3d, 400nm), (met4, m4, 300nm, m4.5b, 400nm)]
+for (m, id, w, huge, hs) in metals {
+    rule {id}.1 width(m) >= w
+    rule {id}.2 space(m) >= w
+    rule {id}.2.notch notch(m) >= w
+    rule {huge} wide_space(m; width: 3um) >= hs
+}
+# Features attached to huge metal within 0.28um (met1, met2) or 0.4um (met3, met4).
+rule m1.3a wide_space(met1; width: 3um, attached: 280nm) >= 280nm
+rule m2.3a wide_space(met2; width: 3um, attached: 280nm) >= 280nm
+rule m3.3c wide_space(met3; width: 3um, attached: 400nm) >= 400nm
+rule m4.5a wide_space(met4; width: 3um, attached: 400nm) >= 400nm
+rule m1.6 area(met1) >= 0.083um2
+rule m2.6 area(met2) >= 0.0676um2
+rule m3.6 area(met3) >= 0.24um2
+rule m4.4a area(met4) >= 0.24um2
+rule m1.7 hole_area(met1) >= 0.14um2
+rule m2.7 hole_area(met2) >= 0.14um2
+rule m5.1 width(met5) >= 1600nm
+rule m5.2 space(met5) >= 1600nm
+rule m5.2.notch notch(met5) >= 1600nm
+rule m5.4 area(met5) >= 4um2
+
+rule m1.4 enclosure(mcon, met1) >= 30nm
+rule m1.5 enclosure(mcon, met1, opposite) >= 60nm
+rule via.1a size(via) == 150nm x 150nm
+rule via.2 space(via) >= 170nm
+rule via.4a enclosure(via, met1) >= 55nm
+rule via.5a enclosure(via, met1, opposite) >= 85nm
+rule m2.4 enclosure(via, met2) >= 55nm
+rule m2.5 enclosure(via, met2, opposite) >= 85nm
+rule via2.1a size(via2) == 200nm x 200nm
+rule via2.2 space(via2) >= 200nm
+rule via2.4 enclosure(via2, met2) >= 40nm
+rule via2.5 enclosure(via2, met2, opposite) >= 85nm
+rule m3.4 enclosure(via2, met3) >= 65nm
+rule via3.1 size(via3) == 200nm x 200nm
+rule via3.2 space(via3) >= 200nm
+rule via3.4 enclosure(via3, met3) >= 60nm
+rule via3.5 enclosure(via3, met3, opposite) >= 90nm
+rule m4.3 enclosure(via3, met4) >= 65nm
+rule via4.1 size(via4) == 800nm x 800nm
+rule via4.2 space(via4) >= 800nm
+rule via4.4 enclosure(via4, met4) >= 190nm
+rule m5.3 enclosure(via4, met5) >= 310nm
+
+# --- MiM capacitors [S3] ---
+rule capm.1 width(capm) >= 1um
+rule capm.2a space(capm) >= 840nm
+rule capm.3 enclosure(capm, met3) >= 140nm
+rule capm.4 enclosure(via3, capm) >= 140nm
+rule capm.11 space(capm_m3_free, capm) >= 500nm
+rule cap2m.1 width(cap2m) >= 1um
+rule cap2m.2a space(cap2m) >= 840nm
+rule cap2m.3 enclosure(cap2m, met4) >= 140nm
+rule cap2m.4 enclosure(via4, cap2m) >= 200nm
+rule cap2m.11 space(cap2m_m4_free, cap2m) >= 500nm
+
+# --- Pad, nitride seal [S1] ---
+rule pad.2 space(pad) >= 1270nm
+rule nsm.1 width(nsm) >= 3um
+rule nsm.2 space(nsm) >= 4um
+
+# --- High-voltage (hvi) rules [S1] ---
+rule hvi.1 width(hvi) >= 600nm
+rule hvi.2a space(hvi) >= 700nm
+rule hvi.2a.notch notch(hvi) >= 700nm
+rule hvi.5 space(hvi, nwell_out_hvi) >= 700nm
+rule difftap.14 width(hdiff) >= 290nm
+rule difftap.15a space(hdiff) >= 300nm
+rule difftap.15b space(hndiff, iso_ptap) >= 370nm
+rule difftap.17 enclosure(hpdiff, nwell) >= 330nm
+rule difftap.18 space(ndiff, hv_nwell) >= 430nm
+rule difftap.19 enclosure(hntap, nwell) >= 330nm
+rule difftap.20 space(ptap, hv_nwell) >= 430nm
+rule difftap.22 enclosure(difftap_hv, hvi) >= 180nm
+rule difftap.23 space(difftap_lv, hvi) >= 180nm
+rule difftap.24 space(nwell, hndiff) >= 430nm
+rule hvntm.1 width(hvntm) >= 700nm
+rule hvntm.2 space(hvntm) >= 700nm
+rule hvntm.2.notch notch(hvntm) >= 700nm
+rule hvntm.3 enclosure(hvntm_ndiff, hvntm) >= 185nm
+rule hvntm.4 space(ndiff_lv, hvntm) >= 185nm
+rule hvntm.5 space(pdiff, hvntm) >= 185nm
+rule hvntm.6a space(iso_ptap, hvntm) >= 185nm
+
+# --- Grid and angles [S1] x.1b, x.3a ---
+rule x.1b off_grid(; pitch: 5nm)
+rule x.3a angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+
+# --- Antenna [S4] Table Ic; via3, via4, met4, met5 as [S5] states them ---
+rule ar.poly.1 antenna(gate, poly_c; max_ratio: 50, sidewall: 180nm)
+rule ar.licon.1 antenna(gate, licon_po, licon_nd, licon_pd, licon_nt, licon_pt; max_ratio: 3, sidewall: none)
+rule ar.li.1 antenna(gate, li_c; max_ratio: 75, sidewall: 100nm)
+rule ar.mcon.1 antenna(gate, mcon; max_ratio: 3, sidewall: none)
+rule ar.met1.1 antenna(gate, met1; max_ratio: 400, sidewall: 350nm)
+rule ar.via.1 antenna(gate, via; max_ratio: 6, sidewall: none)
+rule ar.met2.1 antenna(gate, met2; max_ratio: 400, sidewall: 350nm)
+rule ar.via2.1 antenna(gate, via2; max_ratio: 6, sidewall: none)
+rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 2000nm)
+rule ar.via3.1 antenna(gate, via3_m3; max_ratio: 6, sidewall: none)
+rule ar.met4.1 antenna(gate, met4; max_ratio: 400, sidewall: 845nm)
+rule ar.via4.1 antenna(gate, via4_m4; max_ratio: 6, sidewall: none)
+rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1260nm)
+
+# --- Electrical [S1] x.22, nwell.4; supplies and ESD ---
+rule x.22 unconnected_pin(poly_c, li_c, met1, met2, met3, met4, met5)
+rule nwell.4 floating_well(nwell, ntap_licon)
+rule supply_short supply_short(ntap, ptap)
+rule soft_connection soft_connection(ntap, ptap)
+rule floating_gate floating_gate(; labels_are_ports: false)
+rule tie_high_low warning tie_high_low()
+rule ir_drop ir_drop()
+rule multiple_drivers multiple_drivers(; max: 1)
+
+let esd_clamps = ["sky130_fd_pr__esd_nfet_g5v0d10v5", "sky130_fd_pr__esd_pfet_g5v0d10v5"]
+rule esd.pad esd_topological(pad; clamps: esd_clamps)
+
+# Operating voltages where the SPICE models are valid [S7]
+let lv_fets = ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__nfet_01v8_lvt", "sky130_fd_pr__pfet_01v8", "sky130_fd_pr__pfet_01v8_lvt", "sky130_fd_pr__pfet_01v8_hvt"]
+let g5_fets = ["sky130_fd_pr__nfet_g5v0d10v5", "sky130_fd_pr__pfet_g5v0d10v5", "sky130_fd_pr__esd_pfet_g5v0d10v5"]
+let g5d10_fets = ["sky130_fd_pr__nfet_g5v0d10v5", "sky130_fd_pr__pfet_g5v0d10v5", "sky130_fd_pr__esd_nfet_g5v0d10v5", "sky130_fd_pr__esd_pfet_g5v0d10v5"]
+rule vgs.01v8 gate_oxide(; models: lv_fets, max: 1.95V)
+rule vds.01v8 drain_source(; models: lv_fets, max: 1.95V)
+rule vgs.g5v0 gate_oxide(; models: g5_fets, max: 5.5V)
+rule vgs.esd_nfet gate_oxide(; models: ["sky130_fd_pr__esd_nfet_g5v0d10v5"], max: 5V)
+rule vds.d10v5 drain_source(; models: g5d10_fets, max: 11V)
+
+# --- Connectivity, bottom up ---
+connect conductors [nsd, psd, ntap, ptap, poly_c, li_c, met1, met2, met3, met4, met5]
+connect touch_within_layer
+connect via licon_nd [nsd, li_c]
+connect via licon_pd [psd, li_c]
+connect via licon_nt [ntap, li_c]
+connect via licon_pt [ptap, li_c]
+connect via licon_po [poly_c, li_c]
+connect via mcon [li_c, met1]
+connect via via [met1, met2]
+connect via via2 [met2, met3]
+connect via via3_m3 [met3, met4]
+connect via via4_m4 [met4, met5]
+connect label poly names poly_c
+connect label poly_label names poly_c
+connect label li names li_c
+connect label li_label names li_c
+connect label li_pin names li_c
+connect label met1 names met1
+connect label met1_label names met1
+connect label met1_pin names met1
+connect label met2 names met2
+connect label met2_label names met2
+connect label met2_pin names met2
+connect label met3 names met3
+connect label met3_label names met3
+connect label met3_pin names met3
+connect label met4 names met4
+connect label met4_label names met4
+connect label met4_pin names met4
+connect label met5 names met5
+connect label met5_label names met5
+connect label met5_pin names met5
+
+# --- Devices [S5], [S7]. MOS terminals: gate, source, drain ---
+device mos nfet_01v8 model "sky130_fd_pr__nfet_01v8" terminals [poly_c, nsd, nsd]
+device mos nfet_01v8_lvt model "sky130_fd_pr__nfet_01v8_lvt" terminals [poly_c, nsd, nsd]
+device mos nfet_g5v0d10v5 model "sky130_fd_pr__nfet_g5v0d10v5" terminals [poly_c, nsd, nsd]
+device mos esd_nfet_g5v0d10v5 model "sky130_fd_pr__esd_nfet_g5v0d10v5" terminals [poly_c, nsd, nsd]
+device mos pfet_01v8 model "sky130_fd_pr__pfet_01v8" terminals [poly_c, psd, psd]
+device mos pfet_01v8_lvt model "sky130_fd_pr__pfet_01v8_lvt" terminals [poly_c, psd, psd]
+device mos pfet_01v8_hvt model "sky130_fd_pr__pfet_01v8_hvt" terminals [poly_c, psd, psd]
+device mos pfet_g5v0d10v5 model "sky130_fd_pr__pfet_g5v0d10v5" terminals [poly_c, psd, psd]
+device mos esd_pfet_g5v0d10v5 model "sky130_fd_pr__esd_pfet_g5v0d10v5" terminals [poly_c, psd, psd]
+device resistor rbody_po model "sky130_fd_pr__res_generic_po" terminals [poly_c, poly_c]
+device resistor rbody_high_po model "sky130_fd_pr__res_high_po" terminals [poly_c, poly_c]
+device resistor rbody_xhigh_po model "sky130_fd_pr__res_xhigh_po" terminals [poly_c, poly_c]
+device resistor rbody_nd model "sky130_fd_pr__res_generic_nd" terminals [nsd, nsd]
+device resistor rbody_pd model "sky130_fd_pr__res_generic_pd" terminals [psd, psd]
+device resistor rbody_nd_hv model "sky130_fd_pr__res_generic_nd__hv" terminals [nsd, nsd]
+device resistor rbody_pd_hv model "sky130_fd_pr__res_generic_pd__hv" terminals [psd, psd]
+device resistor li_res model "sky130_fd_pr__res_generic_l1" terminals [li_c, li_c]
+# MiM: top plate (the metal above, through the plate contact), then the bottom plate.
+device capacitor capm model "sky130_fd_pr__cap_mim_m3_1" terminals [met4, met3]
+device capacitor cap2m model "sky130_fd_pr__cap_mim_m3_2" terminals [met5, met4]
+# Varactor: gate, then the n+ tap in the n-well.
+device capacitor cap_var_lvt model "sky130_fd_pr__cap_var_lvt" terminals [poly_c, ntap]
+device capacitor cap_var_hvt model "sky130_fd_pr__cap_var_hvt" terminals [poly_c, ntap]
+device capacitor cap_var_5v model "sky130_fd_pr__cap_var" terminals [poly_c, ntap]
+
+# --- Parasitic stack ---
+# Height and thickness [S5] (non-ReRAM stack, identical to [S6]'s diagram); sheet
+# resistance [S6]; cut resistance per contact, typical corner [S5]; area and
+# perimeter capacitance to substrate [S5]; k is the dielectric the layer is drawn
+# in on [S6]'s diagram (FOX, PSG, NILD2..NILD6, TOPOX). Diffusion capacitance is
+# left to the device models, as [S5] does.
+pex nsd thickness 120nm height 206.2nm sheet 120ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex psd thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex ntap thickness 120nm height 206.2nm sheet 120ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex ptap thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex poly_c thickness 180nm height 326.2nm sheet 48.2ohm dielectric 3.9 area_cap 106.13aF/um2 fringe_cap 55.27aF/um
+pex licon_nd thickness 610nm height 326.2nm sheet 185ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex licon_pd thickness 610nm height 326.2nm sheet 585ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex licon_nt thickness 610nm height 326.2nm sheet 185ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex licon_pt thickness 610nm height 326.2nm sheet 585ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex licon_po thickness 430nm height 506.2nm sheet 152ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex li_c thickness 100nm height 936.1nm sheet 12.8ohm dielectric 4.05 area_cap 36.99aF/um2 fringe_cap 40.7aF/um
+pex mcon thickness 340nm height 1036.1nm sheet 9.3ohm dielectric 4.05 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met1 thickness 360nm height 1376.1nm sheet 0.125ohm dielectric 4.5 area_cap 25.78aF/um2 fringe_cap 40.57aF/um
+pex via thickness 270nm height 1736.1nm sheet 4.5ohm dielectric 4.5 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met2 thickness 360nm height 2006.1nm sheet 0.125ohm dielectric 4.2 area_cap 17.5aF/um2 fringe_cap 37.76aF/um
+pex via2 thickness 420nm height 2366.1nm sheet 3.41ohm dielectric 4.2 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met3 thickness 845nm height 2786.1nm sheet 0.047ohm dielectric 4.1 area_cap 12.37aF/um2 fringe_cap 40.99aF/um
+pex via3_m3 thickness 390nm height 3631.1nm sheet 3.41ohm dielectric 4.1 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met4 thickness 845nm height 4021.1nm sheet 0.047ohm dielectric 4.0 area_cap 8.42aF/um2 fringe_cap 36.68aF/um
+pex via4_m4 thickness 505nm height 4866.1nm sheet 0.38ohm dielectric 4.0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex met5 thickness 1260nm height 5371.1nm sheet 0.029ohm dielectric 3.9 area_cap 6.32aF/um2 fringe_cap 38.85aF/um
+
+# --- Presence rules [S1] ---
+# A straddle is the part of a shape on the other layer touching its part off it.
+rule x.10 forbidden((poly_rs or diff_rs) and licon)
+rule dnwell.4 forbidden(dnwell and pnp)
+rule licon.4 forbidden(licon.outside(li) or licon.outside(poly or difftap))
+rule licon.6 forbidden((licon and tap).interacting(licon not tap))
+rule licon.16 contains(tap, licon) >= 1
+rule licon.17 forbidden((licon and poly) and difftap)
+rule licon.18 inside(poly_licon, npc)
+rule ct.4 inside(mcon, li)
+rule poly.12 forbidden((poly not nwell_lv) and tap)
+rule poly.14 forbidden((gate and hvi).interacting(gate not hvi))
+rule poly.15 forbidden(poly and diff_rs)
+rule nsd.8 forbidden((nsdm and pdifftap) or (psdm and ndifftap))
+rule nsd.9 forbidden(difftap not (nsdm or psdm))
+rule rpm.8 forbidden((poly and rpm).interacting(poly not rpm))
+rule varac.7 forbidden(nwell.interacting(var_channel) and pdiff)
+rule nwell.9 inside(hv_nwell, hvi)
+rule difftap.21 forbidden((difftap and hvi).interacting(difftap not hvi))
+rule hvi.4 forbidden(hvi and tunm)
+rule hvntm.9 forbidden(hvntm and areaid_ce)
+rule hvntm.10 forbidden(hvntm.outside(hvi))
+
+# --- Butting edges [S1], as [S3] writes them ---
+layer butt = tap.edges() and diff.edges()
+rule difftap.4 length(butt) >= 290nm
+rule difftap.5 space(butt) >= 400nm
+rule difftap.7 space((tap.edges() not diff.edges()).not_interacting(diff), diff.edges()) >= 130nm
+rule difftap.7.diff space((diff.edges() not tap.edges()).not_interacting(tap), tap.edges()) >= 130nm
+rule nsd.5a.butted enclosure(diff.interacting(tap).interacting(nsdm).edges() not tap.edges(), nsdm) >= 125nm
+rule psd.5a.butted enclosure(diff.interacting(tap).interacting(psdm).edges() not tap.edges(), psdm) >= 125nm
+rule nsd.5b.butted enclosure(tap.interacting(diff).interacting(nsdm).edges() not diff.edges(), nsdm) >= 125nm
+rule psd.5b.butted enclosure(tap.interacting(diff).interacting(psdm).edges() not diff.edges(), psdm) >= 125nm
+rule nsd.6 forbidden(butt.outside_part(nsdm or psdm))
+rule licon.5b space(licon.inside(tap).edges(), butt) >= 60nm
+rule poly.6 space(gate, tap.interacting(diff)) >= 300nm
+rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
+
+# --- Rules waiting on a check kind ---
+# capm.7 "only rectangular capacitors": no selection by shape class.
+# licon.16 on source diff: needs the source terminal as a layer.
+# rpm.1g-1k "only N licons in the prec_resistor_terminal": an exact count and
+#   the terminal layers.
+# nwell.7 (nwell to dnwell on separate nets, 4.5um), nwell.8 (hv_nwell to
+#   nwell, 2um), hv.nwell.1 (2.5um), vhvi.8 (11.24um): net spacing takes one
+#   layer, and wells are not conductors in this deck (no well-tap connection).
+
+# --- Left out ---
+# Not expressible yet: difftap.2/2b (channel width, 0.42/0.36um: needs W, not
+# width), difftap.16 (tap bound by diffusion), poly.10/11 (corner and turn
+# rules), poly.13 (gate length inside hvi, 0.5um: needs L, not width),
+# lvtn.3b (S/D direction spacing), lvtn.10 (enclosure excluding coincident
+# edges), difftap.6 (edges cannot be extended), npc.5 (maximum enclosure), licon.2b/2c/2d (slotted-licon spacing by
+# edge length), rpm.1b-1f (exact resistor widths), varac.2/6 (tap-width and
+# varactor-tap spacing), hv.* and vhvi.* (net propagation of high voltage),
+# m1.pd.1-m4.pd.1 and x.18 (recommended only; pd.1's "oxide pattern density"
+# is not a metal density this deck can state with certainty), m1.X.1 (waffle
+# windows), pwres.*, photo.*, tunm.*, denmos.*, depmos.*, extd.*, uhvi.*,
+# vpp.*, mf.*, rdl.*, indm.*, x.12-x.29 (frame, seal ring and cell-name rules).
+# N/A in [S1] and absent from [S3]: capm.2b/5/6/8/10/12 as [S1] numbers them
+#   ([S3] gives capm.2b as a bottom-plate spacing of 1.2um that needs same-net
+#   selection; capm.5 0.14um is via3 to capm, which conflicts with capm.4 over
+#   the plate, so it waits on a clearer source).
+# Devices: diodes (pw2nd, pd2nw), bipolars (npn, pnp), the native nfets
+#   (03v3_nvt, 05v0_nvt, areaid.le) and the 20V devices need the well or
+#   substrate as a net, which this deck does not connect; VPP capacitors are
+#   fixed cells with no marker a recogniser can use. MOS bulk terminals are left
+#   off for the same reason, so well_bias has nothing to examine and is not
+#   configured.
+# Latch-up: esd_latchup needs a guard-ring width and tap distance that [S1]
+#   does not state.

@@ -1,32 +1,86 @@
 //! Process-stage rules: antenna ratios and windowed density.
 //!
 //! A cumulative antenna check is one rule row per fabrication stage, row `k`
-//! naming everything present when layer `k` is etched. Areas are doubled
-//! [`DbuArea`]s summed in `i128`; a ratio is the only `f64`, formed at the
-//! comparison.
+//! naming everything present when layer `k` is etched. Nets are built per row
+//! from only the conductors that exist at that etch (SVRF `CONNECT` between
+//! `NET AREA RATIO` stages), so a diode or a second gate reachable only
+//! through a higher metal does not count yet. Areas are doubled [`DbuArea`]s
+//! summed in `i128`; a ratio is the only `f64`, formed at the comparison.
 //!
 //! Data in: the store, nets, the die box. Data out: violations and one run
 //! per row.
 
+use crate::drc::rules::{owners_of, LayerRects, SortedRects};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{centre, record_run, Design, Scratch};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::NetId;
+use crate::topology::{extract_nets_into, NetId, NetTable};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::area2;
 use gpurify_geom::rects::{clipped_area, decompose_into};
-use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_ingest::deck::Connectivity;
 
 /// What an antenna rule counts as collecting area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AntennaMeasure {
     /// The polygon's own area.
     Area,
-    /// Etched sidewall. Refused: the unit of perimeter-times-thickness against
-    /// a gate area is unstated.
+    /// Etched sidewall: the merged layer's perimeter times `thickness`, an
+    /// area like the gate's (sky130 poly/li/met1-3, gf180 `perimeter_only`).
     Sidewall { thickness: Dbu },
+}
+
+/// The deck's conductors (bottom-up) and via rows, from which each antenna
+/// row's etch-step connectivity is cut.
+#[derive(Debug, Default)]
+pub struct Stack {
+    pub conductors: Vec<LayerId>,
+    /// `(cut, lower, upper)`.
+    pub vias: Vec<(LayerId, LayerId, LayerId)>,
+    pub intra_layer_touch: bool,
+}
+
+impl Stack {
+    /// The connectivity standing when the highest of `collectors` is etched:
+    /// conductors up to it, and the vias joining two of them. A cut collector
+    /// stands on its lower conductor. `None` when the deck names no conductors
+    /// (the finished nets are used as given).
+    fn stage(&self, collectors: &[LayerId]) -> Option<Connectivity> {
+        if self.conductors.is_empty() {
+            return None;
+        }
+        let pos = |layer: LayerId| self.conductors.iter().position(|&c| c == layer);
+        let top = collectors
+            .iter()
+            .filter_map(|&c| {
+                pos(c).or_else(|| {
+                    self.vias
+                        .iter()
+                        .filter(|v| v.0 == c)
+                        .filter_map(|&(_, a, b)| Some(pos(a)?.min(pos(b)?)))
+                        .max()
+                })
+            })
+            .max()
+            .unwrap_or(self.conductors.len() - 1);
+        let standing = |layer: LayerId| pos(layer).is_some_and(|at| at <= top);
+        let (via_cut, via_connects) = self
+            .vias
+            .iter()
+            .filter(|&&(_, a, b)| standing(a) && standing(b))
+            .map(|&(cut, a, b)| (cut, (a, b)))
+            .unzip();
+        Some(Connectivity {
+            conductors: self.conductors[..=top].to_vec(),
+            via_cut,
+            via_connects,
+            intra_layer_touch: self.intra_layer_touch,
+            ..Connectivity::default()
+        })
+    }
 }
 
 /// A first-order CMP model: finished thickness linear in local density.
@@ -50,6 +104,7 @@ pub struct AntennaTable {
     pub collector: Vec<LayerId>,
     pub collector_measure: Vec<AntennaMeasure>,
     pub max_ratio: Vec<f64>,
+    pub stack: Stack,
 }
 
 /// Cumulative antenna ratio with diode credit:
@@ -65,6 +120,7 @@ pub struct AntennaElectricalTable {
     pub diode_credit: Vec<f64>,
     pub diode_bonus: Vec<f64>,
     pub max_ratio: Vec<f64>,
+    pub stack: Stack,
 }
 
 /// Windowed density, and the thickness it implies. An absent bound is *not
@@ -85,103 +141,241 @@ pub struct DensityCmpTable {
     pub include_partial_windows: Vec<bool>,
 }
 
-/// Role bits in the per-layer table.
-const GATE: u8 = 0;
-const COLLECTS: u8 = 1;
-const DIODE: u8 = 2;
-
-/// Doubled collecting, gate and diode area per net: `areas[n]`,
-/// `areas[count + n]`, `areas[2 * count + n]`. Doubled so [`area2`] stays
-/// exact; the ratio cancels the factor.
-fn net_areas_into(design: Design<'_>, roles: &[u8], areas: &mut Vec<DbuArea>) {
-    let count = design.nets.net_count();
-    areas.clear();
-    areas.resize(3 * count, DbuArea::new(0));
-    for slot in 0..count {
-        let net = NetId(u32::try_from(slot).expect("a net count fits a u32"));
-        let (mut collecting, mut gate, mut diode) = (0i128, 0i128, 0i128);
-        for &poly in design.nets.polys_of(net) {
-            let role = roles[design.store.poly_layer(poly).idx()];
-            let (xs, ys) = design.store.poly_verts(poly);
-            let doubled = area2(xs, ys).raw();
-            collecting += doubled * i128::from((role >> COLLECTS) & 1);
-            gate += doubled * i128::from((role >> GATE) & 1);
-            diode += doubled * i128::from((role >> DIODE) & 1);
-        }
-        areas[slot] = DbuArea::new(collecting);
-        areas[count + slot] = DbuArea::new(gate);
-        areas[2 * count + slot] = DbuArea::new(diode);
+/// The net of every store row on `layer` that is not a conductor: the lowest
+/// net among conductor shapes it overlaps with positive area (a derived gate
+/// `poly and diff` sits on poly; a cut on the metal under it). Touching alone
+/// does not join, so a gate is not put on the diffusion beside it. `false`
+/// when a layer will not validate.
+fn attach(
+    design: Design<'_>,
+    layer: LayerId,
+    conductors: &[LayerId],
+    nets: &NetTable,
+    net_of: &mut [NetId],
+    scratch: &mut Scratch,
+) -> bool {
+    let store = design.store;
+    if store.polys_on_layer(layer).is_empty() {
+        return true;
     }
+    if validate_layer_into(store, layer, &mut scratch.layer_a).is_err() {
+        return false;
+    }
+    let mut mine = LayerRects::default();
+    mine.build(store, layer, &scratch.layer_a);
+    let mut best = vec![NetId::NONE; mine.len()];
+    let mut theirs = LayerRects::default();
+    for &conductor in conductors {
+        if validate_layer_into(store, conductor, &mut scratch.layer_b).is_err() {
+            return false;
+        }
+        theirs.build(store, conductor, &scratch.layer_b);
+        let under = SortedRects::new(theirs.labelled());
+        for (poly, slot) in (0u32..).zip(best.iter_mut()) {
+            for &r in mine.of(poly) {
+                for (_, row) in under.overlapping(r) {
+                    let net = nets.net_of(row);
+                    if net != NetId::NONE {
+                        *slot = (*slot).min(net);
+                    }
+                }
+            }
+        }
+    }
+    let first = store.polys_on_layer(layer).start;
+    for (offset, &poly) in mine.poly_of_row.iter().enumerate() {
+        net_of[first as usize + offset] = best[poly as usize];
+    }
+    true
 }
 
-/// One antenna row: area per net, the ratio per gate net (after `adjust`,
-/// which receives the net's real diode area), reported at the net's lowest
-/// gate polygon. Returns `examined`, the number of gate nets.
-///
-/// Panics when the row names a layer the store does not have.
+/// Twice the perimeter of every merged figure on `layer`, with the store row
+/// it is blamed on. `None` when the layer will not validate or merge.
+fn merged_perimeters(
+    design: Design<'_>,
+    layer: LayerId,
+    scratch: &mut Scratch,
+) -> Option<Vec<(PolyId, i128)>> {
+    validate_layer_into(design.store, layer, &mut scratch.layer_a).ok()?;
+    let mut drawn = LayerRects::default();
+    drawn.build(design.store, layer, &scratch.layer_a);
+    union_into(
+        &scratch.layer_a,
+        &ValidatedLayer::default(),
+        &mut scratch.layer_b,
+    )
+    .ok()?;
+    let figures = &scratch.layer_b;
+    Some(
+        (0..)
+            .zip(owners_of(figures, &drawn))
+            .map(|(idx, owner)| {
+                let poly = figures.get(idx);
+                let perimeter: i128 = std::iter::once(poly.outer())
+                    .chain(poly.holes())
+                    .map(|ring| {
+                        let (xs, ys) = ring.coords();
+                        (0..xs.len())
+                            .map(|i| {
+                                let j = (i + 1) % xs.len();
+                                i128::from(
+                                    (xs[j] - xs[i]).raw().abs() + (ys[j] - ys[i]).raw().abs(),
+                                )
+                            })
+                            .sum::<i128>()
+                    })
+                    .sum();
+                (owner, 2 * perimeter)
+            })
+            .collect(),
+    )
+}
+
+/// One antenna row: nets as they stand at this row's etch step, doubled
+/// collecting, gate and diode area per net, the ratio per gate net (after
+/// `adjust`, which receives the net's diode area), reported at the net's
+/// lowest gate polygon. `examined` is the number of gate nets; `None` is
+/// `Refused` (a layer that will not validate).
 #[allow(
     clippy::cast_precision_loss,
     reason = "a die's area in database units is far below 2^53"
 )]
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 fn antenna_row(
     design: Design<'_>,
     head: (&RuleHead, usize),
-    layers: (LayerId, &[LayerId], Option<LayerId>),
+    (gate_layer, collectors, diode): (LayerId, &[LayerId], Option<LayerId>),
+    measures: &[AntennaMeasure],
+    stack: &Stack,
     limit: f64,
     adjust: impl Fn(f64, DbuArea) -> f64,
     scratch: &mut Scratch,
     out: &mut Violations,
-) -> u64 {
-    let (gate_layer, collectors, diode) = layers;
-    let mut roles = vec![0u8; design.store.layer_count()];
-    roles[gate_layer.idx()] |= 1 << GATE;
-    for &layer in collectors {
-        roles[layer.idx()] |= 1 << COLLECTS;
+) -> Option<u64> {
+    let store = design.store;
+    let stage = stack.stage(collectors);
+    let mut staged = std::mem::take(&mut scratch.staged_nets);
+    let nets: &NetTable = match &stage {
+        Some(connectivity) => {
+            extract_nets_into(store, connectivity, &mut staged);
+            &staged
+        }
+        None => design.nets,
+    };
+    if nets.net_count() == 0 {
+        scratch.staged_nets = staged;
+        return Some(0);
     }
-    if let Some(layer) = diode {
-        roles[layer.idx()] |= 1 << DIODE;
-    }
-    net_areas_into(design, &roles, &mut scratch.areas);
-    let areas = &scratch.areas;
+    // Conductors: the stage's, or (finished nets) every layer carrying a net.
+    let conductors: Vec<LayerId> = match &stage {
+        Some(connectivity) => connectivity.conductors.clone(),
+        None => (0..store.layer_count())
+            .map(|l| LayerId(u16::try_from(l).expect("a LayerId is a u16")))
+            .filter(|&l| {
+                store
+                    .polys_on_layer(l)
+                    .any(|row| nets.net_of(PolyId(row)) != NetId::NONE)
+            })
+            .collect(),
+    };
 
-    let count = design.nets.net_count();
+    // A collector named twice collects once, with its first measure.
+    let mut read: Vec<(LayerId, AntennaMeasure)> = Vec::new();
+    for (&layer, &measure) in collectors.iter().zip(measures) {
+        if !read.iter().any(|&(l, _)| l == layer) {
+            read.push((layer, measure));
+        }
+    }
+    let mut net_of = vec![NetId::NONE; store.poly_count()];
+    let mut layers: Vec<LayerId> = read.iter().map(|&(l, _)| l).collect();
+    layers.push(gate_layer);
+    layers.extend(diode);
+    layers.sort_unstable();
+    layers.dedup();
+    let mut ok = true;
+    for &layer in &layers {
+        if conductors.contains(&layer) {
+            for row in store.polys_on_layer(layer) {
+                net_of[row as usize] = nets.net_of(PolyId(row));
+            }
+        } else {
+            ok &= attach(design, layer, &conductors, nets, &mut net_of, scratch);
+        }
+    }
+
+    let count = nets.net_count();
+    let mut areas = vec![0i128; 3 * count];
+    let mut first_gate = vec![PolyId(u32::MAX); count];
+    let add = |layer: LayerId, base: usize, areas: &mut Vec<i128>| {
+        for row in store.polys_on_layer(layer) {
+            let net = net_of[row as usize];
+            if net != NetId::NONE {
+                let (xs, ys) = store.poly_verts(PolyId(row));
+                areas[base + net.idx()] += area2(xs, ys).raw();
+            }
+        }
+    };
+    add(gate_layer, count, &mut areas);
+    if let Some(layer) = diode {
+        add(layer, 2 * count, &mut areas);
+    }
+    for row in store.polys_on_layer(gate_layer) {
+        let net = net_of[row as usize];
+        if net != NetId::NONE {
+            first_gate[net.idx()] = first_gate[net.idx()].min(PolyId(row));
+        }
+    }
+    for &(layer, measure) in &read {
+        let AntennaMeasure::Sidewall { thickness } = measure else {
+            add(layer, 0, &mut areas);
+            continue;
+        };
+        let Some(figures) = merged_perimeters(design, layer, scratch) else {
+            ok = false;
+            continue;
+        };
+        for (row, twice_perimeter) in figures {
+            let net = net_of[row.idx()];
+            if net != NetId::NONE {
+                areas[net.idx()] += twice_perimeter * i128::from(thickness.raw());
+            }
+        }
+    }
+    scratch.staged_nets = staged;
+    if !ok {
+        return None;
+    }
+
     let limit = Measurement::Ratio(limit);
     let mut examined = 0u64;
     for slot in 0..count {
-        let gate = areas[count + slot].raw();
+        let gate = areas[count + slot];
         if gate <= 0 {
             continue;
         }
         examined += 1;
         let ratio = adjust(
-            areas[slot].raw() as f64 / gate as f64,
-            DbuArea::new(areas[2 * count + slot].raw() / 2),
+            areas[slot] as f64 / gate as f64,
+            DbuArea::new(areas[2 * count + slot] / 2),
         );
         if !Measurement::Ratio(ratio).violates(limit, LimitSense::Maximum) {
             continue;
         }
-        let poly = design
-            .nets
-            .polys_of(NetId(u32::try_from(slot).expect("a net count fits a u32")))
-            .iter()
-            .copied()
-            .find(|&poly| (roles[design.store.poly_layer(poly).idx()] >> GATE) & 1 == 1)
-            .expect("a net with positive gate area carries a gate polygon");
+        let poly = first_gate[slot];
         out.push(Violation {
             rule: head.0.rule[head.1],
             layer: gate_layer,
             severity: head.0.severity[head.1],
-            at: centre(design.store.poly_bbox(poly)),
+            at: centre(store.poly_bbox(poly)),
             measured: Measurement::Ratio(ratio),
             limit,
             shapes: (poly, None),
         });
     }
-    examined
+    Some(examined)
 }
 
-/// Per-stage antenna ratio, reported at the gate. A row with a sidewall
-/// collector is refused.
+/// Per-stage antenna ratio, reported at the gate.
 pub fn check_antenna(
     design: Design<'_>,
     table: &AntennaTable,
@@ -193,23 +387,19 @@ pub fn check_antenna(
         let rule = table.head.rule[row];
         let before = out.len();
         let span = table.collector_start[row] as usize..table.collector_start[row + 1] as usize;
-        if table.collector_measure[span.clone()]
-            .iter()
-            .any(|measure| matches!(measure, AntennaMeasure::Sidewall { .. }))
-        {
-            record_run(runs, out, before, rule, Outcome::Refused, 0);
-            continue;
-        }
         let examined = antenna_row(
             design,
             (&table.head, row),
-            (table.gate[row], &table.collector[span], None),
+            (table.gate[row], &table.collector[span.clone()], None),
+            &table.collector_measure[span],
+            &table.stack,
             table.max_ratio[row],
             |ratio, _| ratio,
             scratch,
             out,
         );
-        record_run(runs, out, before, rule, Outcome::Ran, examined);
+        let (outcome, examined) = examined.map_or((Outcome::Refused, 0), |n| (Outcome::Ran, n));
+        record_run(runs, out, before, rule, outcome, examined);
     }
 }
 
@@ -233,10 +423,13 @@ pub fn check_antenna_electrical(
             record_run(runs, out, before, rule, Outcome::Refused, 0);
             continue;
         }
+        let collectors = &table.collector[span];
         let examined = antenna_row(
             design,
             (&table.head, row),
-            (table.gate[row], &table.collector[span], diode),
+            (table.gate[row], collectors, diode),
+            &vec![AntennaMeasure::Area; collectors.len()],
+            &table.stack,
             table.max_ratio[row],
             #[allow(
                 clippy::cast_precision_loss,
@@ -246,7 +439,8 @@ pub fn check_antenna_electrical(
             scratch,
             out,
         );
-        record_run(runs, out, before, rule, Outcome::Ran, examined);
+        let (outcome, examined) = examined.map_or((Outcome::Refused, 0), |n| (Outcome::Ran, n));
+        record_run(runs, out, before, rule, outcome, examined);
     }
 }
 
@@ -599,7 +793,39 @@ pub fn check_density_cmp(
 
 #[cfg(test)]
 mod tests {
-    use super::{positions, window_boxes, window_owners_into, Bbox, Dbu};
+    use super::{positions, window_boxes, window_owners_into, Bbox, Dbu, LayerId, Stack};
+
+    /// At an etch step only the conductors up to it exist: metal2's via row is
+    /// cut, so a diode or gate reachable only through metal2 is not on the net
+    /// yet. A cut collector stands on its lower conductor.
+    #[test]
+    fn a_stage_holds_the_conductors_up_to_its_etch_and_the_vias_between_them() {
+        let [diff, poly, li, met1, met2] = [0, 1, 2, 3, 4].map(LayerId);
+        let [licon, mcon, via1] = [5, 6, 7].map(LayerId);
+        let stack = Stack {
+            conductors: vec![diff, poly, li, met1, met2],
+            vias: vec![
+                (licon, diff, li),
+                (licon, poly, li),
+                (mcon, li, met1),
+                (via1, met1, met2),
+            ],
+            intra_layer_touch: true,
+        };
+
+        let at_met1 = stack.stage(&[met1]).expect("a deck with conductors");
+        assert_eq!(at_met1.conductors, [diff, poly, li, met1]);
+        assert_eq!(at_met1.via_cut, [licon, licon, mcon]);
+
+        let at_via1 = stack.stage(&[via1]).expect("a deck with conductors");
+        assert_eq!(at_via1.conductors, [diff, poly, li, met1]);
+
+        let at_poly = stack.stage(&[poly]).expect("a deck with conductors");
+        assert_eq!(at_poly.conductors, [diff, poly]);
+        assert!(at_poly.via_cut.is_empty());
+
+        assert!(Stack::default().stage(&[met1]).is_none());
+    }
 
     fn bbox(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Bbox {
         Bbox {

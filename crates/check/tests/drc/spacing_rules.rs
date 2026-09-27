@@ -567,9 +567,8 @@ fn a_qualifying_wide_pair_exactly_at_the_wide_limit_is_clean() {
 }
 
 /// Oracle: construct-from-answer. One unit more threshold and neither shape is
-/// wide, so no pair qualifies. "Wide" is measured on the narrowest width, not
-/// on a bounding box, which is what makes the 200 in this test the same 200 the
-/// width family measures.
+/// wide, so no pair qualifies. "Wide" is where a threshold square fits, not a
+/// bounding box, so a 200 square is exactly as wide as the width family says.
 #[test]
 fn a_shape_one_unit_narrower_than_the_wide_threshold_does_not_trigger_the_rule() {
     let case = spaced(100, 101);
@@ -590,4 +589,98 @@ fn a_shape_one_unit_narrower_than_the_wide_threshold_does_not_trigger_the_rule()
     assert_eq!(sink.runs[0].outcome, Outcome::Ran);
     assert_eq!(sink.runs[0].examined, 0);
     assert!(sink.out.rule.is_empty());
+}
+
+fn huge_met1_table() -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::WideDependentSpacing {
+            layer: A,
+            width_threshold: dbu(3_000),
+            limit: dbu(280),
+        },
+    )]
+}
+
+/// sky130 m1.3ab: `huge_met1 = met1.sized(-1.5).sized(1.5)`, the part of met1
+/// wider than 3 um, needs 0.28 um to other met1. A 10 um plate with a 0.14 um
+/// tab is huge where the plate is, so a wire 0.2 um from the plate fails. The
+/// old rule read the polygon's narrowest width (0.14, the tab) and called the
+/// whole plate narrow.
+#[test]
+fn sky130_m1_3ab_a_plate_with_a_thin_tab_is_still_huge_where_the_plate_is() {
+    let mut layout = LayoutBuilder::new(1);
+    // Plate (0,0)-(10000,10000) with a 140-wide, 1000-long tab off its top.
+    let plate = layout.push(
+        A,
+        &[0, 10_000, 10_000, 5_140, 5_140, 5_000, 5_000, 0],
+        &[0, 0, 10_000, 10_000, 11_000, 11_000, 10_000, 10_000],
+    );
+    let wire = layout.rect(A, 10_200, 0, 10_340, 5_000);
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &huge_met1_table());
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(200)));
+    assert_eq!(sink.out.get(0).shapes, (ids.of(plate), Some(ids.of(wire))));
+}
+
+/// The same plate: a wire 0.2 um from the far end of the thin tab is not near
+/// the huge part (the tab's end is 1 um from the plate), so m1.3ab is met.
+#[test]
+fn sky130_m1_3ab_the_thin_tab_is_not_huge() {
+    let mut layout = LayoutBuilder::new(1);
+    layout.push(
+        A,
+        &[0, 10_000, 10_000, 5_140, 5_140, 5_000, 5_000, 0],
+        &[0, 0, 10_000, 10_000, 11_000, 11_000, 10_000, 10_000],
+    );
+    layout.rect(A, 4_000, 11_200, 6_000, 11_340);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &huge_met1_table());
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+}
+
+/// Two abutting 2 x 4 um rectangles are one 4 x 4 um plate, huge on the
+/// merged layer though neither drawn rectangle is 3 um wide.
+#[test]
+fn a_plate_drawn_as_two_narrow_rectangles_is_huge() {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 2_000, 4_000);
+    layout.rect(A, 2_000, 0, 4_000, 4_000);
+    layout.rect(A, 4_200, 0, 4_340, 4_000);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &huge_met1_table());
+
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(200)));
+}
+
+/// A huge plate's own slot is not a neighbour: the hole ring is the plate's
+/// boundary, a width question, not spacing to another shape.
+#[test]
+fn a_huge_plate_is_not_spaced_against_its_own_hole() {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 8_000, 8_000);
+    layout.shape(
+        A,
+        &gpurify_testgen::shapes::hole(3_000, 3_000, 5_000, 5_000),
+    );
+    // A neighbour exactly 280 away, so one real pair is judged.
+    layout.rect(A, 8_280, 0, 8_420, 8_000);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &huge_met1_table());
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
 }

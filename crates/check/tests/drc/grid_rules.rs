@@ -6,7 +6,7 @@ use crate::common;
 use common::{Sink, A, RULE};
 use gpurify_check::drc::Rule;
 use gpurify_check::report::{Measurement, Severity, Violation};
-use gpurify_geom::PolyId;
+use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{
@@ -112,7 +112,13 @@ fn a_shape_on_the_lattice_is_clean_and_the_same_shape_one_unit_off_is_not() {
 const RECTILINEAR: u8 = 0b0101;
 
 fn angle_table(allowed: u8) -> Vec<(StrId, Rule)> {
-    vec![(RULE, Rule::Angle { allowed })]
+    vec![(
+        RULE,
+        Rule::Angle {
+            layer: None,
+            allowed,
+        },
+    )]
 }
 
 /// Oracle: construct-from-answer. The triangle's hypotenuse rises 100 over 100,
@@ -189,4 +195,28 @@ fn an_edge_parallel_to_an_allowed_direction_is_clean() {
     strict.run(&rectangle, &angle_table(RECTILINEAR));
     assert_clean(&strict.runs, &strict.out, RULE);
     assert_eq!(assert_rule_ran(&strict.runs, RULE).examined, 4);
+}
+
+/// sky130 x.2: 90-degree angles only on diff, tap, poly, licon, li, mcon and
+/// vias; 45 degrees elsewhere. A 45-degree diff edge fails the diff row and a
+/// 45-degree met1 edge passes it; the global 0/45/90/135 row passes both.
+#[test]
+fn sky130_x_2_a_45_degree_diff_edge_fails_a_per_layer_row() {
+    let (diff, met1) = (LayerId(0), LayerId(1));
+    let mut layout = LayoutBuilder::new(2);
+    let chamfered = layout.push(diff, &[0, 1_000, 1_000, 500, 0], &[0, 0, 500, 1_000, 1_000]);
+    layout.push(met1, &[0, 1_000, 1_000, 500, 0], &[0, 0, 500, 1_000, 1_000]);
+    let (store, ids) = layout.finish();
+
+    let rows = |layer, allowed| vec![(RULE, Rule::Angle { layer, allowed })];
+    let right_angles = 0b0101;
+
+    let mut sink = Sink::default();
+    sink.run(&store, &rows(Some(diff), right_angles));
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.shape_a[0], ids.of(chamfered));
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 5);
+
+    sink.run(&store, &rows(Some(met1), 0b1111));
+    assert_clean(&sink.runs, &sink.out, RULE);
 }

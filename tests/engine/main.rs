@@ -53,7 +53,7 @@ fn empty_loaded(store: GeometryStore, deck: Deck) -> Loaded {
 fn unreadable_inputs(grid: Option<Grid>) -> Inputs {
     Inputs {
         layout: PathBuf::from("/nonexistent/design.gds"),
-        deck: PathBuf::from("/nonexistent/process.json"),
+        deck: PathBuf::from("/nonexistent/process.deck"),
         grid,
         ..Inputs::default()
     }
@@ -119,14 +119,14 @@ fn extraction_partitions_by_touch_and_accepts_an_empty_design() {
 fn a_deck_that_leaves_raw_diffusion_conducting_under_a_mos_marker_is_refused() {
     let mut strings = StrTable::default();
     let deck = parse_deck(
-        r#"{
-          "layers": { "diff": [65, 20], "poly": [66, 20], "nsdm": [93, 44] },
-          "connectivity": { "conductors": ["diff", "poly"], "intra_layer_touch": true },
-          "device_recognition": [
-            { "kind": "mos", "marker": "nsdm", "model": "nfet",
-              "terminals": ["poly", "diff", "diff"] }
-          ]
-        }"#,
+        "grid 1nm
+layer diff = gds(65, 20)
+layer poly = gds(66, 20)
+layer nsdm = gds(93, 44)
+connect conductors [diff, poly]
+connect touch_within_layer
+device mos nsdm model \"nfet\" terminals [poly, diff, diff]
+",
         grid(),
         &mut strings,
     )
@@ -174,7 +174,6 @@ fn reference_with_one_transistor() -> Netlist {
         subckt_port_start: vec![0, 0],
         port_net: Vec::new(),
         subckt_device_start: vec![0, 1],
-        device_name: vec![StrId(3)],
         device_model: vec![StrId(1)],
         device_kind: vec![DeviceKind::Mos],
         device_terminal_start: vec![0, 4],
@@ -275,7 +274,7 @@ fn the_inductance_flag_adds_elements_only_when_asked() {
     let fixtures = gen_fixtures::fixtures();
     let inputs = Inputs {
         layout: fixtures.join("pex/PEX_COUPLING_C.gds"),
-        deck: fixtures.join("params.json"),
+        deck: fixtures.join("params.deck"),
         grid: Some(grid()),
         ..Inputs::default()
     };

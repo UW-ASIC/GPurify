@@ -13,7 +13,7 @@
 
 use gpurify_check::erc::facts::IntentMap;
 use gpurify_check::erc::power;
-use gpurify_check::erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution, SolveConfig};
+use gpurify_check::erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution};
 use gpurify_check::erc::ruleset::RuleHead;
 use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_check::topology::NetId;
@@ -216,8 +216,7 @@ impl GridBuilder {
 /// A pad at node zero and `resistors` identical resistors in series, with the
 /// whole load drawn at the far end.
 ///
-/// The closed form is Ohm's law over a series chain, which is one of the three
-/// oracles named in `docs/TESTING.md`.
+/// The closed form is Ohm's law over a series chain, an independent oracle.
 #[must_use]
 pub fn series_chain(resistors: u32, ohm: f64, nominal_mv: f64, load_ua: f64) -> PowerGrid {
     let mut builder = GridBuilder::new();
@@ -297,7 +296,7 @@ pub fn random_grid(seed: u64, nodes: u32, chords: u32) -> PowerGrid {
 pub fn solve(grid: &PowerGrid) -> PowerSolution {
     let mut scratch = power::SolveScratch::default();
     let mut solution = PowerSolution::default();
-    power::solve_into(grid, SolveConfig::default(), &mut scratch, &mut solution)
+    power::solve_into(grid, &mut scratch, &mut solution)
         .expect("this grid is anchored and every resistance is positive");
     solution
 }
@@ -360,7 +359,7 @@ pub fn probe_of(
 ///
 /// Built directly rather than through `resolve_intent_into`, because
 /// `DesignIntent`'s fields are private and its only producer is `read_intent`,
-/// which takes a path — see `docs/NEED_TESTING.md`. The map is what every
+/// which takes a path. The map is what every
 /// intent-gated rule actually reads, so this is the input under test.
 #[must_use]
 pub fn declared_supplies(power_net: NetId, ground_net: NetId, nominal_mv: f64) -> IntentMap {
@@ -387,6 +386,7 @@ pub fn declared_supplies(power_net: NetId, ground_net: NetId, nominal_mv: f64) -
         declared: true,
         supply_net: vec![first, second],
         supply_role: vec![role_of(first), role_of(second)],
+        supply_domain: vec![gpurify_ingest::intent::DomainId(0); 2],
         supply_voltage: vec![voltage_of(first), voltage_of(second)],
         limit_net: Vec::new(),
         limit: Vec::new(),

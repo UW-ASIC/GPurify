@@ -11,7 +11,7 @@ use common::{
     mos_and_bjt, random_graph, stacked_pair, stacked_pair_with_params, GraphBuilder, LENGTH, NCH,
     RES, VDD, VSS, WIDTH,
 };
-use gpurify_check::lvs::graph::{from_reference_into, RefGraph};
+use gpurify_check::lvs::graph::from_reference;
 use gpurify_check::topology::TerminalRole;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
@@ -156,14 +156,7 @@ fn terminal_ranges_tile_the_terminal_columns_without_gap_or_overlap() {
 #[test]
 fn a_reference_subcircuit_projects_to_the_graph_it_describes() {
     let netlist = one_subcircuit();
-    let mut graph = RefGraph::default();
-    from_reference_into(
-        &netlist,
-        SubcktId(0),
-        &gpurify_ingest::StrTable::default(),
-        &mut graph,
-    );
-    let graph = &graph.0;
+    let graph = &from_reference(&netlist, SubcktId(0));
 
     assert_eq!(graph.device_count(), 2);
     assert_eq!(graph.net_count(), 5);
@@ -213,29 +206,6 @@ fn a_reference_subcircuit_projects_to_the_graph_it_describes() {
     );
 }
 
-/// Oracle: law. Projection is a function: the same subcircuit projected twice
-/// gives the same columns, and projecting into a buffer that already holds a
-/// graph must clear it rather than append to it. The reuse is the point of the
-/// `_into` form, so it is the thing worth checking.
-#[test]
-fn projecting_twice_into_one_buffer_gives_the_same_graph_as_projecting_once() {
-    let netlist = one_subcircuit();
-    let strings = gpurify_ingest::StrTable::default();
-
-    let mut once = RefGraph::default();
-    from_reference_into(&netlist, SubcktId(0), &strings, &mut once);
-
-    let mut twice = RefGraph::default();
-    from_reference_into(&netlist, SubcktId(0), &strings, &mut twice);
-    from_reference_into(&netlist, SubcktId(0), &strings, &mut twice);
-
-    // Column by column, not `Debug` string against `Debug` string. `RefGraph`
-    // derives `PartialEq` for exactly this, and `graph.rs`'s own doc comment
-    // says why: a formatting comparison cannot tell a real difference from a
-    // formatting one, and it passes `-0.0` off against `0.0` in `param`.
-    assert_eq!(once, twice);
-}
-
 /// A resistor and a transistor in one subcircuit over five nets.
 ///
 /// Written as columns rather than parsed, because `spice::read` is a `todo!()`
@@ -248,7 +218,6 @@ fn one_subcircuit() -> Netlist {
         port_net: vec![RefNetId(0), RefNetId(1)],
         subckt_device_start: vec![0, 2],
 
-        device_name: vec![StrId(40), StrId(41)],
         device_model: vec![RES, NCH],
         device_kind: vec![DeviceKind::Resistor, DeviceKind::Mos],
         device_terminal_start: vec![0, 2, 6],

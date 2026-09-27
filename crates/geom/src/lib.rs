@@ -3,6 +3,9 @@
 //! Data in: rings in `Dbu` from `ingest`. Data out: a [`GeometryStore`],
 //! [`ValidatedLayer`]s, candidate pairs, booleans, and exact measures.
 
+// fearless_simd kernels must inline into the `target_feature` fn `dispatch!` makes.
+#![allow(clippy::inline_always)]
+
 mod arith;
 mod dbu;
 mod qty;
@@ -37,6 +40,7 @@ pub(crate) fn narrow(rows: usize) -> u32 {
 pub mod bbox;
 pub mod boolean;
 pub mod connectivity;
+pub mod derive;
 pub mod ids;
 pub mod index;
 pub mod linalg;
@@ -44,6 +48,7 @@ pub mod ops;
 pub mod rects;
 pub mod store;
 pub mod view;
+pub mod width;
 pub use bbox::Bbox;
 pub use ids::{LayerId, PolyId};
 pub use store::{GeometryStore, GeometryStoreBuilder};

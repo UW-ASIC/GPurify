@@ -16,11 +16,12 @@ use crate::common;
 use common::{head, manufacturing_grid, operating_temperature, rule};
 use gpurify_check::erc::facts::{IntentMap, NetFacts};
 use gpurify_check::erc::power::NetNetworks;
-use gpurify_check::erc::rules::{antenna, electrical, reliability, supply, topology};
+use gpurify_check::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
 use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
+use gpurify_check::erc::voltage::NetVoltage;
 use gpurify_check::erc::{Design, ErcError, Scratch};
 use gpurify_check::report::{Outcome, RuleRun, Severity, SkipReason, Violations};
-use gpurify_check::topology::{DeviceTable, NetTable};
+use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
 use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{
@@ -36,17 +37,23 @@ fn id_of(kind: &str) -> StrId {
         .iter()
         .position(|&k| k == kind)
         .unwrap_or_else(|| panic!("{kind} is not a kind this crate implements"));
-    rule(u32::try_from(index).expect("nineteen kinds"))
+    rule(u32::try_from(index).expect("twenty-four kinds"))
 }
 
-/// The six kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 6] = [
+/// The kinds that cannot answer their question without design intent.
+const INTENT_GATED: [&str; 12] = [
+    "domain_crossing",
+    "drain_source",
     "electromigration",
     "em_current_density",
     "esd_latchup",
+    "esd_topological",
+    "gate_oxide",
     "hv_domain",
     "ir_drop",
+    "missing_level_shifter",
     "reliability",
+    "well_bias",
 ];
 
 fn ohms(value: f64) -> Qty<Resistance, { prefix::BASE }> {
@@ -69,11 +76,10 @@ fn density(value: f64) -> Qty<CurrentDensity, { prefix::BASE }> {
     Qty::new(value)
 }
 
-/// One row of every one of the nineteen kinds, all naming layers that exist in
-/// the store below.
+/// One row of every kind, all naming layers that exist in the store below.
 #[allow(
     clippy::too_many_lines,
-    reason = "nineteen tables written out once is the point of the test"
+    reason = "every table written out once is the point of the test"
 )]
 fn every_kind() -> RuleSet {
     let base = LayerId(0);
@@ -81,6 +87,7 @@ fn every_kind() -> RuleSet {
     RuleSet {
         floating_gate: topology::FloatingGateTable {
             head: head(id_of("floating_gate")),
+            labels_are_ports: vec![false],
         },
         floating_well: topology::FloatingWellTable {
             head: head(id_of("floating_well")),
@@ -119,6 +126,8 @@ fn every_kind() -> RuleSet {
         esd_topological: supply::EsdTopologicalTable {
             head: head(id_of("esd_topological")),
             pad: vec![LayerId(0)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
         },
 
         antenna: antenna::AntennaTable {
@@ -128,6 +137,7 @@ fn every_kind() -> RuleSet {
             collector: vec![other],
             collector_measure: vec![antenna::AntennaMeasure::Area],
             max_ratio: vec![50.0],
+            stack: antenna::Stack::default(),
         },
         antenna_electrical: antenna::AntennaElectricalTable {
             head: head(id_of("antenna_electrical")),
@@ -138,6 +148,7 @@ fn every_kind() -> RuleSet {
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
             max_ratio: vec![50.0],
+            stack: antenna::Stack::default(),
         },
         density_cmp: antenna::DensityCmpTable {
             head: head(id_of("density_cmp")),
@@ -199,6 +210,36 @@ fn every_kind() -> RuleSet {
             guard_ring: vec![LayerId(1)],
             min_guard_ring_width: vec![dbu(100)],
             max_tap_distance: vec![dbu(100_000)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
+        },
+
+        gate_oxide: domain::ModelLimitTable {
+            head: head(id_of("gate_oxide")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+            max_voltage: vec![millivolts(1_980.0)],
+        },
+        drain_source: domain::ModelLimitTable {
+            head: head(id_of("drain_source")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+            max_voltage: vec![millivolts(1_980.0)],
+        },
+        well_bias: domain::WellBiasTable {
+            head: head(id_of("well_bias")),
+            pmos_start: vec![0, 1],
+            pmos: vec![rule(900)],
+            nmos_start: vec![0, 0],
+            nmos: Vec::new(),
+        },
+        missing_level_shifter: domain::MissingLevelShifterTable {
+            head: head(id_of("missing_level_shifter")),
+            shifter_start: vec![0, 0],
+            shifter: Vec::new(),
+        },
+        domain_crossing: domain::DomainCrossingTable {
+            head: head(id_of("domain_crossing")),
         },
     }
 }
@@ -209,6 +250,8 @@ struct Cell {
     nets: NetTable,
     devices: DeviceTable,
     facts: NetFacts,
+    ports: PortTable,
+    voltage: NetVoltage,
     networks: NetNetworks,
 }
 
@@ -223,6 +266,8 @@ impl Cell {
             nets: NetTable::default(),
             devices: DeviceTable::default(),
             facts: NetFacts::default(),
+            ports: PortTable::default(),
+            voltage: NetVoltage::default(),
             networks: NetNetworks::default(),
         }
     }
@@ -235,7 +280,9 @@ impl Cell {
                 devices: &self.devices,
             },
             facts: &self.facts,
+            ports: &self.ports,
             intent,
+            voltage: &self.voltage,
             networks: &self.networks,
             power: None,
             die: Bbox {
@@ -250,8 +297,8 @@ impl Cell {
     }
 }
 
-/// Oracle: construct-from-answer. Nineteen configured rows must produce
-/// nineteen run rows, one per row, each attributable to its own rule id. This
+/// Oracle: construct-from-answer. One configured row per kind must produce
+/// one run row per kind, one per row, each attributable to its own rule id. This
 /// comparison is named in `RuleSet::len`'s own doc comment as the thing that
 /// catches a transform returning early without recording itself — the exact
 /// shape of a false-clean result.
@@ -288,13 +335,13 @@ fn every_configured_rule_row_produces_exactly_one_run_row() {
     assert_eq!(ids.len(), runs.len(), "two run rows share one rule id");
 }
 
-/// Oracle: construct-from-answer. With no design intent the six gated kinds
-/// must say so and the thirteen others must run anyway. Both halves matter: a
+/// Oracle: construct-from-answer. With no design intent the gated kinds
+/// must say so and the others must run anyway. Both halves matter: a
 /// gated rule reporting clean is the failure this crate is built against, and
 /// an ungated rule skipping would quietly stop checking a design that needs no
 /// intent file at all.
 #[test]
-fn without_intent_exactly_the_six_gated_kinds_record_themselves_skipped() {
+fn without_intent_exactly_the_gated_kinds_record_themselves_skipped() {
     let rules = every_kind();
     let cell = Cell::new();
     let intent = IntentMap::default();
@@ -442,12 +489,10 @@ fn running_one_rule_set_twice_produces_identical_rows() {
 /// A deck holding one rule row per `(id, kind)` pair, with no layers and no
 /// parameters.
 ///
-/// Three of the nineteen kinds take neither — `floating_gate`, `tie_high_low`
+/// Some kinds take neither — `floating_gate`, `tie_high_low`
 /// and `ir_drop` are configuration and nothing else — so a deck of those is the
 /// one shape [`RuleSet::from_deck`] can be handed from outside this workspace.
-/// The parameter *names* the other sixteen expect are an Implementation-Phase
-/// choice that no frozen signature states, which is why the rows below carry
-/// none; see `docs/NEED_TESTING.md`.
+/// The rows below carry no parameters; each kind's own tests cover those.
 fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) {
     let ids: Vec<StrId> = rows.iter().map(|&(id, _)| strings.intern(id)).collect();
     let spec = rows
@@ -584,18 +629,35 @@ fn every_kind_the_list_names_is_a_kind_from_deck_recognises() {
     }
 }
 
-/// Oracle: construct-from-answer. The shipped deck's `electromigration` rows
-/// span 2 and 4 layers; every layer must carry its own row's Blech limit.
+/// Five `electromigration` rows spanning 2 and 4 layers.
+const EM_DECK: &str = "grid 5nm
+layer li = gds(1, 0)
+layer licon = gds(2, 0)
+layer met1 = gds(3, 0)
+layer mcon = gds(4, 0)
+layer met2 = gds(5, 0)
+layer via1 = gds(6, 0)
+layer met3 = gds(7, 0)
+layer via2 = gds(8, 0)
+layer met4 = gds(9, 0)
+layer via3 = gds(10, 0)
+layer met5 = gds(11, 0)
+layer via4 = gds(12, 0)
+rule em_li electromigration(li, licon; max_density: 280A/m, max_current_per_cut: 80uA, blech_limit: 15000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met1 electromigration(met1, mcon; max_density: 1000A/m, max_current_per_cut: 80uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met2 electromigration(met2, via1; max_density: 1000A/m, max_current_per_cut: 60uA, blech_limit: 54000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met3_met4 electromigration(met3, via2, met4, via3; max_density: 2350A/m, max_current_per_cut: 110uA, blech_limit: 126750uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+rule em_met5 electromigration(met5, via4; max_density: 3500A/m, max_current_per_cut: 1800uA, blech_limit: 189000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+";
+
+/// Oracle: construct-from-answer. `electromigration` rows spanning 2 and 4
+/// layers; every layer must carry its own row's Blech limit.
 #[test]
 fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
     let mut strings = StrTable::default();
-    let deck = gpurify_ingest::deck::parse_deck(
-        include_str!("../../../../pdks/generic_finfet.json"),
-        manufacturing_grid(),
-        &mut strings,
-    )
-    .expect("the shipped deck parses");
-    let rules = RuleSet::from_deck(&deck, &strings).expect("the shipped deck is valid erc");
+    let deck = gpurify_ingest::deck::parse_deck(EM_DECK, manufacturing_grid(), &mut strings)
+        .expect("the deck parses");
+    let rules = RuleSet::from_deck(&deck, &strings).expect("the deck is valid erc");
     let em = &rules.electromigration;
     assert_eq!(em.blech_limit.len(), em.layer.len());
     let expected = [15_000.0, 54_000.0, 54_000.0, 126_750.0, 189_000.0];
@@ -604,7 +666,9 @@ fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
         let span = em.layer_start[row] as usize..em.layer_start[row + 1] as usize;
         assert!(span.len() >= 2, "row {row} is multi-layer");
         assert!(
-            em.blech_limit[span].iter().all(|b| b.raw() == want),
+            em.blech_limit[span]
+                .iter()
+                .all(|b| b.raw().to_bits() == f64::to_bits(want)),
             "row {row}"
         );
     }

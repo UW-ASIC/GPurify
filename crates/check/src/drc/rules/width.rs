@@ -4,203 +4,18 @@
 //! Data in: one validated rectilinear layer. Data out: one violation per offending
 //! polygon (per edge for min edge length). Exact on the whole input domain.
 
-use super::{mid, ring_segs, Verdict, REFUSED};
+use super::{mid, owners_of, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::boolean::union_into;
+use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
 use gpurify_geom::ops::{Point, Winding};
+use gpurify_geom::rects::decompose_into;
+use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::Dbu;
-use gpurify_geom::{GeometryStore, LayerId, PolyId, PolygonRef};
+use gpurify_geom::width::{narrowest_facing, poly_edges};
+use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
-
-/// One axis-aligned boundary edge.
-#[derive(Debug, Clone, Copy)]
-struct Edge {
-    /// Coordinate on the axis the edge is perpendicular to.
-    pos: Dbu,
-    lo: Dbu,
-    hi: Dbu,
-    /// Material lies on the greater-`pos` side (canonical winding puts material
-    /// on the left of travel for every ring, holes included).
-    material_above: bool,
-    vertical: bool,
-}
-
-fn edge_of(a: Point, b: Point) -> Edge {
-    let vertical = a.x == b.x;
-    let (pos, from, to) = if vertical {
-        (a.x, a.y, b.y)
-    } else {
-        (a.y, a.x, b.x)
-    };
-    Edge {
-        pos,
-        lo: from.min(to),
-        hi: from.max(to),
-        // Travelling +y leaves material at -x; travelling +x leaves it at +y.
-        material_above: (to > from) != vertical,
-        vertical,
-    }
-}
-
-/// Every boundary edge of one polygon, holes included, outer ring first.
-fn poly_edges(poly: PolygonRef<'_>) -> impl Iterator<Item = (Point, Point)> + '_ {
-    std::iter::once(poly.outer())
-        .chain(poly.holes())
-        .flat_map(|ring| {
-            let (xs, ys) = ring.coords();
-            ring_segs(xs, ys).map(|s| (s.a, s.b))
-        })
-}
-
-/// The gap between two facing edges and its midpoint, or `None` when they do
-/// not face each other across material (`material_between`) or across a void.
-fn facing_pair(a: Edge, b: Edge, material_between: bool) -> Option<(Dbu, Point)> {
-    if a.vertical != b.vertical {
-        return None;
-    }
-    let (near, far) = if a.pos <= b.pos { (a, b) } else { (b, a) };
-    if near.material_above != material_between || far.material_above == material_between {
-        return None;
-    }
-    let lo = near.lo.max(far.lo);
-    let hi = near.hi.min(far.hi);
-    if hi <= lo {
-        return None;
-    }
-    let (across, along) = (mid(near.pos, far.pos), mid(lo, hi));
-    let at = if a.vertical {
-        Point {
-            x: across,
-            y: along,
-        }
-    } else {
-        Point {
-            x: along,
-            y: across,
-        }
-    };
-    Some((far.pos - near.pos, at))
-}
-
-/// Buffers for one facing-pair sweep, refilled per polygon.
-#[derive(Debug, Default)]
-pub(crate) struct FacingScratch {
-    edges: Vec<Edge>,
-    /// `(coordinate, LEAVE|ENTER, edge)`, ascending: spans are half-open.
-    events: Vec<(Dbu, u8, u32)>,
-    /// Edges crossing the scanline, sorted by `(pos, index)`.
-    active: Vec<u32>,
-}
-
-const LEAVE: u8 = 0;
-const ENTER: u8 = 1;
-
-fn slot_of(edges: &[Edge], active: &[u32], edge: u32) -> usize {
-    let want = (edges[edge as usize].pos, edge);
-    active.partition_point(|&j| (edges[j as usize].pos, j) < want)
-}
-
-/// Fold the active pair `(right - 1, right)` into `best`; out of range is a no-op.
-fn consider(
-    edges: &[Edge],
-    active: &[u32],
-    right: usize,
-    material_between: bool,
-    best: &mut Option<(Dbu, Point)>,
-) {
-    if right == 0 || right >= active.len() {
-        return;
-    }
-    let near = edges[active[right - 1] as usize];
-    let far = edges[active[right] as usize];
-    if let Some(found) = facing_pair(near, far, material_between) {
-        if best.is_none_or(|(gap, _)| found.0 < gap) {
-            *best = Some(found);
-        }
-    }
-}
-
-/// The narrowest facing pair among one axis's edges. Only active-list
-/// neighbours can be narrowest, so each event checks the pairs it disturbed.
-fn sweep_axis(
-    edges: &[Edge],
-    vertical: bool,
-    material_between: bool,
-    events: &mut Vec<(Dbu, u8, u32)>,
-    active: &mut Vec<u32>,
-) -> Option<(Dbu, Point)> {
-    events.clear();
-    active.clear();
-    events.extend(
-        edges
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.vertical == vertical)
-            .flat_map(|(i, e)| {
-                let i = u32::try_from(i).expect("a polygon's edges are indexed by a u32");
-                [(e.lo, ENTER, i), (e.hi, LEAVE, i)]
-            }),
-    );
-    events.sort_unstable();
-
-    let mut best: Option<(Dbu, Point)> = None;
-    let mut ev = 0;
-    while ev < events.len() {
-        let at = events[ev].0;
-        let group = ev;
-        while ev < events.len() && events[ev].0 == at {
-            let (_, kind, edge) = events[ev];
-            let slot = slot_of(edges, active, edge);
-            if kind == ENTER {
-                active.insert(slot, edge);
-            } else {
-                active.remove(slot);
-            }
-            ev += 1;
-        }
-        for &(_, _, edge) in &events[group..ev] {
-            let slot = slot_of(edges, active, edge);
-            consider(edges, active, slot, material_between, &mut best);
-            consider(edges, active, slot + 1, material_between, &mut best);
-        }
-    }
-    best
-}
-
-/// The narrowest facing pair of one polygon; a tie keeps the vertical sweep's.
-fn narrowest_facing(
-    poly: PolygonRef<'_>,
-    material_between: bool,
-    scratch: &mut FacingScratch,
-) -> Option<(Dbu, Point)> {
-    let FacingScratch {
-        edges,
-        events,
-        active,
-    } = scratch;
-    edges.clear();
-    // A zero-length edge has no material side.
-    edges.extend(
-        poly_edges(poly)
-            .map(|(a, b)| edge_of(a, b))
-            .filter(|e| e.lo < e.hi),
-    );
-    let across = sweep_axis(edges, true, material_between, events, active);
-    let along = sweep_axis(edges, false, material_between, events, active);
-    [across, along]
-        .into_iter()
-        .flatten()
-        .min_by_key(|&(gap, _)| gap)
-}
-
-/// The narrowest width of a validated polygon, holes included.
-pub(crate) fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu {
-    narrowest_facing(poly, true, scratch)
-        .expect("every validated polygon has a facing pair across its own material")
-        .0
-}
 
 /// The store rows of a layer's validated polygons, in validated order: one
 /// polygon per counter-clockwise row, ascending.
@@ -249,48 +64,46 @@ fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
     }
 }
 
-/// Min width, max width (`violated_below == false`) and notch
-/// (`material_between == false`). One violation per offending figure.
+/// Min width and notch (`material_between == false`). One violation per
+/// offending figure.
 ///
 /// A notch is measured on the self-merged layer (touching rectangles are one U);
 /// a width on the rows as drawn. `examined` is the pre-merge polygon count.
-#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
     layer: LayerId,
     limit: Dbu,
     material_between: bool,
-    violated_below: bool,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if validate_layer_into(store, layer, &mut s.layer_a).is_err() {
+    let Some(drawn) = s.validated.get(store, layer) else {
         return REFUSED;
-    }
-    let polys = s.layer_a.len() as u64;
-    if !material_between
-        && union_into(&s.layer_a, &ValidatedLayer::default(), &mut s.layer_out).is_err()
+    };
+    let polys = drawn.len() as u64;
+    if !material_between && union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err()
     {
         return REFUSED;
     }
-    let figures = if material_between {
-        &s.layer_a
+    // A merged figure's own provenance is a row of the boolean's scratch store.
+    let (figures, owners) = if material_between {
+        (drawn, Vec::new())
     } else {
-        &s.layer_out
+        s.rects_a.build(store, layer, drawn);
+        (&s.layer_out, owners_of(&s.layer_out, &s.rects_a))
     };
     for idx in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
         let poly = figures.get(idx);
+        let owner = owners
+            .get(idx as usize)
+            .copied()
+            .unwrap_or_else(|| poly.provenance());
         // A convex shape has no notch, and that is not a violation.
         let Some((measured, at)) = narrowest_facing(poly, material_between, &mut s.facing) else {
             continue;
         };
-        let violated = if violated_below {
-            measured < limit
-        } else {
-            measured > limit
-        };
-        if violated {
+        if measured < limit {
             out.push(Violation {
                 rule,
                 layer,
@@ -298,11 +111,119 @@ pub(crate) fn facing(
                 at,
                 measured: Measurement::Length(measured),
                 limit: Measurement::Length(limit),
-                shapes: (poly.provenance(), None),
+                shapes: (owner, None),
             });
         }
     }
     (Outcome::Ran, polys)
+}
+
+/// Max width: one violation per region of the merged layer where a `limit + 1`
+/// square fits, so a plate with a thin tab is as wide as the plate and two
+/// abutting rectangles are as wide as their union. Reported at the region's
+/// narrowest facing pair, on the lowest drawn row under it. `examined` counts
+/// drawn polygons.
+pub(crate) fn max_width(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    let polys = drawn.len() as u64;
+    let mut wide = Vec::new();
+    if wide_rects_into(drawn, limit + Dbu::new_unchecked(1), &mut wide).is_err() {
+        return REFUSED;
+    }
+    if wide.is_empty() {
+        return (Outcome::Ran, polys);
+    }
+    s.rects_a.build(store, layer, drawn);
+    let merged = rects_layer(&wide)
+        .and_then(|regions| union_into(&regions, &ValidatedLayer::default(), &mut s.layer_out));
+    if merged.is_err() {
+        return REFUSED;
+    }
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    for (idx, owner) in (0..).zip(owners) {
+        let poly = s.layer_out.get(idx);
+        let (measured, at) = narrowest_facing(poly, true, &mut s.facing)
+            .expect("every validated polygon has a facing pair across its own material");
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at,
+            measured: Measurement::Length(measured),
+            limit: Measurement::Length(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, polys)
+}
+
+/// Exact cut size: every merged figure must be a `width` x `height` rectangle,
+/// either way round (sky130 licon.1 "min and max L and W", IHP Cnt.a). A wrong
+/// side reports that side against its target; a non-rectangle with the right
+/// box reports its area against `width * height`. `examined` counts figures.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn cut_size(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    width: Dbu,
+    height: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let (short, long) = (width.min(height), width.max(height));
+    let figures = &s.layer_out;
+    for (idx, owner) in (0..).zip(owners_of(figures, &s.rects_a)) {
+        let poly = figures.get(idx);
+        let b = poly.bbox();
+        let (bs, bl) = (b.width().min(b.height()), b.width().max(b.height()));
+        let rectangle = poly.outer().coords().0.len() == 4 && poly.holes().next().is_none();
+        let (measured, limit) = if bs != short {
+            (Measurement::Length(bs), Measurement::Length(short))
+        } else if bl != long {
+            (Measurement::Length(bl), Measurement::Length(long))
+        } else if !rectangle {
+            let area = std::iter::once(poly.outer())
+                .chain(poly.holes())
+                .fold(0i128, |sum, ring| sum + ring.area2().raw())
+                / 2;
+            (
+                Measurement::Area(DbuArea::new(area)),
+                Measurement::Area(short.mul_wide(long)),
+            )
+        } else {
+            continue;
+        };
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: Point {
+                x: mid(b.xlo, b.xhi),
+                y: mid(b.ylo, b.yhi),
+            },
+            measured,
+            limit,
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, figures.len() as u64)
 }
 
 /// One violation per edge shorter than `limit`, at its midpoint. `examined`
@@ -315,15 +236,15 @@ pub(crate) fn min_edge_length(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if validate_layer_into(store, layer, &mut s.layer_a).is_err() {
+    let Some(drawn) = s.validated.get(store, layer) else {
         return REFUSED;
-    }
-    let polys = u32::try_from(s.layer_a.len()).expect("a layer indexes polygons with a u32");
+    };
+    let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
     let mut rows = outer_rows(store, layer);
     let mut examined = 0u64;
     for idx in 0..polys {
         let shape = rows.next().expect("one store row per validated polygon");
-        for (a, b) in poly_edges(s.layer_a.get(idx)) {
+        for (a, b) in poly_edges(drawn.get(idx)) {
             examined += 1;
             // Rectilinear: one term is zero.
             let length = (b.x - a.x).abs() + (b.y - a.y).abs();
@@ -344,4 +265,77 @@ pub(crate) fn min_edge_length(
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// The parts of a layer at least `w` wide, as disjoint rectangles: the union of
+/// every axis-aligned `w`-square inside the merged layer (`KLayout`
+/// `sized(-w/2).sized(w/2)`). Eroding by a `w - 1` square leaves a
+/// positive-area anchor exactly where a `w`-square fits on the integer grid,
+/// so a shape exactly `w` wide counts as wide.
+pub(crate) fn wide_rects_into(
+    drawn: &ValidatedLayer,
+    w: Dbu,
+    out: &mut Vec<Bbox>,
+) -> Result<(), BooleanError> {
+    out.clear();
+    let extent = drawn
+        .bboxes()
+        .iter()
+        .fold(Bbox::EMPTY, |acc, &b| acc.union(b));
+    if extent.is_empty() {
+        return Ok(());
+    }
+    let k = w.raw() - 1;
+    let shift =
+        |v: Dbu, by: i64| Dbu::new_unchecked((v.raw() + by).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let mut start = Vec::new();
+    let mut scratch = ValidatedLayer::default();
+    if k == 0 {
+        union_into(drawn, &ValidatedLayer::default(), &mut scratch)?;
+        decompose_into(&scratch, out, &mut start);
+        return Ok(());
+    }
+    // ponytail: a frame clamped at the coordinate domain's edge erodes shapes
+    // touching it; layouts never reach 2^40.
+    let frame = rects_layer(&[Bbox {
+        xlo: shift(extent.xlo, -k),
+        ylo: shift(extent.ylo, -k),
+        xhi: shift(extent.xhi, k),
+        yhi: shift(extent.yhi, k),
+    }])?;
+    // Anchors p where p + [0, k]² leaves the layer: the complement dragged
+    // left and down by k.
+    subtraction_into(&frame, drawn, &mut scratch)?;
+    decompose_into(&scratch, out, &mut start);
+    for r in out.iter_mut() {
+        r.xlo = shift(r.xlo, -k);
+        r.ylo = shift(r.ylo, -k);
+    }
+    let blocked = rects_layer(out)?;
+    subtraction_into(&frame, &blocked, &mut scratch)?;
+    decompose_into(&scratch, out, &mut start);
+    for r in out.iter_mut() {
+        r.xhi = shift(r.xhi, k);
+        r.yhi = shift(r.yhi, k);
+    }
+    let grown = rects_layer(out)?;
+    union_into(&grown, &ValidatedLayer::default(), &mut scratch)?;
+    decompose_into(&scratch, out, &mut start);
+    Ok(())
+}
+
+/// Rectangles, possibly overlapping, as one validated layer.
+fn rects_layer(rects: &[Bbox]) -> Result<ValidatedLayer, BooleanError> {
+    let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
+    for r in rects {
+        builder.push(
+            LayerId(0),
+            &[r.xlo, r.xhi, r.xhi, r.xlo],
+            &[r.ylo, r.ylo, r.yhi, r.yhi],
+        );
+    }
+    let (store, _) = builder.finish(1);
+    let mut out = ValidatedLayer::default();
+    validate_layer_into(&store, LayerId(0), &mut out)?;
+    Ok(out)
 }

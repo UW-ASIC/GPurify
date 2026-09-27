@@ -14,18 +14,16 @@ does not pass.
 ## Install
 
 ```sh
-nix develop
 cargo build --release
 ```
 
-The binary lands at `target/release/gpurify`. The dev shell pins the toolchain
-and supplies the Vulkan libraries the PEX GPU path links against. A plain stable
-Rust toolchain builds the CPU paths fine.
+The binary lands at `target/release/gpurify`. Any stable Rust toolchain builds
+it; `nix develop` gives you a pinned one.
 
 ## Run a check
 
 ```sh
-gpurify drc --deck my_process.json --grid 1000 my_layout.gds
+gpurify drc my_layout.gds --deck my_process.deck --grid 1000
 ```
 
 ```
@@ -62,12 +60,8 @@ though nothing was found.
 | `pex` | Parasitic resistance and capacitance | `--quasistatic <net>…` to field-solve a net |
 | `all` | Everything | a missing input marks its check skipped, never passed |
 
-Common flags: `--format text|json|gds`, `--output <path>`, `--threads <n>`,
-`--check-determinism`, `--strict-layers`.
-
-`--format gds` writes the violations as a layout you can open in a viewer.
-`--strict-layers` refuses geometry on layers your process file does not
-describe, instead of quietly dropping it. It is on by default.
+Every option, the report format and the design intent file are described in
+[docs/usage.md](docs/usage.md).
 
 The exit code is `0` only when every check you selected ran and passed. Anything
 else is `1`: violations found, a rule skipped, an input missing, a file it could
@@ -75,67 +69,44 @@ not read. There is no exit code that means "mostly fine".
 
 ## Describing your process
 
-One JSON file, five sections. An unknown key is an error rather than a warning,
-because a misspelled `"conectivity"` would otherwise give you a file with no
-connectivity at all, which extracts every shape as its own net and reports a
-clean LVS for a chip that is not connected.
+A deck is a plain-text description of your process: layers, connectivity,
+devices, the parasitic stack and the rules.
 
-```json
-{
-  "layers": { "met1": [68, 20] },
-  "rules": {
-    "met1_min_width": {
-      "kind": "min_width",
-      "layers": ["met1"],
-      "params": { "limit": { "nm": 140 } }
-    }
-  },
-  "connectivity": { "conductors": ["met1"], "intra_layer_touch": true, "vias": [] },
-  "device_recognition": [
-    { "kind": "mos", "marker": "poly", "model": "nfet", "terminals": ["diff", "poly"] }
-  ],
-  "pex": {
-    "met1": { "thickness_nm": 360, "height_nm": 936, "sheet_res_ohm_sq": 0.125,
-              "area_cap_af_um2": 25.6, "fringe_cap_af_um": 40.9, "dielectric_k": 4.1 }
-  }
-}
+```
+grid 5nm
+layer met1 = gds(68, 20)
+layer via1 = gds(68, 44)
+
+rule m1.1 width(met1) >= 140nm
+rule m1.2 space(met1) >= 140nm
+rule m1.6 area(met1)  >= 0.083um2
+rule via.4a enclosure(via1, met1) >= 55nm
 ```
 
-Three things catch people out, all deliberate:
+It is strict. Every parameter must be written out, every number carries its
+unit, and a typo is an error with a line and column, never a rule that silently
+does nothing. There are 24 design-rule kinds and 19 electrical-rule kinds.
+[docs/deck.md](docs/deck.md) covers the language and every rule.
 
-- The JSON key is the rule name and the kind is a field, so two rules of the
-  same kind on different layers need different names. Violations are reported by
-  name.
-- `layers` is always a list, even with one entry.
-- Numbers carry their unit: `{"nm": 140}`, never a bare `140`. A bare `45`
-  cannot be told apart from a ratio of `45`.
+Four decks ship in `pdks/`, each citing the rule manual release its numbers
+come from and using the foundry's rule ids:
 
-There are 24 design-rule kinds and 19 electrical-rule kinds. A kind in neither
-list is refused rather than skipped.
-
-Four process files ship in `pdks/` to get you started:
-
-| File | Layers | Rules | Devices |
+| File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 49 | 177 | 5 |
-| `gf180mcu` | 38 | 136 | 6 |
-| `sky130` | 21 | 114 | 3 |
-| `generic_finfet` | 17 | 105 | 2 |
+| `ihp_sg13g2` | 62 | 413 | 10 |
+| `gf180mcu` | 55 | 228 | 27 |
+| `sky130` | 51 | 222 | 22 |
+| `generic_finfet` (ASAP7) | 45 | 168 | 0 |
 
-None is sign-off quality, and none records which PDK release its numbers came
-from. Treat every limit as approximately right and unattributed.
-`pdks/README.md` lists what each one is missing.
+None has been compared against foundry signoff. What each leaves out is
+listed at the end of the deck and in [docs/limitations.md](docs/limitations.md#shipped-decks).
 
 ## The same input gives the same file
 
-`--threads` changes speed and nothing else. The same inputs produce
-byte-identical output at any thread count, and `--check-determinism` runs the
-job twice and fails if the two differ.
-
-A report that differs from itself cannot be diffed against yesterday's, so you
-cannot tell a fixed violation from one that merely vanished. The previous
-implementation had exactly this problem: 8 of its 27 parasitic reports changed
-between runs of the same binary on the same input.
+The same inputs produce a byte-identical report on every run, and
+`--check-determinism` runs the job twice and fails if the two differ. A report
+that differs from itself cannot be diffed against yesterday's, so you could not
+tell a fixed violation from one that merely vanished.
 
 ## Accuracy
 
@@ -274,49 +245,24 @@ a per-rule breakdown of which rule costs what.
 
 ## What it cannot do yet
 
-This is a working tool that has not been proven on production silicon. Do not
-sign off a tapeout with it. Specifically:
-
-- Geometry must be rectilinear. A shape drawn at 45 degrees is refused, not
-  approximated, so a layout with diagonal routing cannot be checked at all.
-- The included process files are starting points, not qualified decks. Among
-  other gaps, no shipped deck configures the supply-short rule, so a short
-  between two supply nets goes unreported by all four.
-- 79 rules ship without a definitive test, because the right answer is a foundry
-  convention rather than something derivable from physics. They are listed with
-  reasons in `docs/NEED_TESTING.md`.
-- Four electrical rule kinds (electromigration, ESD latch-up, IR drop,
-  reliability) are wired up and accounted for but not yet covered by a test.
-- Mutation testing, the intended final gate, has only been run in part.
+This is a working tool that has not been proven against foundry signoff on
+production silicon. Do not tape out on its verdict alone. Layouts must be
+rectilinear, several rules measure less than a foundry deck does, and the
+shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
+every known gap.
 
 There is no licence file yet.
 
-## GPU
-
-One GPU path, used only for field-solved parasitic extraction, and optional
-there. A machine with no Vulkan device takes the CPU path and tells you which
-one it took.
-
-Everything else is CPU on purpose. The rest of this work is branchy
-pointer-chasing over irregular geometry, which a GPU is bad at. The previous
-implementation's GPU path was about a thousand times slower than its own CPU
-path, and it computed in reduced precision without checking the result, which on
-a sign-off path is an accuracy problem rather than a speed tradeoff.
-
-## More detail
+## Documentation
 
 | File | What is in it |
 |---|---|
-| `docs/TESTING.md` | How correctness is established, and the three gates. |
-| `docs/CORRECTNESS_MAP.md` | Where correctness is established, and where it is not. |
-| `docs/NEED_TESTING.md` | Every rule shipping without a definitive test, and why. |
-| `docs/GPU.md` | Why the GPU survives only in quasi-static PEX. |
-| `docs/CONVENTIONS.md` | The code rubric, for contributors. |
-| `docs/VOCABULARY.md` | Shared terms, used exactly. |
-| `pdks/README.md` | Per-process coverage and gaps. |
-| `tests/fixtures/README.md` | The test corpus and how each expected answer was derived. |
+| [docs/usage.md](docs/usage.md) | Commands, options, reading the report, design intent, parasitics. |
+| [docs/deck.md](docs/deck.md) | Writing a deck, and what every rule checks. |
+| [docs/limitations.md](docs/limitations.md) | What GPurify cannot check yet. |
+| [tests/fixtures/README.md](tests/fixtures/README.md) | The test corpus and how each expected answer was derived. |
 
 ```sh
-cargo test --workspace                    # 874 tests
+cargo test --workspace --release          # the test suite
 cargo test --release --test bench_all     # the timing tables above
 ```

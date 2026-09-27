@@ -1,5 +1,5 @@
 //! Grid family: off-grid vertices and disallowed edge angles, over every
-//! polygon in the store, reported at the vertex.
+//! polygon in the store (angles: or one layer's), reported at the vertex.
 //!
 //! Data in: the store's coordinate columns. Data out: one violation per
 //! offending vertex (off-grid) or edge (angle, at the vertex it leaves).
@@ -7,14 +7,22 @@
 use super::{ring_segs, Verdict};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::ops::Point;
-use gpurify_geom::{Dbu, GeometryStore, PolyId};
+use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
 /// Chebyshev distance from `(x, y)` to the nearest `pitch` lattice point; zero
 /// exactly on the lattice.
 fn lattice_offset(x: Dbu, y: Dbu, pitch: i64) -> i64 {
-    let rx = x.raw().rem_euclid(pitch);
-    let ry = y.raw().rem_euclid(pitch);
+    // A power-of-two pitch is a mask (two's complement makes it exact for
+    // negatives too), which skips two integer divisions per vertex.
+    let rem = |v: i64| {
+        if pitch & (pitch - 1) == 0 {
+            v & (pitch - 1)
+        } else {
+            v.rem_euclid(pitch)
+        }
+    };
+    let (rx, ry) = (rem(x.raw()), rem(y.raw()));
     rx.min(pitch - rx).max(ry.min(pitch - ry))
 }
 
@@ -57,17 +65,22 @@ fn line_bit(dx: i64, dy: i64) -> u8 {
     u8::from(dy == 0) | u8::from(dx == dy) << 1 | u8::from(dx == 0) << 2 | u8::from(dx == -dy) << 3
 }
 
-/// Every non-zero edge must lie along an `allowed` line. Measured as the count
-/// of allowed lines matched (zero) against a limit of one. `examined` counts
-/// non-zero edges.
+/// Every non-zero edge on `layer` (every layer when `None`) must lie along an
+/// `allowed` line. Measured as the count of allowed lines matched (zero)
+/// against a limit of one. `examined` counts non-zero edges.
 pub(crate) fn angle(
     store: &GeometryStore,
     rule: StrId,
+    layer: Option<LayerId>,
     allowed: u8,
     out: &mut Violations,
 ) -> Verdict {
     let mut examined = 0u64;
-    for poly in store_polys(store) {
+    let polys: Box<dyn Iterator<Item = PolyId>> = match layer {
+        Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
+        None => Box::new(store_polys(store)),
+    };
+    for poly in polys {
         let (xs, ys) = store.poly_verts(poly);
         for seg in ring_segs(xs, ys) {
             let (dx, dy) = (seg.b.x.raw() - seg.a.x.raw(), seg.b.y.raw() - seg.a.y.raw());
@@ -89,4 +102,60 @@ pub(crate) fn angle(
         }
     }
     (Outcome::Ran, examined)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lattice_offset;
+    use gpurify_geom::{Dbu, MAX_ABS_DBU};
+
+    fn reference(x: i64, y: i64, pitch: i64) -> i64 {
+        let (rx, ry) = (x.rem_euclid(pitch), y.rem_euclid(pitch));
+        rx.min(pitch - rx).max(ry.min(pitch - ry))
+    }
+
+    #[test]
+    fn the_power_of_two_mask_is_rem_euclid() {
+        let d = Dbu::new_unchecked;
+        let values = [
+            -MAX_ABS_DBU,
+            -1025,
+            -1024,
+            -7,
+            -1,
+            0,
+            1,
+            3,
+            1023,
+            MAX_ABS_DBU,
+        ];
+        for pitch in [1, 2, 3, 5, 8, 1024, 1 << 30, MAX_ABS_DBU] {
+            for &x in &values {
+                for &y in &values {
+                    assert_eq!(lattice_offset(d(x), d(y), pitch), reference(x, y, pitch));
+                }
+            }
+        }
+    }
+
+    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_lattice`
+    #[test]
+    #[ignore = "timing"]
+    fn bench_lattice_offset() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let xs: Vec<i64> = (0..4_000_000i64).map(|i| i * 7919 - (1 << 34)).collect();
+        let pitch = black_box(8);
+        let t = Instant::now();
+        let masked: i64 = xs
+            .iter()
+            .map(|&x| lattice_offset(Dbu::new_unchecked(x), Dbu::new_unchecked(x), pitch))
+            .sum();
+        let fast = t.elapsed();
+        let t = Instant::now();
+        let divided: i64 = xs.iter().map(|&x| reference(x, x, pitch)).sum();
+        let slow = t.elapsed();
+        assert_eq!(masked, divided);
+        eprintln!("mask {fast:?}  rem_euclid {slow:?}");
+    }
 }

@@ -14,7 +14,7 @@ use gpurify_extract::ParasiticNetwork;
 use gpurify_ingest::StrTable;
 
 /// Between a net's name and the node's index within it (`*DELIMITER :`).
-const DELIMITER: char = ':';
+pub(crate) const DELIMITER: char = ':';
 
 /// SPICE node zero, the far end of a ground capacitance in DSPF.
 const GROUND: &str = "0";
@@ -54,7 +54,10 @@ fn check_canonical(network: &ParasiticNetwork) -> Result<(), WriteError> {
 }
 
 /// The net a node sits on, and the node's index within that net's run.
-fn node_place(network: &ParasiticNetwork, node: NodeId) -> Result<(NetId, usize), WriteError> {
+pub(crate) fn node_place(
+    network: &ParasiticNetwork,
+    node: NodeId,
+) -> Result<(NetId, usize), WriteError> {
     let nets = &network.node_net[..];
     let row = node.0 as usize;
     let net = *nets.get(row).ok_or(WriteError::Unrepresentable(
@@ -111,7 +114,7 @@ const fn as_henries(value: Parasitic) -> Option<f64> {
 
 /// A SPICE card's prefix letter, counter slot, magnitude and unit suffix. The
 /// suffix matters: SPICE reads a bare number as SI.
-const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {
+pub(crate) const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {
     match value {
         Parasitic::Resistance(q) => ('R', 0, q.raw(), ""),
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => ('C', 1, q.raw(), "f"),
@@ -196,6 +199,7 @@ pub fn write_spef(
          *L_UNIT 1 PH\n\n",
     );
 
+    let capacitance = network.capacitance_per_net();
     // One `*D_NET` block per net; two cursors, sound after `check_canonical`.
     let mut node = 0usize;
     let mut element = 0usize;
@@ -205,7 +209,7 @@ pub fn write_spef(
         out.push_str("*D_NET ");
         put_net_name(net, ports, strings, out)?;
         out.push(' ');
-        format_f64(network.net_capacitance(net).raw(), out);
+        format_f64(capacitance[net.0 as usize], out);
         out.push('\n');
 
         // No per-terminal direction is known, so one bidirectional connection.
@@ -283,6 +287,7 @@ pub fn write_dspf(
     let _ = writeln!(out, "* deck {}", header.deck_path);
     out.push_str("*|DIVIDER /\n*|DELIMITER :\n*|GROUND_NET 0\n\n");
 
+    let capacitance = network.capacitance_per_net();
     // Per-net declarations first, then the element cards.
     let mut node = 0usize;
     while node < nodes {
@@ -291,7 +296,7 @@ pub fn write_dspf(
         out.push_str("*|NET ");
         put_net_name(net, ports, strings, out)?;
         out.push(' ');
-        format_f64(network.net_capacitance(net).raw(), out);
+        format_f64(capacitance[net.0 as usize], out);
         out.push_str("f\n");
 
         // The node's layer stands in for a position the network does not carry.

@@ -190,7 +190,7 @@ fn patterning_table(colors: u8, color_spacing: i64) -> Vec<(StrId, Rule)> {
         RULE,
         Rule::MultiPatterning {
             layer: A,
-            colors: colors,
+            colors,
             color_spacing: dbu(color_spacing),
         },
     )]
@@ -205,8 +205,7 @@ fn patterning_table(colors: u8, color_spacing: i64) -> Vec<(StrId, Rule)> {
 /// asserted. `multi_patterning` says a violation sits "at the shape named
 /// by `Coloring::Infeasible`" and says nothing about which quantity it reports
 /// or where on that shape it points, so an expected value for either would be
-/// this test inventing a convention rather than reading one — the gap is
-/// recorded in `docs/NEED_TESTING.md`. What *is* stated, and is asserted, is
+/// this test inventing a convention rather than reading one. What *is* stated, and is asserted, is
 /// that there is one row, that it names one shape rather than a conflicting
 /// pair, and that the shape it names is one of the three in the cycle.
 #[test]

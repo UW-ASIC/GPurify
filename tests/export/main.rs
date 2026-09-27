@@ -4,14 +4,19 @@
 //! parasitic network of exact binary fractions.
 
 use gpurify::export::json::{format_f64, Report};
+use gpurify::export::netlist::{self, Detail};
 use gpurify::export::{json, parasitic, Header, WriteError};
 use gpurify_check::report::{
     Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
 };
+use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{bind_ports_into, extract_nets_into, NetId, NetTable, PortTable};
+use gpurify_check::topology::{DeviceTable, Extraction, TerminalRole};
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
+use gpurify_geom::PolyId;
 use gpurify_geom::{Grid, LayerId, Qty};
+use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::deck::{Connectivity, Deck, LayerTable};
 use gpurify_ingest::layout::{gds as reader, UnknownLayers};
 use gpurify_ingest::{Provenance, StrTable};
@@ -26,6 +31,7 @@ struct World {
     runs: Vec<RuleRun>,
     strings: StrTable,
     ports: PortTable,
+    nets: NetTable,
     parasitics: ParasiticNetwork,
     upper_net: NetId,
 }
@@ -106,6 +112,7 @@ impl World {
             ],
             strings,
             ports,
+            nets,
             parasitics: ParasiticNetwork {
                 node_net: vec![lower_net, lower_net, upper_net],
                 node_layer: vec![CONDUCTOR; 3],
@@ -144,6 +151,46 @@ impl World {
             &world.ports,
             &world.strings,
             &world.header,
+            &mut out,
+        )?;
+        Ok(out)
+    }
+
+    /// One MOS, gate on the upper net and everything else on the lower,
+    /// terminals in the recogniser's order (gate, source, drain, bulk).
+    fn spice(&mut self, detail: Detail) -> Result<String, WriteError> {
+        let (vdd, up) = (
+            self.ports.net_of(self.strings.intern("VDD")).expect("VDD"),
+            self.upper_net,
+        );
+        let mut devices = DeviceTable::default();
+        devices.kind = vec![DeviceKind::Mos];
+        devices.marker = vec![PolyId(0)];
+        devices.model = vec![self.strings.intern("nch")];
+        devices.terminal_start = vec![0, 4];
+        devices.terminal_net = vec![up, vdd, vdd, vdd];
+        devices.terminal_role = vec![
+            TerminalRole::Gate,
+            TerminalRole::Source,
+            TerminalRole::Drain,
+            TerminalRole::Bulk,
+        ];
+        devices.param_start = vec![0, 2];
+        devices.param = vec![
+            (DeviceParam::Width, DeviceMeasure::Length(dbu(100))),
+            (DeviceParam::Length, DeviceMeasure::Length(dbu(50))),
+        ];
+        let mut out = String::new();
+        netlist::write_spice(
+            Extraction {
+                nets: &self.nets,
+                devices: &devices,
+                ports: &self.ports,
+            },
+            Some(&self.parasitics),
+            detail,
+            &self.strings,
+            &self.header,
             &mut out,
         )?;
         Ok(out)
@@ -224,6 +271,41 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
          *|NET VDD 0.375000f\n*|S (VDD:0 L0)\n*|S (VDD:1 L0)\n\n\
          *|NET VSS 0.125000f\n*|S (VSS:0 L0)\n\n\
          C1 VDD:0 0 0.250000f\nR1 VDD:0 VDD:1 12.500000\nC2 VDD:1 VSS:0 0.125000f\n"
+    );
+}
+
+/// The device card goes out drain, gate, source, bulk whatever order the
+/// recogniser listed the terminals in; with parasitics, terminals and pins
+/// attach at each net's first node.
+#[test]
+fn the_spice_netlist_is_exactly_these_bytes() {
+    let head =
+        "* gpurify-test SPICE netlist\n* deck: decks/test.json\n* layout: layouts/test.gds\n\
+                * written: 2020-01-01T00:00:00Z\n* lengths below are in database units\n";
+    let mut world = World::new(Some("VSS"));
+    assert_eq!(
+        world.spice(Detail::Schematic).expect("writable"),
+        format!("{head}.subckt TOP VDD VSS\nM0 VDD VSS VDD VDD nch w=100 l=50\n.ends TOP\n")
+    );
+    assert_eq!(
+        world.spice(Detail::WithParasitics).expect("writable"),
+        format!(
+            "{head}.subckt TOP VDD:0 VSS:0\nM0 VDD:0 VSS:0 VDD:0 VDD:0 nch w=100 l=50\n\
+             Cp0 VDD:0 0 0.250000f\nRp1 VDD:0 VDD:1 12.500000\nCp2 VDD:1 VSS:0 0.125000f\n.ends TOP\n"
+        )
+    );
+}
+
+/// SPICE carries its own netlist, so it numbers an anonymous net where SPEF
+/// and DSPF refuse it.
+#[test]
+fn spice_numbers_an_anonymous_net() {
+    let mut world = World::new(None);
+    let text = world.spice(Detail::Schematic).expect("writable");
+    let up = format!("n{}", world.upper_net.0);
+    assert!(
+        text.contains(&format!(".subckt TOP VDD\nM0 VDD {up} VDD VDD nch")),
+        "{text}"
     );
 }
 
