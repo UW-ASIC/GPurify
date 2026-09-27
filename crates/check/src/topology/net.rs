@@ -45,6 +45,8 @@ pub struct NetTable {
     scratch: EdgeScratch,
     /// Hole rows bound to their outers, over every layer of the store.
     pub(crate) holes: Holes,
+    /// Per net: every shape is on a global layer (the substrate alone).
+    global_only: Vec<bool>,
 }
 
 /// A store keeps a polygon's hole as its own clockwise row. This binds each
@@ -111,6 +113,12 @@ impl NetTable {
     /// How many nets there are; [`NetId::NONE`] is not one of them.
     pub fn net_count(&self) -> usize {
         self.net_start.len().saturating_sub(1)
+    }
+
+    /// Whether a net holds only global-layer shapes: the substrate with nothing
+    /// conducting drawn on it. Panics on a net past the table.
+    pub fn is_global_only(&self, net: NetId) -> bool {
+        self.global_only[net.idx()]
     }
 
     /// The net of a polygon, or [`NetId::NONE`]. Panics on a polygon this table never saw.
@@ -194,9 +202,15 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
             &mut out.edges,
         );
     }
+    // A global layer is one net: chain its shapes, holes included, together.
+    for &layer in &connectivity.global {
+        let rows = store.polys_on_layer(layer);
+        out.edges
+            .extend(rows.clone().skip(1).map(|row| (rows.start, row)));
+    }
     // A conductor the store's layer table lacks panics rather than being skipped.
     let mut conducts = vec![false; store.layer_count()];
-    for &layer in &connectivity.conductors {
+    for &layer in connectivity.conductors.iter().chain(&connectivity.global) {
         conducts[layer.idx()] = true;
     }
 
@@ -230,6 +244,13 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
     }
 
     rebuild_index(&out.poly_net, &mut out.net_start, &mut out.polys);
+    out.global_only.clear();
+    out.global_only.resize(next as usize, true);
+    for (row, &net) in (0u32..).zip(&out.poly_net) {
+        if net != NetId::NONE && !connectivity.global.contains(&store.poly_layer(PolyId(row))) {
+            out.global_only[net.idx()] = false;
+        }
+    }
 }
 
 /// Whether two of the store's polygons share at least one point, holes
