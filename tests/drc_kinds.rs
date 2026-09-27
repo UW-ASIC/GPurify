@@ -544,3 +544,36 @@ fn a_holed_polygon_is_spaced_from_its_hole_edge_only() {
     near.push(("m1", [200, 900, 400, 1100]));
     assert_eq!(run(deck, &near).of("S"), vec![(len(50), len(180))]);
 }
+
+/// A derived guard ring is one polygon with a hole; its implant is drawn as
+/// four abutting bands. The host is the merged implant, not any one band, or
+/// no single band covers the ring and it reads as unhosted (0). Reported by
+/// the Philis session (sky130 nsd.5b on every tap ring).
+#[test]
+fn a_ring_is_enclosed_by_a_ring_drawn_as_bands() {
+    let deck =
+        "grid 1nm\nlayer tap = gds(65, 44)\nlayer poly = gds(66, 20)\nlayer nsdm = gds(93, 44)\n\
+                layer body = tap not poly\nrule E enclosure(body, nsdm) >= 125nm\n";
+    // Four bands around a square hole: `out` past the ring's outer edge,
+    // `inside` past its hole edge.
+    let ring = |layer: &'static str, out: i64, inside: i64| {
+        [
+            (layer, [-out, -out, 5000 + out, 500 + inside]),
+            (layer, [-out, 4500 - inside, 5000 + out, 5000 + out]),
+            (layer, [-out, -out, 500 + inside, 5000 + out]),
+            (layer, [4500 - inside, -out, 5000 + out, 5000 + out]),
+        ]
+    };
+    let mut met = ring("tap", 0, 0).to_vec();
+    met.extend(ring("nsdm", 125, 125));
+    assert_eq!(
+        run(deck, &met).of("E"),
+        vec![],
+        "125 on every edge, hole edges included"
+    );
+
+    // Wrong implementation: one that skips the hole edges passes this.
+    let mut short = ring("tap", 0, 0).to_vec();
+    short.extend(ring("nsdm", 125, 100));
+    assert_eq!(run(deck, &short).of("E"), vec![(len(100), len(125))]);
+}

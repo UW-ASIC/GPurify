@@ -7,16 +7,17 @@
 //! skipped. Extension and overlap still measure bounding boxes, which is
 //! optimistic for a concave shape (a known fail-open).
 
-use super::{centre, mid, rects_ring_dist2, ring_segs, Verdict, REFUSED};
+use super::{centre, mid, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
+use gpurify_geom::boolean::union_into;
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
-use gpurify_geom::rects::{clipped_area, covered_area};
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef};
+use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
 use std::cmp::Reverse;
@@ -219,9 +220,10 @@ fn pair_layers(
 }
 
 /// Min enclosure (every side) or asymmetric enclosure (two opposite sides),
-/// per inner polygon on its best host polygon. A host holds the inner only if
-/// it covers all of its area (holes and concave notches count). `examined`
-/// counts inner polygons.
+/// per inner polygon on its best host: a figure of the merged outer layer, so
+/// a ring drawn as abutting bands hosts a ring inside it. A host holds the
+/// inner only if it covers all of its area (holes and concave notches count).
+/// `examined` counts inner polygons.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn enclosure(
     store: &GeometryStore,
@@ -241,6 +243,9 @@ pub(crate) fn enclosure(
         pairs,
         rects_a: inner_rects,
         rects_b: host_rects,
+        layer_out: merged,
+        rects: merged_rects,
+        rect_start: merged_start,
         ..
     } = s;
     let drawn = validated.get(store, inner_layer).expect("validated above");
@@ -249,6 +254,26 @@ pub(crate) fn enclosure(
     let hosts = validated.get(store, outer).expect("validated above");
     host_rects.build(store, outer, hosts);
     let host_first = store.polys_on_layer(outer).start;
+    if union_into(hosts, &ValidatedLayer::default(), merged).is_err() {
+        return REFUSED;
+    }
+    decompose_into(merged, merged_rects, merged_start);
+    let figure_rects = |f: u32| {
+        &merged_rects[merged_start[f as usize] as usize..merged_start[f as usize + 1] as usize]
+    };
+    // Each drawn host polygon lies in exactly one merged figure.
+    let by_figure = SortedRects::new(
+        (0..u32::try_from(merged.len()).expect("a layer indexes polygons with a u32"))
+            .flat_map(|f| figure_rects(f).iter().map(move |&r| (r, f)))
+            .collect(),
+    );
+    let figure_of: Vec<Option<u32>> = (0..u32::try_from(host_rects.len())
+        .expect("a layer indexes polygons with a u32"))
+        .map(|h| {
+            let &first = host_rects.of(h).first()?;
+            by_figure.overlapping(first).next().map(|(_, f)| f)
+        })
+        .collect();
 
     let limit = Measurement::Length(limit);
     for poly in 0..u32::try_from(inner_rects.len()).expect("a layer indexes polygons with a u32") {
@@ -262,15 +287,18 @@ pub(crate) fn enclosure(
         let mut acc = (UNHOSTED, Reverse(u32::MAX), None);
         for &(_, candidate) in &pairs[lo..hi] {
             let h = host_rects.poly_of_row[(candidate.0 - host_first) as usize];
+            let Some(figure) = figure_of[h as usize] else {
+                continue;
+            };
             let host = host_rects.row[h as usize];
-            let theirs = host_rects.of(h);
+            let theirs = figure_rects(figure);
             let covered = mine
                 .iter()
                 .fold(DbuArea::new(0), |sum, &r| sum + clipped_area(theirs, r));
             if covered != area {
                 continue;
             }
-            let (value, side) = enclosure_of(mine, inner_box, hosts.get(h), asymmetric);
+            let (value, side) = enclosure_of(mine, inner_box, merged.get(figure), asymmetric);
             acc = acc.max((value.raw(), Reverse(host.0), side));
         }
         let (best, Reverse(host), side) = acc;
