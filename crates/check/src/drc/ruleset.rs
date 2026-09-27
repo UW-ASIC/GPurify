@@ -100,7 +100,7 @@ pub enum Rule {
         inner: LayerId,
         limit: Dbu,
     },
-    /// At least `min_one_side` on one side of each axis.
+    /// At least `min_one_side` on both sides of at least one axis.
     AsymmetricEnclosure {
         outer: LayerId,
         inner: LayerId,

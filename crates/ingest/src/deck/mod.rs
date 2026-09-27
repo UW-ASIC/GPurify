@@ -119,6 +119,14 @@ impl LayerTable {
         self.name[layer.idx()]
     }
 
+    /// How a derived layer is computed; `None` for a base layer.
+    pub fn op(&self, layer: LayerId) -> Option<DerivedOp> {
+        layer
+            .idx()
+            .checked_sub(usize::from(self.derived_start))
+            .map(|row| self.derived[row].1)
+    }
+
     /// The layers a derived layer is computed from; empty for a base layer.
     pub fn operands(&self, layer: LayerId) -> &[LayerId] {
         layer
@@ -132,7 +140,7 @@ impl LayerTable {
     }
 
     /// Text pattern `text` of a [`DerivedOp::WithText`].
-    pub(crate) fn text(&self, text: u32) -> &str {
+    pub fn text(&self, text: u32) -> &str {
         &self.texts[text as usize]
     }
 
@@ -173,7 +181,7 @@ impl LayerTable {
 /// every operand; a method takes its receiver, then its layer argument if any.
 /// Bounds are inclusive, in grid units (square grid units for an area).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DerivedOp {
+pub enum DerivedOp {
     And,
     Or,
     Not,
