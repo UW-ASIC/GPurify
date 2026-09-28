@@ -12,7 +12,7 @@ use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
 use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature};
 use gpurify_geom::{Bbox, LayerId};
-use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec, RuleTable};
+use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule kind this crate implements, as the deck spells it. Any other
@@ -665,6 +665,13 @@ impl RuleSet {
                 .map(|(&cut, &(a, b))| (cut, a, b))
                 .collect();
             stack.intra_layer_touch = from.intra_layer_touch;
+            let d = &deck.devices;
+            stack.gate_conductors = (0..d.kind.len())
+                .filter(|&r| d.kind[r] == DeviceKind::Mos)
+                .filter_map(|r| d.terminal.get(d.terminal_start[r] as usize).copied())
+                .collect();
+            stack.gate_conductors.sort_unstable();
+            stack.gate_conductors.dedup();
         }
         Ok(set)
     }

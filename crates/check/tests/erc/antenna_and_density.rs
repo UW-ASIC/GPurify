@@ -500,6 +500,7 @@ fn gf180_ant_2_sidewall_area_of_metal1_over_a_derived_gate() {
         conductors: vec![poly, metal1],
         vias: vec![(contact, poly, metal1)],
         intra_layer_touch: true,
+        ..Stack::default()
     };
 
     let (violations, runs) = run_staged(
@@ -548,6 +549,7 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
         conductors: vec![poly, metal1, metal2],
         vias: vec![(contact, poly, metal1), (via1, metal1, metal2)],
         intra_layer_touch: true,
+        ..Stack::default()
     };
 
     let (violations, runs) =
@@ -569,6 +571,111 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
     );
     assert_eq!(violations.rule.len(), 1);
     assert_close_relative("both gates", measured_ratio(&violations, 0), 6.5, 1e-12);
+}
+
+/// Oracle: closed form. Gate B's metal1 wire (11 um2, contacted to B's poly)
+/// also runs over gate A, whose poly reaches no metal. A gate takes its net
+/// through its gate terminal (the poly), never a metal crossing it: B alone
+/// collects the wire, 11 um2 over its 1 um2, and A (nothing collected) is its
+/// own gate net. Attached through any overlapping conductor, A's gate went to
+/// the wire's lower-numbered net and diluted B to 5.5 (gf180 dac4 ANT.6: a
+/// metal5 wire's whole perimeter over a gate it only crossed).
+#[test]
+fn a_metal_crossing_an_unrelated_gate_does_not_take_it() {
+    let (metal1, poly, gate, contact) = (LayerId(0), LayerId(1), LayerId(2), LayerId(3));
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(metal1, 0, 0, 11_000, 1_000);
+    layout.rect(poly, 0, 0, 1_000, 1_000);
+    layout.rect(poly, 10_000, 0, 11_000, 1_000);
+    layout.rect(gate, 0, 0, 1_000, 1_000);
+    let gate_b = layout.rect(gate, 10_000, 0, 11_000, 1_000);
+    layout.rect(contact, 10_400, 400, 10_600, 600);
+    let (store, ids) = layout.finish();
+    let stack = Stack {
+        conductors: vec![poly, metal1],
+        vias: vec![(contact, poly, metal1)],
+        intra_layer_touch: true,
+        gate_conductors: vec![poly],
+    };
+
+    let (violations, runs) = run_staged(&store, stack, gate, &[metal1], AntennaMeasure::Area, 4.0);
+    assert_eq!(violations.rule.len(), 1);
+    assert_eq!(violations.shape_a[0], ids.of(gate_b));
+    assert_close_relative(
+        "gate B's own wire",
+        measured_ratio(&violations, 0),
+        11.0,
+        1e-12,
+    );
+    assert_eq!(assert_rule_ran(&runs, rule(90)).examined, 2);
+}
+
+/// Oracle: closed form. Gate B's metal1 wire (11 um2 over its 1 um2 gate)
+/// also runs over a diode on an unconnected diffusion. The diode is its
+/// diffusion's, never the wire's: B keeps a ratio of 11, not 11 - 5 x 1 um2
+/// of credit = 6. With no MOS recogniser the gate, too, attaches through the
+/// front end (diffusion and poly: no via lands on them from below).
+#[test]
+fn a_metal_crossing_an_unrelated_diode_does_not_take_its_credit() {
+    let (metal1, diff, poly, gate, contact, diode) = (
+        LayerId(0),
+        LayerId(1),
+        LayerId(2),
+        LayerId(3),
+        LayerId(4),
+        LayerId(5),
+    );
+    let mut layout = LayoutBuilder::new(6);
+    layout.rect(metal1, 0, 0, 11_000, 1_000);
+    layout.rect(diff, 0, 0, 1_000, 1_000);
+    layout.rect(diode, 0, 0, 1_000, 1_000);
+    layout.rect(poly, 10_000, 0, 11_000, 1_000);
+    let gate_b = layout.rect(gate, 10_000, 0, 11_000, 1_000);
+    layout.rect(contact, 10_400, 400, 10_600, 600);
+    let (store, ids) = layout.finish();
+    let nets = NetTable::default();
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+    let table = AntennaTable {
+        head: head(rule(91)),
+        gate: vec![gate],
+        collector_start: vec![0, 1],
+        collector: vec![metal1],
+        collector_measure: vec![AntennaMeasure::Area],
+        max_ratio: vec![4.0],
+        diode: vec![Some(diode)],
+        diode_credit: vec![5.0],
+        diode_bonus: vec![0.0],
+        diode_min_area: vec![DbuArea::default()],
+        stack: Stack {
+            conductors: vec![diff, poly, metal1],
+            vias: vec![(contact, poly, metal1)],
+            intra_layer_touch: true,
+            ..Stack::default()
+        },
+    };
+    let (mut violations, mut runs) = report();
+    check_antenna(
+        design,
+        grid(),
+        &table,
+        &mut Scratch::default(),
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(violations.rule.len(), 1);
+    assert_eq!(violations.shape_a[0], ids.of(gate_b));
+    assert_close_relative(
+        "gate B, no diode credit",
+        measured_ratio(&violations, 0),
+        11.0,
+        1e-12,
+    );
+    assert_rule_ran(&runs, rule(91));
 }
 
 /// A die-sized window over one layer, with only the bound the caller states.

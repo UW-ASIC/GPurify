@@ -41,9 +41,29 @@ pub struct Stack {
     /// `(cut, lower, upper)`.
     pub vias: Vec<(LayerId, LayerId, LayerId)>,
     pub intra_layer_touch: bool,
+    /// The MOS recognisers' gate terminals (the poly a gate sits on): the
+    /// only conductors a gate attaches through, so a metal merely crossing a
+    /// gate does not take it. Empty (no MOS recogniser): the front end's.
+    pub gate_conductors: Vec<LayerId>,
 }
 
 impl Stack {
+    /// Of the standing `conductors`, the front end's: those no via lands on
+    /// from below (diffusion, taps, poly), what a diode, or a gate with no
+    /// recogniser, can sit on. All of them when the deck has no vias.
+    fn front_end(&self, conductors: &[LayerId]) -> Vec<LayerId> {
+        let pos = |c: LayerId| self.conductors.iter().position(|&x| x == c);
+        let upper = |&(_, a, b): &(LayerId, LayerId, LayerId)| match (pos(a), pos(b)) {
+            (Some(pa), Some(pb)) => Some(if pa > pb { a } else { b }),
+            _ => None,
+        };
+        conductors
+            .iter()
+            .copied()
+            .filter(|&c| !self.vias.iter().any(|v| upper(v) == Some(c)))
+            .collect()
+    }
+
     /// The connectivity standing when the highest of `collectors` is etched:
     /// conductors up to it, and the vias joining two of them. A cut collector
     /// stands on its lower conductor. `None` when the deck names no conductors
@@ -300,13 +320,33 @@ fn antenna_row(
     layers.sort_unstable();
     layers.dedup();
     let mut ok = true;
+    // A gate attaches through its gate terminal and a diode through the front
+    // end, never through a metal crossing over it; a cut through any (its row
+    // stands only up to the conductor under it, so nothing crosses it yet).
+    let front = stack.front_end(&conductors);
+    let gate_on: Vec<LayerId> = if stack.gate_conductors.is_empty() {
+        front.clone()
+    } else {
+        conductors
+            .iter()
+            .copied()
+            .filter(|c| stack.gate_conductors.contains(c))
+            .collect()
+    };
     for &layer in &layers {
         if conductors.contains(&layer) {
             for row in store.polys_on_layer(layer) {
                 net_of[row as usize] = nets.net_of(PolyId(row));
             }
         } else {
-            ok &= attach(design, layer, &conductors, nets, &mut net_of, scratch);
+            let through = if layer == gate_layer {
+                &gate_on
+            } else if Some(layer) == diode {
+                &front
+            } else {
+                &conductors
+            };
+            ok &= attach(design, layer, through, nets, &mut net_of, scratch);
         }
     }
 
@@ -841,6 +881,7 @@ mod tests {
                 (via1, met1, met2),
             ],
             intra_layer_touch: true,
+            ..Stack::default()
         };
 
         let at_met1 = stack.stage(&[met1]).expect("a deck with conductors");
