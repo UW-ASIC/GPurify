@@ -595,7 +595,10 @@ rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; ma
 rule LU.a missing_tie(pact_nw, ntap; max_distance: 20um)
 rule LU.b missing_tie(nact_pw, ptap; max_distance: 20um)
 rule floating_nwell floating_well(nwell, ntap)
-rule supply_short supply_short(ntap, ptap)
+# An n-tap shorts the rails only from a well that holds a PMOS: a vertical
+# PNP's base well on the substrate net (a diode-connected bandgap PNP) is not.
+layer pmos_well = nwell.interacting(pgate)
+rule supply_short supply_short(ntap, ptap, pmos_well)
 
 # [PS] §2.15 maximum current densities (11 years at 105 C); the narrow-line
 # IMAX values equal JMAX times the upper width of their range.

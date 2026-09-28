@@ -618,11 +618,15 @@ impl RuleSet {
                     close_csr(&mut table.soft_start, table.soft.len());
                 }
                 "supply_short" => {
-                    let layers = row.layers(2)?;
+                    let layers = row.layers_from(2)?;
+                    if layers.len() > 3 {
+                        row.layers(3)?;
+                    }
                     let table = &mut set.supply_short;
                     row.head(&mut table.head)?;
                     table.tap_a.push(layers[0]);
                     table.tap_b.push(layers[1]);
+                    table.well_a.push(layers.get(2).copied());
                 }
                 "tie_high_low" => {
                     row.layers(0)?;

@@ -6,6 +6,7 @@
 //! Data in: the store, nets, devices, [`NetFacts`]. Data out: violations and
 //! one run per row.
 
+use crate::drc::rules::SortedRects;
 use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
@@ -13,6 +14,7 @@ use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::NetId;
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
+use gpurify_geom::rects::decompose_into;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
 use gpurify_geom::{Dbu, DbuArea};
@@ -25,6 +27,10 @@ pub struct SupplyShortTable {
     pub head: RuleHead,
     pub tap_a: Vec<LayerId>,
     pub tap_b: Vec<LayerId>,
+    /// Per row, optional: a `tap_a` polygon counts only where it overlaps this
+    /// layer (an n-tap in a well holding a PMOS: the well a real rail short
+    /// puts on the substrate net, not a bipolar's base well).
+    pub well_a: Vec<Option<LayerId>>,
 }
 
 /// A net that falls into several components once its resistive (soft) layers
@@ -121,6 +127,38 @@ fn mark_nets(design: Design<'_>, layer: LayerId, bit: u32, marks: &mut [u32]) {
     }
 }
 
+/// As [`mark_nets`], counting only the `layer` polygons that overlap `within`
+/// with positive area. `Err` when either layer fails validation.
+fn mark_nets_within(
+    design: Design<'_>,
+    layer: LayerId,
+    within: LayerId,
+    bit: u32,
+    scratch: &mut Scratch,
+) -> Result<(), ()> {
+    let nets = scratch.net_marks.len() - 1;
+    if nets == 0 {
+        return Ok(());
+    }
+    validate_layer_into(design.store, within, &mut scratch.layer_a).map_err(|_| ())?;
+    validate_layer_into(design.store, layer, &mut scratch.layer_b).map_err(|_| ())?;
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&scratch.layer_a, &mut rects, &mut start);
+    let index = SortedRects::new(rects.iter().map(|&r| (r, ())).collect());
+    decompose_into(&scratch.layer_b, &mut rects, &mut start);
+    for poly in 0..scratch.layer_b.len() {
+        let mine = &rects[start[poly] as usize..start[poly + 1] as usize];
+        if mine.iter().any(|&r| index.overlapping(r).next().is_some()) {
+            let at = scratch
+                .layer_b
+                .get(u32::try_from(poly).expect("fits a u32"))
+                .provenance();
+            scratch.net_marks[design.nets.net_of(at).idx().min(nets)] |= bit;
+        }
+    }
+    Ok(())
+}
+
 /// The nets (ascending) whose mark equals `want`, ignoring the trash slot.
 fn nets_marked(marks: &[u32], want: u32) -> Vec<u32> {
     (0u32..)
@@ -130,7 +168,7 @@ fn nets_marked(marks: &[u32], want: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Flag every net carrying both taps.
+/// Flag every net carrying both taps (with a `well_a`, a `tap_a` only in it).
 pub fn check_supply_short(
     design: Design<'_>,
     table: &SupplyShortTable,
@@ -146,7 +184,15 @@ pub fn check_supply_short(
 
         scratch.net_marks.clear();
         scratch.net_marks.resize(nets + 1, 0);
-        mark_nets(design, tap_a, 1, &mut scratch.net_marks);
+        match table.well_a.get(row).copied().flatten() {
+            None => mark_nets(design, tap_a, 1, &mut scratch.net_marks),
+            Some(well) => {
+                if mark_nets_within(design, tap_a, well, 1, scratch).is_err() {
+                    record_run(runs, out, before, rule, Outcome::Refused, 0);
+                    continue;
+                }
+            }
+        }
         mark_nets(design, tap_b, 2, &mut scratch.net_marks);
         let (a_rows, b_rows) = (
             design.store.polys_on_layer(tap_a),

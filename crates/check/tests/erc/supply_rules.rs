@@ -359,6 +359,7 @@ fn supply_short_table(id: StrId) -> SupplyShortTable {
         head: head(id),
         tap_a: vec![LayerId(2)],
         tap_b: vec![LayerId(3)],
+        well_a: vec![None],
     }
 }
 
@@ -415,6 +416,48 @@ fn two_conductors_each_carrying_one_tap_type_are_clean() {
         &mut runs,
     );
     assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: construct-from-answer. The shorted pair again, with a well layer
+/// (4) drawn over the n-tap or away from it: the n-tap counts only in the
+/// well, so a bipolar's base well (no PMOS, so not in the well layer) tied to
+/// the substrate net is not a short, and a PMOS-body well's tap still is.
+#[test]
+fn a_well_qualifier_counts_only_the_n_taps_in_that_well() {
+    for (over_tap, want) in [(true, 1), (false, 0)] {
+        let mut layout = LayoutBuilder::new(5);
+        layout.rect(LayerId(0), 0, 0, 3_000, 1_000);
+        layout.rect(LayerId(2), 0, 0, 1_000, 1_000);
+        layout.rect(LayerId(3), 2_000, 0, 3_000, 1_000);
+        layout.rect(LayerId(1), 400, 400, 600, 600);
+        layout.rect(LayerId(1), 2_400, 400, 2_600, 600);
+        let x = if over_tap { -500 } else { 5_000 };
+        layout.rect(LayerId(4), x, -500, x + 2_000, 1_500);
+        let (store, _) = layout.finish();
+        let drawn = Drawn::new(
+            store,
+            &via_connectivity(LayerId(1), &[LayerId(2), LayerId(3)]),
+        );
+        let id = rule(57);
+        let table = SupplyShortTable {
+            well_a: vec![Some(LayerId(4))],
+            ..supply_short_table(id)
+        };
+        let (mut violations, mut runs) = report();
+        check_supply_short(
+            drawn.design(),
+            &table,
+            &mut Scratch::default(),
+            &mut violations,
+            &mut runs,
+        );
+        assert_eq!(
+            violations.rule.len(),
+            want,
+            "well over the n-tap: {over_tap}"
+        );
+        assert_rule_ran(&runs, id);
+    }
 }
 
 // --------------------------------------------------------------- soft connection

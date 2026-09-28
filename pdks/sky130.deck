@@ -465,7 +465,10 @@ rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1260nm)
 # --- Electrical [S1] x.22, nwell.4; supplies and ESD ---
 rule x.22 unconnected_pin(poly_c, li_c, met1, met2, met3, met4, met5)
 rule nwell.4 floating_well(nwell, ntap_licon)
-rule supply_short supply_short(ntap, ptap)
+# An n-tap shorts the rails only from a well that holds a PMOS: a vertical
+# PNP's base well on the substrate net (a diode-connected bandgap PNP) is not.
+layer pmos_well = nwell.interacting(pgate)
+rule supply_short supply_short(ntap, ptap, pmos_well)
 rule soft_connection soft_connection(ntap, ptap)
 rule floating_gate floating_gate(; labels_are_ports: false)
 rule tie_high_low warning tie_high_low()

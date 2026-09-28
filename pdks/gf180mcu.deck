@@ -484,9 +484,12 @@ rule EM.14.4_Vn em_current_density(via1, via2, via3, via4, via5_nomim; max_densi
 rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_per_cut: 0.43mA)
 
 # --- Electrical ---
-# LU.9 / LU.10: Nwell taps go to the most positive supply and substrate taps to
-# the lowest, so one net carrying both is a supply short [DRM 55].
-rule LU.9_10 supply_short(ntap, ptap)
+# After LU.9 / LU.10 [DRM 55] (guidelines, "not codeable" per DRM 16): n-well
+# taps to the well's highest potential, substrate taps to the lowest. Coded as
+# a rail short: a PMOS well's n-tap on the substrate net. A vertical PNP's base
+# well there (a diode-connected bandgap PNP) is zero-biased, not a short.
+layer pmos_well = nwell.interacting(pgate)
+rule LU.9_10 supply_short(ntap, ptap, pmos_well)
 rule floating_nwell floating_well(nwell, ntap)
 rule floating_lvpwell floating_well(lvpwell_in_dn, pcomp_lvp)
 rule floating_gate floating_gate(; labels_are_ports: false)

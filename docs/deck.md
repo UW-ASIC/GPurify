@@ -305,7 +305,7 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `missing_tie(well, diff; max_distance: len)` | A region further than `max_distance` from a tap. |
 | `multiple_drivers(; max: count)` | A net driven by more than `max` separate drivers. |
 | `soft_connection(layers…)` | A net held together only through the listed high-resistance layers. |
-| `supply_short(tap_a, tap_b)` | A net that touches both kinds of tap, such as an n-tap and a p-tap. |
+| `supply_short(tap_a, tap_b[, well_a])` | A net that touches both kinds of tap, such as an n-tap and a p-tap. With `well_a`, a `tap_a` counts only where it overlaps that layer: name the wells that hold PMOS (`nwell.interacting(pgate)`) so a bipolar's base well tied to the substrate net is not a short, while a rail short, which puts a PMOS well's tap on the substrate net, still is. |
 | `tie_high_low()` | A net that reaches a gate and a transistor source but no drain: a gate tied straight to a rail instead of through a tie cell. |
 | `unconnected_pin(layers…)` | A shape on the listed layers that reaches no device. |
 | `gate_oxide(; models: models, max: voltage)` | A device of those models whose gate can differ from its source, drain or bulk by more than `max`. Needs `--intent`. |
