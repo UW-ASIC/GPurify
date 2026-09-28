@@ -138,6 +138,10 @@ fn every_kind() -> RuleSet {
             collector: vec![other],
             collector_measure: vec![antenna::AntennaMeasure::Area],
             max_ratio: vec![50.0],
+            diode: vec![None],
+            diode_credit: vec![0.0],
+            diode_bonus: vec![0.0],
+            diode_min_area: vec![gpurify_geom::DbuArea::default()],
             stack: antenna::Stack::default(),
         },
         antenna_electrical: antenna::AntennaElectricalTable {

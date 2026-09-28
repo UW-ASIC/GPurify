@@ -204,6 +204,16 @@ const DENSITY: &[Param] = &[
     p("step", "step", Dim::Length),
 ];
 const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
+/// An antenna row's protection diode: `credit` per um2 of diode area and
+/// `bonus` once, both off the ratio, when the net's diode area exceeds zero
+/// and reaches `min_area`.
+const ANTENNA_DIODE: &[Param] = &[
+    p("layer", "diode_layer", Dim::Layer),
+    p("credit", "diode_credit", Dim::Scalar),
+    p("bonus", "diode_bonus", Dim::Scalar),
+    opt("min_area", "diode_min_area", Dim::Area),
+];
+
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("thickness", "cmp_nominal_thickness", Dim::Length),
@@ -440,6 +450,7 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("max_ratio", "max_ratio", Dim::Scalar),
             opt("sidewall", "sidewall_thickness", Dim::Length),
+            opt("diode", "", Dim::Group(ANTENNA_DIODE)),
         ],
     ),
     erc(

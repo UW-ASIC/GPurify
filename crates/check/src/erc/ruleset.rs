@@ -10,7 +10,7 @@ use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
-use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
@@ -362,8 +362,20 @@ impl RuleSet {
                         Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
                         None => antenna::AntennaMeasure::Area,
                     };
+                    let diode = row.opt_layer("diode_layer")?;
+                    let credit = row.opt_number("diode_credit", 0.0)?;
+                    let bonus = row.opt_number("diode_bonus", 0.0)?;
+                    let min_area = match row.find("diode_min_area") {
+                        None => DbuArea::default(),
+                        Some(ParamValue::Area(area)) => area,
+                        Some(_) => return Err(row.wrong_type("diode_min_area")),
+                    };
                     let table = &mut set.antenna;
                     row.head(&mut table.head)?;
+                    table.diode.push(diode);
+                    table.diode_credit.push(credit);
+                    table.diode_bonus.push(bonus);
+                    table.diode_min_area.push(min_area);
                     table.gate.push(layers[0]);
                     table.collector.extend_from_slice(&layers[1..]);
                     table
@@ -728,7 +740,7 @@ impl RuleSet {
         supply::check_tie_high_low(design, facts, &self.tie_high_low, out, runs);
         supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
 
-        antenna::check_antenna(design, &self.antenna, scratch, out, runs);
+        antenna::check_antenna(design, grid, &self.antenna, scratch, out, runs);
         antenna::check_antenna_electrical(design, &self.antenna_electrical, scratch, out, runs);
         antenna::check_density_cmp(design, die, &self.density_cmp, scratch, out, runs);
 

@@ -78,7 +78,8 @@ None has been compared against foundry signoff results.
   covers only poly that touches no diffusion.
 - IHP: parasitic area capacitance other than Metal1 is computed from the
   documented layer heights and dielectric constants, and fringe capacitance
-  is zero. A gate with an antenna diode is held to the no-diode limit.
+  is zero. A protection diode is credited by presence (Ant.g 0.16 um2), not
+  by Note 4's size relative to the net's cut area.
 - `generic_finfet` is ASAP7, a predictive process no fab builds. It
   recognises no transistors and extracts no capacitance: the manual gives no
   resistance for the gate and local-interconnect layers and no capacitance at

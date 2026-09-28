@@ -364,7 +364,7 @@ fn a_missing_parameter_is_an_error() {
         "missing parameter `eol_width`",
     );
     one_error(
-        "rule a antenna(poly, met1; max_ratio: 400)\n",
+        "rule a antenna(poly, met1; max_ratio: 400, diode: none)\n",
         "missing parameter `sidewall`",
     );
 }

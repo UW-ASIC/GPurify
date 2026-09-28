@@ -448,19 +448,24 @@ rule x.1b off_grid(; pitch: 5nm)
 rule x.3a angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 
 # --- Antenna [S4] Table Ic; via3, via4, met4, met5 as [S5] states them ---
-rule ar.poly.1 antenna(gate, poly_c; max_ratio: 50, sidewall: 180nm)
-rule ar.licon.1 antenna(gate, licon_po, licon_nd, licon_pd, licon_nt, licon_pt; max_ratio: 3, sidewall: none)
-rule ar.li.1 antenna(gate, li_c; max_ratio: 75, sidewall: 100nm)
-rule ar.mcon.1 antenna(gate, mcon; max_ratio: 3, sidewall: none)
-rule ar.met1.1 antenna(gate, met1; max_ratio: 400, sidewall: 350nm)
-rule ar.via.1 antenna(gate, via; max_ratio: 6, sidewall: none)
-rule ar.met2.1 antenna(gate, met2; max_ratio: 400, sidewall: 350nm)
-rule ar.via2.1 antenna(gate, via2; max_ratio: 6, sidewall: none)
-rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 2000nm)
-rule ar.via3.1 antenna(gate, via3_m3; max_ratio: 6, sidewall: none)
-rule ar.met4.1 antenna(gate, met4; max_ratio: 400, sidewall: 845nm)
-rule ar.via4.1 antenna(gate, via4_m4; max_ratio: 6, sidewall: none)
-rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1260nm)
+# With a diode, [S4] EGAR = EA/A - K x (AntennaDiode area in um2) - diode_bonus,
+# the bonus once for any diode. AntennaDiode = (diff or tap) not (poly or
+# pAntennaShort), pAntennaShort = (tap not poly) not nwell; [S4] ar.1 does not
+# check a net on a pAntennaShort at all, which is here a diode with its credit
+# (never looser than the exemption).
+rule ar.poly.1 antenna(gate, poly_c; max_ratio: 50, sidewall: 180nm, diode: none)
+rule ar.licon.1 antenna(gate, licon_po, licon_nd, licon_pd, licon_nt, licon_pt; max_ratio: 3, sidewall: none, diode: none)
+rule ar.li.1 antenna(gate, li_c; max_ratio: 75, sidewall: 100nm, diode: (layer: xfom, credit: 450, bonus: 0, min_area: none))
+rule ar.mcon.1 antenna(gate, mcon; max_ratio: 3, sidewall: none, diode: (layer: xfom, credit: 18, bonus: 0, min_area: none))
+rule ar.met1.1 antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: (layer: xfom, credit: 400, bonus: 2200, min_area: none))
+rule ar.via.1 antenna(gate, via; max_ratio: 6, sidewall: none, diode: (layer: xfom, credit: 36, bonus: 0, min_area: none))
+rule ar.met2.1 antenna(gate, met2; max_ratio: 400, sidewall: 350nm, diode: (layer: xfom, credit: 400, bonus: 2200, min_area: none))
+rule ar.via2.1 antenna(gate, via2; max_ratio: 6, sidewall: none, diode: (layer: xfom, credit: 36, bonus: 0, min_area: none))
+rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 2000nm, diode: (layer: xfom, credit: 400, bonus: 2200, min_area: none))
+rule ar.via3.1 antenna(gate, via3_m3; max_ratio: 6, sidewall: none, diode: (layer: xfom, credit: 36, bonus: 0, min_area: none))
+rule ar.met4.1 antenna(gate, met4; max_ratio: 400, sidewall: 845nm, diode: (layer: xfom, credit: 400, bonus: 2200, min_area: none))
+rule ar.via4.1 antenna(gate, via4_m4; max_ratio: 6, sidewall: none, diode: (layer: xfom, credit: 36, bonus: 0, min_area: none))
+rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1260nm, diode: (layer: xfom, credit: 400, bonus: 2200, min_area: none))
 
 # --- Electrical [S1] x.22, nwell.4; supplies and ESD ---
 rule x.22 unconnected_pin(poly_c, li_c, met1, met2, met3, met4, met5)

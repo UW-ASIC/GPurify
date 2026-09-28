@@ -21,13 +21,18 @@ use gpurify_check::erc::rules::antenna::{
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
-use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::{Bbox, DbuArea, GeometryStore, Grid, LayerId};
 use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::{random_rectilinear_layer, RandomLayerSpec};
 use gpurify_testgen::{
     assert_clean, assert_close_relative, assert_rule_ran, dbu, LayoutBuilder, Rng,
 };
+
+/// A thousand database units to the micrometre, as the fixtures draw.
+fn grid() -> Grid {
+    Grid::new(1_000).expect("a 1 nm grid")
+}
 
 fn report() -> (Violations, Vec<RuleRun>) {
     (Violations::default(), Vec::new())
@@ -78,6 +83,10 @@ fn antenna_table(id: StrId, max_ratio: f64) -> AntennaTable {
         collector: vec![LayerId(0)],
         collector_measure: vec![AntennaMeasure::Area],
         max_ratio: vec![max_ratio],
+        diode: vec![None; 1],
+        diode_credit: vec![0.0; 1],
+        diode_bonus: vec![0.0; 1],
+        diode_min_area: vec![DbuArea::default(); 1],
         stack: Stack::default(),
     }
 }
@@ -100,6 +109,7 @@ fn a_per_stage_antenna_ratio_is_the_collecting_area_over_the_gate_area() {
     let (mut violations, mut runs) = report();
     check_antenna(
         design,
+        grid(),
         &antenna_table(id, 3.0),
         &mut scratch,
         &mut violations,
@@ -142,12 +152,64 @@ fn an_antenna_ratio_under_its_limit_is_clean() {
     let (mut violations, mut runs) = report();
     check_antenna(
         design,
+        grid(),
         &antenna_table(id, 5.0),
         &mut scratch,
         &mut violations,
         &mut runs,
     );
     assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: closed form. Half a square micrometre of diode on the four-to-one
+/// net takes 2 per um2 and a bonus of 0.5 off the ratio: 4 - 1 - 0.5 = 2.5.
+/// A `min_area` above the diode's area takes nothing off.
+#[test]
+fn a_diode_on_the_net_takes_its_credit_and_bonus_off_the_ratio() {
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(LayerId(0), 0, 0, 4_000, 1_000);
+    layout.rect(LayerId(2), 0, 0, 1_000, 1_000);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(3), 3_000, 0, 3_500, 1_000);
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0), LayerId(2)],
+        via_cut: vec![LayerId(1)],
+        via_connects: vec![(LayerId(0), LayerId(2))],
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    gpurify_check::topology::extract_nets_into(&store, &connectivity, &mut nets);
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+    for (min_um2, expected) in [(0, 2.5), (600_000, 4.0)] {
+        let id = rule(72);
+        let mut table = antenna_table(id, 1.0);
+        table.diode = vec![Some(LayerId(3))];
+        table.diode_credit = vec![2.0];
+        table.diode_bonus = vec![0.5];
+        table.diode_min_area = vec![DbuArea::new(min_um2)];
+        let mut scratch = Scratch::default();
+        let (mut violations, mut runs) = report();
+        check_antenna(
+            design,
+            grid(),
+            &table,
+            &mut scratch,
+            &mut violations,
+            &mut runs,
+        );
+        assert_close_relative(
+            "the credited ratio",
+            measured_ratio(&violations, 0),
+            expected,
+            1e-12,
+        );
+    }
 }
 
 /// Oracle: closed form. With no diode configured the cumulative form reduces to
@@ -262,12 +324,23 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
         // Limits below both ratios, so each stage's own measurement lands in the
         // table and can be read rather than inferred from a verdict.
         max_ratio: vec![1.0, 1.0],
+        diode: vec![None; 2],
+        diode_credit: vec![0.0; 2],
+        diode_bonus: vec![0.0; 2],
+        diode_min_area: vec![DbuArea::default(); 2],
         stack: Stack::default(),
     };
 
     let mut scratch = Scratch::default();
     let (mut violations, mut runs) = report();
-    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    check_antenna(
+        design,
+        grid(),
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
 
     assert_eq!(runs.len(), 2, "one run row per stage, whatever the verdict");
     assert_eq!(
@@ -326,12 +399,23 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
         // A ratio strictly above zero violates a zero ceiling, so every stage
         // that collects anything at all lands in the table.
         max_ratio: vec![f64::MIN_POSITIVE; 2],
+        diode: vec![None; 2],
+        diode_credit: vec![0.0; 2],
+        diode_bonus: vec![0.0; 2],
+        diode_min_area: vec![DbuArea::default(); 2],
         stack: Stack::default(),
     };
 
     let mut scratch = Scratch::default();
     let (mut violations, mut runs) = report();
-    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    check_antenna(
+        design,
+        grid(),
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
 
     assert_eq!(runs.len(), 2);
     let ratios: Vec<f64> = stages
@@ -378,11 +462,22 @@ fn run_staged(
         collector: collectors.to_vec(),
         collector_measure: vec![measure; collectors.len()],
         max_ratio: vec![max_ratio],
+        diode: vec![None; 1],
+        diode_credit: vec![0.0; 1],
+        diode_bonus: vec![0.0; 1],
+        diode_min_area: vec![DbuArea::default(); 1],
         stack,
     };
     let mut scratch = Scratch::default();
     let (mut violations, mut runs) = report();
-    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    check_antenna(
+        design,
+        grid(),
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
     (violations, runs)
 }
 

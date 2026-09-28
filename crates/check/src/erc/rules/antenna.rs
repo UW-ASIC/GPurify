@@ -20,7 +20,7 @@ use gpurify_geom::ops::area2;
 use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, LayerId, PolyId};
-use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, DbuArea, Grid, MAX_ABS_DBU};
 use gpurify_ingest::deck::Connectivity;
 
 /// What an antenna rule counts as collecting area.
@@ -104,6 +104,13 @@ pub struct AntennaTable {
     pub collector: Vec<LayerId>,
     pub collector_measure: Vec<AntennaMeasure>,
     pub max_ratio: Vec<f64>,
+    /// A net whose `diode` area is positive and at least `diode_min_area` has
+    /// `diode_credit` per um2 of it, and `diode_bonus` once, taken off its
+    /// ratio (sky130 `ar.*` K and diode bonus, gf180 `ANT.16`, IHP `Ant.e/f`).
+    pub diode: Vec<Option<LayerId>>,
+    pub diode_credit: Vec<f64>,
+    pub diode_bonus: Vec<f64>,
+    pub diode_min_area: Vec<DbuArea>,
     pub stack: Stack,
 }
 
@@ -375,9 +382,11 @@ fn antenna_row(
     Some(examined)
 }
 
-/// Per-stage antenna ratio, reported at the gate.
+/// Per-stage antenna ratio, reported at the gate; with a diode, the ratio
+/// after its credit.
 pub fn check_antenna(
     design: Design<'_>,
+    grid: Grid,
     table: &AntennaTable,
     scratch: &mut Scratch,
     out: &mut Violations,
@@ -387,14 +396,35 @@ pub fn check_antenna(
         let rule = table.head.rule[row];
         let before = out.len();
         let span = table.collector_start[row] as usize..table.collector_start[row + 1] as usize;
+        let (credit, bonus, min_area) = (
+            table.diode_credit[row],
+            table.diode_bonus[row],
+            table.diode_min_area[row],
+        );
+        #[allow(clippy::cast_precision_loss, reason = "a small integer")]
+        let dbu2_per_um2 = (grid.dbu_per_um() * grid.dbu_per_um()) as f64;
         let examined = antenna_row(
             design,
             (&table.head, row),
-            (table.gate[row], &table.collector[span.clone()], None),
+            (
+                table.gate[row],
+                &table.collector[span.clone()],
+                table.diode[row],
+            ),
             &table.collector_measure[span],
             &table.stack,
             table.max_ratio[row],
-            |ratio, _| ratio,
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "a diode's area in database units is far below 2^53"
+            )]
+            |ratio, diode: DbuArea| {
+                if diode.raw() > 0 && diode >= min_area {
+                    ratio - credit * diode.raw() as f64 / dbu2_per_um2 - bonus
+                } else {
+                    ratio
+                }
+            },
             scratch,
             out,
         );

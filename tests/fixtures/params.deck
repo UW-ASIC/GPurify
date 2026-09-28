@@ -48,7 +48,7 @@ rule angle angle(; allowed: [0deg, 90deg])
 rule via1.redundant_via redundant_via(via1; within: 500nm) >= 2
 rule via1.via_array_spacing via_array_space(via1; array: 3) >= 200nm
 rule met1.multi_patterning patterning(met1; colors: 2) >= 100nm
-rule poly.met1.antenna antenna(poly, met1; max_ratio: 100, sidewall: none)
+rule poly.met1.antenna antenna(poly, met1; max_ratio: 100, sidewall: none, diode: none)
 rule poly.antenna_electrical antenna_electrical(poly, li, met1, met2; max_ratio: 400, diode: diode, diode_credit: 0, diode_bonus: 0)
 rule met1.density_cmp density_cmp(met1; window: 1000nm x 1000nm, step: 1000nm x 1000nm, min: 0.2, max: 0.85, max_delta: 0.5, partial_windows: true, cmp: (target: 0.5, thickness: 400nm, sensitivity: 200nm, max_delta: 50nm))
 rule em_current_density em_current_density(li, met1, met2; max_density: 1000A/m, max_current_per_cut: 100uA)

@@ -462,17 +462,25 @@ rule OFFGRID off_grid(; pitch: 5nm)
 rule ACUTE angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 
 # --- Antenna [DRM 27, 28: ratio limits; perimeter-area thickness t per layer, 9 kA MetalTop] ---
-rule ANT.1 antenna(gate, poly2_con; max_ratio: 200, sidewall: 200nm)
+# ANT.16 relieves metal and via rows with a reverse-biased diode on the net;
+# [KL] states it as limit + factor x (N+ COMP area in um2), factor 800 (metal)
+# and 40 (via) for thin gates, 6000 and 300 for thick: the thin factors are
+# applied to every gate. N+ COMP under poly2 is channel, not diode.
+layer ant_diode = ncomp not poly2
+rule ANT.1 antenna(gate, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none)
 let ant_metals = [(ANT.2, metal1_con), (ANT.3, metal2_con), (ANT.4, metal3_con),
                   (ANT.5, metal4), (ANT.6, metal5)]
 for (id, m) in ant_metals {
-    rule {id} antenna(gate, m; max_ratio: 400, sidewall: 540nm)
+    rule {id} antenna(gate, m; max_ratio: 400, sidewall: 540nm,
+        diode: (layer: ant_diode, credit: 800, bonus: 0, min_area: none))
 }
-rule ANT.7 antenna(gate, metaltop_con; max_ratio: 400, sidewall: 990nm)
-rule ANT.8 antenna(gate, contact; max_ratio: 10, sidewall: none)
+rule ANT.7 antenna(gate, metaltop_con; max_ratio: 400, sidewall: 990nm,
+    diode: (layer: ant_diode, credit: 800, bonus: 0, min_area: none))
+rule ANT.8 antenna(gate, contact; max_ratio: 10, sidewall: none, diode: none)
 let ant_vias = [(ANT.9, via1), (ANT.10, via2), (ANT.11, via3), (ANT.12, via4), (ANT.13, via5_nomim)]
 for (id, v) in ant_vias {
-    rule {id} antenna(gate, v; max_ratio: 20, sidewall: none)
+    rule {id} antenna(gate, v; max_ratio: 20, sidewall: none,
+        diode: (layer: ant_diode, credit: 40, bonus: 0, min_area: none))
 }
 
 # --- Electromigration at 85 C, unidirectional (DC) limits [DRM 54, tables 14.3 and 14.4] ---
