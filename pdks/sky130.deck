@@ -128,6 +128,7 @@ layer nwell_hole = nwell.holes().interacting(dnwell)
 layer gate = poly and diff
 layer nfet = gate and nsdm
 layer pfet = gate and psdm
+layer pmos_well = nwell.interacting(pfet)
 layer ndiff = diff and nsdm
 layer pdiff = diff and psdm
 layer ndifftap = difftap and nsdm
@@ -465,7 +466,10 @@ rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1260nm)
 # --- Electrical [S1] x.22, nwell.4; supplies and ESD ---
 rule x.22 unconnected_pin(poly_c, li_c, met1, met2, met3, met4, met5)
 rule nwell.4 floating_well(nwell, ntap_licon)
-rule supply_short supply_short(ntap, ptap)
+# Only an n-tap in a well holding a PMOS biases that well: a PNP's base
+# n-tap shares a net with p-type nodes by design (a mirror's base, a
+# diode-connected substrate PNP at VSS).
+rule supply_short supply_short(ntap, ptap, pmos_well)
 rule soft_connection soft_connection(ntap, ptap)
 rule floating_gate floating_gate(; labels_are_ports: false)
 rule tie_high_low warning tie_high_low()

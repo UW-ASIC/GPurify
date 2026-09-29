@@ -565,6 +565,7 @@ pub(crate) const KINDS: &[Kind] = &[
     ),
     erc("soft_connection", &[0], true, &[]),
     erc("supply_short", &[0, 1], false, &[]),
+    erc("supply_short", &[0, 1, 2], false, &[]),
     erc("tie_high_low", &[], false, &[]),
     erc("unconnected_pin", &[0], true, &[]),
     erc(

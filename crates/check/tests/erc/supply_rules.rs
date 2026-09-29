@@ -359,6 +359,35 @@ fn supply_short_table(id: StrId) -> SupplyShortTable {
         head: head(id),
         tap_a: vec![LayerId(2)],
         tap_b: vec![LayerId(3)],
+        within: vec![None],
+    }
+}
+
+/// The shorted pair of taps, plus a scope shape (layer four) around the n-tap
+/// when `scoped`, else away from both taps.
+fn scoped_taps(scoped: bool) -> Drawn {
+    let mut layout = LayoutBuilder::new(5);
+    layout.rect(LayerId(0), 0, 0, 3_000, 1_000);
+    layout.rect(LayerId(2), 0, 0, 1_000, 1_000);
+    layout.rect(LayerId(3), 2_000, 0, 3_000, 1_000);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(1), 2_400, 400, 2_600, 600);
+    if scoped {
+        layout.rect(LayerId(4), -500, -500, 1_500, 1_500);
+    } else {
+        layout.rect(LayerId(4), 10_000, 0, 12_000, 2_000);
+    }
+    let (store, _) = layout.finish();
+    Drawn::new(
+        store,
+        &via_connectivity(LayerId(1), &[LayerId(2), LayerId(3)]),
+    )
+}
+
+fn scoped_table(id: StrId) -> SupplyShortTable {
+    SupplyShortTable {
+        within: vec![Some(LayerId(4))],
+        ..supply_short_table(id)
     }
 }
 
@@ -410,6 +439,44 @@ fn two_conductors_each_carrying_one_tap_type_are_clean() {
     check_supply_short(
         drawn.design(),
         &supply_short_table(id),
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: construct-from-answer. The shorted taps again, the n-tap inside
+/// the scope (a PMOS well): still a short.
+#[test]
+fn a_scoped_tap_inside_its_scope_still_shorts() {
+    let drawn = scoped_taps(true);
+    let id = rule(57);
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_supply_short(
+        drawn.design(),
+        &scoped_table(id),
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(violations.rule.len(), 1);
+    assert_eq!(violations.rule[0], id);
+}
+
+/// Oracle: construct-from-answer. The same short with the n-tap outside every
+/// scope shape (a PNP's base contact, no PMOS well): the net carries both tap
+/// types by design, so the scoped rule is clean.
+#[test]
+fn a_scoped_tap_outside_its_scope_is_not_counted() {
+    let drawn = scoped_taps(false);
+    let id = rule(58);
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_supply_short(
+        drawn.design(),
+        &scoped_table(id),
         &mut scratch,
         &mut violations,
         &mut runs,

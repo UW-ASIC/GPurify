@@ -323,6 +323,13 @@ rule DV.8 enclosure(poly2_hv, dualgate) >= 400nm
 # --- Poly2 [DRM 16, KL; PL.8 from gf180mcu_density.drc] ---
 rule PL.1_3.3V width(poly2) >= 180nm
 rule PL.1_5V width(poly2_hv) >= 200nm
+# PL.2 gate length: a gate's edges on COMP's edges run along the channel, so
+# their length is L (its edges on poly's edges are W). The 3.3V floor is on
+# every gate (the 5V/6V floors are higher, so it never flags one they pass);
+# the 5V floors bound 6V too.
+rule PL.2_3.3V length(gate.edges() and comp.edges()) >= 280nm
+rule PL.2_5V_n length((ngate and dualgate).edges() and comp.edges()) >= 600nm
+rule PL.2_5V_p length((pgate and dualgate).edges() and comp.edges()) >= 500nm
 rule PL.3a space(poly2) >= 240nm
 rule PL.4 extension(poly2, comp) >= 220nm
 # PL.5a/5b hold field poly to COMP; this covers poly shapes with no gate at all.
@@ -621,8 +628,7 @@ rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
 #   rule NAT.8 must_contain(dualgate, nat_hv)
 #   rule DN.3 (every DNWELL directly surrounded by a PCOMP guard ring tied to substrate)
 # needs: edge checks (butting edges, gate length along the channel, edge-direction enclosure)
-#   rule PL.2_3.3V gate length (poly2 edges on the gate) >= 280nm
-#   rule PL.2_5V gate length >= 600nm (5V n), 500nm (5V p), 700nm (6V n), 550nm (6V p)
+#   rule PL.2_6V gate length >= 700nm (6V n), 550nm (6V p): no 6V marker is declared (PL.2 3.3V/5V are coded above)
 #   rule NAT.4 / NAT.5 native gate length >= 1.8um
 #   rule ESD.pl ESD 5V/6V NMOS gate length >= 800nm
 #   rule NP.3a..3e, PP.3a..3e implant space to opposite COMP, excluding butted edges (0.16 / 0.08um)

@@ -108,6 +108,7 @@ fn every_kind() -> RuleSet {
             head: head(id_of("supply_short")),
             tap_a: vec![base],
             tap_b: vec![other],
+            within: vec![None],
         },
         soft_connection: supply::SoftConnectionTable {
             head: head(id_of("soft_connection")),

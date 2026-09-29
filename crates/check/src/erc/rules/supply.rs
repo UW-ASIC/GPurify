@@ -19,12 +19,15 @@ use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
-/// One conductor carrying both tap layers.
+/// One conductor carrying both tap layers. With `within`, a `tap_a` shape
+/// counts only inside a shape of that layer: an n-tap biasing a PMOS well,
+/// not a PNP's base contact, which carries a p-type net by design.
 #[derive(Debug, Default)]
 pub struct SupplyShortTable {
     pub head: RuleHead,
     pub tap_a: Vec<LayerId>,
     pub tap_b: Vec<LayerId>,
+    pub within: Vec<Option<LayerId>>,
 }
 
 /// A net that falls into several components once its resistive (soft) layers
@@ -111,13 +114,42 @@ pub(crate) fn clamp_rails(
 /// `marks` (sized `nets + 1`; `NetId::NONE` lands in the trash slot). Skipped
 /// on an unextracted design, where `net_of` would panic.
 fn mark_nets(design: Design<'_>, layer: LayerId, bit: u32, marks: &mut [u32]) {
+    mark_nets_within(design, layer, None, bit, marks);
+}
+
+/// [`mark_nets`], counting only polygons of `layer` whose bounding-box centre
+/// lies in a polygon of `within` (every polygon when `None`).
+// ponytail: centre-in-polygon stands in for containment; taps are small
+// convex shapes inside their well. A tap straddling a well edge is decided
+// by its centre; an exact inside test if that ever matters.
+fn mark_nets_within(
+    design: Design<'_>,
+    layer: LayerId,
+    within: Option<LayerId>,
+    bit: u32,
+    marks: &mut [u32],
+) {
     let nets = marks.len() - 1;
     if nets == 0 {
         return;
     }
+    let inside = |poly: PolyId| {
+        let Some(scope) = within else { return true };
+        let b = design.store.poly_bbox(poly);
+        let centre = Point {
+            x: Dbu::new_unchecked((b.xlo.raw() + b.xhi.raw()) / 2),
+            y: Dbu::new_unchecked((b.ylo.raw() + b.yhi.raw()) / 2),
+        };
+        design.store.polys_on_layer(scope).any(|s| {
+            let s = PolyId(s);
+            design.store.poly_bbox(s).overlaps(b) && design.store.poly_contains_point(s, centre)
+        })
+    };
     for poly in design.store.polys_on_layer(layer) {
-        let slot = design.nets.net_of(PolyId(poly)).idx().min(nets);
-        marks[slot] |= bit;
+        if inside(PolyId(poly)) {
+            let slot = design.nets.net_of(PolyId(poly)).idx().min(nets);
+            marks[slot] |= bit;
+        }
     }
 }
 
@@ -146,7 +178,8 @@ pub fn check_supply_short(
 
         scratch.net_marks.clear();
         scratch.net_marks.resize(nets + 1, 0);
-        mark_nets(design, tap_a, 1, &mut scratch.net_marks);
+        let within = table.within.get(row).copied().flatten();
+        mark_nets_within(design, tap_a, within, 1, &mut scratch.net_marks);
         mark_nets(design, tap_b, 2, &mut scratch.net_marks);
         let (a_rows, b_rows) = (
             design.store.polys_on_layer(tap_a),
