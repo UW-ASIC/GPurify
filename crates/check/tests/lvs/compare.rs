@@ -560,3 +560,46 @@ fn more_symmetries_than_the_round_budget_still_match() {
     };
     assert_eq!(compare(&graph, &graph, options), Verdict::Match);
 }
+
+/// Oracle: netgen's "resolving symmetries by property value", on the field
+/// report's strongarm dummies. Two MOS on the same four nets (`tail vss vss
+/// vss`) are topologically interchangeable, one 0.42/0.15 and one 5.45/0.6.
+/// Written in opposite orders on the two sides they must still pair by size,
+/// not by row: the old lowest-index tie-break reported two parameter
+/// mismatches here. Swapping a size on one side still mismatches.
+#[test]
+fn symmetric_devices_pair_by_parameters_not_by_row_order() {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let small: &[(StrId, f64)] = &[(WIDTH, 0.42e-6), (common::LENGTH, 0.15e-6)];
+    let large: &[(StrId, f64)] = &[(WIDTH, 5.45e-6), (common::LENGTH, 0.6e-6)];
+    let dummies = |sizes: [&[(StrId, f64)]; 2]| {
+        let mut builder = GraphBuilder::new(2);
+        for size in sizes {
+            builder.device_with_params(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, 0), (Drain, 1), (Bulk, 0)],
+                size,
+            );
+        }
+        builder.finish()
+    };
+
+    let verdict = compare(
+        &dummies([small, large]),
+        &dummies([large, small]),
+        decisive(),
+    );
+    assert_eq!(verdict, Verdict::Match);
+
+    let verdict = compare(
+        &dummies([small, large]),
+        &dummies([large, large]),
+        decisive(),
+    );
+    assert_ne!(
+        verdict,
+        Verdict::Match,
+        "a wrong size must still be reported"
+    );
+}

@@ -3,8 +3,10 @@
 //! Data in: two graphs. Data out: a class per node on each side, plus per-class tallies.
 //! Classes split by a hash of their neighbours' classes until stable; a pass re-signs
 //! only the neighbours of nodes that changed class in the pass before. A balanced
-//! stall is broken by pairing the lowest node index on each side of the stalled class
-//! holding the lowest layout node, one class per stall.
+//! stall is broken by pairing the lowest layout node of the stalled class holding
+//! it with the reference node of that class whose parameters are closest (netgen's
+//! "resolving symmetries by property value"), the lowest such on a tie, one class
+//! per stall.
 
 use crate::lvs::graph::{narrow, Graph};
 use crate::topology::TerminalRole;
@@ -112,6 +114,55 @@ impl Sides<'_> {
                 visit(role, offset + device);
             }
         }
+    }
+}
+
+impl Sides<'_> {
+    /// How far apart the parameters of layout node `layout` and reference node
+    /// `reference` are: per name, the relative difference when both state it
+    /// and one when only one does, summed. Zero for nets.
+    fn distance(self, layout: u32, reference: u32) -> f64 {
+        let reference = reference - self.split;
+        let (layout_devices, ref_devices) = (
+            narrow(self.layout.device_count()),
+            narrow(self.reference.device_count()),
+        );
+        if layout >= layout_devices || reference >= ref_devices {
+            return 0.0;
+        }
+        let (mine, theirs) = (
+            self.layout.params_of(layout),
+            self.reference.params_of(reference),
+        );
+        let relative = |a: f64, b: f64| {
+            let scale = a.abs().max(b.abs());
+            if scale == 0.0 {
+                0.0
+            } else {
+                (a - b).abs() / scale
+            }
+        };
+        let one_sided = |from: &[(gpurify_ingest::StrId, f64)],
+                         to: &[(gpurify_ingest::StrId, f64)]| {
+            from.iter()
+                .filter(|(name, _)| !to.iter().any(|(n, _)| n == name))
+                .count()
+        };
+        let shared: f64 = mine
+            .iter()
+            .filter_map(|&(name, a)| {
+                theirs
+                    .iter()
+                    .find(|&&(n, _)| n == name)
+                    .map(|&(_, b)| relative(a, b))
+            })
+            .sum();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a device states a handful of parameters"
+        )]
+        let missing = (one_sided(mine, theirs) + one_sided(theirs, mine)) as f64;
+        shared + missing
     }
 }
 
@@ -276,21 +327,28 @@ impl Partition {
         self.size[class] == layout || (layout == 1 && self.size[class] == 2)
     }
 
-    /// Pair `node` with the lowest reference node of its class, as a new class
-    /// of their own.
-    fn tie_break(&mut self, node: u32, split: u32) {
+    /// Pair `node` with the reference node of its class whose parameters are
+    /// closest, the lowest on a tie, as a new class of their own.
+    fn tie_break(&mut self, node: u32, sides: Sides) {
+        let split = sides.split;
         let class = self.class[node as usize];
         let (from, end) = (
             self.start[class as usize],
             self.start[class as usize] + self.size[class as usize],
         );
         // ponytail: O(class size) per stall; keep members sorted per class if a
-        // huge class of isolated nodes ever shows up in a profile.
+        // huge class of isolated nodes ever shows up in a profile. Greedy in
+        // layout order, not an optimal assignment: a class of sizes where the
+        // lowest layout node's closest mate starves a later one can still
+        // mismatch; a Hungarian solve per class fixes that if it ever shows up.
         let mate = self.member[from as usize..end as usize]
             .iter()
             .copied()
             .filter(|&member| member >= split)
-            .min()
+            .min_by(|&a, &b| {
+                let (da, db) = (sides.distance(node, a), sides.distance(node, b));
+                da.total_cmp(&db).then(a.cmp(&b))
+            })
             .expect("a stalled class holds reference nodes");
         self.place(node, end - 2);
         self.place(mate, end - 1);
@@ -352,7 +410,7 @@ pub(crate) fn refine_into(
                 out.publish(split);
                 return true;
             };
-            out.tie_break(node, split);
+            out.tie_break(node, sides);
             rounds = 0;
         }
         pass += 1;
