@@ -70,7 +70,9 @@ pub struct Netlist {
     /// Parameters, CSR into `param`.
     pub device_param_start: Vec<u32>,
     /// Interned name and value, in SI base units with scale suffixes already
-    /// expanded: `w=1u` is `1e-6` and a bare `w=1` is one metre.
+    /// expanded: `w=1u` is `1e-6` and a bare `w=1` is one metre, except on an
+    /// `X` card calling a deck device model, where a bare `w`/`l` is in µm
+    /// (the PDK convention, `.option scale=1u`). SPICE names are lowercased.
     pub param: Vec<(StrId, f64)>,
 
     /// One row per subcircuit instance, an `X` card, in file order: the callee.
@@ -332,7 +334,8 @@ struct Build<'a> {
     net_of: Vec<u32>,
     /// Definitions sorted by interned name, for binary search.
     defs: Vec<(StrId, SubcktId)>,
-    /// Spectre `model` cards, sorted the same way.
+    /// Spectre `model` cards, and for SPICE the deck's device models an `X`
+    /// card may call, sorted the same way.
     models: Vec<(StrId, DeviceKind)>,
     /// The open subcircuit and the `net_name` row its nets start at.
     open: Option<(SubcktId, u32)>,
@@ -409,14 +412,29 @@ impl Build<'_> {
         }
     }
 
-    fn param(&mut self, tok: Tok) -> Result<(StrId, f64), NetlistError> {
+    /// `micron`: a bare `w`/`l` is in µm, as on a PDK model's `X` card.
+    fn param(
+        &mut self,
+        tok: Tok,
+        dialect: Dialect,
+        micron: bool,
+    ) -> Result<(StrId, f64), NetlistError> {
         let bad = || NetlistError::Unexpected(tok.span, tok.text.to_string());
-        let (key, value) = tok.text.split_once('=').ok_or_else(bad)?;
+        let (key, text) = tok.text.split_once('=').ok_or_else(bad)?;
         if key.is_empty() {
             return Err(bad());
         }
-        let value = spice_number(value).ok_or_else(bad)?;
-        Ok((self.strings.intern(key), value))
+        let mut value = spice_number(text).ok_or_else(bad)?;
+        // SPICE names are case-insensitive; the layout side compares as `w`.
+        let key = match dialect {
+            Dialect::Spice => key.to_ascii_lowercase(),
+            Dialect::Spectre => key.to_string(),
+        };
+        let bare = text.ends_with(|c: char| c.is_ascii_digit() || c == '.');
+        if micron && bare && (key == "w" || key == "l") {
+            value *= 1e-6;
+        }
+        Ok((self.strings.intern(&key), value))
     }
 
     fn device(
@@ -427,6 +445,7 @@ impl Build<'_> {
         model: Tok,
         params: &[Tok],
         subckt: SubcktId,
+        (dialect, micron): (Dialect, bool),
     ) -> Result<(), NetlistError> {
         // A bare number where a model name belongs is SPICE's positional value
         // form, `R1 a b 1k`, refused rather than interned as a model name.
@@ -454,7 +473,7 @@ impl Build<'_> {
             self.out.terminal_net.push(net);
         }
         for param in params {
-            let param = self.param(*param)?;
+            let param = self.param(*param, dialect, micron)?;
             self.out.param.push(param);
         }
         Ok(())
@@ -529,12 +548,40 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
             let (cell, nets) = positional
                 .split_last()
                 .ok_or_else(|| NetlistError::Unexpected(head.span, head.text.to_string()))?;
-            return b.instance(head, *cell, nets, params, subckt);
+            // A PDK primitive called as a subcircuit, `XM1 d g s b <model> W=..`:
+            // a device when the netlist does not define it and the deck names it.
+            let id = b.strings.intern(cell.text);
+            let defined = b.defs.binary_search_by_key(&id, |&(n, _)| n).is_ok();
+            let model = b.models.binary_search_by_key(&id, |&(n, _)| n);
+            return match model {
+                Ok(at) if !defined => {
+                    let kind = b.models[at].1;
+                    let (nets, model) = split_terminals(kind, positional, head)?;
+                    b.device(
+                        head,
+                        kind,
+                        nets,
+                        model,
+                        params,
+                        subckt,
+                        (Dialect::Spice, true),
+                    )
+                }
+                _ => b.instance(head, *cell, nets, params, subckt),
+            };
         }
         _ => return Err(NetlistError::Unsupported(head.span, head.text.to_string())),
     };
     let (nets, model) = split_terminals(kind, positional, head)?;
-    b.device(head, kind, nets, model, params, subckt)
+    b.device(
+        head,
+        kind,
+        nets,
+        model,
+        params,
+        subckt,
+        (Dialect::Spice, false),
+    )
 }
 
 /// One Spectre statement.
@@ -587,7 +634,15 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
         .ok_or_else(unsupported)?;
     let subckt = b.open_id(head)?;
     let (nets, model) = split_terminals(kind, positional, head)?;
-    b.device(head, kind, nets, model, params, subckt)
+    b.device(
+        head,
+        kind,
+        nets,
+        model,
+        params,
+        subckt,
+        (Dialect::Spectre, false),
+    )
 }
 
 /// Read a reference netlist in either dialect. Two passes: the first collects
@@ -596,7 +651,10 @@ fn read_dialect(
     source: &str,
     strings: &mut StrTable,
     dialect: Dialect,
+    mut models: Vec<(StrId, DeviceKind)>,
 ) -> Result<Netlist, NetlistError> {
+    models.sort_unstable_by_key(|&(name, _)| name);
+    models.dedup_by_key(|&mut (name, _)| name);
     let (toks, card_start) = lex(source, dialect);
     let cards = card_start.len() - 1;
     let mut b = Build {
@@ -604,7 +662,7 @@ fn read_dialect(
         out: Netlist::default(),
         net_of: Vec::new(),
         defs: Vec::new(),
-        models: Vec::new(),
+        models,
         open: None,
         open_span: SourceSpan { line: 0 },
         instances: Vec::new(),
@@ -671,10 +729,23 @@ fn read_dialect(
 /// SPICE and CDL.
 pub mod spice {
     use super::{Netlist, NetlistError};
+    use crate::deck::DeviceRecognition;
     use gpurify_geom::StrTable;
 
-    pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
-        super::read_dialect(source, strings, super::Dialect::Spice)
+    /// `devices`: the deck's recognisers, whose models an `X` card may call as
+    /// a device (`XM1 d g s b sky130_fd_pr__nfet_01v8 W=0.42 L=0.15`).
+    pub fn read(
+        source: &str,
+        strings: &mut StrTable,
+        devices: &DeviceRecognition,
+    ) -> Result<Netlist, NetlistError> {
+        let models = devices
+            .model
+            .iter()
+            .copied()
+            .zip(devices.kind.iter().copied())
+            .collect();
+        super::read_dialect(source, strings, super::Dialect::Spice, models)
     }
 }
 
@@ -687,6 +758,6 @@ pub mod spectre {
     use gpurify_geom::StrTable;
 
     pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
-        super::read_dialect(source, strings, super::Dialect::Spectre)
+        super::read_dialect(source, strings, super::Dialect::Spectre, Vec::new())
     }
 }

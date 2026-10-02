@@ -2,7 +2,7 @@
 //! readers' refusal to guess. CSR offset columns carry one terminator entry.
 
 use gpurify_geom::StrTable;
-use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::deck::{DeviceKind, DeviceRecognition};
 use gpurify_ingest::netlist::{spectre, spice, Netlist, NetlistError, RefNetId, SubcktId};
 
 /// Two subcircuits, three devices, and terminal and parameter runs of three
@@ -119,7 +119,8 @@ mp y a vdd vdd pfet w=4
 .ends
 ";
     let mut strings = StrTable::default();
-    let netlist = spice::read(source, &mut strings).expect("a deck inside the declared subset");
+    let netlist = spice::read(source, &mut strings, &DeviceRecognition::default())
+        .expect("a deck inside the declared subset");
 
     assert_eq!(netlist.subckt_count(), 1);
     assert_eq!(
@@ -213,7 +214,7 @@ M1 y a 0 0 nfet w=1u l=0.15u
 .ends
 ";
     let mut strings = StrTable::default();
-    match spice::read(source, &mut strings) {
+    match spice::read(source, &mut strings, &DeviceRecognition::default()) {
         Err(NetlistError::Redefined(span, name)) => {
             assert_eq!(
                 span.line, 5,
@@ -239,7 +240,7 @@ X1 a y missing_cell
 .ends
 ";
     let mut strings = StrTable::default();
-    match spice::read(source, &mut strings) {
+    match spice::read(source, &mut strings, &DeviceRecognition::default()) {
         Err(NetlistError::UndefinedSubckt(span, name)) => {
             assert_eq!(span.line, 2, "the call is on line 2");
             assert_eq!(name, "missing_cell");
@@ -270,4 +271,54 @@ alter corner_tt dev=nfet param=vth value=0.4
         }
         other => panic!("an `alter` statement produced {other:?} rather than Unsupported"),
     }
+}
+
+/// Oracle: the M-card form. A sky130 primitive called as a subcircuit, the
+/// way PDK netlists write it (`X` card, bare W/L in µm, upper-case names),
+/// reads as the same device as `M` with `u`-suffixed lower-case parameters.
+/// The model is one the deck's recognisers name, not one the file defines.
+#[test]
+fn an_x_card_calling_a_deck_model_is_the_same_device_as_the_m_card() {
+    let mut strings = StrTable::default();
+    let model = strings.intern("sky130_fd_pr__nfet_01v8");
+    let devices = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        model: vec![model],
+        ..DeviceRecognition::default()
+    };
+    let x = ".subckt c d g s b\nXM1 d g s b sky130_fd_pr__nfet_01v8 W=0.42 L=0.15 nf=1\n.ends\n";
+    let m = ".subckt c d g s b\nM1 d g s b sky130_fd_pr__nfet_01v8 w=0.42u l=0.15u nf=1\n.ends\n";
+    let x = spice::read(x, &mut strings, &devices).expect("an X card calling a deck model");
+    let m = spice::read(m, &mut strings, &devices).expect("the M-card form");
+
+    assert!(
+        x.instance_of.is_empty(),
+        "the X card became a subcircuit call"
+    );
+    assert_eq!(x.device_kind, [DeviceKind::Mos]);
+    assert_eq!(x.device_model, m.device_model);
+    assert_eq!(x.terminal_net, m.terminal_net);
+    assert_eq!(x.param.len(), m.param.len());
+    for (&(xn, xv), &(mn, mv)) in x.param.iter().zip(&m.param) {
+        assert_eq!(strings.resolve(xn), strings.resolve(mn));
+        assert!(
+            (xv - mv).abs() <= 1e-12 * mv.abs(),
+            "{}: {xv} vs {mv}",
+            strings.resolve(xn)
+        );
+    }
+
+    // Without the deck naming the model it is still an undefined subcircuit.
+    let none = spice::read(
+        ".subckt c d g s b\nXM1 d g s b sky130_fd_pr__nfet_01v8 W=0.42 L=0.15\n.ends\n",
+        &mut strings,
+        &DeviceRecognition::default(),
+    );
+    assert!(
+        matches!(
+            none,
+            Err(NetlistError::Unsupported(..) | NetlistError::UndefinedSubckt(..))
+        ),
+        "{none:?}"
+    );
 }

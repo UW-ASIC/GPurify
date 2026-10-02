@@ -89,7 +89,7 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
 
     let reference = match &inputs.reference {
         None => None,
-        Some(path) => Some(read_reference(path, &mut strings)?),
+        Some(path) => Some(read_reference(path, &deck.devices, &mut strings)?),
     };
     let intent = match &inputs.intent {
         None => None,
@@ -119,6 +119,7 @@ pub fn intern_report_ids(strings: &mut StrTable) {
 /// (`subckt` Spectre, `.subckt` SPICE); the extension decides only without one.
 fn read_reference(
     path: &std::path::Path,
+    devices: &gpurify_ingest::deck::DeviceRecognition,
     strings: &mut StrTable,
 ) -> Result<Netlist, gpurify_ingest::netlist::NetlistError> {
     let source = std::fs::read_to_string(path).map_err(|why| {
@@ -133,7 +134,7 @@ fn read_reference(
     if spectre {
         gpurify_ingest::netlist::spectre::read(&source, strings)
     } else {
-        gpurify_ingest::netlist::spice::read(&source, strings)
+        gpurify_ingest::netlist::spice::read(&source, strings, devices)
     }
 }
 
