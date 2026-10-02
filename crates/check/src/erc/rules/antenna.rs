@@ -141,11 +141,12 @@ pub struct DensityCmpTable {
     pub include_partial_windows: Vec<bool>,
 }
 
-/// The net of every store row on `layer` that is not a conductor: the lowest
-/// net among conductor shapes it overlaps with positive area (a derived gate
-/// `poly and diff` sits on poly; a cut on the metal under it). Touching alone
-/// does not join, so a gate is not put on the diffusion beside it. `false`
-/// when a layer will not validate.
+/// The net of every store row on `layer` that is not a conductor: that of the
+/// topmost conductor (last in `conductors`, which is bottom-up) it overlaps
+/// with positive area, the lowest net among that conductor's shapes. A
+/// derived gate `poly and diff` sits on poly, not the well under it; a cut on
+/// the metal under it. Touching alone does not join, so a gate is not put on
+/// the diffusion beside it. `false` when a layer will not validate.
 fn attach(
     design: Design<'_>,
     layer: LayerId,
@@ -172,13 +173,14 @@ fn attach(
         theirs.build(store, conductor, &scratch.layer_b);
         let under = SortedRects::new(theirs.labelled());
         for (poly, slot) in (0u32..).zip(best.iter_mut()) {
+            let mut here = NetId::NONE;
             for &r in mine.of(poly) {
                 for (_, row) in under.overlapping(r) {
-                    let net = nets.net_of(row);
-                    if net != NetId::NONE {
-                        *slot = (*slot).min(net);
-                    }
+                    here = here.min(nets.net_of(row));
                 }
+            }
+            if here != NetId::NONE {
+                *slot = here;
             }
         }
     }

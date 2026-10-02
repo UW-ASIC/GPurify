@@ -476,6 +476,41 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
     assert_close_relative("both gates", measured_ratio(&violations, 0), 6.5, 1e-12);
 }
 
+/// A gate sits on its poly, not on the well under it. The well is a net (tied
+/// to a tap carrying a 10 um2 metal plate) listed below poly in the stack; the
+/// gate overlaps both. Attached to the well it would read a ratio of 10; on
+/// its own poly, which collects nothing, it is clean. The Philis rc_filter
+/// fixture's false sky130 ar.licon.1 once the n-well became a net.
+#[test]
+fn a_gate_joins_its_poly_not_the_well_it_sits_in() {
+    let (well, tap, tie, poly, gate, contact, metal1) = (
+        LayerId(0),
+        LayerId(1),
+        LayerId(2),
+        LayerId(3),
+        LayerId(4),
+        LayerId(5),
+        LayerId(6),
+    );
+    let mut layout = LayoutBuilder::new(7);
+    layout.rect(well, -20_000, -5_000, 20_000, 5_000);
+    layout.rect(tap, -15_000, 0, -10_000, 1_000);
+    layout.rect(tie, -15_000, 0, -10_000, 1_000);
+    layout.rect(contact, -12_600, 400, -12_400, 600);
+    layout.rect(metal1, -15_000, 0, -5_000, 1_000);
+    layout.rect(poly, 0, 0, 1_000, 1_000);
+    layout.rect(gate, 0, 0, 1_000, 1_000);
+    let (store, _) = layout.finish();
+    let stack = Stack {
+        conductors: vec![tap, well, poly, metal1],
+        vias: vec![(tie, tap, well), (contact, tap, metal1)],
+        intra_layer_touch: true,
+    };
+
+    let (violations, runs) = run_staged(&store, stack, gate, &[metal1], AntennaMeasure::Area, 1.0);
+    assert_clean(&runs, &violations, rule(90));
+}
+
 /// A die-sized window over one layer, with only the bound the caller states.
 fn density_table(id: StrId, side: i64, min: Option<f64>, max: Option<f64>) -> DensityCmpTable {
     DensityCmpTable {
