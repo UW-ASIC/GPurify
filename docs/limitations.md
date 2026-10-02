@@ -55,10 +55,11 @@ None has been compared against foundry signoff results.
   two layers or on wells (no deck connects wells as nets), rules that depend
   on direction, shape-class and exact-count rules, gate-length rules, and
   maximum areas. Each deck also lists the manual rules it leaves out, and why.
-- Devices whose terminal is a well are not recognised, because no deck
-  connects a well as a net; sky130 connects the p-substrate (`connect global
-  psub`), so its pw2nd diodes are, but not pd2nw or the bipolars. No
-  transistor has a bulk terminal yet, so no deck carries `well_bias`. The
+- Only sky130 connects wells as nets: the p-substrate (`connect global
+  psub`), each n-well through its n-taps, and each isolated p-well in deep
+  n-well, so its transistors have a bulk terminal and it carries
+  `well_bias`. Its pd2nw diodes and bipolars still have no recogniser. The
+  other decks' transistors have no bulk terminal and no `well_bias`. The
   substrate carries no modelled current: a supply reached only through it is
   an island to the power grid, and a field solve refuses a net that holds it.
 - No deck carries `esd_latchup`: none of the manuals states a pad guard-ring

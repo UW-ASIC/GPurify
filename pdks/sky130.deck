@@ -117,6 +117,12 @@ layer licon_po = licon and poly_c
 # dnwell sits in an isolated p-well, not the substrate, and stays off it.
 layer psub = ((diff or tap) not nwell) not dnwell
 layer psub_tie = ptap not dnwell
+# The n-well is a net of its own per well, tied through its n-taps. Inside
+# dnwell, the region the n-well ring leaves is an isolated p-well, one net per
+# well, tied through its p-taps.
+layer pwell_iso = dnwell not nwell
+layer nwell_tie = ntap and nwell
+layer pwell_iso_tie = ptap and pwell_iso
 # A via3 (via4) landing on capm (cap2m) is the MiM top-plate contact, not a met3 (met4) via.
 layer via3_m3 = via3 not capm
 layer via4_m4 = via4 not cap2m
@@ -470,7 +476,7 @@ rule nwell.4 floating_well(nwell, ntap_licon)
 # n-tap shares a net with p-type nodes by design (a mirror's base, a
 # diode-connected substrate PNP at VSS).
 rule supply_short supply_short(ntap, ptap, pmos_well)
-rule soft_connection soft_connection(ntap, ptap)
+rule soft_connection soft_connection(ntap, ptap, nwell, pwell_iso)
 rule floating_gate floating_gate(; labels_are_ports: false)
 rule tie_high_low warning tie_high_low()
 rule ir_drop ir_drop()
@@ -488,6 +494,9 @@ rule vds.01v8 drain_source(; models: lv_fets, max: 1.95V)
 rule vgs.g5v0 gate_oxide(; models: g5_fets, max: 5.5V)
 rule vgs.esd_nfet gate_oxide(; models: ["sky130_fd_pr__esd_nfet_g5v0d10v5"], max: 5V)
 rule vds.d10v5 drain_source(; models: g5d10_fets, max: 11V)
+let pfets = ["sky130_fd_pr__pfet_01v8", "sky130_fd_pr__pfet_01v8_lvt", "sky130_fd_pr__pfet_01v8_hvt", "sky130_fd_pr__pfet_g5v0d10v5", "sky130_fd_pr__esd_pfet_g5v0d10v5"]
+let nfets = ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__nfet_01v8_lvt", "sky130_fd_pr__nfet_g5v0d10v5", "sky130_fd_pr__esd_nfet_g5v0d10v5"]
+rule well_bias well_bias(; pmos: pfets, nmos: nfets)
 
 # Electromigration, average current at Tj = 90C [S8]: each metal per um of
 # width, paired with the cut below it per cut. via3/via4 are the metal vias,
@@ -507,7 +516,7 @@ rule m3.density warning density_cmp(met3; window: 700um x 700um, step: 70um x 70
 rule m4.density warning density_cmp(met4; window: 700um x 700um, step: 70um x 70um, min: none, max: 0.7, max_delta: none, partial_windows: false, cmp: none)
 
 # --- Connectivity, bottom up ---
-connect conductors [nsd, psd, ntap, ptap, poly_c, li_c, met1, met2, met3, met4, met5]
+connect conductors [nsd, psd, ntap, ptap, nwell, pwell_iso, poly_c, li_c, met1, met2, met3, met4, met5]
 connect touch_within_layer
 connect via licon_nd [nsd, li_c]
 connect via licon_pd [psd, li_c]
@@ -515,6 +524,8 @@ connect via licon_nt [ntap, li_c]
 connect via licon_pt [ptap, li_c]
 connect global psub
 connect via psub_tie [ptap, psub]
+connect via nwell_tie [ntap, nwell]
+connect via pwell_iso_tie [ptap, pwell_iso]
 connect via licon_po [poly_c, li_c]
 connect via mcon [li_c, met1]
 connect via via [met1, met2]
@@ -542,16 +553,22 @@ connect label met5 names met5
 connect label met5_label names met5
 connect label met5_pin names met5
 
-# --- Devices [S5], [S7]. MOS terminals: gate, source, drain ---
-device mos nfet_01v8 model "sky130_fd_pr__nfet_01v8" terminals [poly_c, nsd, nsd]
-device mos nfet_01v8_lvt model "sky130_fd_pr__nfet_01v8_lvt" terminals [poly_c, nsd, nsd]
-device mos nfet_g5v0d10v5 model "sky130_fd_pr__nfet_g5v0d10v5" terminals [poly_c, nsd, nsd]
-device mos esd_nfet_g5v0d10v5 model "sky130_fd_pr__esd_nfet_g5v0d10v5" terminals [poly_c, nsd, nsd]
-device mos pfet_01v8 model "sky130_fd_pr__pfet_01v8" terminals [poly_c, psd, psd]
-device mos pfet_01v8_lvt model "sky130_fd_pr__pfet_01v8_lvt" terminals [poly_c, psd, psd]
-device mos pfet_01v8_hvt model "sky130_fd_pr__pfet_01v8_hvt" terminals [poly_c, psd, psd]
-device mos pfet_g5v0d10v5 model "sky130_fd_pr__pfet_g5v0d10v5" terminals [poly_c, psd, psd]
-device mos esd_pfet_g5v0d10v5 model "sky130_fd_pr__esd_pfet_g5v0d10v5" terminals [poly_c, psd, psd]
+# --- Devices [S5], [S7]. MOS terminals: gate, source, drain, bulk ---
+# An nfet's bulk is the substrate, or the isolated p-well inside dnwell: two
+# rows per model, and the one whose bulk the gate sits on binds.
+device mos nfet_01v8 model "sky130_fd_pr__nfet_01v8" terminals [poly_c, nsd, nsd, psub]
+device mos nfet_01v8 model "sky130_fd_pr__nfet_01v8" terminals [poly_c, nsd, nsd, pwell_iso]
+device mos nfet_01v8_lvt model "sky130_fd_pr__nfet_01v8_lvt" terminals [poly_c, nsd, nsd, psub]
+device mos nfet_01v8_lvt model "sky130_fd_pr__nfet_01v8_lvt" terminals [poly_c, nsd, nsd, pwell_iso]
+device mos nfet_g5v0d10v5 model "sky130_fd_pr__nfet_g5v0d10v5" terminals [poly_c, nsd, nsd, psub]
+device mos nfet_g5v0d10v5 model "sky130_fd_pr__nfet_g5v0d10v5" terminals [poly_c, nsd, nsd, pwell_iso]
+device mos esd_nfet_g5v0d10v5 model "sky130_fd_pr__esd_nfet_g5v0d10v5" terminals [poly_c, nsd, nsd, psub]
+device mos esd_nfet_g5v0d10v5 model "sky130_fd_pr__esd_nfet_g5v0d10v5" terminals [poly_c, nsd, nsd, pwell_iso]
+device mos pfet_01v8 model "sky130_fd_pr__pfet_01v8" terminals [poly_c, psd, psd, nwell]
+device mos pfet_01v8_lvt model "sky130_fd_pr__pfet_01v8_lvt" terminals [poly_c, psd, psd, nwell]
+device mos pfet_01v8_hvt model "sky130_fd_pr__pfet_01v8_hvt" terminals [poly_c, psd, psd, nwell]
+device mos pfet_g5v0d10v5 model "sky130_fd_pr__pfet_g5v0d10v5" terminals [poly_c, psd, psd, nwell]
+device mos esd_pfet_g5v0d10v5 model "sky130_fd_pr__esd_pfet_g5v0d10v5" terminals [poly_c, psd, psd, nwell]
 device resistor rbody_po model "sky130_fd_pr__res_generic_po" terminals [poly_c, poly_c]
 device resistor rbody_high_po model "sky130_fd_pr__res_high_po" terminals [poly_c, poly_c]
 device resistor rbody_xhigh_po model "sky130_fd_pr__res_xhigh_po" terminals [poly_c, poly_c]
@@ -583,6 +600,13 @@ pex nsd thickness 120nm height 206.2nm sheet 120ohm dielectric 3.9 area_cap 0aF/
 pex psd thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
 pex ntap thickness 120nm height 206.2nm sheet 120ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
 pex ptap thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+# Wells: sheet resistance and height/thickness from [S5] (nwell/well 950,
+# pwell/well 4400 milliohm/sq, typical). [S5] states no tap-to-well contact,
+# so each tie stands in with its tap's own sheet resistance.
+pex nwell thickness 206.2nm height 0nm sheet 950ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex pwell_iso thickness 206.2nm height 0nm sheet 4400ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex nwell_tie thickness 120nm height 206.2nm sheet 120ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
+pex pwell_iso_tie thickness 120nm height 206.2nm sheet 197ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
 pex poly_c thickness 180nm height 326.2nm sheet 48.2ohm dielectric 3.9 area_cap 106.13aF/um2 fringe_cap 55.27aF/um
 pex licon_nd thickness 610nm height 326.2nm sheet 185ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
 pex licon_pd thickness 610nm height 326.2nm sheet 585ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um
@@ -646,7 +670,7 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 #   the terminal layers.
 # nwell.7 (nwell to dnwell on separate nets, 4.5um), nwell.8 (hv_nwell to
 #   nwell, 2um), hv.nwell.1 (2.5um), vhvi.8 (11.24um): net spacing takes one
-#   layer, and wells are not conductors in this deck (no well-tap connection).
+#   layer.
 
 # --- Left out ---
 # Not expressible yet: difftap.2/2b (channel width, 0.42/0.36um: needs W, not
@@ -664,11 +688,10 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 #   ([S3] gives capm.2b as a bottom-plate spacing of 1.2um that needs same-net
 #   selection; capm.5 0.14um is via3 to capm, which conflicts with capm.4 over
 #   the plate, so it waits on a clearer source).
-# Devices: the substrate is a net (psub), but the n-well is not, so pd2nw,
-#   the bipolars (npn, pnp) and the 20V devices still wait, as do the native
-#   nfets (03v3_nvt, 05v0_nvt, areaid.le). VPP capacitors are fixed cells
-#   with no marker a recogniser can use. MOS bulk terminals are left off until
-#   the n-well is a net too, so well_bias has nothing to examine and is not
-#   configured.
+# Devices: the substrate (psub), each n-well and each isolated p-well are
+#   nets, and every MOS has a bulk. pd2nw, the bipolars (npn, pnp) and the
+#   20V devices have no recogniser yet, nor do the native nfets (03v3_nvt,
+#   05v0_nvt, areaid.le). VPP capacitors are fixed cells with no marker a
+#   recogniser can use.
 # Latch-up: esd_latchup needs a guard-ring width and tap distance that [S1]
 #   does not state.

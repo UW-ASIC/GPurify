@@ -181,10 +181,11 @@ fn devices(rects: &[(&str, i64, i64, i64, i64)]) -> Vec<(String, Vec<u32>)> {
         .collect()
 }
 
-/// A 1.8 V nfet is one device whose gate, source and drain are three nets:
-/// the gate is on poly, source and drain are the n+ diffusion either side.
+/// A 1.8 V nfet is one device whose gate, source, drain and bulk are four
+/// nets: the gate is on poly, source and drain are the n+ diffusion either
+/// side, and the bulk is the substrate under it.
 #[test]
-fn a_plain_nfet_extracts_as_nfet_01v8_with_three_nets() {
+fn a_plain_nfet_extracts_as_nfet_01v8_with_four_nets() {
     let found = devices(&[
         ("diff", 0, 0, 1000, 420),
         ("nsdm", -125, -125, 1125, 545),
@@ -193,11 +194,11 @@ fn a_plain_nfet_extracts_as_nfet_01v8_with_three_nets() {
     assert_eq!(found.len(), 1, "{found:?}");
     let (model, nets) = &found[0];
     assert_eq!(model, "sky130_fd_pr__nfet_01v8");
-    assert_eq!(nets.len(), 3);
-    assert!(
-        nets[0] != nets[1] && nets[1] != nets[2] && nets[0] != nets[2],
-        "{nets:?}"
-    );
+    assert_eq!(nets.len(), 4);
+    let mut distinct = nets.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 4, "{nets:?}");
 }
 
 /// A generic poly resistor: the body under `poly_rs` is cut out of the poly

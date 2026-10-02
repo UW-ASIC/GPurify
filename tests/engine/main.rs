@@ -392,23 +392,18 @@ fn the_pass_criterion_table() {
     }
 }
 
-/// Oracle: construct-from-answer, on the shipped sky130 deck. One NMOS and no
-/// p-tap: the substrate under the diffusion is a net of its own (`connect
-/// global psub`) with no terminal (bulks are off) and no label. It is always
-/// there and floats only in the model, and no netlist can name it, so LVS
-/// neither pairs it nor calls it floating: the NMOS matches its reference.
-/// Reported by the Philis session.
-#[test]
-fn a_substrate_with_nothing_on_it_does_not_fail_lvs() {
+/// LVS of `rects` on the shipped sky130 deck against the SPICE `reference`:
+/// the verdict and the violations' rule ids.
+fn sky130_lvs(rects: &[(&str, i64, i64, i64, i64)], reference: &str) -> (Verdict, Vec<String>) {
     let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/pdks/sky130.deck"))
         .expect("the shipped deck is readable");
     let mut strings = StrTable::default();
     let deck = parse_deck(&source, grid(), &mut strings).expect("sky130.deck parses");
-    let id = |name| deck.layers.id(&strings, name).expect("a sky130 layer");
     let mut layout = LayoutBuilder::new(deck.layers.len());
-    layout.rect(id("diff"), 0, 0, 1_000, 1_000);
-    layout.rect(id("nsdm"), -200, -200, 1_200, 1_200);
-    layout.rect(id("poly"), 450, -200, 600, 1_200);
+    for &(name, xlo, ylo, xhi, yhi) in rects {
+        let layer = deck.layers.id(&strings, name).expect("a sky130 layer");
+        layout.rect(layer, xlo, ylo, xhi, yhi);
+    }
     let (base, _) = layout.finish();
 
     let mut bytes = Vec::new();
@@ -421,21 +416,9 @@ fn a_substrate_with_nothing_on_it_does_not_fail_lvs() {
             gpurify_ingest::layout::UnknownLayers::Reject,
         )
         .expect("reads back");
+    let reference = gpurify_ingest::netlist::spice::read(reference, &mut strings, &deck.devices)
+        .expect("the reference parses");
     gpurify::engine::pipeline::intern_report_ids(&mut strings);
-    let nets: Vec<StrId> = ["d", "g", "s"].map(|n| strings.intern(n)).into();
-    let reference = Netlist {
-        subckt_name: vec![strings.intern("top")],
-        subckt_port_start: vec![0, 0],
-        subckt_device_start: vec![0, 1],
-        device_model: vec![strings.intern("sky130_fd_pr__nfet_01v8")],
-        device_kind: vec![DeviceKind::Mos],
-        device_terminal_start: vec![0, 3],
-        terminal_net: vec![RefNetId(0), RefNetId(1), RefNetId(2)],
-        device_param_start: vec![0, 0],
-        net_name: nets,
-        net_subckt: vec![SubcktId(0); 3],
-        ..Netlist::default()
-    };
     let loaded = Loaded {
         strings,
         grid: grid(),
@@ -449,10 +432,62 @@ fn a_substrate_with_nothing_on_it_does_not_fail_lvs() {
     let (out, summary) =
         run_checks(&loaded, &extracted, &options(Checks { lvs: true, ..NONE })).expect("runs");
     assert_eq!(summary.lvs, StageStatus::Ran);
-    assert!(matches!(out.lvs, Some(Verdict::Match)), "{:?}", out.lvs);
+    let rules = out
+        .violations
+        .rule
+        .iter()
+        .map(|&rule| loaded.strings.resolve(rule).to_owned())
+        .collect();
+    (out.lvs.expect("a reference was given"), rules)
+}
+
+/// Oracle: construct-from-answer, on the shipped sky130 deck. One NMOS and no
+/// p-tap: its bulk is the substrate under the diffusion (`connect global
+/// psub`), a net with no tap and no label. The reference states the bulk on a
+/// net of its own, so the NMOS matches and nothing floats. Reported by the
+/// Philis session.
+#[test]
+fn an_nmos_bulk_on_the_untapped_substrate_does_not_fail_lvs() {
+    let nmos = [
+        ("diff", 0, 0, 1_000, 1_000),
+        ("nsdm", -200, -200, 1_200, 1_200),
+        ("poly", 450, -200, 600, 1_200),
+    ];
+    let reference = ".subckt top\nM1 d g s b sky130_fd_pr__nfet_01v8\n.ends\n";
+    let (verdict, rules) = sky130_lvs(&nmos, reference);
+    assert!(matches!(verdict, Verdict::Match), "{verdict:?}");
+    assert!(rules.is_empty(), "no floating net: {rules:?}");
+}
+
+/// A PMOS in an n-well, its bulk tied to its source in the reference. With
+/// no n-tap the well is a net of its own and LVS must not match (netgen
+/// fails the same layout); an n-tap strapped to the source by li matches.
+/// Oracle: the field report's floating-well strongarm, reduced to one device.
+#[test]
+fn a_pmos_in_an_untapped_well_fails_lvs_and_a_tapped_one_matches() {
+    let pmos = [
+        ("nwell", -1_500, -500, 1_500, 1_500),
+        ("diff", 0, 0, 1_000, 1_000),
+        ("psdm", -100, -200, 1_200, 1_200),
+        ("poly", 450, -200, 600, 1_200),
+        ("licon", 100, 400, 270, 570),
+        ("li", 50, 350, 320, 620),
+    ];
+    let tap = [
+        ("tap", -1_000, 0, -500, 1_000),
+        ("nsdm", -1_125, -125, -375, 1_125),
+        ("licon", -850, 400, -680, 570),
+        ("li", -900, 350, 320, 620),
+    ];
+    let reference = ".subckt top\nM1 d g s s sky130_fd_pr__pfet_01v8\n.ends\n";
+
+    let (verdict, _) = sky130_lvs(&pmos, reference);
     assert!(
-        out.violations.is_empty(),
-        "no floating net: {:?}",
-        out.violations.rule
+        !matches!(verdict, Verdict::Match),
+        "a floating well matched"
     );
+
+    let tapped: Vec<_> = pmos.iter().chain(&tap).copied().collect();
+    let (verdict, rules) = sky130_lvs(&tapped, reference);
+    assert!(matches!(verdict, Verdict::Match), "{verdict:?} {rules:?}");
 }

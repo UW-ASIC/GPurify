@@ -343,8 +343,10 @@ fn every_mos_terminal_names_a_conductor() {
                 devices.terminal_start[row] as usize..devices.terminal_start[row + 1] as usize;
             for &terminal in &devices.terminal[span] {
                 let name = layer_name(&deck, &strings, terminal);
+                // A global (net-only) layer is one net, so it binds too.
                 assert!(
-                    deck.connectivity.conductors.contains(&terminal),
+                    deck.connectivity.conductors.contains(&terminal)
+                        || deck.connectivity.global.contains(&terminal),
                     "{deck_name}: the {model} recogniser puts a terminal on \
                      {name}, which the deck does not list as a conductor; that \
                      position can never be filled, so every {model} in a layout \
