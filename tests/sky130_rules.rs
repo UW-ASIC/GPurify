@@ -281,3 +281,49 @@ fn ihp_cnt_h_metal1_covers_cont() {
     let fail = [("cont", 0, 0, 160, 160), ("metal1", 5, 0, 165, 160)];
     at_limit_in(IHP, "Cnt.h", &pass, &fail);
 }
+
+/// capm.4: a via3 on the MiM top plate is enclosed by capm by 0.140 um. The
+/// pass layout also carries a plain met3-met4 via3 with no capm over it, which
+/// the rule must leave alone.
+#[test]
+fn capm_4_capm_encloses_via3_on_the_plate_by_140nm() {
+    let plain = ("via3", 5000, 0, 5200, 200);
+    let pass = [
+        ("capm", 0, 0, 2000, 2000),
+        ("via3", 140, 140, 340, 340),
+        plain,
+    ];
+    let fail = [
+        ("capm", 0, 0, 2000, 2000),
+        ("via3", 135, 140, 335, 340),
+        plain,
+    ];
+    at_limit("capm.4", &pass, &fail);
+    assert_eq!(
+        run(SKY130, "capm.4", &[plain]).0,
+        0,
+        "a via3 with no capm is flagged"
+    );
+}
+
+/// cap2m.4: the same for via4 on cap2m, 0.200 um.
+#[test]
+fn cap2m_4_cap2m_encloses_via4_on_the_plate_by_200nm() {
+    let plain = ("via4", 5000, 0, 5800, 800);
+    let pass = [
+        ("cap2m", 0, 0, 2000, 2000),
+        ("via4", 200, 200, 1000, 1000),
+        plain,
+    ];
+    let fail = [
+        ("cap2m", 0, 0, 2000, 2000),
+        ("via4", 195, 200, 995, 1000),
+        plain,
+    ];
+    at_limit("cap2m.4", &pass, &fail);
+    assert_eq!(
+        run(SKY130, "cap2m.4", &[plain]).0,
+        0,
+        "a via4 with no cap2m is flagged"
+    );
+}

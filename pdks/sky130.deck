@@ -408,12 +408,12 @@ rule m5.3 enclosure(via4, met5) >= 310nm
 rule capm.1 width(capm) >= 1um
 rule capm.2a space(capm) >= 840nm
 rule capm.3 enclosure(capm, met3) >= 140nm
-rule capm.4 enclosure(via3, capm) >= 140nm
+rule capm.4 enclosure(via3.interacting(capm), capm) >= 140nm
 rule capm.11 space(capm_m3_free, capm) >= 500nm
 rule cap2m.1 width(cap2m) >= 1um
 rule cap2m.2a space(cap2m) >= 840nm
 rule cap2m.3 enclosure(cap2m, met4) >= 140nm
-rule cap2m.4 enclosure(via4, cap2m) >= 200nm
+rule cap2m.4 enclosure(via4.interacting(cap2m), cap2m) >= 200nm
 rule cap2m.11 space(cap2m_m4_free, cap2m) >= 500nm
 
 # --- Pad, nitride seal [S1] ---
