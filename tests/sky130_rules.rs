@@ -327,3 +327,18 @@ fn cap2m_4_cap2m_encloses_via4_on_the_plate_by_200nm() {
         "a via4 with no cap2m is flagged"
     );
 }
+
+/// m1.1 on the field report's repro (`neck.gds`): two 300 nm met1 squares
+/// overlapping at a corner leave a 134.5 nm diagonal neck. KLayout reports it
+/// as two edge pairs; here it is one violation on the one merged figure.
+#[test]
+fn m1_1_diagonal_neck_at_overlapping_rectangles() {
+    let neck = [
+        ("met1", 17020, 9950, 17320, 10250),
+        ("met1", 17230, 9750, 17530, 10050),
+    ];
+    assert_eq!(run(SKY130, "m1.1", &neck).0, 1);
+    // Shift the second square 10 nm left: the neck is √(100² + 100²) ≈ 141 nm.
+    let wider = [neck[0], ("met1", 17220, 9750, 17520, 10050)];
+    assert_eq!(run(SKY130, "m1.1", &wider).0, 0);
+}

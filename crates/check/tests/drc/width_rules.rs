@@ -582,3 +582,30 @@ fn a_notch_names_the_lowest_drawn_row_of_its_own_figure() {
     assert_eq!(sink.out.len(), 1, "one notch, in the U");
     assert_eq!(sink.out.shape_a[0], ids.of(base));
 }
+
+/// Two rectangles overlapping at a corner: their inner corners are 90 apart
+/// in x and 100 in y, a diagonal neck of √18100 ≈ 134.5 units that no pair
+/// of facing edges measures (the field report's sky130 m1.1 miss).
+fn diagonal_neck() -> gpurify_geom::GeometryStore {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 200, 300, 500);
+    layout.rect(A, 210, 0, 510, 300);
+    layout.finish().0
+}
+
+/// Oracle: KLayout's Euclidean width, which flags this neck (sky130A_mr.drc
+/// m1.1 at 140 nm). 134² < 18100 < 135², so a limit of 135 reports the one
+/// merged figure at 134 and a limit of 134 is clean.
+#[test]
+fn a_diagonal_neck_between_concave_corners_is_a_width_violation() {
+    let store = diagonal_neck();
+    let mut sink = Sink::default();
+
+    sink.run(&store, &min_width_table(135));
+    assert_rule_ran(&sink.runs, RULE);
+    assert_eq!(sink.out.len(), 1, "the 134.5-unit neck went unreported");
+    assert_eq!(sink.out.measured[0], Measurement::Length(dbu(134)));
+
+    sink.run(&store, &min_width_table(134));
+    assert_clean(&sink.runs, &sink.out, RULE);
+}

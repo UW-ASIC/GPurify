@@ -204,3 +204,64 @@ pub fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu
         .expect("every validated polygon has a facing pair across its own material")
         .0
 }
+
+/// The narrowest diagonal neck of a polygon under `limit`: the Euclidean gap
+/// between two concave corners facing each other across material, as at the
+/// inner corners of two overlapping rectangles (`KLayout`'s euclidean width).
+/// Facing edges whose projections overlap are [`narrowest_facing`]'s; this is
+/// the corner-to-corner case it cannot see. The gap is floored to a whole
+/// unit; the comparison against `limit` is exact.
+///
+/// ponytail: pairs within `limit` along x, O(k²) only when every concave
+/// corner sits in one `limit`-wide column.
+pub fn narrowest_neck(poly: PolygonRef<'_>, limit: Dbu) -> Option<(Dbu, Point)> {
+    // Each concave corner, with the diagonal its void quadrant points along.
+    let mut corners: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        for i in 0..n {
+            let (p, c, q) = ((i + n - 1) % n, i, (i + 1) % n);
+            let (ix, iy) = (xs[c].raw() - xs[p].raw(), ys[c].raw() - ys[p].raw());
+            let (ox, oy) = (xs[q].raw() - xs[c].raw(), ys[q].raw() - ys[c].raw());
+            // Material on the left of travel: a right turn is concave, and
+            // the void lies back along the way in and on along the way out.
+            if ix * oy - iy * ox < 0 {
+                let (vx, vy) = ((ox - ix).signum(), (oy - iy).signum());
+                corners.push((xs[c].raw(), ys[c].raw(), vx, vy));
+            }
+        }
+    }
+    corners.sort_unstable();
+    let limit = limit.raw();
+    let mut best: Option<(i128, Point)> = None;
+    for (i, &(x, y, vx, vy)) in corners.iter().enumerate() {
+        for &(x2, y2, vx2, vy2) in &corners[i + 1..] {
+            if x2 - x >= limit {
+                break;
+            }
+            let (dx, dy) = (x2 - x, y2 - y);
+            // Opposite voids, and each corner on the other's material side.
+            if (vx2, vy2) != (-vx, -vy) || dx * vx > 0 || dy * vy > 0 {
+                continue;
+            }
+            let gap2 = i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy);
+            if gap2 < i128::from(limit) * i128::from(limit) && best.is_none_or(|(b, _)| gap2 < b) {
+                let at = Point {
+                    x: Dbu::new_unchecked((x + x2).div_euclid(2)),
+                    y: Dbu::new_unchecked((y + y2).div_euclid(2)),
+                };
+                best = Some((gap2, at));
+            }
+        }
+    }
+    best.map(|(gap2, at)| {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            reason = "a gap under the limit"
+        )]
+        let gap = (gap2 as f64).sqrt() as i64;
+        (Dbu::new_unchecked(gap), at)
+    })
+}

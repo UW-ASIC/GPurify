@@ -12,7 +12,7 @@ use gpurify_geom::ops::{Point, Winding};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::width::{narrowest_facing, poly_edges};
+use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
@@ -64,7 +64,8 @@ fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
     }
 }
 
-/// Min width and notch (`material_between == false`). One violation per
+/// Min width (Euclidean at concave corners) and notch (`material_between ==
+/// false`, facing edges only). One violation per
 /// offending figure of the self-merged layer: touching rectangles are one U,
 /// and a rectangle drawn inside another adds no width of its own. `examined`
 /// is the pre-merge polygon count.
@@ -90,7 +91,13 @@ pub(crate) fn facing(
     for (idx, owner) in (0..).zip(owners) {
         let poly = s.layer_out.get(idx);
         // A convex shape has no notch, and that is not a violation.
-        let Some((measured, at)) = narrowest_facing(poly, material_between, &mut s.facing) else {
+        let facing = narrowest_facing(poly, material_between, &mut s.facing);
+        // Width is Euclidean: a diagonal neck between concave corners counts.
+        let neck = material_between
+            .then(|| narrowest_neck(poly, limit))
+            .flatten();
+        let Some((measured, at)) = facing.into_iter().chain(neck).min_by_key(|&(gap, _)| gap)
+        else {
             continue;
         };
         if measured < limit {
