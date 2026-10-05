@@ -61,6 +61,8 @@ pub struct Outputs {
     /// One row per rule, run or not, sorted by rule id.
     pub runs: Vec<RuleRun>,
     pub lvs: Option<Verdict>,
+    /// Every series or parallel merge LVS made on either side.
+    pub lvs_merges: Vec<(gpurify_check::lvs::verdict::Side, gpurify_check::lvs::Merge)>,
     pub parasitics: Option<ParasiticNetwork>,
 }
 
@@ -313,11 +315,27 @@ fn run_lvs(
     let verdict = match reference.top() {
         // Guessing which subcircuit was meant is the one thing a comparison must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
-        Some(top) => gpurify_check::lvs::compare(
-            &layout,
-            &gpurify_check::lvs::graph::from_reference(reference, top),
-            options.lvs,
-        ),
+        Some(top) => {
+            // The SPICE names of width, length, fingers and multiplier, as both
+            // netlists intern them, so sized fingers merge like netgen's.
+            let name = |n: &str| loaded.strings.get(n);
+            let lvs = gpurify_check::lvs::CompareOptions {
+                params: gpurify_check::lvs::ParamNames {
+                    width: name("w"),
+                    length: name("l"),
+                    fingers: name("nf"),
+                    multiplier: name("m"),
+                },
+                ..options.lvs
+            };
+            let (verdict, merges) = gpurify_check::lvs::compare_logged(
+                &layout,
+                &gpurify_check::lvs::graph::from_reference(reference, top),
+                lvs,
+            );
+            out.lvs_merges = merges;
+            verdict
+        }
     };
 
     let status = match &verdict {

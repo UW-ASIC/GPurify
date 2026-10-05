@@ -6,7 +6,7 @@
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
 use crate::lvs::graph::{drop_unextracted_bulk, narrow, Graph};
-use crate::lvs::reduce::reduce;
+use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use crate::topology::TerminalRole;
@@ -21,6 +21,10 @@ pub struct CompareOptions {
     pub max_rounds: u32,
     /// Relative parameter tolerance: `|a - b| <= tol * max(|a|, |b|)`.
     pub param_tolerance: f64,
+    /// Which parameters are `W`, `L`, `nf` and `m`, so sized devices can be
+    /// merged in parallel and series. Default: none, and sized devices never
+    /// merge.
+    pub params: ParamNames,
 }
 
 impl Default for CompareOptions {
@@ -28,6 +32,7 @@ impl Default for CompareOptions {
         Self {
             max_rounds: 1000,
             param_tolerance: 0.02,
+            params: ParamNames::default(),
         }
     }
 }
@@ -36,14 +41,33 @@ impl Default for CompareOptions {
 /// extracts none (a 3-terminal MOS recogniser), then both sides are reduced.
 /// A symmetry refinement cannot break pairs the lowest node index on each side.
 pub fn compare(layout: &Graph, reference: &Graph, options: CompareOptions) -> Verdict {
+    compare_logged(layout, reference, options).0
+}
+
+/// [`compare`], and every series or parallel merge each side's reduction made,
+/// layout's first.
+pub fn compare_logged(
+    layout: &Graph,
+    reference: &Graph,
+    options: CompareOptions,
+) -> (Verdict, Vec<(Side, Merge)>) {
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
-    let (layout, reference) = (reduce(layout), reduce(&declared));
+    let (layout, layout_merges) = reduce_with(layout, options.params);
+    let (reference, reference_merges) = reduce_with(&declared, options.params);
+    let merges = layout_merges
+        .into_iter()
+        .map(|m| (Side::Layout, m))
+        .chain(reference_merges.into_iter().map(|m| (Side::Reference, m)))
+        .collect();
     let mut partition = Partition::default();
     if !refine_into(&layout, &reference, options.max_rounds, &mut partition) {
-        return Verdict::Inconclusive(Inconclusive::RoundLimit);
+        return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
-    interpret(&layout, &reference, &partition, options.param_tolerance)
+    (
+        interpret(&layout, &reference, &partition, options.param_tolerance),
+        merges,
+    )
 }
 
 /// A node no class paired with anything.

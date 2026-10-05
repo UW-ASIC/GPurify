@@ -60,6 +60,22 @@ summary:
 Each violation gives the rule, the layer, a point on the offending shape, what
 was measured and the limit it broke.
 
+## LVS reduction
+
+Before matching, both sides are reduced the way netgen reduces them:
+
+- **Parallel:** devices of one model with every terminal on the same nets
+  become one device. Source and drain are interchangeable. W and `nf` are
+  summed, and every other parameter, L included, must agree.
+- **Series:** devices stacked through a node nothing else touches, with their
+  gates strapped, become one device whose L is the sum, if every other
+  parameter agrees.
+- **Multiplier:** a reference card's `m` counts as that many fingers.
+
+The parameter names are `w`, `l`, `nf` and `m`. The report lists every merge
+under `lvs merges:` with the device rows it joined, so a paired device can be
+traced back to what was drawn.
+
 ## Exit code
 
 `0` only when every selected check ran, no rule was skipped or refused, and

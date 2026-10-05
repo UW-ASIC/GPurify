@@ -413,3 +413,105 @@ fn a_reduced_layout_matches_an_already_reduced_reference() {
     );
     assert_eq!(verdict, Verdict::Match, "{verdict:?}");
 }
+
+/// The names the sized tests merge by; `nf` and `m` are two spare ids.
+const NAMES: gpurify_check::lvs::ParamNames = gpurify_check::lvs::ParamNames {
+    width: Some(WIDTH),
+    length: Some(LENGTH),
+    fingers: Some(StrId(90)),
+    multiplier: Some(StrId(91)),
+};
+
+/// Two sized fingers across one pair of nets, the upper with source and drain
+/// swapped (which end is which is bias, not structure).
+/// Nets: 0 gate, 1 source, 2 drain, 3 bulk.
+fn sized_fingers(upper: &[(StrId, f64)]) -> Graph {
+    let mut builder = GraphBuilder::new(4);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+        &[(WIDTH, 2e-6), (LENGTH, 1.5e-7)],
+    );
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 2), (Drain, 1), (Bulk, 3)],
+        upper,
+    );
+    builder.finish()
+}
+
+/// Oracle: netgen's parallel law. Two fingers of one length are one device of
+/// their summed width; told nothing about names, sized devices stay apart.
+#[test]
+fn sized_fingers_merge_summing_width_when_told_which_parameter_is_width() {
+    let fingers = sized_fingers(&[(WIDTH, 3e-6), (LENGTH, 1.5e-7)]);
+    assert_eq!(reduce(&fingers).device_count(), 2, "merged without names");
+
+    let (out, merges) = gpurify_check::lvs::reduce::reduce_with(&fingers, NAMES);
+    assert_eq!(out.device_count(), 1);
+    let mut params = out.params_of(0).to_vec();
+    params.sort_by_key(|p| p.0);
+    assert_eq!(params.len(), 2);
+    assert!(
+        (params[0].1 - 5e-6).abs() < 1e-12 && (params[1].1 - 1.5e-7).abs() < 1e-15,
+        "{params:?}"
+    );
+    assert_eq!(merges.len(), 1);
+    assert_eq!(merges[0].kind, gpurify_check::lvs::MergeKind::Parallel);
+    assert_eq!(merges[0].devices, [0, 1]);
+}
+
+/// Different lengths are different transistors, however they are wired.
+#[test]
+fn fingers_of_different_length_do_not_merge() {
+    let fingers = sized_fingers(&[(WIDTH, 2e-6), (LENGTH, 3e-7)]);
+    let (out, merges) = gpurify_check::lvs::reduce::reduce_with(&fingers, NAMES);
+    assert_eq!(out.device_count(), 2);
+    assert!(merges.is_empty());
+}
+
+/// Oracle: the series law. Two equal-width devices stacked through an
+/// internal node, gates strapped, are one device of their summed length.
+#[test]
+fn a_sized_stack_merges_summing_length() {
+    let mut builder = GraphBuilder::new(5);
+    for (source, drain) in [(1, 2), (2, 3)] {
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 4)],
+            &[(WIDTH, 1e-6), (LENGTH, 1.5e-7)],
+        );
+    }
+    let (out, merges) = gpurify_check::lvs::reduce::reduce_with(&builder.finish(), NAMES);
+    assert_eq!(out.device_count(), 1);
+    let mut params = out.params_of(0).to_vec();
+    params.sort_by_key(|p| p.0);
+    assert!(
+        (params[0].1 - 1e-6).abs() < 1e-15 && (params[1].1 - 3e-7).abs() < 1e-15,
+        "{params:?}"
+    );
+    assert_eq!(merges[0].kind, gpurify_check::lvs::MergeKind::Series);
+}
+
+/// A reference card with `m = 2` is two fingers of its width: it pairs with a
+/// layout that drew them.
+#[test]
+fn a_multiplier_card_matches_the_fingers_it_stands_for() {
+    let layout = sized_fingers(&[(WIDTH, 2e-6), (LENGTH, 1.5e-7)]);
+    let mut builder = GraphBuilder::new(4);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Drain, 2), (Gate, 0), (Source, 1), (Bulk, 3)],
+        &[(WIDTH, 2e-6), (LENGTH, 1.5e-7), (StrId(91), 2.0)],
+    );
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let verdict = compare(&layout, &builder.finish(), options);
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}

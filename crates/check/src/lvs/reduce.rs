@@ -1,13 +1,58 @@
 //! Series and parallel MOS reduction to a fixed point, run on both sides.
 //!
 //! Data in/out: a [`Graph`]. Under-reduction is safe, over-reduction is not, so
-//! every condition is what must hold before a merge. A device declaring any
-//! parameter never merges: nothing here can tell `W` from `L` to sum them.
-//! ponytail: pass a `&StrTable` (or tag params by kind) when a pre-merged sized
-//! reference needs W/L summing.
+//! every condition is what must hold before a merge.
+//!
+//! A sized device merges only when [`ParamNames`] says which parameter is `W`
+//! and which is `L`; without them a device declaring any parameter never
+//! merges. With them, as netgen does: devices in parallel (same model, every
+//! terminal on the same nets, source and drain interchangeable) merge when
+//! every parameter but `W` and `nf` agrees, and sum those two; devices in
+//! series through an otherwise unused node merge when every parameter but `L`
+//! agrees, and sum `L`. A multiplier `m` is folded into `W` first. Parallel
+//! and series merges run in separate passes, so a merged device is one or the
+//! other and its sums are well defined.
 
 use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
+
+/// Which interned parameter names mean width, length, fingers and multiplier.
+/// A name absent from both netlists is `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ParamNames {
+    pub width: Option<StrId>,
+    pub length: Option<StrId>,
+    pub fingers: Option<StrId>,
+    pub multiplier: Option<StrId>,
+}
+
+/// Which law a merge applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeKind {
+    Parallel,
+    Series,
+}
+
+/// One merge, for the report: the input devices that became one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merge {
+    pub kind: MergeKind,
+    pub model: StrId,
+    /// Device rows of the graph `reduce` was given, ascending.
+    pub devices: Vec<u32>,
+}
+
+/// A parameter list with the named parameters left out, as `(name, bits)`
+/// ascending: what must agree for a merge that sums the named ones.
+fn signature(params: &[(StrId, f64)], summed: &[Option<StrId>]) -> Vec<(StrId, u64)> {
+    let mut out: Vec<(StrId, u64)> = params
+        .iter()
+        .filter(|(name, _)| !summed.contains(&Some(*name)))
+        .map(|&(name, value)| (name, value.to_bits()))
+        .collect();
+    out.sort_unstable();
+    out
+}
 
 use crate::lvs::graph::{narrow, transpose_into, Graph};
 use crate::lvs::refine::{kind_code, role_code};
@@ -74,6 +119,12 @@ struct Plan {
     /// Candidate series nets and the two devices each joins, ascending by net.
     /// Kept because the consumed mask is rebuilt from it after a dissolution.
     series: Vec<(u32, u32, u32)>,
+    /// Per device: the parameters a parallel merge needs equal (all but `W`,
+    /// `nf`) and a series merge needs equal (all but `L`).
+    parallel_sig: Vec<Vec<(StrId, u64)>>,
+    series_sig: Vec<Vec<(StrId, u64)>>,
+    /// Which law this pass applies.
+    mode: Option<MergeKind>,
     /// Groups after dissolution — the device count the emission writes.
     groups: usize,
     /// Surviving nets — the net count the emission writes.
@@ -98,12 +149,14 @@ fn parallel_key<'k>(
     src: &Graph,
     key_start: &[u32],
     key: &'k [u64],
+    signature: &'k [Vec<(StrId, u64)>],
     device: u32,
-) -> (u64, StrId, &'k [u64]) {
+) -> (u64, StrId, &'k [u64], &'k [(StrId, u64)]) {
     (
         kind_code(src.device_kind[device as usize]),
         src.device_model[device as usize],
         keys(key_start, key, device),
+        &signature[device as usize],
     )
 }
 
@@ -126,33 +179,101 @@ fn join(root: &mut [u32], a: u32, b: u32) {
     root[left.max(right) as usize] = left.min(right);
 }
 
-/// Reduce to series/parallel normal form. Devices come out one per group
-/// ascending by the group's lowest row; surviving nets keep their order. A graph
-/// with nothing to merge comes through byte-identical.
+/// Reduce to series/parallel normal form, merging sized devices never.
+/// Devices come out one per group ascending by the group's lowest row;
+/// surviving nets keep their order. A graph with nothing to merge comes through
+/// byte-identical.
 pub fn reduce(src: &Graph) -> Graph {
+    reduce_with(src, ParamNames::default()).0
+}
+
+/// [`reduce`], merging sized devices by `names`, and every merge it made.
+pub fn reduce_with(src: &Graph, names: ParamNames) -> (Graph, Vec<Merge>) {
     let mut plan = Plan::default();
-    let mut out = src.clone();
+    let mut out = fold_multiplier(src, names);
     let mut spare = Graph::default();
+    // `origin[d]`: the input rows output device `d` stands for, ascending.
+    let mut origin: Vec<Vec<u32>> = (0..narrow(src.device_count())).map(|d| vec![d]).collect();
+    let mut merges = Vec::new();
     // Each pass that changes anything drops a device, so this bound is never hit.
-    for _ in 0..=src.device_count() {
-        if !plan_into(&out, &mut plan) {
+    for _ in 0..=2 * src.device_count() {
+        let mode = if plan_into(&out, names, MergeKind::Parallel, &mut plan) {
+            MergeKind::Parallel
+        } else if plan_into(&out, names, MergeKind::Series, &mut plan) {
+            MergeKind::Series
+        } else {
             break;
+        };
+        let mut next = Vec::with_capacity(plan.groups);
+        let mut at = 0usize;
+        while at < plan.order.len() {
+            let root = plan.root[plan.order[at] as usize];
+            let mut end = at + 1;
+            while end < plan.order.len() && plan.root[plan.order[end] as usize] == root {
+                end += 1;
+            }
+            let mut rows: Vec<u32> = plan.order[at..end]
+                .iter()
+                .flat_map(|&d| origin[d as usize].iter().copied())
+                .collect();
+            rows.sort_unstable();
+            if end - at > 1 {
+                merges.push(Merge {
+                    kind: mode,
+                    model: out.device_model[plan.order[at] as usize],
+                    devices: rows.clone(),
+                });
+            }
+            next.push(rows);
+            at = end;
         }
-        emit_into(&out, &plan, &mut spare);
+        origin = next;
+        emit_into(&out, &plan, names, &mut spare);
         std::mem::swap(&mut out, &mut spare);
+    }
+    (out, merges)
+}
+
+/// Each device's `m` folded into its `W`: `m` devices in parallel are one of
+/// `m` times the width. Untouched without both names.
+fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
+    let (Some(width), Some(multiplier)) = (names.width, names.multiplier) else {
+        return src.clone();
+    };
+    let mut out = src.clone();
+    out.param.clear();
+    out.device_param_start.clear();
+    out.device_param_start.push(0);
+    for device in 0..narrow(src.device_count()) {
+        let params = src.params_of(device);
+        let m = params
+            .iter()
+            .find(|(name, _)| *name == multiplier)
+            .map(|&(_, m)| m);
+        for &(name, value) in params {
+            match m {
+                Some(_) if name == multiplier => {}
+                Some(m) if name == width => out.param.push((name, value * m)),
+                _ => out.param.push((name, value)),
+            }
+        }
+        out.device_param_start.push(narrow(out.param.len()));
     }
     out
 }
 
 /// Decide one pass: which devices are one device, and which nets die with them.
 /// Returns whether anything merged, which is the fixed-point test.
-fn plan_into(src: &Graph, plan: &mut Plan) -> bool {
+fn plan_into(src: &Graph, names: ParamNames, mode: MergeKind, plan: &mut Plan) -> bool {
     let devices = src.device_count();
     let nets = src.net_count();
 
-    prepare(src, plan, devices, nets);
-    join_parallel(src, plan, devices);
-    join_series(src, plan, nets);
+    prepare(src, names, plan, devices, nets);
+    plan.mode = Some(mode);
+    match mode {
+        MergeKind::Parallel => join_parallel(src, plan, devices),
+        MergeKind::Series => join_series(src, plan, nets),
+    }
 
     // Groups, then validation, then the net renumbering: a group that does not
     // survive validation must not take its nets with it.
@@ -170,7 +291,7 @@ fn plan_into(src: &Graph, plan: &mut Plan) -> bool {
 
 /// The per-row columns every later pass reads: the merge mask, the terminal keys
 /// and the port mask.
-fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
+fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets: usize) {
     plan.root.clear();
     plan.root.extend(0..narrow(devices));
     plan.consumed.clear();
@@ -190,6 +311,8 @@ fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
     plan.key_start.push(0);
     plan.mergeable.clear();
     plan.mergeable.reserve(devices);
+    plan.parallel_sig.clear();
+    plan.series_sig.clear();
     for device in 0..narrow(devices) {
         let (terminal_nets, roles) = src.terminals_of(device);
         let from = plan.key.len();
@@ -201,9 +324,14 @@ fn prepare(src: &Graph, plan: &mut Plan, devices: usize, nets: usize) {
         plan.key_start.push(narrow(plan.key.len()));
 
         // Both refusals are stated in the module comment.
-        let free = src.params_of(device).is_empty();
+        let params = src.params_of(device);
+        let sized = names.width.is_some() && names.length.is_some();
+        let free = params.is_empty() || sized;
         let bound = !terminal_nets.contains(&u32::MAX);
         plan.mergeable.push(free & bound);
+        plan.parallel_sig
+            .push(signature(params, &[names.width, names.fingers]));
+        plan.series_sig.push(signature(params, &[names.length]));
     }
 }
 
@@ -219,22 +347,25 @@ fn join_parallel(src: &Graph, plan: &mut Plan, devices: usize) {
         mergeable,
         key,
         key_start,
+        parallel_sig,
         ..
     } = plan;
     order.clear();
     order.extend(0..narrow(devices));
     order.sort_unstable_by(|&a, &b| {
-        parallel_key(src, key_start, key, a)
-            .cmp(&parallel_key(src, key_start, key, b))
+        parallel_key(src, key_start, key, parallel_sig, a)
+            .cmp(&parallel_key(src, key_start, key, parallel_sig, b))
             .then(a.cmp(&b))
     });
 
     // Walk the runs, joining each run's mergeable rows to the first of them.
     let mut at = 0usize;
     while at < order.len() {
-        let head = parallel_key(src, key_start, key, order[at]);
+        let head = parallel_key(src, key_start, key, parallel_sig, order[at]);
         let mut end = at + 1;
-        while end < order.len() && parallel_key(src, key_start, key, order[end]) == head {
+        while end < order.len()
+            && parallel_key(src, key_start, key, parallel_sig, order[end]) == head
+        {
             end += 1;
         }
         // The first mergeable row of the run anchors it, so an unmergeable row
@@ -285,6 +416,7 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
         }
         if (src.device_kind[first as usize] != src.device_kind[second as usize])
             || (src.device_model[first as usize] != src.device_model[second as usize])
+            || (plan.series_sig[first as usize] != plan.series_sig[second as usize])
         {
             continue;
         }
@@ -443,7 +575,7 @@ fn count_groups(plan: &Plan) -> usize {
 
 /// Write the planned graph into `out`, rebuilding the net-side incidence through
 /// `graph::transpose_into` so the two directions cannot disagree.
-fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
+fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
     let nets = src.net_count();
 
     out.net_name.clear();
@@ -507,7 +639,24 @@ fn emit_into(src: &Graph, plan: &Plan, out: &mut Graph) {
                 out.terminal_net.push(plan.new_net[net as usize]);
                 out.terminal_role.push(role);
             }
-            // Every member is `mergeable`, and `mergeable` is `params_of` empty.
+            // The head's parameters, the summed ones totalled over the group.
+            let summed: &[Option<StrId>] = match plan.mode {
+                Some(MergeKind::Series) => &[names.length],
+                _ => &[names.width, names.fingers],
+            };
+            for &(name, value) in src.params_of(head) {
+                let total = if summed.contains(&Some(name)) {
+                    plan.order[at..end]
+                        .iter()
+                        .flat_map(|&d| src.params_of(d))
+                        .filter(|(other, _)| *other == name)
+                        .map(|&(_, v)| v)
+                        .sum()
+                } else {
+                    value
+                };
+                out.param.push((name, total));
+            }
         }
         out.device_terminal_start
             .push(narrow(out.terminal_net.len()));

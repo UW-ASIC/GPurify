@@ -25,6 +25,7 @@ fn decisive() -> CompareOptions {
     CompareOptions {
         max_rounds: 512,
         param_tolerance: 1e-6,
+        ..CompareOptions::default()
     }
 }
 

@@ -55,6 +55,30 @@ pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: 
         out.push('\n');
     }
 
+    // Every merge LVS made before matching, so a paired device can be traced
+    // back to the rows it stands for.
+    if !outputs.lvs_merges.is_empty() {
+        out.push_str("lvs merges:\n");
+    }
+    for (side, merge) in &outputs.lvs_merges {
+        let side = match side {
+            gpurify_check::lvs::verdict::Side::Layout => "layout",
+            gpurify_check::lvs::verdict::Side::Reference => "reference",
+        };
+        let kind = match merge.kind {
+            gpurify_check::lvs::MergeKind::Parallel => "parallel",
+            gpurify_check::lvs::MergeKind::Series => "series",
+        };
+        let rows: Vec<String> = merge.devices.iter().map(u32::to_string).collect();
+        let _ = writeln!(
+            out,
+            "  {side} {kind}: {} devices of {} ({}) are one",
+            merge.devices.len(),
+            strings.resolve(merge.model),
+            rows.join(", ")
+        );
+    }
+
     // Debug-printed; every discrepancy of a mismatch is already an error row above.
     if let Some(verdict) = &outputs.lvs {
         let _ = writeln!(out, "lvs: {verdict:?}");
