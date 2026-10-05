@@ -1,6 +1,7 @@
-//! Command line: `gpurify <drc|erc|lvs|pex|all> <layout> --deck <deck> [options]`.
+//! Command line: `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`.
 
 use gpurify::engine::{Checks, Inputs, RunOptions};
+use gpurify::liberty::Accuracy;
 use gpurify_ingest::layout::UnknownLayers;
 use std::path::PathBuf;
 
@@ -23,6 +24,20 @@ pub struct Cli {
     pub output: Option<PathBuf>,
     /// Run twice and fail if the two reports differ.
     pub check_determinism: bool,
+    /// `lib`: generate a macro's Liberty files instead of checking.
+    pub lib: Option<LibArgs>,
+}
+
+/// What `lib` was asked for.
+#[derive(Debug)]
+pub struct LibArgs {
+    pub spec: PathBuf,
+    /// One entry, or every level for `--accuracy all`.
+    pub accuracy: Vec<Accuracy>,
+    pub output_dir: PathBuf,
+    pub lef: Option<PathBuf>,
+    /// Simulator decks and logs; a fresh temporary directory when absent.
+    pub work: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -37,7 +52,7 @@ fn usage<T>(message: String) -> Result<T, ArgError> {
 /// for is refused, never dropped; `--grid` has no default.
 pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let Some((subcommand, rest)) = argv.split_first() else {
-        return usage("expected a subcommand: drc, erc, lvs, pex or all".to_string());
+        return usage("expected a subcommand: drc, erc, lvs, pex, all or lib".to_string());
     };
 
     let mut layout: Option<&str> = None;
@@ -51,6 +66,11 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut reference: Option<&str> = None;
     let mut quasistatic: Vec<String> = Vec::new();
     let mut quasistatic_inductance = false;
+    let mut spec: Option<&str> = None;
+    let mut accuracy: Option<&str> = None;
+    let mut output_dir: Option<&str> = None;
+    let mut lef: Option<&str> = None;
+    let mut work: Option<&str> = None;
 
     let mut tokens = rest.iter().map(String::as_str);
     while let Some(token) = tokens.next() {
@@ -66,6 +86,11 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             "--intent" => intent = Some(value()?),
             "--reference" => reference = Some(value()?),
             "--quasistatic" => quasistatic.push(value()?.to_string()),
+            "--spec" => spec = Some(value()?),
+            "--accuracy" => accuracy = Some(value()?),
+            "--output-dir" => output_dir = Some(value()?),
+            "--lef" => lef = Some(value()?),
+            "--work" => work = Some(value()?),
             "--format" => {
                 format = match value()? {
                     "text" => Format::Text,
@@ -121,11 +146,61 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         "pex" => (Checks { pex: true, ..none }, false, false, true),
         // `all` keeps LVS selected without a reference, so it reports Skipped.
         "all" => (Checks::ALL, true, true, false),
+        // A reference is cross-checked against the spec's pins, never compared.
+        "lib" => (none, false, true, false),
         other => {
             return usage(format!(
-                "unknown subcommand {other}; expected drc, erc, lvs, pex or all"
+                "unknown subcommand {other}; expected drc, erc, lvs, pex, all or lib"
             ))
         }
+    };
+    let is_lib = subcommand == "lib";
+    for (flag, given) in [
+        ("--spec", spec.is_some()),
+        ("--accuracy", accuracy.is_some()),
+        ("--output-dir", output_dir.is_some()),
+        ("--lef", lef.is_some()),
+        ("--work", work.is_some()),
+    ] {
+        if given && !is_lib {
+            return usage(format!("{subcommand} takes no {flag}"));
+        }
+    }
+    if is_lib && (output.is_some() || format != Format::Text || check_determinism) {
+        return usage(
+            "lib writes its files under --output-dir and takes no --output, --format or \
+             --check-determinism"
+                .to_string(),
+        );
+    }
+    let lib = if is_lib {
+        let Some(spec) = spec else {
+            return usage("lib requires a macro spec (--spec)".to_string());
+        };
+        let Some(output_dir) = output_dir else {
+            return usage("lib requires --output-dir".to_string());
+        };
+        let accuracy = match accuracy.unwrap_or("spice") {
+            "all" => Accuracy::ALL.to_vec(),
+            text => match Accuracy::parse(text) {
+                Some(level) => vec![level],
+                None => {
+                    return usage(format!(
+                        "unknown --accuracy {text}; expected interface, analytical, field, \
+                         spice, statistical (or 0 to 4), or all"
+                    ))
+                }
+            },
+        };
+        Some(LibArgs {
+            spec: PathBuf::from(spec),
+            accuracy,
+            output_dir: PathBuf::from(output_dir),
+            lef: lef.map(PathBuf::from),
+            work: work.map(PathBuf::from),
+        })
+    } else {
+        None
     };
     for (flag, given, allowed) in [
         ("--intent", intent.is_some(), takes_intent),
@@ -188,6 +263,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         format,
         output: output.map(PathBuf::from),
         check_determinism,
+        lib,
     })
 }
 
@@ -231,6 +307,30 @@ mod tests {
     }
 
     #[test]
+    fn lib_takes_its_spec_accuracy_and_directory() {
+        let cli =
+            parse_str("lib t --deck d --spec s.json --output-dir o --accuracy all --lef m.lef")
+                .expect("legal");
+        let lib = cli.lib.expect("a lib run");
+        assert_eq!(lib.accuracy.len(), 5);
+        assert!(lib.lef.is_some() && lib.work.is_none());
+        assert_eq!(
+            cli.options.checks,
+            Checks {
+                drc: false,
+                erc: false,
+                lvs: false,
+                pex: false
+            }
+        );
+        let one = parse_str("lib t --deck d --spec s --output-dir o --accuracy 2").expect("legal");
+        assert_eq!(
+            one.lib.expect("lib").accuracy,
+            [gpurify::liberty::Accuracy::Field]
+        );
+    }
+
+    #[test]
     fn the_defaults_are_text_strict_and_gridless() {
         let cli = parse_str("drc t --deck d").expect("legal");
         assert_eq!(cli.format, Format::Text);
@@ -248,10 +348,21 @@ mod tests {
     #[test]
     fn every_malformed_command_line_is_refused_with_its_message() {
         let cases = [
-            ("", "expected a subcommand: drc, erc, lvs, pex or all"),
+            ("", "expected a subcommand: drc, erc, lvs, pex, all or lib"),
             (
                 "dcr t --deck d",
-                "unknown subcommand dcr; expected drc, erc, lvs, pex or all",
+                "unknown subcommand dcr; expected drc, erc, lvs, pex, all or lib",
+            ),
+            (
+                "lib t --deck d --output-dir o",
+                "lib requires a macro spec (--spec)",
+            ),
+            ("lib t --deck d --spec s", "lib requires --output-dir"),
+            ("drc t --deck d --spec s", "drc takes no --spec"),
+            (
+                "lib t --deck d --spec s --output-dir o --accuracy 9",
+                "unknown --accuracy 9; expected interface, analytical, field, spice, \
+                 statistical (or 0 to 4), or all",
             ),
             (
                 "drc --deck d",

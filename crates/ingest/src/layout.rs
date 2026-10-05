@@ -54,6 +54,17 @@ pub enum UnknownLayers {
     Drop,
 }
 
+/// Which cells' `TEXT` elements are placed as labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelDepth {
+    /// Root cells only. A sub-cell's text names a net of that sub-cell (`d`,
+    /// `sd_0`), not of the design, and two of them on one flattened net are a
+    /// conflict nobody drew. Calibre's `TEXT DEPTH PRIMARY` default.
+    Top,
+    /// Every cell, transformed into the root frame.
+    All,
+}
+
 /// A GDSII file's bytes, gunzipped when the file is gzip. `UnknownFormat` when the
 /// decompressed bytes do not open with a GDSII `HEADER` record.
 pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
@@ -305,7 +316,7 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
 
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
-    use super::{Deck, LayoutError, UnknownLayers};
+    use super::{Deck, LabelDepth, LayoutError, UnknownLayers};
     use crate::narrow;
     use crate::provenance::Provenance;
     use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
@@ -1222,6 +1233,7 @@ pub mod gds {
         deck: &'a Deck,
         strings: &'a StrTable,
         unknown: UnknownLayers,
+        labels: LabelDepth,
         builder: GeometryStoreBuilder,
         provenance: Provenance,
         /// Cells on the current root-to-here chain, for the cycle check.
@@ -1236,13 +1248,25 @@ pub mod gds {
 
     impl Library {
         /// Resolve the hierarchy into one flat, layer-sorted store with the deck's
-        /// derived layers appended, plus every label placed in the root frame.
+        /// derived layers appended, plus every root cell's label placed in the
+        /// root frame ([`LabelDepth::Top`]).
         /// `strings` is the table [`Self::parse`] interned into; used for error names only.
         pub fn flatten(
             &self,
             deck: &Deck,
             strings: &StrTable,
             unknown: UnknownLayers,
+        ) -> Result<(GeometryStore, Provenance), LayoutError> {
+            self.flatten_labels(deck, strings, unknown, LabelDepth::Top)
+        }
+
+        /// [`Self::flatten`], placing the labels `labels` selects.
+        pub fn flatten_labels(
+            &self,
+            deck: &Deck,
+            strings: &StrTable,
+            unknown: UnknownLayers,
+            labels: LabelDepth,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
             let mut referenced = vec![false; self.cells.len()];
             for reference in &self.refs {
@@ -1260,6 +1284,7 @@ pub mod gds {
                 deck,
                 strings,
                 unknown,
+                labels,
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
@@ -1271,7 +1296,7 @@ pub mod gds {
             };
             for (index, &is_referenced) in referenced.iter().enumerate() {
                 if !is_referenced {
-                    walk.visit(narrow(index), Xform::IDENTITY)?;
+                    walk.visit(narrow(index), Xform::IDENTITY, true)?;
                 }
             }
 
@@ -1283,8 +1308,9 @@ pub mod gds {
     }
 
     impl Flatten<'_> {
-        /// Emit one cell's geometry and labels under `at`, then recurse into its references.
-        fn visit(&mut self, cell: u32, at: Xform) -> Result<(), LayoutError> {
+        /// Emit one cell's geometry under `at`, then recurse into its references.
+        /// Its labels are placed when `root`, or under [`LabelDepth::All`].
+        fn visit(&mut self, cell: u32, at: Xform, root: bool) -> Result<(), LayoutError> {
             let lib = self.lib;
             let index = cell as usize;
             if self.on_chain[index] {
@@ -1301,8 +1327,10 @@ pub mod gds {
                     self.emit(elem, at)?;
                 }
             }
-            for label in &lib.texts[entry.text_start as usize..entry.text_end as usize] {
-                self.place(label, at)?;
+            if root || self.labels == LabelDepth::All {
+                for label in &lib.texts[entry.text_start as usize..entry.text_end as usize] {
+                    self.place(label, at)?;
+                }
             }
             for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
                 for r in 0..reference.rows {
@@ -1319,7 +1347,7 @@ pub mod gds {
                         let at = at
                             .compose(placed)
                             .ok_or(LayoutError::UnsupportedTransform)?;
-                        self.visit(reference.child, at)?;
+                        self.visit(reference.child, at, false)?;
                     }
                 }
             }
@@ -1484,11 +1512,13 @@ mod tests {
         strings: StrTable,
     }
 
-    /// Parse and flatten into a fresh string table.
+    /// Parse and flatten into a fresh string table, placing every cell's labels
+    /// so the transform tests can follow a label down the hierarchy.
     fn read(bytes: &[u8], deck: &Deck, unknown: UnknownLayers) -> Result<Layout, LayoutError> {
         let mut strings = StrTable::default();
         let library = gds::Library::parse(bytes, &mut strings)?;
-        let (store, provenance) = library.flatten(deck, &strings, unknown)?;
+        let (store, provenance) =
+            library.flatten_labels(deck, &strings, unknown, super::LabelDepth::All)?;
         Ok(Layout {
             store,
             provenance,
@@ -2546,6 +2576,41 @@ mod tests {
             "a point under a mirrored instance takes the instance transform, \
              the same as every vertex of the shape it names"
         );
+    }
+
+    /// By default a sub-cell's label is not a design label: the same library
+    /// that binds `VDD` under [`super::LabelDepth::All`] binds nothing.
+    #[test]
+    fn a_sub_cell_label_is_not_placed_by_default() {
+        let mut strings = StrTable::default();
+        let deck = labelling_deck(&mut strings);
+        let mut bytes = gds_hierarchy(&[
+            ("CHILD", &[met1_square()], &[]),
+            ("TOP", &[], &[sref("CHILD", 0, 0.0, 0, 0)]),
+        ]);
+        let child_end = find_first_endstr(&bytes);
+        bytes.splice(
+            child_end..child_end,
+            text_records(&[label(68, 5, 200, 200, "VDD")]),
+        );
+
+        let library = gds::Library::parse(&bytes, &mut strings).expect("well formed");
+        let (_, top) = library
+            .flatten(&deck, &strings, UnknownLayers::Reject)
+            .expect("well formed");
+        let (_, all) = library
+            .flatten_labels(
+                &deck,
+                &strings,
+                UnknownLayers::Reject,
+                super::LabelDepth::All,
+            )
+            .expect("well formed");
+        assert!(
+            top.placed.is_empty(),
+            "a CHILD text was placed as a design label"
+        );
+        assert_eq!(all.placed.len(), 1, "LabelDepth::All places the CHILD text");
     }
 
     /// The byte offset of the first `ENDSTR`, where a label belonging to the

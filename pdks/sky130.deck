@@ -96,6 +96,13 @@ layer met2_pin = gds(69, 16)
 layer met3_pin = gds(70, 16)
 layer met4_pin = gds(71, 16)
 layer met5_pin = gds(72, 16)
+layer nwell_label = gds(64, 5)
+layer nwell_pin = gds(64, 16)
+layer pwell_label = gds(64, 59)
+layer pwell_pin = gds(122, 16)
+layer pwell_drawing = gds(64, 44)
+# The cell outline, which a macro's area is read from.
+layer prBoundary = gds(235, 4)
 
 # Conductors. A resistor body is cut out of the layer it is drawn on, so the
 # two heads of a resistor are two nets.
@@ -532,6 +539,7 @@ connect via via [met1, met2]
 connect via via2 [met2, met3]
 connect via via3_m3 [met3, met4]
 connect via via4_m4 [met4, met5]
+connect label nwell_label names nwell
 connect label poly names poly_c
 connect label poly_label names poly_c
 connect label li names li_c

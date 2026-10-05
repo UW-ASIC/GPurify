@@ -86,6 +86,14 @@ None has been compared against foundry signoff results.
   all. Its metal heights are stacked from the manual's widths and the 2:1
   aspect ratio, not from a published cross-section.
 
+## Liberty generation
+
+[liberty.md](liberty.md#what-it-does-not-do-yet) lists what `lib` does not
+characterize. Against sky130_fd_sc_hd's shipped libraries, the residual
+difference is mostly the models: the same devices simulated with today's
+ngspice sky130 models differ from the shipped tables by about as much as a
+`spice`-accuracy run does.
+
 ## Test coverage
 
 `ir_drop`, `electromigration` and `reliability` are checked against numbers

@@ -71,28 +71,100 @@ pub fn extract_into(
     grid: Grid,
     matrix: &mut CapMatrix,
 ) -> Result<Accuracy, solve::SolveError> {
+    let mut order = selected.to_vec();
+    order.sort_unstable();
+    let meshing = mesh_options(store, nets, &order, stack, grid);
+    extract_meshed_into(store, nets, &order, stack, grid, meshing, matrix)
+}
+
+/// [`extract_into`] at a caller's panel size rather than the stack-derived one.
+pub fn extract_meshed_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    selected: &[NetId],
+    stack: &ProcessStack,
+    grid: Grid,
+    meshing: mesh::MeshOptions,
+    matrix: &mut CapMatrix,
+) -> Result<Accuracy, solve::SolveError> {
+    let mut order = selected.to_vec();
+    order.sort_unstable();
+    let driven: Vec<Vec<usize>> = (0..order.len()).map(|i| vec![i]).collect();
+    let options = solve::Options::default();
+    columns_meshed_into(
+        store, nets, &order, &driven, stack, grid, meshing, options, matrix,
+    )
+}
+
+/// Columns of the Maxwell matrix with every selected conductor meshed: one
+/// solve per entry of `driven`, each entry's conductors at one volt together
+/// and the rest at ground. `matrix` is `selected.len()` rows by `driven.len()`
+/// columns, row-major, rows in ascending [`NetId`] order (`matrix.net`). An
+/// entry driving several conductors is the column of those conductors shorted,
+/// the sum of their single columns, in one solve; a row is the charge induced
+/// on that conductor, which is what a windowed extraction wants: a net's row
+/// is its column, by reciprocity.
+pub fn extract_columns_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    selected: &[NetId],
+    driven: &[Vec<NetId>],
+    stack: &ProcessStack,
+    grid: Grid,
+    meshing: mesh::MeshOptions,
+    options: solve::Options,
+    matrix: &mut CapMatrix,
+) -> Result<u32, solve::SolveError> {
+    let mut order = selected.to_vec();
+    order.sort_unstable();
+    let columns: Vec<Vec<usize>> = driven
+        .iter()
+        .map(|set| {
+            set.iter()
+                .filter_map(|net| order.binary_search(net).ok())
+                .collect()
+        })
+        .collect();
+    columns_meshed_into(
+        store, nets, &order, &columns, stack, grid, meshing, options, matrix,
+    )
+    .map(|accuracy| accuracy.iterations)
+}
+
+fn columns_meshed_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    order: &[NetId],
+    columns: &[Vec<usize>],
+    stack: &ProcessStack,
+    grid: Grid,
+    meshing: mesh::MeshOptions,
+    options: solve::Options,
+    matrix: &mut CapMatrix,
+) -> Result<Accuracy, solve::SolveError> {
     matrix.net.clear();
     matrix.value.clear();
 
-    let mut order = selected.to_vec();
-    order.sort_unstable();
-
     let mut mesh = mesh::Mesh::default();
-    let meshing = mesh_options(store, nets, &order, stack, grid);
-    mesh::build_into(store, nets, &order, stack, meshing, grid, &mut mesh)?;
+    mesh::build_into(store, nets, order, stack, meshing, grid, &mut mesh)?;
 
     let n = order.len();
-    matrix.net.extend_from_slice(&order);
-    matrix.value.resize(n * n, 0.0);
+    matrix.net.extend_from_slice(order);
+    matrix.value.resize(n * columns.len(), 0.0);
 
     let operator = matvec::CpuMatVec::build(&mesh);
-    let options = solve::Options::default();
-    let iterations = columns_into(&operator, &mesh, options, matrix)?;
+    let iterations = columns_into(&operator, &mesh, options, columns, matrix)?;
 
+    // Asymmetry is only defined on a square matrix.
+    let asymmetry = if columns.len() == n {
+        matrix.asymmetry()
+    } else {
+        0.0
+    };
     Ok(Accuracy {
         tolerance: options.tolerance,
         iterations,
-        asymmetry: matrix.asymmetry(),
+        asymmetry,
     })
 }
 
@@ -102,23 +174,29 @@ fn columns_into(
     operator: &matvec::CpuMatVec,
     mesh: &mesh::Mesh,
     options: solve::Options,
+    columns: &[Vec<usize>],
     matrix: &mut CapMatrix,
 ) -> Result<u32, solve::SolveError> {
     let n = mesh.conductor_net.len();
+    let width = columns.len();
     let panels = mesh.panel.len();
     let mut workspace = solve::Workspace::default();
     let mut potential = Vec::with_capacity(panels);
     let mut charge = vec![0.0_f64; panels];
     let mut iterations = 0_u32;
 
-    for column in 0..n {
-        let owner = u32::try_from(column).expect("a conductor index is a u32");
-        // One volt on the driven conductor, ground on the rest.
+    let mut driven = vec![false; n];
+    for (slot, column) in columns.iter().enumerate() {
+        driven.fill(false);
+        for &conductor in column {
+            driven[conductor] = true;
+        }
+        // One volt on the driven conductors, ground on the rest.
         potential.clear();
         potential.extend(
             mesh.panel
                 .iter()
-                .map(|panel| f64::from(panel.conductor == owner)),
+                .map(|panel| f64::from(driven[panel.conductor as usize])),
         );
 
         // Zero initial guess, never a warm start: columns stay independent.
@@ -139,7 +217,7 @@ fn columns_into(
             if !total.is_finite() {
                 return Err(solve::SolveError::NonFinite(iterations));
             }
-            matrix.value[row * n + column] = total;
+            matrix.value[row * width + slot] = total;
         }
     }
     Ok(iterations)

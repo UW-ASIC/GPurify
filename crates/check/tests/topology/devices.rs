@@ -461,6 +461,43 @@ fn two_gates_under_one_implant_are_refused_rather_than_reported_as_one_device() 
     );
 }
 
+/// Oracle: construct-from-answer. One channel whose bulk layer is drawn
+/// twice, two overlapping wells, as a top cell redrawing a tile's well does.
+/// The two wells are one net, so the bulk is one terminal: one device.
+#[test]
+fn a_terminal_drawn_twice_on_one_net_still_binds() {
+    const CHANNEL: LayerId = LayerId(0);
+    const POLY: LayerId = LayerId(1);
+    const ACTIVE: LayerId = LayerId(2);
+    const WELL: LayerId = LayerId(3);
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(CHANNEL, 200, 0, 250, 200);
+    layout.rect(POLY, 200, -50, 250, 250);
+    layout.rect(ACTIVE, 0, 0, 200, 200);
+    layout.rect(ACTIVE, 250, 0, 450, 200);
+    layout.rect(WELL, -100, -100, 550, 300);
+    layout.rect(WELL, -200, -200, 650, 400);
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![POLY, ACTIVE, WELL],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        marker: vec![CHANNEL],
+        terminal_start: vec![0, 4],
+        terminal: vec![POLY, ACTIVE, ACTIVE, WELL],
+        model: vec![strings.intern("pch")],
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    assert_eq!(devices.len(), 1, "a redrawn well dropped the transistor");
+}
+
 /// Oracle: construct-from-answer. The same layout, recognised on a marker layer
 /// drawn one polygon per channel — `poly AND diff`, which
 /// `ingest::layout::derive_layers_into` materialises with a real `LayerId` and

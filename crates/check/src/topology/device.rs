@@ -238,16 +238,22 @@ pub fn recognise_into(
             for &(marker, terminal) in &exact {
                 rank = if marker == previous { rank + 1 } else { 0 };
                 previous = marker;
-                // More polygons than positions (two gates under one implant):
-                // poison the last position so the marker is refused.
-                let surplus = rank >= positions.len();
-                let slot = positions[rank.min(positions.len() - 1)];
                 let offset = (marker.0 - markers.start) as usize;
-                bind[offset * width + slot] = if surplus {
-                    NetId::NONE
-                } else {
-                    nets.net_of(terminal)
-                };
+                let net = nets.net_of(terminal);
+                // More polygons than positions (two gates under one implant):
+                // poison the last position so the marker is refused. A surplus
+                // polygon on a net already bound here is the same terminal
+                // drawn twice (a well over a well) and binds nothing new.
+                if rank >= positions.len() {
+                    let again = positions
+                        .iter()
+                        .any(|&slot| bind[offset * width + slot] == net);
+                    if !again {
+                        bind[offset * width + positions[positions.len() - 1]] = NetId::NONE;
+                    }
+                    continue;
+                }
+                bind[offset * width + positions[rank]] = net;
                 // The first source/drain polygon under a marker decides the axis.
                 if votes_axis && sd_axis[offset] == Axis::Unknown {
                     sd_axis[offset] = channel_axis(store, marker, terminal);

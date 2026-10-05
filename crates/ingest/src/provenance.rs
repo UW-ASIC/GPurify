@@ -46,6 +46,11 @@ impl Provenance {
         &self.labelled
     }
 
+    /// Every `TEXT` as placed, in arrival order, bound or not.
+    pub fn placed(&self) -> &[PlacedLabel] {
+        &self.placed
+    }
+
     /// Record a `TEXT` where the layout drew it, bound to nothing yet.
     pub fn place_label(&mut self, at: Point, layer: LayerId, name: StrId) {
         self.placed.push(PlacedLabel { at, layer, name });

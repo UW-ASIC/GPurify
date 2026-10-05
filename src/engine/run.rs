@@ -110,7 +110,7 @@ const DIE_LAYER_NAMES: [&str; 3] = ["prBoundary", "DIEAREA", "die"];
 /// The die boundary every density divides by: the deck's outline layer if it
 /// has one, else the union of every polygon's bbox (fail-open for min-density,
 /// which never sweeps the margin). [`Bbox::EMPTY`] for an empty store.
-fn design_extent(loaded: &Loaded) -> Bbox {
+pub(crate) fn design_extent(loaded: &Loaded) -> Bbox {
     let declared = DIE_LAYER_NAMES
         .iter()
         .find_map(|name| loaded.deck.layers.id(&loaded.strings, name))

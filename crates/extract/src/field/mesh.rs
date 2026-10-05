@@ -1,14 +1,20 @@
 //! Panel meshing: conductor surfaces to boundary elements.
 //!
-//! Data in: selected nets' polygons (as extruded bounding boxes) and the stack.
+//! Data in: selected nets' polygons, cut into the disjoint rectangles
+//! [`decompose_into`] gives and extruded through the stack. A rectangle's side
+//! face is meshed only where no rectangle of the same conductor on the same
+//! layer abuts it, so no panel sits inside metal.
 //! Data out: a [`Mesh`] — panels banded by conductor, Morton-ordered within each
 //! band. That order is the matvec's summation order, so it fixes output bits.
 
 use gpurify_check::topology::{NetId, NetTable};
-use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::rects::decompose_into;
+use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, Grid};
 use gpurify_ingest::deck::ProcessStack;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 /// A flat rectangular boundary element.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +55,8 @@ pub enum MeshError {
     MissingThickness(LayerId),
     #[error("selected net has no geometry")]
     EmptyConductor,
+    #[error("layer {0:?} is not valid rectilinear geometry, so it cannot be meshed exactly")]
+    InvalidGeometry(LayerId),
 }
 
 /// Mesh the selected nets, one conductor per entry of `selected`, in that order.
@@ -78,9 +86,10 @@ pub fn build_into(
     let table = extrusion_table(stack);
     let sentinel = table.len() - 1;
 
-    // Pass one: every selected polygon as a solid, so proximity refinement can
-    // see every other conductor.
+    // Pass one: every selected polygon's rectangles as solids, so proximity
+    // refinement can see every other conductor.
     let mut solid: Vec<Solid> = Vec::new();
+    let mut rects = Rects::default();
     for (index, &net) in selected.iter().enumerate() {
         let conductor = u32::try_from(index).expect("a selection is indexed by a u32 conductor");
         let polys = nets.polys_of(net);
@@ -98,13 +107,30 @@ pub fn build_into(
             return Err(MeshError::MissingThickness(layer));
         }
         for &poly in polys {
-            let row = table[store.poly_layer(poly).idx().min(sentinel)];
-            solid.push(Solid {
-                bbox: store.poly_bbox(poly),
-                z: row.z,
-                epsilon: row.epsilon,
-                conductor,
-            });
+            let layer = store.poly_layer(poly);
+            let row = table[layer.idx().min(sentinel)];
+            for &bbox in rects.of(store, layer, poly)? {
+                solid.push(Solid {
+                    bbox,
+                    z: row.z,
+                    epsilon: row.epsilon,
+                    conductor,
+                    layer,
+                });
+            }
+        }
+    }
+
+    // Every side face, by the plane it lies in, so an abutting rectangle of
+    // the same conductor and layer can be cut out of its neighbour's face.
+    let mut faces: BTreeMap<FaceKey, Vec<(i64, i64)>> = BTreeMap::new();
+    for here in &solid {
+        let b = here.bbox;
+        for (axis, low, at, span) in side_faces(b) {
+            faces
+                .entry((here.conductor, here.layer, axis, low, at))
+                .or_default()
+                .push(span);
         }
     }
 
@@ -138,15 +164,47 @@ pub fn build_into(
             ];
             let near = near_another_conductor(&solid, here, options.proximity_refine);
             let edge_here = edge / f64::from(1 + u8::from(near));
-            mesh_box(
-                lo,
-                hi,
-                edge_here,
-                conductor,
-                here.epsilon,
-                &mut remaining,
-                &mut scratch,
-            )?;
+            for (axis, sign) in [(2, -1.0), (2, 1.0)] {
+                let plane = if sign < 0.0 { lo[axis] } else { hi[axis] };
+                mesh_face(
+                    axis,
+                    plane,
+                    lo,
+                    hi,
+                    edge_here,
+                    conductor,
+                    here.epsilon,
+                    &mut remaining,
+                    &mut scratch,
+                )?;
+            }
+            for (axis, low, at, span) in side_faces(here.bbox) {
+                let covering = faces
+                    .get(&(here.conductor, here.layer, axis, !low, at))
+                    .map_or(&[][..], Vec::as_slice);
+                // The face runs along the other planar axis.
+                let along = 1 - axis;
+                let plane = if low { lo[axis] } else { hi[axis] };
+                for (from, to) in uncovered(span, covering) {
+                    let (mut piece_lo, mut piece_hi) = (lo, hi);
+                    #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+                    {
+                        piece_lo[along] = from as f64 * metre;
+                        piece_hi[along] = to as f64 * metre;
+                    }
+                    mesh_face(
+                        axis,
+                        plane,
+                        piece_lo,
+                        piece_hi,
+                        edge_here,
+                        conductor,
+                        here.epsilon,
+                        &mut remaining,
+                        &mut scratch,
+                    )?;
+                }
+            }
         }
         band_start = band_end;
         out.conductor_start
@@ -176,13 +234,91 @@ pub fn build_into(
     Ok(())
 }
 
-/// One conductor polygon as a solid: grid-unit footprint, z extent in metres.
+/// One rectangle of a conductor polygon as a solid: grid-unit footprint, z
+/// extent in metres.
 #[derive(Debug, Clone, Copy)]
 struct Solid {
     bbox: Bbox,
     z: [f64; 2],
     epsilon: f64,
     conductor: u32,
+    layer: LayerId,
+}
+
+/// A side face's plane: conductor, layer, normal axis, low side, coordinate.
+type FaceKey = (u32, LayerId, usize, bool, i64);
+
+/// Each layer's polygons cut into rectangles, decomposed on first use.
+#[derive(Default)]
+struct Rects {
+    /// By outer ring's row; a hole row maps to nothing (its outer carries it).
+    of_poly: BTreeMap<PolyId, Vec<Bbox>>,
+    done: Vec<LayerId>,
+}
+
+impl Rects {
+    fn of(
+        &mut self,
+        store: &GeometryStore,
+        layer: LayerId,
+        poly: PolyId,
+    ) -> Result<&[Bbox], MeshError> {
+        if !self.done.contains(&layer) {
+            self.done.push(layer);
+            let mut valid = ValidatedLayer::default();
+            validate_layer_into(store, layer, &mut valid)
+                .map_err(|_| MeshError::InvalidGeometry(layer))?;
+            let (mut rects, mut start) = (Vec::new(), Vec::new());
+            decompose_into(&valid, &mut rects, &mut start);
+            for i in 0..valid.len() {
+                let polygon = valid.get(u32::try_from(i).expect("a polygon index is a u32"));
+                let mut rows = polygon.rows();
+                let outer = rows.next().expect("a polygon has an outer ring");
+                self.of_poly.insert(
+                    outer,
+                    rects[start[i] as usize..start[i + 1] as usize].to_vec(),
+                );
+                for hole in rows {
+                    self.of_poly.insert(hole, Vec::new());
+                }
+            }
+        }
+        Ok(self.of_poly.get(&poly).map_or(&[][..], Vec::as_slice))
+    }
+}
+
+/// A rectangle's four side faces: `(normal axis, low side?, plane, span along
+/// the other planar axis)`, in grid units.
+fn side_faces(b: Bbox) -> [(usize, bool, i64, (i64, i64)); 4] {
+    let (x, y) = ((b.xlo.raw(), b.xhi.raw()), (b.ylo.raw(), b.yhi.raw()));
+    [
+        (0, true, x.0, y),
+        (0, false, x.1, y),
+        (1, true, y.0, x),
+        (1, false, y.1, x),
+    ]
+}
+
+/// What of `span` no interval of `covering` covers, ascending.
+fn uncovered(span: (i64, i64), covering: &[(i64, i64)]) -> Vec<(i64, i64)> {
+    let mut cuts: Vec<(i64, i64)> = covering
+        .iter()
+        .map(|&(a, b)| (a.max(span.0), b.min(span.1)))
+        .filter(|&(a, b)| a < b)
+        .collect();
+    cuts.sort_unstable();
+    let mut out = Vec::new();
+    let mut at = span.0;
+    for (a, b) in cuts {
+        if a > at {
+            out.push((at, a));
+        }
+        at = at.max(b);
+    }
+    if at < span.1 {
+        out.push((at, span.1));
+    }
+    out
 }
 
 /// One layer's z extent in metres and the permittivity above it.
@@ -236,16 +372,6 @@ fn near_another_conductor(solid: &[Solid], of: Solid, distance: Dbu) -> bool {
         .any(|other| other.conductor != of.conductor && of.bbox.within(other.bbox, distance))
 }
 
-/// The six faces of a box: the axis each is normal to, and which end it sits at.
-const FACES: [(usize, f64); 6] = [
-    (0, -1.0),
-    (0, 1.0),
-    (1, -1.0),
-    (1, 1.0),
-    (2, -1.0),
-    (2, 1.0),
-];
-
 /// Panels along one face edge of `width` at a limit of `edge`; at least one.
 fn cuts(width: f64, edge: f64) -> u32 {
     #[expect(
@@ -259,7 +385,9 @@ fn cuts(width: f64, edge: f64) -> u32 {
 
 /// Panel one box into `out`. The budget is charged per face before emitting,
 /// so an over-limit mesh is refused, never half-built.
-fn mesh_box(
+fn mesh_face(
+    axis: usize,
+    plane: f64,
     lo: [f64; 3],
     hi: [f64; 3],
     edge: f64,
@@ -268,39 +396,35 @@ fn mesh_box(
     remaining: &mut u32,
     out: &mut Vec<(Panel, f64)>,
 ) -> Result<(), MeshError> {
-    for (axis, sign) in FACES {
-        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-        let (wu, wv) = (hi[u] - lo[u], hi[v] - lo[v]);
-        // Degenerate (or NaN) faces carry no charge.
-        if !(wu > 0.0 && wv > 0.0) {
-            continue;
-        }
+    let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    let (wu, wv) = (hi[u] - lo[u], hi[v] - lo[v]);
+    // Degenerate (or NaN) faces carry no charge.
+    if !(wu > 0.0 && wv > 0.0) {
+        return Ok(());
+    }
 
-        let (nu, nv) = (cuts(wu, edge), cuts(wv, edge));
-        let panels = nu.checked_mul(nv).ok_or(MeshError::TooManyPanels)?;
-        *remaining = remaining
-            .checked_sub(panels)
-            .ok_or(MeshError::TooManyPanels)?;
+    let (nu, nv) = (cuts(wu, edge), cuts(wv, edge));
+    let panels = nu.checked_mul(nv).ok_or(MeshError::TooManyPanels)?;
+    *remaining = remaining
+        .checked_sub(panels)
+        .ok_or(MeshError::TooManyPanels)?;
 
-        let (du, dv) = (wu / f64::from(nu), wv / f64::from(nv));
-        let area = du * dv;
-        let plane = (lo[axis] + hi[axis]).mul_add(0.5, sign * (hi[axis] - lo[axis]) * 0.5);
-
-        for iu in 0..nu {
-            for iv in 0..nv {
-                let mut centre = [0.0; 3];
-                centre[axis] = plane;
-                centre[u] = (f64::from(iu) + 0.5).mul_add(du, lo[u]);
-                centre[v] = (f64::from(iv) + 0.5).mul_add(dv, lo[v]);
-                out.push((
-                    Panel {
-                        centre,
-                        area,
-                        conductor,
-                    },
-                    epsilon,
-                ));
-            }
+    let (du, dv) = (wu / f64::from(nu), wv / f64::from(nv));
+    let area = du * dv;
+    for iu in 0..nu {
+        for iv in 0..nv {
+            let mut centre = [0.0; 3];
+            centre[axis] = plane;
+            centre[u] = (f64::from(iu) + 0.5).mul_add(du, lo[u]);
+            centre[v] = (f64::from(iv) + 0.5).mul_add(dv, lo[v]);
+            out.push((
+                Panel {
+                    centre,
+                    area,
+                    conductor,
+                },
+                epsilon,
+            ));
         }
     }
     Ok(())
@@ -382,7 +506,95 @@ fn spatial_cmp(a: Panel, b: Panel) -> Ordering {
 
 #[cfg(test)]
 mod tests {
-    use super::{morton3, quantise, spread3, MORTON_BITS, MORTON_MAX, MORTON_SPAN};
+    use super::{morton3, quantise, spread3, uncovered, MORTON_BITS, MORTON_MAX, MORTON_SPAN};
+
+    #[test]
+    fn uncovered_is_the_span_less_every_cover() {
+        assert_eq!(uncovered((0, 10), &[]), [(0, 10)]);
+        assert_eq!(
+            uncovered((0, 10), &[(2, 4), (3, 6), (9, 20)]),
+            [(0, 2), (6, 9)]
+        );
+        assert_eq!(uncovered((0, 10), &[(-5, 15)]), []);
+    }
+
+    /// An L whose bounding box swallows a second conductor in its notch: the
+    /// L's panels must stay on the L, and its footprint must be its area,
+    /// not its box's. Meshing boxes put the L's top face over the square.
+    #[test]
+    fn a_concave_conductor_is_meshed_as_drawn_not_as_its_box() {
+        use gpurify_check::topology::{net::extract_nets_into, NetId, NetTable};
+        use gpurify_geom::{Dbu, GeometryStoreBuilder, Grid, LayerId};
+        use gpurify_ingest::deck::{Connectivity, ProcessStack};
+
+        let d = Dbu::new_unchecked;
+        let mut builder = GeometryStoreBuilder::default();
+        let l = [
+            (0, 0),
+            (1000, 0),
+            (1000, 400),
+            (400, 400),
+            (400, 1000),
+            (0, 1000),
+        ];
+        let (xs, ys): (Vec<Dbu>, Vec<Dbu>) = l.iter().map(|&(x, y)| (d(x), d(y))).unzip();
+        builder.push(LayerId(0), &xs, &ys);
+        let square = [(600, 600), (900, 600), (900, 900), (600, 900)];
+        let (xs, ys): (Vec<Dbu>, Vec<Dbu>) = square.iter().map(|&(x, y)| (d(x), d(y))).unzip();
+        builder.push(LayerId(0), &xs, &ys);
+        let (store, _) = builder.finish(1);
+        let connectivity = Connectivity {
+            conductors: vec![LayerId(0)],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&store, &connectivity, &mut nets);
+        let stack = ProcessStack {
+            thickness_nm: vec![100.0],
+            height_nm: vec![1000.0],
+            sheet_res_ohm_sq: vec![0.1],
+            area_cap_af_um2: vec![1.0],
+            fringe_cap_af_um: vec![1.0],
+            dielectric_k: vec![4.0],
+        };
+        let options = super::MeshOptions {
+            max_edge: d(50),
+            proximity_refine: d(0),
+            max_panels: 1_000_000,
+        };
+        let mut mesh = super::Mesh::default();
+        let grid = Grid::new(1000).expect("a 1 nm grid");
+        super::build_into(
+            &store,
+            &nets,
+            &[NetId(0), NetId(1)],
+            &stack,
+            options,
+            grid,
+            &mut mesh,
+        )
+        .expect("meshable");
+        let l_net = nets.net_of(gpurify_geom::PolyId(0));
+        let l = u32::from(l_net != NetId(0));
+        let (mut top, mut inside) = (0.0, 0);
+        for p in mesh.panel.iter().filter(|p| p.conductor == l) {
+            let (x, y) = (p.centre[0] * 1e9, p.centre[1] * 1e9);
+            if x > 600.0 && x < 900.0 && y > 600.0 && y < 900.0 {
+                inside += 1;
+            }
+            if (p.centre[2] - 1.1e-6).abs() < 1e-12 {
+                top += p.area;
+            }
+        }
+        assert_eq!(inside, 0, "the L has panels over the square");
+        let l_area = 1000.0 * 400.0 + 400.0 * 600.0;
+        assert!(
+            (top * 1e18 - l_area).abs() < 1e-3,
+            "top face {} nm², L {l_area} nm²",
+            top * 1e18
+        );
+    }
 
     #[test]
     fn spreading_moves_bit_i_to_bit_three_i() {

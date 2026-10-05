@@ -59,6 +59,7 @@ though nothing was found.
 | `lvs` | Layout against your schematic | a reference netlist, required |
 | `pex` | Parasitic resistance and capacitance | `--quasistatic <net>…` to field-solve a net |
 | `all` | Everything | a missing input marks its check skipped, never passed |
+| `lib` | Nothing: writes a hard macro's Liberty `.lib` per corner, and its Verilog blackbox | `--spec <file>`; ngspice above `interface` accuracy |
 
 Every option, the report format and the design intent file are described in
 [docs/usage.md](docs/usage.md).
@@ -259,6 +260,7 @@ There is no licence file yet.
 |---|---|
 | [docs/usage.md](docs/usage.md) | Commands, options, reading the report, design intent, parasitics. |
 | [docs/deck.md](docs/deck.md) | Writing a deck, and what every rule checks. |
+| [docs/liberty.md](docs/liberty.md) | Liberty for a hard macro: accuracy levels, the macro spec, how each number is measured. |
 | [docs/limitations.md](docs/limitations.md) | What GPurify cannot check yet. |
 | [tests/fixtures/README.md](tests/fixtures/README.md) | The test corpus and how each expected answer was derived. |
 

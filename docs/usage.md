@@ -11,6 +11,7 @@ gpurify <command> <layout.gds> --deck <process.deck> --grid <n> [options]
 | `lvs` | The layout's devices and connections against your schematic | `--reference <netlist>` |
 | `pex` | Parasitic resistance, capacitance and, optionally, inductance | the deck's `pex` lines |
 | `all` | All four | a check whose input is missing is reported as skipped, never as passed |
+| `lib` | Nothing: writes a macro's Liberty files, see [liberty.md](liberty.md) | `--spec`, `--output-dir` |
 
 ## Options
 
