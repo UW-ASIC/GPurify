@@ -41,9 +41,9 @@ pub struct Inputs<'a> {
 }
 
 /// Classify nets, resolve intent, build the per-net networks and the supply
-/// grid, solve it, then run every row. A failed solve refuses only the rows
-/// that read it. An error means no rule ran: a network could not be built,
-/// and nothing was written to `out` or `runs`.
+/// grid, solve it, then run every row. A network that could not be built (a
+/// conductor whose resistance the deck does not state: unknown, never zero)
+/// or a failed solve refuses only the rows that read it; the rest run.
 pub fn check(
     rules: &RuleSet,
     inputs: Inputs<'_>,
@@ -66,35 +66,35 @@ pub fn check(
     voltage::propagate_into(design.nets, design.devices, &intent_map, &mut voltage);
 
     let mut networks = NetNetworks::default();
-    power::extract_nets_into(
+    let built = power::extract_nets_into(
         design.store,
         design.nets,
         design.devices,
         process,
         &mut networks,
-    )?;
+    );
     let mut grid = PowerGrid::default();
-    power::extract_into(
+    let grid_built = power::extract_into(
         design.store,
         design.nets,
         design.devices,
         &intent_map,
         process,
         &mut grid,
-    )?;
+    );
 
     // No declared supply: no grid, and the electrical rules record themselves skipped.
     let mut scratch = Scratch::default();
     let mut solution = PowerSolution::default();
-    let power = if grid.is_empty() {
-        Ok(None)
-    } else {
-        power::solve_into(&grid, &mut scratch.solve, &mut solution).map(|()| {
+    let power = match grid_built {
+        Err(error) => Err(error),
+        Ok(()) if grid.is_empty() => Ok(None),
+        Ok(()) => power::solve_into(&grid, &mut scratch.solve, &mut solution).map(|()| {
             Some(Solved {
                 grid: &grid,
                 solution: &solution,
             })
-        })
+        }),
     };
 
     rules.run(
@@ -104,7 +104,7 @@ pub fn check(
             ports,
             intent: &intent_map,
             voltage: &voltage,
-            networks: &networks,
+            networks: built.map(|()| &networks),
             power,
             die,
             grid: process.grid,

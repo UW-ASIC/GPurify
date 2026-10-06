@@ -6,7 +6,8 @@
 
 use crate::erc::facts::IntentMap;
 use crate::erc::power::{
-    discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, Power, PowerGrid, Solved,
+    discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, Power, PowerError,
+    PowerGrid, Solved,
 };
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{fill_rows, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K};
@@ -70,12 +71,16 @@ pub struct ElectromigrationTable {
 /// refuses the row.
 pub fn check_p2p_resistance(
     design: Design<'_>,
-    networks: &NetNetworks,
+    networks: Result<&NetNetworks, PowerError>,
     table: &P2pResistanceTable,
     scratch: &mut Scratch,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    let Ok(networks) = networks else {
+        fill_rows(&table.head, Outcome::Refused, out, runs);
+        return;
+    };
     let Scratch { solve, probes, .. } = scratch;
     for row in 0..table.head.len() {
         let before = out.len();

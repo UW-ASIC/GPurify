@@ -302,6 +302,30 @@ fn a_via_into_a_global_layer_is_no_grid_link() {
     assert_eq!(report.run("ir").outcome, Outcome::Ran);
 }
 
+/// A conductor whose resistance the deck does not state (no `pex` row: a
+/// process that publishes none) is unknown, never zero: the rows that read a
+/// resistance are refused, and the stage still runs every other row.
+/// Reported by the Philis session (ASAP7 front-end layers).
+#[test]
+fn a_conductor_without_a_sheet_resistance_refuses_only_the_rows_that_read_one() {
+    let report = erc(
+        "layer li = gds(9, 0)\nconnect conductors [li]\nrule ir ir_drop()\nrule p2p p2p_resistance(; max: 10ohm)\nrule drivers multiple_drivers(; max: 1)\n",
+        &intent(
+            1800.0,
+            &[("VDD", "power")],
+            r#"{"net":"VDD","max_drop_mv":100,"budget_current_ua":1000}"#,
+        ),
+        |l, layout| {
+            let bar = layout.rect(l.met1, 0, 0, 4_000, 1_000);
+            load_at(l, layout, 3_000, 0);
+            vec![(bar, "VDD")]
+        },
+    );
+    assert_eq!(report.run("ir").outcome, Outcome::Refused);
+    assert_eq!(report.run("p2p").outcome, Outcome::Refused);
+    assert_eq!(report.run("drivers").outcome, Outcome::Ran);
+}
+
 /// Two 12 um x 1 um bars, met2 (pad, centre x = 6000) above met1, joined by
 /// one via at x = 5000 and one at x = 11000; one load on met1 at x = 6000.
 fn divider(l: Layers, layout: &mut LayoutBuilder) -> Vec<(Handle, &'static str)> {

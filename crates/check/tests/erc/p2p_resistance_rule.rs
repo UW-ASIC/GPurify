@@ -61,7 +61,14 @@ fn run(
     let mut scratch = Scratch::default();
     let mut out = Violations::default();
     let mut runs = Vec::new();
-    check_p2p_resistance(design, networks, rules, &mut scratch, &mut out, &mut runs);
+    check_p2p_resistance(
+        design,
+        Ok(networks),
+        rules,
+        &mut scratch,
+        &mut out,
+        &mut runs,
+    );
     (out, runs)
 }
 

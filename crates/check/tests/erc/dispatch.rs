@@ -284,7 +284,7 @@ impl Cell {
             ports: &self.ports,
             intent,
             voltage: &self.voltage,
-            networks: &self.networks,
+            networks: Ok(&self.networks),
             power: Ok(None),
             die: Bbox {
                 xlo: dbu(0),
