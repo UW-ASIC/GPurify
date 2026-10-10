@@ -49,10 +49,14 @@ impl CapMatrix {
         self.net.len()
     }
 
-    /// Largest relative asymmetry `|C[i][j] − C[j][i]| / |C[i][j]|`; NaN if any
-    /// entry is non-finite, so a poisoned matrix fails every tolerance.
+    /// Largest asymmetry `|C[i][j] − C[j][i]| / √(C[i][i]·C[j][j])`, relative
+    /// to the pair's self-capacitances; NaN if any entry is non-finite, so a
+    /// poisoned matrix fails every tolerance.
     ///
-    /// Two exact zeros mirrored count as symmetric.
+    /// The scale is the diagonal, not the entry: a solve converged to a
+    /// relative residual leaves an error of that order in the diagonal, and a
+    /// weakly coupled pair's tiny off-diagonal would otherwise read that same
+    /// error as a large relative asymmetry (testing-plan F47).
     ///
     /// # Panics
     ///
@@ -61,14 +65,15 @@ impl CapMatrix {
     pub fn asymmetry(&self) -> f64 {
         let n = self.dim();
         let mut worst = 0.0_f64;
-        // `f64::max` drops NaN (folding away 0/0 from two exact zeros), so
+        // `f64::max` drops NaN (folding away 0/0 from a zero diagonal), so
         // poison is carried separately: `x * 0.0` is NaN only for non-finite `x`.
         let mut poison = 0.0_f64;
         for i in 0..n {
             for j in 0..n {
                 let entry = self.value[i * n + j];
                 let mirror = self.value[j * n + i];
-                worst = worst.max((entry - mirror).abs() / entry.abs());
+                let scale = (self.value[i * n + i] * self.value[j * n + j]).abs().sqrt();
+                worst = worst.max((entry - mirror).abs() / scale);
                 poison += entry * 0.0 + mirror * 0.0;
             }
         }

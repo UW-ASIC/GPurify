@@ -406,13 +406,19 @@ fn near_another_conductor(solid: &[Solid], of: Solid, distance: Dbu) -> bool {
 }
 
 /// Panels along one face edge of `width` at a limit of `edge`; at least one.
+///
+/// A width within a millionth of an edge above a whole number of edges takes
+/// that number. `width` is a difference of absolute coordinates in metres, so
+/// an exact multiple can come out a few ulps over and gain a panel at one
+/// position but not another: moving a layout changed its capacitance
+/// (testing-plan F46).
 fn cuts(width: f64, edge: f64) -> u32 {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "positive; a saturated count is refused as TooManyPanels"
     )]
-    let n = (width / edge).ceil() as u32;
+    let n = (width / edge - 1e-6).ceil() as u32;
     n.max(1)
 }
 

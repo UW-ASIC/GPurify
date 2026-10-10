@@ -38,10 +38,10 @@
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
 //! finding that breaks them: F23, F24, F30, F31, and
-//! `F44` (closed forms read each drawn polygon, not the conductor),
-//! `F45` (a field-solved polygon is one filament along its bounding box),
-//! `F46` (the field-solve mesh depends on absolute position) and `F47`
-//! (the reciprocity gate refuses ordinary layouts).
+//! `F44` (closed forms read each drawn polygon, not the conductor)
+//! and `F45` (a field-solved polygon is one filament along its bounding box).
+//! `F46` (the mesh depended on absolute position) and `F47` (the reciprocity
+//! gate refused ordinary layouts) are fixed, and their fixtures hold.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -708,7 +708,7 @@ fn solved(name: &str, catalog: &[&'static str], layout: Layout, nets: &[&str]) -
 /// - F24: a plate's ground capacitance is at least the parallel-plate
 ///   `ε₀εr·A/h` to the substrate.
 /// - F31: naming a net twice is refused or deduplicated; the run completes.
-/// - `F47`: four ordinary conductors solved together are not refused.
+/// - Four ordinary conductors solved together are not refused (F47, fixed).
 fn field(depth: Depth) -> Vec<Fixture> {
     let sizes: &[(i64, i64)] = match depth {
         Depth::Merge => &[(20_000, 1_000)],
@@ -884,9 +884,9 @@ fn field(depth: Depth) -> Vec<Fixture> {
     out.push(twice);
 
     // Four ordinary conductors solved together. The matrix is reciprocal to
-    // about 1e-11 of its diagonal, but the engine holds each off-diagonal's
-    // asymmetry, relative to that entry alone, to the 1e-10 residual, so the
-    // most weakly coupled pair refuses the run (`F47`).
+    // about 1e-11 of its diagonal; when the gate held each off-diagonal's
+    // asymmetry relative to that entry alone, the most weakly coupled pair
+    // refused the run (F47).
     out.push(
         solved(
             "pex/field/four_conductors",
@@ -894,8 +894,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
             four_conductors(),
             &["A", "B", "C", "D"],
         )
-        .expect(Expect::Passes(true))
-        .known("F47"),
+        .expect(Expect::Passes(true)),
     );
     out
 }
@@ -1188,16 +1187,6 @@ fn differences(what: &str, c: &[Vec<f64>], reference: &[Vec<f64>], factor: f64) 
     out
 }
 
-/// A law that fails today because of `finding`, as [`Fixture::known`]: it
-/// must keep failing, and one that holds is reported so the fix is recorded.
-fn known(finding: &str, broken: &[String]) {
-    assert!(
-        !broken.is_empty(),
-        "expected to fail until {finding} is fixed, and it now holds; drop the \
-         `known` call and record {finding} as fixed"
-    );
-}
-
 /// PEX-005: a field solve is a function of the geometry, not of how it is
 /// drawn: every symmetry of the square gives the same matrix, and doubling
 /// every length (layout and stack) doubles every capacitance, as it must in a
@@ -1234,11 +1223,9 @@ fn a_field_solve_is_invariant_under_symmetry_and_covariant_under_scale() {
     assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
 
-/// PEX-005: moving a layout moves its field and changes nothing else. Today
-/// a face is cut into `ceil(width / edge)` panels with the width taken from
-/// absolute coordinates in metres, so where the width is an exact multiple of
-/// the edge, round-off at some positions adds a panel: the same three
-/// conductors 1 mm to the right read capacitances 1e-4 apart (`F46`).
+/// PEX-005: moving a layout moves its field and changes nothing else. A face's
+/// panel count once took round-off from absolute coordinates, so the same
+/// three conductors 1 mm to the right read capacitances 1e-4 apart (F46).
 #[test]
 fn a_field_solve_is_invariant_under_translation() {
     let labels = ["A", "B", "C"];
@@ -1249,7 +1236,7 @@ fn a_field_solve_is_invariant_under_translation() {
         let (c, _) = maxwell(layout.transformed(Symmetry::IDENTITY, dx, dy), &labels, 1.0);
         broken.extend(differences(&format!("+({dx},{dy})"), &c, &reference, 1.0));
     }
-    known("F46", &broken);
+    assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
 
 /// PEX-010: SPEF carries the network: a net's `*D_NET` total is its

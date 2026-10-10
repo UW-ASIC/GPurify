@@ -381,11 +381,11 @@ fn a_capacitance_matrix_reads_back_row_major_at_the_dimension_it_reports() {
     assert_eq!(CapMatrix::default().dim(), 0, "an empty matrix has no rows");
 }
 
-/// Oracle: closed form. Asymmetry is the largest relative difference between an
-/// entry and its transpose. A symmetric matrix has none; a matrix whose `(0,1)`
-/// entry is one and whose `(1,0)` entry is 1.1 is off by a tenth, relative to
-/// the smaller of the two, which is a number computed here and not read off a
-/// run.
+/// Oracle: closed form. Asymmetry is the largest difference between an entry
+/// and its transpose, relative to the geometric mean of the two diagonals. A
+/// symmetric matrix has none; a matrix whose `(0,1)` entry is one and whose
+/// `(1,0)` entry is 1.1, on a diagonal of 4 and 3, is off by `0.1 / √12`, a
+/// number computed here and not read off a run.
 #[test]
 fn asymmetry_is_zero_on_a_symmetric_matrix_and_the_relative_gap_otherwise() {
     let symmetric = matrix(&[&[4.0, -1.0, -0.5], &[-1.0, 3.0, -2.0], &[-0.5, -2.0, 5.0]]);
@@ -393,9 +393,9 @@ fn asymmetry_is_zero_on_a_symmetric_matrix_and_the_relative_gap_otherwise() {
 
     let skewed = matrix(&[&[4.0, 1.0], &[1.1, 3.0]]);
     assert_close_relative(
-        "one tenth out of reciprocity",
+        "one tenth out of reciprocity, on a diagonal of 4 and 3",
         skewed.asymmetry(),
-        0.1,
+        0.1 / 12.0_f64.sqrt(),
         1e-9,
     );
 }
