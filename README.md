@@ -86,7 +86,7 @@ rule via.4a enclosure(via1, met1) >= 55nm
 
 It is strict. Every parameter must be written out, every number carries its
 unit, and a typo is an error with a line and column, never a rule that silently
-does nothing. There are 24 design-rule kinds and 19 electrical-rule kinds.
+does nothing. There are 35 design-rule kinds and 24 electrical-rule kinds.
 [docs/deck.md](docs/deck.md) covers the language and every rule.
 
 Four decks ship in `pdks/`, each citing the rule manual release its numbers
@@ -111,9 +111,11 @@ tell a fixed violation from one that merely vanished.
 
 ## Accuracy
 
-GPurify is tested against 167 real GDSII cells drawn for a real PDK, each
-containing a deliberate defect at a known coordinate with a measurement worked
-out by hand. All 167 agree with their expected answer.
+GPurify is tested against 167 GDSII cells, drawn with sky130 layer names on a
+synthetic deck, each containing a deliberate defect at a known coordinate with
+a measurement worked out by hand. All 167 agree with their expected answer.
+The shipped foundry decks are tested separately, on hand-drawn layouts at each
+rule's limit; they have not been run on foundry test structures yet.
 
 ```
 DRC   ██████████████████████████████████████  94
@@ -123,8 +125,8 @@ LVS   ██████                                  16
 ```
 
 Expected answers were derived from the geometry and the physics first, then
-compared against the previous implementation's output. 119 agree, so two
-independent routes reached the same number. 24 disagree, and each records which
+compared against the previous implementation's output. 117 agree, so two
+independent routes reached the same number. 26 disagree, and each records which
 side is wrong and why.
 
 ### The test that matters
@@ -148,11 +150,11 @@ grade for how much evidence is behind it:
 ```
 strong       ███████████████████████████████████  122   the rule ran, had real geometry to look at, and the measurement came close to the limit
 blocked      ███                                   11   the expected answer is sound but the tool cannot currently reach it
-vacuous      ███                                   10   the rule ran but never came close to the limit
+vacuous      ███                                    9   the rule ran but never came close to the limit
 skipped      ██                                     7   the rule reported skipped, and a clean count here would be a lie
-weak         ██                                     7   nothing to check, for a legitimate reason
+underivable  ██                                     7   nothing in the test data determines the answer
+weak         ██                                     6   nothing to check, for a legitimate reason
 refused      █                                      5   the rule correctly refuses this input rather than guessing
-underivable  █                                      5   nothing in the test data determines the answer
 ```
 
 Nearly three quarters genuinely discriminates. The rest is accounted for by
@@ -237,7 +239,7 @@ per cell. At a thousand polygons neither tool is doing enough work to measure.
 This is one rule on synthetic rectilinear layout. It does not exercise KLayout's
 hierarchical or tiled modes and is not a claim about its DRC engine in general.
 KLayout's DRC is a programmable Ruby DSL, so it can express rules a fixed
-vocabulary of 24 kinds cannot; a rule count is not a comparison between the two.
+vocabulary of rule kinds cannot; a rule count is not a comparison between the two.
 
 Everything above is one release build on an Intel i9-14900HX. Timings are
 recorded, not enforced: no run fails a build for being slow. `cargo test

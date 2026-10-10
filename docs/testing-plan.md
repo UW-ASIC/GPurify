@@ -370,7 +370,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | # | Item | Plan refs | Status |
 |---|---|---|---|
 | A1 | Planning docs: this plan, check-sources.md, check-catalog.tsv, deck-library-plan.md | — | done |
-| A2 | Doc-count test; fix the stale counts and claims (README kinds, fixtures README, `counts` block, `limitations.md` esd_latchup, `ci.yml` GPU comment) | F5, F10, L8 | todo |
+| A2 | Doc-count test; fix the stale counts and claims (README kinds, fixtures README, `counts` block, `limitations.md` esd_latchup, `ci.yml` GPU comment) | F5, F10, L8 | done |
 | A3 | Golden report snapshots (`tests/golden/`, `GPURIFY_BLESS`); `--check-determinism` CLI test; RAYON 1 vs N byte test; CI runs release-mode tests | F7, L7, L8 | todo |
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | todo |
 | B1 | LVS: assert `expect_match` in the corpus; planted-fault matrix | F2, L2 | todo |

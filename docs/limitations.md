@@ -99,7 +99,7 @@ ngspice sky130 models differ from the shipped tables by about as much as a
 `ir_drop`, `electromigration` and `reliability` are checked against numbers
 worked out by hand from Ohm's law, Black's equation with the Blech exemption,
 and the power-law and Arrhenius lifetime model, including values exactly at
-the limit. `esd_latchup` runs and reports, but no test yet checks its numbers
-against an independent answer. Many other rules have limits that are foundry
-conventions rather than physics, so their tests prove the rule runs and
-measures, not that the limit is right for your process.
+the limit. `esd_latchup` is checked against the closed form on its corpus
+cell, guard-ring width and tap distance alike. Many other rules have limits
+that are foundry conventions rather than physics, so their tests prove the
+rule runs and measures, not that the limit is right for your process.
