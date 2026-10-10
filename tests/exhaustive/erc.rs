@@ -2484,16 +2484,54 @@ impl Board {
                 .map(|_| count(0))
                 .collect(),
         ));
-        // multiple_drivers: distinct gate nets among the transistors whose
-        // drain is on the net.
+        // multiple_drivers: each transistor with its drain on the net pulls it
+        // through every transistor below its source (drain to source, never
+        // back through the net); pull networks sharing a gate net are one
+        // driver.
         for (id, max) in [("md1", 1), ("md2", 2)] {
             let findings = (0..NETS)
                 .filter_map(|n| {
-                    let mut gates: Vec<usize> =
-                        self.devs.iter().filter(|d| d.d == n).map(|d| d.g).collect();
-                    gates.sort_unstable();
-                    gates.dedup();
-                    (gates.len() > max).then(|| count(gates.len() as u32))
+                    let gates: Vec<Vec<usize>> = self
+                        .devs
+                        .iter()
+                        .filter(|d| d.d == n)
+                        .map(|m| {
+                            let (mut gates, mut seen, mut walk) =
+                                (vec![m.g], [false; NETS], vec![m.s]);
+                            while let Some(at) = walk.pop() {
+                                if at == n || seen[at] {
+                                    continue;
+                                }
+                                seen[at] = true;
+                                for below in self.devs.iter().filter(|u| u.d == at) {
+                                    gates.push(below.g);
+                                    walk.push(below.s);
+                                }
+                            }
+                            gates
+                        })
+                        .collect();
+                    let mut group: Vec<usize> = (0..gates.len()).collect();
+                    let mut changed = true;
+                    while changed {
+                        changed = false;
+                        for i in 0..gates.len() {
+                            for j in 0..gates.len() {
+                                let shared = gates[i].iter().any(|g| gates[j].contains(g));
+                                if shared && group[j] > group[i] {
+                                    let (old, new) = (group[j], group[i]);
+                                    group
+                                        .iter_mut()
+                                        .filter(|g| **g == old)
+                                        .for_each(|g| *g = new);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    group.sort_unstable();
+                    group.dedup();
+                    (group.len() > max).then(|| count(group.len() as u32))
                 })
                 .collect();
             out.push(Expect::rule(id, findings));
@@ -3066,7 +3104,7 @@ fn topology_cases() -> Vec<Fixture> {
 /// inner node X): two parallel pmos from VDD to OUT gated by A and B, nmos A
 /// from X to OUT, nmos B from VSS to X. OUT has one driver, the gate, and
 /// Yosys's "conflicting drivers" asks for one cell output per net; counting
-/// gate nets per drain reads two.
+/// gate nets per drain read two (F28).
 fn nand2_fixture() -> Fixture {
     const SIX: usize = 6;
     let ty = |net: usize| TRACK_Y0 + net as i64 * TRACK_PITCH;
@@ -3108,7 +3146,6 @@ fn nand2_fixture() -> Fixture {
     )
     .layout(l)
     .expect(Expect::clean("md1"))
-    .known("F28")
 }
 
 /// ESD clamp paths (ERC-C1): a pad on net 0, VDD and VSS supplies, and a

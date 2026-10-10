@@ -12,6 +12,7 @@ use crate::erc::{first_vertex, push_net_violations, record_run, Design, Scratch}
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId, PortTable, TerminalRole};
 use gpurify_geom::boolean::union_into;
+use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
@@ -73,18 +74,22 @@ pub struct FloatingWellTable {
 /// Contending drivers: deck kind `multiple_drivers`, written
 /// `multiple_drivers(; max: count)`.
 ///
-/// A net driven by more than `max_drivers` distinct gate nets (a parallel pair
-/// sharing a gate is one driver). A transistor drives the net its drain is
-/// on, and its driver is its gate's net, so an inverter's two transistors are
-/// one driver. A drain with no gate is not a driver. Needs no design intent.
+/// A net driven by more than `max_drivers` distinct drivers. A transistor
+/// with its drain on the net pulls it, through the network below its source:
+/// every transistor reached by following drain to source away from the net
+/// (a NAND's series pull-down). Pull networks that share a gate net are one
+/// driver, so an inverter's pair is one, a parallel pair sharing a gate is
+/// one, and a NAND's or NOR's complementary pull-up and pull-down, gated by
+/// the same inputs, are one. A drain with no gate is not a driver. Needs no
+/// design intent.
 ///
 /// # Limits
 ///
-/// The output of a multi-input static gate (NAND, NOR) has drains gated by
-/// each input, so it counts one driver per input. A transistor's source and
-/// drain are as extraction assigns them, by the order of the two diffusion
-/// polygons under its marker, not by circuit function, so the verdict can
-/// depend on that order.
+/// A transistor's source and drain are as extraction assigns them, by the
+/// order of the two diffusion polygons under its marker, not by circuit
+/// function, so the verdict can depend on that order: a transistor drawn
+/// output side first drives its supply. Telling them apart needs to know
+/// which nets are rails.
 ///
 /// Catalog: ERC-G3 in the [check catalog]. Defined by [Yosys `check`]
 /// (conflicting drivers). Source tags are in [check-sources.md].
@@ -281,7 +286,8 @@ const NO_GATE: u32 = u32::MAX;
 ///
 /// `examined` counts nets with at least one drain terminal. A violation sits
 /// at the first vertex of the net's lowest-numbered polygon, on its layer,
-/// measuring the distinct drivers against `max`. Every row runs.
+/// measuring the distinct drivers (pull networks joined by a shared gate net)
+/// against `max`. Every row runs.
 ///
 /// # Panics
 ///
@@ -293,40 +299,93 @@ pub fn check_multiple_drivers(
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    // Every `(driven net, driving gate net)` pair, once above the rows.
-    scratch.edges.clear();
-    for device in 0..design.devices.len() {
+    // Per device: its first gate's net (`NO_GATE` for none or no net) and its
+    // source's net; every drain on a net as `(net, device)`, sorted, so a
+    // net's drains are one run.
+    let devices = design.devices;
+    let mut gate = vec![NO_GATE; devices.len()];
+    let mut source = vec![NO_GATE; devices.len()];
+    let mut drains: Vec<(u32, u32)> = Vec::new();
+    for device in 0..devices.len() {
         let id = DeviceId(u32::try_from(device).expect("a device index is a u32"));
-        let (nets, roles) = design.devices.terminals_of(id);
-        // First gate wins.
-        let gate = roles
-            .iter()
-            .position(|role| matches!(role, TerminalRole::Gate))
-            .map_or(NO_GATE, |slot| nets[slot].0);
-        for (slot, role) in roles.iter().enumerate() {
-            if matches!(role, TerminalRole::Drain) && nets[slot] != NetId::NONE {
-                scratch.edges.push((nets[slot].0, gate));
+        let (nets, roles) = devices.terminals_of(id);
+        for (&net, role) in nets.iter().zip(roles) {
+            match role {
+                TerminalRole::Gate if gate[device] == NO_GATE => gate[device] = net.0,
+                TerminalRole::Source if source[device] == NO_GATE => source[device] = net.0,
+                TerminalRole::Drain if net != NetId::NONE => drains.push((net.0, id.0)),
+                _ => {}
             }
         }
     }
-    scratch.edges.sort_unstable();
-    scratch.edges.dedup();
+    drains.sort_unstable();
+    drains.dedup();
+    let drains_on = |net: u32| {
+        let lo = drains.partition_point(|&(n, _)| n < net);
+        &drains[lo..lo + drains[lo..].partition_point(|&(n, _)| n == net)]
+    };
 
-    // Collapse each net's run to `(net, distinct drivers)` in place. An ungated
-    // drain (`NO_GATE`, last in its run) is not a driver, but its net counts
-    // as examined.
-    let mut read = 0usize;
-    let mut write = 0usize;
-    while read < scratch.edges.len() {
-        let net = scratch.edges[read].0;
-        let end = read + scratch.edges[read..].partition_point(|&(driven, _)| driven == net);
-        let ungated = u32::from(scratch.edges[end - 1].1 == NO_GATE);
-        let drivers = u32::try_from(end - read).expect("a group is shorter than the pair column");
-        scratch.edges[write] = (net, drivers - ungated);
-        write += 1;
-        read = end;
+    // `(net, distinct drivers)` per net with a drain. A driver is a pull
+    // network: a transistor with its drain on the net, and every transistor
+    // below its source, followed drain to source away from the net. Members
+    // whose networks share a gate net are one driver: a NAND's parallel
+    // pull-up and series pull-down share their inputs.
+    // ponytail: one walk per member; a pass-transistor array walked from each
+    // of its nets is quadratic. Share the walks per source net if that bites.
+    scratch.edges.clear();
+    let mut seen = vec![0u32; design.nets.net_count()];
+    let mut stamp = 0u32;
+    let mut queue: Vec<u32> = Vec::new();
+    // `(gate net, member)` for every gate of each member's pull network.
+    let mut gates: Vec<(u32, u32)> = Vec::new();
+    let mut shared: Vec<(u32, u32)> = Vec::new();
+    let mut labels = Vec::new();
+    let mut start = 0;
+    while start < drains.len() {
+        let net = drains[start].0;
+        let run = drains_on(net);
+        start += run.len();
+        gates.clear();
+        for (member, &(_, device)) in (0u32..).zip(run) {
+            // A drain with no gate drives nothing.
+            if gate[device as usize] == NO_GATE {
+                continue;
+            }
+            gates.push((gate[device as usize], member));
+            stamp += 1;
+            queue.clear();
+            queue.push(source[device as usize]);
+            while let Some(at) = queue.pop() {
+                let fresh = seen.get(at as usize).is_some_and(|&s| s != stamp);
+                if at == net || !fresh {
+                    continue;
+                }
+                seen[at as usize] = stamp;
+                for &(_, below) in drains_on(at) {
+                    if gate[below as usize] != NO_GATE {
+                        gates.push((gate[below as usize], member));
+                    }
+                    queue.push(source[below as usize]);
+                }
+            }
+        }
+        gates.sort_unstable();
+        shared.clear();
+        shared.extend(
+            gates
+                .windows(2)
+                .filter(|pair| pair[0].0 == pair[1].0)
+                .map(|pair| (pair[0].1, pair[1].1)),
+        );
+        let members = u32::try_from(run.len()).expect("a net's drains fit a u32");
+        components_into(members, &shared, &mut labels);
+        let mut drivers: Vec<ComponentLabel> =
+            gates.iter().map(|&(_, m)| labels[m as usize]).collect();
+        drivers.sort_unstable();
+        drivers.dedup();
+        let drivers = u32::try_from(drivers.len()).expect("a net's drivers fit a u32");
+        scratch.edges.push((net, drivers));
     }
-    scratch.edges.truncate(write);
     let examined = u64::try_from(scratch.edges.len()).expect("a net count is a u64");
 
     for row in 0..table.head.len() {
