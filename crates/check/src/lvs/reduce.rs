@@ -1,4 +1,4 @@
-//! Series and parallel MOS reduction to a fixed point, run on both sides.
+//! Series and parallel reduction to a fixed point, run on both sides.
 //!
 //! Data in/out: a [`Graph`]. Under-reduction is safe, over-reduction is not, so
 //! every condition is what must hold before a merge.
@@ -9,36 +9,81 @@
 //! terminal on the same nets, source and drain interchangeable) merge when
 //! every parameter but `W` and `nf` agrees, and sum those two; devices in
 //! series through an otherwise unused node merge when every parameter but `L`
-//! agrees, and sum `L`. A multiplier `m` is folded into `W` first. Parallel
-//! and series merges run in separate passes, so a merged device is one or the
-//! other and its sums are well defined.
+//! agrees, and sum `L`. A multiplier `m` is folded into `W` first. "Agrees"
+//! means the same parameter names with bit-identical values: the comparison's
+//! tolerance plays no part here.
+//!
+//! - **Parallel** (catalog LVS-040, KLayout and Netgen both do it): devices of
+//!   one kind and one model whose terminals land on the same nets role for
+//!   role become one. MOS source and drain are interchangeable, and so is
+//!   every `Pin(_)`. This applies to every device kind, not only MOS, and
+//!   consumes no net.
+//! - **Series** (catalog LVS-041; on by default, which Netgen's is not): two
+//!   devices of one kind and one model whose channels (`Source`/`Drain`) meet
+//!   at a net carrying exactly those two terminals, with every other terminal
+//!   on the same nets (gates strapped, one bulk; catalog LVS-045) and at least
+//!   one such terminal, become one. The shared net must not be a port or
+//!   named, and is consumed. In practice only MOS have a channel.
+//! - **Multiplier** (catalog LVS-046): with both the `W` and `m` names given,
+//!   each device's `W` is multiplied by its `m` and the `m` is dropped,
+//!   before any merge.
+//!
+//! A device with a terminal on no net never merges. Each pass applies one law
+//! to the whole graph, parallel first, so every sum within a pass is well
+//! defined. Passes repeat until neither law merges anything, and a later pass
+//! may merge a merged device again: a series stack, then two such stacks in
+//! parallel. Resistors, capacitors and diodes are never merged in series
+//! (catalog LVS-043, LVS-044).
 
 use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
 
 /// Which interned parameter names mean width, length, fingers and multiplier.
 /// A name absent from both netlists is `None`.
+///
+/// The default names nothing, and then a device that declares any parameter
+/// never merges.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ParamNames {
+    /// `W`: summed by a parallel merge, multiplied by `m`. With `length`, it
+    /// lets sized devices merge at all.
     pub width: Option<StrId>,
+    /// `L`: summed by a series merge. With `width`, it lets sized devices
+    /// merge at all.
     pub length: Option<StrId>,
+    /// `nf`: summed by a parallel merge.
     pub fingers: Option<StrId>,
+    /// `m`: folded into `width` and dropped, when `width` is also named.
+    ///
+    /// # Limits
+    ///
+    /// On a device that declares `m` but no `W`, such as a resistor or a
+    /// capacitor, the `m` is dropped with nothing to fold into, so the
+    /// multiplicity is lost.
     pub multiplier: Option<StrId>,
 }
 
 /// Which law a merge applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeKind {
+    /// Devices on the same nets became one; `W` and `nf` were summed.
     Parallel,
+    /// Devices stacked through an internal net became one; `L` was summed and
+    /// the net was consumed.
     Series,
 }
 
 /// One merge, for the report: the input devices that became one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Merge {
+    /// The law applied.
     pub kind: MergeKind,
+    /// The model of every device merged.
     pub model: StrId,
     /// Device rows of the graph `reduce` was given, ascending.
+    ///
+    /// Rows of the input, not of an intermediate pass, so a device merged
+    /// twice lists every row it stands for in both merges.
     pub devices: Vec<u32>,
 }
 
@@ -183,11 +228,29 @@ fn join(root: &mut [u32], a: u32, b: u32) {
 /// Devices come out one per group ascending by the group's lowest row;
 /// surviving nets keep their order. A graph with nothing to merge comes through
 /// byte-identical.
+///
+/// Reducing a reduced graph changes nothing: the output is a fixed point.
+///
+/// # Panics
+///
+/// Panics, or reduces wrongly, when `src` breaks the [`Graph`] invariants.
 pub fn reduce(src: &Graph) -> Graph {
     reduce_with(src, ParamNames::default()).0
 }
 
-/// [`reduce`], merging sized devices by `names`, and every merge it made.
+/// [`reduce`], merging sized devices by `names`, and every merge it made, in
+/// the order made.
+///
+/// With `names.width` and `names.multiplier` both set, every device's `m` is
+/// folded into its `W` even when nothing merges, so the output then differs
+/// from `src` in those parameters.
+///
+/// Each pass sorts every terminal, and each pass that merges anything removes
+/// at least one device, so there are at most as many passes as devices.
+///
+/// # Panics
+///
+/// As [`reduce`].
 pub fn reduce_with(src: &Graph, names: ParamNames) -> (Graph, Vec<Merge>) {
     let mut plan = Plan::default();
     let mut out = fold_multiplier(src, names);

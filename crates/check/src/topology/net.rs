@@ -1,7 +1,9 @@
 //! Net extraction: which shapes are electrically the same conductor.
 //!
-//! Two shapes join if they are on the same conductor layer and touch, or if a
-//! via cut on the right layer overlaps both.
+//! Two shapes join if they are on the same conductor layer and touch (with
+//! `connect touch_within_layer`), or if a via cut on the right layer overlaps
+//! both. Every shape on a global layer is one net. Text labels join nothing:
+//! two shapes with the same label and no drawn connection are two nets.
 //! Data in: `GeometryStore` + `Connectivity`. Data out: `NetTable`.
 
 use crate::topology::csr_run;
@@ -32,6 +34,13 @@ impl NetId {
 }
 
 /// Which net each polygon belongs to, in both directions.
+///
+/// Filled by [`extract_nets_into`]. Nets are `NetId(0) .. NetId(net_count)`,
+/// numbered as [`NetId`] says; each net's polygons ascend. Only polygons on a
+/// conductor or global layer have a net: a cut, a marker or a label shape is
+/// on [`NetId::NONE`]. A polygon's hole, which the store keeps as a row of
+/// its own, is on the polygon's net (on a layer that fails validation it is
+/// left as drawn). The [`Default`] table has no nets and knows no polygon.
 #[derive(Debug, Default)]
 pub struct NetTable {
     /// Net of each polygon, indexed by [`PolyId`].
@@ -176,8 +185,23 @@ fn rebuild_index(poly_net: &[NetId], net_start: &mut Vec<u32>, polys: &mut Vec<P
 
 /// Extract nets from geometry; caller owns `out`, cleared and refilled.
 ///
-/// Only polygons on a [`Connectivity::conductors`] layer get a net. A cut joins
-/// the two conductors it overlaps but does not belong to that net.
+/// Only polygons on a [`Connectivity::conductors`] or
+/// [`Connectivity::global`] layer get a net. Polygons join when:
+///
+/// - they are on one conductor layer and share at least one point, touching
+///   included, and [`Connectivity::intra_layer_touch`] is set;
+/// - a cut on a [`Connectivity::via_cut`] layer shares at least one point with
+///   both, one on each of the two layers that cut connects. The cut itself
+///   belongs to no net;
+/// - they are on one global layer, however far apart.
+///
+/// Bounding boxes only prune candidates; every join is an exact geometric
+/// test. Labels are not read here: see [`bind_ports_into`](crate::topology::bind_ports_into).
+///
+/// # Panics
+///
+/// Panics if a layer `connectivity` names is not in the store's layer table,
+/// or if the store holds `u32::MAX` or more polygons.
 pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out: &mut NetTable) {
     let rows = store.poly_count();
     let node_count = u32::try_from(rows).expect("a polygon index fits a PolyId");

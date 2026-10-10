@@ -1,4 +1,6 @@
-//! Partition refinement: the matching algorithm.
+//! Partition refinement: the matching algorithm, the iterative graph labelling
+//! of C. Ebeling, "GeminiII: a second generation layout validation program",
+//! ICCAD 1988, doi:10.1109/ICCAD.1988.122520.
 //!
 //! Data in: two graphs. Data out: a class per node on each side, plus per-class tallies.
 //! Classes split by a hash of their neighbours' classes until stable; a pass re-signs
@@ -57,6 +59,8 @@ const fn mix(mut z: u64) -> u64 {
 
 /// A terminal's role as a signature number. Interchangeable roles share a code:
 /// MOS `Source`/`Drain` and every `Pin(_)`; `Emitter` and `Collector` never do.
+/// Sharing one code across every `Pin(_)` is what lets a reversed diode match
+/// (testing-plan F15).
 pub(crate) const fn role_code(role: TerminalRole) -> u64 {
     match role {
         TerminalRole::Gate => 0,

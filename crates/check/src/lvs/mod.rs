@@ -3,6 +3,77 @@
 //!
 //! Every path that could not complete returns [`Verdict::Inconclusive`] with a
 //! reason; there is no code path from "gave up" to "matched".
+//!
+//! # What is compared
+//!
+//! Both sides become a [`Graph`]: devices and nets are two sets of nodes, and
+//! each device terminal is an edge labelled with its
+//! [`TerminalRole`](crate::topology::TerminalRole). The layout comes from
+//! [`graph::from_layout`], the reference from one subcircuit by
+//! [`graph::from_reference`]. [`compare`] then:
+//!
+//! 1. drops every reference `Bulk` terminal when the layout has none (the
+//!    deck's MOS recogniser lists three layers);
+//! 2. reduces both sides by parallel and series merges ([`reduce`]);
+//! 3. partitions the nodes of both sides together by iterative refinement, the
+//!    graph-labelling algorithm of C. Ebeling, "GeminiII: a second generation
+//!    layout validation program", ICCAD 1988,
+//!    [doi:10.1109/ICCAD.1988.122520](https://doi.org/10.1109/ICCAD.1988.122520).
+//!    Devices start in one class per `(kind, model)` and nets in one class.
+//!    Each pass gives every node a signature from the `(role, class)` of each
+//!    of its terminals, and a class splits wherever its members' signatures
+//!    differ, until no class splits;
+//! 4. breaks a symmetry, a class still holding the same number `k >= 2` of
+//!    nodes on each side, by pairing its lowest layout node with the
+//!    reference node of the class whose parameters are closest (the lowest on
+//!    a tie, and always for nets), then refines again. This is how Netgen
+//!    resolves symmetries by property value (catalog LVS-018). The choice is
+//!    greedy per stall, not an optimal assignment;
+//! 5. reads the final partition: a class with exactly one node per side pairs
+//!    them, and every paired device must also agree on kind, model, terminals
+//!    and parameters. Everything else is a [`Discrepancy`].
+//!
+//! Roles decide which terminals are interchangeable. Positions never matter.
+//!
+//! | Role | Interchangeable with |
+//! |---|---|
+//! | MOS `Source`, `Drain` | each other: which end is the source is a matter of bias |
+//! | `Pin(_)` (resistor, capacitor, diode ends) | every other `Pin(_)` |
+//! | `Gate`, `Bulk`, `Base`, `Emitter`, `Collector` | nothing |
+//!
+//! That is catalog LVS-030. User-declared equivalent pins, and devices whose
+//! source and drain must not swap (LVS-031), are not supported.
+//!
+//! Net names do not take part: they neither seed refinement nor are compared,
+//! so a misnamed or reordered port passes (catalog LVS-016, LVS-032).
+//!
+//! # Report
+//!
+//! [`check_layout`] adds checks on the layout's own graph, which need no
+//! reference. [`record_discrepancies`] turns a [`Verdict::Mismatch`] into
+//! error rows. Every id either can write is in [`RULE_IDS`]; the crate's
+//! [rule reference](crate#layout-against-schematic) lists them with the
+//! [check catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
+//! rows each covers. The tools those rows cite are in
+//! [check-sources.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md).
+//!
+//! # Limits
+//!
+//! Known defects, tracked as findings in the
+//! [testing plan](https://github.com/UW-ASIC/GPurify/blob/main/docs/testing-plan.md):
+//!
+//! - **F1, false clean.** [`graph::from_reference`] keeps only the
+//!   subcircuit's own device cards. An `X` instance of another subcircuit is
+//!   dropped, not flattened, so a layout missing a whole block the schematic
+//!   places by instance can match (catalog LVS-010, LVS-017, LVS-072).
+//! - **F12, false mismatch.** Every reference net is named and a series merge
+//!   never crosses a named net, so the reference never series-reduces while
+//!   the layout does: a drawn stack with an unlabelled internal node becomes
+//!   one device against two.
+//! - **F15, false clean.** Every `Pin(_)` is interchangeable, so a reversed
+//!   diode or a capacitor with its plates swapped matches.
+//! - **F16, weak parameters.** The layout measures only MOS `w` and `l` and
+//!   each device's marker `area`, so passives are not sized.
 
 pub mod checks;
 mod compare;

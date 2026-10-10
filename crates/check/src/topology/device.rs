@@ -16,7 +16,8 @@ use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
 use gpurify_ingest::StrId;
 
-/// Identifies one recognised device.
+/// Identifies one recognised device: its row in the [`DeviceTable`]. Rows
+/// ascend by marker polygon, so ids are the same on every run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct DeviceId(pub u32);
@@ -30,32 +31,61 @@ pub struct DeviceId(pub u32);
 /// | `Resistor`, `Capacitor`, `Diode` | `Pin(0)` | `Pin(1)` | — | — |
 ///
 /// A position past its family's row is `Pin(position)`.
+///
+/// Positions are the deck's `terminals [..]` order. A reference netlist uses
+/// SPICE card order instead, which
+/// [`from_reference`](crate::lvs::graph::from_reference) maps to the same
+/// roles. LVS pairs terminals by role and treats `Source` and `Drain` as one,
+/// and every `Pin(_)` as one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalRole {
+    /// A MOS gate.
     Gate,
+    /// A MOS source; interchangeable with `Drain` in LVS.
     Source,
+    /// A MOS drain; interchangeable with `Source` in LVS.
     Drain,
+    /// A MOS bulk. Dropped from the reference when the layout extracts none.
     Bulk,
+    /// A BJT base.
     Base,
+    /// A BJT emitter; never interchangeable with `Collector`.
     Emitter,
+    /// A BJT collector.
     Collector,
     /// Either end of a symmetric two-terminal device.
+    ///
+    /// Also the ends of a diode and the plates of a capacitor, which are not
+    /// symmetric: LVS cannot tell them apart (testing-plan F15).
     Pin(u8),
 }
 
 /// Every device recognised from the layout.
+///
+/// Filled by [`recognise_into`]. Row `k` is `DeviceId(k)`, rows ascend by
+/// marker polygon, and every column has one row per device. Every terminal is
+/// on a real net, never [`NetId::NONE`]: a marker that cannot bind every
+/// terminal is not a device.
 #[derive(Debug, Default)]
 pub struct DeviceTable {
+    /// The family of each device, from its recogniser.
     pub kind: Vec<DeviceKind>,
     /// The marker polygon that identifies this device.
     pub marker: Vec<PolyId>,
+    /// The model name of each device, from its recogniser; what LVS compares
+    /// against the reference.
     pub model: Vec<StrId>,
     /// Terminals, CSR into `terminal_net` / `terminal_role`.
     pub terminal_start: Vec<u32>,
+    /// The net of each terminal, in the recogniser's layer order.
     pub terminal_net: Vec<NetId>,
+    /// The role of each terminal, by its position in the recogniser.
     pub terminal_role: Vec<TerminalRole>,
     /// Measured geometry, CSR into `param`.
     pub param_start: Vec<u32>,
+    /// `(parameter, measure)` per measured parameter. A MOS gets `Width` and
+    /// `Length` when a source or drain polygon fixes its channel direction;
+    /// every device gets `Area`.
     pub param: Vec<(DeviceParam, DeviceMeasure)>,
 
     /// Devices attached to each net, CSR.
@@ -63,31 +93,53 @@ pub struct DeviceTable {
     net_device: Vec<DeviceId>,
 }
 
-/// A measured device parameter.
+/// A measured device parameter, and the SPICE name LVS compares it under.
+///
+/// Extraction measures `Width`, `Length` and `Area` only; nothing yields
+/// `Perimeter` or `Fingers` yet (testing-plan F16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceParam {
+    /// `w`: a MOS marker's bounding-box extent across the channel. Exact for
+    /// a straight rectangular gate.
     Width,
+    /// `l`: a MOS marker's bounding-box extent along the channel, the axis
+    /// on which the first source or drain polygon sits off the marker's
+    /// centre (`x` on a diagonal tie).
     Length,
+    /// `area`: the marker polygon's area.
     Area,
+    /// `perim`: not measured yet.
     Perimeter,
+    /// `nf`: not measured yet.
     Fingers,
 }
 
 /// A measurement, exact and in layout units; tolerance is the comparator's job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceMeasure {
+    /// A length in database units.
     Length(Dbu),
+    /// An area in square database units.
     Area(DbuArea),
+    /// A plain count.
     Count(u32),
 }
 
 impl DeviceTable {
+    /// The number of devices.
     pub fn len(&self) -> usize {
         self.kind.len()
     }
+    /// Whether no device was recognised.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// One device's terminals as parallel `(nets, roles)` slices, in the
+    /// recogniser's layer order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `device` is not a row of this table.
     pub fn terminals_of(&self, device: DeviceId) -> (&[NetId], &[TerminalRole]) {
         let (start, end) = csr_run(&self.terminal_start, device.0 as usize);
         (
@@ -95,11 +147,23 @@ impl DeviceTable {
             &self.terminal_role[start..end],
         )
     }
+    /// One device's measured parameters.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `device` is not a row of this table.
     pub fn params_of(&self, device: DeviceId) -> &[(DeviceParam, DeviceMeasure)] {
         let (start, end) = csr_run(&self.param_start, device.0 as usize);
         &self.param[start..end]
     }
     /// Devices attached to a net, ascending. Empty for [`NetId::NONE`].
+    ///
+    /// A device with two terminals on the net is listed once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `net` is not a net of the table this one was recognised
+    /// against.
     pub fn devices_on(&self, net: NetId) -> &[DeviceId] {
         if net == NetId::NONE {
             return &[];
@@ -141,6 +205,30 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 ///
 /// Positions naming one layer take that layer's polygons under the marker in
 /// ascending [`PolyId`] order; a marker with too few or too many is skipped.
+///
+/// Each polygon on a recogniser's marker layer is one candidate device. A
+/// terminal polygon is under the marker when the two share at least one
+/// point, touching included. A surplus polygon whose net already fills one of
+/// that layer's positions is the same terminal drawn twice and is ignored;
+/// any other surplus refuses the marker, as two gates under one marker do.
+/// When two recognisers that share a marker layer both bind a marker, the
+/// earlier deck row wins.
+/// `nets` must have been extracted from `store`; `out` is cleared and
+/// refilled.
+///
+/// # Limits
+///
+/// - A skipped marker yields no device and no report row. LVS then sees only
+///   the reference device it fails to pair with.
+/// - Only MOS `W`/`L` and each marker's area are measured (testing-plan F16).
+/// - A duplicate polygon is ignored only when it is numbered after every
+///   distinct terminal polygon on its layer. Numbered earlier, it fills a
+///   position itself and the marker is refused.
+///
+/// # Panics
+///
+/// Panics if a recogniser lists 256 or more terminals, or if `nets` was not
+/// extracted from `store`.
 pub fn recognise_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -376,7 +464,9 @@ pub enum ChannelError {
          with the channel subtracted (e.g. `diff NOT poly`)"
     )]
     ConductingChannel {
+        /// The recogniser's marker layer.
         marker: LayerId,
+        /// The source/drain layer the marker overlaps.
         conductor: LayerId,
         /// The lowest store polygon contributing to the first overlap region.
         poly: PolyId,
@@ -388,6 +478,19 @@ pub enum ChannelError {
 
 /// Refuse any MOS recogniser whose channel marker overlaps conductor area on
 /// its source/drain layer. Checked in deck order, positions in terminal order.
+///
+/// Run it before [`extract_nets_into`](crate::topology::extract_nets_into):
+/// a drawn diffusion that runs under the gate would join source and drain
+/// into one net, and the short would then extract, and compare, as clean.
+/// Only area overlap counts, not shapes that merely abut, and only on a
+/// source/drain layer that is a conductor. The test is per layer pair over
+/// the whole layout, so one bad device refuses the run.
+///
+/// # Errors
+///
+/// [`ChannelError::ConductingChannel`] for the first offending
+/// `(marker, layer)` pair; [`ChannelError::Geometry`] when either layer fails
+/// validation or the intersection fails.
 pub fn refuse_conducting_channels(
     store: &GeometryStore,
     connectivity: &Connectivity,

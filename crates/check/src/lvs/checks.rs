@@ -18,6 +18,13 @@ use gpurify_ingest::{StrId, StrTable};
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
 /// variant, then the eight check rows. Each is a row of the check catalog
 /// (`docs/check-catalog.tsv`), which a test keeps in step with this list.
+///
+/// The first six are defined on the [`Discrepancy`] variant that raises them
+/// (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`], and so on), the
+/// other eight under [`check_layout`]. The crate's
+/// [rule reference](crate#layout-against-schematic) maps each to its
+/// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
+/// rows.
 pub const RULE_IDS: [&str; 14] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
@@ -36,6 +43,11 @@ pub const RULE_IDS: [&str; 14] = [
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
+///
+/// Call it on the run's table before [`check_layout`] or
+/// [`record_discrepancies`] writes a row: a row written before carries
+/// `StrId(u32::MAX)`, which `StrTable::resolve` panics on when the report is
+/// printed. Interning twice is harmless.
 pub fn intern_rule_ids(strings: &mut StrTable) {
     for name in RULE_IDS {
         strings.intern(name);
@@ -57,6 +69,60 @@ const NO_LAYER: LayerId = LayerId(u16::MAX);
 const NO_SHAPE: PolyId = PolyId(u32::MAX);
 
 /// Run the layout-only checks on the unreduced layout graph.
+///
+/// `layout` must be [`from_layout`](crate::lvs::graph::from_layout) of the
+/// same `nets`, `devices` and `ports`. Records exactly eight [`RuleRun`]s, in
+/// the order below, and appends their violations to `out`. Every violation is
+/// an error. None has a layer or a location: both are sentinels, and the
+/// shape is `PolyId(u32::MAX)` unless stated otherwise.
+///
+/// # Rows
+///
+/// - `lvs.floating_net`: a net that no device terminal lands on, other than a
+///   net with a port label or one made only of global-layer shapes (the
+///   substrate). Shape: the net's lowest polygon. Measured 0 against a limit
+///   of 1 terminal. Examines every net. Catalog: LVS-006.
+/// - `lvs.label_conflict`: one label text on several nets. That is an open,
+///   since a label never joins shapes by itself. One row per pair of
+///   consecutive such nets in net order, so a label on `n` nets gives
+///   `n - 1` rows. Shapes: each net's lowest polygon. Measured 2 against a
+///   limit of 1. Examines every net. Catalog: LVS-001, LVS-002 (KLayout's
+///   `connect_implicit` would join them instead).
+/// - `lvs.net_seed_conflict`: fewer labelled nets than bound labels, meaning
+///   two labels merged onto one net. Measured the labelled nets against a
+///   limit of the labels. Examines every label. Catalog: LVS-001.
+/// - `lvs.device_count_mos`, `lvs.device_count_bjt`, `lvs.parametric`:
+///   always [`SkipReason::NotInDeck`], examining nothing, because the deck has
+///   no syntax for per-model device counts or parameter ranges. Catalog:
+///   LVS-068.
+/// - `lvs.terminal_net`: a terminal of `layout` on no net, or on a net past
+///   its net table. Measured the net count against the count the terminal
+///   would need. Examines every terminal. Catalog: LVS-004.
+/// - `lvs.terminal_count`: a device whose terminal count its kind does not
+///   allow: MOS 3 or 4 (bulk optional), BJT 3, resistor, capacitor and diode
+///   2. The deck does not fix a recogniser's layer count, so this is where a
+///   wrong one shows. Measured the count against the kind's full count.
+///   Examines every device, or records [`Outcome::Refused`] when
+///   `device_terminal_start` does not hold one run per device. Catalog:
+///   LVS-004.
+///
+/// # Limits
+///
+/// - `lvs.net_seed_conflict` cannot fire: [`bind_ports_into`] already fails
+///   when one net carries two names, so every label has its own net
+///   (testing-plan F13).
+/// - `lvs.terminal_net` cannot fire on a graph built by `from_layout`:
+///   [`recognise_into`] drops any marker with a terminal on no net.
+/// - The three skipped rows are never `Ran`, so under the crate's
+///   [guarantee](crate#the-guarantee-every-rule-keeps) a run that records
+///   them does not pass.
+///
+/// # Panics
+///
+/// Panics if a device terminal names a net past `nets`.
+///
+/// [`bind_ports_into`]: crate::topology::bind_ports_into
+/// [`recognise_into`]: crate::topology::device::recognise_into
 pub fn check_layout(
     layout: &Graph,
     nets: &NetTable,
@@ -89,6 +155,13 @@ pub fn check_layout(
 }
 
 /// One error row per discrepancy, which is how a mismatch fails the run.
+///
+/// Each row reports under its variant's id in [`RULE_IDS`], with no layer,
+/// location or shape. Measured and limit are 1 against 0, except
+/// `lvs.class_imbalance` (the layout's node count against the reference's)
+/// and `lvs.parameter_mismatch` (the layout value against the reference
+/// value, when both are finite). Records no [`RuleRun`]: the comparison is
+/// accounted for by its verdict, not per id.
 pub fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut Violations) {
     for discrepancy in found {
         let (name, measured, limit) = match *discrepancy {

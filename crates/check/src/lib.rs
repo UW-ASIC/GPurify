@@ -138,9 +138,17 @@ use gpurify_geom::GeometryStore;
 use topology::{DeviceTable, NetTable};
 
 /// Everything an ERC rule reads about the layout, borrowed for one run.
+///
+/// The three must come from one load: the tables index `store`'s polygons by
+/// [`PolyId`](gpurify_geom::PolyId), so a table built from another store
+/// reads the wrong shapes or panics.
 #[derive(Debug, Clone, Copy)]
 pub struct Design<'a> {
+    /// The layout's polygons.
     pub store: &'a GeometryStore,
+    /// The nets extracted from `store` by [`topology::extract_nets_into`].
     pub nets: &'a NetTable,
+    /// The devices recognised against `nets` by
+    /// [`topology::device::recognise_into`].
     pub devices: &'a DeviceTable,
 }

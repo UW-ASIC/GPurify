@@ -16,42 +16,92 @@ pub(crate) fn narrow(value: usize) -> u32 {
 }
 
 /// A netlist reduced to what matching needs: `SoA` device and net columns with
-/// CSR incidence in both directions. A terminal on no net holds `u32::MAX`.
+/// CSR incidence in both directions. Devices and nets are numbered separately,
+/// each from zero.
+///
+/// The columns are public so tests can build a graph by hand. Every function
+/// here returns a graph that keeps these invariants, and [`compare`],
+/// [`reduce`] and [`check_layout`] read theirs as given:
+///
+/// - `device_kind` and `device_model` hold one row per device, and
+///   `net_name` one row per net;
+/// - each `*_start` column holds one offset per row plus a terminator,
+///   ascending from zero, and the column it indexes ends at the terminator;
+/// - every `terminal_net` is a net row, or `u32::MAX` for a terminal on no
+///   net;
+/// - `net_terminal` is the transpose of the device side: each net's
+///   terminals ascending by device, a terminal on no net on none;
+/// - every `port_net` is a net row.
+///
+/// The empty [`Default`] graph is valid as it is.
+///
+/// [`compare`]: crate::lvs::compare
+/// [`reduce`]: crate::lvs::reduce::reduce
+/// [`check_layout`]: crate::lvs::check_layout
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Graph {
+    /// The family of each device. With `device_model`, the class a device
+    /// starts refinement in: devices of different kind or model never pair.
     pub device_kind: Vec<DeviceKind>,
+    /// The model name of each device.
     pub device_model: Vec<StrId>,
     /// Terminals of each device, CSR into `terminal_net` / `terminal_role`.
     pub device_terminal_start: Vec<u32>,
+    /// The net row each terminal lands on, or `u32::MAX` for none.
     pub terminal_net: Vec<u32>,
+    /// The role of each terminal. Matching reads roles, never positions.
     pub terminal_role: Vec<TerminalRole>,
     /// Device parameters in SI units, CSR into `param`.
     pub device_param_start: Vec<u32>,
+    /// `(name, value)` per parameter: a lowercased, interned SPICE name, and a
+    /// value in SI base units (metres, square metres, a plain count).
     pub param: Vec<(StrId, f64)>,
 
     /// Devices attached to each net, CSR into `net_terminal`, ascending by device.
     pub net_terminal_start: Vec<u32>,
+    /// `(device row, role)` of each terminal, grouped by net.
     pub net_terminal: Vec<(u32, TerminalRole)>,
+    /// Each net's name: the reference's net name, or the layout's port label.
+    /// A named net is never consumed by a series merge.
     pub net_name: Vec<Option<StrId>>,
-    /// Nets that are ports of this cell.
+    /// Nets that are ports of this cell. A port is never consumed by a series
+    /// merge.
     pub port_net: Vec<u32>,
 }
 
 impl Graph {
+    /// The number of device rows.
     pub fn device_count(&self) -> usize {
         self.device_kind.len()
     }
+    /// The number of net rows.
     pub fn net_count(&self) -> usize {
         self.net_name.len()
     }
+    /// One device's terminals as parallel `(nets, roles)` slices, in the order
+    /// the graph was built with.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `device` is not a device row.
     pub fn terminals_of(&self, device: u32) -> (&[u32], &[TerminalRole]) {
         let (from, to) = csr_run(&self.device_terminal_start, device as usize);
         (&self.terminal_net[from..to], &self.terminal_role[from..to])
     }
+    /// Every terminal on one net as `(device row, role)`, ascending by device.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `net` is not a net row.
     pub fn terminals_on(&self, net: u32) -> &[(u32, TerminalRole)] {
         let (from, to) = csr_run(&self.net_terminal_start, net as usize);
         &self.net_terminal[from..to]
     }
+    /// One device's `(name, value)` parameters, in the order they were stated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `device` is not a device row.
     pub fn params_of(&self, device: u32) -> &[(StrId, f64)] {
         let (from, to) = csr_run(&self.device_param_start, device as usize);
         &self.param[from..to]
@@ -72,9 +122,27 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
 /// Project a `topology` extraction. Device row `k` is `DeviceId(k)`,
 /// net row `k` is `NetId(k)`; `port_net` is ascending.
 ///
+/// `devices` and `ports` must have been built against `nets`. A net's name
+/// is its port label, so an unlabelled net is unnamed. Terminals keep the
+/// recogniser's order and roles.
+///
 /// A measured parameter is emitted in metres (area in m²) only when its SPICE
 /// name is already interned in `strings` (so the reference can declare it) and a
-/// grid is given; otherwise it is omitted.
+/// grid is given; otherwise it is omitted. The names are `w`, `l`, `area`,
+/// `perim` and `nf`.
+///
+/// # Limits
+///
+/// Extraction measures MOS `w` and `l` and every device's marker `area`, and
+/// nothing else (testing-plan F16). Whether a measure is emitted depends on
+/// its name being interned anywhere, not on the matching reference device
+/// declaring it: a reference that gives one diode an `area` makes every
+/// layout device carry `area`, and each MOS whose card lacks it reports
+/// [`Discrepancy::UndeclaredParam`](crate::lvs::Discrepancy::UndeclaredParam).
+///
+/// # Panics
+///
+/// Panics if the tables hold `u32::MAX` or more rows.
 pub fn from_layout(
     nets: &NetTable,
     devices: &DeviceTable,
@@ -177,6 +245,32 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
 
 /// Project one subcircuit of a reference netlist. Roles come from card
 /// position (`card_role`); `port_net` keeps the subcircuit's port order.
+///
+/// | Card | Position 0 | 1 | 2 | 3 |
+/// |---|---|---|---|---|
+/// | MOS (`M`) | `Drain` | `Gate` | `Source` | `Bulk` |
+/// | BJT (`Q`) | `Collector` | `Base` | `Emitter` | `Pin(3)` |
+/// | resistor, capacitor, diode | `Pin(0)` | `Pin(1)` | | |
+///
+/// Device and net rows follow the netlist's order within the subcircuit.
+/// Every net is named, and parameters are copied as the netlist states them.
+/// A terminal on a net of another subcircuit lands on no net.
+///
+/// # Limits
+///
+/// - Only the subcircuit's own device cards are kept. An `X` card that calls a
+///   deck device model is a device and is kept; an `X` instance of another
+///   subcircuit is dropped, not flattened, so a layout missing a whole block
+///   the schematic places by instance can match (testing-plan F1).
+/// - Because every net is named, series reduction never merges across a
+///   reference net, while it does merge across an unlabelled layout net
+///   (testing-plan F12).
+/// - A diode's anode and cathode, and a capacitor's plates, are `Pin(0)` and
+///   `Pin(1)`, which match either way round (testing-plan F15).
+///
+/// # Panics
+///
+/// Panics if `subckt` is not a subcircuit of `netlist`.
 pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
     let mut graph = Graph::default();
     let devices = netlist.devices_of(subckt);

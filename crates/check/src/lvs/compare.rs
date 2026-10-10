@@ -14,12 +14,23 @@ use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
 /// How to run a comparison.
+///
+/// The default is 1000 rounds, a 2% tolerance and no parameter names. The
+/// `gpurify` binary keeps the first two and names `w`, `l`, `nf` and `m`.
 #[derive(Debug, Clone, Copy)]
 pub struct CompareOptions {
-    /// Bound on refinement rounds in a row between tie-breaks; exceeding it is
-    /// [`Inconclusive::RoundLimit`].
+    /// The most refinement passes in a row that may split a class without the
+    /// partition settling; one more is [`Inconclusive::RoundLimit`]. The count
+    /// restarts at each symmetry tie-break, so the number of symmetries does
+    /// not spend it.
     pub max_rounds: u32,
-    /// Relative parameter tolerance: `|a - b| <= tol * max(|a|, |b|)`.
+    /// Relative tolerance `tol` for every parameter of a paired device: values
+    /// `a` and `b` agree when `|a - b| <= tol * max(|a|, |b|)`. `NaN` never
+    /// agrees. It is the only tolerance: there is no absolute or per-parameter
+    /// one (catalog LVS-014), and it does not apply to reduction, whose merges
+    /// need the other parameters bit-identical.
+    ///
+    /// Netgen's counterpart is `property ... tolerance`, KLayout's `tolerance`.
     pub param_tolerance: f64,
     /// Which parameters are `W`, `L`, `nf` and `m`, so sized devices can be
     /// merged in parallel and series. Default: none, and sized devices never
@@ -37,15 +48,38 @@ impl Default for CompareOptions {
     }
 }
 
-/// Compare one cell. Reference `Bulk` terminals are dropped when the layout
-/// extracts none (a 3-terminal MOS recogniser), then both sides are reduced.
-/// A symmetry refinement cannot break pairs the lowest node index on each side.
+/// Compares one cell: the extracted `layout` against one `reference`
+/// subcircuit, as the [`lvs` module docs](crate::lvs) describe.
+///
+/// Reference `Bulk` terminals are dropped when no layout terminal is `Bulk`
+/// (a three-terminal MOS recogniser), then both sides are reduced and refined
+/// together. A symmetry pairs its lowest layout node with the reference node
+/// whose parameters are closest, so a stall resolves by property value rather
+/// than by row order. Neither input is modified.
+///
+/// The verdict is deterministic: the same graphs and options give the same
+/// verdict and the same discrepancy order on every run.
+///
+/// # Panics
+///
+/// Panics, or compares wrongly, when either graph breaks the [`Graph`]
+/// invariants, or holds `u32::MAX` or more devices plus nets.
 pub fn compare(layout: &Graph, reference: &Graph, options: CompareOptions) -> Verdict {
     compare_logged(layout, reference, options).0
 }
 
 /// [`compare`], and every series or parallel merge each side's reduction made,
 /// layout's first.
+///
+/// A [`Merge`]'s device rows are rows of the graph that side was given (the
+/// reference's rows are unchanged by the bulk drop). A device merged in two
+/// passes, say series then parallel, appears in both merges. This is how a
+/// [`Discrepancy`] row, which is a row of the reduced graph, is traced back
+/// to what was drawn.
+///
+/// # Panics
+///
+/// As [`compare`].
 pub fn compare_logged(
     layout: &Graph,
     reference: &Graph,
