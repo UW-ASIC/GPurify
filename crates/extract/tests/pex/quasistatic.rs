@@ -246,7 +246,8 @@ fn field_solving_one_of_two_coupled_nets_keeps_their_coupling() {
             &stack,
             grid(),
             &mut out,
-        );
+        )
+        .expect("every layer is described");
         out
     };
     let coarse = analytical();

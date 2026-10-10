@@ -141,4 +141,10 @@ nets that were not field-solved is kept. A field-solved net also gets its
 inductance. A net with no text label in the
 layout has no name to write, and the run refuses it rather than inventing one.
 
+Every conductor layer that carries a net, and every via layer whose cuts join
+two conductors, needs a `pex` line with a positive sheet resistance (see
+[deck.md](deck.md#parasitic-stack)). A layer without one has unknown
+parasitics, not zero ones, so PEX is refused and names the layer. Layers in
+`connect global` (the substrate) carry no parasitics and need no line.
+
 The same inputs always give a byte-identical report.

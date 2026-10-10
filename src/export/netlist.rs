@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::export::json::format_f64;
-use crate::export::parasitic::{node_place, spice_card, DELIMITER};
+use crate::export::parasitic::{check_finite, node_place, spice_card, DELIMITER};
 use crate::export::{narrow, Header, WriteError};
 use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
@@ -65,10 +65,12 @@ pub enum Detail {
 ///
 /// # Errors
 ///
-/// [`WriteError::Unrepresentable`] for a label on several disconnected nets
-/// (one node would join the pieces and hide the open), for a net with several
-/// labels (one name would hide the short), for a port bound to a net outside
-/// the extraction, found after the `.subckt` line is written, or for a
+/// [`WriteError::Unrepresentable`] for a spliced network holding a NaN or
+/// infinite value, checked before anything is written; for a label on several
+/// disconnected nets (one node would join the pieces and hide the open) or a
+/// net with several labels (one name would hide the short); for a port bound
+/// to a net outside the extraction, found after the `.subckt` line is
+/// written; or for a
 /// parasitic element on a node outside the network.
 pub fn write_spice(
     extraction: Extraction<'_>,
@@ -111,6 +113,9 @@ pub fn write_spice(
     let before = out.len();
 
     let spliced = parasitics.filter(|_| detail == Detail::WithParasitics);
+    if let Some(network) = spliced {
+        check_finite(network)?;
+    }
 
     let _ = writeln!(out, "* {} SPICE netlist", header.tool_version);
     let _ = writeln!(out, "* deck: {}", header.deck_path);

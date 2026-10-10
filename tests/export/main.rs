@@ -344,6 +344,36 @@ fn both_parasitic_formats_refuse_a_resistor_with_no_far_node() {
     assert_eq!(world.dspf(), refusal);
 }
 
+/// A NaN or an infinity in any element is refused by every writer that
+/// prints parasitics (F30): SPEF and DSPF would print `NaN` or `inf`, which no
+/// reader parses as a value, and SPICE would hand a simulator a value it
+/// should not believe.
+#[test]
+fn every_parasitic_writer_refuses_a_value_that_is_not_finite() {
+    let refusal = Err(WriteError::Unrepresentable("a non-finite parasitic value"));
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for row in 0..3 {
+            let mut world = World::new(Some("VSS"));
+            world.parasitics.value[row] = match world.parasitics.value[row] {
+                Parasitic::GroundCap(_) => Parasitic::GroundCap(Qty::new(bad)),
+                Parasitic::Resistance(_) => Parasitic::Resistance(Qty::new(bad)),
+                Parasitic::CouplingCap(_) => Parasitic::CouplingCap(Qty::new(bad)),
+                Parasitic::Inductance(_) => Parasitic::Inductance(Qty::new(bad)),
+            };
+            assert_eq!(world.spef(), refusal, "spef, {bad} in row {row}");
+            assert_eq!(world.dspf(), refusal, "dspf, {bad} in row {row}");
+            assert_eq!(
+                world.spice(Detail::WithParasitics),
+                refusal,
+                "spice, {bad} in row {row}"
+            );
+            world
+                .spice(Detail::Schematic)
+                .expect("no parasitics to refuse");
+        }
+    }
+}
+
 /// Every record is padded to an even length (the odd `TOP` is the case a
 /// missing pad gets wrong), and the reader accepts what the writer emits.
 #[test]

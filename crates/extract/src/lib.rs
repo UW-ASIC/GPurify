@@ -22,6 +22,13 @@
 //! fF and pH ([`Parasitic`]). The field solver works in SI units: metres,
 //! farads, henries.
 //!
+//! A conductor layer that holds a net's shapes, or a via layer whose cuts
+//! join two conductors, with no row stating a positive sheet resistance has
+//! unknown parasitics, not zero ones: both methods refuse it
+//! ([`analytical::AnalyticalError`], and the field solves' own errors).
+//! Shapes on a global layer (the substrate) carry no parasitics and need no
+//! row.
+//!
 //! # The closed forms
 //!
 //! From Weste & Harris, *CMOS VLSI Design* 4e (2011), ch. 6:
@@ -80,9 +87,6 @@
 //!   either: a third shape or layer between two plates does not reduce their
 //!   coupling, and a plate's ground capacitance ignores the plates beneath
 //!   it.
-//! - **Undescribed layers**: the closed forms give no element on a conductor
-//!   layer with no `pex` row. They contribute zero and are not refused. The
-//!   field solves refuse them.
 //! - **No reflected images**: the field solve uses the free-space Green's
 //!   function, with each panel pair seeing the mean of their two
 //!   permittivities. There is no substrate plane, so a field-solved net's

@@ -80,6 +80,30 @@ fn coupling_capacitance(
     Qty::new(coefficient_af_um * ratio / AF_PER_FF)
 }
 
+/// Why the closed forms refused a design. Each names the layer whose
+/// parasitics are unknown, rather than reading it as a perfect wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AnalyticalError {
+    /// A conductor layer holds a net's shapes, but no `pex` row gives it a
+    /// positive, finite sheet resistance: its resistance and capacitance are
+    /// unknown, never zero.
+    #[error("no pex row gives this conductor a positive sheet resistance")]
+    Undescribed(LayerId),
+    /// A via layer has a cut joining two conductor plates, but no `pex` row
+    /// gives it a positive, finite resistance per cut.
+    #[error("no pex row gives this via layer a positive resistance per cut")]
+    UndescribedVia(LayerId),
+}
+
+impl AnalyticalError {
+    /// The layer the refusal names.
+    pub fn layer(self) -> LayerId {
+        match self {
+            Self::Undescribed(layer) | Self::UndescribedVia(layer) => layer,
+        }
+    }
+}
+
 /// Extracts every net of the design into `out`, which is cleared first and
 /// left in canonical order.
 ///
@@ -94,10 +118,18 @@ fn coupling_capacitance(
 ///
 /// Both coupling terms are parallel-plate (no fringing), so lateral coupling
 /// is a lower bound, and neither is shielded by what lies between the plates.
-/// An element that comes out zero or non-finite is left out, so a layer with
-/// no stack row, or a via layer whose per-cut resistance is not positive,
-/// contributes nothing instead of being refused. A cut that does not land on
-/// both of its plates is left out too.
+/// An element that comes out zero is left out, and so is a cut that does not
+/// land on both of its plates. Shapes on a global layer
+/// ([`Connectivity::global`]) carry no parasitics and need no stack row, nor
+/// do vias into them.
+///
+/// # Errors
+///
+/// [`AnalyticalError::Undescribed`] for the lowest conductor layer that holds
+/// a net's shape and has no positive, finite sheet resistance, then
+/// [`AnalyticalError::UndescribedVia`] for the first via layer, in deck
+/// order, with a cut on both of its conductor plates and no positive, finite
+/// resistance per cut. `out` holds no usable network then.
 ///
 /// # Panics
 ///
@@ -115,8 +147,9 @@ pub fn extract_into(
     stack: &ProcessStack,
     grid: Grid,
     out: &mut ParasiticNetwork,
-) {
+) -> Result<(), AnalyticalError> {
     out.clear();
+    refuse_undescribed(store, nets, connectivity, stack)?;
 
     // Ascending nets make `node_net` grouped-and-ascending.
     let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32");
@@ -125,8 +158,41 @@ pub fn extract_into(
     }
     let node_of = nodes_by_poly(store, nets);
     couple_into(store, nets, connectivity, stack, grid, &node_of, out);
-    vias_into(store, connectivity, stack, &node_of, out);
+    vias_into(store, connectivity, stack, &node_of, out)?;
     out.sort_canonical();
+    Ok(())
+}
+
+/// The lowest non-global layer that holds a net's shape and is not
+/// [`described`].
+fn refuse_undescribed(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+    stack: &ProcessStack,
+) -> Result<(), AnalyticalError> {
+    for layer in 0..store.layer_count() {
+        let layer = LayerId(u16::try_from(layer).expect("a LayerId is a u16"));
+        if connectivity.global.contains(&layer) || described(stack, layer) {
+            continue;
+        }
+        let on_a_net = store
+            .polys_on_layer(layer)
+            .any(|row| nets.net_of(PolyId(row)) != NetId::NONE);
+        if on_a_net {
+            return Err(AnalyticalError::Undescribed(layer));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the stack gives `layer` a positive, finite sheet resistance (Ω per
+/// cut on a via layer): the one value every stated row has, and that a layer
+/// with no row reads as zero.
+fn described(stack: &ProcessStack, layer: LayerId) -> bool {
+    stack_row(stack, layer)
+        .map(|row| stack.sheet_res_ohm_sq[row])
+        .is_some_and(|ohm| ohm > 0.0 && ohm.is_finite())
 }
 
 /// The run two same-layer boxes share and the gap across it; `None` for a
@@ -294,14 +360,16 @@ fn couple_into(
 /// Via resistance. Appends.
 ///
 /// Cuts are grouped by the sorted `(lower, upper)` plate pair they join; each
-/// group is one resistor at per-cut / count (parallel, not series).
+/// group is one resistor at per-cut / count (parallel, not series). A via
+/// into a global layer is skipped unless its layer is described; any other
+/// via layer with a cut on both plates must be.
 fn vias_into(
     store: &GeometryStore,
     connectivity: &Connectivity,
     stack: &ProcessStack,
     node_of: &[NodeId],
     out: &mut ParasiticNetwork,
-) {
+) -> Result<(), AnalyticalError> {
     const NO_POLY: PolyId = PolyId(u32::MAX);
 
     let mut cut_index = SpatialIndex::default();
@@ -315,11 +383,9 @@ fn vias_into(
     for row in 0..connectivity.via_cut.len() {
         let cut_layer = connectivity.via_cut[row];
         let (lower, upper) = connectivity.via_connects[row];
-        let Some(cut_row) = stack_row(stack, cut_layer) else {
-            continue;
-        };
-        let per_cut_ohm = stack.sheet_res_ohm_sq.get(cut_row).copied().unwrap_or(0.0);
-        if !(per_cut_ohm > 0.0 && per_cut_ohm.is_finite()) {
+        let into_global =
+            connectivity.global.contains(&lower) || connectivity.global.contains(&upper);
+        if into_global && !described(stack, cut_layer) {
             continue;
         }
 
@@ -351,17 +417,23 @@ fn vias_into(
             above[cut as usize] = NO_POLY;
         }
         arrays.sort_unstable();
+        if arrays.is_empty() {
+            continue;
+        }
+        if !described(stack, cut_layer) {
+            return Err(AnalyticalError::UndescribedVia(cut_layer));
+        }
+        let per_cut_ohm = stack.sheet_res_ohm_sq[cut_layer.idx()];
 
         for group in arrays.chunk_by(|a, b| a == b) {
             let key = group[0];
             let cuts = u32::try_from(group.len()).expect("a via array's cut count is a u32");
             let ohm = via_resistance(per_cut_ohm, cuts).raw();
-            if ohm > 0.0 && ohm.is_finite() {
-                let (from, to) = (node_of[key.0.idx()], node_of[key.1.idx()]);
-                out.push(from, Some(to), Parasitic::Resistance(Qty::new(ohm)));
-            }
+            let (from, to) = (node_of[key.0.idx()], node_of[key.1.idx()]);
+            out.push(from, Some(to), Parasitic::Resistance(Qty::new(ohm)));
         }
     }
+    Ok(())
 }
 
 /// One net's nodes and per-polygon R and ground C. Appends.
@@ -394,7 +466,8 @@ fn extract_net_into(
         out.node_layer.push(layer);
         last_layer = layer;
 
-        // An undescribed layer reads zero coefficients; the guards below drop them.
+        // Only a global layer can be undescribed here: it reads zero
+        // coefficients, and the guards below drop them.
         let row = stack_row(stack, layer).unwrap_or(usize::MAX);
         let sheet_ohm_sq = stack.sheet_res_ohm_sq.get(row).copied().unwrap_or(0.0);
         let area_af_um2 = stack.area_cap_af_um2.get(row).copied().unwrap_or(0.0);

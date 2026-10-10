@@ -37,11 +37,12 @@
 //! `#[test]` at the end of the file, against the same closed forms.
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
-//! finding that breaks them: F23, F24, F30, F31, and
+//! finding that breaks them: F23, F24, F31, and
 //! `F44` (closed forms read each drawn polygon, not the conductor)
 //! and `F45` (a field-solved polygon is one filament along its bounding box).
-//! `F46` (the mesh depended on absolute position) and `F47` (the reciprocity
-//! gate refused ordinary layouts) are fixed, and their fixtures hold.
+//! `F30` (a layer with no `pex` row read as a perfect wire), `F46` (the mesh
+//! depended on absolute position) and `F47` (the reciprocity gate refused
+//! ordinary layouts) are fixed, and their fixtures hold.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -643,8 +644,8 @@ fn vias(depth: Depth) -> Vec<Fixture> {
     every_placement(&out)
 }
 
-/// F30: a layer the stack does not describe is refused, never read as a
-/// perfect wire. The closed forms give it zero today; the field solve refuses.
+/// F30 (fixed): a layer the stack does not describe is refused, never read as
+/// a perfect wire, by the closed forms and the field solve alike.
 fn stack_gaps() -> Vec<Fixture> {
     let bar = Layout::default()
         .rect("m1", 0, 0, 10_000, 1_000)
@@ -666,8 +667,7 @@ fn stack_gaps() -> Vec<Fixture> {
             PEX,
         )
         .layout(bar)
-        .expect(Expect::Passes(false))
-        .known("F30"),
+        .expect(Expect::Passes(false)),
         Fixture::new(
             "pex/stack_gap/no_v1_row",
             &["PEX-001"],
@@ -682,8 +682,7 @@ fn stack_gaps() -> Vec<Fixture> {
             0,
             2,
         ))
-        .expect(Expect::Passes(false))
-        .known("F30"),
+        .expect(Expect::Passes(false)),
         field_solved,
     ]
 }

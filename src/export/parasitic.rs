@@ -57,7 +57,21 @@ fn check_canonical(network: &ParasiticNetwork) -> Result<(), WriteError> {
             "a resistance or inductance with no far node",
         ));
     }
-    Ok(())
+    check_finite(network)
+}
+
+/// Refuse a NaN or infinite element: it prints as a number no reader parses,
+/// or as one no simulator should believe.
+pub(crate) fn check_finite(network: &ParasiticNetwork) -> Result<(), WriteError> {
+    if network
+        .value
+        .iter()
+        .all(|&value| spice_card(value).2.is_finite())
+    {
+        Ok(())
+    } else {
+        Err(WriteError::Unrepresentable("a non-finite parasitic value"))
+    }
 }
 
 /// The net a node sits on, and the node's index within that net's run.
@@ -187,11 +201,11 @@ fn spef_section(
 ///
 /// # Errors
 ///
-/// [`WriteError::Unrepresentable`] for a network out of canonical order or a
-/// resistance or inductance with no far node, checked before anything is
-/// written, and for an element on a node outside the network, found while
-/// writing. [`WriteError::UnnamedNet`] for a net with no label, found while
-/// writing.
+/// [`WriteError::Unrepresentable`] for a network out of canonical order, a
+/// resistance or inductance with no far node, or a NaN or infinite value,
+/// checked before anything is written, and for an element on a node outside
+/// the network, found while writing. [`WriteError::UnnamedNet`] for a net
+/// with no label, found while writing.
 pub fn write_spef(
     network: &ParasiticNetwork,
     ports: &PortTable,

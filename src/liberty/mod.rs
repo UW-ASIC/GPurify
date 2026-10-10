@@ -210,6 +210,10 @@ pub enum LibError {
     /// `statistical`).
     #[error(transparent)]
     Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
+    /// The closed-form extraction of the wiring refused a conductor or via
+    /// layer with no `pex` row (every level but `interface`).
+    #[error(transparent)]
+    Pex(#[from] gpurify_extract::analytical::AnalyticalError),
     /// `statistical` was asked of a corner with no
     /// [`mc_models`](spec::CornerSpec::mc_models).
     #[error("{0}")]
@@ -500,7 +504,7 @@ impl<'a> Prepared<'a> {
             &loaded.deck.stack,
             loaded.grid,
             &mut analytical,
-        );
+        )?;
         let pin_nets = circuit::pin_nets(loaded, extracted, spec)?;
         match accuracy {
             Accuracy::Interface => unreachable!("returned above"),

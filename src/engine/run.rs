@@ -68,11 +68,13 @@ pub enum StageStatus {
     /// LVS, or a layout with no geometry for ERC. Fails [`Summary::passed`].
     Skipped(&'static str),
     /// Requested and refused: the input is outside what this tool represents exactly.
-    /// For LVS, a comparison that did not conclude; for PEX, an unknown net
-    /// name or one on several nets, a capacitance matrix that is not
-    /// reciprocal, or an inductance
-    /// solve that refused; for ERC, design intent on a layout that shorts two
-    /// labelled nets. Otherwise ERC refuses row by row (a supply grid that
+    /// For LVS, a comparison that did not conclude; for PEX, a conductor or
+    /// via layer with no `pex` row
+    /// ([`AnalyticalError`](gpurify_extract::analytical::AnalyticalError)), an
+    /// unknown net name or one on several nets, a capacitance matrix that is
+    /// not reciprocal, or an inductance solve that refused; for ERC, design
+    /// intent on a layout that shorts two labelled nets. Otherwise ERC refuses
+    /// row by row (a supply grid that
     /// cannot be built or solved refuses the rows that read it), and those
     /// rows count in [`Summary::rules_skipped`]. Fails [`Summary::passed`].
     Refused(String),
@@ -475,14 +477,17 @@ fn run_pex(
 ) -> Result<StageStatus, EngineError> {
     let grid = loaded.grid;
     let mut network = ParasiticNetwork::default();
-    gpurify_extract::analytical::extract_into(
+    if let Err(why) = gpurify_extract::analytical::extract_into(
         &loaded.store,
         &extracted.nets,
         &loaded.deck.connectivity,
         &loaded.deck.stack,
         grid,
         &mut network,
-    );
+    ) {
+        let layer = loaded.strings.resolve(loaded.deck.layers.name(why.layer()));
+        return Ok(StageStatus::Refused(format!("layer {layer}: {why}")));
+    }
     if !options.quasistatic_nets.is_empty() {
         let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
         for name in &options.quasistatic_nets {

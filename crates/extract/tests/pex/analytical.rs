@@ -60,7 +60,8 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut single,
-    );
+    )
+    .expect("every layer is described");
     extract_into(
         case.store(),
         &case.nets,
@@ -68,7 +69,8 @@ fn extracted_capacitance_is_linear_in_the_decks_capacitive_coefficients() {
         &uniform_stack(3, 3.0, 0.75),
         grid(),
         &mut tripled,
-    );
+    )
+    .expect("every layer is described");
 
     let base = total_capacitance(&single);
     assert!(
@@ -143,7 +145,8 @@ fn a_net_of_one_polygon_still_carries_that_polygons_resistance() {
         &uniform_stack(1, 0.0, 0.0),
         grid(),
         &mut network,
-    );
+    )
+    .expect("every layer is described");
 
     let total: f64 = network
         .value
@@ -183,7 +186,8 @@ fn the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances() {
         &uniform_stack(1, 0.0, 0.0),
         grid(),
         &mut network,
-    );
+    )
+    .expect("every layer is described");
 
     let want: f64 = SIDES
         .iter()
@@ -257,19 +261,102 @@ fn via_stack(cuts: i64) -> (GeometryStore, Connectivity, NetTable) {
     (store, connectivity, nets)
 }
 
-/// One via stack extracted, with only the cut layer conducting.
+/// The stack [`via_resistance_of`] extracts on: 0.1 ohm/sq plates, 5 ohm
+/// cuts.
+fn via_stack_rows() -> gpurify_ingest::deck::ProcessStack {
+    let mut stack = uniform_stack(3, 0.0, 0.0);
+    stack.sheet_res_ohm_sq = vec![0.1, 5.0, 0.1];
+    stack
+}
+
+/// One via stack extracted, less its two plates: each is 1000 by 200 nm,
+/// five squares at 0.1 ohm/sq, half an ohm. A plate cannot be left at zero
+/// sheet resistance to isolate the cut, because that is a layer with no
+/// resistance stated, which is refused (F30).
 fn via_resistance_of(cuts: i64) -> f64 {
     let (store, connectivity, nets) = via_stack(cuts);
-    let mut stack = uniform_stack(3, 0.0, 0.0);
-    stack.sheet_res_ohm_sq = vec![0.0, 5.0, 0.0];
-
     let mut network = ParasiticNetwork::default();
-    extract_into(&store, &nets, &connectivity, &stack, grid(), &mut network);
-    network
+    extract_into(
+        &store,
+        &nets,
+        &connectivity,
+        &via_stack_rows(),
+        grid(),
+        &mut network,
+    )
+    .expect("every layer is described");
+    let total: f64 = network
         .value
         .iter()
         .filter_map(|&v| resistance_ohm(v))
-        .sum()
+        .sum();
+    total - 2.0 * 0.1 * 5.0
+}
+
+/// Oracle: definition (F30). A conductor the stack does not describe has an
+/// unknown resistance and capacitance, not zero ones: the closed forms refuse
+/// it by layer, as the field solve does, whether the row is missing or states
+/// no positive sheet resistance. Before, both read as a perfect wire.
+#[test]
+fn a_conductor_with_no_pex_row_is_refused_not_read_as_a_perfect_wire() {
+    use gpurify_extract::analytical::AnalyticalError;
+    let store = rects(&[(2_000, 200)]);
+    let nets = layer0_nets(&store);
+    let mut zero_sheet = uniform_stack(1, 1.0, 1.0);
+    zero_sheet.sheet_res_ohm_sq = vec![0.0];
+    for (what, stack) in [
+        ("no row", gpurify_ingest::deck::ProcessStack::default()),
+        ("a row with no sheet resistance", zero_sheet),
+    ] {
+        let mut network = ParasiticNetwork::default();
+        assert_eq!(
+            extract_into(
+                &store,
+                &nets,
+                &Connectivity::default(),
+                &stack,
+                grid(),
+                &mut network
+            ),
+            Err(AnalyticalError::Undescribed(LayerId(0))),
+            "{what}"
+        );
+    }
+}
+
+/// Oracle: definition (F30). A via layer whose cuts join two plates and that
+/// states no resistance per cut is refused, not read as a short; a global
+/// layer, which carries no parasitics, needs no row.
+#[test]
+fn a_via_layer_with_no_pex_row_is_refused_and_a_global_layer_needs_none() {
+    use gpurify_extract::analytical::AnalyticalError;
+    let (store, connectivity, nets) = via_stack(2);
+    let mut stack = via_stack_rows();
+    stack.sheet_res_ohm_sq[1] = 0.0;
+    let mut network = ParasiticNetwork::default();
+    assert_eq!(
+        extract_into(&store, &nets, &connectivity, &stack, grid(), &mut network),
+        Err(AnalyticalError::UndescribedVia(LayerId(1)))
+    );
+
+    // The upper plate made a global layer with no row: no via resistance,
+    // only the lower plate's five squares.
+    let global = Connectivity {
+        conductors: vec![LayerId(0)],
+        global: vec![LayerId(2)],
+        ..connectivity
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &global, &mut nets);
+    stack.sheet_res_ohm_sq[2] = 0.0;
+    extract_into(&store, &nets, &global, &stack, grid(), &mut network)
+        .expect("a global layer needs no pex row");
+    let total: f64 = network
+        .value
+        .iter()
+        .filter_map(|&v| resistance_ohm(v))
+        .sum();
+    assert_close("the lower plate alone", total, 0.5, 1e-12);
 }
 
 /// Oracle: closed form, asked of the extractor rather than of the formula. One
@@ -331,7 +418,8 @@ fn every_extracted_resistance_is_positive_and_at_least_one_exists() {
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
-    );
+    )
+    .expect("every layer is described");
 
     let resistances: Vec<f64> = network
         .value
@@ -365,7 +453,8 @@ fn extracted_elements_name_real_nodes_and_order_every_coupling_by_net() {
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
-    );
+    )
+    .expect("every layer is described");
 
     let nodes = network.node_count();
     assert!(
@@ -430,7 +519,8 @@ fn per_net_capacitance_sums_to_the_total_plus_the_coupling_counted_twice() {
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
-    );
+    )
+    .expect("every layer is described");
 
     let mut nets: Vec<_> = network.node_net.clone();
     nets.sort_unstable();
@@ -476,7 +566,8 @@ fn extraction_emits_the_order_sort_canonical_would_have_produced() {
         &uniform_stack(3, 1.0, 0.25),
         grid(),
         &mut network,
-    );
+    )
+    .expect("every layer is described");
 
     let as_emitted = serialise(&network);
     network.sort_canonical();
@@ -506,7 +597,8 @@ fn extraction_is_byte_identical_across_runs_and_across_a_reused_buffer() {
         &stack,
         grid(),
         &mut fresh,
-    );
+    )
+    .expect("every layer is described");
     let first = serialise(&fresh);
 
     let mut again = ParasiticNetwork::default();
@@ -517,7 +609,8 @@ fn extraction_is_byte_identical_across_runs_and_across_a_reused_buffer() {
         &stack,
         grid(),
         &mut again,
-    );
+    )
+    .expect("every layer is described");
     assert_bytes_identical("two extractions of one corpus", &first, &serialise(&again));
 
     // The same buffer, a second time. Anything appended rather than replaced
@@ -529,7 +622,8 @@ fn extraction_is_byte_identical_across_runs_and_across_a_reused_buffer() {
         &stack,
         grid(),
         &mut again,
-    );
+    )
+    .expect("every layer is described");
     assert_bytes_identical(
         "an extraction into a reused buffer",
         &first,
