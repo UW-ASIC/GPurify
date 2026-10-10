@@ -30,8 +30,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 /// The domains whose fixtures are finished: every implemented, partial and
-/// expressible catalog row of these must be proved by at least one fixture.
-const COMPLETE: &[&str] = &[];
+/// expressible catalog row of these must be proved by at least one fixture, or
+/// by a named test in [`PROVED_BY_TEST`].
+const COMPLETE: &[&str] = &["pex"];
+
+/// Catalog rows whose claim a fixture cannot state, and the `#[test]` in this
+/// binary that proves each.
+const PROVED_BY_TEST: &[(&str, &str)] = &[("PEX-010", "pex::spef_carries_the_closed_form_totals")];
 
 fn all(depth: Depth) -> Vec<Fixture> {
     [
@@ -154,6 +159,19 @@ fn every_catalog_row_of_a_complete_domain_is_proved() {
             *proved.entry(id).or_default() += 1;
         }
     }
+    for (id, test) in PROVED_BY_TEST {
+        let (module, name) = test.split_once("::").expect("module::test");
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/exhaustive/{module}.rs")),
+        )
+        .expect("the module is readable");
+        assert!(
+            source.contains(&format!("fn {name}()")),
+            "{id}: no test {test}"
+        );
+        *proved.entry(id).or_default() += 1;
+    }
     let missing: Vec<&String> = rows
         .iter()
         .filter(|(_, (domain, status))| {
@@ -164,4 +182,35 @@ fn every_catalog_row_of_a_complete_domain_is_proved() {
         .filter(|id| !proved.contains_key(id.as_str()))
         .collect();
     assert!(missing.is_empty(), "rows no fixture proves: {missing:?}");
+}
+
+/// Every expected failure names a finding the testing plan records and has not
+/// fixed: a fixture marked for a fixed finding must be flipped to pass, and an
+/// unrecorded id is a finding nobody will look for.
+#[test]
+fn every_known_failure_names_an_open_finding() {
+    let plan = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/testing-plan.md"),
+    )
+    .expect("the testing plan is readable");
+    let open: BTreeMap<&str, bool> = plan
+        .lines()
+        .filter_map(|line| {
+            let id = line.strip_prefix("| ")?.split(' ').next()?;
+            (id.starts_with('F') && id[1..].parse::<u32>().is_ok())
+                .then(|| (id, !line.contains("**Fixed in")))
+        })
+        .collect();
+    let mut bad: BTreeMap<&str, String> = BTreeMap::new();
+    for fixture in all(Depth::Nightly) {
+        let Some(id) = fixture.known else { continue };
+        let why = match open.get(id) {
+            Some(true) => continue,
+            Some(false) => "is fixed",
+            None => "is not in the findings table",
+        };
+        bad.entry(id)
+            .or_insert_with(|| format!("{why} (first fixture: {})", fixture.name));
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
 }

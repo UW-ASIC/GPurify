@@ -37,10 +37,10 @@
 //! `#[test]` at the end of the file, against the same closed forms.
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
-//! finding that breaks them: F23, F24, F30, F31, and the new findings
-//! `N-x6-1` (closed forms read each drawn polygon, not the conductor),
-//! `N-x6-2` (a field-solved polygon is one filament along its bounding box),
-//! `N-x6-3` (the field-solve mesh depends on absolute position) and `N-x6-4`
+//! finding that breaks them: F23, F24, F30, F31, and
+//! `F44` (closed forms read each drawn polygon, not the conductor),
+//! `F45` (a field-solved polygon is one filament along its bounding box),
+//! `F46` (the field-solve mesh depends on absolute position) and `F47`
 //! (the reciprocity gate refuses ordinary layouts).
 
 #![allow(
@@ -463,9 +463,9 @@ fn bends(depth: Depth) -> Vec<Fixture> {
 /// R holds where the documentation promises it (a net's total is the sum of
 /// its polygons, each at least a square). C does not: each polygon's fringe
 /// counts the edge it shares with its neighbour, and overlapping polygons
-/// count their overlap twice (`N-x6-1`). A piece shorter than it is wide
+/// count their overlap twice (`F44`). A piece shorter than it is wide
 /// counts as `long/short ≥ 1` squares, so a bar cut across into short pieces
-/// reads too many squares (`N-x6-1`).
+/// reads too many squares (`F44`).
 fn pieces() -> Vec<Fixture> {
     let row = PARAMS.m1;
     let deck = deck(PARAMS, &[], "");
@@ -501,7 +501,7 @@ fn pieces() -> Vec<Fixture> {
                     ground_ff(row, 12e6, 26_000.0),
                     EXACT,
                 ))
-                .known("N-x6-1"),
+                .known("F44"),
         );
     }
 
@@ -526,7 +526,7 @@ fn pieces() -> Vec<Fixture> {
                 polygon_ff(row, &points),
                 EXACT,
             ))
-            .known("N-x6-1"),
+            .known("F44"),
     );
     // The same L as two full-length bars overlapping at the corner square.
     known.push(
@@ -548,7 +548,7 @@ fn pieces() -> Vec<Fixture> {
             polygon_ff(row, &points),
             EXACT,
         ))
-        .known("N-x6-1"),
+        .known("F44"),
     );
     // A 3 x 1 um bar (three squares) cut across into four 750 nm pieces.
     let mut short = Layout::default();
@@ -563,7 +563,7 @@ fn pieces() -> Vec<Fixture> {
                 wire_ohm(row, 3_000, 1_000),
                 EXACT,
             ))
-            .known("N-x6-1"),
+            .known("F44"),
     );
 
     let mut out = every_placement(&holds);
@@ -703,12 +703,12 @@ fn solved(name: &str, catalog: &[&'static str], layout: Layout, nets: &[&str]) -
 /// - A net that does not exist is refused.
 /// - F23: an L drawn as two touching rectangles, and a bar pair joined by a
 ///   via, have the R and L of the conductor they draw, not zero.
-/// - `N-x6-2`: an L drawn as one polygon likewise, not a filament along its
+/// - `F45`: an L drawn as one polygon likewise, not a filament along its
 ///   bounding box.
 /// - F24: a plate's ground capacitance is at least the parallel-plate
 ///   `ε₀εr·A/h` to the substrate.
 /// - F31: naming a net twice is refused or deduplicated; the run completes.
-/// - `N-x6-4`: four ordinary conductors solved together are not refused.
+/// - `F47`: four ordinary conductors solved together are not refused.
 fn field(depth: Depth) -> Vec<Fixture> {
     let sizes: &[(i64, i64)] = match depth {
         Depth::Merge => &[(20_000, 1_000)],
@@ -817,7 +817,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
     out.push(bent(
         "pex/field/l_one_polygon",
         Layout::default().polygon("m1", &points),
-        "N-x6-2",
+        "F45",
     ));
     // m1 and m2 bars joined by one cut: the bars and the cut in series.
     out.push(
@@ -886,7 +886,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
     // Four ordinary conductors solved together. The matrix is reciprocal to
     // about 1e-11 of its diagonal, but the engine holds each off-diagonal's
     // asymmetry, relative to that entry alone, to the 1e-10 residual, so the
-    // most weakly coupled pair refuses the run (`N-x6-4`).
+    // most weakly coupled pair refuses the run (`F47`).
     out.push(
         solved(
             "pex/field/four_conductors",
@@ -895,7 +895,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
             &["A", "B", "C", "D"],
         )
         .expect(Expect::Passes(true))
-        .known("N-x6-4"),
+        .known("F47"),
     );
     out
 }
@@ -1238,7 +1238,7 @@ fn a_field_solve_is_invariant_under_symmetry_and_covariant_under_scale() {
 /// a face is cut into `ceil(width / edge)` panels with the width taken from
 /// absolute coordinates in metres, so where the width is an exact multiple of
 /// the edge, round-off at some positions adds a panel: the same three
-/// conductors 1 mm to the right read capacitances 1e-4 apart (`N-x6-3`).
+/// conductors 1 mm to the right read capacitances 1e-4 apart (`F46`).
 #[test]
 fn a_field_solve_is_invariant_under_translation() {
     let labels = ["A", "B", "C"];
@@ -1249,7 +1249,7 @@ fn a_field_solve_is_invariant_under_translation() {
         let (c, _) = maxwell(layout.transformed(Symmetry::IDENTITY, dx, dy), &labels, 1.0);
         broken.extend(differences(&format!("+({dx},{dy})"), &c, &reference, 1.0));
     }
-    known("N-x6-3", &broken);
+    known("F46", &broken);
 }
 
 /// PEX-010: SPEF carries the network: a net's `*D_NET` total is its

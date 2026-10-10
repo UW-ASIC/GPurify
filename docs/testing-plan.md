@@ -89,6 +89,10 @@ A layer without one is not a test.
 | F41 | **`min_extension` judges pairs that only touch:** a line abutting the side of its reference is measured by its far protrusion. | `drc/rules/overlay.rs` | False violation (B2); F19 covered it for `overlap` only. |
 | F42 | **`eol_spacing` reads ends of line from drawn rows:** an edge two abutting rows share is taken as a line end whose keep-out runs through its own figure. | `drc/rules/spacing.rs` | False violation, the F18 pattern. |
 | F43 | **`corner_to_corner` can miss an L-shaped shape** whose bounding box overlaps its neighbour on one axis but whose real corner is diagonal to it. | `drc/rules/spacing.rs` | **False clean**, and corner limits are usually larger than space limits. |
+| F44 | **The PEX closed forms read each drawn polygon, not the merged conductor.** A 12×1 µm bar cut into 2, 3 or 4 abutting pieces reads C = 1.42, 1.50, 1.58 fF for 1.34, since each shared edge counts as fringe on both sides; an L of two overlapping bars reads R 3.2 Ω for 3.1 and C 3.52 fF for 3.335; a piece shorter than it is wide still counts one square, so four 750 nm pieces of a 3-square bar read 0.533 Ω for 0.3. | `crates/extract` (analytical R and C) | Wrong parasitics whenever a conductor is drawn as more than one polygon. Found by X6. |
+| F45 | **A field-solved polygon is one filament along its bounding box.** An L drawn as one polygon reads R = 0.125 Ω and L = 6.28 pH for 3.5 Ω and 25.7 pH, and the filament R replaces the analytical R, which was right. | `crates/extract/src/field` | Wrong R and L for any non-rectangular conductor under `--quasistatic`. Found by X6. |
+| F46 | **The field-solve mesh depends on absolute position.** A face's panel count is the ceiling of a width taken from absolute coordinates in metres, so a 6000 nm face at x = 1 mm reads 12.000000000000293 panels and gets 13. Moving three conductors 1 mm changes C by about 1e-4. Counting panels from the integer width fixes it. | `crates/extract/src/field/mesh.rs` | Translation changes the answer. Found by X6. |
+| F47 | **The reciprocity gate refuses ordinary layouts.** It holds each off-diagonal's own relative asymmetry to the 1e-10 residual, so the weakest pair trips it: four small conductors are refused at asymmetry 2.6e-10 for an entry off by 8e-12 fF (1.6e-11 of the diagonal). Normalising by √(Cii·Cjj) fixes it. | `src/engine/run.rs` (`reciprocity_refusal`) | A false refusal under `--quasistatic`. Found by X6. |
 
 ---
 
@@ -428,7 +432,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | X3 | Exhaustive fixtures: a bitmap reference DRC and every pattern of small cell grids (supersedes C5) | C5, L3 | todo |
 | X4 | Exhaustive fixtures: every ERC kind, closed forms and enumerated topologies (supersedes C6 for ERC) | ERC-* | todo |
 | X5 | Exhaustive fixtures: LVS over every small circuit and every single fault, against a brute-force isomorphism; device classes, reductions, hierarchy | LVS-* | todo |
-| X6 | Exhaustive fixtures: PEX analytic geometries, matrix laws, refinement convergence (supersedes C6 for PEX) | PEX-* | todo |
+| X6 | Exhaustive fixtures: PEX analytic geometries, matrix laws, refinement convergence (supersedes C6 for PEX) | PEX-* | done |
 | D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | todo |
 | D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | todo |
 | D3 | Deck library P2: query API with the shared spacing-threshold function | deck §5 | todo |
