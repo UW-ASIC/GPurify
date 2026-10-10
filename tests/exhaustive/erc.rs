@@ -690,8 +690,8 @@ fn diode_stub(diode: bool) -> Layout {
 ///
 /// - With no credit it is `antenna`: 2.0 swept.
 /// - With a diode on the net and a bonus of 0.5: 1.5 swept.
-/// - A bonus is credit for a diode, so a net without one keeps 2.0; `GPurify`
-///   subtracts it from every gate net (F35).
+/// - A bonus is credit for a diode, so a net without one keeps 2.0 (F35:
+///   it was once subtracted from every gate net).
 /// - A diode with a non-zero credit is refused, as its rustdoc and
 ///   limitations.md state.
 /// - IHP Ant.b (without diode, 1.5 here) and Ant.e (with diode, 100): a net
@@ -739,8 +739,7 @@ fn antenna_electrical() -> Vec<Fixture> {
             ERC,
         )
         .layout(diode_stub(false))
-        .expect(Expect::rule("ae", vec![ratio(2.0).at(500, 500)]))
-        .known("F35"),
+        .expect(Expect::rule("ae", vec![ratio(2.0).at(500, 500)])),
     );
     out.push(
         Fixture::new(

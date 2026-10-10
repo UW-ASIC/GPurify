@@ -194,11 +194,12 @@ pub struct AntennaTable {
 /// diode: layer | none, diode_credit: n, diode_bonus: n)`.
 ///
 /// Nets, collectors, gates and the summed ratio are those of [`AntennaTable`]
-/// (always by drawn area, never sidewall). The value compared with
-/// `max_ratio` is `ratio - diode_credit * diode_area - diode_bonus`, the
-/// subtractive credit sky130 states, where `diode_area` is the `diode` layer
-/// area on the gate's net at the row's highest stage. `diode_bonus` is subtracted from
-/// every gate net of the row, with or without a diode on it.
+/// (always by area, never sidewall). The value compared with `max_ratio` is
+/// `ratio - diode_credit * diode_area - diode_bonus`, the subtractive credit
+/// sky130 states, where `diode_area` is the `diode` layer area on the gate's
+/// net at the row's highest stage. Both terms are credit for a diode: a gate
+/// with no diode area on its net keeps its ratio, so with `diode: none` the
+/// bonus never applies.
 ///
 /// # Limits
 ///
@@ -233,7 +234,8 @@ pub struct AntennaElectricalTable {
     /// Per row: the credit per unit diode area. Non-zero with a diode refuses
     /// the row.
     pub diode_credit: Vec<f64>,
-    /// Per row: a constant subtracted from every gate net's ratio.
+    /// Per row: a constant subtracted from the ratio of every gate with diode
+    /// area on its net.
     pub diode_bonus: Vec<f64>,
     /// Per row: the largest allowed credited ratio. Positive from a deck.
     pub max_ratio: Vec<f64>,
@@ -747,7 +749,11 @@ pub fn check_antenna_electrical(
                 clippy::cast_precision_loss,
                 reason = "a diode's area in database units is far below 2^53"
             )]
-            |ratio, diode_area| Some(ratio - credit * diode_area.raw() as f64 - bonus),
+            |ratio, diode_area| {
+                // Both credits are for a diode: no diode on the net, none given.
+                let bonus = if diode_area.raw() > 0 { bonus } else { 0.0 };
+                Some(ratio - credit * diode_area.raw() as f64 - bonus)
+            },
             scratch,
             out,
         );
