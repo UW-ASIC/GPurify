@@ -37,8 +37,9 @@
 //! `#[test]` at the end of the file, against the same closed forms.
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
-//! finding that breaks them: F23, F24 and F31. `F30` (a layer with no `pex`
-//! row read as a perfect wire), `F44` (closed forms read each drawn polygon,
+//! finding that breaks them: F24 and F31. F23 (inductance filaments joined
+//! nothing but coincident end points), `F30` (a layer with no `pex` row read
+//! as a perfect wire), `F44` (closed forms read each drawn polygon,
 //! not the conductor), `F45` (a field-solved polygon was one filament along
 //! its bounding box), `F46` (the mesh depended on absolute position) and
 //! `F47` (the reciprocity gate refused ordinary layouts) are fixed, and their
@@ -686,8 +687,8 @@ fn solved(name: &str, catalog: &[&'static str], layout: Layout, nets: &[&str]) -
 /// - An L drawn as one polygon or as two touching rectangles has the R and L
 ///   of the conductor it draws: `F45` (one filament along the bounding box)
 ///   and the touching half of F23 are fixed.
-/// - F23: a bar pair joined by a via has the R of the bars and the cut in
-///   series, not zero.
+/// - A bar pair joined by a via has the R of the bars and the cut in series,
+///   not zero (F23, fixed).
 /// - F24: a plate's ground capacitance is at least the parallel-plate
 ///   `ε₀εr·A/h` to the substrate.
 /// - F31: naming a net twice is refused or deduplicated; the run completes.
@@ -819,8 +820,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
             Quantity::Resistance,
             wire_ohm(COARSE.m1, 5_000, 1_000) + wire_ohm(COARSE.m2, 5_000, 1_000) + COARSE.v1.sheet,
             MODEL,
-        ))
-        .known("F23"),
+        )),
     );
 
     // An 8 um plate 250 nm over the substrate (W/h = 32). The column under it

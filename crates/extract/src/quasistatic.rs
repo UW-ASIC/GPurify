@@ -14,7 +14,7 @@ pub use crate::field::{mesh, solve, Accuracy, CapMatrix};
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{GeometryStore, Grid, LayerId, Qty};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 
 const FEMTOFARADS_PER_FARAD: f64 = 1e15;
 const PICOHENRIES_PER_HENRY: f64 = 1e12;
@@ -85,18 +85,28 @@ pub fn extract_into(
 /// # Errors
 ///
 /// Every [`InductanceError`]: a selected net with no polygons, a polygon on
-/// a layer with no positive sheet resistance or thickness, or a singular
-/// system. `out` is unchanged then.
+/// a layer with no positive sheet resistance or thickness, a net whose
+/// shapes do not join into one circuit through shared edges and vias, or a
+/// singular system. `out` is unchanged then.
 pub fn extract_inductance_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
     matrix: &mut InductMatrix,
     out: &mut ParasiticNetwork,
 ) -> Result<(), InductanceError> {
-    crate::field::henry::extract_inductance_into(store, nets, selected, stack, grid, matrix)?;
+    crate::field::henry::extract_inductance_into(
+        store,
+        nets,
+        connectivity,
+        selected,
+        stack,
+        grid,
+        matrix,
+    )?;
 
     if out.node_net.is_empty() {
         push_anchors(store, nets, &matrix.net, out);

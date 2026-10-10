@@ -21,10 +21,11 @@
 use crate::conductor::Regions;
 use crate::field::filament::{self, default_wdir, Filament, Vec3};
 use gpurify_check::topology::{NetId, NetTable};
-use gpurify_geom::{Bbox, GeometryStore, Grid};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_geom::{Bbox, GeometryStore, Grid, LayerId, PolyId};
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use num_complex::Complex64;
 use rayon::prelude::*;
+use std::cmp::Reverse;
 
 /// The one frequency the impedance is extracted at: 1 MHz, where skin effect is
 /// negligible on chip and ωL is still well above round-off next to R.
@@ -75,6 +76,15 @@ pub enum InductanceError {
     /// Carries the layer id.
     #[error("layer {0} is not valid rectilinear geometry, so it cannot be cut into filaments")]
     InvalidGeometry(u16),
+    /// A selected net's filaments do not form one circuit: its pieces do
+    /// not all join through shared edges and vias (two pieces meeting only
+    /// at a corner, say), so its port impedance is undefined. Carries the
+    /// net id.
+    #[error(
+        "net {0}'s shapes do not join into one circuit through shared edges and vias, \
+         so its inductance is undefined"
+    )]
+    Disconnected(u32),
 }
 
 /// A filament node: coordinates in doubled database units, so every
@@ -168,12 +178,16 @@ fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
 /// it projects onto the other, as wide as the shared edge. A centre line is
 /// split wherever a junction lands on it, and a stub past the last landing
 /// carries no current. So a bend of constant width `w` and centre-line
-/// length `Lc` reads `Lc / w` squares, its corner counted once.
+/// length `Lc` reads `Lc / w` squares, its corner counted once. Pieces that
+/// meet only at a corner are not joined.
 ///
-/// Pieces on different layers, and pieces that meet only at a corner, are
-/// not joined. A net's port runs between its two most distant end points;
-/// when those are in different circuits, the net reports a partial or zero
-/// impedance rather than an error.
+/// Layers join through vias ([`Connectivity::via_cut`]): each cut whose box
+/// shares a point with the net's rectangles on both of its plates lands on
+/// the rectangle it overlaps most on each (the lowest on a tie), and is a
+/// filament from where its centre projects onto one centre line to where it
+/// projects onto the other, the cut wide and long, carrying the layer's
+/// resistance per cut. Cuts of one array are so many filaments in parallel.
+/// A net's port runs between its two most distant end points.
 ///
 /// # Errors
 ///
@@ -181,19 +195,23 @@ fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
 /// [`InductanceError::InvalidGeometry`] for a net's shapes on a layer that
 /// are not valid rectilinear rings, [`InductanceError::NoSheetResistance`]
 /// or [`InductanceError::NoThickness`] for a shape on a layer the stack does
-/// not describe, and [`InductanceError::Singular`] if either factorisation
-/// meets a zero pivot. Nets are checked in ascending order, each net's
-/// layers in ascending order.
+/// not describe (or a joining via layer with no resistance per cut),
+/// [`InductanceError::Disconnected`] for a net whose pieces do not join into
+/// one circuit (pieces meeting only at a corner, say), and
+/// [`InductanceError::Singular`] if either factorisation meets a zero pivot.
+/// Nets are checked in ascending order, each net's layers in ascending
+/// order.
 ///
 /// # Time complexity
 ///
 /// A merge per net and layer; a check of every pair of one region's
-/// rectangles for a shared edge; then *O*(B²) filament-pair integrals and an
-/// *O*(B³) complex factorisation for B filament pieces, then an *O*(N³) one
-/// for N filament nodes.
+/// rectangles for a shared edge; a scan of each via layer's cuts per net;
+/// then *O*(B²) filament-pair integrals and an *O*(B³) complex factorisation
+/// for B filament pieces, then an *O*(N³) one for N filament nodes.
 pub fn extract_inductance_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -252,7 +270,10 @@ pub fn extract_inductance_into(
     let mut lines: Vec<(Line, u16)> = Vec::new();
     let mut stops: Vec<(usize, i64)> = Vec::new();
     let mut junctions: Vec<(NodeKey, NodeKey, i64)> = Vec::new();
+    let mut vias: Vec<(NodeKey, NodeKey, Bbox, f64)> = Vec::new();
     let mut keys: Vec<NodeKey> = Vec::new();
+    // Each net's node range, for the one-circuit check.
+    let mut spans: Vec<(NetId, usize, usize)> = Vec::new();
     for &net in &order {
         if nets.polys_of(net).is_empty() {
             return Err(InductanceError::EmptyNet(net.0));
@@ -293,6 +314,64 @@ pub fn extract_inductance_into(
                         junctions.push((from, to, edge));
                     }
                 }
+            }
+        }
+        // A line's index is its rectangle's index in `regions.rects`.
+        vias.clear();
+        for (&cut_layer, &(lower, upper)) in
+            connectivity.via_cut.iter().zip(&connectivity.via_connects)
+        {
+            let plate = |layer: LayerId| -> Vec<usize> {
+                (0..lines.len())
+                    .filter(|&i| lines[i].1 == layer.0)
+                    .collect()
+            };
+            let (below, above) = (plate(lower), plate(upper));
+            let reach = |plate: &[usize]| {
+                plate
+                    .iter()
+                    .fold(Bbox::EMPTY, |b, &i| b.union(regions.rects[i]))
+            };
+            let Some(window) = reach(&below).intersection(reach(&above)) else {
+                continue;
+            };
+            // ponytail: scans every cut on the layer per net; a spatial
+            // query if selections meet chip-scale via layers.
+            for row in store.polys_on_layer(cut_layer) {
+                let cut = store.poly_bbox(PolyId(row));
+                if !cut.overlaps(window) {
+                    continue;
+                }
+                let land = |plate: &[usize]| {
+                    plate
+                        .iter()
+                        .copied()
+                        .filter(|&i| cut.overlaps(regions.rects[i]))
+                        .max_by_key(|&i| {
+                            let shared = cut.intersection(regions.rects[i]);
+                            (shared.map_or(0, |b| b.area().raw()), Reverse(i))
+                        })
+                };
+                let (Some(a), Some(b)) = (land(&below), land(&above)) else {
+                    continue;
+                };
+                let ohm = stack
+                    .sheet_res_ohm_sq
+                    .get(cut_layer.idx())
+                    .copied()
+                    .filter(|&ohm| ohm > 0.0 && ohm.is_finite())
+                    .ok_or(InductanceError::NoSheetResistance(cut_layer.0))?;
+                let (x, y) = (cut.xlo.raw() + cut.xhi.raw(), cut.ylo.raw() + cut.yhi.raw());
+                let ((line_a, layer_a), (line_b, layer_b)) = (lines[a], lines[b]);
+                let (at_a, at_b) = (line_a.project(x, y), line_b.project(x, y));
+                stops.push((a, at_a));
+                stops.push((b, at_b));
+                vias.push((
+                    line_a.key(at_a, layer_a),
+                    line_b.key(at_b, layer_b),
+                    cut,
+                    ohm,
+                ));
             }
         }
         stops.sort_unstable();
@@ -339,10 +418,23 @@ pub fn extract_inductance_into(
                 n2,
             );
         }
+        for &(from, to, cut, ohm) in &vias {
+            let (n1, n2) = (node_of(from), node_of(to));
+            let (w, h) = (metres(cut.width().raw()), metres(cut.height().raw()));
+            set.push_ohm(nodes[n1], nodes[n2], w, h, ohm, n1, n2);
+        }
 
         let (pa, pb) = most_distant_pair(&nodes[base..]);
         ports.push((base + pa, base + pb));
+        spans.push((net, base, nodes.len()));
         out.net.push(net);
+    }
+
+    let component = connected_components(&set, nodes.len());
+    for &(net, from, to) in &spans {
+        if component[from..to].iter().any(|&c| c != component[from]) {
+            return Err(InductanceError::Disconnected(net.0));
+        }
     }
 
     let f = FREQUENCY_HZ;
@@ -386,12 +478,18 @@ struct FilamentSet {
 }
 
 impl FilamentSet {
+    /// A conductor piece of conductivity `sigma`: `R = length / (σ w h)`.
     fn push(&mut self, p1: Vec3, p2: Vec3, w: f64, h: f64, sigma: f64, n1: usize, n2: usize) {
+        let length = (p2 - p1).norm();
+        self.push_ohm(p1, p2, w, h, length / (sigma * (w * h)), n1, n2);
+    }
+
+    /// A piece whose resistance is stated, not derived: a via cut.
+    fn push_ohm(&mut self, p1: Vec3, p2: Vec3, w: f64, h: f64, ohm: f64, n1: usize, n2: usize) {
         // Normalized twice, as the width frame always was: the bits depend on it.
         let wdir = default_wdir((p2 - p1).normalized().normalized());
-        let length = (p2 - p1).norm();
         self.fils.push(Filament::with_frame(p1, p2, w, h, wdir));
-        self.r.push(length / (sigma * (w * h)));
+        self.r.push(ohm);
         self.n1.push(n1);
         self.n2.push(n2);
     }

@@ -533,6 +533,7 @@ fn run_pex(
         if let Err(refusal) = gpurify_extract::quasistatic::extract_inductance_into(
             &loaded.store,
             &extracted.nets,
+            &loaded.deck.connectivity,
             &selected,
             &loaded.deck.stack,
             grid,

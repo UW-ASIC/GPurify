@@ -139,7 +139,9 @@ resistance and capacitance. Nets named with `--quasistatic` are solved from
 the field instead, which is slower and more accurate, and their coupling to
 nets that were not field-solved is kept. A field-solved net also gets its
 inductance, and its resistance and inductance follow the wire's centre line
-through every bend, however the wire was cut into polygons. A net with no text
+through every bend and every via, however the wire was cut into polygons. A
+field-solved net whose shapes do not join into one circuit (two pieces that
+meet only at a corner) is refused. A net with no text
 label in the layout has no name to write, and the run refuses it rather than
 inventing one.
 

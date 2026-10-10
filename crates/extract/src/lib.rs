@@ -62,7 +62,8 @@
 //! [`field::henry`] merges each selected net's shapes per layer, as the
 //! closed forms do, cuts them into rectangles, and makes each rectangle a
 //! straight filament along its centre line; rectangles that share an edge
-//! are joined through the middle of it, so a bend reads its centre line.
+//! are joined through the middle of it, so a bend reads its centre line,
+//! and each via cut joins the two layers it lands on.
 //! It builds their partial-inductance matrix (Ruehli, 1972). Self
 //! terms use Grover's closed form ([`field::filament::self_inductance_bar`]),
 //! close parallel pairs the exact brick formula of Hoer & Love (1965), far
@@ -109,8 +110,10 @@
 //! - **Inductance** models each rectangle of a net's merged shapes as one
 //!   filament, uniform across its width, so current crowding at a corner or
 //!   a step in width is not modelled: a junction between two rectangles is a
-//!   filament as wide as their shared edge. Vias join nothing, so a net on
-//!   several layers is several circuits and can report `L = 0` and `R = 0`
+//!   filament as wide as their shared edge. A via cut is one filament
+//!   between the two centre lines it lands on, carrying the stack's
+//!   resistance per cut. A net whose pieces do not join into one circuit
+//!   (two pieces meeting only at a corner) is refused
 //!   (see [`field::henry::extract_inductance_into`]).
 //!   Only each net's own port impedance is computed, so mutual inductance
 //!   between nets never reaches the output. A single frequency (1 MHz) means
