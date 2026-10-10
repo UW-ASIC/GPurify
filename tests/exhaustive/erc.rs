@@ -3241,8 +3241,27 @@ fn esd(depth: Depth) -> Vec<Fixture> {
         ERC,
     )
     .layout(layout)
-    .expect(Expect::rule("esdl", vec![length(100)]))
-    .known("F26");
+    .expect(Expect::rule("esdl", vec![length(100)]));
+    f.intent = Some(board.intent());
+    out.push(f);
+    // The band is the material: a 500 nm ring drawn as two abutting 250 nm
+    // bars is 500 nm wide, legal at the 500 nm limit.
+    let (x, y) = (-2500, track_y(vdd));
+    let layout = board.layout().rect("ring", x, y, x + 250, y + 1000).rect(
+        "ring",
+        x + 250,
+        y,
+        x + 500,
+        y + 1000,
+    );
+    let mut f = Fixture::new(
+        "erc/esd/f26/abutting_bars",
+        &["ERC-D2"],
+        &topo_deck(Limits::default()),
+        ERC,
+    )
+    .layout(layout)
+    .expect(Expect::clean("esdl"));
     f.intent = Some(board.intent());
     out.push(f);
     // No supply declared (only a limit on the signal): every pad reaches no

@@ -4,6 +4,7 @@
 //! Data in: the solved supply grid, devices, design intent. Data out:
 //! violations and one run per row. All three kinds skip without intent.
 
+use crate::drc::rules::{owners_of, LayerRects};
 use crate::erc::facts::IntentMap;
 use crate::erc::power::Power;
 use crate::erc::rules::supply::clamp_rails;
@@ -14,8 +15,10 @@ use crate::erc::{
 };
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId};
+use gpurify_geom::boolean::union_into;
 use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::width::{narrowest_facing, narrowest_neck, FacingScratch};
 use gpurify_geom::{prefix, Dbu, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
@@ -123,19 +126,21 @@ pub struct HvDomainTable {
 /// A row makes two checks. Pads: every net under a `pad` polygon is held to
 /// the clamp path of
 /// [`EsdTopologicalTable`](crate::erc::rules::supply::EsdTopologicalTable).
-/// Guard rings: every polygon on `guard_ring` is flagged when the narrow side
-/// of its bounding box is under `min_guard_ring_width`, or when the gap from
-/// its bounding box to the nearest box of a shape on any declared supply net
-/// (the larger of the x and y gaps; zero when they touch) is above
-/// `max_tap_distance`. With no supply shapes at all, every ring is flagged as
-/// having no tap.
+/// Guard rings: a figure of the merged `guard_ring` layer is flagged when its
+/// band is narrower than `min_guard_ring_width`, measured as `width`
+/// measures it (the least gap between facing edges across material, and
+/// between concave corners diagonally), so a closed or C-shaped ring is as
+/// wide as its narrowest band and abutting bars as wide as their union.
+/// Every polygon on `guard_ring` is flagged when the gap from its bounding
+/// box to the nearest box of a shape on any declared supply net (the larger
+/// of the x and y gaps; zero when they touch) is above `max_tap_distance`.
+/// With no supply shapes at all, every ring is flagged as having no tap.
 ///
 /// # Limits
 ///
 /// No shipped deck carries this rule: no manual states a pad guard-ring width
-/// and tap distance in this form (ERC-D2). Both ring measures are
-/// bounding-box measures, so a ring drawn as one closed polygon measures its
-/// outer extent, not its band width; draw the ring as bars. The pad check
+/// and tap distance in this form (ERC-D2). The tap distance is a
+/// bounding-box measure: a closed ring around a tap reads zero. The pad check
 /// proves a clamp path exists, not its resistance or current capacity.
 ///
 /// Catalog: ERC-C1, ERC-D2 (partial) in the [check catalog]. Defined by
@@ -162,7 +167,7 @@ pub struct EsdLatchupTable {
     pub clamp: Vec<StrId>,
     /// Per row: the layer whose polygons are guard rings.
     pub guard_ring: Vec<LayerId>,
-    /// Per row: the narrowest allowed ring bounding box side, database units.
+    /// Per row: the narrowest allowed ring band, database units.
     pub min_guard_ring_width: Vec<Dbu>,
     /// Furthest a guard ring may be from a declared supply.
     pub max_tap_distance: Vec<Dbu>,
@@ -355,8 +360,10 @@ pub fn check_hv_domain(
 /// violation sits at the first vertex of the net's first pad polygon on the
 /// pad layer, measuring the rail kinds reached (0 or 1) against 2. A ring
 /// violation sits at the ring's first vertex, measuring its width or tap gap
-/// against the limit, or the count 0 against 1 when no supply shape exists.
-/// Every row is skipped without usable intent.
+/// against the limit, or the count 0 against 1 when no supply shape exists;
+/// a narrow merged figure is reported on its lowest-numbered polygon. Every
+/// row is skipped without usable intent, and refused when its ring layer
+/// will not validate or merge.
 ///
 /// # Panics
 ///
@@ -400,6 +407,13 @@ pub fn check_esd_latchup(
         let generation = u32::try_from(row + 1).expect("a rule table is small");
         let mut examined = 0u64;
 
+        let ring_layer = table.guard_ring[row];
+        let min_width = table.min_guard_ring_width[row];
+        let Some(narrow) = narrow_rings(design, ring_layer, min_width, scratch) else {
+            record_run(runs, out, before, rule, Outcome::Refused, 0);
+            continue;
+        };
+
         let pad_layer = table.pad[row];
         let clamps =
             &table.clamp[table.clamp_start[row] as usize..table.clamp_start[row + 1] as usize];
@@ -425,8 +439,7 @@ pub fn check_esd_latchup(
             }
         }
 
-        let ring_layer = table.guard_ring[row];
-        let min_width = Measurement::Length(table.min_guard_ring_width[row]);
+        let min_width = Measurement::Length(min_width);
         let max_tap = table.max_tap_distance[row];
         for poly in store.polys_on_layer(ring_layer) {
             let ring = PolyId(poly);
@@ -444,10 +457,8 @@ pub fn check_esd_latchup(
                     shapes: (ring, None),
                 });
             };
-            // A ring's width is its narrow side.
-            let width = Measurement::Length(box_of.width().min(box_of.height()));
-            if width.violates(min_width, LimitSense::Minimum) {
-                push(width, min_width);
+            if let Ok(at) = narrow.binary_search_by_key(&ring, |&(owner, _)| owner) {
+                push(Measurement::Length(narrow[at].1), min_width);
             }
             // No supply at all is an absent tap, not a saturated distance.
             let (measured, limit, sense) =
@@ -464,6 +475,42 @@ pub fn check_esd_latchup(
         }
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
+}
+
+/// Every figure of the merged `layer` narrower than `limit`, as `(the lowest
+/// drawn row under it, its narrowest band)`, ascending by row: facing edges
+/// across material and diagonal necks between concave corners, the measure of
+/// DRC `width`. `None` when the layer will not validate or merge.
+fn narrow_rings(
+    design: Design<'_>,
+    layer: LayerId,
+    limit: Dbu,
+    scratch: &mut Scratch,
+) -> Option<Vec<(PolyId, Dbu)>> {
+    validate_layer_into(design.store, layer, &mut scratch.layer_a).ok()?;
+    let mut drawn = LayerRects::default();
+    drawn.build(design.store, layer, &scratch.layer_a);
+    union_into(
+        &scratch.layer_a,
+        &ValidatedLayer::default(),
+        &mut scratch.layer_b,
+    )
+    .ok()?;
+    let mut facing = FacingScratch::default();
+    let mut narrow: Vec<(PolyId, Dbu)> = (0..)
+        .zip(owners_of(&scratch.layer_b, &drawn))
+        .filter_map(|(idx, owner)| {
+            let figure = scratch.layer_b.get(idx);
+            let band = narrowest_facing(figure, true, &mut facing)
+                .into_iter()
+                .chain(narrowest_neck(figure, limit))
+                .map(|(gap, _)| gap)
+                .min()?;
+            (band < limit).then_some((owner, band))
+        })
+        .collect();
+    narrow.sort_unstable();
+    Some(narrow)
 }
 
 /// The widest nominal spread across a device's terminals; `None` when no
