@@ -414,12 +414,14 @@ fn a_field_solve_obeys_the_coupling_laws_a_closed_form_cannot_state() {
         "PEX_VERT is PEX_CC rotated a quarter turn, so the field is the same \
          field: {vertical} aF against {s200} aF"
     );
+    // Once "the same field": in free space a pair moved straight up is the
+    // same pair. The solve now holds the substrate at ground (F24), and a
+    // grounded plane takes more of a pair's flux the nearer it is.
     assert!(
-        agree(on_met2, s200),
+        on_met2 > s200,
         "PEX_M2CC is PEX_CC on met2, which the deck gives the same thickness \
-         and the same dielectric_k, so the field is the same field: {on_met2} \
-         aF against {s200} aF. The manifest's 160-against-200 is what this \
-         disagrees with, and the geometry is on this side"
+         and the same dielectric_k 700 nm farther from the grounded substrate, \
+         so it must couple more: {on_met2} aF against {s200} aF"
     );
 
     assert!(
