@@ -70,12 +70,18 @@ was measured and the limit it broke.
 Before matching, both sides are reduced the way netgen reduces them:
 
 - **Parallel:** devices of one model with every terminal on the same nets
-  become one device. Source and drain are interchangeable. W and `nf` are
-  summed, and every other parameter, L included, must agree.
-- **Series:** devices stacked through a node nothing else touches, with their
-  gates strapped, become one device whose L is the sum, if every other
+  become one device. Source and drain are interchangeable, and so are a
+  resistor's ends. For transistors, W and `nf` are summed, and every other
+  parameter, L included, must agree. Any other device keeps its value and
+  counts: two equal capacitors in parallel are one with `m=2`, which matches
+  a card with `m=2` but not one card of twice the capacitance.
+- **Series:** transistors stacked through a node nothing else touches, with
+  their gates strapped, become one device whose L is the sum, if every other
   parameter agrees.
-- **Multiplier:** a reference card's `m` multiplies its `W`, and `m` is then dropped (`nf` is untouched). A card with `m` but no `W` loses its multiplier, so `m=2` matches one drawn device (testing-plan F21).
+- **Multiplier:** a transistor card's `m` multiplies its `W`, and `m` is then
+  dropped (`nf` is untouched). Any other card's `m` is its count of devices
+  in parallel, so `m=2` matches two drawn devices and not one. `m=1` is the
+  same as no `m`.
 
 The parameter names are `w`, `l`, `nf` and `m`. The report lists every merge
 under `lvs merges:` with the device rows it joined, so a paired device can be

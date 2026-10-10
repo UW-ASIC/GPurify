@@ -1272,14 +1272,14 @@ fn curated() -> Vec<Fixture> {
         .known("F57"),
     );
 
-    // F20, LVS-043, LVS-044: parallel passives keep their count.
+    // F20 (fixed in B9), LVS-043, LVS-044: parallel passives keep their count.
     for (model, row) in [(R, "LVS-043"), (C, "LVS-044"), (D, "LVS-044")] {
         let one = polar(Dev::pins(model, &[0, 1]));
         let mut two = one.clone();
         two.devs.push(Dev::pins(model, &[0, 1]));
         let letter = model.letter();
         let name = format!("parallel/{letter}_two_vs_one");
-        out.push(compared(&name, &[row], &one, &two).known("F20"));
+        out.push(compared(&name, &[row], &one, &two));
         out.push(compared(
             &format!("parallel/{letter}_two_vs_two"),
             &[row],
@@ -1291,7 +1291,7 @@ fn curated() -> Vec<Fixture> {
     let mut opposed = forward.clone();
     opposed.devs.push(Dev::pins(D, &[1, 0]));
     let rows = &["LVS-044", "LVS-030"];
-    // Opposed diodes stay two since F15 was fixed; F20's summing is open.
+    // Opposed diodes stay two since F15 was fixed.
     out.push(compared(
         "parallel/D_opposed_vs_one",
         rows,
@@ -1364,12 +1364,17 @@ fn curated() -> Vec<Fixture> {
         }
     }
 
-    // F21, LVS-046: the multiplier.
+    // F21 (fixed in B9), LVS-046: the multiplier.
     let cap = polar(Dev::pins(C, &[0, 1]));
     let cap_m2 = polar(Dev::pins(C, &[0, 1]).times(2));
     let mut caps = cap.clone();
     caps.devs.push(Dev::pins(C, &[0, 1]));
-    out.push(compared("multiplier/C_m2_vs_one", &["LVS-046"], &cap, &cap_m2).known("F21"));
+    out.push(compared(
+        "multiplier/C_m2_vs_one",
+        &["LVS-046"],
+        &cap,
+        &cap_m2,
+    ));
     out.push(compared(
         "multiplier/C_m2_vs_two",
         &["LVS-046", "LVS-044"],

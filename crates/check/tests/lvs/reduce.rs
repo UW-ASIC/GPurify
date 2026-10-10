@@ -17,7 +17,7 @@
 
 use crate::common;
 
-use common::{mos_and_bjt, permute, GraphBuilder, LENGTH, NCH, PCH, VSS, WIDTH};
+use common::{mos_and_bjt, permute, GraphBuilder, LENGTH, NCH, PCH, RES, VSS, WIDTH};
 use gpurify_check::lvs::graph::Graph;
 use gpurify_check::lvs::reduce::reduce;
 use gpurify_check::lvs::verdict::Verdict;
@@ -512,4 +512,133 @@ fn a_multiplier_card_matches_the_fingers_it_stands_for() {
     };
     let verdict = compare(&layout, &builder.finish(), options);
     assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// A resistor's `r`, a spare id the passive tests state values under.
+const R_VALUE: StrId = StrId(92);
+/// [`NAMES`]'s `m`.
+const M: StrId = StrId(91);
+
+/// Passives of `kind` across nets 0 and 1, one per entry of `params`.
+fn passives(kind: DeviceKind, params: &[&[(StrId, f64)]]) -> Graph {
+    let mut builder = GraphBuilder::new(2);
+    for &stated in params {
+        builder.device_with_params(kind, RES, &[(Pin(0), 0), (Pin(1), 1)], stated);
+    }
+    builder.finish()
+}
+
+/// One device's parameters, sorted by name.
+fn sorted_params(graph: &Graph, device: u32) -> Vec<(StrId, f64)> {
+    let mut params = graph.params_of(device).to_vec();
+    params.sort_by_key(|p| p.0);
+    params
+}
+
+/// Oracle: the law of the device, testing-plan F20. Two 1 kΩ resistors in
+/// parallel are not one 1 kΩ resistor, which is what summing only `W` made
+/// of them: the merge keeps the value and counts the devices, so the merged
+/// device is `r = 1k, m = 2`. A missing `m` counts 1, so a third with
+/// `m = 2` beside them makes `m = 4`. Every kind but MOS keeps its count
+/// this way.
+#[test]
+fn parallel_passives_keep_their_value_and_count_the_devices() {
+    for kind in [
+        DeviceKind::Resistor,
+        DeviceKind::Capacitor,
+        DeviceKind::Diode,
+    ] {
+        let k = [(R_VALUE, 1e3)];
+        let (out, merges) =
+            gpurify_check::lvs::reduce::reduce_with(&passives(kind, &[&k, &k]), NAMES);
+        assert_eq!(out.device_count(), 1, "{kind:?}");
+        assert_eq!(
+            sorted_params(&out, 0),
+            [(M, 2.0), (R_VALUE, 1e3)],
+            "{kind:?}"
+        );
+        assert_eq!(merges[0].devices, [0, 1]);
+
+        let k2 = [(R_VALUE, 1e3), (M, 2.0)];
+        let out = gpurify_check::lvs::reduce::reduce_with(&passives(kind, &[&k, &k, &k2]), NAMES).0;
+        assert_eq!(
+            sorted_params(&out, 0),
+            [(M, 4.0), (R_VALUE, 1e3)],
+            "{kind:?}"
+        );
+    }
+}
+
+/// Oracle: construct-from-answer. Values that differ are not one device,
+/// and with no `m` name the count has nowhere to go, so nothing merges and
+/// both stay: under-reduction, never a count lost.
+#[test]
+fn parallel_passives_stay_apart_when_their_values_differ_or_there_is_no_count() {
+    let differ = passives(
+        DeviceKind::Capacitor,
+        &[&[(R_VALUE, 1e3)], &[(R_VALUE, 2e3)]],
+    );
+    assert_eq!(
+        gpurify_check::lvs::reduce::reduce_with(&differ, NAMES)
+            .0
+            .device_count(),
+        2
+    );
+    let unsized_pair = passives(DeviceKind::Capacitor, &[&[], &[]]);
+    assert_eq!(reduce(&unsized_pair), unsized_pair, "no m name, no merge");
+}
+
+/// Oracle: the multiplier's definition, testing-plan F21. `m = 2` on a card
+/// with no `W` is two devices in parallel and stays, where it used to be
+/// dropped; an `m` of 1 is every card's count and is dropped, so stating it
+/// is the same device as not. A MOS with no `W` keeps its `m` too.
+#[test]
+fn a_multiplier_with_no_width_is_kept_as_the_count() {
+    let out = gpurify_check::lvs::reduce::reduce_with(
+        &passives(DeviceKind::Capacitor, &[&[(M, 2.0)]]),
+        NAMES,
+    )
+    .0;
+    assert_eq!(out.params_of(0), [(M, 2.0)]);
+    let out = gpurify_check::lvs::reduce::reduce_with(
+        &passives(DeviceKind::Capacitor, &[&[(M, 1.0)]]),
+        NAMES,
+    )
+    .0;
+    assert!(out.params_of(0).is_empty(), "{:?}", out.params_of(0));
+
+    let mut builder = GraphBuilder::new(4);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+        &[(M, 2.0)],
+    );
+    let out = gpurify_check::lvs::reduce::reduce_with(&builder.finish(), NAMES).0;
+    assert_eq!(out.params_of(0), [(M, 2.0)]);
+}
+
+/// Oracle: construct-from-answer, through the comparison. A reference card
+/// `m = 2` is the two capacitors a layout drew in parallel, and is not the
+/// one capacitor of another layout: that one is short of the count the card
+/// states.
+#[test]
+fn a_counted_card_matches_two_drawn_capacitors_and_not_one() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let card = passives(DeviceKind::Capacitor, &[&[(M, 2.0)]]);
+    let two = passives(DeviceKind::Capacitor, &[&[], &[]]);
+    assert_eq!(compare(&two, &card, options), Verdict::Match);
+    let one = passives(DeviceKind::Capacitor, &[&[]]);
+    assert_eq!(
+        compare(&one, &card, options),
+        Verdict::Mismatch(vec![gpurify_check::lvs::Discrepancy::UndeclaredParam {
+            side: gpurify_check::lvs::verdict::Side::Reference,
+            layout_device: 0,
+            ref_device: 0,
+            param: M,
+        }])
+    );
 }

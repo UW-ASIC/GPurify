@@ -128,8 +128,9 @@ pub enum Discrepancy {
     /// differs.
     ///
     /// Values are in SI base units (metres, square metres) and are compared
-    /// after reduction, so a merged device carries its summed `W`, `nf` or
-    /// `L`, and `W` already multiplied by `m`.
+    /// after reduction, so a merged MOS carries its summed `W`, `nf` or `L`,
+    /// and `W` already multiplied by `m`; any other merged device carries
+    /// its count of parallel devices as `m`.
     ///
     /// Report id `lvs.parameter_mismatch`. Catalog: LVS-014. KLayout:
     /// `match_devices_with_different_parameters`. Netgen: a property error.
