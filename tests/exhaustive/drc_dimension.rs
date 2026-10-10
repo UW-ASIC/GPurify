@@ -22,11 +22,6 @@
 //!
 //! The findings carried here:
 //! - `F18`: `min_edge_length` measures drawn polygons, not the merged figure.
-//! - `F48`: `eol_spacing` pushes a hole edge's keep-out into the material
-//!   instead of into the hole, so it misses what is in the hole and reaches
-//!   through a thin band to what is outside it.
-//! - `F42`: `eol_spacing` takes ends of line from drawn polygons, so a wide
-//!   line drawn as narrow strips has an end of line per strip.
 //! - `F49`: `prl_spacing` and `spacing_table` read the run off each drawn
 //!   polygon's box, so a wire drawn as short segments escapes the run limit.
 
@@ -1337,9 +1332,10 @@ fn min_spacing_diff(depth: Depth) -> Vec<Fixture> {
 /// swept around `eol_width` at a gap of 50 (a 200-wide end is not an end of
 /// line); two lines side by side (no end faces the other); a wide shape just
 /// beside the keep-out (no sideways reach, though Euclidean 51 away); a line
-/// end facing its own figure (one figure, not a pair). Known to fail: a wide
-/// end drawn as strips (`F42`) and a hole's short edge, whose keep-out
-/// lies in the hole (`F48`).
+/// end facing its own figure (one figure, not a pair). Ends are the merged
+/// layer's edges: a wide end drawn as strips is no end, nor is an edge two
+/// shapes share, whose keep-out would run through its own figure; a hole's
+/// short edge keeps out into the hole, not through the band beyond it.
 fn eol_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule eol eol_space(met1; eol_width: 200nm) >= 101nm");
@@ -1408,74 +1404,78 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
         case(shape.into(), &["DRC-029"], layout, Vec::new());
     }
     // A 300-wide line drawn as three 100-wide strips: its end is 300 wide, not
-    // an end of line, so the line end 50 past it is legal. Ends of line are
-    // read off the drawn strips today.
-    cases.push(
-        fixture(
-            "eol_spacing/wide_end_drawn_as_strips",
-            &["DRC-029"],
-            &deck,
-            met1(&[
-                [0, 0, 100, 2000],
-                [100, 0, 200, 2000],
-                [200, 0, 300, 2000],
-                [0, 2050, 300, 4050],
-            ]),
-            vec![("eol", Vec::new())],
-        )
-        .known("F42"),
-    );
+    // an end of line, so the line end 50 past it is legal.
+    cases.push(fixture(
+        "eol_spacing/wide_end_drawn_as_strips",
+        &["DRC-029"],
+        &deck,
+        met1(&[
+            [0, 0, 100, 2000],
+            [100, 0, 200, 2000],
+            [200, 0, 300, 2000],
+            [0, 2050, 300, 4050],
+        ]),
+        vec![("eol", Vec::new())],
+    ));
+    // A 100-wide line under a 50-thick bar 1100 wide, and a 500-wide shape 30
+    // above the bar. The line's top edge is the bar's to share, not an end of
+    // line; read as one, its keep-out runs up through the bar to the shape, 80
+    // from the line. The bar's 50-long sides are ends, keeping out sideways.
+    cases.push(fixture(
+        "eol_spacing/shared_edge_is_no_end",
+        &["DRC-029"],
+        &deck,
+        met1(&[
+            [0, 0, 100, 1000],
+            [-500, 1000, 600, 1050],
+            [-200, 1080, 300, 1500],
+        ]),
+        vec![("eol", Vec::new())],
+    ));
     // A square hole with a 100-wide, 50-deep slot in its top. The slot's top
     // edge is an end of line whose keep-out is pushed out of the material,
     // down into the hole, where an 800-wide island's top edge sits 90 below it.
-    // Today a hole edge's keep-out is pushed into the material instead.
-    cases.push(
-        fixture(
-            "eol_spacing/hole_end_of_line",
-            &["DRC-029"],
-            &deck,
-            Layout::default()
-                .polygon(
-                    "met1",
-                    &[
-                        (0, -500),
-                        (1500, -500),
-                        (1500, 1600),
-                        (-500, 1600),
-                        (-500, -500),
-                        (0, -500),
-                        (0, 0),
-                        (0, 1000),
-                        (450, 1000),
-                        (450, 1050),
-                        (550, 1050),
-                        (550, 1000),
-                        (1000, 1000),
-                        (1000, 0),
-                        (0, 0),
-                    ],
-                )
-                .rect("met1", 100, 100, 900, 960),
-            vec![("eol", vec![Finding::length(90)])],
-        )
-        .known("F48"),
-    );
-    // The same fault the other way: a 100-wide slot hole in a ring whose band
-    // past the slot's end is 50 thick, and a wide shape 30 beyond the band.
-    // The slot's end keeps out down the slot, so nothing is near it; pushed
-    // the wrong way it reaches through the band to the shape, 80 away.
-    cases.push(
-        fixture(
-            "eol_spacing/hole_end_keeps_out_of_the_band",
-            &["DRC-029"],
-            &deck,
-            Layout::default()
-                .polygon("met1", &holed([0, 0, 200, 1000], [50, 50, 150, 950]))
-                .rect("met1", -500, 1030, 700, 1500),
-            vec![("eol", Vec::new())],
-        )
-        .known("F48"),
-    );
+    cases.push(fixture(
+        "eol_spacing/hole_end_of_line",
+        &["DRC-029"],
+        &deck,
+        Layout::default()
+            .polygon(
+                "met1",
+                &[
+                    (0, -500),
+                    (1500, -500),
+                    (1500, 1600),
+                    (-500, 1600),
+                    (-500, -500),
+                    (0, -500),
+                    (0, 0),
+                    (0, 1000),
+                    (450, 1000),
+                    (450, 1050),
+                    (550, 1050),
+                    (550, 1000),
+                    (1000, 1000),
+                    (1000, 0),
+                    (0, 0),
+                ],
+            )
+            .rect("met1", 100, 100, 900, 960),
+        vec![("eol", vec![Finding::length(90)])],
+    ));
+    // The other way: a 100-wide slot hole in a ring whose band past the
+    // slot's end is 50 thick, and a wide shape 30 beyond the band. The slot's
+    // end keeps out down the slot, so nothing is near it; pushed the wrong way
+    // it would reach through the band to the shape, 80 away.
+    cases.push(fixture(
+        "eol_spacing/hole_end_keeps_out_of_the_band",
+        &["DRC-029"],
+        &deck,
+        Layout::default()
+            .polygon("met1", &holed([0, 0, 200, 1000], [50, 50, 150, 950]))
+            .rect("met1", -500, 1030, 700, 1500),
+        vec![("eol", Vec::new())],
+    ));
     let mut out = every_placement(cases);
     out.push(vacuous(
         "eol_spacing",

@@ -15,8 +15,9 @@ use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use crate::topology::{NetId, NetTable};
 use gpurify_geom::connectivity::ComponentLabel;
+use gpurify_geom::derive::{edges_into, merge_into};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{isqrt, seg_seg_dist2, winding_of, Seg, Winding};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
@@ -73,9 +74,23 @@ fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -
     true
 }
 
-/// The one same-layer kernel: every candidate pair in two different figures that
-/// `judge` accepts is examined, and reported when closer than `limit`. Returns
-/// the examined count.
+/// [`prepare`], then the layer merged into `s.layer_out`. `false` is `Refused`.
+fn prepare_merged(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
+    if !prepare(store, layer, limit, s) {
+        return false;
+    }
+    let drawn = s
+        .validated
+        .get(store, layer)
+        .expect("`prepare` validated it");
+    merge_into(drawn, &mut s.layer_out).is_ok()
+}
+
+/// The one same-layer kernel: every candidate pair in two different figures
+/// that `measure` judges is examined, and reported when closer than `limit`.
+/// `measure` takes the pair and its distance and returns the distance to
+/// judge, `None` for a pair the rule does not judge. Returns the examined
+/// count.
 fn judged_pairs(
     store: &GeometryStore,
     rule: StrId,
@@ -83,14 +98,16 @@ fn judged_pairs(
     limit: Dbu,
     s: &Scratch,
     out: &mut Violations,
-    judge: impl Fn(PolyId, PolyId) -> bool,
+    measure: impl Fn(PolyId, PolyId, DbuArea) -> Option<DbuArea>,
 ) -> u64 {
     let first_row = store.polys_on_layer(layer).start;
     let limit2 = limit.mul_wide(limit);
     let mut examined = 0u64;
-    for (&(a, b), &d2) in s.pairs.iter().zip(&s.dists) {
-        let separate = s.labels[(a.0 - first_row) as usize] != s.labels[(b.0 - first_row) as usize];
-        if separate && judge(a, b) {
+    for (&(a, b), &whole) in s.pairs.iter().zip(&s.dists) {
+        if s.labels[(a.0 - first_row) as usize] == s.labels[(b.0 - first_row) as usize] {
+            continue;
+        }
+        if let Some(d2) = measure(a, b, whole) {
             examined += 1;
             if d2 < limit2 {
                 out.push(spacing_violation(store, rule, layer, (a, b), d2, limit));
@@ -112,7 +129,7 @@ pub(crate) fn min_spacing(
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    judged_pairs(store, rule, layer, limit, s, out, |_, _| true);
+    judged_pairs(store, rule, layer, limit, s, out, |_, _, d2| Some(d2));
     (Outcome::Ran, s.pairs.len() as u64)
 }
 
@@ -146,8 +163,8 @@ pub(crate) fn min_spacing_diff(
     (Outcome::Ran, s.pairs.len() as u64)
 }
 
-/// End-of-line spacing. `examined` counts separate pairs where either shape has
-/// an end of line facing the other.
+/// End-of-line spacing, the ends read off the merged layer. `examined` counts
+/// separate pairs where either shape lies on an end of line facing the other.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn eol_spacing(
     store: &GeometryStore,
@@ -158,39 +175,49 @@ pub(crate) fn eol_spacing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !prepare(store, layer, limit, s) {
+    if !prepare_merged(store, layer, limit, s) {
         return REFUSED;
     }
-    let first_row = store.polys_on_layer(layer).start;
-    let limit2 = limit.mul_wide(limit);
-    let mut examined = 0u64;
-    for &(a, b) in &s.pairs {
-        if s.labels[(a.0 - first_row) as usize] == s.labels[(b.0 - first_row) as usize] {
-            continue;
-        }
-        let hit = eol_hit(store, a, b, eol_width, limit)
-            .into_iter()
-            .chain(eol_hit(store, b, a, eol_width, limit))
-            .min();
-        if let Some(d2) = hit {
-            examined += 1;
-            if d2 < limit2 {
-                out.push(spacing_violation(store, rule, layer, (a, b), d2, limit));
-            }
-        }
-    }
+    let mut edges = Vec::new();
+    edges_into(&s.layer_out, &mut edges);
+    let mut ends: Vec<(Line, Seg)> = edges
+        .into_iter()
+        .map(|edge| (line_of(edge), edge))
+        .filter(|&((.., lo, hi), _)| hi - lo < eol_width.raw())
+        .collect();
+    ends.sort_unstable_by_key(|&(line, _)| line);
+    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, _| {
+        let hit = |eol, other| eol_hit(store, eol, other, &ends, eol_width, limit);
+        hit(a, b).into_iter().chain(hit(b, a)).min()
+    });
     (Outcome::Ran, examined)
 }
 
-/// The keep-out an end of line projects: its span pushed `depth` out along its
-/// outward normal, clamped to the coordinate domain.
-fn eol_zone(edge: Seg, normal_sign: i64, depth: Dbu) -> Bbox {
+/// An axis-parallel edge on its line: whether it is vertical, its fixed
+/// coordinate, whether it travels toward higher coordinates, and its span
+/// `lo < hi`.
+type Line = (bool, i64, bool, i64, i64);
+
+fn line_of(edge: Seg) -> Line {
+    let vertical = edge.a.x == edge.b.x;
+    let (pos, from, to) = if vertical {
+        (edge.a.x.raw(), edge.a.y.raw(), edge.b.y.raw())
+    } else {
+        (edge.a.y.raw(), edge.a.x.raw(), edge.b.x.raw())
+    };
+    (vertical, pos, to > from, from.min(to), from.max(to))
+}
+
+/// The keep-out an end of line projects: its span pushed `depth` out of its
+/// material (to the right of travel, the material being on the left), clamped
+/// to the coordinate domain.
+fn eol_zone(edge: Seg, depth: Dbu) -> Bbox {
     let (dx, dy) = (
         edge.b.x.raw() - edge.a.x.raw(),
         edge.b.y.raw() - edge.a.y.raw(),
     );
-    // Outward normal of a counter-clockwise boundary: direction turned clockwise.
-    let (nx, ny) = (normal_sign * dy.signum(), -normal_sign * dx.signum());
+    // Out of the material: the direction of travel turned clockwise.
+    let (nx, ny) = (dy.signum(), -dx.signum());
     let d = depth.raw();
     let span = seg_bbox(edge);
     let grow =
@@ -203,43 +230,61 @@ fn eol_zone(edge: Seg, normal_sign: i64, depth: Dbu) -> Bbox {
     }
 }
 
-/// Closest approach between an end of line of `eol` and `other` inside its
-/// keep-out; `None` when `eol` has no end of line (an edge shorter than
-/// `eol_width`, axis-aligned) reaching `other`.
+/// Closest approach of `other` to an end of line `eol` lies on, inside that
+/// end's keep-out, measured from the part of the end `eol` draws. `ends` are
+/// the merged layer's ends of line (edges shorter than `eol_width`), sorted by
+/// line; a drawn edge lies on one when they share a line, a direction and a
+/// stretch of it. `None` when no edge of `other` reaches into such a keep-out.
 fn eol_hit(
     store: &GeometryStore,
     eol: PolyId,
     other: PolyId,
+    ends: &[(Line, Seg)],
     eol_width: Dbu,
     limit: Dbu,
 ) -> Option<DbuArea> {
     let (xs, ys) = store.poly_verts(eol);
     let (oxs, oys) = store.poly_verts(other);
-    let normal_sign = match winding_of(xs, ys)? {
-        Winding::CounterClockwise => 1,
-        Winding::Clockwise => -1,
-    };
-    let width2 = eol_width.mul_wide(eol_width);
-
     let mut best: Option<DbuArea> = None;
     for edge in ring_segs(xs, ys) {
-        let (dx, dy) = (
-            edge.b.x.raw() - edge.a.x.raw(),
-            edge.b.y.raw() - edge.a.y.raw(),
-        );
-        let len2 = DbuArea::new(i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy));
-        if len2 >= width2 || (dx != 0 && dy != 0) {
-            continue;
-        }
-        let zone = eol_zone(edge, normal_sign, limit);
-        for far in ring_segs(oxs, oys) {
-            if zone.overlaps(seg_bbox(far)) {
-                let dist2 = seg_seg_dist2(edge, far);
-                best = Some(best.map_or(dist2, |seen| seen.min(dist2)));
+        let (vertical, pos, forward, lo, hi) = line_of(edge);
+        // An end overlapping `edge` is shorter than `eol_width`: it starts past this.
+        let first = ends.partition_point(|&(line, _)| {
+            line < (vertical, pos, forward, lo - eol_width.raw(), i64::MIN)
+        });
+        let on_edge = ends[first..]
+            .iter()
+            .take_while(|&&((v, p, f, start, _), _)| {
+                (v, p, f) == (vertical, pos, forward) && start < hi
+            })
+            .filter(|&&((.., end), _)| end > lo);
+        for &((.., start, end), end_of_line) in on_edge {
+            let zone = eol_zone(end_of_line, limit);
+            let piece = on_line(vertical, pos, start.max(lo), end.min(hi));
+            for far in ring_segs(oxs, oys) {
+                if zone.overlaps(seg_bbox(far)) {
+                    let dist2 = seg_seg_dist2(piece, far);
+                    best = Some(best.map_or(dist2, |seen| seen.min(dist2)));
+                }
             }
         }
     }
     best
+}
+
+/// The segment from `from` to `to` along the line `pos`.
+fn on_line(vertical: bool, pos: i64, from: i64, to: i64) -> Seg {
+    let point = |along: i64| {
+        let (x, y) = if vertical { (pos, along) } else { (along, pos) };
+        Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        }
+    };
+    Seg {
+        a: point(from),
+        b: point(to),
+    }
 }
 
 /// How far two boxes run alongside each other: the larger projection overlap,
@@ -315,8 +360,8 @@ pub(crate) fn net_spacing(
     if unnetted || !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b| {
-        nets.same_net(a, b) == same_net
+    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
+        (nets.same_net(a, b) == same_net).then_some(d2)
     });
     (Outcome::Ran, examined)
 }
@@ -408,8 +453,8 @@ pub(crate) fn prl_spacing(
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b| {
-        parallel_run_length(store.poly_bbox(a), store.poly_bbox(b)) >= threshold
+    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
+        (parallel_run_length(store.poly_bbox(a), store.poly_bbox(b)) >= threshold).then_some(d2)
     });
     (Outcome::Ran, examined)
 }
@@ -427,9 +472,9 @@ pub(crate) fn corner_to_corner(
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b| {
+    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
         let (along_x, along_y) = projection_overlaps(store.poly_bbox(a), store.poly_bbox(b));
-        along_x < 0 && along_y < 0
+        (along_x < 0 && along_y < 0).then_some(d2)
     });
     (Outcome::Ran, examined)
 }

@@ -204,11 +204,14 @@ pub enum Rule {
     /// Too little space in front of an end of line.
     ///
     /// Deck: `eol_space(L; eol_width: len) >= len`, kind `eol_spacing`. An end
-    /// of line is an axis-aligned edge strictly shorter than `eol_width`. Its
-    /// keep-out is the edge's own span pushed `limit` straight out from its
-    /// shape. Two shapes in different merged figures are a pair when an edge
-    /// of one reaches into an end-of-line keep-out of the other, and the pair
-    /// measures the nearest such approach, edge to edge.
+    /// of line is an edge of the merged layer strictly shorter than
+    /// `eol_width`, so a line end drawn as several strips is one edge, and an
+    /// edge two touching shapes share is none. Its keep-out is the edge's own
+    /// span pushed `limit` straight out of the material: away from the shape
+    /// for an outer edge, into the hole for a hole's edge. Two shapes in
+    /// different merged figures are a pair when an edge of one reaches into
+    /// the keep-out of an end of line the other lies on, and the pair measures
+    /// the nearest such approach, from the part of the end that shape draws.
     ///
     /// One violation per pair closer than `limit`, at the middle of the gap
     /// between their bounding boxes. `examined` counts the pairs.
