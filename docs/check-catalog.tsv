@@ -3,7 +3,7 @@ DRC-001	drc	integrity	Off-grid vertex	LEF:MANUFACTURINGGRID; GF:GRID,OFFGRID; SK
 DRC-002	drc	integrity	Allowed edge angles	IHP:3.1; SKY:x.2,x.3; GF:ACUTE; KL:with_angle; MAG:angles	angle	partial	FR; TX:KL	45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer
 DRC-003	drc	integrity	Acute angles	IHP:3.1; GF:ACUTE; CAL:FLAG ACUTE	angle	partial	FR	Same ceiling as DRC-002
 DRC-004	drc	integrity	Self-intersecting / zero-area polygons	IHP:3.1; KL:odd_polygons; CAL:FLAG NONSIMPLE	ingest:layer_validity	partial	SY; TX:KL	Corpus VALID_SELF and VALID_ZERO are in the disagree list
-DRC-005	drc	integrity	Rectangle-only / square-only shapes	SKY:capm.7,x.2a,licon.3; LEF58_RECTONLY; KL:rectangles,squares; MAG:rect_only; drt	-	missing	FR; TX:KL	No selection by shape class (limitations.md:28; sky130.deck)
+DRC-005	drc	integrity	Rectangle-only / square-only shapes	SKY:capm.7,x.2a,licon.3; LEF58_RECTONLY; KL:rectangles,squares; MAG:rect_only; drt	-	missing	FR; TX:KL	No selection by shape class (limitations.md, "Checks that do not exist yet"; sky130.deck)
 DRC-006	drc	integrity	Forbidden layer / layer only inside a region	IHP:3.2; SKY:x.8,x.9,x.15a,x.21	forbidden	implemented	FR; SY	
 DRC-007	drc	integrity	Label / pin / text rules	SKY:x.5,x.17,x.20; IHP:Pin.a-h; KL:texts	must_be_inside	partial	FR; SY	Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible
 DRC-010	drc	dimension	Minimum width	LEF:WIDTH,MINWIDTH; LEF58_MINWIDTH; IHP:M1.a; GF:Mn.1; SKY:m1.1; A7:M1.W.1; KL:width; MAG:width; drt	min_width	implemented	BM; FR; TX:KL; MR	Pin the distance metric before comparing with KL
@@ -12,9 +12,9 @@ DRC-012	drc	dimension	Maximum width	LEF:MAXWIDTH; IHP:Slt.c,AFil.a; GF:DF.2b; SK
 DRC-013	drc	dimension	Exact cut size	IHP:Cnt.a,V1.a; GF:CO.1,Vn.1; SKY:licon.1,ct.1,via.1a; LEF58_CUTCLASS	cut_size	implemented	FR; TX:KL	
 DRC-014	drc	dimension	Cut classes (several legal cut sizes)	SKY:via.1b; IHP:CntB.a; LEF58_CUTCLASS	cut_size	partial	FR	One exact size per rule; class-dependent spacing is DRC-063
 DRC-015	drc	dimension	Discrete / allowed width set	A7:M4.W.3,M4.W.4; LEF58_WIDTHTABLE; SKY:rpm.1b-1f	-	missing	FR	
-DRC-016	drc	dimension	Wrong-direction width or spacing	A7:M4.W.1,M4.W.5,M4.S.1,M4.S.2; LEF58_WIDTH WRONGDIRECTION; LEF58_SPACING WRONGDIRSPACING; drt	-	missing	FR	Direction-dependent rules (limitations.md:55)
+DRC-016	drc	dimension	Wrong-direction width or spacing	A7:M4.W.1,M4.W.5,M4.S.1,M4.S.2; LEF58_WIDTH WRONGDIRECTION; LEF58_SPACING WRONGDIRSPACING; drt	-	missing	FR	Direction-dependent rules (limitations.md, "Shipped decks")
 DRC-017	drc	dimension	Minimum area	LEF:AREA; LEF58_AREA; IHP:M1.d; GF:Mn.3; SKY:m1.6; A7:M1.A.1; KL:with_area; MAG:area; drt	min_area	implemented	BM; FR; TX:KL	LEF58_AREA exceptions (EXCEPTMINWIDTH, EXCEPTRECTANGLE, ...) are not modelled
-DRC-018	drc	dimension	Maximum area	IHP:MIM.g,GFil.i,LBE.b1; SKY:capm.12,pad.3	forbidden	expressible	FR	forbidden(L.with_area(> A)); shipped decks leave it out (limitations.md:56), so verify why
+DRC-018	drc	dimension	Maximum area	IHP:MIM.g,GFil.i,LBE.b1; SKY:capm.12,pad.3	forbidden	expressible	FR	forbidden(L.with_area(> A)); shipped decks leave it out (limitations.md, "Shipped decks"), so verify why
 DRC-019	drc	dimension	Minimum enclosed (hole) area	LEF:MINENCLOSEDAREA; IHP:Act.e; GF:DF.10; SKY:m1.7; KL:holes; drt	min_enclosed_area	implemented	BM; FR; TX:KL	
 DRC-020	drc	dimension	Minimum step / edge length / jog	LEF:MINSTEP,MINSIZE; LEF58_MINSTEP; GF:DF.11; MAG:area minedge; drt	min_edge_length	partial	BM; FR; TX:KL	MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing
 DRC-021	drc	dimension	Feature length min/max	A7:type L; IHP:Rsil.f,Rppd.e; SKY:mf.2	edge_min_length	partial	FR	Edge length via .with_length works; whole-feature length does not
@@ -28,7 +28,7 @@ DRC-028	drc	spacing	Influence / stub spacing near wide metal	LEF:SPACING RANGE I
 DRC-029	drc	spacing	End-of-line spacing	LEF:SPACING ENDOFLINE PARALLELEDGE TWOEDGES; LEF58_SPACING ENDOFLINE; A7:M1.S.2-S.5; ISPD19; drt	eol_spacing	partial	FR; TX:drt	Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing
 DRC-030	drc	spacing	EOL extension / keep-out	LEF58_EOLEXTENSIONSPACING; LEF58_EOLKEEPOUT; drt	-	missing	TX:drt	
 DRC-031	drc	spacing	Tip-to-tip / tip-to-side by width class	A7:M1.S.2-S.5,M4.S.3,M4.S.4	eol_spacing	partial	FR	One end-of-line width per rule, so each width class is its own rule; tip-to-side is not told apart from tip-to-tip
-DRC-032	drc	spacing	Corner spacing (convex/concave, corner-to-corner)	LEF58_CORNERSPACING; A7:M1.S.6; GF:MT30.3; ISPD19; KL:corners; drt	corner_to_corner	partial	BM; FR; TX:KL	Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md:76)
+DRC-032	drc	spacing	Corner spacing (convex/concave, corner-to-corner)	LEF58_CORNERSPACING; A7:M1.S.6; GF:MT30.3; ISPD19; KL:corners; drt	corner_to_corner	partial	BM; FR; TX:KL	Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md, "Shipped decks")
 DRC-033	drc	spacing	Forbidden spacing ranges	LEF58_FORBIDDENSPACING; LEF58_TWOWIRESFORBIDDENSPACING; drt	-	missing	TX:drt	
 DRC-034	drc	spacing	Maximum spacing	LEF58_MAXSPACING; drt	-	missing	TX:drt	
 DRC-035	drc	spacing	Pitch / exact pitch / on-track	A7:FIN.S.1,GATE.S.1; LEF:PITCH; LEF58_PITCH; LEF58_RIGHTWAYONGRIDONLY; drt	-	missing	FR	Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010)
@@ -36,17 +36,17 @@ DRC-036	drc	spacing	Span-length table	LEF58_SPANLENGTHTABLE	-	missing	SE
 DRC-037	drc	spacing	Bent / 45-degree features	IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a	angle	partial	FR	angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer
 DRC-038	drc	spacing	Diagonal width / spacing	LEF:DIAGWIDTH,DIAGSPACING,DIAGMINEDGELENGTH	-	out_of_scope	-	Needs non-rectilinear geometry
 DRC-040	drc	overlay	Enclosure, all sides	LEF:ENCLOSURE; IHP:M1.c,V1.c; GF:CO.3; SKY:ct.4,m1.4,licon.5a; A7:V3.M4.EN.2; KL:enclosing; MAG:surround	min_enclosure	implemented	BM; FR; TX:KL; MR	
-DRC-041	drc	overlay	Enclosure on two opposite sides	SKY:m1.5; A7:V1.M1.EN.1; LEF:ENCLOSURE o1 o2; KL:rectangle error filter	asymmetric_enclosure	partial	BM; FR; TX:KL	A non-rectangular inner shape is held to the every-side limit (limitations.md:19)
+DRC-041	drc	overlay	Enclosure on two opposite sides	SKY:m1.5; A7:V1.M1.EN.1; LEF:ENCLOSURE o1 o2; KL:rectangle error filter	asymmetric_enclosure	partial	BM; FR; TX:KL	A non-rectangular inner shape is held to the every-side limit (limitations.md, "Rules that can pass a layout signoff would flag")
 DRC-042	drc	overlay	End-cap / one-of-two-adjacent-sides enclosure	IHP:M1.c1,V1.c1; SKY:via.5a,licon.5c; LEF58_ENCLOSURE EOL; MAG:surround directional	asymmetric_enclosure	partial	FR	Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written
 DRC-043	drc	overlay	Width-dependent enclosure	LEF:ENCLOSURE WIDTH,LENGTH; LEF58_ENCLOSURETABLE; GF:CO.6	-	missing	FR	
 DRC-044	drc	overlay	Maximum enclosure / min-and-max window	IHP:Sdiod.a-c,Rppd.c,LU.c; GF:NP.3d,GR.1; SKY:npc.5,mf.5	-	missing	FR	sky130.deck "npc.5 (maximum enclosure)"
-DRC-045	drc	overlay	Extension / end-cap / overhang	IHP:Gat.c; GF:PL.4; SKY:poly.7,poly.8; A7:GATE.ACTIVE.EX.1; MAG:overhang,extend	min_extension	partial	BM; FR; TX:KL	Measures bounding boxes, so an L-shape can pass (limitations.md:20); the bitmap oracle targets this
-DRC-046	drc	overlay	Overlap amount	A7:type OV; IHP:pSD.e; GF:NP.5a; SKY:hv.poly.7; KL:overlap	overlap	partial	BM; FR; TX:KL	Bounding-box measure (limitations.md:20)
+DRC-045	drc	overlay	Extension / end-cap / overhang	IHP:Gat.c; GF:PL.4; SKY:poly.7,poly.8; A7:GATE.ACTIVE.EX.1; MAG:overhang,extend	min_extension	partial	BM; FR; TX:KL	Measures bounding boxes, so an L-shape can pass (limitations.md, "Rules that can pass a layout signoff would flag"); the bitmap oracle targets this
+DRC-046	drc	overlay	Overlap amount	A7:type OV; IHP:pSD.e; GF:NP.5a; SKY:hv.poly.7; KL:overlap	overlap	partial	BM; FR; TX:KL	Bounding-box measure (limitations.md, "Rules that can pass a layout signoff would flag")
 DRC-047	drc	overlay	Inter-layer separation	IHP:NW.d,Gat.d; GF:DF.16; SKY:poly.4,licon.11; A7:GATE.ACTIVE.S.4; KL:separation; MAG:spacing t1 t2	min_spacing_diff	implemented	BM; FR; TX:KL	
 DRC-048	drc	overlay	Containment (inside / enclose at least N)	IHP:Cnt.g,Cnt.h; A7:V1.AUX.1; SKY:licon.4,licon.16,licon.18; KL:inside,covering	must_be_inside,must_contain	implemented	FR; TX:KL	
 DRC-049	drc	overlay	Exact or maximum count	SKY:rpm.1g-1k; SKY:via.13	must_contain	partial	FR	Minimum count only (sky130.deck "an exact count")
 DRC-050	drc	overlay	Forbidden overlap / straddle / partial overlap	IHP:Cnt.j; SKY:licon.6,licon.17,x.23a-f; GF:PL.9; KL:overlapping,in_and_out; MAG:no_overlap,exact_overlap	forbidden	implemented	FR; TX:KL	Written as forbidden(derived layer)
-DRC-051	drc	overlay	Abutment / butting edges	IHP:pSD.e-g; GF:DF.3b,NP.3d; SKY:difftap.4-7,licon.5b; MAG:edge4way	edge_min_length,edge_spacing,edge_enclosure	partial	FR; SY	Edge layers cannot be extended (difftap.6; limitations.md:31); edge enclosure misses diagonal gaps (limitations.md:21)
+DRC-051	drc	overlay	Abutment / butting edges	IHP:pSD.e-g; GF:DF.3b,NP.3d; SKY:difftap.4-7,licon.5b; MAG:edge4way	edge_min_length,edge_spacing,edge_enclosure	partial	FR; SY	Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag")
 DRC-052	drc	overlay	Gate-shape rules (no bends, no poly on inner diff corners)	SKY:poly.10,poly.11; IHP:Gat.f; A7:GATE.AUX.1; GF:PL.6	-	missing	FR	Needs corner/turn selection (sky130.deck)
 DRC-053	drc	overlay	Exact alignment / width match across layers	A7:V1.M2.AUX.2; LEF58_SPACING EXACTALIGNED	-	missing	FR	
 DRC-054	drc	overlay	Enclosure excluding coincident edges	SKY:lvtn.10	-	missing	FR	
@@ -95,8 +95,8 @@ DRC-115	drc	dfm	Equation-based DRC	CAL:eqDRC; patents P10,P11	-	missing	CF	First
 DRC-116	drc	dfm	Curvilinear / all-angle tolerance DRC	CAL; SIL; EMP	-	out_of_scope	-	Rectilinear only
 DRC-117	drc	dfm	Via redundancy scoring / via doubling	CAL:YieldAnalyzer,YieldEnhancer	redundant_via	partial	FR	Counts cuts within a distance; no DFM scoring and no via doubling
 DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, extents)	IHP:4.2; GF:4.2; KL; MAG:templayers	deck:derived	implemented	MR; BM	extents keeps one box per figure, unmerged, as KLayout (F54, fixed); with_width counts diagonal necks, floored (F39, fixed; F65 open)
-DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL	limitations.md:28
-DRC-122	drc	infra	Edge-layer ops incl. extension	KL:extended,edges	deck:edge	partial	TX:KL	limitations.md:31
+DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL	limitations.md, "Checks that do not exist yet"
+DRC-122	drc	infra	Edge-layer ops incl. extension	KL:extended,edges	deck:edge	partial	TX:KL	limitations.md, "Checks that do not exist yet"
 DRC-123	drc	infra	Hierarchical processing	KL:deep	ingest:flatten	partial	MR	Flattened at load (gds::Library::flatten); a scale issue, not correctness
 LVS-001	lvs	extract	Port / label consistency	KL:flag_missing_ports,same_nets!; NG:pin matching	lvs.label_conflict,lvs.net_seed_conflict	partial	SY; TX:NG	label_conflict flags one label on several nets (an open); net_seed_conflict flags several labels on one net (a short), one row per pair at the first label's shape
 LVS-002	lvs	extract	Implicit joins (same-label disjoint shapes, must-connect)	KL:connect_implicit,connect_explicit; LEF58_MUSTJOINALLPORTS	lvs.label_conflict	partial	SY; TX:KL	Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout)
@@ -135,7 +135,7 @@ LVS-060	lvs	device	MOS W, L, nf, m, AS/AD/PS/PD, bulk	KL:MOS3,MOS4; NG; sky130 n
 LVS-061	lvs	device	Resistor R/L/W	KL:Resistor; MAG:resistor	-	missing	SY	No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader
 LVS-062	lvs	device	Capacitor C/A/P	KL:Capacitor; MAG:capacitor	lvs:params	partial	SY	Marker area only; no C or perimeter
 LVS-063	lvs	device	Diode A/P	KL:Diode	lvs:params	partial	SY	Marker area only; no perimeter. Polarity is compared
-LVS-064	lvs	device	BJT AE/PE/NE, multi-emitter	KL:BJT3,BJT4	lvs:params	partial	SY	Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61)
+LVS-064	lvs	device	BJT AE/PE/NE, multi-emitter	KL:BJT3,BJT4	lvs:params	partial	SY	Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md, "Shipped decks")
 LVS-065	lvs	device	Inductor	KL:Inductor; IHP:6.12	-	missing	SY	
 LVS-066	lvs	device	Device flavour (HVT/LVT) by implant marker	GF:App.A; IHP LVS decks	deck:device	expressible	SY	A flavour is a device statement whose marker includes the implant (gate_n and hvt), with the plain flavour excluding it (gate_n not hvt). The corpus deck does not do this yet, so LVS_HVT/LVS_LVT stay blocked (testing-plan F6)
 LVS-067	lvs	device	Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD)	MAG:subcircuit kinds; IHP LVS decks	-	missing	SY	sky130 VPP caps have no marker (limitations.md)
@@ -146,12 +146,12 @@ LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	lvs:flatten	impleme
 LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	out_of_scope	-	Single-die only
 ERC-A1	erc	antenna	Per-layer area ratio (PAR)	LEF:App.C; IHP:Ant.a; SKY:antenna	antenna	implemented	CF; SE:LEF PAR 2.0/1.0; FR; TX:OR,MAG	
 ERC-A2	erc	antenna	Side-area (sidewall) ratio	LEF:App.C; GF:ANT.1-7; SKY:antenna vertical	antenna	implemented	CF; FR	
-ERC-A3	erc	antenna	Cumulative ratio (CAR)	LEF:App.C; IHP:Ant.b,Ant.d	antenna	implemented	SE:IHP AreaRatio; CF	
+ERC-A3	erc	antenna	Cumulative ratio (CAR)	LEF:App.C; IHP:Ant.b,Ant.d	antenna	implemented	SE:IHP AreaRatio; CF	Per gate: one ratio per etch stage, summed (IHP AreaRatio, LEF CAR); gates sharing a net at every stage reported once
 ERC-A4	erc	antenna	Cut/via ratio, routing-plus-cut accumulation	LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c	antenna	partial	FR; CF	ROUTINGPLUSCUT is missing
-ERC-A5	erc	antenna	Subtractive diode credit (K x area + bonus)	SKY:EGAR; LEF:ANTENNAAREAMINUSDIFF	antenna_electrical	partial	SE:SKY formula; FR	A row with a diode and non-zero diode_credit is refused (limitations.md:22)
+ERC-A5	erc	antenna	Subtractive diode credit (K x area + bonus)	SKY:EGAR; LEF:ANTENNAAREAMINUSDIFF	antenna_electrical	partial	SE:SKY formula; FR	A row with a diode and non-zero diode_credit is refused (limitations.md, "Rules that can pass a layout signoff would flag"); diode_bonus applies only to gates with diode area on their net
 ERC-A6	erc	antenna	Additive diode credit (gate += MF x diode)	GF:ANT.16; LEF:ANTENNAGATEPLUSDIFF	-	missing	SE:GF ANT.16	
 ERC-A7	erc	antenna	PWL diffusion-dependent limit	LEF:ANTENNADIFFAREARATIO PWL,ANTENNAAREADIFFREDUCEPWL	-	missing	SE:LEF PWL	
-ERC-A8	erc	antenna	Separate limits with/without diode	IHP:Ant.b/e,Ant.d/f; SKY	antenna,antenna_electrical	implemented	FR	IHP gates with a diode are held to the no-diode limit (limitations.md:81)
+ERC-A8	erc	antenna	Separate limits with/without diode	IHP:Ant.b/e,Ant.d/f; SKY	antenna,antenna_electrical	implemented	FR	antenna(..; diode: layer) skips a gate whose net reaches the diode layer (KLayout antenna_check); the IHP deck writes diode: none, so its gates with a diode over-report (limitations.md, "Shipped decks"); Ant.g size not checked
 ERC-A9	erc	antenna	Minimum protection-diode size	IHP:Ant.g	-	missing	SE:IHP	
 ERC-A10	erc	antenna	Diode well legality	IHP:Ant.h,Ant.i	forbidden	expressible	FR	
 ERC-A11	erc	antenna	MIM capacitor as victim	GF:ANT.14,ANT.15	antenna	partial	FR	The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (erc::rules::antenna). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care
@@ -159,8 +159,8 @@ ERC-A12	erc	antenna	Oxide-class-specific limits	LEF:ANTENNAMODEL OXIDE1-4; GF	an
 ERC-A13	erc	antenna	Exemption for substrate-shorted nets	SKY:.ar.1	-	missing	SY	No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna)
 ERC-A14	erc	antenna	Hierarchical / macro-pin antenna	LEF:ANTENNAPIN*	-	missing	SE:LEF; TX:OR	
 ERC-A15	erc	antenna	Fix hint: required diode area	CAL:Auto-Waivers	-	missing	CF	Report feature
-ERC-B1	erc	planarity	Windowed density + CMP thickness	GF:13	density_cmp	implemented	CF	
-ERC-C1	erc	esd	Pad ESD path to power and ground	TR18-01:4.5.2-4.5.4; Khazhinsky2012	esd_topological,esd_latchup	implemented	SY	A clamp is any device of a listed model, however wired (limitations.md:23)
+ERC-B1	erc	planarity	Windowed density + CMP thickness	GF:13	density_cmp	implemented	CF	partial_windows governs every limit, neighbour deltas included; the CMP model states no nominal thickness
+ERC-C1	erc	esd	Pad ESD path to power and ground	TR18-01:4.5.2-4.5.4; Khazhinsky2012	esd_topological,esd_latchup	implemented	SY	A clamp is any device of a listed model, however wired (limitations.md, "Rules that can pass a layout signoff would flag")
 ERC-C2	erc	esd	ESD device sizing (perimeter, clamp width)	TR18-01:Fig23,Fig24	-	missing	FR; SY	
 ERC-C3	erc	esd	Protected device (pad-exposed gates and drains)	TR18-01:4.5.1; Khazhinsky2012	-	missing	SY; CF	
 ERC-C4	erc	esd	Cross-domain signal ESD protection	TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012	-	missing	SE:Part II pseudocode; SY	domain_crossing and missing_level_shifter are functional checks, not ESD
@@ -176,7 +176,7 @@ ERC-C13	erc	esd	System-level ESD	TR18-01:7; WP3	-	out_of_scope	-	A board and sys
 ERC-D1	erc	latchup	Max distance to well/substrate tap	GF:LU.1-4; IHP:LU.a,LU.b; A7:ACTIVE.LUP.1; TR18-02:3.1.1	max_distance_to_tap,missing_tie	implemented	FR; CF	A well's hole is measured as if filled (over-report only); hole rows are not wells of their own (F34, fixed)
 ERC-D1a	erc	latchup	Tap distance conditional on neighbouring well spacing	GF:LU.1-4	-	missing	FR	
 ERC-D1b	erc	latchup	Minimum well-tie area	TR18-02:Annex A; GF:LU.7	-	missing	FR; CF	
-ERC-D2	erc	latchup	Pad-diffusion guard ring (spacing, width)	GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2	esd_latchup	partial	FR	No deck carries it (limitations.md:65)
+ERC-D2	erc	latchup	Pad-diffusion guard ring (spacing, width)	GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2	esd_latchup	partial	FR	No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap
 ERC-D3	erc	latchup	Guard ring / well tied to the correct rail	GF:LU.9,LU.10	well_bias	partial	SY	Devices only, not guard rings
 ERC-D4	erc	latchup	Guard-ring resistance / current under injection	TR18-02:2.3; JESD78:Table 1; CAL	p2p_resistance,em_current_density	partial	CF	Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled
 ERC-D5	erc	latchup	Voltage-aware aggressor/victim	TR18-02:2.2.3; CAL	-	missing	SY	
@@ -188,16 +188,16 @@ ERC-E2	erc	em	Current per cut	GF:Table 14.4; IHP:2.15	em_current_density	impleme
 ERC-E3	erc	em	Width-banded absolute current for narrow lines	IHP:2.15	em_current_density	partial	FR	Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report
 ERC-E4	erc	em	Temperature derating (Black / Arrhenius)	GF:14.2.2; Black1969; JEP122; JESD63	electromigration	implemented	SE:GF formula vs table (1.6% rounding)	
 ERC-E5	erc	em	Lifetime target and percentile	GF:14.2; IHP:2.15; JESD202	electromigration,reliability	implemented	SE	
-ERC-E6	erc	em	Blech short-length immortality	Blech1976	electromigration	implemented	CF	
+ERC-E6	erc	em	Blech short-length immortality	Blech1976	electromigration	implemented	CF	L is the line between diffusion barriers (via landing, feed point, loaded device tap); a branched line's L is all its branches
 ERC-E7	erc	em	RMS / Joule heating / peak limits	(NDA only)	-	missing	-	No open source
-ERC-E8	erc	em	Static IR drop vs budget	OR:psm; WH:13.3.2; RH; VOL; MP	ir_drop	implemented	CF; NV; TX:OR psm	One feed point per supply (limitations.md:39)
+ERC-E8	erc	em	Static IR drop vs budget	OR:psm; WH:13.3.2; RH; VOL; MP	ir_drop	implemented	CF; NV; TX:OR psm	One feed point per supply (limitations.md, "Power grid")
 ERC-E9	erc	em	PDN integrity (floating stripes, unconnected instances)	OR:check_power_grid	unconnected_pin	partial	TX:OR	Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing
 ERC-E10	erc	em	Per-segment PDN EM	OR:psm -enable_em	em_current_density	implemented	TX:OR	
 ERC-E11	erc	em	Dynamic / vectorless IR	RH; VOL; MP; TOT	-	out_of_scope	-	Static analysis only: dynamic IR needs switching activity
 ERC-E12	erc	em	Stress voiding / slotting	JEP139; JESD214; GF:14.6	cheesing	partial	FR	cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing
-ERC-E13	erc	em	Thermal-aware / statistical EM, self-heating	RH; TOT; VOL	-	out_of_scope	-	One temperature, 85 C (limitations.md:44)
+ERC-E13	erc	em	Thermal-aware / statistical EM, self-heating	RH; TOT; VOL	-	out_of_scope	-	One temperature, 85 C (limitations.md, "Power grid")
 ERC-F1	erc	voltage	Static voltage propagation, conditional on gate voltage	CAL:WP 81822; SKY:hv.X.1; patents P5,P9	erc:voltage	partial	SE:Siemens WP; SY	Channels pass unconditionally
-ERC-F2	erc	voltage	Gate-oxide overstress	GF:14.1.4.2; SKY:hv; TR22:4.1; CAL	gate_oxide	implemented	FR; CF	Can over-report (limitations.md:24)
+ERC-F2	erc	voltage	Gate-oxide overstress	GF:14.1.4.2; SKY:hv; TR22:4.1; CAL	gate_oxide	implemented	FR; CF	Can over-report (limitations.md, "Rules that can pass a layout signoff would flag")
 ERC-F3	erc	voltage	Junction / drain-source overstress	SKY:hv; IHP:process spec	drain_source	implemented	FR	
 ERC-F4	erc	voltage	HCI susceptibility flag	CAL:WP 81822 Eq.1; GF:14.1.4.1	-	missing	SE	
 ERC-F5	erc	voltage	TDDB/BTI/HCI lifetime	JEP122; JESD263; JESD241; JESD28; JESD60	reliability	implemented	CF	
@@ -207,13 +207,13 @@ ERC-F8	erc	voltage	Power-state-dependent undriven gates	CAL:WP 81822; IEEE1801; 
 ERC-F9	erc	voltage	DC / sneak path between domains	CAL:datasheet; CAL:WP 81822	domain_crossing	implemented	SE:WP Fig2; SY	
 ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10	hv_domain	partial	FR; SY	The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not
 ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	-	missing	FR	Same row as DRC-082
-ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY	Only sky130 connects wells (limitations.md:58)
+ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY	Only sky130 connects wells (limitations.md, "Shipped decks")
 ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	-	missing	FR	
 ERC-G1	erc	classic	Floating / undriven gate	CAL:WP 81822; YOSYS:check	floating_gate	implemented	SY; TX:YOSYS	
 ERC-G2	erc	classic	Floating well	SKY:nwell.4	floating_well	implemented	FR; SY	
-ERC-G3	erc	classic	Multiple drivers	YOSYS:check	multiple_drivers	implemented	SY; TX:YOSYS	
+ERC-G3	erc	classic	Multiple drivers	YOSYS:check	multiple_drivers	partial	SY; TX:YOSYS	Complementary pull-up/pull-down networks are one driver; source and drain are in extraction order, so a transistor drawn output side first drives its supply (F28)
 ERC-G4	erc	classic	Supply short (n-tie + p-tie, VDD-GND)	CAL	supply_short	implemented	SY	No standards-body definition
-ERC-G5	erc	classic	Soft connection through a high-R layer	KL:soft_connect; CAL:SOFTCHK	soft_connection	implemented	SY; TX:KL	
+ERC-G5	erc	classic	Soft connection through a high-R layer	KL:soft_connect; CAL:SOFTCHK	soft_connection	implemented	SY; TX:KL	Joins only through the deck's connectivity with the soft layers removed
 ERC-G6	erc	classic	Unconnected pin / dangling conductor	OR:check_power_grid	unconnected_pin	implemented	SY	
 ERC-G7	erc	classic	Gate tied directly to a rail	CAL (weak sourcing)	tie_high_low	implemented	SY	
 ERC-G8	erc	classic	Combinational loops	YOSYS:check	-	missing	TX:YOSYS	Digital only, optional

@@ -650,7 +650,7 @@ emit(id, A.inside(B))                                                           
 - **Where it diverges:**
   - Pairs that only touch: GPurify measures the far protrusion and can report a false violation
     (N4). KLayout ignores them.
-  - Bounding boxes against real shapes (`limitations.md:20`, F19).
+  - Bounding boxes against real shapes (limitations.md, "Rules that can pass a layout signoff would flag"; F19).
 - The alternative oracle is the bitmap DRC (testing-plan C5).
 
 ### 20. overlap — APPROX (EXACT on R with disjoint intersections)

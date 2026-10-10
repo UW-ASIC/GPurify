@@ -21,6 +21,7 @@ result from them is weaker than it looks.
 | `enclosure(inner, outer, opposite)` | An inner shape that is not a rectangle is held to the every-side limit instead. |
 | `extension`, `overlap` | Measure bounding boxes, so an L-shaped shape can pass. |
 | `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
+| `multiple_drivers`, `tie_high_low` | Source and drain are as extraction assigns them, so a transistor drawn output side first drives its supply or ties its gate (testing-plan F28). |
 | `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
 | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
@@ -81,7 +82,8 @@ None has been compared against foundry signoff results.
   covers only poly that touches no diffusion.
 - IHP: parasitic area capacitance other than Metal1 is computed from the
   documented layer heights and dielectric constants, and fringe capacitance
-  is zero. A gate with an antenna diode is held to the no-diode limit.
+  is zero. Its antenna rows say `diode: none` (no antenna-diode layer is
+  chosen), so a gate with a diode is held to the no-diode limit.
 - `generic_finfet` is ASAP7, a predictive process no fab builds. It
   recognises no transistors and extracts no capacitance: the manual gives no
   resistance for the gate and local-interconnect layers and no capacitance at
@@ -124,12 +126,12 @@ says which foundry manual, standard or tool defines each one.
 | DRC-002 | Allowed edge angles | partial | 45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer |
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
-| DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md:28; sky130.deck) |
+| DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md, "Checks that do not exist yet"; sky130.deck) |
 | DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible |
 | DRC-011 | Device channel width / length | missing | Needs device W/L as a rule input (sky130.deck "needs W, not width") |
 | DRC-014 | Cut classes (several legal cut sizes) | partial | One exact size per rule; class-dependent spacing is DRC-063 |
 | DRC-015 | Discrete / allowed width set | missing | — |
-| DRC-016 | Wrong-direction width or spacing | missing | Direction-dependent rules (limitations.md:55) |
+| DRC-016 | Wrong-direction width or spacing | missing | Direction-dependent rules (limitations.md, "Shipped decks") |
 | DRC-020 | Minimum step / edge length / jog | partial | MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing |
 | DRC-021 | Feature length min/max | partial | Edge length via .with_length works; whole-feature length does not |
 | DRC-022 | Aspect ratio | missing | — |
@@ -138,20 +140,20 @@ says which foundry manual, standard or tool defines each one.
 | DRC-029 | End-of-line spacing | partial | Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing |
 | DRC-030 | EOL extension / keep-out | missing | — |
 | DRC-031 | Tip-to-tip / tip-to-side by width class | partial | One end-of-line width per rule, so each width class is its own rule; tip-to-side is not told apart from tip-to-tip |
-| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md:76) |
+| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md, "Shipped decks") |
 | DRC-033 | Forbidden spacing ranges | missing | — |
 | DRC-034 | Maximum spacing | missing | — |
 | DRC-035 | Pitch / exact pitch / on-track | missing | Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
 | DRC-036 | Span-length table | missing | — |
 | DRC-037 | Bent / 45-degree features | partial | angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer |
-| DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md:19) |
+| DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md, "Rules that can pass a layout signoff would flag") |
 | DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written |
 | DRC-043 | Width-dependent enclosure | missing | — |
 | DRC-044 | Maximum enclosure / min-and-max window | missing | sky130.deck "npc.5 (maximum enclosure)" |
-| DRC-045 | Extension / end-cap / overhang | partial | Measures bounding boxes, so an L-shape can pass (limitations.md:20); the bitmap oracle targets this |
-| DRC-046 | Overlap amount | partial | Bounding-box measure (limitations.md:20) |
+| DRC-045 | Extension / end-cap / overhang | partial | Measures bounding boxes, so an L-shape can pass (limitations.md, "Rules that can pass a layout signoff would flag"); the bitmap oracle targets this |
+| DRC-046 | Overlap amount | partial | Bounding-box measure (limitations.md, "Rules that can pass a layout signoff would flag") |
 | DRC-049 | Exact or maximum count | partial | Minimum count only (sky130.deck "an exact count") |
-| DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md:31); edge enclosure misses diagonal gaps (limitations.md:21) |
+| DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag") |
 | DRC-052 | Gate-shape rules (no bends, no poly on inner diff corners) | missing | Needs corner/turn selection (sky130.deck) |
 | DRC-053 | Exact alignment / width match across layers | missing | — |
 | DRC-054 | Enclosure excluding coincident edges | missing | — |
@@ -187,8 +189,8 @@ says which foundry manual, standard or tool defines each one.
 | DRC-114 | Pattern-matching DRC | missing | — |
 | DRC-115 | Equation-based DRC | missing | First candidate for Rust custom rules (testing-plan.md L9b) |
 | DRC-117 | Via redundancy scoring / via doubling | partial | Counts cuts within a distance; no DFM scoring and no via doubling |
-| DRC-121 | Selection by shape class, net or angle; covering/overlapping; anisotropic size | partial | limitations.md:28 |
-| DRC-122 | Edge-layer ops incl. extension | partial | limitations.md:31 |
+| DRC-121 | Selection by shape class, net or angle; covering/overlapping; anisotropic size | partial | limitations.md, "Checks that do not exist yet" |
+| DRC-122 | Edge-layer ops incl. extension | partial | limitations.md, "Checks that do not exist yet" |
 | DRC-123 | Hierarchical processing | partial | Flattened at load (gds::Library::flatten); a scale issue, not correctness |
 
 ### Layout against schematic (LVS)
@@ -219,7 +221,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader |
 | LVS-062 | Capacitor C/A/P | partial | Marker area only; no C or perimeter |
 | LVS-063 | Diode A/P | partial | Marker area only; no perimeter. Polarity is compared |
-| LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61) |
+| LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md, "Shipped decks") |
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | No check exists: the deck has no syntax for per-model counts or parameter ranges |
@@ -229,7 +231,7 @@ says which foundry manual, standard or tool defines each one.
 | Id | Check | Status | What is missing |
 |---|---|---|---|
 | ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | ROUTINGPLUSCUT is missing |
-| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | A row with a diode and non-zero diode_credit is refused (limitations.md:22) |
+| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | A row with a diode and non-zero diode_credit is refused (limitations.md, "Rules that can pass a layout signoff would flag"); diode_bonus applies only to gates with diode area on their net |
 | ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
 | ERC-A7 | PWL diffusion-dependent limit | missing | — |
 | ERC-A9 | Minimum protection-diode size | missing | — |
@@ -249,7 +251,7 @@ says which foundry manual, standard or tool defines each one.
 | ERC-C10 | Layout parasitic ESD paths | missing | Spacing values are NDA |
 | ERC-D1a | Tap distance conditional on neighbouring well spacing | missing | — |
 | ERC-D1b | Minimum well-tie area | missing | — |
-| ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | No deck carries it (limitations.md:65) |
+| ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap |
 | ERC-D3 | Guard ring / well tied to the correct rail | partial | Devices only, not guard rings |
 | ERC-D4 | Guard-ring resistance / current under injection | partial | Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled |
 | ERC-D5 | Voltage-aware aggressor/victim | missing | — |
@@ -267,6 +269,7 @@ says which foundry manual, standard or tool defines each one.
 | ERC-F10 | HV tag consistency | partial | The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not |
 | ERC-F11 | Voltage-dependent spacing | missing | Same row as DRC-082 |
 | ERC-F13 | Inter-metal dielectric breakdown | missing | — |
+| ERC-G3 | Multiple drivers | partial | Complementary pull-up/pull-down networks are one driver; source and drain are in extraction order, so a transistor drawn output side first drives its supply (F28) |
 | ERC-G8 | Combinational loops | missing | Digital only, optional |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
