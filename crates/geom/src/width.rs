@@ -1,8 +1,10 @@
-//! Facing-edge widths: the narrowest distance across (or between) a polygon's
-//! own parallel edges, found by a scanline sweep per axis.
+//! Widths: the narrowest distance across (or between) a polygon's own parallel
+//! edges, found by a scanline sweep per axis, and the diagonal necks between
+//! its concave corners.
 //!
 //! Data in: one validated rectilinear polygon. Data out: the narrowest gap and
-//! its midpoint. Exact on the whole input domain.
+//! its midpoint. Exact on the whole input domain, but a neck's length, which
+//! is floored to a whole unit.
 
 use crate::ops::Point;
 use crate::view::PolygonRef;
@@ -198,14 +200,15 @@ pub fn narrowest_facing(
         .min_by_key(|&(gap, _)| gap)
 }
 
-/// The narrowest width of a validated polygon, holes included: the least
-/// distance between two parallel edges facing each other across material,
-/// over a span where their projections overlap. Corner-to-corner necks are
-/// [`narrowest_neck`]'s.
+/// The narrowest width of a validated polygon, holes included, as the `width`
+/// rule measures it: the least of the facing widths ([`narrowest_facing`]
+/// across material) and the diagonal necks ([`narrowest_neck`]), a neck's
+/// length floored to a whole unit.
 pub fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu {
-    narrowest_facing(poly, true, scratch)
+    let facing = narrowest_facing(poly, true, scratch)
         .expect("every validated polygon has a facing pair across its own material")
-        .0
+        .0;
+    narrowest_neck(poly, facing).map_or(facing, |(neck, _)| neck)
 }
 
 /// The narrowest diagonal neck of a polygon under `limit`: the Euclidean gap

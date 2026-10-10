@@ -297,7 +297,7 @@ pub enum DerivedOp {
     /// The shapes whose area, holes excluded, lies in `lo..=hi` square grid units.
     WithArea(i128, i128),
     /// The shapes whose narrowest width, as the `width` rule measures it, lies
-    /// in `lo..=hi` grid units.
+    /// in `lo..=hi` grid units; a diagonal neck counts, floored to a whole unit.
     WithWidth(i128, i128),
     /// Polygons to their boundary edges, each directed with the material on
     /// its left. The result is an edge layer.

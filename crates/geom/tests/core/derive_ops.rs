@@ -316,6 +316,21 @@ fn with_width_selects_on_the_narrowest_width() {
     assert_eq!(boxes(&got), [(0, 0, 10, 10)]);
 }
 
+#[test]
+fn with_width_counts_the_diagonal_neck_width_measures() {
+    // Two 10-squares overlapping 2 x 2 at a corner: every facing pair is 10
+    // apart, but the concave corners (10, 8) and (8, 10) are sqrt(8) = 2.83
+    // apart, which `width` reports floored, as 2.
+    let plates = rects(&[(0, 0, 10, 10), (8, 8, 18, 18)]);
+    let mut got = ValidatedLayer::default();
+    with_width_into(&plates, 0..=2, &mut got);
+    assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is 2 wide");
+    with_width_into(&plates, 3..=i128::MAX, &mut got);
+    assert!(got.is_empty(), "nothing is 3 wide at the neck");
+    with_width_into(&plates, 0..=1, &mut got);
+    assert!(got.is_empty(), "the neck floors to 2, not less");
+}
+
 fn seg(ax: i64, ay: i64, bx: i64, by: i64) -> Seg {
     Seg {
         a: Point { x: d(ax), y: d(ay) },

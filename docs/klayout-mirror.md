@@ -964,7 +964,7 @@ Each operation runs on merged operands. Every polygon result is wrapped in `mc()
 | `.holes()` | Each hole filled, island included, merged | `.holes` | Same (v T12) |
 | `.extents()` | The bbox of each figure, one row per box; overlapping boxes are not merged (`extents_into`) | `.extents` | Same: `Region#extents` "The boxes will not be merged" ([R]); both merge them at the next merging use |
 | `.with_area(b)` | Area without holes, inclusive bounds | `.with_area(min, max)` on [min, max), bounds mapped per (a5) | (v T12, T15) |
-| `.with_width(b)` | `narrowest_width` = facing edges by projection only (`geom/width.rs`) | `L.drc(if_all(!(width(projection) < LO), width(projection) < HI))`, with LO and HI mapped per (a5) | (v t13 W1). deck.md says "as width measures it", but `width` also counts Euclidean necks (N2) |
+| `.with_width(b)` | `narrowest_width`: facing edges and diagonal necks, as `width` (rule 1); a neck is floored to whole DBU (`geom/width.rs`) | `L.drc(if_all(!(width(euclidian) < LO), width(euclidian) < HI))`, with LO and HI mapped per (a5) | (v t13 W1, T4.) The floor makes a neck between n and n + 1 compare as n: exact for `>=` and `<` bounds; a `<=`, `>` or `==` bound can differ on an irrational neck (N2, fixed in B16) |
 | `.with_text(T, "p")` | A text point on the material or its edge (`on_material`); glob `*` and `?` only; case-sensitive | `.interacting(SRC.labels(T).texts(pattern("p")))`, or `texts(text("p"))` when there is no wildcard | Text on an edge and on a corner count (v T14, T18). KLayout globs also have `[…]`, `{a,b}` and `\` escapes, so those characters must be escaped (Q3) |
 | `.without_text(…)` | | `.not_interacting(…)` | |
 | `.edges()` | Merged boundary, kept as directed runs, material on the left (CCW) | `.edges` | KLayout edges are clockwise (material on the right): same side, opposite direction. Compare edges undirected. |
@@ -1083,11 +1083,11 @@ These are not in testing-plan F1–F35. F18, F19, F29 and F34 were confirmed ind
 - KLayout's default (MAX) `notch` and `space` flag it (v T5).
 - Fix: one coherence for both. MAX matches KLayout and foundry decks.
 
-**N2. `with_width` is projection-only.**
-- It uses `narrowest_width` → `narrowest_facing`. `docs/deck.md` says "narrowest width, as `width`
+**N2. `with_width` was projection-only.** Fixed in B16 (F39/F55).
+- It used `narrowest_width` → `narrowest_facing`. `docs/deck.md` says "narrowest width, as `width`
   measures it", but `width` also counts Euclidean necks (`narrowest_neck`).
 - Two overlapping squares offset by 70 have a neck of 42 that `width` sees, but their `with_width`
-  is 100.
+  was 100. `narrowest_width` now takes the neck too.
 
 **N3. The density die grows with derived layers.**
 - With no boundary layer, the die is the union of every store layer's bbox, derived layers

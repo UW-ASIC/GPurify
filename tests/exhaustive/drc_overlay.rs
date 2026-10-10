@@ -20,11 +20,8 @@
 //! Where `GPurify` falls short of a definition, the fixture keeps the
 //! definition and names the finding that explains the gap (`known`): F19,
 //! F34 and F40 (a grown derived layer widens the density die) from
-//! `docs/testing-plan.md`, and three this pass found:
-//! - F54: `extents()` stores the boxes of shapes whose boxes overlap as one
-//!   merged shape, where deck.md and `KLayout` give the box of each shape.
-//! - F55: `with_width` misses the Euclidean neck between concave corners
-//!   that `width` measures, though it is defined as `width` measures.
+//! `docs/testing-plan.md`, and one this pass found (F54 and F55, also found
+//! here, are fixed):
 //! - F56: `extension` and `overlap` pair drawn polygons without merging,
 //!   so a diffusion drawn in two pieces abutting under a legal gate reports
 //!   a 50 nm extension at the seam.
@@ -3046,21 +3043,18 @@ fn selections() -> Vec<Fixture> {
     ));
     // Two plates overlapping 50 x 50 at a corner: the Euclidean neck between
     // their concave corners is sqrt(5000), 70.7 nm, which `width` measures.
-    cases.push(
-        derived(
-            "derived/with_width_neck",
-            cat,
-            &["a"],
-            &[
-                ("a.with_width(< 100nm)", areas(&[1_997_500])),
-                ("a.with_width(>= 100nm)", vec![]),
-            ],
-            Layout::default()
-                .rect("a", 0, 0, 1000, 1000)
-                .rect("a", 950, 950, 1950, 1950),
-        )
-        .known("F55"),
-    );
+    cases.push(derived(
+        "derived/with_width_neck",
+        cat,
+        &["a"],
+        &[
+            ("a.with_width(< 100nm)", areas(&[1_997_500])),
+            ("a.with_width(>= 100nm)", vec![]),
+        ],
+        Layout::default()
+            .rect("a", 0, 0, 1000, 1000)
+            .rect("a", 950, 950, 1950, 1950),
+    ));
 
     let texts = rects(
         ring(

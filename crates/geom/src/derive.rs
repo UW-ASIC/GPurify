@@ -137,7 +137,8 @@ pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut
 }
 
 /// Polygons whose narrowest width in grid units, as the `width` rule measures
-/// it, is in `range`.
+/// it ([`narrowest_width`]: diagonal necks count, floored to a whole unit), is
+/// in `range`.
 pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let mut scratch = FacingScratch::default();
     let keep: Vec<bool> = (0..narrow(a.len()))

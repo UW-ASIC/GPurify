@@ -36,8 +36,9 @@
 //!   integer sweep; [`derive`](mod@derive) builds the deck's layer operations (sizing,
 //!   selection by relation or measure, holes, extents, edge layers) on top.
 //! - [`width`] measures the narrowest width across a polygon's own material
-//!   ([`width::narrowest_width`]) and the diagonal neck between two concave
-//!   corners ([`width::narrowest_neck`]).
+//!   ([`width::narrowest_width`]): between facing edges
+//!   ([`width::narrowest_facing`]) or across the diagonal neck between two
+//!   concave corners ([`width::narrowest_neck`]).
 //! - [`index`] finds candidate pairs within a distance by bounding box. The
 //!   result is a **superset** of the true pairs and never misses one: a check
 //!   prunes with it, then measures each pair exactly.
