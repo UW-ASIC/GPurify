@@ -102,6 +102,12 @@ A layer without one is not a test.
 | F54 | **`extents()` merges shapes whose boxes overlap.** Two interlocking Ls with boxes `[0,1000]²` and `[200,1200]²` become one 1 360 000 nm² shape; deck.md, `DerivedOp::Extents` ("the bounding box of each shape") and `KLayout` give two 1 µm² boxes. `extents_into` documents "merged". | `geom/src/derive.rs` (`extents_into`) | Wrong input to every rule that reads a layer as stored: `forbidden`, enclosure's inner layer, `redundant_via`, `via_array_space`, `tap_distance`. Found by X2. |
 | F55 | **`with_width` misses the corner neck `width` measures.** Two plates overlapping 50×50 at a corner: `width(a) >= 100nm` reports 70 at the neck, but `a.with_width(< 100nm)` selects nothing, because `with_width_into` calls `narrowest_width` and never `narrowest_neck`. | `geom` (`with_width_into`) | **False clean** for any rule written on a `with_width` selection. Found by X2. |
 | F56 | **`min_extension` and `overlap` pair drawn pieces, not merged material.** A legal gate over a diffusion drawn as `[0,450]` + `[450,1000]` gets two false 50 nm findings at the seam; an `a` drawn as two abutting pieces that together overlap `b` by 100 gets two false 50 nm findings. | `drc/rules/overlay.rs` | False violations, the F18 pattern; a different cause from F19's boxes. Found by X2. |
+| F57 | **Parallel MOS whose source and drain share a net never merge.** `group_is_sound` counts distinct surviving channel nets (1, not 2) and dissolves the group: layout `nmos(g=a; s=d=b)` ×2 at W=1000 against `M0 b a b b nmos W=2000n` mismatches, and a 2.1 % W error on one such finger is judged per finger. | `lvs/reduce.rs` (`group_is_sound`) | **False mismatch.** Found by X5. |
+| F58 | **The greedy symmetry break never backtracks.** It pairs devices across classes refinement cannot split, so `nmos(n0;n0,n0) + nmos(n1;n1,n2) + nmos(n2;n1,n2)` against its own netlist with the cards reversed mismatches, and so does a 3-cycle with one device 1.9 % wide. | `lvs/refine.rs` (tie break) | **False mismatch**, order-dependent. Found by X5. |
+| F59 | **The cumulative antenna ratio divides all metal by all gates at the top layer.** IHP's Figure 7.1 sums one ratio per layer over the gates connected at that layer: with every gate 1 µm², M1(i) 100, M2(i) 50, M1(ii)/(iii) 2, M2(ii) 4 and M3(i) 30, IHP gives G1 160, and GPurify computes 188/3 ≈ 62.7 and passes it at a limit of 100. The rustdoc's "can under-report" names it; no finding did. | `erc/rules/antenna.rs` | **False clean.** Found by X4. |
+| F60 | **An `antenna` row cannot see a protection diode,** so a gate with one is held to the no-diode limit: IHP Ant.b flags a 2.0 ratio at 1.5 where only Ant.e (100) applies. | `erc/rules/antenna.rs` | False violation. Found by X4; the catalog notes had it. |
+| F61 | **IR drop on a ground rail is not exact on power-of-two resistances.** A 1.75 mV drop solves as 1.7500000000000002 mV, so a node exactly at a 1.75 mV limit is flagged; the same ladder on a power rail is exact, as `tests/erc_closed_form.rs` claims for both. | `erc/rules/ir.rs` | False violation at the limit. Found by X4. |
+| F62 | **`hv_domain` isolation drawn exactly on a device's marker does not exempt it.** The rustdoc exempts a marker "wholly covered"; the code treats the shared edge as crossing, and a 1500 mV finding is reported. | `erc/rules/domain.rs` | False violation. Found by X4. |
 
 ---
 
@@ -440,8 +446,8 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | X1 | Exhaustive fixtures: DRC dimension, spacing and integrity kinds | DRC-001…038 | done |
 | X2 | Exhaustive fixtures: DRC overlay, cut, density, presence and edge kinds, and the derived-layer operations | DRC-040…123 | done |
 | X3 | Exhaustive fixtures: a bitmap reference DRC and every pattern of small cell grids (supersedes C5) | C5, L3 | done |
-| X4 | Exhaustive fixtures: every ERC kind, closed forms and enumerated topologies (supersedes C6 for ERC) | ERC-* | todo |
-| X5 | Exhaustive fixtures: LVS over every small circuit and every single fault, against a brute-force isomorphism; device classes, reductions, hierarchy | LVS-* | todo |
+| X4 | Exhaustive fixtures: every ERC kind, closed forms and enumerated topologies (supersedes C6 for ERC) | ERC-* | done |
+| X5 | Exhaustive fixtures: LVS over every small circuit and every single fault, against a brute-force isomorphism; device classes, reductions, hierarchy | LVS-* | done |
 | X6 | Exhaustive fixtures: PEX analytic geometries, matrix laws, refinement convergence (supersedes C6 for PEX) | PEX-* | done |
 | D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | todo |
 | D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | todo |

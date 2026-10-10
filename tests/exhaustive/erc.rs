@@ -25,15 +25,15 @@
 //! the finding it fails on: F25 to F29 and F35 from `docs/testing-plan.md`, and
 //! four found here:
 //!
-//! - `N-x4-1`: the cumulative antenna ratio pools all gates of the net at the
+//! - `F59`: the cumulative antenna ratio pools all gates of the net at the
 //!   top stage, where IHP's `AreaRatio` sums one ratio per layer over the gates
 //!   joined at that layer, so a small gate joined to large ones only on a
 //!   high metal passes ([`ihp_area_ratio`]).
-//! - `N-x4-2`: an `antenna` row cannot see a protection diode, so a gate with
+//! - `F60`: an `antenna` row cannot see a protection diode, so a gate with
 //!   one is held to IHP's no-diode limit Ant.b ([`antenna_electrical`]).
-//! - `N-x4-3`: a ground rail's solve is one ulp off an exactly representable
+//! - `F61`: a ground rail's solve is one ulp off an exactly representable
 //!   drop, so a node exactly at its `max_drop_mv` is flagged ([`ir_drop`]).
-//! - `N-x4-4`: `hv_domain` isolation drawn exactly on a device's marker does
+//! - `F62`: `hv_domain` isolation drawn exactly on a device's marker does
 //!   not exempt it, though the marker is wholly covered
 //!   ([`topology_cases`]).
 
@@ -633,7 +633,7 @@ fn antenna_variants() -> Vec<Fixture> {
 /// `GPurify` divides all collected area by the gate area at the highest stage,
 /// (100 + 2 + 2 + 50 + 4 + 30) / 3 = 62.7, and passes it: a false clean, the
 /// limit its rustdoc states (`AntennaTable`, "can under-report") but no
-/// finding in the testing plan records. Reported as `N-x4-1`.
+/// finding in the testing plan records. Reported as `F59`.
 fn ihp_area_ratio() -> Fixture {
     let mut l = Layout::default();
     // G1 under a 100 µm² met1 plate and a 50 µm² met2 plate.
@@ -666,7 +666,7 @@ fn ihp_area_ratio() -> Fixture {
     )
     .layout(l)
     .expect(Expect::rule("ant.b", vec![ratio(g1).at(500, 500)]))
-    .known("N-x4-1")
+    .known("F59")
 }
 
 /// A 1.0 µm² gate under 2.0 µm² of met1, optionally with a 0.15 µm² diode
@@ -693,7 +693,7 @@ fn diode_stub(diode: bool) -> Layout {
 /// - IHP Ant.b (without diode, 1.5 here) and Ant.e (with diode, 100): a net
 ///   with a diode is held to Ant.e only, so at 2.0 it is clean. `GPurify`'s
 ///   `antenna` row cannot see the diode and holds it to Ant.b, the
-///   over-report the catalog notes on ERC-A8 but no finding records: `N-x4-2`.
+///   over-report the catalog notes on ERC-A8 but no finding records: `F60`.
 ///   Without the diode Ant.b fails it and Ant.e (with diode) does not apply.
 fn antenna_electrical() -> Vec<Fixture> {
     let mut out = Vec::new();
@@ -762,7 +762,7 @@ rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_cre
         .layout(diode_stub(true))
         .expect(Expect::clean("Ant.b"))
         .expect(Expect::clean("Ant.e"))
-        .known("N-x4-2"),
+        .known("F60"),
     );
     out.push(
         Fixture::new(
@@ -1242,9 +1242,9 @@ fn ir_drop(depth: Depth) -> Vec<Fixture> {
                 placed.push(f.clone());
             }
             // The worst node is exactly 1.75 mV, legal at a 1.75 mV limit; the
-            // ground rail's solve reads it one ulp high (N-x4-3).
+            // ground rail's solve reads it one ulp high (F61).
             if k == 5 && role == "ground" {
-                f = f.known("N-x4-3");
+                f = f.known("F61");
             }
             out.push(f);
         }
@@ -2870,7 +2870,7 @@ fn topology_cases() -> Vec<Fixture> {
     // Isolation covering half the marker exempts nothing; one drawn exactly
     // on the marker covers all of it, so the device is "wholly covered" and
     // exempt by the definition (GPurify fails closed on the shared edge:
-    // N-x4-4).
+    // F62).
     for (name, iso, exempt) in [
         ("half_isolated", (1100, -100, 1300, 1100), false),
         ("isolation_on_marker", (1000, 0, 1200, 1000), true),
@@ -2881,7 +2881,7 @@ fn topology_cases() -> Vec<Fixture> {
             f.expect
                 .retain(|e| !matches!(e, Expect::Rule { id, .. } if id == "hv"));
             f.expect.push(Expect::clean("hv"));
-            f = f.known("N-x4-4");
+            f = f.known("F62");
         }
         out.push(f);
     }

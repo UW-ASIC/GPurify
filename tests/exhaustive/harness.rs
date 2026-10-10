@@ -9,7 +9,7 @@
 //! a deck, a layout drawn in nanometres, an optional reference netlist and
 //! design intent, the catalog rows it proves, and what the run must report.
 //! The expectation is derived from the rule's definition (the deck language,
-//! the rustdoc, the foundry rule), never from a run of GPurify: a fixture whose
+//! the rustdoc, the foundry rule), never from a run of `GPurify`: a fixture whose
 //! expectation was copied from the tool proves nothing.
 //!
 //! Each fixture runs in memory through the real reader: the layout is written
@@ -484,8 +484,14 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
     let reference = match &fixture.reference {
         None => None,
         Some(text) => {
-            let netlist = gpurify_ingest::netlist::spice::read(text, &mut strings, &deck.devices)
-                .map_err(|why| format!("reference: {why}"))?;
+            // SPICE or Spectre, picked as the pipeline picks it.
+            let netlist = gpurify::engine::pipeline::read_reference_text(
+                text,
+                false,
+                &deck.devices,
+                &mut strings,
+            )
+            .map_err(|why| format!("reference: {why}"))?;
             // As `engine::pipeline::load` does: LVS compares the flattened top.
             Some(match netlist.top() {
                 Some(top) => netlist

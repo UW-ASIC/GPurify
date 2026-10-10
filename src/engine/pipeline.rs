@@ -156,16 +156,30 @@ fn read_reference(
     let source = std::fs::read_to_string(path).map_err(|why| {
         gpurify_ingest::netlist::NetlistError::Io(format!("{}: {why}", path.display()))
     })?;
-    let spectre = spectre_by_opener(&source).unwrap_or_else(|| {
-        matches!(
-            path.extension().and_then(std::ffi::OsStr::to_str),
-            Some("scs" | "spectre")
-        )
-    });
-    if spectre {
-        gpurify_ingest::netlist::spectre::read(&source, strings)
+    let spectre_by_name = matches!(
+        path.extension().and_then(std::ffi::OsStr::to_str),
+        Some("scs" | "spectre")
+    );
+    read_reference_text(&source, spectre_by_name, devices, strings)
+}
+
+/// Reads reference netlist text in the dialect its first subcircuit opener
+/// names (`subckt` Spectre, `.subckt` SPICE), or Spectre when it has none and
+/// `spectre_by_name` says the file was named so.
+///
+/// # Errors
+///
+/// The reader's [`NetlistError`](gpurify_ingest::netlist::NetlistError).
+pub fn read_reference_text(
+    source: &str,
+    spectre_by_name: bool,
+    devices: &gpurify_ingest::deck::DeviceRecognition,
+    strings: &mut StrTable,
+) -> Result<Netlist, gpurify_ingest::netlist::NetlistError> {
+    if spectre_by_opener(source).unwrap_or(spectre_by_name) {
+        gpurify_ingest::netlist::spectre::read(source, strings)
     } else {
-        gpurify_ingest::netlist::spice::read(&source, strings, devices)
+        gpurify_ingest::netlist::spice::read(source, strings, devices)
     }
 }
 

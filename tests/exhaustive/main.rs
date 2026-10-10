@@ -32,7 +32,7 @@ use std::sync::Mutex;
 /// The domains whose fixtures are finished: every implemented, partial and
 /// expressible catalog row of these must be proved by at least one fixture, or
 /// by a named test in [`PROVED_BY_TEST`].
-const COMPLETE: &[&str] = &["drc", "pex"];
+const COMPLETE: &[&str] = &["drc", "erc", "lvs", "pex"];
 
 /// Catalog rows whose claim a fixture cannot state, and the `#[test]` that
 /// proves each, as `file::function` from the repository root.
