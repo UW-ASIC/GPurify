@@ -121,8 +121,8 @@ release build keeps `debug_assert!` out; the test profile turns
 ### L3. Property and reference-oracle tests (testgen, seed-scaled)
 
 Keep `testgen`, the house generator with no dependencies. Add three things:
-1. `GPURIFY_PROP_CASES` scales the iteration count: the default is fast, and nightly sets it to 10⁵.
-2. A failing seed is printed, and `GPURIFY_SEED=` replays one.
+1. Each property runs a fast default count in `cargo test`. A `#[ignore]`d twin runs 10⁵ cases for the nightly tier (`cargo test -- --ignored`), so there are no environment knobs.
+2. A failing seed is printed. It is committed to `tests/regressions/<property>.seeds`, which every run replays.
 3. A ~40-line **layout shrinker** in `testgen`: drop shapes one at a time, then halve coordinates, while the failure persists. Shrinking a list of shapes is the useful kind here, and proptest's value shrinking would not do it.
 
 Properties:
@@ -235,14 +235,14 @@ built from source.
 
 ### L7. Determinism, scale and adversarial size
 
-- **Determinism gate:** run `tools/gate/golden.sh` in CI against a checked-in baseline (see L8). A CLI test exercises `--check-determinism`. Run the suite with `RAYON_NUM_THREADS=1` and `=nproc` and byte-compare all field-solve outputs.
+- **Determinism gate:** the golden test (L8) runs every corpus case twice and byte-compares the runs. A test builds one rayon pool with 1 thread and one with all threads, and byte-compares the field-solve outputs.
 - **Scale:** `testgen::scale_corpus` at 10⁴, 10⁵ and 10⁶ polygons with time and memory budgets per stage (`tests/bench_all.rs` becomes a gated nightly job with a ±10% threshold against a rolling baseline). Each `ponytail:` O(n²) comment gets a scale test that fails when n crosses its documented ceiling.
 - **Adversarial inputs:** a GDS hierarchy 10⁵ levels deep (F3); one polygon with 10⁶ vertices; an AREF of 10⁹ elements (must refuse or stream, never allocate 10⁹); coordinates at ±2³¹; a deck with 10⁴ rules; a netlist with 10⁵ parallel devices (reduction must stay near-linear).
 
 ### L8. Golden snapshots (report contract)
 
-- Check in `tests/golden/<case>.{txt,json,spef}` produced by `golden.sh`, reviewed once.
-- A test regenerates them and diffs bytes. An intended change re-blesses with `GPURIFY_BLESS=1`, and the diff shows in review. Plain files are enough; insta adds nothing here.
+- Check in `tests/golden/<domain>/<case>.<output>`, one file per corpus case and CLI output (the runs `tools/gate/golden.sh` made), reviewed once.
+- `tests/golden.rs` runs the real binary and diffs bytes. A missing file is written and fails the test, so a new golden is always reviewed. To re-bless an intended change, delete the files and rerun; the diff shows in review. Plain files are enough; insta adds nothing here.
 - A doc-count test computes the rule-kind counts, corpus counts and strength table, and fails when `README.md` or `tests/fixtures/README.md` disagree (F5, F10).
 
 ### L9. Catalog traceability (fault-of-omission control)
@@ -281,7 +281,7 @@ User code is a new input surface, so the hook has its own tests:
 | Consumers read what the checker enforces | For every rule in every shipped deck, the query API's value (`min_spacing(layer)`, spacing-table lookup at random width/run) equals the limit the checker reports in a violation's `limit` field on a planted case |
 | Overrides are explicit | `replace` of an absent id errors; `remove` then `add` of the same id equals `replace`; override order does not change the result |
 | Accounting survives user code | A custom rule on an empty input layer reports `Skipped{EmptyLayer}`, never `Ran`. Examined counts come from the runner. A custom rule that finds nothing on a populated layer reports `Ran` with examined > 0. |
-| Determinism survives user code | A custom rule returning findings out of order or duplicated still yields canonical bytes. A deliberately nondeterministic custom rule (time-seeded) fails `--check-determinism`. |
+| Determinism survives user code | A custom rule returning findings out of order or duplicated still yields canonical bytes. A deliberately nondeterministic custom rule (time-seeded) fails the run-twice byte comparison the golden test uses. |
 | A failing custom rule fails the run | The release profile is `panic = "abort"` (`Cargo.toml:73`). A panic hook names the custom rule that was running, and the run exits non-zero, never passing silently. Debug/test builds unwind, and there the rule becomes `Refused` and the report continues. |
 | Findings are sane | A finding outside the layout extent, or on a layer the rule did not declare as input, is an assertion failure (L1) |
 
@@ -307,8 +307,8 @@ passes, and the merge result is what gets tested.
 | Tier | Budget | Contents |
 |---|---|---|
 | **Local** | < 30 s | `cargo test -p <crate>` for the crate touched; `cargo fmt --check` |
-| **Merge** (required) | < 15 min | fmt, clippy (`clippy::correctness` deny, as now); `cargo test --workspace` in debug with `overflow-checks`; `cargo test --workspace --release` for the corpus, which the README already calls "the test suite"; fuzz regression replay; L3 properties at the default count; L5 metamorphic on the corpus; golden-snapshot diff; doc-count test; catalog test; determinism gate (`golden.sh` twice plus `RAYON_NUM_THREADS=1` vs N); `cargo mutants --in-diff` when `check`/`geom` changed |
-| **Nightly** | hours | `cargo fuzz run` for 1 h per target; L3 at `GPURIFY_PROP_CASES=100000` with a random seed (logged); L6 differential (KLayout, Netgen, Magic, FasterCap, FastHenry, ngspice) in `nix develop .#oracles`; scale budgets and the bench threshold; branch coverage; ratchet checks |
+| **Merge** (required) | < 15 min | fmt, clippy (`clippy::correctness` deny, as now); `cargo test --workspace` (debug, `overflow-checks` on; it covers the corpus, goldens and determinism); fuzz regression replay; L3 properties at the default count; L5 metamorphic on the corpus; doc-count test; catalog test; `cargo mutants --in-diff` when `check`/`geom` changed |
+| **Nightly** | hours | `cargo fuzz run` for 1 h per target; `cargo test -- --ignored` (L3 at 10⁵ cases per property, seeds logged); L6 differential (KLayout, Netgen, Magic, FasterCap, FastHenry, ngspice) in `nix develop .#oracles`; scale budgets and the bench threshold; branch coverage; ratchet checks |
 | **Weekly** | a day | full `cargo mutants` on `check` and `geom`; fuzz for 8 h per target |
 | **Release** | unbounded | §7 checklist; all three PDK cross-checks with the ledger reviewed; aarch64 run (native or qemu); one soak of 24 h fuzz per target |
 
@@ -371,8 +371,10 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 |---|---|---|---|
 | A1 | Planning docs: this plan, check-sources.md, check-catalog.tsv, deck-library-plan.md | — | done |
 | A2 | Doc-count test; fix the stale counts and claims (README kinds, fixtures README, `counts` block, `limitations.md` esd_latchup, `ci.yml` GPU comment) | F5, F10, L8 | done |
-| A3 | Golden report snapshots (`tests/golden/`, `GPURIFY_BLESS`); `--check-determinism` CLI test; RAYON 1 vs N byte test; CI runs release-mode tests | F7, L7, L8 | todo |
+| A3 | Golden report snapshots run by plain `cargo test` (`tests/golden/`; delete a file and rerun to re-bless; no env vars, no scripts); every corpus case run twice and byte-compared; RAYON 1 vs N; `tools/gate/` deleted | F7, L7, L8 | todo |
+| S1 | Minimal CLI. Runtime flags are only the required inputs (`<layout>`, `--deck`, `--reference`, `--intent`; `lib`: `--spec`, `--lef`, `--output-dir`), the output form (`--format`) and the method choice (`--quasistatic <net>` for PEX, `--accuracy` for `lib`). Grid from the GDS UNITS record; unknown-layer policy in the deck (`ignore gds(L, D)`); `--output`, `--quasistatic-inductance`, `--check-determinism`, `--work` removed | user direction | todo |
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | todo |
+| R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | todo |
 | B1 | LVS: assert `expect_match` in the corpus; planted-fault matrix | F2, L2 | todo |
 | B2 | LVS: flatten reference `X` instances | F1 | todo |
 | B3 | LVS: diode/capacitor polarity | F15 | todo |
@@ -398,6 +400,12 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | todo |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | todo |
 | H | Catalog gaps in the priority order of check-sources.md §4, one kind per commit | check-sources §4 | todo |
+
+**How code on this branch is written:**
+- **Data-oriented.** Answer the six questions (data in/out, how many, how wide, access pattern, lifetime, parallelism) before writing. SoA tables, the narrowest type the range allows, caller-owned `_into` buffers, indices not pointers, as the existing crates do.
+- **SIMD where a loop earns it.** Through `fearless_simd`, with the scalar loop kept as tail, fallback and oracle. Differential-tested over lengths 0 to 3× the lane count, and benchmarked; a slower vector loop is reported and dropped.
+- **Docs ship with code.** Every public item a commit adds or changes has rustdoc that carries a fact the signature cannot (rank: precondition, invalidation, ownership, failure, cost, why). User docs (`docs/*.md`, README) change in the same commit.
+- **Plain cargo.** `cargo test` is the suite and `cargo build --release` the shipped binary (fat LTO stays), with no env overrides, scripts or extra flags in the flow.
 
 Decisions taken for the deck library (deck-library-plan §6), using the
 recommended options:
