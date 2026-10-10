@@ -52,8 +52,7 @@ fn all(depth: Depth) -> Vec<Fixture> {
 }
 
 /// Runs every fixture on all cores, and fails listing every broken one.
-fn run_all(depth: Depth) {
-    let fixtures = all(depth);
+fn run_all(fixtures: &[Fixture]) {
     let next = Mutex::new(0usize);
     let failures = Mutex::new(Vec::new());
     let workers = std::thread::available_parallelism().map_or(4, usize::from);
@@ -97,19 +96,44 @@ fn run_all(depth: Depth) {
 
 #[test]
 fn every_fixture_holds() {
-    run_all(Depth::Merge);
+    run_all(&all(Depth::Merge));
 }
 
+/// The nightly list, built once: every fixture holds, and the structural checks
+/// the merge tier makes on its sample hold for the whole list.
 #[test]
 #[ignore = "nightly: every enumeration in full"]
 fn every_fixture_holds_at_nightly_depth() {
-    run_all(Depth::Nightly);
+    let fixtures = all(Depth::Nightly);
+    names_are_unique_and_prove_a_row(&fixtures);
+    complete_domains_are_proved(&fixtures);
+    known_failures_name_open_findings(&fixtures);
+    run_all(&fixtures);
 }
 
 #[test]
 fn fixture_names_are_unique_and_every_fixture_proves_a_catalog_row() {
+    names_are_unique_and_prove_a_row(&all(Depth::Merge));
+}
+
+/// Every implemented, partial and expressible row of a finished domain has a
+/// fixture that proves it, and every row a fixture names exists.
+#[test]
+fn every_catalog_row_of_a_complete_domain_is_proved() {
+    complete_domains_are_proved(&all(Depth::Merge));
+}
+
+/// Every expected failure names a finding the testing plan records and has not
+/// fixed: a fixture marked for a fixed finding must be flipped to pass, and an
+/// unrecorded id is a finding nobody will look for.
+#[test]
+fn every_known_failure_names_an_open_finding() {
+    known_failures_name_open_findings(&all(Depth::Merge));
+}
+
+fn names_are_unique_and_prove_a_row(fixtures: &[Fixture]) {
     let mut seen = BTreeSet::new();
-    for fixture in all(Depth::Nightly) {
+    for fixture in fixtures {
         assert!(
             !fixture.catalog.is_empty(),
             "{} proves no catalog row",
@@ -128,10 +152,7 @@ fn fixture_names_are_unique_and_every_fixture_proves_a_catalog_row() {
     }
 }
 
-/// Every implemented, partial and expressible row of a finished domain has a
-/// fixture that proves it, and every row a fixture names exists.
-#[test]
-fn every_catalog_row_of_a_complete_domain_is_proved() {
+fn complete_domains_are_proved(fixtures: &[Fixture]) {
     let catalog = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/check-catalog.tsv"),
     )
@@ -148,8 +169,7 @@ fn every_catalog_row_of_a_complete_domain_is_proved() {
         })
         .collect();
     let mut proved: BTreeMap<&str, usize> = BTreeMap::new();
-    let fixtures = all(Depth::Nightly);
-    for fixture in &fixtures {
+    for fixture in fixtures {
         for id in &fixture.catalog {
             assert!(
                 rows.contains_key(*id),
@@ -184,11 +204,7 @@ fn every_catalog_row_of_a_complete_domain_is_proved() {
     assert!(missing.is_empty(), "rows no fixture proves: {missing:?}");
 }
 
-/// Every expected failure names a finding the testing plan records and has not
-/// fixed: a fixture marked for a fixed finding must be flipped to pass, and an
-/// unrecorded id is a finding nobody will look for.
-#[test]
-fn every_known_failure_names_an_open_finding() {
+fn known_failures_name_open_findings(fixtures: &[Fixture]) {
     let plan = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/testing-plan.md"),
     )
@@ -202,7 +218,7 @@ fn every_known_failure_names_an_open_finding() {
         })
         .collect();
     let mut bad: BTreeMap<&str, String> = BTreeMap::new();
-    for fixture in all(Depth::Nightly) {
+    for fixture in fixtures {
         let Some(id) = fixture.known else { continue };
         let why = match open.get(id) {
             Some(true) => continue,

@@ -47,14 +47,17 @@
 //!
 //! Two disagreements are new findings, each marked on the patterns that show
 //! it (pictures are rows top to bottom):
-//! - N-x3-1: `min_spacing` treats two figures meeting at a corner as one,
+//! - F51: `min_spacing` treats two figures meeting at a corner as one,
 //!   while `notch`, `min_width` and `min_area` treat them as two, so the
 //!   corner and every gap between them go unreported. `.#.|#.#`, three cells,
 //!   has a 100 nm gap that neither `space >= 120nm` nor `notch >= 150nm` sees,
 //!   whichever reading of a corner contact one takes.
-//! - N-x3-2: a figure that meets itself at a corner (`###|#.#|.##`) is
-//!   `Refused` by every rule that merges the layer: `min_width`, `notch`,
-//!   `min_area`, `min_enclosed_area`, and `min_enclosure` on its outer layer.
+//! - F53: a figure that meets itself at a corner (`###|#.#|.##`) closes a
+//!   ring there in the engine, which then reports the cell inside as a hole
+//!   and a width of 0 at the corner; this oracle, like `KLayout`'s default
+//!   merge, lets empty space pass through the corner, so there is no hole and
+//!   the width is the narrowest run. Until F52 was fixed (by C3), every rule
+//!   that merges the layer refused such a figure.
 
 use crate::drc_dimension::DRC;
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout};
@@ -72,9 +75,7 @@ const SEED: u64 = 0x0b17_3a9e;
 
 /// Every fixture this module generates at `depth`.
 pub fn fixtures(depth: Depth) -> Vec<Fixture> {
-    // ponytail: one thread per kind, because main.rs builds the nightly list
-    // (about 600 000 fixtures) in two merge-depth tests; a lazy list there
-    // would make this a plain loop again.
+    // One thread per kind: the nightly enumeration is about 600 000 fixtures.
     std::thread::scope(|scope| {
         let mut jobs: Vec<_> = KINDS
             .iter()
@@ -366,7 +367,7 @@ const KINDS: &[Kind] = &[
         unit: "nm",
         limits: &[150, 200, 250],
         measure: notch,
-        known: pinched,
+        known: never,
     },
     Kind {
         name: "min_area",
@@ -375,7 +376,7 @@ const KINDS: &[Kind] = &[
         unit: "nm2",
         limits: &[15_000, 20_000, 35_000, 50_000],
         measure: min_area,
-        known: pinched,
+        known: never,
     },
     Kind {
         name: "min_enclosed_area",
@@ -384,12 +385,34 @@ const KINDS: &[Kind] = &[
         unit: "nm2",
         limits: &[15_000, 20_000, 25_000],
         measure: min_enclosed_area,
-        known: pinched,
+        known: never,
     },
 ];
 
-/// N-x3-2: a figure with two diagonal cells sharing no neighbour in it meets
-/// itself at a corner, and every rule that merges the layer refuses it.
+/// F53 where it changes the holes: empty space that may not pass through a
+/// corner leaves a different set of holes in a 4×4 pattern than empty space
+/// that may.
+fn closes_at_a_corner(figs: &[Set]) -> Option<&'static str> {
+    let ring = padded(4) & !(padded(2) << 9);
+    let holes = |eight| {
+        let mut holes: Vec<Set> = figs
+            .iter()
+            .flat_map(|&f| components(padded(4) & !f, eight))
+            .filter(|&hole| hole & ring == 0)
+            .collect();
+        holes.sort_unstable();
+        holes
+    };
+    (holes(true) != holes(false)).then_some("F53")
+}
+
+/// No pattern of this kind is known to fail.
+fn never(_: &[Set]) -> Option<&'static str> {
+    None
+}
+
+/// F53: a figure with two diagonal cells sharing no neighbour in it meets
+/// itself at a corner, where the engine closes a ring the oracle leaves open.
 fn pinched(figs: &[Set]) -> Option<&'static str> {
     let pinch = figs.iter().any(|&f| {
         cells(f).any(|(x, y)| {
@@ -398,10 +421,10 @@ fn pinched(figs: &[Set]) -> Option<&'static str> {
             })
         })
     });
-    pinch.then_some("N-x3-2")
+    pinch.then_some("F53")
 }
 
-/// N-x3-1: `min_spacing` takes two figures meeting at a corner as one, so
+/// F51: `min_spacing` takes two figures meeting at a corner as one, so
 /// neither the corner nor any gap between them is reported.
 fn corner_contact(figs: &[Set]) -> Option<&'static str> {
     let diagonal = |s: Set| s << 7 | s >> 7 | s << 9 | s >> 9;
@@ -409,7 +432,7 @@ fn corner_contact(figs: &[Set]) -> Option<&'static str> {
         .iter()
         .enumerate()
         .any(|(i, &a)| figs[i + 1..].iter().any(|&b| diagonal(a) & b != 0));
-    contact.then_some("N-x3-1")
+    contact.then_some("F51")
 }
 
 /// The rule id for one limit of a kind.
@@ -435,7 +458,12 @@ fn single_layer(kind: &Kind, depth: Depth) -> Vec<Fixture> {
     let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
     sample(depth, 1 << 16, kind.name)
         .into_iter()
-        .map(|bits| single(kind, &deck, Pattern { n: 4, bits }))
+        .map(|bits| Pattern { n: 4, bits })
+        // A hole closed only at a corner is a hole or not by the corner model
+        // F53 has to choose, and the engine answers both ways today, so its
+        // patterns wait for that choice rather than presume one.
+        .filter(|p| kind.name != "min_enclosed_area" || closes_at_a_corner(&p.figures()).is_none())
+        .map(|p| single(kind, &deck, p))
         .collect()
 }
 
@@ -488,7 +516,7 @@ fn hosting(outer: Pattern) -> Hosting {
                 .expect("the ring is outside every host");
         }
     }
-    (e2, pinched(&figs))
+    (e2, None)
 }
 
 fn enclosures(depth: Depth) -> Vec<Fixture> {
