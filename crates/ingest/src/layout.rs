@@ -66,6 +66,10 @@ pub enum LayoutError {
     /// references, or every structure is referenced so none is a root.
     #[error("cell hierarchy contains a cycle through {0}")]
     CyclicHierarchy(String),
+    /// A placement chain deeper than [`MAX_HIERARCHY_DEPTH`] levels, refused
+    /// rather than walked: flattening recurses once per level.
+    #[error("cell hierarchy is deeper than {MAX_HIERARCHY_DEPTH} levels at {0}")]
+    HierarchyTooDeep(String),
     /// A shape or text on a stream pair the deck neither declares nor ignores,
     /// under [`UnknownLayers::Reject`].
     #[error(
@@ -88,6 +92,14 @@ pub enum LayoutError {
     #[error("io: {0}")]
     Io(String),
 }
+
+/// The deepest placement chain a layout may have, root included.
+///
+/// Flattening recurses once per level, so without a cap a deep enough chain
+/// would overflow the stack instead of returning an error. Real layouts nest
+/// tens of levels; 1024 leaves room for any of them and stays well inside a
+/// test thread's 2 MiB stack.
+pub const MAX_HIERARCHY_DEPTH: u32 = 1024;
 
 /// How to treat geometry on a stream pair the deck neither declares nor
 /// ignores. A pair listed with `ignore gds(L, D)` is dropped either way.
@@ -1433,7 +1445,7 @@ pub mod gds {
             };
             for (index, &is_referenced) in referenced.iter().enumerate() {
                 if !is_referenced {
-                    walk.visit(narrow(index), Xform::IDENTITY, true)?;
+                    walk.visit(narrow(index), Xform::IDENTITY, true, 1)?;
                 }
             }
 
@@ -1447,11 +1459,22 @@ pub mod gds {
     impl Flatten<'_> {
         /// Emit one cell's geometry under `at`, then recurse into its references.
         /// Its labels are placed when `root`, or under [`LabelDepth::All`].
-        fn visit(&mut self, cell: u32, at: Xform, root: bool) -> Result<(), LayoutError> {
+        fn visit(
+            &mut self,
+            cell: u32,
+            at: Xform,
+            root: bool,
+            depth: u32,
+        ) -> Result<(), LayoutError> {
             let lib = self.lib;
             let index = cell as usize;
             if self.on_chain[index] {
                 return Err(LayoutError::CyclicHierarchy(
+                    self.strings.resolve(lib.cells[index].name).to_owned(),
+                ));
+            }
+            if depth > super::MAX_HIERARCHY_DEPTH {
+                return Err(LayoutError::HierarchyTooDeep(
                     self.strings.resolve(lib.cells[index].name).to_owned(),
                 ));
             }
@@ -1484,7 +1507,7 @@ pub mod gds {
                         let at = at
                             .compose(placed)
                             .ok_or(LayoutError::UnsupportedTransform)?;
-                        self.visit(reference.child, at, false)?;
+                        self.visit(reference.child, at, false, depth + 1)?;
                     }
                 }
             }
@@ -2187,6 +2210,44 @@ mod tests {
             first_square_bbox(),
             "the surviving shape is not the one that was on a declared layer"
         );
+    }
+
+    /// A chain of nested cells, each placing the next, the last holding one
+    /// square.
+    fn chain(levels: usize) -> Vec<u8> {
+        let names: Vec<&'static str> = (0..levels)
+            .map(|level| &*Box::leak(format!("C{level}").into_boxed_str()))
+            .collect();
+        let square = [first_layer_square()];
+        let refs: Vec<[Ref; 1]> = (0..levels)
+            .map(|level| [sref(names[(level + 1) % levels], 0, 0.0, 0, 0)])
+            .collect();
+        let cells: Vec<(&str, &[Boundary], &[Ref])> = (0..levels)
+            .map(|level| {
+                let last = level + 1 == levels;
+                let elements: &[Boundary] = if last { &square } else { &[] };
+                let placed: &[Ref] = if last { &[] } else { &refs[level] };
+                (names[level], elements, placed)
+            })
+            .collect();
+        gds_hierarchy(&cells)
+    }
+
+    /// Oracle: the stated cap. A chain exactly [`super::MAX_HIERARCHY_DEPTH`]
+    /// deep flattens to its one square; one level deeper is refused with an
+    /// error, not a stack overflow.
+    #[test]
+    fn a_hierarchy_deeper_than_the_cap_is_refused_not_overflowed() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let at_cap = super::MAX_HIERARCHY_DEPTH as usize;
+        let layout = read(&chain(at_cap), &deck, UnknownLayers::Reject)
+            .expect("a chain at the cap flattens");
+        assert_eq!(layout.store.poly_count(), 1);
+        assert!(matches!(
+            read(&chain(at_cap + 1), &deck, UnknownLayers::Reject),
+            Err(LayoutError::HierarchyTooDeep(_))
+        ));
     }
 
     /// The deck's ignore list drops a stream pair even under `Reject`: the deck,
