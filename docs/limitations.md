@@ -170,7 +170,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
 | DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
 | DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
-| DRC-086 | Shorts between labelled nets | partial | A short between two labelled nets aborts extraction with PortError::ConflictingLabels (engine::pipeline::extract): the run fails, but there is no report row and no location |
+| DRC-086 | Shorts between labelled nets | partial | Reported in every run as lvs.net_seed_conflict, naming both labelled shapes, located at the first; no abort |
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing |
 | DRC-091 | Per-chip count / total-quantity limits | missing | — |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
@@ -195,9 +195,9 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open). net_seed_conflict can never fire, because port binding already errors on two names on one net (testing-plan F13) |
+| LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open); net_seed_conflict flags several labels on one net (a short), one row per pair at the first label's shape |
 | LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout) |
-| LVS-005 | Short isolation / localisation | partial | A labelled short aborts the run with only a net id (engine::pipeline::extract); no path localisation |
+| LVS-005 | Short isolation / localisation | partial | Reported in every run, DRC-only included, naming both labelled shapes, located at the first; no path traced; no abort |
 | LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell |
 | LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model, so it shows as unpaired |
 | LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing |
@@ -210,12 +210,12 @@ says which foundry manual, standard or tool defines each one.
 | LVS-034 | Ignore device class (fill, decap, tap cells), parasitic filters | missing | sky130 netgen setup ignores fill/tap/fakediode classes |
 | LVS-035 | Dummy / shorted device removal | missing | — |
 | LVS-042 | Semi-series MOS | missing | — |
-| LVS-043 | Resistor series/parallel | partial | Parallel merging applies to every device kind but sums only W and nf, so two parallel resistors without a W collapse into one with the same R, a false clean (testing-plan F20). Series merging is MOS only |
-| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel merging applies to every kind but sums only W and nf: capacitors keep one C (testing-plan F20). Diodes wired in opposite directions no longer merge |
+| LVS-043 | Resistor series/parallel | partial | Parallel resistors merge keeping R and counting m (match one card with m=2, not one card of R/2). Series merging is MOS only |
+| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel capacitors, diodes and bipolars keep their value and count m; values are not added. Diodes wired in opposite directions do not merge |
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
 | LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. |
-| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none |
+| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into); a measured w/l/area is compared only on models the reference declares it for. nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none |
 | LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader |
 | LVS-062 | Capacitor C/A/P | partial | Marker area only; no C or perimeter |
 | LVS-063 | Diode A/P | partial | Marker area only; no perimeter. Polarity is compared |

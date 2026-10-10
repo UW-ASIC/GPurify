@@ -73,7 +73,7 @@ DRC-082	drc	net	Voltage-dependent spacing (VA-DRC)	SKY:hvnwell.8,hv.*; GF:DV.9; 
 DRC-083	drc	net	HV tag propagation (shorted to HV becomes HV)	SKY:hv.X.1-hv.X.6	hv_domain	partial	FR; SY	hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV
 DRC-084	drc	net	Floating interconnect / must-join ports	SKY:x.22; LEF58_MUSTJOINALLPORTS	unconnected_pin	partial	SY	Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled
 DRC-085	drc	net	Tap presence per well	SKY:nwell.4; GF:DN.3; IHP:nmosi.d	floating_well,must_contain	implemented	FR; SY	
-DRC-086	drc	net	Shorts between labelled nets	drt:short	ingest:port_binding	partial	SY; TX:KL	A short between two labelled nets aborts extraction with PortError::ConflictingLabels (engine::pipeline::extract): the run fails, but there is no report row and no location
+DRC-086	drc	net	Shorts between labelled nets	drt:short	lvs.net_seed_conflict	partial	SY; TX:KL	Reported in every run as lvs.net_seed_conflict, naming both labelled shapes, located at the first; no abort
 DRC-090	drc	device	Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM)	IHP:6.*; GF:PRES,MIM,LDMOS,EF,SK; SKY:rpm,capm,varac,indm,mf,photo,denmos	forbidden,min_width,min_enclosure	partial	FR	Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing
 DRC-091	drc	device	Per-chip count / total-quantity limits	IHP:npn13G2.bR,MIM.gR	-	missing	FR	
 DRC-092	drc	device	Exemptions (areaid regions, cell-name, rule flags)	SKY:flags,areaid.*,m1.4a,licon.11c; IHP:6.12 IND,8 DigiBnd	deck:derived	partial	FR	Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened)
@@ -98,11 +98,11 @@ DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, 
 DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL	limitations.md:28
 DRC-122	drc	infra	Edge-layer ops incl. extension	KL:extended,edges	deck:edge	partial	TX:KL	limitations.md:31
 DRC-123	drc	infra	Hierarchical processing	KL:deep	ingest:flatten	partial	MR	Flattened at load (gds::Library::flatten); a scale issue, not correctness
-LVS-001	lvs	extract	Port / label consistency	KL:flag_missing_ports,same_nets!; NG:pin matching	lvs.label_conflict,lvs.net_seed_conflict	partial	SY; TX:NG	label_conflict flags one label on several nets (an open). net_seed_conflict can never fire, because port binding already errors on two names on one net (testing-plan F13)
+LVS-001	lvs	extract	Port / label consistency	KL:flag_missing_ports,same_nets!; NG:pin matching	lvs.label_conflict,lvs.net_seed_conflict	partial	SY; TX:NG	label_conflict flags one label on several nets (an open); net_seed_conflict flags several labels on one net (a short), one row per pair at the first label's shape
 LVS-002	lvs	extract	Implicit joins (same-label disjoint shapes, must-connect)	KL:connect_implicit,connect_explicit; LEF58_MUSTJOINALLPORTS	lvs.label_conflict	partial	SY; TX:KL	Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout)
 LVS-003	lvs	extract	Soft connections through well/substrate	KL:soft_connect; MAG:disconnect; CAL:SCONNECT	soft_connection	implemented	SY; TX:KL	
-LVS-004	lvs	extract	Malformed device (terminal count/net)	KL:ignore_extraction_errors; MAG:param_limits	lvs.terminal_count,lvs.terminal_net	implemented	SY	
-LVS-005	lvs	extract	Short isolation / localisation	CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG	ingest:port_binding	partial	SY	A labelled short aborts the run with only a net id (engine::pipeline::extract); no path localisation
+LVS-004	lvs	extract	Malformed device (terminal count/net)	KL:ignore_extraction_errors; MAG:param_limits	lvs.terminal_count,lvs.terminal_net	implemented	SY	terminal_net reports every marker no recogniser binds, on the marker; recognition does not depend on which copy of a duplicated terminal comes first
+LVS-005	lvs	extract	Short isolation / localisation	CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG	lvs.net_seed_conflict	partial	SY	Reported in every run, DRC-only included, naming both labelled shapes, located at the first; no path traced; no abort
 LVS-006	lvs	extract	Floating nets	KL; NG	lvs.floating_net	implemented	SY	
 LVS-010	lvs	compare	Circuit without partner / hierarchical compare	KL:circuit_mismatch,align; NG:flatten unmatched	lvs:flatten	partial	SY; TX:NG	The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell
 LVS-011	lvs	compare	Device class only on one side	KL:device_class_mismatch; NG:equate classes	lvs.unpaired_device	implemented	SY; TX:NG	A model present on one side only leaves its devices unpaired
@@ -112,7 +112,7 @@ LVS-014	lvs	compare	Parameter mismatch with tolerance	KL:tolerance,ignore_parame
 LVS-015	lvs	compare	Missing / extra / miswired net	KL:net_mismatch; NG	lvs.unpaired_net,lvs.terminal_mismatch,lvs.class_imbalance	implemented	SY; TX:NG; MR	
 LVS-016	lvs	compare	Pin / port mismatch	KL:pin_mismatch; NG:Port counts	lvs.unpaired_net	partial	SY; TX:NG	Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree)
 LVS-017	lvs	compare	Subcircuit instance unpaired	KL:subcircuit_mismatch; NG	lvs:flatten	partial	SY	Instances are flattened, not paired as units: a missing instance shows as its devices unpaired
-LVS-018	lvs	compare	Symmetric / ambiguous matching	KL:match_ambiguous_nets; NG:symmetry by property	lvs:tie_break	implemented	MR; TX:NG	Closest-parameter tie-break matches netgen
+LVS-018	lvs	compare	Symmetric / ambiguous matching	KL:match_ambiguous_nets; NG:symmetry by property	lvs:tie_break	implemented	MR; TX:NG	Closest-parameter tie-break as netgen, with a bounded retry (8 per stall) of pairings refinement shows wrong (F58, fixed)
 LVS-019	lvs	compare	Verdict classes	KL:NetlistCrossReference status; NG	lvs:verdict	implemented	SY	Match / Mismatch / Inconclusive{RoundLimit, AmbiguousTop}
 LVS-020	lvs	compare	Undeclared parameter	-	lvs.undeclared_param	implemented	SY	GPurify-specific
 LVS-030	lvs	equiv	Swappable pins (S/D, resistor ends, user-declared)	KL:equivalent_pins; NG:permute	lvs:roles	partial	SY; TX:NG	MOS source/drain and resistor ends are interchangeable; diode anode/cathode and capacitor plates are not, as in Netgen. User-declared equivalent pins are missing
@@ -121,17 +121,17 @@ LVS-032	lvs	equiv	Net-name seeding (same_nets)	KL:same_nets,consider_net_names	-
 LVS-033	lvs	equiv	Black boxes	KL:blank_circuit; NG:model blackbox	-	missing	SY; TX:NG	
 LVS-034	lvs	equiv	Ignore device class (fill, decap, tap cells), parasitic filters	KL:same_device_classes nil,max_res,min_caps; NG:ignore class; MAG:cthresh	-	missing	SY	sky130 netgen setup ignores fill/tap/fakediode classes
 LVS-035	lvs	equiv	Dummy / shorted device removal	NG:ignore shorted	-	missing	SY	
-LVS-040	lvs	reduce	Parallel MOS (W add, L critical)	KL; NG:parallel; MAG:merge; CAL:LVS REDUCE PARALLEL MOS	lvs:reduce	implemented	SY; TX:NG	
+LVS-040	lvs	reduce	Parallel MOS (W add, L critical)	KL; NG:parallel; MAG:merge; CAL:LVS REDUCE PARALLEL MOS	lvs:reduce	implemented	SY; TX:NG	Including MOS whose source and drain share a net (F57, fixed)
 LVS-041	lvs	reduce	Series MOS (stacks)	CAL:LVS REDUCE SERIES MOS; NG:opt-in	lvs:reduce	implemented	SY; TX:NG	On by default, unlike netgen; a semantic difference to triage in the differential. A merge stops at a port on either side, and a layout label makes the reference net of its name a port
 LVS-042	lvs	reduce	Semi-series MOS	CAL:LVS REDUCE SEMI SERIES MOS	-	missing	-	
-LVS-043	lvs	reduce	Resistor series/parallel	KL; NG:series,parallel	lvs:reduce	partial	SY; TX:NG	Parallel merging applies to every device kind but sums only W and nf, so two parallel resistors without a W collapse into one with the same R, a false clean (testing-plan F20). Series merging is MOS only
-LVS-044	lvs	reduce	Capacitor / diode / BJT parallel	KL; NG; MAG	lvs:reduce	partial	SY; TX:NG	Parallel merging applies to every kind but sums only W and nf: capacitors keep one C (testing-plan F20). Diodes wired in opposite directions no longer merge
+LVS-043	lvs	reduce	Resistor series/parallel	KL; NG:series,parallel	lvs:reduce	partial	SY; TX:NG	Parallel resistors merge keeping R and counting m (match one card with m=2, not one card of R/2). Series merging is MOS only
+LVS-044	lvs	reduce	Capacitor / diode / BJT parallel	KL; NG; MAG	lvs:reduce	partial	SY; TX:NG	Parallel capacitors, diodes and bipolars keep their value and count m; values are not added. Diodes wired in opposite directions do not merge
 LVS-045	lvs	reduce	Bulk-equality condition for merges	KL	lvs:reduce	implemented	SY	Parallel merges need every terminal key equal, series merges equal gate and bulk (lvs::reduce). Bulk is dropped on both sides when the layout extracts none (lvs::compare)
-LVS-046	lvs	reduce	Fingers / nf / m folding	KL; NG; MAG	lvs:reduce	implemented	SY	m folds into W before merging (lvs::reduce); on a device with m but no W, m is dropped (testing-plan F21)
+LVS-046	lvs	reduce	Fingers / nf / m folding	KL; NG; MAG	lvs:reduce	implemented	SY	m folds into W for MOS; other devices keep m as their count; m=1 is dropped
 LVS-047	lvs	reduce	Logic-gate recognition	CAL:LVS RECOGNIZE GATES; SubGemini	-	missing	-	
 LVS-048	lvs	reduce	Filter unused devices	CAL:LVS FILTER UNUSED	-	missing	-	
 LVS-049	lvs	reduce	Topology vs property policy (strict/relaxed)	NG:property topology	lvs.unpaired_device,lvs.class_imbalance	partial	TX:NG	Fixed strict policy: structural differences after reduction are reported as unpaired devices.
-LVS-060	lvs	device	MOS W, L, nf, m, AS/AD/PS/PD, bulk	KL:MOS3,MOS4; NG; sky130 netgen setup	lvs:params	partial	SY; TX:NG	Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none
+LVS-060	lvs	device	MOS W, L, nf, m, AS/AD/PS/PD, bulk	KL:MOS3,MOS4; NG; sky130 netgen setup	lvs:params	partial	SY; TX:NG	Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into); a measured w/l/area is compared only on models the reference declares it for. nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none
 LVS-061	lvs	device	Resistor R/L/W	KL:Resistor; MAG:resistor	-	missing	SY	No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader
 LVS-062	lvs	device	Capacitor C/A/P	KL:Capacitor; MAG:capacitor	lvs:params	partial	SY	Marker area only; no C or perimeter
 LVS-063	lvs	device	Diode A/P	KL:Diode	lvs:params	partial	SY	Marker area only; no perimeter. Polarity is compared
