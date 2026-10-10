@@ -141,7 +141,11 @@ nets that were not field-solved is kept. A field-solved net also gets its
 inductance, and its resistance and inductance follow the wire's centre line
 through every bend and every via, however the wire was cut into polygons. A
 field-solved net whose shapes do not join into one circuit (two pieces that
-meet only at a corner) is refused. A net with no text
+meet only at a corner) is refused. The field solve holds the substrate at
+ground as a plane at height 0, so a field-solved net's capacitance to ground
+is to the substrate, as the closed forms' is; a net with a shape on a layer
+at height 0 (a well, say) sits on that plane and cannot be field-solved. A
+net with no text
 label in the layout has no name to write, and the run refuses it rather than
 inventing one.
 

@@ -14,8 +14,9 @@ use gpurify_geom::{prefix, Capacitance, Inductance, Qty, Resistance};
 pub enum Parasitic {
     /// Series resistance between two nodes of one net.
     Resistance(Qty<Resistance, { prefix::BASE }>),
-    /// Capacitance from a net to ground: the substrate for the closed forms,
-    /// infinity for a field solve, which models no substrate.
+    /// Capacitance from a net to ground, the substrate: an area and fringe
+    /// term for the closed forms, a grounded plane at height 0 for a field
+    /// solve.
     GroundCap(Qty<Capacitance, { prefix::FEMTO }>),
     /// Capacitance between two different nets.
     CouplingCap(Qty<Capacitance, { prefix::FEMTO }>),

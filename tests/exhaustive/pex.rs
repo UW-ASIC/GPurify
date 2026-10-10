@@ -837,8 +837,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
                 .label("m1_label", 500, 500, "A"),
             &["A"],
         )
-        .expect(claim("A", Quantity::GroundCap, 1.5 * column, 1.0 / 3.0))
-        .known("F24"),
+        .expect(claim("A", Quantity::GroundCap, 1.5 * column, 1.0 / 3.0)),
     );
 
     // The DRC row stands for "the run completed": an abort loses it, and both
@@ -1090,6 +1089,55 @@ fn a_field_solved_capacitance_matrix_is_a_maxwell_matrix() {
     }
     let broken = differences("the network", &network, &c, 1.0);
     assert!(broken.is_empty(), "{}", broken.join("\n"));
+}
+
+/// PEX-005 (F24): the field solve sees the substrate, a grounded plane at
+/// height 0. An 8 um square `m1` plate 250, 500 and 1000 nm above it: its
+/// capacitance never drops below the column under it, `ε₀εr·A/h` (Thomson's
+/// principle); it falls strictly as the plate rises (a grounded conductor
+/// brought closer only draws more charge); and the fringe share
+/// `C·h / (ε₀εr·A)` grows as `W/h` falls from 32 to 8. With no plane the
+/// field is the same at every height, which breaks all three.
+#[test]
+fn a_field_solved_plate_sees_the_substrate() {
+    let mut previous: Option<(f64, f64)> = None;
+    for h in [250.0, 500.0, 1_000.0] {
+        let stack = Stack {
+            m1: Row {
+                height: h,
+                ..COARSE.m1
+            },
+            ..COARSE
+        };
+        let layout = Layout::default()
+            .rect("m1", 0, 0, 8_000, 8_000)
+            .label("m1_label", 500, 500, "A");
+        let ran = run(&deck(stack, &[], ""), layout, NONE, &[]);
+        let plate = net(&ran, "A");
+        let (mut matrix, mut network) = (CapMatrix::default(), ParasiticNetwork::default());
+        gpurify::extract::quasistatic::extract_into(
+            &ran.loaded.store,
+            &ran.extracted.nets,
+            &[plate],
+            &ran.loaded.deck.stack,
+            ran.loaded.grid,
+            &mut matrix,
+            &mut network,
+        )
+        .expect("the field solve converges");
+        let c = matrix.value[0] * 1e15;
+        let column = EPSILON0_AF_PER_UM * COARSE.m1.k * 64.0 / (h / 1e3) / 1e3;
+        assert!(c >= column, "h {h}: {c} fF below the column {column}");
+        let share = c / column;
+        if let Some((below, share_below)) = previous {
+            assert!(c < below, "h {h}: {c} fF not below {below} one step lower");
+            assert!(
+                share > share_below,
+                "h {h}: fringe share {share} not above {share_below} one step lower"
+            );
+        }
+        previous = Some((c, share));
+    }
 }
 
 /// PEX-003: field-solved coupling between two parallel bars falls strictly

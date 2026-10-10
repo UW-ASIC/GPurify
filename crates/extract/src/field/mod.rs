@@ -5,9 +5,9 @@
 //! potential gives one column. The dense system is never formed; the matvec is the cost.
 //!
 //! The pipeline is [`mesh::build_into`], then one [`solve::refine`] per
-//! column. The free-space kernel has no images, so neither the substrate nor
-//! a dielectric interface is in the field; see the
-//! [crate docs](crate#accuracy-and-known-gaps).
+//! column. The kernel images every panel in the substrate, a grounded plane
+//! at height 0, so ground is the substrate; no dielectric interface is in
+//! the field. See the [crate docs](crate#accuracy-and-known-gaps).
 //!
 //! # Time complexity
 //!
@@ -31,7 +31,8 @@ use gpurify_ingest::deck::ProcessStack;
 /// The Maxwell capacitance matrix, full square so symmetry is checkable.
 ///
 /// `C[i][i]` is positive, `C[i][j]` for `i ≠ j` is minus the coupling between
-/// nets `i` and `j`, and a row sums to net `i`'s capacitance to infinity. A
+/// nets `i` and `j`, and a row sums to net `i`'s capacitance to the
+/// substrate (a grounded plane at height 0). A
 /// converged solve is symmetric to about its tolerance (reciprocity), which is
 /// what [`Self::asymmetry`] measures.
 #[derive(Debug, Default)]
@@ -106,7 +107,8 @@ pub struct Accuracy {
 ///
 /// [`solve::SolveError::Mesh`] when the selection cannot be meshed: a net
 /// with no polygons, a polygon on a layer the stack gives no thickness,
-/// height or permittivity, a layer whose geometry does not validate as
+/// height or permittivity or puts on the substrate (height 0), a layer whose
+/// geometry does not validate as
 /// rectilinear, or too many panels. The other variants when a column does
 /// not converge, breaks down or goes non-finite.
 pub fn extract_into(

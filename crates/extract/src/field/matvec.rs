@@ -2,6 +2,12 @@
 //! by a charge vector without forming the matrix.
 //!
 //! Data in: a [`super::mesh::Mesh`]. Data out: `y = P x`, one potential per panel.
+//!
+//! The substrate is a grounded plane at `z = 0`, by the method of images:
+//! each panel's charge `q` at height `z` is paired with `−q` at `−z`, so the
+//! potential vanishes on the plane and a conductor's charge is its
+//! capacitance to the substrate (Jackson, *Classical Electrodynamics*, 3e,
+//! §2.1). Every panel sits above the plane; the mesh refuses one on it.
 
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase, SimdFloat};
 use rayon::prelude::*;
@@ -50,15 +56,18 @@ impl CpuMatVec {
         out
     }
 
-    /// `y := P x`, `P_ij = 2 k_i k_j / (k_i + k_j) / √(|c_i − c_j|² + ρ_i ρ_j)`,
-    /// `x` = total panel charge, so `P` is exactly symmetric.
+    /// `y := P x`, `P_ij = w_ij (1/√(|c_i − c_j|² + ρ_i ρ_j) − 1/√(|c_i − c̄_j|² + ρ_i ρ_j))`
+    /// with `w_ij = 2 k_i k_j / (k_i + k_j)` and `c̄_j` panel `j`'s image in
+    /// the substrate plane `z = 0`; `x` = total panel charge. Both distances
+    /// are symmetric in `i` and `j`, so `P` is too.
     ///
     /// Each row is a strict ascending-j fold with separate multiply and add; the
     /// output bits depend on it. Rows run in parallel, 4 per SIMD lane group.
     ///
     /// ponytail: harmonic-mean `k` is the two-medium transmitted image only; no
-    /// reflected images, so same-layer coupling is under-predicted 14–159%.
-    /// Fix: layered Green's function from the `ProcessStack`.
+    /// reflected images at dielectric interfaces, so same-layer coupling is
+    /// under-predicted 14–159%. Fix: layered Green's function from the
+    /// `ProcessStack`.
     pub fn apply(&self, x: &[f64], y: &mut [f64]) {
         let n = self.cx.len();
         // Release-mode length check: a short vector panics, never solves a prefix.
@@ -93,8 +102,14 @@ impl CpuMatVec {
                     let dx = cx[v] - jx;
                     let dy = cy[v] - jy;
                     let dz = cz[v] - jz;
-                    let r2 = dx * dx + dy * dy + dz * dz + radius[v] * jr;
-                    acc[v] += two_k[v] * jk * xj / ((k[v] + jk) * r2.sqrt());
+                    // Panel j's image sits at -jz.
+                    let iz = cz[v] + jz;
+                    let plane = dx * dx + dy * dy;
+                    let soft = radius[v] * jr;
+                    let r2 = plane + dz * dz + soft;
+                    let image2 = plane + iz * iz + soft;
+                    let weight = two_k[v] * jk * xj / (k[v] + jk);
+                    acc[v] += weight / r2.sqrt() - weight / image2.sqrt();
                 }
             }
             for v in 0..VECTORS {
@@ -121,9 +136,14 @@ impl CpuMatVec {
             let dx = ix - self.cx[j];
             let dy = iy - self.cy[j];
             let dz = iz - self.cz[j];
-            let r2 = dx * dx + dy * dy + dz * dz + ir * self.radius[j];
+            let image_z = iz + self.cz[j];
+            let plane = dx * dx + dy * dy;
+            let soft = ir * self.radius[j];
+            let r2 = plane + dz * dz + soft;
+            let image2 = plane + image_z * image_z + soft;
             let jk = self.coefficient[j];
-            potential += 2.0 * ik * jk * xj / ((ik + jk) * r2.sqrt());
+            let weight = 2.0 * ik * jk * xj / (ik + jk);
+            potential += weight / r2.sqrt() - weight / image2.sqrt();
         }
         potential
     }

@@ -285,6 +285,31 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
     );
 }
 
+/// Oracle: definition (F24). The solve holds the substrate at ground as a
+/// plane at height 0, so a conductor whose layer sits at height 0 touches it
+/// and has an unbounded capacitance to it: the mesh refuses it by layer
+/// rather than solve a system whose panels coincide with their own images.
+#[test]
+fn a_conductor_on_the_substrate_is_refused() {
+    let case = extracted(163, 24, 2);
+    let mut grounded = stack();
+    grounded.height_nm = vec![0.0; 3];
+    let mut mesh = Mesh::default();
+    let refusal = build_into(
+        case.store(),
+        &case.nets,
+        &case.selected,
+        &grounded,
+        mesh_options(400, 1 << 20),
+        grid(),
+        &mut mesh,
+    );
+    assert!(
+        matches!(refusal, Err(MeshError::OnSubstrate(_))),
+        "a layer at height 0 meshed: {refusal:?}"
+    );
+}
+
 /// Oracle: determinism. Panels are sorted into spatial tree order by a key
 /// derived only from position, so meshing is a function of the geometry alone.
 /// Two builds must give the same bytes, and a build into a buffer that already

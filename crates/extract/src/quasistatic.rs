@@ -26,7 +26,7 @@ const PICOHENRIES_PER_HENRY: f64 = 1e12;
 /// net's lowest layer. Each node carries its row sum as a ground capacitance,
 /// and every pair `i < j` gets a coupling of `−C_ij`. Every pair is written,
 /// even where the solve gives zero or a slightly negative value; nothing is
-/// dropped. Ground is infinity, since the solve models no substrate.
+/// dropped. Ground is the substrate, a grounded plane at height 0.
 ///
 /// # Errors
 ///

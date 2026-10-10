@@ -97,12 +97,15 @@
 //!   shielding either: a third shape or layer between two plates does not
 //!   reduce their coupling, and a plate's ground capacitance ignores the
 //!   plates beneath it.
-//! - **No reflected images**: the field solve uses the free-space Green's
-//!   function, with each panel pair seeing the mean of their two
-//!   permittivities. There is no substrate plane, so a field-solved net's
-//!   ground capacitance is to infinity, not to the substrate. Dielectric
-//!   interfaces reflect nothing, so same-layer coupling is under-predicted
-//!   by 14–159%.
+//! - **No dielectric images**: the field solve images each panel in the
+//!   substrate, a grounded plane at height 0, so a net's ground capacitance
+//!   is to the substrate; but each panel pair sees the mean of their two
+//!   permittivities and dielectric interfaces reflect nothing, so same-layer
+//!   coupling is under-predicted by 14–159%. A conductor at height 0 sits on
+//!   the plane and is refused ([`field::mesh::MeshError::OnSubstrate`]). The
+//!   panel edge is set by the stack's thicknesses and gaps, not by a
+//!   layer's height, so a panel much wider than twice its height reads its
+//!   own image coarsely.
 //! - **Panel self-terms** use a square panel's shape factor, which
 //!   under-reports C on elongated panels: 3.5% at 2:1, up to 64% at 100:1.
 //! - **Only selected nets are in the field.** Coupling from a solved net to an
@@ -128,7 +131,7 @@
 //! |---|---|---|---|
 //! | PEX-001 | Sheet R × squares, via R | implemented | [`analytical`] |
 //! | PEX-002 | Area + fringe C to substrate | implemented | [`analytical`] |
-//! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, without reflected images |
+//! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, over the substrate plane but without dielectric images |
 //! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net |
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
 //! | PEX-006 | Multi-corner extraction | missing | — |
