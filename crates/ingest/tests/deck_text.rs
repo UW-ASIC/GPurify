@@ -375,6 +375,14 @@ fn an_unknown_parameter_is_an_error() {
         "rule e eol_space(met1; eol_width: 100nm, colour: 3) >= 100nm\n",
         "unknown parameter `colour`",
     );
+    // The CMP model limits only the excursion from nominal; a nominal
+    // thickness would be read by nothing, so the deck cannot state one.
+    one_error(
+        "rule d density_cmp(met1; window: 1um x 1um, step: 1um x 1um, min: none, max: 0.7,
+    max_delta: none, partial_windows: false,
+    cmp: (target: 0.5, thickness: 400nm, sensitivity: 200nm, max_delta: 50nm))\n",
+        "unknown parameter `thickness`",
+    );
 }
 
 #[test]

@@ -813,9 +813,7 @@ impl DensityRow {
         let opt = |v: Option<f64>| v.map_or_else(|| "none".to_owned(), |v| v.to_string());
         let cmp = self.cmp.map_or_else(
             || "none".to_owned(),
-            |(t, s, m)| {
-                format!("(target: {t}, thickness: 300nm, sensitivity: {s}nm, max_delta: {m}nm)")
-            },
+            |(t, s, m)| format!("(target: {t}, sensitivity: {s}nm, max_delta: {m}nm)"),
         );
         format!(
             "{DENSITY_PROCESS}rule den density_cmp(met1; window: {window}nm x {window}nm, step: {step}nm x {step}nm, min: {}, max: {}, max_delta: {}, partial_windows: {}, cmp: {cmp})\n",
@@ -1041,8 +1039,7 @@ fn density() -> Vec<Fixture> {
             ERC,
         )
         .layout(layout.clone())
-        .expect(Expect::clean("den"))
-        .known("F35"),
+        .expect(Expect::clean("den")),
     );
     // Two overlapping pieces in the lower-left window cover their union.
     let overlap = {

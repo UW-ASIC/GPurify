@@ -206,7 +206,6 @@ const DENSITY: &[Param] = &[
 const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
-    p("thickness", "cmp_nominal_thickness", Dim::Length),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
     p("max_delta", "cmp_max_abs_thickness_delta", Dim::Length),
 ];

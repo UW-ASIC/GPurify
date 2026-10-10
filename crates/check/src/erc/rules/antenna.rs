@@ -91,16 +91,14 @@ impl Stack {
     }
 }
 
-/// A first-order CMP model: finished thickness linear in local density,
-/// `nominal + sensitivity * (density - target)`. Deck:
-/// `cmp: (target: frac, thickness: len, sensitivity: len, max_delta: len)`.
+/// A first-order CMP model: finished thickness linear in local density, off
+/// its nominal by `sensitivity * (density - target)`. Only that excursion is
+/// limited, so the nominal thickness itself is not stated. Deck:
+/// `cmp: (target: frac, sensitivity: len, max_delta: len)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CmpModel {
     /// The density at which the finished thickness is nominal, `0.0 ..= 1.0`.
     pub target_density: f64,
-    /// The finished thickness at `target_density`, database units. Required
-    /// by the deck but read by no check: only the excursion is compared.
-    pub nominal_thickness: Dbu,
     /// Thickness change per unit density above target, database units; signed.
     pub thickness_sensitivity: Dbu,
     /// Largest allowed `|sensitivity * (density - target)|`, database units.
@@ -246,8 +244,7 @@ pub struct AntennaElectricalTable {
 /// Windowed metal density and the CMP thickness it implies: deck kind
 /// `density_cmp`, written `density_cmp(L; window: len x len, step: len x len,
 /// min: frac | none, max: frac | none, max_delta: frac | none,
-/// partial_windows: bool, cmp: none | (target, thickness, sensitivity,
-/// max_delta))`.
+/// partial_windows: bool, cmp: none | (target, sensitivity, max_delta))`.
 ///
 /// Windows of `window` size start at the die's lower-left corner and step by
 /// `step` while their origin is inside the die, so a step under the window
@@ -257,9 +254,10 @@ pub struct AntennaElectricalTable {
 /// its right or above by more than `max_delta`, or whose CMP excursion
 /// `|sensitivity * (density - target)|` is above the model's `max_delta`. An
 /// absent bound is not checked, never unlimited; a deck row must state at
-/// least one. A die-clipped (partial) window is held to `min`, `max` and the
-/// CMP limit only when `partial_windows` is true; `max_delta` compares every
-/// pair of neighbours, partial or not. No design intent is needed.
+/// least one. A die-clipped (partial) window is held to `min`, `max`, the
+/// CMP limit and `max_delta` only when `partial_windows` is true: without it
+/// a neighbour pair is compared only when both windows lie wholly inside the
+/// die. No design intent is needed.
 ///
 /// Catalog: ERC-B1, DRC-071 in the [check catalog]. Defined by [GF180MCU]
 /// §13 (density); [LEF/DEF 5.8] `DENSITYCHECKWINDOW`/`DENSITYCHECKSTEP`;
@@ -922,6 +920,8 @@ pub fn check_density_cmp(
     let mut rects: Vec<Bbox> = Vec::new();
     let mut rect_start: Vec<u32> = Vec::new();
     let mut density: Vec<f64> = Vec::new();
+    // Per window: whether the row holds it to its limits.
+    let mut held: Vec<bool> = Vec::new();
     let mut owners: Vec<u32> = Vec::new();
 
     for row in 0..table.head.len() {
@@ -1021,6 +1021,8 @@ pub fn check_density_cmp(
         // Row-major from the die's lower-left; the delta pass relies on it.
         density.clear();
         density.reserve(count);
+        held.clear();
+        held.reserve(count);
         let mut examined = 0u64;
         for j in 0..ny {
             for i in 0..nx {
@@ -1030,6 +1032,7 @@ pub fn check_density_cmp(
                 let denominator = clipped.area().raw();
                 let value = numerator as f64 / denominator.max(1) as f64;
                 density.push(value);
+                held.push(counted);
 
                 examined += u64::from(counted);
                 let measured = Measurement::Ratio(value);
@@ -1090,15 +1093,15 @@ pub fn check_density_cmp(
             }
         }
 
-        // Gradient to the two windows ahead (`+1`, `+nx`); `min` clamps the
-        // last column and row onto themselves, a zero difference.
+        // Gradient to the two windows ahead (`+1`, `+nx`) the row holds; `min`
+        // clamps the last column and row onto themselves, a zero difference.
         if let Some(delta) = table.max_neighbour_delta[row] {
             let limit = Measurement::Ratio(delta);
             for j in 0..ny {
                 for i in 0..nx {
                     let slot = j * nx + i;
                     let ahead = [j * nx + (i + 1).min(nx - 1), (j + 1).min(ny - 1) * nx + i];
-                    for neighbour in ahead {
+                    for neighbour in ahead.into_iter().filter(|&n| held[slot] & held[n]) {
                         let gap = Measurement::Ratio((density[slot] - density[neighbour]).abs());
                         if gap.violates(limit, LimitSense::Maximum) {
                             let (_, clipped) = window_boxes(die, (i, j), window, step);

@@ -455,12 +455,11 @@ impl RuleSet {
                     let max_density = row.opt_fraction("max_density")?;
                     let max_neighbour_delta = row.opt_fraction("max_neighbour_delta")?;
                     let include_partial_windows = row.flag("include_partial_windows", true)?;
-                    // The four coefficients are one model: all or none.
+                    // The three coefficients are one model: all or none.
                     let cmp = match row.find("cmp_target_density") {
                         None => None,
                         Some(_) => Some(antenna::CmpModel {
                             target_density: row.fraction("cmp_target_density")?,
-                            nominal_thickness: row.length("cmp_nominal_thickness")?,
                             thickness_sensitivity: row
                                 .signed_length("cmp_thickness_sensitivity")?,
                             max_abs_thickness_delta: row.length("cmp_max_abs_thickness_delta")?,
