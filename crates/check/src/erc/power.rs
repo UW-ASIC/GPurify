@@ -267,8 +267,9 @@ pub struct SolveScratch {
     z: Vec<f64>,
     /// Diagonal preconditioner, as reciprocals.
     inv_diag: Vec<f64>,
-    /// IC(0) factor: strict lower triangle, CSR, columns ascending and merged,
-    /// plus its diagonal. Empty means "use the diagonal".
+    /// IC(0) factor `L D Lᵀ`: the unit lower triangle's strict part, CSR,
+    /// columns ascending and merged, plus the pivots `D`. Empty means "use the
+    /// diagonal".
     l_start: Vec<u32>,
     l_col: Vec<u32>,
     l_val: Vec<f64>,
@@ -572,9 +573,13 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
     }
 }
 
-/// IC(0): factor the assembled matrix with zero fill into `l_*`, merging
-/// duplicate columns. On breakdown the factor is left empty, which selects the
-/// diagonal preconditioner (a partial factor would diverge).
+/// IC(0): factor the assembled matrix with zero fill into `l_*` as `L D Lᵀ`,
+/// merging duplicate columns. Without square roots, a factor of a network
+/// with exact binary values is exact: on a tree, where zero fill drops
+/// nothing, CG then lands on the exact solution in one step, so a closed-form
+/// drop is the same bits on a ground rail near 0 mV as on a power rail. On
+/// breakdown the factor is left empty, which selects the diagonal
+/// preconditioner (a partial factor would diverge).
 fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
     let SolveScratch {
         row_start,
@@ -627,13 +632,13 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
             while p < t && q < q_end {
                 let (cp, cq) = (l_col[p], l_col[q]);
                 let hit = f64::from(u8::from(cp == cq));
-                s -= l_val[p] * l_val[q] * hit;
+                s -= l_val[p] * l_val[q] * l_diag[cp as usize] * hit;
                 p += usize::from(cp <= cq);
                 q += usize::from(cq <= cp);
             }
             let v = s / l_diag[j];
             l_val[t] = v;
-            d -= v * v;
+            d -= v * s;
         }
         if !(d > 0.0 && d.is_finite()) {
             l_start.clear();
@@ -642,7 +647,7 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
             l_diag.clear();
             return;
         }
-        l_diag[i] = d.sqrt();
+        l_diag[i] = d;
     }
 }
 
@@ -663,18 +668,21 @@ fn precondition(
         }
         return;
     }
-    // `L y = r`, ascending.
+    // `L y = r`, ascending; `L` has a unit diagonal.
     for i in 0..unknowns {
         let mut s = r[i];
         for t in l_start[i] as usize..l_start[i + 1] as usize {
             s -= l_val[t] * z[l_col[t] as usize];
         }
-        z[i] = s / l_diag[i];
+        z[i] = s;
     }
-    // `Lᵀ z = y`, descending, scattering each row back over the rows above.
+    // `D w = y`.
+    for (z, &d) in z.iter_mut().zip(l_diag) {
+        *z /= d;
+    }
+    // `Lᵀ z = w`, descending, scattering each row back over the rows above.
     for i in (0..unknowns).rev() {
-        let v = z[i] / l_diag[i];
-        z[i] = v;
+        let v = z[i];
         for t in l_start[i] as usize..l_start[i + 1] as usize {
             z[l_col[t] as usize] -= l_val[t] * v;
         }
@@ -2200,7 +2208,7 @@ mod tests {
         }
     }
 
-    /// IC(0): `L Lᵀ` equals the matrix wherever the matrix is non-zero. A
+    /// IC(0): `L D Lᵀ` equals the matrix wherever the matrix is non-zero. A
     /// four-node cycle with one pad is the smallest case with a fill hole.
     #[test]
     fn an_incomplete_factor_reproduces_the_matrix_wherever_the_matrix_is_nonzero() {
@@ -2230,21 +2238,22 @@ mod tests {
                 row[scratch.col[t] as usize] += scratch.value[t];
             }
         }
-        // The factor, densely.
+        // The factor, densely: `L` with its unit diagonal, and `D`.
         let mut l = [[0.0f64; N]; N];
         for (i, row) in l.iter_mut().enumerate() {
-            row[i] = scratch.l_diag[i];
+            row[i] = 1.0;
             for t in scratch.l_start[i] as usize..scratch.l_start[i + 1] as usize {
                 row[scratch.l_col[t] as usize] = scratch.l_val[t];
             }
         }
+        let d = &scratch.l_diag;
 
         let mut holes = 0;
         for i in 0..N {
             for j in 0..N {
                 let mut llt = 0.0;
-                for (&lik, &ljk) in l[i].iter().zip(&l[j]) {
-                    llt += lik * ljk;
+                for k in 0..N {
+                    llt += l[i][k] * d[k] * l[j][k];
                 }
                 if a[i][j] == 0.0 {
                     holes += usize::from(llt.abs() > 1e-9);
@@ -2252,7 +2261,7 @@ mod tests {
                 }
                 assert!(
                     (llt - a[i][j]).abs() < 1e-9 * a[i][j].abs(),
-                    "L Lt disagrees with A at ({i},{j}): {llt} against {}",
+                    "L D Lt disagrees with A at ({i},{j}): {llt} against {}",
                     a[i][j]
                 );
             }

@@ -204,14 +204,18 @@ fn close(got: f64, want: f64, what: &str) {
 
 // ---------------------------------------------------------------- ir_drop
 
-/// A 20 um x 1 um met1 bar, pad at its centre x = 10000, with three loads at
-/// x = 12000, 14000 and 18000.
-fn ladder(l: Layers, layout: &mut LayoutBuilder) -> Vec<(Handle, &'static str)> {
-    let bar = layout.rect(l.met1, 0, 0, 20_000, 1_000);
-    for x in [12_000, 14_000, 18_000] {
-        load_at(l, layout, x, 0);
+/// A 20 um x 1 um met1 bar named `net`, pad at its centre x = 10000, with
+/// three loads at x = 12000, 14000 and 18000.
+fn ladder_on(
+    net: &'static str,
+) -> impl FnOnce(Layers, &mut LayoutBuilder) -> Vec<(Handle, &'static str)> {
+    move |l, layout| {
+        let bar = layout.rect(l.met1, 0, 0, 20_000, 1_000);
+        for x in [12_000, 14_000, 18_000] {
+            load_at(l, layout, x, 0);
+        }
+        vec![(bar, net)]
     }
-    vec![(bar, "VDD")]
 }
 
 /// Oracle: Ohm's law on a series ladder. 3000 uA splits 1000 uA per load.
@@ -221,29 +225,39 @@ fn ladder(l: Layers, layout: &mut LayoutBuilder) -> Vec<(Handle, &'static str)> 
 ///
 /// A limit of 1.75 mV sits exactly on the worst node (legal, strict); 1.7 mV is
 /// just under it (one row); 1.25 mV sits on the middle node and still catches
-/// only the far one; 100 mV is far above everything.
+/// only the far one; 100 mV is far above everything. The same on a ground
+/// rail, where the far node rises 1.75 mV above 0 V: solved near 0 mV
+/// instead of near 1800, an inexact factor once read it one ulp high (F61).
 #[test]
 fn ir_drop_on_a_series_ladder_is_ohms_law_and_strict_at_the_limit() {
-    for (limit, expect) in [(1.75, 0usize), (1.7, 1), (1.25, 1), (100.0, 0)] {
-        let report = erc(
-            "rule ir ir_drop()\n",
-            &intent(
-                1800.0,
-                &[("VDD", "power")],
-                &format!(r#"{{"net":"VDD","max_drop_mv":{limit},"budget_current_ua":3000}}"#),
-            ),
-            ladder,
-        );
-        let run = report.run("ir");
-        assert_eq!(run.outcome, Outcome::Ran);
-        assert_eq!(run.examined, 4, "the pad and three load taps");
-        let rows = report.rows("ir");
-        assert_eq!(rows.len(), expect, "limit {limit} mV");
-        for (_, at, measured, bound) in rows {
-            assert_eq!(at, (18_000, 500));
-            assert_eq!(millivolts(measured), 1.75, "exact binary drop");
-            assert_eq!(millivolts(bound), limit);
+    for (net, role) in [("VDD", "power"), ("VSS", "ground")] {
+        for (limit, expect) in [(1.75, 0usize), (1.7, 1), (1.25, 1), (100.0, 0)] {
+            ladder_at_limit(net, role, limit, expect);
         }
+    }
+}
+
+/// One ladder run on `net` at `limit`: `expect` rows, each the far node's
+/// exact 1.75 mV.
+fn ladder_at_limit(net: &'static str, role: &str, limit: f64, expect: usize) {
+    let report = erc(
+        "rule ir ir_drop()\n",
+        &intent(
+            1800.0,
+            &[(net, role)],
+            &format!(r#"{{"net":"{net}","max_drop_mv":{limit},"budget_current_ua":3000}}"#),
+        ),
+        ladder_on(net),
+    );
+    let run = report.run("ir");
+    assert_eq!(run.outcome, Outcome::Ran);
+    assert_eq!(run.examined, 4, "the pad and three load taps");
+    let rows = report.rows("ir");
+    assert_eq!(rows.len(), expect, "{net}: limit {limit} mV");
+    for (_, at, measured, bound) in rows {
+        assert_eq!(at, (18_000, 500));
+        assert_eq!(millivolts(measured), 1.75, "{net}: exact binary drop");
+        assert_eq!(millivolts(bound), limit);
     }
 }
 

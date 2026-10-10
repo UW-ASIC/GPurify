@@ -1268,11 +1268,9 @@ fn ir_drop(depth: Depth) -> Vec<Fixture> {
             if k == 2 && role == "power" {
                 placed.push(f.clone());
             }
-            // The worst node is exactly 1.75 mV, legal at a 1.75 mV limit; the
-            // ground rail's solve reads it one ulp high (F61).
-            if k == 5 && role == "ground" {
-                f = f.known("F61");
-            }
+            // The worst node is exactly 1.75 mV, legal at a 1.75 mV limit, on
+            // either rail (F61: the ground rail's solve once read it one ulp
+            // high).
             out.push(f);
         }
     }
