@@ -174,8 +174,14 @@ impl LayerTable {
     }
 
     /// Is this layer computed by the deck rather than drawn in the layout?
+    ///
+    /// Only a layer the table derives is: an id past the table, as a deck
+    /// built by hand with no layer rows gives every layer, is drawn.
     pub fn is_derived(&self, layer: LayerId) -> bool {
-        layer.0 >= self.derived_start
+        layer
+            .idx()
+            .checked_sub(usize::from(self.derived_start))
+            .is_some_and(|row| row < self.derived.len())
     }
 
     /// Is this an edge layer (directed segments, not polygons)? Only a check
