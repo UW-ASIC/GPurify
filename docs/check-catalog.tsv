@@ -1,6 +1,6 @@
 id	domain	category	check	sources	gpurify	status	oracle	notes
 DRC-001	drc	integrity	Off-grid vertex	LEF:MANUFACTURINGGRID; GF:GRID,OFFGRID; SKY:x.1a,x.1b; IHP:3.1; drt; KL:ongrid; MAG:off_grid	off_grid	implemented	FR; TX:KL; MR	
-DRC-002	drc	integrity	Allowed edge angles	IHP:3.1; SKY:x.2,x.3; GF:ACUTE; KL:with_angle; MAG:angles	angle	partial	FR; TX:KL	Non-rectilinear input is refused at load (limitations.md:9), so 45-degree geometry cannot be checked
+DRC-002	drc	integrity	Allowed edge angles	IHP:3.1; SKY:x.2,x.3; GF:ACUTE; KL:with_angle; MAG:angles	angle	partial	FR; TX:KL	45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer
 DRC-003	drc	integrity	Acute angles	IHP:3.1; GF:ACUTE; CAL:FLAG ACUTE	angle	partial	FR	Same ceiling as DRC-002
 DRC-004	drc	integrity	Self-intersecting / zero-area polygons	IHP:3.1; KL:odd_polygons; CAL:FLAG NONSIMPLE	ingest:layer_validity	partial	SY; TX:KL	Corpus VALID_SELF and VALID_ZERO are in the disagree list
 DRC-005	drc	integrity	Rectangle-only / square-only shapes	SKY:capm.7,x.2a,licon.3; LEF58_RECTONLY; KL:rectangles,squares; MAG:rect_only; drt	-	missing	FR; TX:KL	No selection by shape class (limitations.md:28; sky130.deck)
@@ -33,7 +33,7 @@ DRC-033	drc	spacing	Forbidden spacing ranges	LEF58_FORBIDDENSPACING; LEF58_TWOWI
 DRC-034	drc	spacing	Maximum spacing	LEF58_MAXSPACING; drt	-	missing	TX:drt	
 DRC-035	drc	spacing	Pitch / exact pitch / on-track	A7:FIN.S.1,GATE.S.1; LEF:PITCH; LEF58_PITCH; LEF58_RIGHTWAYONGRIDONLY; drt	-	missing	FR	Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010)
 DRC-036	drc	spacing	Span-length table	LEF58_SPANLENGTHTABLE	-	missing	SE	
-DRC-037	drc	spacing	Bent / 45-degree features	IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a	angle	partial	FR	Rectilinear only
+DRC-037	drc	spacing	Bent / 45-degree features	IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a	angle	partial	FR	angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer
 DRC-038	drc	spacing	Diagonal width / spacing	LEF:DIAGWIDTH,DIAGSPACING,DIAGMINEDGELENGTH	-	out_of_scope	-	Needs non-rectilinear geometry
 DRC-040	drc	overlay	Enclosure, all sides	LEF:ENCLOSURE; IHP:M1.c,V1.c; GF:CO.3; SKY:ct.4,m1.4,licon.5a; A7:V3.M4.EN.2; KL:enclosing; MAG:surround	min_enclosure	implemented	BM; FR; TX:KL; MR	
 DRC-041	drc	overlay	Enclosure on two opposite sides	SKY:m1.5; A7:V1.M1.EN.1; LEF:ENCLOSURE o1 o2; KL:rectangle error filter	asymmetric_enclosure	partial	BM; FR; TX:KL	A non-rectangular inner shape is held to the every-side limit (limitations.md:19)

@@ -6,8 +6,10 @@ report can be read for what it is.
 
 ## Geometry
 
-Layouts must be rectilinear. A shape with a 45° edge is refused, so a design
-with diagonal routing cannot be checked at all.
+A layout with 45° edges loads, and the `angle` rule checks every edge of it.
+Every other rule that measures geometry validates its layer first and records
+`Refused` for a layer with a non-rectilinear edge, so diagonal routing is
+checked for its angles and nothing else.
 
 ## Rules that can pass a layout signoff would flag
 
@@ -119,7 +121,7 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| DRC-002 | Allowed edge angles | partial | Non-rectilinear input is refused at load (limitations.md:9), so 45-degree geometry cannot be checked |
+| DRC-002 | Allowed edge angles | partial | 45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer |
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
 | DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md:28; sky130.deck) |
@@ -141,7 +143,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-034 | Maximum spacing | missing | — |
 | DRC-035 | Pitch / exact pitch / on-track | missing | Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
 | DRC-036 | Span-length table | missing | — |
-| DRC-037 | Bent / 45-degree features | partial | Rectilinear only |
+| DRC-037 | Bent / 45-degree features | partial | angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer |
 | DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md:19) |
 | DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written |
 | DRC-043 | Width-dependent enclosure | missing | — |

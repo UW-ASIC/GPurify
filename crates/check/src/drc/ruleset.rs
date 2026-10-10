@@ -605,9 +605,9 @@ pub enum Rule {
     /// DRC-002, DRC-003, DRC-037. Rules: sky130 x.2 and x.3, IHP 3.1, GF180
     /// ACUTE; `KLayout` `with_angle`.
     ///
-    /// Limits: a layout with a non-rectilinear edge is refused when it is
-    /// loaded, so 45-degree and acute geometry never reaches this rule. Only
-    /// 0 and 90 degree edges are checked.
+    /// A layout with 45-degree or acute edges loads, and this rule checks
+    /// them; it is the one geometric rule that does not validate its layer,
+    /// so it never records `Refused` for a non-rectilinear one.
     Angle {
         /// The layer whose edges are checked; `None` checks every layer.
         layer: Option<LayerId>,

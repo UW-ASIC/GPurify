@@ -18,16 +18,16 @@
 //!   it records `Skipped`, and the rustdoc says each one that can does, so the
 //!   definition's outcome is `Ran` with nothing found.
 //! - A fixture that disagrees with a carefully derived expectation carries the
-//!   finding it is waiting on (`F18`, or `N-x1-<n>` for one this module found).
+//!   finding it is waiting on (`F18`, or `F<n>` for one this module found).
 //!
 //! The findings carried here:
 //! - `F18`: `min_edge_length` measures drawn polygons, not the merged figure.
-//! - `N-x1-1`: `eol_spacing` pushes a hole edge's keep-out into the material
+//! - `F48`: `eol_spacing` pushes a hole edge's keep-out into the material
 //!   instead of into the hole, so it misses what is in the hole and reaches
 //!   through a thin band to what is outside it.
-//! - `N-x1-2`: `eol_spacing` takes ends of line from drawn polygons, so a wide
+//! - `F42`: `eol_spacing` takes ends of line from drawn polygons, so a wide
 //!   line drawn as narrow strips has an end of line per strip.
-//! - `N-x1-3`: `prl_spacing` and `spacing_table` read the run off each drawn
+//! - `F49`: `prl_spacing` and `spacing_table` read the run off each drawn
 //!   polygon's box, so a wire drawn as short segments escapes the run limit.
 
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Want};
@@ -1338,8 +1338,8 @@ fn min_spacing_diff(depth: Depth) -> Vec<Fixture> {
 /// line); two lines side by side (no end faces the other); a wide shape just
 /// beside the keep-out (no sideways reach, though Euclidean 51 away); a line
 /// end facing its own figure (one figure, not a pair). Known to fail: a wide
-/// end drawn as strips (`N-x1-2`) and a hole's short edge, whose keep-out
-/// lies in the hole (`N-x1-1`).
+/// end drawn as strips (`F42`) and a hole's short edge, whose keep-out
+/// lies in the hole (`F48`).
 fn eol_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule eol eol_space(met1; eol_width: 200nm) >= 101nm");
@@ -1423,7 +1423,7 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
             ]),
             vec![("eol", Vec::new())],
         )
-        .known("N-x1-2"),
+        .known("F42"),
     );
     // A square hole with a 100-wide, 50-deep slot in its top. The slot's top
     // edge is an end of line whose keep-out is pushed out of the material,
@@ -1458,7 +1458,7 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
                 .rect("met1", 100, 100, 900, 960),
             vec![("eol", vec![Finding::length(90)])],
         )
-        .known("N-x1-1"),
+        .known("F48"),
     );
     // The same fault the other way: a 100-wide slot hole in a ring whose band
     // past the slot's end is 50 thick, and a wide shape 30 beyond the band.
@@ -1474,7 +1474,7 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
                 .rect("met1", -500, 1030, 700, 1500),
             vec![("eol", Vec::new())],
         )
-        .known("N-x1-1"),
+        .known("F48"),
     );
     let mut out = every_placement(cases);
     out.push(vacuous(
@@ -1496,7 +1496,7 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
 /// The run swept around 500 at a gap of 100 (at 500 the limit applies); the
 /// gap swept at a long run; an L whose box overstates the run against a short
 /// bar (the definition holds it to the limit: fails closed); a diagonal pair
-/// (no run); touching shapes (one figure). Known to fail (`N-x1-3`): a wire
+/// (no run); touching shapes (one figure). Known to fail (`F49`): a wire
 /// drawn as segments, each shorter than the threshold, runs its whole length
 /// beside the other wire; read per segment, the boxes understate the run and
 /// fail open.
@@ -1590,7 +1590,7 @@ fn prl_spacing(depth: Depth) -> Vec<Fixture> {
                 ],
             )],
         )
-        .known("N-x1-3"),
+        .known("F49"),
     );
     let mut out = every_placement(cases);
     out.push(vacuous(
@@ -1986,7 +1986,7 @@ const TABLE: &str = "rule t space_table(met1;
 /// (exactly 1000 is the first column), the gap around 220 and, for two thin
 /// lines, around 180. A thin tab of a wide plate is held to the first row
 /// only; a ring's own hole is never a pair; touching lines are one figure.
-/// Known to fail (`N-x1-3`): the column of a wire drawn as short segments.
+/// Known to fail (`F49`): the column of a wire drawn as short segments.
 fn spacing_table(depth: Depth) -> Vec<Fixture> {
     let deck = one_layer_deck(TABLE);
     let mut cases = Vec::new();
@@ -2097,7 +2097,7 @@ fn spacing_table(depth: Depth) -> Vec<Fixture> {
                 ],
             )],
         )
-        .known("N-x1-3"),
+        .known("F49"),
     );
     let mut out = every_placement(cases);
     out.push(vacuous("spacing_table", &["DRC-025"], TABLE, &["t"]));
