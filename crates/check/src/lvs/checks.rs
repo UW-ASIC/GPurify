@@ -16,8 +16,9 @@ use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
-/// variant, then the eight check rows.
-const RULE_IDS: [&str; 14] = [
+/// variant, then the eight check rows. Each is a row of the check catalog
+/// (`docs/check-catalog.tsv`), which a test keeps in step with this list.
+pub const RULE_IDS: [&str; 14] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",

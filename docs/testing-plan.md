@@ -257,7 +257,7 @@ and asserts:
 - there are no `verify` rows at release (§7);
 - the status counts in check-sources.md §1 match the file.
 
-As of 2026-10-10 there are 237 rows: 68 implemented, 6 expressible, 65 partial, 88 missing, 0 verify, 10 out of scope.
+The current status counts are the table in check-sources.md §1, which this test checks.
 
 This turns "what the foundries and tools check that we don't" into a list
 that cannot drift.
@@ -372,8 +372,9 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | A1 | Planning docs: this plan, check-sources.md, check-catalog.tsv, deck-library-plan.md | — | done |
 | A2 | Doc-count test; fix the stale counts and claims (README kinds, fixtures README, `counts` block, `limitations.md` esd_latchup, `ci.yml` GPU comment) | F5, F10, L8 | done |
 | A3 | Golden report snapshots run by plain `cargo test` (`tests/golden/`; delete a file and rerun to re-bless; no env vars, no scripts); every corpus case run twice and byte-compared; RAYON 1 vs N; `tools/gate/` deleted | F7, L7, L8 | done |
+| A5 | Every `implemented`/`partial` catalog row cites a test that names its id; `tests/catalog.rs` asserts it | L9 | todo |
 | S1 | Minimal CLI. Runtime flags are only the required inputs (`<layout>`, `--deck`, `--reference`, `--intent`; `lib`: `--spec`, `--lef`, `--output-dir`), the output form (`--format`) and the method choice (`--quasistatic <net>` for PEX, `--accuracy` for `lib`). Grid from the GDS UNITS record; unknown-layer policy in the deck (`ignore gds(L, D)`); `--output`, `--quasistatic-inductance`, `--check-determinism`, `--work` removed | user direction | done |
-| A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | todo |
+| A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | done |
 | R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | todo |
 | B1 | LVS: assert `expect_match` in the corpus; planted-fault matrix | F2, L2 | todo |
 | B2 | LVS: flatten reference `X` instances | F1 | todo |

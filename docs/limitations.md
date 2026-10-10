@@ -103,3 +103,194 @@ the limit. `esd_latchup` is checked against the closed form on its corpus
 cell, guard-ring width and tap distance alike. Many other rules have limits
 that are foundry conventions rather than physics, so their tests prove the
 rule runs and measures, not that the limit is right for your process.
+
+## Every check that is missing or partial
+
+The sections above explain the gaps that most often matter. This is the
+complete list: every check kind a signoff verifier is expected to handle that
+GPurify does not have (`missing`), or has without some variant the sources
+define (`partial`). It comes from [check-catalog.tsv](check-catalog.tsv), which
+also lists what GPurify does cover, and [check-sources.md](check-sources.md)
+says which foundry manual, standard or tool defines each one.
+
+<!-- generated from docs/check-catalog.tsv by tests/catalog.rs; edit the catalog, not this block -->
+
+### Design rules (DRC)
+
+| Id | Check | Status | What is missing |
+|---|---|---|---|
+| DRC-002 | Allowed edge angles | partial | Non-rectilinear input is refused at load (limitations.md:9), so 45-degree geometry cannot be checked |
+| DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
+| DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
+| DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md:28; sky130.deck) |
+| DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel, port.rs:66-69): caught, but fatal, not a rule. Pin centre spacing is not expressible |
+| DRC-011 | Device channel width / length | missing | Needs device W/L as a rule input (sky130.deck "needs W, not width") |
+| DRC-014 | Cut classes (several legal cut sizes) | partial | One exact size per rule; class-dependent spacing is DRC-063 |
+| DRC-015 | Discrete / allowed width set | missing | — |
+| DRC-016 | Wrong-direction width or spacing | missing | Direction-dependent rules (limitations.md:55) |
+| DRC-020 | Minimum step / edge length / jog | partial | MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing |
+| DRC-021 | Feature length min/max | partial | Edge length via .with_length works; whole-feature length does not |
+| DRC-022 | Aspect ratio | missing | — |
+| DRC-027 | Two-widths spacing table | partial | The table is keyed on the wider shape only; TWOWIDTHS keys on both widths |
+| DRC-028 | Influence / stub spacing near wide metal | partial | Implements the sky130 m1.3a form; equivalence with LEF INFLUENCE is unverified |
+| DRC-029 | End-of-line spacing | partial | Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing |
+| DRC-030 | EOL extension / keep-out | missing | — |
+| DRC-031 | Tip-to-tip / tip-to-side by width class | partial | One end-of-line width per rule, so each width class is its own rule; tip-to-side is not told apart from tip-to-tip |
+| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | CONVEXCORNER/CONCAVECORNER/EXCEPTEOL variants missing; sky130 poly.4 over-reports (limitations.md:76) |
+| DRC-033 | Forbidden spacing ranges | missing | — |
+| DRC-034 | Maximum spacing | missing | — |
+| DRC-035 | Pitch / exact pitch / on-track | missing | Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
+| DRC-036 | Span-length table | missing | — |
+| DRC-037 | Bent / 45-degree features | partial | Rectilinear only |
+| DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md:19) |
+| DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written |
+| DRC-043 | Width-dependent enclosure | missing | — |
+| DRC-044 | Maximum enclosure / min-and-max window | missing | sky130.deck "npc.5 (maximum enclosure)" |
+| DRC-045 | Extension / end-cap / overhang | partial | Measures bounding boxes, so an L-shape can pass (limitations.md:20); the bitmap oracle targets this |
+| DRC-046 | Overlap amount | partial | Bounding-box measure (limitations.md:20) |
+| DRC-049 | Exact or maximum count | partial | Minimum count only (sky130.deck "an exact count") |
+| DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md:31); edge enclosure misses diagonal gaps (limitations.md:21) |
+| DRC-052 | Gate-shape rules (no bends, no poly on inner diff corners) | missing | Needs corner/turn selection (sky130.deck) |
+| DRC-053 | Exact alignment / width match across layers | missing | — |
+| DRC-054 | Enclosure excluding coincident edges | missing | — |
+| DRC-055 | Direction-dependent (S/D-direction) spacing | missing | — |
+| DRC-061 | Centre-to-centre cut spacing | missing | — |
+| DRC-062 | Array / adjacent-cut spacing | partial | ADJACENTCUTS WITHIN variants are unverified |
+| DRC-063 | Cut-class spacing tables | missing | — |
+| DRC-064 | Slotted / bar cut spacing by edge length | missing | sky130.deck left out |
+| DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
+| DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
+| DRC-067 | Metal-width-dependent via choice | missing | — |
+| DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc/ruleset.rs:82, deck.md:215), so density per device cannot be measured |
+| DRC-075 | Wide-metal slotting | partial | Slot required is a kind; slot geometry uses the generic kinds |
+| DRC-076 | Waffle-window density | missing | sky130.deck left out |
+| DRC-081 | Net spacing between two layers / on wells | missing | Net spacing takes one layer; only sky130 connects wells as nets |
+| DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
+| DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
+| DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
+| DRC-086 | Shorts between labelled nets | partial | A short between two labelled nets aborts extraction with PortError::ConflictingLabels (pipeline.rs:181): the run fails, but there is no report row and no location |
+| DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing |
+| DRC-091 | Per-chip count / total-quantity limits | missing | — |
+| DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
+| DRC-095 | Seal ring | partial | Geometry is expressible; "one seal ring per chip" and "nothing outside it" are not |
+| DRC-097 | Frame / die / cell-name rules | missing | sky130.deck left out |
+| DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | Reports a colouring failure, not its class |
+| DRC-102 | Pre-coloured (MASK) same-/different-mask spacing | missing | — |
+| DRC-103 | Stitch legality | missing | — |
+| DRC-104 | Per-colour density and colour ratio | missing | — |
+| DRC-105 | Trim / cut-metal layers | missing | — |
+| DRC-110 | Recommended rules reported as warnings | partial | `warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning |
+| DRC-111 | DFM scoring of recommended rules | missing | — |
+| DRC-112 | Critical area analysis | missing | — |
+| DRC-114 | Pattern-matching DRC | missing | — |
+| DRC-115 | Equation-based DRC | missing | First candidate for Rust custom rules (testing-plan.md L9b) |
+| DRC-117 | Via redundancy scoring / via doubling | partial | Counts cuts within a distance; no DFM scoring and no via doubling |
+| DRC-121 | Selection by shape class, net or angle; covering/overlapping; anisotropic size | partial | limitations.md:28 |
+| DRC-122 | Edge-layer ops incl. extension | partial | limitations.md:31 |
+| DRC-123 | Hierarchical processing | partial | Flattened at load (layout.rs:1254); a scale issue, not correctness |
+
+### Layout against schematic (LVS)
+
+| Id | Check | Status | What is missing |
+|---|---|---|---|
+| LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open; checks.rs:188). net_seed_conflict can never fire, because binding already errors on two names on one net (port.rs:72; testing-plan F13) |
+| LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (topology/net.rs:1-4; checks.rs:188-212) |
+| LVS-005 | Short isolation / localisation | partial | A labelled short aborts the run with only a net id (pipeline.rs:181); no path localisation |
+| LVS-010 | Circuit without partner / hierarchical compare | missing | F1: reference X instances are dropped (graph.rs:180); false-clean risk |
+| LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model (compare.rs:154), so it shows as unpaired |
+| LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (compare.rs:18); per-parameter and absolute tolerances are missing |
+| LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes. An unconnected reference port shows as unpaired_net (refine.rs:170-183; tests/lvs/compare.rs:461 net_names_do_not_have_to_agree) |
+| LVS-017 | Subcircuit instance unpaired | missing | F1 |
+| LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | Every Pin(_) swaps (refine.rs:69), including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing |
+| LVS-031 | Asymmetric devices (S/D not swappable) | missing | — |
+| LVS-032 | Net-name seeding (same_nets) | missing | Names neither seed refinement nor are compared (refine.rs:171; tests/lvs/compare.rs:461) |
+| LVS-033 | Black boxes | missing | — |
+| LVS-034 | Ignore device class (fill, decap, tap cells), parasitic filters | missing | sky130 netgen setup ignores fill/tap/fakediode classes |
+| LVS-035 | Dummy / shorted device removal | missing | — |
+| LVS-042 | Semi-series MOS | missing | — |
+| LVS-043 | Resistor series/parallel | missing | reduce.rs merges MOS only |
+| LVS-044 | Capacitor / diode / BJT parallel | missing | reduce.rs merges MOS only |
+| LVS-047 | Logic-gate recognition | missing | — |
+| LVS-048 | Filter unused devices | missing | — |
+| LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named (graph.rs:194) and join_series refuses named nodes (reduce.rs:403): testing-plan F12 |
+| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology/device.rs:301-329). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param (compare.rs:255-313); bulk is dropped when the layout has none (compare.rs:49) |
+| LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused (netlist.rs:447-453) |
+| LVS-062 | Capacitor C/A/P | partial | Marker area only; no C or perimeter |
+| LVS-063 | Diode A/P | partial | Marker area only; no perimeter. Polarity is not compared (F15) |
+| LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61) |
+| LVS-065 | Inductor | missing | — |
+| LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
+| LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | The report rows exist but always record Skipped(NotInDeck): the deck has no syntax for the limits (lvs/checks.rs:73-82) |
+| LVS-072 | Hierarchical reference flattening | missing | F1 |
+
+### Electrical rules (ERC)
+
+| Id | Check | Status | What is missing |
+|---|---|---|---|
+| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | ROUTINGPLUSCUT is missing |
+| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | A row with a diode and non-zero diode_credit is refused (limitations.md:22) |
+| ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
+| ERC-A7 | PWL diffusion-dependent limit | missing | — |
+| ERC-A9 | Minimum protection-diode size | missing | — |
+| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (antenna.rs:150,246). gf180 leaves ANT.14/15 out (gf180mcu.deck:647-649), and the FuseTop/Via5 connectivity needs care |
+| ERC-A12 | Oxide-class-specific limits | partial | One row per gate layer |
+| ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (antenna.rs:353-358) |
+| ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
+| ERC-A15 | Fix hint: required diode area | missing | Report feature |
+| ERC-C2 | ESD device sizing (perimeter, clamp width) | missing | — |
+| ERC-C3 | Protected device (pad-exposed gates and drains) | missing | — |
+| ERC-C4 | Cross-domain signal ESD protection | missing | domain_crossing and missing_level_shifter are functional checks, not ESD |
+| ERC-C5 | Ground-domain coupling (anti-parallel diodes) | missing | — |
+| ERC-C6 | P2P resistance on the discharge path, per pin pair | partial | Measures within one net; the pad-device-bus-clamp path is missing |
+| ERC-C7 | ESD-pulse current density | partial | No ESD stimulus and no It2 limits |
+| ERC-C8 | Path voltage vs device failure (ESD window) | missing | — |
+| ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | missing | — |
+| ERC-C10 | Layout parasitic ESD paths | missing | Spacing values are NDA |
+| ERC-D1a | Tap distance conditional on neighbouring well spacing | missing | — |
+| ERC-D1b | Minimum well-tie area | missing | — |
+| ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | No deck carries it (limitations.md:65) |
+| ERC-D3 | Guard ring / well tied to the correct rail | partial | Devices only, not guard rings |
+| ERC-D4 | Guard-ring resistance / current under injection | partial | Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled |
+| ERC-D5 | Voltage-aware aggressor/victim | missing | — |
+| ERC-D6 | HV latch-up between isolated pockets | missing | — |
+| ERC-D7 | Native-device guard ring | missing | — |
+| ERC-D8 | Forward-biased diode marked and ringed | missing | — |
+| ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (electrical.rs:238-255). The IHP deck states JMAX only (ihp_sg13g2.deck:600-602): it may over-report, but it cannot under-report |
+| ERC-E7 | RMS / Joule heating / peak limits | missing | No open source |
+| ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
+| ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
+| ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
+| ERC-F4 | HCI susceptibility flag | missing | — |
+| ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |
+| ERC-F8 | Power-state-dependent undriven gates | missing | — |
+| ERC-F10 | HV tag consistency | partial | The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not |
+| ERC-F11 | Voltage-dependent spacing | missing | Same row as DRC-082 |
+| ERC-F13 | Inter-metal dielectric breakdown | missing | — |
+| ERC-G8 | Combinational loops | missing | Digital only, optional |
+| ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
+| ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
+| ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | missing | — |
+| ERC-H4 | Fanout limits | missing | — |
+
+### Parasitic extraction (PEX)
+
+| Id | Check | Status | What is missing |
+|---|---|---|---|
+| PEX-003 | Coupling C (same-layer and cross-layer) | partial | No reflected images: same-layer coupling under-predicted 14-159% (matvec.rs:59) |
+| PEX-004 | Partial self / mutual inductance | partial | Self and mutual L are solved, but run_pex discards the InductMatrix (run.rs:358-359); only a series L per net reaches the output (quasistatic.rs:57-61) |
+| PEX-006 | Multi-corner extraction | missing | — |
+| PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic and --quasistatic-inductance per net; --format spef\|dspf. No C-only/RC modes or thresholds (args.rs:84-122) |
+| PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
+
+### Flow
+
+| Id | Check | Status | What is missing |
+|---|---|---|---|
+| FLOW-001 | Geometric / hierarchy-invariant waivers | missing | — |
+| FLOW-002 | Early / dirty-design staged runs | missing | — |
+| FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | missing | Cheap from LEF/DEF + GDS |
+| FLOW-004 | Interface DRC top vs blocks | missing | — |
+| FLOW-005 | In-design / live DRC | partial | Shared-deck library (Philis) is the first step |
+| FLOW-006 | User-programmable rules | missing | Rust decks + Rule::Custom (testing-plan.md L9b) |
+
+<!-- end of generated block -->

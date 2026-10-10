@@ -27,7 +27,7 @@ DRC-027	drc	spacing	Two-widths spacing table	LEF:SPACINGTABLE TWOWIDTHS; LEF58_S
 DRC-028	drc	spacing	Influence / stub spacing near wide metal	LEF:SPACING RANGE INFLUENCE,SPACINGTABLE INFLUENCE; SKY:m1.3a; drt	attached_wide_spacing	partial	FR	Implements the sky130 m1.3a form; equivalence with LEF INFLUENCE is unverified
 DRC-029	drc	spacing	End-of-line spacing	LEF:SPACING ENDOFLINE PARALLELEDGE TWOEDGES; LEF58_SPACING ENDOFLINE; A7:M1.S.2-S.5; ISPD19; drt	eol_spacing	partial	FR; TX:drt	Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing
 DRC-030	drc	spacing	EOL extension / keep-out	LEF58_EOLEXTENSIONSPACING; LEF58_EOLKEEPOUT; drt	-	missing	TX:drt	
-DRC-031	drc	spacing	Tip-to-tip / tip-to-side by width class	A7:M1.S.2-S.5,M4.S.3,M4.S.4	eol_spacing	partial	FR	
+DRC-031	drc	spacing	Tip-to-tip / tip-to-side by width class	A7:M1.S.2-S.5,M4.S.3,M4.S.4	eol_spacing	partial	FR	One end-of-line width per rule, so each width class is its own rule; tip-to-side is not told apart from tip-to-tip
 DRC-032	drc	spacing	Corner spacing (convex/concave, corner-to-corner)	LEF58_CORNERSPACING; A7:M1.S.6; GF:MT30.3; ISPD19; KL:corners; drt	corner_to_corner	partial	BM; FR; TX:KL	CONVEXCORNER/CONCAVECORNER/EXCEPTEOL variants missing; sky130 poly.4 over-reports (limitations.md:76)
 DRC-033	drc	spacing	Forbidden spacing ranges	LEF58_FORBIDDENSPACING; LEF58_TWOWIRESFORBIDDENSPACING; drt	-	missing	TX:drt	
 DRC-034	drc	spacing	Maximum spacing	LEF58_MAXSPACING; drt	-	missing	TX:drt	
@@ -37,7 +37,7 @@ DRC-037	drc	spacing	Bent / 45-degree features	IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.
 DRC-038	drc	spacing	Diagonal width / spacing	LEF:DIAGWIDTH,DIAGSPACING,DIAGMINEDGELENGTH	-	out_of_scope	-	Needs non-rectilinear geometry
 DRC-040	drc	overlay	Enclosure, all sides	LEF:ENCLOSURE; IHP:M1.c,V1.c; GF:CO.3; SKY:ct.4,m1.4,licon.5a; A7:V3.M4.EN.2; KL:enclosing; MAG:surround	min_enclosure	implemented	BM; FR; TX:KL; MR	
 DRC-041	drc	overlay	Enclosure on two opposite sides	SKY:m1.5; A7:V1.M1.EN.1; LEF:ENCLOSURE o1 o2; KL:rectangle error filter	asymmetric_enclosure	partial	BM; FR; TX:KL	A non-rectangular inner shape is held to the every-side limit (limitations.md:19)
-DRC-042	drc	overlay	End-cap / one-of-two-adjacent-sides enclosure	IHP:M1.c1,V1.c1; SKY:via.5a,licon.5c; LEF58_ENCLOSURE EOL; MAG:surround directional	asymmetric_enclosure	partial	FR	
+DRC-042	drc	overlay	End-cap / one-of-two-adjacent-sides enclosure	IHP:M1.c1,V1.c1; SKY:via.5a,licon.5c; LEF58_ENCLOSURE EOL; MAG:surround directional	asymmetric_enclosure	partial	FR	Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written
 DRC-043	drc	overlay	Width-dependent enclosure	LEF:ENCLOSURE WIDTH,LENGTH; LEF58_ENCLOSURETABLE; GF:CO.6	-	missing	FR	
 DRC-044	drc	overlay	Maximum enclosure / min-and-max window	IHP:Sdiod.a-c,Rppd.c,LU.c; GF:NP.3d,GR.1; SKY:npc.5,mf.5	-	missing	FR	sky130.deck "npc.5 (maximum enclosure)"
 DRC-045	drc	overlay	Extension / end-cap / overhang	IHP:Gat.c; GF:PL.4; SKY:poly.7,poly.8; A7:GATE.ACTIVE.EX.1; MAG:overhang,extend	min_extension	partial	BM; FR; TX:KL	Measures bounding boxes, so an L-shape can pass (limitations.md:20); the bitmap oracle targets this
@@ -70,8 +70,8 @@ DRC-076	drc	density	Waffle-window density	SKY:m1.X.1	-	missing	FR	sky130.deck le
 DRC-080	drc	net	Same-net vs different-net spacing, one layer	LEF:SPACING SAMENET; GF:NW.2a,NW.2b,DN.2a; IHP:NW.b; KL:nets+props_eq/props_ne; drt	net_spacing	implemented	FR; TX:KL	
 DRC-081	drc	net	Net spacing between two layers / on wells	SKY:nwell.7,hvnwell.8,hv.nwell.1,vhvi.8; IHP:NW.b1,NBL.c	-	missing	FR	Net spacing takes one layer; only sky130 connects wells as nets
 DRC-082	drc	net	Voltage-dependent spacing (VA-DRC)	SKY:hvnwell.8,hv.*; GF:DV.9; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP	-	missing	FR; CF	Top cross-source gap; needs ERC-F1 voltage propagation
-DRC-083	drc	net	HV tag propagation (shorted to HV becomes HV)	SKY:hv.X.1-hv.X.6	hv_domain	partial	FR; SY	
-DRC-084	drc	net	Floating interconnect / must-join ports	SKY:x.22; LEF58_MUSTJOINALLPORTS	unconnected_pin	partial	SY	
+DRC-083	drc	net	HV tag propagation (shorted to HV becomes HV)	SKY:hv.X.1-hv.X.6	hv_domain	partial	FR; SY	hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV
+DRC-084	drc	net	Floating interconnect / must-join ports	SKY:x.22; LEF58_MUSTJOINALLPORTS	unconnected_pin	partial	SY	Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled
 DRC-085	drc	net	Tap presence per well	SKY:nwell.4; GF:DN.3; IHP:nmosi.d	floating_well,must_contain	implemented	FR; SY	
 DRC-086	drc	net	Shorts between labelled nets	drt:short	ingest:port_binding	partial	SY; TX:KL	A short between two labelled nets aborts extraction with PortError::ConflictingLabels (pipeline.rs:181): the run fails, but there is no report row and no location
 DRC-090	drc	device	Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM)	IHP:6.*; GF:PRES,MIM,LDMOS,EF,SK; SKY:rpm,capm,varac,indm,mf,photo,denmos	forbidden,min_width,min_enclosure	partial	FR	Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing
@@ -86,14 +86,14 @@ DRC-102	drc	mpt	Pre-coloured (MASK) same-/different-mask spacing	LEF:MASK; LEF58
 DRC-103	drc	mpt	Stitch legality	CAL; ICV	-	missing	-	
 DRC-104	drc	mpt	Per-colour density and colour ratio	CAL	-	missing	CF	
 DRC-105	drc	mpt	Trim / cut-metal layers	LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL; A7:GCUT	-	missing	FR	
-DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	-	partial	FR	`warning` severity is ERC-only (deck.md)
+DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	deck:warning	partial	FR	`warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning
 DRC-111	drc	dfm	DFM scoring of recommended rules	CAL:YieldAnalyzer	-	missing	-	
 DRC-112	drc	dfm	Critical area analysis	CAL:YieldAnalyzer	-	missing	CF	
 DRC-113	drc	dfm	Litho / CMP simulation hotspots	CAL:LFD,CMPAnalyzer; PEG	-	out_of_scope	-	Needs foundry process models
 DRC-114	drc	dfm	Pattern-matching DRC	CAL; ICV; PEG; patents P1,P3	-	missing	SY	
 DRC-115	drc	dfm	Equation-based DRC	CAL:eqDRC; patents P10,P11	-	missing	CF	First candidate for Rust custom rules (testing-plan.md L9b)
 DRC-116	drc	dfm	Curvilinear / all-angle tolerance DRC	CAL; SIL; EMP	-	out_of_scope	-	Rectilinear only
-DRC-117	drc	dfm	Via redundancy scoring / via doubling	CAL:YieldAnalyzer,YieldEnhancer	redundant_via	partial	FR	
+DRC-117	drc	dfm	Via redundancy scoring / via doubling	CAL:YieldAnalyzer,YieldEnhancer	redundant_via	partial	FR	Counts cuts within a distance; no DFM scoring and no via doubling
 DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, extents)	IHP:4.2; GF:4.2; KL; MAG:templayers	deck:derived	implemented	MR; BM	
 DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL	limitations.md:28
 DRC-122	drc	infra	Edge-layer ops incl. extension	KL:extended,edges	deck:edge	partial	TX:KL	limitations.md:31
@@ -137,12 +137,13 @@ LVS-062	lvs	device	Capacitor C/A/P	KL:Capacitor; MAG:capacitor	lvs:params	partia
 LVS-063	lvs	device	Diode A/P	KL:Diode	lvs:params	partial	SY	Marker area only; no perimeter. Polarity is not compared (F15)
 LVS-064	lvs	device	BJT AE/PE/NE, multi-emitter	KL:BJT3,BJT4	lvs:params	partial	SY	Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61)
 LVS-065	lvs	device	Inductor	KL:Inductor; IHP:6.12	-	missing	SY	
-LVS-066	lvs	device	Device flavour (HVT/LVT) by implant marker	GF:App.A; IHP LVS decks	-	partial	SY	Corpus HVT_MATCH/LVT_MATCH blocked by F6
+LVS-066	lvs	device	Device flavour (HVT/LVT) by implant marker	GF:App.A; IHP LVS decks	deck:device	expressible	SY	A flavour is a device statement whose marker includes the implant (gate_n and hvt), with the plain flavour excluding it (gate_n not hvt). The corpus deck does not do this yet, so LVS_HVT/LVS_LVT stay blocked (testing-plan F6)
 LVS-067	lvs	device	Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD)	MAG:subcircuit kinds; IHP LVS decks	-	missing	SY	sky130 VPP caps have no marker (limitations.md)
+LVS-068	lvs	device	Device-count and parameter-range limits (devices per model, W/L inside the model's valid range)	MAG:param_limits; IHP:npn13G2.bR; GF:App.A	lvs.device_count_mos,lvs.device_count_bjt,lvs.parametric	missing	FR; SY	The report rows exist but always record Skipped(NotInDeck): the deck has no syntax for the limits (lvs/checks.rs:73-82)
 LVS-070	lvs	netlist	SPICE / CDL reader	ngspice manual; KL:NetlistSpiceReader	ingest:spice	implemented	SY; fuzz	No open authoritative CDL spec
 LVS-071	lvs	netlist	Spectre reader	-	ingest:spectre	implemented	SY; fuzz	
 LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	-	missing	SY	F1
-LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	out_of_scope	-	
+LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	out_of_scope	-	Single-die only
 ERC-A1	erc	antenna	Per-layer area ratio (PAR)	LEF:App.C; IHP:Ant.a; SKY:antenna	antenna	implemented	CF; SE:LEF PAR 2.0/1.0; FR; TX:OR,MAG	
 ERC-A2	erc	antenna	Side-area (sidewall) ratio	LEF:App.C; GF:ANT.1-7; SKY:antenna vertical	antenna	implemented	CF; FR	
 ERC-A3	erc	antenna	Cumulative ratio (CAR)	LEF:App.C; IHP:Ant.b,Ant.d	antenna	implemented	SE:IHP AreaRatio; CF	
@@ -170,14 +171,14 @@ ERC-C8	erc	esd	Path voltage vs device failure (ESD window)	TR18-01:2.1; TR22:4.1
 ERC-C9	erc	esd	CDM checks (bus inductance, local clamps, driver/receiver ground R)	TR18-01:5.6.3,6.6; JEP157A; PF	-	missing	TX:SPICE	
 ERC-C10	erc	esd	Layout parasitic ESD paths	TR18-01:5.6.1	-	missing	SY	Spacing values are NDA
 ERC-C11	erc	esd	ESD device geometry (DCGS, SCGS, fingers)	GF:LVESD.1-13; IHP:6.8	min_width,min_spacing_diff	expressible	FR	Under an ESD marker
-ERC-C12	erc	esd	Package / 2.5D / 3D ESD	TR18-01:6.3-6.7; JEP196; CAL:3DPERC	-	out_of_scope	-	
-ERC-C13	erc	esd	System-level ESD	TR18-01:7; WP3	-	out_of_scope	-	
+ERC-C12	erc	esd	Package / 2.5D / 3D ESD	TR18-01:6.3-6.7; JEP196; CAL:3DPERC	-	out_of_scope	-	On-chip only: package and multi-die ESD models are outside a layout verifier
+ERC-C13	erc	esd	System-level ESD	TR18-01:7; WP3	-	out_of_scope	-	A board and system concern, outside a layout verifier
 ERC-D1	erc	latchup	Max distance to well/substrate tap	GF:LU.1-4; IHP:LU.a,LU.b; A7:ACTIVE.LUP.1; TR18-02:3.1.1	max_distance_to_tap,missing_tie	implemented	FR; CF	
 ERC-D1a	erc	latchup	Tap distance conditional on neighbouring well spacing	GF:LU.1-4	-	missing	FR	
 ERC-D1b	erc	latchup	Minimum well-tie area	TR18-02:Annex A; GF:LU.7	-	missing	FR; CF	
 ERC-D2	erc	latchup	Pad-diffusion guard ring (spacing, width)	GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2	esd_latchup	partial	FR	No deck carries it (limitations.md:65)
 ERC-D3	erc	latchup	Guard ring / well tied to the correct rail	GF:LU.9,LU.10	well_bias	partial	SY	Devices only, not guard rings
-ERC-D4	erc	latchup	Guard-ring resistance / current under injection	TR18-02:2.3; JESD78:Table 1; CAL	p2p_resistance,em_current_density	partial	CF	
+ERC-D4	erc	latchup	Guard-ring resistance / current under injection	TR18-02:2.3; JESD78:Table 1; CAL	p2p_resistance,em_current_density	partial	CF	Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled
 ERC-D5	erc	latchup	Voltage-aware aggressor/victim	TR18-02:2.2.3; CAL	-	missing	SY	
 ERC-D6	erc	latchup	HV latch-up between isolated pockets	TR18-02:3.3	-	missing	SY	
 ERC-D7	erc	latchup	Native-device guard ring	GF:LU.5	-	missing	FR	
@@ -190,10 +191,10 @@ ERC-E5	erc	em	Lifetime target and percentile	GF:14.2; IHP:2.15; JESD202	electrom
 ERC-E6	erc	em	Blech short-length immortality	Blech1976	electromigration	implemented	CF	
 ERC-E7	erc	em	RMS / Joule heating / peak limits	(NDA only)	-	missing	-	No open source
 ERC-E8	erc	em	Static IR drop vs budget	OR:psm; WH:13.3.2; RH; VOL; MP	ir_drop	implemented	CF; NV; TX:OR psm	One feed point per supply (limitations.md:39)
-ERC-E9	erc	em	PDN integrity (floating stripes, unconnected instances)	OR:check_power_grid	unconnected_pin	partial	TX:OR	
+ERC-E9	erc	em	PDN integrity (floating stripes, unconnected instances)	OR:check_power_grid	unconnected_pin	partial	TX:OR	Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing
 ERC-E10	erc	em	Per-segment PDN EM	OR:psm -enable_em	em_current_density	implemented	TX:OR	
-ERC-E11	erc	em	Dynamic / vectorless IR	RH; VOL; MP; TOT	-	out_of_scope	-	
-ERC-E12	erc	em	Stress voiding / slotting	JEP139; JESD214; GF:14.6	cheesing	partial	FR	
+ERC-E11	erc	em	Dynamic / vectorless IR	RH; VOL; MP; TOT	-	out_of_scope	-	Static analysis only: dynamic IR needs switching activity
+ERC-E12	erc	em	Stress voiding / slotting	JEP139; JESD214; GF:14.6	cheesing	partial	FR	cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing
 ERC-E13	erc	em	Thermal-aware / statistical EM, self-heating	RH; TOT; VOL	-	out_of_scope	-	One temperature, 85 C (limitations.md:44)
 ERC-F1	erc	voltage	Static voltage propagation, conditional on gate voltage	CAL:WP 81822; SKY:hv.X.1; patents P5,P9	erc:voltage	partial	SE:Siemens WP; SY	Channels pass unconditionally
 ERC-F2	erc	voltage	Gate-oxide overstress	GF:14.1.4.2; SKY:hv; TR22:4.1; CAL	gate_oxide	implemented	FR; CF	Can over-report (limitations.md:24)
@@ -204,7 +205,7 @@ ERC-F6	erc	voltage	Missing level shifter	CAL:WP 81822; IEEE1801	missing_level_sh
 ERC-F7	erc	voltage	Missing isolation at switchable-domain outputs	IEEE1801; CPF	-	missing	SY	Needs power states
 ERC-F8	erc	voltage	Power-state-dependent undriven gates	CAL:WP 81822; IEEE1801; IA	-	missing	SE; SY	
 ERC-F9	erc	voltage	DC / sneak path between domains	CAL:datasheet; CAL:WP 81822	domain_crossing	implemented	SE:WP Fig2; SY	
-ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10	hv_domain	partial	FR; SY	
+ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10	hv_domain	partial	FR; SY	The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not
 ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	-	missing	FR	Same row as DRC-082
 ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY	Only sky130 connects wells (limitations.md:58)
 ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	-	missing	FR	

@@ -11,7 +11,7 @@ pub mod reduce;
 mod refine;
 pub mod verdict;
 
-pub use checks::{check_layout, intern_rule_ids, record_discrepancies};
+pub use checks::{check_layout, intern_rule_ids, record_discrepancies, RULE_IDS};
 pub use compare::{compare, compare_logged, CompareOptions};
 pub use graph::Graph;
 pub use reduce::{Merge, MergeKind, ParamNames};
