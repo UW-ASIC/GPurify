@@ -6,13 +6,12 @@
 //! the ports A, Y, VDD and VSS. Those names are the answer every spec below
 //! is checked against.
 
+#[path = "common/gen_fixtures.rs"]
+mod gen_fixtures;
+
+use gen_fixtures::fixtures;
 use gpurify::engine::pipeline::{extract, load, Inputs};
 use gpurify::liberty::{generate, spec, Accuracy, LibError, Request};
-use std::path::PathBuf;
-
-fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
 
 fn inputs(reference: bool) -> Inputs {
     Inputs {

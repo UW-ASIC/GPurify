@@ -523,8 +523,14 @@ pub fn write_blackbox(cell: &str, pins: &[PinSpec], tool_version: &str, out: &mu
     let signals: Vec<&PinSpec> = pins.iter().filter(|p| !p.role.is_supply()).collect();
     if !supplies.is_empty() {
         out.push_str("`ifdef USE_POWER_PINS\n");
-        for pin in &supplies {
-            let _ = writeln!(out, "    inout {},", pin.name);
+        for (i, pin) in supplies.iter().enumerate() {
+            // The last supply takes a comma only if a signal follows it.
+            let comma = if i + 1 < supplies.len() || !signals.is_empty() {
+                ","
+            } else {
+                ""
+            };
+            let _ = writeln!(out, "    inout {}{comma}", pin.name);
         }
         out.push_str("`endif\n");
     }
@@ -581,6 +587,19 @@ mod tests {
         );
         assert!(
             out.contains("    inout vdd,\n`endif\n    input a,\n    output y\n);"),
+            "{out}"
+        );
+
+        // Supplies and no signal (F35): the last supply ends the list.
+        out.clear();
+        write_blackbox(
+            "m",
+            &[pin("vdd", Role::Power), pin("vss", Role::Ground)],
+            "t",
+            &mut out,
+        );
+        assert!(
+            out.contains("`ifdef USE_POWER_PINS\n    inout vdd,\n    inout vss\n`endif\n);"),
             "{out}"
         );
         let _ = Table {

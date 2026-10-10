@@ -217,6 +217,17 @@ fn need(results: &Results, key: &str) -> Option<f64> {
     results.get(key).copied().flatten()
 }
 
+/// Why leakage state `k` has no supply current: the analysis it is read from
+/// did not converge, a DC operating point for one vector, a transient for a
+/// sequence.
+fn unmeasured_leakage(k: usize, state: &[Vector]) -> String {
+    if state.len() == 1 {
+        format!("the DC operating point of leakage state {k} did not converge")
+    } else {
+        format!("the transient of leakage state {k} did not converge")
+    }
+}
+
 fn rise_fall(edge: Edge) -> &'static str {
     match edge {
         Edge::Rise => "RISE",
@@ -661,12 +672,11 @@ impl Bench<'_> {
         }
         let results = session.run(&commands)?;
         let mut out = Vec::with_capacity(states.len());
-        for k in 0..states.len() {
+        for (k, state) in states.iter().enumerate() {
             let mut watts = 0.0;
             for &(s, volts) in &supplies {
-                let i = need(&results, &format!("l{s}_{k}")).ok_or_else(|| {
-                    self.error("the DC operating point did not converge".to_owned())
-                })?;
+                let i = need(&results, &format!("l{s}_{k}"))
+                    .ok_or_else(|| self.error(unmeasured_leakage(k, state)))?;
                 watts += volts * -i;
             }
             out.push(watts * 1e9);
@@ -875,7 +885,22 @@ pub fn sigma(samples: &[Vec<f64>]) -> Vec<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{set, sigma};
+    use super::{set, sigma, unmeasured_leakage};
+
+    /// A leakage state of one vector is a DC operating point and a sequence
+    /// a transient, so a missing supply current names the analysis that
+    /// produced neither (F35: it always blamed the operating point).
+    #[test]
+    fn a_missing_leakage_names_the_analysis_it_came_from() {
+        let vector = crate::liberty::spec::Vector::new();
+        let dc = unmeasured_leakage(0, std::slice::from_ref(&vector));
+        assert!(dc.contains("DC operating point"), "{dc}");
+        let sequence = unmeasured_leakage(1, &[vector.clone(), vector]);
+        assert!(
+            sequence.contains("transient") && !sequence.contains("operating point"),
+            "{sequence}"
+        );
+    }
 
     #[test]
     fn a_wave_holds_then_ramps_and_skips_a_repeat() {
