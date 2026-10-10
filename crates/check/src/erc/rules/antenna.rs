@@ -10,13 +10,12 @@
 //! Data in: the store, nets, the die box. Data out: violations and one run
 //! per row.
 
-use crate::drc::rules::{owners_of, LayerRects, SortedRects};
+use crate::drc::rules::{LayerRects, SortedRects};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{centre, record_run, Design, Scratch};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{extract_nets_into, NetId, NetTable};
 use gpurify_geom::boolean::union_into;
-use gpurify_geom::ops::area2;
 use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, LayerId, PolyId};
@@ -27,8 +26,8 @@ use gpurify_ingest::deck::Connectivity;
 /// one measure for all of its collectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AntennaMeasure {
-    /// The drawn area of each polygon, summed per polygon: overlapping drawn
-    /// polygons count twice. Deck: `sidewall: none`.
+    /// The merged layer's area: drawn polygons that overlap count their
+    /// shared area once. Deck: `sidewall: none`.
     Area,
     /// Etched sidewall: the merged layer's perimeter times `thickness`, an
     /// area like the gate's (sky130 poly/li/met1-3, gf180 `perimeter_only`).
@@ -125,12 +124,14 @@ pub struct CmpModel {
 ///   the vias between two of them. A cut collector stands on its lower
 ///   conductor. A gate or diode reachable only through a higher metal is not
 ///   on the net yet. A deck with no conductors measures the finished nets.
-/// - collecting area is summed over every collector polygon on the net, by
-///   the row's [`AntennaMeasure`]. One collector gives the per-layer ratio
-///   (PAR); every layer up to the stage gives the cumulative ratio (CAR).
-/// - gate area is summed over the polygons of the `gate` layer on the net.
-///   Name the gate as a derived `poly and diffusion` layer, which is merged.
-///   A layer that is not a conductor (the derived gate, a cut, a capacitor
+/// - collecting area is summed over every merged collector figure on the
+///   net, by the row's [`AntennaMeasure`]. One collector gives the per-layer
+///   ratio (PAR); every layer up to the stage gives the cumulative ratio
+///   (CAR).
+/// - gate area is summed over the merged figures of the `gate` layer on the
+///   net, so overlapping gate polygons are counted once. A figure is on the
+///   lowest net among the drawn polygons it covers. A layer that is not a
+///   conductor (a derived `poly and diffusion` gate, a cut, a capacitor
 ///   plate) joins the net of the topmost conductor it overlaps with positive
 ///   area; touching alone does not join.
 ///
@@ -335,13 +336,42 @@ fn attach(
     true
 }
 
-/// Twice the perimeter of every merged figure on `layer`, with the store row
-/// it is blamed on. `None` when the layer will not validate or merge.
-fn merged_perimeters(
-    design: Design<'_>,
-    layer: LayerId,
-    scratch: &mut Scratch,
-) -> Option<Vec<(PolyId, i128)>> {
+/// One layer merged: what an antenna row measures, so drawn polygons that
+/// overlap count their shared area once.
+#[derive(Debug, Default)]
+struct Figures {
+    /// Per figure: twice its area, holes excluded.
+    area2: Vec<i128>,
+    /// Per figure: twice its perimeter, holes included.
+    perimeter2: Vec<i128>,
+    /// `rows[start[f] .. start[f + 1]]`: the drawn store rows figure `f`
+    /// covers, ascending.
+    start: Vec<u32>,
+    rows: Vec<PolyId>,
+}
+
+impl Figures {
+    fn len(&self) -> usize {
+        self.area2.len()
+    }
+
+    fn rows(&self, figure: usize) -> &[PolyId] {
+        &self.rows[self.start[figure] as usize..self.start[figure + 1] as usize]
+    }
+
+    /// The figure's net: the lowest net among the drawn rows it covers.
+    fn net(&self, figure: usize, net_of: &[NetId]) -> NetId {
+        self.rows(figure)
+            .iter()
+            .map(|row| net_of[row.idx()])
+            .min()
+            .unwrap_or(NetId::NONE)
+    }
+}
+
+/// `layer` merged into [`Figures`]. `None` when the layer will not validate
+/// or merge.
+fn merged(design: Design<'_>, layer: LayerId, scratch: &mut Scratch) -> Option<Figures> {
     validate_layer_into(design.store, layer, &mut scratch.layer_a).ok()?;
     let mut drawn = LayerRects::default();
     drawn.build(design.store, layer, &scratch.layer_a);
@@ -352,36 +382,51 @@ fn merged_perimeters(
     )
     .ok()?;
     let figures = &scratch.layer_b;
-    Some(
-        (0..)
-            .zip(owners_of(figures, &drawn))
-            .map(|(idx, owner)| {
-                let poly = figures.get(idx);
-                let perimeter: i128 = std::iter::once(poly.outer())
-                    .chain(poly.holes())
-                    .map(|ring| {
-                        let (xs, ys) = ring.coords();
-                        (0..xs.len())
-                            .map(|i| {
-                                let j = (i + 1) % xs.len();
-                                i128::from(
-                                    (xs[j] - xs[i]).raw().abs() + (ys[j] - ys[i]).raw().abs(),
-                                )
-                            })
-                            .sum::<i128>()
+    let under = SortedRects::new(drawn.labelled());
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(figures, &mut rects, &mut start);
+    let mut out = Figures {
+        start: vec![0],
+        ..Figures::default()
+    };
+    for (idx, span) in (0..).zip(start.windows(2)) {
+        let mine = &rects[span[0] as usize..span[1] as usize];
+        out.area2
+            .push(mine.iter().map(|r| 2 * r.area().raw()).sum());
+        let poly = figures.get(idx);
+        let perimeter: i128 = std::iter::once(poly.outer())
+            .chain(poly.holes())
+            .map(|ring| {
+                let (xs, ys) = ring.coords();
+                (0..xs.len())
+                    .map(|i| {
+                        let j = (i + 1) % xs.len();
+                        i128::from((xs[j] - xs[i]).raw().abs() + (ys[j] - ys[i]).raw().abs())
                     })
-                    .sum();
-                (owner, 2 * perimeter)
+                    .sum::<i128>()
             })
-            .collect(),
-    )
+            .sum();
+        out.perimeter2.push(2 * perimeter);
+        let mut covered: Vec<PolyId> = mine
+            .iter()
+            .flat_map(|&r| under.overlapping(r))
+            .map(|(_, row)| row)
+            .collect();
+        covered.sort_unstable();
+        covered.dedup();
+        out.rows.extend(covered);
+        out.start
+            .push(u32::try_from(out.rows.len()).expect("a layer's row count fits a u32"));
+    }
+    Some(out)
 }
 
 /// One antenna row: nets as they stand at this row's etch step, doubled
-/// collecting, gate and diode area per net, the ratio per gate net (after
-/// `adjust`, which receives the net's diode area), reported at the net's
-/// lowest gate polygon. `examined` is the number of gate nets; `None` is
-/// `Refused` (a layer that will not validate).
+/// collecting, gate and diode area per net from each layer's merged figures,
+/// the ratio per gate net (after `adjust`, which receives the net's diode
+/// area), reported at the net's lowest gate polygon. `examined` is the number
+/// of gate nets; `None` is `Refused` (a layer that will not validate or
+/// merge).
 #[allow(
     clippy::cast_precision_loss,
     reason = "a die's area in database units is far below 2^53"
@@ -449,42 +494,42 @@ fn antenna_row(
         }
     }
 
+    // Every area is a merged figure's, counted once on its net however many
+    // drawn polygons make it up.
     let count = nets.net_count();
     let mut areas = vec![0i128; 3 * count];
     let mut first_gate = vec![PolyId(u32::MAX); count];
-    let add = |layer: LayerId, base: usize, areas: &mut Vec<i128>| {
-        for row in store.polys_on_layer(layer) {
-            let net = net_of[row as usize];
+    let mut measured = |layer: LayerId, base: usize, measure: AntennaMeasure| {
+        let figures = merged(design, layer, scratch)?;
+        let mut landed = false;
+        for figure in 0..figures.len() {
+            let net = figures.net(figure, &net_of);
             if net != NetId::NONE {
-                let (xs, ys) = store.poly_verts(PolyId(row));
-                areas[base + net.idx()] += area2(xs, ys).raw();
+                landed = true;
+                areas[base + net.idx()] += match measure {
+                    AntennaMeasure::Area => figures.area2[figure],
+                    AntennaMeasure::Sidewall { thickness } => {
+                        figures.perimeter2[figure] * i128::from(thickness.raw())
+                    }
+                };
+                if base == count {
+                    first_gate[net.idx()] = first_gate[net.idx()].min(figures.rows(figure)[0]);
+                }
             }
         }
+        Some(landed)
     };
-    add(gate_layer, count, &mut areas);
-    if let Some(layer) = diode {
-        add(layer, 2 * count, &mut areas);
-    }
-    for row in store.polys_on_layer(gate_layer) {
-        let net = net_of[row as usize];
-        if net != NetId::NONE {
-            first_gate[net.idx()] = first_gate[net.idx()].min(PolyId(row));
+    let gated = measured(gate_layer, count, AntennaMeasure::Area);
+    ok &= gated.is_some();
+    // With no gate on a net there is nothing to measure, whatever the
+    // collectors hold (a collector that cannot merge refuses only a row
+    // that would read it).
+    if gated == Some(true) {
+        if let Some(layer) = diode {
+            ok &= measured(layer, 2 * count, AntennaMeasure::Area).is_some();
         }
-    }
-    for &(layer, measure) in &read {
-        let AntennaMeasure::Sidewall { thickness } = measure else {
-            add(layer, 0, &mut areas);
-            continue;
-        };
-        let Some(figures) = merged_perimeters(design, layer, scratch) else {
-            ok = false;
-            continue;
-        };
-        for (row, twice_perimeter) in figures {
-            let net = net_of[row.idx()];
-            if net != NetId::NONE {
-                areas[net.idx()] += twice_perimeter * i128::from(thickness.raw());
-            }
+        for &(layer, measure) in &read {
+            ok &= measured(layer, 0, measure).is_some();
         }
     }
     scratch.staged_nets = staged;
@@ -528,7 +573,7 @@ fn antenna_row(
 /// sits at the centre of the bounding box of the net's lowest-numbered gate
 /// polygon, on the gate layer, measuring the ratio against `max_ratio`. A row
 /// is refused when one of its layers will not validate (a non-rectilinear
-/// shape) or a sidewall layer will not merge.
+/// shape) or merge.
 ///
 /// # Panics
 ///

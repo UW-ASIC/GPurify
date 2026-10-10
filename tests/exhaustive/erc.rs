@@ -592,8 +592,7 @@ fn antenna_variants() -> Vec<Fixture> {
             ERC,
         )
         .layout(over_collect)
-        .expect(Expect::clean("ant"))
-        .known("F29"),
+        .expect(Expect::clean("ant")),
     );
     // F29, the other way: a gate drawn as two overlapping polygons is 1.5 µm²
     // of oxide, so 3.0 µm² of met1 is a ratio of 2.0, above 1.75. Summed per
@@ -612,8 +611,7 @@ fn antenna_variants() -> Vec<Fixture> {
             ERC,
         )
         .layout(over_gate)
-        .expect(Expect::rule("ant", vec![ratio(2.0).at(500, 500)]))
-        .known("F29"),
+        .expect(Expect::rule("ant", vec![ratio(2.0).at(500, 500)])),
     );
     out.push(ihp_area_ratio());
     out
