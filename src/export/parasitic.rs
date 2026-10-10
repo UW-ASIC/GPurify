@@ -7,14 +7,15 @@
 //! node, and both write in the network's canonical order. Units are fF, Ω
 //! and pH, with six decimals.
 //!
-//! A label on several disconnected nets names each of them, so their nodes
-//! share names in the file and the pieces read as one net.
+//! A label on several disconnected nets would write one `*D_NET` per piece
+//! under one name, so the pieces read as one net: both writers refuse it
+//! ([`WriteError::SplitLabel`]).
 
 use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::export::json::format_f64;
-use crate::export::{narrow, Header, WriteError};
+use crate::export::{check_unsplit, narrow, Header, WriteError};
 use gpurify_check::topology::{NetId, PortTable};
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
@@ -204,8 +205,9 @@ fn spef_section(
 /// [`WriteError::Unrepresentable`] for a network out of canonical order, a
 /// resistance or inductance with no far node, or a NaN or infinite value,
 /// checked before anything is written, and for an element on a node outside
-/// the network, found while writing. [`WriteError::UnnamedNet`] for a net
-/// with no label, found while writing.
+/// the network, found while writing. [`WriteError::SplitLabel`] for a net
+/// whose label also names another net, checked before anything is written.
+/// [`WriteError::UnnamedNet`] for a net with no label, found while writing.
 pub fn write_spef(
     network: &ParasiticNetwork,
     ports: &PortTable,
@@ -216,6 +218,11 @@ pub fn write_spef(
     let nodes = network.node_count();
     let elements = network.element_count();
     check_canonical(network)?;
+    check_unsplit(
+        network.node_net.chunk_by(|a, b| a == b).map(|run| run[0]),
+        ports,
+        strings,
+    )?;
 
     out.push_str("*SPEF \"IEEE 1481-1998\"\n");
     let _ = writeln!(out, "*DESIGN \"{}\"", header.layout_path);
@@ -324,6 +331,11 @@ pub fn write_dspf(
     let nodes = network.node_count();
     let elements = network.element_count();
     check_canonical(network)?;
+    check_unsplit(
+        network.node_net.chunk_by(|a, b| a == b).map(|run| run[0]),
+        ports,
+        strings,
+    )?;
 
     out.push_str("*|DSPF \"1.4\"\n");
     let _ = writeln!(out, "*|DESIGN \"{}\"", header.layout_path);

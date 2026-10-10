@@ -37,13 +37,14 @@
 //! `#[test]` at the end of the file, against the same closed forms.
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
-//! finding that breaks them: F24 and F31. F23 (inductance filaments joined
-//! nothing but coincident end points), `F30` (a layer with no `pex` row read
-//! as a perfect wire), `F44` (closed forms read each drawn polygon,
-//! not the conductor), `F45` (a field-solved polygon was one filament along
-//! its bounding box), `F46` (the mesh depended on absolute position) and
-//! `F47` (the reciprocity gate refused ordinary layouts) are fixed, and their
-//! fixtures hold.
+//! finding that breaks them. Every finding X6 marked here is fixed and its
+//! fixtures hold: F23 (inductance filaments joined nothing but coincident
+//! end points), F24 (the field solve had no substrate), `F30` (a layer with
+//! no `pex` row read as a perfect wire), F31 (a net named twice aborted the
+//! run), `F44` (closed forms read each drawn polygon, not the conductor),
+//! `F45` (a field-solved polygon was one filament along its bounding box),
+//! `F46` (the mesh depended on absolute position) and `F47` (the
+//! reciprocity gate refused ordinary layouts).
 
 #![allow(
     clippy::cast_precision_loss,
@@ -689,9 +690,9 @@ fn solved(name: &str, catalog: &[&'static str], layout: Layout, nets: &[&str]) -
 ///   and the touching half of F23 are fixed.
 /// - A bar pair joined by a via has the R of the bars and the cut in series,
 ///   not zero (F23, fixed).
-/// - F24: a plate's ground capacitance is at least the parallel-plate
-///   `ε₀εr·A/h` to the substrate.
-/// - F31: naming a net twice is refused or deduplicated; the run completes.
+/// - A plate's ground capacitance is at least the parallel-plate `ε₀εr·A/h`
+///   to the substrate (F24, fixed).
+/// - A net named twice is solved once, and the run passes (F31, fixed).
 /// - Four ordinary conductors solved together are not refused (F47, fixed).
 fn field(depth: Depth) -> Vec<Fixture> {
     let sizes: &[(i64, i64)] = match depth {
@@ -858,7 +859,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
             .label("m1_label", 500, 500, "A"),
     )
     .expect(Expect::clean("w"))
-    .known("F31");
+    .expect(Expect::Passes(true));
     twice.quasistatic = vec!["A".into(), "A".into()];
     out.push(twice);
 

@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use crate::export::json::format_f64;
 use crate::export::parasitic::{check_finite, node_place, spice_card, DELIMITER};
-use crate::export::{narrow, Header, WriteError};
+use crate::export::{check_unsplit, narrow, Header, WriteError};
 use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
 use gpurify_extract::network::NodeId;
@@ -60,18 +60,20 @@ pub enum Detail {
 /// lengthened with `_` until no label has that name. Parasitic cards are
 /// `Rp`, `Cp` or `Lp` and the element's row.
 ///
-/// A pin is one node, so the labels must name nets one to one. Nothing is
+/// A pin is one node, so the labels must name nets one to one: a label on
+/// several disconnected nets would join the pieces into one node and hide the
+/// open, and a net with several labels would hide the short. Nothing is
 /// written when they do not.
 ///
 /// # Errors
 ///
+/// [`WriteError::SplitLabel`] for a label on several nets, and
 /// [`WriteError::Unrepresentable`] for a spliced network holding a NaN or
-/// infinite value, checked before anything is written; for a label on several
-/// disconnected nets (one node would join the pieces and hide the open) or a
-/// net with several labels (one name would hide the short); for a port bound
-/// to a net outside the extraction, found after the `.subckt` line is
-/// written; or for a
-/// parasitic element on a node outside the network.
+/// infinite value, both checked before anything is written;
+/// [`WriteError::Unrepresentable`] for a net with several labels, also
+/// checked first, for a port bound to a net outside the extraction, found
+/// after the `.subckt` line is written, or a parasitic element on a node
+/// outside the network.
 pub fn write_spice(
     extraction: Extraction<'_>,
     parasitics: Option<&ParasiticNetwork>,
@@ -101,11 +103,6 @@ pub fn write_spice(
     // No entry assert that `ports.len() <= net_count`: the pin loop below
     // settles it as a typed error, and a panic here would abort the one path a
     // test of that refusal walks.
-    if ports.split_name().is_some() {
-        return Err(WriteError::Unrepresentable(
-            "a label on several disconnected nets",
-        ));
-    }
     if ports.shorted_net().is_some() {
         return Err(WriteError::Unrepresentable("a net with several labels"));
     }
@@ -113,6 +110,7 @@ pub fn write_spice(
     let before = out.len();
 
     let spliced = parasitics.filter(|_| detail == Detail::WithParasitics);
+    check_unsplit((0..net_count).map(|net| NetId(narrow(net))), ports, strings)?;
     if let Some(network) = spliced {
         check_finite(network)?;
     }
@@ -334,10 +332,12 @@ fn put_node(
 /// names another net. The parasitic writers do not use it: SPEF and DSPF
 /// refuse an unlabelled net instead.
 ///
+/// A label on several disconnected nets names each of them; [`write_spice`]
+/// refuses such a label before naming anything.
+///
 /// # Panics
 ///
-/// In debug builds, if `net` is [`NetId::NONE`], or if its label resolves to
-/// a different net, as a label on several disconnected nets does.
+/// In debug builds, if `net` is [`NetId::NONE`].
 pub fn net_name(
     net: gpurify_check::topology::NetId,
     ports: &PortTable,

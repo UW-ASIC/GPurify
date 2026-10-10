@@ -309,21 +309,6 @@ fn spice_numbers_an_anonymous_net() {
     );
 }
 
-/// Testing-plan F14. `VDD` on both nets is one net the layout leaves in two
-/// pieces, an open; a SPICE pin is one node, so writing the name twice would
-/// join the pieces in the file and hide the open. Refused, and nothing is
-/// written.
-#[test]
-fn spice_refuses_a_label_on_two_nets() {
-    let mut world = World::new(Some("VDD"));
-    assert_eq!(
-        world.spice(Detail::Schematic),
-        Err(WriteError::Unrepresentable(
-            "a label on several disconnected nets"
-        ))
-    );
-}
-
 /// A placeholder name would change between runs, so an anonymous net is refused by number.
 #[test]
 fn both_parasitic_formats_refuse_an_anonymous_net() {
@@ -342,6 +327,20 @@ fn both_parasitic_formats_refuse_a_resistor_with_no_far_node() {
     ));
     assert_eq!(world.spef(), refusal);
     assert_eq!(world.dspf(), refusal);
+}
+
+/// One label on two disconnected nets (F31): SPEF and DSPF would write two
+/// `*D_NET VDD` blocks that a reader merges into one net, and SPICE would join
+/// the two pieces into one node (debug builds panicked instead). Every writer
+/// that names nets by label refuses it, naming the label.
+#[test]
+fn every_writer_refuses_a_label_on_two_nets() {
+    let mut world = World::new(Some("VDD"));
+    let refusal = Err(WriteError::SplitLabel("VDD".to_owned()));
+    assert_eq!(world.spef(), refusal);
+    assert_eq!(world.dspf(), refusal);
+    assert_eq!(world.spice(Detail::Schematic), refusal);
+    assert_eq!(world.spice(Detail::WithParasitics), refusal);
 }
 
 /// A NaN or an infinity in any element is refused by every writer that

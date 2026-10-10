@@ -40,6 +40,30 @@ pub enum WriteError {
     /// label. Carries the net id. Refused rather than given an invented name.
     #[error("net {0} has no name, and this format requires one")]
     UnnamedNet(u32),
+    /// One label names several disconnected nets, and the file names nets by
+    /// label: SPEF and DSPF would write one `*D_NET` per piece under the same
+    /// name, and SPICE would join the pieces into one node, hiding the open.
+    /// Carries the label. Refused rather than written either way.
+    #[error("label {0} names several disconnected nets, which this format cannot tell apart")]
+    SplitLabel(String),
+}
+
+/// Refuse a net whose label also names another net. `nets` lists the nets
+/// the file names; `net_of` answers no net for a label on several, so a
+/// labelled net it does not answer is one piece of a split label.
+pub(crate) fn check_unsplit(
+    nets: impl IntoIterator<Item = gpurify_check::topology::NetId>,
+    ports: &gpurify_check::topology::PortTable,
+    strings: &gpurify_ingest::StrTable,
+) -> Result<(), WriteError> {
+    for net in nets {
+        if let Some(name) = ports.name_of(net) {
+            if ports.net_of(name) != Some(net) {
+                return Err(WriteError::SplitLabel(strings.resolve(name).to_owned()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Run metadata: everything that may differ between two otherwise-identical runs.

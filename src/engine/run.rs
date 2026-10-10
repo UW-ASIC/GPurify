@@ -51,8 +51,8 @@ pub struct RunOptions {
     /// closed-form estimate. Empty means analytical extraction only.
     ///
     /// Each entry is a label text. A name no label carries, or one on
-    /// several disconnected nets (an open), refuses the PEX stage. Naming a
-    /// net twice makes the solve fail with [`EngineError::Solve`].
+    /// several disconnected nets (an open), refuses the PEX stage. A net
+    /// named twice is solved once.
     pub quasistatic_nets: Vec<String>,
 }
 
@@ -512,6 +512,10 @@ fn run_pex(
                 }
             }
         }
+        // A net named twice is one conductor: solved twice, it is a singular
+        // system that never converges.
+        selected.sort_unstable();
+        selected.dedup();
 
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
         let mut solved = ParasiticNetwork::default();

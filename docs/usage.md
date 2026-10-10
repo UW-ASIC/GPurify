@@ -145,9 +145,12 @@ meet only at a corner) is refused. The field solve holds the substrate at
 ground as a plane at height 0, so a field-solved net's capacitance to ground
 is to the substrate, as the closed forms' is; a net with a shape on a layer
 at height 0 (a well, say) sits on that plane and cannot be field-solved. A
-net with no text
-label in the layout has no name to write, and the run refuses it rather than
-inventing one.
+net named twice is solved once.
+
+A net with no text label in the layout has no name to write, and the run
+refuses it rather than inventing one. A label on two nets that are not
+connected cannot name either in a SPEF or DSPF file, which would merge them,
+so the file is refused, naming the label.
 
 A wire is measured as drawn, not as cut into polygons: a net's shapes on one
 layer are merged first, so pieces that abut or overlap read as the one
