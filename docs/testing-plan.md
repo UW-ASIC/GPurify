@@ -82,6 +82,7 @@ A layer without one is not a test.
 | F34 | DRC details: `Owners::lowest_within` can name an island in a figure's hole as the violating shape (`min_area`, `cheesing`, `min_enclosed_area`); `max_distance_to_tap` measures hole rings as wells (over-report only); `color_into` returns `Complete` on a self-loop with three or more colours. | `drc/rules/area.rs`, `erc/rules/supply.rs`, `drc/rules/patterning.rs` | Wrong attribution and a public-API trap; no false clean known. |
 | F35 | Small ones: <br>• `write_blackbox` emits a trailing comma (a Verilog syntax error) for a spec with supply pins and no signal pins;<br>• `tests/liberty.rs` fails alone in a fresh checkout (fixtures not generated);<br>• testgen's `density` applies twice (1.0 panics) and its `Angle` triangle winds clockwise;<br>• intent's `BadLimit` and `DomainConflict` messages name the wrong cause;<br>• `resolve_labels` duplicates labels when called twice;<br>• a reference cycle no root reaches is skipped silently;<br>• `density_cmp`'s `partial_windows` is ignored for neighbour deltas;<br>• `CmpModel::nominal_thickness` is read by nothing;<br>• `diode_bonus` is subtracted with no diode on the net;<br>• the leakage error always blames the DC operating point. | various | Each needs a one-line test and a fix. |
 | F36 | **An AREF is expanded without a budget.** A 32767 × 32767 array is about 10⁹ placements per child shape; flattening runs until the u32 polygon id overflows and panics, rather than refusing. | `crates/ingest/src/layout.rs` (`Flatten::visit`), `geom` store builder | A crafted layout hangs or panics the run (B14). **Fixed in C1:** the flat count is taken from the hierarchy before anything is expanded, and a layout over `MAX_FLAT_POLYGONS` (2²⁸) is refused. |
+| F37 | **A boolean whose result has a hole touching its outer boundary at a vertex failed** with "self-intersecting boundary", which `boolean.rs` documents as an internal fault that cannot happen. At a checkerboard vertex the walk takes the left turn, which keeps two separate cells apart, but when the two diagonal cells are one region it stitched the outer ring and the hole into one ring through the vertex twice. Found on its first run by the random boolean property (shrunk to three rectangles). **Fixed in C3:** a ring that comes back through a pinch has the loop since the first visit split off as its own ring. | `crates/geom/src/boolean.rs` (`link`) | A derived layer or rule over such geometry failed the run instead of answering (B4). |
 
 ---
 
@@ -360,7 +361,7 @@ not an oversight.
 Every criterion is a number or a yes/no that a script can check.
 
 1. The corpus passes with zero unannotated failures. Every case in all four domains carries `expect_outcome`; every LVS case asserts its verdict.
-2. F1–F36 are closed, each with a regression test.
+2. F1–F37 are closed, each with a regression test.
 3. Boolean laws and every L5 relation have passed ≥ 10⁶ generated cases in total, with no failure in the last 7 nightlies.
 4. The bitmap-reference differential has shown no disagreement over ≥ 10⁵ random layouts per supported DRC kind.
 5. Each fuzz target has run ≥ 24 CPU-h with no new crash and coverage flat for the last 25% of the run.
@@ -410,7 +411,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B12 | The small ones | F34, F35 | todo |
 | C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | done |
 | C2 | testgen `prop`: seeds by property name, committed regression seeds replayed every run, greedy shrinking (rectangle layouts); `#[ignore]`d nightly twins instead of env knobs | F8, L3 | done |
-| C3 | Boolean laws over random operands | L3 | todo |
+| C3 | Boolean laws over random operands | L3 | done |
 | C4 | Limit monotonicity; L5 metamorphic relations on the corpus and on generated layouts | L3, L5 | todo |
 | C5 | Bitmap reference DRC, kind by kind; fix what it finds (bbox `extension`/`overlap` first) | L3, B1, B3 | todo |
 | C6 | ERC naive references (dense nodal solve, BFS); PEX matrix properties and monotonicity | L3 | todo |

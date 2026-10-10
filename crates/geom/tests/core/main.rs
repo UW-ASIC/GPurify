@@ -2,6 +2,7 @@
 
 mod bbox_laws;
 mod boolean_laws;
+mod boolean_random;
 mod connectivity_components;
 mod derive_ops;
 mod index_pairs;

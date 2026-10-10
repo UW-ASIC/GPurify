@@ -1,0 +1,3 @@
+# Seeds the random boolean property once failed on; replayed on every run.
+# A hole touching its outer boundary at a vertex (testing-plan F37).
+10640773784165308391

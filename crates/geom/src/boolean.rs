@@ -151,6 +151,13 @@ struct Sweep {
     order: Vec<u32>,
     by_end: Vec<u32>,
     next: Vec<u32>,
+    /// Per segment: it leaves a degree-four pinch vertex.
+    pinch: Vec<bool>,
+    /// The pinch vertices of the ring being walked, and where in it each sits.
+    ring_pinches: Vec<((i64, i64), usize)>,
+    /// Loops split off the ring being walked, closed once it is.
+    loops: Vec<(i64, i64)>,
+    loop_start: Vec<usize>,
     /// `link`'s output columns and its visited mask.
     link_x: Vec<i64>,
     link_y: Vec<i64>,
@@ -458,8 +465,16 @@ fn tail_of(seg: Seg) -> (i64, i64) {
 ///
 /// Vertices have degree two or four. At a degree-four pinch the **left turn** is
 /// taken, keeping two cells meeting at a corner as two simple rings; that makes
-/// `next` a permutation, so the walk is a cycle decomposition.
-fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, next: &mut Vec<u32>) {
+/// `next` a permutation, so the walk is a cycle decomposition. Each segment
+/// leaving a pinch is marked in `pinch`, for [`link`] to split a ring that
+/// comes back through one.
+fn successors_into(
+    segs: &[Seg],
+    order: &mut Vec<u32>,
+    by_end: &mut Vec<u32>,
+    next: &mut Vec<u32>,
+    pinch: &mut Vec<bool>,
+) {
     order.clear();
     order.extend(0..ring_mark(segs.len()));
     by_end.clear();
@@ -469,6 +484,8 @@ fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, ne
 
     next.clear();
     next.resize(segs.len(), u32::MAX);
+    pinch.clear();
+    pinch.resize(segs.len(), false);
 
     let (mut head, mut tail) = (0usize, 0usize);
     while tail < by_end.len() {
@@ -490,6 +507,11 @@ fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, ne
             "a boundary segment ends at a point no segment leaves"
         );
 
+        if head_end - head > 1 {
+            for &departure in &order[head..head_end] {
+                pinch[departure as usize] = true;
+            }
+        }
         for &arrival in &by_end[tail..tail_end] {
             let (dx, dy) = dir_of(segs[arrival as usize]);
             let want = (-dy, dx);
@@ -508,14 +530,28 @@ fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, ne
 }
 
 /// Walk the successor permutation into closed rings: flat columns plus CSR `start`.
+///
+/// The left turn keeps two cells that meet at a corner apart, but when those
+/// cells belong to one region (a hole touching its outer boundary at a vertex)
+/// the walk comes back through the pinch in the same ring, which would close a
+/// ring that touches itself. On that return, the loop walked since the first
+/// visit is split off as a ring of its own: the hole, touching the outer ring at
+/// the pinch instead of fused into it.
 fn link(
     segs: &[Seg],
     next: &[u32],
+    pinch: &[bool],
+    scratch: (
+        &mut Vec<((i64, i64), usize)>,
+        &mut Vec<(i64, i64)>,
+        &mut Vec<usize>,
+    ),
     xs: &mut Vec<i64>,
     ys: &mut Vec<i64>,
     start: &mut Vec<u32>,
     used: &mut Vec<bool>,
 ) {
+    let (ring_pinches, loops, loop_start) = scratch;
     xs.clear();
     xs.reserve(segs.len());
     ys.clear();
@@ -529,11 +565,29 @@ fn link(
         if used[seed] {
             continue;
         }
+        let ring_from = xs.len();
+        ring_pinches.clear();
+        loops.clear();
+        loop_start.clear();
         let mut cur = seed;
         loop {
             used[cur] = true;
-            xs.push(segs[cur].sx);
-            ys.push(segs[cur].sy);
+            let point = (segs[cur].sx, segs[cur].sy);
+            if pinch[cur] {
+                if let Some(slot) = ring_pinches.iter().position(|&(p, _)| p == point) {
+                    // Back through a pinch: what was walked since the first
+                    // visit is a closed loop of its own.
+                    let from = ring_pinches[slot].1;
+                    loop_start.push(loops.len());
+                    loops.extend(xs[from..].iter().copied().zip(ys[from..].iter().copied()));
+                    xs.truncate(from);
+                    ys.truncate(from);
+                    ring_pinches.retain(|&(_, at)| at < from);
+                }
+                ring_pinches.push((point, xs.len()));
+            }
+            xs.push(point.0);
+            ys.push(point.1);
 
             let step = next[cur] as usize;
             if step == seed {
@@ -546,7 +600,19 @@ fn link(
             );
             cur = step;
         }
+        debug_assert!(
+            xs.len() > ring_from,
+            "a ring keeps at least its closing vertex"
+        );
         start.push(ring_mark(xs.len()));
+        loop_start.push(loops.len());
+        for window in loop_start.windows(2) {
+            for &(x, y) in &loops[window[0]..window[1]] {
+                xs.push(x);
+                ys.push(y);
+            }
+            start.push(ring_mark(xs.len()));
+        }
     }
 
     // Release assert: a segment in no ring is area missing from the result.
@@ -565,10 +631,17 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
         &mut sweep.order,
         &mut sweep.by_end,
         &mut sweep.next,
+        &mut sweep.pinch,
     );
     link(
         &sweep.segs,
         &sweep.next,
+        &sweep.pinch,
+        (
+            &mut sweep.ring_pinches,
+            &mut sweep.loops,
+            &mut sweep.loop_start,
+        ),
         &mut sweep.link_x,
         &mut sweep.link_y,
         &mut sweep.link_start,
