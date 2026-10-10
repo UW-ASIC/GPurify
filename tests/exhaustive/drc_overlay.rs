@@ -1,8 +1,3264 @@
-//! Fixtures for this domain; see `main.rs`. Filled in by its own pass.
+//! Design rules between layers, on cuts and on coverage, the net, chip and
+//! device rows the deck can express, and every derived-layer operation: one
+//! generator per rule kind or operation, each the matrix of
+//! `docs/testing-plan.md` §6 (X2, catalog rows DRC-040 to DRC-122).
+//!
+//! Every expectation is derived from the rule's definition (the `drc::Rule`
+//! rustdoc and `docs/deck.md`) by construction: a margin, gap, area, count or
+//! coverage is a number the layout was drawn to have. Limits are swept one
+//! grid step either side, and every case is repeated under the eight
+//! symmetries at two translations (`every_placement`), except where a rule
+//! anchors on the die's lower-left corner, which only translations preserve.
+//! A derived layer is proved through `forbidden(L)`, which reports each
+//! resulting shape with its area (holes excluded) and each edge with its
+//! length.
+//!
+//! An edge layer is read as a set of maximal segments, one per run of a line
+//! with its shape on one side, as `KLayout` merges edges: a merged rectangle has
+//! four edges whatever pieces drew it.
+//!
+//! Where `GPurify` falls short of a definition, the fixture keeps the
+//! definition and names the finding that explains the gap (`known`): F19 and
+//! F34 from `docs/testing-plan.md`, and four this pass found:
+//! - N-x2-1: `extents()` stores the boxes of shapes whose boxes overlap as one
+//!   merged shape, where deck.md and `KLayout` give the box of each shape.
+//! - N-x2-2: `with_width` misses the Euclidean neck between concave corners
+//!   that `width` measures, though it is defined as `width` measures.
+//! - N-x2-3: without a boundary layer, `density` and `global_density` take
+//!   the die from every layer, derived ones included, so declaring a grown
+//!   layer (`met1.sized(500nm)`) widens the die and hides a maximum's
+//!   violation.
+//! - N-x2-4: `extension` and `overlap` pair drawn polygons without merging,
+//!   so a diffusion drawn in two pieces abutting under a legal gate reports
+//!   a 50 nm extension at the seam.
 
-use crate::harness::{Depth, Fixture};
+use crate::drc_dimension::{every_placement, DRC, OFFSETS};
+use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Symmetry, Want};
+use gpurify::check::report::Measurement;
+use std::fmt::Write as _;
+
+/// An axis-aligned rectangle, `(xlo, ylo, xhi, yhi)` in nanometres.
+type Rect = (i64, i64, i64, i64);
 
 /// Every fixture this module generates at `depth`.
-pub fn fixtures(_depth: Depth) -> Vec<Fixture> {
-    Vec::new()
+pub fn fixtures(depth: Depth) -> Vec<Fixture> {
+    [
+        min_enclosure(depth),
+        asymmetric_enclosure(depth),
+        min_extension(depth),
+        overlap(depth),
+        must_contain(),
+        must_be_inside(),
+        edge_min_length(),
+        edge_spacing(),
+        edge_enclosure(),
+        cut_spacing(),
+        redundant_via(),
+        via_array_spacing(depth),
+        global_density(),
+        density(depth),
+        cheesing(),
+        fill(),
+        net_spacing(),
+        tap_distance(),
+        labelled_short(),
+        exemption(),
+        chip_and_device(),
+        dangling_metal(),
+        drc_warning(),
+        multi_patterning(depth),
+        booleans(),
+        sizing(),
+        selections(),
+        edge_operations(),
+    ]
+    .concat()
+}
+
+// ------------------------------------------------------------------ helpers
+
+/// A deck on a 1 nm grid with each of `layers` drawn on its own GDS layer,
+/// then `body`.
+fn new_deck(layers: &[&str], body: &str) -> String {
+    let mut out = String::from("grid 1nm\n");
+    for (gds, name) in (1..).zip(layers) {
+        writeln!(out, "layer {name} = gds({gds}, 0)").expect("a String takes any write");
+    }
+    out + body
+}
+
+/// The limit swept one grid step either side, each value with its side's name.
+fn sweep(limit: i64) -> [(i64, &'static str); 3] {
+    [(limit - 1, "below"), (limit, "at"), (limit + 1, "above")]
+}
+
+/// A `>=` rule's verdict on one measurement: a finding measuring it when it
+/// is below `limit`, nothing at or above.
+fn below(measured: i64, limit: i64) -> Vec<Finding> {
+    if measured < limit {
+        vec![Finding::length(measured)]
+    } else {
+        Vec::new()
+    }
+}
+
+/// One finding per length.
+fn lengths(values: &[i64]) -> Vec<Finding> {
+    values.iter().map(|&v| Finding::length(v)).collect()
+}
+
+/// One finding per area, in square nanometres.
+fn areas(values: &[i128]) -> Vec<Finding> {
+    values.iter().map(|&v| Finding::area(v)).collect()
+}
+
+/// A finding with a measured count.
+fn count(n: u32) -> Finding {
+    Finding {
+        measured: Some(Measurement::Count(n)),
+        at: None,
+    }
+}
+
+/// A finding with a measured fraction, at `at`.
+fn ratio(fraction: f64, at: (i64, i64)) -> Finding {
+    Finding {
+        measured: Some(Measurement::Ratio(fraction)),
+        at: Some(at),
+    }
+}
+
+/// `layout` with each of `rects` added on `layer`.
+fn rects(layout: Layout, layer: &str, rects: &[Rect]) -> Layout {
+    rects.iter().fold(layout, |layout, &(xlo, ylo, xhi, yhi)| {
+        layout.rect(layer, xlo, ylo, xhi, yhi)
+    })
+}
+
+/// `outer` with `hole` cut out, drawn as four abutting bands that only merge
+/// into a ring: a shape with a hole, which one drawn outline cannot be.
+fn ring(layout: Layout, layer: &str, outer: Rect, hole: Rect) -> Layout {
+    let (xlo, ylo, xhi, yhi) = outer;
+    let (hxlo, hylo, hxhi, hyhi) = hole;
+    rects(
+        layout,
+        layer,
+        &[
+            (xlo, ylo, xhi, hylo),
+            (xlo, hyhi, xhi, yhi),
+            (xlo, hylo, hxlo, hyhi),
+            (hxhi, hylo, xhi, hyhi),
+        ],
+    )
+}
+
+/// One fixture: `layout` under `deck`, each rule claimed to run and to find
+/// exactly its findings.
+fn fixture(
+    name: &str,
+    catalog: &[&'static str],
+    deck: &str,
+    layout: Layout,
+    rules: &[(&str, Vec<Finding>)],
+) -> Fixture {
+    rules.iter().fold(
+        Fixture::new(name, catalog, deck, DRC).layout(layout),
+        |fixture, (id, findings)| fixture.expect(Expect::rule(id, findings.clone())),
+    )
+}
+
+/// Each fixture at every offset, unturned: for rules anchored on the die's
+/// lower-left corner, which a turn or mirror moves.
+fn every_offset(fixtures: &[Fixture]) -> Vec<Fixture> {
+    fixtures
+        .iter()
+        .flat_map(|fixture| {
+            OFFSETS
+                .iter()
+                .map(move |&(dx, dy)| fixture.transformed(Symmetry::IDENTITY, dx, dy))
+        })
+        .collect()
+}
+
+/// The margins every enumeration sweeps: touching, one step below, at and above
+/// a 100 nm limit, and far.
+const MARGINS: [i64; 5] = [0, 99, 100, 101, 400];
+
+// ---------------------------------------------------------------- enclosure
+
+/// An L-shaped host, `[0, 2000] x [0, 1000]` with `[0, 1000] x [0, 2000]`: its
+/// concave corner is `(1000, 1000)`.
+const L_HOST: [(i64, i64); 6] = [
+    (0, 0),
+    (2000, 0),
+    (2000, 1000),
+    (1000, 1000),
+    (1000, 2000),
+    (0, 2000),
+];
+
+/// A plus-shaped host, bars `[0, 1000] x [400, 600]` and `[400, 600] x [0,
+/// 1000]`: its concave corners are 50 nm diagonally off `[450, 550]^2` on
+/// both axes, Euclidean `floor(sqrt(5000)) = 70`, while every straight strip
+/// from that square runs 450 nm.
+const PLUS_HOST: [(i64, i64); 12] = [
+    (400, 0),
+    (600, 0),
+    (600, 400),
+    (1000, 400),
+    (1000, 600),
+    (600, 600),
+    (600, 1000),
+    (400, 1000),
+    (400, 600),
+    (0, 600),
+    (0, 400),
+    (400, 400),
+];
+
+/// `enclosure(via, met1) >= 100nm` (`min_enclosure`, DRC-040): one finding per
+/// drawn via whose Euclidean distance to its host's boundary, holes and
+/// concave corners included, is below the limit, measuring that distance
+/// floored. A via no merged host figure covers measures 0.
+///
+/// Shapes, each margin swept 99/100/101:
+/// - concentric, and one side short (the symmetries visit the other three);
+/// - the host drawn as two abutting halves meeting under the via, which only
+///   the merged host covers;
+/// - a host ring (four bands) with the via beside its hole, so the hole's edge
+///   counts;
+/// - the via drawn as two abutting halves, each measured on its own;
+/// - an L host with the via off its concave corner at Pythagorean offsets
+///   (60, 79/80/81), so the Euclidean distance is exact and a projection
+///   measure, which sees only the far edges, is caught; drawn as one outline
+///   and as two overlapping rectangles.
+///
+/// And: a plus-shaped host (Euclidean 70 at its concave corners); a via
+/// straddling the host's edge, outside it, or touching it from inside or
+/// outside (all 0); a via with a hole (`cut not hole`), one polygon, swept;
+/// each layer empty. Nightly: every combination of four rectangular margins.
+fn min_enclosure(depth: Depth) -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck = new_deck(&["via", "met1"], "rule enc enclosure(via, met1) >= 100nm\n");
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("min_enclosure/{name}"),
+            &["DRC-040"],
+            &deck,
+            layout,
+            &[("enc", findings)],
+        )
+    };
+    let via = || Layout::default().rect("via", 0, 0, 100, 100);
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        let short = below(m, LIMIT);
+        cases.push(case(
+            &format!("concentric/{side}"),
+            via().rect("met1", -m, -m, 100 + m, 100 + m),
+            short.clone(),
+        ));
+        cases.push(case(
+            &format!("one_side/{side}"),
+            via().rect("met1", -400, -400, 100 + m, 500),
+            short.clone(),
+        ));
+        cases.push(case(
+            &format!("seam/{side}"),
+            via()
+                .rect("met1", -400, -400, 50, 500)
+                .rect("met1", 50, -400, 100 + m, 500),
+            short.clone(),
+        ));
+        cases.push(case(
+            &format!("beside_hole/{side}"),
+            ring(
+                Layout::default().rect("via", 1000 - m, 950, 1100 - m, 1050),
+                "met1",
+                (0, 0, 2000, 2000),
+                (1100, 700, 1500, 1300),
+            ),
+            short.clone(),
+        ));
+        cases.push(case(
+            &format!("via_halves/{side}"),
+            Layout::default()
+                .rect("via", 0, 0, 50, 100)
+                .rect("via", 50, 0, 100, 100)
+                .rect("met1", -m, -m, 100 + m, 100 + m),
+            [short.clone(), short].concat(),
+        ));
+    }
+    for (dy, side, findings) in [
+        (79, "below", lengths(&[99])),
+        (80, "at", Vec::new()),
+        (81, "above", Vec::new()),
+    ] {
+        let via = Layout::default().rect("via", 840, 900 - dy, 940, 1000 - dy);
+        cases.push(case(
+            &format!("concave_corner/{side}"),
+            via.clone().polygon("met1", &L_HOST),
+            findings.clone(),
+        ));
+        cases.push(case(
+            &format!("concave_corner_two_rects/{side}"),
+            via.rect("met1", 0, 0, 2000, 1000)
+                .rect("met1", 0, 0, 1000, 2000),
+            findings,
+        ));
+    }
+    cases.push(case(
+        "plus_host",
+        Layout::default()
+            .rect("via", 450, 450, 550, 550)
+            .polygon("met1", &PLUS_HOST),
+        lengths(&[70]),
+    ));
+    for (name, host) in [
+        ("straddling", (50, -400, 600, 500)),
+        ("outside", (200, -400, 800, 500)),
+        ("touching_inside", (0, -400, 600, 500)),
+        ("touching_outside", (100, -400, 600, 500)),
+    ] {
+        cases.push(case(name, rects(via(), "met1", &[host]), lengths(&[0])));
+    }
+    cases.push(case(
+        "empty_via",
+        Layout::default().rect("met1", 0, 0, 1000, 1000),
+        Vec::new(),
+    ));
+    cases.push(case("empty_met1", via(), lengths(&[0])));
+    // A via with a hole, derived as `cut not hole`, is one polygon: its
+    // material is `m` from the host's edge on every side.
+    let deck_ring = new_deck(
+        &["cut", "hole", "met1"],
+        "layer via = cut not hole\nrule enc enclosure(via, met1) >= 100nm\n",
+    );
+    for (m, side) in sweep(LIMIT) {
+        cases.push(fixture(
+            &format!("min_enclosure/ring_via/{side}"),
+            &["DRC-040", "DRC-120"],
+            &deck_ring,
+            Layout::default()
+                .rect("cut", 0, 0, 300, 300)
+                .rect("hole", 100, 100, 200, 200)
+                .rect("met1", -m, -m, 300 + m, 300 + m),
+            &[("enc", below(m, LIMIT))],
+        ));
+    }
+    if depth == Depth::Nightly {
+        for (l, r, b, t) in margins4() {
+            cases.push(case(
+                &format!("margins/l{l}_r{r}_b{b}_t{t}"),
+                via().rect("met1", -l, -b, 100 + r, 100 + t),
+                below(l.min(r).min(b).min(t), LIMIT),
+            ));
+        }
+    }
+    every_placement(cases)
+}
+
+/// Every `(left, right, bottom, top)` drawn from [`MARGINS`].
+fn margins4() -> Vec<(i64, i64, i64, i64)> {
+    let mut out = Vec::new();
+    for l in MARGINS {
+        for r in MARGINS {
+            for b in MARGINS {
+                for t in MARGINS {
+                    out.push((l, r, b, t));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `enclosure(via, met1, opposite) >= 100nm` (`asymmetric_enclosure`, DRC-041
+/// and DRC-042): a rectangular via measures `max(min(left, right),
+/// min(bottom, top))`, each side read straight out to the nearest host edge
+/// facing it; a via of any other shape is held to the limit on every side, as
+/// `min_enclosure` measures it (fails closed).
+///
+/// Shapes: the limit on one axis with the other axis touching; one side short
+/// with the other axis far; both axes short; every side touching; a host with
+/// notches down to the via on two sides (a bounding-box measure sees the far
+/// edges); the plus host, clean here because its straight strips run 450 nm
+/// although its concave corners are 70 nm off; an L-shaped via, swept, and
+/// with the limit only on one axis (held to every side, so 0); an unhosted
+/// via; an empty via layer. Nightly: every combination of four margins.
+fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck = new_deck(
+        &["via", "met1"],
+        "rule m1.5 enclosure(via, met1, opposite) >= 100nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("asymmetric_enclosure/{name}"),
+            &["DRC-041", "DRC-042"],
+            &deck,
+            layout,
+            &[("m1.5", findings)],
+        )
+    };
+    let hosted = |(l, r, b, t): (i64, i64, i64, i64)| {
+        Layout::default()
+            .rect("via", 0, 0, 100, 100)
+            .rect("met1", -l, -b, 100 + r, 100 + t)
+    };
+    let measure = |(l, r, b, t): (i64, i64, i64, i64)| below(l.min(r).max(b.min(t)), LIMIT);
+    let l_via = [
+        (0, 0),
+        (200, 0),
+        (200, 100),
+        (100, 100),
+        (100, 200),
+        (0, 200),
+    ];
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        for (name, margins) in [
+            ("x_axis", (m, m, 0, 0)),
+            ("y_axis", (0, 0, m, m)),
+            ("one_side_short", (m, 400, 0, 400)),
+            ("both_axes_short", (m, 400, 400, 99)),
+        ] {
+            cases.push(case(
+                &format!("{name}/{side}"),
+                hosted(margins),
+                measure(margins),
+            ));
+        }
+        // Notches come down to `m` above and right of the via; the host's
+        // box is 400 nm out on every side.
+        let notched = [
+            (-400, -400),
+            (500, -400),
+            (500, 0),
+            (100 + m, 0),
+            (100 + m, 100),
+            (500, 100),
+            (500, 500),
+            (100, 500),
+            (100, 100 + m),
+            (0, 100 + m),
+            (0, 500),
+            (-400, 500),
+        ];
+        cases.push(case(
+            &format!("notched_host/{side}"),
+            Layout::default()
+                .rect("via", 0, 0, 100, 100)
+                .polygon("met1", &notched),
+            below(m, LIMIT),
+        ));
+        cases.push(case(
+            &format!("l_via/{side}"),
+            Layout::default()
+                .polygon("via", &l_via)
+                .rect("met1", -m, -m, 200 + m, 200 + m),
+            below(m, LIMIT),
+        ));
+    }
+    cases.push(case("every_side_zero", hosted((0, 0, 0, 0)), lengths(&[0])));
+    cases.push(case(
+        "plus_host",
+        Layout::default()
+            .rect("via", 450, 450, 550, 550)
+            .polygon("met1", &PLUS_HOST),
+        Vec::new(),
+    ));
+    cases.push(case(
+        "l_via_one_axis",
+        Layout::default()
+            .polygon("via", &l_via)
+            .rect("met1", -100, 0, 300, 200),
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "unhosted",
+        Layout::default()
+            .rect("via", 0, 0, 100, 100)
+            .rect("met1", 50, -400, 600, 500),
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "empty_via",
+        Layout::default().rect("met1", 0, 0, 1000, 1000),
+        Vec::new(),
+    ));
+    if depth == Depth::Nightly {
+        for margins in margins4() {
+            let (l, r, b, t) = margins;
+            cases.push(case(
+                &format!("margins/l{l}_r{r}_b{b}_t{t}"),
+                hosted(margins),
+                measure(margins),
+            ));
+        }
+    }
+    every_placement(cases)
+}
+
+// --------------------------------------------------------- extension, overlap
+
+/// `extension(poly, diff) >= 100nm` (`min_extension`, DRC-045): a poly that
+/// crosses diffusion must run past each diffusion edge it crosses by the limit;
+/// one finding per offending pair, measuring the shortest such run, 0 where
+/// the poly stops inside the diffusion or at its edge.
+///
+/// Diffusion is `[0, 1000] x [0, 400]`. Shapes: a gate with both ends at the
+/// swept length, one end swept with the other far, a poly covering the
+/// diffusion; a U-shaped poly whose far arm makes its bounding box reach past
+/// on every side while the gate end is swept, and a gate ending inside the
+/// diffusion at one end (both F19); a legal gate over a diffusion drawn as
+/// two pieces abutting under it (N-x2-4); a poly abutting the diffusion
+/// without crossing it (no gate, clean); an empty poly layer. Nightly: both
+/// ends across {inside, flush, 99, 100, 101, far}.
+fn min_extension(depth: Depth) -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck = new_deck(
+        &["diff", "poly"],
+        "rule poly.8 extension(poly, diff) >= 100nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("min_extension/{name}"),
+            &["DRC-045"],
+            &deck,
+            layout,
+            &[("poly.8", findings)],
+        )
+    };
+    let diff = || Layout::default().rect("diff", 0, 0, 1000, 400);
+    // The gate's two ends past the diffusion, bottom then top; at or below
+    // zero it stops inside, measuring 0.
+    let gate = |bottom: i64, top: i64| {
+        let findings = below(bottom.min(top).max(0), LIMIT);
+        // F19: a side where the poly does not reach past is not measured.
+        let known = bottom.min(top) <= 0 && bottom.max(top) > 0;
+        (
+            diff().rect("poly", 400, -bottom, 500, 400 + top),
+            findings,
+            known,
+        )
+    };
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        let (layout, findings, _) = gate(m, m);
+        cases.push(case(&format!("crossing/{side}"), layout, findings));
+        let (layout, findings, _) = gate(500, m);
+        cases.push(case(&format!("one_end/{side}"), layout, findings));
+        cases.push(case(
+            &format!("covering/{side}"),
+            diff().rect("poly", -m, -m, 1000 + m, 400 + m),
+            below(m, LIMIT),
+        ));
+        let u = [
+            (400, -200),
+            (1300, -200),
+            (1300, 1000),
+            (1200, 1000),
+            (1200, -100),
+            (500, -100),
+            (500, 400 + m),
+            (400, 400 + m),
+        ];
+        let fixture = case(
+            &format!("u_shape/{side}"),
+            diff().polygon("poly", &u),
+            below(m, LIMIT),
+        );
+        cases.push(if m < LIMIT {
+            fixture.known("F19")
+        } else {
+            fixture
+        });
+    }
+    let (layout, findings, _) = gate(500, -100);
+    cases.push(case("ends_inside", layout, findings).known("F19"));
+    cases.push(case(
+        "abutting",
+        diff().rect("poly", 400, 400, 500, 900),
+        Vec::new(),
+    ));
+    cases.push(case("empty_poly", diff(), Vec::new()));
+    // The diffusion drawn as two pieces abutting under the gate: one
+    // diffusion, which the gate crosses with 200 nm to spare at both ends
+    // (N-x2-4: each drawn piece is paired on its own).
+    cases.push(
+        case(
+            "split_diffusion",
+            Layout::default()
+                .rect("diff", 0, 0, 450, 400)
+                .rect("diff", 450, 0, 1000, 400)
+                .rect("poly", 400, -200, 500, 600),
+            Vec::new(),
+        )
+        .known("N-x2-4"),
+    );
+    if depth == Depth::Nightly {
+        let ends = [-100, 0, 99, 100, 101, 500];
+        for bottom in ends {
+            for top in ends {
+                let (layout, findings, known) = gate(bottom, top);
+                let fixture = case(&format!("ends/b{bottom}_t{top}"), layout, findings);
+                cases.push(if known { fixture.known("F19") } else { fixture });
+            }
+        }
+    }
+    every_placement(cases)
+}
+
+/// `overlap(a, b) >= 100nm` (`overlap`, DRC-046): one finding per pair whose
+/// shared area is narrower than the limit, measuring the narrower side of that
+/// area; shapes that share no area do not overlap.
+///
+/// `b` is `[0, 1000]^2`. Shapes: an edge overlap and a contained bar, swept;
+/// boxes that only touch, an L whose material overlaps 500 x 50 inside a
+/// 500 x 500 box intersection, and a notched square whose box overlaps `b`
+/// while its material keeps 50 nm away (all F19); an `a` drawn as two
+/// abutting pieces that together overlap by 100 (N-x2-4); an empty `a`.
+/// Nightly: the edge overlap from 90 to 110.
+fn overlap(depth: Depth) -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck = new_deck(&["a", "b"], "rule ov overlap(a, b) >= 100nm\n");
+    let case = |name: &str, a: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("overlap/{name}"),
+            &["DRC-046"],
+            &deck,
+            a.rect("b", 0, 0, 1000, 1000),
+            &[("ov", findings)],
+        )
+    };
+    let edge = |m: i64| Layout::default().rect("a", 1000 - m, 200, 2000, 800);
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        cases.push(case(&format!("edge/{side}"), edge(m), below(m, LIMIT)));
+        cases.push(case(
+            &format!("contained/{side}"),
+            Layout::default().rect("a", 300, 300, 300 + m, 700),
+            below(m, LIMIT),
+        ));
+    }
+    cases.push(case("touching", edge(0), Vec::new()).known("F19"));
+    let l_shape = [
+        (500, 950),
+        (1900, 950),
+        (1900, 500),
+        (2000, 500),
+        (2000, 1000),
+        (500, 1000),
+    ];
+    cases.push(
+        case(
+            "l_shape",
+            Layout::default().polygon("a", &l_shape),
+            lengths(&[50]),
+        )
+        .known("F19"),
+    );
+    let notched = [
+        (950, 1050),
+        (1050, 1050),
+        (1050, 950),
+        (2000, 950),
+        (2000, 2000),
+        (950, 2000),
+    ];
+    cases.push(
+        case(
+            "notched_square",
+            Layout::default().polygon("a", &notched),
+            Vec::new(),
+        )
+        .known("F19"),
+    );
+    cases.push(case("empty_a", Layout::default(), Vec::new()));
+    // `a` drawn as two abutting pieces: together they overlap `b` by 100
+    // (N-x2-4: each drawn piece is paired on its own).
+    cases.push(
+        case(
+            "split_a",
+            Layout::default()
+                .rect("a", 900, 200, 950, 800)
+                .rect("a", 950, 200, 2000, 800),
+            Vec::new(),
+        )
+        .known("N-x2-4"),
+    );
+    if depth == Depth::Nightly {
+        for m in 90..=110 {
+            cases.push(case(&format!("edge_sweep/{m}"), edge(m), below(m, LIMIT)));
+        }
+    }
+    every_placement(cases)
+}
+
+// ------------------------------------------------------- containment, inside
+
+/// `contains(tap, licon) >= 1` and `>= 2` (`must_contain`, DRC-048 and
+/// DRC-049), and `contains(nwell, ntap) >= 1` (DRC-085, tap presence per
+/// well): one finding per merged outer figure holding fewer merged inner
+/// figures entirely, counting what it holds.
+///
+/// Shapes: none, one and two held; one touching the tap's edge from inside
+/// (held); one straddling the edge and one touching it from outside (not
+/// held); two touching or overlapping licons (one figure); a tap of two
+/// abutting halves holding a licon across the seam; two taps; a licon in a
+/// tap ring's hole (not held); an empty tap layer. For wells: tapped,
+/// untapped, a tap across the well's edge.
+fn must_contain() -> Vec<Fixture> {
+    let deck_tap = new_deck(
+        &["tap", "licon"],
+        "rule one contains(tap, licon) >= 1\nrule two contains(tap, licon) >= 2\n",
+    );
+    let case = |name: &str, layout: Layout, one: Vec<Finding>, two: Vec<Finding>| {
+        fixture(
+            &format!("must_contain/{name}"),
+            &["DRC-048", "DRC-049"],
+            &deck_tap,
+            layout,
+            &[("one", one), ("two", two)],
+        )
+    };
+    let tap = || Layout::default().rect("tap", 0, 0, 1000, 500);
+    let mut cases = Vec::new();
+    for (name, licons, one, two) in [
+        ("none", vec![], vec![count(0)], vec![count(0)]),
+        ("one", vec![(100, 100, 200, 200)], vec![], vec![count(1)]),
+        (
+            "two",
+            vec![(100, 100, 200, 200), (400, 100, 500, 200)],
+            vec![],
+            vec![],
+        ),
+        (
+            "edge_inside",
+            vec![(0, 0, 100, 100)],
+            vec![],
+            vec![count(1)],
+        ),
+        (
+            "straddling",
+            vec![(950, 100, 1050, 200)],
+            vec![count(0)],
+            vec![count(0)],
+        ),
+        (
+            "touching_outside",
+            vec![(1000, 100, 1100, 200)],
+            vec![count(0)],
+            vec![count(0)],
+        ),
+        (
+            "touching_pair",
+            vec![(100, 100, 200, 200), (200, 100, 300, 200)],
+            vec![],
+            vec![count(1)],
+        ),
+        (
+            "overlapping_pair",
+            vec![(100, 100, 250, 200), (200, 100, 300, 200)],
+            vec![],
+            vec![count(1)],
+        ),
+    ] {
+        cases.push(case(name, rects(tap(), "licon", &licons), one, two));
+    }
+    cases.push(case(
+        "tap_halves",
+        Layout::default()
+            .rect("tap", 0, 0, 500, 500)
+            .rect("tap", 500, 0, 1000, 500)
+            .rect("licon", 450, 100, 550, 200),
+        vec![],
+        vec![count(1)],
+    ));
+    cases.push(case(
+        "two_taps",
+        tap()
+            .rect("licon", 100, 100, 200, 200)
+            .rect("tap", 2000, 0, 3000, 500),
+        vec![count(0)],
+        vec![count(1), count(0)],
+    ));
+    cases.push(case(
+        "empty_tap",
+        Layout::default().rect("licon", 100, 100, 200, 200),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "in_hole",
+        ring(
+            Layout::default().rect("licon", 450, 200, 550, 300),
+            "tap",
+            (0, 0, 1000, 500),
+            (300, 100, 700, 400),
+        ),
+        vec![count(0)],
+        vec![count(0)],
+    ));
+
+    let deck_well = new_deck(
+        &["nwell", "ntap"],
+        "rule nwell.4 contains(nwell, ntap) >= 1\n",
+    );
+    for (name, taps, findings) in [
+        ("tapped", vec![(100, 100, 300, 300)], vec![]),
+        ("untapped", vec![], vec![count(0)]),
+        (
+            "tap_across_edge",
+            vec![(1900, 100, 2100, 300)],
+            vec![count(0)],
+        ),
+    ] {
+        cases.push(fixture(
+            &format!("well_tap/{name}"),
+            &["DRC-085", "DRC-048"],
+            &deck_well,
+            rects(
+                Layout::default().rect("nwell", 0, 0, 2000, 1000),
+                "ntap",
+                &taps,
+            ),
+            &[("nwell.4", findings)],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// `inside(licon, npc)` (`must_be_inside`, DRC-048): one finding per merged
+/// licon figure not covered by one merged npc figure, measuring the area left
+/// outside the npc.
+///
+/// npc is `[0, 1000]^2`. Shapes: inside; touching npc's edge from inside;
+/// straddling the edge by 1, 50 and 99 nm of its 100; outside, and touching
+/// from outside (the whole area); spanning a 10 nm gap between two npc
+/// shapes (the gap's area); spanning the seam of two abutting npc shapes
+/// (inside); a licon inside touching one that sticks out (one figure); a
+/// licon in an npc ring's hole (all outside) and across the hole's edge
+/// (half); each layer empty.
+fn must_be_inside() -> Vec<Fixture> {
+    let deck = new_deck(&["npc", "licon"], "rule licon.18 inside(licon, npc)\n");
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("must_be_inside/{name}"),
+            &["DRC-048"],
+            &deck,
+            layout,
+            &[("licon.18", findings)],
+        )
+    };
+    let npc = || Layout::default().rect("npc", 0, 0, 1000, 1000);
+    let mut cases = vec![
+        case("inside", npc().rect("licon", 100, 100, 200, 200), vec![]),
+        case(
+            "touching_inside",
+            npc().rect("licon", 0, 0, 100, 100),
+            vec![],
+        ),
+        case(
+            "outside",
+            npc().rect("licon", 1100, 400, 1200, 500),
+            areas(&[10_000]),
+        ),
+        case(
+            "touching_outside",
+            npc().rect("licon", 1000, 400, 1100, 500),
+            areas(&[10_000]),
+        ),
+        case(
+            "across_gap",
+            npc()
+                .rect("npc", 1010, 0, 2000, 1000)
+                .rect("licon", 950, 400, 1060, 500),
+            areas(&[1000]),
+        ),
+        case(
+            "across_seam",
+            Layout::default()
+                .rect("npc", 0, 0, 1000, 1000)
+                .rect("npc", 1000, 0, 2000, 1000)
+                .rect("licon", 950, 400, 1050, 500),
+            vec![],
+        ),
+        case(
+            "touching_licons",
+            npc()
+                .rect("licon", 800, 400, 900, 500)
+                .rect("licon", 900, 400, 1100, 500),
+            areas(&[10_000]),
+        ),
+        case("empty_licon", npc(), vec![]),
+        case(
+            "in_hole",
+            ring(
+                Layout::default().rect("licon", 450, 450, 550, 550),
+                "npc",
+                (0, 0, 1000, 1000),
+                (300, 300, 700, 700),
+            ),
+            areas(&[10_000]),
+        ),
+        case(
+            "across_hole_edge",
+            ring(
+                Layout::default().rect("licon", 250, 450, 350, 550),
+                "npc",
+                (0, 0, 1000, 1000),
+                (300, 300, 700, 700),
+            ),
+            areas(&[5_000]),
+        ),
+        case(
+            "empty_npc",
+            Layout::default().rect("licon", 0, 0, 100, 100),
+            areas(&[10_000]),
+        ),
+    ];
+    for k in [1, 50, 99] {
+        cases.push(case(
+            &format!("straddling/{k}"),
+            npc().rect("licon", 1000 - k, 400, 1100 - k, 500),
+            areas(&[i128::from(100 - k) * 100]),
+        ));
+    }
+    every_placement(cases)
+}
+
+// ------------------------------------------------------------- edge checks
+
+/// `length(tap.edges() and diff.edges()) >= 100nm` (`edge_min_length`,
+/// DRC-051, sky130 difftap.4): one finding per butting edge shorter than the
+/// limit, measuring it.
+///
+/// Shapes: a tap whose whole side butts a taller diffusion, and one butting
+/// only part of its side, swept; a tap overlapping the diffusion, which leaves
+/// no butting edge.
+fn edge_min_length() -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck = new_deck(
+        &["diff", "tap"],
+        "layer butt = tap.edges() and diff.edges()\nrule difftap.4 length(butt) >= 100nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("edge_min_length/{name}"),
+            &["DRC-051", "DRC-122"],
+            &deck,
+            layout,
+            &[("difftap.4", findings)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (len, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("whole_side/{side}"),
+            Layout::default()
+                .rect("tap", 0, 0, 500, len)
+                .rect("diff", 500, -200, 1500, 800),
+            below(len, LIMIT),
+        ));
+        cases.push(case(
+            &format!("part_side/{side}"),
+            Layout::default()
+                .rect("tap", 0, 0, 500, 300)
+                .rect("diff", 500, 300 - len, 1500, 1000),
+            below(len, LIMIT),
+        ));
+    }
+    cases.push(case(
+        "overlapping",
+        Layout::default()
+            .rect("tap", 0, 0, 600, 50)
+            .rect("diff", 500, -200, 1500, 800),
+        vec![],
+    ));
+    every_placement(cases)
+}
+
+/// `space(butt) >= 200nm` on the butting edges (`edge_spacing`, DRC-051,
+/// sky130 difftap.5), and `space(tap.edges(), nsdm.edges()) >= 200nm`: one
+/// finding per pair of parallel edges closer than the limit, measured edge to
+/// edge, Euclidean; perpendicular edges are not paired.
+///
+/// Shapes: a tap between two diffusions (its two butting edges face each other
+/// across its width); two taps whose butting edges are collinear, end to end;
+/// a tap inside nsdm, whose four facing pairs are the margin apart.
+fn edge_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 200;
+    let deck_butt = new_deck(
+        &["diff", "tap"],
+        "layer butt = tap.edges() and diff.edges()\nrule difftap.5 space(butt) >= 200nm\n",
+    );
+    let deck_two = new_deck(
+        &["tap", "nsdm"],
+        "rule e2 space(tap.edges(), nsdm.edges()) >= 200nm\n",
+    );
+    let catalog = &["DRC-051", "DRC-122"];
+    let mut cases = Vec::new();
+    for (g, side) in sweep(LIMIT) {
+        cases.push(fixture(
+            &format!("edge_spacing/between/{side}"),
+            catalog,
+            &deck_butt,
+            Layout::default()
+                .rect("diff", -1000, -500, 0, 1000)
+                .rect("tap", 0, 0, g, 500)
+                .rect("diff", g, -500, g + 1000, 1000),
+            &[("difftap.5", below(g, LIMIT))],
+        ));
+        cases.push(fixture(
+            &format!("edge_spacing/end_to_end/{side}"),
+            catalog,
+            &deck_butt,
+            Layout::default()
+                .rect("tap", 0, 0, 500, 300)
+                .rect("tap", 0, 300 + g, 500, 600 + g)
+                .rect("diff", 500, -500, 1500, 1500),
+            &[("difftap.5", below(g, LIMIT))],
+        ));
+        let four = if g < LIMIT { lengths(&[g; 4]) } else { vec![] };
+        cases.push(fixture(
+            &format!("edge_spacing/two_layers/{side}"),
+            catalog,
+            &deck_two,
+            Layout::default()
+                .rect("tap", 0, 0, 400, 400)
+                .rect("nsdm", -g, -g, 400 + g, 400 + g),
+            &[("e2", four)],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// `enclosure(diff.edges(), nsdm) >= 100nm` and `enclosure(diff.edges() not
+/// tap.edges(), nsdm) >= 100nm` (`edge_enclosure`, DRC-051, sky130 nsd.5a):
+/// one finding per edge whose strip straight out, along its whole length, is
+/// covered less than the limit deep, measuring the covered depth.
+///
+/// Diffusion is `[0, 1000] x [0, 500]`. Shapes: one side's margin swept, and
+/// all four; nsdm stopping short of the diffusion's top (three edges at 0);
+/// nsdm missing only a corner square diagonally off the diffusion (clean: the
+/// documented diagonal blind spot); no nsdm at all; a hole in nsdm 50 nm out
+/// from one edge (covered 50 deep); the butting edge to a tap excluded, with
+/// nsdm not reaching over the tap; and a diffusion ring, whose hole edges face
+/// into the hole: nsdm filling it covers them, nsdm reaching 50 nm into it
+/// covers them 50 deep.
+fn edge_enclosure() -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck_all = new_deck(
+        &["diff", "tap", "nsdm"],
+        "rule nsd.5a enclosure(diff.edges(), nsdm) >= 100nm\n",
+    );
+    let deck_butt = new_deck(
+        &["diff", "tap", "nsdm"],
+        "rule nsd.5a enclosure(diff.edges() not tap.edges(), nsdm) >= 100nm\n",
+    );
+    let case = |name: &str, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("edge_enclosure/{name}"),
+            &["DRC-051", "DRC-122"],
+            deck,
+            layout.rect("diff", 0, 0, 1000, 500),
+            &[("nsd.5a", findings)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("one_side/{side}"),
+            &deck_all,
+            Layout::default().rect("nsdm", -300, -300, 1000 + m, 800),
+            below(m, LIMIT),
+        ));
+        cases.push(case(
+            &format!("every_side/{side}"),
+            &deck_all,
+            Layout::default().rect("nsdm", -m, -m, 1000 + m, 500 + m),
+            if m < LIMIT { lengths(&[m; 4]) } else { vec![] },
+        ));
+        cases.push(case(
+            &format!("butting_excluded/{side}"),
+            &deck_butt,
+            Layout::default()
+                .rect("tap", -400, 0, 0, 500)
+                .rect("nsdm", 0, -m, 1000 + m, 500 + m),
+            if m < LIMIT { lengths(&[m; 3]) } else { vec![] },
+        ));
+    }
+    cases.push(case(
+        "short_of_top",
+        &deck_all,
+        Layout::default().rect("nsdm", -300, -300, 1300, 400),
+        lengths(&[0; 3]),
+    ));
+    let corner_missing = [
+        (-300, -300),
+        (1300, -300),
+        (1300, 500),
+        (1000, 500),
+        (1000, 800),
+        (-300, 800),
+    ];
+    cases.push(case(
+        "corner_missing",
+        &deck_all,
+        Layout::default().polygon("nsdm", &corner_missing),
+        vec![],
+    ));
+    cases.push(case(
+        "no_nsdm",
+        &deck_all,
+        Layout::default(),
+        lengths(&[0; 4]),
+    ));
+    cases.push(case(
+        "hole_in_strip",
+        &deck_all,
+        ring(
+            Layout::default(),
+            "nsdm",
+            (-300, -300, 1300, 800),
+            (1050, 100, 1150, 400),
+        ),
+        lengths(&[50]),
+    ));
+    // A diffusion ring: its hole's edges face into the hole, so nsdm reaching
+    // 50 nm into the hole covers them 50 deep, and nsdm filling it covers them.
+    for (name, nsdm_hole, findings) in [
+        ("ring_hole_covered", None, vec![]),
+        (
+            "ring_hole_partly",
+            Some((350, 350, 650, 650)),
+            lengths(&[50; 4]),
+        ),
+    ] {
+        let nsdm = match nsdm_hole {
+            None => Layout::default().rect("nsdm", -200, -200, 1200, 1200),
+            Some(hole) => ring(Layout::default(), "nsdm", (-200, -200, 1200, 1200), hole),
+        };
+        cases.push(fixture(
+            &format!("edge_enclosure/{name}"),
+            &["DRC-051", "DRC-122"],
+            &deck_all,
+            ring(nsdm, "diff", (0, 0, 1000, 1000), (300, 300, 700, 700)),
+            &[("nsd.5a", findings)],
+        ));
+    }
+    every_placement(cases)
+}
+
+// -------------------------------------------------------------------- cuts
+
+/// Cut-to-cut spacing `space(cut) >= 100nm` (`min_spacing` on a cut layer,
+/// DRC-060) and cross-layer cut spacing `space(via1, via2) >= 100nm`
+/// (`min_spacing_diff`, DRC-065): one finding per pair closer than the limit,
+/// measuring the Euclidean gap floored.
+///
+/// Shapes: side by side, swept; diagonal at (60, 79/80/81) beyond the first
+/// cut's corner, so the gap is exactly 99.2, 100 and 100.8; two cuts on one
+/// layer abutting, and touching only at a corner (one figure, no gap); a via2
+/// stacked on a via1 (0).
+fn cut_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck_one = new_deck(&["cut"], "rule via.2 space(cut) >= 100nm\n");
+    let deck_two = new_deck(&["via1", "via2"], "rule v12 space(via1, via2) >= 100nm\n");
+    let mut cases = Vec::new();
+    let mut both = |name: &str, first: Rect, second: Rect, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("cut_spacing/one_layer/{name}"),
+            &["DRC-060"],
+            &deck_one,
+            rects(Layout::default(), "cut", &[first, second]),
+            &[("via.2", findings.clone())],
+        ));
+        cases.push(fixture(
+            &format!("cut_spacing/two_layers/{name}"),
+            &["DRC-065"],
+            &deck_two,
+            Layout::default()
+                .rect("via1", first.0, first.1, first.2, first.3)
+                .rect("via2", second.0, second.1, second.2, second.3),
+            &[("v12", findings)],
+        ));
+    };
+    for (g, side) in sweep(LIMIT) {
+        both(
+            &format!("side/{side}"),
+            (0, 0, 100, 100),
+            (100 + g, 0, 200 + g, 100),
+            below(g, LIMIT),
+        );
+    }
+    for (dy, side, findings) in [
+        (79, "below", lengths(&[99])),
+        (80, "at", vec![]),
+        (81, "above", vec![]),
+    ] {
+        both(
+            &format!("diagonal/{side}"),
+            (0, 0, 100, 100),
+            (160, 100 + dy, 260, 200 + dy),
+            findings,
+        );
+    }
+    cases.push(fixture(
+        "cut_spacing/one_layer/abutting",
+        &["DRC-060"],
+        &deck_one,
+        rects(
+            Layout::default(),
+            "cut",
+            &[(0, 0, 100, 100), (100, 0, 200, 100)],
+        ),
+        &[("via.2", vec![])],
+    ));
+    cases.push(fixture(
+        "cut_spacing/two_layers/stacked",
+        &["DRC-065"],
+        &deck_two,
+        Layout::default()
+            .rect("via1", 0, 0, 100, 100)
+            .rect("via2", 0, 0, 100, 100),
+        &[("v12", lengths(&[0]))],
+    ));
+    cases.push(fixture(
+        "cut_spacing/one_layer/corner_touch",
+        &["DRC-060"],
+        &deck_one,
+        rects(
+            Layout::default(),
+            "cut",
+            &[(0, 0, 100, 100), (100, 100, 200, 200)],
+        ),
+        &[("via.2", vec![])],
+    ));
+    every_placement(cases)
+}
+
+/// `redundant_via(cut; within: 100nm) >= 2`, and `>= 3` (`redundant_via`,
+/// DRC-066 and DRC-117): one finding per drawn cut with fewer cuts, itself
+/// included, within 100 nm (inclusive, Euclidean), measuring the count.
+///
+/// Shapes: a pair side by side at 99/100/101; a pair diagonal at Euclidean
+/// 99.2/100/100.8; one cut alone; two abutting and two overlapping cuts (each
+/// counts the other: cuts are counted as drawn); a row of three, where the
+/// ends see two and the middle three; an empty layer.
+fn redundant_via() -> Vec<Fixture> {
+    const WITHIN: i64 = 100;
+    let deck = new_deck(
+        &["cut", "other"],
+        "rule two redundant_via(cut; within: 100nm) >= 2\n\
+         rule three redundant_via(cut; within: 100nm) >= 3\n",
+    );
+    let case = |name: &str, cuts: &[Rect], two: Vec<Finding>, three: Vec<Finding>| {
+        fixture(
+            &format!("redundant_via/{name}"),
+            &["DRC-066", "DRC-117"],
+            &deck,
+            rects(
+                Layout::default().rect("other", -1000, -1000, -900, -900),
+                "cut",
+                cuts,
+            ),
+            &[("two", two), ("three", three)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(WITHIN) {
+        let alone = if g > WITHIN { 1 } else { 2 };
+        cases.push(case(
+            &format!("pair/{side}"),
+            &[(0, 0, 100, 100), (100 + g, 0, 200 + g, 100)],
+            if g > WITHIN {
+                vec![count(1); 2]
+            } else {
+                vec![]
+            },
+            vec![count(alone); 2],
+        ));
+    }
+    for (dy, side, near) in [(79, "below", true), (80, "at", true), (81, "above", false)] {
+        let n = if near { 2 } else { 1 };
+        cases.push(case(
+            &format!("diagonal/{side}"),
+            &[(0, 0, 100, 100), (160, 100 + dy, 260, 200 + dy)],
+            if near { vec![] } else { vec![count(1); 2] },
+            vec![count(n); 2],
+        ));
+    }
+    cases.push(case(
+        "single",
+        &[(0, 0, 100, 100)],
+        vec![count(1)],
+        vec![count(1)],
+    ));
+    cases.push(case(
+        "abutting",
+        &[(0, 0, 100, 100), (100, 0, 200, 100)],
+        vec![],
+        vec![count(2); 2],
+    ));
+    cases.push(case(
+        "overlapping",
+        &[(0, 0, 100, 100), (50, 0, 150, 100)],
+        vec![],
+        vec![count(2); 2],
+    ));
+    cases.push(case(
+        "row_of_three",
+        &[(0, 0, 100, 100), (200, 0, 300, 100), (400, 0, 500, 100)],
+        vec![],
+        vec![count(2); 2],
+    ));
+    cases.push(case("empty", &[], vec![], vec![]));
+    every_placement(cases)
+}
+
+/// `via_array_space(cut; array: 3) >= 100nm` (`via_array_spacing`, DRC-062):
+/// cuts joined by gaps of at most 100 nm form a cluster, a cluster of more
+/// than 3 is an array, and each pair in an array closer than 100 nm is one
+/// finding measuring its gap.
+///
+/// Shapes: rows of 3 and 4 cuts at 99/100/101 (3 is not an array; at 100 the
+/// row is one array with no close pair; at 101 nothing joins); a 3 x 3 grid at
+/// 90 (12 side pairs; the diagonals are 127 apart); two close pairs joined
+/// into one array by a 100 nm gap, and kept apart by 101; an array with a cut
+/// drawn overlapping another (cuts are as drawn: a gap of 0); an empty layer.
+/// Nightly: rows of 1 to 6 cuts at 95 to 105.
+fn via_array_spacing(depth: Depth) -> Vec<Fixture> {
+    const LIMIT: i64 = 100;
+    let deck = new_deck(
+        &["cut", "other"],
+        "rule cnt.b1 via_array_space(cut; array: 3) >= 100nm\n",
+    );
+    let case = |name: &str, cuts: Vec<Rect>, findings: Vec<Finding>| {
+        fixture(
+            &format!("via_array_spacing/{name}"),
+            &["DRC-062"],
+            &deck,
+            rects(
+                Layout::default().rect("other", -1000, -1000, -900, -900),
+                "cut",
+                &cuts,
+            ),
+            &[("cnt.b1", findings)],
+        )
+    };
+    let row = |n: i64, g: i64| -> Vec<Rect> {
+        (0..n)
+            .map(|i| (i * (100 + g), 0, i * (100 + g) + 100, 100))
+            .collect()
+    };
+    let row_findings = |n: i64, g: i64| {
+        if n > 3 && g < LIMIT {
+            lengths(&vec![g; usize::try_from(n - 1).expect("a small row")])
+        } else {
+            vec![]
+        }
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(LIMIT) {
+        for n in [3, 4] {
+            cases.push(case(
+                &format!("row{n}/{side}"),
+                row(n, g),
+                row_findings(n, g),
+            ));
+        }
+    }
+    let grid: Vec<Rect> = (0..3)
+        .flat_map(|i| (0..3).map(move |j| (i * 190, j * 190, i * 190 + 100, j * 190 + 100)))
+        .collect();
+    cases.push(case("grid3x3", grid, lengths(&[90; 12])));
+    for (middle, name, findings) in [
+        (100, "joined_pairs", lengths(&[90, 90])),
+        (101, "separate_pairs", vec![]),
+    ] {
+        let x3 = 290 + middle;
+        cases.push(case(
+            name,
+            vec![
+                (0, 0, 100, 100),
+                (190, 0, 290, 100),
+                (x3, 0, x3 + 100, 100),
+                (x3 + 190, 0, x3 + 290, 100),
+            ],
+            findings,
+        ));
+    }
+    let mut doubled = row(4, 100);
+    doubled.push((-50, 0, 50, 100));
+    cases.push(case("overlapping_cut", doubled, lengths(&[0])));
+    cases.push(case("empty", vec![], vec![]));
+    if depth == Depth::Nightly {
+        for n in 1..=6 {
+            for g in 95..=105 {
+                cases.push(case(
+                    &format!("rows/n{n}_g{g}"),
+                    row(n, g),
+                    row_findings(n, g),
+                ));
+            }
+        }
+    }
+    every_placement(cases)
+}
+
+// ----------------------------------------------------------------- density
+
+/// The area two rectangles share.
+fn shared(a: Rect, b: Rect) -> i64 {
+    let w = a.2.min(b.2) - a.0.max(b.0);
+    let h = a.3.min(b.3) - a.1.max(b.1);
+    if w > 0 && h > 0 {
+        w * h
+    } else {
+        0
+    }
+}
+
+/// Every density window by the definition: `side`-square windows from the
+/// die's lower-left corner every `step`, as many as cover the die's far
+/// edges; each covers the area of `covered` (disjoint rectangles inside the
+/// die) inside it over its whole area. Returns `(centre, fraction)`.
+fn windows(die: Rect, side: i64, step: i64, covered: &[Rect]) -> Vec<((i64, i64), f64)> {
+    let along = |span: i64| {
+        let mut origins = vec![0];
+        while origins[origins.len() - 1] + side < span {
+            origins.push(origins[origins.len() - 1] + step);
+        }
+        origins
+    };
+    let mut out = Vec::new();
+    for x in along(die.2 - die.0) {
+        for y in along(die.3 - die.1) {
+            let (x, y) = (die.0 + x, die.1 + y);
+            let window = (x, y, x + side, y + side);
+            let area: i64 = covered.iter().map(|&r| shared(r, window)).sum();
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "areas below 2^53 convert exactly"
+            )]
+            let fraction = area as f64 / (side * side) as f64;
+            out.push(((x + side / 2, y + side / 2), fraction));
+        }
+    }
+    out
+}
+
+/// The windows a `>= limit` rule (`minimum`) or a `<= limit` rule flags.
+fn density_findings(windows: &[((i64, i64), f64)], limit: f64, minimum: bool) -> Vec<Finding> {
+    windows
+        .iter()
+        .filter(|(_, f)| if minimum { *f < limit } else { *f > limit })
+        .map(|&(at, f)| ratio(f, at))
+        .collect()
+}
+
+/// `global_density(met1, die) >= 50%` and `<= 50%`, and
+/// `global_density(met1) >= 50%` (`global_density`, DRC-070): at most one
+/// finding, at the die's centre, measuring the merged met1 area inside the die
+/// over the die's area. The die is the boundary layer's extent, or the whole
+/// layout's.
+///
+/// The die is `[0, 1000]^2`. Shapes: a stripe covering 49.9/50/50.1%; the same
+/// with more met1 outside the die (clipped by the boundary rule, widening the
+/// die of the other); the stripe drawn as two overlapping halves (counted
+/// once); the die drawn as two corner markers (its extent counts); no met1
+/// (0); no die (the boundary rules skip, the other measures met1 alone); and
+/// a grown derived layer beside a boundary-less rule (N-x2-3).
+fn global_density() -> Vec<Fixture> {
+    let deck_gd = new_deck(
+        &["met1", "die"],
+        "rule gd.min global_density(met1, die) >= 50%\n\
+         rule gd.max global_density(met1, die) <= 50%\n\
+         rule gd.all global_density(met1) >= 50%\n",
+    );
+    let die = || Layout::default().rect("die", 0, 0, 1000, 1000);
+    #[allow(clippy::cast_precision_loss, reason = "small areas convert exactly")]
+    let fraction = |area: i64, die: i64| area as f64 / die as f64;
+    let mut cases = Vec::new();
+    for (w, side) in sweep(500) {
+        let f = fraction(w * 1000, 1_000_000);
+        let min = if w < 500 {
+            vec![ratio(f, (500, 500))]
+        } else {
+            vec![]
+        };
+        let max = if w > 500 {
+            vec![ratio(f, (500, 500))]
+        } else {
+            vec![]
+        };
+        let wide = fraction(w * 1000 + 1_000_000, 3_000_000);
+        let wide_min = if wide < 0.5 {
+            vec![ratio(wide, (1500, 500))]
+        } else {
+            vec![]
+        };
+        for (name, layout, all) in [
+            ("stripe", die().rect("met1", 0, 0, w, 1000), min.clone()),
+            (
+                "outside_die",
+                die()
+                    .rect("met1", 0, 0, w, 1000)
+                    .rect("met1", 2000, 0, 3000, 1000),
+                wide_min,
+            ),
+            (
+                "overlapping_drawn",
+                die()
+                    .rect("met1", 0, 0, w, 600)
+                    .rect("met1", 0, 400, w, 1000),
+                min.clone(),
+            ),
+        ] {
+            cases.push(fixture(
+                &format!("global_density/{name}/{side}"),
+                &["DRC-070"],
+                &deck_gd,
+                layout,
+                &[
+                    ("gd.min", min.clone()),
+                    ("gd.max", max.clone()),
+                    ("gd.all", all),
+                ],
+            ));
+        }
+    }
+    let below_half = vec![ratio(0.499, (500, 500))];
+    cases.push(fixture(
+        "global_density/die_two_markers",
+        &["DRC-070"],
+        &deck_gd,
+        Layout::default()
+            .rect("die", 0, 0, 100, 100)
+            .rect("die", 900, 900, 1000, 1000)
+            .rect("met1", 0, 0, 499, 1000),
+        &[
+            ("gd.min", below_half.clone()),
+            ("gd.max", vec![]),
+            ("gd.all", below_half),
+        ],
+    ));
+    cases.push(fixture(
+        "global_density/empty_met1",
+        &["DRC-070"],
+        &deck_gd,
+        die(),
+        &[
+            ("gd.min", vec![ratio(0.0, (500, 500))]),
+            ("gd.max", vec![]),
+            ("gd.all", vec![ratio(0.0, (500, 500))]),
+        ],
+    ));
+    cases.push(
+        Fixture::new("global_density/empty_die", &["DRC-070"], &deck_gd, DRC)
+            .layout(Layout::default().rect("met1", 0, 0, 400, 1000))
+            .expect(Expect::outcome("gd.min", Want::Skipped))
+            .expect(Expect::outcome("gd.max", Want::Skipped))
+            .expect(Expect::clean("gd.all")),
+    );
+    // Without a boundary the die is the whole layout, `[0, 1000]^2` here, so
+    // met1 covers 70%. A derived layer grown past the drawing is not layout:
+    // it must not widen the die (N-x2-3), which would hide the maximum's
+    // violation and invent the minimum's.
+    cases.push(
+        fixture(
+            "global_density/derived_halo",
+            &["DRC-070"],
+            &new_deck(
+                &["met1", "other"],
+                "layer halo = met1.sized(500nm)\n\
+                 rule gd.min global_density(met1) >= 50%\n\
+                 rule gd.max global_density(met1) <= 60%\n",
+            ),
+            Layout::default()
+                .rect("other", 0, 0, 1000, 1000)
+                .rect("met1", 0, 0, 700, 1000),
+            &[("gd.min", vec![]), ("gd.max", vec![ratio(0.7, (500, 500))])],
+        )
+        .known("N-x2-3"),
+    );
+    every_placement(cases)
+}
+
+/// `density(met1, die; window: 1000nm, step: 500nm) >= 50%` and `<= 50%`
+/// (`density`, DRC-071): one finding per window, at its centre, whose merged
+/// met1 area inside the die over the whole window is outside the limit.
+///
+/// The die is `[0, 2000]^2`, tiled by 3 x 3 windows exactly, so every symmetry
+/// maps the windows onto themselves. Shapes: met1 covering `[0, 1000 + d]`
+/// for d of -1, 0, 1, which sweeps the middle column through 50%; the same
+/// drawn as two overlapping pieces; with met1 outside the die (clipped); the
+/// die drawn as two corner markers; no met1 (every window 0); no die
+/// (skipped); a boundary-less rule beside a grown derived layer, which must
+/// not move the die (N-x2-3). Then, without a boundary, windows
+/// that hang past the die's far edge or exceed the die (counted empty outside
+/// it), under translations only since the windows anchor on the lower-left
+/// corner. Nightly: d from -20 to 20.
+fn density(depth: Depth) -> Vec<Fixture> {
+    let deck_pd = new_deck(
+        &["met1", "die"],
+        "rule pd.min density(met1, die; window: 1000nm, step: 500nm) >= 50%\n\
+         rule pd.max density(met1, die; window: 1000nm, step: 500nm) <= 50%\n",
+    );
+    let die = (0, 0, 2000, 2000);
+    let case = |name: &str, layout: Layout, covered: &[Rect]| {
+        let windows = windows(die, 1000, 500, covered);
+        fixture(
+            &format!("density/{name}"),
+            &["DRC-071"],
+            &deck_pd,
+            layout.rect("die", die.0, die.1, die.2, die.3),
+            &[
+                ("pd.min", density_findings(&windows, 0.5, true)),
+                ("pd.max", density_findings(&windows, 0.5, false)),
+            ],
+        )
+    };
+    let stripe = |d: i64| (0, 0, 1000 + d, 2000);
+    let mut cases = Vec::new();
+    for (d, side) in [(-1, "below"), (0, "at"), (1, "above")] {
+        let s = stripe(d);
+        cases.push(case(
+            &format!("stripe/{side}"),
+            rects(Layout::default(), "met1", &[s]),
+            &[s],
+        ));
+        cases.push(case(
+            &format!("overlapping_drawn/{side}"),
+            Layout::default()
+                .rect("met1", 0, 0, 700, 2000)
+                .rect("met1", 300, 0, s.2, 2000),
+            &[s],
+        ));
+        cases.push(case(
+            &format!("outside_die/{side}"),
+            rects(Layout::default(), "met1", &[s, (3000, 0, 4000, 2000)]),
+            &[s],
+        ));
+    }
+    cases.push(case("empty_met1", Layout::default(), &[]));
+    // The die drawn as two corner markers: its extent, not its area, counts.
+    let markers = windows(die, 1000, 500, &[stripe(-1)]);
+    cases.push(fixture(
+        "density/die_two_markers",
+        &["DRC-071"],
+        &deck_pd,
+        Layout::default()
+            .rect("die", 0, 0, 100, 100)
+            .rect("die", 1900, 1900, 2000, 2000)
+            .rect("met1", 0, 0, 999, 2000),
+        &[
+            ("pd.min", density_findings(&markers, 0.5, true)),
+            ("pd.max", density_findings(&markers, 0.5, false)),
+        ],
+    ));
+    // Without a boundary, the same windows over the drawn layout; a derived
+    // layer grown past it must not move the die (N-x2-3).
+    cases.push(
+        fixture(
+            "density/derived_halo",
+            &["DRC-071"],
+            &new_deck(
+                &["met1", "other"],
+                "layer halo = met1.sized(500nm)\n\
+                 rule pd.min density(met1; window: 1000nm, step: 500nm) >= 50%\n\
+                 rule pd.max density(met1; window: 1000nm, step: 500nm) <= 50%\n",
+            ),
+            Layout::default()
+                .rect("other", 0, 0, 2000, 2000)
+                .rect("met1", 0, 0, 999, 2000),
+            &[
+                ("pd.min", density_findings(&markers, 0.5, true)),
+                ("pd.max", density_findings(&markers, 0.5, false)),
+            ],
+        )
+        .known("N-x2-3"),
+    );
+    cases.push(
+        Fixture::new("density/empty_die", &["DRC-071"], &deck_pd, DRC)
+            .layout(Layout::default().rect("met1", 0, 0, 1000, 2000))
+            .expect(Expect::outcome("pd.min", Want::Skipped))
+            .expect(Expect::outcome("pd.max", Want::Skipped)),
+    );
+    if depth == Depth::Nightly {
+        for d in -20..=20 {
+            let s = stripe(d);
+            cases.push(case(
+                &format!("stripe_sweep/{d}"),
+                rects(Layout::default(), "met1", &[s]),
+                &[s],
+            ));
+        }
+    }
+    let mut out = every_placement(cases);
+
+    let deck_die = new_deck(
+        &["met1"],
+        "rule pd density(met1; window: 1000nm, step: 1000nm) >= 60%\n",
+    );
+    let anchored: Vec<Fixture> = [
+        ("hanging", (0, 0, 1500, 1000), vec![ratio(0.5, (1500, 500))]),
+        (
+            "die_smaller_than_window",
+            (0, 0, 500, 500),
+            vec![ratio(0.25, (500, 500))],
+        ),
+    ]
+    .into_iter()
+    .map(|(name, met1, findings)| {
+        fixture(
+            &format!("density/{name}"),
+            &["DRC-071"],
+            &deck_die,
+            rects(Layout::default(), "met1", &[met1]),
+            &[("pd", findings)],
+        )
+    })
+    .collect();
+    out.extend(every_offset(&anchored));
+    out
+}
+
+/// `cheesing(met1) <= 1um2` (`cheesing`, DRC-075): one finding per merged
+/// figure strictly larger than 1 µm² with no hole, measuring its area.
+///
+/// Shapes: a plate of 0.999/1/1.001 µm²; a large slotted plate (a ring of
+/// bands, clean); the 1.001 µm² plate as two abutting halves each under the
+/// limit; a U whose notch is not a slot; a slotted and an unslotted plate side
+/// by side; an empty layer.
+fn cheesing() -> Vec<Fixture> {
+    let deck = new_deck(&["met1", "other"], "rule slot cheesing(met1) <= 1um2\n");
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("cheesing/{name}"),
+            &["DRC-075"],
+            &deck,
+            layout.rect("other", -1000, -1000, -900, -900),
+            &[("slot", findings)],
+        )
+    };
+    let slotted = || {
+        ring(
+            Layout::default(),
+            "met1",
+            (0, 0, 2000, 2000),
+            (900, 900, 1100, 1100),
+        )
+    };
+    let mut cases = Vec::new();
+    for (h, side) in sweep(1000) {
+        let area = i128::from(h) * 1000;
+        let findings = if area > 1_000_000 {
+            areas(&[area])
+        } else {
+            vec![]
+        };
+        cases.push(case(
+            &format!("plate/{side}"),
+            Layout::default().rect("met1", 0, 0, 1000, h),
+            findings.clone(),
+        ));
+        cases.push(case(
+            &format!("halves/{side}"),
+            Layout::default()
+                .rect("met1", 0, 0, 500, h)
+                .rect("met1", 500, 0, 1000, h),
+            findings,
+        ));
+    }
+    cases.push(case("slotted", slotted(), vec![]));
+    let u = [
+        (0, 0),
+        (2000, 0),
+        (2000, 2000),
+        (1100, 2000),
+        (1100, 1000),
+        (900, 1000),
+        (900, 2000),
+        (0, 2000),
+    ];
+    cases.push(case(
+        "notched_u",
+        Layout::default().polygon("met1", &u),
+        areas(&[3_800_000]),
+    ));
+    cases.push(case(
+        "slotted_beside_unslotted",
+        slotted().rect("met1", 3000, 0, 5000, 2000),
+        areas(&[4_000_000]),
+    ));
+    cases.push(case("empty", Layout::default(), vec![]));
+    every_placement(cases)
+}
+
+/// Fill rules: fill width and fill-to-drawn spacing (`min_width`,
+/// `min_spacing_diff`, DRC-073), and no fill in an exclusion region
+/// (`forbidden(fill and nofill)`, DRC-074), each measured as its kind
+/// defines.
+fn fill() -> Vec<Fixture> {
+    let deck_fill = new_deck(
+        &["met1", "fill"],
+        "rule fill.w width(fill) >= 100nm\nrule fill.s space(fill, met1) >= 200nm\n",
+    );
+    let deck_nofill = new_deck(
+        &["fill", "nofill"],
+        "rule dcf.8 forbidden(fill and nofill)\n",
+    );
+    let metal = || Layout::default().rect("met1", 0, 0, 1000, 1000);
+    let mut cases = Vec::new();
+    for (g, side) in sweep(200) {
+        cases.push(fixture(
+            &format!("fill/spacing/{side}"),
+            &["DRC-073"],
+            &deck_fill,
+            metal().rect("fill", 1000 + g, 0, 1500 + g, 500),
+            &[("fill.w", vec![]), ("fill.s", below(g, 200))],
+        ));
+    }
+    for (w, side) in sweep(100) {
+        cases.push(fixture(
+            &format!("fill/width/{side}"),
+            &["DRC-073"],
+            &deck_fill,
+            metal().rect("fill", 2000, 0, 2000 + w, 1000),
+            &[("fill.w", below(w, 100)), ("fill.s", vec![])],
+        ));
+    }
+    for (name, nofill, findings) in [
+        ("inside_exclusion", (800, 200, 1500, 700), areas(&[100_000])),
+        ("touching_exclusion", (1000, 200, 1500, 700), vec![]),
+        ("apart", (1100, 200, 1500, 700), vec![]),
+    ] {
+        cases.push(fixture(
+            &format!("fill/nofill/{name}"),
+            &["DRC-074", "DRC-050"],
+            &deck_nofill,
+            rects(
+                Layout::default().rect("fill", 0, 0, 1000, 1000),
+                "nofill",
+                &[nofill],
+            ),
+            &[("dcf.8", findings)],
+        ));
+    }
+    every_placement(cases)
+}
+
+// -------------------------------------------------------- nets, taps, chip
+
+/// `space(met1; nets: same) >= 200nm` and `space(met1; nets: different) >=
+/// 300nm` (`net_spacing`, DRC-080): pairs of shapes in different merged
+/// figures, on the same net or on different extracted nets, closer than the
+/// limit.
+///
+/// Two met1 bars a swept gap apart: strapped through cuts and met2 into one
+/// net (only the same-net rule sees them), or left apart (only the
+/// different-net rule); and abutting (one figure, no pair).
+fn net_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1", "cut", "met2"],
+        "connect conductors [met1, met2]\n\
+         connect touch_within_layer\n\
+         connect via cut [met1, met2]\n\
+         rule same space(met1; nets: same) >= 200nm\n\
+         rule diff space(met1; nets: different) >= 300nm\n",
+    );
+    let case = |name: &str, layout: Layout, same: Vec<Finding>, diff: Vec<Finding>| {
+        fixture(
+            &format!("net_spacing/{name}"),
+            &["DRC-080"],
+            &deck,
+            layout,
+            &[("same", same), ("diff", diff)],
+        )
+    };
+    let bars = |g: i64| {
+        Layout::default()
+            .rect("met1", 0, 0, 500, 1000)
+            .rect("met1", 500 + g, 0, 1000 + g, 1000)
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(200) {
+        cases.push(case(
+            &format!("strapped/{side}"),
+            bars(g)
+                .rect("cut", 200, 450, 300, 550)
+                .rect("cut", 700 + g, 450, 800 + g, 550)
+                .rect("met2", 100, 400, 900 + g, 600),
+            below(g, 200),
+            vec![],
+        ));
+    }
+    for (g, side) in sweep(300) {
+        cases.push(case(
+            &format!("separate/{side}"),
+            bars(g).rect("met2", 3000, 0, 3100, 100),
+            vec![],
+            below(g, 300),
+        ));
+    }
+    cases.push(case(
+        "abutting",
+        bars(0).rect("met2", 3000, 0, 3100, 100),
+        vec![],
+        vec![],
+    ));
+    every_placement(cases)
+}
+
+/// `tap_distance(nwell, ntap) <= 1000nm` (`max_distance_to_tap`, ERC-D1): one
+/// finding per well row whose furthest point is more than the limit from
+/// every tap's edges, measuring that distance rounded up; a well with no tap
+/// at all measures 2^40, and an empty well layer is skipped.
+///
+/// Shapes: a bar whose far end is 999/1000/1001 from the tap; a corner tap
+/// with the far corner at Euclidean 999.2/1000/1000.8 (rounded up to 1001);
+/// taps at both ends (the middle is furthest); two wells, one too long; no
+/// tap; no well. And a well ring, derived as `nwell not hole`, with taps all
+/// round it: the rustdoc measures its hole as filled (one finding, 500), and
+/// F34 says the hole's ring is measured as a well of its own. And a tap with
+/// a real hole (`ntap not hole`) over the whole well, whose centre lies in the
+/// hole 1001/1000/999 from its edge (holes count).
+fn tap_distance() -> Vec<Fixture> {
+    const LIMIT: i64 = 1000;
+    let deck_tap = new_deck(
+        &["nwell", "ntap"],
+        "rule lu tap_distance(nwell, ntap) <= 1000nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("tap_distance/{name}"),
+            &["ERC-D1"],
+            &deck_tap,
+            layout,
+            &[("lu", findings)],
+        )
+    };
+    let above = |d: i64| if d > LIMIT { lengths(&[d]) } else { vec![] };
+    let mut cases = Vec::new();
+    for (d, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("bar/{side}"),
+            Layout::default()
+                .rect("ntap", 0, 0, 100, 500)
+                .rect("nwell", 0, 0, 100 + d, 500),
+            above(d),
+        ));
+    }
+    for (dy, side, findings) in [
+        (799, "below", vec![]),
+        (800, "at", vec![]),
+        (801, "above", lengths(&[1001])),
+    ] {
+        cases.push(case(
+            &format!("corner/{side}"),
+            Layout::default()
+                .rect("ntap", 0, 0, 100, 100)
+                .rect("nwell", 0, 0, 700, 100 + dy),
+            findings,
+        ));
+    }
+    cases.push(case(
+        "both_ends",
+        Layout::default()
+            .rect("nwell", 0, 0, 3000, 100)
+            .rect("ntap", 0, 0, 100, 100)
+            .rect("ntap", 2900, 0, 3000, 100),
+        lengths(&[1400]),
+    ));
+    cases.push(case(
+        "two_wells",
+        Layout::default()
+            .rect("nwell", 0, 0, 1500, 100)
+            .rect("ntap", 0, 0, 100, 100)
+            .rect("nwell", 0, 1000, 1000, 1100)
+            .rect("ntap", 0, 1000, 100, 1100),
+        lengths(&[1400]),
+    ));
+    cases.push(case(
+        "no_tap",
+        Layout::default().rect("nwell", 0, 0, 1000, 100),
+        lengths(&[1 << 40]),
+    ));
+    cases.push(
+        Fixture::new("tap_distance/no_well", &["ERC-D1"], &deck_tap, DRC)
+            .layout(Layout::default().rect("ntap", 0, 0, 100, 100))
+            .expect(Expect::outcome("lu", Want::Skipped)),
+    );
+    let deck_ring = new_deck(
+        &["nwell", "hole", "ntap"],
+        "layer ring = nwell not hole\nrule lu tap_distance(ring, ntap) <= 200nm\n",
+    );
+    cases.push(
+        fixture(
+            "tap_distance/ring_well",
+            &["ERC-D1"],
+            &deck_ring,
+            ring(
+                Layout::default()
+                    .rect("nwell", 0, 0, 1000, 1000)
+                    .rect("hole", 100, 100, 900, 900),
+                "ntap",
+                (-100, -100, 1100, 1100),
+                (0, 0, 1000, 1000),
+            ),
+            &[("lu", lengths(&[500]))],
+        )
+        .known("F34"),
+    );
+    // A tap with a real hole, `ntap not hole`, over the whole well: the well's
+    // centre is in the hole, `1100 - h` from its edge.
+    let deck_tap_ring = new_deck(
+        &["nwell", "hole", "ntap"],
+        "layer tap_ring = ntap not hole\nrule lu tap_distance(nwell, tap_ring) <= 1000nm\n",
+    );
+    for (h, side) in sweep(100) {
+        cases.push(fixture(
+            &format!("tap_distance/tap_ring/{side}"),
+            &["ERC-D1"],
+            &deck_tap_ring,
+            Layout::default()
+                .rect("nwell", 0, 0, 2200, 2200)
+                .rect("ntap", 0, 0, 2200, 2200)
+                .rect("hole", h, h, 2200 - h, 2200 - h),
+            &[("lu", above(1100 - h))],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// A short between two labelled nets (DRC-086): extraction refuses the run,
+/// as the catalog says (`PortError::ConflictingLabels`), so the run does not
+/// pass. Shorted on one shape, and through two abutting shapes; two labels
+/// naming one net and two separate labelled shapes pass.
+fn labelled_short() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1", "lbl"],
+        "connect conductors [met1]\n\
+         connect touch_within_layer\n\
+         connect label lbl names met1\n\
+         rule w width(met1) >= 100nm\n",
+    );
+    let refused = |name: &str, layout: Layout| {
+        Fixture::new(&format!("labelled_short/{name}"), &["DRC-086"], &deck, DRC)
+            .layout(layout)
+            .expect(Expect::Passes(false))
+    };
+    let passes = |name: &str, layout: Layout| {
+        Fixture::new(&format!("labelled_short/{name}"), &["DRC-086"], &deck, DRC)
+            .layout(layout)
+            .expect(Expect::clean("w"))
+            .expect(Expect::Passes(true))
+    };
+    let named = |layout: Layout, a: &str, b: &str| {
+        layout.label("lbl", 100, 250, a).label("lbl", 1900, 250, b)
+    };
+    every_placement(vec![
+        refused(
+            "one_shape",
+            named(Layout::default().rect("met1", 0, 0, 2000, 500), "A", "B"),
+        ),
+        refused(
+            "abutting_shapes",
+            named(
+                Layout::default()
+                    .rect("met1", 0, 0, 1000, 500)
+                    .rect("met1", 1000, 0, 2000, 500),
+                "A",
+                "B",
+            ),
+        ),
+        passes(
+            "same_name",
+            named(Layout::default().rect("met1", 0, 0, 2000, 500), "A", "A"),
+        ),
+        passes(
+            "separate_shapes",
+            named(
+                Layout::default()
+                    .rect("met1", 0, 0, 900, 500)
+                    .rect("met1", 1100, 0, 2000, 500),
+                "A",
+                "B",
+            ),
+        ),
+    ])
+}
+
+/// An exemption region (DRC-092): `width(met1 not areaid) >= 100nm` flags a
+/// narrow bar outside the region (swept), not one inside it, the part of a
+/// bar left outside a region that covers only half of it, and the 50 nm
+/// sliver a region leaves of a wide plate.
+fn exemption() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1", "areaid"],
+        "layer met1_chk = met1 not areaid\nrule m1.1 width(met1_chk) >= 100nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("exemption/{name}"),
+            &["DRC-092", "DRC-120"],
+            &deck,
+            layout,
+            &[("m1.1", findings)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (w, side) in sweep(100) {
+        cases.push(case(
+            &format!("outside/{side}"),
+            Layout::default()
+                .rect("met1", 0, 0, w, 1000)
+                .rect("areaid", 2000, 0, 3000, 1000),
+            below(w, 100),
+        ));
+    }
+    cases.push(case(
+        "inside",
+        Layout::default()
+            .rect("met1", 0, 0, 50, 1000)
+            .rect("areaid", -500, -500, 500, 1500),
+        vec![],
+    ));
+    cases.push(case(
+        "half_inside",
+        Layout::default()
+            .rect("met1", 0, 0, 50, 2000)
+            .rect("areaid", -500, -500, 500, 1000),
+        lengths(&[50]),
+    ));
+    // The exemption cuts a wide plate, and what it leaves is a narrow sliver.
+    cases.push(case(
+        "leaves_sliver",
+        Layout::default()
+            .rect("met1", 0, 0, 1000, 1000)
+            .rect("areaid", -500, -500, 950, 1500),
+        lengths(&[50]),
+    ));
+    every_placement(cases)
+}
+
+/// Chip and device geometry the deck expresses with the generic kinds: a pad
+/// opening enclosed by top metal (`enclosure(pad, met5) >= 1um`, DRC-096), a
+/// seal ring's width (`width(seal) >= 1um` on a ring of bands, DRC-095), and
+/// a resistor body enclosed by its marker (`enclosure(poly, rpm) >= 200nm`,
+/// DRC-090), each swept one step either side.
+fn chip_and_device() -> Vec<Fixture> {
+    let deck_pad = new_deck(&["pad", "met5"], "rule pad.2 enclosure(pad, met5) >= 1um\n");
+    let deck_seal = new_deck(&["seal"], "rule seal.w width(seal) >= 1um\n");
+    let deck_res = new_deck(
+        &["poly", "rpm"],
+        "rule rpm.1c enclosure(poly, rpm) >= 200nm\n",
+    );
+    let mut cases = Vec::new();
+    for (m, side) in sweep(1000) {
+        cases.push(fixture(
+            &format!("pad_enclosure/{side}"),
+            &["DRC-096", "DRC-040"],
+            &deck_pad,
+            Layout::default().rect("pad", 0, 0, 10_000, 10_000).rect(
+                "met5",
+                -m,
+                -3000,
+                10_000 + 3000,
+                13_000,
+            ),
+            &[("pad.2", below(m, 1000))],
+        ));
+        cases.push(fixture(
+            &format!("seal_ring/{side}"),
+            &["DRC-095"],
+            &deck_seal,
+            rects(
+                Layout::default(),
+                "seal",
+                &[
+                    (-1200, -1200, 20_000, 0),
+                    (-1200, 20_000, 20_000, 21_200),
+                    (-1200, 0, 0, 20_000),
+                    (20_000, -1200, 20_000 + m, 21_200),
+                ],
+            ),
+            &[("seal.w", below(m, 1000))],
+        ));
+    }
+    for (m, side) in sweep(200) {
+        cases.push(fixture(
+            &format!("resistor_marker/{side}"),
+            &["DRC-090", "DRC-040"],
+            &deck_res,
+            Layout::default()
+                .rect("poly", 0, 0, 330, 2000)
+                .rect("rpm", -m, -1000, 330 + m, 3000),
+            &[("rpm.1c", below(m, 200))],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// Floating interconnect (DRC-084, `unconnected_pin(met1)`, an ERC kind): a
+/// met1 shape whose net reaches no device terminal is flagged, one wired
+/// through a contact to a transistor's source is not, and one touching that
+/// wired shape shares its net.
+fn dangling_metal() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["diff", "poly", "cont", "met1"],
+        "layer gate = poly and diff\n\
+         layer sd = diff not poly\n\
+         connect conductors [sd, poly, met1]\n\
+         connect touch_within_layer\n\
+         connect via cont [sd, met1]\n\
+         device mos gate model \"n\" terminals [poly, sd, sd]\n\
+         rule x.22 unconnected_pin(met1)\n",
+    );
+    let transistor = || {
+        Layout::default()
+            .rect("diff", 0, 0, 1000, 400)
+            .rect("poly", 450, -200, 550, 600)
+            .rect("cont", 100, 150, 200, 250)
+            .rect("met1", 50, 100, 250, 300)
+    };
+    let erc = gpurify::engine::run::Checks {
+        erc: true,
+        ..crate::harness::NONE
+    };
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        Fixture::new(&format!("dangling_metal/{name}"), &["DRC-084"], &deck, erc)
+            .layout(layout)
+            .expect(Expect::rule("x.22", findings))
+    };
+    every_placement(vec![
+        case("wired", transistor(), vec![]),
+        case(
+            "wired_through_touch",
+            transistor().rect("met1", 250, 100, 1500, 300),
+            vec![],
+        ),
+        case(
+            "floating",
+            transistor().rect("met1", 2000, 0, 2200, 200),
+            vec![Finding::any()],
+        ),
+    ])
+}
+
+/// A DRC rule written `warning` (DRC-110): recommended rules cannot be
+/// reported as warnings, and the deck refuses the row, so the run cannot pass.
+fn drc_warning() -> Vec<Fixture> {
+    vec![Fixture::new(
+        "drc_warning/refused",
+        &["DRC-110"],
+        &new_deck(&["met1"], "rule rr warning width(met1) >= 100nm\n"),
+        DRC,
+    )
+    .layout(Layout::default().rect("met1", 0, 0, 1000, 1000))
+    .expect(Expect::Passes(false))]
+}
+
+// --------------------------------------------------------- multi-patterning
+
+/// A cycle of `n >= 4` bars around a 4000 nm square frame, each `gap` from the
+/// next and far from every other: the bottom side split into `ceil((n - 2) /
+/// 2)` bars, the top into the rest, and one bar up each side.
+fn bar_cycle(n: i64, gap: i64) -> Layout {
+    const S: i64 = 4000;
+    const T: i64 = 100;
+    let bottom = (n - 1) / 2;
+    let top = n - 2 - bottom;
+    let pieces = |to: i64, k: i64| -> Vec<(i64, i64)> {
+        let len = (to - (k - 1) * gap) / k;
+        (0..k)
+            .map(|i| {
+                let lo = i * (len + gap);
+                (lo, if i == k - 1 { to } else { lo + len })
+            })
+            .collect()
+    };
+    let mut layout = Layout::default().rect("met1", S - T, T + gap, S, S).rect(
+        "met1",
+        0,
+        T + gap,
+        T,
+        S - T - gap,
+    );
+    for (lo, hi) in pieces(S, bottom) {
+        layout = layout.rect("met1", lo, 0, hi, T);
+    }
+    for (lo, hi) in pieces(S - T - gap, top) {
+        layout = layout.rect("met1", lo, S - T, hi, S);
+    }
+    layout
+}
+
+/// `patterning(met1; colors: k) >= 100nm` for k of 1, 2 and 3
+/// (`multi_patterning`, DRC-100, DRC-101): figures closer than 100 nm
+/// conflict, and a layer whose conflict graph needs more than k masks is one
+/// finding counting k + 1; an empty layer is skipped.
+///
+/// Each layout's chromatic number is known by construction: a triangle of
+/// mutual gaps 99/100/101 (3, or 1 when no gap conflicts); a pair at 99/100/
+/// 101 (2 or 1); cycles of 4 to 7 bars (2 when even, 3 when odd); a 2 x 2
+/// block at 50 nm whose diagonals are 70.7 apart (K4, 4); a triangle whose two
+/// lower shapes abut, merging into one figure (2); two squares touching only
+/// at a corner (one figure, 1); a shape drawn inside another, 50 nm from its
+/// boundary (one figure, 1), and that pair beside a third (2); an island
+/// 50 nm inside a ring's hole (a real gap, 2); one shape (1); none.
+/// Nightly: cycles of 4 to 15 bars.
+fn multi_patterning(depth: Depth) -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1", "other"],
+        "rule mp1 patterning(met1; colors: 1) >= 100nm\n\
+         rule mp2 patterning(met1; colors: 2) >= 100nm\n\
+         rule mp3 patterning(met1; colors: 3) >= 100nm\n",
+    );
+    let case = |name: &str, layout: Layout, chromatic: u32| {
+        let rows: Vec<(&str, Vec<Finding>)> = [("mp1", 1), ("mp2", 2), ("mp3", 3)]
+            .into_iter()
+            .map(|(id, k)| {
+                (
+                    id,
+                    if chromatic > k {
+                        vec![count(k + 1)]
+                    } else {
+                        vec![]
+                    },
+                )
+            })
+            .collect();
+        fixture(
+            &format!("multi_patterning/{name}"),
+            &["DRC-100", "DRC-101"],
+            &deck,
+            layout,
+            &rows,
+        )
+    };
+    let triangle = |g: i64| {
+        Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 500 + g, 0, 1000 + g, 500)
+            .rect("met1", 0, 500 + g, 1000 + g, 1000 + g)
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(100) {
+        let conflicts = g < 100;
+        cases.push(case(
+            &format!("triangle/{side}"),
+            triangle(g),
+            if conflicts { 3 } else { 1 },
+        ));
+        cases.push(case(
+            &format!("pair/{side}"),
+            Layout::default()
+                .rect("met1", 0, 0, 500, 500)
+                .rect("met1", 500 + g, 0, 1000 + g, 500),
+            if conflicts { 2 } else { 1 },
+        ));
+    }
+    let longest = if depth == Depth::Nightly { 15 } else { 7 };
+    for n in 4..=longest {
+        cases.push(case(
+            &format!("cycle/{n}"),
+            bar_cycle(n, 50),
+            if n % 2 == 0 { 2 } else { 3 },
+        ));
+    }
+    cases.push(case(
+        "k4",
+        rects(
+            Layout::default(),
+            "met1",
+            &[
+                (0, 0, 500, 500),
+                (550, 0, 1050, 500),
+                (0, 550, 500, 1050),
+                (550, 550, 1050, 1050),
+            ],
+        ),
+        4,
+    ));
+    cases.push(case(
+        "merged_triangle",
+        Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 500, 0, 1000, 500)
+            .rect("met1", 0, 550, 1000, 1050),
+        2,
+    ));
+    cases.push(case(
+        "single",
+        Layout::default().rect("met1", 0, 0, 500, 500),
+        1,
+    ));
+    // An island 50 nm inside a ring's hole is a real gap; a shape drawn
+    // inside another's material, its boundary 50 nm from the other's, is one
+    // figure with it.
+    cases.push(case(
+        "island_in_hole",
+        ring(
+            Layout::default().rect("met1", 550, 550, 1450, 1450),
+            "met1",
+            (0, 0, 2000, 2000),
+            (500, 500, 1500, 1500),
+        ),
+        2,
+    ));
+    let drawn_inside = || {
+        Layout::default()
+            .rect("met1", 0, 0, 2000, 2000)
+            .rect("met1", 50, 50, 1950, 1950)
+    };
+    cases.push(case("drawn_inside", drawn_inside(), 1));
+    cases.push(case(
+        "corner_touch",
+        Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 500, 500, 1000, 1000),
+        1,
+    ));
+    cases.push(case(
+        "drawn_inside_beside_one",
+        drawn_inside().rect("met1", 2050, 0, 2550, 2000),
+        2,
+    ));
+    cases.push(
+        Fixture::new("multi_patterning/empty", &["DRC-100"], &deck, DRC)
+            .layout(Layout::default().rect("other", 0, 0, 100, 100))
+            .expect(Expect::outcome("mp1", Want::Skipped))
+            .expect(Expect::outcome("mp2", Want::Skipped))
+            .expect(Expect::outcome("mp3", Want::Skipped)),
+    );
+    every_placement(cases)
+}
+
+// --------------------------------------------------- derived-layer operations
+
+/// One fixture per layout proving derived layers through `forbidden`: rule
+/// `f{i}` forbids `exprs[i].0`, declared as layer `d{i}`, and must report
+/// exactly `exprs[i].1`.
+fn derived(
+    name: &str,
+    catalog: &[&'static str],
+    layers: &[&str],
+    exprs: &[(&str, Vec<Finding>)],
+    layout: Layout,
+) -> Fixture {
+    const IDS: [&str; 4] = ["f0", "f1", "f2", "f3"];
+    let mut body = String::new();
+    for (i, (expr, _)) in exprs.iter().enumerate() {
+        writeln!(body, "layer d{i} = {expr}\nrule f{i} forbidden(d{i})")
+            .expect("a String takes any write");
+    }
+    let rules: Vec<(&str, Vec<Finding>)> = IDS
+        .iter()
+        .zip(exprs)
+        .map(|(&id, (_, findings))| (id, findings.clone()))
+        .collect();
+    fixture(name, catalog, &new_deck(layers, &body), layout, &rules)
+}
+
+/// `and`, `or` and `not` (DRC-120, and DRC-050 for a forbidden overlap): each
+/// resulting merged shape reported with its area, holes excluded.
+///
+/// `a` is `[0, 1000]^2` unless stated. `and`: a partial overlap, edge and
+/// corner contact (empty), `b` splitting the overlap in two, `a` drawn as two
+/// overlapping pieces (one result), and sky130 licon.17 written inline,
+/// `forbidden(licon and poly and (diff or tap))`. `or`: overlapping, abutting
+/// (one shape) and apart. `not`: a bite, a split, a hole (one shape with its
+/// hole excluded), an abutting `b` (no change), a covering `b` (empty), and
+/// three operands folded left.
+fn booleans() -> Vec<Fixture> {
+    let cat = &["DRC-120"];
+    let ab = &["a", "b"];
+    let a = || Layout::default().rect("a", 0, 0, 1000, 1000);
+    let with_b = |rs: &[Rect]| rects(a(), "b", rs);
+    let mut cases = vec![
+        derived(
+            "derived/and/overlap",
+            &["DRC-120", "DRC-050"],
+            ab,
+            &[("a and b", areas(&[160_000]))],
+            with_b(&[(600, 300, 1600, 700)]),
+        ),
+        derived(
+            "derived/and/edge_contact",
+            cat,
+            ab,
+            &[("a and b", vec![])],
+            with_b(&[(1000, 300, 1600, 700)]),
+        ),
+        derived(
+            "derived/and/corner_contact",
+            cat,
+            ab,
+            &[("a and b", vec![])],
+            with_b(&[(1000, 1000, 1600, 1600)]),
+        ),
+        derived(
+            "derived/and/split",
+            cat,
+            ab,
+            &[("a and b", areas(&[200_000, 200_000]))],
+            with_b(&[(-100, -100, 200, 1100), (800, -100, 1100, 1100)]),
+        ),
+        derived(
+            "derived/and/overlapping_operand",
+            cat,
+            ab,
+            &[("a and b", areas(&[160_000]))],
+            Layout::default()
+                .rect("a", 0, 0, 600, 1000)
+                .rect("a", 400, 0, 1000, 1000)
+                .rect("b", 300, 300, 700, 700),
+        ),
+        derived(
+            "derived/or/overlap",
+            cat,
+            ab,
+            &[("a or b", areas(&[1_240_000]))],
+            with_b(&[(600, 300, 1600, 700)]),
+        ),
+        derived(
+            "derived/or/abutting",
+            cat,
+            ab,
+            &[("a or b", areas(&[2_000_000]))],
+            with_b(&[(1000, 0, 2000, 1000)]),
+        ),
+        derived(
+            "derived/or/apart",
+            cat,
+            ab,
+            &[("a or b", areas(&[1_000_000, 1_000_000]))],
+            with_b(&[(1001, 0, 2001, 1000)]),
+        ),
+        derived(
+            "derived/not/bite",
+            cat,
+            ab,
+            &[("a not b", areas(&[800_000]))],
+            with_b(&[(800, -100, 1200, 1100)]),
+        ),
+        derived(
+            "derived/not/split",
+            cat,
+            ab,
+            &[("a not b", areas(&[400_000, 400_000]))],
+            with_b(&[(400, -100, 600, 1100)]),
+        ),
+        derived(
+            "derived/not/hole",
+            cat,
+            ab,
+            &[("a not b", areas(&[960_000]))],
+            with_b(&[(400, 400, 600, 600)]),
+        ),
+        derived(
+            "derived/not/abutting",
+            cat,
+            ab,
+            &[("a not b", areas(&[1_000_000]))],
+            with_b(&[(1000, 0, 2000, 1000)]),
+        ),
+        derived(
+            "derived/not/covered",
+            cat,
+            ab,
+            &[("a not b", vec![])],
+            with_b(&[(-100, -100, 1100, 1100)]),
+        ),
+        derived(
+            "derived/not/three_operands",
+            cat,
+            &["a", "b", "c"],
+            &[("a not b not c", areas(&[400_000]))],
+            a().rect("b", 0, 0, 300, 1000).rect("c", 700, 0, 1000, 1000),
+        ),
+    ];
+    cases.push(fixture(
+        "derived/and/licon_17_inline",
+        &["DRC-050", "DRC-120"],
+        &new_deck(
+            &["licon", "poly", "diff", "tap"],
+            "rule licon.17 forbidden(licon and poly and (diff or tap))\n",
+        ),
+        rects(
+            Layout::default()
+                .rect("poly", 0, 0, 1000, 200)
+                .rect("diff", 0, -500, 400, 500)
+                .rect("tap", 600, -500, 1000, 500),
+            "licon",
+            &[
+                (100, 50, 200, 150),
+                (700, 50, 850, 150),
+                (450, 50, 550, 150),
+                (100, 300, 200, 400),
+            ],
+        ),
+        &[("licon.17", areas(&[10_000, 15_000]))],
+    ));
+    every_placement(cases)
+}
+
+/// `.sized` (DRC-120): growth by `a` on every side with square corners;
+/// shrinking, where a part no wider than twice the shrink disappears; and the
+/// opening `.sized(-a).sized(a)`, which keeps the parts wider than `2a`.
+///
+/// Shapes: a bar grown by 50; an L grown and shrunk by 50 (its concave corner
+/// stays); two squares 99 and 101 apart grown by 50 (one shape, or two); bars
+/// 99/100/101 wide shrunk by 50 (gone, gone, 1 x 900); a ring with a 200 nm
+/// hole grown by 99/100/101 (the hole 2 x 2, then closed) and shrunk by 100;
+/// a plate with a 100-wide tab (two abutting pieces) opened by 49/50/51 (tab
+/// kept, then gone); a dumbbell opened by 60, which splits it into its two
+/// plates.
+fn sizing() -> Vec<Fixture> {
+    let cat = &["DRC-120"];
+    let only_a = &["a"];
+    let mut cases = vec![derived(
+        "derived/sized/grow",
+        cat,
+        only_a,
+        &[("a.sized(50nm)", areas(&[80_000]))],
+        Layout::default().rect("a", 0, 0, 100, 300),
+    )];
+    // An L keeps its concave corner: grown by 50 it is two 1100 x 300 arms
+    // sharing 300 x 300, shrunk by 50 two 900 x 100 arms sharing 100 x 100.
+    let l_shape = [
+        (0, 0),
+        (1000, 0),
+        (1000, 200),
+        (200, 200),
+        (200, 1000),
+        (0, 1000),
+    ];
+    for (by, area) in [(50, 570_000), (-50, 170_000)] {
+        cases.push(derived(
+            &format!("derived/sized/l_shape{by}"),
+            cat,
+            only_a,
+            &[(&format!("a.sized({by}nm)"), areas(&[area]))],
+            Layout::default().polygon("a", &l_shape),
+        ));
+    }
+    for (g, grown) in [(99, areas(&[79_800])), (101, areas(&[40_000, 40_000]))] {
+        cases.push(derived(
+            &format!("derived/sized/grow_gap{g}"),
+            cat,
+            only_a,
+            &[("a.sized(50nm)", grown)],
+            Layout::default()
+                .rect("a", 0, 0, 100, 100)
+                .rect("a", 100 + g, 0, 200 + g, 100),
+        ));
+    }
+    for (w, side) in sweep(100) {
+        cases.push(derived(
+            &format!("derived/sized/shrink/{side}"),
+            cat,
+            only_a,
+            &[(
+                "a.sized(-50nm)",
+                if w > 100 { areas(&[900]) } else { vec![] },
+            )],
+            Layout::default().rect("a", 0, 0, w, 1000),
+        ));
+    }
+    for (by, side) in sweep(50) {
+        cases.push(derived(
+            &format!("derived/sized/opening/{side}"),
+            cat,
+            only_a,
+            &[(
+                &format!("a.sized(-{by}nm).sized({by}nm)"),
+                areas(&[if by < 50 { 1_100_000 } else { 1_000_000 }]),
+            )],
+            Layout::default()
+                .rect("a", 0, 0, 1000, 1000)
+                .rect("a", 1000, 450, 2000, 550),
+        ));
+    }
+    // A ring with a 200 nm hole: grown by 99 the hole is 2 x 2, by 100 it
+    // closes; shrunk by 100 the hole widens to 400.
+    let ringed = || {
+        ring(
+            Layout::default(),
+            "a",
+            (0, 0, 1000, 1000),
+            (400, 400, 600, 600),
+        )
+    };
+    for (by, side, area) in [
+        (99, "below", 1_198 * 1_198 - 4),
+        (100, "at", 1_200 * 1_200),
+        (101, "above", 1_202 * 1_202),
+    ] {
+        cases.push(derived(
+            &format!("derived/sized/ring_closes/{side}"),
+            cat,
+            only_a,
+            &[(&format!("a.sized({by}nm)"), areas(&[area]))],
+            ringed(),
+        ));
+    }
+    cases.push(derived(
+        "derived/sized/ring_shrinks",
+        cat,
+        only_a,
+        &[("a.sized(-100nm)", areas(&[640_000 - 160_000]))],
+        ringed(),
+    ));
+    cases.push(derived(
+        "derived/sized/opening_splits",
+        cat,
+        only_a,
+        &[("a.sized(-60nm).sized(60nm)", areas(&[1_000_000, 1_000_000]))],
+        rects(
+            Layout::default(),
+            "a",
+            &[
+                (0, 0, 1000, 1000),
+                (1000, 450, 1500, 550),
+                (1500, 0, 2500, 1000),
+            ],
+        ),
+    ));
+    every_placement(cases)
+}
+
+/// The selections (DRC-120, DRC-121): `interacting` and `not_interacting`
+/// (corner-only contact counts, 1 nm apart does not, an `a` shape far from
+/// `b` is selected through a shape it abuts, and a ring interacts with an
+/// island of `b` in its hole only when they touch), and the straddle
+/// `interacting not inside not outside`; `inside` and `outside` against a `b`
+/// drawn as two halves (touching the boundary from inside is inside, from
+/// outside is outside, straddling is neither) and against a `b` ring (a shape
+/// in its hole is outside); `holes` (one, one with an island, two, and a U
+/// with none); `extents` (an L, two touching shapes, two apart, a ring, and
+/// two interlocking Ls whose boxes overlap, N-x2-1); `with_area` and
+/// `with_width` across their bounds, holes excluded and touching pieces
+/// merged, and a corner neck `width` measures Euclidean (N-x2-2); and
+/// `with_text` / `without_text` with `*`, `?`, case, a text on the edge, one
+/// off the shape and one in a ring's hole.
+fn selections() -> Vec<Fixture> {
+    let cat = &["DRC-120", "DRC-121"];
+    let ab = &["a", "b"];
+    let mut cases = Vec::new();
+
+    let contact = rects(
+        Layout::default().rect("b", 0, 0, 1000, 1000),
+        "a",
+        &[
+            (900, 100, 1200, 200),
+            (1200, 100, 1500, 200),
+            (1000, 300, 1300, 400),
+            (1000, 1000, 1100, 1100),
+            (-101, 500, -1, 600),
+            (-500, -500, -400, -400),
+        ],
+    );
+    cases.push(derived(
+        "derived/interacting",
+        cat,
+        ab,
+        &[
+            ("a.interacting(b)", areas(&[60_000, 30_000, 10_000])),
+            ("a.not_interacting(b)", areas(&[10_000, 10_000])),
+            (
+                "a.interacting(b) not a.inside(b) not a.outside(b)",
+                areas(&[60_000]),
+            ),
+        ],
+        contact,
+    ));
+    cases.push(derived(
+        "derived/inside_outside_ring",
+        cat,
+        ab,
+        &[
+            ("a.inside(b)", areas(&[10_000])),
+            ("a.outside(b)", areas(&[20_000])),
+        ],
+        ring(
+            rects(
+                Layout::default(),
+                "a",
+                &[
+                    (100, 100, 200, 200),
+                    (400, 450, 600, 550),
+                    (250, 450, 350, 550),
+                ],
+            ),
+            "b",
+            (0, 0, 1000, 1000),
+            (300, 300, 700, 700),
+        ),
+    ));
+    // A ring and an island of `b` in its hole: apart they do not interact,
+    // touching the hole's edge they do.
+    for (name, island, hit, miss) in [
+        (
+            "island_apart",
+            (400, 400, 600, 600),
+            vec![],
+            areas(&[840_000]),
+        ),
+        (
+            "island_touching",
+            (300, 400, 400, 600),
+            areas(&[840_000]),
+            vec![],
+        ),
+    ] {
+        cases.push(derived(
+            &format!("derived/interacting_ring/{name}"),
+            cat,
+            ab,
+            &[("a.interacting(b)", hit), ("a.not_interacting(b)", miss)],
+            ring(
+                rects(Layout::default(), "b", &[island]),
+                "a",
+                (0, 0, 1000, 1000),
+                (300, 300, 700, 700),
+            ),
+        ));
+    }
+
+    let placed = rects(
+        Layout::default()
+            .rect("b", 0, 0, 500, 1000)
+            .rect("b", 500, 0, 1000, 1000),
+        "a",
+        &[
+            (100, 100, 200, 200),
+            (0, 400, 200, 500),
+            (400, 700, 700, 800),
+            (900, 100, 1100, 300),
+            (1000, 400, 1500, 500),
+            (1500, 0, 1800, 200),
+        ],
+    );
+    cases.push(derived(
+        "derived/inside_outside",
+        cat,
+        ab,
+        &[
+            ("a.inside(b)", areas(&[10_000, 20_000, 30_000])),
+            ("a.outside(b)", areas(&[50_000, 60_000])),
+        ],
+        placed,
+    ));
+
+    let ring_a = |layout| ring(layout, "a", (0, 0, 1000, 1000), (400, 300, 600, 700));
+    for (name, layout, holes) in [
+        ("ring", ring_a(Layout::default()), areas(&[80_000])),
+        (
+            "ring_with_island",
+            ring_a(Layout::default()).rect("a", 450, 450, 550, 550),
+            areas(&[80_000]),
+        ),
+        (
+            "two_holes",
+            rects(
+                Layout::default(),
+                "a",
+                &[
+                    (0, 0, 1000, 100),
+                    (0, 900, 1000, 1000),
+                    (0, 100, 100, 900),
+                    (900, 100, 1000, 900),
+                    (450, 100, 550, 900),
+                ],
+            ),
+            areas(&[280_000, 280_000]),
+        ),
+        (
+            "u_shape",
+            rects(
+                Layout::default(),
+                "a",
+                &[
+                    (0, 0, 1000, 100),
+                    (0, 100, 100, 1000),
+                    (900, 100, 1000, 1000),
+                ],
+            ),
+            vec![],
+        ),
+    ] {
+        cases.push(derived(
+            &format!("derived/holes/{name}"),
+            cat,
+            &["a"],
+            &[("a.holes()", holes)],
+            layout,
+        ));
+    }
+
+    for (name, layout, extents) in [
+        (
+            "l_shape",
+            Layout::default().polygon(
+                "a",
+                &[
+                    (0, 0),
+                    (1000, 0),
+                    (1000, 200),
+                    (200, 200),
+                    (200, 1000),
+                    (0, 1000),
+                ],
+            ),
+            areas(&[1_000_000]),
+        ),
+        (
+            "touching",
+            Layout::default()
+                .rect("a", 0, 0, 500, 200)
+                .rect("a", 500, 0, 1000, 400),
+            areas(&[400_000]),
+        ),
+        (
+            "apart",
+            Layout::default()
+                .rect("a", 0, 0, 500, 200)
+                .rect("a", 600, 0, 1000, 400),
+            areas(&[100_000, 160_000]),
+        ),
+        (
+            "ring",
+            ring(
+                Layout::default(),
+                "a",
+                (0, 0, 1000, 1000),
+                (300, 300, 700, 700),
+            ),
+            areas(&[1_000_000]),
+        ),
+        (
+            "interlocking",
+            Layout::default()
+                .polygon(
+                    "a",
+                    &[
+                        (0, 0),
+                        (1000, 0),
+                        (1000, 100),
+                        (100, 100),
+                        (100, 1000),
+                        (0, 1000),
+                    ],
+                )
+                .polygon(
+                    "a",
+                    &[
+                        (1100, 200),
+                        (1200, 200),
+                        (1200, 1200),
+                        (200, 1200),
+                        (200, 1100),
+                        (1100, 1100),
+                    ],
+                ),
+            areas(&[1_000_000, 1_000_000]),
+        ),
+    ] {
+        let fixture = derived(
+            &format!("derived/extents/{name}"),
+            cat,
+            &["a"],
+            &[("a.extents()", extents)],
+            layout,
+        );
+        // N-x2-1: the boxes of shapes whose boxes overlap are stored merged.
+        cases.push(if name == "interlocking" {
+            fixture.known("N-x2-1")
+        } else {
+            fixture
+        });
+    }
+
+    let sized = ring(
+        rects(
+            Layout::default(),
+            "a",
+            &[
+                (0, 0, 100, 99),
+                (200, 0, 300, 100),
+                (400, 0, 500, 101),
+                (600, 0, 650, 100),
+                (650, 0, 700, 100),
+            ],
+        ),
+        "a",
+        (0, 1000, 200, 1200),
+        (50, 1050, 150, 1150),
+    );
+    cases.push(derived(
+        "derived/with_area",
+        cat,
+        &["a"],
+        &[
+            (
+                "a.with_area(>= 10000nm2)",
+                areas(&[10_000, 10_100, 10_000, 30_000]),
+            ),
+            ("a.with_area(== 30000nm2)", areas(&[30_000])),
+            (
+                "a.with_area(> 9999nm2, < 10001nm2)",
+                areas(&[10_000, 10_000]),
+            ),
+        ],
+        sized,
+    ));
+
+    let bars = rects(
+        Layout::default().polygon(
+            "a",
+            &[
+                (0, 2000),
+                (1000, 2000),
+                (1000, 2500),
+                (99, 2500),
+                (99, 3500),
+                (0, 3500),
+            ],
+        ),
+        "a",
+        &[
+            (0, 0, 99, 1000),
+            (200, 0, 300, 1000),
+            (400, 0, 501, 1000),
+            (600, 0, 650, 1000),
+            (650, 0, 700, 1000),
+        ],
+    );
+    cases.push(derived(
+        "derived/with_width",
+        cat,
+        &["a"],
+        &[
+            ("a.with_width(< 100nm)", areas(&[99_000, 599_000])),
+            (
+                "a.with_width(>= 100nm)",
+                areas(&[100_000, 101_000, 100_000]),
+            ),
+        ],
+        bars,
+    ));
+    // Two plates overlapping 50 x 50 at a corner: the Euclidean neck between
+    // their concave corners is sqrt(5000), 70.7 nm, which `width` measures.
+    cases.push(
+        derived(
+            "derived/with_width_neck",
+            cat,
+            &["a"],
+            &[
+                ("a.with_width(< 100nm)", areas(&[1_997_500])),
+                ("a.with_width(>= 100nm)", vec![]),
+            ],
+            Layout::default()
+                .rect("a", 0, 0, 1000, 1000)
+                .rect("a", 950, 950, 1950, 1950),
+        )
+        .known("N-x2-2"),
+    );
+
+    let texts = rects(
+        ring(
+            Layout::default(),
+            "a",
+            (3000, 0, 3600, 600),
+            (3100, 100, 3500, 500),
+        )
+        .label("t", 3300, 300, "VDD"),
+        "a",
+        &[
+            (0, 0, 100, 100),
+            (200, 0, 400, 100),
+            (500, 0, 800, 100),
+            (900, 0, 1300, 100),
+            (1400, 0, 1900, 100),
+            (2000, 0, 2600, 100),
+        ],
+    )
+    .label("t", 50, 50, "VDD")
+    .label("t", 200, 50, "VDDA")
+    .label("t", 650, 50, "vdd")
+    .label("t", 1100, 50, "VSD")
+    .label("t", 1650, 200, "VDD");
+    cases.push(derived(
+        "derived/with_text",
+        cat,
+        &["a", "t"],
+        &[
+            ("a.with_text(t, \"VDD*\")", areas(&[10_000, 20_000])),
+            (
+                "a.without_text(t, \"VDD*\")",
+                areas(&[30_000, 40_000, 50_000, 60_000, 200_000]),
+            ),
+            ("a.with_text(t, \"V?D\")", areas(&[10_000, 40_000])),
+        ],
+        texts,
+    ));
+    every_placement(cases)
+}
+
+/// Edge layers (DRC-122): `.edges()` (a rectangle, the same drawn as two
+/// abutting halves, an L, a ring's outer and inner edges, an outline with a
+/// redundant collinear vertex); edge `and`, `not` and `or` on two butting
+/// rectangles and on two whose shapes share edges on the same side;
+/// `inside_part` and `outside_part`, with the part on the other layer's
+/// boundary in neither; edge `interacting`, touching and lying wholly inside;
+/// and `with_length` across its bounds. Each edge is reported with its
+/// length.
+fn edge_operations() -> Vec<Fixture> {
+    let cat = &["DRC-122"];
+    let mut cases = Vec::new();
+    for (name, layout, edges) in [
+        (
+            "rect",
+            Layout::default().rect("a", 0, 0, 300, 100),
+            lengths(&[300, 100, 300, 100]),
+        ),
+        (
+            "abutting_halves",
+            Layout::default()
+                .rect("a", 0, 0, 150, 100)
+                .rect("a", 150, 0, 300, 100),
+            lengths(&[300, 100, 300, 100]),
+        ),
+        (
+            "l_shape",
+            Layout::default().polygon(
+                "a",
+                &[
+                    (0, 0),
+                    (1000, 0),
+                    (1000, 200),
+                    (200, 200),
+                    (200, 1000),
+                    (0, 1000),
+                ],
+            ),
+            lengths(&[1000, 200, 800, 800, 200, 1000]),
+        ),
+        (
+            "ring",
+            ring(
+                Layout::default(),
+                "a",
+                (0, 0, 1000, 1000),
+                (300, 300, 700, 700),
+            ),
+            lengths(&[1000, 1000, 1000, 1000, 400, 400, 400, 400]),
+        ),
+        (
+            "collinear_vertex",
+            Layout::default().polygon("a", &[(0, 0), (400, 0), (1000, 0), (1000, 100), (0, 100)]),
+            lengths(&[1000, 100, 1000, 100]),
+        ),
+    ] {
+        cases.push(derived(
+            &format!("derived/edges/{name}"),
+            cat,
+            &["a"],
+            &[("a.edges()", edges)],
+            layout,
+        ));
+    }
+    cases.push(derived(
+        "derived/edge_booleans",
+        cat,
+        &["a", "b"],
+        &[
+            ("a.edges() and b.edges()", lengths(&[200])),
+            ("a.edges() not b.edges()", lengths(&[500, 100, 500, 300])),
+            (
+                "a.edges() or b.edges()",
+                lengths(&[500, 300, 500, 300, 500, 300, 500, 100]),
+            ),
+        ],
+        Layout::default()
+            .rect("a", 0, 0, 500, 300)
+            .rect("b", 500, -100, 1000, 200),
+    ));
+    // `b` inside `a` along its left side: edges that coincide with their
+    // shapes on the same side.
+    cases.push(derived(
+        "derived/edge_booleans_same_side",
+        cat,
+        &["a", "b"],
+        &[
+            ("a.edges() and b.edges()", lengths(&[1000, 500, 500])),
+            ("a.edges() not b.edges()", lengths(&[500, 500, 1000])),
+            ("a.edges() or b.edges()", lengths(&[1000; 5])),
+        ],
+        Layout::default()
+            .rect("a", 0, 0, 1000, 1000)
+            .rect("b", 0, 0, 500, 1000),
+    ));
+    cases.push(derived(
+        "derived/edge_interacting_within",
+        cat,
+        &["a", "b"],
+        &[
+            ("a.edges().interacting(b)", lengths(&[200; 4])),
+            ("a.edges().not_interacting(b)", vec![]),
+        ],
+        Layout::default()
+            .rect("a", 400, 400, 600, 600)
+            .rect("b", 0, 0, 1000, 1000),
+    ));
+    let bar = || Layout::default().rect("a", 0, 0, 1000, 100);
+    for (name, b, inside) in [
+        ("crossing", (300, -100, 600, 200), lengths(&[300, 300])),
+        ("on_boundary", (300, 0, 600, 100), vec![]),
+    ] {
+        cases.push(derived(
+            &format!("derived/edge_parts/{name}"),
+            cat,
+            &["a", "b"],
+            &[
+                ("a.edges().inside_part(b)", inside),
+                (
+                    "a.edges().outside_part(b)",
+                    lengths(&[300, 400, 300, 400, 100, 100]),
+                ),
+            ],
+            bar().rect("b", b.0, b.1, b.2, b.3),
+        ));
+    }
+    cases.push(derived(
+        "derived/edge_interacting",
+        cat,
+        &["a", "b"],
+        &[
+            ("a.edges().interacting(b)", lengths(&[1000])),
+            ("a.edges().not_interacting(b)", lengths(&[1000, 100, 100])),
+        ],
+        bar().rect("b", 400, 100, 600, 300),
+    ));
+    cases.push(derived(
+        "derived/with_length",
+        cat,
+        &["a"],
+        &[
+            ("a.edges().with_length(== 100nm)", lengths(&[100, 100])),
+            (
+                "a.edges().with_length(> 100nm, <= 300nm)",
+                lengths(&[300, 300]),
+            ),
+            ("a.edges().with_length(< 100nm)", vec![]),
+        ],
+        Layout::default().rect("a", 0, 0, 300, 100),
+    ));
+    every_placement(cases)
 }
