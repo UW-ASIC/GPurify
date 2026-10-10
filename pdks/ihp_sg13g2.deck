@@ -573,21 +573,21 @@ for (name, c) in cuts_90 {
 # One row per etch step, collecting everything standing at that step.
 # Ant.a: GatPoly over field over gate area; GatPoly here includes the gate
 # itself, so the limit is 200 + 1.
-rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none)
-rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none)
-rule Ant.b_Metal1    antenna(gate, metal1; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal2    antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal3    antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal4    antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal5    antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none)
-rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none)
-rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none)
-rule Ant.d_Via1    antenna(gate, via1; max_ratio: 20, sidewall: none)
-rule Ant.d_Via2    antenna(gate, via1, via2; max_ratio: 20, sidewall: none)
-rule Ant.d_Via3    antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none)
-rule Ant.d_Via4    antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none)
-rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none)
-rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none)
+rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none, diode: none)
+rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none, diode: none)
+rule Ant.b_Metal1    antenna(gate, metal1; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.b_Metal2    antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.b_Metal3    antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.b_Metal4    antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.b_Metal5    antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none, diode: none)
+rule Ant.d_Via1    antenna(gate, via1; max_ratio: 20, sidewall: none, diode: none)
+rule Ant.d_Via2    antenna(gate, via1, via2; max_ratio: 20, sidewall: none, diode: none)
+rule Ant.d_Via3    antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none, diode: none)
+rule Ant.d_Via4    antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none, diode: none)
+rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none, diode: none)
+rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none, diode: none)
 
 # ======================= Electrical rules =======================
 
@@ -778,8 +778,10 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 # ======================= Not carried, and why =======================
 # - Antenna: the rows above hold every gate to the unprotected limits; Ant.e/f
 #   (20000 and 500 with a protection diode of at least Ant.g 0.16 um2) switch the
-#   limit on diode presence, which antenna_electrical's linear credit cannot state,
-#   so gates with a diode over-report.
+#   limit on diode presence. An antenna row's `diode:` can leave protected gates
+#   to an Ant.e/f row, but which layer marks an antenna diode here (dantenna and
+#   dpantenna are not recognised, below) is not settled, so every row says
+#   `diode: none` and gates with a diode over-report.
 # - Sheet and fringe capacitances other than Metal1-substrate are not in [PS];
 #   metal-to-metal area capacitances ([PS] §2.17, 68 aF/um2 M(n)-M(n+1), 42.5
 #   TopMetal1-Metal5, 13 TopMetal2-TopMetal1) have no field in the pex row.

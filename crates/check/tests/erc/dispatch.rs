@@ -138,6 +138,7 @@ fn every_kind() -> RuleSet {
             collector: vec![other],
             collector_measure: vec![antenna::AntennaMeasure::Area],
             max_ratio: vec![50.0],
+            diode: vec![None],
             stack: antenna::Stack::default(),
         },
         antenna_electrical: antenna::AntennaElectricalTable {

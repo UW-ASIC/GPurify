@@ -78,6 +78,7 @@ fn antenna_table(id: StrId, max_ratio: f64) -> AntennaTable {
         collector: vec![LayerId(0)],
         collector_measure: vec![AntennaMeasure::Area],
         max_ratio: vec![max_ratio],
+        diode: vec![None],
         stack: Stack::default(),
     }
 }
@@ -262,6 +263,7 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
         // Limits below both ratios, so each stage's own measurement lands in the
         // table and can be read rather than inferred from a verdict.
         max_ratio: vec![1.0, 1.0],
+        diode: vec![None; 2],
         stack: Stack::default(),
     };
 
@@ -326,6 +328,7 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
         // A ratio strictly above zero violates a zero ceiling, so every stage
         // that collects anything at all lands in the table.
         max_ratio: vec![f64::MIN_POSITIVE; 2],
+        diode: vec![None; 2],
         stack: Stack::default(),
     };
 
@@ -378,6 +381,7 @@ fn run_staged(
         collector: collectors.to_vec(),
         collector_measure: vec![measure; collectors.len()],
         max_ratio: vec![max_ratio],
+        diode: vec![None],
         stack,
     };
     let mut scratch = Scratch::default();

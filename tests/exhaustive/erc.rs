@@ -360,7 +360,7 @@ fn antenna_lef() -> Vec<Fixture> {
         for (n, &(value, _)) in row.nets.iter().enumerate() {
             for limit in sweep(value) {
                 let deck = antenna_deck(&format!(
-                    "rule {} antenna(gate, {}; max_ratio: {limit}, sidewall: none)",
+                    "rule {} antenna(gate, {}; max_ratio: {limit}, sidewall: none, diode: none)",
                     row.id, row.collectors
                 ));
                 let fixture = Fixture::new(
@@ -445,7 +445,7 @@ fn antenna_sidewall() -> Vec<Fixture> {
                 &format!("erc/antenna/sidewall/{name}/{}", side(limit, value)),
                 &["ERC-A2"],
                 &antenna_deck(&format!(
-                    "rule ant.side antenna(gate, met1; max_ratio: {limit}, sidewall: 350nm)"
+                    "rule ant.side antenna(gate, met1; max_ratio: {limit}, sidewall: 350nm, diode: none)"
                 )),
                 ERC,
             )
@@ -485,7 +485,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/derived_gate/{}", side(limit, 2.0)),
                 &["ERC-A1"],
                 &antenna_deck(&format!(
-                    "rule ant.d antenna(gated, met1; max_ratio: {limit}, sidewall: none)"
+                    "rule ant.d antenna(gated, met1; max_ratio: {limit}, sidewall: none, diode: none)"
                 )),
                 ERC,
             )
@@ -517,7 +517,7 @@ fn antenna_variants() -> Vec<Fixture> {
                     &format!("erc/antenna/oxide/{id}/{}", side(limit, value)),
                     &["ERC-A12"],
                     &antenna_deck(&format!(
-                        "rule {id} antenna({layer}, met1; max_ratio: {limit}, sidewall: none)"
+                        "rule {id} antenna({layer}, met1; max_ratio: {limit}, sidewall: none, diode: none)"
                     )),
                     ERC,
                 )
@@ -541,7 +541,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/mim/{}", side(limit, 2.0)),
                 &["ERC-A11"],
                 &antenna_deck(&format!(
-                    "rule ant.mim antenna(mim, met2; max_ratio: {limit}, sidewall: none)"
+                    "rule ant.mim antenna(mim, met2; max_ratio: {limit}, sidewall: none, diode: none)"
                 )),
                 ERC,
             )
@@ -570,7 +570,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/car_single_gate/{}", side(limit, 10.0)),
                 &["ERC-A3"],
                 &antenna_deck(&format!(
-                    "rule car antenna(gate, met1, met2, met3; max_ratio: {limit}, sidewall: none)"
+                    "rule car antenna(gate, met1, met2, met3; max_ratio: {limit}, sidewall: none, diode: none)"
                 )),
                 ERC,
             )
@@ -592,7 +592,9 @@ fn antenna_variants() -> Vec<Fixture> {
         Fixture::new(
             "erc/antenna/f29/overlapping_collectors",
             &["ERC-A1"],
-            &antenna_deck("rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none)"),
+            &antenna_deck(
+                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none)",
+            ),
             ERC,
         )
         .layout(over_collect)
@@ -611,7 +613,9 @@ fn antenna_variants() -> Vec<Fixture> {
         Fixture::new(
             "erc/antenna/f29/overlapping_gate",
             &["ERC-A1"],
-            &antenna_deck("rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none)"),
+            &antenna_deck(
+                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none)",
+            ),
             ERC,
         )
         .layout(over_gate)
@@ -662,7 +666,7 @@ fn ihp_area_ratio() -> Fixture {
     Fixture::new(
         "erc/antenna/ihp_fig7_1",
         &["ERC-A3"],
-        &antenna_deck("rule ant.b antenna(gate, met1, met2, met3; max_ratio: 100, sidewall: none)"),
+        &antenna_deck("rule ant.b antenna(gate, met1, met2, met3; max_ratio: 100, sidewall: none, diode: none)"),
         ERC,
     )
     .layout(l)
@@ -691,10 +695,10 @@ fn diode_stub(diode: bool) -> Layout {
 /// - A diode with a non-zero credit is refused, as its rustdoc and
 ///   limitations.md state.
 /// - IHP Ant.b (without diode, 1.5 here) and Ant.e (with diode, 100): a net
-///   with a diode is held to Ant.e only, so at 2.0 it is clean. `GPurify`'s
-///   `antenna` row cannot see the diode and holds it to Ant.b, the
-///   over-report the catalog notes on ERC-A8 but no finding records: `F60`.
-///   Without the diode Ant.b fails it and Ant.e (with diode) does not apply.
+///   with a diode is held to Ant.e only, so at 2.0 it is clean. Ant.b names
+///   the diode layer it leaves to Ant.e; before `antenna` took one it held
+///   the gate to Ant.b, the over-report of `F60`. Without the diode Ant.b
+///   fails it and Ant.e (with diode) does not apply.
 fn antenna_electrical() -> Vec<Fixture> {
     let mut out = Vec::new();
     for limit in sweep(2.0) {
@@ -750,7 +754,7 @@ fn antenna_electrical() -> Vec<Fixture> {
         .layout(diode_stub(true))
         .expect(Expect::outcome("ae", Want::Refused)),
     );
-    let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none)
+    let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
 rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_credit: 0, diode_bonus: 0)";
     out.push(
         Fixture::new(
@@ -761,8 +765,7 @@ rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_cre
         )
         .layout(diode_stub(true))
         .expect(Expect::clean("Ant.b"))
-        .expect(Expect::clean("Ant.e"))
-        .known("F60"),
+        .expect(Expect::clean("Ant.e")),
     );
     out.push(
         Fixture::new(

@@ -108,7 +108,8 @@ pub struct CmpModel {
 }
 
 /// Antenna ratio at one etch stage: deck kind `antenna`, written
-/// `antenna(gate, collectors..; max_ratio: n, sidewall: len | none)`.
+/// `antenna(gate, collectors..; max_ratio: n, sidewall: len | none,
+/// diode: layer | none)`.
 ///
 /// A conductor being plasma-etched collects charge in proportion to its area
 /// (or, for a thick layer, its sidewall) and discharges it through the thin
@@ -134,14 +135,20 @@ pub struct CmpModel {
 ///   plate) joins the net of the topmost conductor it overlaps with positive
 ///   area; touching alone does not join.
 /// - gates on one net at every stage have one ratio and are reported once.
+/// - with a `diode` layer, a gate whose net at the row's highest stage has
+///   area on that layer is not this row's: a foundry that states a separate
+///   limit with a protection diode (IHP Ant.b without, Ant.e with) writes it
+///   as another row. This is [KLayout] `antenna_check` with a diode layer and
+///   no factor: "the respective network is skipped".
 ///
 /// The ratio is dimensionless. No design intent is needed.
 ///
 /// # Limits
 ///
 /// - Every net with gate area is checked: reaching diffusion or a tap
-///   exempts nothing (ERC-A13), and a gate with a protection diode is held to
-///   the no-diode limit, which over-reports IHP Ant.e/f (ERC-A8).
+///   exempts nothing (ERC-A13). Any area on the `diode` layer counts as a
+///   protection diode; IHP's minimum diode size (Ant.g, ERC-A9) is not
+///   checked.
 /// - LEF `ANTENNACUMROUTINGPLUSCUT` is missing (ERC-A4); oxide classes are one
 ///   row per gate layer (ERC-A12); a MIM victim works as a gate layer, but
 ///   gf180's deck leaves ANT.14/15 out (ERC-A11).
@@ -149,11 +156,12 @@ pub struct CmpModel {
 /// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4 (partial), ERC-A8, ERC-A11
 /// (partial), ERC-A12 (partial) in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
-/// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1. Source
-/// tags are in [check-sources.md].
+/// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
+/// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [KLayout]: https://www.klayout.de/doc-qt5/about/drc_ref_netter.html#antenna_check
 /// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
@@ -174,6 +182,9 @@ pub struct AntennaTable {
     pub collector_measure: Vec<AntennaMeasure>,
     /// Per row: the largest allowed ratio. Positive and finite from a deck.
     pub max_ratio: Vec<f64>,
+    /// Per row: the protection-diode layer whose gates the row leaves to
+    /// another, or `None` to hold every gate.
+    pub diode: Vec<Option<LayerId>>,
     /// The deck's connectivity, shared by every row.
     pub stack: Stack,
 }
@@ -658,7 +669,7 @@ fn antenna_row(
 ///
 /// `examined` counts the gates on a net at the row's highest stage, those on
 /// one net at every stage counted once (for a single-stage row, the gate
-/// nets). A violation sits at the centre of the bounding box of the group's
+/// nets), less those the row's `diode` leaves to another row. A violation sits at the centre of the bounding box of the group's
 /// lowest-numbered gate polygon, on the gate layer, measuring the ratio
 /// against `max_ratio`. A row with gate shapes is refused when one of its
 /// layers will not validate (a non-rectilinear shape) or merge.
@@ -680,11 +691,15 @@ pub fn check_antenna(
         let examined = antenna_row(
             design,
             (&table.head, row),
-            (table.gate[row], &table.collector[span.clone()], None),
+            (
+                table.gate[row],
+                &table.collector[span.clone()],
+                table.diode[row],
+            ),
             &table.collector_measure[span],
             &table.stack,
             table.max_ratio[row],
-            |ratio, _| Some(ratio),
+            |ratio, diode| (diode.raw() == 0).then_some(ratio),
             scratch,
             out,
         );

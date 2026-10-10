@@ -419,9 +419,11 @@ impl RuleSet {
                         Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
                         None => antenna::AntennaMeasure::Area,
                     };
+                    let diode = row.opt_layer("diode_layer")?;
                     let table = &mut set.antenna;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
+                    table.diode.push(diode);
                     table.collector.extend_from_slice(&layers[1..]);
                     table
                         .collector_measure
