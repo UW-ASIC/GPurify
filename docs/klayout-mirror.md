@@ -673,10 +673,12 @@ emit(id, A.separation(B, 1))                 # pairs that only touch (d = 0; 1 D
 ### 21. max_distance_to_tap — APPROX (bracket)
 
 **GPurify** (`overlay.rs` `max_distance_to_tap` → `supply.rs` `untied_points`)
-- For each well row, including hole rows (F34), it finds the furthest point by branch and bound and
-  measures its distance to the tap *edges*, holes included.
+- For each outer well row, it finds the furthest point by branch and bound and measures its
+  distance to the tap *edges*, holes included. Hole rows are not wells of their own (F34, fixed in
+  B16).
 - A well fails when that distance is > limit (strict). `at` is that point.
-- A point inside a tap is measured to the tap's edge, which over-reports.
+- A point inside a tap is measured to the tap's edge, and a well's hole is measured as if filled;
+  both over-report.
 
 **KLayout**
 

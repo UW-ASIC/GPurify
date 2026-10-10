@@ -582,3 +582,62 @@ fn a_derived_layer_does_not_widen_the_boundary_less_die() {
     assert_eq!(sink.out.measured[0], Measurement::Ratio(0.7));
     assert_eq!(sink.out.at[0], point(500, 500));
 }
+
+/// F34: a figure's violation names a drawn row under the figure, never a
+/// shape that only sits inside its bounding box. Each island is drawn first,
+/// so it is the lowest row there.
+///
+/// A 500 x 400 ring with a 100 x 100 hole (190 000) holding a 60 x 60 island
+/// (3 600): under a 200 000 minimum area both fail, each naming itself, and
+/// the 10 000 hole under a 20 000 minimum names the ring. A U, 300 square
+/// with a 100 x 200 gap (70 000), around a 60 x 100 island (6 000): above a
+/// 5 000 unslotted limit both fail cheesing, each naming itself.
+#[test]
+fn an_island_inside_a_figure_is_not_named_for_it() {
+    let mut layout = LayoutBuilder::new(1);
+    let island = layout.rect(A, 220, 170, 280, 230);
+    let ring = layout.shape(A, &rect(0, 0, 500, 400));
+    layout.shape(A, &hole(200, 150, 300, 250));
+    let (store, ids) = layout.finish();
+    let owner_of = |sink: &Sink, measured: i128| {
+        let at = sink
+            .out
+            .measured
+            .iter()
+            .position(|&m| m == Measurement::Area(area(measured)))
+            .expect("a violation measuring this area");
+        sink.out.shape_a[at]
+    };
+
+    let mut sink = Sink::default();
+    sink.run(&store, &min_area_table(200_000));
+    assert_eq!(sink.out.len(), 2);
+    assert_eq!(owner_of(&sink, 190_000), ids.of(ring));
+    assert_eq!(owner_of(&sink, 3_600), ids.of(island));
+
+    sink.run(
+        &store,
+        &[(
+            RULE,
+            Rule::MinEnclosedArea {
+                layer: A,
+                limit: area(20_000),
+            },
+        )],
+    );
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(owner_of(&sink, 10_000), ids.of(ring));
+
+    let mut layout = LayoutBuilder::new(1);
+    let island = layout.rect(A, 120, 150, 180, 250);
+    let u = layout.push(
+        A,
+        &[0, 300, 300, 200, 200, 100, 100, 0],
+        &[0, 0, 300, 300, 100, 100, 300, 300],
+    );
+    let (store, ids) = layout.finish();
+    sink.run(&store, &cheesing_table(5_000));
+    assert_eq!(sink.out.len(), 2);
+    assert_eq!(owner_of(&sink, 70_000), ids.of(u));
+    assert_eq!(owner_of(&sink, 6_000), ids.of(island));
+}

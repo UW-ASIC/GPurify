@@ -110,6 +110,25 @@ fn an_odd_cycle_is_proved_infeasible_and_leaves_no_partial_colouring_behind() {
     assert_proper(&with_three, &triangle, 3);
 }
 
+/// Oracle: law (F34). A node that conflicts with itself shares a mask with
+/// itself under every colouring, so no palette colours it. Three nodes, node 1
+/// looped and joined to node 2: three, four and one colours prove it
+/// infeasible at node 1, the lowest looped node, and two colours at the root
+/// of its odd-cycle component, node 1; none leaves a colouring behind.
+#[test]
+fn a_node_conflicting_with_itself_is_infeasible_under_every_palette() {
+    let looped = [(1u32, 1u32), (1, 2)];
+    for palette in [3u8, 4, 2, 1] {
+        let mut colours = vec![7; 3];
+        assert_eq!(
+            color_into(3, &looped, palette, &mut colours),
+            Coloring::Infeasible { node: 1 },
+            "{palette} colours"
+        );
+        assert!(colours.is_empty(), "{palette} colours left a colouring");
+    }
+}
+
 /// Oracle: determinism. The reported node is specified as a function of the
 /// graph, not of the path the search took through it, so two calls on the same
 /// graph name the same node. A search reporting wherever it happened to stop

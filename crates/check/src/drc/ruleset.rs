@@ -319,8 +319,8 @@ pub enum Rule {
     ///
     /// One violation per merged figure, at the centre of one of its
     /// rectangles (always on its material). `measured` is the area, `shapes.0`
-    /// the lowest row on the layer whose bounding box lies within the
-    /// figure's. `examined` counts merged figures.
+    /// the lowest drawn outer row under the figure (an island in its hole is
+    /// not under it). `examined` counts merged figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-017. Rules: sky130 m1.6, GF180 Mn.3, IHP M1.d, ASAP7 M1.A.1; LEF
@@ -339,9 +339,9 @@ pub enum Rule {
     /// shapes counts.
     ///
     /// One violation per small hole, at the centre of the hole's bounding
-    /// box. `measured` is the hole's area, `shapes.0` the lowest row on the
-    /// layer whose bounding box lies within its figure's. `examined` counts
-    /// holes.
+    /// box. `measured` is the hole's area, `shapes.0` the lowest drawn outer
+    /// row under its figure (an island in the hole is not under it).
+    /// `examined` counts holes.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-019. Rules: sky130 m1.7, GF180 DF.10, IHP Act.e; LEF
@@ -359,9 +359,9 @@ pub enum Rule {
     ///
     /// One violation per merged figure strictly larger than `max_unslotted`
     /// and holding no hole, at the centre of one of its rectangles.
-    /// `measured` is the area, `shapes.0` the lowest row on the layer whose
-    /// bounding box lies within the figure's. `examined` counts merged
-    /// figures.
+    /// `measured` is the area, `shapes.0` the lowest drawn outer row under
+    /// the figure (an island in its hole is not under it). `examined` counts
+    /// merged figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-075, ERC-E12. Rules: sky130 m1.11 and m1.12, GF180 MSLOT, IHP
@@ -561,9 +561,10 @@ pub enum Rule {
     /// distance is to the nearest edge of any tap shape, holes included. A
     /// well with no tap on the layer at all measures `2^40`.
     ///
-    /// One violation per offending well row, at its furthest point, reported
-    /// on the `well` layer. `measured` is rounded up, so an exceeded limit
-    /// never reads as met. `examined` counts well rows. Records
+    /// One violation per offending well polygon, at its furthest point, on its
+    /// outer row and the `well` layer. `measured` is rounded up, so an
+    /// exceeded limit never reads as met. `examined` counts well polygons; a
+    /// hole row is not a well of its own. Records
     /// [`Outcome::Skipped`] with
     /// [`SkipReason::EmptyLayer`](crate::report::SkipReason::EmptyLayer) when
     /// the well layer is empty (an empty tap layer is not skipped), and

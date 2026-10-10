@@ -12,7 +12,9 @@ use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Desig
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::NetId;
 use gpurify_geom::connectivity::components_into;
-use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
+use gpurify_geom::ops::{
+    isqrt, point_seg_dist2, segments_intersect, winding_of, Point, Seg, Winding,
+};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
 use gpurify_geom::{Dbu, DbuArea};
@@ -90,7 +92,8 @@ pub struct SoftConnectionTable {
 ///
 /// A tap distance conditional on neighbouring well spacing (ERC-D1a) and a
 /// minimum tie area (ERC-D1b) are missing. A point inside a tap measures its
-/// distance to the tap's edge, not zero.
+/// distance to the tap's edge, not zero, and a region polygon's hole is
+/// measured as if filled (both over-report only).
 ///
 /// Catalog: ERC-D1 in the [check catalog] (with the DRC kind
 /// `max_distance_to_tap`). Defined by [GF180MCU] LU.1-LU.4; [IHP SG13G2]
@@ -469,11 +472,13 @@ pub fn check_missing_tie(
     }
 }
 
-/// Every row on `region` whose furthest point from the `tap` layer (every
-/// point of the polygon, not only its vertices; distance to the taps' edges,
-/// holes included) is more than `limit`: `each(row, point, distance²)`.
-/// Returns the region row count, or `None` when the tap layer will not
-/// validate. A region with no tap at all measures `MAX_ABS_DBU`.
+/// Every outer row on `region` whose furthest point from the `tap` layer
+/// (every point of the polygon, not only its vertices; distance to the taps'
+/// edges, holes included) is more than `limit`: `each(row, point, distance²)`.
+/// A hole row (clockwise) is not a region of its own, and its polygon is
+/// measured as if filled. Returns the outer row count, or `None` when the tap
+/// layer will not validate. A region with no tap at all measures
+/// `MAX_ABS_DBU`.
 pub(crate) fn untied_points(
     store: &GeometryStore,
     (region, tap): (LayerId, LayerId),
@@ -502,11 +507,14 @@ pub(crate) fn untied_points(
     TapGrid::build_into(&taps, &mut grid);
     let mut stack: Vec<Cell> = Vec::new();
 
-    let region_rows = store.polys_on_layer(region);
-    let examined = u64::from(region_rows.end - region_rows.start);
-    for poly in region_rows {
+    let mut examined = 0u64;
+    for poly in store.polys_on_layer(region) {
         let poly = PolyId(poly);
         let (xs, ys) = store.poly_verts(poly);
+        if winding_of(xs, ys) == Some(Winding::Clockwise) {
+            continue;
+        }
+        examined += 1;
         let Some((&x0, &y0)) = xs.first().zip(ys.first()) else {
             continue;
         };

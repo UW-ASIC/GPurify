@@ -21,9 +21,9 @@ const BUDGET_STEPS_PER_NODE: u32 = 64;
 pub enum Coloring {
     /// Every node has a colour, in `out`.
     Complete,
-    /// Proved uncolourable. `node` is canonical: the lowest node the search
-    /// could not place (3+ colours), or the lowest root of an odd-cycle
-    /// component (2 colours).
+    /// Proved uncolourable. `node` is canonical: the lowest root of an
+    /// odd-cycle component (2 colours); otherwise the lowest node conflicting
+    /// with itself, else the lowest node the search could not place.
     Infeasible {
         /// The node to report the failure on; the same for the same graph.
         node: u32,
@@ -41,6 +41,7 @@ pub enum Coloring {
 /// the graph. Three or more is a DSATUR search with backtracking, capped at
 /// `max(2^20, 64 * node_count)` placements, past which it returns
 /// [`Coloring::Exhausted`]. Zero colours is infeasible for any non-empty graph.
+/// A conflict `(a, a)` makes any graph infeasible, under any palette.
 ///
 /// # Panics
 ///
@@ -82,6 +83,17 @@ pub fn color_into(
     out.resize(n, UNCOLORED);
     if colors == 2 {
         return two_color_into(&adj_start, &adj, out);
+    }
+    // A node conflicting with itself takes no colour; the search below never
+    // checks a placed node against itself.
+    if let Some(node) = conflicts
+        .iter()
+        .filter(|(a, b)| a == b)
+        .map(|&(a, _)| a)
+        .min()
+    {
+        out.clear();
+        return Coloring::Infeasible { node };
     }
 
     // `adjacent[node * k + c]`: neighbours of `node` holding colour `c`.

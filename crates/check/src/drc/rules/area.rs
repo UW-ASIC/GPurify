@@ -6,7 +6,7 @@
 //! decomposed into disjoint rectangles (canonical). Data out: one violation per
 //! offending figure, hole or window.
 
-use super::{centre, Verdict, REFUSED};
+use super::{centre, owners_of, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
@@ -29,6 +29,18 @@ fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> bool {
     }
     decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
     true
+}
+
+/// The lowest drawn row under each figure of `s.layer_out`, which
+/// [`merge_layer`] filled: an outer row whose polygon covers part of the
+/// figure, never an island in its hole.
+fn figure_owners(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Vec<PolyId> {
+    let drawn = s
+        .validated
+        .get(store, layer)
+        .expect("merge_layer validated the layer");
+    s.rects_a.build(store, layer, drawn);
+    owners_of(&s.layer_out, &s.rects_a)
 }
 
 /// A layer's boxes sorted by `xlo`, built on first use. A query scans only the
@@ -75,13 +87,12 @@ fn report_figures(
     layer: LayerId,
     rule: StrId,
     limit: DbuArea,
-    s: &Scratch,
+    s: &mut Scratch,
     out: &mut Violations,
     violates: impl Fn(DbuArea, bool) -> bool,
 ) -> u64 {
-    let figures = s.layer_out.len();
-    let mut owners = Owners::new(store, layer);
-    for figure in 0..figures {
+    let owners = figure_owners(store, layer, s);
+    for (figure, owner) in owners.into_iter().enumerate() {
         let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
         let area = covered_area(rects);
         let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
@@ -89,7 +100,6 @@ fn report_figures(
         if !violates(area, has_hole) {
             continue;
         }
-        let owner = owners.lowest_within(s.layer_out.bboxes()[figure]);
         out.push(Violation {
             rule,
             layer,
@@ -97,10 +107,10 @@ fn report_figures(
             at: centre(rects[0]),
             measured: Measurement::Area(area),
             limit: Measurement::Area(limit),
-            shapes: (PolyId(owner), None),
+            shapes: (owner, None),
         });
     }
-    figures as u64
+    s.layer_out.len() as u64
 }
 
 /// Minimum area of each merged figure. `examined` counts figures.
@@ -153,9 +163,8 @@ pub(crate) fn min_enclosed_area(
         return REFUSED;
     }
     let mut examined = 0u64;
-    let mut owners = Owners::new(store, layer);
-    for figure in 0..s.layer_out.len() {
-        let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
+    let owners = figure_owners(store, layer, s);
+    for (index, owner) in (0..).zip(owners) {
         for hole in s.layer_out.get(index).holes() {
             examined += 1;
             // A hole winds clockwise; a rectilinear ring's doubled area is even.
@@ -164,7 +173,6 @@ pub(crate) fn min_enclosed_area(
                 continue;
             }
             let (xs, ys) = hole.coords();
-            let owner = owners.lowest_within(s.layer_out.bboxes()[figure]);
             out.push(Violation {
                 rule,
                 layer,
@@ -172,7 +180,7 @@ pub(crate) fn min_enclosed_area(
                 at: centre(Bbox::of_points(xs, ys)),
                 measured: Measurement::Area(area),
                 limit: Measurement::Area(limit),
-                shapes: (PolyId(owner), None),
+                shapes: (owner, None),
             });
         }
     }

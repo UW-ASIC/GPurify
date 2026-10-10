@@ -19,8 +19,8 @@
 //!
 //! Where `GPurify` falls short of a definition, the fixture keeps the
 //! definition and names the finding that explains the gap (`known`): F19
-//! and F34 from `docs/testing-plan.md`, and one this pass found (F40, F54
-//! and F55, also pinned here, are fixed):
+//! from `docs/testing-plan.md`, and one this pass found (F34, F40, F54 and
+//! F55, also pinned here, are fixed):
 //! - F56: `extension` and `overlap` pair drawn polygons without merging,
 //!   so a diffusion drawn in two pieces abutting under a legal gate reports
 //!   a 50 nm extension at the seam.
@@ -1911,7 +1911,7 @@ fn net_spacing() -> Vec<Fixture> {
 /// taps at both ends (the middle is furthest); two wells, one too long; no
 /// tap; no well. And a well ring, derived as `nwell not hole`, with taps all
 /// round it: the rustdoc measures its hole as filled (one finding, 500), and
-/// F34 says the hole's ring is measured as a well of its own. And a tap with
+/// the hole's ring is not a well of its own (F34). And a tap with
 /// a real hole (`ntap not hole`) over the whole well, whose centre lies in the
 /// hole 1001/1000/999 from its edge (holes count).
 fn tap_distance() -> Vec<Fixture> {
@@ -1984,23 +1984,20 @@ fn tap_distance() -> Vec<Fixture> {
         &["nwell", "hole", "ntap"],
         "layer ring = nwell not hole\nrule lu tap_distance(ring, ntap) <= 200nm\n",
     );
-    cases.push(
-        fixture(
-            "tap_distance/ring_well",
-            &["ERC-D1"],
-            &deck_ring,
-            ring(
-                Layout::default()
-                    .rect("nwell", 0, 0, 1000, 1000)
-                    .rect("hole", 100, 100, 900, 900),
-                "ntap",
-                (-100, -100, 1100, 1100),
-                (0, 0, 1000, 1000),
-            ),
-            &[("lu", lengths(&[500]))],
-        )
-        .known("F34"),
-    );
+    cases.push(fixture(
+        "tap_distance/ring_well",
+        &["ERC-D1"],
+        &deck_ring,
+        ring(
+            Layout::default()
+                .rect("nwell", 0, 0, 1000, 1000)
+                .rect("hole", 100, 100, 900, 900),
+            "ntap",
+            (-100, -100, 1100, 1100),
+            (0, 0, 1000, 1000),
+        ),
+        &[("lu", lengths(&[500]))],
+    ));
     // A tap with a real hole, `ntap not hole`, over the whole well: the well's
     // centre is in the hole, `1100 - h` from its edge.
     let deck_tap_ring = new_deck(
