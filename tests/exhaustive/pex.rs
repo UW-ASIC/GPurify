@@ -6,10 +6,10 @@
 //!
 //! - [`PARAMS`]: the `met1`, `via1` and `met2` rows of
 //!   `tests/fixtures/params.deck`, for the closed forms of the crate docs
-//!   (`gpurify_extract`, "The closed forms"): `R = Rs·L/W` per polygon, as the
-//!   rectangle with the polygon's area and perimeter; `R = Rcut/n` per via
-//!   array; `C = Ca·A + Cf·P` per polygon; lateral `ε₀εr·t·L/S`; interlayer
-//!   `ε₀εr·A/d`.
+//!   (`gpurify_extract`, "The closed forms"): `R = Rs·L/W` per conductor (a
+//!   net's merged outline on one layer), as the rectangle with the outline's
+//!   area and perimeter; `R = Rcut/n` per via array; `C = Ca·A + Cf·P` per
+//!   conductor; lateral `ε₀εr·t·L/S`; interlayer `ε₀εr·A/d`.
 //! - [`COARSE`]: thick layers 500 nm apart, for the field solves. The panel
 //!   edge is the stack's finest stated length, so this keeps every solve to a
 //!   few hundred panels and the module inside its merge budget.
@@ -37,10 +37,10 @@
 //! `#[test]` at the end of the file, against the same closed forms.
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
-//! finding that breaks them: F23, F24, F31, and
-//! `F44` (closed forms read each drawn polygon, not the conductor)
-//! and `F45` (a field-solved polygon is one filament along its bounding box).
-//! `F30` (a layer with no `pex` row read as a perfect wire), `F46` (the mesh
+//! finding that breaks them: F23, F24, F31, and `F45` (a field-solved polygon
+//! is one filament along its bounding box). `F30` (a layer with no `pex` row
+//! read as a perfect wire), `F44` (closed forms read each drawn polygon, not
+//! the conductor), `F46` (the mesh
 //! depended on absolute position) and `F47` (the reciprocity gate refused
 //! ordinary layouts) are fixed, and their fixtures hold.
 
@@ -461,12 +461,11 @@ fn bends(depth: Depth) -> Vec<Fixture> {
 /// PEX-001, PEX-002: one conductor drawn as several polygons. Its R and C are
 /// those of the conductor, however it is cut up.
 ///
-/// R holds where the documentation promises it (a net's total is the sum of
-/// its polygons, each at least a square). C does not: each polygon's fringe
-/// counts the edge it shares with its neighbour, and overlapping polygons
-/// count their overlap twice (`F44`). A piece shorter than it is wide
-/// counts as `long/short ≥ 1` squares, so a bar cut across into short pieces
-/// reads too many squares (`F44`).
+/// The closed forms read the merged outline of each net on each layer, so
+/// abutting pieces share no fringe edge, overlapping ones count the overlap
+/// once, and a piece shorter than it is wide is part of the bar, not a square
+/// of its own. Per drawn polygon, the bar in pieces read C = 1.42, 1.50 and
+/// 1.58 fF for 1.34 and the short pieces 0.533 ohm for 0.3 (`F44`, fixed).
 fn pieces() -> Vec<Fixture> {
     let row = PARAMS.m1;
     let deck = deck(PARAMS, &[], "");
@@ -480,7 +479,6 @@ fn pieces() -> Vec<Fixture> {
         .layout(layout.label("m1_label", 500, 500, "A"))
     };
     let mut holds = Vec::new();
-    let mut known = Vec::new();
 
     // A 12 x 1 um bar in k abutting pieces, each three or more squares long.
     for k in [2_i64, 3, 4] {
@@ -494,16 +492,12 @@ fn pieces() -> Vec<Fixture> {
             wire_ohm(row, 12_000, 1_000),
             EXACT,
         )));
-        known.push(
-            case(&format!("bar_in_{k}/c"), layout)
-                .expect(claim(
-                    "A",
-                    Quantity::GroundCap,
-                    ground_ff(row, 12e6, 26_000.0),
-                    EXACT,
-                ))
-                .known("F44"),
-        );
+        holds.push(case(&format!("bar_in_{k}/c"), layout).expect(claim(
+            "A",
+            Quantity::GroundCap,
+            ground_ff(row, 12e6, 26_000.0),
+            EXACT,
+        )));
     }
 
     // An L of legs 20 and 12 um, 1 um wide, as two abutting rectangles: the
@@ -519,18 +513,14 @@ fn pieces() -> Vec<Fixture> {
         wire_ohm(row, centre, w),
         EXACT,
     )));
-    known.push(
-        case("l_abutting/c", abutting)
-            .expect(claim(
-                "A",
-                Quantity::GroundCap,
-                polygon_ff(row, &points),
-                EXACT,
-            ))
-            .known("F44"),
-    );
+    holds.push(case("l_abutting/c", abutting).expect(claim(
+        "A",
+        Quantity::GroundCap,
+        polygon_ff(row, &points),
+        EXACT,
+    )));
     // The same L as two full-length bars overlapping at the corner square.
-    known.push(
+    holds.push(
         case(
             "l_overlapping",
             Layout::default()
@@ -548,28 +538,21 @@ fn pieces() -> Vec<Fixture> {
             Quantity::GroundCap,
             polygon_ff(row, &points),
             EXACT,
-        ))
-        .known("F44"),
+        )),
     );
     // A 3 x 1 um bar (three squares) cut across into four 750 nm pieces.
     let mut short = Layout::default();
     for i in 0..4 {
         short = short.rect("m1", i * 750, 0, (i + 1) * 750, 1_000);
     }
-    known.push(
-        case("bar_in_short_pieces/r", short)
-            .expect(claim(
-                "A",
-                Quantity::Resistance,
-                wire_ohm(row, 3_000, 1_000),
-                EXACT,
-            ))
-            .known("F44"),
-    );
+    holds.push(case("bar_in_short_pieces/r", short).expect(claim(
+        "A",
+        Quantity::Resistance,
+        wire_ohm(row, 3_000, 1_000),
+        EXACT,
+    )));
 
-    let mut out = every_placement(&holds);
-    out.extend(known);
-    out
+    every_placement(&holds)
 }
 
 /// `n` 200 nm cuts in the 1 x 1 um square where an `m1` bar at `[x, x+5um]`

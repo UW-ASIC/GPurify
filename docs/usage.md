@@ -141,6 +141,11 @@ nets that were not field-solved is kept. A field-solved net also gets its
 inductance. A net with no text label in the
 layout has no name to write, and the run refuses it rather than inventing one.
 
+A wire is measured as drawn, not as cut into polygons: a net's shapes on one
+layer are merged first, so pieces that abut or overlap read as the one
+conductor they draw. A conductor layer with a diagonal edge cannot be merged
+exactly, and PEX is refused for it.
+
 Every conductor layer that carries a net, and every via layer whose cuts join
 two conductors, needs a `pex` line with a positive sheet resistance (see
 [deck.md](deck.md#parasitic-stack)). A layer without one has unknown

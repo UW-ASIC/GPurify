@@ -43,7 +43,8 @@ pub struct NodeId(pub u32);
 /// [`Self::push`] checks neither, and the SPEF and DSPF writers refuse a
 /// network that breaks them.
 ///
-/// The closed forms give a net of `n` polygons `n + 1` nodes. A field solve
+/// The closed forms give a net of `n` conductor regions (its merged shapes,
+/// one per connected piece on a layer) `n + 1` nodes. A field solve
 /// gives each solved net one node, or two once its inductance is solved.
 ///
 /// # Examples

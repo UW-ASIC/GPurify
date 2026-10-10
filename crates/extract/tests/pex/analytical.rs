@@ -161,22 +161,35 @@ fn a_net_of_one_polygon_still_carries_that_polygons_resistance() {
     );
 }
 
-/// Oracle: law — conservation. A net's emitted resistance is the sum of its
-/// polygons' resistances, whatever the chain does with the distribution along
-/// it. Three rectangles of deliberately different aspect ratios, so a model that
-/// halved the two ends (the F10 shape, which is exact in the middle and short by
-/// `(R_first + R_last) / 2`) fails by a different amount than one that dropped a
-/// polygon, and neither can pass by cancellation.
+/// Oracle: law — conservation. The network's resistance is the sum of its
+/// conductors' resistances, whatever the chain does with the distribution
+/// along each. Three rectangles of deliberately different aspect ratios,
+/// drawn apart so each is a conductor of its own, so a model that halved the
+/// two ends (the F10 shape, which is exact in the middle and short by
+/// `(R_first + R_last) / 2`) fails by a different amount than one that dropped
+/// a conductor, and neither can pass by cancellation.
 ///
-/// The per-polygon terms are `sheet × long / short`, which the closed-form
+/// The per-conductor terms are `sheet × long / short`, which the closed-form
 /// tests in `analytical.rs` pin independently, so this asserts the *network*
-/// against the *formula* rather than against itself.
+/// against the *formula* rather than against itself. (These rectangles once
+/// overlapped at the origin as one net, and the law was stated per drawn
+/// polygon; F44 is that a conductor is its merged outline, not its pieces.)
 #[test]
-fn the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances() {
+fn the_resistance_a_network_emits_is_the_sum_of_its_conductors_resistances() {
     const SIDES: [(i64, i64); 3] = [(2_000, 200), (5_000, 100), (300, 300)];
 
-    let store = rects(&SIDES);
+    let mut builder = GeometryStoreBuilder::default();
+    for (i, &(width, height)) in (0_i64..).zip(&SIDES) {
+        let x = 10_000 * i;
+        builder.push(
+            LayerId(0),
+            &[dbu(x), dbu(x + width), dbu(x + width), dbu(x)],
+            &[dbu(0), dbu(0), dbu(height), dbu(height)],
+        );
+    }
+    let store = builder.finish(1).0;
     let nets = layer0_nets(&store);
+    assert_eq!(nets.net_count(), 3, "three conductors apart");
 
     let mut network = ParasiticNetwork::default();
     extract_into(
@@ -204,10 +217,100 @@ fn the_resistance_a_net_emits_is_the_sum_of_its_polygons_resistances() {
         .filter_map(|&v| resistance_ohm(v))
         .sum();
     assert_close(
-        "a net's resistance is its polygons' resistances",
+        "the network's resistance is its conductors' resistances",
         got,
         want,
         1e-12,
+    );
+}
+
+/// Oracle: closed form (F44). A conductor is its merged outline, however it
+/// is drawn. Overlapping or abutting polygons on one layer and net are one
+/// region, extracted as the rectangle with the outline's area and perimeter:
+///
+/// - an L of a 2000 x 200 bar and a 200 x 1000 bar overlapping at the
+///   corner: `A = 2000·200 + 200·800 = 560 000`, `P = 2(2000 + 1000) = 6000`,
+///   so the rectangle is 2800 x 200, fourteen squares, 1.4 ohm; per drawn
+///   polygon it read 10 + 5 = 15 squares;
+/// - a 3000 x 1000 bar cut across into four 750 nm pieces: three squares,
+///   0.3 ohm, where each piece read as one square (`long/short = 1000/750`).
+///
+/// Ground capacitance at 1 aF/um² and 1 aF/um is the outline's
+/// `A + P`: 0.56 + 6 and 3 + 8 aF, where the pieces counted the shared edges
+/// and the overlap a second time.
+#[test]
+fn a_conductor_drawn_as_several_polygons_is_its_merged_outline() {
+    for (what, sides, ohm, attofarads) in [
+        (
+            "an L of two overlapping bars",
+            vec![(0, 0, 2_000, 200), (1_800, 0, 2_000, 1_000)],
+            1.4,
+            0.56 + 6.0,
+        ),
+        (
+            "a bar in four short pieces",
+            (0..4)
+                .map(|i| (750 * i, 0, 750 * (i + 1), 1_000))
+                .collect::<Vec<_>>(),
+            0.3,
+            3.0 + 8.0,
+        ),
+    ] {
+        let mut builder = GeometryStoreBuilder::default();
+        for (xlo, ylo, xhi, yhi) in sides {
+            builder.push(
+                LayerId(0),
+                &[dbu(xlo), dbu(xhi), dbu(xhi), dbu(xlo)],
+                &[dbu(ylo), dbu(ylo), dbu(yhi), dbu(yhi)],
+            );
+        }
+        let store = builder.finish(1).0;
+        let nets = layer0_nets(&store);
+        let mut network = ParasiticNetwork::default();
+        extract_into(
+            &store,
+            &nets,
+            &Connectivity::default(),
+            &uniform_stack(1, 1.0, 1.0),
+            grid(),
+            &mut network,
+        )
+        .expect("every layer is described");
+        let got: f64 = network
+            .value
+            .iter()
+            .filter_map(|&v| resistance_ohm(v))
+            .sum();
+        assert_close(what, got, ohm, 1e-12);
+        assert_close(what, total_capacitance(&network), attofarads / 1e3, 1e-15);
+    }
+}
+
+/// Oracle: definition. A conductor with a 45-degree edge cannot be merged
+/// into rectangles exactly, so it is refused by layer rather than read as an
+/// approximation, as every other geometric check refuses it.
+#[test]
+fn a_conductor_with_a_diagonal_edge_is_refused() {
+    use gpurify_extract::analytical::AnalyticalError;
+    let mut builder = GeometryStoreBuilder::default();
+    builder.push(
+        LayerId(0),
+        &[dbu(0), dbu(200), dbu(300), dbu(100)],
+        &[dbu(0), dbu(0), dbu(100), dbu(100)],
+    );
+    let store = builder.finish(1).0;
+    let nets = layer0_nets(&store);
+    let mut network = ParasiticNetwork::default();
+    assert_eq!(
+        extract_into(
+            &store,
+            &nets,
+            &Connectivity::default(),
+            &uniform_stack(1, 1.0, 1.0),
+            grid(),
+            &mut network
+        ),
+        Err(AnalyticalError::InvalidGeometry(LayerId(0)))
     );
 }
 

@@ -31,13 +31,18 @@
 //!
 //! # The closed forms
 //!
-//! From Weste & Harris, *CMOS VLSI Design* 4e (2011), ch. 6:
+//! From Weste & Harris, *CMOS VLSI Design* 4e (2011), ch. 6. They are applied
+//! to conductor regions, not drawn polygons: a region is one connected piece
+//! of the union of a net's shapes on one layer, so a wire drawn as abutting or
+//! overlapping polygons is one region with its outline's area and perimeter
+//! (testing-plan F44). A layer whose shapes are not valid rectilinear rings
+//! cannot be merged exactly and is refused.
 //!
 //! | Element | Formula | Applied to |
 //! |---|---|---|
-//! | Wire resistance | `R = Rs · L / W` (sheet resistance × squares) | each polygon, as the rectangle with the same area and perimeter |
-//! | Via resistance | `R = Rcut / n` | the `n` cuts joining one pair of plates, in parallel |
-//! | Ground capacitance | `C = Ca · A + Cf · P` | each polygon: plate area to the substrate plus perimeter fringe |
+//! | Wire resistance | `R = Rs · L / W` (sheet resistance × squares) | each region, as the rectangle with the same area and perimeter |
+//! | Via resistance | `R = Rcut / n` | the `n` cuts joining one pair of regions, in parallel |
+//! | Ground capacitance | `C = Ca · A + Cf · P` | each region: plate area to the substrate plus perimeter fringe |
 //! | Lateral coupling | `C = ε₀ εr t · L / S` | facing sidewalls of two nets on one layer, within 10 thicknesses |
 //! | Interlayer coupling | `C = ε₀ εr · A / d` | overlapping plates of two nets on two conductor layers |
 //!
@@ -78,15 +83,16 @@
 //!
 //! What is known to be wrong or missing, so a number can be read for what it is:
 //!
-//! - **Analytical R** chains a net's polygons in polygon order, not along the
-//!   current path. The net's total is the sum of its polygon resistances, but
+//! - **Analytical R** chains a net's regions in layer order, not along the
+//!   current path. The net's total is the sum of its region resistances, but
 //!   the node a resistor sits between is not the drawn topology: a comb's
-//!   fingers come out in series.
-//! - **Analytical coupling** is parallel-plate between bounding boxes: no
-//!   fringing field, so lateral coupling is a lower bound. No shielding
-//!   either: a third shape or layer between two plates does not reduce their
-//!   coupling, and a plate's ground capacitance ignores the plates beneath
-//!   it.
+//!   fingers come out in series, and a region that is not a constant-width
+//!   path reads as the rectangle of its area and perimeter.
+//! - **Analytical coupling** is parallel-plate between the regions'
+//!   rectangles: no fringing field, so lateral coupling is a lower bound. No
+//!   shielding either: a third shape or layer between two plates does not
+//!   reduce their coupling, and a plate's ground capacitance ignores the
+//!   plates beneath it.
 //! - **No reflected images**: the field solve uses the free-space Green's
 //!   function, with each panel pair seeing the mean of their two
 //!   permittivities. There is no substrate plane, so a field-solved net's
@@ -128,6 +134,7 @@
 //! says what each partial row lacks.
 
 pub mod analytical;
+mod conductor;
 pub mod field;
 pub mod network;
 pub mod quasistatic;
