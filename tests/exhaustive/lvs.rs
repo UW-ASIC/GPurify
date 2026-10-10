@@ -1650,7 +1650,7 @@ fn layout_rows() -> Vec<Fixture> {
     // LVS-003: two unlabelled tracks joined only through `pwell`, a soft
     // layer, are one net held together by it; one tap into the well is not.
     // With `crossing`, the second stub passes under the first track with no
-    // via, which is no join (F27).
+    // via, which is no join (F27, fixed).
     let deck = format!("{}rule soft soft_connection(pwell)\n", full_deck());
     let erc = Checks { erc: true, ..NONE };
     for (name, taps, crossing, known) in [
@@ -1659,7 +1659,7 @@ fn layout_rows() -> Vec<Fixture> {
             "checks/soft_connection_under_a_track",
             &[0, 1][..],
             true,
-            Some("F27"),
+            None,
         ),
         ("checks/one_tap_is_not_soft", &[0][..], false, None),
     ] {

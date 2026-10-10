@@ -21,7 +21,6 @@ pub use ruleset::{RuleSet, KINDS};
 use crate::report::{Outcome, RuleRun, Violations};
 use crate::topology::PortTable;
 use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts};
-use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance, Temperature};
 use gpurify_geom::{Bbox, GeometryStore, PolyId, ValidatedLayer};
@@ -208,7 +207,6 @@ pub struct Scratch {
     net_marks: Vec<u32>,
     areas: Vec<DbuArea>,
     edges: Vec<(u32, u32)>,
-    labels: Vec<ComponentLabel>,
     solve: power::SolveScratch,
     probes: Vec<(u32, u32, Qty<Resistance, { prefix::BASE }>)>,
     boxes: Vec<Bbox>,

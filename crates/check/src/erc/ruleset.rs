@@ -698,6 +698,7 @@ impl RuleSet {
                 _ => {}
             }
         }
+        set.soft_connection.connectivity = deck.connectivity.clone();
         for stack in [&mut set.antenna.stack, &mut set.antenna_electrical.stack] {
             let from = &deck.connectivity;
             stack.conductors.clone_from(&from.conductors);

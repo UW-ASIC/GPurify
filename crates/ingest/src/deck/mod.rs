@@ -442,7 +442,7 @@ impl RuleTable {
 ///
 /// Rows of `via_cut` and `via_connects` pair by index, as do `label_layer`
 /// and `label_names`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Connectivity {
     /// The layers that carry a net (`connect conductors [..]`), in the order
     /// written. No global layer is among them.

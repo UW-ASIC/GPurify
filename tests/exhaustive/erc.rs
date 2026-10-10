@@ -3327,8 +3327,9 @@ fn supply_short(depth: Depth) -> Vec<Fixture> {
 
 /// `soft_connection` (ERC-G5): two met1 islands joined only through a well
 /// (soft) by two contacts, one finding; with a met1 strap between them,
-/// clean. F27: a met2 strap contacted to one island only and passing over the
-/// other joins nothing, so the islands are still held only by the well.
+/// clean. A met2 strap contacted to one island only and passing over the
+/// other joins nothing, so the islands are still held only by the well (F27:
+/// any two touching shapes were once taken as joined).
 fn soft_connection() -> Vec<Fixture> {
     let base = || {
         let mut l = Layout::default();
@@ -3357,7 +3358,7 @@ fn soft_connection() -> Vec<Fixture> {
     vec![
         case("through_well", base(), vec![count(2)]),
         case("strapped", strapped, Vec::new()),
-        case("f27/overlap_without_via", over, vec![count(2)]).known("F27"),
+        case("f27/overlap_without_via", over, vec![count(2)]),
     ]
 }
 

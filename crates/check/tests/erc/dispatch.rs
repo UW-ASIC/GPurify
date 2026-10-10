@@ -114,6 +114,7 @@ fn every_kind() -> RuleSet {
             head: head(id_of("soft_connection")),
             soft_start: vec![0, 1],
             soft: vec![other],
+            connectivity: Default::default(),
         },
         missing_tie: supply::MissingTieTable {
             head: head(id_of("missing_tie")),

@@ -10,14 +10,12 @@ use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::NetId;
-use gpurify_geom::connectivity::components_into;
-use gpurify_geom::ops::{
-    isqrt, point_seg_dist2, segments_intersect, winding_of, Point, Seg, Winding,
-};
+use crate::topology::{extract_nets_into, NetId};
+use gpurify_geom::ops::{isqrt, point_seg_dist2, winding_of, Point, Seg, Winding};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
 use gpurify_geom::{Dbu, DbuArea};
+use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
@@ -54,11 +52,14 @@ pub struct SupplyShortTable {
 /// `soft_connection`, written `soft_connection(layers..)`.
 ///
 /// The listed layers are soft: wells, substrate ties and the like, which
-/// conduct too poorly to carry a signal or a supply. A row takes every net
-/// with a polygon on a soft layer, drops its soft polygons, and joins the rest
-/// wherever two polygons share a point, on whatever layers. A net whose
-/// remaining polygons form more than one group is flagged: its pieces are
-/// connected only through the soft layers. Needs no design intent.
+/// conduct too poorly to carry a signal or a supply. A row cuts the nets
+/// again from the deck's connectivity with the soft layers taken out: no soft
+/// conductor or global layer, and no via with a soft cut or a soft layer on
+/// either side. Every net with a polygon on a soft layer whose other
+/// polygons fall into more than one of those pieces is flagged: its pieces
+/// are connected only through the soft layers. Shapes join only as the deck
+/// declares, so a strap drawn over a piece without a via joins nothing.
+/// Needs no design intent.
 ///
 /// Catalog: LVS-003, ERC-G5 in the [check catalog]. Defined by
 /// [KLayout `soft_connect`]; Calibre SOFTCHK and SCONNECT (public material
@@ -76,6 +77,10 @@ pub struct SoftConnectionTable {
     /// Soft layers, CSR by `soft_start`; at least one per row. A layer listed
     /// twice counts once.
     pub soft: Vec<LayerId>,
+    /// The deck's connectivity, shared by every row: each row extracts it
+    /// without its soft layers. [`RuleSet::from_deck`](crate::erc::RuleSet::from_deck)
+    /// copies it from the deck's `connect` statements.
+    pub connectivity: Connectivity,
 }
 
 /// Latch-up tap distance: deck kind `missing_tie`, written
@@ -343,8 +348,7 @@ pub fn check_soft_connection(
 ) {
     let nets = design.nets.net_count();
     let mut is_soft: Vec<bool> = Vec::new();
-    let mut hard: Vec<PolyId> = Vec::new();
-    let mut order: Vec<u32> = Vec::new();
+    let mut pieces = std::mem::take(&mut scratch.staged_nets);
 
     for row in 0..table.head.len() {
         let before = out.len();
@@ -364,52 +368,50 @@ pub fn check_soft_connection(
         }
         let soft_nets = nets_marked(&scratch.net_marks, 1);
 
-        for &net in &soft_nets {
-            // What is left without the resistive body is what one potential holds.
-            hard.clear();
-            hard.extend(
-                design
-                    .nets
-                    .polys_of(NetId(net))
-                    .iter()
-                    .copied()
-                    .filter(|&poly| !is_soft[design.store.poly_layer(poly).idx()]),
-            );
-            let Some(&first_poly) = hard.first() else {
-                continue;
-            };
-            scratch.boxes.clear();
-            scratch
-                .boxes
-                .extend(hard.iter().map(|&p| design.store.poly_bbox(p)));
+        // What is left without the resistive bodies, joined only as declared.
+        let soft = |layer: LayerId| is_soft[layer.idx()];
+        let all = &table.connectivity;
+        let (via_cut, via_connects) = all
+            .via_cut
+            .iter()
+            .zip(&all.via_connects)
+            .filter(|&(&cut, &(a, b))| !(soft(cut) || soft(a) || soft(b)))
+            .map(|(&cut, &joins)| (cut, joins))
+            .unzip();
+        let hard = Connectivity {
+            conductors: all
+                .conductors
+                .iter()
+                .copied()
+                .filter(|&l| !soft(l))
+                .collect(),
+            via_cut,
+            via_connects,
+            global: all.global.iter().copied().filter(|&l| !soft(l)).collect(),
+            ..all.clone()
+        };
+        extract_nets_into(design.store, &hard, &mut pieces);
 
-            // Join conductors that share a point (not just a box); the box test
-            // and an x-order sweep prune in front of the exact one.
-            let node_count = u32::try_from(hard.len()).expect("a net's polygons fit a u32");
-            order.clear();
-            order.extend(0..node_count);
-            order.sort_unstable_by_key(|&i| scratch.boxes[i as usize].xlo);
-            scratch.edges.clear();
-            for i in 0..order.len() {
-                let a = order[i];
-                let box_a = scratch.boxes[a as usize];
-                for &b in &order[i + 1..] {
-                    let box_b = scratch.boxes[b as usize];
-                    if box_b.xlo > box_a.xhi {
+        for &net in &soft_nets {
+            // The lowest polygon off the soft layers, and the lowest one in
+            // another piece.
+            let mut near: Option<(PolyId, NetId)> = None;
+            let mut far = None;
+            for &poly in design.nets.polys_of(NetId(net)) {
+                let piece = pieces.net_of(poly);
+                if soft(design.store.poly_layer(poly)) || piece == NetId::NONE {
+                    continue;
+                }
+                match near {
+                    None => near = Some((poly, piece)),
+                    Some((_, first)) if piece != first => {
+                        far = Some(poly);
                         break;
                     }
-                    if box_a.overlaps(box_b)
-                        && polys_meet(design.store, hard[a as usize], hard[b as usize])
-                    {
-                        scratch.edges.push((a, b));
-                    }
+                    Some(_) => {}
                 }
             }
-            components_into(node_count, &scratch.edges, &mut scratch.labels);
-
-            // The lowest-numbered conductor not in the first one's component.
-            let near = scratch.labels[0];
-            let Some(far) = scratch.labels.iter().position(|&label| label != near) else {
+            let (Some((first_poly, _)), Some(far)) = (near, far) else {
                 continue;
             };
             out.push(Violation {
@@ -419,13 +421,14 @@ pub fn check_soft_connection(
                 at: first_vertex(design.store, first_poly),
                 measured: Measurement::Count(2),
                 limit: Measurement::Count(1),
-                shapes: (first_poly, Some(hard[far])),
+                shapes: (first_poly, Some(far)),
             });
         }
 
         let examined = u64::try_from(soft_nets.len()).expect("a net count fits a u64");
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
+    scratch.staged_nets = pieces;
 }
 
 /// Runs every [`MissingTieTable`] row.
@@ -653,35 +656,6 @@ fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
             y: ys[next],
         },
     }
-}
-
-/// Whether two polygons share at least one point. Rings whose boundaries do
-/// not meet are nested or disjoint, so one vertex of each decides the rest.
-fn polys_meet(store: &GeometryStore, a: PolyId, b: PolyId) -> bool {
-    let (ax, ay) = store.poly_verts(a);
-    let (bx, by) = store.poly_verts(b);
-
-    // `ingest` may carry a degenerate run, which bounds no area.
-    if ax.len() < 3 || bx.len() < 3 {
-        return false;
-    }
-
-    rings_meet(ax, ay, bx, by)
-        || point_in_region(bx, by, Point { x: ax[0], y: ay[0] })
-        || point_in_region(ax, ay, Point { x: bx[0], y: by[0] })
-}
-
-/// Whether any edge of one ring meets any edge of the other, touching included.
-fn rings_meet(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
-    for i in 0..ax.len() {
-        let edge = ring_edge(ax, ay, i);
-        for j in 0..bx.len() {
-            if segments_intersect(edge, ring_edge(bx, by, j)) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Whether a point lies in a ring, boundary included (the missing-tie maximum

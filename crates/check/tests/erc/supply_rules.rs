@@ -514,6 +514,7 @@ fn soft_connection_table(id: StrId) -> SoftConnectionTable {
         head: head(id),
         soft_start: vec![0, 1],
         soft: vec![LayerId(2)],
+        connectivity: via_connectivity(LayerId(1), &[LayerId(2)]),
     }
 }
 
