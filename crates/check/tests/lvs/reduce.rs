@@ -1,10 +1,10 @@
 //! Series and parallel reduction: what merges, what must not, and what comes
 //! through untouched.
 //!
-//! The corpus cannot see any of this. `every_lvs_cell_in_the_corpus_extracts_the
-//! _devices_it_draws` runs with `Checks { lvs: false }` and asserts the
-//! *extraction* count, and its `expect_match` field is not asserted by anything,
-//! so these are the only tests reduction has.
+//! The corpus sees reduction end to end: `LVS_SERIES_MERGE` and
+//! `LVS_PARALLEL_MERGE` assert their verdict against their own reference
+//! netlists (`tests/fixtures/lvs_refs/`). These tests pin what merges, and what
+//! must not, on graphs built by hand.
 //!
 //! # The bracket the fixtures are built around
 //!

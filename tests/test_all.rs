@@ -180,13 +180,15 @@ fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
 }
 
 /// Oracle: construct-from-answer. Each LVS cell draws a stated number of
-/// devices and a stated number of nets.
+/// devices and nets, and matches its own reference netlist (`lvs_refs/`) or
+/// not, as `expect_match` derives from the geometry.
 #[test]
 fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
     let corpus = common::load_corpus();
     let mut failed = Vec::new();
+    let open = corpus.open_blockers();
     for case in &corpus.lvs.cases {
-        failed.extend(common::check_lvs_case(case));
+        failed.extend(common::check_lvs_case(case, &open));
     }
     common::report_domain("LVS", corpus.lvs.cases.len(), &failed);
 }

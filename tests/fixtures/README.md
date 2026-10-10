@@ -119,9 +119,12 @@ Cases expected to fail are explained under `known_defects` and
 `blocking_findings` at the top of `expectations.json`. Weakening them to match
 the code would erase the finding.
 
-LVS cases assert device and net counts only; `expect_match` is recorded but not
-yet asserted (testing-plan F2). Three LVS cases are blocked on device flavour
-(HVT/LVT).
+LVS cases assert device and net counts, and their verdict against their own
+reference netlist in `lvs_refs/<id>.spice`. Each reference was transcribed once
+from the manifest's `reference_netlist` for that case, the schematic the case was
+designed around (an input, not an answer), and is reviewed like any fixture. The
+three HVT/LVT cases are expected to fail until device flavour is recognised
+(blocking finding F6), and the harness reports it if one starts to hold.
 
 ## Using it
 

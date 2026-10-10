@@ -411,6 +411,28 @@ pub struct Corpus {
     pub erc: Domain<GeometryCase>,
     pub lvs: Domain<LvsCase>,
     pub pex: Domain<PexCase>,
+    /// What keeps a case from holding, by id (`F1`, ...).
+    pub blocking_findings: std::collections::BTreeMap<String, BlockingFinding>,
+}
+
+/// One entry of `expectations.json`'s `blocking_findings`.
+#[derive(Debug, Deserialize)]
+pub struct BlockingFinding {
+    pub title: String,
+}
+
+impl Corpus {
+    /// The blocking findings still open: those whose title does not begin
+    /// RESOLVED or CLOSED. A case blocked by one is expected to fail.
+    pub fn open_blockers(&self) -> std::collections::BTreeSet<&str> {
+        self.blocking_findings
+            .iter()
+            .filter(|(_, finding)| {
+                !(finding.title.starts_with("RESOLVED") || finding.title.starts_with("CLOSED"))
+            })
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1042,16 +1064,52 @@ fn context_of(case: &GeometryCase) -> String {
 // LVS.
 // ---------------------------------------------------------------------------
 
-/// Every way an LVS case's *layout side* disagreed with the geometry.
-pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
+/// Every way an LVS case disagreed with the geometry: its extraction (device
+/// and net counts), and its verdict against `lvs_refs/<id>.spice`.
+///
+/// A case blocked by a finding in `open` is expected to fail its verdict; one
+/// that holds anyway is reported too, so a fix that resolves the finding is
+/// noticed and recorded rather than passing silently.
+pub fn check_lvs_case(case: &LvsCase, open: &std::collections::BTreeSet<&str>) -> Vec<String> {
     let mut failed = Vec::new();
     let blocked = format!(
-        " [strength: {}, expect_match: {} — not asserted, see this test's doc \
-         comment; blocked by {}]",
+        " [strength: {}, expect_match: {}, blocked by {}]",
         case.strength,
         case.expect_match,
         case.blocked_by.join(", ")
     );
+
+    if case.asserts.iter().any(|claim| claim == "match") {
+        let reference = format!("lvs_refs/{}.spice", case.id);
+        let lvs = Checks {
+            drc: false,
+            erc: false,
+            lvs: true,
+            pex: false,
+        };
+        let verdict = run_case_with_reference("lvs", &case.id, lvs, &reference).map(|run| {
+            run.outputs
+                .lvs
+                .map(|verdict| matches!(verdict, lvs::Verdict::Match))
+        });
+        let holds = matches!(verdict, Ok(Some(matched)) if matched == case.expect_match);
+        match (
+            case.blocked_by.iter().find(|id| open.contains(id.as_str())),
+            holds,
+        ) {
+            (None, false) => failed.push(format!(
+                "{}: LVS of cell {} against {reference} gave {verdict:?} (Some(true) is a \
+                 match); the case expects match = {}{blocked}",
+                case.id, case.cell, case.expect_match
+            )),
+            (Some(finding), true) => failed.push(format!(
+                "{}: expected to fail until blocking finding {finding} is fixed, and it now \
+                 holds: mark {finding} resolved in expectations.json{blocked}",
+                case.id
+            )),
+            _ => {}
+        }
+    }
 
     let checks = Checks {
         drc: false,

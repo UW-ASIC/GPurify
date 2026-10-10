@@ -85,7 +85,8 @@ fn quasistatic_nets(spef: &str) -> Vec<String> {
 }
 
 /// Every run for one case: the full JSON report, plus SPEF and quasistatic
-/// SPEF for PEX cells and an LVS compare against `lvs_inv.cdl` for LVS cells.
+/// SPEF for PEX cells and, for LVS cells, the compare against the case's own
+/// reference netlist (`tests/fixtures/lvs_refs/<id>.spice`).
 fn jobs_for(domain: &str, id: &str, every_thread_check: bool) -> Vec<Job> {
     let gds = format!("tests/fixtures/{domain}/{id}.gds");
     let golden = |run: &str| {
@@ -121,17 +122,13 @@ fn jobs_for(domain: &str, id: &str, every_thread_check: bool) -> Vec<Job> {
         }
     }
     if domain == "lvs" {
+        let reference = format!("tests/fixtures/lvs_refs/{id}.spice");
         jobs.push(Job {
             golden: golden("lvs"),
             args: args(
                 "lvs",
                 &gds,
-                &[
-                    "--reference",
-                    "tests/fixtures/lvs_inv.cdl",
-                    "--format",
-                    "json",
-                ],
+                &["--reference", &reference, "--format", "json"],
             ),
             parallel: false,
         });

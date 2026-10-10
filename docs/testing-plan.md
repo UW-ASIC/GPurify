@@ -396,7 +396,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | done |
 | B8 | LVS: rows only for configured checks, so a clean LVS run can pass | F17 | done |
 | R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | done |
-| B1 | LVS: assert `expect_match` in the corpus; planted-fault matrix | F2, L2 | todo |
+| B1 | LVS: every corpus case asserts its verdict against its own reference netlist (the planted-fault matrix moves to X5) | F2, L2 | done |
 | B2 | LVS: flatten reference `X` instances | F1 | todo |
 | B3 | LVS: diode/capacitor polarity | F15 | todo |
 | B4 | LVS: series reduction symmetric between sides | F12 | todo |

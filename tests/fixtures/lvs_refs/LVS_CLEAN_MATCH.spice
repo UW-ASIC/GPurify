@@ -1,0 +1,12 @@
+* The schematic LVS case LVS_CLEAN_MATCH compares cell LVS_INV against.
+*
+* Transcribed once from manifest.json's reference_netlist for this case: the
+* schematic the case was designed around, an input rather than an answer.
+* The answer, whether the cell matches, is expectations.json's expect_match,
+* derived from the geometry. Models are params.deck's recognisers; a flavour
+* the deck cannot recognise keeps its own model name (expectations F6).
+* Bulk is written as the source and dropped, since the deck's MOS have none.
+.subckt LVS_INV Y A VSS VDD
+M0 Y A VSS VSS nfet_01v8
+M1 Y A VDD VDD pfet_01v8
+.ends
