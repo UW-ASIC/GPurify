@@ -180,8 +180,8 @@ fn reference_with_one_transistor() -> Netlist {
 }
 
 /// Without a reference LVS is skipped (not a match) and blocks the pass. With
-/// one against an empty layout it runs, files its eight check rows (three
-/// deliberately unconfigured, so skipped), and every discrepancy is an error.
+/// one against an empty layout it runs, files its five check rows, and every
+/// discrepancy is an error.
 #[test]
 fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
     let lvs = Checks { lvs: true, ..NONE };
@@ -196,8 +196,10 @@ fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
     loaded.reference = Some(reference_with_one_transistor());
     let (out, summary) = run_checks(&loaded, &extracted, &options(lvs)).expect("a comparison");
     assert_eq!(summary.lvs, StageStatus::Ran);
-    assert_eq!(out.runs.len(), 8);
-    assert_eq!((summary.rules_clean, summary.rules_skipped), (5, 3));
+    // The five layout checks, every one run and clean: an unconfigurable
+    // check records no row, so it cannot keep a clean comparison from passing.
+    assert_eq!(out.runs.len(), 5);
+    assert_eq!((summary.rules_clean, summary.rules_skipped), (5, 0));
     let Some(Verdict::Mismatch(found)) = &out.lvs else {
         panic!(
             "a one-device reference against an empty layout is a mismatch: {:?}",

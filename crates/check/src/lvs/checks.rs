@@ -14,7 +14,7 @@ use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
-/// variant, then the eight check rows. Each is a row of the check catalog
+/// variant, then the five check rows. Each is a row of the check catalog
 /// (`docs/check-catalog.tsv`), which a test keeps in step with this list.
 ///
 /// The first six are defined on the [`Discrepancy`] variant that raises them

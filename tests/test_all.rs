@@ -250,7 +250,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         run.outputs.violations.len()
     );
 
-    // The eight rows, by name, with `examined` tied to the extraction's own
+    // The five rows, by name, with `examined` tied to the extraction's own
     // counts rather than to a constant: the claim a `RuleRun` makes is *this
     // check looked at every one of them*, and a hardcoded number would still
     // pass on a check that examined half of a differently-sized cell.
@@ -285,7 +285,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
     // sentinels counted down from `u32::MAX` precisely so that
     // `StrTable::resolve` panics on one rather than mislabelling a finding, and
     // `export::json::write_runs` resolves every row — so a stage that filed
-    // those eight rows without mapping them back to interned names would crash
+    // those five rows without mapping them back to interned names would crash
     // the CLI on every LVS run. This is the one check that the mapping happened.
     let mut json = String::new();
     gpurify::export::json::write_report(

@@ -37,7 +37,7 @@ fn check_topology(graph: &Graph, out: &mut Violations, runs: &mut Vec<RuleRun>) 
         strings.get("lvs.terminal_net"),
         strings.get("lvs.terminal_count"),
     ];
-    assert_eq!(all.len(), 8, "check_layout writes eight rows");
+    assert_eq!(all.len(), 5, "check_layout writes five rows");
     runs.extend(
         all.into_iter()
             .filter(|run| structural.contains(&Some(run.rule))),

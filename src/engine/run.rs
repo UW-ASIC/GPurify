@@ -335,7 +335,7 @@ fn run_erc(
     ))
 }
 
-/// The six layout-only checks on the unreduced graph, then a flat comparison of
+/// The five layout-only checks on the unreduced graph, then a flat comparison of
 /// both sides reduced, on the reference's unique top cell. A verdict that did not
 /// conclude is [`StageStatus::Refused`].
 fn run_lvs(
