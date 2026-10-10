@@ -66,6 +66,13 @@ pub enum LayoutError {
     /// references, or every structure is referenced so none is a root.
     #[error("cell hierarchy contains a cycle through {0}")]
     CyclicHierarchy(String),
+    /// A layout that would flatten to more than [`MAX_FLAT_POLYGONS`] polygons,
+    /// counted from the hierarchy before anything is expanded.
+    #[error(
+        "the layout flattens to {0} polygons, over the {MAX_FLAT_POLYGONS} a flat run \
+         holds; GPurify flattens every placement and array"
+    )]
+    TooManyPolygons(u64),
     /// A placement chain deeper than [`MAX_HIERARCHY_DEPTH`] levels, refused
     /// rather than walked: flattening recurses once per level.
     #[error("cell hierarchy is deeper than {MAX_HIERARCHY_DEPTH} levels at {0}")]
@@ -100,6 +107,17 @@ pub enum LayoutError {
 /// tens of levels; 1024 leaves room for any of them and stays well inside a
 /// test thread's 2 MiB stack.
 pub const MAX_HIERARCHY_DEPTH: u32 = 1024;
+
+/// The most polygons a layout may flatten to.
+///
+/// GPurify checks a flat copy of the layout, so a 32767 × 32767 array of a
+/// cell is about 10⁹ polygons per shape in it: hours of expansion and more
+/// memory than any machine, before the polygon ids (`u32`) overflow. The count
+/// is taken from the hierarchy first, and a layout over the cap is refused
+/// before anything is expanded. 2²⁸ polygons is about 20 GB of flat geometry.
+// ponytail: a flat cap; checking hierarchically, without flattening, is the
+// upgrade that lifts it.
+pub const MAX_FLAT_POLYGONS: u64 = 1 << 28;
 
 /// How to treat geometry on a stream pair the deck neither declares nor
 /// ignores. A pair listed with `ignore gds(L, D)` is dropped either way.
@@ -393,7 +411,9 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
 
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
-    use super::{Deck, LabelDepth, LayoutError, UnknownLayers};
+    use super::{
+        Deck, LabelDepth, LayoutError, UnknownLayers, MAX_FLAT_POLYGONS, MAX_HIERARCHY_DEPTH,
+    };
     use crate::narrow;
     use crate::provenance::Provenance;
     use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
@@ -1428,6 +1448,20 @@ pub mod gds {
                 ));
             }
 
+            let mut counted = vec![None; self.cells.len()];
+            let mut on_chain = vec![false; self.cells.len()];
+            let mut total = 0u64;
+            for (index, &is_referenced) in referenced.iter().enumerate() {
+                if !is_referenced {
+                    let polygons =
+                        self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
+                    total = total.saturating_add(polygons);
+                }
+            }
+            if total > MAX_FLAT_POLYGONS {
+                return Err(LayoutError::TooManyPolygons(total));
+            }
+
             let mut walk = Flatten {
                 lib: self,
                 deck,
@@ -1456,6 +1490,44 @@ pub mod gds {
         }
     }
 
+    impl Library {
+        /// How many polygons `cell` flattens to: its own elements, plus each
+        /// placed child's count times the placement's array size, saturating.
+        /// Memoised in `counted`; refuses a cycle and a chain past the depth cap.
+        fn flat_count(
+            &self,
+            cell: u32,
+            strings: &StrTable,
+            counted: &mut [Option<u64>],
+            on_chain: &mut [bool],
+            depth: u32,
+        ) -> Result<u64, LayoutError> {
+            let index = cell as usize;
+            if let Some(count) = counted[index] {
+                return Ok(count);
+            }
+            let name = || strings.resolve(self.cells[index].name).to_owned();
+            if on_chain[index] {
+                return Err(LayoutError::CyclicHierarchy(name()));
+            }
+            if depth > MAX_HIERARCHY_DEPTH {
+                return Err(LayoutError::HierarchyTooDeep(name()));
+            }
+            on_chain[index] = true;
+            let entry = &self.cells[index];
+            let mut count = u64::from(entry.elem_end - entry.elem_start);
+            for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let child =
+                    self.flat_count(reference.child, strings, counted, on_chain, depth + 1)?;
+                let copies = u64::from(reference.rows) * u64::from(reference.cols);
+                count = count.saturating_add(child.saturating_mul(copies));
+            }
+            on_chain[index] = false;
+            counted[index] = Some(count);
+            Ok(count)
+        }
+    }
+
     impl Flatten<'_> {
         /// Emit one cell's geometry under `at`, then recurse into its references.
         /// Its labels are placed when `root`, or under [`LabelDepth::All`].
@@ -1473,7 +1545,7 @@ pub mod gds {
                     self.strings.resolve(lib.cells[index].name).to_owned(),
                 ));
             }
-            if depth > super::MAX_HIERARCHY_DEPTH {
+            if depth > MAX_HIERARCHY_DEPTH {
                 return Err(LayoutError::HierarchyTooDeep(
                     self.strings.resolve(lib.cells[index].name).to_owned(),
                 ));
@@ -2248,6 +2320,60 @@ mod tests {
             read(&chain(at_cap + 1), &deck, UnknownLayers::Reject),
             Err(LayoutError::HierarchyTooDeep(_))
         ));
+    }
+
+    /// A two-cell library: `TOP` holds one `AREF` of `cols` × `rows` copies of
+    /// `UNIT`, which holds the deck's first-layer square.
+    fn gds_array(cols: i16, rows: i16) -> Vec<u8> {
+        const AREF: u16 = 0x0B00;
+        const COLROW: u16 = 0x1302;
+        let mut out = gds_hierarchy(&[("UNIT", &[first_layer_square()], &[])]);
+        // Drop the ENDLIB the helper wrote, and append TOP.
+        out.truncate(out.len() - 4);
+        record(&mut out, BGNSTR, &[0u8; 24]);
+        record(&mut out, STRNAME, &ascii("TOP"));
+        record(&mut out, AREF, &[]);
+        record(&mut out, SNAME, &ascii("UNIT"));
+        let mut colrow = Vec::new();
+        colrow.extend_from_slice(&cols.to_be_bytes());
+        colrow.extend_from_slice(&rows.to_be_bytes());
+        record(&mut out, COLROW, &colrow);
+        let pitch = 1_000i32;
+        let mut xy = Vec::new();
+        for (x, y) in [
+            (0, 0),
+            (pitch * i32::from(cols), 0),
+            (0, pitch * i32::from(rows)),
+        ] {
+            xy.extend_from_slice(&x.to_be_bytes());
+            xy.extend_from_slice(&y.to_be_bytes());
+        }
+        record(&mut out, XY, &xy);
+        record(&mut out, ENDEL, &[]);
+        record(&mut out, ENDSTR, &[]);
+        record(&mut out, ENDLIB, &[]);
+        out
+    }
+
+    /// Oracle: the count, `cols × rows` squares, against
+    /// [`super::MAX_FLAT_POLYGONS`]. A small array flattens to its count; the
+    /// largest array GDSII can state is refused before anything is expanded,
+    /// and so returns at once instead of expanding 10⁹ squares.
+    #[test]
+    fn an_array_over_the_flat_budget_is_refused_before_it_is_expanded() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let small = read(&gds_array(3, 2), &deck, UnknownLayers::Reject).expect("6 squares");
+        assert_eq!(small.store.poly_count(), 6);
+
+        let started = std::time::Instant::now();
+        let refused = read(&gds_array(i16::MAX, i16::MAX), &deck, UnknownLayers::Reject);
+        assert!(
+            matches!(refused, Err(LayoutError::TooManyPolygons(count)) if count == 32_767 * 32_767),
+            "{:?}",
+            refused.map(|layout| layout.store.poly_count())
+        );
+        assert!(started.elapsed().as_secs() < 5, "refused without expanding");
     }
 
     /// The deck's ignore list drops a stream pair even under `Reject`: the deck,

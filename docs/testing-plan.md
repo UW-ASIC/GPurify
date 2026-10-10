@@ -81,7 +81,7 @@ A layer without one is not a test.
 | F33 | **A source or drain polygon drawn twice is ignored only when its copy is numbered after the other terminal's polygon;** numbered earlier, it takes a terminal slot and the device is silently not recognised. | `topology/device.rs` | A missing device with no report; it depends on drawing order. |
 | F34 | DRC details: `Owners::lowest_within` can name an island in a figure's hole as the violating shape (`min_area`, `cheesing`, `min_enclosed_area`); `max_distance_to_tap` measures hole rings as wells (over-report only); `color_into` returns `Complete` on a self-loop with three or more colours. | `drc/rules/area.rs`, `erc/rules/supply.rs`, `drc/rules/patterning.rs` | Wrong attribution and a public-API trap; no false clean known. |
 | F35 | Small ones: <br>• `write_blackbox` emits a trailing comma (a Verilog syntax error) for a spec with supply pins and no signal pins;<br>• `tests/liberty.rs` fails alone in a fresh checkout (fixtures not generated);<br>• testgen's `density` applies twice (1.0 panics) and its `Angle` triangle winds clockwise;<br>• intent's `BadLimit` and `DomainConflict` messages name the wrong cause;<br>• `resolve_labels` duplicates labels when called twice;<br>• a reference cycle no root reaches is skipped silently;<br>• `density_cmp`'s `partial_windows` is ignored for neighbour deltas;<br>• `CmpModel::nominal_thickness` is read by nothing;<br>• `diode_bonus` is subtracted with no diode on the net;<br>• the leakage error always blames the DC operating point. | various | Each needs a one-line test and a fix. |
-| F36 | **An AREF is expanded without a budget.** A 32767 × 32767 array is about 10⁹ placements per child shape; flattening runs until the u32 polygon id overflows and panics, rather than refusing. | `crates/ingest/src/layout.rs` (`Flatten::visit`), `geom` store builder | A crafted layout hangs or panics the run (B14). The fix is a polygon budget with a typed refusal. |
+| F36 | **An AREF is expanded without a budget.** A 32767 × 32767 array is about 10⁹ placements per child shape; flattening runs until the u32 polygon id overflows and panics, rather than refusing. | `crates/ingest/src/layout.rs` (`Flatten::visit`), `geom` store builder | A crafted layout hangs or panics the run (B14). **Fixed in C1:** the flat count is taken from the hierarchy before anything is expanded, and a layout over `MAX_FLAT_POLYGONS` (2²⁸) is refused. |
 
 ---
 
@@ -408,7 +408,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B10 | ERC: Blech length via-to-via; guard-ring width measured, not bounding-boxed; soft connection only through declared joins; `multiple_drivers` that understands complementary gates; antenna areas merged | F25–F29 | todo |
 | B11 | PEX and export: filaments joined through touching shapes and vias, or refused; a substrate plane in the field solve; no fail-open conductors; duplicate quasistatic names refused; split-label nets refused in SPEF/DSPF | F23, F24, F30, F31 | todo |
 | B12 | The small ones | F34, F35 | todo |
-| C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | doing |
+| C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | done |
 | C2 | testgen: env-scaled seeds, seed replay, layout shrinker | F8, L3 | todo |
 | C3 | Boolean laws over random operands | L3 | todo |
 | C4 | Limit monotonicity; L5 metamorphic relations on the corpus and on generated layouts | L3, L5 | todo |
