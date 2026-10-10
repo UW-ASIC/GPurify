@@ -139,6 +139,10 @@ impl LayerTable {
     pub fn len(&self) -> usize {
         self.name.len()
     }
+    /// Whether the deck declares no layer.
+    pub fn is_empty(&self) -> bool {
+        self.name.is_empty()
+    }
     /// `None` for a name the deck does not define. Never interns.
     pub fn id(&self, strings: &StrTable, name: &str) -> Option<LayerId> {
         let wanted = strings.get(name)?;

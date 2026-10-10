@@ -251,8 +251,8 @@ fn mark_nets_within(
         let Some(scope) = within else { return true };
         let b = design.store.poly_bbox(poly);
         let centre = Point {
-            x: Dbu::new_unchecked((b.xlo.raw() + b.xhi.raw()) / 2),
-            y: Dbu::new_unchecked((b.ylo.raw() + b.yhi.raw()) / 2),
+            x: Dbu::new_unchecked(i64::midpoint(b.xlo.raw(), b.xhi.raw())),
+            y: Dbu::new_unchecked(i64::midpoint(b.ylo.raw(), b.yhi.raw())),
         };
         design.store.polys_on_layer(scope).any(|s| {
             let s = PolyId(s);
