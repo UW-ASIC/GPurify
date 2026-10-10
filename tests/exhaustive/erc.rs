@@ -22,20 +22,20 @@
 //! - Every kind that needs design intent records Skipped without it.
 //!
 //! A fixture that fails because `GPurify` disagrees with the definition carries
-//! the finding it fails on: F25 to F29 and F35 from `docs/testing-plan.md`, and
-//! four found here:
+//! the finding it fails on. Left: F28's drawing-order cases
+//! ([`topology_cases`]), where a transistor drawn output side first drives
+//! its supply. A fixed finding's fixtures name it in their comments: F25 to
+//! F29 and F35 from `docs/testing-plan.md`, and four found here:
 //!
-//! - `F59`: the cumulative antenna ratio pools all gates of the net at the
-//!   top stage, where IHP's `AreaRatio` sums one ratio per layer over the gates
-//!   joined at that layer, so a small gate joined to large ones only on a
-//!   high metal passes ([`ihp_area_ratio`]).
-//! - `F60`: an `antenna` row cannot see a protection diode, so a gate with
-//!   one is held to IHP's no-diode limit Ant.b ([`antenna_electrical`]).
-//! - `F61`: a ground rail's solve is one ulp off an exactly representable
-//!   drop, so a node exactly at its `max_drop_mv` is flagged ([`ir_drop`]).
-//! - `F62`: `hv_domain` isolation drawn exactly on a device's marker does
-//!   not exempt it, though the marker is wholly covered
-//!   ([`topology_cases`]).
+//! - `F59`: the cumulative antenna ratio pooled all gates of the net at the
+//!   top stage, where IHP's `AreaRatio` sums one ratio per layer over the
+//!   gates joined at that layer ([`ihp_area_ratio`]).
+//! - `F60`: an `antenna` row could not see a protection diode, so a gate
+//!   with one was held to IHP's no-diode limit Ant.b ([`antenna_electrical`]).
+//! - `F61`: a ground rail's solve was one ulp off an exactly representable
+//!   drop, so a node exactly at its `max_drop_mv` was flagged ([`ir_drop`]).
+//! - `F62`: `hv_domain` isolation drawn exactly on a device's marker did not
+//!   exempt it, though the marker is wholly covered ([`topology_cases`]).
 
 #![allow(
     clippy::cast_precision_loss,
@@ -1725,8 +1725,8 @@ fn electromigration() -> Vec<Fixture> {
     // at 18 µm, loaded at 17.5 µm. The line between its diffusion barriers
     // carries 1 mA over 17 µm: a Blech product of at least 17 000 µA, mortal
     // against a 10 000 µA limit, and far over a 1 µA/µm density. Tapped at
-    // its centre the line reads two 8.5 µm segments of 8500 µA, each called
-    // immortal, and nothing is reported.
+    // its centre the line once read two 8.5 µm segments of 8500 µA, each
+    // called immortal, and nothing was reported.
     let mut f25 = Layout::default();
     rect(&mut f25, "met1", (0, 0, 18_000, 1000));
     rect(&mut f25, "met2", (0, 0, 1000, 1000));
@@ -1739,11 +1739,39 @@ fn electromigration() -> Vec<Fixture> {
         &rail_deck(&em("1uA/um", "10000uA", "85C", 0.9, 2.0)),
         ERC,
     )
-    .layout(f25)
-    .expect(Expect::Passes(false))
-    .known("F25");
+    .layout(f25.clone())
+    .expect(Expect::Passes(false));
     f.intent = Some(vdd_intent(1000.0));
     out.push(f);
+    // The same line swept across its Blech product, 1000 µA × 17 µm / 1 µm =
+    // 17 000 µA: below it both segments (via to centre tap, centre tap to the
+    // load) are mortal and over 1 µA, reported at their first nodes; at or
+    // above it the whole line is immortal.
+    for blech in [16_999.0, 17_000.0, 17_001.0] {
+        let mut f = Fixture::new(
+            &format!(
+                "erc/electromigration/f25/line_product/{}",
+                side(blech, 17_000.0)
+            ),
+            &["ERC-E6"],
+            &rail_deck(&em("1uA/um", &format!("{blech}uA"), "85C", 0.9, 2.0)),
+            ERC,
+        )
+        .layout(f25.clone())
+        .expect(Expect::rule(
+            "em",
+            if blech < 17_000.0 {
+                vec![
+                    microamps(1000.0).at(500, 500),
+                    microamps(1000.0).at(9000, 500),
+                ]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(vdd_intent(1000.0));
+        out.push(f);
+    }
     out
 }
 

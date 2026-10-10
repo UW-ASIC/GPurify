@@ -8,11 +8,12 @@
 use crate::erc::facts::IntentMap;
 use crate::erc::power::{
     discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, Power, PowerError,
-    PowerGrid, Solved,
+    PowerGrid, PowerSolution, Solved,
 };
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{fill_rows, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use gpurify_geom::connectivity::components_into;
 use gpurify_geom::LayerId;
 use gpurify_geom::{
     prefix, Current, CurrentDensity, Dbu, Grid, Qty, Resistance, Temperature, Voltage,
@@ -167,18 +168,24 @@ pub struct EmCurrentDensityTable {
 /// `allowed(T) = allowed(T_ref) * exp(Ea / (n k) * (1/T - 1/T_ref))`,
 ///
 /// which is below the stated limit when hotter. A segment is exempt
-/// (Blech-immortal) when its Blech product `|I| * L / W`, current density per
-/// width times the segment's length, is at or below `blech_limit` for its
-/// layer: back-stress halts the drift in a short line. A row flags a segment
-/// or cut that is not immortal and carries more than its derated limit.
+/// (Blech-immortal) when the Blech product `|I| * L / W` of the line it lies
+/// in, current per width times the line's length, is at or below
+/// `blech_limit` for its layer: back-stress halts the drift in a short line.
+/// A line is the metal between two diffusion barriers: a via landing, the
+/// supply's feed point, a loaded device tap (its contact), or the line's
+/// end. The grid's own taps along a shape (its centre) are no barrier, so a
+/// long line tapped in the middle is still long. A line's product is its
+/// largest segment's, and a branched line's `L` is every branch, which errs
+/// mortal. A via is a line of its own, `L` its stack height. A row flags a
+/// segment or cut that is not immortal and carries more than its derated
+/// limit.
 ///
 /// # Limits
 ///
 /// One operating temperature for the whole run (85 °C from the CLI), with no
-/// self-heating, which errs open for a hot wire. A segment's length `L` is
-/// the run between two adjacent nodes of the grid, not the line between two
-/// diffusion barriers. RMS, peak and Joule-heating limits (ERC-E7) and
-/// statistical or thermal-aware EM (ERC-E13) are not modelled.
+/// self-heating, which errs open for a hot wire. RMS, peak and
+/// Joule-heating limits (ERC-E7) and statistical or thermal-aware EM
+/// (ERC-E13) are not modelled.
 ///
 /// Catalog: ERC-E4, ERC-E5, ERC-E6 in the [check catalog]. Defined by
 /// [GF180MCU] §14.2 (§14.2.2 for the derating); [IHP SG13G2] §2.15;
@@ -425,6 +432,78 @@ fn allowed_current(
     }
 }
 
+/// Each edge's Blech product `|I| * L / W`, with `L` the length of the line
+/// the edge lies in: the metal between diffusion barriers, which are a node
+/// where a via lands, a supply's feed point and a loaded device tap (its
+/// contact). A line's product is the largest of its edges', so a line is
+/// immortal whole or not at all; a branched line's `L` is all of its
+/// branches, which errs mortal. A via is its own line, `L` the stack height.
+/// A zero width makes the product infinite (mortal).
+#[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+fn blech_products(power: &PowerGrid, solution: &PowerSolution) -> Vec<f64> {
+    let (nodes, edges) = (power.node_count(), power.edge_count());
+    let metal = |edge: usize| power.edge_kind[edge] == EdgeKind::Metal;
+    let mut barrier = vec![false; nodes];
+    for &pad in &power.source_node {
+        barrier[pad as usize] = true;
+    }
+    for (barrier, load) in barrier.iter_mut().zip(&power.node_load) {
+        *barrier |= load.raw() != 0.0;
+    }
+    for edge in (0..edges).filter(|&edge| !metal(edge)) {
+        barrier[power.edge_from[edge] as usize] = true;
+        barrier[power.edge_to[edge] as usize] = true;
+    }
+    // Metal edges meeting at a node that is no barrier are one line.
+    let mut first = vec![u32::MAX; nodes];
+    let mut joins = Vec::new();
+    for edge in (0..edges).filter(|&edge| metal(edge)) {
+        let edge_id = u32::try_from(edge).expect("an edge index is a u32");
+        for node in [power.edge_from[edge], power.edge_to[edge]] {
+            let slot = &mut first[node as usize];
+            if barrier[node as usize] {
+                continue;
+            }
+            if *slot == u32::MAX {
+                *slot = edge_id;
+            } else {
+                joins.push((*slot, edge_id));
+            }
+        }
+    }
+    let mut line = Vec::new();
+    components_into(
+        u32::try_from(edges).expect("an edge count is a u32"),
+        &joins,
+        &mut line,
+    );
+    let product = |edge: usize, length: i64| {
+        let width = power.edge_width[edge].raw();
+        if width == 0 {
+            return f64::INFINITY;
+        }
+        solution.branch_current[edge].raw().abs() * (length as f64 / width as f64)
+    };
+    let mut length = vec![0i64; edges];
+    for edge in (0..edges).filter(|&edge| metal(edge)) {
+        length[line[edge].0 as usize] += power.edge_length[edge].raw();
+    }
+    let mut worst = vec![0.0f64; edges];
+    for edge in (0..edges).filter(|&edge| metal(edge)) {
+        let at = line[edge].0 as usize;
+        worst[at] = worst[at].max(product(edge, length[at]));
+    }
+    (0..edges)
+        .map(|edge| {
+            if metal(edge) {
+                worst[line[edge].0 as usize]
+            } else {
+                product(edge, power.edge_length[edge].raw())
+            }
+        })
+        .collect()
+}
+
 /// Compare every branch on a limited layer against its allowed current times
 /// `derate`. Returns `examined`: in-scope edges the Blech exemption did not
 /// remove.
@@ -438,6 +517,11 @@ fn check_branches(
 ) -> u64 {
     // `power` is the network; `grid` is the manufacturing grid.
     let (power, solution) = (solved.grid, solved.solution);
+    let blech = if limits.blech.is_empty() {
+        Vec::new()
+    } else {
+        blech_products(power, solution)
+    };
     let mut examined = 0u64;
     for edge in 0..power.edge_count() {
         // First mention of a repeated layer wins; other layers are out of scope.
@@ -450,16 +534,12 @@ fn check_branches(
         };
         let current =
             Qty::<Current, { prefix::MICRO }>::new(solution.branch_current[edge].raw().abs());
-        let (width, length) = (power.edge_width[edge], power.edge_length[edge]);
-
-        // Blech product `|I| * L / W`; a zero width makes it infinite (mortal).
-        #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
-        let slenderness = length.raw() as f64 / width.raw() as f64;
-        let blech_product = current.raw() * slenderness;
+        let width = power.edge_width[edge];
         let immortal = limits
             .blech
             .get(limit_row)
-            .is_some_and(|&blech| blech_product <= blech.raw());
+            .zip(blech.get(edge))
+            .is_some_and(|(&limit, &product)| product <= limit.raw());
         examined += u64::from(!immortal);
 
         let allowed = allowed_current(
