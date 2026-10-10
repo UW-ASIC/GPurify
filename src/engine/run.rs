@@ -476,6 +476,35 @@ fn run_pex(
     out: &mut Outputs,
 ) -> Result<StageStatus, EngineError> {
     let grid = loaded.grid;
+    // The names are the user's input, so they are refused before any
+    // extraction is attempted.
+    let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
+    for name in &options.quasistatic_nets {
+        // `get`, never `intern`: a name the run never saw is not a net.
+        let pieces = loaded
+            .strings
+            .get(name)
+            .map_or(&[][..], |id| extracted.ports.nets_of(id));
+        match *pieces {
+            [net] => selected.push(net),
+            [] => {
+                return Ok(StageStatus::Refused(format!(
+                    "no extracted net is named {name}, so it cannot be field solved"
+                )))
+            }
+            _ => {
+                return Ok(StageStatus::Refused(format!(
+                    "{name} labels {} disconnected nets, an open, so no one net \
+                     of that name can be field solved",
+                    pieces.len()
+                )))
+            }
+        }
+    }
+    // A net named twice is one conductor: solved twice, it is a singular
+    // system that never converges.
+    selected.sort_unstable();
+    selected.dedup();
     let mut network = ParasiticNetwork::default();
     if let Err(why) = gpurify_extract::analytical::extract_into(
         &loaded.store,
@@ -485,38 +514,17 @@ fn run_pex(
         grid,
         &mut network,
     ) {
-        let layer = loaded.strings.resolve(loaded.deck.layers.name(why.layer()));
+        let layer = if why.layer().idx() < loaded.deck.layers.len() {
+            loaded
+                .strings
+                .resolve(loaded.deck.layers.name(why.layer()))
+                .to_owned()
+        } else {
+            format!("{:?}", why.layer())
+        };
         return Ok(StageStatus::Refused(format!("layer {layer}: {why}")));
     }
     if !options.quasistatic_nets.is_empty() {
-        let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
-        for name in &options.quasistatic_nets {
-            // `get`, never `intern`: a name the run never saw is not a net.
-            let pieces = loaded
-                .strings
-                .get(name)
-                .map_or(&[][..], |id| extracted.ports.nets_of(id));
-            match *pieces {
-                [net] => selected.push(net),
-                [] => {
-                    return Ok(StageStatus::Refused(format!(
-                        "no extracted net is named {name}, so it cannot be field solved"
-                    )))
-                }
-                _ => {
-                    return Ok(StageStatus::Refused(format!(
-                        "{name} labels {} disconnected nets, an open, so no one net \
-                         of that name can be field solved",
-                        pieces.len()
-                    )))
-                }
-            }
-        }
-        // A net named twice is one conductor: solved twice, it is a singular
-        // system that never converges.
-        selected.sort_unstable();
-        selected.dedup();
-
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
         let mut solved = ParasiticNetwork::default();
         let accuracy = gpurify_extract::quasistatic::extract_into(
