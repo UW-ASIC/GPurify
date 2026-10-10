@@ -409,7 +409,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B11 | PEX and export: filaments joined through touching shapes and vias, or refused; a substrate plane in the field solve; no fail-open conductors; duplicate quasistatic names refused; split-label nets refused in SPEF/DSPF | F23, F24, F30, F31 | todo |
 | B12 | The small ones | F34, F35 | todo |
 | C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | done |
-| C2 | testgen: env-scaled seeds, seed replay, layout shrinker | F8, L3 | todo |
+| C2 | testgen `prop`: seeds by property name, committed regression seeds replayed every run, greedy shrinking (rectangle layouts); `#[ignore]`d nightly twins instead of env knobs | F8, L3 | done |
 | C3 | Boolean laws over random operands | L3 | todo |
 | C4 | Limit monotonicity; L5 metamorphic relations on the corpus and on generated layouts | L3, L5 | todo |
 | C5 | Bitmap reference DRC, kind by kind; fix what it finds (bbox `extension`/`overlap` first) | L3, B1, B3 | todo |

@@ -52,6 +52,7 @@ pub mod assertions;
 pub mod gds;
 pub mod graph;
 pub mod netlist;
+pub mod prop;
 pub mod rng;
 pub mod scale;
 pub mod shapes;
