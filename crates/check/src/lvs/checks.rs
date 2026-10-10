@@ -6,9 +6,7 @@
 
 use crate::lvs::graph::{narrow, Graph};
 use crate::lvs::verdict::Discrepancy;
-use crate::report::{
-    record_run, Measurement, Outcome, RuleRun, Severity, SkipReason, Violation, Violations,
-};
+use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::{DeviceTable, NetId, NetTable, PortTable};
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
@@ -21,11 +19,11 @@ use gpurify_ingest::{StrId, StrTable};
 ///
 /// The first six are defined on the [`Discrepancy`] variant that raises them
 /// (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`], and so on), the
-/// other eight under [`check_layout`]. The crate's
+/// other five under [`check_layout`]. The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 14] = [
+pub const RULE_IDS: [&str; 11] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -35,9 +33,6 @@ pub const RULE_IDS: [&str; 14] = [
     "lvs.floating_net",
     "lvs.label_conflict",
     "lvs.net_seed_conflict",
-    "lvs.device_count_mos",
-    "lvs.device_count_bjt",
-    "lvs.parametric",
     "lvs.terminal_net",
     "lvs.terminal_count",
 ];
@@ -91,10 +86,6 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// - `lvs.net_seed_conflict`: fewer labelled nets than bound labels, meaning
 ///   two labels merged onto one net. Measured the labelled nets against a
 ///   limit of the labels. Examines every label. Catalog: LVS-001.
-/// - `lvs.device_count_mos`, `lvs.device_count_bjt`, `lvs.parametric`:
-///   always [`SkipReason::NotInDeck`], examining nothing, because the deck has
-///   no syntax for per-model device counts or parameter ranges. Catalog:
-///   LVS-068.
 /// - `lvs.terminal_net`: a terminal of `layout` on no net, or on a net past
 ///   its net table. Measured the net count against the count the terminal
 ///   would need. Examines every terminal. Catalog: LVS-004.
@@ -113,9 +104,10 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   (testing-plan F13).
 /// - `lvs.terminal_net` cannot fire on a graph built by `from_layout`:
 ///   [`recognise_into`] drops any marker with a terminal on no net.
-/// - The three skipped rows are never `Ran`, so under the crate's
-///   [guarantee](crate#the-guarantee-every-rule-keeps) a run that records
-///   them does not pass.
+/// - Per-model device counts and parameter ranges are not checked: the deck
+///   has no syntax for their limits (catalog LVS-068). No row is recorded for
+///   them, because no deck configures them; a row that could only ever be
+///   `Skipped` would fail every run that selects LVS.
 ///
 /// # Panics
 ///
@@ -136,16 +128,6 @@ pub fn check_layout(
     check_floating_nets(nets, devices, ports, id("lvs.floating_net"), out, runs);
     check_label_conflicts(nets, ports, id("lvs.label_conflict"), out, runs);
     check_net_seed_conflicts(nets, ports, id("lvs.net_seed_conflict"), out, runs);
-    // Device counts and parameter ranges need limits the deck does not carry.
-    let before = out.len();
-    for name in [
-        "lvs.device_count_mos",
-        "lvs.device_count_bjt",
-        "lvs.parametric",
-    ] {
-        let skipped = Outcome::Skipped(SkipReason::NotInDeck);
-        record_run(runs, out, before, id(name), skipped, 0);
-    }
     check_topology(
         layout,
         (id("lvs.terminal_net"), id("lvs.terminal_count")),

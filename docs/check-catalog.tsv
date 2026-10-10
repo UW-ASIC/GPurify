@@ -139,7 +139,7 @@ LVS-064	lvs	device	BJT AE/PE/NE, multi-emitter	KL:BJT3,BJT4	lvs:params	partial	S
 LVS-065	lvs	device	Inductor	KL:Inductor; IHP:6.12	-	missing	SY	
 LVS-066	lvs	device	Device flavour (HVT/LVT) by implant marker	GF:App.A; IHP LVS decks	deck:device	expressible	SY	A flavour is a device statement whose marker includes the implant (gate_n and hvt), with the plain flavour excluding it (gate_n not hvt). The corpus deck does not do this yet, so LVS_HVT/LVS_LVT stay blocked (testing-plan F6)
 LVS-067	lvs	device	Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD)	MAG:subcircuit kinds; IHP LVS decks	-	missing	SY	sky130 VPP caps have no marker (limitations.md)
-LVS-068	lvs	device	Device-count and parameter-range limits (devices per model, W/L inside the model's valid range)	MAG:param_limits; IHP:npn13G2.bR; GF:App.A	lvs.device_count_mos,lvs.device_count_bjt,lvs.parametric	missing	FR; SY	The report rows exist but always record Skipped(NotInDeck): the deck has no syntax for the limits (lvs/checks.rs:73-82)
+LVS-068	lvs	device	Device-count and parameter-range limits (devices per model, W/L inside the model's valid range)	MAG:param_limits; IHP:npn13G2.bR; GF:App.A	-	missing	FR; SY	No check exists: the deck has no syntax for per-model counts or parameter ranges
 LVS-070	lvs	netlist	SPICE / CDL reader	ngspice manual; KL:NetlistSpiceReader	ingest:spice	implemented	SY; fuzz	No open authoritative CDL spec
 LVS-071	lvs	netlist	Spectre reader	-	ingest:spectre	implemented	SY; fuzz	
 LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	-	missing	SY	F1

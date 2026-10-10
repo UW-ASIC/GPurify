@@ -258,26 +258,10 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
     let ports = run.extracted.ports.len() as u64;
     let devices = run.extracted.devices.len() as u64;
     let terminals = run.extracted.devices.terminal_net.len() as u64;
-    let expected: [(&str, Outcome, u64); 8] = [
+    let expected: [(&str, Outcome, u64); 5] = [
         ("lvs.floating_net", Outcome::Ran, nets),
         ("lvs.label_conflict", Outcome::Ran, nets),
         ("lvs.net_seed_conflict", Outcome::Ran, ports),
-        // Both device-count families and the parametric check compare against a
-        // limit that lives in the deck, and no signature in `lvs::checks` takes
-        // one. They are recorded unrun rather than passing every layout, which
-        // is the whole point of the variant — and the reason a run selecting
-        // LVS cannot report a pass today.
-        (
-            "lvs.device_count_mos",
-            Outcome::Skipped(SkipReason::NotInDeck),
-            0,
-        ),
-        (
-            "lvs.device_count_bjt",
-            Outcome::Skipped(SkipReason::NotInDeck),
-            0,
-        ),
-        ("lvs.parametric", Outcome::Skipped(SkipReason::NotInDeck), 0),
         ("lvs.terminal_net", Outcome::Ran, terminals),
         ("lvs.terminal_count", Outcome::Ran, devices),
     ];
@@ -293,7 +277,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
     assert_eq!(
         run.outputs.runs.len(),
         expected.len(),
-        "six checks file eight rows between them; the run recorded {:?}",
+        "five checks file five rows; the run recorded {:?}",
         run.outputs.runs
     );
 

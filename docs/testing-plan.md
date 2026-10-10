@@ -62,6 +62,7 @@ A layer without one is not a test.
 | F14 | **A short between two labelled nets aborts extraction** (`PortError::ConflictingLabels`, `pipeline.rs:181`): the run fails with a net id, with no report row and no location. Separately, **`PortTable::net_of` resolves a name on several nets to the lowest one** (`port.rs:33-37`). That affects `--quasistatic` (`run.rs:384`), Liberty (`src/liberty/circuit.rs:106`) and the netlist exporter (`src/export/netlist.rs:326-345`). Intent is not affected: `resolve_intent_into` visits every piece (`erc/facts.rs:154-199`). | `src/engine/pipeline.rs:181`, `crates/check/src/topology/port.rs:33-37` | The first does not pass, but it cannot be debugged from the report. The second field-solves, characterises or exports only one piece of a split net. |
 | F15 | **Diode anode/cathode and capacitor plates are interchangeable in LVS.** Diodes and capacitors get `Pin(0)`/`Pin(1)` roles (`graph.rs:301`), and every `Pin(_)` shares one role code (`refine.rs:69`), so a reversed diode matches. | `crates/check/src/lvs/graph.rs:291-302`, `crates/check/src/lvs/refine.rs:58-69` | **False clean** (B7). Netgen permutes resistor ends but not capacitor plates; nobody permutes a diode. |
 | F16 | **LVS compares few device parameters.** Extraction gives MOS `w`/`l` and the marker `area` only (`topology/device.rs:301-329`). No resistor R/W/L, capacitor C, perimeter, `nf` or BJT emitter area. A parameter only the reference declares becomes `undeclared_param`, and the positional `R1 a b 1k` form is refused (`netlist.rs:447-453`). | `crates/check/src/topology/device.rs:301-329`, `crates/check/src/lvs/compare.rs:255-313` | Wrong-size passives match (B9). Catalog rows LVS-060–064. |
+| F17 | **No run that selects LVS with a reference could pass.** `check_layout` recorded three rows the deck cannot configure (`lvs.device_count_mos`, `lvs.device_count_bjt`, `lvs.parametric`) as `Skipped(NotInDeck)`, and a skipped rule fails the run, so even a clean match exited 1. **Fixed in B8:** a row is recorded only for a configured check; the missing checks stay in the catalog (LVS-068) and `limitations.md`. | `crates/check/src/lvs/checks.rs` (`check_layout`) | Every LVS golden exited 1 before the fix. No test covered a passing LVS run, which is why this went unnoticed. |
 
 ---
 
@@ -340,7 +341,7 @@ not an oversight.
 Every criterion is a number or a yes/no that a script can check.
 
 1. The corpus passes with zero unannotated failures. Every case in all four domains carries `expect_outcome`; every LVS case asserts its verdict.
-2. F1–F16 are closed, each with a regression test.
+2. F1–F17 are closed, each with a regression test.
 3. Boolean laws and every L5 relation have passed ≥ 10⁶ generated cases in total, with no failure in the last 7 nightlies.
 4. The bitmap-reference differential has shown no disagreement over ≥ 10⁵ random layouts per supported DRC kind.
 5. Each fuzz target has run ≥ 24 CPU-h with no new crash and coverage flat for the last 25% of the run.
@@ -375,6 +376,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | A5 | Every `implemented`/`partial` catalog row cites a test that names its id; `tests/catalog.rs` asserts it | L9 | todo |
 | S1 | Minimal CLI. Runtime flags are only the required inputs (`<layout>`, `--deck`, `--reference`, `--intent`; `lib`: `--spec`, `--lef`, `--output-dir`), the output form (`--format`) and the method choice (`--quasistatic <net>` for PEX, `--accuracy` for `lib`). Grid from the GDS UNITS record; unknown-layer policy in the deck (`ignore gds(L, D)`); `--output`, `--quasistatic-inductance`, `--check-determinism`, `--work` removed | user direction | done |
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | done |
+| B8 | LVS: rows only for configured checks, so a clean LVS run can pass | F17 | done |
 | R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | doing |
 | B1 | LVS: assert `expect_match` in the corpus; planted-fault matrix | F2, L2 | todo |
 | B2 | LVS: flatten reference `X` instances | F1 | todo |

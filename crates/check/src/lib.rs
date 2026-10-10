@@ -124,9 +124,6 @@
 //! | `lvs.net_seed_conflict` | [`lvs::check_layout`] | two labels merged onto one net | LVS-001 |
 //! | `lvs.terminal_net` | [`lvs::check_layout`] | a device terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
-//! | `lvs.device_count_mos` | [`lvs::check_layout`] | always Skipped: the deck has no count limits | LVS-068 |
-//! | `lvs.device_count_bjt` | [`lvs::check_layout`] | always Skipped: the deck has no count limits | LVS-068 |
-//! | `lvs.parametric` | [`lvs::check_layout`] | always Skipped: the deck has no parameter ranges | LVS-068 |
 
 pub mod drc;
 pub mod erc;

@@ -220,7 +220,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61) |
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
-| LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | The report rows exist but always record Skipped(NotInDeck): the deck has no syntax for the limits (lvs/checks.rs:73-82) |
+| LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | No check exists: the deck has no syntax for per-model counts or parameter ranges |
 | LVS-072 | Hierarchical reference flattening | missing | F1 |
 
 ### Electrical rules (ERC)
