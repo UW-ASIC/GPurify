@@ -38,7 +38,8 @@
 //! | Role | Interchangeable with |
 //! |---|---|
 //! | MOS `Source`, `Drain` | each other: which end is the source is a matter of bias |
-//! | `Pin(_)` (resistor, capacitor, diode ends) | every other `Pin(_)` |
+//! | A resistor's two ends | each other: a resistor has no direction |
+//! | A diode's anode and cathode, a capacitor's plates | nothing: a reversed diode is another circuit, and Netgen does not permute capacitor plates either |
 //! | `Gate`, `Bulk`, `Base`, `Emitter`, `Collector` | nothing |
 //!
 //! That is catalog LVS-030. User-declared equivalent pins, and devices whose
@@ -62,16 +63,15 @@
 //! Known defects, tracked as findings in the
 //! [testing plan](https://github.com/UW-ASIC/GPurify/blob/main/docs/testing-plan.md):
 //!
-//! - **F1, false clean.** [`graph::from_reference`] keeps only the
-//!   subcircuit's own device cards. An `X` instance of another subcircuit is
-//!   dropped, not flattened, so a layout missing a whole block the schematic
-//!   places by instance can match (catalog LVS-010, LVS-017, LVS-072).
+//! - **Flat comparison.** [`graph::from_reference`] reads only the subcircuit's
+//!   own device cards, so the load step flattens a reference with a unique top
+//!   first ([`Netlist::flatten_top`](gpurify_ingest::netlist::Netlist::flatten_top)):
+//!   a block placed by instance is compared device by device, never cell by
+//!   cell (catalog LVS-010, LVS-017).
 //! - **F12, false mismatch.** Every reference net is named and a series merge
 //!   never crosses a named net, so the reference never series-reduces while
 //!   the layout does: a drawn stack with an unlabelled internal node becomes
 //!   one device against two.
-//! - **F15, false clean.** Every `Pin(_)` is interchangeable, so a reversed
-//!   diode or a capacitor with its plates swapped matches.
 //! - **F16, weak parameters.** The layout measures only MOS `w` and `l` and
 //!   each device's marker `area`, so passives are not sized.
 

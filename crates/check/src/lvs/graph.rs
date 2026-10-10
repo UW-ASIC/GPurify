@@ -159,6 +159,13 @@ pub fn from_layout(
         .device_terminal_start
         .clone_from(&devices.terminal_start);
     graph.terminal_role.clone_from(&devices.terminal_role);
+    for device in 0..devices.kind.len() {
+        let slots =
+            devices.terminal_start[device] as usize..devices.terminal_start[device + 1] as usize;
+        for slot in slots {
+            graph.terminal_role[slot] = comparable(devices.kind[device], graph.terminal_role[slot]);
+        }
+    }
     graph.terminal_net.clear();
     graph
         .terminal_net
@@ -260,13 +267,15 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
 ///
 /// - Only the subcircuit's own device cards are kept. An `X` card that calls a
 ///   deck device model is a device and is kept; an `X` instance of another
-///   subcircuit is dropped, not flattened, so a layout missing a whole block
-///   the schematic places by instance can match (testing-plan F1).
+///   subcircuit is skipped, so flatten the netlist first
+///   ([`Netlist::flatten_top`](gpurify_ingest::netlist::Netlist::flatten_top)),
+///   as the load step does (testing-plan F1).
 /// - Because every net is named, series reduction never merges across a
 ///   reference net, while it does merge across an unlabelled layout net
 ///   (testing-plan F12).
-/// - A diode's anode and cathode, and a capacitor's plates, are `Pin(0)` and
-///   `Pin(1)`, which match either way round (testing-plan F15).
+/// - A resistor's ends are both `Pin(0)`, so they match either way round; a
+///   diode's anode and cathode, and a capacitor's plates, stay `Pin(0)` and
+///   `Pin(1)` (testing-plan F15).
 ///
 /// # Panics
 ///
@@ -380,6 +389,17 @@ pub(crate) fn drop_unextracted_bulk(layout: &Graph, graph: &mut Graph) {
     transpose_into(graph, net_count);
 }
 
+/// The role LVS compares a terminal under: a resistor's two ends are
+/// interchangeable, so both become `Pin(0)`; every other role is kept, and a
+/// diode's or capacitor's pins stay distinct (testing-plan F15: a reversed diode
+/// is a different circuit, and Netgen does not permute capacitor plates either).
+fn comparable(kind: DeviceKind, role: TerminalRole) -> TerminalRole {
+    match (kind, role) {
+        (DeviceKind::Resistor, TerminalRole::Pin(_)) => TerminalRole::Pin(0),
+        _ => role,
+    }
+}
+
 /// A SPICE card position to its [`TerminalRole`]: drain-first MOS,
 /// collector-first BJT.
 fn card_role(kind: DeviceKind, position: usize) -> TerminalRole {
@@ -392,6 +412,9 @@ fn card_role(kind: DeviceKind, position: usize) -> TerminalRole {
         (DeviceKind::Bjt, 0) => Collector,
         (DeviceKind::Bjt, 1) => Base,
         (DeviceKind::Bjt, 2) => Emitter,
-        _ => TerminalRole::Pin(u8::try_from(position).unwrap_or(u8::MAX)),
+        _ => comparable(
+            kind,
+            TerminalRole::Pin(u8::try_from(position).unwrap_or(u8::MAX)),
+        ),
     }
 }

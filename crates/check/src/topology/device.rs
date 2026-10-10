@@ -36,7 +36,8 @@ pub struct DeviceId(pub u32);
 /// SPICE card order instead, which
 /// [`from_reference`](crate::lvs::graph::from_reference) maps to the same
 /// roles. LVS pairs terminals by role and treats `Source` and `Drain` as one,
-/// and every `Pin(_)` as one.
+/// and a resistor's two ends as one; a diode's anode (`Pin(0)`) and cathode
+/// (`Pin(1)`), and a capacitor's plates, stay distinct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalRole {
     /// A MOS gate.
@@ -53,10 +54,9 @@ pub enum TerminalRole {
     Emitter,
     /// A BJT collector.
     Collector,
-    /// Either end of a symmetric two-terminal device.
-    ///
-    /// Also the ends of a diode and the plates of a capacitor, which are not
-    /// symmetric: LVS cannot tell them apart (testing-plan F15).
+    /// A passive's terminal by position: a resistor's end, a capacitor's
+    /// plate, a diode's anode (0) or cathode (1). LVS compares a resistor's two
+    /// ends as one and keeps every other position distinct.
     Pin(u8),
 }
 

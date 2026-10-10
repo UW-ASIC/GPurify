@@ -201,7 +201,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing |
 | LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree) |
 | LVS-017 | Subcircuit instance unpaired | partial | Instances are flattened, not paired as units: a missing instance shows as its devices unpaired |
-| LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | Every Pin(_) role is interchangeable, including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing |
+| LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | MOS source/drain and resistor ends are interchangeable; diode anode/cathode and capacitor plates are not, as in Netgen. User-declared equivalent pins are missing |
 | LVS-031 | Asymmetric devices (S/D not swappable) | missing | — |
 | LVS-032 | Net-name seeding (same_nets) | missing | Names neither seed refinement nor are compared (test net_names_do_not_have_to_agree) |
 | LVS-033 | Black boxes | missing | — |
@@ -209,14 +209,14 @@ says which foundry manual, standard or tool defines each one.
 | LVS-035 | Dummy / shorted device removal | missing | — |
 | LVS-042 | Semi-series MOS | missing | — |
 | LVS-043 | Resistor series/parallel | partial | Parallel merging applies to every device kind but sums only W and nf, so two parallel resistors without a W collapse into one with the same R, a false clean (testing-plan F20). Series merging is MOS only |
-| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel merging applies to every kind but sums only W and nf: capacitors keep one C, and diodes wired in opposite directions merge (testing-plan F15, F20) |
+| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel merging applies to every kind but sums only W and nf: capacitors keep one C (testing-plan F20). Diodes wired in opposite directions no longer merge |
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
 | LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named and series merging refuses named nodes (testing-plan F12) |
 | LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none |
 | LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader |
 | LVS-062 | Capacitor C/A/P | partial | Marker area only; no C or perimeter |
-| LVS-063 | Diode A/P | partial | Marker area only; no perimeter. Polarity is not compared (F15) |
+| LVS-063 | Diode A/P | partial | Marker area only; no perimeter. Polarity is compared |
 | LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61) |
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |

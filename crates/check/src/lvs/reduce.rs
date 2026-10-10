@@ -15,8 +15,8 @@
 //!
 //! - **Parallel** (catalog LVS-040, KLayout and Netgen both do it): devices of
 //!   one kind and one model whose terminals land on the same nets role for
-//!   role become one. MOS source and drain are interchangeable, and so is
-//!   every `Pin(_)`. This applies to every device kind, not only MOS, and
+//!   role become one. MOS source and drain are interchangeable, and so are
+//!   a resistor's ends; a diode's or capacitor's pins are not. This applies to every device kind, not only MOS, and
 //!   consumes no net.
 //! - **Series** (catalog LVS-041; on by default, which Netgen's is not): two
 //!   devices of one kind and one model whose channels (`Source`/`Drain`) meet
@@ -108,10 +108,11 @@ const fn is_channel(role: TerminalRole) -> bool {
     matches!(role, TerminalRole::Source | TerminalRole::Drain)
 }
 
-/// The merge code the channel collapses onto. `8`, past every value
-/// [`role_code`] returns, which is what puts a device's channel terminals at the
-/// end of its sorted key and lets the non-channel half be read off as a prefix.
-const CHANNEL: u64 = 8;
+/// The merge code the channel collapses onto, past every value [`role_code`]
+/// returns (at most 16 + 255), which is what puts a device's channel terminals
+/// at the end of its sorted key and lets the non-channel half be read off as a
+/// prefix.
+const CHANNEL: u64 = 1 << 16;
 
 /// The lowest key a channel terminal can carry, and therefore the split point
 /// between a device's non-channel prefix and its channel suffix.

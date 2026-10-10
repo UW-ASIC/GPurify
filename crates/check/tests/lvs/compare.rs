@@ -13,9 +13,11 @@ use common::{
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
     stacked_pair_with_params, GraphBuilder, NCH, NPN, VDD, VSS, WIDTH,
 };
+use gpurify_check::lvs::graph::from_reference;
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use gpurify_check::lvs::{compare, CompareOptions};
 use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::StrId;
 use gpurify_testgen::Rng;
 
@@ -602,5 +604,64 @@ fn symmetric_devices_pair_by_parameters_not_by_row_order() {
         verdict,
         Verdict::Match,
         "a wrong size must still be reported"
+    );
+}
+
+/// A two-terminal device of `kind` from net `first` to net `second`, beside a
+/// transistor whose gate sits on net 0: the gate gives net 0 a degree net 1
+/// lacks, so exchanging the two ends is not a relabelling (see
+/// [`a_bipolars_emitter_and_collector_are_not_interchangeable`]).
+fn anchored_two_terminal(kind: DeviceKind, first: u32, second: u32) -> Netlist {
+    Netlist {
+        subckt_name: vec![StrId(30)],
+        subckt_port_start: vec![0, 0],
+        subckt_device_start: vec![0, 2],
+        device_model: vec![StrId(40), NCH],
+        device_kind: vec![kind, DeviceKind::Mos],
+        device_terminal_start: vec![0, 2, 6],
+        terminal_net: [first, second, 0, 2, 3, 3].map(RefNetId).to_vec(),
+        device_param_start: vec![0, 0, 0],
+        net_name: (50..54).map(StrId).collect(),
+        net_subckt: vec![SubcktId(0); 4],
+        ..Netlist::default()
+    }
+}
+
+fn reference_verdict(kind: DeviceKind, swapped: bool) -> Verdict {
+    let drawn = from_reference(&anchored_two_terminal(kind, 0, 1), SubcktId(0));
+    let (a, b) = if swapped { (1, 0) } else { (0, 1) };
+    let written = from_reference(&anchored_two_terminal(kind, a, b), SubcktId(0));
+    compare(&drawn, &written, decisive())
+}
+
+/// Oracle: the device's definition. A diode conducts one way, so a diode
+/// written cathode-first is another circuit, and a capacitor's plates are not
+/// permuted either (Netgen's default). Each was a false clean while every
+/// `Pin(_)` shared one role (testing-plan F15).
+#[test]
+fn a_reversed_diode_or_capacitor_is_a_different_circuit() {
+    for kind in [DeviceKind::Diode, DeviceKind::Capacitor] {
+        assert_eq!(
+            reference_verdict(kind, false),
+            Verdict::Match,
+            "{kind:?} as drawn"
+        );
+        assert_ne!(
+            reference_verdict(kind, true),
+            Verdict::Match,
+            "a {kind:?} with its ends exchanged must not match"
+        );
+    }
+}
+
+/// Oracle: the device's definition. A resistor has no direction, so either
+/// end may be written first. The boundary on the test above: polarity must
+/// not leak into the one two-terminal device that has none.
+#[test]
+fn a_resistor_written_either_way_round_is_the_same_resistor() {
+    assert_eq!(
+        reference_verdict(DeviceKind::Resistor, true),
+        Verdict::Match,
+        "a resistor's ends are interchangeable"
     );
 }

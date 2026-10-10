@@ -106,7 +106,7 @@ pub enum Discrepancy {
     /// net its partner's terminal of the same role lands on.
     ///
     /// Terminals are matched by role, never by position, and interchangeable
-    /// roles count as one: MOS `Source` and `Drain`, and every `Pin(_)`. A
+    /// roles count as one: MOS `Source` and `Drain`, and a resistor's ends. A
     /// terminal on no net, or on a net that did not pair, never matches. One
     /// moved terminal usually gives a row from each side.
     ///

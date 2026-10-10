@@ -58,9 +58,10 @@ const fn mix(mut z: u64) -> u64 {
 }
 
 /// A terminal's role as a signature number. Interchangeable roles share a code:
-/// MOS `Source`/`Drain` and every `Pin(_)`; `Emitter` and `Collector` never do.
-/// Sharing one code across every `Pin(_)` is what lets a reversed diode match
-/// (testing-plan F15).
+/// MOS `Source`/`Drain`, and a resistor's two ends (the graph builders write
+/// both as `Pin(0)`). `Emitter` and `Collector` never share, and neither do a
+/// diode's anode and cathode or a capacitor's plates, so a reversed diode is a
+/// mismatch (testing-plan F15).
 pub(crate) const fn role_code(role: TerminalRole) -> u64 {
     match role {
         TerminalRole::Gate => 0,
@@ -69,7 +70,10 @@ pub(crate) const fn role_code(role: TerminalRole) -> u64 {
         TerminalRole::Base => 4,
         TerminalRole::Emitter => 5,
         TerminalRole::Collector => 6,
-        TerminalRole::Pin(_) => 7,
+        // Each pin position its own code: a diode's anode is not its cathode.
+        // A resistor's ends are interchangeable, and the graph builders write
+        // both as `Pin(0)` so they share this code.
+        TerminalRole::Pin(position) => 16 + position as u64,
     }
 }
 
@@ -85,7 +89,7 @@ pub(crate) const fn kind_code(kind: DeviceKind) -> u64 {
 
 /// One neighbour's contribution; summed with `wrapping_add`, so order-free.
 const fn neighbour(role: TerminalRole, class: u32) -> u64 {
-    mix(0x21 ^ (role_code(role) << 8) ^ ((class as u64) << 16))
+    mix(0x21 ^ (role_code(role) << 8) ^ ((class as u64) << 24))
 }
 
 /// Both graphs as one node space: layout nodes `0 .. split`, reference nodes after.

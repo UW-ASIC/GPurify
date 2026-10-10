@@ -351,7 +351,10 @@ device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, d
 ```
 
 A device is found wherever its marker layer (`ngate`) has shapes. Its
-terminals are the listed layers, in order: gate, source, drain for `mos`.
+terminals are the listed layers, in order: gate, source, drain for `mos`;
+base, emitter, collector for `bjt`; anode, cathode for `diode`, which LVS
+compares as polar (a reversed diode is a mismatch), as it does a capacitor's
+two plates. A resistor's two ends may be written either way round.
 Kinds: `mos`, `bjt`, `resistor`, `capacitor`, `diode`. The model name is what
 LVS compares against your schematic.
 
