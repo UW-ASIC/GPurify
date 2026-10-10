@@ -418,7 +418,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | done |
 | C2 | testgen `prop`: seeds by property name, committed regression seeds replayed every run, greedy shrinking (rectangle layouts); `#[ignore]`d nightly twins instead of env knobs | F8, L3 | done |
 | C3 | Boolean laws over random operands | L3 | done |
-| C4 | Limit monotonicity; L5 metamorphic relations on the corpus and on generated layouts | L3, L5 | todo |
+| C4 | L5 metamorphic relations: every corpus cell under the seven other symmetries and a translation (`tests/exhaustive/corpus.rs`); limit monotonicity is the X1/X2 limit sweeps | L3, L5 | done |
 | C5 | Bitmap reference DRC, kind by kind; fix what it finds (bbox `extension`/`overlap` first) | L3, B1, B3 | todo |
 | C6 | ERC naive references (dense nodal solve, BFS); PEX matrix properties and monotonicity | L3 | todo |
 | C7 | Assertion pass on `geom` and `check` (runs alongside C3–C6) | F9, L1 | todo |

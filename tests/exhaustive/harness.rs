@@ -684,7 +684,7 @@ pub fn violations_of(fixture: &Fixture, ran: &Result<Ran, String>) -> Vec<String
 }
 
 /// The total of one quantity over a net's elements, by the net's label.
-fn parasitic_total(ran: &Ran, net: &str, quantity: Quantity) -> Option<f64> {
+pub fn parasitic_total(ran: &Ran, net: &str, quantity: Quantity) -> Option<f64> {
     let network = ran.outputs.parasitics.as_ref()?;
     let wanted = ran.loaded.strings.get(net)?;
     let net_id = ran.extracted.ports.net_of(wanted)?;

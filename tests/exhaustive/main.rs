@@ -14,12 +14,16 @@
 //! `cargo test --test exhaustive -- --ignored` the full enumerations.
 
 mod bitmap;
+mod corpus;
 mod drc_dimension;
 mod drc_overlay;
 mod erc;
 mod harness;
 mod lvs;
 mod pex;
+
+#[path = "../common/gen_fixtures.rs"]
+mod gen_fixtures;
 
 use harness::{Depth, Fixture};
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +41,7 @@ fn all(depth: Depth) -> Vec<Fixture> {
         erc::fixtures(depth),
         lvs::fixtures(depth),
         pex::fixtures(depth),
+        corpus::fixtures(depth),
     ]
     .concat()
 }
