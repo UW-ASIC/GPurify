@@ -9,7 +9,7 @@ use gpurify_check::lvs::Verdict;
 use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
 use gpurify_extract::ParasiticNetwork;
 use gpurify_geom::{celsius, prefix, Qty, Temperature};
-use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::{Bbox, LayerId};
 
 /// Which checks to run.
 ///
@@ -150,8 +150,10 @@ fn sign_off_temperature() -> Qty<Temperature, { prefix::BASE }> {
 const DIE_LAYER_NAMES: [&str; 3] = ["prBoundary", "DIEAREA", "die"];
 
 /// The die boundary every density divides by: the deck's outline layer if it
-/// has one, else the union of every polygon's bbox (fail-open for min-density,
-/// which never sweeps the margin). [`Bbox::EMPTY`] for an empty store.
+/// has one, else the union of every drawn polygon's bbox (fail-open for
+/// min-density, which never sweeps the margin). A derived layer is not layout,
+/// so one grown past the drawing does not widen the die. [`Bbox::EMPTY`] for
+/// an empty store.
 pub(crate) fn design_extent(loaded: &Loaded) -> Bbox {
     let declared = DIE_LAYER_NAMES
         .iter()
@@ -159,18 +161,20 @@ pub(crate) fn design_extent(loaded: &Loaded) -> Bbox {
         .filter(|layer| layer.idx() < loaded.store.layer_count())
         .map(|layer| union_bboxes(loaded.store.layer_bboxes(layer)))
         .filter(|outline| !outline.is_empty());
-    declared.unwrap_or_else(|| design_bbox(&loaded.store))
+    declared.unwrap_or_else(|| drawn_bbox(loaded))
 }
 
 fn union_bboxes(boxes: &[Bbox]) -> Bbox {
     boxes.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b))
 }
 
-fn design_bbox(store: &GeometryStore) -> Bbox {
-    (0..store.layer_count()).fold(Bbox::EMPTY, |die, layer| {
-        let layer = LayerId(u16::try_from(layer).expect("a LayerId is a u16"));
-        die.union(union_bboxes(store.layer_bboxes(layer)))
-    })
+fn drawn_bbox(loaded: &Loaded) -> Bbox {
+    (0..loaded.store.layer_count())
+        .map(|layer| LayerId(u16::try_from(layer).expect("a LayerId is a u16")))
+        .filter(|&layer| !loaded.deck.layers.is_derived(layer))
+        .fold(Bbox::EMPTY, |die, layer| {
+            die.union(union_bboxes(loaded.store.layer_bboxes(layer)))
+        })
 }
 
 /// Refuse a deck row whose kind neither DRC nor ERC implements. A rule nobody

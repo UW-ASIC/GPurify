@@ -1,6 +1,6 @@
 //! Area family: min area, min enclosed (hole) area, cheesing, windowed and
 //! whole-die density. Density windows tile the die (a boundary layer's extent,
-//! or the whole layout's), never just the measured layer's own extent.
+//! or the drawn layers'), never just the measured layer's own extent.
 //!
 //! Data in: one layer, self-merged into connected figures (exact union) and
 //! decomposed into disjoint rectangles (canonical). Data out: one violation per
@@ -179,8 +179,10 @@ pub(crate) fn min_enclosed_area(
     (Outcome::Ran, examined)
 }
 
-/// The die: the `boundary` layer's extent, or every layer's.
-fn die_of(store: &GeometryStore, boundary: Option<LayerId>) -> Bbox {
+/// The die: the `boundary` layer's extent, or that of the drawn layers
+/// `0..drawn`. A derived layer is not layout: grown past it, it would widen
+/// the die.
+fn die_of(store: &GeometryStore, boundary: Option<LayerId>, drawn: usize) -> Bbox {
     let extent = |layer: LayerId| {
         store
             .layer_bboxes(layer)
@@ -189,7 +191,7 @@ fn die_of(store: &GeometryStore, boundary: Option<LayerId>) -> Bbox {
     };
     match boundary {
         Some(layer) => extent(layer),
-        None => (0..store.layer_count()).fold(Bbox::EMPTY, |die, layer| {
+        None => (0..drawn).fold(Bbox::EMPTY, |die, layer| {
             die.union(extent(LayerId(
                 u16::try_from(layer).expect("a LayerId is a u16"),
             )))
@@ -234,14 +236,14 @@ fn first_row_or_none(store: &GeometryStore, layer: LayerId) -> u32 {
 pub(crate) fn density(
     store: &GeometryStore,
     rule: StrId,
-    (layer, boundary): (LayerId, Option<LayerId>),
+    (layer, boundary, drawn): (LayerId, Option<LayerId>, usize),
     (window, step): (Dbu, Dbu),
     limit: f64,
     sense: LimitSense,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let die = die_of(store, boundary);
+    let die = die_of(store, boundary, drawn);
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
@@ -305,13 +307,13 @@ pub(crate) fn density(
 pub(crate) fn global_density(
     store: &GeometryStore,
     rule: StrId,
-    (layer, boundary): (LayerId, Option<LayerId>),
+    (layer, boundary, drawn): (LayerId, Option<LayerId>, usize),
     limit: f64,
     sense: LimitSense,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let die = die_of(store, boundary);
+    let die = die_of(store, boundary, drawn);
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }

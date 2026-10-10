@@ -18,10 +18,9 @@
 //! four edges whatever pieces drew it.
 //!
 //! Where `GPurify` falls short of a definition, the fixture keeps the
-//! definition and names the finding that explains the gap (`known`): F19,
-//! F34 and F40 (a grown derived layer widens the density die) from
-//! `docs/testing-plan.md`, and one this pass found (F54 and F55, also found
-//! here, are fixed):
+//! definition and names the finding that explains the gap (`known`): F19
+//! and F34 from `docs/testing-plan.md`, and one this pass found (F40, F54
+//! and F55, also pinned here, are fixed):
 //! - F56: `extension` and `overlap` pair drawn polygons without merging,
 //!   so a diffusion drawn in two pieces abutting under a legal gate reports
 //!   a 50 nm extension at the seam.
@@ -1562,23 +1561,20 @@ fn global_density() -> Vec<Fixture> {
     // met1 covers 70%. A derived layer grown past the drawing is not layout:
     // it must not widen the die (F40), which would hide the maximum's
     // violation and invent the minimum's.
-    cases.push(
-        fixture(
-            "global_density/derived_halo",
-            &["DRC-070"],
-            &new_deck(
-                &["met1", "other"],
-                "layer halo = met1.sized(500nm)\n\
-                 rule gd.min global_density(met1) >= 50%\n\
-                 rule gd.max global_density(met1) <= 60%\n",
-            ),
-            Layout::default()
-                .rect("other", 0, 0, 1000, 1000)
-                .rect("met1", 0, 0, 700, 1000),
-            &[("gd.min", vec![]), ("gd.max", vec![ratio(0.7, (500, 500))])],
-        )
-        .known("F40"),
-    );
+    cases.push(fixture(
+        "global_density/derived_halo",
+        &["DRC-070"],
+        &new_deck(
+            &["met1", "other"],
+            "layer halo = met1.sized(500nm)\n\
+             rule gd.min global_density(met1) >= 50%\n\
+             rule gd.max global_density(met1) <= 60%\n",
+        ),
+        Layout::default()
+            .rect("other", 0, 0, 1000, 1000)
+            .rect("met1", 0, 0, 700, 1000),
+        &[("gd.min", vec![]), ("gd.max", vec![ratio(0.7, (500, 500))])],
+    ));
     every_placement(cases)
 }
 
@@ -1656,26 +1652,23 @@ fn density(depth: Depth) -> Vec<Fixture> {
     ));
     // Without a boundary, the same windows over the drawn layout; a derived
     // layer grown past it must not move the die (F40).
-    cases.push(
-        fixture(
-            "density/derived_halo",
-            &["DRC-071"],
-            &new_deck(
-                &["met1", "other"],
-                "layer halo = met1.sized(500nm)\n\
-                 rule pd.min density(met1; window: 1000nm, step: 500nm) >= 50%\n\
-                 rule pd.max density(met1; window: 1000nm, step: 500nm) <= 50%\n",
-            ),
-            Layout::default()
-                .rect("other", 0, 0, 2000, 2000)
-                .rect("met1", 0, 0, 999, 2000),
-            &[
-                ("pd.min", density_findings(&markers, 0.5, true)),
-                ("pd.max", density_findings(&markers, 0.5, false)),
-            ],
-        )
-        .known("F40"),
-    );
+    cases.push(fixture(
+        "density/derived_halo",
+        &["DRC-071"],
+        &new_deck(
+            &["met1", "other"],
+            "layer halo = met1.sized(500nm)\n\
+             rule pd.min density(met1; window: 1000nm, step: 500nm) >= 50%\n\
+             rule pd.max density(met1; window: 1000nm, step: 500nm) <= 50%\n",
+        ),
+        Layout::default()
+            .rect("other", 0, 0, 2000, 2000)
+            .rect("met1", 0, 0, 999, 2000),
+        &[
+            ("pd.min", density_findings(&markers, 0.5, true)),
+            ("pd.max", density_findings(&markers, 0.5, false)),
+        ],
+    ));
     cases.push(
         Fixture::new("density/empty_die", &["DRC-071"], &deck_pd, DRC)
             .layout(Layout::default().rect("met1", 0, 0, 1000, 2000))

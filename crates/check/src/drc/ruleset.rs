@@ -381,7 +381,9 @@ pub enum Rule {
     ///
     /// Deck: `density(L[, boundary]; window: len, step: len) >= frac` (or
     /// `<=` for a maximum), kind `density`. The die is the bounding box of
-    /// every shape on `boundary`, or of the whole layout. `window`-sided
+    /// every shape on `boundary`, or of the whole layout: every shape on a
+    /// drawn layer, none on a derived one ([`RuleSet::first_derived`]), so a
+    /// layer grown past the drawing does not move it. `window`-sided
     /// square windows start at the die's lower-left corner and step by `step`
     /// on both axes, as many as it takes to cover the die's far edges. A
     /// window's density is the merged layer's area inside the die and the
@@ -406,7 +408,7 @@ pub enum Rule {
     Density {
         /// The layer whose coverage is measured, drawn or derived.
         layer: LayerId,
-        /// The layer whose extent is the die; `None` takes every layer's.
+        /// The layer whose extent is the die; `None` takes the drawn layers'.
         boundary: Option<LayerId>,
         /// The window's side, in grid units; positive.
         window: Dbu,
@@ -435,7 +437,7 @@ pub enum Rule {
     GlobalDensity {
         /// The layer whose coverage is measured, drawn or derived.
         layer: LayerId,
-        /// The layer whose extent is the die; `None` takes every layer's.
+        /// The layer whose extent is the die; `None` takes the drawn layers'.
         boundary: Option<LayerId>,
         /// The density limit as a fraction of the die; positive and finite.
         limit: f64,
@@ -1003,6 +1005,12 @@ pub struct RuleSet {
     pub rules: Vec<(StrId, Rule)>,
     /// The tables [`Rule::SpacingTable`] names.
     pub tables: Vec<SpacingTable>,
+    /// The deck's first derived layer: it and every higher id are computed,
+    /// and the layers below it are drawn. `None` when every layer is drawn,
+    /// as in a rule set built in code. A [`Rule::Density`] or
+    /// [`Rule::GlobalDensity`] without a boundary takes its die from the drawn
+    /// layers.
+    pub first_derived: Option<LayerId>,
 }
 
 impl RuleSet {
@@ -1131,7 +1139,12 @@ impl RuleSet {
             })
         };
 
-        let mut set = Self::default();
+        let mut set = Self {
+            first_derived: (0..deck.layers.len())
+                .map(|id| LayerId(u16::try_from(id).expect("a LayerId is a u16")))
+                .find(|&layer| deck.layers.is_derived(layer)),
+            ..Self::default()
+        };
         for spec in &rules.spec {
             let rule = match strings.resolve(spec.kind) {
                 "min_width" => Rule::MinWidth {
@@ -1450,6 +1463,10 @@ impl RuleSet {
         *out = Violations::default();
         runs.clear();
         let s = &mut Scratch::default();
+        // Layers `0..drawn` are drawn; the rest are the deck's derived ones.
+        let drawn = self.first_derived.map_or(store.layer_count(), |layer| {
+            layer.idx().min(store.layer_count())
+        });
         // The last rule reading each layer; its validation is dropped after that rule.
         let mut last_use: Vec<usize> = Vec::new();
         for (at, (_, rule)) in self.rules.iter().enumerate() {
@@ -1530,7 +1547,7 @@ impl RuleSet {
                 } => area::density(
                     store,
                     id,
-                    (layer, boundary),
+                    (layer, boundary, drawn),
                     (window, step),
                     limit,
                     sense,
@@ -1542,7 +1559,9 @@ impl RuleSet {
                     boundary,
                     limit,
                     sense,
-                } => area::global_density(store, id, (layer, boundary), limit, sense, s, out),
+                } => {
+                    area::global_density(store, id, (layer, boundary, drawn), limit, sense, s, out)
+                }
                 Rule::MinEnclosure {
                     outer,
                     inner,

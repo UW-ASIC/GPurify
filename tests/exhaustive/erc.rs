@@ -1073,6 +1073,34 @@ fn density() -> Vec<Fixture> {
             density_oracle(&union, 4000, 2000, 2000, row),
         )),
     );
+    // No die layer: the die is the drawn layout's extent, `[0, 4000]^2` from a
+    // marker, so the same four windows. A derived layer grown 500 nm past the
+    // metal is not layout and must not widen it to `[-500, 4500]^2` (F40).
+    let row = DensityRow {
+        min: Some(0.2),
+        partial: true,
+        ..DensityRow::default()
+    };
+    let mut halo = Layout::default();
+    rect(&mut halo, "marker", (0, 0, 4000, 4000));
+    for &m in &DENSITY_METAL {
+        rect(&mut halo, "met1", m);
+    }
+    fixtures.push(
+        Fixture::new(
+            "erc/density/derived_halo",
+            &["ERC-B1"],
+            &row.deck(2000, 2000)
+                .replace("layer die =", "layer marker =")
+                .replace("rule den", "layer halo = met1.sized(500nm)\nrule den"),
+            ERC,
+        )
+        .layout(halo)
+        .expect(Expect::rule(
+            "den",
+            density_oracle(&DENSITY_METAL, 4000, 2000, 2000, row),
+        )),
+    );
     out.extend(every_offset(&fixtures));
     out
 }

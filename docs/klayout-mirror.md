@@ -532,7 +532,7 @@ emit(id, mc(L).drc(if_all(area > AREA4, with_holes == 0)))
 
 **GPurify** (`area.rs` `density`, `die_of`, `positions`)
 - **The die** is the extent of the boundary layer. Without one, it is the union of the bboxes of
-  every store layer, including derived ones (N3).
+  every drawn layer; derived layers do not count (N3, fixed in B16).
 - **The layer** is merged, then clipped to the die.
 - **The windows** are squares of side W at origins die.lo + i·S, with
   NX = ⌈(span − W)/S⌉ + 1 (at least 1).
@@ -551,8 +551,8 @@ args = [tile_size(W.dbu), tile_step(S.dbu), tile_origin((DX1 + off).dbu, (DY1 + 
 emit(id, minimum ? cov.without_density(LIMIT .. nil, *args) : cov.without_density(nil .. LIMIT, *args))
 ```
 
-- **The die.** Compute it in the script, as the union of `bbox` over every drawn and every derived
-  polygon layer (`Layer#bbox` returns a DBox in µm (v t14)), or pass it in with `-rd`.
+- **The die.** Compute it in the script, as the union of `bbox` over every drawn polygon layer
+  (`Layer#bbox` returns a DBox in µm (v t14)), or pass it in with `-rd`.
 - **Tile placement.** When the step is smaller than the size, tiles are centred on the step cells.
   So `tile_origin` = corner + (W − S)/2. (v t6 T21b: an origin of 0.125 µm with size 0.5 and
   step 0.25 gives tiles at 0, 250 and 500 DBU.)
@@ -1089,11 +1089,11 @@ These are not in testing-plan F1–F35. F18, F19, F29 and F34 were confirmed ind
 - Two overlapping squares offset by 70 have a neck of 42 that `width` sees, but their `with_width`
   was 100. `narrowest_width` now takes the neck too.
 
-**N3. The density die grows with derived layers.**
-- With no boundary layer, the die is the union of every store layer's bbox, derived layers
+**N3. The density die grew with derived layers.** Fixed in B16 (F40).
+- With no boundary layer, the die was the union of every store layer's bbox, derived layers
   included (`area.rs` `die_of`).
-- So `layer x = met1.sized(1um)` enlarges the die and adds empty windows. deck.md says "the whole
-  layout".
+- So `layer x = met1.sized(1um)` enlarged the die and added empty windows. deck.md says "the whole
+  layout"; the die is now the drawn layers' extent (`RuleSet::first_derived`).
 
 **N4. `min_extension` judges pairs that only touch.**
 - The prune at distance 0 keeps boxes that only touch, yet `overlay.rs` says "The prune at distance

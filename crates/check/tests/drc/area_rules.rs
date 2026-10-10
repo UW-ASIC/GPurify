@@ -15,7 +15,7 @@
 use crate::common;
 
 use common::{Sink, A, B, RULE};
-use gpurify_check::drc::Rule;
+use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{LimitSense, Measurement, Outcome, Severity, SkipReason, Violation};
 use gpurify_geom::LayerId;
 use gpurify_ingest::StrId;
@@ -548,4 +548,37 @@ fn gf180_m1_4_whole_die_density() {
 
     sink.run(&store, &rule(LayerId(2)));
     assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// F40: without a boundary the die is the drawn layers' extent. met1 covers
+/// 700 x 1000 of a `[0, 1000]^2` marker, 0.7, which fails a 60 % maximum. A
+/// derived layer grown 500 past met1 is not layout: counted, it would widen
+/// the die to 1700 x 2000 and read 700 000 / 3 400 000 = 0.206, clean.
+#[test]
+fn a_derived_layer_does_not_widen_the_boundary_less_die() {
+    let halo = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(A, 0, 0, 700, 1_000);
+    layout.rect(B, 0, 0, 1_000, 1_000);
+    layout.rect(halo, -500, -500, 1_200, 1_500);
+    let (store, _ids) = layout.finish();
+    let set = RuleSet {
+        rules: vec![(
+            RULE,
+            Rule::GlobalDensity {
+                layer: A,
+                boundary: None,
+                limit: 0.6,
+                sense: LimitSense::Maximum,
+            },
+        )],
+        first_derived: Some(halo),
+        ..RuleSet::default()
+    };
+
+    let mut sink = Sink::default();
+    set.run(&store, &mut sink.out, &mut sink.runs);
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.7));
+    assert_eq!(sink.out.at[0], point(500, 500));
 }

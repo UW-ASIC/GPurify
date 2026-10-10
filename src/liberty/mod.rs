@@ -449,7 +449,7 @@ fn lef_pins(lef: &str, cell: &str) -> Result<BTreeSet<String>, LibError> {
     }
 }
 
-/// The die area: the deck's outline layer if drawn, else every shape's box.
+/// The die area: the deck's outline layer if drawn, else every drawn shape's box.
 fn area_um2(loaded: &Loaded) -> f64 {
     let die = crate::engine::run::design_extent(loaded);
     if die.is_empty() {

@@ -218,9 +218,9 @@ deck always finishes loading.
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |
 | `cheesing(L) <= area` | A shape larger than the limit with no slot in it. |
-| `density(L; window: len, step: len) >= frac` | A window, swept in steps across the whole layout, with less coverage than the limit. Use `<=` for a maximum. A window hanging past the edge counts the outside as empty. |
+| `density(L; window: len, step: len) >= frac` | A window, swept in steps across the whole layout, with less coverage than the limit. Use `<=` for a maximum. A window hanging past the edge counts the outside as empty. The whole layout is the extent of the drawn layers: a derived layer, such as one grown past the drawing, does not widen it. |
 | `density(L, boundary; window: len, step: len) >= frac` | The same, with the windows tiling the extent of the `boundary` layer (the die outline). |
-| `global_density(L) >= frac` | Coverage of the whole layout below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
+| `global_density(L) >= frac` | Coverage of the whole layout (the drawn layers' extent, as for `density`) below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
 | `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side, measured to the outer shape's real edges, holes included. |
 | `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (sky130 m1.5 "two opposite sides"). |
 | `extension(A, B) >= len` | `A` not extending past `B` by the limit, as poly past diffusion. |
