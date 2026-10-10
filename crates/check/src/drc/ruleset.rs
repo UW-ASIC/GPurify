@@ -261,12 +261,18 @@ pub enum Rule {
     },
     /// Two shapes whose corners are closer than `limit`.
     ///
-    /// Deck: `corner_space(L) >= len`, kind `corner_to_corner`. Only pairs in
-    /// different merged figures whose bounding boxes are apart on both axes
-    /// are measured; a pair overlapping on either axis is [`Rule::MinSpacing`]'s.
+    /// Deck: `corner_space(L) >= len`, kind `corner_to_corner`. Corners are
+    /// the convex corners of the merged layer, so a corner of one shape that
+    /// another touching shape covers is none. Two shapes in different merged
+    /// figures are a pair when a corner at a vertex of one and a corner at a
+    /// vertex of the other face each other: each lies beyond the other on
+    /// both axes, out along its own diagonal. The pair measures its nearest
+    /// such corners, Euclidean. Shapes facing each other only across an edge
+    /// are [`Rule::MinSpacing`]'s; for two rectangles, those are the pairs
+    /// whose bounding boxes overlap on an axis.
     ///
     /// One violation per offending pair, at the middle of the gap between
-    /// their bounding boxes. `examined` counts the diagonal pairs.
+    /// their bounding boxes. `examined` counts the pairs with facing corners.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-032. Rules: ASAP7 M1.S.6, GF180 MT30.3; `LEF58_CORNERSPACING`;

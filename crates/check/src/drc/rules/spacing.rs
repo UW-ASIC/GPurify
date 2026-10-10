@@ -476,8 +476,9 @@ pub(crate) fn prl_spacing(
     (Outcome::Ran, examined)
 }
 
-/// Corner-to-corner spacing: only pairs overlapping on neither axis (the rest
-/// are `min_spacing`'s). `examined` counts those diagonal separate pairs.
+/// Corner-to-corner spacing between convex corners of the merged layer that
+/// face each other (pairs facing only across an edge are `min_spacing`'s).
+/// `examined` counts separate pairs with facing corners.
 pub(crate) fn corner_to_corner(
     store: &GeometryStore,
     rule: StrId,
@@ -486,14 +487,68 @@ pub(crate) fn corner_to_corner(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !prepare(store, layer, limit, s) {
+    if !prepare_merged(store, layer, limit, s) {
         return REFUSED;
     }
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
-        let (along_x, along_y) = projection_overlaps(store.poly_bbox(a), store.poly_bbox(b));
-        (along_x < 0 && along_y < 0).then_some(d2)
+    let figures = &s.layer_out;
+    let mut corners: Vec<Corner> = (0..u32::try_from(figures.len())
+        .expect("a layer indexes polygons with a u32"))
+        .flat_map(|idx| figures.poly_rings(idx))
+        .flat_map(|ring| {
+            let (xs, ys) = ring.coords();
+            convex_corners(xs, ys)
+        })
+        .collect();
+    corners.sort_unstable();
+    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, _| {
+        corner_gap(store, a, b, &corners)
     });
     (Outcome::Ran, examined)
+}
+
+/// A convex corner: its vertex, then the diagonal it faces out along, each
+/// component `±1`.
+type Corner = (i64, i64, i64, i64);
+
+/// The convex corners of a ring wound with its material on the left (a store
+/// row or a merged ring): the vertices where it turns left.
+fn convex_corners<'a>(xs: &'a [Dbu], ys: &'a [Dbu]) -> impl Iterator<Item = Corner> + 'a {
+    let n = xs.len();
+    (0..n).filter_map(move |i| {
+        let (back, next) = ((i + n - 1) % n, (i + 1) % n);
+        let (inx, iny) = (xs[i].raw() - xs[back].raw(), ys[i].raw() - ys[back].raw());
+        let (outx, outy) = (xs[next].raw() - xs[i].raw(), ys[next].raw() - ys[i].raw());
+        let left = i128::from(inx) * i128::from(outy) > i128::from(iny) * i128::from(outx);
+        // Outward: along the edge coming in, against the one leaving.
+        left.then_some((
+            xs[i].raw(),
+            ys[i].raw(),
+            (inx - outx).signum(),
+            (iny - outy).signum(),
+        ))
+    })
+}
+
+/// Squared distance between the nearest convex corners of the merged layer
+/// (`corners`, sorted) that face each other, one at a vertex of `a` and one at
+/// a vertex of `b`: each beyond the other on both axes, out along its own
+/// diagonal. `None` when there are none.
+fn corner_gap(store: &GeometryStore, a: PolyId, b: PolyId, corners: &[Corner]) -> Option<DbuArea> {
+    let merged = |row: PolyId| {
+        let (xs, ys) = store.poly_verts(row);
+        convex_corners(xs, ys).filter(move |corner| corners.binary_search(corner).is_ok())
+    };
+    let theirs: Vec<Corner> = merged(b).collect();
+    merged(a)
+        .flat_map(|(x, y, sx, sy)| {
+            theirs.iter().filter_map(move |&(bx, by, bsx, bsy)| {
+                let facing =
+                    (bx - x).signum() == sx && (by - y).signum() == sy && (bsx, bsy) == (-sx, -sy);
+                let (dx, dy) = (i128::from(bx - x), i128::from(by - y));
+                facing.then(|| DbuArea::new(dx * dx + dy * dy))
+            })
+        })
+        .min()
 }
 
 /// Wide-metal spacing, measured from the wide part of a shape: the region

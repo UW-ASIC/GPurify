@@ -1598,14 +1598,19 @@ fn prl_spacing(depth: Depth) -> Vec<Fixture> {
 
 // ----------------------------------------------------------- corner_to_corner
 
-/// `corner_space(met1) >= 101nm` (`corner_to_corner`, DRC-032): only pairs in
-/// different figures whose boxes are apart on both axes, Euclidean, at the
-/// middle of the gap between the boxes.
+/// `corner_space(met1) >= 101nm` (`corner_to_corner`, DRC-032): pairs in
+/// different figures with convex corners of the merged layer facing each other
+/// (each beyond the other on both axes), measured between the nearest such
+/// corners, Euclidean, at the middle of the gap between the boxes.
 ///
 /// The diagonal swept; a pair 50 apart on x and 1 on y (apart on both: 50.01,
-/// reported 50); the same with no gap on y (boxes not apart on y:
+/// reported 50); the same with no gap on y (facing across an edge:
 /// `min_spacing`'s); side by side; two squares 50 apart corner to corner but
-/// one figure.
+/// one figure. An L whose arm's corner faces a square diagonally though its
+/// box overlaps the square on y; a hook facing a square across an edge and,
+/// further on, corner to corner (the corners are held); a square's corner
+/// that a shape on top of it turns into a stretch of the figure's edge (not a
+/// corner).
 fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
     let deck = one_layer_deck("rule cc corner_space(met1) >= 101nm");
     let mut cases = Vec::new();
@@ -1645,6 +1650,60 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
             [-500, 0, 0, 3500],
             [-500, 3000, 2050, 3500],
             [1050, 2050, 2050, 3000],
+        ]),
+        Vec::new(),
+    );
+    // An L with a 100-thick arm along the bottom to x = 1000, and a square
+    // whose corner (1050, 150) is 50 past the arm's corner (1000, 100) on both
+    // axes: √5000, 70. The L's box reaches y = 1000, past the square's.
+    case(
+        "l_corner_inside_its_box".into(),
+        Layout::default()
+            .polygon(
+                "met1",
+                &[
+                    (0, 0),
+                    (1000, 0),
+                    (1000, 100),
+                    (100, 100),
+                    (100, 1000),
+                    (0, 1000),
+                ],
+            )
+            .rect("met1", 1050, 150, 1150, 250),
+        vec![pin(Finding::length(70), 2050, 400)],
+    );
+    // A hook whose left side faces the square's right edge 50 away, below
+    // y = 500, and whose inner corner (1060, 1060) faces the square's corner
+    // (1000, 1000): √7200, 84. The edge gap is `min_spacing`'s; the corners
+    // are this rule's.
+    case(
+        "corner_beside_an_edge_gap".into(),
+        Layout::default().rect("met1", 0, 0, 1000, 1000).polygon(
+            "met1",
+            &[
+                (1050, -500),
+                (1600, -500),
+                (1600, 1500),
+                (1060, 1500),
+                (1060, 1060),
+                (1500, 1060),
+                (1500, 500),
+                (1050, 500),
+            ],
+        ),
+        vec![pin(Finding::length(84), 2050, 1000)],
+    );
+    // A square with a 10-thick bar on top, flush with its right side: the
+    // square's corner (1000, 1000) is a stretch of the figure's right edge,
+    // which runs to y = 1010 and faces a shape from y = 1005 across 50. No
+    // corner faces it.
+    case(
+        "row_corner_inside_a_figure_edge".into(),
+        met1(&[
+            [0, 0, 1000, 1000],
+            [0, 1000, 1000, 1010],
+            [1050, 1005, 2050, 2005],
         ]),
         Vec::new(),
     );
