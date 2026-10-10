@@ -108,6 +108,10 @@ pub enum CircuitError {
     /// either (`.1` then says so).
     #[error("pin {0} names no net in the layout: no label carries it{1}")]
     MissingPin(String, &'static str),
+    /// Spec pins `.0` and `.1` are labelled on one layout net: the layout
+    /// shorts them, so no characterisation can tell them apart.
+    #[error("pins {0} and {1} are labelled on one net: the layout shorts them")]
+    ShortedPins(String, String),
     /// Conductor layer `.0` is not valid rectilinear geometry (`.1` says
     /// why), so it cannot be cut into rectangles. [`Wires::Distributed`]
     /// only.
@@ -123,13 +127,17 @@ pub enum CircuitError {
     Disconnected(String, usize),
 }
 
-/// The layout nets each spec pin is, in spec order: its label's net, plus
-/// every net holding substrate geometry when it is the spec's `substrate`.
-/// Each list is ascending and never empty.
+/// The layout nets each spec pin is, in spec order: every net its label is
+/// on, plus every net holding substrate geometry when it is the spec's
+/// `substrate`. Each list is ascending and never empty. A label on several
+/// disconnected nets (an open) gives all of them, which the circuit joins at
+/// the pin.
 ///
 /// # Errors
 ///
-/// [`CircuitError::MissingPin`] for the first pin that names no net.
+/// - [`CircuitError::MissingPin`] for the first pin that names no net.
+/// - [`CircuitError::ShortedPins`] for the first two pins whose labels are on
+///   one net: a short between them in the layout.
 pub fn pin_nets(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -137,13 +145,15 @@ pub fn pin_nets(
 ) -> Result<Vec<Vec<NetId>>, CircuitError> {
     let substrate = substrate_nets(loaded, extracted);
     let mut out = Vec::with_capacity(spec.pins.len());
-    for pin in &spec.pins {
+    // `(label net, pin)`: two pins whose labels share a net are shorted.
+    let mut labelled: Vec<(NetId, usize)> = Vec::new();
+    for (index, pin) in spec.pins.iter().enumerate() {
         let mut nets: Vec<NetId> = loaded
             .strings
             .get(&pin.name)
-            .and_then(|id| extracted.ports.net_of(id))
-            .into_iter()
-            .collect();
+            .map_or(&[][..], |id| extracted.ports.nets_of(id))
+            .to_vec();
+        labelled.extend(nets.iter().map(|&net| (net, index)));
         if spec.substrate.as_deref() == Some(pin.name.as_str()) {
             nets.extend(&substrate);
         }
@@ -158,6 +168,11 @@ pub fn pin_nets(
             return Err(CircuitError::MissingPin(pin.name.clone(), hint));
         }
         out.push(nets);
+    }
+    labelled.sort_unstable();
+    if let Some(pair) = labelled.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+        let (first, second) = (&spec.pins[pair[0].1].name, &spec.pins[pair[1].1].name);
+        return Err(CircuitError::ShortedPins(first.clone(), second.clone()));
     }
     Ok(out)
 }

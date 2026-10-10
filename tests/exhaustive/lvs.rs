@@ -1642,8 +1642,7 @@ fn layout_rows() -> Vec<Fixture> {
             shorted,
             spice(&one),
         )
-        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
-        .known("F13"),
+        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()])),
     );
 
     // LVS-004: a MOS recogniser with two terminals. Its source and drain

@@ -122,3 +122,37 @@ fn a_pin_the_views_disagree_on_is_refused_by_name() {
     let why = run(&spec_with(PINS), false, Some(lef)).expect_err("EN is only in the LEF");
     assert!(why.to_string().contains("has [EN]"), "{why}");
 }
+
+/// Testing-plan F14. A second label, the input's name, on the output's net is
+/// a short between the two pins in the layout. Extraction keeps both names,
+/// and the circuit refuses the pair rather than characterise one node as two
+/// pins; without the extra label the same cell's pins resolve.
+#[test]
+fn two_pins_labelled_on_one_net_are_refused_as_shorted() {
+    use gpurify::liberty::circuit::{pin_nets, CircuitError};
+
+    let mut loaded = load(&inputs(false)).expect("the corpus cell loads");
+    let spec = spec_with(PINS);
+    let extracted = extract(&loaded).expect("and extracts");
+    assert!(
+        pin_nets(&loaded, &extracted, &spec).is_ok(),
+        "four pins, four nets"
+    );
+
+    let output = loaded.strings.get("LVS_INV_n4").expect("labelled");
+    let net = extracted.ports.net_of(output).expect("one net");
+    let input = loaded.strings.get("LVS_INV_n5").expect("labelled");
+    loaded
+        .provenance
+        .label(extracted.nets.polys_of(net)[0], input);
+    let extracted = extract(&loaded).expect("a labelled short extracts");
+    match pin_nets(&loaded, &extracted, &spec) {
+        Err(CircuitError::ShortedPins(first, second)) => {
+            assert_eq!(
+                (first.as_str(), second.as_str()),
+                ("LVS_INV_n5", "LVS_INV_n4")
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}

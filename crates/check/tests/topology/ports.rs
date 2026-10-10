@@ -5,7 +5,6 @@
 //! known before a label is placed, and therefore so is whether two labels land
 //! on one net.
 
-use gpurify_check::topology::port::PortError;
 use gpurify_check::topology::{
     bind_ports_into, extract_nets_into, NetTable, PortTable, TerminalRole,
 };
@@ -83,12 +82,14 @@ fn a_label_names_the_net_of_the_shape_it_sits_on_and_nothing_else() {
 /// stub joined to it by a via, so extraction has already established they are
 /// one conductor — and one conductor cannot be both `VIN` and `VOUT`.
 ///
-/// The result is an error, deliberately, and the error names the net. Picking a
-/// winner and carrying on is the failure mode the module's doc comment refuses:
-/// it produces an LVS result that is confidently wrong about which net is
-/// which, and nothing downstream can tell that it happened.
+/// That is a short between two named nets, and binding keeps it as drawn:
+/// both names on the one net, each name finding it. Picking a winner and
+/// carrying on is the failure mode the table refuses, since nothing downstream
+/// could tell it happened; failing the binding is the other, since then no
+/// report row can say where the short is (testing-plan F14).
+/// `lvs.net_seed_conflict` reports it from here.
 #[test]
-fn two_different_labels_on_one_net_is_a_conflict_and_not_a_silently_chosen_winner() {
+fn two_different_labels_on_one_net_are_both_kept_and_not_a_silently_chosen_winner() {
     let mut strings = StrTable::default();
     let case = layout_from_netlist(&two_pin_resistor(), Floorplan::default(), &mut strings);
     let nets = extract(&case);
@@ -110,19 +111,60 @@ fn two_different_labels_on_one_net_is_a_conflict_and_not_a_silently_chosen_winne
     provenance.label(rail_and_stub[1], second);
 
     let mut ports = PortTable::default();
-    let result = bind_ports_into(&nets, &provenance, &mut ports);
+    bind_ports_into(&nets, &provenance, &mut ports).expect("a short is bound, not an error");
+
+    let net = nets.net_of(rail_and_stub[0]);
+    assert_eq!(ports.len(), 2, "two names were bound");
     assert_eq!(
-        result,
-        Err(PortError::ConflictingLabels(nets.net_of(rail_and_stub[0]))),
-        "two labels on one net must be reported against that net"
+        ports.names_of(net),
+        [first, second],
+        "both names, in StrId order"
     );
+    assert_eq!(ports.name_of(net), Some(first), "the first in StrId order");
+    assert_eq!(
+        (ports.net_of(first), ports.net_of(second)),
+        (Some(net), Some(net))
+    );
+    assert_eq!(ports.shorted_net(), Some(net));
+    assert_eq!(ports.split_name(), None, "each name is on one net");
+}
+
+/// Oracle: construct-from-answer. One name on two nets extraction keeps
+/// apart is one logical net in two pieces: an open. The name finds both
+/// pieces, and no single one of them is "the" net, so a consumer resolving
+/// it must take both or refuse (testing-plan F14).
+#[test]
+fn one_name_on_two_nets_finds_both_pieces_and_no_single_net() {
+    let mut strings = StrTable::default();
+    let case = layout_from_netlist(&two_pin_resistor(), Floorplan::default(), &mut strings);
+    let nets = extract(&case);
+
+    let name = strings.intern("VIN");
+    let mut provenance = Provenance::default();
+    provenance.label(case.expected_net_polys[0][0], name);
+    provenance.label(case.expected_net_polys[1][0], name);
+
+    let mut ports = PortTable::default();
+    bind_ports_into(&nets, &provenance, &mut ports).expect("an open is bound, not an error");
+
+    let mut pieces = [
+        nets.net_of(case.expected_net_polys[0][0]),
+        nets.net_of(case.expected_net_polys[1][0]),
+    ];
+    pieces.sort_unstable();
+    assert_ne!(pieces[0], pieces[1], "the two shapes must be two nets");
+    assert_eq!(ports.nets_of(name), pieces, "both pieces, ascending");
+    assert_eq!(ports.net_of(name), None, "no single piece is the net");
+    assert_eq!(ports.split_name(), Some(name));
+    assert_eq!(ports.shorted_net(), None, "each net has one name");
+    assert_eq!(ports.name_of(pieces[1]), Some(name));
 }
 
 /// Oracle: construct-from-answer. The same name on two shapes of one net is
 /// what a designer writes when they label both ends of a wire, and it is not a
 /// contradiction — there is one name for one net. This is the boundary of the
-/// rule above, and without it `ConflictingLabels` could be implemented as
-/// "more than one label" and still pass.
+/// rule above, and without it a short could be implemented as "more than one
+/// label" and still pass.
 #[test]
 fn one_name_repeated_across_a_nets_shapes_binds_once_and_is_not_a_conflict() {
     let mut strings = StrTable::default();

@@ -17,6 +17,8 @@ use common::{mos_and_bjt, stacked_pair};
 use gpurify_check::lvs::{check_layout, intern_rule_ids, Graph};
 use gpurify_check::report::{Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
+use gpurify_check::Design;
+use gpurify_geom::GeometryStore;
 use gpurify_ingest::StrTable;
 
 /// The structural rows `check_layout` writes for `graph`, and their violations.
@@ -26,8 +28,11 @@ fn check_topology(graph: &Graph, out: &mut Violations, runs: &mut Vec<RuleRun>) 
     let mut all = Vec::new();
     check_layout(
         graph,
-        &NetTable::default(),
-        &DeviceTable::default(),
+        Design {
+            store: &GeometryStore::default(),
+            nets: &NetTable::default(),
+            devices: &DeviceTable::default(),
+        },
         &PortTable::default(),
         &strings,
         out,
@@ -165,4 +170,85 @@ fn a_graph_with_devices_but_no_terminal_csr_refuses_rather_than_reporting_clean(
         terminal_count.examined, 0,
         "a check that read no column examined nothing, and must say so"
     );
+}
+
+/// Oracle: construct-from-answer. Two touching rectangles are one net, and
+/// labelling them `VDD` (the right one) and `VSS` (the left) is a short
+/// between two named nets (testing-plan F13, F14). It is one
+/// `lvs.net_seed_conflict` row naming both labelled shapes, `VDD`'s first
+/// since `VDD` is interned first, located at that shape's first vertex
+/// (90, 0) on its layer: the row says which two labels and where. With one
+/// of the labels removed, the same layout has no conflict.
+#[test]
+fn two_names_on_one_net_are_one_seed_conflict_row_at_the_first_label() {
+    use gpurify_check::lvs::graph::from_layout;
+    use gpurify_check::report::Measurement;
+    use gpurify_check::topology::{bind_ports_into, extract_nets_into};
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId};
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_ingest::Provenance;
+    use gpurify_testgen::LayoutBuilder;
+
+    let metal = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let left = layout.rect(metal, 0, 0, 100, 100);
+    let right = layout.rect(metal, 90, 0, 200, 100);
+    let (store, ids) = layout.finish();
+    let (left, right) = (ids.of(left), ids.of(right));
+    let connectivity = Connectivity {
+        conductors: vec![metal],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert!(nets.same_net(left, right), "the fixture is one net");
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let (vdd, vss) = (strings.intern("VDD"), strings.intern("VSS"));
+    let rule = strings.get("lvs.net_seed_conflict").expect("interned");
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+
+    for (labels, rows) in [
+        (&[(right, vdd), (left, vss)][..], 1),
+        (&[(right, vdd)][..], 0),
+    ] {
+        let mut provenance = Provenance::default();
+        for &(poly, name) in labels {
+            provenance.label(poly, name);
+        }
+        let mut ports = PortTable::default();
+        bind_ports_into(&nets, &provenance, &mut ports).expect("a short binds");
+        let graph = from_layout(&nets, &devices, &ports, &strings, None);
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_layout(&graph, design, &ports, &strings, &mut out, &mut runs);
+
+        let run = runs.iter().find(|run| run.rule == rule).expect("a row");
+        assert_eq!(run.outcome, Outcome::Ran);
+        assert_eq!(run.examined, labels.len() as u64, "every binding");
+        let found: Vec<_> = (0..out.len())
+            .map(|row| out.get(row))
+            .filter(|row| row.rule == rule)
+            .collect();
+        assert_eq!(found.len(), rows, "{found:?}");
+        if let Some(row) = found.first() {
+            assert_eq!(row.shapes, (right, Some(left)), "VDD's shape, then VSS's");
+            let at = Point {
+                x: Dbu::new_unchecked(90),
+                y: Dbu::new_unchecked(0),
+            };
+            assert_eq!((row.at, row.layer), (at, metal));
+            assert_eq!(
+                (row.measured, row.limit),
+                (Measurement::Count(2), Measurement::Count(1))
+            );
+        }
+    }
 }

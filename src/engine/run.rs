@@ -50,10 +50,9 @@ pub struct RunOptions {
     /// Nets to field-solve for capacitance and inductance instead of the
     /// closed-form estimate. Empty means analytical extraction only.
     ///
-    /// Each entry is a label text. A name no label carries refuses the PEX
-    /// stage. A name on several disconnected nets solves only the lowest of
-    /// them. Naming a net twice makes the solve fail with
-    /// [`EngineError::Solve`].
+    /// Each entry is a label text. A name no label carries, or one on
+    /// several disconnected nets (an open), refuses the PEX stage. Naming a
+    /// net twice makes the solve fail with [`EngineError::Solve`].
     pub quasistatic_nets: Vec<String>,
 }
 
@@ -70,8 +69,10 @@ pub enum StageStatus {
     Skipped(&'static str),
     /// Requested and refused: the input is outside what this tool represents exactly.
     /// For LVS, a comparison that did not conclude; for PEX, an unknown net
-    /// name, a capacitance matrix that is not reciprocal, or an inductance
-    /// solve that refused. ERC refuses row by row instead (a supply grid that
+    /// name or one on several nets, a capacitance matrix that is not
+    /// reciprocal, or an inductance
+    /// solve that refused; for ERC, design intent on a layout that shorts two
+    /// labelled nets. Otherwise ERC refuses row by row (a supply grid that
     /// cannot be built or solved refuses the rows that read it), and those
     /// rows count in [`Summary::rules_skipped`]. Fails [`Summary::passed`].
     Refused(String),
@@ -200,6 +201,10 @@ fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
 ///
 /// The checks run once each, in the order DRC, ERC, LVS, PEX. A check that
 /// cannot run is reported in its [`StageStatus`], never as an empty result.
+/// A layout with a net carrying two labels, a short between named nets, gets
+/// the `lvs.net_seed_conflict` row whatever was selected
+/// ([`check_net_seed_conflicts`](gpurify_check::lvs::check_net_seed_conflicts)),
+/// so it fails every run.
 /// `loaded` must come from [`load`](crate::engine::pipeline::load), and
 /// `extracted` from [`extract`](crate::engine::pipeline::extract) over it.
 ///
@@ -241,6 +246,25 @@ pub fn run_checks(
     } else {
         StageStatus::NotSelected
     };
+
+    // A short between labelled nets fails every run, with its row: LVS's layout
+    // checks record it when they run, and this does when they do not.
+    let layout_checked = options.checks.lvs && loaded.reference.is_some();
+    if !layout_checked && extracted.ports.shorted_net().is_some() {
+        append_stage(&mut out, |violations, runs| {
+            gpurify_check::lvs::check_net_seed_conflicts(
+                gpurify_check::Design {
+                    store: &loaded.store,
+                    nets: &extracted.nets,
+                    devices: &extracted.devices,
+                },
+                &extracted.ports,
+                &loaded.strings,
+                violations,
+                runs,
+            );
+        });
+    }
 
     out.violations.sort_canonical();
     out.runs.sort_by_key(|run| run.rule);
@@ -296,7 +320,8 @@ fn run_drc(
 /// Classify nets, resolve intent, build and solve the supply grid, then run the
 /// rules. A supply grid that cannot be built or solved refuses only the rows
 /// that read it; `erc::check` refusing the whole stage maps to
-/// [`StageStatus::Refused`].
+/// [`StageStatus::Refused`], and so does design intent on a layout with a net
+/// carrying two labels.
 fn run_erc(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -304,6 +329,26 @@ fn run_erc(
 ) -> Result<StageStatus, EngineError> {
     // Before any skip, so a missing input cannot hide a wrong deck.
     let rules = gpurify_check::erc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
+
+    // Intent finds nets by label, and a net with two labels is two named nets
+    // shorted: resolving it by one name would drop the other's supply.
+    if let Some(net) = extracted
+        .ports
+        .shorted_net()
+        .filter(|_| loaded.intent.is_some())
+    {
+        let names: Vec<&str> = extracted
+            .ports
+            .names_of(net)
+            .iter()
+            .map(|&name| loaded.strings.resolve(name))
+            .collect();
+        return Ok(StageStatus::Refused(format!(
+            "one net carries the labels {}, a short between named nets, so design \
+             intent cannot say which of them it is",
+            names.join(", ")
+        )));
+    }
 
     let grid = loaded.grid;
     let die = design_extent(loaded);
@@ -364,8 +409,11 @@ fn run_lvs(
     append_stage(out, |violations, runs| {
         gpurify_check::lvs::check_layout(
             &layout,
-            &extracted.nets,
-            &extracted.devices,
+            gpurify_check::Design {
+                store: &loaded.store,
+                nets: &extracted.nets,
+                devices: &extracted.devices,
+            },
             &extracted.ports,
             &loaded.strings,
             violations,
@@ -439,16 +487,25 @@ fn run_pex(
         let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
         for name in &options.quasistatic_nets {
             // `get`, never `intern`: a name the run never saw is not a net.
-            let Some(net) = loaded
+            let pieces = loaded
                 .strings
                 .get(name)
-                .and_then(|id| extracted.ports.net_of(id))
-            else {
-                return Ok(StageStatus::Refused(format!(
-                    "no extracted net is named {name}, so it cannot be field solved"
-                )));
-            };
-            selected.push(net);
+                .map_or(&[][..], |id| extracted.ports.nets_of(id));
+            match *pieces {
+                [net] => selected.push(net),
+                [] => {
+                    return Ok(StageStatus::Refused(format!(
+                        "no extracted net is named {name}, so it cannot be field solved"
+                    )))
+                }
+                _ => {
+                    return Ok(StageStatus::Refused(format!(
+                        "{name} labels {} disconnected nets, an open, so no one net \
+                         of that name can be field solved",
+                        pieces.len()
+                    )))
+                }
+            }
         }
 
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();

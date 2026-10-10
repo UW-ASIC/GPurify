@@ -160,7 +160,7 @@ impl World {
     /// terminals in the recogniser's order (gate, source, drain, bulk).
     fn spice(&mut self, detail: Detail) -> Result<String, WriteError> {
         let (vdd, up) = (
-            self.ports.net_of(self.strings.intern("VDD")).expect("VDD"),
+            self.ports.nets_of(self.strings.intern("VDD"))[0],
             self.upper_net,
         );
         let mut devices = DeviceTable::default();
@@ -306,6 +306,21 @@ fn spice_numbers_an_anonymous_net() {
     assert!(
         text.contains(&format!(".subckt TOP VDD\nM0 VDD {up} VDD VDD nch")),
         "{text}"
+    );
+}
+
+/// Testing-plan F14. `VDD` on both nets is one net the layout leaves in two
+/// pieces, an open; a SPICE pin is one node, so writing the name twice would
+/// join the pieces in the file and hide the open. Refused, and nothing is
+/// written.
+#[test]
+fn spice_refuses_a_label_on_two_nets() {
+    let mut world = World::new(Some("VDD"));
+    assert_eq!(
+        world.spice(Detail::Schematic),
+        Err(WriteError::Unrepresentable(
+            "a label on several disconnected nets"
+        ))
     );
 }
 

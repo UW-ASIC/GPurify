@@ -194,7 +194,8 @@ pub enum LibError {
     #[error("pin cross-check: {0}")]
     Mismatch(String),
     /// The layout cannot be made into a circuit. At every level, a spec pin
-    /// no layout label names ([`CircuitError::MissingPin`]); at `spice` and
+    /// no layout label names ([`CircuitError::MissingPin`]) or two pins the
+    /// layout shorts ([`CircuitError::ShortedPins`]); at `spice` and
     /// `statistical`, also a conductor layer that is not valid geometry or a
     /// net whose resistor network falls apart.
     #[error(transparent)]
@@ -374,7 +375,7 @@ fn cross_check(
     let mut labelled = BTreeSet::new();
     for net in 0..extracted.nets.net_count() {
         let net = NetId(u32::try_from(net).expect("a net id is a u32"));
-        if let Some(name) = extracted.ports.name_of(net) {
+        for &name in extracted.ports.names_of(net) {
             labelled.insert(loaded.strings.resolve(name).to_owned());
         }
     }

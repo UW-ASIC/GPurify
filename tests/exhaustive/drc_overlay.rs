@@ -2019,10 +2019,10 @@ fn tap_distance() -> Vec<Fixture> {
     every_placement(cases)
 }
 
-/// A short between two labelled nets (DRC-086): extraction refuses the run,
-/// as the catalog says (`PortError::ConflictingLabels`), so the run does not
-/// pass. Shorted on one shape, and through two abutting shapes; two labels
-/// naming one net and two separate labelled shapes pass.
+/// A short between two labelled nets (DRC-086): a DRC run reports it as one
+/// `lvs.net_seed_conflict` row (testing-plan F14), so the run does not pass.
+/// Shorted on one shape, and through two abutting shapes; two labels naming
+/// one net and two separate labelled shapes pass.
 fn labelled_short() -> Vec<Fixture> {
     let deck = new_deck(
         &["met1", "lbl"],
@@ -2034,6 +2034,8 @@ fn labelled_short() -> Vec<Fixture> {
     let refused = |name: &str, layout: Layout| {
         Fixture::new(&format!("labelled_short/{name}"), &["DRC-086"], &deck, DRC)
             .layout(layout)
+            .expect(Expect::clean("w"))
+            .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
             .expect(Expect::Passes(false))
     };
     let passes = |name: &str, layout: Layout| {

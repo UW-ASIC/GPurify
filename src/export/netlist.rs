@@ -60,15 +60,16 @@ pub enum Detail {
 /// lengthened with `_` until no label has that name. Parasitic cards are
 /// `Rp`, `Cp` or `Lp` and the element's row.
 ///
-/// A label on several disconnected nets names each of them, so the file
-/// joins the pieces into one node and hides the open between them; debug
-/// builds panic on it instead.
+/// A pin is one node, so the labels must name nets one to one. Nothing is
+/// written when they do not.
 ///
 /// # Errors
 ///
-/// [`WriteError::Unrepresentable`] for a port bound to a net outside the
-/// extraction, found after the `.subckt` line is written, or a parasitic
-/// element on a node outside the network.
+/// [`WriteError::Unrepresentable`] for a label on several disconnected nets
+/// (one node would join the pieces and hide the open), for a net with several
+/// labels (one name would hide the short), for a port bound to a net outside
+/// the extraction, found after the `.subckt` line is written, or for a
+/// parasitic element on a node outside the network.
 pub fn write_spice(
     extraction: Extraction<'_>,
     parasitics: Option<&ParasiticNetwork>,
@@ -98,6 +99,14 @@ pub fn write_spice(
     // No entry assert that `ports.len() <= net_count`: the pin loop below
     // settles it as a typed error, and a panic here would abort the one path a
     // test of that refusal walks.
+    if ports.split_name().is_some() {
+        return Err(WriteError::Unrepresentable(
+            "a label on several disconnected nets",
+        ));
+    }
+    if ports.shorted_net().is_some() {
+        return Err(WriteError::Unrepresentable("a net with several labels"));
+    }
 
     let before = out.len();
 
@@ -114,7 +123,7 @@ pub fn write_spice(
     let _ = writeln!(out, "* lengths below are in database units");
 
     // ponytail: `O(nets · log ports)`, because `PortTable` publishes none of
-    // its four columns and `name_of` — a binary search — is the only way to read
+    // its columns and `name_of` — a binary search — is the only way to read
     // one. The port list is the named nets in ascending `NetId`, and named nets
     // are a cell's pins, hundreds against a net count in the millions, so the
     // scan is the wrong way round. Only the `log ports` factor is debt: a merge
@@ -351,7 +360,7 @@ pub fn net_name(
         // and nowhere else, so lengthen the fallback until no port carries it.
         while strings
             .get(&out[before..])
-            .is_some_and(|taken| ports.net_of(taken).is_some())
+            .is_some_and(|taken| !ports.nets_of(taken).is_empty())
         {
             out.push(FALLBACK_PAD);
         }
@@ -365,11 +374,10 @@ pub fn net_name(
     debug_assert!(
         strings
             .get(&out[before..])
-            .and_then(|name| ports.net_of(name))
-            .is_none_or(|owner| owner == net),
-        "net {} was named {:?}, which is net {:?}'s label",
+            .is_none_or(|name| ports.nets_of(name).iter().all(|&owner| owner == net)),
+        "net {} was named {:?}, which labels nets {:?}",
         net.0,
         &out[before..],
-        strings.get(&out[before..]).and_then(|n| ports.net_of(n))
+        strings.get(&out[before..]).map(|n| ports.nets_of(n))
     );
 }

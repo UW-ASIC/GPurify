@@ -4,10 +4,12 @@
 //! Data in: the extracted tables and the unreduced layout graph. Data out: eight
 //! run rows and their violations. Deck-limited checks record `Skipped`.
 
+use crate::erc::first_vertex;
 use crate::lvs::graph::{narrow, Graph};
 use crate::lvs::verdict::Discrepancy;
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::{DeviceTable, NetId, NetTable, PortTable};
+use crate::Design;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
 use gpurify_geom::{LayerId, PolyId};
@@ -66,10 +68,10 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// Run the layout-only checks on the unreduced layout graph.
 ///
 /// `layout` must be [`from_layout`](crate::lvs::graph::from_layout) of the
-/// same `nets`, `devices` and `ports`. Records exactly eight [`RuleRun`]s, in
-/// the order below, and appends their violations to `out`. Every violation is
-/// an error. None has a layer or a location: both are sentinels, and the
-/// shape is `PolyId(u32::MAX)` unless stated otherwise.
+/// same `design` and `ports`. Records exactly five [`RuleRun`]s, in the order
+/// below, and appends their violations to `out`. Every violation is an error.
+/// Unless a row says otherwise, it has no layer and no location (both are
+/// sentinels), and its shape is `PolyId(u32::MAX)`.
 ///
 /// # Rows
 ///
@@ -83,9 +85,14 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   `n - 1` rows. Shapes: each net's lowest polygon. Measured 2 against a
 ///   limit of 1. Examines every net. Catalog: LVS-001, LVS-002 (KLayout's
 ///   `connect_implicit` would join them instead).
-/// - `lvs.net_seed_conflict`: fewer labelled nets than bound labels, meaning
-///   two labels merged onto one net. Measured the labelled nets against a
-///   limit of the labels. Examines every label. Catalog: LVS-001.
+/// - `lvs.net_seed_conflict`: several label texts on one net, a short between
+///   named nets. One row per pair of consecutive names on the net in
+///   [`StrId`] order, so `n` names give `n - 1` rows. Shapes: the lowest
+///   polygon carrying each of the two names, so the two labels are found
+///   from the row; the location is the first vertex of the first, on its
+///   layer. No path between the two labels is traced (catalog LVS-005).
+///   Measured 2 against a limit of 1. Examines every binding of a name to a
+///   net. Catalog: LVS-001.
 /// - `lvs.terminal_net`: a terminal of `layout` on no net, or on a net past
 ///   its net table. Measured the net count against the count the terminal
 ///   would need. Examines every terminal. Catalog: LVS-004.
@@ -99,9 +106,6 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///
 /// # Limits
 ///
-/// - `lvs.net_seed_conflict` cannot fire: [`bind_ports_into`] already fails
-///   when one net carries two names, so every label has its own net
-///   (testing-plan F13).
 /// - `lvs.terminal_net` cannot fire on a graph built by `from_layout`:
 ///   [`recognise_into`] drops any marker with a terminal on no net.
 /// - Per-model device counts and parameter ranges are not checked: the deck
@@ -111,23 +115,23 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///
 /// # Panics
 ///
-/// Panics if a device terminal names a net past `nets`.
+/// Panics if a device terminal names a net past `design.nets`, or a port
+/// binding a polygon past `design.store`.
 ///
-/// [`bind_ports_into`]: crate::topology::bind_ports_into
 /// [`recognise_into`]: crate::topology::device::recognise_into
 pub fn check_layout(
     layout: &Graph,
-    nets: &NetTable,
-    devices: &DeviceTable,
+    design: Design<'_>,
     ports: &PortTable,
     strings: &StrTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
     let id = |name| rule_id(strings, name);
+    let (nets, devices) = (design.nets, design.devices);
     check_floating_nets(nets, devices, ports, id("lvs.floating_net"), out, runs);
     check_label_conflicts(nets, ports, id("lvs.label_conflict"), out, runs);
-    check_net_seed_conflicts(nets, ports, id("lvs.net_seed_conflict"), out, runs);
+    check_net_seed_conflicts(design, ports, strings, out, runs);
     check_topology(
         layout,
         (id("lvs.terminal_net"), id("lvs.terminal_count")),
@@ -252,40 +256,52 @@ fn check_label_conflicts(
     let before = out.len();
     let net_count = narrow(nets.net_count());
 
-    let mut named: Vec<(StrId, NetId)> = (0..net_count)
-        .filter_map(|row| ports.name_of(NetId(row)).map(|name| (name, NetId(row))))
-        .collect();
-    named.sort_unstable();
-
-    for pair in named.windows(2).filter(|pair| pair[0].0 == pair[1].0) {
-        let shapes = (
-            first_poly(nets, pair[0].1),
-            Some(first_poly(nets, pair[1].1)),
-        );
-        out.push(graph_violation(rule, shapes, 2, 1));
+    // Every binding, so a name a short hides behind another is still seen.
+    let (names, named) = ports.bindings_by_name();
+    for at in 1..names.len() {
+        if names[at] == names[at - 1] {
+            let shapes = (
+                first_poly(nets, named[at - 1]),
+                Some(first_poly(nets, named[at])),
+            );
+            out.push(graph_violation(rule, shapes, 2, 1));
+        }
     }
     record_run(runs, out, before, rule, Outcome::Ran, u64::from(net_count));
 }
 
-/// Fewer distinct named nets than labels: two seeds merged onto one net.
-fn check_net_seed_conflicts(
-    nets: &NetTable,
+/// The `lvs.net_seed_conflict` row of [`check_layout`] alone: one
+/// [`RuleRun`], and a violation per pair of names on one net, as described
+/// there.
+///
+/// For a run that reports labelled shorts without LVS's other layout rows:
+/// the `gpurify` engine calls it when [`check_layout`] does not run and a
+/// net carries two names, so a short between named nets fails every run.
+///
+/// # Panics
+///
+/// Panics if a port binds a polygon past `design.store`.
+pub fn check_net_seed_conflicts(
+    design: Design<'_>,
     ports: &PortTable,
-    rule: StrId,
+    strings: &StrTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    let rule = rule_id(strings, "lvs.net_seed_conflict");
     let before = out.len();
-    let seeds = narrow(ports.len());
-    let resolved = narrow(
-        (0..narrow(nets.net_count()))
-            .filter(|&row| ports.name_of(NetId(row)).is_some())
-            .count(),
-    );
-    if resolved < seeds {
-        out.push(graph_violation(rule, (NO_SHAPE, None), resolved, seeds));
+    let (nets, _, polys) = ports.bindings();
+    for at in 1..nets.len() {
+        if nets[at] == nets[at - 1] {
+            let (first, second) = (polys[at - 1], polys[at]);
+            out.push(Violation {
+                layer: design.store.poly_layer(first),
+                at: first_vertex(design.store, first),
+                ..graph_violation(rule, (first, Some(second)), 2, 1)
+            });
+        }
     }
-    record_run(runs, out, before, rule, Outcome::Ran, u64::from(seeds));
+    record_run(runs, out, before, rule, Outcome::Ran, ports.len() as u64);
 }
 
 /// Structural sanity of the extracted graph: a terminal on no net, a device with

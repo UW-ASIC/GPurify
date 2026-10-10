@@ -57,8 +57,9 @@ pub struct Extracted {
     pub nets: NetTable,
     /// Devices recognised from the deck's marker layers, with terminals on `nets`.
     pub devices: DeviceTable,
-    /// Net names from text labels. A name on several disconnected nets
-    /// resolves to the lowest of them through [`PortTable::net_of`].
+    /// Net names from text labels, bound as drawn: a name on several
+    /// disconnected nets (an open) names every piece, and a net with several
+    /// names (a short) carries them all. See [`PortTable`].
     pub ports: PortTable,
 }
 
@@ -208,9 +209,9 @@ fn spectre_by_opener(source: &str) -> Option<bool> {
 /// - [`ExtractError::Channel`]: a transistor's channel marker overlaps
 ///   conductor on its source/drain layer, which would fuse source and drain
 ///   into one net, or one of those layers fails geometry validation.
-/// - [`ExtractError::Port`]: one net carries two different labels (a short
-///   between two named nets), or a label sits on a shape that is on no net.
-///   The run stops with no report row for either.
+/// - [`ExtractError::Port`]: a label sits on a shape that is on no net. The
+///   run stops with no report row. A short between two labelled nets is not
+///   an error here: LVS reports it as `lvs.net_seed_conflict`.
 pub fn extract(loaded: &Loaded) -> Result<Extracted, ExtractError> {
     let mut out = Extracted::default();
 
@@ -260,8 +261,7 @@ pub enum LoadError {
 /// Why [`extract`] refused the layout.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ExtractError {
-    /// Labels could not be bound to nets: two names on one net, or a label
-    /// on no net.
+    /// A label could not be bound: it sits on no net.
     #[error(transparent)]
     Port(#[from] gpurify_check::topology::port::PortError),
     /// A transistor channel marker over live conductor, or geometry that

@@ -146,6 +146,90 @@ device mos nsdm model \"nfet\" terminals [poly, diff, diff]
     assert!(matches!(extract(&loaded), Err(ExtractError::Channel(_))));
 }
 
+/// One conductor deck, and a layout of two touching rectangles (one net) and
+/// a third apart from them (another), labelled by `labels` as
+/// `(rectangle, name)`.
+fn labelled_rails(labels: &[(usize, &str)]) -> Loaded {
+    let metal = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let rects = [
+        layout.rect(metal, 0, 0, 100, 100),
+        layout.rect(metal, 90, 0, 200, 100),
+        layout.rect(metal, 500, 0, 600, 100),
+    ];
+    let (store, ids) = layout.finish();
+    let deck = Deck {
+        connectivity: Connectivity {
+            conductors: vec![metal],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        },
+        ..Deck::default()
+    };
+    let mut loaded = empty_loaded(store, deck);
+    for &(rect, name) in labels {
+        let name = loaded.strings.intern(name);
+        loaded.provenance.label(ids.of(rects[rect]), name);
+    }
+    loaded
+}
+
+/// Testing-plan F14. Two labels on one net, a short between named nets, used
+/// to abort extraction with no report row. It extracts, keeping both names
+/// (LVS reports it as `lvs.net_seed_conflict`), and ERC refuses design intent
+/// on it rather than resolve the net by one of its names, which would drop
+/// the other's supply. The same intent on the unshorted layout runs.
+#[test]
+fn a_short_between_labelled_nets_extracts_and_intent_on_it_is_refused() {
+    let intent = r#"{"domains": {"core": {"voltage_mv": 1800}},
+        "supplies": [{"net": "VDD", "domain": "core", "role": "power"},
+                     {"net": "VSS", "domain": "core", "role": "ground"}]}"#;
+    for (labels, shorted) in [
+        (&[(0, "VDD"), (1, "VSS")][..], true),
+        (&[(0, "VDD"), (2, "VSS")][..], false),
+    ] {
+        let mut loaded = labelled_rails(labels);
+        let extracted = extract(&loaded).expect("a labelled short is not an extraction error");
+        let vdd = loaded.strings.get("VDD").expect("labelled");
+        let net = extracted.ports.net_of(vdd).expect("VDD is on one net");
+        assert_eq!(
+            extracted.ports.names_of(net).len(),
+            if shorted { 2 } else { 1 }
+        );
+
+        loaded.intent = Some(
+            gpurify_ingest::intent::parse_intent(intent, &mut loaded.strings)
+                .expect("valid intent"),
+        );
+        let (_, summary) = run_checks(&loaded, &extracted, &options(Checks { erc: true, ..NONE }))
+            .expect("the stage reports, it does not fail");
+        match summary.erc {
+            StageStatus::Refused(why) => {
+                assert!(shorted && why.contains("VDD, VSS"), "{why}");
+            }
+            status => assert!(!shorted && status == StageStatus::Ran, "{status:?}"),
+        }
+    }
+}
+
+/// Testing-plan F14. A name on two disconnected nets is one net in two
+/// pieces, an open; field-solving "the" net of that name would solve one
+/// piece, so PEX refuses it by name (`a_quasistatic_net_is_solved_for_inductance_too`
+/// is the name on one net).
+#[test]
+fn a_quasistatic_name_on_two_nets_is_refused() {
+    let loaded = labelled_rails(&[(0, "A"), (2, "A")]);
+    let extracted = extract(&loaded).expect("an open is not an extraction error");
+    let mut opts = options(Checks { pex: true, ..NONE });
+    opts.quasistatic_nets = vec!["A".to_owned()];
+    let (_, summary) = run_checks(&loaded, &extracted, &opts).expect("refused, not failed");
+    assert!(
+        matches!(&summary.pex, StageStatus::Refused(why) if why.contains("A labels 2 disconnected nets")),
+        "{:?}",
+        summary.pex
+    );
+}
+
 /// Nothing selected: four declines, no output, and a pass.
 #[test]
 fn a_run_selecting_no_check_reports_four_declines_and_passes() {

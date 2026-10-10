@@ -331,7 +331,10 @@ connect label met1_label names met1                # text on met1_label names th
 ```
 
 Name your nets with text labels in the layout. LVS, SPEF and the intent file
-all refer to nets by those names.
+all refer to nets by those names. One name on two nets the layout does not
+join is an open (`lvs.label_conflict`), and a field solve or netlist export of
+that name is refused. Two names on one net is a short between them
+(`lvs.net_seed_conflict`, reported by every run).
 
 ```
 connect global psub                                # every psub shape is one net: the substrate
