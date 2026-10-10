@@ -2301,14 +2301,17 @@ fn min_enclosed_area(depth: Depth) -> Vec<Fixture> {
 // ------------------------------------------------------------------ off_grid
 
 /// `off_grid(; pitch: 10nm)` (`off_grid`, DRC-001): one finding per vertex of
-/// any row on any layer off the 10 nm lattice, at the vertex, measuring its
-/// Chebyshev distance to the nearest lattice point.
+/// any row on any drawn layer off the 10 nm lattice, at the vertex, measuring
+/// its Chebyshev distance to the nearest lattice point.
 ///
 /// The lattice is fixed to the origin, so the translations here are whole
 /// multiples of the pitch; every symmetry of the square maps it to itself. A
 /// rectangle shifted by `k` on x (every vertex off by `min(k, 10 − k)`); one
 /// off on both axes (the larger offset); one off at two vertices only; a hole
-/// with two vertices off; a shape on another layer; an empty layout.
+/// with two vertices off; a shape on another layer; an empty layout. And a
+/// deck deriving `met1.sized(5nm)` and a copy `met1 not met2` (F50): derived
+/// layers are not checked, so on-grid met1 is clean though its halo is 5 off,
+/// and off-grid met1 is reported once, not again on the copy.
 fn off_grid(depth: Depth) -> Vec<Fixture> {
     const OFFSETS_ON_GRID: [(i64, i64); 2] = [(0, 0), (-1_234_560, 987_650)];
     let deck = "grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n\
@@ -2369,6 +2372,21 @@ fn off_grid(depth: Depth) -> Vec<Fixture> {
         rects(Layout::default(), "met2", &[[3, 0, 103, 100]]),
         vertices([3, 0, 103, 100], 3),
     );
+    let derived_deck = "grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n\
+                        layer halo = met1.sized(5nm)\nlayer copy = met1 not met2\n\
+                        rule g off_grid(; pitch: 10nm)\n";
+    for (shape, rect, findings) in [
+        ("on_grid", [0, 0, 100, 100], Vec::new()),
+        ("off_grid", [3, 0, 103, 100], vertices([3, 0, 103, 100], 3)),
+    ] {
+        cases.push(fixture(
+            &format!("off_grid/derived/{shape}"),
+            &["DRC-001"],
+            derived_deck,
+            met1(&[rect]),
+            vec![("g", findings)],
+        ));
+    }
     let mut out = every_placement_at(cases, &OFFSETS_ON_GRID);
     out.push(fixture(
         "off_grid/empty_layout",

@@ -245,7 +245,7 @@ Notation in the snippets:
 | 19 | min_extension | `extension(A, B) >= l` | rows (bbox) | PAIR | APPROX (EXACT on R with overlap) |
 | 20 | overlap | `overlap(A, B) >= l` | rows (bbox) | PAIR | APPROX (EXACT on R, disjoint intersections) |
 | 21 | max_distance_to_tap | `tap_distance(w, t) <= l` | rows | ROW | APPROX (bracket) |
-| 22 | off_grid | `off_grid(; pitch)` | raw, every layer | VTX | EXACT |
+| 22 | off_grid | `off_grid(; pitch)` | raw, every drawn layer | VTX | EXACT |
 | 23 | angle | `angle([L]; allowed)` | raw | EDGE (coverage) | EXACT |
 | 24 | redundant_via | `redundant_via(L; within) >= n` | raw | ROW | APPROX (bracket; EXACT on X) |
 | 25 | via_array_spacing | `via_array_space(L; array) >= l` | raw | PAIR (rows) | APPROX (bracket; EXACT on X) |
@@ -693,13 +693,14 @@ hi = w.overlapping(w - t.sized(LIM, diamond_limit))   # L1 ball: over-reports
 
 ### 22. off_grid — EXACT
 
-**GPurify** (`grid.rs` `off_grid`): every vertex of every store row on every layer, derived and
-hole rows included, whose Chebyshev offset from the lattice is non-zero. `at` is the vertex.
+**GPurify** (`grid.rs` `off_grid`): every vertex of every store row on every drawn layer, hole
+rows included, whose Chebyshev offset from the lattice is non-zero. `at` is the vertex. Derived
+layers are not checked (F50, fixed in B16).
 
 **KLayout**
 
 ```ruby
-ALL.each { |x| emit(id, x.raw.ongrid(PITCH)) }   # every drawn and every derived polygon layer; PITCH = 2·pitch
+DRAWN.each { |x| emit(id, x.raw.ongrid(PITCH)) }   # every drawn polygon layer; PITCH = 2·pitch
 ```
 
 - A merged `ongrid` hides vertices that end up inside material; `.raw` reports them (v T16).

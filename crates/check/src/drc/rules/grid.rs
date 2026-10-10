@@ -1,5 +1,6 @@
-//! Grid family: off-grid vertices and disallowed edge angles, over every
-//! polygon in the store (angles: or one layer's), reported at the vertex.
+//! Grid family: off-grid vertices, over every drawn polygon, and disallowed
+//! edge angles, over every polygon in the store (or one layer's), reported at
+//! the vertex.
 //!
 //! Data in: the store's coordinate columns. Data out: one violation per
 //! offending vertex (off-grid) or edge (angle, at the vertex it leaves).
@@ -30,16 +31,24 @@ fn store_polys(store: &GeometryStore) -> impl Iterator<Item = PolyId> {
     (0..u32::try_from(store.poly_count()).expect("a store indexes polygons with a u32")).map(PolyId)
 }
 
-/// Every vertex must sit on the `pitch` lattice. `examined` counts vertices.
+/// Every vertex on the drawn layers `0..drawn` must sit on the `pitch`
+/// lattice; a derived layer is computed, not drawn, and repeats its operands'
+/// vertices. `examined` counts vertices.
 pub(crate) fn off_grid(
     store: &GeometryStore,
     rule: StrId,
     pitch: Dbu,
+    drawn: usize,
     out: &mut Violations,
 ) -> Verdict {
     let pitch = pitch.raw();
     let mut examined = 0u64;
-    for poly in store_polys(store) {
+    let drawn_rows = (0..drawn)
+        .flat_map(|layer| {
+            store.polys_on_layer(LayerId(u16::try_from(layer).expect("a LayerId is a u16")))
+        })
+        .map(PolyId);
+    for poly in drawn_rows {
         let (xs, ys) = store.poly_verts(poly);
         examined += xs.len() as u64;
         for (&x, &y) in xs.iter().zip(ys) {

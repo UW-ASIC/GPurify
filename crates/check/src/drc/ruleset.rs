@@ -588,8 +588,11 @@ pub enum Rule {
     /// A vertex off the manufacturing grid.
     ///
     /// Deck: `off_grid(; pitch: len)`, kind `off_grid`. Every vertex of every
-    /// row on every layer must lie on the lattice of multiples of `pitch`
-    /// from the origin, on both axes.
+    /// row on every drawn layer must lie on the lattice of multiples of
+    /// `pitch` from the origin, on both axes. A derived layer is not checked
+    /// ([`RuleSet::first_derived`]): it is computed from drawn ones, so it
+    /// would repeat their off-grid vertices, and sizing a drawn layer by less
+    /// than the pitch would put on-grid drawing off it.
     ///
     /// One violation per off-grid vertex, at it, on its row's layer.
     /// `measured` is the vertex's Chebyshev distance to the nearest lattice
@@ -1009,7 +1012,7 @@ pub struct RuleSet {
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
     /// [`Rule::GlobalDensity`] without a boundary takes its die from the drawn
-    /// layers.
+    /// layers, and [`Rule::OffGrid`] checks drawn rows only.
     pub first_derived: Option<LayerId>,
 }
 
@@ -1581,7 +1584,7 @@ impl RuleSet {
                 Rule::MaxDistanceToTap { well, tap, limit } => {
                     overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
                 }
-                Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, out),
+                Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, drawn, out),
                 Rule::Angle { layer, allowed } => grid::angle(store, id, layer, allowed, out),
                 Rule::RedundantVia {
                     layer,
