@@ -14,10 +14,10 @@ use crate::erc::{
 };
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId};
-use gpurify_geom::ops::{point_in_ring, segments_intersect, Point, Seg};
+use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{prefix, Dbu, Qty, Temperature, Voltage};
-use gpurify_geom::{Bbox, LayerId, PolyId, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_geom::{Bbox, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
 /// Voltage-stress lifetime on the supply grid: deck kind `reliability`,
@@ -87,8 +87,9 @@ pub struct ReliabilityTable {
 /// device whose terminals see domain voltages more than `max_delta` apart: the
 /// highest domain voltage reaching any terminal minus the lowest. A ground
 /// supply counts as its own domain's voltage here, not 0 V, so this compares
-/// domains, not node voltages. A device whose marker is wholly covered by one
-/// polygon of `isolation` is exempt.
+/// domains, not node voltages. A device whose marker's bounding box is wholly
+/// covered by one polygon of `isolation`, edges included (isolation drawn
+/// exactly on the marker covers it), is exempt.
 ///
 /// # Limits
 ///
@@ -318,6 +319,8 @@ pub fn check_hv_domain(
                 continue;
             }
         }
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&isolation, &mut rects, &mut start);
 
         let mut examined = 0u64;
         for index in 0..devices.len() {
@@ -329,7 +332,7 @@ pub fn check_hv_domain(
             examined += 1;
             let marker = devices.marker[index];
             let measured = Measurement::Voltage(spread);
-            let exempt = encloses(&isolation, store.poly_bbox(marker));
+            let exempt = encloses(&rects, &start, store.poly_bbox(marker));
             if !exempt & measured.violates(limit, LimitSense::Maximum) {
                 out.push(Violation {
                     rule,
@@ -481,55 +484,14 @@ fn domain_spread(
     (hi >= lo).then(|| Qty::new(hi - lo))
 }
 
-/// True when one polygon of `isolation` covers all of `inner`, exactly.
-fn encloses(isolation: &ValidatedLayer, inner: Bbox) -> bool {
-    (0..isolation.len())
-        .map(|idx| isolation.get(u32::try_from(idx).expect("a layer indexes with u32")))
-        .any(|poly| poly.bbox().contains(inner) && covers(poly, inner))
-}
-
-/// True when `poly`'s region covers every point of `inner`: a corner inside,
-/// in no hole, and no ring crossing the rectangle (a slot could pass between
-/// four inside corners). Touching counts as crossing: fail closed.
-fn covers(poly: PolygonRef<'_>, inner: Bbox) -> bool {
-    let corner = Point {
-        x: inner.xlo,
-        y: inner.ylo,
-    };
-    let inside = point_in_ring(poly.outer(), corner)
-        && !poly.holes().any(|hole| point_in_ring(hole, corner));
-    inside && !crosses(poly.outer(), inner) && !poly.holes().any(|hole| crosses(hole, inner))
-}
-
-/// True when any edge of `ring` meets the boundary of `box_`.
-fn crosses(ring: RingRef<'_>, box_: Bbox) -> bool {
-    let (xs, ys) = ring.coords();
-    let corner = |x: Dbu, y: Dbu| Point { x, y };
-    let (lb, rb, rt, lt) = (
-        corner(box_.xlo, box_.ylo),
-        corner(box_.xhi, box_.ylo),
-        corner(box_.xhi, box_.yhi),
-        corner(box_.xlo, box_.yhi),
-    );
-    let sides = [
-        Seg { a: lb, b: rb },
-        Seg { a: rb, b: rt },
-        Seg { a: rt, b: lt },
-        Seg { a: lt, b: lb },
-    ];
-    let n = xs.len();
-    let (mut ax, mut ay) = (xs[n - 1], ys[n - 1]);
-    let mut hit = false;
-    for i in 0..n {
-        let (bx, by) = (xs[i], ys[i]);
-        let edge = Seg {
-            a: Point { x: ax, y: ay },
-            b: Point { x: bx, y: by },
-        };
-        hit |= sides.iter().any(|&side| segments_intersect(edge, side));
-        (ax, ay) = (bx, by);
-    }
-    hit
+/// True when one polygon of the isolation layer, as disjoint rectangles
+/// (`rects[start[p] .. start[p + 1]]`, holes left out), covers all of
+/// `inner`: its area inside `inner` is all of `inner`'s. Exact, so isolation
+/// drawn on `inner`'s own edges covers it.
+fn encloses(rects: &[Bbox], start: &[u32], inner: Bbox) -> bool {
+    start
+        .windows(2)
+        .any(|span| clipped_area(&rects[span[0] as usize..span[1] as usize], inner) == inner.area())
 }
 
 /// Distance from a guard ring to the nearest supply box; `None` when there is

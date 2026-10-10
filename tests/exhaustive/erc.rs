@@ -2894,8 +2894,8 @@ fn topology_cases() -> Vec<Fixture> {
     }
     // Isolation covering half the marker exempts nothing; one drawn exactly
     // on the marker covers all of it, so the device is "wholly covered" and
-    // exempt by the definition (GPurify fails closed on the shared edge:
-    // F62).
+    // exempt by the definition (F62: the shared edge once counted as a
+    // crossing).
     for (name, iso, exempt) in [
         ("half_isolated", (1100, -100, 1300, 1100), false),
         ("isolation_on_marker", (1000, 0, 1200, 1000), true),
@@ -2906,10 +2906,30 @@ fn topology_cases() -> Vec<Fixture> {
             f.expect
                 .retain(|e| !matches!(e, Expect::Rule { id, .. } if id == "hv"));
             f.expect.push(Expect::clean("hv"));
-            f = f.known("F62");
         }
         out.push(f);
     }
+    // Isolation around the marker with a hole over its middle (a keyhole
+    // outline, as GDS carries a hole) does not cover the marker.
+    let mut f = board.fixture("erc/topology/hv/isolation_with_hole");
+    f.layout = std::mem::take(&mut f.layout).polygon(
+        "iso",
+        &[
+            (900, -100),
+            (1300, -100),
+            (1300, 1100),
+            (900, 1100),
+            (900, 500),
+            (1050, 500),
+            (1050, 600),
+            (1150, 600),
+            (1150, 400),
+            (1050, 400),
+            (1050, 500),
+            (900, 500),
+        ],
+    );
+    out.push(f);
     board.iso = vec![0];
     out.push(board.fixture("erc/topology/hv/isolated"));
     // Well bias: a pmos in a well at VDD with its source on VDD and its drain
