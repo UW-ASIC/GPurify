@@ -65,6 +65,12 @@ module_name_repetitions = "allow"
 unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = "warn"
 
+# The rustdoc is the reference a library user reads, so a link that leads
+# nowhere, or to an item they cannot see, fails `cargo doc`.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

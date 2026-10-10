@@ -375,7 +375,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | A5 | Every `implemented`/`partial` catalog row cites a test that names its id; `tests/catalog.rs` asserts it | L9 | todo |
 | S1 | Minimal CLI. Runtime flags are only the required inputs (`<layout>`, `--deck`, `--reference`, `--intent`; `lib`: `--spec`, `--lef`, `--output-dir`), the output form (`--format`) and the method choice (`--quasistatic <net>` for PEX, `--accuracy` for `lib`). Grid from the GDS UNITS record; unknown-layer policy in the deck (`ignore gds(L, D)`); `--output`, `--quasistatic-inductance`, `--check-determinism`, `--work` removed | user direction | done |
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | done |
-| R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | todo |
+| R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | doing |
 | B1 | LVS: assert `expect_match` in the corpus; planted-fault matrix | F2, L2 | todo |
 | B2 | LVS: flatten reference `X` instances | F1 | todo |
 | B3 | LVS: diode/capacitor polarity | F15 | todo |

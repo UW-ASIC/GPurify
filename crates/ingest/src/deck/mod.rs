@@ -94,7 +94,7 @@ impl LayerTable {
         (self.stream[found.idx()] == wanted).then_some(found)
     }
 
-    /// The GDS stream pair a layer writes to. A derived layer answers [`DERIVED_STREAM`];
+    /// The GDS stream pair a layer writes to. A derived layer answers `(65535, 65535)`;
     /// a writer should skip [`Self::is_derived`] rows, which would duplicate area.
     pub fn stream_of(&self, layer: LayerId) -> (u16, u16) {
         self.stream[layer.idx()]

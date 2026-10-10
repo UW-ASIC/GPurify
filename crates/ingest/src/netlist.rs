@@ -58,7 +58,7 @@ pub struct Netlist {
     /// The nets a device's terminals attach to, **in the card's order, which is
     /// the role**.
     ///
-    /// | [`DeviceKind`](crate::deck::DeviceKind) | order, from the card |
+    /// | [`crate::deck::DeviceKind`] | order, from the card |
     /// |---|---|
     /// | `Mos` (`M`) | drain, gate, source, bulk |
     /// | `Bjt` (`Q`) | collector, base, emitter, then substrate if stated |

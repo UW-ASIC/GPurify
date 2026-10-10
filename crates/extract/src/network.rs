@@ -106,7 +106,7 @@ impl ParasiticNetwork {
         total
     }
 
-    /// Establish canonical element order (see [`CanonicalKey`]).
+    /// Establish canonical element order (see `CanonicalKey`).
     pub fn sort_canonical(&mut self) {
         let mut rows: Vec<(CanonicalKey, NodeId, Option<NodeId>, Parasitic)> = (0..self.from.len())
             .map(|i| {

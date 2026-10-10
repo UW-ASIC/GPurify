@@ -426,7 +426,7 @@ pub fn check_tie_high_low(
     }
 }
 
-/// Flag every pad net that [`clamp_rails`] finds short of both rails.
+/// Flag every pad net that `clamp_rails` finds short of both rails.
 /// Measured is the rail kinds reached, limit 2.
 pub fn check_esd_topological(
     design: Design<'_>,

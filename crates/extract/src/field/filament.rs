@@ -390,7 +390,7 @@ pub(crate) fn mutual(f1: &Filament, f2: &Filament) -> f64 {
     }
 }
 
-/// Self partial inductance [H] of a straight rectangular bar of length `l`,
+/// Self partial inductance, in henries, of a straight rectangular bar of length `l`,
 /// width `w`, thickness `t` — the classical Grover/Rosa closed form:
 ///   L = (µ₀/2π) l [ ln(2l/(w+t)) + 1/2 + 0.2235 (w+t)/l ].
 /// Valid for l ≳ (w+t); accurate to a fraction of a percent for wire-like

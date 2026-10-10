@@ -272,3 +272,41 @@ fn limitations_lists_every_missing_and_partial_check() {
         panic!("docs/limitations.md was stale against the catalog; it is rewritten: review and commit it");
     }
 }
+
+/// The rule reference in `gpurify_check`'s crate docs has a row for every kind
+/// the code has, and each row cites exactly the catalog rows that name it.
+#[test]
+fn the_rule_reference_cites_the_catalog() {
+    let doc = read("crates/check/src/lib.rs");
+    let rows = catalog();
+    for kind in code_kinds() {
+        let needle = format!("| `{kind}` |");
+        let line = doc
+            .lines()
+            .find(|line| line.contains(&needle))
+            .unwrap_or_else(|| {
+                panic!("crates/check/src/lib.rs: the rule reference has no row for {kind}")
+            });
+        let cited = line
+            .trim_end()
+            .trim_end_matches('|')
+            .rsplit('|')
+            .next()
+            .expect("a table row has cells")
+            .trim();
+        let named: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.gpurify.iter().any(|name| name == kind))
+            .map(|row| row.id.as_str())
+            .collect();
+        let want = if named.is_empty() {
+            "—".to_owned()
+        } else {
+            named.join(", ")
+        };
+        assert_eq!(
+            cited, want,
+            "crates/check/src/lib.rs: the {kind} row's catalog cell"
+        );
+    }
+}

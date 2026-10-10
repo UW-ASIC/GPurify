@@ -8,7 +8,7 @@
 //! A polygon is a chain of resistors along its long bounding-box axis, tapped
 //! wherever something connects and once at its own centre (so an unconnected
 //! shape is an island, not absent). Segment resistance is sheet resistance
-//! times `∫ ds / w(s)` over the width a cut actually finds ([`ChainProfile`]).
+//! times `∫ ds / w(s)` over the width a cut actually finds (`ChainProfile`).
 //! One-dimensional: transverse resistance within a cut is not modelled.
 
 use crate::erc::centre;

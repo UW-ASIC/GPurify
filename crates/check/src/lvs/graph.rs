@@ -176,7 +176,7 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
 }
 
 /// Project one subcircuit of a reference netlist. Roles come from card
-/// position ([`card_role`]); `port_net` keeps the subcircuit's port order.
+/// position (`card_role`); `port_net` keeps the subcircuit's port order.
 pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
     let mut graph = Graph::default();
     let devices = netlist.devices_of(subckt);

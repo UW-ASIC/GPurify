@@ -1,4 +1,6 @@
-//! Generators and oracles for the `GPUVerify` test suite.
+//! Generators and oracles for GPurify's test suite: layouts with a planted
+//! violation at a known place, netlist-shaped layouts, scale corpora, a seeded
+//! RNG, a GDSII writer, and assertions that read a report the way a test should.
 
 pub mod assertions;
 pub mod gds;
