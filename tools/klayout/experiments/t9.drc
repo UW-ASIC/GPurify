@@ -1,0 +1,83 @@
+# helpers: build an in-memory layout and make it the DRC source
+def mk(spec)
+  ly = RBA::Layout.new
+  ly.dbu = 0.001
+  top = ly.create_cell("TOP")
+  spec.each do |ld, shapes|
+    li = ly.layer(ld[0], ld[1])
+    shapes.each do |s|
+      if s.is_a?(Array) && s[0].is_a?(Array)
+        top.shapes(li).insert(RBA::Polygon.new(s.map { |x, y| RBA::Point.new(x, y) }))
+      elsif s.is_a?(String)
+        x, y, t = s.split(",")
+        top.shapes(li).insert(RBA::Text.new(t, RBA::Trans.new(x.to_i, y.to_i)))
+      else
+        top.shapes(li).insert(RBA::Box.new(*s))
+      end
+    end
+  end
+  ly
+end
+def use(spec)
+  $ly = mk(spec)
+  source($ly, "TOP")
+end
+def ep_s(ep)
+  r = []
+  ep.data.each { |e| r << "#{e.first} | #{e.second} d=#{e.distance}" }
+  r.join("; ")
+end
+def show(name, layer)
+  d = layer.data
+  n = layer.count
+  items = []
+  d.each { |o| items << o.to_s } if n < 12
+  puts "#{name}: count=#{n} #{items.join(' ; ')}"
+end
+flat
+
+# T1 width equality
+use({[1,0] => [[0,0,100,1000]]})
+a = input(1,0)
+show("T1 width(100)", a.width(100))
+use({[1,0] => [[0,0,500,1000]]})
+a=input(1,0)
+show("D1 without(nil..0.5) 2x1", a.without_density(nil .. 0.5, tile_size(1.0), tile_origin(0.0,0.0), tile_count(2,1)))
+show("D2 without(0.5..nil) 2x1", a.without_density(0.5 .. nil, tile_size(1.0), tile_origin(0.0,0.0), tile_count(2,1)))
+
+# connect(l,l)
+use({[1,0] => [[0,0,100,100],[100,0,200,100],[400,0,500,100]]})
+m=input(1,0)
+connect(m, m)
+show("N1 self-connect nets", m.nets)
+clear_connections
+
+# covering counts (must_contain)
+use({[1,0] => [[0,0,300,300],[400,0,700,300],[800,0,1100,300]], [2,0] => [[0,0,100,100],[150,150,200,200],[650,100,750,200],[900,100,950,150]]})
+o=input(1,0); i=input(2,0)
+show("C1 covering(i)", o.covering(i))
+show("C2 covering(i,2)", o.covering(i, 2))
+show("C3 not_covering(i,2)", o.not_covering(i, 2))
+show("C4 not_inside", i.not_inside(o))
+
+# extended_out on edges
+use({[1,0] => [[0,0,100,100]]})
+e=input(1,0).edges
+show("X1 extended_out(10)", e.extended_out(10))
+show("X2 raw extended_out(10)", e.raw.extended_out(10))
+
+# edge space semantics: collinear end-to-end, back-to-back, same-direction
+use({[1,0] => [[0,0,100,100],[130,0,230,100],[0,120,100,220],[0,300,100,400]]})
+e=input(1,0).edges
+show("E1 space(25) edges", e.space(25))
+show("E2 width(25) edges", e.width(25))
+show("E3 space(35) edges", e.space(35))
+er = e.collect_to_edges { |x| [x, x.swapped_points] }
+show("E4 both-dir space(35) wtc", er.space(35, without_touching_edges, without_touching_corners))
+
+# interacting with count (redundant via)
+use({[1,0] => [[0,0,10,10],[30,0,40,10],[100,0,110,10]]})
+c=input(1,0).raw
+g=c.sized(20)
+show("R1 c.interacting(g,2)", c.interacting(g, 2))
+show("R2 c.not_interacting(g,2)", c.not_interacting(g, 2))

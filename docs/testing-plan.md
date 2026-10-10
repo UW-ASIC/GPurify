@@ -83,6 +83,12 @@ A layer without one is not a test.
 | F35 | Small ones: <br>• `write_blackbox` emits a trailing comma (a Verilog syntax error) for a spec with supply pins and no signal pins;<br>• `tests/liberty.rs` fails alone in a fresh checkout (fixtures not generated);<br>• testgen's `density` applies twice (1.0 panics) and its `Angle` triangle winds clockwise;<br>• intent's `BadLimit` and `DomainConflict` messages name the wrong cause;<br>• `resolve_labels` duplicates labels when called twice;<br>• a reference cycle no root reaches is skipped silently;<br>• `density_cmp`'s `partial_windows` is ignored for neighbour deltas;<br>• `CmpModel::nominal_thickness` is read by nothing;<br>• `diode_bonus` is subtracted with no diode on the net;<br>• the leakage error always blames the DC operating point. | various | Each needs a one-line test and a fix. |
 | F36 | **An AREF is expanded without a budget.** A 32767 × 32767 array is about 10⁹ placements per child shape; flattening runs until the u32 polygon id overflows and panics, rather than refusing. | `crates/ingest/src/layout.rs` (`Flatten::visit`), `geom` store builder | A crafted layout hangs or panics the run (B14). **Fixed in C1:** the flat count is taken from the hierarchy before anything is expanded, and a layout over `MAX_FLAT_POLYGONS` (2²⁸) is refused. |
 | F37 | **A boolean whose result has a hole touching its outer boundary at a vertex failed** with "self-intersecting boundary", which `boolean.rs` documents as an internal fault that cannot happen. At a checkerboard vertex the walk takes the left turn, which keeps two separate cells apart, but when the two diagonal cells are one region it stitched the outer ring and the hole into one ring through the vertex twice. Found on its first run by the random boolean property (shrunk to three rectangles). **Fixed in C3:** a ring that comes back through a pinch has the loop since the first visit split off as its own ring. | `crates/geom/src/boolean.rs` (`link`) | A derived layer or rule over such geometry failed the run instead of answering (B4). |
+| F38 | **A gap in a chain of shapes joined only at corners is reported by nothing.** Booleans keep corner-touching shapes as separate figures, but the spacing rules join them into one component; so with squares at (0,0)–(10,10), (10,10)–(20,20) and (20,0)–(30,10), the 10-wide gap between the first and third is not a `notch` (separate figures) and not a `space` (one component), at any limit. KLayout's default reports it. | `drc/rules/spacing.rs` (`prepare`) vs `geom/boolean.rs` | **False clean** (B1). One coherence for both is the fix; KLayout's and foundry decks' is to treat corner contact as connecting. |
+| F39 | **`.with_width()` measures facing edges only**, while deck.md says "as `width` measures it", which also counts Euclidean necks. Two squares overlapping at a corner have a neck `width` sees and `with_width` does not. | `geom/width.rs` (`narrowest_width`) | A derived-layer selection that differs from the rule it is documented to match. |
+| F40 | **The density die includes derived layers** when no boundary layer is given, so `layer x = met1.sized(1um)` enlarges it and adds empty windows. deck.md says "the whole layout". | `drc/rules/area.rs` (`die_of`) | False density violations at the layout's edge. |
+| F41 | **`min_extension` judges pairs that only touch:** a line abutting the side of its reference is measured by its far protrusion. | `drc/rules/overlay.rs` | False violation (B2); F19 covered it for `overlap` only. |
+| F42 | **`eol_spacing` reads ends of line from drawn rows:** an edge two abutting rows share is taken as a line end whose keep-out runs through its own figure. | `drc/rules/spacing.rs` | False violation, the F18 pattern. |
+| F43 | **`corner_to_corner` can miss an L-shaped shape** whose bounding box overlaps its neighbour on one axis but whose real corner is diagonal to it. | `drc/rules/spacing.rs` | **False clean**, and corner limits are usually larger than space limits. |
 
 ---
 
@@ -361,7 +367,7 @@ not an oversight.
 Every criterion is a number or a yes/no that a script can check.
 
 1. The corpus passes with zero unannotated failures. Every case in all four domains carries `expect_outcome`; every LVS case asserts its verdict.
-2. F1–F37 are closed, each with a regression test.
+2. F1–F43 are closed, each with a regression test.
 3. Boolean laws and every L5 relation have passed ≥ 10⁶ generated cases in total, with no failure in the last 7 nightlies.
 4. The bitmap-reference differential has shown no disagreement over ≥ 10⁵ random layouts per supported DRC kind.
 5. Each fuzz target has run ≥ 24 CPU-h with no new crash and coverage flat for the last 25% of the run.
@@ -429,7 +435,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | todo |
 | D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | todo |
 | E1 | `fuzz/` targets + stable regression replay (deck round trip needs D4) | L4 | todo |
-| F1 | `.#oracles` nix shell; KLayout mirror-deck translator | L6 | doing |
+| F1 | `.#oracles` nix shell; KLayout mirror-deck translator per [klayout-mirror.md](klayout-mirror.md) (24 kinds exact, 10 approximate, `multi_patterning` none); retire the stale `drc_oracle.rb` families | L6 | doing |
 | F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | todo |
 | F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | todo |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | todo |

@@ -1,0 +1,6 @@
+flat
+SRC = source($gds).global_transform(magnify(2))
+p = SRC.polygons(1, 0); i = SRC.input(1, 0); t = SRC.labels(1, 0)
+puts "polygons=#{p.count} #{p.data.each.map(&:to_s).join(' ; ')}"
+puts "input=#{i.count} #{i.data.each.map(&:to_s).join(' ; ')}"
+puts "labels=#{t.count} #{t.data.each.map(&:to_s).join(' ; ')}"

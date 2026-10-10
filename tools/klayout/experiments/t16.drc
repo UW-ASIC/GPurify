@@ -1,0 +1,71 @@
+# helpers: build an in-memory layout and make it the DRC source
+def mk(spec)
+  ly = RBA::Layout.new
+  ly.dbu = 0.001
+  top = ly.create_cell("TOP")
+  spec.each do |ld, shapes|
+    li = ly.layer(ld[0], ld[1])
+    shapes.each do |s|
+      if s.is_a?(Array) && s[0].is_a?(Array)
+        top.shapes(li).insert(RBA::Polygon.new(s.map { |x, y| RBA::Point.new(x, y) }))
+      elsif s.is_a?(String)
+        x, y, t = s.split(",")
+        top.shapes(li).insert(RBA::Text.new(t, RBA::Trans.new(x.to_i, y.to_i)))
+      else
+        top.shapes(li).insert(RBA::Box.new(*s))
+      end
+    end
+  end
+  ly
+end
+def use(spec)
+  $ly = mk(spec)
+  source($ly, "TOP")
+end
+def ep_s(ep)
+  r = []
+  ep.data.each { |e| r << "#{e.first} | #{e.second} d=#{e.distance}" }
+  r.join("; ")
+end
+def show(name, layer)
+  d = layer.data
+  n = layer.count
+  items = []
+  d.each { |o| items << o.to_s } if n < 12
+  puts "#{name}: count=#{n} #{items.join(' ; ')}"
+end
+flat
+
+# T1 width equality
+use({[1,0] => [[0,0,100,1000]]})
+a = input(1,0)
+show("T1 width(100)", a.width(100))
+def mc(l) ; l.data.min_coherence = true ; l ; end
+# cheesing: big solid 300x300 (90000), big with hole, small solid
+use({[1,0] => [[0,0,300,300],[[400,0],[400,300],[700,300],[700,0],[400,0],[500,100],[600,100],[600,200],[500,200],[500,100]],[800,0,850,50]]})
+show("Q1 cheesing area>50000 no holes", mc(input(1,0)).drc(if_all(area > 50000, with_holes == 0)))
+show("Q2 hole area<20000", mc(mc(input(1,0)).holes).drc(area < 20000))
+# eol: line end 50 wide, neighbour above at 30; also side neighbour (long edges)
+use({[1,0] => [[0,0,50,500],[0,530,50,800],[100,0,140,500]]})
+a=input(1,0)
+show("Q3 eol iso(40,projection,whole_edges).with_length(nil,60)", a.isolated(40, projection, transparent, whole_edges).with_length(nil, 60))
+show("Q3b iso(60, projection, whole_edges)", a.isolated(60, projection, transparent, whole_edges))
+# edge enclosure: E = top edge of A; outer covers 20 above
+use({[1,0] => [[0,0,100,100]], [2,0] => [[0,100,100,120],[0,-50,100,0]]})
+e = input(1,0).edges.with_angle(0)
+show("Q4 strips", e.extended_out(30))
+show("Q5 strips not_inside(outer)", e.extended_out(30).raw.not_inside(input(2,0)))
+# edge spacing: same-direction parallel edges (two top edges stacked)
+use({[1,0] => [[0,0,100,100]], [2,0] => [[0,0,100,120]]})
+ea = input(1,0).edges.with_angle(0); eb = input(2,0).edges.with_angle(0)
+show("Q6 ea", ea); show("Q6 eb", eb)
+show("Q7 ea.enclosed(eb,30)", ea.enclosed(eb, 30))
+show("Q8 ea.enclosing(eb,30)", ea.enclosing(eb, 30))
+show("Q9 ea.separation(eb,30)", ea.separation(eb, 30))
+show("Q10 ea.overlap(eb,30)", ea.overlap(eb, 30))
+# collinear end-to-end on one edge layer, and opposite-direction pairs
+use({[1,0] => [[0,0,100,100],[130,0,230,100]]})
+e = input(1,0).edges.with_angle(0)
+show("Q11 collinear: space(40)", e.space(40))
+show("Q12 collinear: width(40)", e.width(40))
+show("Q13 collinear: enclosing(e,40,wte)", e.enclosing(e, 40, without_touching_edges))
