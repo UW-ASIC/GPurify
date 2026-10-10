@@ -241,7 +241,7 @@ built from source.
 
 ### L8. Golden snapshots (report contract)
 
-- Check in `tests/golden/<domain>/<case>.<output>`, one file per corpus case and CLI output (the runs `tools/gate/golden.sh` made), reviewed once.
+- Check in `tests/golden/<domain>/<case>.<output>`, one file per corpus case and CLI output (the runs the deleted `tools/gate/golden.sh` made), reviewed once.
 - `tests/golden.rs` runs the real binary and diffs bytes. A missing file is written and fails the test, so a new golden is always reviewed. To re-bless an intended change, delete the files and rerun; the diff shows in review. Plain files are enough; insta adds nothing here.
 - A doc-count test computes the rule-kind counts, corpus counts and strength table, and fails when `README.md` or `tests/fixtures/README.md` disagree (F5, F10).
 
@@ -371,7 +371,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 |---|---|---|---|
 | A1 | Planning docs: this plan, check-sources.md, check-catalog.tsv, deck-library-plan.md | — | done |
 | A2 | Doc-count test; fix the stale counts and claims (README kinds, fixtures README, `counts` block, `limitations.md` esd_latchup, `ci.yml` GPU comment) | F5, F10, L8 | done |
-| A3 | Golden report snapshots run by plain `cargo test` (`tests/golden/`; delete a file and rerun to re-bless; no env vars, no scripts); every corpus case run twice and byte-compared; RAYON 1 vs N; `tools/gate/` deleted | F7, L7, L8 | todo |
+| A3 | Golden report snapshots run by plain `cargo test` (`tests/golden/`; delete a file and rerun to re-bless; no env vars, no scripts); every corpus case run twice and byte-compared; RAYON 1 vs N; `tools/gate/` deleted | F7, L7, L8 | done |
 | S1 | Minimal CLI. Runtime flags are only the required inputs (`<layout>`, `--deck`, `--reference`, `--intent`; `lib`: `--spec`, `--lef`, `--output-dir`), the output form (`--format`) and the method choice (`--quasistatic <net>` for PEX, `--accuracy` for `lib`). Grid from the GDS UNITS record; unknown-layer policy in the deck (`ignore gds(L, D)`); `--output`, `--quasistatic-inductance`, `--check-determinism`, `--work` removed | user direction | todo |
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | todo |
 | R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | todo |

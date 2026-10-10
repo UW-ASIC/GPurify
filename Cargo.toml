@@ -27,7 +27,6 @@ members = [
     "crates/extract",
     "crates/testgen",
 ]
-exclude = ["tools"]
 
 [workspace.dependencies]
 gpurify-geom = { path = "crates/geom" }
@@ -79,4 +78,10 @@ debug = true
 strip = false
 
 [profile.dev.package."*"]
+opt-level = 3
+
+# The field solver is the one workspace crate whose debug build is too slow
+# to test: an unoptimised quasistatic run of a corpus cell took 57 s, 2 s
+# optimised. Debug assertions and overflow checks stay on.
+[profile.dev.package.gpurify-extract]
 opt-level = 3

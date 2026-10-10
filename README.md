@@ -267,6 +267,6 @@ There is no licence file yet.
 | [tests/fixtures/README.md](tests/fixtures/README.md) | The test corpus and how each expected answer was derived. |
 
 ```sh
-cargo test --workspace --release          # the test suite
+cargo test --workspace                    # the test suite, golden reports included
 cargo test --release --test bench_all     # the timing tables above
 ```
