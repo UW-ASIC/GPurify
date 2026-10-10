@@ -26,6 +26,9 @@ const LAYER: u16 = 0x0D02;
 const DATATYPE: u16 = 0x0E02;
 const XY: u16 = 0x1003;
 const ENDEL: u16 = 0x1100;
+const TEXT: u16 = 0x0C00;
+const TEXTTYPE: u16 = 0x1602;
+const STRING: u16 = 0x1906;
 
 /// Stream format 6.0, the version every reader since 1987 accepts.
 const VERSION: u16 = 600;
@@ -64,6 +67,38 @@ pub fn write_store(
     cell_name: &str,
     out: &mut Vec<u8>,
 ) -> Result<(), &'static str> {
+    write_store_labelled(store, layers, &[], cell_name, out)
+}
+
+/// One text label for [`write_store_labelled`]: a `TEXT` element on a base
+/// layer's stream pair, at a point in database units.
+#[derive(Debug, Clone, Copy)]
+pub struct Label<'a> {
+    /// The label layer; written on its stream pair as layer and texttype.
+    pub layer: LayerId,
+    /// Where the text sits, in database units.
+    pub x: i64,
+    /// Where the text sits, in database units.
+    pub y: i64,
+    /// The net name it states. ASCII only.
+    pub text: &'a str,
+}
+
+/// [`write_store`], plus one `TEXT` element per label after the polygons, so a
+/// test layout can name its nets the way a drawn one does and the labels go
+/// through the reader like any layout's.
+///
+/// # Errors
+///
+/// As [`write_store`], and also a label on a derived or undeclared layer, a
+/// label coordinate beyond `i32::MAX` in magnitude, or label text outside ASCII.
+pub fn write_store_labelled(
+    store: &GeometryStore,
+    layers: &LayerTable,
+    labels: &[Label<'_>],
+    cell_name: &str,
+    out: &mut Vec<u8>,
+) -> Result<(), &'static str> {
     put_library_head(out, cell_name)?;
     put_record(out, BGNSTR, &TIMESTAMPS)?;
     put_ascii(out, STRNAME, cell_name)?;
@@ -90,6 +125,24 @@ pub fn write_store(
             let (xs, ys) = store.poly_verts(PolyId(row));
             put_boundary(out, &mut payload, number, datatype, xs, ys)?;
         }
+    }
+    for label in labels {
+        if label.layer.idx() >= layers.len() || layers.is_derived(label.layer) {
+            return Err("a label on a layer the deck's table does not declare as drawn");
+        }
+        let (number, texttype) = layers.stream_of(label.layer);
+        let coordinate = |value: i64| {
+            i32::try_from(value).map_err(|_| "a label coordinate beyond the GDSII range")
+        };
+        let mut xy = [0u8; 8];
+        xy[..4].copy_from_slice(&coordinate(label.x)?.to_be_bytes());
+        xy[4..].copy_from_slice(&coordinate(label.y)?.to_be_bytes());
+        put_record(out, TEXT, &[])?;
+        put_record(out, LAYER, &number.to_be_bytes())?;
+        put_record(out, TEXTTYPE, &texttype.to_be_bytes())?;
+        put_record(out, XY, &xy)?;
+        put_ascii(out, STRING, label.text)?;
+        put_record(out, ENDEL, &[])?;
     }
     put_record(out, ENDSTR, &[])?;
     put_record(out, ENDLIB, &[])

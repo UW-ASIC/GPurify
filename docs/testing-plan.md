@@ -414,6 +414,13 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | C5 | Bitmap reference DRC, kind by kind; fix what it finds (bbox `extension`/`overlap` first) | L3, B1, B3 | todo |
 | C6 | ERC naive references (dense nodal solve, BFS); PEX matrix properties and monotonicity | L3 | todo |
 | C7 | Assertion pass on `geom` and `check` (runs alongside C3–C6) | F9, L1 | todo |
+| X0 | Exhaustive-fixture harness `tests/exhaustive/`: fixtures run in memory through the real reader, symmetry and translation transforms, expected-failure markers tied to findings, catalog-row coverage per complete domain; `min_width` as the worked example | user direction, §6 | done |
+| X1 | Exhaustive fixtures: DRC dimension, spacing and integrity kinds | DRC-001…038 | todo |
+| X2 | Exhaustive fixtures: DRC overlay, cut, density, presence and edge kinds, and the derived-layer operations | DRC-040…123 | todo |
+| X3 | Exhaustive fixtures: a bitmap reference DRC and every pattern of small cell grids (supersedes C5) | C5, L3 | todo |
+| X4 | Exhaustive fixtures: every ERC kind, closed forms and enumerated topologies (supersedes C6 for ERC) | ERC-* | todo |
+| X5 | Exhaustive fixtures: LVS over every small circuit and every single fault, against a brute-force isomorphism; device classes, reductions, hierarchy | LVS-* | todo |
+| X6 | Exhaustive fixtures: PEX analytic geometries, matrix laws, refinement convergence (supersedes C6 for PEX) | PEX-* | todo |
 | D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | todo |
 | D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | todo |
 | D3 | Deck library P2: query API with the shared spacing-threshold function | deck §5 | todo |
