@@ -34,16 +34,32 @@ const NOT_AN_UNKNOWN: u32 = u32::MAX;
 /// Why a network could not be built or solved. Every variant fails closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PowerError {
+    /// A grid with nodes but no pad held at a fixed voltage.
+    /// [`extract_into`] anchors every supply that has a shape, so only a grid
+    /// built by hand meets this.
     #[error("the grid has no supply pad to anchor the solve")]
     Unanchored,
+    /// The node is in a piece of the grid no pad reaches, such as a supply
+    /// shape joined to its net only through a global (substrate) layer, which
+    /// carries no modelled current. Its voltage would be undefined.
     #[error("node {0} is in an island no supply pad reaches")]
     UnanchoredIsland(u32),
+    /// The edge (within its network row, for a per-net network) has a zero,
+    /// negative or non-finite resistance; zero would short two nodes and hide
+    /// a drop.
     #[error("edge {0} does not have a positive finite resistance")]
     BadResistance(u32),
+    /// A conductor, or a cut between two conductors, has no positive finite
+    /// sheet resistance in the deck's `pex` rows: its resistance is unknown,
+    /// never zero.
     #[error("layer {0:?} carries current but the process stack gives it no sheet resistance")]
     NoSheetResistance(LayerId),
+    /// The conjugate-gradient solve did not bring the residual to `1e-10` of
+    /// its starting value within this many iterations.
     #[error("the solve did not reach the requested tolerance in {0} iterations")]
     NotConverged(u32),
+    /// The node carries a NaN or infinite value: an input nominal, load or pad
+    /// voltage, a solved voltage or current, or a probe that would not invert.
     #[error("node {0} carries a non-finite electrical value")]
     NotFinite(u32),
 }
@@ -51,8 +67,14 @@ pub enum PowerError {
 /// The process data an extraction needs, borrowed.
 #[derive(Debug, Clone, Copy)]
 pub struct Process<'a> {
+    /// The layout's grid: database units to metres.
     pub grid: Grid,
+    /// The deck's parasitic stack: sheet resistance per layer (Ω per square;
+    /// Ω per cut for a cut layer) and the layer heights that pick each
+    /// supply's feed point and set a via's length.
     pub stack: &'a ProcessStack,
+    /// The deck's `connect` statements: which layers conduct, which cuts join
+    /// them, and which layers are global.
     pub connectivity: &'a Connectivity,
 }
 
@@ -60,18 +82,27 @@ pub struct Process<'a> {
 /// cut).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeKind {
+    /// A run along one conductor, or the touch between two: limited per unit
+    /// width.
     Metal,
+    /// One cut of a via: limited per cut.
     Via,
 }
 
 /// The supply grid, `SoA`: node columns, the fixed-voltage pads, edge columns.
+///
+/// Every node column has [`PowerGrid::node_count`] entries and every edge
+/// column [`PowerGrid::edge_count`]. Nodes are taps on the declared
+/// supplies' conducting shapes; edges are resistors between them.
 #[derive(Debug, Default)]
 pub struct PowerGrid {
+    /// The supply net each node is on.
     pub node_net: Vec<NetId>,
     /// Where to report a violation at this node.
     pub node_at: Vec<Point>,
-    /// The tapped polygon and its layer.
+    /// The tapped polygon.
     pub node_poly: Vec<PolyId>,
+    /// The tapped polygon's layer.
     pub node_layer: Vec<LayerId>,
     /// The domain nominal every drop is measured from.
     pub node_nominal: Vec<Qty<Voltage, { prefix::MILLI }>>,
@@ -80,33 +111,50 @@ pub struct PowerGrid {
 
     /// Pad nodes held at a fixed voltage, ascending.
     pub source_node: Vec<u32>,
+    /// Parallel to `source_node`: the voltage each pad is held at, mV.
     pub source_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
 
+    /// Each resistor's first node; a branch current is positive from here
+    /// toward `edge_to`.
     pub edge_from: Vec<u32>,
+    /// Each resistor's second node.
     pub edge_to: Vec<u32>,
+    /// Each resistor's value, Ω.
     pub edge_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
     /// Conductor width (density denominator) and length (Blech `L`), exact.
     pub edge_width: Vec<Dbu>,
+    /// The run between the edge's two nodes, at least one database unit: the
+    /// Blech `L`. For a via, the stack height between its conductors.
     pub edge_length: Vec<Dbu>,
+    /// The conductor's layer, or the cut layer for a via.
     pub edge_layer: Vec<LayerId>,
+    /// Which limit applies: per width or per cut.
     pub edge_kind: Vec<EdgeKind>,
 }
 
 impl PowerGrid {
+    /// The number of nodes, the length of every node column.
     pub fn node_count(&self) -> usize {
         self.node_net.len()
     }
 
+    /// The number of resistors, the length of every edge column.
     pub fn edge_count(&self) -> usize {
         self.edge_from.len()
     }
 
+    /// True when no declared supply has a conducting shape: nothing to solve.
     pub fn is_empty(&self) -> bool {
         self.node_count() == 0
     }
 }
 
 /// One resistor network per net with at least two terminals, CSR by row.
+///
+/// Row `r` is net `net[r]`; its nodes, terminals and edges are the CSR runs
+/// of their `*_start` columns, each of which has `len() + 1` entries once a
+/// row exists and none before. Node indices in `terminal` and `edge_*` are
+/// local to the row.
 #[derive(Debug, Default)]
 pub struct NetNetworks {
     /// The net of each row, ascending.
@@ -114,25 +162,34 @@ pub struct NetNetworks {
 
     /// `node_start[r] .. node_start[r + 1]` indexes the node columns.
     pub node_start: Vec<u32>,
+    /// Where each node sits: on its shape's centre line, at the tap.
     pub node_at: Vec<Point>,
+    /// The polygon each node taps.
     pub node_poly: Vec<PolyId>,
 
     /// Row-local node indices between which resistance is probed.
     pub terminal_start: Vec<u32>,
+    /// The attach-point nodes, row-local, ascending, at least two per row;
+    /// CSR by `terminal_start`.
     pub terminal: Vec<u32>,
 
     /// Edges, endpoints row-local.
     pub edge_start: Vec<u32>,
+    /// Each resistor's first node, row-local.
     pub edge_from: Vec<u32>,
+    /// Each resistor's second node, row-local.
     pub edge_to: Vec<u32>,
+    /// Each resistor's value, Ω.
     pub edge_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
 }
 
 impl NetNetworks {
+    /// The number of rows: nets with at least two attach points.
     pub fn len(&self) -> usize {
         self.net.len()
     }
 
+    /// True when no net has two attach points.
     pub fn is_empty(&self) -> bool {
         self.net.is_empty()
     }
@@ -172,6 +229,8 @@ const MAX_ITERATIONS: u32 = 20_000;
 /// `i` (currents).
 #[derive(Debug, Default)]
 pub struct PowerSolution {
+    /// Solved voltage at each node, mV; a pad sits exactly at its fixed
+    /// voltage.
     pub node_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
     /// Nominal minus solved: positive is a loss.
     pub node_drop: Vec<Qty<Voltage, { prefix::MILLI }>>,
@@ -689,7 +748,9 @@ fn conjugate_gradient(scratch: &mut SolveScratch) -> Result<(), PowerError> {
 /// A grid and its solution, borrowed together.
 #[derive(Debug, Clone, Copy)]
 pub struct Solved<'a> {
+    /// The supply grid.
     pub grid: &'a PowerGrid,
+    /// Its solution, row for row.
     pub solution: &'a PowerSolution,
 }
 
@@ -725,6 +786,12 @@ pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
 /// Each rail's budget spreads uniformly over its device terminals: one number
 /// per net is all [`IntentMap`] carries, so a hot spot reads cooler than it
 /// is. The rail is anchored at one pad (see below), which over-reports drop.
+///
+/// # Errors
+///
+/// Returns [`PowerError::NoSheetResistance`] when a conductor, or a cut
+/// between two non-global conductors, has no positive finite sheet
+/// resistance, whether or not any supply is declared. `out` is left empty.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -1544,6 +1611,11 @@ fn squares(length: Dbu, width: Dbu) -> f64 {
 ///
 /// Same chain model as [`extract_into`], but each net's links are sorted by
 /// `(net, a, b, layer)` and a device attaches once per net.
+///
+/// # Errors
+///
+/// Returns [`PowerError::NoSheetResistance`] as [`extract_into`] does, with
+/// `out` left empty.
 pub fn extract_nets_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -1711,6 +1783,15 @@ fn bad_resistance(resistance: &[Qty<Resistance, { prefix::BASE }>]) -> Result<()
 /// Pads are eliminated before the iteration (leaving an SPD system), and an
 /// island no pad reaches is refused first: CG on a singular system converges
 /// to a meaningless solution.
+///
+/// # Errors
+///
+/// [`PowerError::NotFinite`] for a non-finite nominal, load or pad voltage,
+/// or a non-finite result; [`PowerError::BadResistance`] for an edge that is
+/// not positive and finite; [`PowerError::Unanchored`] with no pad;
+/// [`PowerError::UnanchoredIsland`] for a node no pad reaches;
+/// [`PowerError::NotConverged`] when the iteration limit is hit. `out` is
+/// not a solution after an error.
 pub fn solve_into(
     grid: &PowerGrid,
     scratch: &mut SolveScratch,
@@ -1888,6 +1969,16 @@ pub fn solve_into(
 ///
 /// Interior nodes are Kron-eliminated in minimum-degree order, then each
 /// component's `k × k` terminal Laplacian is grounded and inverted exactly.
+///
+/// # Errors
+///
+/// [`PowerError::BadResistance`] for an edge of the row that is not positive
+/// and finite (its index within the row), and [`PowerError::NotFinite`] when
+/// a component's terminal Laplacian will not invert.
+///
+/// # Panics
+///
+/// Panics if `row` is not below `networks.len()`.
 pub fn effective_resistance_into(
     networks: &NetNetworks,
     row: u32,

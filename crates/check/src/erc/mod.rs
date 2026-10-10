@@ -4,6 +4,10 @@
 //! Data out: violations and one `RuleRun` per configured row, from [`check`].
 //! Kinds that need design intent record themselves skipped, never clean,
 //! without it. The submodules stay public for the integration tests.
+//!
+//! Each kind is defined on its table type in [`rules`], reached from its
+//! [`RuleSet`] field; the crate's [rule reference](crate#electrical-rules)
+//! lists them all with their deck spelling.
 
 pub mod facts;
 pub mod power;
@@ -29,10 +33,15 @@ use ruleset::{RuleHead, RunInputs};
 /// What one ERC run reads, borrowed.
 #[derive(Debug, Clone, Copy)]
 pub struct Inputs<'a> {
+    /// The extracted layout: geometry, nets and devices.
     pub design: Design<'a>,
+    /// Net names from layout labels. They key the intent's supplies and
+    /// limits, and `floating_gate` may read a labelled net as a port.
     pub ports: &'a PortTable,
     /// `None` skips the intent rules.
     pub intent: Option<&'a DesignIntent>,
+    /// The deck's grid, stack and connectivity: sheet resistances for the
+    /// networks, conductors for the antenna stages.
     pub process: Process<'a>,
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
@@ -40,10 +49,21 @@ pub struct Inputs<'a> {
     pub temperature: Qty<Temperature, { prefix::BASE }>,
 }
 
-/// Classify nets, resolve intent, build the per-net networks and the supply
-/// grid, solve it, then run every row. A network that could not be built (a
-/// conductor whose resistance the deck does not state: unknown, never zero)
-/// or a failed solve refuses only the rows that read it; the rest run.
+/// Runs every row of `rules` over one extracted design, appending violations
+/// to `out` and exactly one [`RuleRun`] per row to `runs`.
+///
+/// Nets are classified, the intent resolved onto them, voltages propagated,
+/// and the per-net networks and the supply grid built and solved once, for
+/// every row to read. A network that could not be built (a conductor whose
+/// resistance the deck does not state: unknown, never zero) or a failed solve
+/// refuses only the rows that read it; the rest run. Rows that need intent
+/// record themselves skipped when `inputs.intent` is `None` or names nothing
+/// this layout has.
+///
+/// # Errors
+///
+/// Never returns `Err`: a network or solve failure is recorded as refused
+/// rows instead.
 pub fn check(
     rules: &RuleSet,
     inputs: Inputs<'_>,
@@ -121,22 +141,58 @@ pub fn check(
 pub(crate) const BOLTZMANN_EV_PER_K: f64 = 8.617_333_262e-5;
 
 /// Why a deck could not be turned into a [`RuleSet`]. Construction-time only.
+///
+/// Every `rule` field is the deck's rule id, and every parameter name is the
+/// engine's (`sidewall_thickness`, `max_drivers`), not the deck spelling.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ErcError {
+    /// A required parameter is absent, or a row bounds nothing: a
+    /// `density_cmp` row with no limit names `max_density`, a `well_bias` row
+    /// with no model names `pmos`.
     #[error("rule {rule}: missing required parameter {param}")]
-    MissingParam { rule: String, param: &'static str },
+    MissingParam {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        param: &'static str,
+    },
+    /// A parameter holds the wrong kind of value, or a non-finite number.
     #[error("rule {rule}: parameter {param} is not the kind of value this rule takes")]
-    WrongParamType { rule: String, param: &'static str },
+    WrongParamType {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        param: &'static str,
+    },
+    /// The row names the wrong number of layers.
     #[error("rule {rule}: takes {expected} layers, the deck names {found}")]
     WrongLayerCount {
+        /// The deck's rule id.
         rule: String,
+        /// The exact count, or the minimum for a kind taking a layer list.
         expected: u32,
+        /// The count the row names.
         found: u32,
     },
+    /// A limit that must be positive is zero or negative; also a zero
+    /// `max_drivers` or `duty_cycle`.
     #[error("rule {rule}: limit {limit} is not positive")]
-    NonPositiveLimit { rule: String, limit: String },
+    NonPositiveLimit {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        limit: String,
+    },
+    /// A fraction outside `0.0 ..= 1.0`.
     #[error("rule {rule}: {param} must be a fraction in [0, 1]")]
-    NotAFraction { rule: String, param: &'static str },
+    NotAFraction {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        param: &'static str,
+    },
+    /// Two rows of the deck, of any kind, share this id: a run's outcomes are
+    /// attributed by id.
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
 }

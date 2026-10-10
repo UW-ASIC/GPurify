@@ -19,50 +19,161 @@ use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
-/// One conductor carrying both tap layers. With `within`, a `tap_a` shape
-/// counts only inside a shape of that layer: an n-tap biasing a PMOS well,
-/// not a PNP's base contact, which carries a p-type net by design.
+/// A supply short through one conductor: deck kind `supply_short`, written
+/// `supply_short(tap_a, tap_b[, within])`.
+///
+/// A row flags every net that holds a polygon of `tap_a` and a polygon of
+/// `tap_b`, such as an n-tap and a p-tap: one conductor ties together the two
+/// supplies those taps bias. With `within`, a `tap_a` shape counts only when
+/// its bounding-box centre lies in a `within` polygon: an n-tap biasing a
+/// PMOS well, not a PNP's base contact, which carries a p-type net by design.
+/// Needs no design intent.
+///
+/// Catalog: ERC-G4 in the [check catalog]. Defined by Calibre (public
+/// material only); no standards body defines it. Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 #[derive(Debug, Default)]
 pub struct SupplyShortTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the first tap layer (the one `within` scopes).
     pub tap_a: Vec<LayerId>,
+    /// Per row: the second tap layer.
     pub tap_b: Vec<LayerId>,
+    /// Per row: the layer a `tap_a` shape must sit in to count, or `None` for
+    /// every `tap_a` shape.
     pub within: Vec<Option<LayerId>>,
 }
 
-/// A net that falls into several components once its resistive (soft) layers
-/// are removed.
+/// A net held together only by a high-resistance layer: deck kind
+/// `soft_connection`, written `soft_connection(layers..)`.
+///
+/// The listed layers are soft: wells, substrate ties and the like, which
+/// conduct too poorly to carry a signal or a supply. A row takes every net
+/// with a polygon on a soft layer, drops its soft polygons, and joins the rest
+/// wherever two polygons share a point, on whatever layers. A net whose
+/// remaining polygons form more than one group is flagged: its pieces are
+/// connected only through the soft layers. Needs no design intent.
+///
+/// Catalog: LVS-003, ERC-G5 in the [check catalog]. Defined by
+/// [KLayout `soft_connect`]; Calibre SOFTCHK and SCONNECT (public material
+/// only); Magic `disconnect`. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [KLayout `soft_connect`]: https://www.klayout.de/doc-qt5/about/lvs_ref_netter.html
 #[derive(Debug, Default)]
 pub struct SoftConnectionTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// `soft[soft_start[i] .. soft_start[i + 1]]` are row `i`'s soft layers.
     pub soft_start: Vec<u32>,
+    /// Soft layers, CSR by `soft_start`; at least one per row. A layer listed
+    /// twice counts once.
     pub soft: Vec<LayerId>,
 }
 
-/// A point of a region further than `max_distance` from every tap.
+/// Latch-up tap distance: deck kind `missing_tie`, written
+/// `missing_tie(region, tap; max_distance: len)`.
+///
+/// A row flags every polygon of the `region` layer (the active area of one
+/// device polarity, say) that has a point, anywhere in it and not only at a
+/// vertex, further than `max_distance` from the nearest edge of a `tap`
+/// polygon, holes included. Distance is Euclidean, compared exactly in
+/// integers. A region with no tap on the layout is flagged. Needs no design
+/// intent.
+///
+/// # Limits
+///
+/// A tap distance conditional on neighbouring well spacing (ERC-D1a) and a
+/// minimum tie area (ERC-D1b) are missing. A point inside a tap measures its
+/// distance to the tap's edge, not zero.
+///
+/// Catalog: ERC-D1 in the [check catalog] (with the DRC kind
+/// `max_distance_to_tap`). Defined by [GF180MCU] LU.1-LU.4; [IHP SG13G2]
+/// LU.a and LU.b; [ASAP7] ACTIVE.LUP.1; [ESDA TR18.0-02] §3.1.1. Source tags
+/// are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [ASAP7]: https://github.com/The-OpenROAD-Project/asap7_pdk_r1p7/blob/main/docs/asap7_drm_201207a.pdf
+/// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
 #[derive(Debug, Default)]
 pub struct MissingTieTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the layer whose polygons must be tied.
     pub region: Vec<LayerId>,
+    /// Per row: the tap layer.
     pub tap: Vec<LayerId>,
+    /// Per row: the furthest a region point may be from a tap, database
+    /// units. Positive from a deck.
     pub max_distance: Vec<Dbu>,
 }
 
-/// A net carrying a gate and a source terminal but no drain.
+/// A gate tied straight to a rail: deck kind `tie_high_low`, written
+/// `tie_high_low()`.
+///
+/// A row flags every net that reaches a transistor gate and a transistor
+/// source but no drain: a gate tied directly to a supply instead of through a
+/// tie cell, which leaves the gate oxide exposed to every transient on the
+/// rail. Every row flags the same nets; rows differ only in id and severity.
+/// Needs no design intent.
+///
+/// # Limits
+///
+/// A transistor's source and drain are as extraction assigns them, by the
+/// order of the two diffusion polygons under its marker, not by circuit
+/// function, so the verdict can depend on that order.
+///
+/// Catalog: ERC-G7 in the [check catalog]. Defined by Calibre's weak-sourcing
+/// checks (public material only). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 #[derive(Debug, Default)]
 pub struct TieHighLowTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
 }
 
-/// A pad net with no chain of clamp devices to both a power and a ground supply.
+/// Pad ESD clamp path: deck kind `esd_topological`, written
+/// `esd_topological(pad; clamps: models)`.
+///
+/// A row flags a pad net with no chain of clamp devices to both a power and a
+/// ground supply. A pad net is any net with a polygon on the `pad` layer. The
+/// path is a clamp from the pad to a declared supply, then any chain of clamps
+/// between supplies (rail clamps). A clamp is any device of a listed model,
+/// through any of its terminals; a signal net other than the pad is not a
+/// path. Needs design intent, for which nets are the rails.
+///
+/// # Limits
+///
+/// Only the path's existence is checked: a clamp is any device of a listed
+/// model however it is wired, and the path's resistance, current capacity and
+/// device sizing (ERC-C2 to ERC-C8) are not checked.
+///
+/// Catalog: ERC-C1 in the [check catalog]. Defined by [ESDA TR18.0-01]
+/// §4.5.2-4.5.4; [Khazhinsky 2012]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
+/// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
 #[derive(Debug, Default)]
 pub struct EsdTopologicalTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// Marker layer whose polygons are pads.
     pub pad: Vec<LayerId>,
     /// Clamp device models per row, CSR.
     pub clamp_start: Vec<u32>,
+    /// Clamp models, CSR by `clamp_start`; at least one per row.
     pub clamp: Vec<StrId>,
 }
 
@@ -162,7 +273,16 @@ fn nets_marked(marks: &[u32], want: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Flag every net carrying both taps.
+/// Runs every [`SupplyShortTable`] row.
+///
+/// `examined` counts the polygons on `tap_a` and `tap_b`, all of them, inside
+/// `within` or not. A violation sits at the first vertex of the net's
+/// lowest-numbered polygon, on that polygon's layer, measuring the count 2
+/// (tap kinds on the net) against 1. Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_supply_short(
     design: Design<'_>,
     table: &SupplyShortTable,
@@ -200,8 +320,17 @@ pub fn check_supply_short(
     }
 }
 
-/// Flag every net that falls apart once the soft layers are removed, naming a
-/// shape on each side of the bridge.
+/// Runs every [`SoftConnectionTable`] row.
+///
+/// `examined` counts the nets with a polygon on a soft layer. A violation sits
+/// at the first vertex of the net's lowest-numbered remaining polygon, on its
+/// layer, and names a polygon in another group, one shape on each side of the
+/// bridge. It measures the count 2 against 1, however many groups there are.
+/// Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_soft_connection(
     design: Design<'_>,
     table: &SoftConnectionTable,
@@ -296,9 +425,16 @@ pub fn check_soft_connection(
     }
 }
 
-/// Flag every region polygon whose furthest point is more than `max_distance`
-/// from a tap, reporting that exact furthest point. Distances are compared
-/// squared, in integers.
+/// Runs every [`MissingTieTable`] row.
+///
+/// `examined` counts the region polygons. A violation sits at that furthest
+/// point, on the region layer, measuring its distance (rounded down to a
+/// database unit; `MAX_ABS_DBU` with no tap at all) against `max_distance`. A
+/// row is refused when its tap layer will not validate, never read as empty.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_missing_tie(
     design: Design<'_>,
     table: &MissingTieTable,
@@ -389,8 +525,11 @@ pub(crate) fn untied_points(
     Some(examined)
 }
 
-/// Flag every net that is a gate and a source and not a drain. `examined`
-/// counts gate nets.
+/// Runs every [`TieHighLowTable`] row.
+///
+/// `examined` counts nets with a gate terminal. A violation sits at the first
+/// vertex of the net's lowest-numbered polygon, on its layer, measuring the
+/// count of drains, 0, against 1. Every row runs.
 pub fn check_tie_high_low(
     design: Design<'_>,
     facts: &NetFacts,
@@ -426,8 +565,16 @@ pub fn check_tie_high_low(
     }
 }
 
-/// Flag every pad net that `clamp_rails` finds short of both rails.
-/// Measured is the rail kinds reached, limit 2.
+/// Runs every [`EsdTopologicalTable`] row.
+///
+/// `examined` counts distinct pad nets. A violation sits at the first vertex
+/// of the net's lowest-numbered polygon, on its layer, measuring the rail
+/// kinds reached (0 or 1) against 2. Every row is skipped without usable
+/// intent.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_esd_topological(
     design: Design<'_>,
     intent: &IntentMap,

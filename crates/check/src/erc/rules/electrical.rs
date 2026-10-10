@@ -1,7 +1,8 @@
 //! Rules over a solved resistive network.
 //!
-//! Data in: per-net networks (p2p resistance, always runs) and the solved
-//! supply grid (the other three, skipped without intent).
+//! Data in: per-net networks (p2p resistance, which needs no intent) and the
+//! solved supply grid (the other three, skipped without intent). Every kind
+//! here is refused when its network could not be built.
 //! Data out: violations and one run per row.
 
 use crate::erc::facts::IntentMap;
@@ -19,56 +20,217 @@ use gpurify_geom::{
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
-/// Worst effective resistance between any two device attach points of a net.
-/// Effective resistance, so a parallel strap can only lower it.
+/// Point-to-point resistance within a net: deck kind `p2p_resistance`,
+/// written `p2p_resistance(; max: resistance)`.
+///
+/// Every net with at least two device attach points gets a resistor network:
+/// each conductor polygon is a chain of resistors along its long axis,
+/// `sheet resistance * ∫ ds / w(s)`, tapped wherever something connects, and
+/// each via cut is one resistor of its cut layer's sheet value. A device
+/// attaches once per net, at the shape nearest its marker's centre. A row
+/// flags a net whose largest effective resistance between two attach points
+/// is above `max`. Effective resistance, so a parallel strap can only lower
+/// it. Two attach points in separate pieces of the net are not a pair. Needs
+/// no design intent, but needs a sheet resistance for every conductor and
+/// via the deck connects.
+///
+/// # Limits
+///
+/// Resistance is measured within one net. The ESD discharge path a P2P
+/// check is meant for, pad to device to bus to clamp across several nets
+/// (ERC-C6), and a guard ring's path to the supply pins (ERC-D4) are not
+/// modelled. Transverse resistance across a wide shape is not modelled.
+///
+/// Catalog: ERC-C6 (partial), ERC-D4 (partial) in the [check catalog].
+/// Defined by [ESDA TR18.0-01] Fig. 58; [ESDA TR18.0-02] Fig. 21 and §2.3;
+/// [JS-001] Tables 2A/2B (which pin pairs); [JESD78] Table 1; Calibre PERC,
+/// IC Validator and Voltus (public material only). Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
+/// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
+/// [JS-001]: https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf
+/// [JESD78]: https://www.jedec.org/standards-documents/docs/jesd-78b
 #[derive(Debug, Default)]
 pub struct P2pResistanceTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the largest allowed effective resistance, Ω. Positive from a
+    /// deck.
     pub max_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
 }
 
-/// Node voltage against each net's declared limits (all in `NetLimits`).
+/// Static IR drop on the supply grid: deck kind `ir_drop`, written
+/// `ir_drop()`.
+///
+/// The limits are per net, in the design intent's `limits`, not in the deck:
+/// `max_drop_mv`, `max_drop_fraction` (of the net's domain voltage) and
+/// `max_overvoltage_mv`. The grid is every conducting shape of every declared
+/// supply, modelled as for [`P2pResistanceTable`]. Each supply is held at its
+/// nominal (its domain's voltage for power, 0 V for ground) at one feed
+/// point, and each net's `budget_current_ua` is drawn equally by every device
+/// terminal on it; Ohm's and Kirchhoff's laws give each node's voltage. Drop
+/// is the loss toward the other rail: nominal minus node voltage on a power
+/// net, the rise above 0 V on a ground net (ground bounce). A row flags a node
+/// whose drop is above `max_drop_mv` or `max_drop_fraction` times its
+/// domain's voltage, or whose overvoltage (negative drop) is above
+/// `max_overvoltage_mv`. A limit left out is not checked, never unlimited.
+///
+/// # Limits
+///
+/// Each supply is fed from one point, the centre of its highest, then widest,
+/// shape, so a rail fed from several pads reads more drop near that point than
+/// it has. A net's budget is shared equally among its device terminals, so a
+/// device drawing more than its share reads cooler than it is. Static only:
+/// dynamic and vectorless IR are out of scope (ERC-E11).
+///
+/// Catalog: ERC-E8 in the [check catalog]. Defined by [OpenROAD psm];
+/// [Weste & Harris] §13.3.2; RedHawk, Voltus and mPower (public material
+/// only). No standards body defines static IR drop. Source tags are in
+/// [check-sources.md]; the intent file is described in [usage.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [usage.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md#design-intent
+/// [OpenROAD psm]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
+/// [Weste & Harris]: https://pages.hmc.edu/harris/cmosvlsi/4e/cmosvlsidesign_4e_fm.pdf
 #[derive(Debug, Default)]
 pub struct IrDropTable {
+    /// Rule id and severity per row. Rows differ only in id and severity: the
+    /// limits come from the intent.
     pub head: RuleHead,
 }
 
-/// Instantaneous current per unit conductor width against a per-layer limit.
+/// Current density on the supply grid: deck kind `em_current_density`,
+/// written `em_current_density(layers..; max_density: current per width,
+/// max_current_per_cut: current)`.
+///
+/// The grid is solved as for [`IrDropTable`], which gives every resistor its
+/// DC branch current. A metal segment on a listed layer may carry
+/// `max_density` times its width, the narrowest width the segment's cross
+/// section finds; a via cut on a listed cut layer may carry
+/// `max_current_per_cut`. A row flags a segment or cut whose current
+/// magnitude is above that. A layer the row does not list is not checked. The
+/// limit is taken as given, with no temperature derating
+/// ([`ElectromigrationTable`] derates).
+///
+/// # Limits
+///
+/// The limit is `max_density` times width only, with no width band or absolute
+/// cap for narrow lines (ERC-E3); IHP states only JMAX, so this may
+/// over-report but cannot under-report. The current is the static budget's,
+/// with no ESD stimulus and no It2 limits (ERC-C7), and no injection stimulus
+/// for a guard ring (ERC-D4).
+///
+/// Catalog: ERC-C7 (partial), ERC-D4 (partial), ERC-E1, ERC-E2, ERC-E3
+/// (partial), ERC-E10 in the [check catalog]. Defined by [GF180MCU] Tables
+/// 14.3 and 14.4; [IHP SG13G2] §2.15; [OpenROAD psm] `-enable_em`;
+/// [ESDA TR18.0-01] Fig. 58; [ESDA TR22] §4.4; [ESDA TR18.0-02] §2.3. Source
+/// tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [OpenROAD psm]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
+/// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
+/// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
+/// [ESDA TR22]: https://www.esda.org/store/standards/product/72/esd-tr22-0-01-14
 #[derive(Debug, Default)]
 pub struct EmCurrentDensityTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// `layer[layer_start[i] .. layer_start[i + 1]]` and the parallel limit
     /// columns are row `i`'s per-layer limits.
     pub layer_start: Vec<u32>,
+    /// Limited layers, metal or cut, CSR by `layer_start`. A layer listed
+    /// twice in a row is limited by its first entry.
     pub layer: Vec<LayerId>,
+    /// Parallel to `layer`: the largest current per width of metal, A/m.
     pub max_density: Vec<Qty<CurrentDensity, { prefix::BASE }>>,
     /// Via limits are per cut: a via has no width to divide by.
     pub max_current_per_cut: Vec<Qty<Current, { prefix::MICRO }>>,
 }
 
-/// Lifetime under sustained current: [`EmCurrentDensityTable`]'s limits
-/// derated to the operating temperature, with Blech-immortal segments exempt.
+/// Electromigration lifetime at temperature: deck kind `electromigration`,
+/// written `electromigration(layers..; max_density: current per width,
+/// max_current_per_cut: current, blech_limit: current,
+/// reference_temperature: temp, activation_energy: eV, current_exponent: n)`.
+///
+/// The limits are [`EmCurrentDensityTable`]'s, characterised for the target
+/// lifetime at `reference_temperature`, and derated to the run's operating
+/// temperature `T` by Black's equation, `MTTF = A J^-n exp(Ea / kT)`, held at
+/// equal lifetime:
+///
+/// `allowed(T) = allowed(T_ref) * exp(Ea / (n k) * (1/T - 1/T_ref))`,
+///
+/// which is below the stated limit when hotter. A segment is exempt
+/// (Blech-immortal) when its Blech product `|I| * L / W`, current density per
+/// width times the segment's length, is at or below `blech_limit` for its
+/// layer: back-stress halts the drift in a short line. A row flags a segment
+/// or cut that is not immortal and carries more than its derated limit.
+///
+/// # Limits
+///
+/// One operating temperature for the whole run (85 °C from the CLI), with no
+/// self-heating, which errs open for a hot wire. A segment's length `L` is
+/// the run between two adjacent nodes of the grid, not the line between two
+/// diffusion barriers. RMS, peak and Joule-heating limits (ERC-E7) and
+/// statistical or thermal-aware EM (ERC-E13) are not modelled.
+///
+/// Catalog: ERC-E4, ERC-E5, ERC-E6 in the [check catalog]. Defined by
+/// [GF180MCU] §14.2 (§14.2.2 for the derating); [IHP SG13G2] §2.15;
+/// [Black 1969]; [Blech 1976]; [JEP122]; JESD63 and JESD202. Source tags are
+/// in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [Black 1969]: https://doi.org/10.1109/T-ED.1969.16754
+/// [Blech 1976]: https://doi.org/10.1063/1.322842
+/// [JEP122]: https://www.jedec.org/standards-documents/docs/jep-122e
 #[derive(Debug, Default)]
 pub struct ElectromigrationTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// Per-layer CSR, as in [`EmCurrentDensityTable`].
     pub layer_start: Vec<u32>,
+    /// Limited layers, metal or cut, CSR by `layer_start`.
     pub layer: Vec<LayerId>,
+    /// Parallel to `layer`: current per width of metal at the reference
+    /// temperature, A/m.
     pub max_density: Vec<Qty<CurrentDensity, { prefix::BASE }>>,
+    /// Parallel to `layer`: current per via cut at the reference
+    /// temperature, µA.
     pub max_current_per_cut: Vec<Qty<Current, { prefix::MICRO }>>,
     /// Per layer: the Blech product `J * L` (current, since `J` is per width)
     /// at or below which a segment is immortal.
     pub blech_limit: Vec<Qty<Current, { prefix::MICRO }>>,
     /// Per row: the Arrhenius reference point, absolute.
     pub reference_temperature: Vec<Qty<Temperature, { prefix::BASE }>>,
+    /// Per row: `Ea` in Black's equation, eV. Negative or non-finite refuses
+    /// the row.
     pub activation_energy_ev: Vec<f64>,
     /// `n` in Black's equation.
     pub current_exponent: Vec<f64>,
 }
 
-/// Worst-pair effective resistance per net. A net with under two attach
-/// points has no network row and is not examined; a net that cannot be probed
-/// refuses the row.
+/// Runs every [`P2pResistanceTable`] row over the per-net networks.
+///
+/// `examined` counts the networks probed, one per net with at least two
+/// attach points. A violation sits at the first attach point of the worst
+/// pair (the earliest pair on a tie), on that shape's layer, names both
+/// shapes, and measures the pair's resistance against `max`. Every row is
+/// refused when `networks` could not be built (a conductor or via with no
+/// sheet resistance), and a row is refused at the first network that cannot
+/// be probed; violations it found before that stay in `out`.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_p2p_resistance(
     design: Design<'_>,
     networks: Result<&NetNetworks, PowerError>,
@@ -176,8 +338,17 @@ fn solved_or_fill<'a>(
     Some(solved)
 }
 
-/// Node voltages against each net's stated absolute drop, fractional drop and
-/// overvoltage. A node whose net states none is not examined.
+/// Runs every [`IrDropTable`] row over the solved supply grid.
+///
+/// `examined` counts grid nodes whose net states a drop, fractional drop or
+/// overvoltage limit. A violation sits at the node, on its shape's layer,
+/// measuring the drop (or overvoltage) in mV against the broken limit; a node
+/// can break several. Every row is refused when the grid could not be built
+/// or solved, with or without intent (a conductor with no sheet resistance
+/// refuses it). Otherwise every row is skipped when no usable intent was
+/// given or it declares no supply this layout has, and refused when a net's
+/// non-zero current budget reached no device terminal (zero current would
+/// pass every limit).
 pub fn check_ir_drop(
     power: Power<'_>,
     intent: &IntentMap,
@@ -351,8 +522,17 @@ fn check_current_rows(
     }
 }
 
-/// Branch currents against each layer's instantaneous limit. An edge on an
-/// unlimited layer is not examined.
+/// Runs every [`EmCurrentDensityTable`] row over the solved supply grid's
+/// branch currents.
+///
+/// `examined` counts grid segments and cuts on the row's layers. A violation
+/// sits at the segment's first node, on its layer, names the shapes at both
+/// ends, and measures the current in µA against the allowed current. Skipped
+/// and refused as [`check_ir_drop`] is.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_em_current_density(
     power: Power<'_>,
     intent: &IntentMap,
@@ -407,12 +587,19 @@ fn arrhenius_derating(
     derate.is_finite().then_some(derate)
 }
 
-/// Branch currents against the Arrhenius-derated limit, Blech-immortal
-/// segments exempt. A row with no usable derating is refused.
+/// Runs every [`ElectromigrationTable`] row over the solved supply grid's
+/// branch currents, derated to `operating_temperature` (absolute).
 ///
-/// ponytail: one temperature for the whole run, no self-heating, which errs
-/// open for a hot wire; upgrade is a per-edge temperature column on
-/// [`PowerGrid`].
+/// `examined` counts grid segments and cuts on the row's layers that are not
+/// Blech-immortal. A violation reports as [`check_em_current_density`]'s,
+/// against the derated limit. A row is refused when its derating is not
+/// usable: a non-positive temperature, a negative activation energy, a
+/// non-positive current exponent, or an infinite factor. Otherwise skipped
+/// and refused as [`check_ir_drop`] is.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_electromigration(
     power: Power<'_>,
     intent: &IntentMap,
@@ -422,6 +609,9 @@ pub fn check_electromigration(
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    // ponytail: one temperature for the whole run, no self-heating, which errs
+    // open for a hot wire; upgrade is a per-edge temperature column on
+    // `PowerGrid`.
     let Some(solved) = solved_or_fill(power, intent, &table.head, out, runs) else {
         return;
     };

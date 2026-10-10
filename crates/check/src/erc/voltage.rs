@@ -5,6 +5,18 @@
 //! pin of a resistor, diode or BJT); gates, bulks and capacitors pass nothing,
 //! and a supply net is fixed at its domain's nominal (power) or 0 V (ground).
 //! Data in: nets, devices, [`IntentMap`]. Data out: [`NetVoltage`].
+//!
+//! A channel passes whatever its gate is driven to, so a range spans every
+//! supply the net could ever be joined to, and the voltage rules built on it
+//! can over-report. A node pumped or bootstrapped beyond its supplies is
+//! outside the model. This is catalog row ERC-F1, partial because channels
+//! pass unconditionally; it is defined by Calibre PERC (white paper 81822,
+//! public material only), the sky130 hv.X.1 rule and Siemens patents
+//! US10796045B2 and US9262574B2. See the [check catalog] and
+//! [check-sources.md].
+//!
+//! [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+//! [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 
 use crate::erc::facts::IntentMap;
 use crate::topology::{DeviceTable, NetId, NetTable, TerminalRole};
@@ -12,21 +24,28 @@ use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::intent::SupplyRole;
 
-/// What each net can see, indexed by [`NetId`].
+/// What each net can see, indexed by [`NetId`]. Every column has one entry
+/// per net of the extraction [`propagate_into`] was given.
 #[derive(Debug, Default)]
 pub struct NetVoltage {
-    /// Lowest and highest voltage, mV; `lo > hi` when no supply reaches the net.
+    /// Lowest voltage the net can reach, mV; `lo > hi` when no supply reaches
+    /// the net.
     pub lo: Vec<f64>,
+    /// Highest voltage the net can reach, mV; `-inf` when no supply reaches it.
     pub hi: Vec<f64>,
-    /// Lowest and highest nominal of the reaching supplies' domains, mV.
+    /// Lowest domain nominal among the reaching supplies, mV.
+    /// A ground supply counts as its domain's nominal here, not 0 V.
     pub nominal_lo: Vec<f64>,
+    /// Highest domain nominal among the reaching supplies, mV; `-inf` when
+    /// none reaches the net.
     pub nominal_hi: Vec<f64>,
     /// Bit `d` set when a power supply of domain `d` reaches the net.
     pub power: Vec<u64>,
 }
 
 impl NetVoltage {
-    /// True when some supply reaches `net`. `NetId::NONE` is false.
+    /// True when some supply reaches `net`. `NetId::NONE` is false; any other
+    /// id past the table panics.
     pub fn known(&self, net: NetId) -> bool {
         net != NetId::NONE && self.lo[net.idx()] <= self.hi[net.idx()]
     }
@@ -37,7 +56,8 @@ impl NetVoltage {
             .then(|| (self.hi[a.idx()] - self.lo[b.idx()]).max(self.hi[b.idx()] - self.lo[a.idx()]))
     }
 
-    /// The power-domain mask of `net`; zero for `NetId::NONE`.
+    /// The power-domain mask of `net`; zero for `NetId::NONE`. A domain id is a
+    /// bit, so at most 64 domains.
     pub fn power_of(&self, net: NetId) -> u64 {
         if net == NetId::NONE {
             0
@@ -60,7 +80,7 @@ pub fn is_channel(kind: DeviceKind, role: TerminalRole) -> bool {
     !matches!(role, TerminalRole::Gate | TerminalRole::Bulk) && kind != DeviceKind::Capacitor
 }
 
-/// Propagate the declared supplies over device channels; `out` is refilled to
+/// Propagates the declared supplies over device channels; `out` is refilled to
 /// `nets.net_count()` rows. Supply nets stop propagation: two domains that share
 /// a ground stay apart.
 pub fn propagate_into(

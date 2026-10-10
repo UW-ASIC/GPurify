@@ -17,6 +17,9 @@ use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule kind this crate implements, as the deck spells it. Any other
 /// kind belongs to another domain and is stepped over.
+///
+/// Each name is a [`RuleSet`] field of the same name; the crate's
+/// [rule reference](crate#electrical-rules) gives each one's deck syntax.
 pub const KINDS: [&str; 24] = [
     "antenna",
     "antenna_electrical",
@@ -49,60 +52,99 @@ pub const KINDS: [&str; 24] = [
 pub struct RuleHead {
     /// The deck's id for this rule, interned; what a `RuleRun` is attributed to.
     pub rule: Vec<StrId>,
+    /// Per row: `Error`, or `Warning` when the deck row is marked `warning`.
     pub severity: Vec<Severity>,
 }
 
 impl RuleHead {
+    /// The number of rows; every per-row column of the table has this many.
     pub fn len(&self) -> usize {
         self.rule.len()
     }
 
+    /// True when the deck has no row of this kind; its check records nothing.
     pub fn is_empty(&self) -> bool {
         self.rule.is_empty()
     }
 }
 
 /// Every configured rule, one table per kind.
+///
+/// Built by [`RuleSet::from_deck`] and run by [`RuleSet::run`], usually
+/// through [`erc::check`](crate::erc::check). Each field holds the rows of
+/// the [`KINDS`] entry of the same name; its table type defines the kind.
 #[derive(Debug, Default)]
 pub struct RuleSet {
+    /// `floating_gate` rows: [`topology::FloatingGateTable`].
     pub floating_gate: topology::FloatingGateTable,
+    /// `floating_well` rows: [`topology::FloatingWellTable`].
     pub floating_well: topology::FloatingWellTable,
+    /// `multiple_drivers` rows: [`topology::MultipleDriversTable`].
     pub multiple_drivers: topology::MultipleDriversTable,
+    /// `unconnected_pin` rows: [`topology::UnconnectedPinTable`].
     pub unconnected_pin: topology::UnconnectedPinTable,
 
+    /// `supply_short` rows: [`supply::SupplyShortTable`].
     pub supply_short: supply::SupplyShortTable,
+    /// `soft_connection` rows: [`supply::SoftConnectionTable`].
     pub soft_connection: supply::SoftConnectionTable,
+    /// `missing_tie` rows: [`supply::MissingTieTable`].
     pub missing_tie: supply::MissingTieTable,
+    /// `tie_high_low` rows: [`supply::TieHighLowTable`].
     pub tie_high_low: supply::TieHighLowTable,
+    /// `esd_topological` rows: [`supply::EsdTopologicalTable`].
     pub esd_topological: supply::EsdTopologicalTable,
 
+    /// `antenna` rows: [`antenna::AntennaTable`].
     pub antenna: antenna::AntennaTable,
+    /// `antenna_electrical` rows: [`antenna::AntennaElectricalTable`].
     pub antenna_electrical: antenna::AntennaElectricalTable,
+    /// `density_cmp` rows: [`antenna::DensityCmpTable`].
     pub density_cmp: antenna::DensityCmpTable,
 
+    /// `p2p_resistance` rows: [`electrical::P2pResistanceTable`].
     pub p2p_resistance: electrical::P2pResistanceTable,
+    /// `ir_drop` rows: [`electrical::IrDropTable`].
     pub ir_drop: electrical::IrDropTable,
+    /// `em_current_density` rows: [`electrical::EmCurrentDensityTable`].
     pub em_current_density: electrical::EmCurrentDensityTable,
+    /// `electromigration` rows: [`electrical::ElectromigrationTable`].
     pub electromigration: electrical::ElectromigrationTable,
 
+    /// `reliability` rows: [`reliability::ReliabilityTable`].
     pub reliability: reliability::ReliabilityTable,
+    /// `hv_domain` rows: [`reliability::HvDomainTable`].
     pub hv_domain: reliability::HvDomainTable,
+    /// `esd_latchup` rows: [`reliability::EsdLatchupTable`].
     pub esd_latchup: reliability::EsdLatchupTable,
 
+    /// `gate_oxide` rows: [`domain::ModelLimitTable`], checked by
+    /// [`domain::check_gate_oxide`].
     pub gate_oxide: domain::ModelLimitTable,
+    /// `drain_source` rows: [`domain::ModelLimitTable`], checked by
+    /// [`domain::check_drain_source`].
     pub drain_source: domain::ModelLimitTable,
+    /// `well_bias` rows: [`domain::WellBiasTable`].
     pub well_bias: domain::WellBiasTable,
+    /// `missing_level_shifter` rows: [`domain::MissingLevelShifterTable`].
     pub missing_level_shifter: domain::MissingLevelShifterTable,
+    /// `domain_crossing` rows: [`domain::DomainCrossingTable`].
     pub domain_crossing: domain::DomainCrossingTable,
 }
 
 /// Everything one run reads, borrowed.
 #[derive(Debug, Clone, Copy)]
 pub struct RunInputs<'a> {
+    /// The extracted layout: geometry, nets and devices.
     pub design: Design<'a>,
+    /// Terminal roles per net, from
+    /// [`classify_nets_into`](crate::erc::facts::classify_nets_into) over the
+    /// same nets.
     pub facts: &'a NetFacts,
     /// Labelled nets: driven from outside the cell.
     pub ports: &'a PortTable,
+    /// The design intent keyed by net; [`IntentMap::is_usable`] decides which
+    /// rows skip.
     pub intent: &'a IntentMap,
     /// What each net can reach from the declared supplies.
     pub voltage: &'a NetVoltage,
@@ -112,6 +154,8 @@ pub struct RunInputs<'a> {
     pub power: Power<'a>,
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
+    /// The layout's grid, which turns a width in database units into metres
+    /// for a current-density limit.
     pub grid: Grid,
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
@@ -333,8 +377,20 @@ impl Row<'_> {
 }
 
 impl RuleSet {
-    /// Build the tables from a deck. Fails closed on any row of a kind in
-    /// [`KINDS`] it cannot read; rows of other kinds are stepped over.
+    /// Builds the tables from a deck. Fails closed on any row of a kind in
+    /// [`KINDS`] it cannot read; rows of other kinds are stepped over. The
+    /// antenna tables also take a copy of the deck's connectivity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`ErcError`] in deck order: a rule id used twice by
+    /// rows of any kind, or, in a row of a kind in [`KINDS`], a missing or
+    /// mistyped parameter, a wrong layer count, a non-positive limit, a
+    /// fraction outside `0.0 ..= 1.0`, or a row that bounds nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if one table's layer or model column outgrows a `u32` index.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, ErcError> {
         let mut set = Self::default();
         // Sorted ids already filed; the first duplicate in deck order is refused.
@@ -689,12 +745,19 @@ impl RuleSet {
         .sum()
     }
 
+    /// True when the deck configures no ERC row.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Run every table once, appending to `out` and `runs`. An empty table
-    /// produces no `RuleRun`.
+    /// Runs every table once, appending to `out` and `runs`: exactly one
+    /// `RuleRun` per configured row, and none for an empty table.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a table's columns break the
+    /// [table invariants](crate::erc::rules#tables), as one assembled by hand
+    /// rather than by [`RuleSet::from_deck`] can.
     pub fn run(
         &self,
         inputs: RunInputs<'_>,

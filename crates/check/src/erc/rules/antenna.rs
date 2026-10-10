@@ -23,23 +23,36 @@ use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::deck::Connectivity;
 
-/// What an antenna rule counts as collecting area.
+/// What an [`AntennaTable`] row counts as collecting area. A deck row states
+/// one measure for all of its collectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AntennaMeasure {
-    /// The polygon's own area.
+    /// The drawn area of each polygon, summed per polygon: overlapping drawn
+    /// polygons count twice. Deck: `sidewall: none`.
     Area,
     /// Etched sidewall: the merged layer's perimeter times `thickness`, an
     /// area like the gate's (sky130 poly/li/met1-3, gf180 `perimeter_only`).
-    Sidewall { thickness: Dbu },
+    /// Deck: `sidewall: len`.
+    Sidewall {
+        /// The conductor's thickness, database units. Positive from a deck.
+        thickness: Dbu,
+    },
 }
 
-/// The deck's conductors (bottom-up) and via rows, from which each antenna
-/// row's etch-step connectivity is cut.
+/// The deck's connectivity, from which each antenna row's etch-stage nets are
+/// cut. [`RuleSet::from_deck`](crate::erc::RuleSet::from_deck) copies it from
+/// the deck's `connect` statements; with no conductors, every row measures
+/// the finished nets instead.
 #[derive(Debug, Default)]
 pub struct Stack {
+    /// Conductor layers bottom-up, as `connect conductors` lists them. The
+    /// order decides which conductors exist at a stage.
     pub conductors: Vec<LayerId>,
-    /// `(cut, lower, upper)`.
+    /// `(cut, a, b)`: one `connect via` row, the cut and the two conductors it
+    /// joins in deck order. A stage keeps a via when both conductors stand.
     pub vias: Vec<(LayerId, LayerId, LayerId)>,
+    /// Whether shapes touching on one layer are one net
+    /// (`connect touch_within_layer`).
     pub intra_layer_touch: bool,
 }
 
@@ -83,59 +96,190 @@ impl Stack {
     }
 }
 
-/// A first-order CMP model: finished thickness linear in local density.
+/// A first-order CMP model: finished thickness linear in local density,
+/// `nominal + sensitivity * (density - target)`. Deck:
+/// `cmp: (target: frac, thickness: len, sensitivity: len, max_delta: len)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CmpModel {
+    /// The density at which the finished thickness is nominal, `0.0 ..= 1.0`.
     pub target_density: f64,
+    /// The finished thickness at `target_density`, database units. Required
+    /// by the deck but read by no check: only the excursion is compared.
     pub nominal_thickness: Dbu,
-    /// Thickness change per unit density above target; signed.
+    /// Thickness change per unit density above target, database units; signed.
     pub thickness_sensitivity: Dbu,
+    /// Largest allowed `|sensitivity * (density - target)|`, database units.
     pub max_abs_thickness_delta: Dbu,
 }
 
-/// Per-stage antenna ratio: collecting area over gate area, per gate net.
+/// Antenna ratio at one etch stage: deck kind `antenna`, written
+/// `antenna(gate, collectors..; max_ratio: n, sidewall: len | none)`.
+///
+/// A conductor being plasma-etched collects charge in proportion to its area
+/// (or, for a thick layer, its sidewall) and discharges it through the thin
+/// gate oxide it is connected to at that moment. A row flags every gate net
+/// whose `collecting area / gate area` is above `max_ratio`, where:
+///
+/// - the nets are those standing when the row's highest collector is etched:
+///   the deck's conductors up to that one ([`Stack::conductors`] order) and
+///   the vias between two of them. A cut collector stands on its lower
+///   conductor. A gate or diode reachable only through a higher metal is not
+///   on the net yet. A deck with no conductors measures the finished nets.
+/// - collecting area is summed over every collector polygon on the net, by
+///   the row's [`AntennaMeasure`]. One collector gives the per-layer ratio
+///   (PAR); every layer up to the stage gives the cumulative ratio (CAR).
+/// - gate area is summed over the polygons of the `gate` layer on the net.
+///   Name the gate as a derived `poly and diffusion` layer, which is merged.
+///   A layer that is not a conductor (the derived gate, a cut, a capacitor
+///   plate) joins the net of the topmost conductor it overlaps with positive
+///   area; touching alone does not join.
+///
+/// The ratio is dimensionless. No design intent is needed.
+///
+/// # Limits
+///
+/// - Every net with gate area is checked: reaching diffusion or a tap
+///   exempts nothing (ERC-A13), and a gate with a protection diode is held to
+///   the no-diode limit, which over-reports IHP Ant.e/f (ERC-A8).
+/// - The cumulative ratio divides all collected area by the gate area at the
+///   highest stage. IHP sums one ratio per layer, each over the gate area
+///   connected at that layer's stage, so a gate joined to others only on a
+///   higher metal can under-report.
+/// - LEF `ANTENNACUMROUTINGPLUSCUT` is missing (ERC-A4); oxide classes are one
+///   row per gate layer (ERC-A12); a MIM victim works as a gate layer, but
+///   gf180's deck leaves ANT.14/15 out (ERC-A11).
+///
+/// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4 (partial), ERC-A8, ERC-A11
+/// (partial), ERC-A12 (partial) in the [check catalog]. Defined by
+/// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
+/// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1. Source
+/// tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
 #[derive(Debug, Default)]
 pub struct AntennaTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the gate (victim) layer, the ratio's denominator.
     pub gate: Vec<LayerId>,
     /// `collector[collector_start[i] .. collector_start[i + 1]]` and the
     /// parallel `collector_measure` are row `i`'s collecting set.
     pub collector_start: Vec<u32>,
+    /// Collector layers, CSR by `collector_start`; at least one per row. A
+    /// layer listed twice in a row collects once, by its first measure.
     pub collector: Vec<LayerId>,
+    /// Parallel to `collector`; equal within a row.
     pub collector_measure: Vec<AntennaMeasure>,
+    /// Per row: the largest allowed ratio. Positive and finite from a deck.
     pub max_ratio: Vec<f64>,
+    /// The deck's connectivity, shared by every row.
     pub stack: Stack,
 }
 
-/// Cumulative antenna ratio with diode credit:
-/// `collecting / gate - credit * diode_area - bonus`.
+/// Antenna ratio with protection-diode credit: deck kind `antenna_electrical`,
+/// written `antenna_electrical(gate, collectors..; max_ratio: n,
+/// diode: layer | none, diode_credit: n, diode_bonus: n)`.
+///
+/// Nets, collectors and gates are those of [`AntennaTable`] (always by drawn
+/// area, never sidewall). The value compared with `max_ratio` is
+/// `collecting / gate - diode_credit * diode_area - diode_bonus`, the
+/// subtractive credit sky130 states, where `diode_area` is the `diode` layer
+/// area on the gate's net at that stage. `diode_bonus` is subtracted from
+/// every gate net of the row, with or without a diode on it.
+///
+/// # Limits
+///
+/// A row with a diode layer and a non-zero `diode_credit` is refused: the unit
+/// of the diode area in the credit is not settled. So today the kind runs only
+/// as `antenna` with a constant bonus (ERC-A5). gf180's additive model
+/// (ERC-A6) and LEF's piecewise-linear diffusion limits (ERC-A7) are missing.
+///
+/// Catalog: ERC-A5 (partial), ERC-A8 in the [check catalog]. Defined by
+/// [SKY130] antenna EGAR; [LEF/DEF 5.8] `ANTENNAAREAMINUSDIFF`; [IHP SG13G2]
+/// Ant.b/e and Ant.d/f. Source tags are in [check-sources.md]; the refusal is
+/// in [limitations.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [limitations.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md
+/// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
 #[derive(Debug, Default)]
 pub struct AntennaElectricalTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the gate (victim) layer.
     pub gate: Vec<LayerId>,
     /// `collector[collector_start[i] .. collector_start[i + 1]]`, CSR.
     pub collector_start: Vec<u32>,
+    /// Collector layers, CSR by `collector_start`; at least one per row.
     pub collector: Vec<LayerId>,
+    /// Per row: the protection-diode layer, or `None` for no credit by area.
     pub diode: Vec<Option<LayerId>>,
+    /// Per row: the credit per unit diode area. Non-zero with a diode refuses
+    /// the row.
     pub diode_credit: Vec<f64>,
+    /// Per row: a constant subtracted from every gate net's ratio.
     pub diode_bonus: Vec<f64>,
+    /// Per row: the largest allowed credited ratio. Positive from a deck.
     pub max_ratio: Vec<f64>,
+    /// The deck's connectivity, shared by every row.
     pub stack: Stack,
 }
 
-/// Windowed density, and the thickness it implies. An absent bound is *not
-/// checked*.
+/// Windowed metal density and the CMP thickness it implies: deck kind
+/// `density_cmp`, written `density_cmp(L; window: len x len, step: len x len,
+/// min: frac | none, max: frac | none, max_delta: frac | none,
+/// partial_windows: bool, cmp: none | (target, thickness, sensitivity,
+/// max_delta))`.
+///
+/// Windows of `window` size start at the die's lower-left corner and step by
+/// `step` while their origin is inside the die, so a step under the window
+/// overlaps on purpose. A window's density is the merged layer's area inside
+/// it over the window's area clipped to the die, in `0.0 ..= 1.0`. A row
+/// flags a window below `min`, above `max`, differing from the next window to
+/// its right or above by more than `max_delta`, or whose CMP excursion
+/// `|sensitivity * (density - target)|` is above the model's `max_delta`. An
+/// absent bound is not checked, never unlimited; a deck row must state at
+/// least one. A die-clipped (partial) window is held to `min`, `max` and the
+/// CMP limit only when `partial_windows` is true; `max_delta` compares every
+/// pair of neighbours, partial or not. No design intent is needed.
+///
+/// Catalog: ERC-B1, DRC-071 in the [check catalog]. Defined by [GF180MCU]
+/// §13 (density); [LEF/DEF 5.8] `DENSITYCHECKWINDOW`/`DENSITYCHECKSTEP`;
+/// [IHP SG13G2] MFil.h; [SKY130] m1.pd.2a/2b. Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
 #[derive(Debug, Default)]
 pub struct DensityCmpTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the layer whose density is measured, merged first.
     pub layer: Vec<LayerId>,
     /// Window extent and step; a step under the window overlaps on purpose.
     pub window: Vec<(Dbu, Dbu)>,
+    /// Per row: the `(x, y)` step between window origins, database units.
+    /// Positive from a deck; a non-positive window or step refuses the row.
     pub step: Vec<(Dbu, Dbu)>,
+    /// Per row: the smallest allowed density, or `None` for unchecked.
     pub min_density: Vec<Option<f64>>,
+    /// Per row: the largest allowed density, or `None` for unchecked.
     pub max_density: Vec<Option<f64>>,
     /// Largest density difference between adjacent windows.
     pub max_neighbour_delta: Vec<Option<f64>>,
+    /// Per row: the CMP thickness model, or `None` for no thickness check.
     pub cmp: Vec<Option<CmpModel>>,
     /// Evaluate a die-clipped window against its clipped area, or skip it.
     pub include_partial_windows: Vec<bool>,
@@ -377,7 +521,18 @@ fn antenna_row(
     Some(examined)
 }
 
-/// Per-stage antenna ratio, reported at the gate.
+/// Runs every [`AntennaTable`] row: one ratio per gate net at the row's etch
+/// stage.
+///
+/// `examined` counts gate nets, the nets with positive gate area. A violation
+/// sits at the centre of the bounding box of the net's lowest-numbered gate
+/// polygon, on the gate layer, measuring the ratio against `max_ratio`. A row
+/// is refused when one of its layers will not validate (a non-rectilinear
+/// shape) or a sidewall layer will not merge.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_antenna(
     design: Design<'_>,
     table: &AntennaTable,
@@ -405,9 +560,16 @@ pub fn check_antenna(
     }
 }
 
-/// Cumulative antenna ratio with diode credit, subtracted from the ratio (as a
-/// foundry states it). A row whose verdict depends on `credit * diode_area` is
-/// refused: that area's unit is unstated.
+/// Runs every [`AntennaElectricalTable`] row: the credited ratio per gate net.
+///
+/// Reports as [`check_antenna`] does, the measured value being the credited
+/// ratio. A row with a diode layer and a non-zero `diode_credit` is refused
+/// before it is measured, whatever its nets hold: the unit of the diode area
+/// in the credit is not settled.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_antenna_electrical(
     design: Design<'_>,
     table: &AntennaElectricalTable,
@@ -577,8 +739,20 @@ fn window_owner(owners: &[u32], slot: usize, fallback: u32) -> PolyId {
     PolyId((best & !none) | (fallback & none))
 }
 
-/// Density of every window (area clipped to `die`), neighbour deltas, and the
-/// CMP thickness excursion. `examined` counts windows evaluated.
+/// Runs every [`DensityCmpTable`] row over the window grid laid on `die`.
+///
+/// `examined` counts the windows held to the density and CMP limits: every
+/// window with `partial_windows`, else only those wholly inside the die. A
+/// violation sits at the centre of the die-clipped window, on the row's
+/// layer, and names the lowest-numbered polygon whose box touches the window
+/// (the layer's first polygon for an empty window). Density and neighbour
+/// delta report ratios, the CMP check a length in database units. One window
+/// can raise several violations. A row is refused when its window or step is
+/// not positive or its layer will not validate or merge.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 #[allow(
     clippy::cast_precision_loss,
     reason = "a die's area in database units is far below 2^53"

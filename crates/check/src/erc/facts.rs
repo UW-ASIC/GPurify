@@ -15,16 +15,28 @@ use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, SupplyRole};
 pub struct RoleMask(pub u8);
 
 impl RoleMask {
+    /// A MOS gate.
     pub const GATE: Self = Self(1 << 0);
+    /// A MOS source, as extraction assigns it: by terminal order, not by
+    /// circuit function.
     pub const SOURCE: Self = Self(1 << 1);
+    /// A MOS drain, as extraction assigns it: by terminal order, not by
+    /// circuit function.
     pub const DRAIN: Self = Self(1 << 2);
+    /// A MOS bulk (body).
     pub const BULK: Self = Self(1 << 3);
+    /// A bipolar base.
     pub const BASE: Self = Self(1 << 4);
+    /// A bipolar emitter.
     pub const EMITTER: Self = Self(1 << 5);
+    /// A bipolar collector.
     pub const COLLECTOR: Self = Self(1 << 6);
+    /// Any pin of a resistor, capacitor or diode, whatever its index.
     pub const PIN: Self = Self(1 << 7);
+    /// No terminal: a net no device touches.
     pub const NONE: Self = Self(0);
 
+    /// The one bit for `role`; every `Pin(_)` maps to [`Self::PIN`].
     pub const fn of(role: TerminalRole) -> Self {
         match role {
             TerminalRole::Gate => Self::GATE,
@@ -47,11 +59,13 @@ impl RoleMask {
         self.0 & other.0 != 0
     }
 
+    /// The bits set in either mask.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
+    /// True when no bit is set: no device terminal on the net.
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
@@ -60,14 +74,17 @@ impl RoleMask {
 /// Roles present on each net, indexed by [`NetId`].
 #[derive(Debug, Default)]
 pub struct NetFacts {
+    /// One mask per net of the extraction [`classify_nets_into`] was given.
     pub role: Vec<RoleMask>,
 }
 
 impl NetFacts {
+    /// The number of nets classified.
     pub fn len(&self) -> usize {
         self.role.len()
     }
 
+    /// True when no net was classified, as for a design never extracted.
     pub fn is_empty(&self) -> bool {
         self.role.is_empty()
     }
@@ -79,8 +96,9 @@ impl NetFacts {
     }
 }
 
-/// Fold every device terminal into its net's role mask; `out` is refilled to
-/// `nets.net_count()` rows.
+/// Folds every device terminal into its net's role mask; `out` is refilled to
+/// `nets.net_count()` rows. A terminal on no net, or on a net past `nets`, is
+/// dropped.
 pub fn classify_nets_into(nets: &NetTable, devices: &DeviceTable, out: &mut NetFacts) {
     // A scrap row past the end takes `NetId::NONE` (and any id past this
     // extraction) so its roles cannot leak onto a real net.
@@ -102,6 +120,7 @@ pub struct IntentMap {
     pub declared: bool,
     /// Declared supply nets, ascending (the lookups binary-search it).
     pub supply_net: Vec<NetId>,
+    /// Parallel to `supply_net`: power or ground.
     pub supply_role: Vec<SupplyRole>,
     /// The domain each supply net belongs to.
     pub supply_domain: Vec<DomainId>,
@@ -109,6 +128,8 @@ pub struct IntentMap {
     pub supply_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
     /// Nets with declared limits, ascending. Not disjoint from `supply_net`.
     pub limit_net: Vec<NetId>,
+    /// Parallel to `limit_net`: the limits as the intent states them, at
+    /// least one of them set.
     pub limit: Vec<NetLimits>,
 }
 
@@ -149,8 +170,11 @@ impl IntentMap {
     }
 }
 
-/// Re-key design intent onto extracted nets; `out` is cleared and refilled.
+/// Re-keys design intent onto extracted nets; `out` is cleared and refilled.
 /// `None` leaves `declared == false`, which is how the intent rules report skipped.
+///
+/// A net is matched by its label name in `ports`. A supply or limit the
+/// intent names but no labelled net carries is dropped without a report.
 pub fn resolve_intent_into(
     intent: Option<&DesignIntent>,
     ports: &PortTable,

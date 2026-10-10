@@ -1,7 +1,9 @@
-//! Rules that ask only what is connected to what.
+//! Rules that ask what is connected to what, and the well-tap containment
+//! test.
 //!
-//! Data in: nets, devices, [`NetFacts`]. Data out: violations and one run per
-//! row. Nothing here re-derives connectivity.
+//! Data in: nets, devices, [`NetFacts`], and for `floating_well` the well and
+//! tap geometry. Data out: violations and one run per row. Nothing here
+//! re-derives connectivity.
 
 use crate::drc::rules::{owners_of, LayerRects, SortedRects};
 use crate::erc::facts::{NetFacts, RoleMask};
@@ -15,44 +17,133 @@ use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{LayerId, PolyId};
 
+/// A floating gate: deck kind `floating_gate`, written
+/// `floating_gate(; labels_are_ports: bool)`.
+///
 /// A gate net with nothing driving it: its role mask is exactly
-/// [`RoleMask::GATE`].
+/// [`RoleMask::GATE`]. Every device terminal on the net is a transistor gate,
+/// so no source, drain, bulk, bipolar or two-terminal device can set its
+/// voltage. With `labels_are_ports: true`, a labelled net is a block input
+/// driven from outside the cell and is not flagged. Needs no design intent.
+///
+/// Catalog: ERC-G1 in the [check catalog]. Defined by Calibre PERC (white
+/// paper 81822, public material only); [Yosys `check`] (undriven wires).
+/// Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [Yosys `check`]: https://yosyshq.readthedocs.io/projects/yosys/en/latest/cmd/index_passes_status.html
 #[derive(Debug, Default)]
 pub struct FloatingGateTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// Per row: a labelled net is a port, driven from outside the cell. Off by
     /// default, since a layout may label internal nets too.
     pub labels_are_ports: Vec<bool>,
 }
 
-/// A well with no tap tying it to a supply.
+/// A well with no tap: deck kind `floating_well`, written
+/// `floating_well(well, tap)`.
+///
+/// A well with no tap tying it to a supply. A well is a figure of the merged
+/// `well` layer, so bands drawn abutting are one well. A tap ties the well
+/// that covers all of its area, so a tap in a hole or a notch, or straddling
+/// the well's edge, ties nothing. The test is geometric containment, not
+/// connectivity: wells need not be nets. Needs no design intent.
+///
+/// Catalog: DRC-085, ERC-G2 in the [check catalog]. Defined by [SKY130]
+/// nwell.4; [GF180MCU] DN.3; [IHP SG13G2] nmosi.d. Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 #[derive(Debug, Default)]
 pub struct FloatingWellTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the well layer, merged into wells.
     pub well: Vec<LayerId>,
+    /// Per row: the tap layer.
     pub tap: Vec<LayerId>,
 }
 
+/// Contending drivers: deck kind `multiple_drivers`, written
+/// `multiple_drivers(; max: count)`.
+///
 /// A net driven by more than `max_drivers` distinct gate nets (a parallel pair
-/// sharing a gate is one driver).
+/// sharing a gate is one driver). A transistor drives the net its drain is
+/// on, and its driver is its gate's net, so an inverter's two transistors are
+/// one driver. A drain with no gate is not a driver. Needs no design intent.
+///
+/// # Limits
+///
+/// The output of a multi-input static gate (NAND, NOR) has drains gated by
+/// each input, so it counts one driver per input. A transistor's source and
+/// drain are as extraction assigns them, by the order of the two diffusion
+/// polygons under its marker, not by circuit function, so the verdict can
+/// depend on that order.
+///
+/// Catalog: ERC-G3 in the [check catalog]. Defined by [Yosys `check`]
+/// (conflicting drivers). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [Yosys `check`]: https://yosyshq.readthedocs.io/projects/yosys/en/latest/cmd/index_passes_status.html
 #[derive(Debug, Default)]
 pub struct MultipleDriversTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the most distinct drivers a net may have. At least 1 from a
+    /// deck.
     pub max_drivers: Vec<u32>,
 }
 
-/// A conductor on a net no device terminal touches.
+/// A dangling conductor: deck kind `unconnected_pin`, written
+/// `unconnected_pin(layers..)`.
+///
+/// A conductor on a net no device terminal touches. A row flags every
+/// polygon on a listed layer whose net reaches no device terminal, or that is
+/// on no net: a floating stripe, a stray shape, a pin wired to nothing. Needs
+/// no design intent.
+///
+/// # Limits
+///
+/// LEF58 must-join-all-ports is not modelled (DRC-084), and neither are the
+/// power-grid checks beyond dangling shapes, such as an instance's supply
+/// terminal left unconnected (ERC-E9).
+///
+/// Catalog: DRC-084 (partial), ERC-E9 (partial), ERC-G6 in the [check
+/// catalog]. Defined by [SKY130] x.22; LEF58 `MUSTJOINALLPORTS`;
+/// [OpenROAD `check_power_grid`]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+/// [OpenROAD `check_power_grid`]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
 #[derive(Debug, Default)]
 pub struct UnconnectedPinTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// `layer[layer_start[i] .. layer_start[i + 1]]` are row `i`'s layers.
     pub layer_start: Vec<u32>,
+    /// Checked layers, CSR by `layer_start`; at least one per row. A layer
+    /// listed twice is checked, and reported, twice.
     pub layer: Vec<LayerId>,
 }
 
-/// Flag every net whose only terminals are gates, skipping labelled nets on a
-/// row that treats labels as ports. `examined` counts nets carrying a gate
-/// terminal.
+/// Runs every [`FloatingGateTable`] row.
+///
+/// `examined` counts nets carrying a gate terminal, labelled or not. A
+/// violation sits at the first vertex of the net's lowest-numbered polygon,
+/// on its layer, measuring the count of non-gate terminals, 0, against 1.
+/// Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_floating_gate(
     design: Design<'_>,
     facts: &NetFacts,
@@ -98,10 +189,16 @@ pub fn check_floating_gate(
     }
 }
 
-/// Flag every well that no tap lies in. A well is a figure of the merged well
-/// layer, so bands drawn abutting are one well. A tap ties the figure that
-/// covers all of its area (exact: a tap in a hole or a notch ties nothing).
-/// `examined` counts wells; a violation names the well's lowest drawn row.
+/// Runs every [`FloatingWellTable`] row.
+///
+/// `examined` counts wells (merged figures). A violation sits at the first
+/// vertex of the well's lowest-numbered drawn polygon, on the well layer,
+/// measuring the count of taps, 0, against 1. A row is refused when its well
+/// or tap layer will not validate, or the well layer will not merge.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_floating_well(
     design: Design<'_>,
     table: &FloatingWellTable,
@@ -180,7 +277,15 @@ pub fn check_floating_well(
 /// `NetId::NONE`, so it sorts last in a net's group.
 const NO_GATE: u32 = u32::MAX;
 
-/// Flag every net driven from more than `max_drivers` distinct gate nets.
+/// Runs every [`MultipleDriversTable`] row.
+///
+/// `examined` counts nets with at least one drain terminal. A violation sits
+/// at the first vertex of the net's lowest-numbered polygon, on its layer,
+/// measuring the distinct drivers against `max`. Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_multiple_drivers(
     design: Design<'_>,
     table: &MultipleDriversTable,
@@ -248,7 +353,16 @@ pub fn check_multiple_drivers(
     }
 }
 
-/// Flag every polygon on a listed layer whose net reaches no device terminal.
+/// Runs every [`UnconnectedPinTable`] row.
+///
+/// `examined` counts the polygons on the row's layers. A violation sits at
+/// the polygon's first vertex, on its layer, measuring the device terminals
+/// reached, 0, against 1. Every row runs; with no extracted nets every
+/// polygon is unconnected.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_unconnected_pin(
     design: Design<'_>,
     facts: &NetFacts,
