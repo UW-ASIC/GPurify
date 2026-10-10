@@ -32,11 +32,21 @@ use std::sync::Mutex;
 /// The domains whose fixtures are finished: every implemented, partial and
 /// expressible catalog row of these must be proved by at least one fixture, or
 /// by a named test in [`PROVED_BY_TEST`].
-const COMPLETE: &[&str] = &["pex"];
+const COMPLETE: &[&str] = &["drc", "pex"];
 
-/// Catalog rows whose claim a fixture cannot state, and the `#[test]` in this
-/// binary that proves each.
-const PROVED_BY_TEST: &[(&str, &str)] = &[("PEX-010", "pex::spef_carries_the_closed_form_totals")];
+/// Catalog rows whose claim a fixture cannot state, and the `#[test]` that
+/// proves each, as `file::function` from the repository root.
+const PROVED_BY_TEST: &[(&str, &str)] = &[
+    (
+        "PEX-010",
+        "tests/exhaustive/pex.rs::spef_carries_the_closed_form_totals",
+    ),
+    // The harness writes one flat cell; flattening is proved where it is done.
+    (
+        "DRC-123",
+        "crates/ingest/src/layout.rs::a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise",
+    ),
+];
 
 fn all(depth: Depth) -> Vec<Fixture> {
     [
@@ -180,12 +190,10 @@ fn complete_domains_are_proved(fixtures: &[Fixture]) {
         }
     }
     for (id, test) in PROVED_BY_TEST {
-        let (module, name) = test.split_once("::").expect("module::test");
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("tests/exhaustive/{module}.rs")),
-        )
-        .expect("the module is readable");
+        let (file, name) = test.rsplit_once("::").expect("file::test");
+        let source =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+                .expect("the file is readable");
         assert!(
             source.contains(&format!("fn {name}()")),
             "{id}: no test {test}"

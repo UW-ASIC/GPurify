@@ -18,17 +18,14 @@
 //! four edges whatever pieces drew it.
 //!
 //! Where `GPurify` falls short of a definition, the fixture keeps the
-//! definition and names the finding that explains the gap (`known`): F19 and
-//! F34 from `docs/testing-plan.md`, and four this pass found:
-//! - N-x2-1: `extents()` stores the boxes of shapes whose boxes overlap as one
+//! definition and names the finding that explains the gap (`known`): F19,
+//! F34 and F40 (a grown derived layer widens the density die) from
+//! `docs/testing-plan.md`, and three this pass found:
+//! - F54: `extents()` stores the boxes of shapes whose boxes overlap as one
 //!   merged shape, where deck.md and `KLayout` give the box of each shape.
-//! - N-x2-2: `with_width` misses the Euclidean neck between concave corners
+//! - F55: `with_width` misses the Euclidean neck between concave corners
 //!   that `width` measures, though it is defined as `width` measures.
-//! - N-x2-3: without a boundary layer, `density` and `global_density` take
-//!   the die from every layer, derived ones included, so declaring a grown
-//!   layer (`met1.sized(500nm)`) widens the die and hides a maximum's
-//!   violation.
-//! - N-x2-4: `extension` and `overlap` pair drawn polygons without merging,
+//! - F56: `extension` and `overlap` pair drawn polygons without merging,
 //!   so a diffusion drawn in two pieces abutting under a legal gate reports
 //!   a 50 nm extension at the seam.
 
@@ -512,7 +509,7 @@ fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
 /// diffusion; a U-shaped poly whose far arm makes its bounding box reach past
 /// on every side while the gate end is swept, and a gate ending inside the
 /// diffusion at one end (both F19); a legal gate over a diffusion drawn as
-/// two pieces abutting under it (N-x2-4); a poly abutting the diffusion
+/// two pieces abutting under it (F56); a poly abutting the diffusion
 /// without crossing it (no gate, clean); an empty poly layer. Nightly: both
 /// ends across {inside, flush, 99, 100, 101, far}.
 fn min_extension(depth: Depth) -> Vec<Fixture> {
@@ -585,7 +582,7 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
     cases.push(case("empty_poly", diff(), Vec::new()));
     // The diffusion drawn as two pieces abutting under the gate: one
     // diffusion, which the gate crosses with 200 nm to spare at both ends
-    // (N-x2-4: each drawn piece is paired on its own).
+    // (F56: each drawn piece is paired on its own).
     cases.push(
         case(
             "split_diffusion",
@@ -595,7 +592,7 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
                 .rect("poly", 400, -200, 500, 600),
             Vec::new(),
         )
-        .known("N-x2-4"),
+        .known("F56"),
     );
     if depth == Depth::Nightly {
         let ends = [-100, 0, 99, 100, 101, 500];
@@ -618,7 +615,7 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
 /// boxes that only touch, an L whose material overlaps 500 x 50 inside a
 /// 500 x 500 box intersection, and a notched square whose box overlaps `b`
 /// while its material keeps 50 nm away (all F19); an `a` drawn as two
-/// abutting pieces that together overlap by 100 (N-x2-4); an empty `a`.
+/// abutting pieces that together overlap by 100 (F56); an empty `a`.
 /// Nightly: the edge overlap from 90 to 110.
 fn overlap(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 100;
@@ -677,7 +674,7 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
     );
     cases.push(case("empty_a", Layout::default(), Vec::new()));
     // `a` drawn as two abutting pieces: together they overlap `b` by 100
-    // (N-x2-4: each drawn piece is paired on its own).
+    // (F56: each drawn piece is paired on its own).
     cases.push(
         case(
             "split_a",
@@ -686,7 +683,7 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
                 .rect("a", 950, 200, 2000, 800),
             Vec::new(),
         )
-        .known("N-x2-4"),
+        .known("F56"),
     );
     if depth == Depth::Nightly {
         for m in 90..=110 {
@@ -1471,7 +1468,7 @@ fn density_findings(windows: &[((i64, i64), f64)], limit: f64, minimum: bool) ->
 /// die of the other); the stripe drawn as two overlapping halves (counted
 /// once); the die drawn as two corner markers (its extent counts); no met1
 /// (0); no die (the boundary rules skip, the other measures met1 alone); and
-/// a grown derived layer beside a boundary-less rule (N-x2-3).
+/// a grown derived layer beside a boundary-less rule (F40).
 fn global_density() -> Vec<Fixture> {
     let deck_gd = new_deck(
         &["met1", "die"],
@@ -1566,7 +1563,7 @@ fn global_density() -> Vec<Fixture> {
     );
     // Without a boundary the die is the whole layout, `[0, 1000]^2` here, so
     // met1 covers 70%. A derived layer grown past the drawing is not layout:
-    // it must not widen the die (N-x2-3), which would hide the maximum's
+    // it must not widen the die (F40), which would hide the maximum's
     // violation and invent the minimum's.
     cases.push(
         fixture(
@@ -1583,7 +1580,7 @@ fn global_density() -> Vec<Fixture> {
                 .rect("met1", 0, 0, 700, 1000),
             &[("gd.min", vec![]), ("gd.max", vec![ratio(0.7, (500, 500))])],
         )
-        .known("N-x2-3"),
+        .known("F40"),
     );
     every_placement(cases)
 }
@@ -1598,7 +1595,7 @@ fn global_density() -> Vec<Fixture> {
 /// drawn as two overlapping pieces; with met1 outside the die (clipped); the
 /// die drawn as two corner markers; no met1 (every window 0); no die
 /// (skipped); a boundary-less rule beside a grown derived layer, which must
-/// not move the die (N-x2-3). Then, without a boundary, windows
+/// not move the die (F40). Then, without a boundary, windows
 /// that hang past the die's far edge or exceed the die (counted empty outside
 /// it), under translations only since the windows anchor on the lower-left
 /// corner. Nightly: d from -20 to 20.
@@ -1661,7 +1658,7 @@ fn density(depth: Depth) -> Vec<Fixture> {
         ],
     ));
     // Without a boundary, the same windows over the drawn layout; a derived
-    // layer grown past it must not move the die (N-x2-3).
+    // layer grown past it must not move the die (F40).
     cases.push(
         fixture(
             "density/derived_halo",
@@ -1680,7 +1677,7 @@ fn density(depth: Depth) -> Vec<Fixture> {
                 ("pd.max", density_findings(&markers, 0.5, false)),
             ],
         )
-        .known("N-x2-3"),
+        .known("F40"),
     );
     cases.push(
         Fixture::new("density/empty_die", &["DRC-071"], &deck_pd, DRC)
@@ -2742,9 +2739,9 @@ fn sizing() -> Vec<Fixture> {
 /// outside is outside, straddling is neither) and against a `b` ring (a shape
 /// in its hole is outside); `holes` (one, one with an island, two, and a U
 /// with none); `extents` (an L, two touching shapes, two apart, a ring, and
-/// two interlocking Ls whose boxes overlap, N-x2-1); `with_area` and
+/// two interlocking Ls whose boxes overlap, F54); `with_area` and
 /// `with_width` across their bounds, holes excluded and touching pieces
-/// merged, and a corner neck `width` measures Euclidean (N-x2-2); and
+/// merged, and a corner neck `width` measures Euclidean (F55); and
 /// `with_text` / `without_text` with `*`, `?`, case, a text on the edge, one
 /// off the shape and one in a ring's hole.
 fn selections() -> Vec<Fixture> {
@@ -2977,9 +2974,9 @@ fn selections() -> Vec<Fixture> {
             &[("a.extents()", extents)],
             layout,
         );
-        // N-x2-1: the boxes of shapes whose boxes overlap are stored merged.
+        // F54: the boxes of shapes whose boxes overlap are stored merged.
         cases.push(if name == "interlocking" {
-            fixture.known("N-x2-1")
+            fixture.known("F54")
         } else {
             fixture
         });
@@ -3068,7 +3065,7 @@ fn selections() -> Vec<Fixture> {
                 .rect("a", 0, 0, 1000, 1000)
                 .rect("a", 950, 950, 1950, 1950),
         )
-        .known("N-x2-2"),
+        .known("F55"),
     );
 
     let texts = rects(
