@@ -5,7 +5,7 @@ DRC-003	drc	integrity	Acute angles	IHP:3.1; GF:ACUTE; CAL:FLAG ACUTE	angle	parti
 DRC-004	drc	integrity	Self-intersecting / zero-area polygons	IHP:3.1; KL:odd_polygons; CAL:FLAG NONSIMPLE	ingest:layer_validity	partial	SY; TX:KL	Corpus VALID_SELF and VALID_ZERO are in the disagree list
 DRC-005	drc	integrity	Rectangle-only / square-only shapes	SKY:capm.7,x.2a,licon.3; LEF58_RECTONLY; KL:rectangles,squares; MAG:rect_only; drt	-	missing	FR; TX:KL	No selection by shape class (limitations.md:28; sky130.deck)
 DRC-006	drc	integrity	Forbidden layer / layer only inside a region	IHP:3.2; SKY:x.8,x.9,x.15a,x.21	forbidden	implemented	FR; SY	
-DRC-007	drc	integrity	Label / pin / text rules	SKY:x.5,x.17,x.20; IHP:Pin.a-h; KL:texts	must_be_inside	partial	FR; SY	Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel, port.rs:66-69): caught, but fatal, not a rule. Pin centre spacing is not expressible
+DRC-007	drc	integrity	Label / pin / text rules	SKY:x.5,x.17,x.20; IHP:Pin.a-h; KL:texts	must_be_inside	partial	FR; SY	Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible
 DRC-010	drc	dimension	Minimum width	LEF:WIDTH,MINWIDTH; LEF58_MINWIDTH; IHP:M1.a; GF:Mn.1; SKY:m1.1; A7:M1.W.1; KL:width; MAG:width; drt	min_width	implemented	BM; FR; TX:KL; MR	Pin the distance metric before comparing with KL
 DRC-011	drc	dimension	Device channel width / length	IHP:Gat.a1-a4; SKY:poly.1b,difftap.2,poly.13; GF:PL.2	-	missing	FR	Needs device W/L as a rule input (sky130.deck "needs W, not width")
 DRC-012	drc	dimension	Maximum width	LEF:MAXWIDTH; IHP:Slt.c,AFil.a; GF:DF.2b; SKY:m1.11; A7:M4.W.2; MAG:maxwidth	max_width	implemented	BM; FR; TX:KL	
@@ -62,7 +62,7 @@ DRC-067	drc	cut	Metal-width-dependent via choice	LEF58_METALWIDTHVIAMAP; drt	-	m
 DRC-068	drc	cut	Cut-area conservation between two databases	SKY:ct.irdrop,via.irdrop	-	out_of_scope	-	Compares two GDS files
 DRC-070	drc	density	Global min/max density	LEF:MINIMUMDENSITY,MAXIMUMDENSITY; IHP:M1.j,M1.k; GF:PL.8,Mn.4; SKY:m1.13	global_density	implemented	CF; FR; TX:KL	
 DRC-071	drc	density	Windowed density (window + step)	LEF:DENSITYCHECKWINDOW,DENSITYCHECKSTEP; IHP:MFil.h; SKY:m1.pd.2a,m1.pd.2b; KL:with_density; GF:density tests	density,density_cmp	implemented	CF; FR; TX:KL	GF ships density-M*_4_pass/fail test GDS
-DRC-072	drc	density	Local density over a device	SKY:vpp.5a-c,vpp.11	-	missing	FR	The boundary layer reduces to one extent for the whole layer (drc/ruleset.rs:82, deck.md:215), so density per device cannot be measured
+DRC-072	drc	density	Local density over a device	SKY:vpp.5a-c,vpp.11	-	missing	FR	The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured
 DRC-073	drc	density	Fill geometry and fill-to-drawn spacing	IHP:AFil,GFil,MFil; GF:DCF,DPF,DM; LEF:FILLACTIVESPACING	min_width,min_spacing_diff	expressible	FR	
 DRC-074	drc	density	No-fill / exclusion regions	GF:DCF.8a,DPF.15,DM.8; IHP:GFil.i,6.12	forbidden	expressible	FR	
 DRC-075	drc	density	Wide-metal slotting	IHP:Slt.a-i; GF:MSLOT; SKY:m1.11,m1.12	cheesing	partial	FR	Slot required is a kind; slot geometry uses the generic kinds
@@ -73,7 +73,7 @@ DRC-082	drc	net	Voltage-dependent spacing (VA-DRC)	SKY:hvnwell.8,hv.*; GF:DV.9; 
 DRC-083	drc	net	HV tag propagation (shorted to HV becomes HV)	SKY:hv.X.1-hv.X.6	hv_domain	partial	FR; SY	hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV
 DRC-084	drc	net	Floating interconnect / must-join ports	SKY:x.22; LEF58_MUSTJOINALLPORTS	unconnected_pin	partial	SY	Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled
 DRC-085	drc	net	Tap presence per well	SKY:nwell.4; GF:DN.3; IHP:nmosi.d	floating_well,must_contain	implemented	FR; SY	
-DRC-086	drc	net	Shorts between labelled nets	drt:short	ingest:port_binding	partial	SY; TX:KL	A short between two labelled nets aborts extraction with PortError::ConflictingLabels (pipeline.rs:181): the run fails, but there is no report row and no location
+DRC-086	drc	net	Shorts between labelled nets	drt:short	ingest:port_binding	partial	SY; TX:KL	A short between two labelled nets aborts extraction with PortError::ConflictingLabels (engine::pipeline::extract): the run fails, but there is no report row and no location
 DRC-090	drc	device	Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM)	IHP:6.*; GF:PRES,MIM,LDMOS,EF,SK; SKY:rpm,capm,varac,indm,mf,photo,denmos	forbidden,min_width,min_enclosure	partial	FR	Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing
 DRC-091	drc	device	Per-chip count / total-quantity limits	IHP:npn13G2.bR,MIM.gR	-	missing	FR	
 DRC-092	drc	device	Exemptions (areaid regions, cell-name, rule flags)	SKY:flags,areaid.*,m1.4a,licon.11c; IHP:6.12 IND,8 DigiBnd	deck:derived	partial	FR	Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened)
@@ -97,42 +97,42 @@ DRC-117	drc	dfm	Via redundancy scoring / via doubling	CAL:YieldAnalyzer,YieldEnh
 DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, extents)	IHP:4.2; GF:4.2; KL; MAG:templayers	deck:derived	implemented	MR; BM	
 DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL	limitations.md:28
 DRC-122	drc	infra	Edge-layer ops incl. extension	KL:extended,edges	deck:edge	partial	TX:KL	limitations.md:31
-DRC-123	drc	infra	Hierarchical processing	KL:deep	ingest:flatten	partial	MR	Flattened at load (layout.rs:1254); a scale issue, not correctness
-LVS-001	lvs	extract	Port / label consistency	KL:flag_missing_ports,same_nets!; NG:pin matching	lvs.label_conflict,lvs.net_seed_conflict	partial	SY; TX:NG	label_conflict flags one label on several nets (an open; checks.rs:188). net_seed_conflict can never fire, because binding already errors on two names on one net (port.rs:72; testing-plan F13)
-LVS-002	lvs	extract	Implicit joins (same-label disjoint shapes, must-connect)	KL:connect_implicit,connect_explicit; LEF58_MUSTJOINALLPORTS	lvs.label_conflict	partial	SY; TX:KL	Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (topology/net.rs:1-4; checks.rs:188-212)
+DRC-123	drc	infra	Hierarchical processing	KL:deep	ingest:flatten	partial	MR	Flattened at load (gds::Library::flatten); a scale issue, not correctness
+LVS-001	lvs	extract	Port / label consistency	KL:flag_missing_ports,same_nets!; NG:pin matching	lvs.label_conflict,lvs.net_seed_conflict	partial	SY; TX:NG	label_conflict flags one label on several nets (an open). net_seed_conflict can never fire, because port binding already errors on two names on one net (testing-plan F13)
+LVS-002	lvs	extract	Implicit joins (same-label disjoint shapes, must-connect)	KL:connect_implicit,connect_explicit; LEF58_MUSTJOINALLPORTS	lvs.label_conflict	partial	SY; TX:KL	Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout)
 LVS-003	lvs	extract	Soft connections through well/substrate	KL:soft_connect; MAG:disconnect; CAL:SCONNECT	soft_connection	implemented	SY; TX:KL	
 LVS-004	lvs	extract	Malformed device (terminal count/net)	KL:ignore_extraction_errors; MAG:param_limits	lvs.terminal_count,lvs.terminal_net	implemented	SY	
-LVS-005	lvs	extract	Short isolation / localisation	CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG	ingest:port_binding	partial	SY	A labelled short aborts the run with only a net id (pipeline.rs:181); no path localisation
+LVS-005	lvs	extract	Short isolation / localisation	CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG	ingest:port_binding	partial	SY	A labelled short aborts the run with only a net id (engine::pipeline::extract); no path localisation
 LVS-006	lvs	extract	Floating nets	KL; NG	lvs.floating_net	implemented	SY	
-LVS-010	lvs	compare	Circuit without partner / hierarchical compare	KL:circuit_mismatch,align; NG:flatten unmatched	-	missing	SY; TX:NG	F1: reference X instances are dropped (graph.rs:180); false-clean risk
-LVS-011	lvs	compare	Device class only on one side	KL:device_class_mismatch; NG:equate classes	lvs.class_imbalance	implemented	SY; TX:NG	
-LVS-012	lvs	compare	Missing / extra device	KL:device_mismatch; NG	lvs.unpaired_device	implemented	SY; TX:NG; MR	Corpus never asserts the verdict (F2)
-LVS-013	lvs	compare	Paired device with a different class/model	KL:match_devices_with_different_device_classes	lvs.unpaired_device	partial	SY	Pairing requires the same kind and model (compare.rs:154), so it shows as unpaired
-LVS-014	lvs	compare	Parameter mismatch with tolerance	KL:tolerance,ignore_parameter; NG:property tolerance	lvs.parameter_mismatch	partial	SY; TX:NG	One relative tolerance, 0.02 (compare.rs:18); per-parameter and absolute tolerances are missing
-LVS-015	lvs	compare	Missing / extra / miswired net	KL:net_mismatch; NG	lvs.unpaired_net,lvs.terminal_mismatch	implemented	SY; TX:NG; MR	
-LVS-016	lvs	compare	Pin / port mismatch	KL:pin_mismatch; NG:Port counts	lvs.unpaired_net	partial	SY; TX:NG	Net and port names are never compared, so a misnamed or reordered port passes. An unconnected reference port shows as unpaired_net (refine.rs:170-183; tests/lvs/compare.rs:461 net_names_do_not_have_to_agree)
+LVS-010	lvs	compare	Circuit without partner / hierarchical compare	KL:circuit_mismatch,align; NG:flatten unmatched	-	missing	SY; TX:NG	F1: reference X instances are dropped (lvs::graph::from_reference); false-clean risk
+LVS-011	lvs	compare	Device class only on one side	KL:device_class_mismatch; NG:equate classes	lvs.unpaired_device	implemented	SY; TX:NG	A model present on one side only leaves its devices unpaired
+LVS-012	lvs	compare	Missing / extra device	KL:device_mismatch; NG	lvs.unpaired_device,lvs.class_imbalance	implemented	SY; TX:NG; MR	Corpus never asserts the verdict (F2)
+LVS-013	lvs	compare	Paired device with a different class/model	KL:match_devices_with_different_device_classes	lvs.unpaired_device	partial	SY	Pairing requires the same kind and model, so it shows as unpaired
+LVS-014	lvs	compare	Parameter mismatch with tolerance	KL:tolerance,ignore_parameter; NG:property tolerance	lvs.parameter_mismatch	partial	SY; TX:NG	One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing
+LVS-015	lvs	compare	Missing / extra / miswired net	KL:net_mismatch; NG	lvs.unpaired_net,lvs.terminal_mismatch,lvs.class_imbalance	implemented	SY; TX:NG; MR	
+LVS-016	lvs	compare	Pin / port mismatch	KL:pin_mismatch; NG:Port counts	lvs.unpaired_net	partial	SY; TX:NG	Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree)
 LVS-017	lvs	compare	Subcircuit instance unpaired	KL:subcircuit_mismatch; NG	-	missing	SY	F1
 LVS-018	lvs	compare	Symmetric / ambiguous matching	KL:match_ambiguous_nets; NG:symmetry by property	lvs:tie_break	implemented	MR; TX:NG	Closest-parameter tie-break matches netgen
 LVS-019	lvs	compare	Verdict classes	KL:NetlistCrossReference status; NG	lvs:verdict	implemented	SY	Match / Mismatch / Inconclusive{RoundLimit, AmbiguousTop}
 LVS-020	lvs	compare	Undeclared parameter	-	lvs.undeclared_param	implemented	SY	GPurify-specific
-LVS-030	lvs	equiv	Swappable pins (S/D, resistor ends, user-declared)	KL:equivalent_pins; NG:permute	lvs:roles	partial	SY; TX:NG	Every Pin(_) swaps (refine.rs:69), including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing
+LVS-030	lvs	equiv	Swappable pins (S/D, resistor ends, user-declared)	KL:equivalent_pins; NG:permute	lvs:roles	partial	SY; TX:NG	Every Pin(_) role is interchangeable, including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing
 LVS-031	lvs	equiv	Asymmetric devices (S/D not swappable)	KL:dmos3,dmos4	-	missing	SY	
-LVS-032	lvs	equiv	Net-name seeding (same_nets)	KL:same_nets,consider_net_names	-	missing	SY	Names neither seed refinement nor are compared (refine.rs:171; tests/lvs/compare.rs:461)
+LVS-032	lvs	equiv	Net-name seeding (same_nets)	KL:same_nets,consider_net_names	-	missing	SY	Names neither seed refinement nor are compared (test net_names_do_not_have_to_agree)
 LVS-033	lvs	equiv	Black boxes	KL:blank_circuit; NG:model blackbox	-	missing	SY; TX:NG	
 LVS-034	lvs	equiv	Ignore device class (fill, decap, tap cells), parasitic filters	KL:same_device_classes nil,max_res,min_caps; NG:ignore class; MAG:cthresh	-	missing	SY	sky130 netgen setup ignores fill/tap/fakediode classes
 LVS-035	lvs	equiv	Dummy / shorted device removal	NG:ignore shorted	-	missing	SY	
 LVS-040	lvs	reduce	Parallel MOS (W add, L critical)	KL; NG:parallel; MAG:merge; CAL:LVS REDUCE PARALLEL MOS	lvs:reduce	implemented	SY; TX:NG	
 LVS-041	lvs	reduce	Series MOS (stacks)	CAL:LVS REDUCE SERIES MOS; NG:opt-in	lvs:reduce	implemented	SY; TX:NG	On by default, unlike netgen; a semantic difference to triage in the differential
 LVS-042	lvs	reduce	Semi-series MOS	CAL:LVS REDUCE SEMI SERIES MOS	-	missing	-	
-LVS-043	lvs	reduce	Resistor series/parallel	KL; NG:series,parallel	-	missing	SY; TX:NG	reduce.rs merges MOS only
-LVS-044	lvs	reduce	Capacitor / diode / BJT parallel	KL; NG; MAG	-	missing	SY; TX:NG	reduce.rs merges MOS only
-LVS-045	lvs	reduce	Bulk-equality condition for merges	KL	lvs:reduce	implemented	SY	Parallel merges need equal terminal keys, series merges equal gate and bulk (reduce.rs:148-160,428). Bulk is dropped on both sides when the layout extracts none (compare.rs:54)
-LVS-046	lvs	reduce	Fingers / nf / m folding	KL; NG; MAG	lvs:reduce	implemented	SY	m folds into W (reduce.rs:12)
+LVS-043	lvs	reduce	Resistor series/parallel	KL; NG:series,parallel	lvs:reduce	partial	SY; TX:NG	Parallel merging applies to every device kind but sums only W and nf, so two parallel resistors without a W collapse into one with the same R, a false clean (testing-plan F20). Series merging is MOS only
+LVS-044	lvs	reduce	Capacitor / diode / BJT parallel	KL; NG; MAG	lvs:reduce	partial	SY; TX:NG	Parallel merging applies to every kind but sums only W and nf: capacitors keep one C, and diodes wired in opposite directions merge (testing-plan F15, F20)
+LVS-045	lvs	reduce	Bulk-equality condition for merges	KL	lvs:reduce	implemented	SY	Parallel merges need every terminal key equal, series merges equal gate and bulk (lvs::reduce). Bulk is dropped on both sides when the layout extracts none (lvs::compare)
+LVS-046	lvs	reduce	Fingers / nf / m folding	KL; NG; MAG	lvs:reduce	implemented	SY	m folds into W before merging (lvs::reduce); on a device with m but no W, m is dropped (testing-plan F21)
 LVS-047	lvs	reduce	Logic-gate recognition	CAL:LVS RECOGNIZE GATES; SubGemini	-	missing	-	
 LVS-048	lvs	reduce	Filter unused devices	CAL:LVS FILTER UNUSED	-	missing	-	
-LVS-049	lvs	reduce	Topology vs property policy (strict/relaxed)	NG:property topology	lvs.unpaired_device,lvs.class_imbalance	partial	TX:NG	Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named (graph.rs:194) and join_series refuses named nodes (reduce.rs:403): testing-plan F12
-LVS-060	lvs	device	MOS W, L, nf, m, AS/AD/PS/PD, bulk	KL:MOS3,MOS4; NG; sky130 netgen setup	lvs:params	partial	SY; TX:NG	Extraction gives MOS w and l only, plus marker area (topology/device.rs:301-329). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param (compare.rs:255-313); bulk is dropped when the layout has none (compare.rs:49)
-LVS-061	lvs	device	Resistor R/L/W	KL:Resistor; MAG:resistor	-	missing	SY	No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused (netlist.rs:447-453)
+LVS-049	lvs	reduce	Topology vs property policy (strict/relaxed)	NG:property topology	lvs.unpaired_device,lvs.class_imbalance	partial	TX:NG	Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named and series merging refuses named nodes (testing-plan F12)
+LVS-060	lvs	device	MOS W, L, nf, m, AS/AD/PS/PD, bulk	KL:MOS3,MOS4; NG; sky130 netgen setup	lvs:params	partial	SY; TX:NG	Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none
+LVS-061	lvs	device	Resistor R/L/W	KL:Resistor; MAG:resistor	-	missing	SY	No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader
 LVS-062	lvs	device	Capacitor C/A/P	KL:Capacitor; MAG:capacitor	lvs:params	partial	SY	Marker area only; no C or perimeter
 LVS-063	lvs	device	Diode A/P	KL:Diode	lvs:params	partial	SY	Marker area only; no perimeter. Polarity is not compared (F15)
 LVS-064	lvs	device	BJT AE/PE/NE, multi-emitter	KL:BJT3,BJT4	lvs:params	partial	SY	Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61)
@@ -154,9 +154,9 @@ ERC-A7	erc	antenna	PWL diffusion-dependent limit	LEF:ANTENNADIFFAREARATIO PWL,AN
 ERC-A8	erc	antenna	Separate limits with/without diode	IHP:Ant.b/e,Ant.d/f; SKY	antenna,antenna_electrical	implemented	FR	IHP gates with a diode are held to the no-diode limit (limitations.md:81)
 ERC-A9	erc	antenna	Minimum protection-diode size	IHP:Ant.g	-	missing	SE:IHP	
 ERC-A10	erc	antenna	Diode well legality	IHP:Ant.h,Ant.i	forbidden	expressible	FR	
-ERC-A11	erc	antenna	MIM capacitor as victim	GF:ANT.14,ANT.15	antenna	partial	FR	The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (antenna.rs:150,246). gf180 leaves ANT.14/15 out (gf180mcu.deck:647-649), and the FuseTop/Via5 connectivity needs care
+ERC-A11	erc	antenna	MIM capacitor as victim	GF:ANT.14,ANT.15	antenna	partial	FR	The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (erc::rules::antenna). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care
 ERC-A12	erc	antenna	Oxide-class-specific limits	LEF:ANTENNAMODEL OXIDE1-4; GF	antenna	partial	FR	One row per gate layer
-ERC-A13	erc	antenna	Exemption for substrate-shorted nets	SKY:.ar.1	-	missing	SY	No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (antenna.rs:353-358)
+ERC-A13	erc	antenna	Exemption for substrate-shorted nets	SKY:.ar.1	-	missing	SY	No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna)
 ERC-A14	erc	antenna	Hierarchical / macro-pin antenna	LEF:ANTENNAPIN*	-	missing	SE:LEF; TX:OR	
 ERC-A15	erc	antenna	Fix hint: required diode area	CAL:Auto-Waivers	-	missing	CF	Report feature
 ERC-B1	erc	planarity	Windowed density + CMP thickness	GF:13	density_cmp	implemented	CF	
@@ -185,7 +185,7 @@ ERC-D7	erc	latchup	Native-device guard ring	GF:LU.5	-	missing	FR
 ERC-D8	erc	latchup	Forward-biased diode marked and ringed	GF:14.3.3	-	missing	SY	
 ERC-E1	erc	em	DC current per width	GF:Table 14.3; IHP:2.15	em_current_density	implemented	FR; CF	
 ERC-E2	erc	em	Current per cut	GF:Table 14.4; IHP:2.15	em_current_density	implemented	FR	
-ERC-E3	erc	em	Width-banded absolute current for narrow lines	IHP:2.15	em_current_density	partial	FR	Limit is max_density x width only, with no width band or absolute cap (electrical.rs:238-255). The IHP deck states JMAX only (ihp_sg13g2.deck:600-602): it may over-report, but it cannot under-report
+ERC-E3	erc	em	Width-banded absolute current for narrow lines	IHP:2.15	em_current_density	partial	FR	Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report
 ERC-E4	erc	em	Temperature derating (Black / Arrhenius)	GF:14.2.2; Black1969; JEP122; JESD63	electromigration	implemented	SE:GF formula vs table (1.6% rounding)	
 ERC-E5	erc	em	Lifetime target and percentile	GF:14.2; IHP:2.15; JESD202	electromigration,reliability	implemented	SE	
 ERC-E6	erc	em	Blech short-length immortality	Blech1976	electromigration	implemented	CF	
@@ -223,12 +223,12 @@ ERC-H3	erc	perc	Netlist path checks (gate to ground within N devices; net types)
 ERC-H4	erc	perc	Fanout limits	ICV	-	missing	SY	
 PEX-001	pex	r	Sheet R x squares, via R	W&H	pex:analytical	implemented	CF	
 PEX-002	pex	c	Area + fringe C to substrate	W&H	pex:analytical	implemented	CF	
-PEX-003	pex	c	Coupling C (same-layer and cross-layer)	CAL:xACT3D; SRC; QNT; FasterCap	pex:quasistatic	partial	TX:FasterCap; CF; MR	No reflected images: same-layer coupling under-predicted 14-159% (matvec.rs:59)
-PEX-004	pex	l	Partial self / mutual inductance	CAL:xL; FastHenry; Grover	pex:quasistatic	partial	CF:Grover; TX:FastHenry	Self and mutual L are solved, but run_pex discards the InductMatrix (run.rs:358-359); only a series L per net reaches the output (quasistatic.rs:57-61)
+PEX-003	pex	c	Coupling C (same-layer and cross-layer)	CAL:xACT3D; SRC; QNT; FasterCap	pex:quasistatic	partial	TX:FasterCap; CF; MR	No reflected images and no substrate ground plane: same-layer coupling is under-predicted 14-159%, and a field-solved ground C is to infinity, not the substrate (extract::field; testing-plan F24)
+PEX-004	pex	l	Partial self / mutual inductance	CAL:xL; FastHenry; Grover	pex:quasistatic	partial	CF:Grover; TX:FastHenry	Each field-solved net gets its self L and R; mutual inductance between nets is never computed. A net drawn as touching rectangles reads L = 0 and R = 0 with no refusal, because filaments join only at coincident endpoints (testing-plan F23)
 PEX-005	pex	accuracy	Field-solver reference for selected nets	CAL:xACT3D; SRC:Rapid3D; QNT; SIL	pex:quasistatic	implemented	TX:FasterCap,FastHenry	
 PEX-006	pex	accuracy	Multi-corner extraction	CAL; SRC	-	missing	-	
 PEX-007	pex	accuracy	Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware)	SRC; CAL	-	out_of_scope	-	Needs foundry models
-PEX-008	pex	output	Reduction modes (C-only, RC, RCC, thresholds)	CAL:xACT	-	missing	-	One fixed output (R, ground C, coupling C, via R); --quasistatic and --quasistatic-inductance per net; --format spef|dspf. No C-only/RC modes or thresholds (args.rs:84-122)
+PEX-008	pex	output	Reduction modes (C-only, RC, RCC, thresholds)	CAL:xACT	-	missing	-	One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef|dspf. No C-only or RC modes and no thresholds
 PEX-009	pex	accuracy	PEX netlist diff / qualification	SIL:PEX Certify	-	missing	TX	Worth building as an internal test tool
 PEX-010	pex	output	SPEF output	IEEE1481	pex:spef	implemented	MR; golden	
 FLOW-001	flow	waiver	Geometric / hierarchy-invariant waivers	CAL:Auto-Waivers; PEG	-	missing	SY	

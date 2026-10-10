@@ -64,6 +64,9 @@ module_name_repetitions = "allow"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = "warn"
+# Every public item says what it does and what it promises; the rustdoc is how
+# a library user learns the tool, so an undocumented item fails the build.
+missing_docs = "deny"
 
 # The rustdoc is the reference a library user reads, so a link that leads
 # nowhere, or to an item they cannot see, fails `cargo doc`.

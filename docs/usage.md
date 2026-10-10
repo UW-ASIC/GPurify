@@ -75,7 +75,7 @@ Before matching, both sides are reduced the way netgen reduces them:
 - **Series:** devices stacked through a node nothing else touches, with their
   gates strapped, become one device whose L is the sum, if every other
   parameter agrees.
-- **Multiplier:** a reference card's `m` counts as that many fingers.
+- **Multiplier:** a reference card's `m` multiplies its `W`, and `m` is then dropped (`nf` is untouched). A card with `m` but no `W` loses its multiplier, so `m=2` matches one drawn device (testing-plan F21).
 
 The parameter names are `w`, `l`, `nf` and `m`. The report lists every merge
 under `lvs merges:` with the device rows it joined, so a paired device can be
@@ -84,7 +84,8 @@ traced back to what was drawn.
 ## Exit code
 
 `0` only when every selected check ran, no rule was skipped or refused, and
-nothing was found. Anything else is `1`: a violation, a skipped rule, a
+no error was found; findings from rules the deck marks `warning` are reported
+but do not fail the run. Anything else is `1`: an error, a skipped rule, a
 missing input, a file that could not be read.
 
 ## Design intent

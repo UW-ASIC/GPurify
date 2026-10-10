@@ -93,7 +93,7 @@
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
-//! | `missing_tie(well, diff; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
+//! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
 //! | `multiple_drivers(; max)` | `multiple_drivers` | [`erc::RuleSet::multiple_drivers`] | a net with too many drivers | ERC-G3 |
 //! | `soft_connection(layers..)` | `soft_connection` | [`erc::RuleSet::soft_connection`] | a net held together only through high-resistance layers | LVS-003, ERC-G5 |
 //! | `supply_short(tap_a, tap_b[, within])` | `supply_short` | [`erc::RuleSet::supply_short`] | a net touching both kinds of tap | ERC-G4 |
@@ -113,12 +113,12 @@
 //!
 //! | Report id | Raised by | Flags | Catalog |
 //! |---|---|---|---|
-//! | `lvs.unpaired_device` | [`lvs::Discrepancy::UnpairedDevice`] | a device with no partner on the other side | LVS-012, LVS-013, LVS-049 |
+//! | `lvs.unpaired_device` | [`lvs::Discrepancy::UnpairedDevice`] | a device with no partner on the other side | LVS-011, LVS-012, LVS-013, LVS-049 |
 //! | `lvs.unpaired_net` | [`lvs::Discrepancy::UnpairedNet`] | a net with no partner on the other side | LVS-015, LVS-016 |
 //! | `lvs.terminal_mismatch` | [`lvs::Discrepancy::TerminalMismatch`] | paired devices whose terminals reach different nets | LVS-015 |
 //! | `lvs.parameter_mismatch` | [`lvs::Discrepancy::ParameterMismatch`] | paired devices whose parameters differ beyond the tolerance | LVS-014 |
 //! | `lvs.undeclared_param` | [`lvs::Discrepancy::UndeclaredParam`] | a parameter only one side declares | LVS-020 |
-//! | `lvs.class_imbalance` | [`lvs::Discrepancy::ClassImbalance`] | a class with different member counts on the two sides | LVS-011, LVS-049 |
+//! | `lvs.class_imbalance` | [`lvs::Discrepancy::ClassImbalance`] | a class with different member counts on the two sides | LVS-012, LVS-015, LVS-049 |
 //! | `lvs.floating_net` | [`lvs::check_layout`] | a layout net that reaches no device | LVS-006 |
 //! | `lvs.label_conflict` | [`lvs::check_layout`] | one label on several nets | LVS-001, LVS-002 |
 //! | `lvs.net_seed_conflict` | [`lvs::check_layout`] | two labels merged onto one net | LVS-001 |

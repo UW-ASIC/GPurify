@@ -123,7 +123,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
 | DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md:28; sky130.deck) |
-| DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel, port.rs:66-69): caught, but fatal, not a rule. Pin centre spacing is not expressible |
+| DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible |
 | DRC-011 | Device channel width / length | missing | Needs device W/L as a rule input (sky130.deck "needs W, not width") |
 | DRC-014 | Cut classes (several legal cut sizes) | partial | One exact size per rule; class-dependent spacing is DRC-063 |
 | DRC-015 | Discrete / allowed width set | missing | — |
@@ -161,14 +161,14 @@ says which foundry manual, standard or tool defines each one.
 | DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
 | DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
-| DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc/ruleset.rs:82, deck.md:215), so density per device cannot be measured |
+| DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind; slot geometry uses the generic kinds |
 | DRC-076 | Waffle-window density | missing | sky130.deck left out |
 | DRC-081 | Net spacing between two layers / on wells | missing | Net spacing takes one layer; only sky130 connects wells as nets |
 | DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
 | DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
 | DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
-| DRC-086 | Shorts between labelled nets | partial | A short between two labelled nets aborts extraction with PortError::ConflictingLabels (pipeline.rs:181): the run fails, but there is no report row and no location |
+| DRC-086 | Shorts between labelled nets | partial | A short between two labelled nets aborts extraction with PortError::ConflictingLabels (engine::pipeline::extract): the run fails, but there is no report row and no location |
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing |
 | DRC-091 | Per-chip count / total-quantity limits | missing | — |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
@@ -187,34 +187,34 @@ says which foundry manual, standard or tool defines each one.
 | DRC-117 | Via redundancy scoring / via doubling | partial | Counts cuts within a distance; no DFM scoring and no via doubling |
 | DRC-121 | Selection by shape class, net or angle; covering/overlapping; anisotropic size | partial | limitations.md:28 |
 | DRC-122 | Edge-layer ops incl. extension | partial | limitations.md:31 |
-| DRC-123 | Hierarchical processing | partial | Flattened at load (layout.rs:1254); a scale issue, not correctness |
+| DRC-123 | Hierarchical processing | partial | Flattened at load (gds::Library::flatten); a scale issue, not correctness |
 
 ### Layout against schematic (LVS)
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open; checks.rs:188). net_seed_conflict can never fire, because binding already errors on two names on one net (port.rs:72; testing-plan F13) |
-| LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (topology/net.rs:1-4; checks.rs:188-212) |
-| LVS-005 | Short isolation / localisation | partial | A labelled short aborts the run with only a net id (pipeline.rs:181); no path localisation |
-| LVS-010 | Circuit without partner / hierarchical compare | missing | F1: reference X instances are dropped (graph.rs:180); false-clean risk |
-| LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model (compare.rs:154), so it shows as unpaired |
-| LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (compare.rs:18); per-parameter and absolute tolerances are missing |
-| LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes. An unconnected reference port shows as unpaired_net (refine.rs:170-183; tests/lvs/compare.rs:461 net_names_do_not_have_to_agree) |
+| LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open). net_seed_conflict can never fire, because port binding already errors on two names on one net (testing-plan F13) |
+| LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout) |
+| LVS-005 | Short isolation / localisation | partial | A labelled short aborts the run with only a net id (engine::pipeline::extract); no path localisation |
+| LVS-010 | Circuit without partner / hierarchical compare | missing | F1: reference X instances are dropped (lvs::graph::from_reference); false-clean risk |
+| LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model, so it shows as unpaired |
+| LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing |
+| LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree) |
 | LVS-017 | Subcircuit instance unpaired | missing | F1 |
-| LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | Every Pin(_) swaps (refine.rs:69), including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing |
+| LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | Every Pin(_) role is interchangeable, including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing |
 | LVS-031 | Asymmetric devices (S/D not swappable) | missing | — |
-| LVS-032 | Net-name seeding (same_nets) | missing | Names neither seed refinement nor are compared (refine.rs:171; tests/lvs/compare.rs:461) |
+| LVS-032 | Net-name seeding (same_nets) | missing | Names neither seed refinement nor are compared (test net_names_do_not_have_to_agree) |
 | LVS-033 | Black boxes | missing | — |
 | LVS-034 | Ignore device class (fill, decap, tap cells), parasitic filters | missing | sky130 netgen setup ignores fill/tap/fakediode classes |
 | LVS-035 | Dummy / shorted device removal | missing | — |
 | LVS-042 | Semi-series MOS | missing | — |
-| LVS-043 | Resistor series/parallel | missing | reduce.rs merges MOS only |
-| LVS-044 | Capacitor / diode / BJT parallel | missing | reduce.rs merges MOS only |
+| LVS-043 | Resistor series/parallel | partial | Parallel merging applies to every device kind but sums only W and nf, so two parallel resistors without a W collapse into one with the same R, a false clean (testing-plan F20). Series merging is MOS only |
+| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel merging applies to every kind but sums only W and nf: capacitors keep one C, and diodes wired in opposite directions merge (testing-plan F15, F20) |
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
-| LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named (graph.rs:194) and join_series refuses named nodes (reduce.rs:403): testing-plan F12 |
-| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology/device.rs:301-329). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param (compare.rs:255-313); bulk is dropped when the layout has none (compare.rs:49) |
-| LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused (netlist.rs:447-453) |
+| LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named and series merging refuses named nodes (testing-plan F12) |
+| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none |
+| LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader |
 | LVS-062 | Capacitor C/A/P | partial | Marker area only; no C or perimeter |
 | LVS-063 | Diode A/P | partial | Marker area only; no perimeter. Polarity is not compared (F15) |
 | LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area only; no AE/PE/NE extraction. sky130 bipolars have no recogniser (limitations.md:61) |
@@ -232,9 +232,9 @@ says which foundry manual, standard or tool defines each one.
 | ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
 | ERC-A7 | PWL diffusion-dependent limit | missing | — |
 | ERC-A9 | Minimum protection-diode size | missing | — |
-| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (antenna.rs:150,246). gf180 leaves ANT.14/15 out (gf180mcu.deck:647-649), and the FuseTop/Via5 connectivity needs care |
+| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (erc::rules::antenna). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
 | ERC-A12 | Oxide-class-specific limits | partial | One row per gate layer |
-| ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (antenna.rs:353-358) |
+| ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna) |
 | ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
 | ERC-A15 | Fix hint: required diode area | missing | Report feature |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | missing | — |
@@ -255,7 +255,7 @@ says which foundry manual, standard or tool defines each one.
 | ERC-D6 | HV latch-up between isolated pockets | missing | — |
 | ERC-D7 | Native-device guard ring | missing | — |
 | ERC-D8 | Forward-biased diode marked and ringed | missing | — |
-| ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (electrical.rs:238-255). The IHP deck states JMAX only (ihp_sg13g2.deck:600-602): it may over-report, but it cannot under-report |
+| ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report |
 | ERC-E7 | RMS / Joule heating / peak limits | missing | No open source |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
@@ -276,10 +276,10 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| PEX-003 | Coupling C (same-layer and cross-layer) | partial | No reflected images: same-layer coupling under-predicted 14-159% (matvec.rs:59) |
-| PEX-004 | Partial self / mutual inductance | partial | Self and mutual L are solved, but run_pex discards the InductMatrix (run.rs:358-359); only a series L per net reaches the output (quasistatic.rs:57-61) |
+| PEX-003 | Coupling C (same-layer and cross-layer) | partial | No reflected images and no substrate ground plane: same-layer coupling is under-predicted 14-159%, and a field-solved ground C is to infinity, not the substrate (extract::field; testing-plan F24) |
+| PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. A net drawn as touching rectangles reads L = 0 and R = 0 with no refusal, because filaments join only at coincident endpoints (testing-plan F23) |
 | PEX-006 | Multi-corner extraction | missing | — |
-| PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic and --quasistatic-inductance per net; --format spef\|dspf. No C-only/RC modes or thresholds (args.rs:84-122) |
+| PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds |
 | PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
 
 ### Flow

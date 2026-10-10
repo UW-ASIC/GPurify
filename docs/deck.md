@@ -303,13 +303,13 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `em_current_density(layers…; max_density: current per width, max_current_per_cut: current)` | A wire or cut above its instantaneous current limit. Needs `--intent`. |
 | `ir_drop()` | A node whose voltage drop or overvoltage exceeds its net's stated limit. Needs `--intent`. |
 | `p2p_resistance(; max: resistance)` | Two points on one net further apart in resistance than the limit. |
-| `reliability(; required_lifetime: h, reference_lifetime: h, reference_stress: voltage, stress_exponent: n, reference_temperature: temp, activation_energy: eV, max_abs_voltage: voltage, duty_cycle: frac)` | A device whose predicted lifetime is below `required_lifetime`. Needs `--intent`. |
+| `reliability(; required_lifetime: h, reference_lifetime: h, reference_stress: voltage, stress_exponent: n, reference_temperature: temp, activation_energy: eV, max_abs_voltage: voltage, duty_cycle: frac)` | A supply-grid node whose voltage stress predicts a lifetime below `required_lifetime` (inverse power law in voltage times Arrhenius in temperature), or whose voltage exceeds `max_abs_voltage`. It reads the solved supply grid, not individual devices. Needs `--intent`. |
 | `hv_domain(; max_delta: voltage, isolation: layer \| none)` | A device whose terminals reach supply domains more than `max_delta` apart, directly or through other devices' channels. Needs `--intent`. |
 | `esd_latchup(pad, guard_ring; min_guard_ring_width: len, max_tap_distance: len, clamps: models)` | A guard ring too narrow or too far from a supply tap, and a pad net short of a clamp path (as `esd_topological`). Needs `--intent`. |
 | `esd_topological(pad; clamps: models)` | A pad net with no path through `clamps` devices to both a power and a ground supply. The path is a clamp from the pad to a supply, then any rail clamps between supplies. Needs `--intent`. |
 | `floating_gate(; labels_are_ports: bool)` | A net that only connects to gates. With `labels_are_ports: true`, a labelled net is a block input driven from outside the cell and is skipped. |
 | `floating_well(well, tap)` | A well with no tap in it. |
-| `missing_tie(well, diff; max_distance: len)` | A region further than `max_distance` from a tap. |
+| `missing_tie(region, tap; max_distance: len)` | A point of a `region` shape (a device polarity's active area, say) further than `max_distance` from the nearest `tap` edge. |
 | `multiple_drivers(; max: count)` | A net driven by more than `max` separate drivers. |
 | `soft_connection(layers…)` | A net held together only through the listed high-resistance layers. |
 | `supply_short(tap_a, tap_b[, within])` | A net that touches both kinds of tap, such as an n-tap and a p-tap. With `within`, a `tap_a` shape counts only when its centre lies in a `within` shape (sky130: n-taps in a well holding a PMOS, so a PNP's base contact is not a short). |

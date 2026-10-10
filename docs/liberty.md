@@ -255,8 +255,9 @@ sky130_fd_sc_hd's tables and thresholds.
 
 Before anything is measured, the spec's pins are compared with:
 
-- **The layout's labels**: every label must be a spec pin, and every spec pin
-  must be found. The `substrate` pin may be found as the substrate instead.
+- **The layout's labels**: every spec pin must be found among them. The
+  `substrate` pin may be found as the substrate instead. A label the spec does
+  not list is taken as an internal net, and the run says so in a note.
 - **The reference `.subckt`'s ports**, with `--reference`.
 - **The LEF macro's pins**, with `--lef`.
 
