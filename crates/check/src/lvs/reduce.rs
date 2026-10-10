@@ -22,8 +22,11 @@
 //!   devices of one kind and one model whose channels (`Source`/`Drain`) meet
 //!   at a net carrying exactly those two terminals, with every other terminal
 //!   on the same nets (gates strapped, one bulk; catalog LVS-045) and at least
-//!   one such terminal, become one. The shared net must not be a port or
-//!   named, and is consumed. In practice only MOS have a channel.
+//!   one such terminal, become one. The shared net must not be a port, and
+//!   is consumed; a name alone does not protect it, since every reference
+//!   net is named. [`compare`](crate::lvs::compare) makes a reference net a
+//!   port when a layout label names it, so a labelled node stops the merge on
+//!   both sides. In practice only MOS have a channel.
 //! - **Multiplier** (catalog LVS-046): with both the `W` and `m` names given,
 //!   each device's `W` is multiplied by its `m` and the `m` is dropped,
 //!   before any merge.
@@ -462,9 +465,10 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
             continue;
         }
         let ((first, first_role), (second, second_role)) = (on[0], on[1]);
-        // Merging across a named or probed node destroys the thing a human asked
-        // about.
-        if plan.is_port[net as usize] || src.net_name[net as usize].is_some() {
+        // A port is a node someone outside can reach, so it is not internal. A
+        // name alone does not stop the merge: every reference net has one, and
+        // the layout's would not (testing-plan F12).
+        if plan.is_port[net as usize] {
             continue;
         }
         // Two terminals of *one* device on a node is a shorted device, not a

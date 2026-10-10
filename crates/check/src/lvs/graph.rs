@@ -270,9 +270,6 @@ pub(crate) fn transpose_into(graph: &mut Graph, net_count: usize) {
 ///   subcircuit is skipped, so flatten the netlist first
 ///   ([`Netlist::flatten_top`](gpurify_ingest::netlist::Netlist::flatten_top)),
 ///   as the load step does (testing-plan F1).
-/// - Because every net is named, series reduction never merges across a
-///   reference net, while it does merge across an unlabelled layout net
-///   (testing-plan F12).
 /// - A resistor's ends are both `Pin(0)`, so they match either way round; a
 ///   diode's anode and cathode, and a capacitor's plates, stay `Pin(0)` and
 ///   `Pin(1)` (testing-plan F15).

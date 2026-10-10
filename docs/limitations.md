@@ -214,7 +214,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel merging applies to every kind but sums only W and nf: capacitors keep one C (testing-plan F20). Diodes wired in opposite directions no longer merge |
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
-| LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named and series merging refuses named nodes (testing-plan F12) |
+| LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. |
 | LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none |
 | LVS-061 | Resistor R/L/W | missing | No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader |
 | LVS-062 | Capacitor C/A/P | partial | Marker area only; no C or perimeter |

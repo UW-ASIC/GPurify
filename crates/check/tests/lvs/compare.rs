@@ -15,7 +15,7 @@ use common::{
 };
 use gpurify_check::lvs::graph::from_reference;
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
-use gpurify_check::lvs::{compare, CompareOptions};
+use gpurify_check::lvs::{compare, compare_logged, CompareOptions};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::StrId;
@@ -663,5 +663,68 @@ fn a_resistor_written_either_way_round_is_the_same_resistor() {
         reference_verdict(DeviceKind::Resistor, true),
         Verdict::Match,
         "a resistor's ends are interchangeable"
+    );
+}
+
+/// Two NMOS in series from net 1 to net 3 through net 2, gates on 0, bulk on 4.
+/// Nets 0, 1, 3 and 4 are named ports; `middle` names net 2, and `middle_port`
+/// makes it a port as well.
+fn series_stack(middle: Option<StrId>, middle_port: bool) -> gpurify_check::lvs::Graph {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(5);
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+    );
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+    );
+    for (net, name) in [(0, 60), (1, 61), (3, 63), (4, 64)] {
+        builder.name_net(net, StrId(name));
+        builder.port(net);
+    }
+    if let Some(name) = middle {
+        builder.name_net(2, name);
+    }
+    if middle_port {
+        builder.port(2);
+    }
+    builder.finish()
+}
+
+/// Oracle: the stack is the same circuit on both sides. The layout's middle
+/// node is unlabelled and the reference's is named, as every reference net is;
+/// both must reduce to one device. Before B4 only the layout did, and the
+/// stack was a false mismatch (testing-plan F12).
+#[test]
+fn a_stack_matches_its_schematic_whether_or_not_the_middle_is_named() {
+    let layout = series_stack(None, false);
+    let reference = series_stack(Some(StrId(62)), false);
+    let (verdict, merges) = compare_logged(&layout, &reference, decisive());
+    assert_eq!(verdict, Verdict::Match);
+    assert_eq!(merges.len(), 2, "each side merged its stack: {merges:?}");
+}
+
+/// Oracle: a label is a port, so the layout keeps a labelled middle node, and
+/// the reference net of the same name must be kept too or the two sides reduce
+/// differently. A schematic that does not name the node the same way still
+/// reduces, which is the mismatch a misnamed label deserves.
+#[test]
+fn a_labelled_middle_node_is_kept_on_both_sides() {
+    let layout = series_stack(Some(StrId(62)), true);
+    let (verdict, merges) =
+        compare_logged(&layout, &series_stack(Some(StrId(62)), false), decisive());
+    assert_eq!(verdict, Verdict::Match);
+    assert!(
+        merges.is_empty(),
+        "nothing merges across a labelled node: {merges:?}"
+    );
+    assert_ne!(
+        compare(&layout, &series_stack(Some(StrId(65)), false), decisive()),
+        Verdict::Match,
+        "the label names a node the schematic does not"
     );
 }

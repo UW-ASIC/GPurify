@@ -193,12 +193,13 @@ fn a_shared_node_that_is_a_port_blocks_the_series_merge() {
     assert_eq!(reduce(&src), src);
 }
 
-/// Oracle: construct-from-answer. A name on the node is a human saying they care
-/// about it — a probe point, a pin, a net the schematic also names. Merging
-/// across it destroys the thing they asked about, so the name blocks the merge
-/// exactly as the port does.
+/// Oracle: construct-from-answer. A name alone does not make a node external:
+/// every reference net is named, so if a name blocked the merge the reference
+/// would never series-reduce while the layout did (testing-plan F12). Only a
+/// port blocks it, and `compare` turns a reference net a layout label names
+/// into one.
 #[test]
-fn a_shared_node_that_carries_a_declared_name_blocks_the_series_merge() {
+fn a_name_alone_does_not_block_the_series_merge() {
     let mut builder = GraphBuilder::new(6);
     builder.device(
         DeviceKind::Mos,
@@ -211,14 +212,11 @@ fn a_shared_node_that_carries_a_declared_name_blocks_the_series_merge() {
         &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
     );
     builder.name_net(2, VSS);
-    let src = builder.finish();
-
     assert_eq!(
-        reduce(&src).device_count(),
-        2,
-        "a named node is not internal"
+        reduce(&builder.finish()).device_count(),
+        1,
+        "a named node is internal"
     );
-    assert_eq!(reduce(&src), src);
 }
 
 /// Oracle: construct-from-answer. A third terminal on the node means current can

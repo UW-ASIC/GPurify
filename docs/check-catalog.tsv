@@ -122,7 +122,7 @@ LVS-033	lvs	equiv	Black boxes	KL:blank_circuit; NG:model blackbox	-	missing	SY; 
 LVS-034	lvs	equiv	Ignore device class (fill, decap, tap cells), parasitic filters	KL:same_device_classes nil,max_res,min_caps; NG:ignore class; MAG:cthresh	-	missing	SY	sky130 netgen setup ignores fill/tap/fakediode classes
 LVS-035	lvs	equiv	Dummy / shorted device removal	NG:ignore shorted	-	missing	SY	
 LVS-040	lvs	reduce	Parallel MOS (W add, L critical)	KL; NG:parallel; MAG:merge; CAL:LVS REDUCE PARALLEL MOS	lvs:reduce	implemented	SY; TX:NG	
-LVS-041	lvs	reduce	Series MOS (stacks)	CAL:LVS REDUCE SERIES MOS; NG:opt-in	lvs:reduce	implemented	SY; TX:NG	On by default, unlike netgen; a semantic difference to triage in the differential
+LVS-041	lvs	reduce	Series MOS (stacks)	CAL:LVS REDUCE SERIES MOS; NG:opt-in	lvs:reduce	implemented	SY; TX:NG	On by default, unlike netgen; a semantic difference to triage in the differential. A merge stops at a port on either side, and a layout label makes the reference net of its name a port
 LVS-042	lvs	reduce	Semi-series MOS	CAL:LVS REDUCE SEMI SERIES MOS	-	missing	-	
 LVS-043	lvs	reduce	Resistor series/parallel	KL; NG:series,parallel	lvs:reduce	partial	SY; TX:NG	Parallel merging applies to every device kind but sums only W and nf, so two parallel resistors without a W collapse into one with the same R, a false clean (testing-plan F20). Series merging is MOS only
 LVS-044	lvs	reduce	Capacitor / diode / BJT parallel	KL; NG; MAG	lvs:reduce	partial	SY; TX:NG	Parallel merging applies to every kind but sums only W and nf: capacitors keep one C (testing-plan F20). Diodes wired in opposite directions no longer merge
@@ -130,7 +130,7 @@ LVS-045	lvs	reduce	Bulk-equality condition for merges	KL	lvs:reduce	implemented	
 LVS-046	lvs	reduce	Fingers / nf / m folding	KL; NG; MAG	lvs:reduce	implemented	SY	m folds into W before merging (lvs::reduce); on a device with m but no W, m is dropped (testing-plan F21)
 LVS-047	lvs	reduce	Logic-gate recognition	CAL:LVS RECOGNIZE GATES; SubGemini	-	missing	-	
 LVS-048	lvs	reduce	Filter unused devices	CAL:LVS FILTER UNUSED	-	missing	-	
-LVS-049	lvs	reduce	Topology vs property policy (strict/relaxed)	NG:property topology	lvs.unpaired_device,lvs.class_imbalance	partial	TX:NG	Fixed strict policy: structural differences after reduction are reported as unpaired devices. The reference never series-reduces, because every reference net is named and series merging refuses named nodes (testing-plan F12)
+LVS-049	lvs	reduce	Topology vs property policy (strict/relaxed)	NG:property topology	lvs.unpaired_device,lvs.class_imbalance	partial	TX:NG	Fixed strict policy: structural differences after reduction are reported as unpaired devices.
 LVS-060	lvs	device	MOS W, L, nf, m, AS/AD/PS/PD, bulk	KL:MOS3,MOS4; NG; sky130 netgen setup	lvs:params	partial	SY; TX:NG	Extraction gives MOS w and l only, plus marker area (topology::device::recognise_into). nf, perim and as/ad/ps/pd on a reference card become lvs.undeclared_param; bulk is dropped when the layout has none
 LVS-061	lvs	device	Resistor R/L/W	KL:Resistor; MAG:resistor	-	missing	SY	No R, W or L is measured for a resistor. The positional value form `R1 a b 1k` is refused by the netlist reader
 LVS-062	lvs	device	Capacitor C/A/P	KL:Capacitor; MAG:capacitor	lvs:params	partial	SY	Marker area only; no C or perimeter

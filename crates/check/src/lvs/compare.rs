@@ -68,6 +68,30 @@ pub fn compare(layout: &Graph, reference: &Graph, options: CompareOptions) -> Ve
     compare_logged(layout, reference, options).0
 }
 
+/// Makes every reference net a layout label names a port of `reference`.
+///
+/// A label makes a layout port, and a series merge never crosses a port. The
+/// reference's net of the same name must stop the merge too, or a stack with a
+/// labelled internal node reduces on one side only (testing-plan F12).
+fn protect_labelled(layout: &Graph, reference: &mut Graph) {
+    let mut labels: Vec<StrId> = layout
+        .port_net
+        .iter()
+        .filter_map(|&net| layout.net_name[net as usize])
+        .collect();
+    labels.sort_unstable();
+    let mut is_port = vec![false; reference.net_count()];
+    for &net in &reference.port_net {
+        is_port[net as usize] = true;
+    }
+    for net in 0..reference.net_count() {
+        let named = reference.net_name[net].is_some_and(|name| labels.binary_search(&name).is_ok());
+        if named && !is_port[net] {
+            reference.port_net.push(narrow(net));
+        }
+    }
+}
+
 /// [`compare`], and every series or parallel merge each side's reduction made,
 /// layout's first.
 ///
@@ -87,6 +111,7 @@ pub fn compare_logged(
 ) -> (Verdict, Vec<(Side, Merge)>) {
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
+    protect_labelled(layout, &mut declared);
     let (layout, layout_merges) = reduce_with(layout, options.params);
     let (reference, reference_merges) = reduce_with(&declared, options.params);
     let merges = layout_merges

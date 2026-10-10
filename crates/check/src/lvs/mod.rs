@@ -68,10 +68,6 @@
 //!   first ([`Netlist::flatten_top`](gpurify_ingest::netlist::Netlist::flatten_top)):
 //!   a block placed by instance is compared device by device, never cell by
 //!   cell (catalog LVS-010, LVS-017).
-//! - **F12, false mismatch.** Every reference net is named and a series merge
-//!   never crosses a named net, so the reference never series-reduces while
-//!   the layout does: a drawn stack with an unlabelled internal node becomes
-//!   one device against two.
 //! - **F16, weak parameters.** The layout measures only MOS `w` and `l` and
 //!   each device's marker `area`, so passives are not sized.
 
