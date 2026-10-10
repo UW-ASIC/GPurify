@@ -51,7 +51,8 @@ KLayout pages cited:
   harness only feeds layouts GPurify accepted.
 - **Derived layers:** translated as in (c), then wrapped in `mc(...)`. GPurify stores each derived
   layer as merged, minimum-coherence figures (`ingest/src/layout.rs`, derived loop:
-  `store.append_layer` of the boolean or selection result).
+  `store.append_layer` of the boolean or selection result), except `.extents()`, whose boxes are
+  stored one row each and may overlap.
 - **`.raw` mutates the layer object** ([L] "raw": "this method will set the state of the layer").
   Call it only on a fresh `SRC.polygons(...)` or on a `.dup`.
 
@@ -87,7 +88,7 @@ KLayout pages cited:
 GPurify reports `shapes: (row, row?)` and `at`. A row is a store polygon: a drawn GDS polygon, or
 the outer ring or a hole ring of a keyhole, which ingest splits into an outer row plus hole rows.
 - Some kinds work on drawn rows and others on merged figures.
-- On a derived layer, rows already are figures.
+- On a derived layer, rows already are figures, except the boxes of `.extents()`, which may overlap.
 - KLayout works on merged polygons (clean mode) unless `.raw` is used.
 
 So compare at the coarsest unit both tools share. For every layer that a FIG or PAIR rule reads,
@@ -790,7 +791,7 @@ plus holes) with its area, and every edge of an edge layer with its length.
 
 ```ruby
 emit(id, SRC.polygons(l, d).raw)   # drawn layer
-emit(id, DERIVED)                  # derived layer: merged figures
+emit(id, DERIVED)                  # derived layer: merged figures; `.extents` boxes unmerged
 emit(id, E)                        # edge layer
 ```
 
@@ -961,7 +962,7 @@ Each operation runs on merged operands. Every polygon result is wrapped in `mc()
 | `.inside(L)` | No part of the shape lies outside L; touching the boundary from inside is fine | `.inside(L)` | Same (v T11) |
 | `.outside(L)` | No shared area; touching only is outside | `.outside(L)` | Same (v T11) |
 | `.holes()` | Each hole filled, island included, merged | `.holes` | Same (v T12) |
-| `.extents()` | The bbox of each figure, merged at once | `.extents` | KLayout merges at the next use; same under clean semantics |
+| `.extents()` | The bbox of each figure, one row per box; overlapping boxes are not merged (`extents_into`) | `.extents` | Same: `Region#extents` "The boxes will not be merged" ([R]); both merge them at the next merging use |
 | `.with_area(b)` | Area without holes, inclusive bounds | `.with_area(min, max)` on [min, max), bounds mapped per (a5) | (v T12, T15) |
 | `.with_width(b)` | `narrowest_width` = facing edges by projection only (`geom/width.rs`) | `L.drc(if_all(!(width(projection) < LO), width(projection) < HI))`, with LO and HI mapped per (a5) | (v t13 W1). deck.md says "as width measures it", but `width` also counts Euclidean necks (N2) |
 | `.with_text(T, "p")` | A text point on the material or its edge (`on_material`); glob `*` and `?` only; case-sensitive | `.interacting(SRC.labels(T).texts(pattern("p")))`, or `texts(text("p"))` when there is no wildcard | Text on an edge and on a corner count (v T14, T18). KLayout globs also have `[…]`, `{a,b}` and `\` escapes, so those characters must be escaped (Q3) |

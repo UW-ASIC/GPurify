@@ -291,7 +291,8 @@ pub enum DerivedOp {
     Outside,
     /// Each hole of each shape, filled; a hole holding an island covers it.
     Holes,
-    /// The bounding box of each shape.
+    /// The bounding box of each shape, one shape per box: boxes that overlap
+    /// are not merged.
     Extents,
     /// The shapes whose area, holes excluded, lies in `lo..=hi` square grid units.
     WithArea(i128, i128),

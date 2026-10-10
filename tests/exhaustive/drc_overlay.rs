@@ -2967,19 +2967,13 @@ fn selections() -> Vec<Fixture> {
             areas(&[1_000_000, 1_000_000]),
         ),
     ] {
-        let fixture = derived(
+        cases.push(derived(
             &format!("derived/extents/{name}"),
             cat,
             &["a"],
             &[("a.extents()", extents)],
             layout,
-        );
-        // F54: the boxes of shapes whose boxes overlap are stored merged.
-        cases.push(if name == "interlocking" {
-            fixture.known("F54")
-        } else {
-            fixture
-        });
+        ));
     }
 
     let sized = ring(

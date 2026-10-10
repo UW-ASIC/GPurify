@@ -3,8 +3,9 @@
 //!
 //! Data in: merged [`ValidatedLayer`]s (a boolean result, or a layer passed
 //! through [`merge_into`]); edge layers as directed [`Seg`]s, material on the
-//! left of travel. Data out: a merged layer, or merged edges. Semantics follow
-//! `KLayout`'s merged-polygon definitions; exact on the rectilinear grid.
+//! left of travel. Data out: a merged layer (but [`extents_into`]: one box per
+//! polygon, overlaps kept), or merged edges. Semantics follow `KLayout`'s
+//! merged-polygon definitions; exact on the rectilinear grid.
 
 use crate::bbox::Bbox;
 use crate::boolean::{subtraction_into, union_into, BooleanError};
@@ -110,13 +111,17 @@ pub fn holes_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), Bo
     merged(builder, out)
 }
 
-/// `KLayout` `extents`: the bounding box of every polygon of `a`, merged.
+/// `KLayout` `extents`: the bounding box of each polygon of `a`, one polygon
+/// per box. Boxes that overlap stay apart, as `KLayout`'s do ("The boxes will
+/// not be merged"); a later operation merges them like any operand.
 pub fn extents_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
     let mut builder = GeometryStoreBuilder::with_capacity(a.len(), 4 * a.len());
     for &b in a.bboxes() {
         push_rect(&mut builder, b);
     }
-    merged(builder, out)
+    let (store, _) = builder.finish(1);
+    validate_layer_into(&store, ONLY, out)?;
+    Ok(())
 }
 
 /// `KLayout` `with_area`: polygons whose area in square grid units, holes

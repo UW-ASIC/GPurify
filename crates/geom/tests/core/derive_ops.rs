@@ -265,11 +265,13 @@ fn holes_fill_each_hole_and_a_hole_holding_an_island_covers_it() {
 }
 
 #[test]
-fn extents_are_bounding_boxes_merged() {
+fn extents_give_each_shape_its_own_box() {
     let mut got = ValidatedLayer::default();
     extents_into(&l_shape(2), &mut got).expect("rectilinear");
     same(&got, &rects(&[(0, 0, 10, 10)]), "extent of the L");
-    // Two Ls whose boxes overlap merge into one box region.
+    // Two disjoint Ls whose boxes overlap on [8, 10] x [4, 10]: each keeps its
+    // own box, 10 x 10 and 12 x 10, so the areas add with the overlap counted
+    // twice (`KLayout`: "The boxes will not be merged").
     let two = layer(&[
         (&[0, 10, 10, 2, 2, 0], &[0, 0, 2, 2, 10, 10]),
         (
@@ -278,12 +280,8 @@ fn extents_are_bounding_boxes_merged() {
         ),
     ]);
     extents_into(&two, &mut got).expect("rectilinear");
-    same(
-        &got,
-        &rects(&[(0, 0, 10, 10), (8, 4, 20, 14)]),
-        "union of boxes",
-    );
-    assert_eq!(area(&got), 100 + 120 - 2 * 6);
+    assert_eq!(boxes(&got), [(0, 0, 10, 10), (8, 4, 20, 14)]);
+    assert_eq!(area(&got), 100 + 120);
 }
 
 #[test]
