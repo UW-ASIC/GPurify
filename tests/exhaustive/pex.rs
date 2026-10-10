@@ -37,12 +37,12 @@
 //! `#[test]` at the end of the file, against the same closed forms.
 //!
 //! Known gaps get fixtures that state the correct physics and carry the
-//! finding that breaks them: F23, F24, F31, and `F45` (a field-solved polygon
-//! is one filament along its bounding box). `F30` (a layer with no `pex` row
-//! read as a perfect wire), `F44` (closed forms read each drawn polygon, not
-//! the conductor), `F46` (the mesh
-//! depended on absolute position) and `F47` (the reciprocity gate refused
-//! ordinary layouts) are fixed, and their fixtures hold.
+//! finding that breaks them: F23, F24 and F31. `F30` (a layer with no `pex`
+//! row read as a perfect wire), `F44` (closed forms read each drawn polygon,
+//! not the conductor), `F45` (a field-solved polygon was one filament along
+//! its bounding box), `F46` (the mesh depended on absolute position) and
+//! `F47` (the reciprocity gate refused ordinary layouts) are fixed, and their
+//! fixtures hold.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -683,10 +683,11 @@ fn solved(name: &str, catalog: &[&'static str], layout: Layout, nets: &[&str]) -
 ///   `Rs·L/W` (one filament carries the bar's DC resistance).
 /// - The same bar drawn as two collinear halves is the same conductor.
 /// - A net that does not exist is refused.
-/// - F23: an L drawn as two touching rectangles, and a bar pair joined by a
-///   via, have the R and L of the conductor they draw, not zero.
-/// - `F45`: an L drawn as one polygon likewise, not a filament along its
-///   bounding box.
+/// - An L drawn as one polygon or as two touching rectangles has the R and L
+///   of the conductor it draws: `F45` (one filament along the bounding box)
+///   and the touching half of F23 are fixed.
+/// - F23: a bar pair joined by a via has the R of the bars and the cut in
+///   series, not zero.
 /// - F24: a plate's ground capacitance is at least the parallel-plate
 ///   `ε₀εr·A/h` to the substrate.
 /// - F31: naming a net twice is refused or deduplicated; the run completes.
@@ -773,7 +774,7 @@ fn field(depth: Depth) -> Vec<Fixture> {
     let (points, centre) = bend("l", a, b, w);
     let (wf, af, bf) = (w as f64, a as f64, b as f64);
     let l_shape = grover_ph(af - wf / 2.0, wf, t) + grover_ph(bf - wf / 2.0, wf, t);
-    let bent = |name: &str, layout: Layout, finding: &'static str| {
+    let bent = |name: &str, layout: Layout| {
         solved(
             name,
             &["PEX-004", "PEX-005"],
@@ -787,19 +788,16 @@ fn field(depth: Depth) -> Vec<Fixture> {
             MODEL,
         ))
         .expect(claim("A", Quantity::Inductance, l_shape, MODEL))
-        .known(finding)
     };
     out.push(bent(
         "pex/field/l_two_rectangles",
         Layout::default()
             .rect("m1", 0, 0, a, w)
             .rect("m1", a - w, w, a, b),
-        "F23",
     ));
     out.push(bent(
         "pex/field/l_one_polygon",
         Layout::default().polygon("m1", &points),
-        "F45",
     ));
     // m1 and m2 bars joined by one cut: the bars and the cut in series.
     out.push(

@@ -59,8 +59,11 @@
 //! capacitance and `−C_ij` as the coupling between nets `i` and `j`. The
 //! engine refuses a matrix that is not symmetric to the solve's tolerance.
 //!
-//! [`field::henry`] turns each polygon of a selected net into one straight
-//! filament and builds their partial-inductance matrix (Ruehli, 1972). Self
+//! [`field::henry`] merges each selected net's shapes per layer, as the
+//! closed forms do, cuts them into rectangles, and makes each rectangle a
+//! straight filament along its centre line; rectangles that share an edge
+//! are joined through the middle of it, so a bend reads its centre line.
+//! It builds their partial-inductance matrix (Ruehli, 1972). Self
 //! terms use Grover's closed form ([`field::filament::self_inductance_bar`]),
 //! close parallel pairs the exact brick formula of Hoer & Love (1965), far
 //! parallel pairs the centre-line closed form, and every other pair
@@ -103,11 +106,12 @@
 //!   under-reports C on elongated panels: 3.5% at 2:1, up to 64% at 100:1.
 //! - **Only selected nets are in the field.** Coupling from a solved net to an
 //!   unselected one is the analytical estimate, which `overlay` keeps.
-//! - **Inductance** models each polygon as one filament along its bounding
-//!   box's long side. Filaments join only where their end points coincide on
-//!   one layer, so vias join nothing, and a net drawn as touching polygons
-//!   whose centre lines do not meet is several circuits. Such a net can
-//!   report `L = 0` and `R = 0` (see [`field::henry::extract_inductance_into`]).
+//! - **Inductance** models each rectangle of a net's merged shapes as one
+//!   filament, uniform across its width, so current crowding at a corner or
+//!   a step in width is not modelled: a junction between two rectangles is a
+//!   filament as wide as their shared edge. Vias join nothing, so a net on
+//!   several layers is several circuits and can report `L = 0` and `R = 0`
+//!   (see [`field::henry::extract_inductance_into`]).
 //!   Only each net's own port impedance is computed, so mutual inductance
 //!   between nets never reaches the output. A single frequency (1 MHz) means
 //!   there is no skin effect.

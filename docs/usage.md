@@ -138,8 +138,10 @@ writes a DSPF file for a simulator. Every net is extracted with closed-form
 resistance and capacitance. Nets named with `--quasistatic` are solved from
 the field instead, which is slower and more accurate, and their coupling to
 nets that were not field-solved is kept. A field-solved net also gets its
-inductance. A net with no text label in the
-layout has no name to write, and the run refuses it rather than inventing one.
+inductance, and its resistance and inductance follow the wire's centre line
+through every bend, however the wire was cut into polygons. A net with no text
+label in the layout has no name to write, and the run refuses it rather than
+inventing one.
 
 A wire is measured as drawn, not as cut into polygons: a net's shapes on one
 layer are merged first, so pieces that abut or overlap read as the one

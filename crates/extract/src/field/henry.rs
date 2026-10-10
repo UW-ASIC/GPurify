@@ -1,8 +1,11 @@
 //! Quasi-static inductance: `GeometryStore` polygons in, per-net series L and R out.
 //!
-//! Data in: selected nets; each polygon's bbox becomes one filament along its
-//! long axis (short side × layer thickness), one port per net across its two
-//! most distant filament endpoints.
+//! Data in: selected nets. Each net's shapes are merged per layer and cut into
+//! disjoint rectangles, as the closed forms read them; each rectangle is a
+//! filament along its long axis (short side × layer thickness), and two
+//! rectangles that share an edge are joined by a short filament through the
+//! middle of that edge. One port per net runs across its two most distant
+//! filament end points.
 //! Data out: [`InductMatrix`] — the port impedance diagonal at one frequency,
 //! `L = Im(Z)/ω`, `R = Re(Z)`, from a dense nodal solve of `Zb = R + jωL`.
 //!
@@ -15,9 +18,10 @@
     reason = "assembly kernels index several lanes in lockstep; ranged loops keep the fold order explicit"
 )]
 
+use crate::conductor::Regions;
 use crate::field::filament::{self, default_wdir, Filament, Vec3};
 use gpurify_check::topology::{NetId, NetTable};
-use gpurify_geom::{GeometryStore, Grid};
+use gpurify_geom::{Bbox, GeometryStore, Grid};
 use gpurify_ingest::deck::ProcessStack;
 use num_complex::Complex64;
 use rayon::prelude::*;
@@ -38,7 +42,8 @@ pub struct InductMatrix {
     /// Series inductance between the net's port terminals, henries.
     pub l_henry: Vec<f64>,
     /// Series resistance between the net's port terminals, ohms. At 1 MHz
-    /// and one filament per polygon this is the DC resistance.
+    /// and one filament across each rectangle's width this is the DC
+    /// resistance.
     pub r_ohm: Vec<f64>,
 }
 
@@ -65,10 +70,87 @@ pub enum InductanceError {
     /// has an exactly zero pivot column. Carries the frequency in Hz.
     #[error("singular system at frequency {0} Hz")]
     Singular(f64),
+    /// A selected net's shapes on a layer do not validate as simple
+    /// rectilinear rings, so they cannot be cut into filaments exactly.
+    /// Carries the layer id.
+    #[error("layer {0} is not valid rectilinear geometry, so it cannot be cut into filaments")]
+    InvalidGeometry(u16),
 }
 
-/// A quantized filament endpoint: dbu coordinates plus layer. Sorted = dedup order.
+/// A filament node: coordinates in doubled database units, so every
+/// rectangle's centre line lands on an integer, plus the layer. Sorted is
+/// dedup order.
 type NodeKey = (i64, i64, u16);
+
+/// A rectangle's filament: its centre line along the long side (a square
+/// runs along x), in doubled database units.
+#[derive(Debug, Clone, Copy)]
+struct Line {
+    along_x: bool,
+    /// The two ends, along the axis.
+    lo: i64,
+    hi: i64,
+    /// The centre line's place across the axis.
+    at: i64,
+    /// The short side, in database units: the filament's width.
+    width: i64,
+}
+
+impl Line {
+    fn of(r: Bbox) -> Self {
+        let (xlo, xhi, ylo, yhi) = (r.xlo.raw(), r.xhi.raw(), r.ylo.raw(), r.yhi.raw());
+        if xhi - xlo >= yhi - ylo {
+            Line {
+                along_x: true,
+                lo: 2 * xlo,
+                hi: 2 * xhi,
+                at: ylo + yhi,
+                width: yhi - ylo,
+            }
+        } else {
+            Line {
+                along_x: false,
+                lo: 2 * ylo,
+                hi: 2 * yhi,
+                at: xlo + xhi,
+                width: xhi - xlo,
+            }
+        }
+    }
+
+    /// Where the point `(x, y)` (doubled units) projects onto the line,
+    /// clamped to its ends, as a coordinate along the axis.
+    fn project(self, x: i64, y: i64) -> i64 {
+        (if self.along_x { x } else { y }).clamp(self.lo, self.hi)
+    }
+
+    fn key(self, along: i64, layer: u16) -> NodeKey {
+        if self.along_x {
+            (along, self.at, layer)
+        } else {
+            (self.at, along, layer)
+        }
+    }
+}
+
+/// The midpoint (doubled units) and length (database units) of the edge two
+/// disjoint rectangles share, if they share one of positive length; `None`
+/// for a corner touch or a gap.
+fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
+    let (ax0, ax1, ay0, ay1) = (a.xlo.raw(), a.xhi.raw(), a.ylo.raw(), a.yhi.raw());
+    let (bx0, bx1, by0, by1) = (b.xlo.raw(), b.xhi.raw(), b.ylo.raw(), b.yhi.raw());
+    let (ylo, yhi) = (ay0.max(by0), ay1.min(by1));
+    if (ax1 == bx0 || bx1 == ax0) && yhi > ylo {
+        let x = if ax1 == bx0 { ax1 } else { ax0 };
+        return Some((2 * x, ylo + yhi, yhi - ylo));
+    }
+    let (xlo, xhi) = (ax0.max(bx0), ax1.min(bx1));
+    if (ay1 == by0 || by1 == ay0) && xhi > xlo {
+        let y = if ay1 == by0 { ay1 } else { ay0 };
+        return Some((xlo + xhi, 2 * y, xhi - xlo));
+    }
+    None
+}
 
 /// Solve per-net L and R for `selected` in one magnetoquasistatic solve.
 ///
@@ -76,28 +158,39 @@ type NodeKey = (i64, i64, u16);
 /// [`NetId`] order. All selected nets share one solve, and each net's value
 /// is its port's self impedance with every other port open.
 ///
-/// Each polygon becomes one filament along its bounding box's long side,
-/// the short side wide and the layer thickness deep. Filaments join only
-/// where their end points coincide exactly on one layer. Vias therefore join
-/// nothing, and a net drawn as touching polygons whose centre lines do not
-/// meet is several circuits. A net's port runs between its two most distant
-/// end points; when those are in different circuits, the net reports a
-/// partial or zero impedance (an L-shaped net drawn as two rectangles reads
-/// `L = 0`, `R = 0`) rather than an error.
+/// Each selected net's shapes are merged per layer and cut into disjoint
+/// rectangles (vertical slabs), as the closed forms read them, so a wire is
+/// the same conductor however it was drawn. Each rectangle is a filament
+/// along its centre line, end to end along its long side (a square runs
+/// along x), the short side wide and the layer thickness deep. Two
+/// rectangles that share an edge are joined through the middle of it: a
+/// filament from where that midpoint projects onto one centre line to where
+/// it projects onto the other, as wide as the shared edge. A centre line is
+/// split wherever a junction lands on it, and a stub past the last landing
+/// carries no current. So a bend of constant width `w` and centre-line
+/// length `Lc` reads `Lc / w` squares, its corner counted once.
+///
+/// Pieces on different layers, and pieces that meet only at a corner, are
+/// not joined. A net's port runs between its two most distant end points;
+/// when those are in different circuits, the net reports a partial or zero
+/// impedance rather than an error.
 ///
 /// # Errors
 ///
 /// [`InductanceError::EmptyNet`] for a selected net with no polygons,
-/// [`InductanceError::NoSheetResistance`] or
-/// [`InductanceError::NoThickness`] for a polygon on a layer the stack does
+/// [`InductanceError::InvalidGeometry`] for a net's shapes on a layer that
+/// are not valid rectilinear rings, [`InductanceError::NoSheetResistance`]
+/// or [`InductanceError::NoThickness`] for a shape on a layer the stack does
 /// not describe, and [`InductanceError::Singular`] if either factorisation
-/// meets a zero pivot. Nets are checked in ascending order.
+/// meets a zero pivot. Nets are checked in ascending order, each net's
+/// layers in ascending order.
 ///
 /// # Time complexity
 ///
-/// *O*(B²) filament-pair integrals and an *O*(B³) complex factorisation for
-/// B selected polygons, then an *O*(N³) one for N filament end points.
-// ponytail: one filament per poly bbox; centerline decomposition when L-shaped nets need it.
+/// A merge per net and layer; a check of every pair of one region's
+/// rectangles for a shared edge; then *O*(B²) filament-pair integrals and an
+/// *O*(B³) complex factorisation for B filament pieces, then an *O*(N³) one
+/// for N filament nodes.
 pub fn extract_inductance_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -124,66 +217,127 @@ pub fn extract_inductance_into(
         .len()
         .min(stack.thickness_nm.len())
         .min(stack.height_nm.len());
+    // Conductivity and thickness of a described layer; σ = 1/(Rsq · t)
+    // reproduces the sheet resistance through the thickness.
+    let conductor = |layer: u16| -> Result<(f64, f64), InductanceError> {
+        let row = usize::from(layer);
+        let sheet = stack.sheet_res_ohm_sq.get(row).copied().unwrap_or(0.0);
+        let thickness_m = stack.thickness_nm.get(row).copied().unwrap_or(0.0) * nm;
+        if row >= stack_rows || !(sheet > 0.0) || !sheet.is_finite() {
+            return Err(InductanceError::NoSheetResistance(layer));
+        }
+        if !(thickness_m > 0.0) {
+            return Err(InductanceError::NoThickness(layer));
+        }
+        Ok((1.0 / (sheet * thickness_m), thickness_m))
+    };
+    // A node's place, metres: half a database unit per doubled unit.
+    let position = |(x, y, layer): NodeKey| {
+        let row = usize::from(layer);
+        let z = (stack.height_nm.get(row).copied().unwrap_or(0.0)
+            + stack.thickness_nm.get(row).copied().unwrap_or(0.0) / 2.0)
+            * nm;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "|coordinate| < 2^42, exact in f64"
+        )]
+        Vec3::new(x as f64 * scale / 2.0, y as f64 * scale / 2.0, z)
+    };
 
     let mut nodes: Vec<Vec3> = Vec::new();
     let mut set = FilamentSet::default();
     let mut ports: Vec<(usize, usize)> = Vec::new();
+    // Per net, reused: each rectangle's line and layer, the stops on each
+    // line (`(rectangle, along)`), the junctions and the node keys.
+    let mut lines: Vec<(Line, u16)> = Vec::new();
+    let mut stops: Vec<(usize, i64)> = Vec::new();
+    let mut junctions: Vec<(NodeKey, NodeKey, i64)> = Vec::new();
+    let mut keys: Vec<NodeKey> = Vec::new();
     for &net in &order {
-        let polys = nets.polys_of(net);
-        if polys.is_empty() {
+        if nets.polys_of(net).is_empty() {
             return Err(InductanceError::EmptyNet(net.0));
         }
+        let mut regions = Regions::default();
+        regions
+            .push_net(store, nets, net, |_| true)
+            .map_err(|layer| InductanceError::InvalidGeometry(layer.0))?;
+        for &layer in &regions.layer {
+            conductor(layer.0)?;
+        }
+
+        lines.clear();
+        stops.clear();
+        junctions.clear();
+        for region in 0..regions.len() {
+            let layer = regions.layer[region].0;
+            let range = regions.rect_range(region);
+            for &rect in &regions.rects[range.clone()] {
+                let line = Line::of(rect);
+                stops.push((lines.len(), line.lo));
+                stops.push((lines.len(), line.hi));
+                lines.push((line, layer));
+            }
+            // ponytail: every pair of one region's rectangles; a sweep over
+            // slab boundaries if regions grow to thousands of rectangles.
+            for i in range.clone() {
+                for j in i + 1..range.end {
+                    let Some((x, y, edge)) = shared_edge(regions.rects[i], regions.rects[j]) else {
+                        continue;
+                    };
+                    let (a, b) = (lines[i].0, lines[j].0);
+                    let (at_a, at_b) = (a.project(x, y), b.project(x, y));
+                    stops.push((i, at_a));
+                    stops.push((j, at_b));
+                    let (from, to) = (a.key(at_a, layer), b.key(at_b, layer));
+                    if from != to {
+                        junctions.push((from, to, edge));
+                    }
+                }
+            }
+        }
+        stops.sort_unstable();
+        stops.dedup();
 
         // Node order is the sorted key order: a function of the geometry alone.
-        let mut keys: Vec<NodeKey> = Vec::with_capacity(polys.len() * 2);
-        for &poly in polys {
-            let (a, b) = filament_endpoints(store.poly_bbox(poly));
-            let layer = store.poly_layer(poly).0;
-            keys.push((a.0, a.1, layer));
-            keys.push((b.0, b.1, layer));
-        }
+        keys.clear();
+        keys.extend(stops.iter().map(|&(i, along)| {
+            let (line, layer) = lines[i];
+            line.key(along, layer)
+        }));
         keys.sort_unstable();
         keys.dedup();
-
         let base = nodes.len();
-        for &(x, y, layer) in &keys {
-            let row = usize::from(layer);
-            let z = (stack.height_nm.get(row).copied().unwrap_or(0.0)
-                + stack.thickness_nm.get(row).copied().unwrap_or(0.0) / 2.0)
-                * nm;
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "|coordinate| < 2^41, exact in f64"
-            )]
-            nodes.push(Vec3::new(x as f64 * scale, y as f64 * scale, z));
-        }
+        nodes.extend(keys.iter().map(|&key| position(key)));
         let node_of = |key: NodeKey| {
             base + keys
                 .binary_search(&key)
-                .expect("every endpoint was pushed as a key")
+                .expect("every stop was pushed as a key")
         };
 
-        for &poly in polys {
-            let layer = store.poly_layer(poly);
-            let row = usize::from(layer.0);
-            let sheet = stack.sheet_res_ohm_sq.get(row).copied().unwrap_or(0.0);
-            let thickness_m = stack.thickness_nm.get(row).copied().unwrap_or(0.0) * nm;
-            if row >= stack_rows || !(sheet > 0.0) || !sheet.is_finite() {
-                return Err(InductanceError::NoSheetResistance(layer.0));
+        #[expect(clippy::cast_precision_loss, reason = "|side| < 2^41, exact in f64")]
+        let metres = |dbu: i64| dbu as f64 * scale;
+        for run in stops.chunk_by(|a, b| a.0 == b.0) {
+            let (line, layer) = lines[run[0].0];
+            let (sigma, thickness_m) = conductor(layer)?;
+            let w = metres(line.width);
+            for pair in run.windows(2) {
+                let n1 = node_of(line.key(pair[0].1, layer));
+                let n2 = node_of(line.key(pair[1].1, layer));
+                set.push(nodes[n1], nodes[n2], w, thickness_m, sigma, n1, n2);
             }
-            if !(thickness_m > 0.0) {
-                return Err(InductanceError::NoThickness(layer.0));
-            }
-            // σ = 1/(Rsq · t) reproduces the sheet resistance through the thickness.
-            let sigma = 1.0 / (sheet * thickness_m);
-
-            let bbox = store.poly_bbox(poly);
-            let (a, b) = filament_endpoints(bbox);
-            #[expect(clippy::cast_precision_loss, reason = "|side| < 2^41, exact in f64")]
-            let w = bbox.width().raw().min(bbox.height().raw()) as f64 * scale;
-            let n1 = node_of((a.0, a.1, layer.0));
-            let n2 = node_of((b.0, b.1, layer.0));
-            set.push(nodes[n1], nodes[n2], w, thickness_m, sigma, n1, n2);
+        }
+        for &(from, to, edge) in &junctions {
+            let (sigma, thickness_m) = conductor(from.2)?;
+            let (n1, n2) = (node_of(from), node_of(to));
+            set.push(
+                nodes[n1],
+                nodes[n2],
+                metres(edge),
+                thickness_m,
+                sigma,
+                n1,
+                n2,
+            );
         }
 
         let (pa, pb) = most_distant_pair(&nodes[base..]);
@@ -199,19 +353,6 @@ pub fn extract_inductance_into(
         out.r_ohm.push(zp.re);
     }
     Ok(())
-}
-
-/// Centre line of a bbox along its long axis, in dbu. A square runs along x.
-fn filament_endpoints(bbox: gpurify_geom::Bbox) -> ((i64, i64), (i64, i64)) {
-    let (xlo, xhi) = (bbox.xlo.raw(), bbox.xhi.raw());
-    let (ylo, yhi) = (bbox.ylo.raw(), bbox.yhi.raw());
-    if xhi - xlo >= yhi - ylo {
-        let yc = i64::midpoint(ylo, yhi);
-        ((xlo, yc), (xhi, yc))
-    } else {
-        let xc = i64::midpoint(xlo, xhi);
-        ((xc, ylo), (xc, yhi))
-    }
 }
 
 /// The two most distant nodes; ties keep the first pair in scan order.

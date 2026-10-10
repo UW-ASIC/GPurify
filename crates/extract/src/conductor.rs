@@ -47,9 +47,14 @@ impl Regions {
         self.net.len()
     }
 
+    /// Where region `region`'s rectangles sit in [`Self::rects`].
+    pub(crate) fn rect_range(&self, region: usize) -> std::ops::Range<usize> {
+        self.rect_start[region] as usize..self.rect_start[region + 1] as usize
+    }
+
     /// Region `region`'s rectangles.
     pub(crate) fn rects_of(&self, region: usize) -> &[Bbox] {
-        &self.rects[self.rect_start[region] as usize..self.rect_start[region + 1] as usize]
+        &self.rects[self.rect_range(region)]
     }
 
     /// Appends `net`'s regions on every layer `keep` accepts, ascending by
