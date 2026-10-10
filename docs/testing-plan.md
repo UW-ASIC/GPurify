@@ -396,7 +396,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | todo |
 | D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | todo |
 | E1 | `fuzz/` targets + stable regression replay (deck round trip needs D4) | L4 | todo |
-| F1 | `.#oracles` nix shell; KLayout mirror-deck translator | L6 | todo |
+| F1 | `.#oracles` nix shell; KLayout mirror-deck translator | L6 | doing |
 | F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | todo |
 | F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | todo |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | todo |

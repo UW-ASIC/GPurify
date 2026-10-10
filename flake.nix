@@ -28,15 +28,28 @@
           ];
         };
       in
+      let
+        tools = [
+          rust
+          pkgs.pkg-config
+          # Mutation testing is the acceptance gate for the test suite: a
+          # suite is only as strong as the logic changes it actually catches,
+          # and this measures that instead of assuming it.
+          pkgs.cargo-mutants
+        ];
+      in
       {
-        devShells.default = pkgs.mkShell {
-          buildInputs = [
-            rust
-            pkgs.pkg-config
-            # Mutation testing is the acceptance gate for the test suite: a
-            # suite is only as strong as the logic changes it actually catches,
-            # and this measures that instead of assuming it.
-            pkgs.cargo-mutants
+        devShells.default = pkgs.mkShell { buildInputs = tools; };
+        # The independent tools the nightly differential tests compare against
+        # (docs/testing-plan.md L6): `nix develop .#oracles`, then
+        # `cargo test -- --ignored`. Pinned by flake.lock, so an oracle's
+        # version changes only in a reviewed commit.
+        devShells.oracles = pkgs.mkShell {
+          buildInputs = tools ++ [
+            pkgs.klayout
+            pkgs.magic-vlsi
+            pkgs.netgen-vlsi
+            pkgs.ngspice
           ];
         };
       }
