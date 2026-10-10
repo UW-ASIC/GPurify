@@ -37,8 +37,9 @@ and shows all three needs:
   `# PHILIS:`:
   - an added layer (`npn`);
   - three added latch-up rules (`LU.2`, `LU.2.1`, `LU.3`);
-  - one changed value (`ar.met3.1` sidewall 845 nm vs 2000 nm, which is
-    probably a GPurify bug; testing-plan F11).
+  - one changed value (`ar.met3.1` sidewall 845 nm vs 2000 nm). GPurify's
+    value was a bug, from the wrong foundry table; the rule is 800 nm, so
+    Philis's correction was not right either (testing-plan F11, fixed).
 
   The same diff also adds three derived `lu_*` layers, two `device bjt`
   recognisers and three `pex` rows (`rbody_*`). So overrides must cover

@@ -10,8 +10,14 @@
 #   [S3] efabless mpw_precheck KLayout deck sky130A_mr.drc (2022.6.30_01.07 release),
 #        https://github.com/efabless/mpw_precheck/blob/main/checks/tech-files/sky130A_mr.drc
 #        (MiM capacitor numbers, which [S1] lists as N/A, and the derived-layer definitions)
-#   [S4] SKY130 antenna rules, Table Ic (S8TM-5R), docs/rules/antenna/table-Ic-antenna-rules-s8tm.csv
-#        in [S1]'s repository
+#   [S4] SKY130 antenna rules, Table Ig (S8P12-10R*/S8PIR-10R/S8PF-10R*),
+#        docs/rules/antenna/table-Ig-antenna-rules-s8p12.csv in [S1]'s repository.
+#        [S1]'s antenna page carries five tables, one per process flow. Ig is
+#        sky130A's: its top metal is met5, which docs/rules/layers/table-c3 gives
+#        only to the S8P* flows, and its met5 minimum (m5.1, 1.6 um) is the one
+#        docs/rules/assumptions/02-mins.csv gives only to S8PF*/S8PIR*. FLT is the
+#        film thickness the rule is defined with, not the drawn stack's thickness
+#        (met3 is 0.8 um here, 0.845 um in the pex rows).
 #   [S5] Magic technology file sky130.tech, RTimothyEdwards/open_pdks at commit
 #        61a056e180dac7dcc6d4eb7529e2231f95105746, sky130/magic/sky130.tech
 #        (layer heights and thicknesses, typical-corner contact resistances, area and
@@ -461,7 +467,7 @@ rule hvntm.6a space(iso_ptap, hvntm) >= 185nm
 rule x.1b off_grid(; pitch: 5nm)
 rule x.3a angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 
-# --- Antenna [S4] Table Ic; via3, via4, met4, met5 as [S5] states them ---
+# --- Antenna [S4] Table Ig ---
 rule ar.poly.1 antenna(gate, poly_c; max_ratio: 50, sidewall: 180nm)
 rule ar.licon.1 antenna(gate, licon_po, licon_nd, licon_pd, licon_nt, licon_pt; max_ratio: 3, sidewall: none)
 rule ar.li.1 antenna(gate, li_c; max_ratio: 75, sidewall: 100nm)
@@ -470,11 +476,11 @@ rule ar.met1.1 antenna(gate, met1; max_ratio: 400, sidewall: 350nm)
 rule ar.via.1 antenna(gate, via; max_ratio: 6, sidewall: none)
 rule ar.met2.1 antenna(gate, met2; max_ratio: 400, sidewall: 350nm)
 rule ar.via2.1 antenna(gate, via2; max_ratio: 6, sidewall: none)
-rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 2000nm)
+rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 800nm)
 rule ar.via3.1 antenna(gate, via3_m3; max_ratio: 6, sidewall: none)
-rule ar.met4.1 antenna(gate, met4; max_ratio: 400, sidewall: 845nm)
+rule ar.met4.1 antenna(gate, met4; max_ratio: 400, sidewall: 800nm)
 rule ar.via4.1 antenna(gate, via4_m4; max_ratio: 6, sidewall: none)
-rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1260nm)
+rule ar.met5.1 antenna(gate, met5; max_ratio: 400, sidewall: 1200nm)
 
 # --- Electrical [S1] x.22, nwell.4; supplies and ESD ---
 rule x.22 unconnected_pin(poly_c, li_c, met1, met2, met3, met4, met5)

@@ -343,3 +343,63 @@ fn m1_1_diagonal_neck_at_overlapping_rectangles() {
     let wider = [neck[0], ("met1", 17220, 9750, 17520, 10050)];
     assert_eq!(run(SKY130, "m1.1", &wider).0, 0);
 }
+
+/// Oracle: SkyWater's Table Ig (S8PIR-10R), the antenna table for sky130A's
+/// five-metal flow, row by row: `MAX_EGAR` without a diode, and `FLT`, the film
+/// thickness the sidewall area is defined with. The deck once took met3 from
+/// Table Ic (the three-metal S8TM flow, FLT 2.0 um) and met4/met5 from Magic's
+/// drawn thicknesses; neither is the rule.
+#[test]
+fn the_sky130_antenna_rows_are_table_ig() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        include_str!("../pdks/sky130.deck"),
+        Grid::new(1000).expect("a 1 nm grid"),
+        &mut strings,
+    )
+    .expect("the shipped sky130 deck parses");
+    let table_ig: [(&str, f64, Option<i64>); 12] = [
+        ("ar.poly.1", 50.0, Some(180)),
+        ("ar.licon.1", 3.0, None),
+        ("ar.li.1", 75.0, Some(100)),
+        ("ar.mcon.1", 3.0, None),
+        ("ar.met1.1", 400.0, Some(350)),
+        ("ar.via.1", 6.0, None),
+        ("ar.met2.1", 400.0, Some(350)),
+        ("ar.via2.1", 6.0, None),
+        ("ar.met3.1", 400.0, Some(800)),
+        ("ar.via3.1", 6.0, None),
+        ("ar.met4.1", 400.0, Some(800)),
+        ("ar.via4.1", 6.0, None),
+    ];
+    let param = |rule: &gpurify_ingest::deck::RuleSpec, name: &str| {
+        strings
+            .get(name)
+            .and_then(|name| deck.rules.param(rule, name))
+    };
+    for (id, ratio, sidewall_nm) in
+        table_ig
+            .iter()
+            .copied()
+            .chain([("ar.met5.1", 400.0, Some(1200))])
+    {
+        let rule = deck
+            .rules
+            .spec
+            .iter()
+            .find(|rule| strings.resolve(rule.id) == id)
+            .unwrap_or_else(|| panic!("the sky130 deck has no {id}"));
+        assert!(
+            matches!(param(rule, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r == ratio),
+            "{id}: max_ratio should be {ratio}"
+        );
+        let sidewall = match param(rule, "sidewall_thickness") {
+            Some(gpurify_ingest::deck::ParamValue::Length(length)) => Some(length.raw()),
+            _ => None,
+        };
+        assert_eq!(
+            sidewall, sidewall_nm,
+            "{id}: sidewall FLT in nm on a 1 nm grid"
+        );
+    }
+}
