@@ -11,7 +11,7 @@ use crate::common;
 use common::{
     assert_same_discrepancies, blames_device, blames_net, chain, differential_pair, discrepancies,
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
-    stacked_pair_with_params, GraphBuilder, NCH, NPN, VDD, VSS, WIDTH,
+    stacked_pair_with_params, GraphBuilder, NCH, NPN, RES, VDD, VSS, WIDTH,
 };
 use gpurify_check::lvs::graph::from_reference;
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
@@ -421,18 +421,20 @@ fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
 }
 
 /// The mirror image, so the previous test is not satisfied by a comparator that
-/// only ever blames the reference. Swapping the two sides must swap the `side`
-/// field and nothing else — the same law
-/// `swapping_the_two_sides_reverses_every_side_in_the_report` states for
-/// terminals.
+/// only ever blames the reference. The layout measures; the reference says
+/// which measures its devices are sized by, per kind and model (testing-plan
+/// F22). Here it sizes the `NCH` model by `W` on its upper card and leaves
+/// the lower card's out, so the layout's lower `W` is the lone one and the
+/// layout is the side named. A reference that sizes `NCH` by nothing says
+/// nothing against the layout's `W`s, which are then not compared.
 #[test]
 fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
+    let layout = stacked_pair_with_params(&[(WIDTH, 1.0)], &[(WIDTH, 1.0)]);
     let verdict = compare(
-        &stacked_pair_with_params(&[(WIDTH, 1.0)], &[]),
-        &stacked_pair_with_params(&[], &[]),
+        &layout,
+        &stacked_pair_with_params(&[], &[(WIDTH, 1.0)]),
         decisive(),
     );
-
     assert_same_discrepancies(
         discrepancies(&verdict),
         &[Discrepancy::UndeclaredParam {
@@ -440,6 +442,50 @@ fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
             layout_device: 0,
             ref_device: 0,
             param: WIDTH,
+        }],
+    );
+
+    let verdict = compare(&layout, &stacked_pair(), decisive());
+    assert_eq!(
+        verdict,
+        Verdict::Match,
+        "W is not how this reference sizes NCH"
+    );
+}
+
+/// Oracle: construct-from-answer, testing-plan F22. A reference that sizes
+/// its capacitor by `area` says nothing about its transistor's area, so the
+/// area the layout measured on every device is compared on the capacitor
+/// alone: the transistor's is not an undeclared parameter, and the
+/// capacitor's still has to agree.
+#[test]
+fn a_measure_is_compared_only_on_the_models_the_reference_declares_it_for() {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Pin, Source};
+    let graph = |mos: &[(StrId, f64)], cap: &[(StrId, f64)]| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            mos,
+        );
+        builder.device_with_params(DeviceKind::Capacitor, RES, &[(Pin(0), 2), (Pin(1), 3)], cap);
+        builder.finish()
+    };
+    let area = StrId(93);
+    let layout = graph(&[(area, 4.0)], &[(area, 2.0)]);
+    assert_eq!(
+        compare(&layout, &graph(&[], &[(area, 2.0)]), decisive()),
+        Verdict::Match
+    );
+    assert_same_discrepancies(
+        discrepancies(&compare(&layout, &graph(&[], &[(area, 3.0)]), decisive())),
+        &[Discrepancy::ParameterMismatch {
+            layout_device: 1,
+            ref_device: 1,
+            param: area,
+            layout_value: 2.0,
+            ref_value: 3.0,
         }],
     );
 }

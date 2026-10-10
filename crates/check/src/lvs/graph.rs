@@ -3,6 +3,7 @@
 //! Data in: a `topology` extraction, or one subcircuit of a reference netlist.
 //! Data out: a [`Graph`] with CSR incidence in both directions.
 
+use crate::lvs::refine::kind_code;
 use crate::topology::device::{DeviceMeasure, DeviceParam};
 use crate::topology::{csr_run, DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::Grid;
@@ -129,16 +130,14 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
 /// A measured parameter is emitted in metres (area in m²) only when its SPICE
 /// name is already interned in `strings` (so the reference can declare it) and a
 /// grid is given; otherwise it is omitted. The names are `w`, `l`, `area`,
-/// `perim` and `nf`.
+/// `perim` and `nf`. Interned anywhere means every device carries it, so
+/// [`compare`](crate::lvs::compare) keeps a measure only on devices whose
+/// kind and model the reference declares it for.
 ///
 /// # Limits
 ///
 /// Extraction measures MOS `w` and `l` and every device's marker `area`, and
-/// nothing else (testing-plan F16). Whether a measure is emitted depends on
-/// its name being interned anywhere, not on the matching reference device
-/// declaring it: a reference that gives one diode an `area` makes every
-/// layout device carry `area`, and each MOS whose card lacks it reports
-/// [`Discrepancy::UndeclaredParam`](crate::lvs::Discrepancy::UndeclaredParam).
+/// nothing else (testing-plan F16).
 ///
 /// # Panics
 ///
@@ -384,6 +383,47 @@ pub(crate) fn drop_unextracted_bulk(layout: &Graph, graph: &mut Graph) {
     graph.device_terminal_start = starts;
     let net_count = graph.net_count();
     transpose_into(graph, net_count);
+}
+
+/// Keep each layout parameter only where the reference declares that name on
+/// some device of the same kind and model. [`from_layout`] measures a name for
+/// every device once anything declares it, and a reference that sizes one
+/// model says nothing about another (testing-plan F22). Only parameters are
+/// dropped, never devices.
+pub(crate) fn keep_declared_params(reference: &Graph, layout: &mut Graph) {
+    let identity = |graph: &Graph, device: usize| {
+        (
+            kind_code(graph.device_kind[device]),
+            graph.device_model[device],
+        )
+    };
+    let mut declared: Vec<(u64, StrId, StrId)> = (0..reference.device_count())
+        .flat_map(|device| {
+            let (kind, model) = identity(reference, device);
+            reference
+                .params_of(narrow(device))
+                .iter()
+                .map(move |&(name, _)| (kind, model, name))
+        })
+        .collect();
+    declared.sort_unstable();
+    declared.dedup();
+
+    let mut param = Vec::with_capacity(layout.param.len());
+    let mut start = Vec::with_capacity(layout.device_count() + 1);
+    start.push(0);
+    for device in 0..layout.device_count() {
+        let (kind, model) = identity(layout, device);
+        param.extend(
+            layout
+                .params_of(narrow(device))
+                .iter()
+                .filter(|&&(name, _)| declared.binary_search(&(kind, model, name)).is_ok()),
+        );
+        start.push(narrow(param.len()));
+    }
+    layout.param = param;
+    layout.device_param_start = start;
 }
 
 /// The role LVS compares a terminal under: a resistor's two ends are

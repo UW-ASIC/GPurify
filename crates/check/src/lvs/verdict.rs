@@ -159,7 +159,10 @@ pub enum Discrepancy {
     ///
     /// Every reference parameter the layout does not measure (`nf`, `as`,
     /// `ad`, `ps`, `pd`, a resistor's `r`, a capacitor's `c`) lands here
-    /// (testing-plan F16).
+    /// (testing-plan F16). A layout measure lands here only when the
+    /// reference declares it on another device of the same kind and model
+    /// but not on this one's partner: one the reference never declares for
+    /// that model is not compared.
     ///
     /// Report id `lvs.undeclared_param`. Catalog: LVS-020, which is
     /// GPurify-specific and cites no tool.

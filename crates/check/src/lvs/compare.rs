@@ -5,7 +5,7 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::graph::{drop_unextracted_bulk, narrow, Graph};
+use crate::lvs::graph::{drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
@@ -52,8 +52,10 @@ impl Default for CompareOptions {
 /// subcircuit, as the [`lvs` module docs](crate::lvs) describe.
 ///
 /// Reference `Bulk` terminals are dropped when no layout terminal is `Bulk`
-/// (a three-terminal MOS recogniser), then both sides are reduced and refined
-/// together. A symmetry pairs its lowest layout node with the reference node
+/// (a three-terminal MOS recogniser), and a layout device keeps a parameter
+/// only when the reference declares it on some device of the same kind and
+/// model (a reference that sizes its diodes by `area` says nothing about its
+/// transistors' areas). Then both sides are reduced and refined together. A symmetry pairs its lowest layout node with the reference node
 /// whose parameters are closest, so a stall resolves by property value rather
 /// than by row order. Neither input is modified.
 ///
@@ -112,7 +114,9 @@ pub fn compare_logged(
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
     protect_labelled(layout, &mut declared);
-    let (layout, layout_merges) = reduce_with(layout, options.params);
+    let mut measured = layout.clone();
+    keep_declared_params(reference, &mut measured);
+    let (layout, layout_merges) = reduce_with(&measured, options.params);
     let (reference, reference_merges) = reduce_with(&declared, options.params);
     let merges = layout_merges
         .into_iter()

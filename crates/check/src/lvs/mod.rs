@@ -13,7 +13,8 @@
 //! [`graph::from_reference`]. [`compare`] then:
 //!
 //! 1. drops every reference `Bulk` terminal when the layout has none (the
-//!    deck's MOS recogniser lists three layers);
+//!    deck's MOS recogniser lists three layers), and every layout parameter
+//!    that no reference device of the same kind and model declares;
 //! 2. reduces both sides by parallel and series merges ([`reduce`]);
 //! 3. partitions the nodes of both sides together by iterative refinement, the
 //!    graph-labelling algorithm of C. Ebeling, "GeminiII: a second generation

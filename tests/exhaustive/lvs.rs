@@ -17,12 +17,12 @@
 //!
 //! Where the docs describe a defect rather than the intended semantics, the
 //! oracle follows the intended one and the fixture is marked with the finding:
-//! parallel passives keep their count (F20); `m` multiplies a passive (F21); a
-//! parameter is compared only where the reference declares it (F22); `nf=1` is
-//! one drawn finger (F16). A diode's and a capacitor's ends are ordered (F15),
-//! a series merge crosses a net that is not a port on either side (F12), and a
-//! reference `X` instance is flattened (F1): those fixtures hold since B3, B4
-//! and B2.
+//! `nf=1` is one drawn finger (F16). A diode's and a capacitor's ends are
+//! ordered (F15), a series merge crosses a net that is not a port on either
+//! side (F12), and a reference `X` instance is flattened (F1): those fixtures
+//! hold since B3, B4 and B2. Parallel passives keep their count (F20), `m`
+//! multiplies a passive (F21), and a parameter is compared only where the
+//! reference declares it for the model (F22): those hold since B9.
 //!
 //! The enumeration is every circuit of one to three `nmos`/`pmos` over one to
 //! four nets, every net used, one per class under renaming nets and devices and
@@ -1435,7 +1435,12 @@ fn curated() -> Vec<Fixture> {
     let diode = polar(Dev::pins(D, &[0, 1]));
     let declared = polar(Dev::pins(D, &[0, 1]).area(PIN2_AREA));
     let rows = &["LVS-020", "LVS-063"];
-    out.push(compared("params/D_area_beside_mos", rows, &diode, &declared).known("F22"));
+    out.push(compared(
+        "params/D_area_beside_mos",
+        rows,
+        &diode,
+        &declared,
+    ));
     let nf = edited(&spice(&one), "l=150n", "l=150n nf=1");
     out.push(
         with_text(
