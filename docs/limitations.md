@@ -138,7 +138,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-029 | End-of-line spacing | partial | Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing |
 | DRC-030 | EOL extension / keep-out | missing | — |
 | DRC-031 | Tip-to-tip / tip-to-side by width class | partial | One end-of-line width per rule, so each width class is its own rule; tip-to-side is not told apart from tip-to-tip |
-| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | CONVEXCORNER/CONCAVECORNER/EXCEPTEOL variants missing; sky130 poly.4 over-reports (limitations.md:76) |
+| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md:76) |
 | DRC-033 | Forbidden spacing ranges | missing | — |
 | DRC-034 | Maximum spacing | missing | — |
 | DRC-035 | Pitch / exact pitch / on-track | missing | Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
