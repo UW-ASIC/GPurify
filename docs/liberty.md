@@ -6,7 +6,7 @@ with the same ports. The numbers come from your layout, extracted and
 simulated, at the accuracy you choose.
 
 ```sh
-gpurify lib strongarm.gds --deck pdks/sky130.deck --grid 1000 \
+gpurify lib strongarm.gds --deck pdks/sky130.deck \
     --spec strongarm.json --accuracy spice --output-dir lib/ \
     --reference strongarm.spice --lef strongarm.lef
 ```
@@ -27,10 +27,10 @@ spice: wrote lib/min/strongarm__tt_025C_1v80.lib
 | `--output-dir <dir>` | Where the files go. With `--accuracy all`, one subdirectory per level. |
 | `--reference <netlist>` | A `.subckt` whose ports must match the spec's pins. |
 | `--lef <file>` | A LEF whose `MACRO`'s pins must match the spec's pins. |
-| `--work <dir>` | Keep the simulator decks and logs here. Without it they go to a temporary directory that is removed on success and kept on failure. |
 
-The layout options (`--deck`, `--grid`, `--no-strict-layers`) are the other
-commands'.
+`--deck` is read as for the other commands. Simulator decks and logs go to a
+temporary directory, removed on success and kept, with its path printed, on
+failure.
 
 ## Accuracy
 

@@ -1,7 +1,8 @@
 //! The shared stages: load, then extract.
 //!
-//! Data in: [`Inputs`] (paths plus the grid). Data out: [`Loaded`] (everything read
-//! from disk, in one string table) and [`Extracted`] (nets, devices, ports).
+//! Data in: [`Inputs`] (paths). Data out: [`Loaded`] (everything read from disk,
+//! in one string table, on the grid the layout's `UNITS` record states) and
+//! [`Extracted`] (nets, devices, ports).
 
 use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::{GeometryStore, Grid};
@@ -10,32 +11,17 @@ use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{Deck, DesignIntent, Provenance, StrTable};
 use std::path::PathBuf;
 
-/// What a run was asked to work on.
-#[derive(Debug, Clone)]
+/// What a run was asked to work on: files only. The grid is the layout's own
+/// (its `UNITS` record), and geometry on a stream pair the deck neither declares
+/// nor ignores refuses the layout.
+#[derive(Debug, Clone, Default)]
 pub struct Inputs {
     pub layout: PathBuf,
     pub deck: PathBuf,
-    /// Absent is [`LoadError::NoGrid`]: a guessed grid reinterprets every deck limit.
-    pub grid: Option<Grid>,
     /// Absent means LVS is skipped.
     pub reference: Option<PathBuf>,
     /// Absent means the intent-gated ERC rules are skipped.
     pub intent: Option<PathBuf>,
-    pub unknown_layers: UnknownLayers,
-}
-
-/// Hand-written so `unknown_layers` defaults to `Reject`, the fail-closed choice.
-impl Default for Inputs {
-    fn default() -> Self {
-        Self {
-            layout: PathBuf::new(),
-            deck: PathBuf::new(),
-            grid: None,
-            reference: None,
-            intent: None,
-            unknown_layers: UnknownLayers::Reject,
-        }
-    }
 }
 
 /// Everything read from disk. One [`StrTable`], so a name from the layout and the
@@ -72,8 +58,6 @@ impl Extracted {
 
 /// Read every input. The grid is checked before any file is opened.
 pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
-    let grid = inputs.grid.ok_or(LoadError::NoGrid)?;
-
     let source = std::fs::read_to_string(&inputs.deck).map_err(|why| {
         gpurify_ingest::DeckError::Io(format!("{}: {why}", inputs.deck.display()))
     })?;
@@ -82,9 +66,11 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     // Layout strings are interned before the deck's, which fixes every StrId.
     let mut strings = StrTable::default();
     let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
+    // The deck's lengths are converted on the layout's grid, so the layout states it.
+    let grid = library.grid()?;
     let deck = gpurify_ingest::deck::parse_deck(&source, grid, &mut strings)
         .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?;
-    let (store, mut provenance) = library.flatten(&deck, &strings, inputs.unknown_layers)?;
+    let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
 
     let reference = match &inputs.reference {
@@ -194,8 +180,6 @@ pub enum LoadError {
     Netlist(#[from] gpurify_ingest::netlist::NetlistError),
     #[error(transparent)]
     Label(#[from] gpurify_ingest::LabelError),
-    #[error("no grid resolution: Inputs::grid is absent and nothing else establishes one")]
-    NoGrid,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

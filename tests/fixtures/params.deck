@@ -17,6 +17,10 @@ layer poly_label = gds(3, 5)
 layer li_label = gds(5, 5)
 layer met1_label = gds(7, 5)
 layer met2_label = gds(9, 5)
+# The LVT and HVT implants of LVS_LVT and LVS_HVT. No device recognises a
+# flavour yet (blocking finding F6), so they are dropped rather than declared.
+ignore gds(12, 0)
+ignore gds(13, 0)
 layer diff_active = diff not poly
 layer gate = poly and diff
 layer gate_n = gate and nsdm

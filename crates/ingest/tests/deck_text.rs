@@ -760,3 +760,33 @@ fn a_text_selection_needs_a_drawn_layer_and_a_pattern() {
         "an empty pattern matches no text",
     );
 }
+
+/// `ignore gds(L, D)` lists stream pairs to drop. It may not repeat, nor name a
+/// declared layer's pair, whichever statement comes first.
+#[test]
+fn an_ignored_pair_is_listed_and_may_not_repeat_or_be_declared() {
+    let (deck, _) = ok("ignore gds(81, 4)\nignore gds(12, 0)\n");
+    assert!(deck.layers.is_ignored(81, 4) && deck.layers.is_ignored(12, 0));
+    assert!(
+        !deck.layers.is_ignored(68, 20),
+        "a declared layer is not ignored"
+    );
+    assert!(!deck.layers.is_ignored(81, 5));
+
+    one_error(
+        "ignore gds(81, 4)\nignore gds(81, 4)\n",
+        "gds(81, 4) is already ignored",
+    );
+    one_error(
+        "ignore gds(68, 20)\n",
+        "gds(68, 20) is ignored, but layer `met1` is declared on it",
+    );
+    one_error(
+        "ignore gds(90, 0)\nlayer late = gds(90, 0)\n",
+        "gds(90, 0) is ignored, but layer `late` is declared on it",
+    );
+    one_error(
+        "ignore met1\n",
+        "expected `gds(layer, datatype)`, found `met1`",
+    );
+}

@@ -37,8 +37,17 @@ pub enum LayoutError {
     MissingCell(String),
     #[error("cell hierarchy contains a cycle through {0}")]
     CyclicHierarchy(String),
-    #[error("layer {0}/{1} is not in the deck's layer table")]
+    #[error(
+        "layer {0}/{1} is in neither the deck's layer table nor its ignore list \
+         (`ignore gds({0}, {1})`)"
+    )]
     UnknownLayer(u16, u16),
+    /// Without `UNITS`, no length in the deck can be converted to the layout's grid.
+    #[error("the layout has no UNITS record, so its database unit is unknown")]
+    NoUnits,
+    /// Every length is measured on an integer grid of database units per micrometre.
+    #[error("a database unit of {0:e} m is not a whole number of units per micrometre")]
+    UnsupportedUnits(f64),
     #[error("derived layer {0:?} could not be computed: {1}")]
     Derived(gpurify_geom::LayerId, BooleanError),
     #[error("io: {0}")]
@@ -321,7 +330,7 @@ pub mod gds {
     use crate::provenance::Provenance;
     use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
     use gpurify_geom::boolean::canonical_rings_into;
-    use gpurify_geom::{Dbu, LayerId, MAX_ABS_DBU};
+    use gpurify_geom::{Dbu, Grid, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
 
@@ -497,6 +506,8 @@ pub mod gds {
     /// `PROPVALUE`s) in file order; [`Library::flatten`] interns nothing.
     #[derive(Default)]
     pub struct Library {
+        /// The `UNITS` record's second value; `None` until one is read.
+        metres_per_dbu: Option<f64>,
         cells: Vec<Cell>,
         elems: Vec<Elem>,
         refs: Vec<Ref>,
@@ -585,6 +596,31 @@ pub mod gds {
     }
 
     impl Library {
+        /// The layout's grid, from its `UNITS` record: how many database units
+        /// make one micrometre.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::NoUnits`] when the stream has no `UNITS` record, and
+        /// [`LayoutError::UnsupportedUnits`] when its database unit is not a
+        /// whole fraction of a micrometre (within the 1e-9 relative error an
+        /// eight-byte GDSII real carries, so a written 1 nm reads as exactly 1000).
+        pub fn grid(&self) -> Result<Grid, LayoutError> {
+            let metres = self.metres_per_dbu.ok_or(LayoutError::NoUnits)?;
+            let per_um = 1e-6 / metres;
+            let whole = per_um.round();
+            // `!(a <= b)` refuses NaN and infinities with the misfits.
+            if !(whole >= 1.0 && (per_um - whole).abs() <= whole * 1e-9 && whole < 1e15) {
+                return Err(LayoutError::UnsupportedUnits(metres));
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "whole is a positive integer below 1e15"
+            )]
+            let per_um = whole as i64;
+            Grid::new(per_um).map_err(|_| LayoutError::UnsupportedUnits(metres))
+        }
+
         /// Read the record stream, one pass. Every record is consumed, skipped, or refused.
         pub fn parse(bytes: &[u8], strings: &mut StrTable) -> Result<Self, LayoutError> {
             let mut lib = Library::default();
@@ -597,9 +633,13 @@ pub mod gds {
                 let in_cell = move || open.ok_or(LayoutError::UnsupportedRecord(tag, at));
                 match tag {
                     ENDLIB => break,
-                    // `UNITS` is discarded: coordinates are database units and never rescaled.
-                    HEADER | BGNLIB | LIBNAME | UNITS | REFLIBS | FONTS | GENERATIONS
-                    | ATTRTABLE | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
+                    // Coordinates stay database units; `UNITS` only names their size.
+                    UNITS => {
+                        let metres = payload.get(8..).ok_or(LayoutError::Truncated(at))?;
+                        lib.metres_per_dbu = Some(real(metres, at)?);
+                    }
+                    HEADER | BGNLIB | LIBNAME | REFLIBS | FONTS | GENERATIONS | ATTRTABLE
+                    | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
                     BGNSTR => {
                         if open.is_some() {
                             return Err(LayoutError::UnsupportedRecord(tag, at));
@@ -1356,10 +1396,12 @@ pub mod gds {
             Ok(())
         }
 
-        /// The deck layer for a stream pair; `None` means drop it.
+        /// The deck layer for a stream pair; `None` means drop it. A pair the
+        /// deck ignores is dropped whatever `unknown` says.
         fn layer(&self, layer: u16, datatype: u16) -> Result<Option<LayerId>, LayoutError> {
             match (self.deck.layers.of_stream(layer, datatype), self.unknown) {
                 (Some(id), _) => Ok(Some(id)),
+                (None, _) if self.deck.layers.is_ignored(layer, datatype) => Ok(None),
                 (None, UnknownLayers::Reject) => Err(LayoutError::UnknownLayer(layer, datatype)),
                 (None, UnknownLayers::Drop) => Ok(None),
             }
@@ -2047,6 +2089,91 @@ mod tests {
             dropped.store.poly_bbox(PolyId(0)),
             first_square_bbox(),
             "the surviving shape is not the one that was on a declared layer"
+        );
+    }
+
+    /// The deck's ignore list drops a stream pair even under `Reject`: the deck,
+    /// not the run, decides which layers a signoff may skip. A pair neither
+    /// declared nor ignored is still refused.
+    #[test]
+    fn an_ignored_pair_is_dropped_even_under_reject() {
+        let mut strings = StrTable::default();
+        let deck = crate::deck::parse_deck(
+            "layer met1 = gds(68, 20)\nignore gds(99, 7)\n",
+            gpurify_geom::Grid::new(1000).expect("a 1 nm grid"),
+            &mut strings,
+        )
+        .expect("a deck with one layer and one ignored pair");
+        let square_on =
+            |layer, datatype| boundary(layer, datatype, &[0, 400, 400, 0], &[0, 0, 400, 400]);
+
+        let ignored = gds_library("TOP", &[square_on(68, 20), square_on(99, 7)]);
+        let layout = read(&ignored, &deck, UnknownLayers::Reject).expect("99/7 is ignored");
+        assert_eq!(
+            layout.store.poly_count(),
+            1,
+            "only the met1 square survives"
+        );
+
+        let stray = gds_library("TOP", &[square_on(68, 20), square_on(99, 8)]);
+        assert!(matches!(
+            read(&stray, &deck, UnknownLayers::Reject),
+            Err(LayoutError::UnknownLayer(99, 8))
+        ));
+    }
+
+    /// A one-cell library whose `UNITS` record states `metres` per database
+    /// unit, or that has no `UNITS` record at all.
+    fn gds_with_units(metres: Option<f64>) -> Vec<u8> {
+        let mut out = Vec::new();
+        record(&mut out, HEADER, &600u16.to_be_bytes());
+        record(&mut out, BGNLIB, &[0u8; 24]);
+        record(&mut out, LIBNAME, &ascii("UNITS.DB"));
+        if let Some(metres) = metres {
+            let mut units = Vec::with_capacity(16);
+            units.extend_from_slice(&gds_real(1e-3));
+            units.extend_from_slice(&gds_real(metres));
+            record(&mut out, UNITS, &units);
+        }
+        record(&mut out, BGNSTR, &[0u8; 24]);
+        record(&mut out, STRNAME, &ascii("TOP"));
+        record(&mut out, ENDSTR, &[]);
+        record(&mut out, ENDLIB, &[]);
+        out
+    }
+
+    /// Oracle: the GDSII definition, database units per micrometre being
+    /// 1e-6 m over the stated metres per unit.
+    #[test]
+    fn the_units_record_is_the_grid() {
+        for (metres, per_um) in [(1e-9, 1000), (5e-9, 200), (2.5e-10, 4000), (1e-6, 1)] {
+            let library =
+                gds::Library::parse(&gds_with_units(Some(metres)), &mut StrTable::default())
+                    .expect("a well-formed library");
+            assert_eq!(
+                library.grid().map(gpurify_geom::Grid::dbu_per_um).ok(),
+                Some(per_um),
+                "{metres} m per database unit"
+            );
+        }
+    }
+
+    /// A grid the deck cannot be converted onto is refused before any deck is read.
+    #[test]
+    fn a_missing_or_fractional_unit_is_refused() {
+        let grid = |metres| {
+            gds::Library::parse(&gds_with_units(metres), &mut StrTable::default())
+                .expect("a well-formed library")
+                .grid()
+        };
+        assert!(matches!(grid(None), Err(LayoutError::NoUnits)));
+        assert!(
+            matches!(grid(Some(3e-9)), Err(LayoutError::UnsupportedUnits(_))),
+            "333.3 per um"
+        );
+        assert!(
+            matches!(grid(Some(2e-6)), Err(LayoutError::UnsupportedUnits(_))),
+            "half a unit per um"
         );
     }
 

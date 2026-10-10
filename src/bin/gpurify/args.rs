@@ -2,7 +2,6 @@
 
 use gpurify::engine::{Checks, Inputs, RunOptions};
 use gpurify::liberty::Accuracy;
-use gpurify_ingest::layout::UnknownLayers;
 use std::path::PathBuf;
 
 /// How to render the result.
@@ -20,10 +19,6 @@ pub struct Cli {
     pub inputs: Inputs,
     pub options: RunOptions,
     pub format: Format,
-    /// `None` is stdout.
-    pub output: Option<PathBuf>,
-    /// Run twice and fail if the two reports differ.
-    pub check_determinism: bool,
     /// `lib`: generate a macro's Liberty files instead of checking.
     pub lib: Option<LibArgs>,
 }
@@ -36,8 +31,6 @@ pub struct LibArgs {
     pub accuracy: Vec<Accuracy>,
     pub output_dir: PathBuf,
     pub lef: Option<PathBuf>,
-    /// Simulator decks and logs; a fresh temporary directory when absent.
-    pub work: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,7 +42,12 @@ fn usage<T>(message: String) -> Result<T, ArgError> {
 }
 
 /// Parse `argv` (without the program name). An option a subcommand has no use
-/// for is refused, never dropped; `--grid` has no default.
+/// for is refused, never dropped.
+///
+/// The only options are the files a run reads, the output form, and the choice
+/// of method (`--quasistatic` for PEX, `--accuracy` for `lib`). Everything else
+/// lives where it is already stated: the grid in the layout's `UNITS` record,
+/// layers to skip in the deck (`ignore gds(L, D)`).
 pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let Some((subcommand, rest)) = argv.split_first() else {
         return usage("expected a subcommand: drc, erc, lvs, pex, all or lib".to_string());
@@ -58,19 +56,13 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut layout: Option<&str> = None;
     let mut deck: Option<&str> = None;
     let mut format = Format::Text;
-    let mut output: Option<&str> = None;
-    let mut grid: Option<u32> = None;
-    let mut check_determinism = false;
-    let mut strict_layers = true;
     let mut intent: Option<&str> = None;
     let mut reference: Option<&str> = None;
     let mut quasistatic: Vec<String> = Vec::new();
-    let mut quasistatic_inductance = false;
     let mut spec: Option<&str> = None;
     let mut accuracy: Option<&str> = None;
     let mut output_dir: Option<&str> = None;
     let mut lef: Option<&str> = None;
-    let mut work: Option<&str> = None;
 
     let mut tokens = rest.iter().map(String::as_str);
     while let Some(token) = tokens.next() {
@@ -82,7 +74,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         };
         match token {
             "--deck" => deck = Some(value()?),
-            "--output" => output = Some(value()?),
             "--intent" => intent = Some(value()?),
             "--reference" => reference = Some(value()?),
             "--quasistatic" => quasistatic.push(value()?.to_string()),
@@ -90,7 +81,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             "--accuracy" => accuracy = Some(value()?),
             "--output-dir" => output_dir = Some(value()?),
             "--lef" => lef = Some(value()?),
-            "--work" => work = Some(value()?),
             "--format" => {
                 format = match value()? {
                     "text" => Format::Text,
@@ -104,22 +94,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
                     }
                 }
             }
-            "--grid" => {
-                let raw = value()?;
-                match raw.parse().ok().filter(|per_um| *per_um > 0) {
-                    Some(per_um) => grid = Some(per_um),
-                    None => {
-                        return usage(format!(
-                            "--grid wants a positive count of database units per \
-                             micrometre, not {raw:?}"
-                        ))
-                    }
-                }
-            }
-            "--quasistatic-inductance" => quasistatic_inductance = true,
-            "--check-determinism" => check_determinism = true,
-            "--strict-layers" => strict_layers = true,
-            "--no-strict-layers" => strict_layers = false,
             _ if token.starts_with('-') => return usage(format!("unknown option {token}")),
             "" => return usage("the layout file was given as an empty path".to_string()),
             positional => {
@@ -160,18 +134,13 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         ("--accuracy", accuracy.is_some()),
         ("--output-dir", output_dir.is_some()),
         ("--lef", lef.is_some()),
-        ("--work", work.is_some()),
     ] {
         if given && !is_lib {
             return usage(format!("{subcommand} takes no {flag}"));
         }
     }
-    if is_lib && (output.is_some() || format != Format::Text || check_determinism) {
-        return usage(
-            "lib writes its files under --output-dir and takes no --output, --format or \
-             --check-determinism"
-                .to_string(),
-        );
+    if is_lib && format != Format::Text {
+        return usage("lib writes its files under --output-dir and takes no --format".to_string());
     }
     let lib = if is_lib {
         let Some(spec) = spec else {
@@ -197,7 +166,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             accuracy,
             output_dir: PathBuf::from(output_dir),
             lef: lef.map(PathBuf::from),
-            work: work.map(PathBuf::from),
         })
     } else {
         None
@@ -206,11 +174,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         ("--intent", intent.is_some(), takes_intent),
         ("--reference", reference.is_some(), takes_reference),
         ("--quasistatic", !quasistatic.is_empty(), takes_quasistatic),
-        (
-            "--quasistatic-inductance",
-            quasistatic_inductance,
-            takes_quasistatic,
-        ),
     ] {
         if given && !allowed {
             return usage(format!("{subcommand} takes no {flag}"));
@@ -243,26 +206,15 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         inputs: Inputs {
             layout: PathBuf::from(layout),
             deck: PathBuf::from(deck),
-            grid: grid.map(|per_um| {
-                gpurify_geom::Grid::new(i64::from(per_um)).expect("the parser refuses zero")
-            }),
             reference: reference.map(PathBuf::from),
             intent: intent.map(PathBuf::from),
-            unknown_layers: if strict_layers {
-                UnknownLayers::Reject
-            } else {
-                UnknownLayers::Drop
-            },
         },
         options: RunOptions {
             checks,
             lvs: gpurify_check::lvs::CompareOptions::default(),
             quasistatic_nets: quasistatic,
-            quasistatic_inductance,
         },
         format,
-        output: output.map(PathBuf::from),
-        check_determinism,
         lib,
     })
 }
@@ -280,26 +232,13 @@ mod tests {
     #[test]
     fn a_full_command_line_reaches_every_field() {
         let cli = parse_str(
-            "pex top.gds --deck d.json --grid 1000 --format spef --output o \
-             --check-determinism --no-strict-layers --quasistatic vdd --quasistatic clk \
-             --quasistatic-inductance",
+            "pex top.gds --deck d.deck --format spef --quasistatic vdd --quasistatic clk",
         )
         .expect("a legal command line");
         assert_eq!(cli.inputs.layout.to_str(), Some("top.gds"));
-        assert_eq!(cli.inputs.deck.to_str(), Some("d.json"));
-        assert_eq!(
-            cli.inputs.grid.map(gpurify_geom::Grid::dbu_per_um),
-            Some(1000)
-        );
+        assert_eq!(cli.inputs.deck.to_str(), Some("d.deck"));
         assert_eq!(cli.format, Format::Spef);
-        assert_eq!(cli.output.as_deref().and_then(|p| p.to_str()), Some("o"));
-        assert!(cli.check_determinism);
-        assert_eq!(
-            cli.inputs.unknown_layers,
-            gpurify_ingest::layout::UnknownLayers::Drop
-        );
         assert_eq!(cli.options.quasistatic_nets, ["vdd", "clk"]);
-        assert!(cli.options.quasistatic_inductance);
 
         let all = parse_str("all t --deck d --reference r --intent i").expect("legal");
         assert_eq!(all.options.checks, Checks::ALL);
@@ -313,7 +252,7 @@ mod tests {
                 .expect("legal");
         let lib = cli.lib.expect("a lib run");
         assert_eq!(lib.accuracy.len(), 5);
-        assert!(lib.lef.is_some() && lib.work.is_none());
+        assert!(lib.lef.is_some());
         assert_eq!(
             cli.options.checks,
             Checks {
@@ -331,14 +270,9 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_text_strict_and_gridless() {
+    fn the_default_format_is_text() {
         let cli = parse_str("drc t --deck d").expect("legal");
         assert_eq!(cli.format, Format::Text);
-        assert!(cli.inputs.grid.is_none() && cli.output.is_none());
-        assert_eq!(
-            cli.inputs.unknown_layers,
-            gpurify_ingest::layout::UnknownLayers::Reject
-        );
         assert_eq!(
             parse_str("all t --deck d").expect("legal").options.checks,
             Checks::ALL
@@ -379,15 +313,34 @@ mod tests {
                 "drc t --deck d --format gds",
                 "unknown --format gds; expected text, json, spef or dspf",
             ),
+            // The grid is the layout's UNITS record; layers to skip are in the deck.
+            ("drc t --deck d --grid 1000", "unknown option --grid"),
             (
-                "drc t --deck d --grid 1.5",
-                "--grid wants a positive count of database units per micrometre, not \"1.5\"",
+                "drc t --deck d --no-strict-layers",
+                "unknown option --no-strict-layers",
+            ),
+            ("drc t --deck d --output o", "unknown option --output"),
+            (
+                "drc t --deck d --check-determinism",
+                "unknown option --check-determinism",
+            ),
+            (
+                "lib t --deck d --spec s --output-dir o --work w",
+                "unknown option --work",
             ),
             ("drc t --deck d --intent i", "drc takes no --intent"),
             ("erc t --deck d --reference r", "erc takes no --reference"),
             (
-                "all t --deck d --quasistatic-inductance",
-                "all takes no --quasistatic-inductance",
+                "all t --deck d --quasistatic n",
+                "all takes no --quasistatic",
+            ),
+            (
+                "pex t --deck d --quasistatic-inductance",
+                "unknown option --quasistatic-inductance",
+            ),
+            (
+                "lib t --deck d --spec s --output-dir o --format json",
+                "lib writes its files under --output-dir and takes no --format",
             ),
             (
                 "lvs t --deck d",

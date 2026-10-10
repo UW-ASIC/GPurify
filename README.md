@@ -23,7 +23,7 @@ it; `nix develop` gives you a pinned one.
 ## Run a check
 
 ```sh
-gpurify drc my_layout.gds --deck my_process.deck --grid 1000
+gpurify drc my_layout.gds --deck my_process.deck
 ```
 
 ```
@@ -104,10 +104,11 @@ listed at the end of the deck and in [docs/limitations.md](docs/limitations.md#s
 
 ## The same input gives the same file
 
-The same inputs produce a byte-identical report on every run, and
-`--check-determinism` runs the job twice and fails if the two differ. A report
-that differs from itself cannot be diffed against yesterday's, so you could not
-tell a fixed violation from one that merely vanished.
+The same inputs produce a byte-identical report on every run. The test suite
+holds every corpus report as a golden file and runs each twice, and each
+field solve on one thread and on many, failing on any byte that differs. A
+report that differs from itself cannot be diffed against yesterday's, so you
+could not tell a fixed violation from one that merely vanished.
 
 ## Accuracy
 

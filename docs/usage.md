@@ -1,7 +1,7 @@
 # Running GPurify
 
 ```sh
-gpurify <command> <layout.gds> --deck <process.deck> --grid <n> [options]
+gpurify <command> <layout.gds> --deck <process.deck> [options] > report
 ```
 
 | Command | Checks | Needs |
@@ -9,24 +9,29 @@ gpurify <command> <layout.gds> --deck <process.deck> --grid <n> [options]
 | `drc` | Design rules: width, spacing, enclosure, area, density, grid, angle, vias | the deck |
 | `erc` | Electrical rules: antenna, ties, floating gates and wells, shorts, power grid | the deck; `--intent` for the voltage, ESD and power-grid rules |
 | `lvs` | The layout's devices and connections against your schematic | `--reference <netlist>` |
-| `pex` | Parasitic resistance, capacitance and, optionally, inductance | the deck's `pex` lines |
+| `pex` | Parasitic resistance and capacitance; inductance for field-solved nets | the deck's `pex` lines |
 | `all` | All four | a check whose input is missing is reported as skipped, never as passed |
 | `lib` | Nothing: writes a macro's Liberty files, see [liberty.md](liberty.md) | `--spec`, `--output-dir` |
 
 ## Options
 
+The options are the files a run reads, the report's form, and one choice of
+method. Everything else is stated where it already lives: the grid is the
+layout's own (its GDS `UNITS` record), and layers to skip are listed in the
+deck (`ignore gds(L, D)`, see [deck.md](deck.md#layers)). The report goes to
+standard output.
+
 | Option | Meaning |
 |---|---|
 | `--deck <file>` | The process deck. Required. See [deck.md](deck.md). |
-| `--grid <n>` | Layout database units per micron, as the GDS was written. `1000` means 1 dbu = 1 nm. |
 | `--reference <file>` | The schematic netlist for LVS (SPICE or Spectre). |
 | `--intent <file>` | Design intent: supply voltages and per-net limits. See below. |
 | `--format text\|json\|spef\|dspf` | Report format. `spef` and `dspf` need a `pex` run. Default `text`. |
-| `--output <file>` | Write the report there instead of to standard output. |
-| `--quasistatic <net>` | Field-solve this net's capacitance instead of using the closed-form estimate. Repeat for more nets. |
-| `--quasistatic-inductance` | Also solve inductance for the `--quasistatic` nets. |
-| `--strict-layers` / `--no-strict-layers` | Refuse, or ignore, shapes on layers the deck does not declare. Strict is the default. |
-| `--check-determinism` | Run twice and fail if the two reports differ. |
+| `--quasistatic <net>` | Field-solve this net's capacitance and inductance instead of using the closed-form estimate. Repeat for more nets. |
+
+A shape on a GDS layer the deck neither declares nor ignores refuses the
+layout, naming the layer. A layout whose database unit is not a whole fraction
+of a micrometre is refused too.
 
 ## Reading the report
 
@@ -125,7 +130,8 @@ supply its own domain. A file may declare at most 64 domains.
 writes a DSPF file for a simulator. Every net is extracted with closed-form
 resistance and capacitance. Nets named with `--quasistatic` are solved from
 the field instead, which is slower and more accurate, and their coupling to
-nets that were not field-solved is kept. A net with no text label in the
+nets that were not field-solved is kept. A field-solved net also gets its
+inductance. A net with no text label in the
 layout has no name to write, and the run refuses it rather than inventing one.
 
 The same inputs always give a byte-identical report.

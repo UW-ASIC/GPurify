@@ -96,7 +96,14 @@ layer met1 = gds(68, 20)                 # a drawn layer: GDS layer and datatype
 layer ngate = poly and diff and nsdm     # a derived layer
 layer diff_active = diff not poly
 layer m12 = (met1 or met2) not blockage
+ignore gds(81, 4)                        # a stream pair to drop, not refuse
 ```
+
+A shape on a GDS layer the deck does not declare refuses the layout, so a
+layer nobody wrote rules for cannot slip past every check. A layer the deck
+deliberately leaves out, such as a marker no rule reads, is listed with
+`ignore gds(L, D)`, and its shapes and texts are dropped. A pair cannot be
+both ignored and declared, and cannot be ignored twice.
 
 Derived layers combine earlier layers with `and`, `or` and `not`, left to
 right; use parentheses to group. A layer must be declared before anything

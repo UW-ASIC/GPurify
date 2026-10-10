@@ -21,31 +21,7 @@ fn main() -> ExitCode {
         Ok(first) => first,
         Err(code) => return code,
     };
-
-    if cli.check_determinism {
-        let (second_summary, second_text) = match render(&cli) {
-            Ok(second) => second,
-            Err(code) => return code,
-        };
-        if second_summary != summary || second_text != text {
-            eprintln!(
-                "--check-determinism: two runs of the same inputs produced \
-                 different reports, so the output depends on something other \
-                 than the design"
-            );
-            return ExitCode::FAILURE;
-        }
-    }
-
-    match &cli.output {
-        Some(path) => {
-            if let Err(error) = std::fs::write(path, text.as_bytes()) {
-                eprintln!("{}: {error}", path.display());
-                return ExitCode::FAILURE;
-            }
-        }
-        None => print!("{text}"),
-    }
+    print!("{text}");
 
     if summary.passed() {
         ExitCode::SUCCESS
@@ -144,9 +120,8 @@ fn liberty(cli: &args::Cli, lib: &args::LibArgs) -> ExitCode {
         Ok(extracted) => extracted,
         Err(error) => return fail(&error),
     };
-    let scratch = lib.work.clone().unwrap_or_else(|| {
-        std::env::temp_dir().join(format!("gpurify-lib-{}", std::process::id()))
-    });
+    // Simulator decks and logs; kept only when a simulation fails, to debug it.
+    let scratch = std::env::temp_dir().join(format!("gpurify-lib-{}", std::process::id()));
     let many = lib.accuracy.len() > 1;
     for &accuracy in &lib.accuracy {
         let (dir, work) = if many {
@@ -196,13 +171,9 @@ fn liberty(cli: &args::Cli, lib: &args::LibArgs) -> ExitCode {
             accuracy.name(),
             started.elapsed().as_secs_f64()
         );
-        if lib.work.is_none() {
-            let _ = std::fs::remove_dir_all(&work);
-        }
+        let _ = std::fs::remove_dir_all(&work);
     }
-    if lib.work.is_none() {
-        let _ = std::fs::remove_dir_all(&scratch);
-    }
+    let _ = std::fs::remove_dir_all(&scratch);
     ExitCode::SUCCESS
 }
 

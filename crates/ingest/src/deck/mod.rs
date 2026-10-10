@@ -67,6 +67,8 @@ pub struct LayerTable {
     derived: Vec<(LayerId, DerivedOp, Vec<LayerId>)>,
     /// The text patterns [`DerivedOp::WithText`] names, `*` any run, `?` one character.
     texts: Vec<String>,
+    /// Stream pairs the deck says to drop (`ignore gds(L, D)`), sorted; never a declared pair.
+    ignored: Vec<(u16, u16)>,
 }
 
 /// The placeholder stream pair of a derived layer. Ask [`LayerTable::is_derived`].
@@ -99,6 +101,12 @@ impl LayerTable {
     }
 
     /// Is this layer computed by the deck rather than drawn in the layout?
+    /// Whether the deck drops geometry on this stream pair (`ignore gds(L, D)`)
+    /// instead of refusing the layout for it.
+    pub fn is_ignored(&self, layer: u16, datatype: u16) -> bool {
+        self.ignored.binary_search(&(layer, datatype)).is_ok()
+    }
+
     pub fn is_derived(&self, layer: LayerId) -> bool {
         layer.0 >= self.derived_start
     }
@@ -173,6 +181,7 @@ impl LayerTable {
             derived_start: count,
             derived: Vec::new(),
             texts: Vec::new(),
+            ignored: Vec::new(),
         }
     }
 }
@@ -368,6 +377,8 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
         layers.push_derived(strings.intern(&row.name), row.op, operands);
     }
     layers.texts.clone_from(&doc.texts);
+    layers.ignored.clone_from(&doc.ignored);
+    layers.ignored.sort_unstable();
     // A misspelt model would match no device and silently check nothing.
     for rule in &doc.rules {
         for (_, stated) in &rule.params {
@@ -580,6 +591,8 @@ fn build_stack(
 struct DeckSrc {
     /// Base layers in statement order, with their GDS pair.
     layers: Vec<(String, (u16, u16))>,
+    /// `ignore gds(L, D)` pairs, distinct, none of them a base layer's.
+    ignored: Vec<(u16, u16)>,
     /// In declaration order, which decides the ids they take.
     derived: Vec<DerivedSrc>,
     /// Text patterns, indexed by [`DerivedOp::WithText`].

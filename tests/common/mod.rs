@@ -18,7 +18,6 @@ use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
 use gpurify::geom::{Dbu, Grid};
 use gpurify::geom::{GeometryStore, LayerId, PolyId};
 use gpurify::ingest;
-use gpurify::ingest::layout::UnknownLayers;
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
@@ -141,7 +140,6 @@ impl Run {
             checks: self.checks,
             lvs: lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
-            quasistatic_inductance: false,
         };
         run_checks(&loaded, &extracted, &options)
     }
@@ -239,7 +237,6 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     let inputs = Inputs {
         layout: layout_path,
         deck: deck_path,
-        grid: Some(grid),
         // No reference netlist and no design intent exist yet, so `Inputs`
         // starts without them and `without_reference` / `without_intent` are
         // idempotent.
@@ -527,10 +524,8 @@ fn case_inputs(
     Inputs {
         layout: fixtures().join(domain).join(format!("{id}.gds")),
         deck: fixtures().join("params.deck"),
-        grid: Some(Grid::new(DBU_PER_UM).expect("a thousand dbu per micrometre is a grid")),
         reference,
         intent,
-        unknown_layers: UnknownLayers::Drop,
     }
 }
 
@@ -587,7 +582,6 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
         // would field-solve it, which is a different extraction and a different
         // set of expected numbers.
         quasistatic_nets: Vec::new(),
-        quasistatic_inductance: false,
     };
 
     let (outputs, _) =
@@ -634,7 +628,6 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
         },
         lvs: gpurify::check::lvs::CompareOptions::default(),
         quasistatic_nets: named,
-        quasistatic_inductance: false,
     };
 
     let (outputs, _) =

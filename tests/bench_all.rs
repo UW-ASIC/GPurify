@@ -11,8 +11,7 @@ use gpurify::check::topology::NetTable;
 use gpurify::engine::pipeline::{extract, load, Inputs};
 use gpurify::engine::run::{run_checks, Checks, RunOptions};
 use gpurify::geom::index::{candidate_pairs_into, SpatialIndex};
-use gpurify::geom::{Dbu, Grid, LayerId};
-use gpurify::ingest::layout::UnknownLayers;
+use gpurify::geom::{Dbu, LayerId};
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -117,10 +116,8 @@ fn fixture_inputs(deck: &Path) -> Inputs {
     Inputs {
         layout: fixtures().join("_source/conformance.gds"),
         deck: deck.to_path_buf(),
-        grid: Some(Grid::new(1000).expect("a 1 nm grid")),
         reference: None,
         intent: None,
-        unknown_layers: UnknownLayers::Drop,
     }
 }
 
@@ -146,7 +143,6 @@ fn every_rule_in_the_deck_timed_on_its_own() {
             checks,
             lvs: gpurify::check::lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
-            quasistatic_inductance: false,
         };
         let start = Instant::now();
         let mut record = None;

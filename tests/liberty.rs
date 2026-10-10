@@ -8,7 +8,6 @@
 
 use gpurify::engine::pipeline::{extract, load, Inputs};
 use gpurify::liberty::{generate, spec, Accuracy, LibError, Request};
-use gpurify_geom::Grid;
 use std::path::PathBuf;
 
 fn fixtures() -> PathBuf {
@@ -19,7 +18,6 @@ fn inputs(reference: bool) -> Inputs {
     Inputs {
         layout: fixtures().join("lvs/LVS_CLEAN_MATCH.gds"),
         deck: fixtures().join("params.deck"),
-        grid: Some(Grid::new(1_000).expect("a 1 nm grid")),
         reference: reference.then(|| fixtures().join("lvs_inv.cdl")),
         ..Inputs::default()
     }

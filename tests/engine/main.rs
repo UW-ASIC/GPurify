@@ -34,7 +34,6 @@ fn options(checks: Checks) -> RunOptions {
         checks,
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
-        quasistatic_inductance: false,
     }
 }
 
@@ -50,29 +49,23 @@ fn empty_loaded(store: GeometryStore, deck: Deck) -> Loaded {
     }
 }
 
-fn unreadable_inputs(grid: Option<Grid>) -> Inputs {
+fn unreadable_inputs() -> Inputs {
     Inputs {
         layout: PathBuf::from("/nonexistent/design.gds"),
         deck: PathBuf::from("/nonexistent/process.deck"),
-        grid,
         ..Inputs::default()
     }
 }
 
-/// The grid is checked before any file is opened, and the deck is read before
-/// the layout; a failed load reaches no later stage.
+/// The deck is read before the layout; a failed load reaches no later stage.
 #[test]
-fn a_load_fails_on_the_grid_then_the_deck_before_the_layout() {
+fn a_load_fails_on_the_deck_before_the_layout() {
     assert!(matches!(
-        load(&unreadable_inputs(None)),
-        Err(LoadError::NoGrid)
-    ));
-    assert!(matches!(
-        load(&unreadable_inputs(Some(grid()))),
+        load(&unreadable_inputs()),
         Err(LoadError::Deck(_))
     ));
     assert!(matches!(
-        run(&unreadable_inputs(Some(grid())), &options(Checks::ALL)),
+        run(&unreadable_inputs(), &options(Checks::ALL)),
         Err(EngineError::Load(_))
     ));
 }
@@ -265,23 +258,23 @@ fn a_kind_in_neither_domain_is_refused_whatever_was_selected() {
     );
 }
 
-/// Off, the network holds no inductance; on, the field-solved nets gain some
-/// and keep their capacitive elements.
+/// A field-solved net gains inductance and keeps its capacitive elements; the
+/// analytical extraction alone carries none.
 #[test]
-fn the_inductance_flag_adds_elements_only_when_asked() {
+fn a_quasistatic_net_is_solved_for_inductance_too() {
     use gpurify_extract::Parasitic;
 
     let fixtures = gen_fixtures::fixtures();
     let inputs = Inputs {
         layout: fixtures.join("pex/PEX_COUPLING_C.gds"),
         deck: fixtures.join("params.deck"),
-        grid: Some(grid()),
         ..Inputs::default()
     };
-    let count = |inductance: bool, want_inductance: bool| -> usize {
+    let count = |quasistatic: bool, want_inductance: bool| -> usize {
         let mut opts = options(Checks { pex: true, ..NONE });
-        opts.quasistatic_nets = vec!["PEX_CC_n0".to_string(), "PEX_CC_n1".to_string()];
-        opts.quasistatic_inductance = inductance;
+        if quasistatic {
+            opts.quasistatic_nets = vec!["PEX_CC_n0".to_string(), "PEX_CC_n1".to_string()];
+        }
         let (_, _, out, summary) = run(&inputs, &opts).expect("the coupling fixture field-solves");
         assert_eq!(summary.pex, StageStatus::Ran);
         out.parasitics.map_or(0, |network| {

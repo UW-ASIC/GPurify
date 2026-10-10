@@ -35,10 +35,9 @@ impl Checks {
 pub struct RunOptions {
     pub checks: Checks,
     pub lvs: gpurify_check::lvs::CompareOptions,
-    /// Nets to extract by field solve. Empty means analytical extraction only.
+    /// Nets to field-solve for capacitance and inductance instead of the
+    /// closed-form estimate. Empty means analytical extraction only.
     pub quasistatic_nets: Vec<String>,
-    /// Also solve the quasi-static nets for inductance. Off leaves output unchanged.
-    pub quasistatic_inductance: bool,
 }
 
 /// Whether a check ran, and if not, why. `Skipped` is not a quieter `Ran`.
@@ -406,19 +405,17 @@ fn run_pex(
             return Ok(StageStatus::Refused(refusal));
         }
 
-        if options.quasistatic_inductance {
-            let mut inductance = gpurify_extract::quasistatic::InductMatrix::default();
-            if let Err(refusal) = gpurify_extract::quasistatic::extract_inductance_into(
-                &loaded.store,
-                &extracted.nets,
-                &selected,
-                &loaded.deck.stack,
-                grid,
-                &mut inductance,
-                &mut solved,
-            ) {
-                return Ok(StageStatus::Refused(refusal.to_string()));
-            }
+        let mut inductance = gpurify_extract::quasistatic::InductMatrix::default();
+        if let Err(refusal) = gpurify_extract::quasistatic::extract_inductance_into(
+            &loaded.store,
+            &extracted.nets,
+            &selected,
+            &loaded.deck.stack,
+            grid,
+            &mut inductance,
+            &mut solved,
+        ) {
+            return Ok(StageStatus::Refused(refusal.to_string()));
         }
 
         gpurify_extract::quasistatic::overlay(&mut network, &solved);

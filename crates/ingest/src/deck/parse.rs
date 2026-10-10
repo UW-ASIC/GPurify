@@ -97,6 +97,7 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
     let toks = lex(source, &mut errors);
     let mut parser = Parser::new(source, toks, grid, errors);
     parser.statements(parser.toks.len() - 1);
+    parser.check_ignored();
     if !parser.errors.is_empty() {
         let mut diagnostics = parser.errors;
         diagnostics.truncate(MAX_ERRORS);
@@ -276,6 +277,8 @@ struct Parser<'a> {
     /// Layer expressions lowered so far among the current rule's arguments.
     inline: u32,
     touch: bool,
+    /// Each `ignore gds(L, D)` pair, and where it was written.
+    ignored_at: Vec<((u16, u16), (u32, u32))>,
     out: DeckSrc,
 }
 
@@ -307,6 +310,7 @@ impl<'a> Parser<'a> {
             context: String::new(),
             inline: 0,
             touch: false,
+            ignored_at: Vec::new(),
             out: DeckSrc::default(),
         }
     }
@@ -434,9 +438,10 @@ impl<'a> Parser<'a> {
             "connect" => self.connect(),
             "device" => self.device(),
             "pex" => self.pex(),
+            "ignore" => self.ignore(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, rule, for, connect, device or pex"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device or pex"),
             )),
         }
     }
@@ -479,12 +484,8 @@ impl<'a> Parser<'a> {
         if self.is("gds") && self.peek_at(1).tok == Tok::Punct && self.text(self.peek_at(1)) == "("
         {
             self.bump();
-            self.expect("(")?;
-            let layer = self.gds_number()?;
-            self.expect(",")?;
-            let datatype = self.gds_number()?;
-            self.expect(")")?;
-            self.out.layers.push((name.clone(), (layer, datatype)));
+            let pair = self.gds_pair()?;
+            self.out.layers.push((name.clone(), pair));
         } else {
             let expr = self.layer_expr()?;
             if self.edges_of(&expr) {
@@ -510,6 +511,60 @@ impl<'a> Parser<'a> {
         }
         self.layers.insert(name);
         Ok(())
+    }
+
+    /// `ignore gds(L, D)`: geometry on this stream pair is dropped, not refused.
+    fn ignore(&mut self) -> R<()> {
+        let (word, span) = self.ident("`gds`")?;
+        if word != "gds" {
+            return Err(self.err(
+                span,
+                &format!("expected `gds(layer, datatype)`, found `{word}`"),
+            ));
+        }
+        let pair = self.gds_pair()?;
+        let at = (span.0, self.toks[self.pos.saturating_sub(1)].end);
+        if self.ignored_at.iter().any(|&(seen, _)| seen == pair) {
+            return Err(self.err(
+                at,
+                &format!("gds({}, {}) is already ignored", pair.0, pair.1),
+            ));
+        }
+        self.ignored_at.push((pair, at));
+        self.out.ignored.push(pair);
+        Ok(())
+    }
+
+    /// An ignored pair that is also a declared layer contradicts itself. Run
+    /// once every statement is read, because a layer may be declared later.
+    fn check_ignored(&mut self) {
+        let clashes: Vec<_> = self
+            .ignored_at
+            .iter()
+            .filter_map(|&(pair, at)| {
+                let (name, _) = self.out.layers.iter().find(|(_, stream)| *stream == pair)?;
+                Some((
+                    at,
+                    format!(
+                        "gds({}, {}) is ignored, but layer `{name}` is declared on it",
+                        pair.0, pair.1
+                    ),
+                ))
+            })
+            .collect();
+        for (at, message) in clashes {
+            let _ = self.err(at, &message);
+        }
+    }
+
+    /// `(layer, datatype)` after the word `gds`.
+    fn gds_pair(&mut self) -> R<(u16, u16)> {
+        self.expect("(")?;
+        let layer = self.gds_number()?;
+        self.expect(",")?;
+        let datatype = self.gds_number()?;
+        self.expect(")")?;
+        Ok((layer, datatype))
     }
 
     fn gds_number(&mut self) -> R<u16> {

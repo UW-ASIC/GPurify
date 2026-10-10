@@ -143,7 +143,6 @@ fn erc(
         },
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
-        quasistatic_inductance: false,
     };
     let (out, summary) = run_checks(&loaded, &extracted, &options).expect("ERC runs");
     assert_eq!(summary.erc, StageStatus::Ran, "the supply grid solved");

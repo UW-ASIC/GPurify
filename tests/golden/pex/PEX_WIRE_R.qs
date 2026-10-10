@@ -21,7 +21,9 @@ exit 0
 *CAP
 1 PEX_R_n0:0 0.204940
 *RES
+1 PEX_R_n0:0 PEX_R_n0:1 1.000000
 *INDUC
+1 PEX_R_n0:0 PEX_R_n0:1 0.985668
 *END
 
 --- stderr

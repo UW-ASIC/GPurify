@@ -62,16 +62,9 @@ fn run(args: &[String], threads: Option<&str>) -> String {
 
 /// The arguments every corpus run shares, after the command and the layout.
 fn common(gds: &str) -> Vec<String> {
-    [
-        gds,
-        "--deck",
-        "tests/fixtures/params.deck",
-        "--grid",
-        "1000",
-        "--no-strict-layers",
-    ]
-    .map(str::to_owned)
-    .to_vec()
+    [gds, "--deck", "tests/fixtures/params.deck"]
+        .map(str::to_owned)
+        .to_vec()
 }
 
 fn args(command: &str, gds: &str, rest: &[&str]) -> Vec<String> {
@@ -115,21 +108,14 @@ fn jobs_for(domain: &str, id: &str, every_thread_check: bool) -> Vec<Job> {
             parallel: false,
         });
         if !nets.is_empty() {
-            let mut capacitance = spef.clone();
-            capacitance.extend(nets);
-            let mut inductance = capacitance.clone();
-            inductance.push("--quasistatic-inductance".to_owned());
+            let mut quasistatic = spef.clone();
+            quasistatic.extend(nets);
             // ponytail: the slow cells skip the one-thread run outside the
             // nightly twin; drop the condition once the field solve is faster.
             let parallel = every_thread_check || !id.starts_with("PEX_NEG_");
             jobs.push(Job {
                 golden: golden("qs"),
-                args: capacitance,
-                parallel,
-            });
-            jobs.push(Job {
-                golden: golden("qsl"),
-                args: inductance,
+                args: quasistatic,
                 parallel,
             });
         }
