@@ -1,8 +1,16 @@
 //! Design rule checking: a deck's DRC rows as one [`RuleSet`], run row by row.
 //!
-//! Data in: the deck (via [`RuleSet::from_deck`]) and the layout's `GeometryStore`.
-//! Data out: `Violations` plus one `RuleRun` per rule row. A rule that cannot run
-//! says so (`Skipped` / `Refused`); neither is ever collapsed into a clean `Ran`.
+//! Data in: the deck (via [`RuleSet::from_deck`]) and the layout's
+//! [`GeometryStore`], plus its extracted nets for [`Rule::NetSpacing`]
+//! ([`RuleSet::run_with_nets`]). Data out:
+//! [`Violations`](crate::report::Violations) plus one
+//! [`RuleRun`](crate::report::RuleRun) per rule row. A rule that cannot run
+//! says so ([`Outcome::Skipped`](crate::report::Outcome::Skipped) or
+//! [`Outcome::Refused`](crate::report::Outcome::Refused)); neither is ever
+//! collapsed into a clean `Ran`.
+//!
+//! [`Rule`] defines every kind: what it flags, how it measures, where it
+//! reports, and which foundry rules it implements.
 
 pub mod rules;
 pub mod ruleset;
@@ -16,27 +24,75 @@ use gpurify_geom::{Bbox, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer
 
 /// Why a deck could not be turned into a [`RuleSet`]. Load time only: geometry a
 /// rule cannot handle is that rule's `Refused` row, not an error.
+///
+/// The deck parser already refuses most of these with a line and column;
+/// [`RuleSet::from_deck`] checks them again for a deck built in code. Every
+/// `rule` field is the row's id as the deck spells it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DrcError {
+    /// A row's kind is in neither the DRC nor the ERC
+    /// [`KINDS`](ruleset::KINDS). Raised by the engine before any rule runs;
+    /// `from_deck` alone steps over such a row.
     #[error("rule {rule}: unknown rule kind {kind}")]
-    UnknownKind { rule: String, kind: String },
+    UnknownKind {
+        /// The row's id.
+        rule: String,
+        /// The kind it names.
+        kind: String,
+    },
+    /// A required parameter is absent; for `angle`, the allowed list is empty.
     #[error("rule {rule}: missing required parameter {param}")]
-    MissingParam { rule: String, param: &'static str },
+    MissingParam {
+        /// The row's id.
+        rule: String,
+        /// The parameter's kind-level name, which can differ from the deck's
+        /// (`prl_threshold` for `prl:`).
+        param: &'static str,
+    },
+    /// A parameter holds the wrong kind of value, or a count too large for
+    /// its [`Rule`] field (`u16` cut counts, `u8` colours).
     #[error("rule {rule}: parameter {param} is not the kind of value this rule takes")]
-    WrongParamType { rule: String, param: &'static str },
+    WrongParamType {
+        /// The row's id.
+        rule: String,
+        /// The parameter's kind-level name.
+        param: &'static str,
+    },
+    /// A row names too few or too many layers for its kind.
     #[error("rule {rule}: takes {expected} layers, the deck names {found}")]
     WrongLayerCount {
+        /// The row's id.
         rule: String,
+        /// How many layers the kind takes (the larger count where a second
+        /// layer is optional).
         expected: u32,
+        /// How many the row names.
         found: u32,
     },
+    /// A length, area or fraction is zero or negative, a fraction is not
+    /// finite, or a required count (`min_count`, `colors`) is zero.
     #[error("rule {rule}: limit {limit} is not positive")]
-    NonPositiveLimit { rule: String, limit: i64 },
-    /// Only multiples of 45 degrees are exact integer edge directions.
+    NonPositiveLimit {
+        /// The row's id.
+        rule: String,
+        /// The offending value for display only: a length or area in grid
+        /// units, a fraction truncated toward zero (NaN shows as 0), a count.
+        limit: i64,
+    },
+    /// An allowed angle is not a multiple of 45 degrees. Only those are exact
+    /// integer edge directions.
     #[error("rule {rule}: {degrees} degrees is not exactly representable")]
-    UnrepresentableAngle { rule: String, degrees: i32 },
+    UnrepresentableAngle {
+        /// The row's id.
+        rule: String,
+        /// The angle, reduced modulo 360.
+        degrees: i32,
+    },
+    /// Two deck rows, DRC or ERC, share this id.
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
+    /// The named row's spacing table fails
+    /// [`SpacingTable::is_valid`](ruleset::SpacingTable::is_valid).
     #[error("rule {0}: the spacing table is not complete and monotone")]
     BadTable(String),
 }

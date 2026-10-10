@@ -2,7 +2,8 @@
 //! polygon, found by a scanline sweep), and min edge length.
 //!
 //! Data in: one validated rectilinear layer. Data out: one violation per offending
-//! polygon (per edge for min edge length). Exact on the whole input domain.
+//! merged figure (per drawn edge for min edge length). Exact on the whole input
+//! domain.
 
 use super::{mid, owners_of, Verdict, REFUSED};
 use crate::drc::Scratch;

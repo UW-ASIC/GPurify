@@ -1,6 +1,7 @@
 //! Presence family: what must not exist, and what must hold or lie inside what.
 //!
-//! Data in: one or two validated layers, merged (touching shapes are one).
+//! Data in: one or two validated layers, merged (touching shapes are one),
+//! except that `forbidden` reports shapes as drawn.
 //! Data out: one violation per offending shape, or per edge of an edge layer.
 
 use super::{centre, mid, owners_of, seg_bbox, SortedRects, Verdict, REFUSED};

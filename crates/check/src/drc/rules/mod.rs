@@ -1,9 +1,12 @@
 //! The rule kinds, one function per kind, grouped by what they measure.
 //!
 //! Data in: one rule row's parameters, the store and a `Scratch`.
-//! Data out: violations appended to `out`, and the row's `Verdict`.
-//! `Violation::at` is the midpoint of the thing measured (a vertex for off-grid
-//! and angle). A layer that fails to validate is `Refused`, never a clean `Ran`.
+//! Data out: violations appended to `out`, and the row's `Verdict`. Where each
+//! kind places [`Violation::at`](crate::report::Violation::at), and what it
+//! counts as examined, is documented on its [`Rule`](crate::drc::Rule)
+//! variant. Input a kind cannot represent exactly (a layer that fails to
+//! validate, a failed boolean, a non-axis-aligned edge) is `Refused`, never a
+//! clean `Ran`. The via and grid kinds read raw rows and never refuse.
 
 pub mod area;
 pub mod edge;

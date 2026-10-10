@@ -24,13 +24,27 @@ pub enum Coloring {
     /// Proved uncolourable. `node` is canonical: the lowest node the search
     /// could not place (3+ colours), or the lowest root of an odd-cycle
     /// component (2 colours).
-    Infeasible { node: u32 },
-    /// The budget ran out with no answer either way.
+    Infeasible {
+        /// The node to report the failure on; the same for the same graph.
+        node: u32,
+    },
+    /// The budget ran out with no answer either way. Only three or more
+    /// colours can run out.
     Exhausted,
 }
 
-/// Colour a conflict graph over `0 .. node_count` with at most `colors` colours.
+/// Colours a conflict graph over `0 .. node_count` with at most `colors`
+/// colours, so that no conflict joins two nodes of one colour.
 /// `out` holds the colouring on `Complete` and is left empty otherwise.
+///
+/// Exact either way it answers. Two colours is a bipartiteness test, linear in
+/// the graph. Three or more is a DSATUR search with backtracking, capped at
+/// `max(2^20, 64 * node_count)` placements, past which it returns
+/// [`Coloring::Exhausted`]. Zero colours is infeasible for any non-empty graph.
+///
+/// # Panics
+///
+/// When a conflict names a node at or above `node_count`.
 pub fn color_into(
     node_count: u32,
     conflicts: &[(u32, u32)],
