@@ -18,10 +18,10 @@
 //!   it records `Skipped`, and the rustdoc says each one that can does, so the
 //!   definition's outcome is `Ran` with nothing found.
 //! - A fixture that disagrees with a carefully derived expectation carries the
-//!   finding it is waiting on (`F18`, or `F<n>` for one this module found).
+//!   finding it is waiting on (`F<n>`).
 //!
-//! The findings carried here:
-//! - `F18`: `min_edge_length` measures drawn polygons, not the merged figure.
+//! None are carried today: the fixtures F18, F42, F48 and F49 marked hold
+//! since B14 and B15.
 
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Want};
 use gpurify::check::report::Measurement;
@@ -832,12 +832,9 @@ fn merged_edge_shapes(s: i64) -> Vec<(&'static str, Layout, Vec<Finding>)> {
 /// edge shorter than the limit, at its midpoint, measuring its length. At the
 /// limit is legal.
 ///
-/// The rustdoc measures each drawn polygon unmerged; F18 records that as a
-/// bug, so the expectation here is the merged figure's edges. Single polygons
-/// (a step, a thin rectangle, a small hole) agree either way and must hold.
-/// A square drawn as a thin strip on a block (the strip's short ends are not
-/// edges of the square) and an overlap whose union has two short jogs fail
-/// today wherever merging changes the answer, and carry `F18`.
+/// The layer is merged first, so the edges are the merged figure's: a square
+/// drawn as a thin strip on a block has none of the strip's short ends, and
+/// an overlap whose union has two short jogs has both (F18).
 fn min_edge_length(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule el edge_length(met1) >= 101nm");
@@ -853,15 +850,13 @@ fn min_edge_length(depth: Depth) -> Vec<Fixture> {
             ));
         }
         for (shape, layout, findings) in merged_edge_shapes(s) {
-            let case = fixture(
+            cases.push(fixture(
                 &format!("min_edge_length/{shape}/{}", side(s, LIMIT)),
                 &["DRC-020"],
                 &deck,
                 layout,
                 vec![("el", findings)],
-            );
-            // Unmerged, the strip's ends are flagged and the jogs are not seen.
-            cases.push(if s < LIMIT { case.known("F18") } else { case });
+            ));
         }
     }
     let mut out = every_placement(cases);

@@ -2,68 +2,21 @@
 //! polygon, found by a scanline sweep), and min edge length.
 //!
 //! Data in: one validated rectilinear layer. Data out: one violation per offending
-//! merged figure (per drawn edge for min edge length). Exact on the whole input
-//! domain.
+//! merged figure (per edge of one for min edge length). Exact on the whole
+//! input domain.
 
 use super::{mid, owners_of, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
-use gpurify_geom::ops::{Point, Winding};
+use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
-
-/// The store rows of a layer's validated polygons, in validated order: one
-/// polygon per counter-clockwise row, ascending.
-fn outer_rows(store: &GeometryStore, layer: LayerId) -> impl Iterator<Item = PolyId> + '_ {
-    store
-        .polys_on_layer(layer)
-        .map(PolyId)
-        .filter(move |&poly| {
-            let (xs, ys) = store.poly_verts(poly);
-            ring_winding(xs, ys) == Winding::CounterClockwise
-        })
-}
-
-/// Winding of a validated rectilinear ring, read off its bottom edge: that edge
-/// travels +x exactly when the ring is counter-clockwise.
-fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
-    let n = xs.len();
-    let ys = &ys[..n];
-    // `i64::MAX` doubles as "no horizontal edge yet"; iteration zero is the closing edge.
-    let (mut px, mut py) = (xs[n - 1].raw(), ys[n - 1].raw());
-    let mut best_y = i64::MAX;
-    let mut best_dx = 0i64;
-    for i in 0..n {
-        let (x, y) = (xs[i].raw(), ys[i].raw());
-        let cand_y = if py == y { py } else { i64::MAX };
-        if cand_y < best_y {
-            best_dx = x - px;
-            best_y = cand_y;
-        }
-        px = x;
-        py = y;
-    }
-    debug_assert_eq!(
-        Some(if best_dx > 0 {
-            Winding::CounterClockwise
-        } else {
-            Winding::Clockwise
-        }),
-        gpurify_geom::ops::winding_of(xs, ys),
-        "the bottom edge disagrees with the shoelace"
-    );
-    if best_dx > 0 {
-        Winding::CounterClockwise
-    } else {
-        Winding::Clockwise
-    }
-}
 
 /// Min width (Euclidean at concave corners) and notch (`material_between ==
 /// false`, facing edges only). One violation per
@@ -224,8 +177,9 @@ pub(crate) fn cut_size(
     (Outcome::Ran, figures.len() as u64)
 }
 
-/// One violation per edge shorter than `limit`, at its midpoint. `examined`
-/// counts edges.
+/// One violation per edge of the merged layer shorter than `limit`, at its
+/// midpoint, on the lowest drawn row under its figure. `examined` counts the
+/// merged figures' edges.
 pub(crate) fn min_edge_length(
     store: &GeometryStore,
     rule: StrId,
@@ -237,12 +191,13 @@ pub(crate) fn min_edge_length(
     let Some(drawn) = s.validated.get(store, layer) else {
         return REFUSED;
     };
-    let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
-    let mut rows = outer_rows(store, layer);
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
     let mut examined = 0u64;
-    for idx in 0..polys {
-        let shape = rows.next().expect("one store row per validated polygon");
-        for (a, b) in poly_edges(drawn.get(idx)) {
+    for (idx, owner) in (0..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        for (a, b) in poly_edges(s.layer_out.get(idx)) {
             examined += 1;
             // Rectilinear: one term is zero.
             let length = (b.x - a.x).abs() + (b.y - a.y).abs();
@@ -257,7 +212,7 @@ pub(crate) fn min_edge_length(
                     },
                     measured: Measurement::Length(length),
                     limit: Measurement::Length(limit),
-                    shapes: (shape, None),
+                    shapes: (owner, None),
                 });
             }
         }

@@ -114,20 +114,21 @@ pub enum Rule {
     },
     /// An edge of a shape shorter than `limit`: a step or jog.
     ///
-    /// Deck: `edge_length(L) >= len`, kind `min_edge_length`. Each drawn
-    /// polygon is measured as drawn, holes included, not merged.
+    /// Deck: `edge_length(L) >= len`, kind `min_edge_length`. The layer is
+    /// merged first and every edge of each figure is measured, holes
+    /// included: a jog where two overlapping shapes meet is an edge, and a
+    /// side two abutting shapes share is not.
     ///
     /// One violation per short edge, at its midpoint. `measured` is its
-    /// length, `shapes.0` its polygon's outer row. `examined` counts edges.
+    /// length, `shapes.0` the lowest drawn row under its figure. `examined`
+    /// counts the figures' edges.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-020. Rules: GF180 DF.11; LEF `MINSTEP` and `MINSIZE`;
     /// `LEF58_MINSTEP`.
     ///
     /// Limits: the `MINSTEP` variants (`INSIDECORNER`, `OUTSIDECORNER`,
-    /// `LENGTHSUM`, `MAXEDGES`, `MINADJACENTLENGTH`) are missing. Because shapes
-    /// are not merged, a step that only the union of two overlapping shapes
-    /// has is not seen, and an edge two abutting shapes share is measured.
+    /// `LENGTHSUM`, `MAXEDGES`, `MINADJACENTLENGTH`) are missing.
     MinEdgeLength {
         /// The layer measured, drawn or derived.
         layer: LayerId,
