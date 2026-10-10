@@ -63,9 +63,9 @@ pub enum TerminalRole {
 /// Every device recognised from the layout.
 ///
 /// Filled by [`recognise_into`]. Row `k` is `DeviceId(k)`, rows ascend by
-/// marker polygon, and every column has one row per device. Every terminal is
-/// on a real net, never [`NetId::NONE`]: a marker that cannot bind every
-/// terminal is not a device.
+/// marker polygon, and every column but `refused` has one row per device.
+/// Every terminal is on a real net, never [`NetId::NONE`]: a marker that
+/// cannot bind every terminal is not a device, and is listed in `refused`.
 #[derive(Debug, Default)]
 pub struct DeviceTable {
     /// The family of each device, from its recogniser.
@@ -87,6 +87,11 @@ pub struct DeviceTable {
     /// `Length` when a source or drain polygon fixes its channel direction;
     /// every device gets `Area`.
     pub param: Vec<(DeviceParam, DeviceMeasure)>,
+    /// Markers that are no device, ascending: `(marker, bound, listed)` for
+    /// each marker polygon no recogniser naming its layer could bind, with
+    /// the terminals the first such recogniser in deck order bound and the
+    /// count it lists. `lvs.terminal_net` reports each.
+    pub refused: Vec<(PolyId, u32, u32)>,
 
     /// Devices attached to each net, CSR.
     net_start: Vec<u32>,
@@ -204,26 +209,29 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 /// polygon; terminals come back in the recogniser's stated order.
 ///
 /// Positions naming one layer take that layer's polygons under the marker in
-/// ascending [`PolyId`] order; a marker with too few or too many is skipped.
+/// ascending [`PolyId`] order.
 ///
 /// Each polygon on a recogniser's marker layer is one candidate device. A
 /// terminal polygon is under the marker when the two share at least one
-/// point, touching included. A surplus polygon whose net already fills one of
-/// that layer's positions is the same terminal drawn twice and is ignored;
-/// any other surplus refuses the marker, as two gates under one marker do.
-/// When two recognisers that share a marker layer both bind a marker, the
-/// earlier deck row wins.
+/// point, touching included. More polygons under it than positions name
+/// their layer are terminals drawn twice when their nets are as many as the
+/// positions, which then take one net each in the order of each net's lowest
+/// polygon, or all one net, which then fills every position. Any other
+/// surplus refuses the marker, as two gates under one marker do, and so do
+/// too few polygons. Which copy of a terminal is numbered first does not
+/// matter (testing-plan F33). When two recognisers that share a marker layer
+/// both bind a marker, the earlier deck row wins; a marker none binds is
+/// listed in [`DeviceTable::refused`].
 /// `nets` must have been extracted from `store`; `out` is cleared and
 /// refilled.
 ///
 /// # Limits
 ///
-/// - A skipped marker yields no device and no report row. LVS then sees only
-///   the reference device it fails to pair with.
 /// - Only MOS `W`/`L` and each marker's area are measured (testing-plan F16).
-/// - A duplicate polygon is ignored only when it is numbered after every
-///   distinct terminal polygon on its layer. Numbered earlier, it fills a
-///   position itself and the marker is refused.
+/// - Duplicates are recognised by net, not by shape: a terminal drawn twice
+///   with its twin missing reads as both terminals on one net, a shorted
+///   device, and with three or more positions on one layer, a surplus that
+///   leaves some net to fill two of them refuses the marker.
 ///
 /// # Panics
 ///
@@ -253,6 +261,7 @@ pub fn recognise_into(
     let mut exact: Vec<(PolyId, PolyId)> = Vec::new();
     let mut bind: Vec<NetId> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
+    let mut distinct: Vec<NetId> = Vec::new();
     let mut matched: Vec<Match> = Vec::new();
     let mut bound: Vec<NetId> = Vec::new();
     let mut sd_axis: Vec<Axis> = Vec::new();
@@ -276,9 +285,6 @@ pub fn recognise_into(
         bind.resize(marker_count * width, NetId::NONE);
         sd_axis.clear();
         sd_axis.resize(marker_count, Axis::Unknown);
-
-        // Above every marker, so the first pair reads as a new marker.
-        let past_markers = PolyId(markers.end);
 
         for (k, &layer) in terminals.iter().enumerate() {
             // The first position naming a layer fills them all.
@@ -319,32 +325,48 @@ pub fn recognise_into(
             // Box-only hits must not bind: a spurious low-id pair would win.
             retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
 
-            // `exact` ascends by `(marker, terminal)`: the r-th polygon under a
-            // marker fills the r-th position naming this layer.
-            let mut previous = past_markers;
-            let mut rank = 0usize;
-            for &(marker, terminal) in &exact {
-                rank = if marker == previous { rank + 1 } else { 0 };
-                previous = marker;
+            // `exact` ascends by `(marker, terminal)`, so each marker's polygons
+            // on this layer are one run, lowest first.
+            let mut from = 0;
+            while from < exact.len() {
+                let marker = exact[from].0;
+                let to = from + exact[from..].partition_point(|&(m, _)| m == marker);
+                let run = &exact[from..to];
+                from = to;
                 let offset = (marker.0 - markers.start) as usize;
-                let net = nets.net_of(terminal);
-                // More polygons than positions (two gates under one implant):
-                // poison the last position so the marker is refused. A surplus
-                // polygon on a net already bound here is the same terminal
-                // drawn twice (a well over a well) and binds nothing new.
-                if rank >= positions.len() {
-                    let again = positions
-                        .iter()
-                        .any(|&slot| bind[offset * width + slot] == net);
-                    if !again {
-                        bind[offset * width + positions[positions.len() - 1]] = NetId::NONE;
+                let slots = &mut bind[offset * width..(offset + 1) * width];
+                // The first source/drain polygon under a marker decides the axis.
+                if votes_axis && sd_axis[offset] == Axis::Unknown {
+                    sd_axis[offset] = channel_axis(store, marker, run[0].1);
+                }
+                if run.len() <= positions.len() {
+                    // The r-th polygon fills the r-th position; too few leave
+                    // one unfilled, which refuses the marker.
+                    for (&position, &(_, terminal)) in positions.iter().zip(run) {
+                        slots[position] = nets.net_of(terminal);
                     }
                     continue;
                 }
-                bind[offset * width + positions[rank]] = net;
-                // The first source/drain polygon under a marker decides the axis.
-                if votes_axis && sd_axis[offset] == Axis::Unknown {
-                    sd_axis[offset] = channel_axis(store, marker, terminal);
+                // More polygons than positions. Their nets, each at its lowest
+                // polygon, decide whether the surplus is terminals drawn twice
+                // (a well over a well), wherever the copies are numbered.
+                distinct.clear();
+                for &(_, terminal) in run {
+                    let net = nets.net_of(terminal);
+                    if !distinct.contains(&net) {
+                        distinct.push(net);
+                    }
+                }
+                let unique = distinct.len();
+                for (k, &position) in positions.iter().enumerate() {
+                    slots[position] = if unique == positions.len() {
+                        distinct[k]
+                    } else if unique == 1 {
+                        distinct[0]
+                    } else {
+                        // Two gates under one implant: refused.
+                        NetId::NONE
+                    };
                 }
             }
         }
@@ -353,6 +375,12 @@ pub fn recognise_into(
         for offset in 0..marker_count {
             let slots = &bind[offset * width..offset * width + width];
             if slots.contains(&NetId::NONE) {
+                let filled = slots.iter().filter(|&&net| net != NetId::NONE).count();
+                out.refused.push((
+                    PolyId(markers.start + narrow(offset)),
+                    narrow(filled),
+                    narrow(width),
+                ));
                 continue;
             }
             let at = narrow(bound.len());
@@ -369,6 +397,15 @@ pub fn recognise_into(
     // Stable, so of two recognisers matching one marker the earlier wins.
     matched.sort_by_key(|&(marker, ..)| marker);
     matched.dedup_by_key(|&mut (marker, ..)| marker);
+    // A marker another recogniser bound is a device; of the rest, each is
+    // reported once, as the earliest recogniser refused it.
+    out.refused.sort_by_key(|&(marker, ..)| marker);
+    out.refused.dedup_by_key(|&mut (marker, ..)| marker);
+    out.refused.retain(|&(marker, ..)| {
+        matched
+            .binary_search_by_key(&marker, |&(bound, ..)| bound)
+            .is_err()
+    });
 
     // Deduplicated: a device with two terminals on one net attaches once.
     let mut attach: Vec<(NetId, DeviceId)> = Vec::with_capacity(bound.len());
@@ -446,6 +483,7 @@ fn clear(out: &mut DeviceTable) {
     out.terminal_role.clear();
     out.param_start.clear();
     out.param.clear();
+    out.refused.clear();
     out.net_start.clear();
     out.net_device.clear();
     out.terminal_start.push(0);

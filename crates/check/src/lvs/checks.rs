@@ -1,8 +1,8 @@
 //! LVS rows for the report: the layout-only checks, which need no reference
 //! netlist, and the mapping of a comparison's discrepancies to violations.
 //!
-//! Data in: the extracted tables and the unreduced layout graph. Data out: eight
-//! run rows and their violations. Deck-limited checks record `Skipped`.
+//! Data in: the extracted tables and the unreduced layout graph. Data out: five
+//! run rows and their violations.
 
 use crate::erc::first_vertex;
 use crate::lvs::graph::{narrow, Graph};
@@ -93,9 +93,15 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   layer. No path between the two labels is traced (catalog LVS-005).
 ///   Measured 2 against a limit of 1. Examines every binding of a name to a
 ///   net. Catalog: LVS-001.
-/// - `lvs.terminal_net`: a terminal of `layout` on no net, or on a net past
-///   its net table. Measured the net count against the count the terminal
-///   would need. Examines every terminal. Catalog: LVS-004.
+/// - `lvs.terminal_net`: a device marker no recogniser could bind
+///   ([`DeviceTable::refused`]): a terminal layer with no polygon under it,
+///   or more distinct nets under it than the recogniser has positions on
+///   that layer (two gates under one implant). Shape: the marker,
+///   located at its first vertex on its layer. Measured the terminals bound
+///   against the count listed. Also a terminal of `layout` on no net, or on a
+///   net past its net table, which a hand-built graph can hold: measured the
+///   net count against the count the terminal would need. Examines every
+///   terminal and every refused marker. Catalog: LVS-004.
 /// - `lvs.terminal_count`: a device whose terminal count its kind does not
 ///   allow: MOS 3 or 4 (bulk optional), BJT 3, resistor, capacitor and diode
 ///   2. The deck does not fix a recogniser's layer count, so this is where a
@@ -106,8 +112,6 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///
 /// # Limits
 ///
-/// - `lvs.terminal_net` cannot fire on a graph built by `from_layout`:
-///   [`recognise_into`] drops any marker with a terminal on no net.
 /// - Per-model device counts and parameter ranges are not checked: the deck
 ///   has no syntax for their limits (catalog LVS-068). No row is recorded for
 ///   them, because no deck configures them; a row that could only ever be
@@ -116,9 +120,9 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// # Panics
 ///
 /// Panics if a device terminal names a net past `design.nets`, or a port
-/// binding a polygon past `design.store`.
+/// binding or a refused marker a polygon past `design.store`.
 ///
-/// [`recognise_into`]: crate::topology::device::recognise_into
+/// [`DeviceTable::refused`]: crate::topology::DeviceTable::refused
 pub fn check_layout(
     layout: &Graph,
     design: Design<'_>,
@@ -134,6 +138,7 @@ pub fn check_layout(
     check_net_seed_conflicts(design, ports, strings, out, runs);
     check_topology(
         layout,
+        design,
         (id("lvs.terminal_net"), id("lvs.terminal_count")),
         out,
         runs,
@@ -309,6 +314,7 @@ pub fn check_net_seed_conflicts(
 /// CSR is `Refused` rather than reported clean.
 fn check_topology(
     graph: &Graph,
+    design: Design<'_>,
     (terminal_net, terminal_count): (StrId, StrId),
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
@@ -327,13 +333,23 @@ fn check_topology(
             net.saturating_add(1),
         ));
     }
+    // A marker recognition refused never reaches the graph: it is reported
+    // here, on the marker, rather than missing silently.
+    let refused = &design.devices.refused;
+    for &(marker, bound, listed) in refused {
+        out.push(Violation {
+            layer: design.store.poly_layer(marker),
+            at: first_vertex(design.store, marker),
+            ..graph_violation(terminal_net, (marker, None), bound, listed)
+        });
+    }
     record_run(
         runs,
         out,
         before,
         terminal_net,
         Outcome::Ran,
-        graph.terminal_net.len() as u64,
+        (graph.terminal_net.len() + refused.len()) as u64,
     );
 
     let before = out.len();

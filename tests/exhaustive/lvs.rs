@@ -1676,8 +1676,8 @@ fn layout_rows() -> Vec<Fixture> {
     fixture.reference = Some(spice(&shorted));
     out.push(fixture);
 
-    // F32, LVS-004: a MOS drawn without its drain is malformed, and must be
-    // reported rather than silently not be a device.
+    // F32 (fixed in B9), LVS-004: a MOS drawn without its drain is malformed,
+    // and is reported rather than silently not a device.
     let mut layout = draw(&one);
     layout.shapes.retain(|(layer, _)| layer != "diff");
     let layout = layout.rect("diff", 0, 0, SD + 150, 1000);
@@ -1688,12 +1688,11 @@ fn layout_rows() -> Vec<Fixture> {
             layout,
             spice(&one),
         )
-        .expect(Expect::rule("lvs.terminal_net", vec![Finding::any()]))
-        .known("F32"),
+        .expect(Expect::rule("lvs.terminal_net", vec![Finding::any()])),
     );
 
-    // F33, LVS-004: a resistor pad drawn twice is one pad, whichever copy
-    // comes first.
+    // F33 (fixed in B9), LVS-004: a resistor pad drawn twice is one pad,
+    // whichever copy comes first.
     let res = Circuit::new(2, vec![Dev::pins(R, &[0, 1])]);
     let (x0, y0, x1, y1) = pad(0, 0);
     let twice = (
@@ -1710,8 +1709,7 @@ fn layout_rows() -> Vec<Fixture> {
     );
     out.push(
         with_text("checks/pad_drawn_twice_first", rows, first, spice(&res))
-            .expect(Expect::Lvs(true))
-            .known("F33"),
+            .expect(Expect::Lvs(true)),
     );
 
     // LVS-003: two unlabelled tracks joined only through `pwell`, a soft

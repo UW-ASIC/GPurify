@@ -455,10 +455,92 @@ fn two_gates_under_one_implant_are_refused_rather_than_reported_as_one_device() 
         devices.len(),
         0,
         "one implant rectangle over two transistors is not one device: the \
-         recogniser reported {} of them, which is a transistor dropped in \
-         silence",
+         recogniser reported {} of them",
         devices.len()
     );
+    // Nor is it dropped in silence (testing-plan F32): two gate nets for one
+    // gate position and three diffusion nets for two positions bind none of
+    // the three terminals.
+    let implant = PolyId(drawn.store.polys_on_layer(Fingers::IMPLANT).start);
+    assert_eq!(devices.refused, [(implant, 0, 3)]);
+}
+
+/// One channel, its gate, and diffusion drawn as `active` (`xlo`, `xhi`
+/// pairs, in drawing order), recognised as a three-terminal MOS: the
+/// devices, and the nets of the gate and of each diffusion rectangle.
+fn one_channel(active: &[(i64, i64)]) -> (DeviceTable, NetId, Vec<NetId>) {
+    const CHANNEL: LayerId = LayerId(0);
+    const POLY: LayerId = LayerId(1);
+    const ACTIVE: LayerId = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(CHANNEL, 200, 0, 250, 200);
+    let gate = layout.rect(POLY, 200, -50, 250, 250);
+    let drawn: Vec<_> = active
+        .iter()
+        .map(|&(xlo, xhi)| layout.rect(ACTIVE, xlo, 0, xhi, 200))
+        .collect();
+    let (store, ids) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![POLY, ACTIVE],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        marker: vec![CHANNEL],
+        terminal_start: vec![0, 3],
+        terminal: vec![POLY, ACTIVE, ACTIVE],
+        model: vec![strings.intern("nch")],
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    let active = drawn.iter().map(|&h| nets.net_of(ids.of(h))).collect();
+    (devices, nets.net_of(ids.of(gate)), active)
+}
+
+/// Oracle: construct-from-answer, testing-plan F33. A source or a drain drawn
+/// twice is one terminal, so the channel is one device gated by its poly
+/// between the source's net and the drain's, whichever of the two is drawn
+/// twice and wherever its copy is numbered. It used to depend on numbering:
+/// a copy numbered before the other terminal's polygon took that terminal's
+/// position, and the marker was refused in silence.
+#[test]
+fn a_source_or_drain_drawn_twice_binds_wherever_its_copy_is_numbered() {
+    let (source, drain) = ((0, 200), (250, 450));
+    for active in [
+        [source, source, drain],
+        [source, drain, source],
+        [drain, source, drain],
+        [source, drain, drain],
+    ] {
+        let (devices, gate, nets) = one_channel(&active);
+        let net_of = |rect| nets[active.iter().position(|&r| r == rect).expect("drawn")];
+        let (s, d) = (net_of(source), net_of(drain));
+        assert_ne!(s, d, "source and drain are two nets");
+        assert_eq!(devices.len(), 1, "{active:?}: {:?}", devices.refused);
+        let (bound, _) = devices.terminals_of(DeviceId(0));
+        assert_eq!(bound[0], gate, "{active:?}");
+        let mut channel = [bound[1], bound[2]];
+        channel.sort_unstable();
+        let mut want = [s, d];
+        want.sort_unstable();
+        assert_eq!(channel, want, "{active:?}");
+        assert!(devices.refused.is_empty());
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F32. A channel with its drain
+/// missing has one diffusion polygon for two positions: it is no device, and
+/// it is listed as refused with the gate and source bound of three terminals,
+/// so `lvs.terminal_net` can say where it is.
+#[test]
+fn a_channel_missing_its_drain_is_listed_as_refused() {
+    let (devices, ..) = one_channel(&[(0, 200)]);
+    assert_eq!(devices.len(), 0);
+    assert_eq!(devices.refused, [(PolyId(0), 2, 3)]);
 }
 
 /// Oracle: construct-from-answer. One channel whose bulk layer is drawn

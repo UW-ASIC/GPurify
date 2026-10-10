@@ -122,7 +122,7 @@
 //! | `lvs.floating_net` | [`lvs::check_layout`] | a layout net that reaches no device | LVS-006 |
 //! | `lvs.label_conflict` | [`lvs::check_layout`] | one label on several nets | LVS-001, LVS-002 |
 //! | `lvs.net_seed_conflict` | [`lvs::check_layout`] | several labels on one net: a short between named nets | LVS-001 |
-//! | `lvs.terminal_net` | [`lvs::check_layout`] | a device terminal on no net | LVS-004 |
+//! | `lvs.terminal_net` | [`lvs::check_layout`] | a device marker no recogniser could bind, or a terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
 
 pub mod drc;

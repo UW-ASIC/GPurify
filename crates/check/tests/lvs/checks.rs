@@ -7,9 +7,10 @@
 //! *this rule ran, it examined N things, and it found nothing* — and both are
 //! asserted here every time.
 //!
-//! The extracted tables hold private fields and offer no constructor, so these
-//! tests run [`check_layout`] over empty tables and a hand-built graph, and read
-//! back the two structural rows (`lvs.terminal_net`, `lvs.terminal_count`).
+//! The extracted tables hold private fields and offer no constructor, so most
+//! of these tests run [`check_layout`] over empty tables and a hand-built graph,
+//! and read back the two structural rows (`lvs.terminal_net`,
+//! `lvs.terminal_count`); the last two build the tables they need.
 
 use crate::common;
 
@@ -251,4 +252,60 @@ fn two_names_on_one_net_are_one_seed_conflict_row_at_the_first_label() {
             );
         }
     }
+}
+
+/// Oracle: construct-from-answer, testing-plan F32. A marker recognition
+/// refused, here with 2 of its 3 terminals bound, never reaches the graph,
+/// so `lvs.terminal_net` reads it from the device table: one row on the
+/// marker, at its first vertex (200, 0) on its layer, measuring the 2
+/// terminals bound against the 3 listed. It examines the refused marker too.
+#[test]
+fn a_refused_marker_is_one_terminal_net_row_on_the_marker() {
+    use gpurify_check::report::Measurement;
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId};
+    use gpurify_testgen::LayoutBuilder;
+
+    let layer = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let marker = layout.rect(layer, 200, 0, 250, 200);
+    let (store, ids) = layout.finish();
+    let marker = ids.of(marker);
+    let mut devices = DeviceTable::default();
+    devices.refused.push((marker, 2, 3));
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let rule = strings.get("lvs.terminal_net").expect("interned");
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    check_layout(
+        &Graph::default(),
+        Design {
+            store: &store,
+            nets: &NetTable::default(),
+            devices: &devices,
+        },
+        &PortTable::default(),
+        &strings,
+        &mut out,
+        &mut runs,
+    );
+
+    let run = runs.iter().find(|run| run.rule == rule).expect("a row");
+    assert_eq!(
+        (run.outcome, run.examined, run.violations),
+        (Outcome::Ran, 1, 1)
+    );
+    let row = out.get(0);
+    assert_eq!(row.rule, rule);
+    assert_eq!(row.shapes, (marker, None));
+    let at = Point {
+        x: Dbu::new_unchecked(200),
+        y: Dbu::new_unchecked(0),
+    };
+    assert_eq!((row.at, row.layer), (at, layer));
+    assert_eq!(
+        (row.measured, row.limit),
+        (Measurement::Count(2), Measurement::Count(3))
+    );
 }
