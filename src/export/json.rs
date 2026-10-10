@@ -2,6 +2,22 @@
 //!
 //! Data in: a [`Report`] (violations, rule records, strings, grid, header). Data
 //! out: one JSON object appended to a `String`, lengths in nanometres.
+//!
+//! The object has three keys, in this order:
+//!
+//! - `header`: `tool_version`, `deck_path`, `layout_path`, and `timestamp`
+//!   (a string or `null`).
+//! - `violations`: one object per row, with `rule`, `layer` (the deck's layer
+//!   id), `severity` (`"error"` or `"warning"`), `at` (`x` and `y` in nm),
+//!   `measured` and `limit` (each `kind`, `unit` and `value`), and `shapes`
+//!   (two polygon ids, the second `null` for a one-shape violation).
+//! - `runs`: one object per rule, with `rule`, `outcome` (`ran`, `refused`,
+//!   or `skipped:` and the reason), `examined` and `violations`.
+//!
+//! Measurement units: lengths `nm`, areas `nm^2`, voltages `mV`, currents
+//! `uA`, resistances `ohm`; ratios and counts have none. Floats have six
+//! decimals and no exponent ([`format_f64`]). Keys are fixed, never derived
+//! from a map, so the bytes are deterministic.
 
 use std::fmt::Write as _;
 
@@ -14,15 +30,26 @@ use gpurify_ingest::{StrId, StrTable};
 /// mean "clean" rather than "nothing ran".
 #[derive(Debug)]
 pub struct Report<'a> {
+    /// The run's metadata, written first.
     pub header: &'a Header,
+    /// The findings, written in their own order: sort them canonically first
+    /// ([`run_checks`](crate::engine::run::run_checks) does).
     pub violations: &'a Violations,
+    /// One record per rule, written in slice order.
     pub runs: &'a [RuleRun],
+    /// Resolves every rule name. It must be the table the ids came from.
     pub strings: &'a StrTable,
+    /// Converts coordinates and measurements from database units to nm.
     pub grid: Grid,
 }
 
 /// Write a report as JSON, appended to `out`, in the table's own order. A
 /// non-finite measurement is refused before a byte is written.
+///
+/// # Errors
+///
+/// [`WriteError::Unrepresentable`] when a measured value or limit is NaN or
+/// infinite, which JSON cannot carry.
 pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteError> {
     let v = report.violations;
     let all_finite = v
@@ -162,6 +189,11 @@ fn write_json_str(text: &str, out: &mut String) {
 
 /// The one place a float becomes bytes: `{:.6}`, six decimal places, never an
 /// exponent (so anything below `5e-7` prints as `0.000000`).
+///
+/// Six decimals of the unit the caller writes in: 1 zF for a capacitance in
+/// fF, 1 µΩ for ohms. A non-finite value prints as `NaN` or `inf`, which no
+/// format here can carry: [`write_report`] refuses one, and the parasitic
+/// writers do not check.
 pub fn format_f64(value: f64, out: &mut String) {
     let _ = write!(out, "{value:.6}");
 }

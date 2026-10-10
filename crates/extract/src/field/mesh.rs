@@ -17,10 +17,14 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 /// A flat rectangular boundary element.
+///
+/// Its face is axis-aligned: a top or bottom face of a layer's extrusion, or
+/// a side face where no rectangle of the same conductor and layer abuts it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Panel {
     /// Centroid, in metres.
     pub centre: [f64; 3],
+    /// Area, in square metres.
     pub area: f64,
     /// Which conductor this panel belongs to.
     pub conductor: u32,
@@ -29,14 +33,18 @@ pub struct Panel {
 /// The meshed problem: panels in spatial order, banded by conductor.
 #[derive(Debug, Default)]
 pub struct Mesh {
+    /// Every panel, conductor by conductor, Morton-ordered within each band.
+    /// The order is the matvec's summation order, so it fixes the output bits.
     pub panel: Vec<Panel>,
     /// `panel[conductor_start[c] .. conductor_start[c + 1]]` is conductor `c`.
     pub conductor_start: Vec<u32>,
+    /// The net of each conductor, in the order it was selected.
     pub conductor_net: Vec<NetId>,
     /// Relative permittivity above each panel.
     pub epsilon: Vec<f64>,
 }
 
+/// How finely to mesh, and when to refuse.
 #[derive(Debug, Clone, Copy)]
 pub struct MeshOptions {
     /// Largest panel edge, in database units.
@@ -47,19 +55,44 @@ pub struct MeshOptions {
     pub max_panels: u32,
 }
 
+/// Why a selection could not be meshed. Each is a refusal, and the `out`
+/// buffer holds no usable mesh after one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum MeshError {
+    /// The panels would exceed [`MeshOptions::max_panels`].
     #[error("mesh would exceed the panel limit")]
     TooManyPanels,
+    /// A selected polygon is on a layer the stack does not describe: no row,
+    /// or a row whose thickness or permittivity is not positive or whose
+    /// height is not finite. The smallest such layer id is named.
     #[error("layer {0:?} has no thickness in the process stack")]
     MissingThickness(LayerId),
+    /// A selected net has no polygons.
     #[error("selected net has no geometry")]
     EmptyConductor,
+    /// The layer's polygons fail validation as rectilinear geometry, so they
+    /// cannot be cut into rectangles exactly.
     #[error("layer {0:?} is not valid rectilinear geometry, so it cannot be meshed exactly")]
     InvalidGeometry(LayerId),
 }
 
 /// Mesh the selected nets, one conductor per entry of `selected`, in that order.
+///
+/// `out` is cleared first. Each polygon is cut into disjoint rectangles,
+/// extruded from its layer's height through its thickness, and each face is
+/// cut into panels no longer than `options.max_edge` on a side (half that
+/// near another conductor).
+///
+/// # Errors
+///
+/// Every [`MeshError`]: checked net by net in selection order, and the panel
+/// budget face by face, so an over-limit mesh is refused, never truncated.
+///
+/// # Time complexity
+///
+/// *O*(P log P) in the panels, for the sort, plus a check of every rectangle
+/// against every other for proximity refinement, quadratic in the
+/// selection's rectangles.
 pub fn build_into(
     store: &GeometryStore,
     nets: &NetTable,

@@ -3,6 +3,19 @@
 //! Data in: selected nets' polygons and the process stack.
 //! Data out: the Maxwell [`CapMatrix`] — one GMRES solve per conductor at unit
 //! potential gives one column. The dense system is never formed; the matvec is the cost.
+//!
+//! The pipeline is [`mesh::build_into`], then one [`solve::refine`] per
+//! column. The free-space kernel has no images, so neither the substrate nor
+//! a dielectric interface is in the field; see the
+//! [crate docs](crate#accuracy-and-known-gaps).
+//!
+//! # Time complexity
+//!
+//! Each GMRES iteration is a dense product over every pair of panels,
+//! *O*(P²) for P panels, and there is one solve per selected net. The panel
+//! count is capped at 2²⁰: [`extract_into`] coarsens the panels until an
+//! estimate of the count fits, and the mesh is refused with
+//! [`mesh::MeshError::TooManyPanels`] if the real count still exceeds the cap.
 
 pub mod filament;
 pub mod henry;
@@ -16,21 +29,35 @@ use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
 use gpurify_ingest::deck::ProcessStack;
 
 /// The Maxwell capacitance matrix, full square so symmetry is checkable.
+///
+/// `C[i][i]` is positive, `C[i][j]` for `i ≠ j` is minus the coupling between
+/// nets `i` and `j`, and a row sums to net `i`'s capacitance to infinity. A
+/// converged solve is symmetric to about its tolerance (reciprocity), which is
+/// what [`Self::asymmetry`] measures.
 #[derive(Debug, Default)]
 pub struct CapMatrix {
-    /// Which net each row and column belongs to.
+    /// Which net each row and column belongs to, in ascending [`NetId`] order.
     pub net: Vec<NetId>,
-    /// Row-major, `n × n`, in farads.
+    /// Row-major, in farads. `n × n` from [`extract_into`]; `n` rows by one
+    /// column per driven set from [`extract_columns_into`].
     pub value: Vec<f64>,
 }
 
 impl CapMatrix {
+    /// Returns the number of rows, one per net.
     pub fn dim(&self) -> usize {
         self.net.len()
     }
 
     /// Largest relative asymmetry `|C[i][j] − C[j][i]| / |C[i][j]|`; NaN if any
     /// entry is non-finite, so a poisoned matrix fails every tolerance.
+    ///
+    /// Two exact zeros mirrored count as symmetric.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` holds fewer than `n × n` entries, which a
+    /// non-square matrix from [`extract_columns_into`] can.
     pub fn asymmetry(&self) -> f64 {
         let n = self.dim();
         let mut worst = 0.0_f64;
@@ -52,17 +79,31 @@ impl CapMatrix {
 /// What a solve achieved, measured in `f64`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Accuracy {
-    /// Residual asked for.
+    /// Relative residual every column was solved to.
     pub tolerance: f64,
+    /// GMRES iterations summed over every column, saturating at `u32::MAX`.
     pub iterations: u32,
-    /// [`CapMatrix::asymmetry`] of the result.
+    /// [`CapMatrix::asymmetry`] of the result; `0.0` for a matrix that is
+    /// not square, where it is undefined.
     pub asymmetry: f64,
 }
 
-/// Field-solve `selected` into `matrix`, rows in ascending [`NetId`] order.
+/// Field-solves `selected` into `matrix`, rows in ascending [`NetId`] order.
 ///
 /// Duplicates are kept: two conductors on one net is a singular system the
 /// solver refuses, rather than a silently smaller matrix.
+///
+/// The panel edge is the smallest length the stack states (a layer
+/// thickness or a gap between layers), coarsened until the estimated mesh
+/// fits 2²⁰ panels. Every column is solved to [`solve::Options::default`].
+///
+/// # Errors
+///
+/// [`solve::SolveError::Mesh`] when the selection cannot be meshed: a net
+/// with no polygons, a polygon on a layer the stack gives no thickness,
+/// height or permittivity, a layer whose geometry does not validate as
+/// rectilinear, or too many panels. The other variants when a column does
+/// not converge, breaks down or goes non-finite.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -78,6 +119,11 @@ pub fn extract_into(
 }
 
 /// [`extract_into`] at a caller's panel size rather than the stack-derived one.
+///
+/// # Errors
+///
+/// As [`extract_into`]. `meshing.max_panels` is the cap that
+/// [`mesh::MeshError::TooManyPanels`] enforces.
 pub fn extract_meshed_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -104,6 +150,15 @@ pub fn extract_meshed_into(
 /// the sum of their single columns, in one solve; a row is the charge induced
 /// on that conductor, which is what a windowed extraction wants: a net's row
 /// is its column, by reciprocity.
+///
+/// A driven net that is not in `selected` is ignored, so a set of only such
+/// nets gives a zero column. Returns the GMRES iterations summed over every
+/// column.
+///
+/// # Errors
+///
+/// As [`extract_into`], with `options` in place of the default tolerance and
+/// budgets.
 pub fn extract_columns_into(
     store: &GeometryStore,
     nets: &NetTable,

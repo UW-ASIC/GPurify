@@ -5,6 +5,10 @@
 //! most distant filament endpoints.
 //! Data out: [`InductMatrix`] — the port impedance diagonal at one frequency,
 //! `L = Im(Z)/ω`, `R = Re(Z)`, from a dense nodal solve of `Zb = R + jωL`.
+//!
+//! The frequency is 1 MHz: skin effect is negligible on chip there, and `ωL`
+//! still stands well above round-off next to `R`. The filament integrals are
+//! in [`crate::field::filament`].
 
 #![expect(
     clippy::needless_range_loop,
@@ -24,24 +28,41 @@ const FREQUENCY_HZ: f64 = 1e6;
 
 /// Per-net self inductance (H) and series resistance (Ω), one row per selected
 /// net in ascending [`NetId`] order.
+///
+/// Despite the name, only the diagonal is computed: each net's own port
+/// impedance. Mutual inductance between nets is not reported.
 #[derive(Debug, Default)]
 pub struct InductMatrix {
+    /// The net of each row.
     pub net: Vec<NetId>,
+    /// Series inductance between the net's port terminals, henries.
     pub l_henry: Vec<f64>,
+    /// Series resistance between the net's port terminals, ohms. At 1 MHz
+    /// and one filament per polygon this is the DC resistance.
     pub r_ohm: Vec<f64>,
 }
 
+/// Why an inductance solve was refused. Each names what is missing rather
+/// than solving without it.
 #[derive(Debug, thiserror::Error)]
 pub enum InductanceError {
+    /// A selected polygon's layer has no stack row, or a sheet resistance
+    /// that is not positive and finite, so its conductivity is unknown.
+    /// Carries the layer id.
     #[error(
         "layer {0} has no positive sheet resistance in the process stack, so \
          its conductivity is undefined and net inductance cannot be solved"
     )]
     NoSheetResistance(u16),
+    /// A selected polygon's layer has a thickness that is not positive.
+    /// Carries the layer id.
     #[error("layer {0} has no positive thickness in the process stack")]
     NoThickness(u16),
+    /// A selected net has no polygons. Carries the net id.
     #[error("net {0} has no geometry to build a filament from")]
     EmptyNet(u32),
+    /// The branch impedance matrix or the reduced nodal admittance matrix
+    /// has an exactly zero pivot column. Carries the frequency in Hz.
     #[error("singular system at frequency {0} Hz")]
     Singular(f64),
 }
@@ -50,6 +71,32 @@ pub enum InductanceError {
 type NodeKey = (i64, i64, u16);
 
 /// Solve per-net L and R for `selected` in one magnetoquasistatic solve.
+///
+/// `out` is cleared first and gets one row per selected net, in ascending
+/// [`NetId`] order. All selected nets share one solve, and each net's value
+/// is its port's self impedance with every other port open.
+///
+/// Each polygon becomes one filament along its bounding box's long side,
+/// the short side wide and the layer thickness deep. Filaments join only
+/// where their end points coincide exactly on one layer. Vias therefore join
+/// nothing, and a net drawn as touching polygons whose centre lines do not
+/// meet is several circuits. A net's port runs between its two most distant
+/// end points; when those are in different circuits, the net reports a
+/// partial or zero impedance (an L-shaped net drawn as two rectangles reads
+/// `L = 0`, `R = 0`) rather than an error.
+///
+/// # Errors
+///
+/// [`InductanceError::EmptyNet`] for a selected net with no polygons,
+/// [`InductanceError::NoSheetResistance`] or
+/// [`InductanceError::NoThickness`] for a polygon on a layer the stack does
+/// not describe, and [`InductanceError::Singular`] if either factorisation
+/// meets a zero pivot. Nets are checked in ascending order.
+///
+/// # Time complexity
+///
+/// *O*(B²) filament-pair integrals and an *O*(B³) complex factorisation for
+/// B selected polygons, then an *O*(N³) one for N filament end points.
 // ponytail: one filament per poly bbox; centerline decomposition when L-shaped nets need it.
 pub fn extract_inductance_into(
     store: &GeometryStore,

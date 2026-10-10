@@ -12,7 +12,7 @@ use gpurify_extract::ParasiticNetwork;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
 
-/// The subcircuit's name, matching what `engine` hands `gds::write_store`.
+/// The subcircuit's name, the same for every layout.
 /// Never `header.layout_path`: a path in a body is what the [`Header`] keeps out.
 const CELL: &str = "TOP";
 
@@ -41,7 +41,9 @@ const fn card_rank(role: TerminalRole) -> u8 {
 pub enum Detail {
     /// Devices and their connectivity only.
     Schematic,
-    /// Devices plus lumped per-net parasitic R and C.
+    /// Devices plus every element of the parasitic network (R, C, and L
+    /// where a net was field-solved), with each device terminal on its net's
+    /// first node.
     WithParasitics,
 }
 
@@ -51,6 +53,22 @@ pub enum Detail {
 /// or by their `NetId` where they have no name; both are canonical, so the file
 /// is a function of the layout alone. `parasitics` is the source and `detail`
 /// the decision: a network passed with [`Detail::Schematic`] is not read.
+///
+/// The subcircuit is `TOP`, its pins are the labelled nets in ascending net
+/// order, and device sizes are integers in database units (the file says
+/// so, since no grid is passed). An unlabelled net is named `n` and its id,
+/// lengthened with `_` until no label has that name. Parasitic cards are
+/// `Rp`, `Cp` or `Lp` and the element's row.
+///
+/// A label on several disconnected nets names each of them, so the file
+/// joins the pieces into one node and hides the open between them; debug
+/// builds panic on it instead.
+///
+/// # Errors
+///
+/// [`WriteError::Unrepresentable`] for a port bound to a net outside the
+/// extraction, found after the `.subckt` line is written, or a parasitic
+/// element on a node outside the network.
 pub fn write_spice(
     extraction: Extraction<'_>,
     parasitics: Option<&ParasiticNetwork>,
@@ -295,7 +313,17 @@ fn put_node(
     Ok(())
 }
 
-/// The name of one net in the emitted netlist, shared with the parasitic writers.
+/// The name of one net in the emitted SPICE netlist: its label, or `n` and
+/// its id when it has none.
+///
+/// The fallback is lengthened with `_` until no label carries it, so it never
+/// names another net. The parasitic writers do not use it: SPEF and DSPF
+/// refuse an unlabelled net instead.
+///
+/// # Panics
+///
+/// In debug builds, if `net` is [`NetId::NONE`], or if its label resolves to
+/// a different net, as a label on several disconnected nets does.
 pub fn net_name(
     net: gpurify_check::topology::NetId,
     ports: &PortTable,

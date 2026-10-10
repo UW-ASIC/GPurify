@@ -1,4 +1,8 @@
 //! The extracted parasitic network, as `SoA` node and element columns.
+//!
+//! Both extraction methods write a [`ParasiticNetwork`], and the SPEF, DSPF and
+//! SPICE writers read one. A [`NodeId`] is a row of the node columns, so it
+//! means something only inside the network that issued it.
 
 use gpurify_check::topology::NetId;
 use gpurify_geom::LayerId;
@@ -10,15 +14,23 @@ use gpurify_geom::{prefix, Capacitance, Inductance, Qty, Resistance};
 pub enum Parasitic {
     /// Series resistance between two nodes of one net.
     Resistance(Qty<Resistance, { prefix::BASE }>),
-    /// Capacitance from a net to ground.
+    /// Capacitance from a net to ground: the substrate for the closed forms,
+    /// infinity for a field solve, which models no substrate.
     GroundCap(Qty<Capacitance, { prefix::FEMTO }>),
     /// Capacitance between two different nets.
     CouplingCap(Qty<Capacitance, { prefix::FEMTO }>),
-    /// Loop or partial inductance. Only the quasi-static path produces these.
+    /// Series inductance of a field-solved net, between its two nodes. Only
+    /// the quasistatic path produces these.
     Inductance(Qty<Inductance, { prefix::PICO }>),
 }
 
 /// A node in the parasitic network: a net plus a position along it.
+///
+/// The value is a row of [`ParasiticNetwork::node_net`]. Writers name it
+/// `net:index`, where `index` counts from the first node of its net.
+/// [`quasistatic::extract_inductance_into`](crate::quasistatic::extract_inductance_into)
+/// and [`quasistatic::overlay`](crate::quasistatic::overlay) renumber nodes, so
+/// a `NodeId` read before either call is stale after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct NodeId(pub u32);
@@ -26,15 +38,50 @@ pub struct NodeId(pub u32);
 /// The extracted network, as parallel node and element columns.
 ///
 /// Invariant: every net's nodes occupy one contiguous range of `node_net`, in
-/// ascending [`NetId`]. The `extract_into` entry points establish it; [`Self::push`]
-/// does not check it.
+/// ascending [`NetId`], and the elements are in canonical order
+/// ([`Self::sort_canonical`]). The `extract_into` entry points establish both.
+/// [`Self::push`] checks neither, and the SPEF and DSPF writers refuse a
+/// network that breaks them.
+///
+/// The closed forms give a net of `n` polygons `n + 1` nodes. A field solve
+/// gives each solved net one node, or two once its inductance is solved.
+///
+/// # Examples
+///
+/// ```
+/// use gpurify_check::topology::NetId;
+/// use gpurify_extract::network::NodeId;
+/// use gpurify_extract::{Parasitic, ParasiticNetwork};
+/// use gpurify_geom::{LayerId, Qty};
+///
+/// // Net 0 has nodes 0 and 1, net 1 has node 2.
+/// let mut network = ParasiticNetwork::default();
+/// network.node_net = vec![NetId(0), NetId(0), NetId(1)];
+/// network.node_layer = vec![LayerId(3); 3];
+/// network.push(NodeId(0), Some(NodeId(2)), Parasitic::CouplingCap(Qty::new(0.5)));
+/// network.push(NodeId(0), Some(NodeId(1)), Parasitic::Resistance(Qty::new(12.0)));
+/// network.push(NodeId(0), None, Parasitic::GroundCap(Qty::new(2.0)));
+/// network.sort_canonical();
+///
+/// // Ground first, then by far node.
+/// assert_eq!(network.to, [None, Some(NodeId(1)), Some(NodeId(2))]);
+/// // A coupling capacitance counts on both of its nets, in fF.
+/// assert_eq!(network.capacitance_per_net(), [2.5, 0.5]);
+/// ```
 #[derive(Debug, Default, PartialEq)]
 pub struct ParasiticNetwork {
+    /// The net of each node, indexed by [`NodeId`].
     pub node_net: Vec<NetId>,
+    /// The layer of each node, indexed by [`NodeId`]. It stands in for a
+    /// position the network does not carry: the layer of the polygon an
+    /// analytical node starts, or a field-solved net's lowest layer.
     pub node_layer: Vec<LayerId>,
-    /// One row per element. `to` is `None` for a ground capacitance.
+    /// One row per element: its near node.
     pub from: Vec<NodeId>,
+    /// Each element's far node, or `None` for ground. Only a
+    /// [`Parasitic::GroundCap`] may have `None`.
     pub to: Vec<Option<NodeId>>,
+    /// Each element's kind and magnitude.
     pub value: Vec<Parasitic>,
 }
 
@@ -54,10 +101,12 @@ fn canonical_key(from: NodeId, to: Option<NodeId>, value: Parasitic) -> Canonica
 }
 
 impl ParasiticNetwork {
+    /// Returns the number of nodes, the length of the node columns.
     pub fn node_count(&self) -> usize {
         self.node_net.len()
     }
 
+    /// Returns the number of elements, the length of the element columns.
     pub fn element_count(&self) -> usize {
         self.from.len()
     }
@@ -70,6 +119,10 @@ impl ParasiticNetwork {
         self.value.clear();
     }
 
+    /// Appends one element.
+    ///
+    /// Nothing is checked: the nodes need not exist yet, and canonical order
+    /// is lost until [`Self::sort_canonical`] runs again.
     pub fn push(&mut self, from: NodeId, to: Option<NodeId>, value: Parasitic) {
         self.from.push(from);
         self.to.push(to);
@@ -106,7 +159,13 @@ impl ParasiticNetwork {
         total
     }
 
-    /// Establish canonical element order (see `CanonicalKey`).
+    /// Sorts the elements into canonical order: by `from`, then far node with
+    /// ground first, then kind (R, ground C, coupling C, L), then the value's
+    /// bits.
+    ///
+    /// The key is total, so any permutation of the same elements sorts to the
+    /// same columns. The node columns are not touched. Takes *O*(e log e) time
+    /// and a scratch buffer of e rows.
     pub fn sort_canonical(&mut self) {
         let mut rows: Vec<(CanonicalKey, NodeId, Option<NodeId>, Parasitic)> = (0..self.from.len())
             .map(|i| {

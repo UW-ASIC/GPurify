@@ -12,16 +12,25 @@ use gpurify_geom::{celsius, prefix, Qty, Temperature};
 use gpurify_geom::{Bbox, GeometryStore, LayerId};
 
 /// Which checks to run.
+///
+/// A check left out is [`StageStatus::NotSelected`], which does not fail
+/// [`Summary::passed`], so a run with none selected passes having checked
+/// nothing. Unknown rule kinds in the deck are refused whatever is selected.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checks {
+    /// Design rules: every DRC row of the deck.
     pub drc: bool,
+    /// Electrical rules: every ERC row of the deck.
     pub erc: bool,
+    /// The layout-only LVS checks and, given a reference, the comparison.
     pub lvs: bool,
+    /// Parasitic extraction.
     pub pex: bool,
 }
 
 impl Checks {
+    /// All four, as `gpurify all` runs them.
     pub const ALL: Self = Self {
         drc: true,
         erc: true,
@@ -33,22 +42,38 @@ impl Checks {
 /// How to run.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    /// Which of the four checks to run.
     pub checks: Checks,
+    /// LVS comparison settings. Only `max_rounds` and `param_tolerance` are
+    /// read: `params` is always replaced by the names `w`, `l`, `nf` and `m`.
     pub lvs: gpurify_check::lvs::CompareOptions,
     /// Nets to field-solve for capacitance and inductance instead of the
     /// closed-form estimate. Empty means analytical extraction only.
+    ///
+    /// Each entry is a label text. A name no label carries refuses the PEX
+    /// stage. A name on several disconnected nets solves only the lowest of
+    /// them. Naming a net twice makes the solve fail with
+    /// [`EngineError::Solve`].
     pub quasistatic_nets: Vec<String>,
 }
 
 /// Whether a check ran, and if not, why. `Skipped` is not a quieter `Ran`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StageStatus {
+    /// Requested and run. Its findings, if any, are in [`Outputs`]; an LVS
+    /// mismatch still counts as run, with its discrepancies as error rows.
     Ran,
     /// Not requested.
     NotSelected,
-    /// Requested, but a required input was absent.
+    /// Requested, but a required input was absent: no reference netlist for
+    /// LVS, or a layout with no geometry for ERC. Fails [`Summary::passed`].
     Skipped(&'static str),
     /// Requested and refused: the input is outside what this tool represents exactly.
+    /// For LVS, a comparison that did not conclude; for PEX, an unknown net
+    /// name, a capacitance matrix that is not reciprocal, or an inductance
+    /// solve that refused. ERC refuses row by row instead (a supply grid that
+    /// cannot be built or solved refuses the rows that read it), and those
+    /// rows count in [`Summary::rules_skipped`]. Fails [`Summary::passed`].
     Refused(String),
 }
 
@@ -59,31 +84,47 @@ pub struct Outputs {
     pub violations: Violations,
     /// One row per rule, run or not, sorted by rule id.
     pub runs: Vec<RuleRun>,
+    /// The comparison's verdict. `Some` whenever LVS ran with a reference,
+    /// including an inconclusive comparison; `None` otherwise.
     pub lvs: Option<Verdict>,
     /// Every series or parallel merge LVS made on either side.
     pub lvs_merges: Vec<(gpurify_check::lvs::verdict::Side, gpurify_check::lvs::Merge)>,
+    /// The extracted parasitics, analytical with any field-solved nets laid
+    /// over them, in canonical order. `Some` only when PEX ran; a refused
+    /// PEX stage leaves `None`, not a partial network.
     pub parasitics: Option<ParasiticNetwork>,
 }
 
 /// What happened, at a glance. `0 violations` without `rules_skipped` is a false clean.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Summary {
+    /// Whether DRC ran.
     pub drc: StageStatus,
+    /// Whether ERC ran.
     pub erc: StageStatus,
+    /// Whether LVS ran.
     pub lvs: StageStatus,
+    /// Whether PEX ran.
     pub pex: StageStatus,
+    /// Rows in [`Outputs::violations`], errors and warnings together.
     pub violations: u32,
+    /// Violations of error severity, LVS discrepancies included. Any fails
+    /// [`Self::passed`].
     pub errors: u32,
+    /// Violations of warning severity. These do not fail [`Self::passed`].
     pub warnings: u32,
     /// Rules that ran and found nothing.
     pub rules_clean: u32,
     /// Rules that did not run. Read this before believing a clean result.
+    /// Skipped and refused rules both count, and any fails [`Self::passed`].
     pub rules_skipped: u32,
 }
 
 impl Summary {
     /// The pass criterion: no errors, no skipped rule, and no selected stage
     /// skipped or refused. An LVS mismatch arrives through `errors`.
+    ///
+    /// Warnings do not fail it. The CLI exits `0` only when this holds.
     pub fn passed(&self) -> bool {
         let denied = |status: &StageStatus| {
             matches!(status, StageStatus::Skipped(_) | StageStatus::Refused(_))
@@ -152,6 +193,21 @@ fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
 
 /// Run the selected checks. A deck that cannot become rule tables fails the whole
 /// run: a run against a wrong deck has no verdict to report.
+///
+/// The checks run once each, in the order DRC, ERC, LVS, PEX. A check that
+/// cannot run is reported in its [`StageStatus`], never as an empty result.
+/// `loaded` must come from [`load`](crate::engine::pipeline::load), and
+/// `extracted` from [`extract`](crate::engine::pipeline::extract) over it.
+///
+/// # Errors
+///
+/// - [`EngineError::Drc`]: a deck rule names a kind neither DRC nor ERC
+///   knows (checked even when neither is selected), or DRC is selected and
+///   its rules cannot be built.
+/// - [`EngineError::Erc`]: ERC is selected and its rules cannot be built.
+/// - [`EngineError::Solve`]: `quasistatic_nets` cannot be meshed, or a
+///   capacitance column does not converge. A net on a layer the stack does
+///   not describe fails here.
 pub fn run_checks(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -234,7 +290,9 @@ fn run_drc(
 }
 
 /// Classify nets, resolve intent, build and solve the supply grid, then run the
-/// rules. A supply grid that cannot be built or solved is [`StageStatus::Refused`].
+/// rules. A supply grid that cannot be built or solved refuses only the rows
+/// that read it; `erc::check` refusing the whole stage maps to
+/// [`StageStatus::Refused`].
 fn run_erc(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -438,6 +496,15 @@ fn reciprocity_refusal(accuracy: &gpurify_extract::quasistatic::Accuracy) -> Opt
 }
 
 /// Load, extract and check in one call.
+///
+/// Returns what was loaded and extracted alongside the results, since the
+/// report writers need the string table, grid and ports.
+///
+/// # Errors
+///
+/// [`EngineError::Load`] and [`EngineError::Extract`] from the first two
+/// steps, then whatever [`run_checks`] returns. An error means no verdict;
+/// a check that could not run is not an error but a [`StageStatus`].
 pub fn run(
     inputs: &Inputs,
     options: &RunOptions,
@@ -448,16 +515,22 @@ pub fn run(
     Ok((loaded, extracted, outputs, summary))
 }
 
+/// Why a run produced no report at all. The CLI prints it and exits `1`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum EngineError {
+    /// An input file could not be read or parsed.
     #[error(transparent)]
     Load(#[from] crate::engine::pipeline::LoadError),
+    /// Nets, devices or ports could not be extracted.
     #[error(transparent)]
     Extract(#[from] crate::engine::pipeline::ExtractError),
+    /// The deck's rules could not become DRC tables, or name an unknown kind.
     #[error(transparent)]
     Drc(#[from] gpurify_check::drc::DrcError),
+    /// The deck's rules could not become ERC tables.
     #[error(transparent)]
     Erc(#[from] gpurify_check::erc::ErcError),
+    /// A field solve for `quasistatic_nets` could not be meshed or did not converge.
     #[error(transparent)]
     Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
 }

@@ -2,7 +2,14 @@
 //!
 //! Every reduction is a strict ascending fold; the iteration trajectory, and so
 //! the low bits of every capacitance, depend on it.
+//!
+//! GMRES is Saad & Schultz (1986). The operator is any `Fn(x, y)` that writes
+//! `y = A x` for vectors of one length; it need not be symmetric.
 
+/// Convergence target and iteration budgets for [`gmres`] and [`refine`].
+///
+/// The default (`1e-10`, restart 50, 1000 iterations) is what the field
+/// solve uses for every column.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     /// Relative residual to reach; a worse answer is an error.
@@ -23,19 +30,36 @@ impl Default for Options {
     }
 }
 
+/// Why a field solve produced no answer. Every variant is a refusal: no
+/// capacitance is reported from a solve that did not reach its tolerance.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum SolveError {
+    /// The explicit relative residual stayed above the tolerance: the
+    /// iteration budget ran out, or a refinement pass stopped reducing it.
     #[error("did not converge: residual {residual} after {iterations} iterations")]
-    NotConverged { residual: f64, iterations: u32 },
+    NotConverged {
+        /// The explicit relative residual when the solve stopped.
+        residual: f64,
+        /// Iterations spent.
+        iterations: u32,
+    },
+    /// The Krylov basis met a direction the operator maps to zero, so the
+    /// least-squares step is singular. Carries the iteration count.
     #[error("system broke down at iteration {0}")]
     Breakdown(u32),
+    /// The operator produced a NaN or infinity, or a conductor's summed
+    /// charge is not finite. Carries the iteration count.
     #[error("the operator produced a non-finite value at iteration {0}")]
     NonFinite(u32),
+    /// The selection could not be meshed; nothing was solved.
     #[error(transparent)]
     Mesh(#[from] super::mesh::MeshError),
 }
 
 /// Krylov basis, Hessenberg, Givens and residual buffers, reused across columns.
+///
+/// Only an allocation cache: its contents mean nothing between calls, and
+/// each call resizes it to the problem at hand.
 #[derive(Debug, Default)]
 pub struct Workspace {
     krylov: Vec<f64>,
@@ -50,12 +74,31 @@ pub struct Workspace {
 pub struct Converged {
     /// True relative residual, recomputed explicitly.
     pub residual: f64,
+    /// Krylov iterations, one operator application each; the explicit
+    /// residual checks are not counted, and a [`refine`] pass counts at
+    /// least one.
     pub iterations: u32,
+    /// Restarts for [`gmres`]; refinement passes for [`refine`].
     pub restarts: u32,
 }
 
 /// Solve `A x = b` from the caller's `x`. Returns the explicitly recomputed
 /// residual, not the GMRES recurrence estimate.
+///
+/// `x` is the initial guess and holds the answer on return; it must be as
+/// long as `b`. The residual is relative to `‖b‖`, or absolute when `b` is
+/// zero. On an error, `x` keeps the progress of every completed cycle.
+///
+/// # Errors
+///
+/// [`SolveError::NotConverged`] when `max_iterations` runs out above the
+/// tolerance, [`SolveError::Breakdown`] on a singular least-squares step, and
+/// [`SolveError::NonFinite`] when the operator returns NaN or infinity.
+///
+/// # Time complexity
+///
+/// One operator application per iteration, plus *O*(n · restart) per
+/// iteration for the orthogonalisation.
 pub fn gmres(
     operator: impl Fn(&[f64], &mut [f64]) + Copy,
     b: &[f64],
@@ -257,6 +300,17 @@ fn scale_of(norm_b: f64) -> f64 {
 /// ```
 ///
 /// Stops early when a pass fails to reduce the residual.
+///
+/// `x` is the initial guess and must be as long as `b`. A pass whose inner
+/// GMRES did not converge still applies its correction, since recomputing
+/// the true residual is what decides.
+///
+/// # Errors
+///
+/// [`SolveError::NotConverged`] when the true residual is still above the
+/// tolerance after `max_iterations` or after a pass that did not reduce it.
+/// [`SolveError::Breakdown`] and [`SolveError::NonFinite`] from an inner
+/// solve end the refinement at once.
 pub fn refine(
     operator: impl Fn(&[f64], &mut [f64]) + Copy,
     b: &[f64],
@@ -320,6 +374,9 @@ pub fn refine(
 }
 
 /// True relative residual `‖b − Ax‖ / ‖b‖`; leaves `b − A x` in `scratch`.
+///
+/// The residual is absolute when `b` is zero. `scratch` is resized to
+/// `b.len()`, and its old contents are discarded.
 pub fn residual(
     operator: impl Fn(&[f64], &mut [f64]),
     b: &[f64],

@@ -2,6 +2,13 @@
 //!
 //! Data in: a canonical [`ParasiticNetwork`] plus the ports that name its nets.
 //! Data out: text appended to a `String`; an unnamed net is refused, not invented.
+//!
+//! Both formats name node `i` of a net `net:i`, counting from the net's first
+//! node, and both write in the network's canonical order. Units are fF, Ω
+//! and pH, with six decimals.
+//!
+//! A label on several disconnected nets names each of them, so their nodes
+//! share names in the file and the pieces read as one net.
 
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -169,6 +176,22 @@ fn spef_section(
 
 /// Write the network as SPEF. Every net it references must have a name: an
 /// anonymous net is [`WriteError::UnnamedNet`], not a generated placeholder.
+///
+/// IEEE 1481-1998, units `1 FF`, `1 OHM`, `1 PH`. The header carries
+/// `*DESIGN` (the layout path), `*DATE` only when the header has a
+/// timestamp, `*VERSION`, and the deck path as a comment. Then one `*D_NET`
+/// per net, in ascending net order, with the net's total capacitance
+/// (coupling included), one bidirectional `*CONN` port, and `*CAP`, `*RES`
+/// and `*INDUC` sections. A coupling capacitance is listed once, in the
+/// section of the net that holds its near node.
+///
+/// # Errors
+///
+/// [`WriteError::Unrepresentable`] for a network out of canonical order or a
+/// resistance or inductance with no far node, checked before anything is
+/// written, and for an element on a node outside the network, found while
+/// writing. [`WriteError::UnnamedNet`] for a net with no label, found while
+/// writing.
 pub fn write_spef(
     network: &ParasiticNetwork,
     ports: &PortTable,
@@ -266,6 +289,17 @@ pub fn write_spef(
 
 /// Write the network as DSPF, a flat SPICE-like form. Sub-node names come from
 /// the node's index within its net, not from allocation order.
+///
+/// DSPF 1.4 with ground net `0`. The header carries `*|DESIGN` (the layout
+/// path), `*|DATE` only when the header has a timestamp, `*|VERSION`, and
+/// the deck path as a comment. Then, per net, `*|NET` with its total
+/// capacitance and one `*|S` line per node, with the node's layer standing
+/// in for its position. Then every element as a card, `R`, `C` and `L`
+/// numbered separately from 1, capacitances in `f` and inductances in `p`.
+///
+/// # Errors
+///
+/// As [`write_spef`].
 pub fn write_dspf(
     network: &ParasiticNetwork,
     ports: &PortTable,
@@ -332,6 +366,14 @@ pub fn write_dspf(
 }
 
 /// `net:index`, the name both writers give a node.
+///
+/// `index` counts from the first node of the node's net, so it needs the
+/// network's nodes grouped by net.
+///
+/// # Errors
+///
+/// [`WriteError::Unrepresentable`] for a node outside the network, and
+/// [`WriteError::UnnamedNet`] for a net with no label.
 pub fn node_name(
     network: &ParasiticNetwork,
     node: gpurify_extract::network::NodeId,

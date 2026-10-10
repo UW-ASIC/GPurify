@@ -2,7 +2,8 @@
 //!
 //! Data in: every net's polygons, the conductor/via connectivity, the stack.
 //! Data out: a canonical [`ParasiticNetwork`] — per polygon a series R and a
-//! ground C, lateral and interlayer coupling C, and via R.
+//! ground C, lateral and interlayer coupling C, and via R. The formulas and
+//! what they leave out are in the [crate docs](crate#the-closed-forms).
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::{NetId, NetTable};
@@ -79,9 +80,34 @@ fn coupling_capacitance(
     Qty::new(coefficient_af_um * ratio / AF_PER_FF)
 }
 
-/// Extract the whole design into `out` (cleared), in canonical order.
+/// Extracts every net of the design into `out`, which is cleared first and
+/// left in canonical order.
 ///
-/// Both coupling terms are parallel-plate lower bounds (no fringing).
+/// `nets` must have been traced from `store` with `connectivity`, and `stack`
+/// is indexed by [`LayerId`]. Net `k`'s nodes follow those of nets `0..k`; a
+/// net of `n` polygons has `n + 1` nodes, chained in the order
+/// [`NetTable::polys_of`] lists them. Polygon `i` contributes a ground
+/// capacitance on node `i` and a resistor from node `i` to `i + 1`, and
+/// node `i` is that polygon's node. Coupling joins the nodes of the two
+/// polygons. A via array, the cuts that land on the same two plates (the
+/// lowest polygon id on each side), is one resistor between the plates' nodes.
+///
+/// Both coupling terms are parallel-plate (no fringing), so lateral coupling
+/// is a lower bound, and neither is shielded by what lies between the plates.
+/// An element that comes out zero or non-finite is left out, so a layer with
+/// no stack row, or a via layer whose per-cut resistance is not positive,
+/// contributes nothing instead of being refused. A cut that does not land on
+/// both of its plates is left out too.
+///
+/// # Panics
+///
+/// Panics if the nets or the nodes of the network outnumber a `u32`.
+///
+/// # Time complexity
+///
+/// Linear in the polygons, plus the spatial joins: each conductor layer
+/// against itself within ten thicknesses, each pair of conductor layers, and
+/// each via layer against its two plates.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,

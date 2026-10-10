@@ -16,11 +16,14 @@ use std::path::PathBuf;
 /// nor ignores refuses the layout.
 #[derive(Debug, Clone, Default)]
 pub struct Inputs {
+    /// The GDSII layout. Its `UNITS` record sets the grid of the whole run.
     pub layout: PathBuf,
+    /// The process deck, see
+    /// [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md).
     pub deck: PathBuf,
-    /// Absent means LVS is skipped.
+    /// The reference netlist, SPICE or Spectre. Absent means LVS is skipped.
     pub reference: Option<PathBuf>,
-    /// Absent means the intent-gated ERC rules are skipped.
+    /// The design-intent JSON. Absent means the intent-gated ERC rules are skipped.
     pub intent: Option<PathBuf>,
 }
 
@@ -28,20 +31,34 @@ pub struct Inputs {
 /// same name from the reference netlist are one `StrId`.
 #[derive(Debug)]
 pub struct Loaded {
+    /// Every name the run knows: layout first, then the deck, the reference,
+    /// the intent and the LVS report ids, so the same inputs give the same ids.
     pub strings: StrTable,
+    /// The layout's database unit. Every deck length was converted onto it
+    /// exactly, or the deck was refused.
     pub grid: Grid,
+    /// The parsed deck: layers, rules, connectivity, devices and the
+    /// parasitic stack.
     pub deck: Deck,
+    /// The flattened layout geometry, on the deck's layer ids.
     pub store: GeometryStore,
+    /// The layout's text labels, placed and bound to the polygons they name.
     pub provenance: Provenance,
+    /// The reference netlist; `Some` exactly when [`Inputs::reference`] is.
     pub reference: Option<Netlist>,
+    /// The design intent; `Some` exactly when [`Inputs::intent`] is.
     pub intent: Option<DesignIntent>,
 }
 
 /// Everything derived from what was loaded, shared read-only by all four checks.
 #[derive(Debug, Default)]
 pub struct Extracted {
+    /// Nets traced through the deck's conductors and vias.
     pub nets: NetTable,
+    /// Devices recognised from the deck's marker layers, with terminals on `nets`.
     pub devices: DeviceTable,
+    /// Net names from text labels. A name on several disconnected nets
+    /// resolves to the lowest of them through [`PortTable::net_of`].
     pub ports: PortTable,
 }
 
@@ -56,7 +73,23 @@ impl Extracted {
     }
 }
 
-/// Read every input. The grid is checked before any file is opened.
+/// Reads every input.
+///
+/// The layout's grid is read before the deck is parsed, because every deck
+/// length is converted onto it. The reference netlist's dialect is chosen by
+/// its first subcircuit opener (`subckt` for Spectre, `.subckt` for SPICE),
+/// and by the extension `.scs` or `.spectre` only when it has none.
+///
+/// # Errors
+///
+/// - [`LoadError::Deck`]: the deck cannot be read or parsed, or a limit is
+///   not a whole number of the layout's database units.
+/// - [`LoadError::Layout`]: the layout cannot be read or parsed, has no
+///   usable `UNITS` record, or has a shape on a stream pair the deck neither
+///   declares nor ignores.
+/// - [`LoadError::Label`]: a label the deck claims lands on no shape.
+/// - [`LoadError::Netlist`], [`LoadError::Intent`]: the reference or intent
+///   file cannot be read or parsed.
 pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     let source = std::fs::read_to_string(&inputs.deck).map_err(|why| {
         gpurify_ingest::DeckError::Io(format!("{}: {why}", inputs.deck.display()))
@@ -97,6 +130,9 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
 
 /// Intern every LVS report rule id, so `run_checks` (which borrows `Loaded`
 /// shared) can find them.
+///
+/// [`load`] calls it. A caller that builds a [`Loaded`] another way must
+/// call it before [`run_checks`](crate::engine::run::run_checks).
 pub fn intern_report_ids(strings: &mut StrTable) {
     gpurify_check::lvs::intern_rule_ids(strings);
 }
@@ -143,6 +179,15 @@ fn spectre_by_opener(source: &str) -> Option<bool> {
 
 /// Extract nets, recognise devices, bind ports — in that order, since devices
 /// read nets and ports bind to them.
+///
+/// # Errors
+///
+/// - [`ExtractError::Channel`]: a transistor's channel marker overlaps
+///   conductor on its source/drain layer, which would fuse source and drain
+///   into one net, or one of those layers fails geometry validation.
+/// - [`ExtractError::Port`]: one net carries two different labels (a short
+///   between two named nets), or a label sits on a shape that is on no net.
+///   The run stops with no report row for either.
 pub fn extract(loaded: &Loaded) -> Result<Extracted, ExtractError> {
     let mut out = Extracted::default();
 
@@ -168,24 +213,36 @@ pub fn extract(loaded: &Loaded) -> Result<Extracted, ExtractError> {
     Ok(out)
 }
 
+/// Why [`load`] read nothing usable. Each wraps its reader's error unchanged.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LoadError {
+    /// The GDSII layout: unreadable, malformed, no usable `UNITS`, or a shape
+    /// on an undeclared layer.
     #[error(transparent)]
     Layout(#[from] gpurify_ingest::layout::LayoutError),
+    /// The deck: unreadable, malformed, or a length off the layout's grid.
     #[error(transparent)]
     Deck(#[from] gpurify_ingest::DeckError),
+    /// The design-intent file.
     #[error(transparent)]
     Intent(#[from] gpurify_ingest::IntentError),
+    /// The reference netlist.
     #[error(transparent)]
     Netlist(#[from] gpurify_ingest::netlist::NetlistError),
+    /// A label the deck claims that lands on no shape.
     #[error(transparent)]
     Label(#[from] gpurify_ingest::LabelError),
 }
 
+/// Why [`extract`] refused the layout.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ExtractError {
+    /// Labels could not be bound to nets: two names on one net, or a label
+    /// on no net.
     #[error(transparent)]
     Port(#[from] gpurify_check::topology::port::PortError),
+    /// A transistor channel marker over live conductor, or geometry that
+    /// could not be checked for one.
     #[error(transparent)]
     Channel(#[from] gpurify_check::topology::ChannelError),
 }
