@@ -322,3 +322,65 @@ fn an_x_card_calling_a_deck_model_is_the_same_device_as_the_m_card() {
         "{none:?}"
     );
 }
+
+/// Flattening places every leaf device under the top, wired through the
+/// instance's port nets, with internal nets named by path.
+#[test]
+fn flattening_wires_instances_through_their_ports() {
+    let mut strings = StrTable::default();
+    let source = "\
+.subckt INV A Y VDD VSS
+M0 Y A mid VSS nfet
+M1 mid A VDD VDD pfet
+.ends
+.subckt BUF IN OUT VDD VSS
+X1 IN n1 VDD VSS INV
+X2 n1 OUT VDD VSS INV
+.ends
+";
+    let netlist = spice::read(source, &mut strings, &DeviceRecognition::default())
+        .expect("a two-level netlist reads");
+    let top = netlist.top().expect("BUF is the one top");
+    let flat = netlist.flatten_top(top, &mut strings).expect("no cycle");
+
+    assert_eq!(flat.subckt_count(), 1);
+    assert_eq!(strings.resolve(flat.subckt_name[0]), "BUF");
+    assert_eq!(flat.device_model.len(), 4, "two inverters of two devices");
+    let net = |id: gpurify_ingest::netlist::RefNetId| {
+        strings.resolve(flat.net_name[id.0 as usize]).to_owned()
+    };
+    let ports: Vec<String> = flat.port_net.iter().map(|&n| net(n)).collect();
+    assert_eq!(ports, ["IN", "OUT", "VDD", "VSS"]);
+    // Device 0 is X1's nfet: drain Y = n1, gate A = IN, source = X1.mid.
+    let terminals = |device: usize| -> Vec<String> {
+        let range = flat.device_terminal_start[device] as usize
+            ..flat.device_terminal_start[device + 1] as usize;
+        flat.terminal_net[range].iter().map(|&n| net(n)).collect()
+    };
+    assert_eq!(terminals(0), ["n1", "IN", "X1.mid", "VSS"]);
+    assert_eq!(terminals(2), ["OUT", "n1", "X2.mid", "VSS"]);
+}
+
+/// A subcircuit that places itself is refused, not expanded forever.
+#[test]
+fn flattening_refuses_a_cycle() {
+    let mut strings = StrTable::default();
+    let source = "\
+.subckt A x
+X1 x B
+.ends
+.subckt B x
+X1 x A
+.ends
+.subckt TOP x
+X1 x A
+.ends
+";
+    let netlist = spice::read(source, &mut strings, &DeviceRecognition::default())
+        .expect("reads: a cycle is a property of the hierarchy, not of a card");
+    let top = netlist.top().expect("TOP is the one top");
+    assert!(matches!(
+        netlist.flatten_top(top, &mut strings),
+        Err(gpurify_ingest::netlist::NetlistError::CyclicHierarchy(_))
+    ));
+}

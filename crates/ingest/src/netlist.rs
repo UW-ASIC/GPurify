@@ -61,6 +61,10 @@ pub enum NetlistError {
     /// its subcircuit's port count.
     #[error("line {}: device {1} has {2} terminals, expected {3}", .0.line)]
     TerminalCount(SourceSpan, String, u32, u32),
+    /// A subcircuit that places itself, directly or through others: the
+    /// hierarchy cannot be flattened ([`Netlist::flatten_top`]).
+    #[error("subcircuit {0} places itself through its instances")]
+    CyclicHierarchy(String),
     /// The netlist file could not be read. The readers never return it; a
     /// caller reading the file does.
     #[error("io: {0}")]
@@ -129,6 +133,14 @@ pub struct Netlist {
     /// The subcircuit each instance sits in — the caller. With `instance_of`,
     /// the only cell-to-cell edge, so the only place a cycle can be stated.
     pub instance_subckt: Vec<SubcktId>,
+    /// Each instance's name, interned (`X1`).
+    pub instance_name: Vec<StrId>,
+    /// The caller's nets each instance connects to the callee's ports, in port
+    /// order: CSR into `instance_net`, one row per instance plus a final end.
+    /// Empty when the netlist has no instances.
+    pub instance_net_start: Vec<u32>,
+    /// See `instance_net_start`.
+    pub instance_net: Vec<RefNetId>,
 
     /// One row per net, indexed by [`RefNetId`]: its name, interned.
     pub net_name: Vec<StrId>,
@@ -147,6 +159,132 @@ impl Netlist {
         let row = subckt.0 as usize;
         self.subckt_device_start[row]..self.subckt_device_start[row + 1]
     }
+    /// `top` with every instance below it expanded: one subcircuit holding
+    /// every leaf device, wired as the hierarchy wires it.
+    ///
+    /// The result has a single subcircuit, `top` under its own name and with
+    /// its own ports. Its nets are `top`'s, then each instance's internal nets
+    /// (those not on a port) under the instance path, `X1.X2.n1`, interned
+    /// into `strings`. A device keeps its kind, model and parameters, with its
+    /// terminals on the flattened nets. LVS compares devices, not cells, so a
+    /// block the schematic places by instance has to be in the comparison; a
+    /// graph built from `top`'s own devices alone would let a layout missing
+    /// that block match.
+    ///
+    /// # Errors
+    ///
+    /// [`NetlistError::CyclicHierarchy`] when a subcircuit places itself.
+    ///
+    /// # Panics
+    ///
+    /// On a `top` past [`Self::subckt_count`].
+    pub fn flatten_top(
+        &self,
+        top: SubcktId,
+        strings: &mut StrTable,
+    ) -> Result<Netlist, NetlistError> {
+        let mut out = Netlist {
+            subckt_name: vec![self.subckt_name[top.0 as usize]],
+            subckt_port_start: vec![0],
+            subckt_device_start: vec![0],
+            device_terminal_start: vec![0],
+            device_param_start: vec![0],
+            ..Netlist::default()
+        };
+        // The caller's nets for `top`: its own, under their own names.
+        let own: Vec<RefNetId> = (0..narrow(self.net_name.len()))
+            .filter(|&row| self.net_subckt[row as usize] == top)
+            .map(RefNetId)
+            .collect();
+        let mut map = vec![u32::MAX; self.net_name.len()];
+        for &net in &own {
+            map[net.0 as usize] = narrow(out.net_name.len());
+            out.net_name.push(self.net_name[net.0 as usize]);
+            out.net_subckt.push(SubcktId(0));
+        }
+        let ports = self.subckt_port_start[top.0 as usize] as usize
+            ..self.subckt_port_start[top.0 as usize + 1] as usize;
+        for &port in &self.port_net[ports] {
+            out.port_net.push(RefNetId(map[port.0 as usize]));
+        }
+        out.subckt_port_start.push(narrow(out.port_net.len()));
+        let mut on_chain = vec![false; self.subckt_count()];
+        self.expand(top, &map, "", strings, &mut on_chain, &mut out)?;
+        out.subckt_device_start.push(narrow(out.device_model.len()));
+        Ok(out)
+    }
+
+    /// Append `cell`'s devices to `out`, its nets mapped by `map` (indexed by
+    /// this netlist's net ids, `u32::MAX` for none yet), then each instance in
+    /// it, recursively, under `path`.
+    fn expand(
+        &self,
+        cell: SubcktId,
+        map: &[u32],
+        path: &str,
+        strings: &mut StrTable,
+        on_chain: &mut [bool],
+        out: &mut Netlist,
+    ) -> Result<(), NetlistError> {
+        let row = cell.0 as usize;
+        if on_chain[row] {
+            return Err(NetlistError::CyclicHierarchy(
+                strings.resolve(self.subckt_name[row]).to_owned(),
+            ));
+        }
+        on_chain[row] = true;
+        for device in self.devices_of(cell) {
+            let device = device as usize;
+            out.device_model.push(self.device_model[device]);
+            out.device_kind.push(self.device_kind[device]);
+            let terminals = self.device_terminal_start[device] as usize
+                ..self.device_terminal_start[device + 1] as usize;
+            for &net in &self.terminal_net[terminals] {
+                out.terminal_net.push(RefNetId(map[net.0 as usize]));
+            }
+            out.device_terminal_start
+                .push(narrow(out.terminal_net.len()));
+            let params = self.device_param_start[device] as usize
+                ..self.device_param_start[device + 1] as usize;
+            out.param.extend_from_slice(&self.param[params]);
+            out.device_param_start.push(narrow(out.param.len()));
+        }
+        for instance in 0..self.instance_of.len() {
+            if self.instance_subckt[instance] != cell {
+                continue;
+            }
+            let callee = self.instance_of[instance];
+            let name = strings.resolve(self.instance_name[instance]).to_owned();
+            let inner = if path.is_empty() {
+                name
+            } else {
+                format!("{path}.{name}")
+            };
+            let mut child = vec![u32::MAX; self.net_name.len()];
+            // Ports first: each takes the caller's net the instance passes.
+            let passed = self.instance_net_start[instance] as usize
+                ..self.instance_net_start[instance + 1] as usize;
+            let ports = self.subckt_port_start[callee.0 as usize] as usize
+                ..self.subckt_port_start[callee.0 as usize + 1] as usize;
+            for (&port, &net) in self.port_net[ports].iter().zip(&self.instance_net[passed]) {
+                child[port.0 as usize] = map[net.0 as usize];
+            }
+            // Every other net of the callee is new, named under the path.
+            for net in 0..self.net_name.len() {
+                if self.net_subckt[net] == callee && child[net] == u32::MAX {
+                    let local = strings.resolve(self.net_name[net]).to_owned();
+                    child[net] = narrow(out.net_name.len());
+                    out.net_name
+                        .push(strings.intern(&format!("{inner}.{local}")));
+                    out.net_subckt.push(SubcktId(0));
+                }
+            }
+            self.expand(callee, &child, &inner, strings, on_chain, out)?;
+        }
+        on_chain[row] = false;
+        Ok(())
+    }
+
     /// The one subcircuit nothing instantiates. `None` when not unique, or
     /// when there is none: `lvs` refuses, never guesses.
     pub fn top(&self) -> Option<SubcktId> {
@@ -559,11 +697,18 @@ impl Build<'_> {
         let name = self.strings.intern(head.text);
         self.out.instance_of.push(of);
         self.out.instance_subckt.push(subckt);
+        self.out.instance_name.push(name);
         self.instances.push((head.span, name, narrow(nets.len())));
-        // Not stored, but a net named only on an `X` card must still exist.
-        for net in nets {
-            self.net(net.text, subckt);
+        if self.out.instance_net_start.is_empty() {
+            self.out.instance_net_start.push(0);
         }
+        for net in nets {
+            let id = self.net(net.text, subckt);
+            self.out.instance_net.push(id);
+        }
+        self.out
+            .instance_net_start
+            .push(narrow(self.out.instance_net.len()));
         Ok(())
     }
 }

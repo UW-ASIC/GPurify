@@ -196,11 +196,11 @@ says which foundry manual, standard or tool defines each one.
 | LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open). net_seed_conflict can never fire, because port binding already errors on two names on one net (testing-plan F13) |
 | LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout) |
 | LVS-005 | Short isolation / localisation | partial | A labelled short aborts the run with only a net id (engine::pipeline::extract); no path localisation |
-| LVS-010 | Circuit without partner / hierarchical compare | missing | F1: reference X instances are dropped (lvs::graph::from_reference); false-clean risk |
+| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell |
 | LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model, so it shows as unpaired |
 | LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing |
 | LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree) |
-| LVS-017 | Subcircuit instance unpaired | missing | F1 |
+| LVS-017 | Subcircuit instance unpaired | partial | Instances are flattened, not paired as units: a missing instance shows as its devices unpaired |
 | LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | Every Pin(_) role is interchangeable, including diode anode/cathode and capacitor plates, so a reversed diode matches (testing-plan F15). User-declared equivalent pins are missing |
 | LVS-031 | Asymmetric devices (S/D not swappable) | missing | — |
 | LVS-032 | Net-name seeding (same_nets) | missing | Names neither seed refinement nor are compared (test net_names_do_not_have_to_agree) |
@@ -221,7 +221,6 @@ says which foundry manual, standard or tool defines each one.
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | No check exists: the deck has no syntax for per-model counts or parameter ranges |
-| LVS-072 | Hierarchical reference flattening | missing | F1 |
 
 ### Electrical rules (ERC)
 

@@ -483,10 +483,17 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         .map_err(|why| format!("labels: {why}"))?;
     let reference = match &fixture.reference {
         None => None,
-        Some(text) => Some(
-            gpurify_ingest::netlist::spice::read(text, &mut strings, &deck.devices)
-                .map_err(|why| format!("reference: {why}"))?,
-        ),
+        Some(text) => {
+            let netlist = gpurify_ingest::netlist::spice::read(text, &mut strings, &deck.devices)
+                .map_err(|why| format!("reference: {why}"))?;
+            // As `engine::pipeline::load` does: LVS compares the flattened top.
+            Some(match netlist.top() {
+                Some(top) => netlist
+                    .flatten_top(top, &mut strings)
+                    .map_err(|why| format!("reference: {why}"))?,
+                None => netlist,
+            })
+        }
     };
     let intent = match &fixture.intent {
         None => None,

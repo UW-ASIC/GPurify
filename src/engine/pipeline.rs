@@ -108,7 +108,16 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
 
     let reference = match &inputs.reference {
         None => None,
-        Some(path) => Some(read_reference(path, &deck.devices, &mut strings)?),
+        Some(path) => {
+            let netlist = read_reference(path, &deck.devices, &mut strings)?;
+            // LVS compares leaf devices, so a block the schematic places by
+            // instance must be in the comparison: flatten below the top. With
+            // no unique top, LVS reports that instead of guessing.
+            Some(match netlist.top() {
+                Some(top) => netlist.flatten_top(top, &mut strings)?,
+                None => netlist,
+            })
+        }
     };
     let intent = match &inputs.intent {
         None => None,

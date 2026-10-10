@@ -104,14 +104,14 @@ LVS-003	lvs	extract	Soft connections through well/substrate	KL:soft_connect; MAG
 LVS-004	lvs	extract	Malformed device (terminal count/net)	KL:ignore_extraction_errors; MAG:param_limits	lvs.terminal_count,lvs.terminal_net	implemented	SY	
 LVS-005	lvs	extract	Short isolation / localisation	CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG	ingest:port_binding	partial	SY	A labelled short aborts the run with only a net id (engine::pipeline::extract); no path localisation
 LVS-006	lvs	extract	Floating nets	KL; NG	lvs.floating_net	implemented	SY	
-LVS-010	lvs	compare	Circuit without partner / hierarchical compare	KL:circuit_mismatch,align; NG:flatten unmatched	-	missing	SY; TX:NG	F1: reference X instances are dropped (lvs::graph::from_reference); false-clean risk
+LVS-010	lvs	compare	Circuit without partner / hierarchical compare	KL:circuit_mismatch,align; NG:flatten unmatched	lvs:flatten	partial	SY; TX:NG	The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell
 LVS-011	lvs	compare	Device class only on one side	KL:device_class_mismatch; NG:equate classes	lvs.unpaired_device	implemented	SY; TX:NG	A model present on one side only leaves its devices unpaired
 LVS-012	lvs	compare	Missing / extra device	KL:device_mismatch; NG	lvs.unpaired_device,lvs.class_imbalance	implemented	SY; TX:NG; MR	Corpus never asserts the verdict (F2)
 LVS-013	lvs	compare	Paired device with a different class/model	KL:match_devices_with_different_device_classes	lvs.unpaired_device	partial	SY	Pairing requires the same kind and model, so it shows as unpaired
 LVS-014	lvs	compare	Parameter mismatch with tolerance	KL:tolerance,ignore_parameter; NG:property tolerance	lvs.parameter_mismatch	partial	SY; TX:NG	One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing
 LVS-015	lvs	compare	Missing / extra / miswired net	KL:net_mismatch; NG	lvs.unpaired_net,lvs.terminal_mismatch,lvs.class_imbalance	implemented	SY; TX:NG; MR	
 LVS-016	lvs	compare	Pin / port mismatch	KL:pin_mismatch; NG:Port counts	lvs.unpaired_net	partial	SY; TX:NG	Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree)
-LVS-017	lvs	compare	Subcircuit instance unpaired	KL:subcircuit_mismatch; NG	-	missing	SY	F1
+LVS-017	lvs	compare	Subcircuit instance unpaired	KL:subcircuit_mismatch; NG	lvs:flatten	partial	SY	Instances are flattened, not paired as units: a missing instance shows as its devices unpaired
 LVS-018	lvs	compare	Symmetric / ambiguous matching	KL:match_ambiguous_nets; NG:symmetry by property	lvs:tie_break	implemented	MR; TX:NG	Closest-parameter tie-break matches netgen
 LVS-019	lvs	compare	Verdict classes	KL:NetlistCrossReference status; NG	lvs:verdict	implemented	SY	Match / Mismatch / Inconclusive{RoundLimit, AmbiguousTop}
 LVS-020	lvs	compare	Undeclared parameter	-	lvs.undeclared_param	implemented	SY	GPurify-specific
@@ -142,7 +142,7 @@ LVS-067	lvs	device	Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, E
 LVS-068	lvs	device	Device-count and parameter-range limits (devices per model, W/L inside the model's valid range)	MAG:param_limits; IHP:npn13G2.bR; GF:App.A	-	missing	FR; SY	No check exists: the deck has no syntax for per-model counts or parameter ranges
 LVS-070	lvs	netlist	SPICE / CDL reader	ngspice manual; KL:NetlistSpiceReader	ingest:spice	implemented	SY; fuzz	No open authoritative CDL spec
 LVS-071	lvs	netlist	Spectre reader	-	ingest:spectre	implemented	SY; fuzz	
-LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	-	missing	SY	F1
+LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	lvs:flatten	implemented	SY	Netlist::flatten_top expands every instance below the top at load; a cycle is refused
 LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	out_of_scope	-	Single-die only
 ERC-A1	erc	antenna	Per-layer area ratio (PAR)	LEF:App.C; IHP:Ant.a; SKY:antenna	antenna	implemented	CF; SE:LEF PAR 2.0/1.0; FR; TX:OR,MAG	
 ERC-A2	erc	antenna	Side-area (sidewall) ratio	LEF:App.C; GF:ANT.1-7; SKY:antenna vertical	antenna	implemented	CF; FR	

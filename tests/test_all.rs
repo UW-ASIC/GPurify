@@ -193,11 +193,37 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
     common::report_domain("LVS", corpus.lvs.cases.len(), &failed);
 }
 
+/// Oracle: the circuit, not its hierarchy. LVS_INV's inverter placed by
+/// instance matches the flat cell, and a schematic that also places a second,
+/// undrawn inverter by instance does not (testing-plan F1: the instance used to
+/// be dropped, so the missing block matched).
+#[test]
+fn a_block_placed_by_instance_is_compared_like_one_drawn_flat() {
+    let lvs = Checks {
+        drc: false,
+        erc: false,
+        lvs: true,
+        pex: false,
+    };
+    let verdict = |reference: &str| {
+        common::run_case_with_reference("lvs", "LVS_CLEAN_MATCH", lvs, reference)
+            .expect("the cell and the reference load")
+            .outputs
+            .lvs
+            .map(|verdict| matches!(verdict, gpurify::check::lvs::Verdict::Match))
+    };
+    assert_eq!(verdict("lvs_refs/hier/inv_by_instance.spice"), Some(true));
+    assert_eq!(
+        verdict("lvs_refs/hier/inv_and_missing_block.spice"),
+        Some(false)
+    );
+}
+
 /// Oracle: construct-from-answer. A real extraction and a real reference netlist
-/// through the LVS stage, and the eight run rows that say which of its checks
+/// through the LVS stage, and the five run rows that say which of its checks
 /// executed.
 #[test]
-fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows() {
+fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_five_run_rows() {
     let checks = Checks {
         drc: false,
         erc: false,

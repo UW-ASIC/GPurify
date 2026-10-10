@@ -46,7 +46,7 @@ A layer without one is not a test.
 
 | # | Finding | Where | Why it matters |
 |---|---|---|---|
-| F1 | **Subcircuit instances in the reference netlist are dropped from the LVS graph.** `from_reference` takes only the top subcircuit's own devices; `X` cards are parsed (`netlist.rs:506`) but never flattened. | `crates/check/src/lvs/graph.rs:180`, called from `src/engine/run.rs:333` | A layout missing a whole sub-block that the schematic places by `X` instance can match. This is a false clean, the worst LVS bug class. |
+| F1 | **Subcircuit instances in the reference netlist are dropped from the LVS graph.** `from_reference` takes only the top subcircuit's own devices; `X` cards are parsed (`netlist.rs:506`) but never flattened. | `crates/check/src/lvs/graph.rs:180`, called from `src/engine/run.rs:333` | A layout missing a whole sub-block that the schematic places by `X` instance can match. This is a false clean, the worst LVS bug class. **Fixed in B2:** the reference is flattened below its top at load (`Netlist::flatten_top`). |
 | F2 | **The LVS corpus never asserts `expect_match`.** Its 16 cases check only device and net counts. Inside the corpus the full compare runs once, on `lvs_inv.cdl` (`test_all.rs:197`). Outside it, `tests/engine/main.rs:193,450,467` and the 22 tests in `crates/check/tests/lvs/compare.rs` check verdicts on hand-built graphs. | `tests/common/mod.rs:1053-1106`, stated in `crates/check/tests/lvs/reduce.rs:4-7` | The corpus cells, the ones with derived answers, have no verdict oracle. |
 | F3 | GDS hierarchy traversal recurses with a cycle check but **no depth limit**. | `crates/ingest/src/layout.rs:1313` (`visit`) | A deep, legal hierarchy overflows the stack. This is the same class as SQLite's `median()` quicksort bug: found after full coverage and fuzzing, because fuzzers prefer small inputs. |
 | F4 | The corpus GDS uses **invented layer numbers** (1/0–14/0) and a synthetic deck (`params.deck`). The README calls it "real GDSII cells drawn for a real PDK". | `tests/fixtures/_source/conformance.gds`, `README.md` Accuracy section | The shipped foundry decks (`pdks/*.deck`) run only on hand-drawn rectangles for a few rules (`tests/sky130_rules.rs`, `tests/engine/main.rs:397`, `tests/derived_layers.rs:287`), never on foundry test structures or real designs. Spec misunderstanding of a foundry rule is the class nothing currently sees. |
@@ -405,7 +405,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B8 | LVS: rows only for configured checks, so a clean LVS run can pass | F17 | done |
 | R1 | Rustdoc pass. Crate docs that explain the project; every DRC/ERC kind and LVS discrepancy documented with its definition (what it measures, deck spelling, the foundry and tool sources from check-sources.md, the catalog id); `missing_docs` and broken intra-doc links denied by crate attributes, so `cargo doc` alone enforces it | user direction | done |
 | B1 | LVS: every corpus case asserts its verdict against its own reference netlist (the planted-fault matrix moves to X5) | F2, L2 | done |
-| B2 | LVS: flatten reference `X` instances | F1 | todo |
+| B2 | LVS: flatten reference `X` instances | F1 | done |
 | B3 | LVS: diode/capacitor polarity | F15 | todo |
 | B4 | LVS: series reduction symmetric between sides | F12 | todo |
 | B5 | LVS: dead `net_seed_conflict`; labelled short reported, not aborted; split-name lookup | F13, F14 | todo |
