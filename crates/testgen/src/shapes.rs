@@ -2,13 +2,20 @@
 //!
 //! Coordinates are computed in plain `i64` and wrapped through [`dbu`] at the
 //! last moment. Every outer boundary is counter-clockwise and every hole is
-//! clockwise, the canonical winding `core::view` establishes.
+//! clockwise, the canonical winding [`gpurify_geom::view`] establishes. Each
+//! shape function returns `(xs, ys)`, the vertex columns
+//! [`LayoutBuilder::shape`] takes, and has a closed-form area beside it to
+//! check a measurement against.
 
 use gpurify_geom::ops::Point;
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId, PolygonRef};
 
-/// Wrap an `i64` as a coordinate. `MAX_ABS_DBU` is the bound that keeps every
+/// Wraps an `i64` as a coordinate.
+///
+/// # Panics
+///
+/// Panics if `|value|` exceeds [`MAX_ABS_DBU`], the bound that keeps every
 /// `i128` area product from overflowing.
 #[must_use]
 pub fn dbu(value: i64) -> Dbu {
@@ -19,7 +26,12 @@ pub fn dbu(value: i64) -> Dbu {
     Dbu::new_unchecked(value)
 }
 
-/// Wrap a pair of `i64` as a report coordinate.
+/// Wraps a pair of `i64` as a report coordinate, such as a
+/// violation's `at`.
+///
+/// # Panics
+///
+/// Panics as [`dbu`] does.
 #[must_use]
 pub fn point(x: i64, y: i64) -> Point {
     Point {
@@ -28,14 +40,18 @@ pub fn point(x: i64, y: i64) -> Point {
     }
 }
 
-/// Wrap an `i128` as a layout area.
+/// Wraps an `i128` as a layout area, in database units squared.
 #[must_use]
 pub fn area(value: i128) -> DbuArea {
     DbuArea::new(value)
 }
 
-/// A rectangle, counter-clockwise from its lower-left corner. Empty or inverted
-/// is legal as a derived result but a bug in a generator, so it is refused.
+/// A rectangle, counter-clockwise from its lower-left corner.
+///
+/// # Panics
+///
+/// Panics unless `xlo < xhi` and `ylo < yhi`. Empty or inverted is legal as a
+/// derived result but a bug in a generator, so it is refused.
 #[must_use]
 pub fn rect(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -45,7 +61,12 @@ pub fn rect(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> (Vec<i64>, Vec<i64>) {
     (vec![xlo, xhi, xhi, xlo], vec![ylo, ylo, yhi, yhi])
 }
 
-/// The same rectangle wound clockwise: a hole.
+/// The same rectangle wound clockwise: a hole, pushed as its own polygon on
+/// the layer of the shape it cuts.
+///
+/// # Panics
+///
+/// Panics as [`rect`] does.
 #[must_use]
 pub fn hole(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> (Vec<i64>, Vec<i64>) {
     let (xs, ys) = rect(xlo, ylo, xhi, yhi);
@@ -55,9 +76,14 @@ pub fn hole(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> (Vec<i64>, Vec<i64>) {
     )
 }
 
-/// An L, with both arms of length `arm` and both of width `thickness`, the
-/// inner corner at `(x, y)`. Outside `0 < thickness < arm` it would be a
-/// rectangle or self-overlapping.
+/// An L, with both arms of length `arm` and both of width `thickness`, its
+/// outer corner at `(x, y)` and the arms running in +x and +y. Its area is
+/// [`l_shape_area`].
+///
+/// # Panics
+///
+/// Panics unless `0 < thickness < arm`; outside that it would be a rectangle
+/// or self-overlapping.
 #[must_use]
 pub fn l_shape(x: i64, y: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -78,7 +104,12 @@ pub fn l_shape_area(arm: i64, thickness: i64) -> i128 {
 }
 
 /// A plus sign centred on `(cx, cy)`: two bars of width `thickness`, each
-/// `2 * arm` long, crossing at the centre.
+/// `2 * arm` long, crossing at the centre. Its area is [`plus_shape_area`].
+///
+/// # Panics
+///
+/// Panics unless `0 < thickness < 2 * arm` and `thickness` is even, so the
+/// bars' edges are integer coordinates.
 #[must_use]
 pub fn plus_shape(cx: i64, cy: i64, arm: i64, thickness: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(
@@ -127,7 +158,12 @@ pub fn plus_shape_area(arm: i64, thickness: i64) -> i128 {
 }
 
 /// A U opening upwards, lower-left corner at `(x, y)`, overall width
-/// `2 * thickness + gap`.
+/// `2 * thickness + gap` and height `arm`. The notch is `gap` wide and runs
+/// from `y + thickness` to `y + arm`. Its area is [`u_shape_area`].
+///
+/// # Panics
+///
+/// Panics unless `gap > 0` and `0 < thickness < arm`.
 #[must_use]
 pub fn u_shape(x: i64, y: i64, arm: i64, thickness: i64, gap: i64) -> (Vec<i64>, Vec<i64>) {
     assert!(gap > 0, "a U needs a positive gap, got {gap}");
@@ -167,6 +203,10 @@ pub fn u_shape_area(arm: i64, thickness: i64, gap: i64) -> i128 {
 }
 
 /// Accumulates shapes and hands back a store plus the identity of every shape.
+///
+/// The store sorts its polygons, so a shape's [`PolyId`] is not its push
+/// order: every push returns a [`Handle`], and [`LayoutBuilder::finish`]
+/// returns the [`Ids`] that resolve handles to ids.
 #[derive(Debug)]
 pub struct LayoutBuilder {
     builder: GeometryStoreBuilder,
@@ -190,7 +230,12 @@ pub struct Ids {
 }
 
 impl Ids {
-    /// The store row a handle became. Panics on a handle from another builder.
+    /// The store row a handle became.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a handle beyond this builder's pushes. A handle from another
+    /// builder resolves silently to the wrong shape.
     #[must_use]
     pub fn of(&self, handle: Handle) -> PolyId {
         self.id[handle.0 as usize]
@@ -206,7 +251,8 @@ impl Ids {
 }
 
 impl LayoutBuilder {
-    /// Start a layout over a layer table of `layer_count` layers.
+    /// Starts a layout over a layer table of `layer_count` layers; every
+    /// pushed layer must be below it.
     #[must_use]
     pub fn new(layer_count: usize) -> Self {
         Self {
@@ -218,7 +264,13 @@ impl LayoutBuilder {
         }
     }
 
-    /// Push a coordinate run as one polygon on `layer`.
+    /// Pushes a coordinate run as one polygon on `layer`, unclosed (the first
+    /// vertex is not repeated).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the columns differ in length, there are fewer than three
+    /// vertices, or a coordinate is outside [`dbu`]'s domain.
     pub fn push(&mut self, layer: LayerId, xs: &[i64], ys: &[i64]) -> Handle {
         assert_eq!(xs.len(), ys.len(), "coordinate columns must be parallel");
         assert!(xs.len() >= 3, "a polygon needs at least three vertices");
@@ -232,12 +284,13 @@ impl LayoutBuilder {
         handle
     }
 
-    /// Push a shape from one of the free functions above.
+    /// Pushes a shape from one of the free functions above. Panics as
+    /// [`LayoutBuilder::push`] does.
     pub fn shape(&mut self, layer: LayerId, shape: &(Vec<i64>, Vec<i64>)) -> Handle {
         self.push(layer, &shape.0, &shape.1)
     }
 
-    /// Push a rectangle.
+    /// Pushes a rectangle. Panics as [`rect`] does.
     pub fn rect(&mut self, layer: LayerId, xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Handle {
         self.shape(layer, &rect(xlo, ylo, xhi, yhi))
     }
@@ -248,12 +301,14 @@ impl LayoutBuilder {
         self.pushed
     }
 
+    /// Whether nothing has been pushed.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pushed == 0
     }
 
-    /// Sort into a store and invert the permutation.
+    /// Sorts the shapes into a store and inverts the store's permutation, so
+    /// [`Ids`] can map each push's [`Handle`] to its [`PolyId`].
     #[must_use]
     pub fn finish(self) -> (GeometryStore, Ids) {
         let (store, permutation) = self.builder.finish(self.layer_count);
@@ -275,7 +330,14 @@ impl LayoutBuilder {
     }
 }
 
-/// Two rectangles of side `size` facing each other across an exact gap.
+/// Two rectangles facing each other across an exact `gap` in x, centred on
+/// `at`. Each is `size` wide and `2 * size` tall, spanning `at.1 - size` to
+/// `at.1 + size`; the left one's right edge is at `at.0 - gap / 2`. Returns
+/// (left, right).
+///
+/// # Panics
+///
+/// Panics unless `gap` is positive and even and `size` is positive.
 pub fn spaced_pair(
     layout: &mut LayoutBuilder,
     layer: LayerId,
@@ -297,6 +359,20 @@ pub fn spaced_pair(
 
 /// One layer of pseudo-random rectilinear geometry at an exactly known
 /// coverage.
+///
+/// The region, `grid.cells` square cells of side `grid.cell` from `origin`,
+/// gets at most one square per cell. A cell is filled with probability
+/// `grid.density`, and every square has side `floor(cell * sqrt(density))`
+/// (at least 1), jittered inside its cell with at least one unit of clearance
+/// on each side. So no two squares touch, the expected covered fraction is
+/// about `density²`, and the returned [`RandomLayer`] states the exact
+/// figure. The same `rng` state gives the same layer.
+///
+/// # Panics
+///
+/// Panics if `density` is outside `0.0..=1.0`, `cells` is zero, `cell` does
+/// not fit a `u32`, or a square plus two units of clearance does not fit a
+/// cell (always so at a density of 1.0).
 pub fn random_rectilinear_layer(
     layout: &mut LayoutBuilder,
     rng: &mut crate::Rng,
@@ -369,7 +445,9 @@ pub struct RandomLayerSpec {
     pub cells: u32,
     /// Side of one cell, in database units.
     pub cell: i64,
-    /// Fraction of the region to cover, in `0.0..=1.0`.
+    /// In `0.0..=1.0`: both the chance a cell is filled and the area fraction
+    /// of a filled cell its square covers, so the expected coverage is about
+    /// its square. [`RandomLayer::covered`] is exact.
     pub density: f64,
 }
 
@@ -438,7 +516,8 @@ mod tests {
     }
 }
 
-/// Signed area of a validated polygon: the outer ring minus its holes.
+/// Area of a validated polygon: the outer ring minus its holes. Positive for
+/// the canonical winding, which validation establishes.
 #[must_use]
 pub fn polygon_area(poly: PolygonRef<'_>) -> DbuArea {
     // Holes wind CW, so their doubled areas are already negative.

@@ -1,11 +1,18 @@
 //! Assertions over violation tables, rule runs and float comparisons.
+//!
+//! Each one panics with a message naming what differed, so a failing test
+//! reads as a diagnosis. Violation rows compare by exact equality in every
+//! field, floating-point measurements included; build the expected row with
+//! [`crate::violation`] so its values are the exact ones.
 
 use gpurify_check::report::{Outcome, RuleRun, Violation, Violations};
 use gpurify_check::topology::{NetId, NetTable, PortTable};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
 
-/// The net partition as comparable data: each net's polygons, by `NetId`.
+/// The net partition as comparable data: each net's polygons, by `NetId`,
+/// in the order the table holds them. Compare it with a generator's
+/// `expected_net_polys`.
 #[must_use]
 pub fn net_partition(nets: &NetTable) -> Vec<Vec<PolyId>> {
     (0..nets.net_count())
@@ -24,7 +31,12 @@ pub fn port_names(ports: &PortTable, nets: &NetTable) -> Vec<Option<StrId>> {
         .collect()
 }
 
-/// Assert two `f64` agree to an absolute tolerance.
+/// Asserts two `f64` agree to an absolute tolerance, inclusive.
+///
+/// # Panics
+///
+/// Panics if either value is not finite, or they differ by more than
+/// `tolerance`; the message names `what`, both values and the error.
 pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {
     assert!(
         actual.is_finite() && expected.is_finite(),
@@ -37,7 +49,13 @@ pub fn assert_close(what: &str, actual: f64, expected: f64, tolerance: f64) {
     );
 }
 
-/// Assert two `f64` agree to a tolerance relative to the expected magnitude.
+/// Asserts two `f64` agree to a tolerance relative to the expected magnitude:
+/// `|actual - expected| / |expected| <= tolerance`.
+///
+/// # Panics
+///
+/// Panics if either value is not finite, if `expected` is zero (use
+/// [`assert_close`]), or if the relative error exceeds `tolerance`.
 pub fn assert_close_relative(what: &str, actual: f64, expected: f64, tolerance: f64) {
     assert!(
         actual.is_finite() && expected.is_finite(),
@@ -55,7 +73,13 @@ pub fn assert_close_relative(what: &str, actual: f64, expected: f64, tolerance: 
     );
 }
 
-/// Assert a rule ran and looked at something, returning its record.
+/// Asserts a rule ran and looked at something, returning its record.
+///
+/// # Panics
+///
+/// Panics unless exactly one [`RuleRun`] names `rule`, its outcome is
+/// [`Outcome::Ran`], and it examined at least one shape: a rule that ran on
+/// nothing exercised none of its logic.
 #[must_use]
 pub fn assert_rule_ran(runs: &[RuleRun], rule: StrId) -> RuleRun {
     let matching: Vec<&RuleRun> = runs.iter().filter(|r| r.rule == rule).collect();
@@ -82,7 +106,12 @@ pub fn assert_rule_ran(runs: &[RuleRun], rule: StrId) -> RuleRun {
     run
 }
 
-/// Assert a rule ran, examined shapes, and found nothing.
+/// Asserts a rule ran, examined shapes, and found nothing.
+///
+/// # Panics
+///
+/// Panics as [`assert_rule_ran`] does, or if its record counts violations,
+/// or if any row of `violations` names `rule`; the message lists those rows.
 pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
     let run = assert_rule_ran(runs, rule);
     assert!(
@@ -104,7 +133,13 @@ pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
     );
 }
 
-/// Assert a violation table holds exactly one row, and that it is this one.
+/// Asserts a violation table holds exactly one row, and that it is this one.
+///
+/// # Panics
+///
+/// Panics listing the table if it does not hold exactly one row, or naming
+/// the first field (rule, layer, severity, `at`, measured, limit, shapes)
+/// that differs from `expected`.
 pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
     assert!(
         violations.rule.len() == 1,
@@ -115,7 +150,12 @@ pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
     assert_violation_row(violations, 0, expected);
 }
 
-/// Assert a table contains this violation, and return which row it is.
+/// Asserts a table contains this violation, and returns the first row that
+/// matches it in every field.
+///
+/// # Panics
+///
+/// Panics listing the whole table when no row matches.
 #[must_use]
 pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> usize {
     let found = (0..violations.rule.len()).find(|&i| row_matches(violations, i, expected));
@@ -128,7 +168,12 @@ pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> us
     }
 }
 
-/// Assert two violation tables are equal row for row, in order.
+/// Asserts two violation tables are equal row for row, in order.
+///
+/// # Panics
+///
+/// Panics listing both tables if their lengths differ, or naming the first
+/// row and field that differ.
 pub fn assert_violations_eq(actual: &Violations, expected: &Violations) {
     assert!(
         actual.rule.len() == expected.rule.len(),
@@ -143,7 +188,13 @@ pub fn assert_violations_eq(actual: &Violations, expected: &Violations) {
     }
 }
 
-/// Assert a run produced byte-identical output twice.
+/// Asserts a run produced byte-identical output twice.
+///
+/// # Panics
+///
+/// Panics if the bytes differ, naming `what`, both lengths, the offset of the
+/// first difference, and up to 24 bytes either side of it from each, decoded
+/// lossily as UTF-8.
 pub fn assert_bytes_identical(what: &str, first: &[u8], second: &[u8]) {
     if first == second {
         return;

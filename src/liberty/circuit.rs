@@ -5,7 +5,8 @@
 //! the simulator's ground.
 //!
 //! Two shapes. [`Wires::Lumped`] is one node per net and no wire elements: the
-//! device netlist, for DC. [`Wires::Distributed`] is a rectangle graph: every
+//! device netlist, for leakage and the static capacitance sweep.
+//! [`Wires::Distributed`] is a rectangle graph: every
 //! conductor polygon is cut into the slab rectangles [`decompose_into`] gives,
 //! each rectangle is a node, two rectangles sharing an edge are joined by the
 //! sheet resistance from centre to centre, each via cut is its own resistor, and
@@ -33,11 +34,17 @@ use gpurify_ingest::deck::DeviceKind;
 /// Where wire parasitics come from.
 #[derive(Clone, Copy)]
 pub enum Wires<'a> {
-    /// No wire elements; one node per net.
+    /// No wire elements; one node per net. What `analytical` and `field`
+    /// simulate, where wire capacitance is added separately.
     Lumped,
     /// The rectangle graph, coupling from `analytical`, rescaled to `field`.
+    /// What `spice` and `statistical` simulate.
     Distributed {
+        /// The analytical extraction of the same layout and nets. Its
+        /// polygon-pair coupling is placed between the closest rectangles.
         analytical: &'a ParasiticNetwork,
+        /// A field solve with one node per net. When given, every net's
+        /// ground and every net pair's coupling is rescaled to its totals.
         field: Option<&'a ParasiticNetwork>,
     },
 }
@@ -45,27 +52,43 @@ pub enum Wires<'a> {
 /// A device parameter value, SI.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Param {
+    /// Metres; written divided by
+    /// [`Simulator::scale`](crate::liberty::spec::Simulator::scale).
     Length(f64),
+    /// Square metres; written divided by the scale's square.
     Area(f64),
+    /// A count, such as fingers; written as is.
     Count(u32),
 }
 
+/// One device card.
 #[derive(Debug, Clone)]
 pub struct Device {
+    /// The deck's device family.
     pub kind: DeviceKind,
+    /// The deck's model name, written on the card as is.
     pub model: String,
-    /// Card order (`d g s b` for a MOS).
+    /// Card order (`d g s b` for a MOS, `c b e` for a bipolar, pins in order
+    /// otherwise).
     pub nodes: Vec<u32>,
+    /// The layout net of each terminal, in `nodes` order.
     pub nets: Vec<NetId>,
+    /// Each terminal's role, in `nodes` order.
     pub roles: Vec<TerminalRole>,
+    /// Card parameters, `(name, value)`: the recogniser's `w`, `l`, `nf`,
+    /// `area` and `perim` (`pj` on a diode). A MOS has its diffusions' `ad`,
+    /// `as`, `pd` and `ps` instead of area and perimeter, shared diffusion
+    /// split between the fingers that share it, and BSIM4 `sa` and `sb` when
+    /// its channel's direction can be told.
     pub params: Vec<(&'static str, Param)>,
 }
 
 /// The circuit, SI units.
 #[derive(Debug, Clone, Default)]
 pub struct Circuit {
-    /// Node 0 is ground.
+    /// Nodes are `0..node_count`. Node 0 is ground.
     pub node_count: u32,
+    /// Every recognised device in the layout, in device-table order.
     pub devices: Vec<Device>,
     /// `(a, b, ohms)`.
     pub resistors: Vec<(u32, u32, f64)>,
@@ -77,12 +100,22 @@ pub struct Circuit {
     pub pin_nets: Vec<Vec<NetId>>,
 }
 
+/// Why the layout could not be made into a circuit.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CircuitError {
+    /// Spec pin `.0` names no layout net: no label carries it and, when it is
+    /// the spec's `substrate`, the deck declares no substrate geometry
+    /// either (`.1` then says so).
     #[error("pin {0} names no net in the layout: no label carries it{1}")]
     MissingPin(String, &'static str),
+    /// Conductor layer `.0` is not valid rectilinear geometry (`.1` says
+    /// why), so it cannot be cut into rectangles. [`Wires::Distributed`]
+    /// only.
     #[error("layer {0} is not valid rectilinear geometry: {1}")]
     Geometry(String, String),
+    /// Net `.0`'s rectangles and via resistors fall into `.1` separate
+    /// pieces, so a terminal on a detached piece would float in simulation.
+    /// [`Wires::Distributed`] only.
     #[error(
         "net {0} falls apart into {1} unconnected pieces in the resistor network, \
          so a simulation of it would leave a terminal floating"
@@ -90,8 +123,13 @@ pub enum CircuitError {
     Disconnected(String, usize),
 }
 
-/// The layout nets each spec pin is: its label's net, plus every net holding
-/// substrate when it is the spec's `substrate`.
+/// The layout nets each spec pin is, in spec order: its label's net, plus
+/// every net holding substrate geometry when it is the spec's `substrate`.
+/// Each list is ascending and never empty.
+///
+/// # Errors
+///
+/// [`CircuitError::MissingPin`] for the first pin that names no net.
 pub fn pin_nets(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -250,7 +288,17 @@ fn as_f64(v: i64) -> f64 {
     v as f64
 }
 
-/// Build the circuit for `spec` from the extraction.
+/// Builds the circuit for `spec` from the extraction, with wires as
+/// `wires` says.
+///
+/// The result is deterministic: node numbers do not depend on hash or union
+/// order.
+///
+/// # Errors
+///
+/// [`CircuitError::MissingPin`] for a spec pin with no net, and for
+/// [`Wires::Distributed`] also [`CircuitError::Geometry`] and
+/// [`CircuitError::Disconnected`].
 pub fn build(
     loaded: &Loaded,
     extracted: &Extracted,

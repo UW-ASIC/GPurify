@@ -1,8 +1,10 @@
 //! Geometry at any size whose net partition and per-layer area are known by
 //! construction, so one corpus serves both the benchmark and the assertion.
 //!
-//! A comb per net — a rail, `fingers` stubs and a cut per stub — with nets in
-//! disjoint y bands and blocks in disjoint regions, so no two nets touch.
+//! A comb per net — a rail on the lower layer, `fingers` stubs on the upper
+//! layer and a cut per stub — with nets in disjoint y bands and blocks in
+//! disjoint regions, so no two nets touch. Rails are 200 units tall and bands
+//! 1000 apart; fingers are 120 by 600 at a 400 pitch; cuts are 80 square.
 //! Blocks are placed by recursively quartering a region with the gap scaled by
 //! level, which gives the corpus more than one spatial scale.
 
@@ -47,9 +49,16 @@ impl ScaleLayers {
 /// A corpus and everything known about it without running anything.
 #[derive(Debug)]
 pub struct ScaleCorpus {
+    /// The geometry, on a [`ScaleLayers::COUNT`]-layer table.
     pub store: GeometryStore,
+    /// Resolves the builder's handles; the expected answers already use
+    /// store ids.
     pub ids: Ids,
+    /// Which layer holds rails, fingers and cuts.
     pub layers: ScaleLayers,
+    /// The deck fragment that extracts it: rails and fingers conduct, cuts
+    /// join them, and touching shapes do not connect, so every join is through
+    /// a cut.
     pub connectivity: Connectivity,
     /// `expected_net_polys[n]` is every conductor polygon on net `n`,
     /// ascending. Cuts are not conductors and are not listed.
@@ -57,7 +66,7 @@ pub struct ScaleCorpus {
     /// Covered area per layer, indexed by `LayerId`. Exact: shapes on one
     /// layer never overlap.
     pub layer_area: [i128; ScaleLayers::COUNT],
-    /// Polygons actually emitted.
+    /// Polygons actually emitted: `nets * (1 + 2 * fingers)`, cuts included.
     pub polygons: u32,
     /// Fingers per net.
     pub fingers: u32,
@@ -83,7 +92,17 @@ const CUT_SIZE: i64 = 80;
 /// Gap between adjacent leaf blocks at the innermost level.
 const BLOCK_GAP: i64 = 4_000;
 
-/// Build the corpus.
+/// Builds the corpus `spec` describes.
+///
+/// `fingers` is `(polygons / nets - 1) / 2`, so the polygon count is rounded
+/// down to whole combs and [`ScaleCorpus::polygons`] says what was emitted.
+/// Nets are dealt round-robin over `4^(hierarchy_depth - 1)` leaf blocks and
+/// then shuffled, so a net's index says nothing about where it lies.
+///
+/// # Panics
+///
+/// Panics if `nets` or `hierarchy_depth` is zero, or `polygons` is below
+/// `3 * nets` (one rail, one finger and one cut per net).
 #[must_use]
 pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
     assert!(spec.nets > 0, "a corpus needs at least one net");

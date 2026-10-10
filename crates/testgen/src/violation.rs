@@ -13,6 +13,10 @@ use gpurify_ingest::StrId;
 use crate::shapes::{area, dbu, hole, point, rect, u_shape, Handle, Ids, LayoutBuilder};
 
 /// A measured quantity in the plain integers this crate computes in.
+///
+/// As a case's `measured`, it shapes the geometry, and each [`ShapeKind`]
+/// takes one dimension: asking for another panics. As its `limit`, it is
+/// copied into the expected violation unread.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Amount {
     /// A distance in database units.
@@ -23,14 +27,22 @@ pub enum Amount {
     Ratio(f64),
     /// A count of things.
     Count(u32),
-    /// The fixed prefixes `report::measure` chose so a column has one scale.
+    /// A voltage in mV: the fixed prefix [`Measurement::Voltage`] reports in,
+    /// chosen so a report column has one scale.
     Millivolts(f64),
+    /// A current in µA, the prefix [`Measurement::Current`] reports in.
     Microamps(f64),
+    /// A resistance in Ω, as [`Measurement::Resistance`] reports it.
     Ohms(f64),
 }
 
 impl Amount {
-    /// The frozen form.
+    /// The report's [`Measurement`] of the same quantity, as a [`Violation`]
+    /// holds it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a [`Amount::Length`] is outside [`dbu`]'s domain.
     #[must_use]
     pub fn measurement(self) -> Measurement {
         match self {
@@ -80,136 +92,283 @@ impl Amount {
 pub struct ViolationShape {
     /// The deck's id for the rule under test, interned by the caller.
     pub rule: StrId,
+    /// The severity the rule must report; copied into the expected violation.
     pub severity: Severity,
+    /// The geometry, and what `measured` means for it.
     pub kind: ShapeKind,
 }
 
 /// The geometric configuration to realise.
+///
+/// Each variant says which [`Amount`] dimension its `measured` takes, where
+/// `at` lands, and which shapes the expected violation names as its pair.
+/// It is reported on the first layer the variant names. A length that is
+/// halved to centre geometry on `at` must be positive and even, so the
+/// midpoint is a coordinate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeKind {
-    /// A rectangle `measured` wide and `run` long. `at` is its centre.
-    Width { layer: LayerId, run: i64 },
+    /// A rectangle `measured` wide in x and `run` tall, centred on `at`.
+    /// `measured`: an even [`Amount::Length`]. Shapes: the rectangle.
+    Width {
+        /// The layer drawn on and reported.
+        layer: LayerId,
+        /// The rectangle's height; even.
+        run: i64,
+    },
 
     /// A rectangle with a `measured`-long bottom edge, `body` tall. `at` is
-    /// the midpoint of that edge.
-    EdgeLength { layer: LayerId, body: i64 },
+    /// the midpoint of that edge. `measured`: an even [`Amount::Length`].
+    /// Shapes: the rectangle.
+    EdgeLength {
+        /// The layer drawn on and reported.
+        layer: LayerId,
+        /// The rectangle's height above the edge; positive.
+        body: i64,
+    },
 
-    /// Two `extent`-sided squares on one layer, facing across a gap of
-    /// `measured`. `at` is the midpoint of the gap.
-    Spacing { layer: LayerId, extent: i64 },
+    /// Two rectangles on one layer facing across a gap of `measured` in x,
+    /// each `extent` wide and `2 * extent` tall. `at` is the midpoint of the
+    /// gap. `measured`: an even [`Amount::Length`]. Shapes: (left, right).
+    Spacing {
+        /// The layer drawn on and reported.
+        layer: LayerId,
+        /// Each rectangle's width, and half its height; positive.
+        extent: i64,
+    },
 
     /// A U whose internal gap is `measured`. `at` is the centre of the notch
     /// void, which is inside the bounding box and outside the polygon.
+    /// `measured`: an even [`Amount::Length`]. Shapes: the U.
     Notch {
+        /// The layer drawn on and reported.
         layer: LayerId,
+        /// The U's height. The void runs from `thickness` to `arm` above the
+        /// U's base, so `arm + thickness` must be even.
         arm: i64,
+        /// The width of each upright and of the base; `0 < thickness < arm`.
         thickness: i64,
     },
 
     /// A line `width` wide whose end faces a wide neighbour across `measured`.
-    /// `at` is the midpoint of the gap.
+    /// `at` is the midpoint of the gap. The line runs `extent` below the gap;
+    /// the neighbour is `2 * extent` wide and `extent` tall above it.
+    /// `measured`: an even [`Amount::Length`]. Shapes: (line, neighbour).
     EndOfLine {
+        /// The layer drawn on and reported.
         layer: LayerId,
+        /// The line's width; even.
         width: i64,
+        /// The line's length, and the neighbour's height and half-width;
+        /// positive.
         extent: i64,
     },
 
     /// Two `size`-sided squares whose nearest corners are `legs` apart on the
-    /// two axes. `at` is the midpoint of the corner-to-corner segment.
+    /// two axes, the first below and left of the second. `at` is the midpoint
+    /// of the corner-to-corner segment. `measured`: an [`Amount::Length`]
+    /// that is that segment exactly, so `legs.0² + legs.1² = measured²`.
+    /// Shapes: (lower left, upper right).
     CornerToCorner {
+        /// The layer drawn on and reported.
         layer: LayerId,
+        /// Each square's side; positive.
         size: i64,
+        /// The corners' distance in x and in y; both even.
         legs: (i64, i64),
     },
 
-    /// A rectangle of area `measured` and width `width`. `at` is its centre.
-    Area { layer: LayerId, width: i64 },
-
-    /// A ring whose hole has area `measured`, of width `hole_width`, with
-    /// `margin` of material around it. `at` is the centre of the hole.
-    EnclosedArea {
+    /// A rectangle of area `measured` and width `width`, centred on `at`.
+    /// `measured`: an [`Amount::Area`] that is a whole number of
+    /// `width`-wide rows, with an even height. Shapes: the rectangle.
+    Area {
+        /// The layer drawn on and reported.
         layer: LayerId,
-        margin: i64,
-        hole_width: i64,
-    },
-
-    /// An `inner_size` square on `inner`, enclosed by a shape on `outer` that
-    /// clears it by `measured` on the left and generously elsewhere. `at` is
-    /// the midpoint of the deficient margin.
-    Enclosure {
-        outer: LayerId,
-        inner: LayerId,
-        inner_size: i64,
-    },
-
-    /// A line on `line` crossing a bar on `crossed` and running past it by
-    /// `measured`. `at` is the midpoint of the overhanging stub.
-    Extension {
-        line: LayerId,
-        crossed: LayerId,
+        /// The rectangle's width; even.
         width: i64,
     },
 
-    /// Two rectangles on two layers overlapping by `measured` in x. `at` is the
-    /// centre of the overlap.
-    Overlap { a: LayerId, b: LayerId, extent: i64 },
+    /// A ring whose hole has area `measured`, of width `hole_width`, with
+    /// `margin` of material around it. `at` is the centre of the hole.
+    /// `measured`: an [`Amount::Area`] that is a whole number of
+    /// `hole_width`-wide rows, with an even height. The hole is pushed as a
+    /// second, clockwise polygon. Shapes: the outer rectangle.
+    EnclosedArea {
+        /// The layer drawn on and reported.
+        layer: LayerId,
+        /// The ring's width on every side; positive.
+        margin: i64,
+        /// The hole's width; even.
+        hole_width: i64,
+    },
 
-    /// A shape on `a` and a shape on `b`, `measured` apart. `at` is the
-    /// midpoint of the gap — the cross-layer twin of [`ShapeKind::Spacing`].
-    Separation { a: LayerId, b: LayerId, size: i64 },
+    /// An `inner_size` square on `inner`, enclosed by a rectangle on `outer`
+    /// that clears it by `measured` on the left and by `inner_size` on every
+    /// other side. `at` is the midpoint of the deficient margin. `measured`:
+    /// an even [`Amount::Length`]. Shapes: (inner square, outer rectangle).
+    Enclosure {
+        /// The enclosing layer.
+        outer: LayerId,
+        /// The enclosed layer, which the violation is reported on.
+        inner: LayerId,
+        /// The inner square's side; positive, and even for `at` to be the
+        /// margin's exact midpoint in y.
+        inner_size: i64,
+    },
+
+    /// A line on `line` crossing a bar on `crossed` and running past the
+    /// bar's right edge by `measured`. `at` is the midpoint of that
+    /// overhanging stub. The bar is `width` wide and `4 * width` tall; the
+    /// line's other end overhangs the bar's left edge by `2 * width`, which a
+    /// limit above that also reports. `measured`: an even
+    /// [`Amount::Length`]. Shapes: (line, bar).
+    Extension {
+        /// The extending layer, which the violation is reported on.
+        line: LayerId,
+        /// The layer crossed.
+        crossed: LayerId,
+        /// The line's width; even.
+        width: i64,
+    },
+
+    /// Two rectangles on two layers overlapping by `measured` in x, each
+    /// `extent` tall and reaching `extent` past the overlap's centre. `at` is
+    /// the centre of the overlap. `measured`: an even [`Amount::Length`].
+    /// Shapes: (left on `a`, right on `b`).
+    Overlap {
+        /// The left rectangle's layer, which the violation is reported on.
+        a: LayerId,
+        /// The right rectangle's layer.
+        b: LayerId,
+        /// Each rectangle's height, and its reach past the overlap's centre;
+        /// even.
+        extent: i64,
+    },
+
+    /// A rectangle on `a` and one on `b`, `measured` apart in x, each `size`
+    /// wide and `2 * size` tall. `at` is the midpoint of the gap — the
+    /// cross-layer twin of [`ShapeKind::Spacing`]. `measured`: an even
+    /// [`Amount::Length`]. Shapes: (left on `a`, right on `b`).
+    Separation {
+        /// The left rectangle's layer, which the violation is reported on.
+        a: LayerId,
+        /// The right rectangle's layer.
+        b: LayerId,
+        /// Each rectangle's width, and half its height; positive.
+        size: i64,
+    },
 
     /// A `size` square whose lower-left corner sits `measured` off a `grid`
     /// multiple. `at` is that corner: the offending vertex, not the centre.
+    /// `measured`: an [`Amount::Length`] equal to `at.0` modulo `grid`;
+    /// `at.1` is the caller's to choose. Shapes: the square.
     OffGrid {
+        /// The layer drawn on and reported.
         layer: LayerId,
+        /// The square's side; positive.
         size: i64,
+        /// The manufacturing grid; positive.
         grid: i64,
     },
 
     /// A right triangle whose hypotenuse rises `run.1` over `run.0` at
     /// `measured` degrees. `at` is the vertex that edge leaves from.
-    Angle { layer: LayerId, run: (i64, i64) },
-
-    /// A `window`-sided window holding `filled` squares of side `cell`, so the
-    /// covered fraction is `measured`. `at` is the centre of the window.
-    Density {
+    /// `measured`: an [`Amount::Ratio`] within 1e-9 of `atan2(run.1, run.0)`
+    /// in degrees. Shapes: the triangle.
+    Angle {
+        /// The layer drawn on and reported.
         layer: LayerId,
+        /// The hypotenuse as `(dx, dy)`; neither zero.
+        run: (i64, i64),
+    },
+
+    /// A `window`-sided window centred on `at`, holding `filled` squares of
+    /// side `cell` packed in rows from its lower-left corner one unit apart,
+    /// so the covered fraction is `measured`. `measured`: an
+    /// [`Amount::Ratio`] within 1e-12 of `filled * cell² / window²`. Shapes:
+    /// the first square.
+    Density {
+        /// The layer drawn on and reported.
+        layer: LayerId,
+        /// The window's side; even.
         window: i64,
+        /// Each square's side; positive.
         cell: i64,
+        /// How many squares; at least one, and they must fit the window.
         filled: u32,
     },
 
     /// A `gate_side` square on `gate` overlapped by a metal square on `metal`,
-    /// sized so the area ratio is `measured`. `at` is the centre of the gate.
+    /// both centred on `at`, sized so the metal-to-gate area ratio is
+    /// `measured`. `measured`: an [`Amount::Ratio`] equal, within 1e-12, to
+    /// `(m / gate_side)²` for an even integer `m`, the metal's side. Shapes:
+    /// (gate, metal).
     Antenna {
+        /// The gate layer, which the violation is reported on.
         gate: LayerId,
+        /// The metal layer whose area is counted.
         metal: LayerId,
+        /// The gate square's side; even.
         gate_side: i64,
     },
 
-    /// `measured` cut squares of side `size` in a row at `pitch`. `at` is the
-    /// centre of the first cut.
-    ViaArray { cut: LayerId, size: i64, pitch: i64 },
+    /// `measured` cut squares of side `size` in a row along +x at `pitch`.
+    /// `at` is the centre of the first cut. `measured`: a positive
+    /// [`Amount::Count`]. Shapes: the first cut.
+    ViaArray {
+        /// The cut layer drawn on and reported.
+        cut: LayerId,
+        /// Each cut's side; even.
+        size: i64,
+        /// Centre-to-centre distance; above `size`.
+        pitch: i64,
+    },
 
-    /// Three `size` squares pairwise within `gap` — an odd conflict cycle, so
-    /// no two-colouring exists. `at` is the first square's centre.
-    OddCycle { layer: LayerId, size: i64, gap: i64 },
+    /// Three `size` squares at the corners of an L: the first centred on
+    /// `at`, the second `gap` to its right, the third `gap` above it. The
+    /// second and third are `gap` apart on each axis, `gap·√2` corner to
+    /// corner, so a colouring spacing above that makes all three pairs
+    /// conflict: an odd cycle, with no two-colouring. `at` is the first
+    /// square's centre. `measured`: [`Amount::Count`] of exactly 3. Shapes:
+    /// (first, second).
+    OddCycle {
+        /// The layer drawn on and reported.
+        layer: LayerId,
+        /// Each square's side; even.
+        size: i64,
+        /// The edge-to-edge distance of the axis-aligned pairs; positive.
+        gap: i64,
+    },
 }
 
 /// A layout with one violation in it, and the violation.
 #[derive(Debug)]
 pub struct ViolationCase {
+    /// The layout, on a layer table just wide enough for the layers the shape
+    /// names: the largest index plus one.
     pub store: GeometryStore,
     /// Resolves handles to the ids the store gave them.
     pub ids: Ids,
-    /// The one violation the rule must report.
+    /// The one violation the rule must report: the rule and severity asked
+    /// for, the variant's reported layer, `at`, `measured`, `limit`, and the
+    /// store ids of the shapes the variant names.
     pub expected: Violation,
     /// Every shape in the layout, the floor a `RuleRun::examined` assertion is
     /// written against.
     pub shapes: u32,
 }
 
-/// Build a layout whose only violation is the stated one.
+/// Builds a layout whose only violation is the stated one.
+///
+/// `measured` shapes the geometry, in the dimension the [`ShapeKind`] names;
+/// `limit` only fills the expected row, so the passing twin of a case is the
+/// same call with a limit the measurement satisfies. Nothing is random: the
+/// same arguments give the same layout.
+///
+/// # Panics
+///
+/// Panics when the request cannot be built exactly: `measured` in the wrong
+/// dimension, a span that is halved being odd or not positive, or any other
+/// precondition the variant states. The message says which.
 #[must_use]
 pub fn layout_with_violation(
     kind: ViolationShape,

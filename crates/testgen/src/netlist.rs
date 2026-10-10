@@ -4,7 +4,15 @@
 //! a column of stubs, and each stub reaches its rail only through a via cut.
 //! Bands never touch and columns never share x, so every adjacency is decided
 //! by construction. Every distinct [`TerminalRole`] gets its own conductor and
-//! cut layer, because `DeviceRecognition` identifies terminal `k` by layer.
+//! cut layer, because [`DeviceRecognition`] identifies terminal `k` by layer.
+//!
+//! Layer 0 holds the rails and layer 1 the device markers; each role then
+//! takes a conductor layer and a cut layer, in order of first appearance.
+//! Net `n`'s rail spans `n * band_pitch` to `n * band_pitch + rail_height`
+//! in y. Device `d`'s column starts at `x = d * column_pitch +
+//! column_pitch / 2`; each terminal is a stub there, `column_width` wide and
+//! `rail_height` tall, lying over its net's rail, with a `cut_size` cut
+//! centred in it. The device's marker spans the column across every band.
 
 use gpurify_check::topology::TerminalRole;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
@@ -16,6 +24,7 @@ use crate::shapes::{Handle, Ids, LayoutBuilder};
 /// One device to realise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceSpec {
+    /// The device family the recogniser row gets.
     pub kind: DeviceKind,
     /// Model name, interned into the caller's table.
     pub model: String,
@@ -28,6 +37,7 @@ pub struct DeviceSpec {
 pub struct NetlistSpec {
     /// How many nets exist. Every one gets a rail, floating nets included.
     pub nets: u32,
+    /// One column each, left to right in this order.
     pub devices: Vec<DeviceSpec>,
 }
 
@@ -41,7 +51,10 @@ pub struct NetlistLayers {
     /// Terminal roles in assignment order; `terminal[i]` is on `role_layer[i]`
     /// and joined to a rail by a cut on `cut_layer[i]`.
     pub roles: Vec<TerminalRole>,
+    /// The conductor layer of each role's stubs, parallel to `roles`.
     pub role_layer: Vec<LayerId>,
+    /// The cut layer joining each role's stubs to the rails, parallel to
+    /// `roles`.
     pub cut_layer: Vec<LayerId>,
     /// Total layers in the table.
     pub count: usize,
@@ -49,6 +62,10 @@ pub struct NetlistLayers {
 
 impl NetlistLayers {
     /// The conductor layer carrying a role's stubs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no device in the spec has a terminal of that role.
     #[must_use]
     pub fn layer_of(&self, role: TerminalRole) -> LayerId {
         let index = self
@@ -63,7 +80,9 @@ impl NetlistLayers {
 /// The device the layout says is there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedDevice {
+    /// The spec's device family.
     pub kind: DeviceKind,
+    /// The spec's model name, interned into the caller's table.
     pub model: StrId,
     /// The marker polygon, which also fixes the expected `DeviceId` ordering.
     pub marker: PolyId,
@@ -74,12 +93,20 @@ pub struct ExpectedDevice {
 /// A layout, the deck fragments needed to extract it, and the answer.
 #[derive(Debug)]
 pub struct NetlistCase {
+    /// The geometry, on a [`NetlistLayers::count`]-layer table.
     pub store: GeometryStore,
+    /// Resolves the builder's handles; the expected answers already use
+    /// store ids.
     pub ids: Ids,
+    /// Which layer is which.
     pub layers: NetlistLayers,
-    /// What `topology::extract_nets_into` needs.
+    /// What [`extract_nets_into`](gpurify_check::topology::net::extract_nets_into)
+    /// needs: the rail and role layers conduct, the cuts join each role layer
+    /// to the rails, and touching shapes do not connect, so a broken via
+    /// splits a net instead of being masked.
     pub connectivity: Connectivity,
-    /// What `topology::device::recognise_into` needs.
+    /// What [`recognise_into`](gpurify_check::topology::device::recognise_into)
+    /// needs: one row per device, in spec order.
     pub recognition: DeviceRecognition,
     /// `expected_net_polys[n]` is every polygon on net `n`, ascending by
     /// [`PolyId`] — the order `NetTable::polys_of` states its result in.
@@ -117,7 +144,15 @@ impl Default for Floorplan {
     }
 }
 
-/// Emit a layout realising `spec`.
+/// Emits a layout realising `spec`, interning every model name into
+/// `strings`. Deterministic: no randomness is involved.
+///
+/// # Panics
+///
+/// Panics if `spec` has no nets, a device has no terminals or names a net
+/// past `spec.nets`, or `plan` breaks one of its own rules: `band_pitch` must
+/// exceed `rail_height`, `column_pitch` must exceed `column_width`, and
+/// `cut_size` must be below both `rail_height` and `column_width`.
 #[must_use]
 pub fn layout_from_netlist(
     spec: &NetlistSpec,

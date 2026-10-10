@@ -6,6 +6,13 @@
 //!
 //! `deny_unknown_fields` throughout: a misspelled key would otherwise silently
 //! drop an arc or a corner from the model.
+//!
+//! Units: volts for every voltage, °C, ns for times and transitions, pF for
+//! loads, Hz, and percent of a pin's swing for thresholds. The format, with
+//! a worked example, is in
+//! [liberty.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/liberty.md#the-spec).
+//! Build a spec with [`parse`], never by hand: the characterizer trusts every
+//! relation [`parse`] checks.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -22,28 +29,38 @@ pub struct MacroSpec {
     /// Without it a substrate no label names floats.
     #[serde(default)]
     pub substrate: Option<String>,
+    /// The timing arcs, measured at `spice` and above. Empty: a model of
+    /// pins, capacitance and leakage only.
     #[serde(default)]
     pub arcs: Vec<ArcSpec>,
+    /// One `.lib` each, in this order. At least one.
     pub corners: Vec<CornerSpec>,
     /// The states leakage is measured in, each a sequence of vectors applied
     /// in order (a latch's state is its history, not its inputs). Empty: every
     /// arc case's preparation.
     #[serde(default)]
     pub leakage_states: Vec<Vec<Vector>>,
+    /// Table indices, thresholds and timing of every measurement.
     #[serde(default)]
     pub characterization: Characterization,
+    /// How the simulator is run and its device cards spelled.
     #[serde(default)]
     pub simulator: Simulator,
 }
 
-/// Pin values applied together. Unnamed pins keep their previous value.
+/// Pin values applied together, by pin name. Unnamed pins keep their previous
+/// value.
 pub type Vector = BTreeMap<String, Level>;
 
-/// A pin value: a logic level of the pin's related supplies, or volts.
+/// A pin value: a logic level of the pin's related supplies, or volts. In
+/// JSON, `"0"`, `"1"` or a finite number; anything else is refused.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Level {
+    /// `"0"`: the voltage of the pin's related ground.
     Low,
+    /// `"1"`: the voltage of the pin's related power.
     High,
+    /// A number: that many volts. The only value an analog pin may take.
     Volts(f64),
 }
 
@@ -71,19 +88,27 @@ impl<'de> Deserialize<'de> for Level {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinSpec {
+    /// The port name. It must match the layout's label, and the reference
+    /// `.subckt`'s port and the LEF's `PIN` when those are given, exactly.
     pub name: String,
+    /// What the pin is, which decides how it is driven and written.
     pub role: Role,
-    /// `related_power_pin`. Required for every signal pin.
+    /// `related_power_pin`: a `power` or `nwell` pin of this spec. Required
+    /// on every signal pin, forbidden on a supply; its voltage is the pin's
+    /// logic high.
     #[serde(default)]
     pub power: Option<String>,
-    /// `related_ground_pin`. Required for every signal pin.
+    /// `related_ground_pin`: a `ground` or `pwell` pin of this spec. Required
+    /// on every signal pin, forbidden on a supply; its voltage is the pin's
+    /// logic low.
     #[serde(default)]
     pub ground: Option<String>,
     /// An analog pin's direction; digital roles fix their own. Default `inout`.
     #[serde(default)]
     pub direction: Option<Direction>,
-    /// An analog pin's DC voltage while anything else is characterized, and the
-    /// operating point its capacitance is taken at.
+    /// An analog pin's DC voltage, V, while anything else is characterized,
+    /// and the operating point its capacitance is taken at. Required on an
+    /// analog pin, forbidden on any other.
     #[serde(default)]
     pub bias: Option<f64>,
     /// An output's Liberty `function`, copied through unread.
@@ -95,38 +120,56 @@ pub struct PinSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    /// A `pg_pin` of type `primary_power`, held at its corner's voltage.
     Power,
+    /// A `pg_pin` of type `primary_ground`, held at its corner's voltage.
     Ground,
+    /// A `pg_pin` of type `nwell`, a body bias; may be a signal pin's related
+    /// power.
     Nwell,
+    /// A `pg_pin` of type `pwell`, a body bias; may be a signal pin's related
+    /// ground.
     Pwell,
+    /// A digital input, driven between its related rails; `clock : false`.
     Input,
+    /// A digital input marked `clock : true`: the related pin of clocked arcs.
     Clock,
+    /// A digital output: loaded and measured, never driven.
     Output,
-    /// Direction and capacitance only, never an arc.
+    /// Direction and capacitance only, never an arc. Held at its `bias` and
+    /// marked `is_analog : true`, which `OpenSTA` does not read.
     Analog,
 }
 
 impl Role {
-    /// A `pg_pin`, not a `pin`.
+    /// Whether the pin is a `pg_pin` rather than a `pin`: power, ground or a
+    /// well, which takes a corner voltage and no related pins.
     pub const fn is_supply(self) -> bool {
         matches!(self, Self::Power | Self::Ground | Self::Nwell | Self::Pwell)
     }
 
-    /// Driven by the characterizer as a logic level.
+    /// Whether the characterizer drives the pin as a logic level: an input or
+    /// a clock. Only these may start an arc or take `"0"`/`"1"` in a vector.
     pub const fn is_digital_input(self) -> bool {
         matches!(self, Self::Input | Self::Clock)
     }
 }
 
+/// An analog pin's direction, in both the `.lib` and the Verilog blackbox.
+/// Digital roles fix their own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
+    /// Into the macro.
     Input,
+    /// Out of the macro.
     Output,
+    /// Either way: the default for an analog pin.
     Inout,
 }
 
 impl Direction {
+    /// The keyword, which Liberty and Verilog spell alike.
     pub const fn liberty(self) -> &'static str {
         match self {
             Self::Input => "input",
@@ -144,24 +187,38 @@ pub struct ArcSpec {
     pub from: String,
     /// The output of a delay arc, the constrained data pin of a constraint.
     pub to: String,
+    /// The Liberty `timing_type`, which decides whether this is a delay or a
+    /// constraint.
     pub kind: ArcKind,
+    /// At least one. Each is one measurement; when they disagree, the main
+    /// `.lib` keeps the worst at each table point and `min/` the best.
     pub cases: Vec<CaseSpec>,
 }
 
-/// Liberty `timing_type`.
+/// Liberty `timing_type`: a delay from an input or clock to an output, or a
+/// setup or hold constraint on a data pin against a clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArcKind {
+    /// Input to output with no clock. Each case names its input edge; a
+    /// self-timed `go -> done` is one of these.
     Combinational,
+    /// Clock rise to output: a clock-to-Q delay.
     RisingEdge,
+    /// Clock fall to output.
     FallingEdge,
+    /// How long before a rising clock the data must settle.
     SetupRising,
+    /// How long after a rising clock the data must hold.
     HoldRising,
+    /// How long before a falling clock the data must settle.
     SetupFalling,
+    /// How long after a falling clock the data must hold.
     HoldFalling,
 }
 
 impl ArcKind {
+    /// The `timing_type` keyword.
     pub const fn liberty(self) -> &'static str {
         match self {
             Self::Combinational => "combinational",
@@ -174,6 +231,8 @@ impl ArcKind {
         }
     }
 
+    /// Whether the arc is setup or hold: a constraint table on the data pin,
+    /// not a delay on an output.
     pub const fn is_constraint(self) -> bool {
         matches!(
             self,
@@ -181,6 +240,8 @@ impl ArcKind {
         )
     }
 
+    /// Whether the data edge is placed after the clock (hold) rather than
+    /// before it (setup).
     pub const fn is_hold(self) -> bool {
         matches!(self, Self::HoldRising | Self::HoldFalling)
     }
@@ -195,14 +256,18 @@ impl ArcKind {
     }
 }
 
+/// A signal transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Edge {
+    /// Low to high.
     Rise,
+    /// High to low.
     Fall,
 }
 
 impl Edge {
+    /// The opposite edge.
     #[must_use]
     pub const fn flip(self) -> Self {
         match self {
@@ -211,6 +276,7 @@ impl Edge {
         }
     }
 
+    /// `rise` or `fall`, as Liberty group names spell it (`cell_rise`).
     pub const fn name(self) -> &'static str {
         match self {
             Self::Rise => "rise",
@@ -245,7 +311,10 @@ pub struct CaseSpec {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Check {
+    /// The signal pin watched, usually the captured output.
     pub pin: String,
+    /// The value it must hold at the end of the trial for the capture to
+    /// count; `"0"` and `"1"` are read through that pin's rails.
     pub value: Level,
 }
 
@@ -255,14 +324,20 @@ pub struct Check {
 pub struct CornerSpec {
     /// The file's corner suffix, `tt_025C_1v80`.
     pub name: String,
+    /// Liberty `nom_process` and the operating condition's `process`; written,
+    /// never simulated. Default 1.
     #[serde(default = "one")]
     pub process: f64,
+    /// °C: the simulator's `.temp`, and the `.lib`'s `nom_temperature`.
     pub temperature: f64,
-    /// Volts on every supply pin.
+    /// Volts on every supply pin, by pin name: each supply pin needs one, and
+    /// no other pin may have one. The highest `power` pin's voltage is the
+    /// `.lib`'s `nom_voltage`.
     pub supplies: BTreeMap<String, f64>,
     /// Simulator lines that load this corner's models, written verbatim.
     pub models: Vec<String>,
-    /// The same with statistical variation switched on, for `statistical`.
+    /// The same with statistical variation switched on. Needed only, and then
+    /// for every corner, at `statistical`.
     #[serde(default)]
     pub mc_models: Vec<String>,
 }
@@ -271,32 +346,53 @@ const fn one() -> f64 {
     1.0
 }
 
-/// How each quantity is measured. Defaults are `sky130_fd_sc_hd`'s.
+/// How each quantity is measured. Defaults are `sky130_fd_sc_hd`'s tables and
+/// thresholds, so a result diffs against a shipped library. Every field is
+/// optional in JSON.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Characterization {
-    /// The 20–80 % input transitions of every delay table, ns.
+    /// Input transitions of every delay, transition and energy table, ns,
+    /// measured from `slew_lower_pct` to `slew_upper_pct`: the tables'
+    /// `index_1`. Positive and strictly ascending; the last is each input's
+    /// `max_transition`.
     pub slews_ns: Vec<f64>,
-    /// Output loads, pF.
+    /// Output loads of the same tables, pF: their `index_2`. Positive and
+    /// strictly ascending; the last is each output's `max_capacitance`.
     pub loads_pf: Vec<f64>,
-    /// Clock and data transitions of every constraint table, ns.
+    /// Clock and data transitions of every constraint table, ns: `index_1` is
+    /// the clock's, `index_2` the data pin's. Positive and strictly ascending.
     pub constraint_slews_ns: Vec<f64>,
+    /// Delay starts where the related pin crosses this percent of its swing.
+    /// Default 50.
     pub input_threshold_pct: f64,
+    /// Delay ends where the output crosses this percent of its swing; also
+    /// where a constraint's check pin is read. Default 50.
     pub output_threshold_pct: f64,
+    /// A transition is timed from this percent of the swing. In (0, 100),
+    /// below `slew_upper_pct`. Default 20.
     pub slew_lower_pct: f64,
+    /// A transition is timed to this percent of the swing. Default 80.
     pub slew_upper_pct: f64,
-    /// A constraint passes while clock-to-check delay stays within this much of
-    /// its relaxed value (`violation_delay_degrade_pct`).
+    /// A constraint passes while clock-to-check delay stays within this
+    /// percent of its relaxed value (`violation_delay_degrade_pct`). Default
+    /// 10.
     pub pushout_pct: f64,
-    /// Time each preparation vector is held, ns.
+    /// Time each preparation vector is held, ns; the measured edge comes one
+    /// period after the last. Default 2.
     pub vector_ns: f64,
-    /// The longest an output may take to respond, ns.
+    /// The longest an output may take to respond, ns. An output still not
+    /// switched by then is an error, never a long delay. Default 10.
     pub settle_ns: f64,
-    /// The widest setup or hold searched, ns either side of the clock.
+    /// The widest setup or hold searched, ns either side of the clock. A
+    /// capture that passes even this far on the wrong side is clamped to
+    /// minus this, with a note. Default 4.
     pub constraint_window_ns: f64,
-    /// Monte Carlo samples per point, `statistical` only.
+    /// Monte Carlo samples per table point, `statistical` only. At least 2.
+    /// Default 64.
     pub mc_samples: u32,
     /// Small-signal frequency an analog pin's capacitance is read at, Hz.
+    /// Default 1 MHz.
     pub analog_frequency_hz: f64,
 }
 
@@ -340,6 +436,8 @@ impl Default for Characterization {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Simulator {
+    /// The simulator executable, looked up on `PATH`. It is driven as ngspice
+    /// in pipe mode (`-p`), so it must be ngspice. Default `ngspice`.
     pub binary: String,
     /// `.option scale`: lengths are written divided by it. sky130 is `1e-6`.
     pub scale: f64,
@@ -347,7 +445,8 @@ pub struct Simulator {
     pub prefix: String,
     /// Extra `.option` lines.
     pub options: Vec<String>,
-    /// Concurrent simulator processes. Default: available parallelism.
+    /// Concurrent simulator processes; each loads the corner's models once.
+    /// Default: available parallelism. Zero is refused.
     pub workers: Option<usize>,
 }
 
@@ -363,16 +462,55 @@ impl Default for Simulator {
     }
 }
 
-/// Why a spec was refused.
+/// Why [`parse`] refused a spec. The message says which key or relation.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum SpecError {
+    /// The text is not JSON of the spec's shape: a syntax error, a missing
+    /// required key, an unknown key, a misspelled role, kind or edge, or a pin
+    /// value that is not `"0"`, `"1"` or a finite number.
     #[error("macro spec: {0}")]
     Malformed(String),
+    /// Well-formed JSON whose parts disagree, such as a signal pin with no
+    /// related supply or an arc between the wrong kinds of pin. [`parse`]
+    /// lists every relation checked.
     #[error("macro spec: {0}")]
     Invalid(String),
 }
 
-/// Parse and validate a spec.
+/// Parses a macro spec from JSON and validates every relation a
+/// characterizer would otherwise trip over mid-run.
+///
+/// # Errors
+///
+/// [`SpecError::Malformed`] when the text does not deserialize.
+/// [`SpecError::Invalid`], naming the first offence, when:
+///
+/// - there are no pins, or a pin name repeats;
+/// - a supply pin has a `power`, `ground` or `bias`, or a signal pin lacks a
+///   related `power` (a `power` or `nwell` pin) or `ground` (a `ground` or
+///   `pwell` pin);
+/// - an analog pin has no `bias`, or another pin has a `bias` or `direction`;
+/// - `substrate` is not a supply pin;
+/// - there are no corners, or a corner gives a supply pin no voltage or sets
+///   one on a pin that is not a supply;
+/// - an arc's ends are not pins, its `from` is not an input or clock, a
+///   delay's `to` is not an output, or a constraint's `to` is not an input
+///   or clock;
+/// - an arc has no cases, a case has no vectors, or its first vector leaves a
+///   digital input undriven;
+/// - a vector names a pin that is not an input or clock, or gives an analog
+///   pin anything but volts;
+/// - a combinational case lacks `edge`, or a clocked case has one;
+/// - a delay case lacks `output` or has `data` or `check`, or a constraint
+///   case lacks `data` or `check`, has `output`, or checks a supply pin;
+/// - a leakage state is empty;
+/// - `slews_ns`, `loads_pf` or `constraint_slews_ns` is empty, not positive or
+///   not strictly ascending;
+/// - a threshold is outside (0, 100), or `slew_lower_pct` is not below
+///   `slew_upper_pct`;
+/// - `pushout_pct`, `vector_ns`, `settle_ns`, `constraint_window_ns` or
+///   `analog_frequency_hz` is not positive, or `mc_samples` is below 2;
+/// - the simulator's `scale` is not positive, or `workers` is zero.
 pub fn parse(text: &str) -> Result<MacroSpec, SpecError> {
     let spec: MacroSpec =
         serde_json::from_str(text).map_err(|why| SpecError::Malformed(why.to_string()))?;
@@ -381,6 +519,7 @@ pub fn parse(text: &str) -> Result<MacroSpec, SpecError> {
 }
 
 impl MacroSpec {
+    /// The pin named `name`, if the spec lists one.
     pub fn pin(&self, name: &str) -> Option<&PinSpec> {
         self.pins.iter().find(|pin| pin.name == name)
     }

@@ -1,24 +1,29 @@
 //! Characterization: what each Liberty number is, measured.
 //!
 //! Every measurement is one transient (or AC, or DC) analysis on a
-//! [`Session`]: the pins are driven through the spec's preparation vectors,
-//! then the measured edge. Conventions are `sky130_fd_sc_hd`'s, so the result
-//! diffs against a shipped library:
+//! [`Session`], so every function here needs ngspice: the pins are driven
+//! through the spec's preparation vectors, then the measured edge.
+//! Conventions are `sky130_fd_sc_hd`'s, so the result diffs against a shipped
+//! library:
 //!
-//! - delay: related pin's `input_threshold` crossing to the output's
-//!   `output_threshold` crossing; transition: `slew_lower` to `slew_upper`,
-//!   reported undereated (`slew_derate_from_library : 1`), and an input ramp of
-//!   transition `s` is a linear ramp whose full swing takes `s / (upper − lower)`.
-//! - pin capacitance: charge the pin's source delivers while the pin swings,
-//!   less the static current it drew before, over the swing; rise and fall
-//!   separately, averaged over every state the pin switches in. Integrating
-//!   past the ramp would make rise and fall equal by charge conservation.
-//! - internal energy: supply energy over the edge and its settling, less the
-//!   static power over that window, less `½·C_load·V²` (the switching energy a
-//!   timer adds itself), in pJ.
-//! - setup and hold: the smallest data-to-clock offset at which the check pin
-//!   still reaches its value, and its clock-to-check delay stays within
-//!   `pushout_pct` of the relaxed delay; found by bisection.
+//! - delay, ns: the related pin's `input_threshold_pct` crossing to the
+//!   output's `output_threshold_pct` crossing. Transition, ns:
+//!   `slew_lower_pct` to `slew_upper_pct`, not derated
+//!   (`slew_derate_from_library : 1`). An input transition of `s` is a linear
+//!   ramp whose full swing takes `s / (upper − lower)`.
+//! - pin capacitance, pF: charge the pin's source delivers while the pin
+//!   swings, less the static current it drew before, over the swing; rise and
+//!   fall separately, averaged over every state the pin switches in.
+//!   Integrating past the ramp would make rise and fall equal by charge
+//!   conservation.
+//! - internal energy, pJ: supply energy over the edge and its settling, less
+//!   the static power over that window, less `½·C_load·V²` (the switching
+//!   energy a timer adds itself).
+//! - setup and hold, ns: the smallest data-to-clock offset at which the check
+//!   pin still reaches its value and its clock-to-check delay stays within
+//!   `pushout_pct` of the relaxed delay; found by bisection to
+//!   [`Effort::resolution`]. See [`Bench::constraint_point`].
+//! - leakage, nW: `V·I` summed over every supply.
 //!
 //! A measurement the simulator could not make is an error naming the arc,
 //! case and table point. It never becomes a zero in a table.
@@ -40,10 +45,18 @@ pub struct Effort {
     pub resolution: f64,
 }
 
-/// One corner's measurement context.
+/// One corner's measurement context. Every method runs on a [`Session`] that
+/// has this corner's deck loaded, written by
+/// [`write_deck`](crate::liberty::spice::write_deck) from the same `spec`, so
+/// pin `i` is the deck's node `p<i>`.
 pub struct Bench<'a> {
+    /// The spec, as [`parse`](crate::liberty::spec::parse) validated it:
+    /// pin names and case shapes are trusted, and a spec that skipped
+    /// validation can panic here.
     pub spec: &'a MacroSpec,
+    /// The corner whose supply voltages set every pin's rails.
     pub corner: &'a CornerSpec,
+    /// Transient step and bisection resolution.
     pub effort: Effort,
     /// The deck's `reltol`, restored after a relaxed retry.
     pub reltol: f64,
@@ -211,16 +224,25 @@ fn rise_fall(edge: Edge) -> &'static str {
     }
 }
 
-/// One slew row of a delay case's tables, by load.
+/// One input-slew row of a delay case's tables: one value per load, in
+/// [`loads_pf`](crate::liberty::spec::Characterization::loads_pf) order.
 #[derive(Debug, Clone)]
 pub struct Grid {
+    /// Delay, ns.
     pub delay: Vec<f64>,
+    /// Output transition, ns.
     pub transition: Vec<f64>,
     /// Internal energy, pJ.
     pub energy: Vec<f64>,
 }
 
-/// The related pin's edge in a delay case.
+/// The related pin's edge in a case: the clock edge of a clocked arc, else
+/// the case's own `edge`.
+///
+/// # Panics
+///
+/// Panics on a combinational case with no `edge`, which
+/// [`parse`](crate::liberty::spec::parse) refuses.
 pub fn input_edge(arc: &ArcSpec, case: &CaseSpec) -> Edge {
     arc.kind
         .clock_edge()
@@ -241,7 +263,18 @@ impl Bench<'_> {
             .collect()
     }
 
-    /// One slew row of a case's delay, transition and energy tables.
+    /// Measures row `row` of a delay case's delay, transition and energy
+    /// tables: the input slew `slews_ns[row]` into every load, one transient
+    /// per load, sent to `session` as one batch. `label` names the arc and
+    /// case in every error.
+    ///
+    /// # Errors
+    ///
+    /// [`SimError::Measure`] when the case's vectors already leave the related
+    /// pin where its edge would take it, when the output does not make its
+    /// edge within `settle_ns` of the input edge, when it never completes its
+    /// swing, or when a supply's charge was not measured. Any error of
+    /// [`Session::run`].
     pub fn delay_row(
         &self,
         session: &mut Session,
@@ -387,13 +420,18 @@ impl Bench<'_> {
 /// Rise and fall capacitance of one pin, pF.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Cap {
+    /// Charge drawn while the pin rises, over the swing, pF.
     pub rise: f64,
+    /// Charge returned while the pin falls, over the swing, pF.
     pub fall: f64,
 }
 
 /// A state the pin is switched in, and the edge it switches with.
 pub struct Context {
+    /// The preparation sequence that sets up the state.
     pub vectors: Vec<Vector>,
+    /// The pin's first edge in that state; the measurement then switches it
+    /// back.
     pub edge: Edge,
 }
 
@@ -437,6 +475,7 @@ impl Bench<'_> {
         out
     }
 
+    /// Every digital input low: the state used when the spec names none.
     pub fn all_low(&self) -> Vector {
         self.spec
             .pins
@@ -446,8 +485,15 @@ impl Bench<'_> {
             .collect()
     }
 
-    /// Charge-integrated rise and fall capacitance of a digital input: each
-    /// context's edge, then back, both measured.
+    /// Charge-integrated rise and fall capacitance of a digital input: in each
+    /// of its [`contexts`](Bench::contexts), the edge and then back, both
+    /// measured at the middle input slew of `slews_ns`, then averaged over the
+    /// contexts.
+    ///
+    /// # Errors
+    ///
+    /// [`SimError::Measure`] when a charge was not measured, or any error of
+    /// [`Session::run`].
     pub fn input_cap(&self, session: &mut Session, pin: &str) -> Result<Cap, SimError> {
         let c = &self.spec.characterization;
         let i = index_of(self.spec, pin);
@@ -529,8 +575,15 @@ impl Bench<'_> {
         })
     }
 
-    /// An analog pin's small-signal capacitance at its bias, every other pin
-    /// in the first leakage state: `−Im(I)/ω`, Miller included.
+    /// An analog pin's small-signal capacitance, pF, at its bias and
+    /// `analog_frequency_hz`: `−Im(I)/ω`, Miller included. Every other pin
+    /// sits in the final state of the spec's first `leakage_states` entry, or
+    /// all digital inputs low when the spec gives none.
+    ///
+    /// # Errors
+    ///
+    /// [`SimError::Measure`] when the AC analysis gave no value, or any error
+    /// of [`Session::run`].
     pub fn analog_cap(&self, session: &mut Session, pin: &str) -> Result<f64, SimError> {
         let c = &self.spec.characterization;
         let i = index_of(self.spec, pin);
@@ -554,9 +607,16 @@ impl Bench<'_> {
             .ok_or_else(|| self.error(format!("capacitance of analog pin {pin} was not measured")))
     }
 
-    /// Static power in each state, nW: every supply's `V·I`. A one-vector state
-    /// is a DC operating point; a sequence is simulated and its supply current
-    /// averaged once settled, as a latch only holds a state it was driven into.
+    /// Static power in each state, nW, in `states` order: every supply's
+    /// `V·I`, summed. A one-vector state is a DC operating point; a sequence
+    /// is simulated and its supply current averaged over the last tenth of
+    /// `settle_ns` after it, as a latch only holds a state it was driven into.
+    ///
+    /// # Errors
+    ///
+    /// [`SimError::Measure`] when a supply current was not measured (the
+    /// operating point or transient did not converge), or any error of
+    /// [`Session::run`].
     pub fn leakage(
         &self,
         session: &mut Session,
@@ -616,7 +676,28 @@ impl Bench<'_> {
 }
 
 impl Bench<'_> {
-    /// Setup or hold for every (clock slew, data slew) of one case.
+    /// Setup or hold of one constraint case at one table point, ns: clock
+    /// transition `clock_slew` and data transition `data_slew`, both ns.
+    ///
+    /// The offset is between the midpoints of the clock and data ramps:
+    /// the data edge that far before the clock for setup, after it for hold.
+    /// A trial at an offset passes when the case's check pin ends on the same
+    /// side of its `output_threshold_pct` as the value it should capture, and
+    /// its clock-to-check delay stays within `pushout_pct` of the delay with
+    /// the data a whole `constraint_window_ns` clear. The result is the
+    /// smallest passing offset in `±constraint_window_ns`, found by bisection
+    /// to [`Effort::resolution`] and taken from the passing end, so it is
+    /// pessimistic by at most that and never optimistic. Bisection assumes
+    /// passing is monotone in the offset. A capture that passes even at
+    /// `-constraint_window_ns` returns that bound. A transient that does not finish, a latch caught
+    /// metastable, is retried at `reltol = 1e-3` and then counted as a
+    /// failed capture, which can only lengthen the constraint.
+    ///
+    /// # Errors
+    ///
+    /// [`SimError::Measure`] when the capture fails even with the data a
+    /// whole window clear of the clock, so the case describes no capture.
+    /// Any error of [`Session::run`].
     pub fn constraint_point(
         &self,
         session: &mut Session,
@@ -758,14 +839,25 @@ enum Trial {
     Pass(Option<f64>),
 }
 
-/// Monte Carlo prologue: a seeded redraw of every statistical parameter.
+/// Monte Carlo prologue: redraws every statistical parameter of the loaded
+/// circuit, seeding the simulator with `sample + 1` so a sample number names
+/// one draw.
+///
+/// # Errors
+///
+/// Any error of [`Session::run`].
 pub fn redraw(session: &mut Session, sample: u32) -> Result<(), SimError> {
     session
         .run(&format!("setseed {}\nreset\n", sample + 1))
         .map(|_| ())
 }
 
-/// Mean and sample standard deviation, column by column.
+/// The sample standard deviation (divisor `n − 1`) of each column across
+/// `samples`, one value per column. Fewer than two samples give zeros.
+///
+/// # Panics
+///
+/// Panics if a row is shorter than the first.
 pub fn sigma(samples: &[Vec<f64>]) -> Vec<f64> {
     let n = samples.len();
     if n < 2 {

@@ -2,7 +2,11 @@
 //! An error names what the format cannot represent.
 //!
 //! Data in: a flattened [`GeometryStore`] and the deck's [`LayerTable`]. Data out:
-//! a one-cell GDSII library.
+//! a one-cell GDSII library on a 1 nm grid: `UNITS` says 0.001 user units
+//! (µm) and 1e-9 m per database unit, and every coordinate is written as the
+//! integer it is. A store built on a coarser grid reads back as 1 nm, so
+//! build test geometry in nanometres. Timestamps are zero, so the bytes are
+//! reproducible.
 
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
@@ -33,7 +37,7 @@ const TIMESTAMPS: [u8; 24] = [0; 24];
 /// never truncated. `i32::MIN` is excluded with it.
 const COORD_LIMIT: u64 = i32::MAX as u64;
 
-/// Database units per user unit, and metres per database unit.
+/// User units (µm) per database unit, and metres per database unit.
 ///
 /// Fixed at a 1 nm grid: the writer is handed no `Grid`.
 const USER_UNITS_PER_DBU: f64 = 1e-3;
@@ -41,8 +45,19 @@ const METRES_PER_DBU: f64 = 1e-9;
 
 /// Write a store as a flat GDSII library, appended to `out`.
 ///
-/// One cell: the store was flattened at ingest, so a round trip returns the
-/// flattened store and not the original file. Polygons go out in store order.
+/// One cell, named `cell_name`: the store was flattened at ingest, so a round
+/// trip returns the flattened store and not the original file. Polygons go
+/// out in store order, each as a `BOUNDARY` on its layer's stream pair from
+/// `layers`. Shapes on a derived layer are skipped: they are the deck's
+/// arithmetic over geometry already in the file. On error, `out` holds a
+/// partial library and must be discarded.
+///
+/// # Errors
+///
+/// A static message naming what GDSII cannot carry: `cell_name` outside
+/// ASCII, a polygon with fewer than three vertices, a coordinate beyond
+/// `i32::MAX` in magnitude, a polygon too long for one record (over 8190
+/// vertices), or a shape on a layer `layers` does not declare.
 pub fn write_store(
     store: &GeometryStore,
     layers: &LayerTable,

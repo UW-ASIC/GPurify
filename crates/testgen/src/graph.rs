@@ -20,7 +20,17 @@ pub struct GraphCase {
     pub components: Vec<Vec<u32>>,
 }
 
-/// Build a graph with the stated component sizes.
+/// Builds a graph whose connected components have exactly the stated
+/// `sizes`, in that order in [`GraphCase::components`].
+///
+/// Each component is a random spanning tree plus up to `extra_edges`
+/// redundant edges drawn inside one component. An extra edge may be a
+/// self-loop or repeat an edge; a draw that lands on a singleton adds
+/// nothing. The same `rng` state gives the same graph, edge order included.
+///
+/// # Panics
+///
+/// Panics if `sizes` is empty, holds a zero, or sums past `u32::MAX`.
 #[must_use]
 pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> GraphCase {
     assert!(

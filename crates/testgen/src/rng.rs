@@ -15,7 +15,9 @@ pub struct Rng {
 const SCRAMBLE: u64 = 0x2545_F491_4F6C_DD1D;
 
 impl Rng {
-    /// Seed the generator. Every `u64` is a legal seed, including zero.
+    /// Seeds the generator. Every `u64` is a legal seed, including zero. The
+    /// seed passes through the `SplitMix64` finaliser first, so adjacent
+    /// seeds start unrelated streams.
     #[must_use]
     pub const fn new(seed: u64) -> Self {
         // SplitMix64 finaliser: decorrelates adjacent seeds, which raw
@@ -29,7 +31,7 @@ impl Rng {
         }
     }
 
-    /// The next 64 bits.
+    /// The next 64 bits of the stream.
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x >> 12;
@@ -39,7 +41,13 @@ impl Rng {
         x.wrapping_mul(SCRAMBLE)
     }
 
-    /// A uniform value in `0..bound`.
+    /// A uniform value in `0..bound`, without modulo bias: a draw from the
+    /// biased tail is discarded and redrawn, so one call may consume more than
+    /// one value of the stream.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bound` is zero.
     pub fn below(&mut self, bound: u64) -> u64 {
         assert!(bound > 0, "Rng::below needs a positive bound");
         // Largest multiple of `bound` in the draw space; the tail above it is
@@ -53,7 +61,12 @@ impl Rng {
         }
     }
 
-    /// A uniform value in `lo..hi`, half-open.
+    /// A uniform value in `lo..hi`, half-open. Any span fits, even
+    /// `i64::MIN..i64::MAX`.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `lo < hi`.
     pub fn range(&mut self, lo: i64, hi: i64) -> i64 {
         assert!(hi > lo, "Rng::range needs lo < hi, got {lo}..{hi}");
         // The span of an `i64` interval can overflow `i64` but never `u64`.
@@ -70,7 +83,8 @@ impl Rng {
         lo.wrapping_add(offset)
     }
 
-    /// A uniform value in `0.0..1.0`, built from the top 53 bits.
+    /// A uniform value in `0.0..1.0`, built from the top 53 bits of one draw;
+    /// `1.0` never occurs.
     pub fn unit(&mut self) -> f64 {
         // 2^53 exactly.
         const MANTISSA: f64 = 9_007_199_254_740_992.0;
@@ -82,7 +96,8 @@ impl Rng {
         numerator / MANTISSA
     }
 
-    /// Fisher-Yates, in place.
+    /// Shuffles `items` in place, Fisher-Yates: every permutation equally
+    /// likely.
     pub fn shuffle<T>(&mut self, items: &mut [T]) {
         for i in (1..items.len()).rev() {
             #[allow(
