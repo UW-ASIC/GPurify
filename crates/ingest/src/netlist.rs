@@ -2,6 +2,29 @@
 //!
 //! Data in: netlist text and the run's `StrTable`. Data out: [`Netlist`], hierarchy kept.
 //! Anything outside the declared subset is an error with its source line, never a guess.
+//!
+//! # The subset
+//!
+//! Both dialects: subcircuit definitions with ports, device cards with every
+//! terminal written before any `name=value` parameter, and subcircuit
+//! instances. A call may come before the definition it names. Every device
+//! and instance card sits inside a subcircuit.
+//!
+//! - **SPICE/CDL** ([`spice::read`]): `.subckt`/`.ends` (`.end` also closes),
+//!   `M`, `Q`, `R`, `C`, `D` and `X` cards, `+` continuation lines, `*` comment
+//!   lines and `$` or `;` trailing comments. Card letters and dot keywords
+//!   are case-insensitive and parameter names are stored lowercase; net and
+//!   cell names keep their case. An `X` card calling a model the deck's
+//!   `device` statements name, with no `.subckt` of that name, is that device.
+//! - **Spectre** ([`spectre::read`]): `subckt`/`ends`, `model <name> <master>`
+//!   cards, and instances `name (nets) master params` of a subcircuit, a
+//!   `model`, or a built-in primitive master; `\` continuation, `//` comments.
+//!   Case-sensitive.
+//!
+//! Refused with [`NetlistError::Unsupported`]: any other dot card (`.param`,
+//! `.include`, `.global`, `.model`, …), sources and other element letters,
+//! SPICE's positional value form (`R1 a b 1k`), parameters on a `.subckt`
+//! line or an `X` card, and a card outside every subcircuit.
 
 use crate::deck::DeviceKind;
 use crate::narrow;
@@ -10,48 +33,74 @@ use gpurify_geom::{StrId, StrTable};
 /// Where a token came from: its 1-based line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceSpan {
+    /// 1-based line number in the netlist text; a continued card reports the
+    /// line the token is on.
     pub line: u32,
 }
 
+/// Why a netlist was refused. Each but [`NetlistError::Io`] carries the line
+/// and the offending token.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum NetlistError {
+    /// A token that does not fit the card: a missing name, a malformed
+    /// `name=value`, a positional token after a parameter, a subcircuit opened
+    /// inside another or never closed.
     #[error("line {}: unexpected token {1}", .0.line)]
     Unexpected(SourceSpan, String),
+    /// A construct outside the subset the module documents.
     #[error("line {}: {1} is not in the supported subset", .0.line)]
     Unsupported(SourceSpan, String),
+    /// An instance of a subcircuit the file never defines.
     #[error("line {}: subcircuit {1} is called but never defined", .0.line)]
     UndefinedSubckt(SourceSpan, String),
+    /// A subcircuit, or a Spectre `model`, defined twice.
     #[error("line {}: {1} is defined twice", .0.line)]
     Redefined(SourceSpan, String),
+    /// A device or instance with the wrong number of terminals: got, then
+    /// expected. A MOS takes 4, a BJT 3 or 4, a two-pin device 2, an instance
+    /// its subcircuit's port count.
     #[error("line {}: device {1} has {2} terminals, expected {3}", .0.line)]
     TerminalCount(SourceSpan, String, u32, u32),
+    /// The netlist file could not be read. The readers never return it; a
+    /// caller reading the file does.
     #[error("io: {0}")]
     Io(String),
 }
 
-/// Identifies a subcircuit definition.
+/// Identifies a subcircuit definition: its position in file order, from 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct SubcktId(pub u32);
 
-/// Identifies a net within one subcircuit.
+/// Identifies a net: a row of [`Netlist::net_name`]. Every row belongs to
+/// exactly one subcircuit ([`Netlist::net_subckt`]), so the same name in two
+/// subcircuits is two nets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct RefNetId(pub u32);
 
 /// A parsed reference netlist, hierarchy preserved.
+///
+/// Columns are grouped into tables that share a row index. Each `*_start`
+/// column is CSR: one longer than its table, row `i` owning
+/// `start[i]..start[i + 1]` of the column it indexes.
 #[derive(Debug, Default)]
 pub struct Netlist {
-    /// One row per subcircuit definition.
+    /// One row per subcircuit definition, indexed by [`SubcktId`].
     pub subckt_name: Vec<StrId>,
     /// Ports, as a CSR range into `port_net`.
     pub subckt_port_start: Vec<u32>,
+    /// Every subcircuit's port nets, in the order the definition lists them.
     pub port_net: Vec<RefNetId>,
     /// Devices belonging to each subcircuit, CSR into the device columns.
+    /// [`Netlist::devices_of`] reads it.
     pub subckt_device_start: Vec<u32>,
 
-    /// One row per device instance.
+    /// One row per device instance (not per subcircuit instance): its model
+    /// name, interned.
     pub device_model: Vec<StrId>,
+    /// The device's family, from its card letter, its Spectre master, or the
+    /// deck `device` statement an `X` card called.
     pub device_kind: Vec<crate::deck::DeviceKind>,
     /// Terminals, CSR into `terminal_net`.
     pub device_terminal_start: Vec<u32>,
@@ -81,20 +130,25 @@ pub struct Netlist {
     /// the only cell-to-cell edge, so the only place a cycle can be stated.
     pub instance_subckt: Vec<SubcktId>,
 
-    /// One row per net.
+    /// One row per net, indexed by [`RefNetId`]: its name, interned.
     pub net_name: Vec<StrId>,
+    /// The subcircuit each net belongs to.
     pub net_subckt: Vec<SubcktId>,
 }
 
 impl Netlist {
+    /// Returns the number of subcircuit definitions.
     pub fn subckt_count(&self) -> usize {
         self.subckt_name.len()
     }
+    /// Returns the device rows a subcircuit holds directly, not through its
+    /// instances. Panics on an id past [`Self::subckt_count`].
     pub fn devices_of(&self, subckt: SubcktId) -> std::ops::Range<u32> {
         let row = subckt.0 as usize;
         self.subckt_device_start[row]..self.subckt_device_start[row + 1]
     }
-    /// The one subcircuit nothing instantiates. `None` when not unique: `lvs` refuses, never guesses.
+    /// The one subcircuit nothing instantiates. `None` when not unique, or
+    /// when there is none: `lvs` refuses, never guesses.
     pub fn top(&self) -> Option<SubcktId> {
         let mut instantiated = vec![false; self.subckt_count()];
         for &callee in &self.instance_of {
@@ -726,14 +780,23 @@ fn read_dialect(
     Ok(b.out)
 }
 
-/// SPICE and CDL.
+/// SPICE and CDL. The accepted subset is in the [module docs](super).
 pub mod spice {
     use super::{Netlist, NetlistError};
     use crate::deck::DeviceRecognition;
     use gpurify_geom::StrTable;
 
+    /// Reads a SPICE or CDL netlist, interning its names into `strings`.
+    ///
     /// `devices`: the deck's recognisers, whose models an `X` card may call as
-    /// a device (`XM1 d g s b sky130_fd_pr__nfet_01v8 W=0.42 L=0.15`).
+    /// a device (`XM1 d g s b sky130_fd_pr__nfet_01v8 W=0.42 L=0.15`). On such a
+    /// card a bare `W`/`L` is in micrometres, as PDK models take it.
+    ///
+    /// # Errors
+    ///
+    /// The first [`NetlistError`] found, with its line; nothing partial is
+    /// returned. Definitions are read before cards, and instance port counts
+    /// checked last, so the first error found need not be the first in the file.
     pub fn read(
         source: &str,
         strings: &mut StrTable,
@@ -752,11 +815,21 @@ pub mod spice {
 /// Spectre.
 ///
 /// Declared subset: no `inline subckt`, no `alter`, no sweeps. Anything outside
-/// it is `NetlistError::Unsupported` with the line it sits on.
+/// it is [`NetlistError::Unsupported`] with the line it sits on. The accepted
+/// subset is in the [module docs](super).
 pub mod spectre {
     use super::{Netlist, NetlistError};
     use gpurify_geom::StrTable;
 
+    /// Reads a Spectre netlist, interning its names into `strings`. A device's
+    /// family comes from its `model` card's master or a built-in primitive
+    /// master (`nmos`, `bsim4`, `resistor`, …); any other master is refused.
+    ///
+    /// # Errors
+    ///
+    /// The first [`NetlistError`] found, with its line; nothing partial is
+    /// returned. Definitions are read before cards, and instance port counts
+    /// checked last, so the first error found need not be the first in the file.
     pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
         super::read_dialect(source, strings, super::Dialect::Spectre, Vec::new())
     }

@@ -14,15 +14,31 @@ use crate::{Dbu, MAX_ABS_DBU};
 /// Why a boolean could not be computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BooleanError {
+    /// A raw ring given to [`canonical_rings_into`] has an edge that is neither
+    /// horizontal nor vertical.
     #[error("input is not rectilinear; arbitrary-angle geometry is unsupported")]
     NotRectilinear,
+    /// Growing a shape ([`crate::derive::sized_into`]) would put a coordinate
+    /// past `±`[`MAX_ABS_DBU`].
     #[error("a sized coordinate leaves the representable range")]
     OutOfRange,
+    /// An operand read from a store failed validation; from a traced result,
+    /// an internal fault.
     #[error(transparent)]
     Validity(#[from] ValidityError),
 }
 
 /// Union of two validated layers into `out` (cleared and refilled).
+///
+/// Every result is merged: overlapping and abutting input polygons come out
+/// as one, and two cells meeting only at a corner stay two polygons. The
+/// result's store rows name a scratch store, not a layout shape
+/// ([`crate::view::PolygonRef::provenance`]).
+///
+/// # Errors
+///
+/// [`BooleanError::Validity`] only on an internal fault: validated operands
+/// always produce valid rings.
 pub fn union_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -31,7 +47,13 @@ pub fn union_into(
     combine_into(a, b, out, |in_a, in_b| in_a | in_b)
 }
 
-/// Intersection of two validated layers into `out` (cleared and refilled).
+/// Intersection of two validated layers into `out` (cleared and refilled),
+/// merged as [`union_into`]'s. A shared edge or corner has no area and is not
+/// in the result.
+///
+/// # Errors
+///
+/// As [`union_into`].
 pub fn intersection_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -40,7 +62,12 @@ pub fn intersection_into(
     combine_into(a, b, out, |in_a, in_b| in_a & in_b)
 }
 
-/// `a` minus `b` into `out` (cleared and refilled).
+/// `a` minus `b` into `out` (cleared and refilled), merged as
+/// [`union_into`]'s.
+///
+/// # Errors
+///
+/// As [`union_into`].
 pub fn subtraction_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -623,7 +650,21 @@ fn combine_into(
 /// GDSII writes a polygon with holes as one weakly simple *keyhole* ring, which
 /// [`validate_layer_into`] refuses as self-intersecting. Retracing it through the
 /// sweep cancels the slit and yields the outer and holes, for any number of holes.
-/// Raw `i64` file coordinates; asserted inside `±MAX_ABS_DBU`.
+///
+/// `xs`/`ys` are one open ring in raw file coordinates. The rings come out
+/// flat: ring `i` is `out_xs[out_start[i]..out_start[i + 1]]` (and the same of
+/// `out_ys`), so `out_start` is one longer than the ring count. All three
+/// outputs are cleared first. Vertices are reordered, so vertex 0 of the
+/// result need not be the input's.
+///
+/// # Errors
+///
+/// [`BooleanError::NotRectilinear`] for a skew edge, the closing edge included.
+///
+/// # Panics
+///
+/// When `xs` and `ys` differ in length, or a coordinate lies outside
+/// `±`[`MAX_ABS_DBU`].
 pub fn canonical_rings_into(
     xs: &[i64],
     ys: &[i64],

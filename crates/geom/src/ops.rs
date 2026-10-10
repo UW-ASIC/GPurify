@@ -6,14 +6,21 @@ use crate::{Dbu, DbuArea, MAX_ABS_DBU};
 /// A coordinate pair, passed by value to a predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Point {
+    /// Horizontal coordinate, in database units.
     pub x: Dbu,
+    /// Vertical coordinate, in database units.
     pub y: Dbu,
 }
 
-/// A closed line segment between two points.
+/// A closed line segment between two points, both ends included.
+///
+/// On an edge layer the direction carries meaning: the shape's material lies
+/// to the left of travel from `a` to `b`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Seg {
+    /// Start point.
     pub a: Point,
+    /// End point.
     pub b: Point,
 }
 
@@ -143,10 +150,12 @@ fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptE
     }
 }
 
-/// Whether a closed coordinate run crosses itself (non-adjacent edges share a point).
+/// Whether a closed coordinate run crosses itself: two non-adjacent edges
+/// share a point, touching included. A run of fewer than four vertices never does.
 ///
-/// Sweep by `xlo`, testing only edges whose x-intervals overlap: same verdict as
-/// all pairs. Not Shamos–Hoey, whose neighbour argument fails on rectilinear degeneracies.
+/// Gives the all-pairs verdict at the cost of the pairs whose x-intervals
+/// overlap: `O(n log n)` for typical rings, `O(n²)` when every edge spans a
+/// common x.
 pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
     self_intersects_with(xs, ys, &mut Vec::new())
 }
@@ -218,8 +227,9 @@ pub fn winding_of(xs: &[Dbu], ys: &[Dbu]) -> Option<Winding> {
     }
 }
 
-/// Squared distance from a point to a closed segment, rounded up: zero only when
-/// `p` is on the segment.
+/// Squared distance from a point to a closed segment, rounded up to a whole
+/// square unit: zero only when `p` is on the segment, so a comparison against
+/// a squared limit never passes a point that is too close.
 pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let vx = i128::from(seg.b.x.raw() - seg.a.x.raw());
     let vy = i128::from(seg.b.y.raw() - seg.a.y.raw());

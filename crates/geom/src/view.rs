@@ -15,18 +15,30 @@ use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
 /// Why a polygon could not be validated; never a silently skipped row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ValidityError {
+    /// Fewer than three vertices, two consecutive equal vertices, or zero
+    /// signed area (a run that doubles back on itself).
     #[error("polygon {0:?} has fewer than three distinct vertices")]
     Degenerate(PolyId),
+    /// Two non-adjacent edges share a point, touching included. Checked before
+    /// rectilinearity, so a skew bowtie is reported as this.
     #[error("polygon {0:?} has self-intersecting boundary")]
     SelfIntersecting(PolyId),
+    /// A clockwise ring that no counter-clockwise ring on the layer contains.
     #[error("polygon {0:?} is a hole with no containing outer ring")]
     OrphanHole(PolyId),
+    /// An edge that is neither horizontal nor vertical.
     #[error("polygon {0:?} is not rectilinear")]
     NotRectilinear(PolyId),
 }
 
 /// One layer's geometry, validated and grouped into outer-plus-holes polygons.
 /// [`PartialEq`] is structural (same rings in the same order), not region equality.
+///
+/// Every ring is simple and rectilinear; each outer is counter-clockwise and
+/// each hole clockwise, inside its outer. Built by [`validate_layer_into`] or
+/// returned by a boolean. A layer straight from a store is *not* merged:
+/// overlapping or abutting shapes stay separate polygons until
+/// [`crate::derive::merge_into`] or a boolean.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ValidatedLayer {
     /// Owned: a boolean produces vertices no store row holds.
@@ -44,15 +56,18 @@ pub struct ValidatedLayer {
 }
 
 impl ValidatedLayer {
+    /// Returns the number of polygons (outer rings); holes are not counted.
     pub fn len(&self) -> usize {
         self.poly_ring_start.len()
     }
 
+    /// Returns whether the layer holds no polygon.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Borrow one validated polygon.
+    /// Borrows polygon `idx`, for `idx < len()`. The handle's accessors
+    /// panic on an index past the end.
     pub fn get(&self, idx: u32) -> PolygonRef<'_> {
         PolygonRef { layer: self, idx }
     }
@@ -62,7 +77,12 @@ impl ValidatedLayer {
         &self.poly_bbox
     }
 
-    /// The polygons whose `keep` flag is set, in order, into `out` (cleared and refilled).
+    /// Copies the polygons whose `keep` flag is set, in order, into `out`
+    /// (cleared and refilled), keeping their store rows.
+    ///
+    /// # Panics
+    ///
+    /// When `keep.len() != self.len()`.
     pub fn select_into(&self, keep: &[bool], out: &mut ValidatedLayer) {
         assert_eq!(keep.len(), self.len(), "one flag per polygon");
         out.reset();
@@ -79,7 +99,8 @@ impl ValidatedLayer {
         }
     }
 
-    /// Every ring of one polygon, outer first.
+    /// Every ring of polygon `idx`, outer first, then its holes ascending by
+    /// store row. Panics on `idx >= len()`.
     pub fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
         let start = self.poly_ring_start[idx as usize];
         let len = self.poly_ring_len[idx as usize];
@@ -119,6 +140,7 @@ impl<'a> PolygonRef<'a> {
         (start + 1..start + len).map(move |ring| layer.ring(ring))
     }
 
+    /// Returns the outer ring's bounding box, which holds every hole too.
     pub fn bbox(self) -> Bbox {
         self.layer.poly_bbox[self.idx as usize]
     }
@@ -141,7 +163,7 @@ impl<'a> PolygonRef<'a> {
     }
 }
 
-/// One validated closed ring.
+/// One validated closed ring, borrowed from its [`ValidatedLayer`].
 #[derive(Debug, Clone, Copy)]
 pub struct RingRef<'a> {
     xs: &'a [Dbu],
@@ -149,6 +171,8 @@ pub struct RingRef<'a> {
 }
 
 impl<'a> RingRef<'a> {
+    /// Returns the ring's x and y columns, open: the last vertex joins the
+    /// first and is not repeated.
     pub fn coords(self) -> (&'a [Dbu], &'a [Dbu]) {
         (self.xs, self.ys)
     }
@@ -162,9 +186,23 @@ impl<'a> RingRef<'a> {
 /// `outer_slot` marker for a hole row.
 const NOT_OUTER: u32 = u32::MAX;
 
-/// Validate every polygon on one layer into `out` (cleared and refilled).
-/// Fails on the first invalid polygon; arbitrary-angle input is
+/// Validates every ring on one layer of `store` into `out` (cleared and
+/// refilled), binding each clockwise ring to the innermost (smallest-box)
+/// counter-clockwise ring that contains it. Arbitrary-angle input is
 /// [`ValidityError::NotRectilinear`], not an approximation.
+///
+/// Polygons follow the store order of their outer rings, so `out.get(i)` comes
+/// from the `i`-th counter-clockwise row on the layer.
+///
+/// # Errors
+///
+/// A [`ValidityError`] naming the failing row: the first ring, in row order,
+/// that is not a valid ring, else the first hole no outer contains. `out` is
+/// then left empty.
+///
+/// # Panics
+///
+/// On a layer past [`GeometryStore::layer_count`].
 pub fn validate_layer_into(
     store: &GeometryStore,
     layer: LayerId,

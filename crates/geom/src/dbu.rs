@@ -12,18 +12,26 @@ pub(crate) const fn in_domain(raw: i64) -> bool {
     raw.unsigned_abs() <= MAX_ABS_DBU.unsigned_abs()
 }
 
-/// One grid coordinate.
+/// One coordinate on a layout's [`Grid`], in database units.
+///
+/// Every coordinate a reader produces, and every one [`Dbu::new`] accepts, lies
+/// within `±`[`MAX_ABS_DBU`]. `+`, `-` and negation are unchecked and may
+/// leave that range (a box's width can be `2^41`); a computed value re-enters
+/// stored geometry only through [`Dbu::new`] or a caller that has bounded it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Dbu(i64);
 
-/// The product of two [`Dbu`], in `i128`.
+/// An area or squared distance in square database units, as `i128`.
+///
+/// The product of two in-range [`Dbu`] is at most `2^80`, so [`Dbu::mul_wide`]
+/// never overflows and areas compare exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct DbuArea(i128);
 
 impl Dbu {
-    /// Checked constructor; rejects anything outside `±MAX_ABS_DBU`.
+    /// Wraps a raw coordinate, or `None` when it lies outside `±`[`MAX_ABS_DBU`].
     pub const fn new(raw: i64) -> Option<Self> {
         if in_domain(raw) {
             Some(Self(raw))
@@ -32,8 +40,12 @@ impl Dbu {
         }
     }
 
-    /// Construct without the range check; only for values derived from
-    /// already-checked ones by an operation that cannot leave the range.
+    /// Wraps a raw coordinate without the range check. Only for values derived
+    /// from already-checked ones by an operation that cannot leave the range.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when `raw` lies outside `±`[`MAX_ABS_DBU`].
     pub const fn new_unchecked(raw: i64) -> Self {
         debug_assert!(
             in_domain(raw),
@@ -42,12 +54,16 @@ impl Dbu {
         Self(raw)
     }
 
-    /// The underlying integer.
+    /// Returns the coordinate as a plain integer count of database units.
     pub const fn raw(self) -> i64 {
         self.0
     }
 
-    /// Absolute value.
+    /// Returns the absolute value. Defined for out-of-range sums too.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, on `i64::MIN`, which has no positive counterpart.
     #[must_use]
     pub const fn abs(self) -> Self {
         // Not `in_domain`: `Add` and `Sub` legally produce out-of-range
@@ -56,7 +72,8 @@ impl Dbu {
         Self(self.0.abs())
     }
 
-    /// Widening multiply: the only route from coordinates to an area.
+    /// Multiplies into `i128`: the only route from coordinates to an area.
+    /// Exact for any two `i64`, in range or not.
     pub const fn mul_wide(self, rhs: Self) -> DbuArea {
         DbuArea(self.0 as i128 * rhs.0 as i128)
     }
@@ -86,12 +103,12 @@ impl std::ops::Neg for Dbu {
 }
 
 impl DbuArea {
-    /// Wrap a raw area.
+    /// Wraps a raw area in square database units. Unchecked: any `i128` is an area.
     pub const fn new(raw: i128) -> Self {
         Self(raw)
     }
 
-    /// The underlying integer.
+    /// Returns the area as a plain integer count of square database units.
     pub const fn raw(self) -> i128 {
         self.0
     }
@@ -111,7 +128,11 @@ impl std::ops::Sub for DbuArea {
     }
 }
 
-/// The manufacturing grid a layout is expressed on.
+/// The resolution a layout is expressed on: how many database units make one
+/// micrometre.
+///
+/// A layout states it in its GDSII `UNITS` record; a deck's lengths are
+/// converted against it exactly, or refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grid {
     /// Database units per micrometre. `1000` for a 1 nm grid.
@@ -137,7 +158,11 @@ pub enum GridError {
 }
 
 impl Grid {
-    /// Validate a resolution read from a deck or a layout header.
+    /// Wraps a resolution in database units per micrometre (`1000` for 1 nm).
+    ///
+    /// # Errors
+    ///
+    /// [`GridError::BadResolution`] when `dbu_per_um` is zero or negative.
     pub const fn new(dbu_per_um: i64) -> Result<Self, GridError> {
         if dbu_per_um <= 0 {
             return Err(GridError::BadResolution);
@@ -145,13 +170,21 @@ impl Grid {
         Ok(Self { dbu_per_um })
     }
 
-    /// Database units per micrometre.
+    /// Returns the resolution in database units per micrometre.
     pub const fn dbu_per_um(self) -> i64 {
         self.dbu_per_um
     }
 
-    /// Convert a physical length to grid units, exactly or not at all.
-    /// Check order (finite, range, exact) is part of the interface.
+    /// Converts a physical length to grid units, exactly or not at all. `P` is
+    /// the length's SI exponent, so `Qty::<Length, NANO>::new(140.0)` is 140 nm.
+    ///
+    /// # Errors
+    ///
+    /// Checked in this order, which is part of the interface:
+    /// [`GridError::NotFinite`] for `NaN` or an infinity,
+    /// [`GridError::OutOfRange`] past `±`[`MAX_ABS_DBU`] units, and
+    /// [`GridError::NotOnGrid`] when the length is not a whole number of units,
+    /// including a non-zero length too small to reach one unit.
     pub fn to_dbu<const P: i8>(self, length: Qty<Length, P>) -> Result<Dbu, GridError> {
         if !length.is_finite() {
             return Err(GridError::NotFinite);
@@ -189,7 +222,9 @@ impl Grid {
         Ok(Dbu::new_unchecked(units as i64))
     }
 
-    /// Convert a coordinate to nanometres. Always succeeds.
+    /// Converts a coordinate to nanometres. Never fails: the result is the
+    /// correctly rounded `f64` of `coord * 1000 / dbu_per_um`, exact on the
+    /// usual 1 nm and 0.5 nm grids.
     pub fn to_length(self, coord: Dbu) -> Qty<Length, { crate::prefix::NANO }> {
         // Numerator <= 2^40 * 1000 < 2^53: exact, so the round trip through `to_dbu` is an equality.
         #[expect(

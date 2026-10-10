@@ -5,6 +5,8 @@ use std::marker::PhantomData;
 /// A physical dimension. `SYMBOL` is the SI symbol of the **base** unit, with
 /// no prefix.
 pub trait Dimension: Copy + Clone + 'static {
+    /// The base unit's symbol, ASCII (`ohm`, not `Ω`). [`Qty`]'s `Display`
+    /// writes it after the prefix letter.
     const SYMBOL: &'static str;
 }
 

@@ -9,22 +9,37 @@ use gpurify_geom::{ops::Point, GeometryStore, LayerId, PolyId};
 /// One `TEXT` as the layout stated it, point already in the root frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacedLabel {
+    /// Where the text's anchor point lands in the root cell, in database units.
     pub at: Point,
     /// The layer the `TEXT` was drawn on, mapped through the deck.
     pub layer: LayerId,
+    /// The text's string, interned: a net name when the layer is a label layer.
     pub name: StrId,
 }
 
 /// A label the deck claims that lands on no shape: failing closed keeps a net from losing its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LabelError {
+    /// A `TEXT` on a deck label layer lies on no shape of any conductor its
+    /// label rows name, holes counting as no shape.
     #[error(
         "a net label on layer {layer:?} at ({x}, {y}) lies on no shape of the conductor it names"
     )]
-    Unplaced { layer: LayerId, x: i64, y: i64 },
+    Unplaced {
+        /// The label layer the text was drawn on.
+        layer: LayerId,
+        /// The text's x, in database units of the root frame.
+        x: i64,
+        /// The text's y, in database units of the root frame.
+        y: i64,
+    },
 }
 
 /// Placed labels, and the ones bound to a polygon.
+///
+/// Filled in two steps: [`gds::Library::flatten`](crate::layout::gds::Library::flatten)
+/// places every `TEXT`, then [`Self::resolve_labels`] binds the ones on label
+/// layers to the store rows under them.
 #[derive(Debug, Default)]
 pub struct Provenance {
     /// Ascending by `PolyId`, arrival order kept among equal ids.
@@ -33,7 +48,8 @@ pub struct Provenance {
 }
 
 impl Provenance {
-    /// Attach a net label to a polygon, keeping [`Self::labels`] ascending.
+    /// Attaches a net label to a polygon, keeping [`Self::labels`] ascending;
+    /// after any existing labels of the same polygon. `O(n)` per call.
     pub fn label(&mut self, poly: PolyId, name: StrId) {
         let at = self
             .labelled
@@ -56,7 +72,10 @@ impl Provenance {
         self.placed.push(PlacedLabel { at, layer, name });
     }
 
-    /// Bind each placed label to the polygon it sits on. Run after the store is finished.
+    /// Binds each placed label to the polygon it sits on. Run once, after the
+    /// store is finished and its derived layers appended: a second call binds
+    /// every label again, duplicating [`Self::labels`]. One sweep in x per
+    /// label row: each text tests only the shapes whose box spans its x.
     ///
     /// The boundary counts as inside; the first pairing row, then the lowest `PolyId`, wins.
     /// A text on a layer no pairing row names binds nothing.

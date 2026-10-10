@@ -198,7 +198,10 @@ pub fn narrowest_facing(
         .min_by_key(|&(gap, _)| gap)
 }
 
-/// The narrowest width of a validated polygon, holes included.
+/// The narrowest width of a validated polygon, holes included: the least
+/// distance between two parallel edges facing each other across material,
+/// over a span where their projections overlap. Corner-to-corner necks are
+/// [`narrowest_neck`]'s.
 pub fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu {
     narrowest_facing(poly, true, scratch)
         .expect("every validated polygon has a facing pair across its own material")
@@ -210,11 +213,14 @@ pub fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu
 /// inner corners of two overlapping rectangles (`KLayout`'s euclidean width).
 /// Facing edges whose projections overlap are [`narrowest_facing`]'s; this is
 /// the corner-to-corner case it cannot see. The gap is floored to a whole
-/// unit; the comparison against `limit` is exact.
+/// unit; the comparison against `limit` is exact. Returns the gap and its
+/// midpoint, or `None` when no such neck is narrower than `limit`.
 ///
-/// ponytail: pairs within `limit` along x, O(k²) only when every concave
-/// corner sits in one `limit`-wide column.
+/// Over `k` concave corners, `O(k log k)` plus the pairs within `limit` in x:
+/// `O(k²)` only when every corner sits in one `limit`-wide column.
 pub fn narrowest_neck(poly: PolygonRef<'_>, limit: Dbu) -> Option<(Dbu, Point)> {
+    // ponytail: pairs within `limit` along x, O(k²) only when every concave
+    // corner sits in one `limit`-wide column.
     // Each concave corner, with the diagonal its void quadrant points along.
     let mut corners: Vec<(i64, i64, i64, i64)> = Vec::new();
     for ring in std::iter::once(poly.outer()).chain(poly.holes()) {

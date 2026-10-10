@@ -24,9 +24,13 @@ const fn max(a: Dbu, b: Dbu) -> Dbu {
 /// a segment, both legal derived shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Bbox {
+    /// Least x, inclusive.
     pub xlo: Dbu,
+    /// Least y, inclusive.
     pub ylo: Dbu,
+    /// Greatest x, inclusive. Below `xlo` only in an empty box.
     pub xhi: Dbu,
+    /// Greatest y, inclusive. Below `ylo` only in an empty box.
     pub yhi: Dbu,
 }
 
@@ -46,6 +50,7 @@ impl Bbox {
         yhi: Dbu::new_unchecked(-crate::MAX_ABS_DBU),
     };
 
+    /// Returns the zero-area box holding exactly `(x, y)`.
     pub const fn point(x: Dbu, y: Dbu) -> Self {
         Self {
             xlo: x,
@@ -55,6 +60,8 @@ impl Bbox {
         }
     }
 
+    /// Returns the smallest box holding `self` and `(x, y)`; on [`Self::EMPTY`]
+    /// that is the point's own box.
     #[must_use]
     pub const fn include(self, x: Dbu, y: Dbu) -> Self {
         Self {
@@ -65,6 +72,7 @@ impl Bbox {
         }
     }
 
+    /// Returns the smallest box holding both; [`Self::EMPTY`] is the identity.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self {
@@ -121,16 +129,27 @@ impl Bbox {
         }
     }
 
-    /// A whole-domain box's width is `2^41`, past what `new_unchecked` debug-asserts.
+    /// Returns `xhi - xlo`: zero for a point or a vertical segment.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the result is outside `±MAX_ABS_DBU`: on
+    /// [`Self::EMPTY`], or a box spanning the whole domain (`2^41` wide).
     pub const fn width(self) -> Dbu {
         Dbu::new_unchecked(self.xhi.raw() - self.xlo.raw())
     }
 
+    /// Returns `yhi - ylo`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::width`], in y.
     pub const fn height(self) -> Dbu {
         Dbu::new_unchecked(self.yhi.raw() - self.ylo.raw())
     }
 
-    /// Each span clamped at zero before the product, so `EMPTY` measures 0, not `2^82`.
+    /// Returns the area in square database units; zero for an empty,
+    /// point or segment box. Never panics, unlike [`Self::width`].
     pub const fn area(self) -> DbuArea {
         let (w, h) = (
             self.xhi.raw() - self.xlo.raw(),

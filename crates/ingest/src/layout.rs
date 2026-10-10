@@ -3,6 +3,12 @@
 //! Data in: GDSII bytes (gzip or plain) and a [`Deck`] mapping stream pairs to layers.
 //! Data out: [`gds::Library::flatten`]'s store with deck-derived layers appended, and placed
 //! labels. An inexact transform is an error, never rounded.
+//!
+//! Three steps, in order: [`read_gds_bytes`] loads and un-gzips the file,
+//! [`gds::Library::parse`] reads the records with the hierarchy intact and
+//! states the grid ([`gds::Library::grid`]), and [`gds::Library::flatten`]
+//! places every shape in the root frame on the deck's layers. Coordinates stay
+//! in the file's database units throughout; nothing is scaled.
 
 use crate::deck::{Deck, DerivedOp, LayerTable};
 use crate::provenance::{PlacedLabel, Provenance};
@@ -23,20 +29,45 @@ use gpurify_geom::{Bbox, StrTable};
 /// transform moves geometry and moves verdicts.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LayoutError {
+    /// The bytes, after any gunzip, do not open with a GDSII `HEADER` record
+    /// (OASIS is not read).
     #[error("unrecognised file format")]
     UnknownFormat,
+    /// The stream ends inside a record or before `ENDLIB`, a record's length
+    /// is under 4 or odd, a payload is shorter than its type needs, or a
+    /// structure is still open at `ENDLIB`. Carries the record's byte offset.
     #[error("truncated record at byte {0}")]
     Truncated(usize),
+    /// A record outside the reader's subset or out of place (an element
+    /// outside a structure, a nested `BGNSTR`), or an element missing what it
+    /// needs: no `LAYER`/`DATATYPE`/`XY`, a boundary under three vertices, a
+    /// `TEXT` without exactly one point, a reference without its name or
+    /// points, a `PATH` of odd or non-positive `WIDTH` or a `PATHTYPE` other
+    /// than 0, 2 or 4. Carries the record type (or the element's) and its
+    /// byte offset.
     #[error("unsupported record type {0:#06x} at byte {1}")]
     UnsupportedRecord(u16, usize),
+    /// A placed vertex or label lies outside `±2^40` database units
+    /// ([`gpurify_geom::MAX_ABS_DBU`]) once its placements are composed.
     #[error("coordinate {0} exceeds the representable range")]
     CoordinateOutOfRange(i64),
+    /// A placement that would move geometry off the integer grid or overflow:
+    /// absolute `STRANS` magnification or angle, a magnification that is not
+    /// a whole number from 1 to 10^6, an angle not a multiple of 90°, an
+    /// `AREF` whose pitch does not divide exactly or with a zero count, or
+    /// composed transforms overflowing `i64`. Also a `PATH` with a diagonal or
+    /// zero-length segment or a vertex that turns back on itself.
     #[error("instance transform is not representable exactly")]
     UnsupportedTransform,
+    /// An `SREF` or `AREF` names a structure the library does not define.
     #[error("cell {0} is referenced but not defined")]
     MissingCell(String),
+    /// A structure reached from a root reaches itself again through its
+    /// references, or every structure is referenced so none is a root.
     #[error("cell hierarchy contains a cycle through {0}")]
     CyclicHierarchy(String),
+    /// A shape or text on a stream pair the deck neither declares nor ignores,
+    /// under [`UnknownLayers::Reject`].
     #[error(
         "layer {0}/{1} is in neither the deck's layer table nor its ignore list \
          (`ignore gds({0}, {1})`)"
@@ -48,18 +79,24 @@ pub enum LayoutError {
     /// Every length is measured on an integer grid of database units per micrometre.
     #[error("a database unit of {0:e} m is not a whole number of units per micrometre")]
     UnsupportedUnits(f64),
+    /// A derived layer's computation failed: usually an operand holding a
+    /// ring that is not simple and rectilinear (a diagonal edge, a
+    /// self-crossing), or sizing past the coordinate range.
     #[error("derived layer {0:?} could not be computed: {1}")]
     Derived(gpurify_geom::LayerId, BooleanError),
+    /// The file could not be read or un-gzipped.
     #[error("io: {0}")]
     Io(String),
 }
 
-/// How to treat geometry on a stream pair the deck does not declare.
+/// How to treat geometry on a stream pair the deck neither declares nor
+/// ignores. A pair listed with `ignore gds(L, D)` is dropped either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownLayers {
     /// Refuse the layout. What a signoff run uses.
     Reject,
-    /// Drop the shape or label, uncounted.
+    /// Drop the shape or label, uncounted. Not for signoff: what is dropped
+    /// is checked by no rule.
     Drop,
 }
 
@@ -74,8 +111,14 @@ pub enum LabelDepth {
     All,
 }
 
-/// A GDSII file's bytes, gunzipped when the file is gzip. `UnknownFormat` when the
-/// decompressed bytes do not open with a GDSII `HEADER` record.
+/// A GDSII file's bytes, gunzipped when the file is gzip (every member of a
+/// multi-member gzip, so a concatenated file is never read partially).
+///
+/// # Errors
+///
+/// [`LayoutError::Io`] when the file cannot be read or decompressed, and
+/// [`LayoutError::UnknownFormat`] when the bytes do not open with a GDSII
+/// `HEADER` record.
 pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
     use std::io::Read;
     let io = |e: std::io::Error| LayoutError::Io(e.to_string());
@@ -103,6 +146,19 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 /// layers, as [`gds::Library::flatten`] does after reading a stream. `with_text`
 /// reads `provenance`'s placed labels; bind them afterwards with
 /// [`Provenance::resolve_labels`].
+///
+/// `store` must have been finished with `deck.layers.len()` layers and hold
+/// shapes on drawn layers only; derived layers are appended in id order.
+///
+/// # Errors
+///
+/// [`LayoutError::Derived`] naming the first derived layer that could not be
+/// computed.
+///
+/// # Panics
+///
+/// When `store` has fewer layers than the deck, or already holds shapes on a
+/// derived layer.
 pub fn derive_layers(
     store: &mut GeometryStore,
     deck: &Deck,
@@ -504,6 +560,13 @@ pub mod gds {
     ///
     /// [`Library::parse`] interns every layout string (cell names, `TEXT`s,
     /// `PROPVALUE`s) in file order; [`Library::flatten`] interns nothing.
+    ///
+    /// Shapes are already normalised as parsed: every `BOUNDARY` and `BOX` is
+    /// one counter-clockwise outer ring without its repeated closing point, a
+    /// keyhole boundary (how GDSII writes a hole) is split into its outer and
+    /// clockwise holes, and every `PATH` is stroked into its outline, exactly.
+    /// Rings are not otherwise validated here: a diagonal or self-crossing
+    /// boundary is refused where a check or derived layer reads its layer.
     #[derive(Default)]
     pub struct Library {
         /// The `UNITS` record's second value; `None` until one is read.
@@ -621,7 +684,17 @@ pub mod gds {
             Grid::new(per_um).map_err(|_| LayoutError::UnsupportedUnits(metres))
         }
 
-        /// Read the record stream, one pass. Every record is consumed, skipped, or refused.
+        /// Reads the record stream in one pass. Every record is consumed,
+        /// skipped, or refused; bytes after `ENDLIB` (block padding) are ignored.
+        /// Glyph records on a `TEXT` (font, size, angle) and properties are
+        /// accepted and discarded.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::Truncated`], [`LayoutError::UnsupportedRecord`] or
+        /// [`LayoutError::UnsupportedTransform`] at the first record that cannot
+        /// be read exactly, and [`LayoutError::MissingCell`] for a reference to
+        /// an undefined structure. On error, `strings` may have gained names.
         pub fn parse(bytes: &[u8], strings: &mut StrTable) -> Result<Self, LayoutError> {
             let mut lib = Library::default();
             let mut stroke = Stroke::default();
@@ -1287,10 +1360,28 @@ pub mod gds {
     }
 
     impl Library {
-        /// Resolve the hierarchy into one flat, layer-sorted store with the deck's
+        /// Resolves the hierarchy into one flat, layer-sorted store with the deck's
         /// derived layers appended, plus every root cell's label placed in the
         /// root frame ([`LabelDepth::Top`]).
-        /// `strings` is the table [`Self::parse`] interned into; used for error names only.
+        ///
+        /// A root is a structure no reference names; a library with several
+        /// roots flattens them all into one store. Rows on one layer keep the
+        /// walk's order: roots in file order, each cell's own shapes before its
+        /// references'. `deck` must have been parsed against [`Self::grid`];
+        /// nothing checks it. `strings` is the table [`Self::parse`] and the
+        /// deck interned into; it is read for error names and `with_text`
+        /// patterns, never written.
+        ///
+        /// The returned [`Provenance`] holds the placed labels, bound to no
+        /// shape yet: call [`Provenance::resolve_labels`] next.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::UnknownLayer`] (under [`UnknownLayers::Reject`]),
+        /// [`LayoutError::CyclicHierarchy`],
+        /// [`LayoutError::UnsupportedTransform`] or
+        /// [`LayoutError::CoordinateOutOfRange`] while placing, and
+        /// [`LayoutError::Derived`] while computing derived layers.
         pub fn flatten(
             &self,
             deck: &Deck,
@@ -1300,7 +1391,13 @@ pub mod gds {
             self.flatten_labels(deck, strings, unknown, LabelDepth::Top)
         }
 
-        /// [`Self::flatten`], placing the labels `labels` selects.
+        /// [`Self::flatten`], placing the labels `labels` selects: with
+        /// [`LabelDepth::All`], every cell's `TEXT`s, transformed into the root
+        /// frame.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::flatten`].
         pub fn flatten_labels(
             &self,
             deck: &Deck,

@@ -1,8 +1,39 @@
 //! The PDK deck: layers, derived layers, rules, connectivity, device recognisers, PEX stack.
 //!
-//! Data in: deck text (see `docs/deck.md`) and the layout's grid.
-//! Data out: [`Deck`], limits converted from physical nanometres to grid units exactly or refused.
-//! Rule kinds are interned verbatim and never interpreted here.
+//! Data in: deck text and the layout's grid. The language is
+//! [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md).
+//! Data out: [`Deck`], every limit converted from physical units to grid units
+//! exactly, or refused.
+//!
+//! Each rule's spelling (`space(met1) >= 140nm`) resolves to one engine kind
+//! name (`min_spacing`) with every parameter named, typed and converted;
+//! nothing here decides what a rule means. The DRC and ERC engines in
+//! `gpurify-check` read [`RuleSpec::kind`] and the parameters by name.
+//!
+//! # Examples
+//!
+//! ```
+//! use gpurify_geom::{Grid, StrTable};
+//! use gpurify_ingest::deck::{parse_deck, ParamValue};
+//!
+//! let text = "grid 5nm
+//! layer met1 = gds(68, 20)
+//! rule m1.1 width(met1) >= 140nm
+//! ";
+//! let mut strings = StrTable::default();
+//! // A 1 nm layout grid: 1000 database units per micrometre.
+//! let deck = parse_deck(text, Grid::new(1000)?, &mut strings)?;
+//!
+//! let rule = &deck.rules.spec[0];
+//! assert_eq!(strings.resolve(rule.kind), "min_width");
+//! let limit = strings.get("limit").and_then(|name| deck.rules.param(rule, name));
+//! assert!(matches!(limit, Some(ParamValue::Length(d)) if d.raw() == 140));
+//!
+//! // 142 nm is not on the deck's 5 nm grid: refused, never rounded.
+//! let off_grid = text.replace("140nm", "142nm");
+//! assert!(parse_deck(&off_grid, Grid::new(1000)?, &mut StrTable::default()).is_err());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use crate::narrow;
 use gpurify_geom::LayerId;
@@ -18,21 +49,31 @@ pub use parse::{parse_deck, Diagnostic};
 /// Why a deck was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum DeckError {
-    /// Two statements that parse alone but contradict each other.
+    /// Statements that parse alone but contradict each other: a rule naming a
+    /// model no `device` declares, net spacing on a non-conductor, a global
+    /// layer also listed as a conductor, or a label row whose text layer is
+    /// derived or whose named layer is not a conductor.
     #[error("malformed deck: {0}")]
     Malformed(String),
+    /// The deck file could not be read. [`parse_deck`] never returns it; a
+    /// caller reading the file does.
     #[error("io: {0}")]
     Io(String),
-    /// The deck text did not parse; each diagnostic points at its span.
+    /// The deck text did not parse. Displays as `file:line:col: message`, the
+    /// line, and a caret under the span, for each diagnostic.
     #[error("{}", parse::render(.file, .diagnostics))]
     Invalid {
+        /// The path shown before each diagnostic; `<deck>` until
+        /// [`DeckError::in_file`] names it.
         file: String,
+        /// Every error found, at most 50: parsing continues past an error so
+        /// one pass reports them all.
         diagnostics: Vec<Diagnostic>,
     },
 }
 
 impl DeckError {
-    /// Name the file the diagnostics point into.
+    /// Names the file the diagnostics point into. Other variants pass through unchanged.
     #[must_use]
     pub fn in_file(mut self, path: &str) -> Self {
         if let Self::Invalid { file, .. } = &mut self {
@@ -42,17 +83,34 @@ impl DeckError {
     }
 }
 
-/// A parsed, validated, grid-resolved deck.
+/// A parsed, validated, grid-resolved deck, built by [`parse_deck`].
+///
+/// Every table refers to layers by [`LayerId`], and every name (layer, rule,
+/// model, parameter) is a [`StrId`] in the [`StrTable`] the deck was parsed
+/// with. Lengths are [`Dbu`] on the layout grid the deck was parsed against,
+/// so a deck is only meaningful with a layout on that grid.
 #[derive(Debug, Default)]
 pub struct Deck {
+    /// Drawn and derived layers, and the stream pairs the deck ignores.
     pub layers: LayerTable,
+    /// Every `rule` statement, in deck order.
     pub rules: RuleTable,
+    /// The `connect` statements: what carries a net, and how layers join.
     pub connectivity: Connectivity,
+    /// The `device` statements.
     pub devices: DeviceRecognition,
+    /// The `pex` statements: the parasitic stack, per layer.
     pub stack: ProcessStack,
 }
 
-/// Layer names and stream pairs to ids, and back. Derived layers take the ids after every base layer.
+/// Layer names and stream pairs to ids, and back.
+///
+/// Ids are dense from 0. Drawn layers (`layer x = gds(L, D)`) come first,
+/// ascending by name bytes; derived layers follow in declaration order, each
+/// computed only from lower ids. Each inner operation of a nested expression
+/// such as `(a or b) not c` adds a hidden derived layer (`x#1`, `x#2`, …), and
+/// a layer expression written inside a rule adds one named `<rule id>@k`. No
+/// deck text can name a hidden layer.
 #[derive(Debug, Default)]
 pub struct LayerTable {
     /// `LayerId(i)` is named `name[i]`.
@@ -75,6 +133,9 @@ pub struct LayerTable {
 const DERIVED_STREAM: (u16, u16) = (u16::MAX, u16::MAX);
 
 impl LayerTable {
+    /// Returns the number of layers, drawn, derived and hidden: the
+    /// `layer_count` a [`GeometryStore`](gpurify_geom::GeometryStore) for this
+    /// deck is built with.
     pub fn len(&self) -> usize {
         self.name.len()
     }
@@ -84,7 +145,9 @@ impl LayerTable {
         let at = self.name.iter().position(|&n| n == wanted)?;
         Some(LayerId(u16::try_from(at).expect("LayerId is a u16")))
     }
-    /// The base layer a GDS layer/datatype pair maps to; the lowest id when two share it.
+    /// The drawn layer a GDS layer/datatype pair maps to; the lowest id when
+    /// two share it. `None` for a pair the deck does not declare, ignored or not.
+    /// `O(log n)`.
     pub fn of_stream(&self, layer: u16, datatype: u16) -> Option<LayerId> {
         let wanted = (layer, datatype);
         let at = self
@@ -100,19 +163,19 @@ impl LayerTable {
         self.stream[layer.idx()]
     }
 
-    /// Is this layer computed by the deck rather than drawn in the layout?
     /// Whether the deck drops geometry on this stream pair (`ignore gds(L, D)`)
-    /// instead of refusing the layout for it.
+    /// instead of refusing the layout for it. Never true of a declared pair.
     pub fn is_ignored(&self, layer: u16, datatype: u16) -> bool {
         self.ignored.binary_search(&(layer, datatype)).is_ok()
     }
 
+    /// Is this layer computed by the deck rather than drawn in the layout?
     pub fn is_derived(&self, layer: LayerId) -> bool {
         layer.0 >= self.derived_start
     }
 
     /// Is this an edge layer (directed segments, not polygons)? Only a check
-    /// that says it takes edges accepts one.
+    /// that says it takes edges accepts one. Panics on an id past [`Self::len`].
     pub fn is_edges(&self, layer: LayerId) -> bool {
         let Some(row) = layer.idx().checked_sub(usize::from(self.derived_start)) else {
             return false;
@@ -122,12 +185,13 @@ impl LayerTable {
             .unwrap_or_else(|| self.is_edges(operands[0]))
     }
 
-    /// How the derived layers are computed, in id order.
+    /// Returns the layer's name as the deck wrote it, or its hidden name.
+    /// Panics on an id past [`Self::len`].
     pub fn name(&self, layer: LayerId) -> StrId {
         self.name[layer.idx()]
     }
 
-    /// How a derived layer is computed; `None` for a base layer.
+    /// How a derived layer is computed; `None` for a drawn layer.
     pub fn op(&self, layer: LayerId) -> Option<DerivedOp> {
         layer
             .idx()
@@ -135,7 +199,8 @@ impl LayerTable {
             .map(|row| self.derived[row].1)
     }
 
-    /// The layers a derived layer is computed from; empty for a base layer.
+    /// The layers a derived layer is computed from, every one a lower id;
+    /// empty for a drawn layer. [`DerivedOp`] says what each position means.
     pub fn operands(&self, layer: LayerId) -> &[LayerId] {
         layer
             .idx()
@@ -143,11 +208,14 @@ impl LayerTable {
             .map_or(&[], |row| &self.derived[row].2)
     }
 
+    /// How the derived layers are computed, in id order.
     pub(crate) fn derived(&self) -> &[(LayerId, DerivedOp, Vec<LayerId>)] {
         &self.derived
     }
 
-    /// Text pattern `text` of a [`DerivedOp::WithText`].
+    /// Text pattern `text` of a [`DerivedOp::WithText`]: `*` matches any run of
+    /// characters, `?` one, anything else itself, case included. Panics on an
+    /// index no `WithText` holds.
     pub fn text(&self, text: u32) -> &str {
         &self.texts[text as usize]
     }
@@ -186,33 +254,66 @@ impl LayerTable {
     }
 }
 
-/// The operators a deck may spell over layers. `and`/`or`/`not` fold over
-/// every operand; a method takes its receiver, then its layer argument if any.
-/// Bounds are inclusive, in grid units (square grid units for an area).
+/// The operators a deck may spell over layers; the semantics are
+/// [deck.md's layer operations](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md#layers).
+///
+/// [`LayerTable::operands`] holds the inputs. `And`, `Or` and `Not` fold left
+/// over every operand (`a not b not c` is one row of three). Every other
+/// operation takes its receiver as operand 0 and its layer argument, if it
+/// has one, as operand 1. Touching and overlapping shapes count as one shape
+/// before an operation reads them.
+///
+/// Bounds `(lo, hi)` are inclusive, in grid units (square grid units for an
+/// area); a strict `>` or `<` in the deck has already moved one unit, and an
+/// absent side is `i128::MIN` or `i128::MAX`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivedOp {
+    /// The area every operand covers. On edge layers, the parts of operand 0
+    /// that coincide with every other operand.
     And,
+    /// The area any operand covers. On edge layers, every operand's edges,
+    /// shared parts once.
     Or,
+    /// Operand 0's area minus every other operand's. On edge layers, the parts
+    /// of operand 0 that coincide with no other operand.
     Not,
-    /// Grow, or shrink when negative.
+    /// Every shape grown by the length on all sides, corners square; shrunk
+    /// when negative, a part no wider than twice the shrink disappearing.
     Sized(Dbu),
-    /// `interacting` (`true`) or `not_interacting`.
+    /// `interacting` (`true`): the shapes or edges of operand 0 that touch or
+    /// overlap a shape of operand 1, a shared corner counting. `false` is
+    /// `not_interacting`, the rest.
     Interacting(bool),
+    /// The shapes of operand 0 entirely covered by operand 1, touching its
+    /// boundary from inside allowed.
     Inside,
+    /// The shapes of operand 0 sharing no area with operand 1; touching is outside.
     Outside,
+    /// Each hole of each shape, filled; a hole holding an island covers it.
     Holes,
+    /// The bounding box of each shape.
     Extents,
+    /// The shapes whose area, holes excluded, lies in `lo..=hi` square grid units.
     WithArea(i128, i128),
+    /// The shapes whose narrowest width, as the `width` rule measures it, lies
+    /// in `lo..=hi` grid units.
     WithWidth(i128, i128),
-    /// Polygons to their boundary edges.
+    /// Polygons to their boundary edges, each directed with the material on
+    /// its left. The result is an edge layer.
     Edges,
-    /// `inside_part` (`true`) or `outside_part`, on edges.
+    /// `inside_part` (`true`) or `outside_part`: the parts of each edge of
+    /// operand 0 strictly inside, or strictly outside, operand 1's shapes.
+    /// Parts on the boundary are in neither.
     Part(bool),
+    /// The edges whose length lies in `lo..=hi` grid units.
     WithLength(i128, i128),
-    /// `with_text` (`keep`) or `without_text`: the shapes holding a text on the
-    /// layer argument that matches [`LayerTable::text`] `text`.
+    /// `with_text` (`keep`) or `without_text`: the shapes of operand 0 that
+    /// hold, on their material or boundary, a `TEXT` drawn on operand 1 (always
+    /// a drawn layer) whose string matches [`LayerTable::text`] `text`.
     WithText {
+        /// `true` keeps the shapes holding a match, `false` the others.
         keep: bool,
+        /// Index of the pattern, for [`LayerTable::text`].
         text: u32,
     },
 }
@@ -242,28 +343,44 @@ impl DerivedOp {
 }
 
 /// One rule as the deck states it, layers resolved and lengths already [`Dbu`].
+///
+/// Read its layers and parameters through [`RuleTable::layers_of`] and
+/// [`RuleTable::params_of`] rather than slicing by hand.
 #[derive(Debug, Clone, Copy)]
 pub struct RuleSpec {
-    /// The rule's id, for reporting. Interned.
+    /// The rule's id, for reporting: the deck's text with every `{name}`
+    /// replaced. Interned; unique within a deck.
     pub id: StrId,
-    /// The rule kind, interned. `drc` matches this against its own kind list.
+    /// The engine kind the deck's spelling resolved to (`width(L) >=` is
+    /// `min_width`, `width(L) <=` is `max_width`), interned. `drc` and `erc`
+    /// match this against their own kind lists.
     pub kind: StrId,
-    /// `layer_ref[layer_start .. layer_start + layer_len]` in [`RuleTable`].
+    /// First of this rule's rows in [`RuleTable::layer_ref`].
     pub layer_start: u32,
+    /// Number of layer arguments.
     pub layer_len: u32,
-    /// `param[param_start .. param_start + param_len]` in [`RuleTable`].
+    /// First of this rule's rows in [`RuleTable::param`].
     pub param_start: u32,
+    /// Number of parameter rows.
     pub param_len: u32,
 }
 
-/// A rule parameter, already converted.
+/// A rule parameter, already converted to the unit the engines store.
 #[derive(Debug, Clone, Copy)]
 pub enum ParamValue {
-    /// A length, converted against the grid. The common case.
+    /// A length in grid units, on the deck grid and exact on the layout grid.
+    /// The common case: every comparison limit on a length.
     Length(Dbu),
-    /// A dimensionless ratio — an antenna limit, a density fraction.
+    /// Any other real number, in its dimension's engine unit: a ratio,
+    /// exponent or fraction (`0..=1`, `%` already divided) bare; a voltage in
+    /// mV; a current in µA; a current per width in A/m (µA/µm); a resistance in
+    /// ohms; a temperature in kelvin (`C` already converted); an energy in eV;
+    /// a time in hours. The name says which.
     Ratio(f64),
+    /// A whole count (cuts, colours, drivers), or an angle in whole degrees.
     Count(u32),
+    /// `true`/`false`; `nets: same` (`true`) or `different`; `maximum`, which a
+    /// density rule's `<=` sets; or `warning`, on an ERC rule written so.
     Flag(bool),
     /// An area, already in square grid units.
     Area(DbuArea),
@@ -276,22 +393,32 @@ pub enum ParamValue {
 /// Every rule in the deck, `SoA`.
 #[derive(Debug, Default)]
 pub struct RuleTable {
+    /// One row per `rule` statement, in deck order (a `for` loop's rules in
+    /// iteration order).
     pub spec: Vec<RuleSpec>,
+    /// Every rule's layer arguments, back to back; a [`RuleSpec`] owns a run.
     pub layer_ref: Vec<LayerId>,
-    /// Parameter name and value, names interned.
+    /// Parameter name and value, names interned; a [`RuleSpec`] owns a run.
     pub param: Vec<(StrId, ParamValue)>,
 }
 
 impl RuleTable {
+    /// Returns a rule's layer arguments in the order its engine kind takes
+    /// them, which can differ from the deck's: `enclosure(inner, outer)` is
+    /// stored outer first.
     pub fn layers_of(&self, rule: &RuleSpec) -> &[LayerId] {
         let start = rule.layer_start as usize;
         &self.layer_ref[start..start + rule.layer_len as usize]
     }
+    /// Returns a rule's parameters. A list parameter (`models`, `allowed`, a
+    /// spacing table's cells) is one row per element under the same name, in
+    /// list order; a parameter written `none` has no row at all.
     pub fn params_of(&self, rule: &RuleSpec) -> &[(StrId, ParamValue)] {
         let start = rule.param_start as usize;
         &self.param[start..start + rule.param_len as usize]
     }
-    /// Look up one parameter by interned name.
+    /// Looks up one parameter by interned name: the first row for a list,
+    /// `None` when absent or written `none`.
     pub fn param(&self, rule: &RuleSpec, name: StrId) -> Option<ParamValue> {
         self.params_of(rule)
             .iter()
@@ -301,25 +428,34 @@ impl RuleTable {
 }
 
 /// What connects to what: conductors carry current, vias join two conductors.
+///
+/// Rows of `via_cut` and `via_connects` pair by index, as do `label_layer`
+/// and `label_names`.
 #[derive(Debug, Default)]
 pub struct Connectivity {
+    /// The layers that carry a net (`connect conductors [..]`), in the order
+    /// written. No global layer is among them.
     pub conductors: Vec<LayerId>,
-    /// One row per via layer: the cut layer and the two layers it joins.
+    /// One row per `connect via` statement: the cut layer...
     pub via_cut: Vec<LayerId>,
+    /// ...and the two layers it joins where it overlaps them.
     pub via_connects: Vec<(LayerId, LayerId)>,
-    /// Whether shapes on the same conductor layer connect by touching.
+    /// Whether shapes on the same conductor layer connect by touching
+    /// (`connect touch_within_layer`).
     pub intra_layer_touch: bool,
     /// Net-only layers, each one net however many shapes it holds (the
     /// substrate). Not conductors: they carry no modelled current and no
     /// parasitics, so they need no sheet resistance, nor do vias into them.
     pub global: Vec<LayerId>,
-    /// One row per net-label layer: the layer a `TEXT` is drawn on...
+    /// One row per `connect label` statement: the drawn layer a `TEXT` is on...
     pub label_layer: Vec<LayerId>,
-    /// ...and the one conductor whose shapes it names.
+    /// ...and the conductor whose shapes it names. When two rows share a text
+    /// layer, a label binds through the first row that finds a shape under it.
     pub label_names: Vec<LayerId>,
 }
 
-/// How to recognise a device from geometry.
+/// How to recognise a device from geometry: one row per `device` statement,
+/// in deck order.
 ///
 /// A terminal's role is its **position**, fixed per family:
 ///
@@ -330,33 +466,54 @@ pub struct Connectivity {
 /// | `Resistor`, `Capacitor`, `Diode` | pin 0, pin 1 — symmetric, so the comparator may swap them |
 #[derive(Debug, Default)]
 pub struct DeviceRecognition {
-    /// One row per recogniser: each marker polygon is one device. Terminals are CSR.
+    /// The device family of each recogniser.
     pub kind: Vec<DeviceKind>,
+    /// The layer each of whose shapes is one device.
     pub marker: Vec<LayerId>,
+    /// Recogniser `i`'s terminal layers are
+    /// `terminal[terminal_start[i]..terminal_start[i + 1]]`: one longer than
+    /// `kind`, or empty when the deck declares no device.
     pub terminal_start: Vec<u32>,
+    /// Every recogniser's terminal layers, in role order (see above).
     pub terminal: Vec<LayerId>,
     /// Interned model name, for netlist comparison.
     pub model: Vec<StrId>,
 }
 
-/// The device families this tool recognises.
+/// The device families this tool recognises, in the deck as `mos`, `bjt`,
+/// `resistor`, `capacitor` and `diode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
+    /// A MOS transistor; a SPICE `M` card.
     Mos,
+    /// A bipolar transistor; a SPICE `Q` card.
     Bjt,
+    /// A two-pin resistor; a SPICE `R` card.
     Resistor,
+    /// A two-pin capacitor; a SPICE `C` card.
     Capacitor,
+    /// A two-pin diode; a SPICE `D` card.
     Diode,
 }
 
 /// Per-layer process parameters, for parasitic extraction, indexed by [`LayerId`].
+///
+/// Every column is empty when the deck has no `pex` statement, and
+/// [`LayerTable::len`] long otherwise. A layer with no `pex` row reads `0.0`
+/// in every column, which means "not stated", not a measured zero.
 #[derive(Debug, Default)]
 pub struct ProcessStack {
+    /// Conductor thickness, nm.
     pub thickness_nm: Vec<f64>,
+    /// Height above the substrate, nm.
     pub height_nm: Vec<f64>,
+    /// Sheet resistance, ohms per square.
     pub sheet_res_ohm_sq: Vec<f64>,
+    /// Area capacitance to substrate, aF/µm².
     pub area_cap_af_um2: Vec<f64>,
+    /// Fringe capacitance to substrate, aF/µm of edge.
     pub fringe_cap_af_um: Vec<f64>,
+    /// Relative permittivity of the surrounding dielectric.
     pub dielectric_k: Vec<f64>,
 }
 

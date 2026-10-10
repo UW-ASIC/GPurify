@@ -31,14 +31,18 @@ const DEVICES: [(&str, DeviceKind); 5] = [
 /// One error, located in the deck text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// What is wrong, prefixed with the rule id when inside a rule
+    /// (`m1.5: enclosure needs a length, got 60 (no unit)`).
     pub message: String,
-    /// 1-based line and column (in characters).
+    /// 1-based line of `start`.
     pub line: u32,
+    /// 1-based column of `start`, counted in characters, not bytes.
     pub col: u32,
     /// The source line, for the caret display.
     pub text: String,
-    /// Byte span in the deck text.
+    /// Byte offset of the offending text's start in the deck source.
     pub start: u32,
+    /// Byte offset just past its end.
     pub end: u32,
 }
 
@@ -90,8 +94,19 @@ pub(crate) fn render(file: &str, diagnostics: &[Diagnostic]) -> String {
     out
 }
 
-/// Parse deck text and lower it to a [`Deck`]. Lengths are checked against the
-/// deck's `grid` and converted against the layout's `grid` exactly.
+/// Parses deck text and lowers it to a [`Deck`], interning every name into
+/// `strings`. `grid` is the layout's, from
+/// [`Library::grid`](crate::layout::gds::Library::grid): every length must be a
+/// multiple of the deck's own `grid` statement and convert to `grid` exactly.
+/// The same text and the same table state give the same ids.
+///
+/// # Errors
+///
+/// [`DeckError::Invalid`] with every syntax, name, unit and grid error found
+/// (a length off either grid, a parameter missing or misspelt, a layer used
+/// before it is declared, an ignored pair also declared); then
+/// [`DeckError::Malformed`] for the first contradiction between statements. On
+/// error, `strings` may have gained names.
 pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
     let mut errors = Vec::new();
     let toks = lex(source, &mut errors);

@@ -9,19 +9,28 @@ use gpurify_geom::{StrId, StrTable};
 /// Why an intent file was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum IntentError {
+    /// Not JSON of the schema (an unknown key, a wrong type), more than 64
+    /// domains, a domain voltage that is not finite, a supply naming an
+    /// undeclared domain, or two `limits` entries for one net.
     #[error("malformed intent file: {0}")]
     Malformed(String),
+    /// A net listed more than once in `supplies`, in one domain or two.
     #[error("net {0} is declared in two power domains")]
     DomainConflict(String),
+    /// A declared domain that no supply net belongs to.
     #[error("domain {0} has no supply net")]
     DomainWithoutSupply(String),
+    /// Any stated limit of the named net (drop, drop fraction, overvoltage or
+    /// current budget) is zero, negative, `NaN` or infinite.
     #[error("net {0}: IR-drop limit is not a positive voltage")]
     BadLimit(String),
+    /// The intent file could not be read.
     #[error("io: {0}")]
     Io(String),
 }
 
-/// A named voltage domain.
+/// A named voltage domain: its position among the file's domain names in
+/// ascending byte order, from 0, below 64.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct DomainId(pub u32);
@@ -29,11 +38,16 @@ pub struct DomainId(pub u32);
 /// Which side of a supply pair a net is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupplyRole {
+    /// Sits at its domain's voltage.
     Power,
+    /// Sits at 0 V; its drop is how far it rises.
     Ground,
 }
 
 /// Everything the design's owner must state that the process does not.
+///
+/// Built by [`parse_intent`] or [`read_intent`]; nets are named by [`StrId`]
+/// in the run's table, so a net matches when its layout label has the same text.
 #[derive(Debug, Default)]
 pub struct DesignIntent {
     /// Nominal supply voltage, indexed by [`DomainId`].
@@ -48,18 +62,23 @@ pub struct DesignIntent {
 /// *unlimited*.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NetLimits {
-    /// Absolute IR drop permitted from the supply pad to any point.
+    /// Absolute IR drop permitted from the supply pad to any point, mV
+    /// (`max_drop_mv`).
     pub max_drop: Option<Qty<Voltage, { prefix::MILLI }>>,
-    /// The same as a fraction of the domain's nominal voltage.
+    /// The same as a fraction of the domain's nominal voltage
+    /// (`max_drop_fraction`), for a power or a ground net.
     pub max_drop_fraction: Option<f64>,
-    /// Voltage above nominal that constitutes an overvoltage.
+    /// Voltage above nominal that constitutes an overvoltage, mV
+    /// (`max_overvoltage_mv`).
     pub max_overvoltage: Option<Qty<Voltage, { prefix::MILLI }>>,
-    /// Current the net is budgeted to carry, for electromigration.
+    /// Current the net is budgeted to carry, µA (`budget_current_ua`), for
+    /// electromigration and IR drop.
     pub budget_current_ua: Option<f64>,
 }
 
 impl DesignIntent {
-    /// Whether a net is a declared supply, and in which role.
+    /// Whether a net is a declared supply, and in which domain and role.
+    /// `O(log supplies)`.
     pub fn supply_role(&self, net: StrId) -> Option<(DomainId, SupplyRole)> {
         let row = self.supplies.binary_search_by_key(&net, |s| s.0).ok()?;
         let (_, domain, role) = self.supplies[row];
@@ -73,6 +92,8 @@ impl DesignIntent {
             .map_or_else(|_| NetLimits::default(), |row| self.limits[row].1)
     }
 
+    /// Returns a domain's nominal voltage, as the file states it (any finite
+    /// value). Panics on an id from another intent.
     pub fn domain_voltage(&self, domain: DomainId) -> Qty<Voltage, { prefix::MILLI }> {
         self.domain_voltage[domain.0 as usize]
     }
@@ -157,6 +178,11 @@ fn checked_limit(value: Option<f64>, net: &str) -> Result<Option<f64>, IntentErr
 ///
 /// Every section is optional; an absent key is [`NetLimits`]'s `None`. `supplies` and
 /// `limits` are arrays so a net stated twice is expressible, and therefore refusable.
+///
+/// # Errors
+///
+/// Any [`IntentError`] but [`IntentError::Io`]; nothing partial is returned.
+/// On error, `strings` may have gained names.
 pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent, IntentError> {
     let file: IntentFile =
         serde_json::from_str(source).map_err(|e| IntentError::Malformed(e.to_string()))?;
@@ -243,7 +269,12 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     Ok(out)
 }
 
-/// Read design intent from a file.
+/// Reads design intent from a file; see [`parse_intent`] for the schema.
+///
+/// # Errors
+///
+/// [`IntentError::Io`] naming the path when it cannot be read, else as
+/// [`parse_intent`].
 pub fn read_intent(
     path: &std::path::Path,
     strings: &mut StrTable,
