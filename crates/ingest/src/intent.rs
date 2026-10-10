@@ -15,15 +15,20 @@ pub enum IntentError {
     #[error("malformed intent file: {0}")]
     Malformed(String),
     /// A net listed more than once in `supplies`, in one domain or two.
-    #[error("net {0} is declared in two power domains")]
+    #[error("net {0} is listed more than once in supplies")]
     DomainConflict(String),
     /// A declared domain that no supply net belongs to.
     #[error("domain {0} has no supply net")]
     DomainWithoutSupply(String),
-    /// Any stated limit of the named net (drop, drop fraction, overvoltage or
-    /// current budget) is zero, negative, `NaN` or infinite.
-    #[error("net {0}: IR-drop limit is not a positive voltage")]
-    BadLimit(String),
+    /// A stated limit of a net (drop, drop fraction, overvoltage or current
+    /// budget) is zero, negative, `NaN` or infinite.
+    #[error("net {net}: {limit} is not a positive finite number")]
+    BadLimit {
+        /// The net the limit belongs to.
+        net: String,
+        /// The limit's key in the file, such as `max_drop_mv`.
+        limit: &'static str,
+    },
     /// The intent file could not be read.
     #[error("io: {0}")]
     Io(String),
@@ -154,9 +159,16 @@ struct LimitSpec {
 /// A stated limit must be a strictly positive, finite number. Zero, negative,
 /// NaN and infinity are refused rather than carried: a NaN compares false
 /// against every measurement, so it would check nothing.
-fn checked_limit(value: Option<f64>, net: &str) -> Result<Option<f64>, IntentError> {
+fn checked_limit(
+    value: Option<f64>,
+    net: &str,
+    limit: &'static str,
+) -> Result<Option<f64>, IntentError> {
     match value {
-        Some(v) if !(v.is_finite() && v > 0.0) => Err(IntentError::BadLimit(net.to_owned())),
+        Some(v) if !(v.is_finite() && v > 0.0) => Err(IntentError::BadLimit {
+            net: net.to_owned(),
+            limit,
+        }),
         v => Ok(v),
     }
 }
@@ -249,10 +261,23 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         limit.push((
             strings.intern(&spec.net),
             NetLimits {
-                max_drop: checked_limit(spec.max_drop_mv, &spec.net)?.map(Qty::new),
-                max_drop_fraction: checked_limit(spec.max_drop_fraction, &spec.net)?,
-                max_overvoltage: checked_limit(spec.max_overvoltage_mv, &spec.net)?.map(Qty::new),
-                budget_current_ua: checked_limit(spec.budget_current_ua, &spec.net)?,
+                max_drop: checked_limit(spec.max_drop_mv, &spec.net, "max_drop_mv")?.map(Qty::new),
+                max_drop_fraction: checked_limit(
+                    spec.max_drop_fraction,
+                    &spec.net,
+                    "max_drop_fraction",
+                )?,
+                max_overvoltage: checked_limit(
+                    spec.max_overvoltage_mv,
+                    &spec.net,
+                    "max_overvoltage_mv",
+                )?
+                .map(Qty::new),
+                budget_current_ua: checked_limit(
+                    spec.budget_current_ua,
+                    &spec.net,
+                    "budget_current_ua",
+                )?,
             },
         ));
     }

@@ -79,3 +79,44 @@ fn an_intent_file_that_cannot_be_opened_is_an_error_rather_than_an_empty_intent(
         other => panic!("an unreadable intent file produced {other:?} rather than IntentError::Io"),
     }
 }
+
+/// Oracle: construct-from-answer. Each of the four limits, stated as zero,
+/// is refused with a message naming that limit's key; a current budget is not
+/// "an IR-drop limit" and not a voltage.
+#[test]
+fn a_bad_limit_names_the_limit_it_is() {
+    for key in [
+        "max_drop_mv",
+        "max_drop_fraction",
+        "max_overvoltage_mv",
+        "budget_current_ua",
+    ] {
+        let source = format!(
+            r#"{{"domains":{{"core":{{"voltage_mv":1800}}}},
+            "supplies":[{{"net":"VDD","domain":"core","role":"power"}}],
+            "limits":[{{"net":"VDD","{key}":0}}]}}"#
+        );
+        let error = gpurify_ingest::intent::parse_intent(&source, &mut StrTable::default())
+            .expect_err("a zero limit is refused");
+        assert_eq!(
+            error.to_string(),
+            format!("net VDD: {key} is not a positive finite number")
+        );
+    }
+}
+
+/// Oracle: construct-from-answer. A supply listed twice in the same domain is
+/// refused, and the message says what is wrong: the repeat, not two domains.
+#[test]
+fn a_supply_listed_twice_in_one_domain_is_named_as_a_repeat() {
+    let source = r#"{"domains":{"core":{"voltage_mv":1800}},
+        "supplies":[{"net":"VDD","domain":"core","role":"power"},
+                    {"net":"VDD","domain":"core","role":"power"}],
+        "limits":[]}"#;
+    let error = gpurify_ingest::intent::parse_intent(source, &mut StrTable::default())
+        .expect_err("a repeated supply is refused");
+    assert_eq!(
+        error.to_string(),
+        "net VDD is listed more than once in supplies"
+    );
+}
