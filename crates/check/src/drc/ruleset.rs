@@ -238,8 +238,10 @@ pub enum Rule {
     ///
     /// Deck: `prl_space(L; prl: len) >= len`, kind `prl_spacing`. Pairs are
     /// shapes in different merged figures. The run is the longer of the two
-    /// overlaps of their bounding boxes' projections, so an L-shape's run is
-    /// overstated, which holds more pairs to the limit (fails closed).
+    /// overlaps of the projections of their merged figures' bounding boxes, so
+    /// a wire drawn as short segments runs its whole length, and an L-shaped
+    /// figure's run is overstated, which holds more pairs to the limit (fails
+    /// closed).
     ///
     /// One violation per offending pair, at the middle of the gap between
     /// their bounding boxes. `examined` counts pairs whose run reaches
@@ -811,12 +813,12 @@ pub enum Rule {
     /// Deck: `space_table(L; prl: [..], width: [..], space: [[..], ..])`, kind
     /// `spacing_table`. Pairs are shapes in different merged figures, never a
     /// polygon and its own hole. A pair takes the column of the last `prl` its
-    /// run strictly exceeds, the run measured on bounding boxes as for
-    /// [`Rule::PrlSpacing`]. It is held, for each row above the first, to that
-    /// row's cell, measured from the part of either shape strictly wider than
-    /// the row's width (where a `width + 1` square fits in the merged layer),
-    /// and to the first row's cell measured from the whole shapes. A thin tab
-    /// of a wide plate is held to the first row only.
+    /// run strictly exceeds, the run measured on the merged figures' bounding
+    /// boxes as for [`Rule::PrlSpacing`]. It is held, for each row above the
+    /// first, to that row's cell, measured from the part of either shape
+    /// strictly wider than the row's width (where a `width + 1` square fits in
+    /// the merged layer), and to the first row's cell measured from the whole
+    /// shapes. A thin tab of a wide plate is held to the first row only.
     ///
     /// One violation per pair, at its highest failing row, with `limit` that
     /// row's cell and `measured` the distance that row measured, at the

@@ -294,6 +294,17 @@ fn parallel_run_length(a: Bbox, b: Bbox) -> Dbu {
     Dbu::new_unchecked(along_x.max(along_y).clamp(0, MAX_ABS_DBU))
 }
 
+/// Each merged figure's bounding box, indexed by the label [`prepare`] gave
+/// its rows, so a figure drawn as several shapes runs its whole length.
+fn figure_boxes(store: &GeometryStore, layer: LayerId, labels: &[ComponentLabel]) -> Vec<Bbox> {
+    let mut boxes = vec![Bbox::EMPTY; labels.len()];
+    for (row, label) in store.polys_on_layer(layer).zip(labels) {
+        let figure = &mut boxes[label.0 as usize];
+        *figure = figure.union(store.poly_bbox(PolyId(row)));
+    }
+    boxes
+}
+
 /// Each polygon's wide rectangles, CSR: every `wide` rectangle of the
 /// polygon's own figure (component `labels`), grown by `attached`, clipped to
 /// the polygon rectangle by rectangle.
@@ -367,9 +378,10 @@ pub(crate) fn net_spacing(
 }
 
 /// Spacing by table: each separate pair is held to the cell of its run length
-/// and of each width row either shape reaches, measured from that shape's
-/// part at least as wide (row 0 from the whole shape). A pair reports once,
-/// at its highest failing row. `examined` counts separate pairs.
+/// (read off the merged figures' boxes) and of each width row either shape
+/// reaches, measured from that shape's part at least as wide (row 0 from the
+/// whole shape). A pair reports once, at its highest failing row. `examined`
+/// counts separate pairs.
 pub(crate) fn spacing_table(
     store: &GeometryStore,
     rule: StrId,
@@ -405,6 +417,8 @@ pub(crate) fn spacing_table(
     }
     let polys = &s.rects_a;
     let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize] as usize;
+    let figures = figure_boxes(store, layer, &s.labels);
+    let figure_of = |row: PolyId| figures[s.labels[(row.0 - first_row) as usize].0 as usize];
 
     let mut examined = 0u64;
     for (&(a, b), &whole) in s.pairs.iter().zip(&s.dists) {
@@ -414,7 +428,7 @@ pub(crate) fn spacing_table(
             continue;
         }
         examined += 1;
-        let run = parallel_run_length(store.poly_bbox(a), store.poly_bbox(b));
+        let run = parallel_run_length(figure_of(a), figure_of(b));
         let column = table.prl[1..].iter().filter(|&&prl| prl < run).count();
         let (axs, ays) = store.poly_verts(a);
         let (bxs, bys) = store.poly_verts(b);
@@ -438,8 +452,8 @@ pub(crate) fn spacing_table(
     (Outcome::Ran, examined)
 }
 
-/// Parallel-run-length spacing. `examined` counts separate pairs whose run
-/// reaches `threshold`.
+/// Parallel-run-length spacing, the run read off the merged figures' boxes.
+/// `examined` counts separate pairs whose run reaches `threshold`.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn prl_spacing(
     store: &GeometryStore,
@@ -453,8 +467,11 @@ pub(crate) fn prl_spacing(
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
+    let figures = figure_boxes(store, layer, &s.labels);
+    let first_row = store.polys_on_layer(layer).start;
+    let figure_of = |row: PolyId| figures[s.labels[(row.0 - first_row) as usize].0 as usize];
     let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
-        (parallel_run_length(store.poly_bbox(a), store.poly_bbox(b)) >= threshold).then_some(d2)
+        (parallel_run_length(figure_of(a), figure_of(b)) >= threshold).then_some(d2)
     });
     (Outcome::Ran, examined)
 }

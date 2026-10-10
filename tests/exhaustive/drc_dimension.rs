@@ -22,8 +22,6 @@
 //!
 //! The findings carried here:
 //! - `F18`: `min_edge_length` measures drawn polygons, not the merged figure.
-//! - `F49`: `prl_spacing` and `spacing_table` read the run off each drawn
-//!   polygon's box, so a wire drawn as short segments escapes the run limit.
 
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Want};
 use gpurify::check::report::Measurement;
@@ -1489,17 +1487,16 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
 // ---------------------------------------------------------------- prl_spacing
 
 /// `prl_space(met1; prl: 500nm) >= 101nm` (`prl_spacing`, DRC-026): pairs in
-/// different figures whose run (the longer overlap of their boxes'
-/// projections) is at least 500 are held to 101. One finding per pair, at the
-/// middle of the gap between their boxes.
+/// different figures whose run (the longer overlap of the projections of their
+/// merged figures' boxes) is at least 500 are held to 101. One finding per
+/// pair, at the middle of the gap between their boxes.
 ///
 /// The run swept around 500 at a gap of 100 (at 500 the limit applies); the
 /// gap swept at a long run; an L whose box overstates the run against a short
 /// bar (the definition holds it to the limit: fails closed); a diagonal pair
-/// (no run); touching shapes (one figure). Known to fail (`F49`): a wire
-/// drawn as segments, each shorter than the threshold, runs its whole length
-/// beside the other wire; read per segment, the boxes understate the run and
-/// fail open.
+/// (no run); touching shapes (one figure); a wire drawn as segments, each
+/// shorter than the threshold, which runs its whole length beside the other
+/// wire.
 fn prl_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule prl prl_space(met1; prl: 500nm) >= 101nm");
@@ -1566,32 +1563,29 @@ fn prl_spacing(depth: Depth) -> Vec<Fixture> {
     );
     // A line 100 from another that runs 2000 beside it, drawn as four
     // 500-long segments: the figures run 2000 alongside, past a 600
-    // threshold, so each segment's pair is held to the limit. Today the run
-    // is read off each segment's box, 500, and the wire escapes the limit.
-    cases.push(
-        fixture(
-            "prl_spacing/segmented_run",
-            &["DRC-026"],
-            &one_layer_deck("rule prl prl_space(met1; prl: 600nm) >= 101nm"),
-            met1(&[
-                [0, 0, 100, 2000],
-                [200, 0, 300, 500],
-                [200, 500, 300, 1000],
-                [200, 1000, 300, 1500],
-                [200, 1500, 300, 2000],
-            ]),
-            vec![(
-                "prl",
-                vec![
-                    Finding::length(100).at(150, 250),
-                    Finding::length(100).at(150, 750),
-                    Finding::length(100).at(150, 1250),
-                    Finding::length(100).at(150, 1750),
-                ],
-            )],
-        )
-        .known("F49"),
-    );
+    // threshold, so each segment's pair is held to the limit; read off each
+    // segment's box, the run would be 500 and the wire would escape it.
+    cases.push(fixture(
+        "prl_spacing/segmented_run",
+        &["DRC-026"],
+        &one_layer_deck("rule prl prl_space(met1; prl: 600nm) >= 101nm"),
+        met1(&[
+            [0, 0, 100, 2000],
+            [200, 0, 300, 500],
+            [200, 500, 300, 1000],
+            [200, 1000, 300, 1500],
+            [200, 1500, 300, 2000],
+        ]),
+        vec![(
+            "prl",
+            vec![
+                Finding::length(100).at(150, 250),
+                Finding::length(100).at(150, 750),
+                Finding::length(100).at(150, 1250),
+                Finding::length(100).at(150, 1750),
+            ],
+        )],
+    ));
     let mut out = every_placement(cases);
     out.push(vacuous(
         "prl_spacing",
@@ -1976,17 +1970,18 @@ const TABLE: &str = "rule t space_table(met1;
             [180nm, 220nm]])";
 
 /// `space_table` (`spacing_table`, DRC-025, DRC-026, DRC-027): the column of
-/// the last `prl` the box run strictly exceeds, the row of the last `width`
-/// the wider shape strictly exceeds (measured on its part that wide), the
-/// first row always applied to whole shapes. One finding per pair, measuring
-/// its distance, at the middle of the gap between the boxes.
+/// the last `prl` the run of the merged figures' boxes strictly exceeds, the
+/// row of the last `width` the wider shape strictly exceeds (measured on its
+/// part that wide), the first row always applied to whole shapes. One finding
+/// per pair, measuring its distance, at the middle of the gap between the
+/// boxes.
 ///
 /// A `wa`-wide line beside a 100-wide one, `g` apart with a run `r`: the width
 /// swept around 300 (exactly 300 is the first row), the run around 1000
 /// (exactly 1000 is the first column), the gap around 220 and, for two thin
 /// lines, around 180. A thin tab of a wide plate is held to the first row
 /// only; a ring's own hole is never a pair; touching lines are one figure.
-/// Known to fail (`F49`): the column of a wire drawn as short segments.
+/// A wire drawn as short segments takes the column of its whole run.
 fn spacing_table(depth: Depth) -> Vec<Fixture> {
     let deck = one_layer_deck(TABLE);
     let mut cases = Vec::new();
@@ -2072,33 +2067,29 @@ fn spacing_table(depth: Depth) -> Vec<Fixture> {
     }
     // A 400-wide line and a 100-wide one 200 apart, running 2000 alongside,
     // the thin one drawn as four 500-long segments: the figures' run passes
-    // 1000, so each segment's pair is held to 220. Today the column comes from
-    // each segment's box (run 500: 180), and the wire escapes the second
-    // column.
-    cases.push(
-        fixture(
-            "spacing_table/segmented_run",
-            &["DRC-026"],
-            &deck,
-            met1(&[
-                [0, 0, 400, 2000],
-                [600, 0, 700, 500],
-                [600, 500, 700, 1000],
-                [600, 1000, 700, 1500],
-                [600, 1500, 700, 2000],
-            ]),
-            vec![(
-                "t",
-                vec![
-                    Finding::length(200).at(500, 250),
-                    Finding::length(200).at(500, 750),
-                    Finding::length(200).at(500, 1250),
-                    Finding::length(200).at(500, 1750),
-                ],
-            )],
-        )
-        .known("F49"),
-    );
+    // 1000, so each segment's pair is held to 220; read off each segment's
+    // box (run 500: 180), the wire would escape the second column.
+    cases.push(fixture(
+        "spacing_table/segmented_run",
+        &["DRC-026"],
+        &deck,
+        met1(&[
+            [0, 0, 400, 2000],
+            [600, 0, 700, 500],
+            [600, 500, 700, 1000],
+            [600, 1000, 700, 1500],
+            [600, 1500, 700, 2000],
+        ]),
+        vec![(
+            "t",
+            vec![
+                Finding::length(200).at(500, 250),
+                Finding::length(200).at(500, 750),
+                Finding::length(200).at(500, 1250),
+                Finding::length(200).at(500, 1750),
+            ],
+        )],
+    ));
     let mut out = every_placement(cases);
     out.push(vacuous("spacing_table", &["DRC-025"], TABLE, &["t"]));
     out
