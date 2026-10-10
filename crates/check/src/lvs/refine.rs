@@ -9,6 +9,14 @@
 //! it with the reference node of that class whose parameters are closest (netgen's
 //! "resolving symmetries by property value"), the lowest such on a tie, one class
 //! per stall.
+//!
+//! Refinement cannot always split nodes that no relabelling exchanges, so the
+//! closest node can be the wrong one (testing-plan F58). A pairing is a trial
+//! while a match is still possible: refined until stable, it is kept when no
+//! class holds more reference nodes than layout nodes and every device pair it
+//! formed agrees on parameters; otherwise an undo log takes it back and the
+//! next closest is tried, up to [`TRIES`]. When none fits, the closest is kept
+//! and no later stall tries again, since a match is then out of reach.
 
 use crate::lvs::graph::{narrow, Graph};
 use crate::topology::TerminalRole;
@@ -16,6 +24,25 @@ use gpurify_ingest::deck::DeviceKind;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ClassId(pub(crate) u32);
+
+/// The most reference nodes a stall tries its layout node against.
+///
+/// ponytail: depth one, eight wide. A wrong pairing that refinement exposes
+/// only after a later tie-break is kept, and so is one whose right partner
+/// ranks past the eighth; a search over several stalls fixes both if a
+/// circuit ever needs it.
+pub(crate) const TRIES: usize = 8;
+
+/// One change a trial made, so a rejected trial can be taken back.
+#[derive(Debug, Clone, Copy)]
+enum Undo {
+    /// [`Partition::place`] swapped these two `member` slots.
+    Swap(u32, u32),
+    /// [`Partition::carve`] made the last class out of this one.
+    Carve(u32),
+    /// A pass moved this class's start from this offset.
+    Start(u32, u32),
+}
 
 /// Refinement state for both graphs. Node index is devices first, then nets;
 /// internally layout nodes come first and reference nodes follow them.
@@ -48,6 +75,16 @@ pub(crate) struct Partition {
     seen: Vec<u32>,
     /// `(offset, length)` of each part a class splits into.
     parts: Vec<(u32, u32)>,
+    /// Classes holding more reference nodes than layout nodes. Splitting such a
+    /// class leaves a part that still does, so once above zero no match is
+    /// left to find.
+    deficit: u32,
+    /// Every change since the current trial began, while `trial` is set.
+    log: Vec<Undo>,
+    trial: bool,
+    /// Set when a stall found no candidate that fits: a match is out of reach,
+    /// and later stalls take their closest without trying others.
+    hopeless: bool,
 }
 
 /// Splitmix64's finaliser.
@@ -172,6 +209,28 @@ impl Sides<'_> {
         let missing = (one_sided(mine, theirs) + one_sided(theirs, mine)) as f64;
         shared + missing
     }
+
+    /// Whether layout node `layout` and reference node `reference` would pass
+    /// the verdict's parameter comparison: the same names, each value within
+    /// `tolerance` of the other relatively (`NaN` never is). Nets always do.
+    fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
+        let reference = reference - self.split;
+        if layout >= narrow(self.layout.device_count())
+            || reference >= narrow(self.reference.device_count())
+        {
+            return true;
+        }
+        let (mine, theirs) = (
+            self.layout.params_of(layout),
+            self.reference.params_of(reference),
+        );
+        mine.len() == theirs.len()
+            && mine.iter().all(|&(name, a)| {
+                theirs.iter().any(|&(other, b)| {
+                    other == name && (a - b).abs() <= tolerance * a.abs().max(b.abs())
+                })
+            })
+    }
 }
 
 impl Partition {
@@ -217,6 +276,15 @@ impl Partition {
         self.dirty.extend(0..narrow(nodes));
         self.seen.clear();
         self.seen.resize(nodes, 0);
+        self.deficit = narrow((0..self.start.len()).filter(|&c| self.short(c)).count());
+        self.log.clear();
+        self.trial = false;
+        self.hopeless = false;
+    }
+
+    /// Whether `class` holds more reference nodes than layout nodes.
+    fn short(&self, class: usize) -> bool {
+        self.size[class] > 2 * self.layout_size[class]
     }
 
     /// Move `node` to position `to` of `member`, swapping out what was there.
@@ -226,12 +294,16 @@ impl Partition {
         self.member.swap(from as usize, to as usize);
         self.slot[other as usize] = from;
         self.slot[node as usize] = to;
+        if self.trial {
+            self.log.push(Undo::Swap(from, to));
+        }
     }
 
     /// Carve `member[from .. from + count]` out of `parent` into a new class
     /// whose nodes become dirty. The caller re-points `parent`'s range.
     fn carve(&mut self, parent: u32, from: u32, count: u32, split: u32) {
         let class = narrow(self.start.len());
+        let was_short = self.short(parent as usize);
         let mut layout = 0;
         for at in from..from + count {
             let node = self.member[at as usize];
@@ -244,6 +316,42 @@ impl Partition {
         self.layout_size.push(layout);
         self.size[parent as usize] -= count;
         self.layout_size[parent as usize] -= layout;
+        self.deficit = self.deficit - u32::from(was_short)
+            + u32::from(self.short(parent as usize))
+            + u32::from(self.short(class as usize));
+        if self.trial {
+            self.log.push(Undo::Carve(parent));
+        }
+    }
+
+    /// Take back every change the log holds, newest first, leaving the
+    /// partition as the trial found it but for `deficit`, which the caller
+    /// restores.
+    fn undo(&mut self) {
+        while let Some(change) = self.log.pop() {
+            match change {
+                Undo::Swap(a, b) => {
+                    self.member.swap(a as usize, b as usize);
+                    self.slot[self.member[a as usize] as usize] = a;
+                    self.slot[self.member[b as usize] as usize] = b;
+                }
+                Undo::Carve(parent) => {
+                    let class = self.start.len() - 1;
+                    let from = self.start[class] as usize;
+                    for at in from..from + self.size[class] as usize {
+                        self.class[self.member[at] as usize] = parent;
+                    }
+                    self.size[parent as usize] += self.size[class];
+                    self.layout_size[parent as usize] += self.layout_size[class];
+                    self.start.pop();
+                    self.size.pop();
+                    self.layout_size.pop();
+                }
+                Undo::Start(class, from) => self.start[class as usize] = from,
+            }
+        }
+        self.dirty.clear();
+        self.next_dirty.clear();
     }
 
     /// Re-sign every neighbour of a dirty node and split its class by signature.
@@ -306,6 +414,10 @@ impl Partition {
                 .enumerate()
                 .max_by_key(|&(at, &(_, length))| (length, std::cmp::Reverse(at)))
                 .map_or(0, |(at, _)| at);
+            if self.trial {
+                self.log
+                    .push(Undo::Start(parent, self.start[parent as usize]));
+            }
             self.start[parent as usize] = parts[keep].0;
             for (at, &(from, length)) in parts.iter().enumerate() {
                 if at != keep {
@@ -335,34 +447,139 @@ impl Partition {
         self.size[class] == layout || (layout == 1 && self.size[class] == 2)
     }
 
-    /// Pair `node` with the reference node of its class whose parameters are
-    /// closest, the lowest on a tie, as a new class of their own.
-    fn tie_break(&mut self, node: u32, sides: Sides) {
-        let split = sides.split;
-        let class = self.class[node as usize];
-        let (from, end) = (
-            self.start[class as usize],
-            self.start[class as usize] + self.size[class as usize],
-        );
-        // ponytail: O(class size) per stall; keep members sorted per class if a
-        // huge class of isolated nodes ever shows up in a profile. Greedy in
-        // layout order, not an optimal assignment: a class of sizes where the
-        // lowest layout node's closest mate starves a later one can still
-        // mismatch; a Hungarian solve per class fixes that if it ever shows up.
-        let mate = self.member[from as usize..end as usize]
+    /// The reference nodes of `node`'s class.
+    fn mates(&self, node: u32, split: u32) -> impl Iterator<Item = u32> + '_ {
+        let class = self.class[node as usize] as usize;
+        let from = self.start[class] as usize;
+        self.member[from..from + self.size[class] as usize]
             .iter()
             .copied()
-            .filter(|&member| member >= split)
+            .filter(move |&member| member >= split)
+    }
+
+    /// The reference node of `node`'s class whose parameters are closest, the
+    /// lowest on a tie.
+    ///
+    /// ponytail: O(class size) per stall; keep members sorted per class if a
+    /// huge class of isolated nodes ever shows up in a profile.
+    fn closest(&self, node: u32, sides: Sides) -> u32 {
+        self.mates(node, sides.split)
             .min_by(|&a, &b| {
                 let (da, db) = (sides.distance(node, a), sides.distance(node, b));
                 da.total_cmp(&db).then(a.cmp(&b))
             })
-            .expect("a stalled class holds reference nodes");
+            .expect("a stalled class holds reference nodes")
+    }
+
+    /// The next [`TRIES`] − 1 reference nodes of `node`'s class after
+    /// `closest`, in the same order: closest parameters first, lowest first
+    /// on a tie.
+    fn ranked(&self, node: u32, sides: Sides, closest: u32) -> Vec<u32> {
+        let mut ranked: Vec<(f64, u32)> = self
+            .mates(node, sides.split)
+            .filter(|&mate| mate != closest)
+            .map(|mate| (sides.distance(node, mate), mate))
+            .collect();
+        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        ranked.truncate(TRIES - 1);
+        ranked.into_iter().map(|(_, mate)| mate).collect()
+    }
+
+    /// Pair `node` with `mate`, a reference node of its class, as a new class
+    /// of their own whose two nodes are dirty.
+    fn pair(&mut self, node: u32, mate: u32, split: u32) {
+        let class = self.class[node as usize];
+        let end = self.start[class as usize] + self.size[class as usize];
         self.place(node, end - 2);
         self.place(mate, end - 1);
         self.next_dirty.clear();
         self.carve(class, end - 2, 2, split);
         std::mem::swap(&mut self.dirty, &mut self.next_dirty);
+    }
+
+    /// Whether a settled trial can still be part of a match: no class short of
+    /// layout nodes, and every one-to-one device class it made, the classes
+    /// from `fresh` on and the ones they were carved from, agreeing on
+    /// parameters.
+    fn fits(&self, sides: Sides, tolerance: f64, fresh: usize) -> bool {
+        let carved = self.log.iter().filter_map(|change| match *change {
+            Undo::Carve(parent) => Some(parent as usize),
+            _ => None,
+        });
+        self.deficit == 0
+            && (fresh..self.start.len()).chain(carved).all(|class| {
+                if self.size[class] != 2 || self.layout_size[class] != 1 {
+                    return true;
+                }
+                let from = self.start[class] as usize;
+                let (a, b) = (self.member[from], self.member[from + 1]);
+                let (layout, reference) = (a.min(b), a.max(b));
+                sides.agrees(layout, reference, tolerance)
+            })
+    }
+
+    /// Pass until no class splits. Returns `false` when more than
+    /// `max_rounds` passes in a row split one.
+    fn settle(&mut self, sides: Sides, max_rounds: u32, pass: &mut u32) -> bool {
+        let mut rounds = 0u32;
+        while !self.dirty.is_empty() {
+            *pass += 1;
+            if self.pass(sides, *pass) {
+                if rounds == max_rounds {
+                    return false;
+                }
+                rounds += 1;
+            }
+        }
+        true
+    }
+
+    /// Break the stall at layout node `node`: pair it with its closest
+    /// reference node and settle, trying the next closest in turn while the
+    /// result does not [fit](Self::fits) and a match is still possible.
+    /// Returns `false` when a settle runs out of rounds.
+    fn resolve(
+        &mut self,
+        node: u32,
+        sides: Sides,
+        (max_rounds, tolerance): (u32, f64),
+        pass: &mut u32,
+    ) -> bool {
+        let closest = self.closest(node, sides);
+        if self.hopeless || self.deficit > 0 {
+            self.pair(node, closest, sides.split);
+            return self.settle(sides, max_rounds, pass);
+        }
+        let (deficit, fresh) = (self.deficit, self.start.len());
+        let mut ranked: Option<Vec<u32>> = None;
+        let mut tried = 0;
+        let mut mate = closest;
+        loop {
+            self.trial = true;
+            self.log.clear();
+            self.pair(node, mate, sides.split);
+            let settled = self.settle(sides, max_rounds, pass);
+            self.trial = false;
+            if !settled {
+                return false;
+            }
+            if self.fits(sides, tolerance, fresh) {
+                return true;
+            }
+            self.undo();
+            self.deficit = deficit;
+            let others = ranked.get_or_insert_with(|| self.ranked(node, sides, closest));
+            let Some(&next) = others.get(tried) else {
+                break;
+            };
+            tried += 1;
+            mate = next;
+        }
+        // Nothing tried fits, so no match is left to find: the closest, and
+        // no more trials.
+        self.hopeless = true;
+        self.pair(node, closest, sides.split);
+        self.settle(sides, max_rounds, pass)
     }
 
     /// Per-class tallies and the layout classes, as the verdict reads them.
@@ -393,11 +610,13 @@ impl Partition {
 /// Refine until stable, leaving classes and tallies in `out`. Returns `false`
 /// when more than `max_rounds` passes in a row split a class without reaching a
 /// stall, which says nothing about whether the graphs match. The count restarts
-/// at each tie-break, so the number of symmetries does not spend it.
+/// at each tie-break and each trial of one, so the number of symmetries does
+/// not spend it. `tolerance` is the verdict's, which a trial pairing's devices
+/// must meet.
 pub(crate) fn refine_into(
     layout: &Graph,
     reference: &Graph,
-    max_rounds: u32,
+    (max_rounds, tolerance): (u32, f64),
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -408,25 +627,20 @@ pub(crate) fn refine_into(
     };
     out.seed(sides);
 
-    let (mut rounds, mut pass, mut cursor) = (0u32, 0u32, 0u32);
+    let (mut pass, mut cursor) = (0u32, 0u32);
+    if !out.settle(sides, max_rounds, &mut pass) {
+        return false;
+    }
     loop {
-        if out.dirty.is_empty() {
-            while cursor < split && out.settled(cursor) {
-                cursor += 1;
-            }
-            let Some(node) = (cursor..split).find(|&node| out.stalled(node)) else {
-                out.publish(split);
-                return true;
-            };
-            out.tie_break(node, sides);
-            rounds = 0;
+        while cursor < split && out.settled(cursor) {
+            cursor += 1;
         }
-        pass += 1;
-        if out.pass(sides, pass) {
-            if rounds == max_rounds {
-                return false;
-            }
-            rounds += 1;
+        let Some(node) = (cursor..split).find(|&node| out.stalled(node)) else {
+            out.publish(split);
+            return true;
+        };
+        if !out.resolve(node, sides, (max_rounds, tolerance), &mut pass) {
+            return false;
         }
     }
 }

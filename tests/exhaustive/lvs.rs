@@ -982,38 +982,6 @@ fn faults(c: &Circuit) -> Vec<(String, Circuit, &'static [&'static str])> {
     out
 }
 
-/// Enumerated fixtures that fail today because the tool's symmetry breaking
-/// pairs a device with the wrong member of a class refinement cannot split
-/// (finding F58), as `(circuit code, fault label)`. Each was re-derived by
-/// hand: the faulted reference is the layout's circuit, within tolerance.
-const TIE_BREAK: &[(&str, &str)] = &[
-    ("N0.0.0+N1.1.2+N2.1.2", "reversed"),
-    ("N0.0.0+N1.1.2+N2.1.2", "w+1.9/0"),
-    ("N0.0.0+N1.2.2+N2.1.1", "reversed"),
-    ("N0.0.0+N1.2.2+N2.1.1", "w+1.9/0"),
-    ("N0.0.1+N1.0.2+N2.1.2", "w+1.9/0"),
-    ("N0.0.1+N1.2.2+N2.0.1", "reversed"),
-    ("N0.0.1+N1.2.2+N2.0.1", "w+1.9/0"),
-    ("N0.1.1+N0.1.2+N0.2.2", "w+1.9/0"),
-    ("P0.0.0+P1.1.2+P2.1.2", "reversed"),
-    ("P0.0.0+P1.1.2+P2.1.2", "w+1.9/0"),
-    ("P0.0.0+P1.2.2+P2.1.1", "reversed"),
-    ("P0.0.0+P1.2.2+P2.1.1", "w+1.9/0"),
-    ("P0.0.1+P1.0.2+P2.1.2", "w+1.9/0"),
-    ("P0.0.1+P1.2.2+P2.0.1", "reversed"),
-    ("P0.0.1+P1.2.2+P2.0.1", "w+1.9/0"),
-    ("P0.1.1+P0.1.2+P0.2.2", "w+1.9/0"),
-    ("N0.0.1+N2.1.3+N3.1.2", "reversed"),
-    ("N0.0.1+N2.1.3+N3.1.2", "w+1.9/0"),
-    ("P0.0.1+P2.1.3+P3.1.2", "reversed"),
-    ("P0.0.1+P2.1.3+P3.1.2", "w+1.9/0"),
-];
-
-/// Why an enumerated fixture fails today, if it does.
-fn known_enum(code: &str, label: &str) -> Option<&'static str> {
-    TIE_BREAK.contains(&(code, label)).then_some("F58")
-}
-
 /// The circuit against its own reference, its cards reversed, and its faults,
 /// deduplicated up to isomorphism (the source/drain swaps are kept, since
 /// they differ only in text).
@@ -1078,10 +1046,7 @@ fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
                 .layout(layout.clone())
                 .expect(Expect::Lvs(matched));
             fixture.reference = Some(text);
-            match known_enum(&code, &label) {
-                Some(finding) => fixture.known(finding),
-                None => fixture,
-            }
+            fixture
         })
         .collect()
 }
@@ -1508,9 +1473,10 @@ fn curated() -> Vec<Fixture> {
         &sym(1000, 2000),
         &sym(1000, 1000),
     ));
-    // F58's smallest cases: a class refinement cannot split, broken the
-    // wrong way. The layout's own circuit with its cards reversed; and a
-    // circuit whose one device is written 1.9 % wide.
+    // F58 (fixed in B17), its smallest cases: a class refinement cannot
+    // split, which the closest-parameter pairing alone broke the wrong way.
+    // The layout's own circuit with its cards reversed; and a circuit whose
+    // one device is written 1.9 % wide.
     let lone = Circuit::new(
         3,
         vec![
@@ -1527,8 +1493,7 @@ fn curated() -> Vec<Fixture> {
             draw(&lone),
             text,
         )
-        .expect(Expect::Lvs(true))
-        .known("F58"),
+        .expect(Expect::Lvs(true)),
     );
     let cycle = Circuit::new(
         3,
@@ -1541,7 +1506,7 @@ fn curated() -> Vec<Fixture> {
     let mut cycle_wide = cycle.clone();
     cycle_wide.devs[0].w = 1019;
     let name = "symmetry/refinement_stall_by_parameter";
-    out.push(compared(name, rows, &cycle, &cycle_wide).known("F58"));
+    out.push(compared(name, rows, &cycle, &cycle_wide));
 
     // LVS-016: the port order of the reference does not matter.
     let inv = Circuit::new(4, vec![Dev::mos(N, 0, 2, 1), Dev::mos(P, 0, 3, 1)]);

@@ -13,7 +13,7 @@ use common::{
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
     stacked_pair_with_params, GraphBuilder, NCH, NPN, RES, VDD, VSS, WIDTH,
 };
-use gpurify_check::lvs::graph::from_reference;
+use gpurify_check::lvs::graph::{from_reference, Graph};
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use gpurify_check::lvs::{compare, compare_logged, CompareOptions};
 use gpurify_ingest::deck::DeviceKind;
@@ -773,4 +773,86 @@ fn a_labelled_middle_node_is_kept_on_both_sides() {
         Verdict::Match,
         "the label names a node the schematic does not"
     );
+}
+
+/// Three-terminal MOS `(gate, source, drain, width)` on `nets` nets, in the
+/// order given.
+fn mos_circuit(nets: u32, devices: &[(u32, u32, u32, f64)]) -> Graph {
+    use gpurify_check::topology::TerminalRole::{Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(nets);
+    for &(gate, source, drain, width) in devices {
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, gate), (Source, source), (Drain, drain)],
+            &[(WIDTH, width)],
+        );
+    }
+    builder.finish()
+}
+
+/// Oracle: law, testing-plan F58. A netlist matches itself in any card
+/// order. Refinement cannot tell these devices apart (every device has a
+/// gate and two channel ends on nets of one class, and every net carries
+/// one gate and two channel ends), yet they are not interchangeable:
+/// device 0 has all three terminals on net 0, while devices 1 and 2 swap
+/// under exchanging nets 1 and 2. Breaking that symmetry by pairing layout
+/// device 0 with whichever reference device comes first, as the greedy
+/// tie-break did, pairs it with one of the other two once the cards are
+/// reversed. Hand-derived from the circuit, not from a run.
+#[test]
+fn a_netlist_matches_itself_reversed_when_refinement_cannot_split_its_devices() {
+    let devices = [(0, 0, 0, 1e-6), (1, 1, 2, 1e-6), (2, 1, 2, 1e-6)];
+    let mut reversed = devices;
+    reversed.reverse();
+    let verdict = compare(
+        &mos_circuit(3, &devices),
+        &mos_circuit(3, &reversed),
+        CompareOptions::default(),
+    );
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: construct-from-answer, testing-plan F58. A three-device cycle
+/// (gate nets 0, 1, 2) whose reference states device 0 1.9 % wide, inside
+/// the 2 % tolerance: the same circuit. Devices 0 and 2 swap under
+/// exchanging nets 0 and 2, and device 1 is fixed, but refinement sees all
+/// three as one class. Closest parameters alone send layout device 0 to
+/// reference device 1, at distance 0, which no relabelling allows.
+#[test]
+fn a_cycle_with_one_device_inside_tolerance_matches() {
+    let layout = [(0, 0, 1, 1e-6), (1, 0, 2, 1e-6), (2, 1, 2, 1e-6)];
+    let mut reference = layout;
+    reference[0].3 = 1.019e-6;
+    let verdict = compare(
+        &mos_circuit(3, &layout),
+        &mos_circuit(3, &reference),
+        CompareOptions::default(),
+    );
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: law, testing-plan F58. Two two-stage buffers fed by net 0, the
+/// first stage of each 1 µm wide, the second 1 µm in one and 2 µm in the
+/// other. The two buffers are interchangeable to refinement (names take no
+/// part), so the first stages tie at distance 0; paired the wrong way round,
+/// the second stages pair 1 µm with 2 µm. Written in reverse, the netlist
+/// still matches itself. Nets: 0 the input, 1 ground, 2 and 3 the inner
+/// nodes, 4 and 5 the outputs.
+#[test]
+fn two_buffers_sized_apart_match_themselves_reversed() {
+    let devices = [
+        (0, 1, 2, 1e-6),
+        (2, 1, 4, 1e-6),
+        (0, 1, 3, 1e-6),
+        (3, 1, 5, 2e-6),
+    ];
+    let mut reversed = devices;
+    reversed.reverse();
+    let verdict = compare(
+        &mos_circuit(6, &devices),
+        &mos_circuit(6, &reversed),
+        CompareOptions::default(),
+    );
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
 }

@@ -28,8 +28,12 @@
 //!    nodes on each side, by pairing its lowest layout node with the
 //!    reference node of the class whose parameters are closest (the lowest on
 //!    a tie, and always for nets), then refines again. This is how Netgen
-//!    resolves symmetries by property value (catalog LVS-018). The choice is
-//!    greedy per stall, not an optimal assignment;
+//!    resolves symmetries by property value (catalog LVS-018). Refinement
+//!    cannot always tell apart nodes no relabelling exchanges, so while a
+//!    match is still possible the pairing is a trial: kept when no class is
+//!    left with more reference nodes than layout nodes and every device pair
+//!    it forms agrees on parameters, otherwise taken back and the next closest
+//!    tried, up to eight per stall (testing-plan F58);
 //! 5. reads the final partition: a class with exactly one node per side pairs
 //!    them, and every paired device must also agree on kind, model, terminals
 //!    and parameters. Everything else is a [`Discrepancy`].
@@ -71,6 +75,16 @@
 //!   cell (catalog LVS-010, LVS-017).
 //! - **F16, weak parameters.** The layout measures only MOS `w` and `l` and
 //!   each device's marker `area`, so passives are not sized.
+//! - **Bounded symmetry search.** A tie-break takes back only a pairing whose
+//!   own refinement shows it wrong, and tries at most eight candidates; a
+//!   wrong pairing exposed only after a later tie-break, or a right one past
+//!   the eighth, is kept, and the verdict is then a false mismatch, never a
+//!   false match.
+//! - **Passive values are counted, not combined.** Parallel resistors,
+//!   capacitors and diodes merge into one device of the same value with a
+//!   count `m`, so two capacitors of `c` do not match one card of `2c`,
+//!   which `KLayout`, adding the capacitance, would pass ([`reduce`]). The
+//!   conservative side: a false mismatch, never a false match.
 
 pub mod checks;
 mod compare;

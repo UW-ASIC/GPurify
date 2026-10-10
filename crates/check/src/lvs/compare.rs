@@ -21,8 +21,8 @@ use std::cmp::Ordering;
 pub struct CompareOptions {
     /// The most refinement passes in a row that may split a class without the
     /// partition settling; one more is [`Inconclusive::RoundLimit`]. The count
-    /// restarts at each symmetry tie-break, so the number of symmetries does
-    /// not spend it.
+    /// restarts at each symmetry tie-break, and at each pairing a tie-break
+    /// tries, so the number of symmetries does not spend it.
     pub max_rounds: u32,
     /// Relative tolerance `tol` for every parameter of a paired device: values
     /// `a` and `b` agree when `|a - b| <= tol * max(|a|, |b|)`. `NaN` never
@@ -55,9 +55,12 @@ impl Default for CompareOptions {
 /// (a three-terminal MOS recogniser), and a layout device keeps a parameter
 /// only when the reference declares it on some device of the same kind and
 /// model (a reference that sizes its diodes by `area` says nothing about its
-/// transistors' areas). Then both sides are reduced and refined together. A symmetry pairs its lowest layout node with the reference node
-/// whose parameters are closest, so a stall resolves by property value rather
-/// than by row order. Neither input is modified.
+/// transistors' areas). Then both sides are reduced and refined together. A
+/// symmetry pairs its lowest layout node with the reference node whose
+/// parameters are closest, so a stall resolves by property value rather than
+/// by row order, and a pairing that leaves a class short of layout nodes or
+/// pairs devices that disagree is taken back for the next closest, so card
+/// order does not decide a match either. Neither input is modified.
 ///
 /// The verdict is deterministic: the same graphs and options give the same
 /// verdict and the same discrepancy order on every run.
@@ -124,7 +127,8 @@ pub fn compare_logged(
         .chain(reference_merges.into_iter().map(|m| (Side::Reference, m)))
         .collect();
     let mut partition = Partition::default();
-    if !refine_into(&layout, &reference, options.max_rounds, &mut partition) {
+    let budget = (options.max_rounds, options.param_tolerance);
+    if !refine_into(&layout, &reference, budget, &mut partition) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
     (
