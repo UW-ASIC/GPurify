@@ -642,3 +642,39 @@ fn a_counted_card_matches_two_drawn_capacitors_and_not_one() {
         }])
     );
 }
+
+/// Oracle: the parallel law, testing-plan F57. Two transistors gated by net
+/// 0 whose sources and drains all sit on net 1 are on the same nets role for
+/// role, so they are one transistor of their summed width, with the head's
+/// terminals: its source and drain both still on net 1. Counting the distinct
+/// channel nets that survive (one, not two) used to dissolve the pair, so
+/// the layout's two 1 µm fingers did not match the reference's 2 µm card.
+#[test]
+fn parallel_transistors_with_source_and_drain_shorted_merge() {
+    let shorted = |widths: &[f64]| {
+        let mut builder = GraphBuilder::new(3);
+        for &w in widths {
+            builder.device_with_params(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, 1), (Drain, 1), (Bulk, 2)],
+                &[(WIDTH, w), (LENGTH, 1.5e-7)],
+            );
+        }
+        builder.finish()
+    };
+    let (out, merges) = gpurify_check::lvs::reduce::reduce_with(&shorted(&[1e-6, 1e-6]), NAMES);
+    assert_eq!(out.device_count(), 1, "{merges:?}");
+    assert_eq!(
+        terminals(&out, 0),
+        [(Gate, 0), (Source, 1), (Drain, 1), (Bulk, 2)]
+    );
+    assert_eq!(sorted_params(&out, 0), [(WIDTH, 2e-6), (LENGTH, 1.5e-7)]);
+
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let verdict = compare(&shorted(&[1e-6, 1e-6]), &shorted(&[2e-6]), options);
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}

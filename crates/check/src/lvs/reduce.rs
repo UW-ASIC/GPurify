@@ -21,9 +21,11 @@
 //!
 //! - **Parallel** (catalog LVS-040, LVS-043, LVS-044; KLayout and Netgen both
 //!   do it): devices of one kind and one model whose terminals land on the
-//!   same nets role for role become one. MOS source and drain are
-//!   interchangeable, and so are a resistor's ends; a diode's or capacitor's
-//!   pins are not. This applies to every device kind and consumes no net.
+//!   same nets role for role become one, with the first's terminals. MOS
+//!   source and drain are interchangeable, and so are a resistor's ends; a
+//!   diode's or capacitor's pins are not. A MOS whose source and drain share
+//!   a net merges like any other. This applies to every device kind and
+//!   consumes no net.
 //! - **Series** (catalog LVS-041; on by default, which Netgen's is not): two
 //!   devices of one kind and one model whose channels (`Source`/`Drain`) meet
 //!   at a net carrying exactly those two terminals, with every other terminal
@@ -390,10 +392,14 @@ fn plan_into(src: &Graph, names: ParamNames, mode: MergeKind, plan: &mut Plan) -
     }
 
     // Groups, then validation, then the net renumbering: a group that does not
-    // survive validation must not take its nets with it.
+    // survive validation must not take its nets with it. A parallel group needs
+    // none: its members share the head's every terminal key, so it is the head,
+    // even one whose source and drain share a net (testing-plan F57).
     order_by_group(plan, devices);
-    dissolve_invalid(src, plan);
-    order_by_group(plan, devices);
+    if mode == MergeKind::Series {
+        dissolve_invalid(src, plan);
+        order_by_group(plan, devices);
+    }
     mark_consumed(plan);
     rank_nets(plan, nets);
 
@@ -588,7 +594,7 @@ fn order_by_group(plan: &mut Plan, devices: usize) {
     order.sort_unstable_by_key(|&device| (root[device as usize], device));
 }
 
-/// Break up any group that would not produce a well-formed device.
+/// Break up any series group that would not produce a well-formed device.
 ///
 /// The joins are pairwise and their transitive closure is not: three transistors
 /// in a ring with tied gates are three legal series pairs whose group consumes
@@ -616,7 +622,7 @@ fn dissolve_invalid(src: &Graph, plan: &mut Plan) {
     }
 }
 
-/// Whether one group's members really are one device: same kind and model, same
+/// Whether one series group's members really are one device: same kind and model, same
 /// non-channel terminals, and as many surviving channel ends as one member has.
 fn group_is_sound(src: &Graph, plan: &Plan, from: usize, to: usize) -> bool {
     let head = plan.order[from];
@@ -740,9 +746,10 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
 
         out.device_kind.push(src.device_kind[head as usize]);
         out.device_model.push(src.device_model[head as usize]);
-        if end - at == 1 {
+        if end - at == 1 || plan.mode == Some(MergeKind::Parallel) {
             // A group of one is the device it started as, which is what makes an
-            // unreducible graph come through byte-identical.
+            // unreducible graph come through byte-identical; a parallel group's
+            // members all have the head's terminals.
             let (terminal_nets, roles) = src.terminals_of(head);
             for slot in 0..roles.len() {
                 out.terminal_net.push(
@@ -753,13 +760,16 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
                 );
                 out.terminal_role.push(roles[slot]);
             }
-            out.param.extend_from_slice(src.params_of(head));
         } else {
             merge_terminals(src, plan, at, end, &mut merged);
             for &(role, net) in &merged {
                 out.terminal_net.push(plan.new_net[net as usize]);
                 out.terminal_role.push(role);
             }
+        }
+        if end - at == 1 {
+            out.param.extend_from_slice(src.params_of(head));
+        } else {
             // The head's parameters, the summed ones totalled over the group,
             // which states each of them on every member or on none.
             let kind = src.device_kind[head as usize];
@@ -806,7 +816,7 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
     transpose_into(out, plan.nets);
 }
 
-/// One merged device's terminals, in `(role_code, net)` order: the
+/// One series-merged device's terminals, in `(role_code, net)` order: the
 /// representative's non-channel terminals plus one per surviving channel net.
 fn merge_terminals(
     src: &Graph,

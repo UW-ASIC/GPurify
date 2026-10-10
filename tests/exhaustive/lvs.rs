@@ -628,13 +628,9 @@ fn same_pins(model: Model, a: &[usize], b: &[usize], map: impl Fn(usize) -> usiz
 ///   equal `W`, whose channels meet at a net that is not a port and that no
 ///   other terminal touches, become one with `L` summed; the net is consumed.
 ///
-/// `shorted_parallel: false` skips a parallel merge of MOS whose source and
-/// drain share a net, which is what the tool does today (finding F57); it
-/// is used only to mark the fixtures that finding breaks.
-///
 /// A net no terminal lands on survives only as a port: a floating shape is
 /// not a node, and SPICE cannot even write one.
-fn reduce(c: &Circuit, shorted_parallel: bool) -> Reduction {
+fn reduce(c: &Circuit) -> Reduction {
     #[allow(clippy::cast_precision_loss, reason = "nanometre sizes are small")]
     let mut devs: Vec<Reduced> = c
         .devs
@@ -656,7 +652,6 @@ fn reduce(c: &Circuit, shorted_parallel: bool) -> Reduction {
         })
         .collect();
     let mut alive = vec![true; c.nets()];
-    let shorted = |d: &Reduced| d.model.is_mos() && d.pins[1] == d.pins[2];
     'pass: loop {
         for i in 0..devs.len() {
             for j in i + 1..devs.len() {
@@ -667,11 +662,7 @@ fn reduce(c: &Circuit, shorted_parallel: bool) -> Reduction {
                 } else {
                     a.area == b.area
                 };
-                if a.model == b.model
-                    && params
-                    && same_pins(a.model, &a.pins, &b.pins, |n| n)
-                    && (shorted_parallel || !shorted(a))
-                {
+                if a.model == b.model && params && same_pins(a.model, &a.pins, &b.pins, |n| n) {
                     let b = devs.remove(j);
                     if b.model.is_mos() {
                         devs[i].w += b.w;
@@ -810,15 +801,7 @@ fn assign(a: &[Reduced], b: &[Reduced], map: &[usize], used: &mut [bool], from: 
 /// The oracle: whether `layout` and `reference` are one circuit, by brute
 /// force over every bijection of their reduced nets.
 fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
-    verdict(layout, reference, true)
-}
-
-/// [`equivalent`], with [`reduce`]'s `shorted_parallel` switch.
-fn verdict(layout: &Circuit, reference: &Circuit, shorted_parallel: bool) -> bool {
-    matches(
-        &reduce(layout, shorted_parallel),
-        &reduce(reference, shorted_parallel),
-    )
+    matches(&reduce(layout), &reduce(reference))
 }
 
 /// Whether some bijection of `a`'s surviving nets onto `b`'s pairs every
@@ -1027,17 +1010,7 @@ const TIE_BREAK: &[(&str, &str)] = &[
 ];
 
 /// Why an enumerated fixture fails today, if it does.
-fn known_enum(
-    c: &Circuit,
-    code: &str,
-    label: &str,
-    reference: &Circuit,
-    matched: bool,
-) -> Option<&'static str> {
-    let shorted = |c: &Circuit| c.devs.iter().any(|d| d.pins[1] == d.pins[2]);
-    if (shorted(c) || shorted(reference)) && verdict(c, reference, false) != matched {
-        return Some("F57");
-    }
+fn known_enum(code: &str, label: &str) -> Option<&'static str> {
     TIE_BREAK.contains(&(code, label)).then_some("F58")
 }
 
@@ -1049,7 +1022,7 @@ fn known_enum(
 /// matches is kept, since that is where a false mismatch hides, and of those
 /// that must mismatch, one per kind, drawn from `pick`. Without it, all.
 fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
-    let reduced = reduce(c, true);
+    let reduced = reduce(c);
     let mut seen = BTreeSet::from([key(c)]);
     // `(label, reference, catalog rows, matches)`; the first two keep `c`.
     let mut kept = vec![(
@@ -1067,7 +1040,7 @@ fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
         if !label.starts_with("sd/") && !seen.insert(key(&r)) {
             continue;
         }
-        let matched = matches(&reduced, &reduce(&r, true));
+        let matched = matches(&reduced, &reduce(&r));
         if matched || pick.is_none() {
             kept.push((label, r, catalog, matched));
         } else {
@@ -1105,7 +1078,7 @@ fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
                 .layout(layout.clone())
                 .expect(Expect::Lvs(matched));
             fixture.reference = Some(text);
-            match known_enum(c, &code, &label, &r, matched) {
+            match known_enum(&code, &label) {
                 Some(finding) => fixture.known(finding),
                 None => fixture,
             }
@@ -1243,7 +1216,7 @@ fn curated() -> Vec<Fixture> {
         &long,
     ));
 
-    // LVS-040 and finding F57: parallel MOS.
+    // LVS-040 and F57 (fixed in B17): parallel MOS, source and drain shorted too.
     let two = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);
     let wide = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(2000, 150)]);
     out.push(compared(
@@ -1262,15 +1235,12 @@ fn curated() -> Vec<Fixture> {
     ));
     let shorted = Circuit::new(2, vec![Dev::mos(N, 0, 1, 1), Dev::mos(N, 0, 1, 1)]);
     let shorted_wide = Circuit::new(2, vec![Dev::mos(N, 0, 1, 1).sized(2000, 150)]);
-    out.push(
-        compared(
-            "parallel/mos_shorted_two_vs_wide",
-            &["LVS-040"],
-            &shorted,
-            &shorted_wide,
-        )
-        .known("F57"),
-    );
+    out.push(compared(
+        "parallel/mos_shorted_two_vs_wide",
+        &["LVS-040"],
+        &shorted,
+        &shorted_wide,
+    ));
 
     // F20 (fixed in B9), LVS-043, LVS-044: parallel passives keep their count.
     for (model, row) in [(R, "LVS-043"), (C, "LVS-044"), (D, "LVS-044")] {
