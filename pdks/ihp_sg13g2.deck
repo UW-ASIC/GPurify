@@ -779,10 +779,7 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 # - Antenna: the rows above hold every gate to the unprotected limits; Ant.e/f
 #   (20000 and 500 with a protection diode of at least Ant.g 0.16 um2) switch the
 #   limit on diode presence, which antenna_electrical's linear credit cannot state,
-#   so gates with a diode over-report. IHP sums one ratio per layer, each over the
-#   gate area connected at that layer's step; the rows here divide all collected
-#   metal by the gate area at the highest step, which can under-report a gate that
-#   is joined to others only on a higher metal.
+#   so gates with a diode over-report.
 # - Sheet and fringe capacitances other than Metal1-substrate are not in [PS];
 #   metal-to-metal area capacitances ([PS] §2.17, 68 aF/um2 M(n)-M(n+1), 42.5
 #   TopMetal1-Metal5, 13 TopMetal2-TopMetal1) have no field in the pex row.

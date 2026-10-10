@@ -1,11 +1,12 @@
 //! Process-stage rules: antenna ratios and windowed density.
 //!
 //! A cumulative antenna check is one rule row per fabrication stage, row `k`
-//! naming everything present when layer `k` is etched. Nets are built per row
+//! naming every layer etched up to layer `k`. Nets are built per etch stage
 //! from only the conductors that exist at that etch (SVRF `CONNECT` between
 //! `NET AREA RATIO` stages), so a diode or a second gate reachable only
 //! through a higher metal does not count yet. Areas are doubled [`DbuArea`]s
-//! summed in `i128`; a ratio is the only `f64`, formed at the comparison.
+//! summed in `i128`; each stage's ratio is an `f64`, and a cumulative ratio
+//! their sum.
 //!
 //! Data in: the store, nets, the die box. Data out: violations and one run
 //! per row.
@@ -56,42 +57,37 @@ pub struct Stack {
 }
 
 impl Stack {
-    /// The connectivity standing when the highest of `collectors` is etched:
-    /// conductors up to it, and the vias joining two of them. A cut collector
-    /// stands on its lower conductor. `None` when the deck names no conductors
-    /// (the finished nets are used as given).
-    fn stage(&self, collectors: &[LayerId]) -> Option<Connectivity> {
-        if self.conductors.is_empty() {
-            return None;
-        }
+    /// The stage at which `layer` is etched, as an index into
+    /// [`conductors`](Self::conductors): a conductor's own place, a cut's
+    /// lower conductor. `None` for any other layer.
+    fn standing(&self, layer: LayerId) -> Option<usize> {
         let pos = |layer: LayerId| self.conductors.iter().position(|&c| c == layer);
-        let top = collectors
-            .iter()
-            .filter_map(|&c| {
-                pos(c).or_else(|| {
-                    self.vias
-                        .iter()
-                        .filter(|v| v.0 == c)
-                        .filter_map(|&(_, a, b)| Some(pos(a)?.min(pos(b)?)))
-                        .max()
-                })
-            })
-            .max()
-            .unwrap_or(self.conductors.len() - 1);
-        let standing = |layer: LayerId| pos(layer).is_some_and(|at| at <= top);
+        pos(layer).or_else(|| {
+            self.vias
+                .iter()
+                .filter(|v| v.0 == layer)
+                .filter_map(|&(_, a, b)| Some(pos(a)?.min(pos(b)?)))
+                .max()
+        })
+    }
+
+    /// The connectivity standing when conductor `top` is etched: conductors
+    /// up to it, and the vias joining two of them.
+    fn stage(&self, top: usize) -> Connectivity {
+        let standing = |layer: LayerId| self.conductors[..=top].contains(&layer);
         let (via_cut, via_connects) = self
             .vias
             .iter()
             .filter(|&&(_, a, b)| standing(a) && standing(b))
             .map(|&(cut, a, b)| (cut, (a, b)))
             .unzip();
-        Some(Connectivity {
+        Connectivity {
             conductors: self.conductors[..=top].to_vec(),
             via_cut,
             via_connects,
             intra_layer_touch: self.intra_layer_touch,
             ..Connectivity::default()
-        })
+        }
     }
 }
 
@@ -116,24 +112,28 @@ pub struct CmpModel {
 ///
 /// A conductor being plasma-etched collects charge in proportion to its area
 /// (or, for a thick layer, its sidewall) and discharges it through the thin
-/// gate oxide it is connected to at that moment. A row flags every gate net
-/// whose `collecting area / gate area` is above `max_ratio`, where:
+/// gate oxide it is connected to at that moment. A row flags every gate whose
+/// ratio is above `max_ratio`. The ratio is one term per etch stage the row's
+/// collectors span, summed: the collecting area on the gate's net at that
+/// stage over the gate area on that net at that stage. That is LEF's CAR (the
+/// sum of a gate's PARs) and IHP's `AreaRatio`; a row whose collectors are
+/// all etched at one stage is that stage's PAR. Where:
 ///
-/// - the nets are those standing when the row's highest collector is etched:
-///   the deck's conductors up to that one ([`Stack::conductors`] order) and
-///   the vias between two of them. A cut collector stands on its lower
-///   conductor. A gate or diode reachable only through a higher metal is not
-///   on the net yet. A deck with no conductors measures the finished nets.
-/// - collecting area is summed over every merged collector figure on the
-///   net, by the row's [`AntennaMeasure`]. One collector gives the per-layer
-///   ratio (PAR); every layer up to the stage gives the cumulative ratio
-///   (CAR).
+/// - a collector is etched at its own stage: the deck's conductors up to it
+///   ([`Stack::conductors`] order) and the vias between two of them. A cut
+///   collector stands on its lower conductor; a layer the stack does not
+///   place is etched with the row's highest collector. A gate or diode
+///   reachable only through a higher metal is not on the net yet. A deck with
+///   no conductors measures the finished nets at every stage.
+/// - collecting area is summed over every merged collector figure etched at
+///   that stage on the net, by the row's [`AntennaMeasure`].
 /// - gate area is summed over the merged figures of the `gate` layer on the
 ///   net, so overlapping gate polygons are counted once. A figure is on the
 ///   lowest net among the drawn polygons it covers. A layer that is not a
 ///   conductor (a derived `poly and diffusion` gate, a cut, a capacitor
 ///   plate) joins the net of the topmost conductor it overlaps with positive
 ///   area; touching alone does not join.
+/// - gates on one net at every stage have one ratio and are reported once.
 ///
 /// The ratio is dimensionless. No design intent is needed.
 ///
@@ -142,10 +142,6 @@ pub struct CmpModel {
 /// - Every net with gate area is checked: reaching diffusion or a tap
 ///   exempts nothing (ERC-A13), and a gate with a protection diode is held to
 ///   the no-diode limit, which over-reports IHP Ant.e/f (ERC-A8).
-/// - The cumulative ratio divides all collected area by the gate area at the
-///   highest stage. IHP sums one ratio per layer, each over the gate area
-///   connected at that layer's stage, so a gate joined to others only on a
-///   higher metal can under-report.
 /// - LEF `ANTENNACUMROUTINGPLUSCUT` is missing (ERC-A4); oxide classes are one
 ///   row per gate layer (ERC-A12); a MIM victim works as a gate layer, but
 ///   gf180's deck leaves ANT.14/15 out (ERC-A11).
@@ -186,11 +182,11 @@ pub struct AntennaTable {
 /// written `antenna_electrical(gate, collectors..; max_ratio: n,
 /// diode: layer | none, diode_credit: n, diode_bonus: n)`.
 ///
-/// Nets, collectors and gates are those of [`AntennaTable`] (always by drawn
-/// area, never sidewall). The value compared with `max_ratio` is
-/// `collecting / gate - diode_credit * diode_area - diode_bonus`, the
+/// Nets, collectors, gates and the summed ratio are those of [`AntennaTable`]
+/// (always by drawn area, never sidewall). The value compared with
+/// `max_ratio` is `ratio - diode_credit * diode_area - diode_bonus`, the
 /// subtractive credit sky130 states, where `diode_area` is the `diode` layer
-/// area on the gate's net at that stage. `diode_bonus` is subtracted from
+/// area on the gate's net at the row's highest stage. `diode_bonus` is subtracted from
 /// every gate net of the row, with or without a diode on it.
 ///
 /// # Limits
@@ -421,12 +417,69 @@ fn merged(design: Design<'_>, layer: LayerId, scratch: &mut Scratch) -> Option<F
     Some(out)
 }
 
-/// One antenna row: nets as they stand at this row's etch step, doubled
-/// collecting, gate and diode area per net from each layer's merged figures,
-/// the ratio per gate net (after `adjust`, which receives the net's diode
-/// area), reported at the net's lowest gate polygon. `examined` is the number
-/// of gate nets; `None` is `Refused` (a layer that will not validate or
-/// merge).
+/// Puts every store row of `layers` on its net as the stack stands at `stage`
+/// (`None`: the finished nets), cutting the stage's nets into `staged`. A
+/// conductor's rows read the stage's nets; any other layer is [`attach`]ed.
+/// The stage's net count, or `None` when a layer will not validate.
+fn stage_nets(
+    design: Design<'_>,
+    stack: &Stack,
+    stage: Option<usize>,
+    layers: &[LayerId],
+    staged: &mut NetTable,
+    net_of: &mut [NetId],
+    scratch: &mut Scratch,
+) -> Option<usize> {
+    let store = design.store;
+    let connectivity = stage.map(|top| stack.stage(top));
+    let nets: &NetTable = match &connectivity {
+        Some(connectivity) => {
+            extract_nets_into(store, connectivity, staged);
+            staged
+        }
+        None => design.nets,
+    };
+    if nets.net_count() == 0 {
+        for &layer in layers {
+            for row in store.polys_on_layer(layer) {
+                net_of[row as usize] = NetId::NONE;
+            }
+        }
+        return Some(0);
+    }
+    // Conductors: the stage's, or (finished nets) every layer carrying a net.
+    let conductors: Vec<LayerId> = match &connectivity {
+        Some(connectivity) => connectivity.conductors.clone(),
+        None => (0..store.layer_count())
+            .map(|l| LayerId(u16::try_from(l).expect("a LayerId is a u16")))
+            .filter(|&l| {
+                store
+                    .polys_on_layer(l)
+                    .any(|row| nets.net_of(PolyId(row)) != NetId::NONE)
+            })
+            .collect(),
+    };
+    for &layer in layers {
+        if conductors.contains(&layer) {
+            for row in store.polys_on_layer(layer) {
+                net_of[row as usize] = nets.net_of(PolyId(row));
+            }
+        } else if !attach(design, layer, &conductors, nets, net_of, scratch) {
+            return None;
+        }
+    }
+    Some(nets.net_count())
+}
+
+/// One antenna row. Each gate figure's ratio is summed over the row's etch
+/// stages: at each, the doubled collecting area of the collectors etched
+/// there on the gate's net over the doubled gate area on that net. `judge`
+/// receives the ratio and the diode area on the gate's net at the row's
+/// stage, and returns the value compared with `limit`, or `None` for a gate
+/// this row does not hold. Gates on one net at every stage share a ratio and
+/// are judged once, reported at their lowest gate polygon. `examined` is the
+/// number of such groups judged; `None` is `Refused` (a layer that will not
+/// validate or merge).
 #[allow(
     clippy::cast_precision_loss,
     reason = "a die's area in database units is far below 2^53"
@@ -439,37 +492,17 @@ fn antenna_row(
     measures: &[AntennaMeasure],
     stack: &Stack,
     limit: f64,
-    adjust: impl Fn(f64, DbuArea) -> f64,
+    judge: impl Fn(f64, DbuArea) -> Option<f64>,
     scratch: &mut Scratch,
     out: &mut Violations,
 ) -> Option<u64> {
     let store = design.store;
-    let stage = stack.stage(collectors);
-    let mut staged = std::mem::take(&mut scratch.staged_nets);
-    let nets: &NetTable = match &stage {
-        Some(connectivity) => {
-            extract_nets_into(store, connectivity, &mut staged);
-            &staged
-        }
-        None => design.nets,
-    };
-    if nets.net_count() == 0 {
-        scratch.staged_nets = staged;
+    // With no gate there is nothing to measure, whatever the collectors hold
+    // (a collector that cannot merge refuses only a row that would read it).
+    let gates = merged(design, gate_layer, scratch)?;
+    if gates.len() == 0 {
         return Some(0);
     }
-    // Conductors: the stage's, or (finished nets) every layer carrying a net.
-    let conductors: Vec<LayerId> = match &stage {
-        Some(connectivity) => connectivity.conductors.clone(),
-        None => (0..store.layer_count())
-            .map(|l| LayerId(u16::try_from(l).expect("a LayerId is a u16")))
-            .filter(|&l| {
-                store
-                    .polys_on_layer(l)
-                    .any(|row| nets.net_of(PolyId(row)) != NetId::NONE)
-            })
-            .collect(),
-    };
-
     // A collector named twice collects once, with its first measure.
     let mut read: Vec<(LayerId, AntennaMeasure)> = Vec::new();
     for (&layer, &measure) in collectors.iter().zip(measures) {
@@ -477,88 +510,142 @@ fn antenna_row(
             read.push((layer, measure));
         }
     }
-    let mut net_of = vec![NetId::NONE; store.poly_count()];
-    let mut layers: Vec<LayerId> = read.iter().map(|&(l, _)| l).collect();
-    layers.push(gate_layer);
-    layers.extend(diode);
-    layers.sort_unstable();
-    layers.dedup();
-    let mut ok = true;
-    for &layer in &layers {
-        if conductors.contains(&layer) {
-            for row in store.polys_on_layer(layer) {
-                net_of[row as usize] = nets.net_of(PolyId(row));
-            }
-        } else {
-            ok &= attach(design, layer, &conductors, nets, &mut net_of, scratch);
-        }
-    }
+    let collected = read
+        .iter()
+        .map(|&(layer, _)| merged(design, layer, scratch))
+        .collect::<Option<Vec<Figures>>>()?;
+    let diodes = match diode {
+        Some(layer) => Some(merged(design, layer, scratch)?),
+        None => None,
+    };
 
-    // Every area is a merged figure's, counted once on its net however many
-    // drawn polygons make it up.
-    let count = nets.net_count();
-    let mut areas = vec![0i128; 3 * count];
-    let mut first_gate = vec![PolyId(u32::MAX); count];
-    let mut measured = |layer: LayerId, base: usize, measure: AntennaMeasure| {
-        let figures = merged(design, layer, scratch)?;
-        let mut landed = false;
-        for figure in 0..figures.len() {
-            let net = figures.net(figure, &net_of);
-            if net != NetId::NONE {
-                landed = true;
-                areas[base + net.idx()] += match measure {
-                    AntennaMeasure::Area => figures.area2[figure],
-                    AntennaMeasure::Sidewall { thickness } => {
-                        figures.perimeter2[figure] * i128::from(thickness.raw())
-                    }
-                };
-                if base == count {
-                    first_gate[net.idx()] = first_gate[net.idx()].min(figures.rows(figure)[0]);
+    // Each collector's etch stage. The row's stage is the highest; a layer the
+    // stack does not place is etched with it. With no conductors every stage
+    // is the finished nets.
+    let row_stage = (!stack.conductors.is_empty()).then(|| {
+        read.iter()
+            .filter_map(|&(layer, _)| stack.standing(layer))
+            .max()
+            .unwrap_or(stack.conductors.len() - 1)
+    });
+    let etched: Vec<Option<usize>> = read
+        .iter()
+        .map(|&(layer, _)| row_stage.map(|top| stack.standing(layer).unwrap_or(top)))
+        .collect();
+    let mut stages = etched.clone();
+    stages.sort_unstable();
+    stages.dedup();
+
+    // Per gate figure: the summed ratio, its net at each stage (stage-major),
+    // and the doubled diode area on its net at the row's stage.
+    let n = gates.len();
+    let mut ratio = vec![0.0f64; n];
+    let mut key = vec![NetId::NONE; n * stages.len()];
+    let mut diode_area = vec![0i128; n];
+    let mut net_of = vec![NetId::NONE; store.poly_count()];
+    let mut staged = std::mem::take(&mut scratch.staged_nets);
+    for (s, &stage) in stages.iter().enumerate() {
+        let last = s + 1 == stages.len();
+        let here: Vec<usize> = (0..read.len()).filter(|&c| etched[c] == stage).collect();
+        let mut layers: Vec<LayerId> = here.iter().map(|&c| read[c].0).collect();
+        layers.push(gate_layer);
+        layers.extend(diode.filter(|_| last));
+        layers.sort_unstable();
+        layers.dedup();
+        let Some(count) = stage_nets(
+            design,
+            stack,
+            stage,
+            &layers,
+            &mut staged,
+            &mut net_of,
+            scratch,
+        ) else {
+            scratch.staged_nets = staged;
+            return None;
+        };
+
+        let mut gate_area = vec![0i128; count];
+        let mut collect = vec![0i128; count];
+        let gate_net = &mut key[s * n..(s + 1) * n];
+        for (g, net) in gate_net.iter_mut().enumerate() {
+            *net = gates.net(g, &net_of);
+            if *net != NetId::NONE {
+                gate_area[net.idx()] += gates.area2[g];
+            }
+        }
+        for &c in &here {
+            let figures = &collected[c];
+            for f in 0..figures.len() {
+                let net = figures.net(f, &net_of);
+                if net != NetId::NONE {
+                    collect[net.idx()] += match read[c].1 {
+                        AntennaMeasure::Area => figures.area2[f],
+                        AntennaMeasure::Sidewall { thickness } => {
+                            figures.perimeter2[f] * i128::from(thickness.raw())
+                        }
+                    };
                 }
             }
         }
-        Some(landed)
-    };
-    let gated = measured(gate_layer, count, AntennaMeasure::Area);
-    ok &= gated.is_some();
-    // With no gate on a net there is nothing to measure, whatever the
-    // collectors hold (a collector that cannot merge refuses only a row
-    // that would read it).
-    if gated == Some(true) {
-        if let Some(layer) = diode {
-            ok &= measured(layer, 2 * count, AntennaMeasure::Area).is_some();
+        for (g, net) in gate_net.iter().enumerate() {
+            if *net != NetId::NONE {
+                ratio[g] += collect[net.idx()] as f64 / gate_area[net.idx()] as f64;
+            }
         }
-        for &(layer, measure) in &read {
-            ok &= measured(layer, 0, measure).is_some();
+        if let (true, Some(figures)) = (last, &diodes) {
+            let mut on_net = vec![0i128; count];
+            for f in 0..figures.len() {
+                let net = figures.net(f, &net_of);
+                if net != NetId::NONE {
+                    on_net[net.idx()] += figures.area2[f];
+                }
+            }
+            for (g, net) in gate_net.iter().enumerate() {
+                if *net != NetId::NONE {
+                    diode_area[g] = on_net[net.idx()];
+                }
+            }
         }
     }
     scratch.staged_nets = staged;
-    if !ok {
-        return None;
-    }
+
+    // Gates on a net at the row's stage, grouped by their net at every stage,
+    // the row's stage first.
+    let top = stages.len() - 1;
+    let net_at = |g: usize, s: usize| key[s * n + g];
+    let mut order: Vec<usize> = (0..n).filter(|&g| net_at(g, top) != NetId::NONE).collect();
+    let cmp = |a: &usize, b: &usize| {
+        (0..=top)
+            .rev()
+            .map(|s| net_at(*a, s).cmp(&net_at(*b, s)))
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    };
+    order.sort_by(cmp);
 
     let limit = Measurement::Ratio(limit);
     let mut examined = 0u64;
-    for slot in 0..count {
-        let gate = areas[count + slot];
-        if gate <= 0 {
+    for group in order.chunk_by(|a, b| cmp(a, b).is_eq()) {
+        let first = group[0];
+        let Some(value) = judge(ratio[first], DbuArea::new(diode_area[first] / 2)) else {
             continue;
-        }
+        };
         examined += 1;
-        let ratio = adjust(
-            areas[slot] as f64 / gate as f64,
-            DbuArea::new(areas[2 * count + slot] / 2),
-        );
-        if !Measurement::Ratio(ratio).violates(limit, LimitSense::Maximum) {
+        if !Measurement::Ratio(value).violates(limit, LimitSense::Maximum) {
             continue;
         }
-        let poly = first_gate[slot];
+        let poly = group
+            .iter()
+            .map(|&g| gates.rows(g)[0])
+            .min()
+            .expect("a group has a gate");
         out.push(Violation {
             rule: head.0.rule[head.1],
             layer: gate_layer,
             severity: head.0.severity[head.1],
             at: centre(store.poly_bbox(poly)),
-            measured: Measurement::Ratio(ratio),
+            measured: Measurement::Ratio(value),
             limit,
             shapes: (poly, None),
         });
@@ -566,14 +653,15 @@ fn antenna_row(
     Some(examined)
 }
 
-/// Runs every [`AntennaTable`] row: one ratio per gate net at the row's etch
-/// stage.
+/// Runs every [`AntennaTable`] row: one ratio per gate, summed over the
+/// row's etch stages.
 ///
-/// `examined` counts gate nets, the nets with positive gate area. A violation
-/// sits at the centre of the bounding box of the net's lowest-numbered gate
-/// polygon, on the gate layer, measuring the ratio against `max_ratio`. A row
-/// is refused when one of its layers will not validate (a non-rectilinear
-/// shape) or merge.
+/// `examined` counts the gates on a net at the row's highest stage, those on
+/// one net at every stage counted once (for a single-stage row, the gate
+/// nets). A violation sits at the centre of the bounding box of the group's
+/// lowest-numbered gate polygon, on the gate layer, measuring the ratio
+/// against `max_ratio`. A row with gate shapes is refused when one of its
+/// layers will not validate (a non-rectilinear shape) or merge.
 ///
 /// # Panics
 ///
@@ -596,7 +684,7 @@ pub fn check_antenna(
             &table.collector_measure[span],
             &table.stack,
             table.max_ratio[row],
-            |ratio, _| ratio,
+            |ratio, _| Some(ratio),
             scratch,
             out,
         );
@@ -605,7 +693,7 @@ pub fn check_antenna(
     }
 }
 
-/// Runs every [`AntennaElectricalTable`] row: the credited ratio per gate net.
+/// Runs every [`AntennaElectricalTable`] row: the credited ratio per gate.
 ///
 /// Reports as [`check_antenna`] does, the measured value being the credited
 /// ratio. A row with a diode layer and a non-zero `diode_credit` is refused
@@ -644,7 +732,7 @@ pub fn check_antenna_electrical(
                 clippy::cast_precision_loss,
                 reason = "a diode's area in database units is far below 2^53"
             )]
-            |ratio, diode_area| ratio - credit * diode_area.raw() as f64 - bonus,
+            |ratio, diode_area| Some(ratio - credit * diode_area.raw() as f64 - bonus),
             scratch,
             out,
         );
@@ -1034,18 +1122,18 @@ mod tests {
             intra_layer_touch: true,
         };
 
-        let at_met1 = stack.stage(&[met1]).expect("a deck with conductors");
+        let at_met1 = stack.stage(stack.standing(met1).expect("a conductor"));
         assert_eq!(at_met1.conductors, [diff, poly, li, met1]);
         assert_eq!(at_met1.via_cut, [licon, licon, mcon]);
 
-        let at_via1 = stack.stage(&[via1]).expect("a deck with conductors");
-        assert_eq!(at_via1.conductors, [diff, poly, li, met1]);
+        assert_eq!(stack.standing(via1), stack.standing(met1));
+        assert_eq!(stack.standing(licon), stack.standing(poly));
 
-        let at_poly = stack.stage(&[poly]).expect("a deck with conductors");
+        let at_poly = stack.stage(stack.standing(poly).expect("a conductor"));
         assert_eq!(at_poly.conductors, [diff, poly]);
         assert!(at_poly.via_cut.is_empty());
 
-        assert!(Stack::default().stage(&[met1]).is_none());
+        assert_eq!(Stack::default().standing(met1), None);
     }
 
     fn bbox(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Bbox {

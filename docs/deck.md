@@ -296,7 +296,7 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 
 | Check | What it flags |
 |---|---|
-| `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none)` | A gate connected to more collector area than `max_ratio` times its own, counting only what is connected when the highest collector is etched. With `sidewall`, collector area is perimeter times that thickness. Name the gate as a derived `poly and diffusion` layer. |
+| `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none)` | A gate whose collector-to-gate area ratio is above `max_ratio`. The ratio has one term per etch step the collectors span, each counting only what is connected to the gate when that layer is etched, and the terms are summed (LEF's CAR, IHP's `AreaRatio`). Overlapping shapes count once. With `sidewall`, collector area is perimeter times that thickness. Name the gate as a derived `poly and diffusion` layer. |
 | `antenna_electrical(gate, collectors…; max_ratio: n, diode: layer \| none, diode_credit: n, diode_bonus: n)` | The cumulative antenna ratio, with credit for protection diodes. |
 | `density_cmp(L; window: len x len, step: len x len, min: frac \| none, max: frac \| none, max_delta: frac \| none, partial_windows: true \| false, cmp: none \| (target: frac, thickness: len, sensitivity: len, max_delta: len))` | Metal density out of range, a jump between neighbouring windows, or a predicted polish thickness out of range. |
 | `electromigration(layers…; max_density: current per width, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: n)` | A wire or cut carrying more current than its rated limit at the operating temperature. Needs `--intent`. |

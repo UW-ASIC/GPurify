@@ -434,6 +434,11 @@ fn gf180_ant_2_sidewall_area_of_metal1_over_a_derived_gate() {
 /// plate (ratio 6); gate B, joined to it only through metal2, carries 1 um2.
 /// On the finished net the two gates share 7 um2 of metal1 over 2 um2 of gate,
 /// 3.5, under a limit of 4. At the metal1 etch gate A stands alone at 6.
+///
+/// The cumulative row sums each gate's ratio per stage (IHP `AreaRatio`, LEF
+/// CAR): A reads 6/1 + 6/2 = 9, B reads 1/1 + 6/2 = 4, exactly at the limit,
+/// so only A fails. Pooling 13 um2 over the 2 um2 of gate at metal2 would read
+/// 6.5 for the net (F59).
 #[test]
 fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() {
     let (poly, contact, metal1, via1, metal2) =
@@ -462,9 +467,9 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
     assert_close_relative("gate A alone", measured_ratio(&violations, 0), 6.0, 1e-12);
     assert_eq!(assert_rule_ran(&runs, rule(90)).examined, 2);
 
-    // At the metal2 etch the two gates are one net: 7 um2 of metal1 plus 6 um2
-    // of metal2 over 2 um2 of gate.
-    let (violations, _) = run_staged(
+    // At the metal2 etch the two gates are one net over 2 um2 of gate, which
+    // collects 6 um2 of metal2.
+    let (violations, runs) = run_staged(
         &store,
         stack(),
         poly,
@@ -473,7 +478,13 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
         4.0,
     );
     assert_eq!(violations.rule.len(), 1);
-    assert_close_relative("both gates", measured_ratio(&violations, 0), 6.5, 1e-12);
+    assert_eq!(violations.shape_a[0], ids.of(gate_a));
+    assert_close_relative("gate A summed", measured_ratio(&violations, 0), 9.0, 1e-12);
+    assert_eq!(
+        assert_rule_ran(&runs, rule(90)).examined,
+        2,
+        "A and B share a net at metal2 but not at metal1"
+    );
 }
 
 /// A gate sits on its poly, not on the well under it. The well is a net (tied

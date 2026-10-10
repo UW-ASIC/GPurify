@@ -274,7 +274,8 @@ fn lef_c20() -> Layout {
 struct AntennaRow {
     id: &'static str,
     collectors: &'static str,
-    /// `(ratio, marker)` per gate net.
+    /// `(ratio, marker)` per gate net, or per gate where the row's stages
+    /// part them.
     nets: Vec<(f64, (i64, i64))>,
 }
 
@@ -285,11 +286,11 @@ struct AntennaRow {
 /// (3.0/2.0); from met2 up one node holds both gates (step 8: 9/3 = 3.0, step
 /// 14: 15/3 = 5.0). A cut stands on its lower conductor: the contacts on bare
 /// poly (0.1/1.0, 0.1/2.0), via1 on met1 (V1,2 + V1,3 = 0.2 on G1, V1,4 = 0.1
-/// on G2), via2 on met2 (0.2/3). The cumulative row over met1-met3 divides
-/// all of it by the gates at met3, 30/3 = 10.0; per gate, IHP's `AreaRatio`
-/// sums one ratio per layer, 2 + 3 + 5 = 10.0 for G1 and 1.5 + 3 + 5 = 9.5
-/// for G2, so the per-net and per-gate readings agree at every limit from
-/// 9.5 up, the only limits swept here (below 9.5 is `ihp_area_ratio`'s case).
+/// on G2), via2 on met2 (0.2/3). The cumulative row over met1-met3 is the
+/// manual's CAR, the sum of each gate's PARs: 2 + 3 + 5 = 10.0 for G1 and
+/// 1.5 + 3 + 5 = 9.5 for G2, one value per gate (IHP's `AreaRatio` too).
+/// Pooling all the metal over the gates at met3, 30/3 = 10.0, would report
+/// one net and miss G2 below 9.5 (F59).
 fn lef_c20_rows() -> Vec<AntennaRow> {
     let g1 = (500, 500);
     let g2 = (6500, 0);
@@ -328,7 +329,10 @@ fn lef_c20_rows() -> Vec<AntennaRow> {
         AntennaRow {
             id: "car.met123",
             collectors: "met1, met2, met3",
-            nets: vec![(r(30_000_000, 3_000_000), g1)],
+            nets: vec![
+                (r(2_000_000, 1_000_000) + 3.0 + 5.0, g1),
+                (r(3_000_000, 2_000_000) + 3.0 + 5.0, g2),
+            ],
         },
     ]
 }
@@ -628,10 +632,9 @@ fn antenna_variants() -> Vec<Fixture> {
 /// = 2, M2(ii) = 4 and M3(i) = 30: G1 reads 150 + 10 = 160, G2 and G3 read
 /// 2 + 2 + 10 = 14. Against Ant.b's limit, scaled to 100, G1 fails.
 ///
-/// `GPurify` divides all collected area by the gate area at the highest stage,
-/// (100 + 2 + 2 + 50 + 4 + 30) / 3 = 62.7, and passes it: a false clean, the
-/// limit its rustdoc states (`AntennaTable`, "can under-report") but no
-/// finding in the testing plan records. Reported as `F59`.
+/// Dividing all collected area by the gate area at the highest stage,
+/// (100 + 2 + 2 + 50 + 4 + 30) / 3 = 62.7, passes it: the false clean of
+/// `F59`.
 fn ihp_area_ratio() -> Fixture {
     let mut l = Layout::default();
     // G1 under a 100 µm² met1 plate and a 50 µm² met2 plate.
@@ -664,7 +667,6 @@ fn ihp_area_ratio() -> Fixture {
     )
     .layout(l)
     .expect(Expect::rule("ant.b", vec![ratio(g1).at(500, 500)]))
-    .known("F59")
 }
 
 /// A 1.0 µm² gate under 2.0 µm² of met1, optionally with a 0.15 µm² diode
