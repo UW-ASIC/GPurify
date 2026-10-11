@@ -2,30 +2,35 @@
 //! netlist, and the mapping of a comparison's discrepancies to violations.
 //!
 //! Data in: the extracted tables and the unreduced layout graph. Data out: five
-//! run rows and their violations.
+//! run rows and their violations, and a sixth when the deck states device
+//! parameter ranges.
 
 use crate::erc::first_vertex;
-use crate::lvs::graph::{narrow, Graph};
+use crate::lvs::graph::{narrow, spice_param_name, Graph};
 use crate::lvs::verdict::Discrepancy;
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use crate::topology::{NetId, NetTable, PortTable};
+use crate::topology::device::{DeviceMeasure, DeviceParam};
+use crate::topology::{DeviceId, NetId, NetTable, PortTable};
 use crate::Design;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_ingest::deck::{LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
-/// variant, then the five check rows. Each is a row of the check catalog
-/// (`docs/check-catalog.tsv`), which a test keeps in step with this list.
+/// variant, then the five check rows, then the parameter-range row. Each is
+/// a row of the check catalog (`docs/check-catalog.tsv`), which a test keeps
+/// in step with this list.
 ///
 /// The first six are defined on the [`Discrepancy`] variant that raises them
 /// (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`], and so on), the
-/// other five under [`check_layout`]. The crate's
+/// next five under [`check_layout`], and the last under
+/// [`check_param_ranges`]. The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 11] = [
+pub const RULE_IDS: [&str; 12] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -37,6 +42,7 @@ pub const RULE_IDS: [&str; 11] = [
     "lvs.net_seed_conflict",
     "lvs.terminal_net",
     "lvs.terminal_count",
+    "lvs.param_range",
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
@@ -117,10 +123,9 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///
 /// # Limits
 ///
-/// - Per-model device counts and parameter ranges are not checked: the deck
-///   has no syntax for their limits (catalog LVS-068). No row is recorded for
-///   them, because no deck configures them; a row that could only ever be
-///   `Skipped` would fail every run that selects LVS.
+/// - Parameter ranges are [`check_param_ranges`]'s, a row recorded only when
+///   the deck states one. Per-model device counts are not checked (catalog
+///   LVS-068).
 ///
 /// # Panics
 ///
@@ -147,6 +152,151 @@ pub fn check_layout(
         out,
         runs,
     );
+}
+
+/// The `lvs.param_range` row: every layout device of a model an `lvs range`
+/// row names, its measured parameter held to the row's bounds (catalog
+/// LVS-068), as a foundry states a device's legal size (GF App. A's
+/// parameter ranges, IHP's per-device rules, Magic's device parameter
+/// limits). A value at a bound is legal. Records nothing when `ranges` is
+/// empty, since then no deck asked; otherwise one [`RuleRun`] that examined
+/// one device per row naming its model.
+///
+/// Each violation is an error on the device's marker, located at its first
+/// vertex on its layer, measured against the bound it breaks: a length or an
+/// area exactly, a count as a count, and a diffusion a transistor shares
+/// with others (its share, a fraction of a database unit) as a ratio of
+/// database units. A device of a ranged model on which the parameter was not
+/// measured (a source drawn in pieces, say) cannot be held to the bound, and
+/// the run is then [`Outcome::Refused`], its other rows kept.
+///
+/// # Panics
+///
+/// Panics if a device's marker is past `design.store`.
+pub fn check_param_ranges(
+    design: Design<'_>,
+    ranges: &[LvsRange],
+    strings: &StrTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if ranges.is_empty() {
+        return;
+    }
+    let rule = rule_id(strings, "lvs.param_range");
+    let before = out.len();
+    let devices = design.devices;
+    let (mut examined, mut unmeasured) = (0u64, false);
+    for device in 0..devices.len() {
+        for range in ranges
+            .iter()
+            .filter(|row| row.model == devices.model[device])
+        {
+            examined += 1;
+            let measure = measured_param(strings, range.param).and_then(|param| {
+                devices
+                    .params_of(DeviceId(narrow(device)))
+                    .iter()
+                    .find(|&&(stated, _)| stated == param)
+                    .map(|&(_, measure)| measure)
+            });
+            let Some(measure) = measure else {
+                unmeasured = true;
+                continue;
+            };
+            for (bound, least) in [(range.min, true), (range.max, false)] {
+                let Some(bound) = bound else { continue };
+                match out_of_bounds(measure, bound, least) {
+                    Some(Some((measured, limit))) => {
+                        let row = Violation {
+                            measured,
+                            limit,
+                            ..graph_violation(rule, (devices.marker[device], None), 0, 0)
+                        };
+                        out.push(on_first_shape(design.store, row));
+                    }
+                    Some(None) => {}
+                    None => unmeasured = true,
+                }
+            }
+        }
+    }
+    let outcome = if unmeasured {
+        Outcome::Refused
+    } else {
+        Outcome::Ran
+    };
+    record_run(runs, out, before, rule, outcome, examined);
+}
+
+/// The measured parameter an `lvs range` row's name stands for.
+fn measured_param(strings: &StrTable, name: StrId) -> Option<DeviceParam> {
+    const MEASURED: [DeviceParam; 11] = [
+        DeviceParam::Width,
+        DeviceParam::Length,
+        DeviceParam::Area,
+        DeviceParam::Perimeter,
+        DeviceParam::Fingers,
+        DeviceParam::SourceArea,
+        DeviceParam::DrainArea,
+        DeviceParam::SourcePerimeter,
+        DeviceParam::DrainPerimeter,
+        DeviceParam::EmitterArea,
+        DeviceParam::EmitterPerimeter,
+    ];
+    let name = strings.resolve(name);
+    MEASURED
+        .into_iter()
+        .find(|&param| spice_param_name(param) == name)
+}
+
+/// Whether `measure` breaks `bound`, the least legal value when `least`, the
+/// greatest otherwise: `Some(Some((measured, limit)))` as the row reports
+/// them when it does, `Some(None)` when it does not, and `None` when the two
+/// are of different kinds and cannot be compared. A share of `ways` is
+/// compared exactly, its bound scaled by `ways`.
+fn out_of_bounds(
+    measure: DeviceMeasure,
+    bound: LvsLimit,
+    least: bool,
+) -> Option<Option<(Measurement, Measurement)>> {
+    let breaks = |value: i128, limit: i128| if least { value < limit } else { value > limit };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a shared diffusion is reported, not compared, as a ratio"
+    )]
+    let report = match (measure, bound) {
+        (DeviceMeasure::Length(value), LvsLimit::Length(limit)) => {
+            breaks(i128::from(value.raw()), i128::from(limit.raw()))
+                .then_some((Measurement::Length(value), Measurement::Length(limit)))
+        }
+        (DeviceMeasure::Area(value), LvsLimit::Area(limit)) => breaks(value.raw(), limit.raw())
+            .then_some((Measurement::Area(value), Measurement::Area(limit))),
+        (DeviceMeasure::Count(value), LvsLimit::Count(limit)) => {
+            breaks(i128::from(value), i128::from(limit))
+                .then_some((Measurement::Count(value), Measurement::Count(limit)))
+        }
+        (DeviceMeasure::LengthShare(value, ways), LvsLimit::Length(limit)) => breaks(
+            i128::from(value.raw()),
+            i128::from(limit.raw()) * i128::from(ways),
+        )
+        .then(|| {
+            (
+                Measurement::Ratio(value.raw() as f64 / f64::from(ways)),
+                Measurement::Ratio(limit.raw() as f64),
+            )
+        }),
+        (DeviceMeasure::AreaShare(value, ways), LvsLimit::Area(limit)) => {
+            breaks(value.raw(), limit.raw() * i128::from(ways)).then(|| {
+                (
+                    Measurement::Ratio(value.raw() as f64 / f64::from(ways)),
+                    Measurement::Ratio(limit.raw() as f64),
+                )
+            })
+        }
+        _ => return None,
+    };
+    Some(report)
 }
 
 /// One error row per discrepancy, which is how a mismatch fails the run.

@@ -186,7 +186,8 @@ The deck's `lvs` statements change the comparison per device model (see
 drain do not swap (`lvs asymmetric`); pins that do (`lvs permute`); and
 devices left out of the comparison altogether, fill or decap cells one side
 does not state (`lvs ignore`), or dummies with every terminal on one net
-(`lvs ignore_shorted`). The layout's own checks still see every
+(`lvs ignore_shorted`). And `lvs range` holds a model's drawn devices to
+the sizes the foundry allows (`lvs.param_range`). The layout's own checks still see every
 device.
 
 ## Exit code

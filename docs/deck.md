@@ -439,6 +439,7 @@ lvs permute "cmim" top bottom
 lvs ignore "sky130_fd_pr__decap"
 lvs ignore_shorted "nfet"
 lvs ports_by_name
+lvs range "nfet" w >= 420nm <= 100um
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -506,6 +507,16 @@ layout net its name labels, as KLayout's `flag_missing_ports` does, so
 swapped pad labels or a missing label are reported (`lvs.unpaired_net`)
 rather than matched by structure. Without it, names only break ties between
 nets nothing else tells apart, and are never compared.
+
+**`lvs range "model" param >= min <= max`** holds every layout device of
+the model to bounds on what is drawn, as a foundry states each device's
+legal sizes: `w`, `l`, `perim`, `ps`, `pd` and `pe` take lengths, `area`,
+`as`, `ad` and `ae` areas, and `nf` a count, measured as the table in
+[Devices](#devices) says. Give `>=`, `<=` or both; a value at a bound is
+legal. A device out of range is reported as `lvs.param_range` on its
+marker; one whose parameter could not be measured (a source drawn in
+pieces) makes the row refused rather than passed. The row exists only in
+a deck that states a range, and runs with LVS.
 
 **`lvs ignore_shorted "model"`** leaves out only the model's dummies: each
 device whose every terminal is on one net, as Netgen's `ignore shorted`

@@ -5,8 +5,8 @@ use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, 
 use super::lex::{lex, Tok, Token};
 use super::{
     lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
-    DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource, ToleranceSrc,
-    ViaSource,
+    DeviceValue, LabelSource, LvsLimit, ParamSource, ParamValue, RuleSource, StackSource,
+    ToleranceSrc, ViaSource,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -1108,6 +1108,7 @@ impl<'a> Parser<'a> {
                 self.out.lvs.ignore.push(model);
                 Ok(())
             }
+            "range" => self.lvs_range(),
             "ports_by_name" => {
                 if std::mem::replace(&mut self.out.lvs.ports_by_name, true) {
                     return Err(self.err(span, "ports are already compared by name"));
@@ -1137,7 +1138,7 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric, permute, ignore, ignore_shorted or ports_by_name"
+                     asymmetric, permute, ignore, ignore_shorted, ports_by_name or range"
                 ),
             )),
         }
@@ -1154,6 +1155,74 @@ impl<'a> Parser<'a> {
         }
         self.bump();
         self.string(t)
+    }
+
+    /// `lvs range "model" param >= min <= max`, either bound or both, each
+    /// in the parameter's kind (a length or an area on the deck's grid, or a
+    /// count), converted to the layout's grid.
+    fn lvs_range(&mut self) -> R<()> {
+        let model = self.model()?;
+        let (param, span) = self.ident("a parameter name")?;
+        let param = param.to_ascii_lowercase();
+        let dim = match param.as_str() {
+            "w" | "l" | "perim" | "ps" | "pd" | "pe" => Dim::Length,
+            "area" | "as" | "ad" | "ae" => Dim::Area,
+            "nf" => Dim::Count,
+            _ => {
+                return Err(self.err(
+                    span,
+                    &format!(
+                        "`{param}` is not measured on a device; expected w, l, perim, ps, pd, \
+                         pe, area, as, ad, ae or nf"
+                    ),
+                ))
+            }
+        };
+        if self
+            .out
+            .lvs
+            .range
+            .iter()
+            .any(|row| row.0 == model && row.1 == param)
+        {
+            return Err(self.err(
+                span,
+                &format!("`{param}` of \"{model}\" already has a range"),
+            ));
+        }
+        let (mut min, mut max) = (None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let t = self.peek();
+            let slot = if self.eat(">=") {
+                &mut min
+            } else if self.eat("<=") {
+                &mut max
+            } else {
+                return Err(self.err_tok(t, &format!("expected >= or <=, found {}", self.found(t))));
+            };
+            let value = self.value()?;
+            let limit = match dim {
+                Dim::Length => LvsLimit::Length(self.length(&value, &param)?),
+                Dim::Area => LvsLimit::Area(self.area(&value, &param)?),
+                _ => LvsLimit::Count(self.count(&value, &param)?),
+            };
+            if slot.replace(limit).is_some() {
+                return Err(self.err_tok(t, "this bound is already given"));
+            }
+        }
+        match (min, max) {
+            (None, None) => {
+                let t = self.peek();
+                Err(self.err_tok(t, "a range needs >=, <= or both"))
+            }
+            (Some(low), Some(high)) if high < low => {
+                Err(self.err(span, "the range admits no value"))
+            }
+            _ => {
+                self.out.lvs.range.push((model, param, min, max));
+                Ok(())
+            }
+        }
     }
 
     /// `lvs ignore_parameter "model" param`. The count `m` is no parameter to

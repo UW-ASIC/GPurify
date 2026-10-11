@@ -121,7 +121,9 @@
 //!
 //! LVS compares the extracted layout with a reference netlist ([`lvs::compare`])
 //! and reports under these ids. The first six are [`lvs::Discrepancy`] variants;
-//! the rest are checks on the layout's own graph ([`lvs::check_layout`]).
+//! the rest are checks on the layout's own graph ([`lvs::check_layout`]), and
+//! on its devices' measures where the deck states ranges
+//! ([`lvs::check_param_ranges`]).
 //!
 //! | Report id | Raised by | Flags | Catalog |
 //! |---|---|---|---|
@@ -136,6 +138,7 @@
 //! | `lvs.net_seed_conflict` | [`lvs::check_layout`] | several labels on one net: a short between named nets | DRC-086, LVS-001, LVS-005 |
 //! | `lvs.terminal_net` | [`lvs::check_layout`] | a device marker no recogniser could bind, or a terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
+//! | `lvs.param_range` | [`lvs::check_param_ranges`] | a device parameter outside the range the deck states for its model | LVS-068 |
 
 pub mod deck;
 pub mod drc;

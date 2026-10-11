@@ -406,6 +406,17 @@ fn run_lvs(
             violations,
             runs,
         );
+        gpurify_check::lvs::check_param_ranges(
+            gpurify_check::Design {
+                store: &loaded.store,
+                nets: &extracted.nets,
+                devices: &extracted.devices,
+            },
+            &loaded.deck.lvs.range,
+            &loaded.strings,
+            violations,
+            runs,
+        );
     });
 
     let verdict = match reference.top() {
