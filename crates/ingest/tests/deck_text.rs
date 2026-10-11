@@ -1151,7 +1151,7 @@ fn a_layer_operation_checks_its_arguments() {
 }
 
 /// Oracle: `docs/deck.md`, Rules: the id is how violations are reported, so it
-/// is unique, and `warning` is "ERC only".
+/// is unique.
 #[test]
 fn a_duplicate_rule_id_is_an_error() {
     one_error(
