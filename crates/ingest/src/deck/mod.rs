@@ -108,6 +108,21 @@ pub struct Deck {
     pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
 }
 
+/// The layer table, for a reader that needs only the layers
+/// ([`flatten`](crate::layout::gds::Library::flatten)).
+impl AsRef<LayerTable> for Deck {
+    fn as_ref(&self) -> &LayerTable {
+        &self.layers
+    }
+}
+
+/// Itself, so a reader taking any holder of a layer table takes the table.
+impl AsRef<LayerTable> for LayerTable {
+    fn as_ref(&self) -> &LayerTable {
+        self
+    }
+}
+
 /// Layer names and stream pairs to ids, and back.
 ///
 /// Ids are dense from 0. Drawn layers (`layer x = gds(L, D)`) come first,

@@ -68,6 +68,8 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
     let (store, provenance) = library
         .flatten(&deck, &strings, UnknownLayers::Reject)
         .expect("reads back");
+    let deck =
+        gpurify::deck::CompiledDeck::from_deck(deck, grid(), &strings).expect("the deck compiles");
     let loaded = Loaded {
         strings,
         grid: grid(),

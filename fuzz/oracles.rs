@@ -488,6 +488,10 @@ pub fn deck(data: &[u8]) {
     }
     intern_report_ids(&mut strings);
     let rules: Vec<_> = deck.rules.spec.iter().map(|rule| rule.id).collect();
+    // A deck whose rules do not compile has no run table to hold them to.
+    let Ok(deck) = gpurify::deck::CompiledDeck::from_deck(deck, nm_grid(), &strings) else {
+        return;
+    };
     let loaded = Loaded {
         strings,
         grid: nm_grid(),

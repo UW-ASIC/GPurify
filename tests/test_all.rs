@@ -5,6 +5,7 @@
 //! `tests/fixtures` and check each against its geometry-derived expectation.
 
 use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
+use gpurify::deck::CompileError;
 use gpurify::engine::pipeline::LoadError;
 use gpurify::engine::run::{Checks, StageStatus};
 use gpurify::ingest::DeckError;
@@ -155,7 +156,7 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
         .expect_err("a limit off the manufacturing grid must not load");
 
     assert!(
-        matches!(&error, LoadError::Deck(DeckError::Invalid { diagnostics, .. })
+        matches!(&error, LoadError::Deck(CompileError::Deck(DeckError::Invalid { diagnostics, .. }))
             if diagnostics[0].message.contains("not on the layout's grid")),
         "expected an off-grid rejection, got {error:?}"
     );

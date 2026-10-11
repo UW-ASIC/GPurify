@@ -146,12 +146,28 @@ impl Run {
         run_checks(&loaded, &extracted, &options)
     }
 
-    /// Every rule id the deck declares.
+    /// Every rule id the deck declares, as the parser alone reads the deck
+    /// file (not the compiled rule sets a run reports from), as ids in the
+    /// run's own string table.
     pub fn deck_rule_ids(&self) -> Vec<StrId> {
         let loaded = self
             .load()
             .expect("a fixture whose rules are being listed loads");
-        loaded.deck.rules.spec.iter().map(|spec| spec.id).collect()
+        let text = std::fs::read_to_string(&self.inputs.deck).expect("the fixture deck reads");
+        let mut strings = ingest::StrTable::default();
+        let deck = ingest::deck::parse_deck(&text, self.grid, &mut strings)
+            .expect("the fixture deck parses");
+        deck.rules
+            .spec
+            .iter()
+            .map(|spec| {
+                let name = strings.resolve(spec.id);
+                loaded
+                    .strings
+                    .get(name)
+                    .unwrap_or_else(|| panic!("the run never interned rule {name}"))
+            })
+            .collect()
     }
 }
 
@@ -317,10 +333,11 @@ pub fn rule_run(runs: &[RuleRun], strings: &ingest::StrTable, name: &str) -> Rul
     first
 }
 
-/// Read a store back from GDS bytes held in memory.
+/// Read a store back from GDS bytes held in memory, on the layers of `deck`
+/// (a parsed or a compiled deck).
 pub fn load_bytes(
     bytes: &[u8],
-    deck: &ingest::Deck,
+    deck: &impl AsRef<ingest::deck::LayerTable>,
 ) -> Result<GeometryStore, ingest::layout::LayoutError> {
     let mut strings = ingest::StrTable::default();
     let library = ingest::layout::gds::Library::parse(bytes, &mut strings)?;

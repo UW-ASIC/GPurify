@@ -14,7 +14,8 @@ use gpurify_ingest::{StrId, StrTable};
 /// # What every variant keeps
 ///
 /// - Lengths are in grid units (the layout's database unit), areas in square
-///   grid units. Every limit is positive; `from_deck` refuses anything else.
+///   grid units. Every limit is positive; [`Rule::validate`] refuses
+///   anything else.
 /// - A value exactly at its limit passes. Only a strict excess violates.
 /// - "Merged" means that shapes on the layer that touch or overlap become one
 ///   figure before the rule looks at them. Meeting only at a corner is
@@ -1355,7 +1356,7 @@ pub struct SpacingTable {
 
 impl SpacingTable {
     /// Whether the table is complete and monotone, as the struct states.
-    /// [`RuleSet::from_deck`] refuses a table that is not
+    /// [`Rule::validate`] refuses a table that is not
     /// ([`DrcError::BadTable`]).
     pub fn is_valid(&self) -> bool {
         let starts_and_rises = |steps: &[Dbu]| {
@@ -1404,27 +1405,26 @@ pub struct RuleSet {
 }
 
 impl RuleSet {
-    /// Builds one [`Rule`] per deck row whose kind is in [`KINDS`]. Other kinds
-    /// belong to ERC and are stepped over; the engine refuses a kind neither
-    /// domain spells.
+    /// Builds one [`Rule`] per deck row whose kind is in [`KINDS`], and holds
+    /// each to [`Rule::validate`]. Other kinds belong to ERC and are stepped
+    /// over; [`CompiledDeck::from_deck`](crate::deck::CompiledDeck::from_deck)
+    /// refuses a kind neither domain spells.
     ///
     /// Area limits arrive as areas (`ParamValue::Area`).
     ///
     /// # Errors
     ///
-    /// The first problem, in deck order:
+    /// The first problem, in deck order, and within a row in this order:
     /// - [`DrcError::DuplicateRule`] when two rows of any domain share an id;
     /// - [`DrcError::WrongLayerCount`] when a row names too few or too many
     ///   layers;
     /// - [`DrcError::MissingParam`] or [`DrcError::WrongParamType`] when a
     ///   parameter is absent, of the wrong kind, or a count too large for its
     ///   field;
-    /// - [`DrcError::NonPositiveLimit`] when a length, area, fraction or
-    ///   required count is not positive (or a fraction is not finite);
     /// - [`DrcError::UnrepresentableAngle`] when an allowed angle is not a
     ///   multiple of 45 degrees;
-    /// - [`DrcError::BadTable`] when a spacing table fails
-    ///   [`SpacingTable::is_valid`].
+    /// - what [`Rule::validate`] refuses: a limit that is not positive, or a
+    ///   spacing table that is not complete and monotone.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -1448,55 +1448,31 @@ impl RuleSet {
                     param,
                 })
         };
+        // Each reads a value of its type only: what values a rule can hold is
+        // `Rule::validate`'s, which a rule built in code meets too.
         let length = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
-            let ParamValue::Length(limit) = value(spec, param)? else {
-                return Err(wrong_type(spec, param));
-            };
-            if limit.raw() <= 0 {
-                return Err(DrcError::NonPositiveLimit {
-                    rule: name_of(spec.id),
-                    limit: limit.raw(),
-                });
+            match value(spec, param)? {
+                ParamValue::Length(limit) => Ok(limit),
+                _ => Err(wrong_type(spec, param)),
             }
-            Ok(limit)
         };
-        let area_limit = |spec: &RuleSpec, param| match value(spec, param)? {
-            ParamValue::Area(area) if area.raw() > 0 => Ok(area),
-            ParamValue::Area(area) => Err(DrcError::NonPositiveLimit {
-                rule: name_of(spec.id),
-                limit: i64::try_from(area.raw()).unwrap_or(i64::MIN),
-            }),
-            _ => Err(wrong_type(spec, param)),
+        let area_limit = |spec: &RuleSpec, param| -> Result<DbuArea, DrcError> {
+            match value(spec, param)? {
+                ParamValue::Area(area) => Ok(area),
+                _ => Err(wrong_type(spec, param)),
+            }
         };
         let ratio = |spec: &RuleSpec, param| -> Result<f64, DrcError> {
-            let ParamValue::Ratio(limit) = value(spec, param)? else {
-                return Err(wrong_type(spec, param));
-            };
-            // `!(x > 0)` also rejects NaN, which would compare clean everywhere.
-            if !(limit > 0.0) || !limit.is_finite() {
-                #[allow(clippy::cast_possible_truncation, reason = "shown to a human only")]
-                let shown = limit as i64;
-                return Err(DrcError::NonPositiveLimit {
-                    rule: name_of(spec.id),
-                    limit: shown,
-                });
+            match value(spec, param)? {
+                ParamValue::Ratio(limit) => Ok(limit),
+                _ => Err(wrong_type(spec, param)),
             }
-            Ok(limit)
         };
         let count = |spec: &RuleSpec, param, ceiling: u32| -> Result<u32, DrcError> {
             match value(spec, param)? {
                 ParamValue::Count(found) if found <= ceiling => Ok(found),
                 _ => Err(wrong_type(spec, param)),
             }
-        };
-        let positive = |spec: &RuleSpec, found: u32| {
-            if found == 0 {
-                return Err(DrcError::NonPositiveLimit {
-                    rule: name_of(spec.id),
-                    limit: 0,
-                });
-            }
-            Ok(found)
         };
         let layers = |spec: &RuleSpec, expected: u32| {
             if spec.layer_len == expected {
@@ -1701,7 +1677,7 @@ impl RuleSet {
                 }
                 "redundant_via" => {
                     let layer = one(spec)?;
-                    let min_count = positive(spec, count(spec, "min_count", u16::MAX.into())?)?;
+                    let min_count = count(spec, "min_count", u16::MAX.into())?;
                     Rule::RedundantVia {
                         layer,
                         min_count: u16::try_from(min_count).expect("checked against the ceiling"),
@@ -1720,7 +1696,7 @@ impl RuleSet {
                 }
                 "multi_patterning" => {
                     let layer = one(spec)?;
-                    let colors = positive(spec, count(spec, "colors", u8::MAX.into())?)?;
+                    let colors = count(spec, "colors", u8::MAX.into())?;
                     Rule::MultiPatterning {
                         layer,
                         colors: u8::try_from(colors).expect("checked against the ceiling"),
@@ -1733,7 +1709,7 @@ impl RuleSet {
                     Rule::MustContain {
                         outer,
                         inner,
-                        min_count: positive(spec, count(spec, "min_count", u32::MAX)?)?,
+                        min_count: count(spec, "min_count", u32::MAX)?,
                     }
                 }
                 "must_be_inside" => {
@@ -1765,15 +1741,11 @@ impl RuleSet {
                             })
                             .collect()
                     };
-                    let table = SpacingTable {
+                    set.tables.push(SpacingTable {
                         prl: lengths("prl")?,
                         width: lengths("width")?,
                         space: lengths("space")?,
-                    };
-                    if !table.is_valid() {
-                        return Err(DrcError::BadTable(name_of(spec.id)));
-                    }
-                    set.tables.push(table);
+                    });
                     Rule::SpacingTable {
                         layer,
                         table: u32::try_from(set.tables.len() - 1).expect("a deck has few tables"),
@@ -1962,6 +1934,7 @@ impl RuleSet {
                     continue;
                 }
             };
+            rule.validate(strings.resolve(spec.id), &set.tables)?;
             set.rules.push((spec.id, rule));
         }
         Ok(set)
@@ -2236,6 +2209,195 @@ impl RuleSet {
 }
 
 impl Rule {
+    /// Whether the rule's values are ones its kind can hold, as each variant
+    /// states: every length, area and fraction positive (a fraction also
+    /// finite), every required count at least 1, an angle rule allowing some
+    /// angle, and a [`Rule::SpacingTable`] naming a table of `tables` that is
+    /// [`SpacingTable::is_valid`]. [`RuleSet::from_deck`] holds every row to
+    /// it; a rule built in code is held to the same.
+    ///
+    /// `rule` is the rule's id, for the error.
+    ///
+    /// # Errors
+    ///
+    /// The first value that fails, in field order:
+    /// [`DrcError::NonPositiveLimit`] for a value that is not positive,
+    /// [`DrcError::MissingParam`] for an angle rule allowing nothing, and
+    /// [`DrcError::BadTable`] for a missing or invalid table.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpurify_check::drc::{DrcError, Rule};
+    /// use gpurify_geom::{Dbu, LayerId};
+    ///
+    /// let width = |nm| Rule::MinWidth { layer: LayerId(0), limit: Dbu::new_unchecked(nm) };
+    /// assert!(width(140).validate("m1.1", &[]).is_ok());
+    /// assert_eq!(
+    ///     width(0).validate("m1.1", &[]),
+    ///     Err(DrcError::NonPositiveLimit { rule: "m1.1".into(), limit: 0 })
+    /// );
+    /// ```
+    pub fn validate(&self, rule: &str, tables: &[SpacingTable]) -> Result<(), DrcError> {
+        let refuse = |limit: i64| DrcError::NonPositiveLimit {
+            rule: rule.to_owned(),
+            limit,
+        };
+        let length = |value: Dbu| {
+            if value.raw() > 0 {
+                Ok(())
+            } else {
+                Err(refuse(value.raw()))
+            }
+        };
+        let area = |value: DbuArea| {
+            if value.raw() > 0 {
+                Ok(())
+            } else {
+                Err(refuse(i64::try_from(value.raw()).unwrap_or(i64::MIN)))
+            }
+        };
+        // `!(x > 0)` also refuses NaN, which would compare clean everywhere.
+        let fraction = |value: f64| {
+            if value > 0.0 && value.is_finite() {
+                Ok(())
+            } else {
+                #[allow(clippy::cast_possible_truncation, reason = "shown to a human only")]
+                let shown = value as i64;
+                Err(refuse(shown))
+            }
+        };
+        let count = |value: u32| if value > 0 { Ok(()) } else { Err(refuse(0)) };
+        match *self {
+            Rule::MinWidth { limit, .. }
+            | Rule::MaxWidth { limit, .. }
+            | Rule::MinEdgeLength { limit, .. }
+            | Rule::Notch { limit, .. }
+            | Rule::MinSpacing { limit, .. }
+            | Rule::MinSpacingDiff { limit, .. }
+            | Rule::CornerToCorner { limit, .. }
+            | Rule::MinEnclosure { limit, .. }
+            | Rule::AsymmetricEnclosure {
+                min_one_side: limit,
+                ..
+            }
+            | Rule::MinExtension { limit, .. }
+            | Rule::Overlap { limit, .. }
+            | Rule::MaxDistanceToTap { limit, .. }
+            | Rule::OffGrid { pitch: limit }
+            | Rule::NetSpacing { limit, .. }
+            | Rule::EdgeMinLength { limit, .. }
+            | Rule::EdgeSpacing { limit, .. }
+            | Rule::EdgeEnclosure { limit, .. } => length(limit),
+            Rule::CutSize { width, height, .. } => length(width).and(length(height)),
+            Rule::EolSpacing {
+                eol_width: first,
+                limit,
+                ..
+            }
+            | Rule::PrlSpacing {
+                prl_threshold: first,
+                limit,
+                ..
+            }
+            | Rule::WideDependentSpacing {
+                width_threshold: first,
+                limit,
+                ..
+            } => length(first).and(length(limit)),
+            Rule::AttachedWideSpacing {
+                width_threshold,
+                attached,
+                limit,
+                ..
+            } => length(width_threshold)
+                .and(length(attached))
+                .and(length(limit)),
+            Rule::MinArea { limit, .. } | Rule::MinEnclosedArea { limit, .. } => area(limit),
+            Rule::Cheesing { max_unslotted, .. } => area(max_unslotted),
+            Rule::Density {
+                window,
+                step,
+                limit,
+                ..
+            } => length(window).and(length(step)).and(fraction(limit)),
+            Rule::GlobalDensity { limit, .. } => fraction(limit),
+            Rule::Angle { allowed, .. } => {
+                if allowed == 0 {
+                    Err(DrcError::MissingParam {
+                        rule: rule.to_owned(),
+                        param: "angle",
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+            Rule::RedundantVia {
+                min_count, within, ..
+            } => count(min_count.into()).and(length(within)),
+            Rule::ViaArraySpacing { limit, .. } => length(limit),
+            Rule::MultiPatterning {
+                colors,
+                color_spacing,
+                ..
+            } => count(colors.into()).and(length(color_spacing)),
+            Rule::MustContain { min_count, .. } => count(min_count),
+            Rule::Forbidden { .. } | Rule::MustBeInside { .. } => Ok(()),
+            Rule::SpacingTable { table, .. } => {
+                if tables
+                    .get(table as usize)
+                    .is_some_and(SpacingTable::is_valid)
+                {
+                    Ok(())
+                } else {
+                    Err(DrcError::BadTable(rule.to_owned()))
+                }
+            }
+        }
+    }
+
+    /// The kind name a deck row resolves to for this variant, its entry of
+    /// [`KINDS`]: `min_width` for [`Rule::MinWidth`].
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Rule::MinWidth { .. } => "min_width",
+            Rule::MaxWidth { .. } => "max_width",
+            Rule::CutSize { .. } => "cut_size",
+            Rule::MinEdgeLength { .. } => "min_edge_length",
+            Rule::Notch { .. } => "notch",
+            Rule::MinSpacing { .. } => "min_spacing",
+            Rule::MinSpacingDiff { .. } => "min_spacing_diff",
+            Rule::EolSpacing { .. } => "eol_spacing",
+            Rule::PrlSpacing { .. } => "prl_spacing",
+            Rule::CornerToCorner { .. } => "corner_to_corner",
+            Rule::WideDependentSpacing { .. } => "wide_dependent_spacing",
+            Rule::MinArea { .. } => "min_area",
+            Rule::MinEnclosedArea { .. } => "min_enclosed_area",
+            Rule::Cheesing { .. } => "cheesing",
+            Rule::Density { .. } => "density",
+            Rule::GlobalDensity { .. } => "global_density",
+            Rule::MinEnclosure { .. } => "min_enclosure",
+            Rule::AsymmetricEnclosure { .. } => "asymmetric_enclosure",
+            Rule::MinExtension { .. } => "min_extension",
+            Rule::Overlap { .. } => "overlap",
+            Rule::MaxDistanceToTap { .. } => "max_distance_to_tap",
+            Rule::OffGrid { .. } => "off_grid",
+            Rule::Angle { .. } => "angle",
+            Rule::RedundantVia { .. } => "redundant_via",
+            Rule::ViaArraySpacing { .. } => "via_array_spacing",
+            Rule::MultiPatterning { .. } => "multi_patterning",
+            Rule::Forbidden { .. } => "forbidden",
+            Rule::MustContain { .. } => "must_contain",
+            Rule::MustBeInside { .. } => "must_be_inside",
+            Rule::NetSpacing { .. } => "net_spacing",
+            Rule::SpacingTable { .. } => "spacing_table",
+            Rule::AttachedWideSpacing { .. } => "attached_wide_spacing",
+            Rule::EdgeMinLength { .. } => "edge_min_length",
+            Rule::EdgeSpacing { .. } => "edge_spacing",
+            Rule::EdgeEnclosure { .. } => "edge_enclosure",
+        }
+    }
+
     /// Every layer the rule reads.
     fn layers(&self) -> [Option<LayerId>; 2] {
         match *self {
