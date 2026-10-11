@@ -347,7 +347,7 @@ fn codes(oracle: &str) -> BTreeSet<&str> {
 }
 
 /// A supported row no open tool defines and none was compared against: what
-/// GPurify must prove on its own evidence.
+/// `GPurify` must prove on its own evidence.
 fn beyond_open_source(row: &Row) -> bool {
     let words = |text: &str| {
         text.split(|c: char| !c.is_ascii_alphanumeric())
@@ -387,7 +387,7 @@ fn beyond_block(rows: &[Row]) -> String {
     out
 }
 
-/// check-sources.md lists every check GPurify performs that no open tool
+/// `check-sources.md` lists every check `GPurify` performs that no open tool
 /// defines, with the public source that defines it and the evidence that
 /// proves it; each rests on two independent oracles, or is a named gap.
 #[test]
