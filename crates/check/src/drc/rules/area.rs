@@ -349,6 +349,42 @@ pub(crate) fn global_density(
     (Outcome::Ran, 1)
 }
 
+/// The number of merged figures on the layer in the whole layout against a
+/// minimum or a maximum (IHP npn13G2.bR, one seal ring per chip), one
+/// violation at the die's centre. `examined` counts figures; nothing drawn is
+/// `Skipped(EmptyLayer)`.
+pub(crate) fn count(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, drawn): (LayerId, usize),
+    limit: u32,
+    sense: LimitSense,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, None, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    if !merge_layer(store, layer, s) {
+        return REFUSED;
+    }
+    let figures =
+        u32::try_from(s.layer_out.len()).expect("a merged layer's figure count fits a u32");
+    if Measurement::Count(figures).violates(Measurement::Count(limit), sense) {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(die),
+            measured: Measurement::Count(figures),
+            limit: Measurement::Count(limit),
+            shapes: (PolyId(first_row_or_none(store, layer)), None),
+        });
+    }
+    (Outcome::Ran, u64::from(figures))
+}
+
 /// A density sweep: `cols x ways` windows of `side`, origins `stride` apart
 /// from `(x0, y0)`.
 #[derive(Debug, Clone, Copy)]

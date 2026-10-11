@@ -210,6 +210,7 @@ const DENSITY: &[Param] = &[
     p("step", "step", Dim::Length),
 ];
 const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
+const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -311,6 +312,16 @@ pub(crate) const KINDS: &[Kind] = &[
             DENSITY_LIMIT,
             &[],
         )
+    },
+    // The number of merged shapes on the layer in the whole layout, a minimum
+    // or a maximum (IHP npn13G2.bR; one seal ring per chip).
+    Kind {
+        fixed: &[("maximum", false)],
+        ..drc("count", Cmp::Ge, "count", &[0], COUNT, &[])
+    },
+    Kind {
+        fixed: &[("maximum", true)],
+        ..drc("count", Cmp::Le, "count", &[0], COUNT, &[])
     },
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),

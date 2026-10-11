@@ -233,6 +233,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `cheesing(L) <= area` | A shape larger than the limit with no slot in it. |
 | `density(L; window: len, step: len) >= frac` | A window, swept in steps across the whole layout, with less coverage than the limit. Use `<=` for a maximum. A window hanging past the edge counts the outside as empty. The whole layout is the extent of the drawn layers: a derived layer, such as one grown past the drawing, does not widen it. |
 | `density(L, boundary; window: len, step: len) >= frac` | The same, with the windows tiling the extent of the `boundary` layer (the die outline). |
+| `count(L) <= n` | More than `n` shapes on `L` in the whole layout, touching shapes counting as one: a per-chip limit, as IHP's npn13G2.bR on the number of npn13G2 devices. Use `>=` for a minimum; "one seal ring per chip" is `count(seal) <= 1` with `count(seal) >= 1`. Reported once, at the centre of the drawn layers' extent. |
 | `global_density(L) >= frac` | Coverage of the whole layout (the drawn layers' extent, as for `density`) below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
 | `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side, measured to the outer shape's real edges, holes included. |
 | `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (sky130 m1.5 "two opposite sides"). |

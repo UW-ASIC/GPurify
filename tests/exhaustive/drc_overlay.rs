@@ -54,6 +54,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         labelled_short(),
         exemption(),
         chip_and_device(),
+        chip_count(),
         dangling_metal(),
         drc_warning(),
         multi_patterning(depth),
@@ -2219,6 +2220,115 @@ fn chip_and_device() -> Vec<Fixture> {
             &[("rpm.1c", below(m, 200))],
         ));
     }
+    every_placement(cases)
+}
+
+/// A count per chip (`count`, DRC-091: IHP npn13G2.bR's devices per chip) and
+/// one seal ring per chip (DRC-095): `count(a) <= 2` and `count(a) >= 2` on
+/// one, two and three shapes, each finding at the die's centre measuring the
+/// count; the die is a frame on another layer, `[0, 4000]²`.
+///
+/// Oracle: counts fixed by construction, at the limit and one either side:
+/// three drawn boxes two of which abut, or meet only at a corner, are two
+/// shapes (a check counting drawn rows reads three), and an empty layer on a
+/// drawn die counts zero. A seal ring drawn as four abutting bands is one
+/// ring; a second ring is two.
+fn chip_count() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["a", "frame"],
+        "rule cmax count(a) <= 2\nrule cmin count(a) >= 2\n",
+    );
+    let at = |n: u32| count(n).at(2000, 2000);
+    let case = |name: &str, boxes: &[Rect], max: Vec<Finding>, min: Vec<Finding>| {
+        fixture(
+            &format!("count/{name}"),
+            &["DRC-091"],
+            &deck,
+            rects(
+                Layout::default().rect("frame", 0, 0, 4000, 4000),
+                "a",
+                boxes,
+            ),
+            &[("cmax", max), ("cmin", min)],
+        )
+    };
+    let (p, q, r) = (
+        (100, 100, 300, 300),
+        (500, 100, 700, 300),
+        (900, 100, 1100, 300),
+    );
+    let mut cases = vec![
+        case("none", &[], vec![], vec![at(0)]),
+        case("one", &[p], vec![], vec![at(1)]),
+        case("two", &[p, q], vec![], vec![]),
+        case("three", &[p, q, r], vec![at(3)], vec![]),
+        case(
+            "three_drawn_two_abut",
+            &[p, q, (700, 100, 900, 300)],
+            vec![],
+            vec![],
+        ),
+        case(
+            "three_drawn_two_at_a_corner",
+            &[p, q, (700, 300, 900, 500)],
+            vec![],
+            vec![],
+        ),
+    ];
+    let seal_deck = new_deck(
+        &["seal", "frame"],
+        "rule seal.one count(seal) <= 1\nrule seal.any count(seal) >= 1\n",
+    );
+    let seal = |layout: Layout, max: Vec<Finding>, min: Vec<Finding>, name: &str| {
+        fixture(
+            &format!("count/seal_ring/{name}"),
+            &["DRC-095", "DRC-091"],
+            &seal_deck,
+            layout.rect("frame", 0, 0, 4000, 4000),
+            &[("seal.one", max), ("seal.any", min)],
+        )
+    };
+    let ring_at = |layout, lo: i64, hi: i64| {
+        ring(
+            layout,
+            "seal",
+            (lo, lo, hi, hi),
+            (lo + 100, lo + 100, hi - 100, hi - 100),
+        )
+    };
+    cases.push(seal(
+        ring_at(Layout::default(), 0, 4000),
+        vec![],
+        vec![],
+        "one",
+    ));
+    cases.push(seal(
+        ring_at(ring_at(Layout::default(), 0, 4000), 1000, 3000),
+        vec![at(2)],
+        vec![],
+        "two",
+    ));
+    cases.push(seal(Layout::default(), vec![], vec![at(0)], "none"));
+    // Nothing outside the seal ring: the ring with its hole filled is the
+    // chip, and what lies off it is forbidden, reported with its area.
+    cases.push(fixture(
+        "count/seal_ring/outside",
+        &["DRC-095"],
+        &new_deck(
+            &["seal", "met1"],
+            "layer chip = seal or seal.holes()\nrule seal.out forbidden(met1 not chip)\n",
+        ),
+        rects(
+            ring_at(Layout::default(), 0, 4000),
+            "met1",
+            &[
+                (500, 500, 1000, 1000),
+                (5000, 0, 5100, 100),
+                (3950, 100, 4100, 200),
+            ],
+        ),
+        &[("seal.out", areas(&[10_000, 10_000]))],
+    ));
     every_placement(cases)
 }
 

@@ -87,7 +87,7 @@ rule via.4a enclosure(via1, met1) >= 55nm
 
 It is strict. Every parameter must be written out, every number carries its
 unit, and a typo is an error with a line and column, never a rule that silently
-does nothing. There are 35 design-rule kinds and 24 electrical-rule kinds.
+does nothing. There are 36 design-rule kinds and 24 electrical-rule kinds.
 [docs/deck.md](docs/deck.md) covers the language and every rule.
 
 Four decks ship in `pdks/`, each citing the rule manual release its numbers
