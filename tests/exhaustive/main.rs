@@ -7,8 +7,8 @@
 //! Small domains are enumerated outright against an independent reference: a
 //! bitmap DRC, a brute-force graph isomorphism for LVS, closed forms for ERC and
 //! PEX. Each fixture names the catalog rows (`docs/check-catalog.tsv`) it
-//! proves, and `every_catalog_row_of_a_complete_domain_is_proved` holds the
-//! catalog to it. Two ERC references run on generated inputs outside the
+//! proves, and `every_supported_catalog_row_is_proved` holds the catalog to
+//! it. Two ERC references run on generated inputs outside the
 //! fixture table (`erc_reference`): a dense nodal solve of supply grids and a
 //! search of extracted net graphs.
 //!
@@ -32,13 +32,12 @@ use harness::{Depth, Fixture};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
-/// The domains whose fixtures are finished: every implemented, partial and
-/// expressible catalog row of these must be proved by at least one fixture, or
-/// by a named test in [`PROVED_BY_TEST`].
-const COMPLETE: &[&str] = &["drc", "erc", "lvs", "pex"];
-
 /// Catalog rows whose claim a fixture cannot state, and the `#[test]` that
-/// proves each, as `file::function` from the repository root.
+/// proves each, as `file::function` from the repository root. The test's
+/// doc comment names the row.
+///
+/// With these, every implemented, partial and expressible row of every
+/// domain, flow included, is proved by a fixture or a named test.
 const PROVED_BY_TEST: &[(&str, &str)] = &[
     (
         "PEX-010",
@@ -48,6 +47,11 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
     (
         "DRC-123",
         "crates/ingest/src/layout.rs::a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise",
+    ),
+    // Live DRC is a library consumer's loop, not a run of the CLI.
+    (
+        "FLOW-005",
+        "tests/engine/main.rs::a_consumer_checks_each_edit_against_one_shared_deck",
     ),
 ];
 
@@ -129,7 +133,7 @@ fn every_fixture_holds() {
 fn every_fixture_holds_at_nightly_depth() {
     let fixtures = all(Depth::Nightly);
     names_are_unique_and_prove_a_row(&fixtures);
-    complete_domains_are_proved(&fixtures);
+    supported_rows_are_proved(&fixtures);
     known_failures_name_open_findings(&fixtures);
     run_all(&fixtures);
 }
@@ -141,14 +145,16 @@ fn fixture_names_are_unique_and_every_fixture_proves_a_catalog_row() {
     names_are_unique_and_prove_a_row(&all(Depth::Merge));
 }
 
-/// Every implemented, partial and expressible row of a finished domain has a
-/// fixture that proves it, and every row a fixture names exists.
+/// Every implemented, partial and expressible catalog row, in every domain,
+/// has a fixture or a named test that proves it (A5), and every row a
+/// fixture names exists.
 ///
-/// Oracle: the catalog's rows: each implemented, partial and expressible row of
-/// a complete domain is named by a fixture or in `PROVED_BY_TEST`.
+/// Oracle: the catalog's rows: each implemented, partial and expressible row
+/// of every domain, flow included, is named by a fixture or in
+/// `PROVED_BY_TEST`, whose test's doc comment names the row.
 #[test]
-fn every_catalog_row_of_a_complete_domain_is_proved() {
-    complete_domains_are_proved(&all(Depth::Merge));
+fn every_supported_catalog_row_is_proved() {
+    supported_rows_are_proved(&all(Depth::Merge));
 }
 
 /// Every expected failure names a finding the testing plan records and has not
@@ -183,20 +189,18 @@ fn names_are_unique_and_prove_a_row(fixtures: &[Fixture]) {
     }
 }
 
-fn complete_domains_are_proved(fixtures: &[Fixture]) {
+fn supported_rows_are_proved(fixtures: &[Fixture]) {
     let catalog = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/check-catalog.tsv"),
     )
     .expect("the catalog is readable");
-    let rows: BTreeMap<String, (String, String)> = catalog
+    // Row id to status.
+    let rows: BTreeMap<String, String> = catalog
         .lines()
         .skip(1)
         .map(|line| {
             let cells: Vec<&str> = line.split('\t').collect();
-            (
-                cells[0].to_owned(),
-                (cells[1].to_owned(), cells[6].to_owned()),
-            )
+            (cells[0].to_owned(), cells[6].to_owned())
         })
         .collect();
     let mut proved: BTreeMap<&str, usize> = BTreeMap::new();
@@ -215,22 +219,35 @@ fn complete_domains_are_proved(fixtures: &[Fixture]) {
         let source =
             std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
                 .expect("the file is readable");
+        let at = source
+            .find(&format!("fn {name}()"))
+            .unwrap_or_else(|| panic!("{id}: no test {test}"));
+        // The doc comment and attributes right above it.
+        let named = source[..at]
+            .trim_end()
+            .lines()
+            .rev()
+            .take_while(|line| {
+                let line = line.trim_start();
+                line.starts_with("///") || line.starts_with("#[")
+            })
+            .any(|line| line.contains(id));
         assert!(
-            source.contains(&format!("fn {name}()")),
-            "{id}: no test {test}"
+            named,
+            "{id}: the doc comment of {test} does not name the row"
         );
         *proved.entry(id).or_default() += 1;
     }
     let missing: Vec<&String> = rows
         .iter()
-        .filter(|(_, (domain, status))| {
-            COMPLETE.contains(&domain.as_str())
-                && matches!(status.as_str(), "implemented" | "partial" | "expressible")
-        })
+        .filter(|(_, status)| matches!(status.as_str(), "implemented" | "partial" | "expressible"))
         .map(|(id, _)| id)
         .filter(|id| !proved.contains_key(id.as_str()))
         .collect();
-    assert!(missing.is_empty(), "rows no fixture proves: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "rows no fixture or named test proves: {missing:?}"
+    );
 }
 
 fn known_failures_name_open_findings(fixtures: &[Fixture]) {
