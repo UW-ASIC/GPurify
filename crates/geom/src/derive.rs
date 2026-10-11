@@ -149,6 +149,27 @@ pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mu
     a.select_into(&keep, out);
 }
 
+/// `KLayout` `with_bbox_max` (`longer`) or `with_bbox_min`: polygons whose
+/// bounding box's longer, or shorter, side in grid units lies in `range`
+/// ("the maximum dimension of the bounding box … either the width or height,
+/// whichever is larger"). For a straight feature, the longer side is its
+/// length.
+pub fn with_bbox_into(
+    a: &ValidatedLayer,
+    longer: bool,
+    range: RangeInclusive<i128>,
+    out: &mut ValidatedLayer,
+) {
+    let keep: Vec<bool> = (0..narrow(a.len()))
+        .map(|idx| {
+            let b = a.get(idx).bbox();
+            let (w, h) = (b.width().raw(), b.height().raw());
+            range.contains(&i128::from(if longer { w.max(h) } else { w.min(h) }))
+        })
+        .collect();
+    a.select_into(&keep, out);
+}
+
 /// `KLayout` `rectangles` and `squares` (`keep`), or `non_rectangles` and
 /// `non_squares`: the polygons of `a` that are, or are not, one axis-aligned
 /// box with no hole, and with `square` a box with equal sides. `a` must be

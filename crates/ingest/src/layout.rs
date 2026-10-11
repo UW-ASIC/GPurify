@@ -16,7 +16,7 @@ use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, Boo
 use gpurify_geom::derive::{
     edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
     inside_into, interacting_into, merge_into, outside_into, rectangles_into, sized_into,
-    with_area_into, with_length_into, with_width_into, EdgeOp,
+    with_area_into, with_bbox_into, with_length_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
 use gpurify_geom::view::{validate_layer_into, PolygonRef, RingRef, ValidatedLayer};
@@ -330,6 +330,10 @@ fn derive_layers_into(
                     }
                     DerivedOp::Rectangles { square, keep } => {
                         rectangles_into(a, square, keep, &mut folded);
+                        Ok(())
+                    }
+                    DerivedOp::WithBbox { longer, lo, hi } => {
+                        with_bbox_into(a, longer, lo..=hi, &mut folded);
                         Ok(())
                     }
                     DerivedOp::WithText { keep, text } => {

@@ -63,6 +63,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         sizing(),
         selections(),
         shape_class(),
+        feature_length(),
         edge_operations(),
     ]
     .concat()
@@ -3381,6 +3382,47 @@ fn shape_class() -> Vec<Fixture> {
                 "a.non_squares()",
                 areas(&[20_000, 20_000, 15_000, 50_000, 20_000, 80_000]),
             ),
+        ],
+        layout,
+    )])
+}
+
+/// A feature's length, the longer side of its bounding box (DRC-021: sky130
+/// mf.2 "length of fuse", IHP Rsil.f "min. RES length"), and its shorter
+/// side: `with_bbox_max` and `with_bbox_min`, each shape reported with its
+/// area.
+///
+/// Oracle: boxes fixed by construction: bars 499, 500 and 501 long against
+/// bounds at 500 (strict and `==`); a 500 bar drawn as two abutting halves
+/// (250 each unmerged); an L of two 100-wide arms in a 500 square box (its
+/// arms are not its box); a 50 x 500 bar under `with_bbox_min(< 100nm)`.
+fn feature_length() -> Vec<Fixture> {
+    let layout = rects(
+        Layout::default(),
+        "a",
+        &[
+            (0, 0, 100, 499),
+            (300, 0, 400, 500),
+            (600, 0, 700, 501),
+            (900, 0, 1000, 250),
+            (900, 250, 1000, 500),
+            (1200, 0, 1700, 100),
+            (1200, 100, 1300, 500),
+            (2000, 0, 2050, 500),
+        ],
+    );
+    every_placement(vec![derived(
+        "derived/feature_length",
+        &["DRC-021"],
+        &["a"],
+        &[
+            ("a.with_bbox_max(< 500nm)", areas(&[49_900])),
+            ("a.with_bbox_max(> 500nm)", areas(&[50_100])),
+            (
+                "a.with_bbox_max(== 500nm)",
+                areas(&[50_000, 50_000, 90_000, 25_000]),
+            ),
+            ("a.with_bbox_min(< 100nm)", areas(&[25_000])),
         ],
         layout,
     )])

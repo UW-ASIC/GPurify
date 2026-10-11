@@ -317,6 +317,18 @@ pub enum DerivedOp {
     /// kept exactly: `with_width(> 70nm)` is `4901..` and holds a `√5000`
     /// neck, `with_width(<= 70nm)` is `..=4900` and does not.
     WithWidth(i128, i128),
+    /// `with_bbox_max` (`longer`) or `with_bbox_min`: the shapes whose
+    /// bounding box's longer, or shorter, side lies in `lo..=hi` grid units,
+    /// as `KLayout`'s selections of those names. The longer side is a straight
+    /// feature's length.
+    WithBbox {
+        /// The longer side (`with_bbox_max`), else the shorter.
+        longer: bool,
+        /// The least side kept, in grid units.
+        lo: i128,
+        /// The greatest side kept, in grid units.
+        hi: i128,
+    },
     /// `rectangles` (`keep`), `squares` (`keep` and `square`),
     /// `non_rectangles` or `non_squares`: the shapes that are, or are not, one
     /// axis-aligned box with no hole, a square having equal sides, as
@@ -368,6 +380,7 @@ impl DerivedOp {
             | Self::WithArea(..)
             | Self::WithWidth(..)
             | Self::Rectangles { .. }
+            | Self::WithBbox { .. }
             | Self::WithText { .. } => Some(false),
             Self::And
             | Self::Or
