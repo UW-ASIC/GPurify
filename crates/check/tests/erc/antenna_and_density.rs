@@ -180,6 +180,7 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
             diode: vec![None],
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
+            cut_factor: vec![1.0],
             area_minus_diode: vec![0.0],
             gate_plus_diode: vec![0.0],
             diode_reduce: vec![Vec::new()],
