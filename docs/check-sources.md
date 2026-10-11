@@ -58,15 +58,15 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | `MR` | Metamorphic relation (plan L5) |
 | `NV` | Naive reference implementation (dense nodal solve, BFS, brute-force colouring) |
 
-**Snapshot, 2026-10-10** (238 rows):
+**Snapshot, 2026-10-10** (261 rows):
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 23 | 4 | 36 | 36 | 0 | 0 |
-| LVS | 17 | 1 | 16 | 12 | 0 | 0 |
-| ERC | 27 | 2 | 14 | 34 | 0 | 0 |
-| PEX | 4 | 0 | 3 | 3 | 0 | 0 |
-| Flow | 0 | 0 | 1 | 5 | 0 | 0 |
+| DRC | 23 | 4 | 36 | 43 | 0 | 0 |
+| LVS | 17 | 1 | 16 | 14 | 0 | 0 |
+| ERC | 27 | 2 | 14 | 38 | 0 | 0 |
+| PEX | 4 | 0 | 3 | 9 | 0 | 0 |
+| Flow | 0 | 0 | 1 | 9 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).
@@ -128,6 +128,7 @@ pages are TODO stubs. FreePDK45 has open SVRF decks
 | `MAG` | Magic tech-file manual (DRC rule kinds, device extraction kinds), `ext2spice merge` | format 35 | https://opencircuitdesign.com/magic/techref/maint2.html |
 | `Gemini` | Ebeling, "GeminiII", ICCAD 1988, doi:10.1109/ICCAD.1988.122520; Ohlrich et al., "SubGemini", DAC 1993, doi:10.1145/157485.164556. Ebeling & Zajicek, ICCAD 1983, pp. 172–173 (confirmed only through secondary citations) | — | paywalled |
 | `ngspice` | ngspice manual: SPICE element syntax | 43–47 | https://ngspice.sourceforge.io/docs/ngspice-manual.pdf |
+| `BSIM4` | BSIM4 MOSFET model manual (UC Berkeley): the layout-dependent instance parameters SA, SB, SD (stress, LOD) and SCA, SCB, SCC, SC (well proximity) and their geometric definitions | 4.8 | https://bsim.berkeley.edu/models/bsim4/ |
 
 No open, authoritative **CDL** specification exists. CDL is a SPICE subset
 with vendor extensions, and the Calibre/Cadence CDL documents are behind
@@ -142,6 +143,7 @@ plus the dialect real PDK netlists use.
 | `TR18-02` | ESDA TR18.0-02-20, *Latch-up EDA* | 2020 (revision due 2027) | Same. TOC read; Annex A reference rules not read. | https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/ |
 | `TR22` | ESDA TR22.0-01-14 / -02-18, foundry and IP ESD parameters | 2014 / 2018 | Members free | https://www.esda.org/store/standards/product/72/esd-tr22-0-01-14 |
 | `Khazhinsky2012`, `Hogan2012` | ESDA / In Compliance, "ESD EDA Checks" Parts I and II | 2012 (against TR18-11) | Open, read in full | https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf ; https://www.esda.org/assets/News/ESDEDA-InCompliance-part2.pdf |
+| `HoganMedhat2021` | Hogan, Medhat (Siemens), "Circuit Reliability Verification For Automotive Electronics", Semiconductor Engineering: the Calibre PERC layout checks it names (P2P and current density pad to ESD device, PMOS/NMOS sharing one well, field-oxide parasitics, latch-up) | 2021-05-06 | Open | https://semiengineering.com/circuit-reliability-verification-for-automotive-electronics/ |
 | `JESD78` | JEDEC JESD78F.02, IC latch-up test | Nov 2023 | Free with JEDEC registration. Table 1 was read from a third-party copy, so **obtain the JEDEC original** before citing numbers. | https://www.jedec.org/standards-documents/docs/jesd-78b |
 | `JS001`, `JS002` | ANSI/ESDA/JEDEC JS-001-2024 (HBM), JS-002-2025 (CDM); JTR001-01-12 user guide | 2024 / 2025 | Registration or purchase; bodies not read. JS-001's pin-combination tables set which pin pairs a P2P check must cover. | https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf |
 | `JEP122` | JEDEC JEP122H, failure mechanisms and models (EM, TDDB, HCI, NBTI) | Sep 2016 | Registration; abstract only | https://www.jedec.org/standards-documents/docs/jep-122e |
@@ -150,7 +152,7 @@ plus the dialect real PDK netlists use.
 | `Black1969`, `Blech1976` | Black, IEEE TED 16(4), doi:10.1109/T-ED.1969.16754; Blech, J. Appl. Phys. 47(4), doi:10.1063/1.322842 | — | Paywalled | — |
 | `IEEE1801` | IEEE 1801-2024 (UPF 4.0) | 2025-03-04 | Free through IEEE GET; **not read**, so no clause numbers are cited | https://standards.ieee.org/ieee/1801/11890/ |
 | `CPF` | Si2 Common Power Format 2.1 | archived 2014 | Not read | https://si2.org/si2-openstandards/ |
-| `OR` | OpenROAD `psm` (IR, EM, `check_power_grid`) and `ant` (PAR/CAR per LEF/DEF) | latest | Open | https://openroad.readthedocs.io/en/latest/main/src/psm/README.html |
+| `OR` | OpenROAD `psm` (IR, EM, `check_power_grid`), `ant` (PAR/CAR per LEF/DEF), `rcx` (OpenRCX, extraction from DEF), `fin` (`density_fill`) and `dpl` (placement legality, cell edge spacing) | latest | Open | https://openroad.readthedocs.io/en/latest/main/src/psm/README.html ; https://openroad.readthedocs.io/en/latest/main/src/rcx/README.html |
 | `YOSYS` | Yosys `check` (loops, conflicting drivers, undriven wires) | latest | Open | https://yosyshq.readthedocs.io/projects/yosys/en/latest/cmd/index_passes_status.html |
 | `WH` | Weste & Harris, *CMOS VLSI Design* 4e (§3.3 rules, §3.6.1 antenna, §7.3 reliability, §13.3.2 IR, §13.6.2 ESD) | 2011 | Paywalled; TOC verified | https://pages.hmc.edu/harris/cmosvlsi/4e/cmosvlsidesign_4e_fm.pdf |
 
@@ -188,7 +190,10 @@ PathFinder-SC; `PEG` Cadence Pegasus/PVS/Assura; `VOL` Voltus; `QNT` Quantus;
 - vendor product pages and datasheets;
 - white papers and vendor engineering blogs;
 - the open FreePDK45 SVRF decks;
-- PVconverter, a BSD-licensed SVRF→PVS translator whose keyword table shows real SVRF statement names (https://github.com/kiwa3927/PVconverter);
+- PVconverter, a BSD-licensed SVRF→PVS translator whose keyword table shows real SVRF statement names (https://github.com/kiwa3927/PVconverter); a `CAL:<STATEMENT>` source in capitals (e.g. `CAL:ERC PATHCHK`, `CAL:LVS ISOLATE OPENS`) is a statement name from its token table `src/public/token/rcsTokenTypes.h`, which shows the check exists, not its semantics;
+- `SRC:datasheet`: the Synopsys StarRC datasheet (CS1038890626, 04/2023), its process-modelling and productivity lists (https://www.synopsys.com/content/dam/synopsys/implementation&signoff/datasheets/starrc-ds.pdf);
+- `QNT:RFIC`: Cadence's RFIC design page on Quantus substrate modelling (https://www.cadence.com/en_US/home/explore/rfic-design.html);
+- the Siemens product pages and fact sheets for Calibre 3DSTACK, DesignEnhancer, Vision AI and PERC (https://www.siemens.com/en-us/products/ic/calibre-design/);
 - granted and published patents.
 
 The key patents cited in the catalog:
@@ -229,7 +234,10 @@ catalog row:
 - logic-gate recognition (LVS-047);
 - SoC-integration sanity checks (FLOW-003);
 - waivers (FLOW-001);
-- PEX qualification diff (PEX-009).
+- PEX qualification diff (PEX-009);
+- device-region (MEOL) parasitics, fill treatment, substrate and 3D-IC extraction (PEX-011–013, 015);
+- inter-die alignment (DRC-129), path checks (ERC-G9), ESD layout rules on recognised devices (ERC-C14);
+- layout enhancement and result clustering (FLOW-009, 010).
 
 **Not gaps after all:** soft-connect checking (KLayout `soft_connect`) and
 basic antenna ratios (KLayout `antenna_check`) exist in open tools.
@@ -291,7 +299,7 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | CAL | NV; MR; SY |
 | DRC-110 | Recommended rules reported as warnings | partial | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY |
 | DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
-| LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG | SY; MR |
+| LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
