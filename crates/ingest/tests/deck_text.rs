@@ -1164,3 +1164,41 @@ fn a_temperature_and_its_coefficients_come_together() {
     );
     one_error("temperature 85C\n", "expected `nominal`");
 }
+
+/// Oracle: LEF/DEF 5.8's `PWL ( ( d1 r1 ) ( d2 r2 ) ... )`, written as a list
+/// of `(area, number)` points: each point lowers to its area in square grid
+/// units (1 nm grid: 0.0125 µm² is 12 500) and its number, in deck order.
+/// Areas must start at 0 or more and rise strictly, as LEF's diffusion values
+/// do; a point is a pair, and a table has one.
+#[test]
+fn a_piecewise_linear_table_lowers_point_by_point_and_must_rise() {
+    let row = |table: &str| {
+        format!(
+            "rule ae antenna_electrical(poly, met1; max_ratio: 400, sidewall: none, diode: diff,
+    diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: {table})\n"
+        )
+    };
+    let (deck, strings) = ok(&row("[(0um2, 400), (0.0125um2, 400), (22.5um2, 11600)]"));
+    assert_eq!(
+        rules(&deck, &strings)[0].3,
+        [
+            "max_ratio=400",
+            "diode_layer=diff",
+            "diode_credit=0",
+            "diode_bonus=0",
+            "area_minus_diode=0",
+            "gate_plus_diode=0",
+            "diode_max_ratio_area=0dbu2",
+            "diode_max_ratio=400",
+            "diode_max_ratio_area=12500dbu2",
+            "diode_max_ratio=400",
+            "diode_max_ratio_area=22500000dbu2",
+            "diode_max_ratio=11600",
+        ]
+    );
+    one_error(&row("[(0.1um2, 400), (0.1um2, 500)]"), "rise strictly");
+    one_error(&row("[(0.1um2, 400), (0.05um2, 500)]"), "rise strictly");
+    one_error(&row("[(0um2, 400, 1)]"), "(area, number) points");
+    one_error(&row("[]"), "at least one point");
+}

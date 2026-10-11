@@ -1731,6 +1731,36 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::AreaTable(second) => {
+                let want = "a list of (area, number) points";
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, want, label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one point")));
+                }
+                let mut previous: Option<DbuArea> = None;
+                for item in items {
+                    let Val::Tuple(parts, _) = item else {
+                        return Err(self.wrong(item, want, label));
+                    };
+                    let [area, number] = parts.as_slice() else {
+                        return Err(self.wrong(item, want, label));
+                    };
+                    let area = self.area(area, label)?;
+                    if area.raw() < 0 || previous.is_some_and(|before| area <= before) {
+                        return Err(self.err(
+                            item.span(),
+                            &format!("`{label}`'s areas start at 0 or more and rise strictly"),
+                        ));
+                    }
+                    previous = Some(area);
+                    let number = self.physical(number, Dim::Scalar, label)?;
+                    out.push((engine, ParamSrc::Value(ParamValue::Area(area))));
+                    out.push((second, ParamSrc::Value(ParamValue::Ratio(number))));
+                }
+                return Ok(());
+            }
             Dim::Group(inner) => {
                 let Val::Group(named, span) = value else {
                     return Err(self.wrong(value, "named arguments `(name: value, ..)`", label));
@@ -2180,5 +2210,6 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::LengthRows => "a list of rows of lengths",
         Dim::LengthPairList(_) => "a list of pairs of lengths",
         Dim::Word(_) => "one of the listed words",
+        Dim::AreaTable(_) => "a list of (area, number) points",
     }
 }
