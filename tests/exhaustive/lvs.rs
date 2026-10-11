@@ -1950,7 +1950,9 @@ fn curated() -> Vec<Fixture> {
     // the middle one shared two ways, so merged the fingers have 1 um² and
     // 6 um on n1 and 0.5 um² and 3 um on n2. A card with those at its source
     // (n1) and drain (n2) matches; one with them the other way round does
-    // not.
+    // not. F98 (fixed in B31): without the sensor nothing tells n1 from n2,
+    // so the card the other way round is the same circuit with n1 and n2
+    // renamed, and names do not take part: both cards match.
     let mut shared = Layout::default()
         .rect("diff", 0, 0, 1800, 1000)
         .rect("poly", 500, -200, 650, 1500)
@@ -1975,17 +1977,21 @@ fn curated() -> Vec<Fixture> {
         );
     }
     let sensor = Dev::mos(N, 1, 0, 0);
-    shared = draw_mos(shared, column(1), &sensor);
-    for net in 0..3 {
-        let t = track(net);
-        shared = shared.rect("met2", -1000, t, column(2), t + 200).label(
-            "met2_label",
-            -900,
-            t + 100,
-            &format!("n{net}"),
-        );
-    }
-    for (case, ends, matched) in [
+    let tracked = |mut layout: Layout| {
+        for net in 0..3 {
+            let t = track(net);
+            layout = layout.rect("met2", -1000, t, column(2), t + 200).label(
+                "met2_label",
+                -900,
+                t + 100,
+                &format!("n{net}"),
+            );
+        }
+        layout
+    };
+    let symmetric = tracked(shared.clone());
+    let shared = tracked(draw_mos(shared, column(1), &sensor));
+    for (case, ends, sensed) in [
         ("source_and_drain", [1e-12, 5e-13, 6e-6, 3e-6], true),
         ("the_other_way_round", [5e-13, 1e-12, 3e-6, 6e-6], false),
     ] {
@@ -1995,16 +2001,21 @@ fn curated() -> Vec<Fixture> {
             .fold(Dev::mos(N, 0, 1, 2).sized(2000, 150), |dev, (name, v)| {
                 dev.param(name, v)
             });
-        let written = Circuit::new(3, vec![card, sensor.clone()]);
-        out.push(
-            with_text(
-                &format!("parallel/shared_diffusion_{case}"),
-                &["LVS-060", "LVS-040"],
-                shared.clone(),
-                spice(&written),
-            )
-            .expect(Expect::Lvs(matched)),
-        );
+        let variants = [
+            ("", &shared, vec![card.clone(), sensor.clone()], sensed),
+            ("symmetric_", &symmetric, vec![card], true),
+        ];
+        for (variant, layout, devs, matched) in variants {
+            out.push(
+                with_text(
+                    &format!("parallel/shared_diffusion_{variant}{case}"),
+                    &["LVS-060", "LVS-040"],
+                    layout.clone(),
+                    spice(&Circuit::new(3, devs)),
+                )
+                .expect(Expect::Lvs(matched)),
+            );
+        }
     }
 
     let nf = edited(&spice(&one), "l=150n", "l=150n nf=1");
