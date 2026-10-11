@@ -335,6 +335,32 @@ def max_enclosure(rule, outer, inner, lim)
     put({ rule: rule }.merge(poly(o))) unless (r - RBA::Region.new(mine).sized(lim)).is_empty?
   end
 end
+# LEF MAXVIASTACK over raw cut layers, bottom to top: a cut stacks on a cut
+# of the layer before whose box it overlaps with positive area; each cut at
+# height `max + 1` of a taller chain, with the tallest chain through it.
+def via_stack(rule, layers, max)
+  cuts = layers.map { |l| l.data.each.to_a }
+  over = lambda { |a, b| a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top }
+  chain = lambda do |order, step|
+    h = cuts.map { |cs| [1] * cs.size }
+    order.each do |i|
+      p = i - step
+      next if p < 0 || p >= cuts.size
+      cuts[i].each_with_index do |c, k|
+        hs = cuts[p].each_index.select { |j| over.(cuts[p][j].bbox, c.bbox) }.map { |j| h[p][j] }
+        h[i][k] = hs.max + 1 unless hs.empty?
+      end
+    end
+    h
+  end
+  down = chain.((0...cuts.size).to_a, 1)
+  up = chain.((0...cuts.size).to_a.reverse, -1)
+  cuts.each_with_index do |cs, i|
+    cs.each_with_index do |c, k|
+      put({ rule: rule }.merge(poly(c)).merge({ v: down[i][k] + up[i][k] - 1 })) if down[i][k] == max + 1
+    end
+  end
+end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
 # two corners is irrational, so each width pair under the bound is measured
@@ -1106,6 +1132,18 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::ViaStack { stack, max_height } => {
+                let cuts: Vec<String> = set.stacks[stack as usize]
+                    .iter()
+                    .map(|&layer| {
+                        layers.reads(layer, &mut reads);
+                        format!("{}.dup.raw", var(layer))
+                    })
+                    .collect();
+                writeln!(body, "via_stack({q}, [{}], {max_height})", cuts.join(", "))
+                    .expect("a String");
+                exact("via_stack", Key::Row(None), Value::Count)
             }
             Rule::CutClassSpacing { layer, table } => {
                 layers.reads(layer, &mut reads);

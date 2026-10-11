@@ -399,3 +399,71 @@ pub(crate) fn minimum_cut(
     }
     (Outcome::Ran, examined)
 }
+
+/// LEF `MAXVIASTACK`: the tallest chain of overlapping cuts, one per layer of
+/// `stack` (bottom to top), through each cut; each cut at height
+/// `max_height + 1` of a taller chain is reported once. `examined` counts
+/// cuts.
+pub(crate) fn via_stack(
+    store: &GeometryStore,
+    rule: StrId,
+    stack: &[LayerId],
+    max_height: u16,
+    out: &mut Violations,
+) -> Verdict {
+    let cuts: Vec<Vec<(Bbox, PolyId)>> = stack
+        .iter()
+        .map(|&layer| {
+            store
+                .polys_on_layer(layer)
+                .map(|row| (store.poly_bbox(PolyId(row)), PolyId(row)))
+                .collect()
+        })
+        .collect();
+    // Per layer and cut: the tallest chain ending at it from below (`down`)
+    // and starting at it upward (`up`).
+    let chain = |order: &mut dyn Iterator<Item = usize>, step: isize| {
+        let mut heights: Vec<Vec<u32>> = cuts.iter().map(|c| vec![1; c.len()]).collect();
+        for i in order {
+            let Some(prev) = i.checked_add_signed(-step).filter(|&p| p < cuts.len()) else {
+                continue;
+            };
+            let under = SortedRects::new(
+                (0u32..)
+                    .zip(&cuts[prev])
+                    .map(|(k, &(b, _))| (b, k))
+                    .collect(),
+            );
+            for (c, &(b, _)) in cuts[i].iter().enumerate() {
+                let best = under
+                    .overlapping(b)
+                    .map(|(_, k)| heights[prev][k as usize])
+                    .max();
+                if let Some(best) = best {
+                    heights[i][c] = best + 1;
+                }
+            }
+        }
+        heights
+    };
+    let down = chain(&mut (0..cuts.len()), 1);
+    let up = chain(&mut (0..cuts.len()).rev(), -1);
+    let over = u32::from(max_height) + 1;
+    for (i, layer_cuts) in cuts.iter().enumerate() {
+        for (c, &(b, row)) in layer_cuts.iter().enumerate() {
+            let tallest = down[i][c] + up[i][c] - 1;
+            if down[i][c] == over {
+                out.push(Violation {
+                    rule,
+                    layer: stack[i],
+                    severity: Severity::Error,
+                    at: centre(b),
+                    measured: Measurement::Count(tallest),
+                    limit: Measurement::Count(u32::from(max_height)),
+                    shapes: (row, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, cuts.iter().map(|c| c.len() as u64).sum())
+}
