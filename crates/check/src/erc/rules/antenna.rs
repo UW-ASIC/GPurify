@@ -225,8 +225,8 @@ pub struct AntennaTable {
 /// the gate's node on it, conductors before the cuts on them (metal and cut
 /// as one CAR, `ANTENNACUMROUTINGPLUSCUT`),
 ///
-/// `PAR = (factor * area * reduce(diode) - area_minus_diode * diode) / (gate
-/// + gate_plus_diode * diode)`,
+/// `PAR = (factor * area * reduce(diode) - area_minus_diode * diode) /
+/// (gate + gate_plus_diode * diode)`,
 ///
 /// where `factor` is `cut_factor` on a cut layer (`ANTENNAAREAFACTOR`, its
 /// Example 1's "10 x cut_area") and 1 on a conductor, `reduce` is
@@ -241,9 +241,9 @@ pub struct AntennaTable {
 /// with no shape on the gate's net adds nothing, and the running sum is
 /// truncated at zero after each layer, as LEF states ("if the resulting value
 /// is less than 0, it should be truncated to 0"; its Example 2 carries the 0
-/// to the next layer). With both factors 0 and no `diode_reduce` the ratio
-/// is [`AntennaTable`]'s. The value compared with the limit is then sky130's
-/// etch gate area ratio with a diode,
+/// to the next layer). With both diode factors 0, a `cut_factor` of 1 and no
+/// `diode_reduce` the ratio is [`AntennaTable`]'s. The value compared with
+/// the limit is then sky130's etch gate area ratio with a diode,
 ///
 /// `EGAR = ratio - diode_credit * diode_area - diode_bonus`,
 ///
@@ -274,15 +274,14 @@ pub struct AntennaTable {
 /// tap). It is judged before any credit, so a row can exempt one layer and
 /// credit another (sky130's `AntennaDiode` excludes the `pAntennaShort`).
 ///
-/// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13 in the
-/// [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1 and Table Ig, and the
-/// sky130 technology LEF's PWL tables; [LEF/DEF 5.8]
-/// `ANTENNACUMROUTINGPLUSCUT`,
-/// `ANTENNAAREAFACTOR`, `ANTENNAAREAMINUSDIFF`,
-/// `ANTENNAGATEPLUSDIFF`, `ANTENNAAREADIFFREDUCEPWL`, `ANTENNADIFFAREARATIO
-/// PWL` and `ANTENNAMODEL`; [GF180MCU] ANT.16; [IHP SG13G2] Ant.b/e and
-/// Ant.d/f; [KLayout] `antenna_check` (its diode factor). Source tags are in
-/// [check-sources.md].
+/// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12,
+/// ERC-A13 in the [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1
+/// and Table Ig, and the sky130 technology LEF's PWL tables; [LEF/DEF 5.8]
+/// `ANTENNACUMROUTINGPLUSCUT`, `ANTENNAAREAFACTOR`, `ANTENNAAREAMINUSDIFF`,
+/// `ANTENNAGATEPLUSDIFF`, `ANTENNAAREADIFFREDUCEPWL`, `ANTENNADIFFAREARATIO`
+/// tables and `ANTENNAMODEL`; [GF180MCU] ANT.16; [IHP SG13G2] Ant.b/e,
+/// Ant.d/f and Ant.g; [KLayout] `antenna_check` (its diode factor). Source
+/// tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
