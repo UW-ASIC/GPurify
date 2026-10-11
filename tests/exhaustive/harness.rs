@@ -22,7 +22,7 @@ use gpurify::engine::pipeline::{extract, intern_report_ids, Extracted, Loaded};
 use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions, Summary};
 use gpurify::extract::Parasitic;
 use gpurify::geom::{Dbu, Grid, LayerId};
-use gpurify_ingest::deck::parse_deck;
+use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
 use gpurify_testgen::gds::{write_store_labelled, Label};
@@ -431,48 +431,8 @@ pub struct Ran {
 /// or a run that errors. Some fixtures expect exactly that, through
 /// [`Expect::Passes`]` (false)` and a stage refusal.
 pub fn run(fixture: &Fixture) -> Result<Ran, String> {
+    let (bytes, deck, mut strings) = written(fixture)?;
     let grid = Grid::new(1000).expect("a 1 nm grid");
-    let mut strings = StrTable::default();
-    let deck =
-        parse_deck(&fixture.deck, grid, &mut strings).map_err(|why| format!("deck: {why}"))?;
-
-    let mut builder = LayoutBuilder::new(deck.layers.len());
-    for (layer, points) in &fixture.layout.shapes {
-        let id = deck
-            .layers
-            .id(&strings, layer)
-            .ok_or_else(|| format!("layout: {layer} is not a deck layer"))?;
-        let xs: Vec<i64> = points.iter().map(|p| p.0 * NM).collect();
-        let ys: Vec<i64> = points.iter().map(|p| p.1 * NM).collect();
-        builder.push(id, &xs, &ys);
-    }
-    let (store, _) = builder.finish();
-    let label_layers: Vec<LayerId> = fixture
-        .layout
-        .labels
-        .iter()
-        .map(|(layer, ..)| {
-            deck.layers
-                .id(&strings, layer)
-                .ok_or_else(|| format!("layout: label layer {layer} is not a deck layer"))
-        })
-        .collect::<Result<_, _>>()?;
-    let labels: Vec<Label<'_>> = fixture
-        .layout
-        .labels
-        .iter()
-        .zip(&label_layers)
-        .map(|((_, x, y, text), &layer)| Label {
-            layer,
-            x: *x,
-            y: *y,
-            text,
-        })
-        .collect();
-    let mut bytes = Vec::new();
-    write_store_labelled(&store, &deck.layers, &labels, "TOP", &mut bytes)
-        .map_err(|why| format!("gds write: {why}"))?;
-
     let library =
         gds::Library::parse(&bytes, &mut strings).map_err(|why| format!("gds read: {why}"))?;
     let (store, mut provenance) = library
@@ -552,6 +512,58 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         loaded,
         extracted,
     })
+}
+
+/// The fixture's layout as the GDSII bytes [`run`] reads back, with its deck
+/// parsed on the 1 nm grid and the strings that deck interned.
+///
+/// # Errors
+///
+/// A deck that does not parse, a layer the deck does not declare, or a
+/// layout the writer refuses.
+pub fn written(fixture: &Fixture) -> Result<(Vec<u8>, Deck, StrTable), String> {
+    let grid = Grid::new(1000).expect("a 1 nm grid");
+    let mut strings = StrTable::default();
+    let deck =
+        parse_deck(&fixture.deck, grid, &mut strings).map_err(|why| format!("deck: {why}"))?;
+
+    let mut builder = LayoutBuilder::new(deck.layers.len());
+    for (layer, points) in &fixture.layout.shapes {
+        let id = deck
+            .layers
+            .id(&strings, layer)
+            .ok_or_else(|| format!("layout: {layer} is not a deck layer"))?;
+        let xs: Vec<i64> = points.iter().map(|p| p.0 * NM).collect();
+        let ys: Vec<i64> = points.iter().map(|p| p.1 * NM).collect();
+        builder.push(id, &xs, &ys);
+    }
+    let (store, _) = builder.finish();
+    let label_layers: Vec<LayerId> = fixture
+        .layout
+        .labels
+        .iter()
+        .map(|(layer, ..)| {
+            deck.layers
+                .id(&strings, layer)
+                .ok_or_else(|| format!("layout: label layer {layer} is not a deck layer"))
+        })
+        .collect::<Result<_, _>>()?;
+    let labels: Vec<Label<'_>> = fixture
+        .layout
+        .labels
+        .iter()
+        .zip(&label_layers)
+        .map(|((_, x, y, text), &layer)| Label {
+            layer,
+            x: *x,
+            y: *y,
+            text,
+        })
+        .collect();
+    let mut bytes = Vec::new();
+    write_store_labelled(&store, &deck.layers, &labels, "TOP", &mut bytes)
+        .map_err(|why| format!("gds write: {why}"))?;
+    Ok((bytes, deck, strings))
 }
 
 /// A measurement as one number, for sorting and tolerant comparison.

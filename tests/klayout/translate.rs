@@ -1,0 +1,1125 @@
+//! A `GPurify` deck as a `KLayout` DRC script: the mirror deck of
+//! `docs/klayout-mirror.md`, one emitter per DRC kind.
+//!
+//! The script runs on the layout magnified by two (a1), so every length the
+//! deck implies, halves included, is a whole database unit: a length `l` is
+//! written `2l` and an area `a` is written `4a`. Corner contact joins
+//! material (the Connected model, ledger B20), which is `KLayout`'s default
+//! merge, so no layer is put in minimum coherence.
+//!
+//! Each rule writes JSON lines tagged with its id (see `PRELUDE`), and a
+//! [`Mirror`] says how those lines are compared with `GPurify`'s findings.
+
+use gpurify::check::drc::{Rule, RuleSet};
+use gpurify::check::report::LimitSense;
+use gpurify::geom::LayerId;
+use gpurify_ingest::deck::{Deck, DerivedOp};
+use gpurify_ingest::StrTable;
+use std::fmt::Write as _;
+
+/// What the mirror can say about a kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// The recipe reports what `GPurify` must report.
+    Exact,
+    /// The recipe brackets `GPurify`, or agrees only on a class of layouts.
+    Approx,
+    /// `KLayout` cannot state the rule; the reason is shown.
+    None(&'static str),
+}
+
+/// How the two reports of one rule are compared, key by key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compare {
+    /// The same keys, and the same measurement on each.
+    Exact,
+    /// Every `KLayout` key is a `GPurify` key, whose measurement is no larger.
+    KlayoutWithin,
+    /// Every `GPurify` key is a `KLayout` key, whose measurement is no larger.
+    GpurifyWithin,
+    /// `<id>#lo` ⊆ `GPurify` ⊆ `<id>#hi`, keys only.
+    Bracket,
+    /// Exact when the layout is in the class [`Mirror::exact_on`] names,
+    /// otherwise not compared.
+    OnlyInClass,
+    /// Not compared.
+    Not,
+}
+
+/// What a finding is keyed by, on both sides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Key {
+    /// A figure of the named set; `GPurify`'s by its marker.
+    FigAt(String),
+    /// A figure of the named set; `GPurify`'s by its first shape, `KLayout`'s by
+    /// the given edge of an edge pair.
+    FigRow(String, usize),
+    /// An ordered pair of figures, one per set; `GPurify`'s by its two shapes.
+    /// Unordered when the sets are one. `filter_same` drops a `KLayout` pair
+    /// inside one figure.
+    Pair(String, String, bool),
+    /// A point: `GPurify`'s marker; `KLayout`'s window centre, vertex, or box centre.
+    Point,
+    /// An axis-parallel edge, by its floored midpoint and its length.
+    Edge,
+    /// An undirected segment: `GPurify`'s from its shape and marker vertex.
+    Segment,
+    /// A shape by its bounding box (an edge by [`Key::Edge`]). With sets
+    /// `(taps, wells)`, a finding whose marker lies in a tap or in a hole of
+    /// the wells may be missing from the upper bound of a bracket (the tap
+    /// rule's documented over-report).
+    Row(Option<(String, String)>),
+    /// A pair of drawn polygons of the named layer (`raw:<name>`).
+    RowPair(String),
+}
+
+/// What a measurement is, and how a `KLayout` number becomes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Value {
+    /// A length, to within one database unit.
+    Length,
+    /// An area, exactly.
+    Area,
+    /// A fraction, to within 1e-9.
+    Ratio,
+    /// A count, exactly.
+    Count,
+    /// A cut's wrong side, else its area: the sides `(short, long)`.
+    CutSize(i64, i64),
+    /// Not compared.
+    Ignore,
+}
+
+/// One rule of the deck and how its mirror is compared.
+#[derive(Debug, Clone)]
+pub struct Mirror {
+    /// The rule id.
+    pub id: String,
+    /// The engine kind.
+    pub kind: &'static str,
+    /// The kind's verdict.
+    pub verdict: Verdict,
+    /// How the reports are compared.
+    pub compare: Compare,
+    /// The comparison key.
+    pub key: Key,
+    /// The measurement.
+    pub value: Value,
+    /// Every polygon layer the rule reads, operands included: a corner
+    /// contact on one of them makes a difference the open corner-model
+    /// findings explain.
+    pub reads: Vec<String>,
+    /// Layers on which the comparison becomes exact when each is of class R
+    /// (rectangles that neither touch nor overlap).
+    pub exact_on: Vec<String>,
+}
+
+/// One job's script body and its rules.
+pub struct Script {
+    /// Ruby, run with `src` bound to the doubled source.
+    pub ruby: String,
+    /// One per DRC rule, in deck order.
+    pub mirrors: Vec<Mirror>,
+}
+
+/// Helpers every job uses, emitted once per `KLayout` process.
+pub const PRELUDE: &str = r#"require "json"
+flat
+def pts(it) ; it.map { |p| [p.x, p.y] } ; end
+def seg(e) ; [e.x1, e.y1, e.x2, e.y2] ; end
+def put(h) ; $out.puts(JSON.generate(h)) ; end
+def poly(o) ; { hull: pts(o.each_point_hull), holes: (0...o.holes).map { |h| pts(o.each_point_hole(h)) }, area: o.area } ; end
+# Every object of `layer` as one line tagged `rule`; a polygon also carries
+# what the block says of it.
+def emit(rule, layer, &extra)
+  data = layer.is_a?(DRC::DRCLayer) ? layer.data : layer
+  data.each do |o|
+    rec = case o
+          when RBA::EdgePair then { ep: [seg(o.first), seg(o.second)] }
+          when RBA::Edge     then { e: seg(o) }
+          when RBA::Polygon  then poly(o).merge(extra ? extra.call(o) : {})
+          else { other: o.to_s }
+          end
+    put({ rule: rule }.merge(rec))
+  end
+end
+# The figures of a polygon layer (corner contact joins), and whether it has a
+# corner contact (its figures differ at minimum coherence) or is of class R.
+def figs(name, layer)
+  d = layer.data
+  emit("fig:" + name, d.merged)
+  m = d.dup ; m.min_coherence = true
+  put({ corner: name }) if d.merged.each.map(&:to_s).sort != m.merged.each.map(&:to_s).sort
+  put({ rclass: name }) if d.count == d.merged.count && d.merged.each.all?(&:is_box?)
+end
+def big(layer) ; b = layer.data.bbox ; b.empty? ? 1 : b.width + b.height + 1 ; end
+def holes_below(rule, layer, a4)
+  layer.data.merged.each do |p|
+    p.holes.times do |h|
+      q = RBA::Polygon.new(p.each_point_hole(h).to_a)
+      put({ rule: rule }.merge(poly(q))) if q.area < a4
+    end
+  end
+end
+def positions(span, w, s) ; ([span - w, 0].max + s - 1) / s + 1 ; end
+def density(rule, layer, die, w, s, limit, maximum)
+  return if die.empty?
+  cov = layer.data.merged & RBA::Region.new(die)
+  positions(die.width, w, s).times do |i|
+    positions(die.height, w, s).times do |j|
+      win = RBA::Box.new(die.left + i * s, die.bottom + j * s, die.left + i * s + w, die.bottom + j * s + w)
+      r = (cov & RBA::Region.new(win)).area.to_f / (w.to_f * w)
+      put({ rule: rule, pt: [win.center.x, win.center.y], v: r }) if (maximum ? r > limit : r < limit)
+    end
+  end
+end
+def global_density(rule, layer, die, limit, maximum)
+  return if die.empty?
+  r = (layer.data.merged & RBA::Region.new(die)).area.to_f / die.area
+  put({ rule: rule, pt: [die.center.x, die.center.y], v: r }) if (maximum ? r > limit : r < limit)
+end
+# Pairs of polygons of `all` (by index) that are both in `chosen` and touch
+# or overlap.
+def touching(rule, all, chosen)
+  ps = all.data.each.to_a
+  keep = chosen.data.each.to_a
+  ps.each_with_index do |p, i|
+    next unless keep.include?(p)
+    ps.each_with_index do |q, j|
+      next if j <= i || !keep.include?(q)
+      put({ rule: rule, rows: [i, j] }) unless (RBA::Region.new(p).sized(1) & RBA::Region.new(q)).is_empty?
+    end
+  end
+end
+# Each gate edge an A figure runs past, measured to that figure's own edges:
+# one figure at a time, since a transparent `enclosing` also pairs edges of
+# neighbouring figures that merely face the same way.
+def extension(rule, a, b, lim)
+  bm = b.data.merged
+  a.data.merged.each do |p|
+    ar = RBA::Region.new(p)
+    g = ar & bm
+    next if g.is_empty?
+    ar.enclosing_check(g, lim, false, RBA::Region::Projection, nil, nil, nil, false,
+                       RBA::Region::NoOppositeFilter, RBA::Region::NoRectFilter, false,
+                       RBA::Region::IgnoreProperties, RBA::Region::NeverIncludeZeroDistance).each do |ep|
+      put({ rule: rule, ep: [seg(ep.first), seg(ep.second)] })
+    end
+  end
+end
+def edge_enclosure(rule, edges, outer, depth)
+  edges.data.each do |e|
+    next if e.length == 0
+    put({ rule: rule, e: seg(e) }) unless (RBA::Edges.new(e).extended_out(depth) - outer.data).is_empty?
+  end
+end
+"#;
+
+/// A Ruby string literal.
+fn rb(s: &str) -> String {
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn var(layer: LayerId) -> String {
+    format!("l{}", layer.0)
+}
+
+/// A bound for a `KLayout` `[min, max)` selection, from an inclusive `GPurify`
+/// bound scaled by `k`: `nil` when absent.
+fn lo_bound(lo: i128, k: i128) -> String {
+    if lo == i128::MIN {
+        "nil".into()
+    } else {
+        (lo * k).to_string()
+    }
+}
+
+fn hi_bound(hi: i128, k: i128) -> String {
+    if hi == i128::MAX {
+        "nil".into()
+    } else {
+        (hi * k + 1).to_string()
+    }
+}
+
+struct Layers<'a> {
+    deck: &'a Deck,
+    strings: &'a StrTable,
+}
+
+impl Layers<'_> {
+    fn name(&self, layer: LayerId) -> String {
+        self.strings
+            .resolve(self.deck.layers.name(layer))
+            .to_owned()
+    }
+
+    /// `layer` and every layer it is computed from, polygon layers only.
+    fn reads(&self, layer: LayerId, into: &mut Vec<String>) {
+        if !self.deck.layers.is_edges(layer) {
+            into.push(self.name(layer));
+        }
+        for &operand in self.deck.layers.operands(layer) {
+            self.reads(operand, into);
+        }
+    }
+
+    /// The Ruby for one derived layer, from its operands' variables.
+    fn derived(&self, layer: LayerId, op: DerivedOp) -> String {
+        let ops: Vec<String> = self
+            .deck
+            .layers
+            .operands(layer)
+            .iter()
+            .map(|&o| var(o))
+            .collect();
+        let (a, b) = (&ops[0], ops.get(1));
+        let b = || b.expect("a binary layer operation");
+        match op {
+            DerivedOp::And => ops.join(" & "),
+            // KLayout's `|` on edges cancels coincident edges of opposite
+            // direction; GPurify keeps a shared part once.
+            DerivedOp::Or if self.deck.layers.is_edges(layer) => ops[1..]
+                .iter()
+                .fold(a.clone(), |acc, e| format!("({acc} + ({e} - {acc}))")),
+            DerivedOp::Or => ops.join(" | "),
+            DerivedOp::Not => ops.join(" - "),
+            DerivedOp::Sized(d) => format!("{a}.sized({})", 2 * d.raw()),
+            DerivedOp::Interacting(true) => format!("{a}.interacting({})", b()),
+            DerivedOp::Interacting(false) => format!("{a}.not_interacting({})", b()),
+            DerivedOp::Inside => format!("{a}.inside({})", b()),
+            DerivedOp::Outside => format!("{a}.outside({})", b()),
+            DerivedOp::Holes => format!("{a}.holes"),
+            DerivedOp::Extents => format!("{a}.extents"),
+            DerivedOp::WithArea(lo, hi) => {
+                format!("{a}.with_area({}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
+            }
+            // A neck is floored to whole units: w <= hi holds while 2w < 2hi + 2.
+            DerivedOp::WithWidth(lo, hi) => {
+                let mut conditions = Vec::new();
+                if lo != i128::MIN {
+                    conditions.push(format!("!(width(euclidian) < {})", 2 * lo));
+                }
+                if hi != i128::MAX {
+                    conditions.push(format!("width(euclidian) < {}", 2 * hi + 2));
+                }
+                if conditions.is_empty() {
+                    a.clone()
+                } else {
+                    format!("{a}.drc(if_all({}))", conditions.join(", "))
+                }
+            }
+            DerivedOp::Edges => format!("{a}.edges"),
+            DerivedOp::Part(true) => format!("{a}.inside_part({})", b()),
+            DerivedOp::Part(false) => format!("({a}.outside_part({b}) - {b}.edges)", b = b()),
+            DerivedOp::WithLength(lo, hi) => {
+                format!("{a}.with_length({}, {})", lo_bound(lo, 2), hi_bound(hi, 2))
+            }
+            DerivedOp::WithText { keep, text } => {
+                let operand = self.deck.layers.operands(layer)[1];
+                let (l, d) = self.deck.layers.stream_of(operand);
+                let pattern = self.deck.layers.text(text);
+                format!(
+                    "{a}.{}(src.labels({l}, {d}).texts(pattern({})))",
+                    if keep {
+                        "interacting"
+                    } else {
+                        "not_interacting"
+                    },
+                    rb(pattern)
+                )
+            }
+        }
+    }
+}
+
+/// Translates every DRC rule of `deck`.
+///
+/// # Errors
+///
+/// The deck's DRC rules do not build (`RuleSet::from_deck`).
+pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
+    let set = RuleSet::from_deck(deck, strings).map_err(|why| why.to_string())?;
+    let layers = Layers { deck, strings };
+    let mut ruby = String::new();
+    let count = deck.layers.len();
+    let all: Vec<LayerId> = (0..count)
+        .map(|i| LayerId(u16::try_from(i).expect("a LayerId is a u16")))
+        .collect();
+    let drawn: Vec<LayerId> = all
+        .iter()
+        .copied()
+        .filter(|&l| !deck.layers.is_derived(l))
+        .collect();
+    for &layer in &all {
+        let line = match deck.layers.op(layer) {
+            None => {
+                let (l, d) = deck.layers.stream_of(layer);
+                format!("src.polygons({l}, {d})")
+            }
+            // KLayout can split a run where an operand's drawn shapes meet;
+            // GPurify's edge layer holds maximal runs.
+            Some(op) if deck.layers.is_edges(layer) => {
+                format!("({}).merged", layers.derived(layer, op))
+            }
+            Some(op) => layers.derived(layer, op),
+        };
+        writeln!(ruby, "{} = {line}  # {}", var(layer), layers.name(layer)).expect("a String");
+    }
+    // The die every density rule without a boundary uses: the drawn layers' extent.
+    let die: Vec<String> = drawn
+        .iter()
+        .map(|&l| format!("{}.data.bbox", var(l)))
+        .collect();
+    writeln!(ruby, "die = [RBA::Box.new, {}].inject(:+)", die.join(", ")).expect("a String");
+
+    let mut figs: Vec<LayerId> = Vec::new();
+    let mut connected = false;
+    let mut mirrors = Vec::new();
+    for &(id, rule) in &set.rules {
+        let id = strings.resolve(id).to_owned();
+        let q = rb(&id);
+        let mut body = String::new();
+        let mut reads = Vec::new();
+        let mut fig = |layer: LayerId, reads: &mut Vec<String>| {
+            if !figs.contains(&layer) {
+                figs.push(layer);
+            }
+            layers.reads(layer, reads);
+            layers.name(layer)
+        };
+        let lim = |l: gpurify::geom::Dbu| 2 * l.raw();
+        let (kind, verdict, compare, key, value, exact_on): (
+            &'static str,
+            Verdict,
+            Compare,
+            Key,
+            Value,
+            Vec<String>,
+        ) = match rule {
+            Rule::MinWidth { layer, limit } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.width({}, euclidian, shielded))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("min_width", Key::FigAt(name), Value::Length)
+            }
+            Rule::MaxWidth { layer, limit } => {
+                fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "w = {v}.sized(-{h}).sized({h}) ; figs({q}, w) ; emit({q}, w.width(big(w), projection))",
+                    v = var(layer),
+                    h = limit.raw()
+                )
+                .expect("a String");
+                exact("max_width", Key::FigAt(id.clone()), Value::Length)
+            }
+            Rule::CutSize {
+                layer,
+                width,
+                height,
+            } => {
+                fig(layer, &mut reads);
+                let (short, long) = (width.min(height).raw(), width.max(height).raw());
+                writeln!(
+                    body,
+                    "emit({q}, {}.drc(if_any(!rectangles, bbox_min != {}, bbox_max != {})))",
+                    var(layer),
+                    2 * short,
+                    2 * long
+                )
+                .expect("a String");
+                exact("cut_size", Key::Point, Value::CutSize(short, long))
+            }
+            Rule::MinEdgeLength { layer, limit } => {
+                fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.edges.with_length(nil, {}))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("min_edge_length", Key::Edge, Value::Length)
+            }
+            Rule::Notch { layer, limit } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.notch({}, projection))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("notch", Key::FigRow(name, 0), Value::Length)
+            }
+            Rule::MinSpacing { layer, limit } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.isolated({}, euclidian, transparent))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact(
+                    "min_spacing",
+                    Key::Pair(name.clone(), name, false),
+                    Value::Length,
+                )
+            }
+            Rule::MinSpacingDiff { a, b, limit } => {
+                let (na, nb) = (fig(a, &mut reads), fig(b, &mut reads));
+                writeln!(
+                    body,
+                    "emit({q}, {a}.separation({b}, {}, euclidian, transparent)) ; emit({q}, {a} & {b})",
+                    lim(limit),
+                    a = var(a),
+                    b = var(b)
+                )
+                .expect("a String");
+                exact("min_spacing_diff", Key::Pair(na, nb, false), Value::Length)
+            }
+            Rule::EolSpacing {
+                layer,
+                eol_width,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.isolated({}, projection, transparent, whole_edges).with_length(nil, {}))",
+                    var(layer),
+                    lim(limit),
+                    lim(eol_width)
+                )
+                .expect("a String");
+                approx(
+                    "eol_spacing",
+                    Compare::KlayoutWithin,
+                    Key::Pair(name.clone(), name, false),
+                    Value::Length,
+                    vec![],
+                )
+            }
+            Rule::PrlSpacing {
+                layer,
+                prl_threshold,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.isolated({}, euclidian, transparent, projection_limits({}, nil)))",
+                    var(layer),
+                    lim(limit),
+                    lim(prl_threshold)
+                )
+                .expect("a String");
+                approx(
+                    "prl_spacing",
+                    Compare::KlayoutWithin,
+                    Key::Pair(name.clone(), name.clone(), false),
+                    Value::Length,
+                    vec![name],
+                )
+            }
+            Rule::CornerToCorner { layer, limit } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.isolated({}, euclidian, transparent, projection_limits(0, 1)))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                approx(
+                    "corner_to_corner",
+                    Compare::GpurifyWithin,
+                    Key::Pair(name.clone(), name.clone(), false),
+                    Value::Length,
+                    vec![name],
+                )
+            }
+            Rule::WideDependentSpacing {
+                layer,
+                width_threshold,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "w = {v}.sized(-{t}).sized({t}) ; emit({q}, w.separation({v}, {}, euclidian, transparent))",
+                    lim(limit),
+                    v = var(layer),
+                    t = width_threshold.raw() - 1
+                )
+                .expect("a String");
+                exact(
+                    "wide_dependent_spacing",
+                    Key::Pair(name.clone(), name, true),
+                    Value::Length,
+                )
+            }
+            Rule::MinArea { layer, limit } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.with_area(nil, {}))",
+                    var(layer),
+                    4 * limit.raw()
+                )
+                .expect("a String");
+                exact("min_area", Key::FigAt(name), Value::Area)
+            }
+            Rule::MinEnclosedArea { layer, limit } => {
+                fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "holes_below({q}, {}, {})",
+                    var(layer),
+                    4 * limit.raw()
+                )
+                .expect("a String");
+                exact("min_enclosed_area", Key::Point, Value::Area)
+            }
+            Rule::Cheesing {
+                layer,
+                max_unslotted,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.drc(if_all(area > {}, with_holes == 0)))",
+                    var(layer),
+                    4 * max_unslotted.raw()
+                )
+                .expect("a String");
+                exact("cheesing", Key::FigAt(name), Value::Area)
+            }
+            Rule::Density {
+                layer,
+                boundary,
+                window,
+                step,
+                limit,
+                sense,
+            } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "density({q}, {}, {}, {}, {}, {limit:?}, {})",
+                    var(layer),
+                    boundary.map_or("die".to_owned(), |b| format!("{}.data.bbox", var(b))),
+                    lim(window),
+                    lim(step),
+                    sense == LimitSense::Maximum
+                )
+                .expect("a String");
+                exact("density", Key::Point, Value::Ratio)
+            }
+            Rule::GlobalDensity {
+                layer,
+                boundary,
+                limit,
+                sense,
+            } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "global_density({q}, {}, {}, {limit:?}, {})",
+                    var(layer),
+                    boundary.map_or("die".to_owned(), |b| format!("{}.data.bbox", var(b))),
+                    sense == LimitSense::Maximum
+                )
+                .expect("a String");
+                exact("global_density", Key::Point, Value::Ratio)
+            }
+            Rule::MinEnclosure {
+                outer,
+                inner,
+                limit,
+            } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {o}.enclosing({i}, {}, euclidian, transparent)) ; emit({q}, {i}.not_inside({o}))",
+                    lim(limit),
+                    o = var(outer),
+                    i = var(inner)
+                )
+                .expect("a String");
+                exact("min_enclosure", Key::FigRow(name, 1), Value::Length)
+            }
+            Rule::AsymmetricEnclosure {
+                outer,
+                inner,
+                min_one_side,
+            } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    "c = enclosed({o}, projection) < {} ; \
+                     emit({q}, {i}.drc(if_all(c.first_edges.angle == 90, c.first_edges.angle == 0))) ; \
+                     emit({q}, {i}.not_inside({o}))",
+                    lim(min_one_side),
+                    o = var(outer),
+                    i = var(inner)
+                )
+                .expect("a String");
+                approx(
+                    "asymmetric_enclosure",
+                    Compare::KlayoutWithin,
+                    Key::FigRow(name.clone(), 0),
+                    Value::Ignore,
+                    vec![name],
+                )
+            }
+            Rule::MinExtension {
+                layer,
+                reference,
+                limit,
+            } => {
+                let (na, nb) = (fig(layer, &mut reads), fig(reference, &mut reads));
+                writeln!(
+                    body,
+                    "extension({q}, {a}, {b}, {}) ; emit({q}, {a}.inside({b}))",
+                    lim(limit),
+                    a = var(layer),
+                    b = var(reference)
+                )
+                .expect("a String");
+                approx(
+                    "min_extension",
+                    Compare::OnlyInClass,
+                    Key::Pair(na, nb, false),
+                    Value::Length,
+                    vec![],
+                )
+            }
+            Rule::Overlap { a, b, limit } => {
+                fig(a, &mut reads);
+                fig(b, &mut reads);
+                writeln!(
+                    body,
+                    "ab = {} & {} ; figs({q}, ab) ; emit({q}, ab.width({}, euclidian, shielded))",
+                    var(a),
+                    var(b),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("overlap", Key::FigAt(id.clone()), Value::Length)
+            }
+            Rule::MaxDistanceToTap { well, tap, limit } => {
+                let wells = fig(well, &mut reads);
+                let taps = fig(tap, &mut reads);
+                writeln!(
+                    body,
+                    // `sized(0)` copies the difference: KLayout never finds a
+                    // raw polygon overlapping itself, and `w - t` is `w` when
+                    // no tap reaches it.
+                    "w = {}.dup.raw ; t = {} ; \
+                     emit({lo}, w.overlapping((w - t.sized({l})).sized(0))) ; \
+                     emit({hi}, w.overlapping((w - t.sized({l}, diamond_limit)).sized(0)))",
+                    var(well),
+                    var(tap),
+                    lo = rb(&format!("{id}#lo")),
+                    hi = rb(&format!("{id}#hi")),
+                    l = lim(limit)
+                )
+                .expect("a String");
+                (
+                    "max_distance_to_tap",
+                    Verdict::Approx,
+                    Compare::Bracket,
+                    Key::Row(Some((taps, wells))),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
+            Rule::OffGrid { pitch } => {
+                for &layer in &drawn {
+                    writeln!(
+                        body,
+                        "emit({q}, {}.dup.raw.ongrid({}))",
+                        var(layer),
+                        lim(pitch)
+                    )
+                    .expect("a String");
+                }
+                exact("off_grid", Key::Point, Value::Ignore)
+            }
+            Rule::Angle { layer, allowed } => {
+                let targets: Vec<LayerId> = match layer {
+                    Some(layer) => vec![layer],
+                    None => all
+                        .iter()
+                        .copied()
+                        .filter(|&l| !deck.layers.is_edges(l))
+                        .collect(),
+                };
+                let mut drop = String::new();
+                for (bit, angle) in [(0, 0), (1, 45), (2, 90), (3, -45)] {
+                    if allowed >> bit & 1 == 1 {
+                        write!(drop, ".without_angle({angle})").expect("a String");
+                    }
+                }
+                for layer in targets {
+                    writeln!(body, "emit({q}, {}.dup.raw.edges{drop})", var(layer))
+                        .expect("a String");
+                }
+                exact("angle", Key::Segment, Value::Ignore)
+            }
+            Rule::RedundantVia {
+                layer,
+                min_count,
+                within,
+            } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "c = {}.dup.raw ; \
+                     emit({lo}, c.not_interacting(c.sized({w}).raw, {min_count})) ; \
+                     emit({hi}, c.not_interacting(c.sized({w}, diamond_limit).raw, {min_count}))",
+                    var(layer),
+                    lo = rb(&format!("{id}#lo")),
+                    hi = rb(&format!("{id}#hi")),
+                    w = lim(within)
+                )
+                .expect("a String");
+                (
+                    "redundant_via",
+                    Verdict::Approx,
+                    Compare::Bracket,
+                    Key::Row(None),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
+            Rule::ViaArraySpacing {
+                layer,
+                array_threshold,
+                limit,
+            } => {
+                layers.reads(layer, &mut reads);
+                let name = layers.name(layer);
+                writeln!(
+                    body,
+                    "emit({}, {}.dup.raw)",
+                    rb(&format!("raw:{name}")),
+                    var(layer)
+                )
+                .expect("a String");
+                // Clusters joined at half the limit from each cut: by square
+                // growth (Chebyshev, the most joins) and by diamond growth (L1,
+                // the fewest). A raw `isolated` never pairs cuts that overlap,
+                // which `GPurify` measures at 0: `touching` adds every pair at 0
+                // by index into `raw:`.
+                for (tag, mode) in [("hi", ""), ("lo", ", diamond_limit")] {
+                    writeln!(
+                        body,
+                        "c = {v}.dup.raw ; big = c.sized({h}{mode}).merged.interacting(c, {n}) ; \
+                         arr = c.interacting(big) ; emit({t}, arr.isolated({l}, euclidian, transparent)) ; \
+                         touching({t}, {v}.dup.raw, arr)",
+                        v = var(layer),
+                        h = limit.raw(),
+                        n = u32::from(array_threshold) + 1,
+                        t = rb(&format!("{id}#{tag}")),
+                        l = lim(limit)
+                    )
+                    .expect("a String");
+                }
+                (
+                    "via_array_spacing",
+                    Verdict::Approx,
+                    Compare::Bracket,
+                    Key::RowPair(name),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
+            Rule::MultiPatterning { .. } => (
+                "multi_patterning",
+                Verdict::None("KLayout has no mask colouring"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::Forbidden { layer } => {
+                layers.reads(layer, &mut reads);
+                let what = if deck.layers.is_edges(layer) {
+                    var(layer)
+                } else if matches!(deck.layers.op(layer), None | Some(DerivedOp::Extents)) {
+                    format!("{}.dup.raw", var(layer))
+                } else {
+                    format!("{}.data.merged", var(layer))
+                };
+                writeln!(body, "emit({q}, {what})").expect("a String");
+                exact("forbidden", Key::Row(None), Value::Area)
+            }
+            Rule::MustContain {
+                outer,
+                inner,
+                min_count,
+            } => {
+                let name = fig(outer, &mut reads);
+                fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    // `covering` drops an outer figure that an inner one
+                    // straddles, whatever else it holds: count only inners
+                    // that some outer figure holds.
+                    "emit({q}, {o}.not_covering({i}.inside({o}), {min_count})) {{ |p| {{ v: {i}.data.merged.inside(RBA::Region.new(p)).count }} }}",
+                    o = var(outer),
+                    i = var(inner)
+                )
+                .expect("a String");
+                exact("must_contain", Key::FigAt(name), Value::Count)
+            }
+            Rule::MustBeInside { inner, outer } => {
+                let name = fig(inner, &mut reads);
+                fig(outer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {i}.not_inside({o})) {{ |p| {{ v: (RBA::Region.new(p) - {o}.data).area }} }}",
+                    o = var(outer),
+                    i = var(inner)
+                )
+                .expect("a String");
+                exact("must_be_inside", Key::FigAt(name), Value::Area)
+            }
+            Rule::NetSpacing {
+                layer,
+                same_net,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                if deck.connectivity.intra_layer_touch {
+                    if !connected {
+                        connected = true;
+                        body.push_str(&connect(deck));
+                    }
+                    writeln!(
+                        body,
+                        "emit({q}, {}.nets.isolated({}, euclidian, transparent, {}))",
+                        var(layer),
+                        lim(limit),
+                        if same_net { "props_eq" } else { "props_ne" }
+                    )
+                    .expect("a String");
+                    exact(
+                        "net_spacing",
+                        Key::Pair(name.clone(), name, false),
+                        Value::Length,
+                    )
+                } else {
+                    (
+                        "net_spacing",
+                        Verdict::None(
+                            "no `connect touch_within_layer`: KLayout always joins touching shapes",
+                        ),
+                        Compare::Not,
+                        Key::Point,
+                        Value::Ignore,
+                        vec![],
+                    )
+                }
+            }
+            Rule::SpacingTable { layer, table } => {
+                let name = fig(layer, &mut reads);
+                let table = &set.tables[table as usize];
+                let columns = table.prl.len();
+                for (r, width) in table.width.iter().enumerate() {
+                    for (c, prl) in table.prl.iter().enumerate() {
+                        let s = 2 * table.space[r * columns + c].raw();
+                        let run = if c == 0 {
+                            String::new()
+                        } else {
+                            format!(", projection_limits({}, nil)", 2 * prl.raw() + 1)
+                        };
+                        let v = var(layer);
+                        if r == 0 {
+                            writeln!(
+                                body,
+                                "emit({q}, {v}.isolated({s}, euclidian, transparent{run}))"
+                            )
+                        } else {
+                            writeln!(
+                                body,
+                                "emit({q}, {v}.sized(-{w}).sized({w}).separation({v}, {s}, euclidian, transparent{run}))",
+                                w = width.raw()
+                            )
+                        }
+                        .expect("a String");
+                    }
+                }
+                approx(
+                    "spacing_table",
+                    Compare::KlayoutWithin,
+                    Key::Pair(name.clone(), name.clone(), true),
+                    Value::Ignore,
+                    vec![name],
+                )
+            }
+            Rule::AttachedWideSpacing {
+                layer,
+                width_threshold,
+                attached,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "w = {v}.sized(-{t}).sized({t}) ; a = (w.sized({}) & {v}).interacting(w) ; \
+                     emit({q}, a.separation({v}, {}, euclidian, transparent))",
+                    lim(attached),
+                    lim(limit),
+                    v = var(layer),
+                    t = width_threshold.raw() - 1
+                )
+                .expect("a String");
+                approx(
+                    "attached_wide_spacing",
+                    Compare::KlayoutWithin,
+                    Key::Pair(name.clone(), name, true),
+                    Value::Length,
+                    vec![],
+                )
+            }
+            Rule::EdgeMinLength { layer, limit } => {
+                writeln!(
+                    body,
+                    "emit({q}, {}.with_length(nil, {}))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("edge_min_length", Key::Edge, Value::Length)
+            }
+            Rule::EdgeSpacing { a, b, limit } => {
+                let l = lim(limit);
+                let (e, f) = (var(a), b.map_or_else(|| var(a), var));
+                let checks = if b.is_none() {
+                    format!(
+                        "[{e}.space({l}, euclidian, whole_edges), {e}.width({l}, euclidian, whole_edges), \
+                         {e}.enclosing({e}, {l}, euclidian, whole_edges, without_touching_edges)]"
+                    )
+                } else {
+                    format!(
+                        "[{e}.separation({f}, {l}, euclidian, whole_edges), {e}.overlap({f}, {l}, euclidian, whole_edges), \
+                         {e}.enclosing({f}, {l}, euclidian, whole_edges, without_touching_edges), \
+                         {e}.enclosed({f}, {l}, euclidian, whole_edges, without_touching_edges)]"
+                    )
+                };
+                writeln!(body, "{checks}.each {{ |x| emit({q}, x) }}").expect("a String");
+                approx(
+                    "edge_spacing",
+                    Compare::KlayoutWithin,
+                    Key::Point,
+                    Value::Length,
+                    vec![],
+                )
+            }
+            Rule::EdgeEnclosure {
+                edges,
+                outer,
+                limit,
+            } => {
+                layers.reads(outer, &mut reads);
+                writeln!(
+                    body,
+                    "edge_enclosure({q}, {}, {}, {})",
+                    var(edges),
+                    var(outer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("edge_enclosure", Key::Point, Value::Ignore)
+            }
+        };
+        reads.sort();
+        reads.dedup();
+        if matches!(verdict, Verdict::None(_)) {
+            writeln!(ruby, "# {id}: not mirrored").expect("a String");
+        } else {
+            write!(
+                ruby,
+                "begin\n{body}rescue => e\n  put({{ error: {q} + \": \" + e.message }})\nend\n"
+            )
+            .expect("a String");
+        }
+        mirrors.push(Mirror {
+            id,
+            kind,
+            verdict,
+            compare,
+            key,
+            value,
+            reads,
+            exact_on,
+        });
+    }
+    // The figures of every layer a rule keys on, before any rule needs them.
+    let mut head = String::new();
+    for layer in figs {
+        writeln!(head, "figs({}, {})", rb(&layers.name(layer)), var(layer)).expect("a String");
+    }
+    let split = ruby.find("die = ").expect("the die line is written");
+    let end = split + ruby[split..].find('\n').expect("a line") + 1;
+    ruby.insert_str(end, &head);
+    Ok(Script { ruby, mirrors })
+}
+
+type Spec = (&'static str, Verdict, Compare, Key, Value, Vec<String>);
+
+fn exact(kind: &'static str, key: Key, value: Value) -> Spec {
+    (kind, Verdict::Exact, Compare::Exact, key, value, vec![])
+}
+
+fn approx(
+    kind: &'static str,
+    compare: Compare,
+    key: Key,
+    value: Value,
+    exact_on: Vec<String>,
+) -> Spec {
+    (kind, Verdict::Approx, compare, key, value, exact_on)
+}
+
+/// The deck's connectivity as `KLayout` `connect` statements (doc (c)): each
+/// conductor joins itself, each via its two layers, each global layer one net.
+/// Labels only name nets, so they join nothing. Each cut layer with a cut on
+/// two shapes of one of its layers, or two cuts that touch, is marked
+/// `bridge`: `KLayout`'s cut conducts there and `GPurify`'s does not (N-f1-1).
+fn connect(deck: &Deck) -> String {
+    let c = &deck.connectivity;
+    let mut out = String::from("clear_connections\n");
+    for &layer in &c.conductors {
+        writeln!(out, "connect({v}, {v})", v = var(layer)).expect("a String");
+    }
+    for (&cut, &(a, b)) in c.via_cut.iter().zip(&c.via_connects) {
+        writeln!(
+            out,
+            "connect({a}, {v}) ; connect({v}, {b})\n\
+             put({{ bridge: {n} }}) if !{v}.interacting({a}, 2).is_empty? || \
+             !{v}.interacting({b}, 2).is_empty? || {v}.data.count != {v}.data.merged.count",
+            a = var(a),
+            v = var(cut),
+            b = var(b),
+            n = rb(&var(cut))
+        )
+        .expect("a String");
+    }
+    for &layer in &c.global {
+        writeln!(out, "connect_global({}, {})", var(layer), rb(&var(layer))).expect("a String");
+    }
+    out
+}
