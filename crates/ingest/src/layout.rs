@@ -410,8 +410,9 @@ fn on_material(poly: PolygonRef<'_>, p: Point) -> bool {
 }
 
 /// A glob over the whole text: `*` matches any run, `?` one character, and
-/// every other character itself.
-fn glob_matches(pattern: &str, text: &str) -> bool {
+/// every other character itself, case included. The deck's text patterns
+/// (`with_text`, `lvs connect_implicit`) match so.
+pub fn glob_matches(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) =
         (pattern.chars().collect(), text.chars().collect());
     let (mut p, mut t) = (0, 0);

@@ -6,6 +6,7 @@
 //! parameter ranges.
 
 use crate::erc::first_vertex;
+use crate::lvs::controls::must_connect;
 use crate::lvs::graph::{narrow, spice_param_name, Graph};
 use crate::lvs::verdict::Discrepancy;
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
@@ -15,7 +16,7 @@ use crate::Design;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_ingest::deck::{LvsLimit, LvsRange};
+use gpurify_ingest::deck::{LvsControls, LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
@@ -100,8 +101,10 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   `n - 1` rows. Shapes: the lowest polygon carrying the label on each of
 ///   the two nets, so the two labels are found from the row; the location is
 ///   the first vertex of the first, on its layer. Measured 2 against a limit
-///   of 1. Examines every net. Catalog: LVS-001, LVS-002 (`KLayout`'s
-///   `connect_implicit` would join them instead).
+///   of 1. Examines every net. A label `controls` makes must-connect (`lvs
+///   connect_implicit`, `lvs connect_explicit`) is a warning, as `KLayout`
+///   raises one for a top cell's must-connect nets, which it "assumes ...
+///   [are connected] later". Catalog: LVS-001, LVS-002.
 /// - `lvs.net_seed_conflict`: several label texts on one net, a short between
 ///   named nets. One row per pair of consecutive names on the net in
 ///   [`StrId`] order, so `n` names give `n - 1` rows. Shapes: the lowest
@@ -145,13 +148,20 @@ pub fn check_layout(
     layout: &Graph,
     design: Design<'_>,
     ports: &PortTable,
-    strings: &StrTable,
+    (strings, controls): (&StrTable, &LvsControls),
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
     let id = |name| rule_id(strings, name);
     check_floating_nets(design, ports, id("lvs.floating_net"), out, runs);
-    check_label_conflicts(design, ports, id("lvs.label_conflict"), out, runs);
+    let joined = |name| must_connect(name, strings, controls);
+    check_label_conflicts(
+        design,
+        ports,
+        (id("lvs.label_conflict"), &joined),
+        out,
+        runs,
+    );
     check_net_seed_conflicts(design, ports, strings, out, runs);
     check_topology(
         layout,
@@ -429,7 +439,7 @@ fn check_floating_nets(
 fn check_label_conflicts(
     design: Design<'_>,
     ports: &PortTable,
-    rule: StrId,
+    (rule, must_connect): (StrId, &dyn Fn(StrId) -> bool),
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
@@ -444,7 +454,10 @@ fn check_label_conflicts(
                 labelled(ports, named[at - 1], names[at]),
                 Some(labelled(ports, named[at], names[at])),
             );
-            let row = graph_violation(rule, shapes, 2, 1);
+            let mut row = graph_violation(rule, shapes, 2, 1);
+            if must_connect(names[at]) {
+                row.severity = Severity::Warning;
+            }
             out.push(on_first_shape(design.store, row));
         }
     }

@@ -11,7 +11,8 @@ use crate::lvs::verdict::Discrepancy;
 use crate::topology::device::role_at;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::{DeviceKind, LvsControls};
-use gpurify_ingest::StrId;
+use gpurify_ingest::layout::glob_matches;
+use gpurify_ingest::{StrId, StrTable};
 
 /// The role an asymmetric transistor's source is compared under: a pin of
 /// its own, so it never trades places with the drain.
@@ -254,6 +255,92 @@ pub(crate) fn drop_ignored_devices(graph: &mut Graph, controls: &LvsControls) ->
     transpose_into(&mut out, next as usize);
     *graph = out;
     Some(kept)
+}
+
+/// Whether a layout net labelled `name` is a must-connect net: its label
+/// matches an `lvs connect_implicit` pattern, or is in an `lvs
+/// connect_explicit` group.
+pub(crate) fn must_connect(name: StrId, strings: &StrTable, controls: &LvsControls) -> bool {
+    let text = strings.resolve(name);
+    controls
+        .connect_implicit
+        .iter()
+        .any(|pattern| glob_matches(pattern, text))
+        || controls
+            .connect_explicit
+            .iter()
+            .any(|group| group.contains(&name))
+}
+
+/// `layout` with its must-connect nets joined, as `KLayout`'s
+/// `connect_implicit` and `connect_explicit` join them for LVS ("physically
+/// there are multiple nets, logically ... there is only one net"; catalog
+/// LVS-002): the nets of one label an `lvs connect_implicit` pattern
+/// matches are one net, and so are the nets labelled with the names of one
+/// `lvs connect_explicit` group (an explicit group first). The joined net is
+/// the lowest of its nets, with that net's label; the other rows go, and
+/// surviving nets keep their order. Devices are unchanged. With neither
+/// control, a copy. The open stays an open on the layout:
+/// [`check_layout`](crate::lvs::check_layout) still reports it, as a
+/// warning.
+pub fn join_must_connect(layout: &Graph, controls: &LvsControls, strings: &StrTable) -> Graph {
+    let mut out = layout.clone();
+    if controls.connect_implicit.is_empty() && controls.connect_explicit.is_empty() {
+        return out;
+    }
+    // Each must-connect net's key: `(0, group)` for an explicit group,
+    // `(1, label)` for an implicit label; the first net of a key stays.
+    let key = |name: StrId| {
+        if let Some(group) = controls
+            .connect_explicit
+            .iter()
+            .position(|group| group.contains(&name))
+        {
+            return Some((0u8, narrow(group)));
+        }
+        let text = strings.resolve(name);
+        controls
+            .connect_implicit
+            .iter()
+            .any(|pattern| glob_matches(pattern, text))
+            .then_some((1u8, name.0))
+    };
+    let mut first: Vec<((u8, u32), u32)> = Vec::new();
+    let mut new_net = Vec::with_capacity(layout.net_count());
+    let mut kept = 0u32;
+    for (net, &name) in layout.net_name.iter().enumerate() {
+        let joined = name.and_then(key).and_then(|k| {
+            first
+                .iter()
+                .find(|&&(seen, _)| seen == k)
+                .map(|&(_, row)| row)
+        });
+        if let Some(row) = joined {
+            new_net.push(row);
+            continue;
+        }
+        if let Some(k) = name.and_then(key) {
+            first.push((k, kept));
+        }
+        new_net.push(kept);
+        out.net_name[kept as usize] = layout.net_name[net];
+        kept += 1;
+    }
+    out.net_name.truncate(kept as usize);
+    for net in &mut out.terminal_net {
+        if let Some(&renamed) = new_net.get(*net as usize) {
+            *net = renamed;
+        }
+    }
+    out.port_net = layout
+        .port_net
+        .iter()
+        .map(|&net| new_net[net as usize])
+        .collect();
+    out.port_net.sort_unstable();
+    out.port_net.dedup();
+    transpose_into(&mut out, kept as usize);
+    out
 }
 
 /// The names of `reference`'s ports, ascending, each once: what `lvs

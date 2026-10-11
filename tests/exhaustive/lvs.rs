@@ -3076,6 +3076,24 @@ fn layout_rows() -> Vec<Fixture> {
         .expect(Expect::rule("lvs.label_conflict", vec![Finding::any()])),
     );
 
+    // LVS-002: the same open with n0 a must-connect label (KLayout's
+    // `connect_implicit`): the two nets are one to compare, so the verdict
+    // is a match, and the open is still reported, as a warning, so the run
+    // passes.
+    let deck = format!("{}lvs connect_implicit \"n*\"\n", full_deck());
+    let mut fixture = Fixture::new(
+        "lvs/checks/label_on_two_nets_must_connect",
+        &["LVS-002", "LVS-001"],
+        &deck,
+        LVS,
+    )
+    .layout(draw(&split))
+    .expect(Expect::Lvs(true))
+    .expect(Expect::rule("lvs.label_conflict", vec![Finding::any()]))
+    .expect(Expect::Passes(true));
+    fixture.reference = Some(spice(&joined));
+    out.push(fixture);
+
     // F13, F14, LVS-001, LVS-005: two labels on one net is a short between
     // named nets, which must be reported, not abort the run.
     let shorted = draw(&one).label("met2_label", -800, track(0) + 100, "other");

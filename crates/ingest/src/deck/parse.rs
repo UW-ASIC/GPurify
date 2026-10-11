@@ -1109,6 +1109,23 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             "range" => self.lvs_range(),
+            "connect_implicit" => {
+                let pattern = self.quoted("a label pattern in quotes")?;
+                self.out.lvs.connect_implicit.push(pattern);
+                Ok(())
+            }
+            "connect_explicit" => {
+                let mut names = Vec::new();
+                while self.peek().tok == Tok::Str {
+                    names.push(self.quoted("a label in quotes")?);
+                }
+                if names.len() < 2 {
+                    let t = self.peek();
+                    return Err(self.err_tok(t, "connect_explicit joins two labels or more, each in quotes"));
+                }
+                self.out.lvs.connect_explicit.push(names);
+                Ok(())
+            }
             "topology" => {
                 let (policy, at) = self.ident("strict or relaxed")?;
                 let relaxed = match policy.as_str() {
@@ -1155,7 +1172,8 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric, permute, ignore, ignore_shorted, ports_by_name, range or topology"
+                     asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit or \
+                     connect_explicit"
                 ),
             )),
         }
@@ -1163,12 +1181,14 @@ impl<'a> Parser<'a> {
 
     /// A device model name in quotes.
     fn model(&mut self) -> R<String> {
+        self.quoted("a model name in quotes")
+    }
+
+    /// A string in quotes, `what` naming it in an error.
+    fn quoted(&mut self, what: &str) -> R<String> {
         let t = self.peek();
         if t.tok != Tok::Str {
-            return Err(self.err_tok(
-                t,
-                &format!("expected a model name in quotes, found {}", self.found(t)),
-            ));
+            return Err(self.err_tok(t, &format!("expected {what}, found {}", self.found(t))));
         }
         self.bump();
         self.string(t)

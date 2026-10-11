@@ -408,7 +408,7 @@ fn run_lvs(
                 devices: &extracted.devices,
             },
             &extracted.ports,
-            &loaded.strings,
+            (&loaded.strings, &loaded.deck.lvs),
             violations,
             runs,
         );
@@ -453,8 +453,12 @@ fn run_lvs(
                 },
                 ..options.lvs
             };
+            // Must-connect nets are one net to compare, though the layout
+            // keeps the open, which `check_layout` reported.
+            let joined =
+                gpurify_check::lvs::join_must_connect(&layout, &loaded.deck.lvs, &loaded.strings);
             let (verdict, merges) = gpurify_check::lvs::compare_with(
-                &layout,
+                &joined,
                 &gpurify_check::lvs::graph::from_reference(reference, top),
                 lvs,
                 &loaded.deck.lvs,
