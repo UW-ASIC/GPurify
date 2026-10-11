@@ -214,10 +214,10 @@ says which foundry manual, standard or tool defines each one.
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
 | LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. |
-| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | w and l from the marker bounding box; nf = 1 per channel, summed by parallel merges; marker area and perim. Compared per paired device, only where its card states the parameter (F68). as/ad/ps/pd on a card become lvs.undeclared_param; bulk is dropped when the layout has none |
-| LVS-061 | Resistor R/L/W | partial | w/l from the resistor body's bounding box; r = sheet·l/w when the device statement gives sheet; positional R1 a b 1k rpoly is read as r. A bent body reads its bounding box; a card with no model is refused (F86); resistors never merge in series |
-| LVS-062 | Capacitor C/A/P | partial | area and perim measured; c = area_cap·area + fringe_cap·perim when the deck gives them; a positional C value is read. No w/l |
-| LVS-064 | BJT AE/PE/NE, multi-emitter | partial | Marker area and perim only; no AE/PE/NE (B27). sky130 bipolars have no recogniser (limitations.md, "Shipped decks") |
+| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | w and l from the marker bounding box; nf = 1 per channel, summed by parallel merges; marker area and perim. Compared per paired device, only where its card states the parameter (F68). as/ad/ps/pd from the source/drain polygon (gate edge included, BSIM4 perMod=1), a shared diffusion split evenly, compared at the channel end, summed in parallel merges, refused in series; not measured where drawn in pieces; bulk is dropped when the layout has none |
+| LVS-061 | Resistor R/L/W | partial | w/l from the resistor body's bounding box; r = sheet·l/w when the device statement gives sheet; positional R1 a b 1k rpoly is read as r. A bent body reads its bounding box; a card with no model is the deck's one resistor (F86); resistors never merge in series |
+| LVS-062 | Capacitor C/A/P | partial | area and perim measured; c = area_cap·area + fringe_cap·perim when the deck gives them; a positional C value is read. No w/l; KLayout A/P read as area/perim (F87); a C card with no model is the deck's one capacitor (F86) |
+| LVS-064 | BJT AE/PE/NE, multi-emitter | partial | ae/pe from the emitter terminal's polygon (B27); marker area and perim; no NE or multi-emitter. sky130 bipolars have no recogniser (limitations.md, "Shipped decks") |
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | No check exists: the deck has no syntax for per-model counts or parameter ranges |
