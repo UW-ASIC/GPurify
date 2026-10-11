@@ -131,6 +131,7 @@ this way. Operations on shapes:
 | Operation | Result |
 |---|---|
 | `.sized(len)` | Every shape grown by `len` on all sides, corners square. A negative `len` shrinks, and a part no wider than twice the shrink disappears. `.sized(-a).sized(a)` keeps the parts wider than `2a`. |
+| `.sized(dx, dy)` | Every shape grown by `dx` left and right and by `dy` above and below, as KLayout's `sized(dx, dy)`. Both negative shrinks. One growing and one shrinking is an error: chain two `sized` for that. |
 | `.interacting(L)` | The shapes that touch or overlap a shape on `L`. Sharing only a corner counts. |
 | `.not_interacting(L)` | The shapes that do not. |
 | `.inside(L)` | The shapes entirely covered by `L`. A shape may touch `L`'s boundary from inside. |

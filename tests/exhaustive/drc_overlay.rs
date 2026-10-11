@@ -78,6 +78,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         shape_class(),
         feature_length(),
         covering_overlapping(),
+        sized_xy(),
         edge_operations(),
     ]
     .concat()
@@ -4513,6 +4514,75 @@ fn selections() -> Vec<Fixture> {
         texts,
     ));
     every_placement(cases)
+}
+
+/// `sized(dx, dy)` (DRC-121), `KLayout`'s anisotropic sizing: each shape
+/// grown by `dx` left and right and `dy` above and below, or shrunk when both
+/// are negative. Each result is reported with its area, worked by hand.
+///
+/// A 1000 x 500 box grown by (100, 50) (1200 x 600), shrunk by (100, 50)
+/// (800 x 400), grown in y only (1000 x 700), and grown then shrunk back;
+/// two 1000 x 500 bars 100 apart across x, which (50, 0) joins and (49, 0)
+/// leaves 2 apart, while (0, 50) leaves the gap; a 1000 x 200 bar that
+/// (-50, -100) shrinks away and (-50, -99) leaves 2 tall. The rule names an
+/// axis, so only the symmetries that keep each axis (no quarter turn) apply.
+fn sized_xy() -> Vec<Fixture> {
+    let cat = &["DRC-121"];
+    let cases = [
+        derived(
+            "derived/sized_xy/box",
+            cat,
+            &["a"],
+            &[
+                ("a.sized(100nm, 50nm)", areas(&[720_000])),
+                ("a.sized(-100nm, -50nm)", areas(&[320_000])),
+                ("a.sized(0nm, 100nm)", areas(&[700_000])),
+                (
+                    "a.sized(100nm, 50nm).sized(-100nm, -50nm)",
+                    areas(&[500_000]),
+                ),
+            ],
+            Layout::default().rect("a", 0, 0, 1000, 500),
+        ),
+        derived(
+            "derived/sized_xy/gap",
+            cat,
+            &["a"],
+            &[
+                ("a.sized(50nm, 0nm)", areas(&[1_100_000])),
+                ("a.sized(49nm, 0nm)", areas(&[549_000, 549_000])),
+                ("a.sized(0nm, 50nm)", areas(&[600_000, 600_000])),
+            ],
+            rects(
+                Layout::default(),
+                "a",
+                &[(0, 0, 1000, 500), (1100, 0, 2100, 500)],
+            ),
+        ),
+        derived(
+            "derived/sized_xy/vanish",
+            cat,
+            &["a"],
+            &[
+                ("a.sized(-50nm, -100nm)", vec![]),
+                ("a.sized(-50nm, -99nm)", areas(&[1800])),
+            ],
+            Layout::default().rect("a", 0, 0, 1000, 200),
+        ),
+    ];
+    cases
+        .iter()
+        .flat_map(|fixture| {
+            Symmetry::ALL
+                .into_iter()
+                .filter(|symmetry| symmetry.turns % 2 == 0)
+                .flat_map(move |symmetry| {
+                    OFFSETS
+                        .iter()
+                        .map(move |&(dx, dy)| fixture.transformed(symmetry, dx, dy))
+                })
+        })
+        .collect()
 }
 
 /// `covering`, `not_covering`, `overlapping` and `not_overlapping` (DRC-121),

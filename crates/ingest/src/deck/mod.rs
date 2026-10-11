@@ -335,9 +335,11 @@ pub enum DerivedOp {
     /// Operand 0's area minus every other operand's. On edge layers, the parts
     /// of operand 0 that coincide with no other operand.
     Not,
-    /// Every shape grown by the length on all sides, corners square; shrunk
-    /// when negative, a part no wider than twice the shrink disappearing.
-    Sized(Dbu),
+    /// Every shape grown by `.0` left and right and `.1` above and below,
+    /// corners square (`KLayout`'s `sized(dx, dy)`; `sized(d)` is `(d, d)`);
+    /// shrunk when both are negative, a part no wider than twice the shrink
+    /// across that axis disappearing. The two never differ in sign.
+    Sized(Dbu, Dbu),
     /// `interacting` (`true`): the shapes or edges of operand 0 that touch or
     /// overlap a shape of operand 1, a shared corner counting. `false` is
     /// `not_interacting`, the rest.

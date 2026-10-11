@@ -42,27 +42,40 @@ fn push_rect(builder: &mut GeometryStoreBuilder, r: Bbox) {
     );
 }
 
-/// `r` grown by `d` on every side, refused past the coordinate domain.
-fn grown(r: Bbox, d: i64) -> Result<Bbox, BooleanError> {
+/// `r` grown by `dx` left and right and `dy` above and below, refused past
+/// the coordinate domain.
+fn grown(r: Bbox, dx: i64, dy: i64) -> Result<Bbox, BooleanError> {
     let at = |v: Dbu, by: i64| Dbu::new(v.raw() + by).ok_or(BooleanError::OutOfRange);
     Ok(Bbox {
-        xlo: at(r.xlo, -d)?,
-        ylo: at(r.ylo, -d)?,
-        xhi: at(r.xhi, d)?,
-        yhi: at(r.yhi, d)?,
+        xlo: at(r.xlo, -dx)?,
+        ylo: at(r.ylo, -dy)?,
+        xhi: at(r.xhi, dx)?,
+        yhi: at(r.yhi, dy)?,
     })
 }
 
-/// `KLayout` `sized(d)`: the Minkowski sum with the square `[-d, d]²` for `d > 0`,
-/// the erosion by it for `d < 0`. A part no wider than `2|d|` shrinks away.
+/// `KLayout` `sized(dx, dy)` (`sized(d)` is `(d, d)`): the Minkowski sum with
+/// the box `[-dx, dx] x [-dy, dy]` when both are at least 0, the erosion by
+/// `[dx, -dx] x [dy, -dy]` when both are at most 0. A part no wider than
+/// `2|dx|` across x, or `2|dy|` across y, shrinks away.
+///
+/// # Panics
+///
+/// When `dx` and `dy` differ in sign: one axis grown and the other shrunk is
+/// not one Minkowski operation, and the deck refuses it.
 pub fn sized_into(
     a: &ValidatedLayer,
-    d: Dbu,
+    dx: Dbu,
+    dy: Dbu,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
-    let d = d.raw();
-    if d >= 0 {
-        return grow_into(a, d, out);
+    let (dx, dy) = (dx.raw(), dy.raw());
+    assert!(
+        dx.signum() * dy.signum() >= 0,
+        "sizing grows or shrinks both axes, never one of each"
+    );
+    if dx >= 0 && dy >= 0 {
+        return grow_into(a, dx, dy, out);
     }
     // Erosion is the complement of growing the complement, within a frame far
     // enough out that its own border does not erode `a`.
@@ -70,24 +83,29 @@ pub fn sized_into(
         return merge_into(a, out);
     };
     let mut frame = GeometryStoreBuilder::with_capacity(1, 4);
-    push_rect(&mut frame, grown(extent, -d)?);
+    push_rect(&mut frame, grown(extent, -dx, -dy)?);
     let mut frame_layer = ValidatedLayer::default();
     merged(frame, &mut frame_layer)?;
     let mut outside = ValidatedLayer::default();
     subtraction_into(&frame_layer, a, &mut outside)?;
     let mut eaten = ValidatedLayer::default();
-    grow_into(&outside, -d, &mut eaten)?;
+    grow_into(&outside, -dx, -dy, &mut eaten)?;
     subtraction_into(a, &eaten, out)
 }
 
-/// Union of every rectangle of `a` grown by `d >= 0`: exact, since the
+/// Union of every rectangle of `a` grown by `dx, dy >= 0`: exact, since the
 /// Minkowski sum distributes over union.
-fn grow_into(a: &ValidatedLayer, d: i64, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
+fn grow_into(
+    a: &ValidatedLayer,
+    dx: i64,
+    dy: i64,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
     let (mut rects, mut start) = (Vec::new(), Vec::new());
     decompose_into(a, &mut rects, &mut start);
     let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
     for &r in &rects {
-        push_rect(&mut builder, grown(r, d)?);
+        push_rect(&mut builder, grown(r, dx, dy)?);
     }
     merged(builder, out)
 }

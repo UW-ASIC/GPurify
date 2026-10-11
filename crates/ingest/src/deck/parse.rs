@@ -680,9 +680,22 @@ impl<'a> Parser<'a> {
             "sized" => {
                 self.expect("(")?;
                 let value = self.value()?;
-                let by = self.length(&value, "sized")?;
+                let dx = self.length(&value, "sized")?;
+                let dy = if self.eat(",") {
+                    let second = self.value()?;
+                    let dy = self.length(&second, "sized")?;
+                    if dx.raw().signum() * dy.raw().signum() < 0 {
+                        return Err(self.err(
+                            second.span(),
+                            "`sized(dx, dy)` grows or shrinks both axes; chain two `sized` for one of each",
+                        ));
+                    }
+                    dy
+                } else {
+                    dx
+                };
                 self.expect(")")?;
-                (DerivedOp::Sized(by), Some(false), None)
+                (DerivedOp::Sized(dx, dy), Some(false), None)
             }
             "interacting" | "not_interacting" | "inside" | "outside" | "inside_part"
             | "outside_part" | "overlapping" | "not_overlapping" | "covering" | "not_covering" => {
