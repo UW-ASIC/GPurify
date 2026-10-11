@@ -845,6 +845,45 @@ fn malformed_tables_and_ranges_are_refused_at_load() {
     }
 }
 
+/// Oracle: the kinds' contract. Every new kind refuses a layer it cannot
+/// represent exactly (a triangle), and never reads it as clean.
+#[test]
+fn every_new_kind_refuses_a_layer_that_does_not_validate() {
+    let mut builder = LayoutBuilder::new(1);
+    builder.push(A, &[0, 100, 0], &[0, 0, 100]);
+    let (store, _) = builder.finish();
+    let set = RuleSet {
+        rules: [
+            TIPS,
+            Rule::TwoWidthSpacingTable { layer: A, table: 1 },
+            forbidden(),
+            lef_eol(parallel_edge(false), Some(1400)),
+            KEEP_OUT,
+            lef_spans(),
+            corners(false, Some(200)),
+            FIN_PITCH,
+        ]
+        .into_iter()
+        .map(|rule| (RULE, rule))
+        .collect(),
+        class_tables: asap7_m1().into_iter().chain(lef_two_widths()).collect(),
+        span_tables: vec![SpanTable {
+            x: vec![dbu(60)],
+            y: vec![dbu(60)],
+        }],
+        ..RuleSet::default()
+    };
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    set.run(&store, &mut out, &mut runs);
+
+    assert!(out.is_empty());
+    assert_eq!(runs.len(), 8);
+    assert!(
+        runs.iter().all(|run| run.outcome == Outcome::Refused),
+        "{runs:?}"
+    );
+}
+
 /// Oracle: the kind's contract. A layer the rule cannot represent exactly
 /// (a triangle) is refused, never read as clean.
 #[test]
