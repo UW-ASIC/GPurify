@@ -93,6 +93,47 @@ fn a_layout_written_and_read_back_yields_the_same_store() {
     common::assert_stores_equal(&original.store, &round_tripped);
 }
 
+/// Oracle: law, on a hole. The reader splits a keyhole into its outer and a
+/// clockwise hole row; written back, the hole must go inside its outer's
+/// keyhole, since a `BOUNDARY` of its own reads back as material. Found by
+/// the `gds` fuzz target's round trip on `conformance.gds` (E1).
+#[test]
+fn a_hole_survives_the_file_round_trip() {
+    let mut strings = gpurify::ingest::StrTable::default();
+    let deck = gpurify::ingest::deck::parse_deck(
+        "grid 1nm\nlayer m = gds(1, 0)\n",
+        gpurify::geom::Grid::new(1000).expect("a 1 nm grid"),
+        &mut strings,
+    )
+    .expect("a one-layer deck");
+    // [0, 1000]² around a [200, 800]² hole, as one keyhole ring.
+    let mut layout = gpurify_testgen::LayoutBuilder::new(1);
+    layout.push(
+        gpurify::geom::LayerId(0),
+        &[200, 1000, 1000, 0, 0, 200, 200, 200, 800, 800, 200],
+        &[0, 0, 1000, 1000, 0, 0, 200, 800, 800, 200, 200],
+    );
+    let mut bytes = Vec::new();
+    gpurify_testgen::gds::write_store(&layout.finish().0, &deck.layers, "TOP", &mut bytes)
+        .expect("a keyhole is writable");
+    let read = common::load_bytes(&bytes, &deck).expect("a keyhole reads");
+    let ring = |row| {
+        let (xs, ys) = read.poly_verts(gpurify::geom::PolyId(row));
+        gpurify::geom::ops::area2(xs, ys).raw()
+    };
+    assert_eq!(
+        (read.poly_count(), ring(0), ring(1)),
+        (2, 2 * 1_000_000, -2 * 360_000),
+        "the outer, then its hole, clockwise"
+    );
+
+    let mut again = Vec::new();
+    gpurify_testgen::gds::write_store(&read, &deck.layers, "TOP", &mut again)
+        .expect("a store with a hole is writable");
+    let round_tripped = common::load_bytes(&again, &deck).expect("re-read");
+    common::assert_stores_equal(&read, &round_tripped);
+}
+
 /// Oracle: construct-from-answer. Coordinates at the edge of the representable
 /// domain survive the file round trip exactly.
 #[test]

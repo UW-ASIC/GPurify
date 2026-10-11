@@ -1,13 +1,15 @@
 //! GDSII writer: the other half of `parse -> write -> parse`, for test layouts.
 //! An error names what the format cannot represent.
 //!
-//! Data in: a flattened [`GeometryStore`] and the deck's [`LayerTable`]. Data out:
-//! a one-cell GDSII library on a 1 nm grid: `UNITS` says 0.001 user units
+//! Data in: a flattened [`GeometryStore`] and the deck's [`LayerTable`], or a
+//! hierarchy of [`Structure`]s. Data out: a GDSII library (one cell for a
+//! store) on a 1 nm grid: `UNITS` says 0.001 user units
 //! (µm) and 1e-9 m per database unit, and every coordinate is written as the
 //! integer it is. A store built on a coarser grid reads back as 1 nm, so
 //! build test geometry in nanometres. Timestamps are zero, so the bytes are
 //! reproducible.
 
+use gpurify_geom::ops::area2;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::LayerTable;
@@ -29,6 +31,16 @@ const ENDEL: u16 = 0x1100;
 const TEXT: u16 = 0x0C00;
 const TEXTTYPE: u16 = 0x1602;
 const STRING: u16 = 0x1906;
+const SREF: u16 = 0x0A00;
+const AREF: u16 = 0x0B00;
+const SNAME: u16 = 0x1206;
+const COLROW: u16 = 0x1302;
+const STRANS: u16 = 0x1A01;
+const MAG: u16 = 0x1B05;
+const ANGLE: u16 = 0x1C05;
+
+/// `STRANS` bit 0 (MSB first): reflect about the x axis before rotating.
+const STRANS_REFLECT: u16 = 0x8000;
 
 /// Stream format 6.0, the version every reader since 1987 accepts.
 const VERSION: u16 = 600;
@@ -51,7 +63,8 @@ const METRES_PER_DBU: f64 = 1e-9;
 /// One cell, named `cell_name`: the store was flattened at ingest, so a round
 /// trip returns the flattened store and not the original file. Polygons go
 /// out in store order, each as a `BOUNDARY` on its layer's stream pair from
-/// `layers`. Shapes on a derived layer are skipped: they are the deck's
+/// `layers`; a clockwise row is a hole of the outer row before it, the order
+/// the reader stores a keyhole in, and goes out inside that outer's keyhole. Shapes on a derived layer are skipped: they are the deck's
 /// arithmetic over geometry already in the file. On error, `out` holds a
 /// partial library and must be discarded.
 ///
@@ -59,8 +72,9 @@ const METRES_PER_DBU: f64 = 1e-9;
 ///
 /// A static message naming what GDSII cannot carry: `cell_name` outside
 /// ASCII, a polygon with fewer than three vertices, a coordinate beyond
-/// `i32::MAX` in magnitude, a polygon too long for one record (over 8190
-/// vertices), or a shape on a layer `layers` does not declare.
+/// `i32::MAX` in magnitude, a polygon (a keyhole with its slits) too long for
+/// one record (over 8190 vertices), a hole first on its layer, or a shape on
+/// a layer `layers` does not declare.
 pub fn write_store(
     store: &GeometryStore,
     layers: &LayerTable,
@@ -121,9 +135,28 @@ pub fn write_store_labelled(
             return Err("a layer the deck's table does not declare");
         }
         let (number, datatype) = layers.stream_of(layer);
-        for row in range {
+        let mut row = range.start;
+        while row < range.end {
             let (xs, ys) = store.poly_verts(PolyId(row));
-            put_boundary(out, &mut payload, number, datatype, xs, ys)?;
+            if area2(xs, ys).raw() < 0 {
+                return Err("a hole with no outer row before it");
+            }
+            // A clockwise row is a hole of the outer before it, as the reader
+            // stores a keyhole: written back as one keyhole with that outer.
+            let holes = row + 1;
+            row = holes;
+            while row < range.end && {
+                let (hx, hy) = store.poly_verts(PolyId(row));
+                area2(hx, hy).raw() < 0
+            } {
+                row += 1;
+            }
+            if holes == row {
+                put_boundary(out, &mut payload, number, datatype, xs, ys)?;
+            } else {
+                let (kx, ky) = keyhole(store, holes - 1..row);
+                put_boundary(out, &mut payload, number, datatype, &kx, &ky)?;
+            }
         }
     }
     for label in labels {
@@ -148,6 +181,136 @@ pub fn write_store_labelled(
     put_record(out, ENDLIB, &[])
 }
 
+/// One structure for [`write_library`]: its rectangles, then its placements.
+#[derive(Debug, Clone, Default)]
+pub struct Structure {
+    /// The structure's name. ASCII only.
+    pub name: String,
+    /// `(layer, datatype, [xlo, ylo, xhi, yhi])`, each a counter-clockwise
+    /// `BOUNDARY`.
+    pub rects: Vec<(u16, u16, [i32; 4])>,
+    /// Each an `SREF`, or an `AREF` when it is an array.
+    pub refs: Vec<Placement>,
+}
+
+/// One `SREF` or `AREF` in a [`Structure`].
+#[derive(Debug, Clone)]
+pub struct Placement {
+    /// The placed structure's name. ASCII only.
+    pub cell: String,
+    /// Reflect about the x axis before rotating (`STRANS` bit 0).
+    pub reflect: bool,
+    /// Counter-clockwise quarter turns, written as an `ANGLE` in degrees.
+    pub quarter_turns: u8,
+    /// Whole magnification; 1 writes no `MAG`.
+    pub mag: u32,
+    /// Where the child's origin lands; for an array, its first element's.
+    pub at: (i32, i32),
+    /// The lattice of an `AREF`; `None` for an `SREF`.
+    pub array: Option<Array>,
+}
+
+/// An `AREF`'s lattice, in the parent's frame as the format states it.
+#[derive(Debug, Clone, Copy)]
+pub struct Array {
+    /// Copies along the column step; positive.
+    pub cols: u16,
+    /// Copies along the row step; positive.
+    pub rows: u16,
+    /// From one column to the next.
+    pub col_step: (i32, i32),
+    /// From one row to the next.
+    pub row_step: (i32, i32),
+}
+
+/// Write `cells` as one GDSII library, in order, on the 1 nm grid
+/// [`write_store`] uses: the hierarchical half of a `write -> parse` test, for
+/// the reader's placement, array and cycle handling. Nothing is checked
+/// against the hierarchy: a placement may name any structure, defined or not,
+/// itself included. On error, `out` holds a partial library.
+///
+/// # Errors
+///
+/// A name outside ASCII, an array with a zero count or whose far corner
+/// leaves the 32-bit coordinate range, or a record over 64 KiB.
+pub fn write_library(cells: &[Structure], out: &mut Vec<u8>) -> Result<(), &'static str> {
+    put_library_head(out, "LIB")?;
+    for cell in cells {
+        put_record(out, BGNSTR, &TIMESTAMPS)?;
+        put_ascii(out, STRNAME, &cell.name)?;
+        for &(layer, datatype, [xlo, ylo, xhi, yhi]) in &cell.rects {
+            let xy: Vec<u8> = [(xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi), (xlo, ylo)]
+                .iter()
+                .flat_map(|&(x, y)| x.to_be_bytes().into_iter().chain(y.to_be_bytes()))
+                .collect();
+            put_record(out, BOUNDARY, &[])?;
+            put_record(out, LAYER, &layer.to_be_bytes())?;
+            put_record(out, DATATYPE, &datatype.to_be_bytes())?;
+            put_record(out, XY, &xy)?;
+            put_record(out, ENDEL, &[])?;
+        }
+        for placement in &cell.refs {
+            put_placement(out, placement)?;
+        }
+        put_record(out, ENDSTR, &[])?;
+    }
+    put_record(out, ENDLIB, &[])
+}
+
+/// One `SREF` or `AREF`, in the format's record order.
+fn put_placement(out: &mut Vec<u8>, placement: &Placement) -> Result<(), &'static str> {
+    let mut points = vec![placement.at];
+    if let Some(Array {
+        cols,
+        rows,
+        col_step,
+        row_step,
+    }) = placement.array
+    {
+        if cols == 0 || rows == 0 {
+            return Err("an array with a zero count");
+        }
+        let far = |n: u16, step: (i32, i32)| -> Result<(i32, i32), &'static str> {
+            let reach = |origin: i32, step: i32| {
+                i32::try_from(i64::from(origin) + i64::from(n) * i64::from(step))
+                    .map_err(|_| "an array corner beyond the GDSII range")
+            };
+            Ok((
+                reach(placement.at.0, step.0)?,
+                reach(placement.at.1, step.1)?,
+            ))
+        };
+        points.push(far(cols, col_step)?);
+        points.push(far(rows, row_step)?);
+    }
+    let array = placement.array.is_some();
+    put_record(out, if array { AREF } else { SREF }, &[])?;
+    put_ascii(out, SNAME, &placement.cell)?;
+    let turns = placement.quarter_turns % 4;
+    if placement.reflect || placement.mag != 1 || turns != 0 {
+        let flags = if placement.reflect { STRANS_REFLECT } else { 0 };
+        put_record(out, STRANS, &flags.to_be_bytes())?;
+        if placement.mag != 1 {
+            put_record(out, MAG, &real8(f64::from(placement.mag)))?;
+        }
+        if turns != 0 {
+            put_record(out, ANGLE, &real8(f64::from(turns) * 90.0))?;
+        }
+    }
+    if let Some(Array { cols, rows, .. }) = placement.array {
+        let mut colrow = [0u8; 4];
+        colrow[..2].copy_from_slice(&cols.to_be_bytes());
+        colrow[2..].copy_from_slice(&rows.to_be_bytes());
+        put_record(out, COLROW, &colrow)?;
+    }
+    let xy: Vec<u8> = points
+        .iter()
+        .flat_map(|&(x, y)| x.to_be_bytes().into_iter().chain(y.to_be_bytes()))
+        .collect();
+    put_record(out, XY, &xy)?;
+    put_record(out, ENDEL, &[])
+}
+
 // ----------------------------------------------------------------- the format
 
 /// `HEADER`, `BGNLIB`, `LIBNAME` and `UNITS` — everything before the first cell.
@@ -160,6 +323,38 @@ fn put_library_head(out: &mut Vec<u8>, name: &str) -> Result<(), &'static str> {
     units[..8].copy_from_slice(&real8(USER_UNITS_PER_DBU));
     units[8..].copy_from_slice(&real8(METRES_PER_DBU));
     put_record(out, UNITS, &units)
+}
+
+/// The rows `rows`, an outer then its clockwise holes, as one GDSII keyhole
+/// ring: the outer, then from its first vertex an axis-aligned slit out to
+/// each hole's first vertex, around the hole and back along the same slit.
+/// Each slit is drawn both ways, so it encloses nothing, and the reader's
+/// keyhole split (`geom::boolean::canonical_rings_into`) gives back the
+/// outer and the holes, which is why the slits must be rectilinear.
+fn keyhole(store: &GeometryStore, rows: std::ops::Range<u32>) -> (Vec<Dbu>, Vec<Dbu>) {
+    let (mut kx, mut ky) = (Vec::new(), Vec::new());
+    let mut go = |x: Dbu, y: Dbu| {
+        if kx.last() != Some(&x) || ky.last() != Some(&y) {
+            kx.push(x);
+            ky.push(y);
+        }
+    };
+    let (ox, oy) = store.poly_verts(PolyId(rows.start));
+    for (&x, &y) in ox.iter().zip(oy) {
+        go(x, y);
+    }
+    let (x0, y0) = (ox[0], oy[0]);
+    for hole in rows.start + 1..rows.end {
+        let (hx, hy) = store.poly_verts(PolyId(hole));
+        go(x0, y0);
+        go(hx[0], y0);
+        for (&x, &y) in hx.iter().zip(hy) {
+            go(x, y);
+        }
+        go(hx[0], hy[0]);
+        go(hx[0], y0);
+    }
+    (kx, ky)
 }
 
 /// One `BOUNDARY` element — the stream pair, the closed outline, and `ENDEL`.
