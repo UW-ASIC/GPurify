@@ -474,7 +474,7 @@ pub enum ParamValue {
     /// A whole count (cuts, colours, drivers), or an angle in whole degrees.
     Count(u32),
     /// `true`/`false`; `nets: same` (`true`) or `different`; `maximum`, which a
-    /// density rule's `<=` sets; or `warning`, on an ERC rule written so.
+    /// density rule's `<=` sets; or `warning`, on a rule written so.
     Flag(bool),
     /// An area, already in square grid units.
     Area(DbuArea),

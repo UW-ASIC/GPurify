@@ -4,7 +4,7 @@ use crate::drc::rules::{
     area, edge, facing, grid, overlay, patterning, presence, spacing, via, width,
 };
 use crate::drc::{DrcError, Scratch};
-use crate::report::{record_run, LimitSense, Outcome, RuleRun, Violations};
+use crate::report::{record_run, LimitSense, Outcome, RuleRun, Severity, Violations};
 use crate::topology::NetTable;
 use gpurify_geom::{Dbu, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
@@ -48,7 +48,9 @@ use gpurify_ingest::{StrId, StrTable};
 ///   layout under every symmetry of the square cannot pick a side.
 /// - `shapes` names store rows ([`PolyId`](gpurify_geom::PolyId)). A hole of a
 ///   drawn polygon is a row of its own, so a pair may name a hole's ring.
-/// - Every finding is a [`Severity::Error`](crate::report::Severity::Error).
+/// - Every finding is a [`Severity::Error`], unless the deck writes the row
+///   `warning` (a recommended rule, [`RuleSet::warnings`]): then every finding
+///   of the row is a [`Severity::Warning`], which does not fail the run.
 /// - The rule records [`Outcome::Refused`] when a layer it reads fails
 ///   validation (a degenerate, self-intersecting or non-rectilinear polygon,
 ///   or a hole outside every outer ring) or a boolean on it fails. Each
@@ -2414,6 +2416,14 @@ pub struct RuleSet {
     pub cut_tables: Vec<CutClassTable>,
     /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
     pub stacks: Vec<Vec<LayerId>>,
+    /// The ids of the rules the deck writes `warning` (`rule <id> warning
+    /// <check>`): each finding of these is a [`Severity::Warning`], reported
+    /// and counted but not failing the run. This is how a recommended rule is
+    /// carried: IHP's rules with an `R` suffix (Layout Rules §4.1), sky130's
+    /// `RR`/`RC` flags, ASAP7's rule type `R`, LEF `PREFERENCLOSURE`. The
+    /// row's outcome is unchanged, so a recommended rule that cannot look
+    /// still fails the run. Catalog DRC-110.
+    pub warnings: Vec<StrId>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -3262,6 +3272,14 @@ impl RuleSet {
                 }
             };
             rule.validate(strings.resolve(spec.id), &set.tables)?;
+            match strings
+                .get("warning")
+                .and_then(|name| rules.param(spec, name))
+            {
+                None | Some(ParamValue::Flag(false)) => {}
+                Some(ParamValue::Flag(true)) => set.warnings.push(spec.id),
+                Some(_) => return Err(wrong_type(spec, "warning")),
+            }
             set.rules.push((spec.id, rule));
         }
         Ok(set)
@@ -3706,6 +3724,9 @@ impl RuleSet {
                     out,
                 ),
             };
+            if self.warnings.contains(&id) {
+                out.severity[before..].fill(Severity::Warning);
+            }
             record_run(runs, out, before, id, outcome, examined);
             // A rule over every layer (`angle` with none named, `off_grid`, `via_stack`)
             // declares none.

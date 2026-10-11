@@ -176,12 +176,19 @@ layer and naming it.
 
 ```
 rule <id> <check>
-rule <id> warning <check>        # ERC only: report as a warning, not an error
+rule <id> warning <check>        # report as a warning, not an error
 ```
 
 The id is your name for the rule, and it is how violations are reported. Use
 the foundry's rule numbers (`m1.1`, `licon.5a`) so a report reads like the
 manual.
+
+A rule written `warning` reports its findings as warnings: they are listed
+and counted, but do not fail the run. This is how a foundry's recommended
+rules are carried, the ones IHP marks with an `R` suffix (`TM2.bR`), sky130
+flags `RR` or `RC`, and ASAP7 gives rule type `R`, beside the required rule
+they relax: `rule M1.bR warning space(met1) >= 220nm`. A warning rule that
+cannot look at the layout (skipped or refused) still fails the run.
 
 A check with one limit is written as a comparison: `>=` for a minimum, `<=`
 for a maximum. Writing `<=` on a minimum rule is an error, not a flipped rule.

@@ -1522,13 +1522,6 @@ impl<'a> Parser<'a> {
             cmp.as_ref().map(|c| (c.0, c.1)),
             &named,
         )?;
-        if let (Some(t), false) = (warning, kind.warns) {
-            return Err(self.err_tok(
-                t,
-                &format!("`warning` is not legal on `{name}`: DRC rules are errors"),
-            ));
-        }
-
         let slots = EDGE_KINDS
             .iter()
             .find(|(engine, _)| *engine == kind.engine)

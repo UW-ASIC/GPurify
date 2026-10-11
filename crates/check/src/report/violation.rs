@@ -10,8 +10,9 @@ use gpurify_ingest::StrId;
 /// is its worst.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
-    /// A finding that does not fail the run: a violation of an ERC row the
-    /// deck marks `warning`. DRC and LVS never report one.
+    /// A finding that does not fail the run: a violation of a DRC or ERC row
+    /// the deck marks `warning`, such as a foundry's recommended rule. LVS
+    /// never reports one.
     Warning,
     /// A finding that fails the run.
     Error,
