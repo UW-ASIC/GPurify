@@ -879,7 +879,7 @@ impl RuleSet {
                 }
             }
             "hv_domain" => {
-                c.positive("max_domain_delta", self.hv_domain.max_domain_delta[r].raw())?
+                c.positive("max_domain_delta", self.hv_domain.max_domain_delta[r].raw())?;
             }
             "missing_tie" => c.length("max_distance", self.missing_tie.max_distance[r])?,
             // Zero permitted drivers flags every driven net.

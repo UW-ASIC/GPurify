@@ -2350,6 +2350,7 @@ impl Rule {
             | Rule::MaxDistanceToTap { limit, .. }
             | Rule::OffGrid { pitch: limit }
             | Rule::NetSpacing { limit, .. }
+            | Rule::ViaArraySpacing { limit, .. }
             | Rule::EdgeMinLength { limit, .. }
             | Rule::EdgeSpacing { limit, .. }
             | Rule::EdgeEnclosure { limit, .. } => length(limit),
@@ -2399,7 +2400,6 @@ impl Rule {
             Rule::RedundantVia {
                 min_count, within, ..
             } => count(min_count.into()).and(length(within)),
-            Rule::ViaArraySpacing { limit, .. } => length(limit),
             Rule::MultiPatterning {
                 colors,
                 color_spacing,

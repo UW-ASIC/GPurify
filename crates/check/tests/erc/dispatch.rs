@@ -449,7 +449,7 @@ fn a_kind_the_deck_did_not_configure_produces_no_run_row() {
         runs.is_empty(),
         "an empty rule set claims nothing was checked"
     );
-    assert!(violations.rule.is_empty());
+    assert_eq!(violations.rule, []);
 }
 
 /// Oracle: construct-from-answer. `run` appends rather than clears, which is

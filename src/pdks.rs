@@ -1,4 +1,4 @@
-//! The decks GPurify ships, as text compiled into the library.
+//! The decks `GPurify` ships, as text compiled into the library.
 //!
 //! A consumer that checks or routes against one of these processes reads the
 //! deck from here instead of keeping a copy of `pdks/*.deck`, so its copy
@@ -27,17 +27,17 @@
 use crate::check::deck::{compile, CompileError, CompiledDeck};
 use crate::geom::{Grid, StrTable};
 
-/// SkyWater SKY130 (`sky130A`, five-metal aluminium back end), `pdks/sky130.deck`.
+/// `SkyWater` SKY130 (`sky130A`, five-metal aluminium back end), `pdks/sky130.deck`.
 pub const SKY130: &str = include_str!("../pdks/sky130.deck");
 
-/// GlobalFoundries GF180MCU (1P6M, MIM option B), `pdks/gf180mcu.deck`.
+/// `GlobalFoundries` GF180MCU (1P6M, MIM option B), `pdks/gf180mcu.deck`.
 pub const GF180MCU: &str = include_str!("../pdks/gf180mcu.deck");
 
-/// IHP SG13G2 (130 nm SiGe BiCMOS, five thin and two thick metals),
+/// IHP SG13G2 (130 nm `SiGe` `BiCMOS`, five thin and two thick metals),
 /// `pdks/ihp_sg13g2.deck`.
 pub const IHP_SG13G2: &str = include_str!("../pdks/ihp_sg13g2.deck");
 
-/// ASAP7, the predictive 7 nm FinFET PDK, standing in for a generic FinFET
+/// ASAP7, the predictive 7 nm `FinFET` PDK, standing in for a generic `FinFET`
 /// process: `pdks/generic_finfet.deck`. No fab builds it.
 pub const GENERIC_FINFET: &str = include_str!("../pdks/generic_finfet.deck");
 

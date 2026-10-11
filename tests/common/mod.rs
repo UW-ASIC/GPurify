@@ -260,7 +260,6 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         // idempotent.
         reference: None,
         intent: None,
-        ..Inputs::default()
     };
 
     // The run's own string table, from a real load, so a `StrId` in a violation
@@ -606,7 +605,7 @@ pub struct CaseRun {
 
 /// Load, extract and check one fixture cell against `params.deck`.
 pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, String> {
-    run_case_inputs(case_inputs(domain, id, None, None), checks)
+    run_case_inputs(&case_inputs(domain, id, None, None), checks)
 }
 
 /// The same case with a reference netlist beside it, so the LVS stage compares
@@ -618,7 +617,7 @@ pub fn run_case_with_reference(
     reference: &str,
 ) -> Result<CaseRun, String> {
     let path = fixtures().join(reference);
-    run_case_inputs(case_inputs(domain, id, None, Some(path)), checks)
+    run_case_inputs(&case_inputs(domain, id, None, Some(path)), checks)
 }
 
 /// The same case with a design intent file written beside it.
@@ -631,7 +630,7 @@ pub fn run_case_with_intent(
     let dir = scratch_dir(id);
     let path = dir.join("intent.json");
     std::fs::write(&path, intent_source).expect("the scratch directory is writable");
-    let run = run_case_inputs(case_inputs(domain, id, Some(path), None), checks);
+    let run = run_case_inputs(&case_inputs(domain, id, Some(path), None), checks);
     // Best-effort, and silent for the reason `Run::drop` gives: a failure to
     // clean up must not turn a passing test red or mask a failing one.
     let _ = std::fs::remove_dir_all(&dir);
@@ -639,8 +638,8 @@ pub fn run_case_with_intent(
 }
 
 /// Load, extract and check whatever inputs were assembled.
-fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
-    let loaded = load(&inputs).map_err(|why| format!("load failed: {why}"))?;
+fn run_case_inputs(inputs: &Inputs, checks: Checks) -> Result<CaseRun, String> {
+    let loaded = load(inputs).map_err(|why| format!("load failed: {why}"))?;
     let extracted = extract(&loaded).map_err(|why| format!("extraction failed: {why}"))?;
 
     let options = RunOptions {
@@ -1347,17 +1346,15 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
     // the deck's layer ordering a second time.
     let scope = match case.kind.rsplit_once('_') {
         Some((_, conductor @ ("met1" | "met2"))) => {
-            match run.loaded.deck.layers.id(&run.loaded.strings, conductor) {
-                Some(layer) => Some(layer),
-                None => {
-                    failed.push(format!(
-                        "{}: kind {} names {conductor} and the deck defines no such \
-                         layer{context}",
-                        case.id, case.kind
-                    ));
-                    return failed;
-                }
-            }
+            let Some(layer) = run.loaded.deck.layers.id(&run.loaded.strings, conductor) else {
+                failed.push(format!(
+                    "{}: kind {} names {conductor} and the deck defines no such \
+                     layer{context}",
+                    case.id, case.kind
+                ));
+                return failed;
+            };
+            Some(layer)
         }
         _ => None,
     };
