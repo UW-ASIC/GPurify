@@ -22,48 +22,83 @@ use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Ordering;
 
 /// The nearest approach among `pairs` of axis-parallel segments: its squared
 /// distance and the midpoint of the two nearest points (floored). Where the
 /// two nearest segments run alongside each other at that distance, the
 /// nearest points are a stretch of pairs, and the midpoint is that stretch's
-/// middle; among several nearest pairs, the longest stretch wins (a facing
-/// run over a corner). Stretches that tie on length are all kept: the point
-/// is the middle of the box bounding their midpoints, floored once. That is
-/// the middle of their union when they lie on one line, and between them
-/// otherwise (on the axis of a pair that is symmetric, such as a square
-/// tucked into an L's corner, which can put it off the gap), so it does not
-/// depend on the order of the rings and maps with the layout under every
-/// symmetry of the square. `None` when `pairs` is empty.
+/// middle. A stretch is whole however its sides were cut: the nearest pairs'
+/// stretches that lie on one line and touch or overlap are merged first, so
+/// a side split by a collinear vertex, or by the rectangles a wide part is
+/// cut into in one orientation, is marked at the middle of the whole run.
+/// Among the merged stretches the longest wins (a facing run over a corner).
+/// Stretches that tie on length are all kept: the point is the middle of the
+/// box bounding their midpoints, floored once. That is between them: on
+/// their line when they share one, and otherwise between the lines (on the
+/// axis of a pair that is symmetric, such as a square tucked into an L's
+/// corner, which can put it off the gap); it does not depend on the order of
+/// the rings and maps with the layout under every symmetry of the square.
+/// `None` when `pairs` is empty.
 fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
-    let mut best: Option<(DbuArea, Reverse<i64>)> = None;
-    // The tied pairs' doubled midpoints, boxed: xlo, xhi, ylo, yhi.
-    let mut tied = [0i64; 4];
+    let mut best: Option<DbuArea> = None;
+    // Each nearest pair's stretch, doubled: `(vertical, across, lo, hi)`, the
+    // line's doubled middle across it and its extent along it. A pair that
+    // faces over no run is a point, a horizontal stretch of length 0.
+    let mut stretches: Vec<(bool, i64, i64, i64)> = Vec::new();
     for (p, q) in pairs {
+        let d2 = seg_seg_dist2(p, q);
+        match best.map(|b| d2.cmp(&b)) {
+            Some(Ordering::Greater) => continue,
+            Some(Ordering::Equal) => {}
+            _ => {
+                best = Some(d2);
+                stretches.clear();
+            }
+        }
+        // For axis-parallel segments, the boxes' overlap on each axis: a
+        // positive one is the run they face each other over, and either
+        // one's ends sum to twice the middle of the boxes' gap.
         let (pb, qb) = (seg_bbox(p), seg_bbox(q));
-        let along = |lo: Dbu, hi: Dbu, other_lo: Dbu, other_hi: Dbu| {
-            (hi.min(other_hi) - lo.max(other_lo)).raw()
+        let (xlo, xhi) = (pb.xlo.max(qb.xlo).raw(), pb.xhi.min(qb.xhi).raw());
+        let (ylo, yhi) = (pb.ylo.max(qb.ylo).raw(), pb.yhi.min(qb.yhi).raw());
+        stretches.push(if xhi > xlo {
+            (false, ylo + yhi, 2 * xlo, 2 * xhi)
+        } else if yhi > ylo {
+            (true, xlo + xhi, 2 * ylo, 2 * yhi)
+        } else {
+            (false, ylo + yhi, xlo + xhi, xlo + xhi)
+        });
+    }
+    // Merge each line's touching stretches; box the longest ones' doubled
+    // midpoints: xlo, xhi, ylo, yhi.
+    stretches.sort_unstable();
+    let (mut longest, mut tied) = (-1, [0i64; 4]);
+    let mut at = 0;
+    while at < stretches.len() {
+        let (vertical, across, lo, mut hi) = stretches[at];
+        at += 1;
+        while let Some(&(v, a, next_lo, next_hi)) = stretches.get(at) {
+            if (v, a) != (vertical, across) || next_lo > hi {
+                break;
+            }
+            hi = hi.max(next_hi);
+            at += 1;
+        }
+        // Exact: a stretch's ends are both even, a point's equal.
+        let along = i64::midpoint(lo, hi);
+        let (x, y) = if vertical {
+            (across, along)
+        } else {
+            (along, across)
         };
-        let run = along(pb.xlo, pb.xhi, qb.xlo, qb.xhi)
-            .max(along(pb.ylo, pb.yhi, qb.ylo, qb.yhi))
-            .max(0);
-        // For axis-parallel segments, the middle of their boxes' gap, doubled.
-        let twice = |lo: Dbu, hi: Dbu, other_lo: Dbu, other_hi: Dbu| {
-            lo.max(other_lo).raw() + hi.min(other_hi).raw()
-        };
-        let (x, y) = (
-            twice(pb.xlo, pb.xhi, qb.xlo, qb.xhi),
-            twice(pb.ylo, pb.yhi, qb.ylo, qb.yhi),
-        );
-        let key = (seg_seg_dist2(p, q), Reverse(run));
-        match best.map(|b| b.cmp(&key)) {
-            Some(Ordering::Less) => {}
-            Some(Ordering::Equal) => {
+        match (hi - lo).cmp(&longest) {
+            Ordering::Less => {}
+            Ordering::Equal => {
                 let [xlo, xhi, ylo, yhi] = tied;
                 tied = [xlo.min(x), xhi.max(x), ylo.min(y), yhi.max(y)];
             }
-            _ => (best, tied) = (Some(key), [x, x, y, y]),
+            Ordering::Greater => (longest, tied) = (hi - lo, [x, x, y, y]),
         }
     }
     let quarter = |sum: i64| Dbu::new_unchecked(sum.div_euclid(4));
@@ -71,7 +106,7 @@ fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> 
         x: quarter(tied[0] + tied[1]),
         y: quarter(tied[2] + tied[3]),
     };
-    best.map(|(d2, _)| (d2, at))
+    best.map(|d2| (d2, at))
 }
 
 /// Every edge of one ring paired with every edge of another.

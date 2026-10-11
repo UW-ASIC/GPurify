@@ -121,8 +121,10 @@ every layer a figure or pair rule reads, the script also writes that layer's fig
   layouts and not compared off it.
 - **Marker of the spacing kinds and via_array_spacing.** GPurify's `at` is the midpoint of the
   two nearest points the pair measured, the middle of their stretch where they run alongside
-  (`nearest`; F66, fixed in B24, and for via_array_spacing F82, fixed in B26). Equally long
-  nearest stretches give the middle of the box bounding their midpoints (F82, fixed in B26).
+  (`nearest`; F66, fixed in B24, and for via_array_spacing F82, fixed in B26). Collinear pieces
+  of one stretch that touch are merged first, so a side split by a vertex or by the rectangles a
+  wide part is cut into is marked at the middle of the whole stretch (F92, fixed in B29). Equally
+  long nearest stretches give the middle of the box bounding their midpoints (F82, fixed in B26).
 
 The classes, detected by the script (`{rclass: layer}`) or by the harness from the figures:
 - **R:** every shape on the layer is a rectangle, and no two touch or overlap, so rows = figures

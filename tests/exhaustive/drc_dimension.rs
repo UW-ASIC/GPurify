@@ -1098,7 +1098,8 @@ fn tucked_marker(g: i64) -> Finding {
 /// tucked into an L's corner (the boxes overlap, the shapes do not); a figure
 /// drawn as two halves near a bar (one finding per row pair); three bars with
 /// two short gaps; a hook beside a square, marked on the 50 gap it measures,
-/// not on its box (F66).
+/// not on its box (F66); a side drawn as two collinear edges, marked at the
+/// middle of the whole side (F92).
 fn min_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule s space(met1) >= 101nm");
@@ -1200,6 +1201,20 @@ fn min_spacing(depth: Depth) -> Vec<Fixture> {
         "hook_beside_a_square".into(),
         hook_beside_a_square(),
         vec![pin(Finding::length(50), 1000 + 1050, 500)],
+    );
+    // A square whose side x = 1000 is drawn as two edges, split by a
+    // collinear vertex at y = 300, faces a bar 50 off over y = 0..1000: one
+    // stretch, marked at its middle (1025, 500), not at the longer piece's
+    // (1025, 650) (F92).
+    case(
+        "side_split_by_a_vertex".into(),
+        Layout::default()
+            .polygon(
+                "met1",
+                &[(0, 0), (1000, 0), (1000, 300), (1000, 1000), (0, 1000)],
+            )
+            .rect("met1", 1050, 0, 2000, 1000),
+        vec![pin(Finding::length(50), 1000 + 1050, 1000)],
     );
     for (shape, layout) in [
         ("touching", met1(&[[0, 0, 500, 2000], [500, 0, 1000, 2000]])),
@@ -1757,7 +1772,9 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
 /// halves, neither wide alone (two row pairs, both held); two thin lines; a
 /// thin line between the plate and another line (the far pair has no wide
 /// part); a thin staircase 100 from the plate over y = 1500..2000 whose box
-/// reaches far below, marked on the gap it measures (F66).
+/// reaches far below, marked on the gap it measures (F66); a plate whose
+/// facing side the wide part's rectangles cut in three, marked at the middle
+/// of the whole side (F92).
 fn wide_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 301;
     let deck = one_layer_deck("rule wd wide_space(met1; width: 1000nm) >= 301nm");
@@ -1869,6 +1886,30 @@ fn wide_spacing(depth: Depth) -> Vec<Fixture> {
             ],
         ),
         vec![pin(Finding::length(100), 2000 + 2100, 1500 + 2000)],
+    );
+    // A 3000 x 2000 plate with a 1000-wide arm below x = 500..1500, all of
+    // it wide, and a line 200 above its top y = 2000. Cut into vertical
+    // slabs, the wide part's top is three sides, x = 0..500, 500..1500 and
+    // 1500..3000, in the orientations where it lies along x: one stretch,
+    // marked at (1500, 2100), not at the longest piece's (2250, 2100) (F92).
+    case(
+        "wide_side_cut_into_slabs".into(),
+        Layout::default()
+            .polygon(
+                "met1",
+                &[
+                    (0, 0),
+                    (500, 0),
+                    (500, -1000),
+                    (1500, -1000),
+                    (1500, 0),
+                    (3000, 0),
+                    (3000, 2000),
+                    (0, 2000),
+                ],
+            )
+            .rect("met1", 0, 2200, 3000, 2300),
+        vec![pin(Finding::length(200), 3000, 2000 + 2200)],
     );
     let mut out = every_placement(cases);
     out.push(vacuous(
