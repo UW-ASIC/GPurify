@@ -191,7 +191,8 @@ fn the_overlay_and_cut_checks_lower_to_their_engine_kinds() {
          rule wb enclosure(mcon, met1, opposite; below: 1um) >= 50nm\n\
          rule wwb enclosure(mcon, met1; width: 1um, below: 2um) >= 20nm\n\
          rule most contains(diff, licon) <= 1\n\
-         rule exact contains(diff, licon) == 2\n");
+         rule exact contains(diff, licon) == 2\n\
+         rule fw full_width(mcon, met1)\n");
     let got = rules(&deck, &strings);
     let expect = |id: &str, kind: &str, layers: &[&str], params: &[&str]| {
         let row = got
@@ -303,6 +304,7 @@ fn the_overlay_and_cut_checks_lower_to_their_engine_kinds() {
         &["max_count=#1"],
     );
     expect("exact", "must_contain", &["diff", "licon"], &["count=#2"]);
+    expect("fw", "full_width", &["met1", "mcon"], &[]);
 }
 
 /// gf180 M1.4 "Metal1 minimum density 30 % over the entire die", and a
