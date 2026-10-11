@@ -630,7 +630,7 @@ fn a_pmos_in_an_untapped_well_fails_lvs_and_a_tapped_one_matches() {
 /// layout it holds in memory (`GeometryStoreBuilder`,
 /// `gpurify_ingest::layout::derive_layers`, `RuleSet::run`): no file, no CLI.
 ///
-/// Oracle: the foundry rule at the limit (FR), SkyWater's periphery rules
+/// Oracle: the foundry rule at the limit (FR), the sky130 periphery rules
 /// m1.1 and m1.2, met1 width and spacing 0.14 um (`pdks/sky130.deck` [S1]):
 /// two met1 wires 140 nm wide and 140 nm apart break neither; the first
 /// narrowed by one 5 nm deck grid step is one m1.1 finding of 135 nm, and

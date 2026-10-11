@@ -1874,7 +1874,7 @@ fn spef_tokens(text: &str) -> Vec<&str> {
 }
 
 /// A reader of the SPEF that IEEE 1481 defines (the 1998 edition the writer
-/// names), written from the standard's grammar as the public OpenSTA parser
+/// names), written from the standard's grammar as the public `OpenSTA` parser
 /// (`parasitics/SpefParse.yy`) transcribes it, and sharing nothing with
 /// `gpurify::export`:
 ///
