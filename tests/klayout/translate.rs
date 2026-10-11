@@ -526,6 +526,20 @@ impl Layers<'_> {
                 if square { "squares" } else { "rectangles" }
             ),
             DerivedOp::Edges => format!("{a}.edges"),
+            // KLayout's edges keep their material on the right, so they run
+            // opposite to GPurify's: its begin is GPurify's end.
+            DerivedOp::Extended {
+                begin,
+                end,
+                outside,
+                inside,
+            } => format!(
+                "{a}.extended({}, {}, {}, {})",
+                2 * end.raw(),
+                2 * begin.raw(),
+                2 * outside.raw(),
+                2 * inside.raw()
+            ),
             DerivedOp::Part(true) => format!("{a}.inside_part({})", b()),
             DerivedOp::Part(false) => format!("({a}.outside_part({b}) - {b}.edges)", b = b()),
             DerivedOp::WithLength(lo, hi) => {
@@ -1245,7 +1259,10 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 layers.reads(layer, &mut reads);
                 let what = if deck.layers.is_edges(layer) {
                     var(layer)
-                } else if matches!(deck.layers.op(layer), None | Some(DerivedOp::Extents)) {
+                } else if matches!(
+                    deck.layers.op(layer),
+                    None | Some(DerivedOp::Extents | DerivedOp::Extended { .. })
+                ) {
                     format!("{}.dup.raw", var(layer))
                 } else {
                     format!("{}.data.merged", var(layer))

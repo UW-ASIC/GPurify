@@ -29,8 +29,6 @@ result from them is weaker than it looks.
   `.vertical()`), bounding-box size (`.with_bbox_max()`), `.covering()`,
   `.overlapping()` and per-axis sizing (`.sized(dx, dy)`) are written in
   the deck.
-- Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
-  allowed to extend beyond their abutting edge" cannot be written.
 - Spacing that depends on the voltage between two nets.
 - A way to state the voltage or domain of an input signal in the intent file,
   and checks for inputs driven from a powered-down domain.

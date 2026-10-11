@@ -80,6 +80,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         covering_overlapping(),
         sized_xy(),
         edge_operations(),
+        edge_extended(),
     ]
     .concat()
 }
@@ -4718,6 +4719,76 @@ fn shape_class() -> Vec<Fixture> {
         ],
         layout,
     )])
+}
+
+/// `extended` on edge layers (DRC-122), `KLayout`'s `extended(begin, end,
+/// out, in)`: a box round each edge, lengthened before its start and past
+/// its end, widened away from its shape (`out`) and into it (`in`), one box
+/// per edge, reported with its area.
+///
+/// On a 1000 x 500 rectangle's four edges: 100 out (two 1000 x 100 and two
+/// 500 x 100 boxes), 50 in, and 100 at both ends with 10 either side (two
+/// 1200 x 20, two 700 x 20); and the edge `a` butts `b` with, 100 out, which
+/// lies in `b` (100 x 500). All eight symmetries. Which end is the start
+/// depends on the edges' turning sense, which a mirror reverses, so the
+/// `begin`/`end` cases run under rotations only: lengthened 100 at its start,
+/// 10 out, the bottom edge reaches a 200 x 5 probe below the rectangle's
+/// lower-left corner (100 x 5 inside it); lengthened at its end instead, only
+/// the left edge does (10 x 5).
+fn edge_extended() -> Vec<Fixture> {
+    let cat = &["DRC-122"];
+    let sides = derived(
+        "derived/extended/sides",
+        cat,
+        &["a", "b"],
+        &[
+            (
+                "a.edges().extended(begin: 0nm, end: 0nm, out: 100nm, in: 0nm)",
+                areas(&[100_000, 100_000, 50_000, 50_000]),
+            ),
+            (
+                "a.edges().extended(begin: 0nm, end: 0nm, out: 0nm, in: 50nm)",
+                areas(&[50_000, 50_000, 25_000, 25_000]),
+            ),
+            (
+                "a.edges().extended(begin: 100nm, end: 100nm, out: 10nm, in: 10nm)",
+                areas(&[24_000, 24_000, 14_000, 14_000]),
+            ),
+            (
+                "(a.edges() and b.edges()).extended(begin: 0nm, end: 0nm, out: 100nm, in: 0nm) \
+                 and b",
+                areas(&[50_000]),
+            ),
+        ],
+        Layout::default()
+            .rect("a", 0, 0, 1000, 500)
+            .rect("b", 1000, 0, 1500, 500),
+    );
+    let ends = derived(
+        "derived/extended/ends",
+        cat,
+        &["a", "b"],
+        &[
+            (
+                "a.edges().extended(begin: 100nm, end: 0nm, out: 10nm, in: 0nm) and b",
+                areas(&[500]),
+            ),
+            (
+                "a.edges().extended(begin: 0nm, end: 100nm, out: 10nm, in: 0nm) and b",
+                areas(&[50]),
+            ),
+        ],
+        Layout::default()
+            .rect("a", 0, 0, 1000, 500)
+            .rect("b", -200, -5, 0, 0),
+    );
+    let mut out = every_placement(vec![sides]);
+    for symmetry in Symmetry::ALL.into_iter().filter(|s| !s.mirror) {
+        for &(dx, dy) in &OFFSETS {
+            out.push(ends.transformed(symmetry, dx, dy));
+        }
+    }
+    out
 }
 
 /// A feature's length, the longer side of its bounding box (DRC-021: sky130

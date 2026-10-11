@@ -618,6 +618,58 @@ pub fn edge_interacting_into(a: &[Seg], b: &ValidatedLayer, keep: bool, out: &mu
     }
 }
 
+/// `KLayout` `extended(begin, end, out, in)` on edges, material on the left:
+/// one box per edge of `a`, the edge lengthened by `begin` before its start
+/// and `end` past its end, and widened by `outside` to its right (away from
+/// its shape) and `inside` to its left. Boxes are not merged, as `KLayout`'s
+/// are not. A box with no area (`outside + inside` of 0) is refused by
+/// validation.
+pub fn extended_into(
+    a: &[Seg],
+    (begin, end, outside, inside): (Dbu, Dbu, Dbu, Dbu),
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let mut builder = GeometryStoreBuilder::with_capacity(a.len(), 4 * a.len());
+    for &s in a {
+        let r = run_of(s);
+        // Travelling toward `hi`, the material (left) is +y on a horizontal
+        // edge and -x on a vertical one.
+        let left_positive = r.forward != r.vertical;
+        let (before, after) = if r.forward {
+            (begin.raw(), end.raw())
+        } else {
+            (end.raw(), begin.raw())
+        };
+        let (below, above) = if left_positive {
+            (outside.raw(), inside.raw())
+        } else {
+            (inside.raw(), outside.raw())
+        };
+        let (lo, hi, across_lo, across_hi) =
+            (r.lo - before, r.hi + after, r.pos - below, r.pos + above);
+        let at = |v: i64| Dbu::new(v).ok_or(BooleanError::OutOfRange);
+        let b = if r.vertical {
+            Bbox {
+                xlo: at(across_lo)?,
+                ylo: at(lo)?,
+                xhi: at(across_hi)?,
+                yhi: at(hi)?,
+            }
+        } else {
+            Bbox {
+                xlo: at(lo)?,
+                ylo: at(across_lo)?,
+                xhi: at(hi)?,
+                yhi: at(across_hi)?,
+            }
+        };
+        push_rect(&mut builder, b);
+    }
+    let (store, _) = builder.finish(1);
+    validate_layer_into(&store, ONLY, out)?;
+    Ok(())
+}
+
 /// `KLayout` `with_length`: edges whose length in grid units is in `range`.
 pub fn with_length_into(a: &[Seg], range: RangeInclusive<i128>, out: &mut Vec<Seg>) {
     out.clear();
