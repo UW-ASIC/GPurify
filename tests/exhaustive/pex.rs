@@ -2194,3 +2194,4 @@ fn spef_reads_back_through_an_independent_reader_as_the_network() {
 
 mod fastcap;
 mod fasthenry;
+mod magic;
