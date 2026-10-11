@@ -31,8 +31,16 @@ use gpurify_ingest::{StrId, StrTable};
 ///   sits at their midpoint (floored to the grid). Where the two run
 ///   alongside each other at that distance, the nearest points are a
 ///   stretch, and the finding sits at its middle; among several nearest
-///   stretches the longest, then the first found. So a marker lies in the
-///   gap that was measured, not where the shapes' bounding boxes face.
+///   stretches the longest. So a marker lies in the gap that was measured,
+///   not where the shapes' bounding boxes face. Equally long stretches are
+///   one answer, not a pick by drawing order: the finding sits at the middle
+///   of the box bounding their midpoints, which is the middle of their union
+///   when they share a line. Stretches on different lines put it between
+///   them: two crossing shapes, measured 0 at the points where their
+///   boundaries cross, are marked in the middle of those points, and a pair
+///   symmetric across a diagonal (a square tucked into an L's corner) on
+///   that diagonal, off the gap. A marker that maps with the layout under
+///   every symmetry of the square cannot pick a side.
 /// - `shapes` names store rows ([`PolyId`](gpurify_geom::PolyId)). A hole of a
 ///   drawn polygon is a row of its own, so a pair may name a hole's ring.
 /// - Every finding is a [`Severity::Error`](crate::report::Severity::Error).

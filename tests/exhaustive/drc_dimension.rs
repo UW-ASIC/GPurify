@@ -1072,6 +1072,19 @@ fn hook_beside_a_square() -> Layout {
     )
 }
 
+/// The finding for a square `[100 + g, 1000]²` tucked into the L of arms
+/// `[0, 1000] x [0, 100]` and `[0, 100] x [0, 1000]`, g apart: two nearest
+/// stretches of one length, 900 - g, tie. The L's y = 100 faces the square's
+/// y = 100 + g over x = 100 + g..1000, midpoint ((1100 + g) / 2, (200 + g) /
+/// 2), and the L's x = 100 faces x = 100 + g, its mirror across y = x. The
+/// marker is the middle of the box bounding the two: ((650 + g) / 2, (650 +
+/// g) / 2), on the diagonal the pair is symmetric across, pinned where whole
+/// (F82). Either midpoint alone would follow drawing order, and a transposed
+/// layout would report the other.
+fn tucked_marker(g: i64) -> Finding {
+    pin(Finding::length(g), 650 + g, 650 + g)
+}
+
 /// `space(met1) >= 101nm` (`min_spacing`, DRC-023): one finding per pair of
 /// rows in different merged figures closer than the limit, Euclidean, at the
 /// midpoint of the nearest points (the middle of the stretch where the two
@@ -1133,7 +1146,7 @@ fn min_spacing(depth: Depth) -> Vec<Fixture> {
             ]),
         );
         // A square tucked into an L's corner: the boxes overlap, the shapes
-        // are g apart.
+        // are g apart, marked at [`tucked_marker`].
         case(
             format!("tucked_into_l/{tag}"),
             Layout::default()
@@ -1149,7 +1162,7 @@ fn min_spacing(depth: Depth) -> Vec<Fixture> {
                     ],
                 )
                 .rect("met1", 100 + g, 100 + g, 1000, 1000),
-            when(vec![Finding::length(g)]),
+            when(vec![tucked_marker(g)]),
         );
         case(
             format!("halves_near_a_bar/{tag}"),
@@ -1280,7 +1293,7 @@ fn min_spacing_diff(depth: Depth) -> Vec<Fixture> {
                     ],
                 )
                 .rect("diff", 100 + g, 100 + g, 1000, 1000),
-            when(vec![Finding::length(g)]),
+            when(vec![tucked_marker(g)]),
         );
         case(
             format!("halves/{tag}"),

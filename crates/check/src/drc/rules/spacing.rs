@@ -22,29 +22,56 @@ use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 
 /// The nearest approach among `pairs` of axis-parallel segments: its squared
 /// distance and the midpoint of the two nearest points (floored). Where the
 /// two nearest segments run alongside each other at that distance, the
 /// nearest points are a stretch of pairs, and the midpoint is that stretch's
 /// middle; among several nearest pairs, the longest stretch wins (a facing
-/// run over a corner), then the first. `None` when `pairs` is empty.
+/// run over a corner). Stretches that tie on length are all kept: the point
+/// is the middle of the box bounding their midpoints, floored once. That is
+/// the middle of their union when they lie on one line, and between them
+/// otherwise (on the axis of a pair that is symmetric, such as a square
+/// tucked into an L's corner, which can put it off the gap), so it does not
+/// depend on the order of the rings and maps with the layout under every
+/// symmetry of the square. `None` when `pairs` is empty.
 fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
-    pairs
-        .map(|(p, q)| {
-            let (pb, qb) = (seg_bbox(p), seg_bbox(q));
-            let along = |lo: Dbu, hi: Dbu, other_lo: Dbu, other_hi: Dbu| {
-                (hi.min(other_hi) - lo.max(other_lo)).raw()
-            };
-            let run = along(pb.xlo, pb.xhi, qb.xlo, qb.xhi)
-                .max(along(pb.ylo, pb.yhi, qb.ylo, qb.yhi))
-                .max(0);
-            // For axis-parallel segments, the middle of their boxes' gap.
-            (seg_seg_dist2(p, q), Reverse(run), gap_midpoint(pb, qb))
-        })
-        .min_by_key(|&(d2, run, _)| (d2, run))
-        .map(|(d2, _, at)| (d2, at))
+    let mut best: Option<(DbuArea, Reverse<i64>)> = None;
+    // The tied pairs' doubled midpoints, boxed: xlo, xhi, ylo, yhi.
+    let mut tied = [0i64; 4];
+    for (p, q) in pairs {
+        let (pb, qb) = (seg_bbox(p), seg_bbox(q));
+        let along = |lo: Dbu, hi: Dbu, other_lo: Dbu, other_hi: Dbu| {
+            (hi.min(other_hi) - lo.max(other_lo)).raw()
+        };
+        let run = along(pb.xlo, pb.xhi, qb.xlo, qb.xhi)
+            .max(along(pb.ylo, pb.yhi, qb.ylo, qb.yhi))
+            .max(0);
+        // For axis-parallel segments, the middle of their boxes' gap, doubled.
+        let twice = |lo: Dbu, hi: Dbu, other_lo: Dbu, other_hi: Dbu| {
+            lo.max(other_lo).raw() + hi.min(other_hi).raw()
+        };
+        let (x, y) = (
+            twice(pb.xlo, pb.xhi, qb.xlo, qb.xhi),
+            twice(pb.ylo, pb.yhi, qb.ylo, qb.yhi),
+        );
+        let key = (seg_seg_dist2(p, q), Reverse(run));
+        match best.map(|b| b.cmp(&key)) {
+            Some(Ordering::Less) => {}
+            Some(Ordering::Equal) => {
+                let [xlo, xhi, ylo, yhi] = tied;
+                tied = [xlo.min(x), xhi.max(x), ylo.min(y), yhi.max(y)];
+            }
+            _ => (best, tied) = (Some(key), [x, x, y, y]),
+        }
+    }
+    let quarter = |sum: i64| Dbu::new_unchecked(sum.div_euclid(4));
+    let at = Point {
+        x: quarter(tied[0] + tied[1]),
+        y: quarter(tied[2] + tied[3]),
+    };
+    best.map(|(d2, _)| (d2, at))
 }
 
 /// Every edge of one ring paired with every edge of another.
