@@ -320,8 +320,6 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-G2 | Floating well | implemented | SKY:nwell.4 | FR; SY; MR |
 | ERC-G4 | Supply short (n-tie + p-tie, VDD-GND) | implemented | CAL | SY; MR |
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
-| PEX-001 | Sheet R x squares, via R | implemented | W&H | CF; MR; SY |
-| PEX-002 | Area + fringe C to substrate | implemented | W&H | CF; MR; SY |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
 
