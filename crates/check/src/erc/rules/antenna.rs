@@ -43,7 +43,7 @@ pub enum AntennaMeasure {
 /// cut. [`RuleSet::from_deck`](crate::erc::RuleSet::from_deck) copies it from
 /// the deck's `connect` statements; with no conductors, every row measures
 /// the finished nets instead.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Stack {
     /// Conductor layers bottom-up, as `connect conductors` lists them. The
     /// order decides which conductors exist at a stage.
@@ -177,7 +177,7 @@ pub struct CmpModel {
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct AntennaTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -230,7 +230,7 @@ pub struct AntennaTable {
 /// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct AntennaElectricalTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -292,7 +292,7 @@ pub struct AntennaElectricalTable {
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DensityCmpTable {
     /// Rule id and severity per row.
     pub head: RuleHead,

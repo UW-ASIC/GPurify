@@ -12,26 +12,10 @@ use gpurify_check::deck::{compile, CompiledDeck};
 use gpurify_check::drc::{Rule, RuleSet, SpacingQuery};
 use gpurify_check::erc::rules::antenna::AntennaMeasure;
 use gpurify_check::report::{Measurement, Outcome, Violations};
-use gpurify_geom::{Dbu, DbuArea, Grid, LayerId, StrId, StrTable};
+use gpurify_geom::{Dbu, DbuArea, LayerId, StrId, StrTable};
 use gpurify_testgen::LayoutBuilder;
 
-/// The shipped decks, as `gpurify::pdks` ships them.
-const DECKS: [(&str, &str); 4] = [
-    (
-        "generic_finfet",
-        include_str!("../../../../pdks/generic_finfet.deck"),
-    ),
-    ("gf180mcu", include_str!("../../../../pdks/gf180mcu.deck")),
-    (
-        "ihp_sg13g2",
-        include_str!("../../../../pdks/ihp_sg13g2.deck"),
-    ),
-    ("sky130", include_str!("../../../../pdks/sky130.deck")),
-];
-
-fn grid() -> Grid {
-    Grid::new(1000).expect("a 1 nm grid")
-}
+use super::{grid, DECKS};
 
 fn nm(raw: i64) -> Dbu {
     Dbu::new_unchecked(raw)
@@ -59,6 +43,8 @@ fn limits(
     let set = RuleSet {
         rules: rules.to_vec(),
         tables: deck.drc.tables.clone(),
+        classes: deck.drc.classes.clone(),
+        widths: deck.drc.widths.clone(),
         first_derived: None,
     };
     let mut out = Violations::default();

@@ -31,14 +31,20 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod builder;
+mod decompile;
 mod query;
+pub mod rules;
 
+pub use builder::{Bound, BuildDiagnostic, BuildError, DeckBuilder, LayerExpr, LayerRef};
 pub use query::{AntennaLimit, DensityLimit, EmLimit, Enclosure, FetLimits};
+pub use rules::RuleRow;
 
 use crate::{drc, erc};
-use gpurify_geom::{Grid, StrId, StrTable};
+use gpurify_geom::{prefix, Grid, Qty, StrId, StrTable, Temperature};
 use gpurify_ingest::deck::{
-    parse_deck, Connectivity, Deck, DeckError, DeviceRecognition, LayerTable, ProcessStack,
+    parse_deck, Connectivity, Deck, DeckError, DeviceRecognition, LayerTable, PrintError,
+    ProcessStack, TemperatureLaw,
 };
 
 /// A deck ready to run: what [`compile`] makes of deck text.
@@ -46,7 +52,10 @@ use gpurify_ingest::deck::{
 /// Every [`StrId`] in it is from the [`StrTable`] it was
 /// compiled into, and every length is in database units of [`Self::grid`], so
 /// it is only meaningful with a layout on that grid and with that table.
-#[derive(Debug)]
+///
+/// Two compiled decks are equal when every table and every typed rule is,
+/// in the same order, with the same provenance.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledDeck {
     /// The layout grid every length was converted onto.
     pub grid: Grid,
@@ -56,12 +65,61 @@ pub struct CompiledDeck {
     pub connectivity: Connectivity,
     /// The `device` statements.
     pub devices: DeviceRecognition,
-    /// The parasitic stack, per layer.
+    /// The parasitic stack, per layer, its sheet resistances at
+    /// [`Self::temperature`].
     pub stack: ProcessStack,
+    /// The `temperature` statement's operating temperature, absolute; `None`
+    /// when the deck states none.
+    pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
+    /// The `temperature` statement and the `pex` coefficients as written
+    /// ([`TemperatureLaw`]), so the deck prints exactly.
+    pub temperature_law: Option<TemperatureLaw>,
     /// Every DRC rule, typed, in deck order.
     pub drc: drc::RuleSet,
     /// Every ERC rule, typed, one table per kind.
     pub erc: erc::RuleSet,
+    /// Every rule's id in deck order, with where it came from: what a report
+    /// says a consumer changed in a shipped deck.
+    pub provenance: Vec<(StrId, Origin)>,
+}
+
+/// Where a rule of a [`CompiledDeck`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Origin {
+    /// As the deck it was compiled or built from states it: a text deck's
+    /// rules, or the rules a [`DeckBuilder`] states with
+    /// [`rule`](DeckBuilder::rule).
+    Base,
+    /// Added over a base deck ([`DeckBuilder::add`]).
+    Added,
+    /// A base deck's rule, replaced ([`DeckBuilder::replace`]).
+    Replaced,
+}
+
+/// Writes a compiled deck as deck text, which [`compile`] reads back, in the
+/// same `strings` it was compiled into, to an equal deck: the way to share a
+/// deck built or overridden in Rust with a tool that reads text.
+///
+/// # Errors
+///
+/// [`PrintError`] when a value cannot be stated exactly in the deck language
+/// (a grid that is no terminating decimal of a nanometre).
+///
+/// # Examples
+///
+/// ```
+/// use gpurify_check::deck::{compile, print};
+/// use gpurify_geom::{Grid, StrTable};
+///
+/// let text = "grid 5nm\nlayer met1 = gds(68, 20)\nrule m1.1 width(met1) >= 0.14um\n";
+/// let mut strings = StrTable::default();
+/// let deck = compile(text, Grid::new(1000)?, &mut strings)?;
+/// let printed = print(&deck, &strings)?;
+/// assert_eq!(compile(&printed, Grid::new(1000)?, &mut strings)?, deck);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn print(deck: &CompiledDeck, strings: &StrTable) -> Result<String, PrintError> {
+    gpurify_ingest::deck::print(&deck.source(strings), deck.grid)
 }
 
 /// Why a deck did not compile.
@@ -132,12 +190,20 @@ impl CompiledDeck {
         }
         let drc = drc::RuleSet::from_deck(&deck, strings)?;
         let erc = erc::RuleSet::from_deck(&deck, strings)?;
+        let provenance = deck
+            .rules
+            .spec
+            .iter()
+            .map(|spec| (spec.id, Origin::Base))
+            .collect();
         let Deck {
             layers,
             rules: _,
             connectivity,
             devices,
             stack,
+            temperature,
+            temperature_law,
         } = deck;
         Ok(Self {
             grid,
@@ -145,8 +211,11 @@ impl CompiledDeck {
             connectivity,
             devices,
             stack,
+            temperature,
+            temperature_law,
             drc,
             erc,
+            provenance,
         })
     }
 

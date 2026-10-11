@@ -78,6 +78,63 @@ pub struct FetLimits {
 }
 
 impl CompiledDeck {
+    /// The widths `layer`'s shapes must be one of
+    /// ([`Rule::AllowedWidth`]), sorted; `None` when no rule lists them.
+    pub fn allowed_widths(&self, layer: LayerId) -> Option<&[Dbu]> {
+        self.drc_on(layer).find_map(|(_, rule)| match *rule {
+            Rule::AllowedWidth { layer: on, widths } if on == layer => {
+                self.drc.widths.get(widths as usize).map(Vec::as_slice)
+            }
+            _ => None,
+        })
+    }
+
+    /// The cut sizes `layer`'s shapes must be one of ([`Rule::CutClass`]),
+    /// each `(short, long)`, sorted; `None` when no rule lists them.
+    pub fn cut_classes(&self, layer: LayerId) -> Option<&[(Dbu, Dbu)]> {
+        self.drc_on(layer).find_map(|(_, rule)| match *rule {
+            Rule::CutClass { layer: on, classes } if on == layer => {
+                self.drc.classes.get(classes as usize).map(Vec::as_slice)
+            }
+            _ => None,
+        })
+    }
+
+    /// The largest bounding-box aspect ratio a shape on `layer` may have
+    /// ([`Rule::AspectRatio`]), the strictest stated.
+    pub fn max_aspect_ratio(&self, layer: LayerId) -> Option<f64> {
+        self.drc_on(layer)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::AspectRatio { layer: on, limit } if on == layer => Some(limit),
+                _ => None,
+            })
+            .reduce(f64::min)
+    }
+
+    /// The most area `layer` may cover in the whole layout
+    /// ([`Rule::TotalArea`]), the strictest stated.
+    pub fn max_total_area(&self, layer: LayerId) -> Option<DbuArea> {
+        self.drc_on(layer)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::TotalArea { layer: on, limit } if on == layer => Some(limit),
+                _ => None,
+            })
+            .min()
+    }
+
+    /// The shortest edge a `MINSTEP` rule allows on `layer`
+    /// ([`Rule::MinStep`]), the strictest stated.
+    pub fn min_step(&self, layer: LayerId) -> Option<Dbu> {
+        self.drc_on(layer)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::MinStep {
+                    layer: on, limit, ..
+                } if on == layer => Some(limit),
+                _ => None,
+            })
+            .max()
+    }
+
     /// Every DRC rule reading `layer`, with its id, in deck order.
     pub fn drc_on(&self, layer: LayerId) -> impl Iterator<Item = (StrId, &Rule)> + '_ {
         self.drc

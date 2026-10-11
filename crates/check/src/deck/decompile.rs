@@ -1,0 +1,589 @@
+//! A compiled deck back to names: every typed rule as the row the parser
+//! would read it into, so the deck can be printed or overridden.
+
+use super::CompiledDeck;
+use crate::drc::{Rule, StepKind};
+use crate::erc::rules::antenna::AntennaMeasure;
+use crate::report::LimitSense;
+use crate::report::Severity;
+use gpurify_geom::{LayerId, StrId, StrTable};
+use gpurify_ingest::deck::{DeckSource, ParamSource, ParamValue, RuleSource};
+use std::collections::HashMap;
+
+/// One rule's row as it is filed, in engine names.
+struct Row {
+    kind: &'static str,
+    layers: Vec<LayerId>,
+    params: Vec<(&'static str, ParamSource)>,
+}
+
+impl Row {
+    fn new(kind: &'static str, layers: &[LayerId]) -> Self {
+        Self {
+            kind,
+            layers: layers.to_vec(),
+            params: Vec::new(),
+        }
+    }
+
+    fn value(mut self, name: &'static str, value: ParamValue) -> Self {
+        self.params.push((name, ParamSource::Value(value)));
+        self
+    }
+
+    fn length(self, name: &'static str, value: gpurify_geom::Dbu) -> Self {
+        self.value(name, ParamValue::Length(value))
+    }
+
+    fn number(self, name: &'static str, value: f64) -> Self {
+        self.value(name, ParamValue::Ratio(value))
+    }
+}
+
+impl CompiledDeck {
+    /// The deck as names, in the form the parser reads text into: what
+    /// [`lower`](gpurify_ingest::deck::lower) and
+    /// [`CompiledDeck::from_deck`] turn back into an equal deck in the same
+    /// `strings`. Rules come in deck order ([`CompiledDeck::provenance`]),
+    /// and every value as the rule holds it, so a list the parser would read
+    /// twice, or an angle written as 180 degrees, comes back as the rule
+    /// stores it.
+    pub fn source(&self, strings: &StrTable) -> DeckSource {
+        let mut source = DeckSource::from_tables(
+            &self.layers,
+            &self.connectivity,
+            &self.devices,
+            &self.stack,
+            self.temperature.map(gpurify_geom::Qty::raw),
+            strings,
+        );
+        let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();
+        // The sheets as written, at the nominal temperature, with their
+        // coefficients, rather than at the operating one with none.
+        if let Some(law) = &self.temperature_law {
+            source.temperature = Some((law.operating_k, law.nominal_k));
+            for &(layer, sheet, tc) in &law.rows {
+                let layer = name(layer);
+                if let Some((_, row)) = source.pex.iter_mut().find(|(on, _)| *on == layer) {
+                    row.sheet_res_ohm_sq = sheet;
+                    row.tc = Some(tc);
+                }
+            }
+        }
+        let mut rows: HashMap<StrId, Row> = HashMap::new();
+        for &(id, rule) in &self.drc.rules {
+            rows.insert(id, self.drc_row(rule));
+        }
+        self.erc_rows(strings, &mut rows);
+        let mut order: Vec<StrId> = self
+            .provenance
+            .iter()
+            .map(|&(id, _)| id)
+            .filter(|id| rows.contains_key(id))
+            .collect();
+        // A rule no provenance lists (a deck edited by hand) follows, DRC
+        // first.
+        for (id, _) in self.rules() {
+            if !order.contains(&id) {
+                order.push(id);
+            }
+        }
+        source.rules = order
+            .into_iter()
+            .filter_map(|id| {
+                let row = rows.remove(&id)?;
+                Some(RuleSource {
+                    id: strings.resolve(id).to_owned(),
+                    kind: row.kind,
+                    layers: row.layers.into_iter().map(name).collect(),
+                    params: row
+                        .params
+                        .into_iter()
+                        .map(|(param, value)| {
+                            let value = match value {
+                                ParamSource::Value(ParamValue::Layer(layer)) => {
+                                    ParamSource::Layer(name(layer))
+                                }
+                                ParamSource::Value(ParamValue::Model(model)) => {
+                                    ParamSource::Model(strings.resolve(model).to_owned())
+                                }
+                                other => other,
+                            };
+                            (param, value)
+                        })
+                        .collect(),
+                })
+            })
+            .collect();
+        source
+    }
+
+    /// A DRC rule's row, in the parameter names `drc::RuleSet::from_deck`
+    /// reads.
+    fn drc_row(&self, rule: Rule) -> Row {
+        let one = |layer| Row::new(rule.kind(), &[layer]);
+        let two = |a, b| Row::new(rule.kind(), &[a, b]);
+        let bounded = |layer, boundary: Option<LayerId>| {
+            let mut layers = vec![layer];
+            layers.extend(boundary);
+            Row::new(rule.kind(), &layers)
+        };
+        match rule {
+            Rule::MinWidth { layer, limit }
+            | Rule::MaxWidth { layer, limit }
+            | Rule::MinEdgeLength { layer, limit }
+            | Rule::Notch { layer, limit }
+            | Rule::MinSpacing { layer, limit }
+            | Rule::CornerToCorner { layer, limit }
+            | Rule::EdgeMinLength { layer, limit } => one(layer).length("limit", limit),
+            Rule::CutSize {
+                layer,
+                width,
+                height,
+            } => one(layer).length("width", width).length("height", height),
+            Rule::MinSpacingDiff { a, b, limit } | Rule::Overlap { a, b, limit } => {
+                two(a, b).length("limit", limit)
+            }
+            Rule::EolSpacing {
+                layer,
+                eol_width,
+                limit,
+            } => one(layer)
+                .length("eol_width", eol_width)
+                .length("limit", limit),
+            Rule::PrlSpacing {
+                layer,
+                prl_threshold,
+                limit,
+            } => one(layer)
+                .length("prl_threshold", prl_threshold)
+                .length("limit", limit),
+            Rule::WideDependentSpacing {
+                layer,
+                width_threshold,
+                limit,
+            } => one(layer)
+                .length("width_threshold", width_threshold)
+                .length("limit", limit),
+            Rule::MinArea { layer, limit } | Rule::MinEnclosedArea { layer, limit } => {
+                one(layer).value("limit", ParamValue::Area(limit))
+            }
+            Rule::Cheesing {
+                layer,
+                max_unslotted,
+            } => one(layer).value("max_unslotted", ParamValue::Area(max_unslotted)),
+            Rule::Density {
+                layer,
+                boundary,
+                window,
+                step,
+                limit,
+                sense,
+            } => bounded(layer, boundary)
+                .length("window", window)
+                .length("step", step)
+                .number("limit", limit)
+                .value(
+                    "maximum",
+                    ParamValue::Flag(sense == crate::report::LimitSense::Maximum),
+                ),
+            Rule::GlobalDensity {
+                layer,
+                boundary,
+                limit,
+                sense,
+            } => bounded(layer, boundary).number("limit", limit).value(
+                "maximum",
+                ParamValue::Flag(sense == crate::report::LimitSense::Maximum),
+            ),
+            Rule::MinEnclosure {
+                outer,
+                inner,
+                limit,
+            } => two(outer, inner).length("limit", limit),
+            Rule::AsymmetricEnclosure {
+                outer,
+                inner,
+                min_one_side,
+            } => two(outer, inner).length("min_one_side", min_one_side),
+            Rule::MinExtension {
+                layer,
+                reference,
+                limit,
+            } => two(layer, reference).length("limit", limit),
+            Rule::MaxDistanceToTap { well, tap, limit } => two(well, tap).length("limit", limit),
+            Rule::OffGrid { pitch } => Row::new(rule.kind(), &[]).length("pitch", pitch),
+            Rule::Angle { layer, allowed } => {
+                let layers: Vec<LayerId> = layer.into_iter().collect();
+                let mut row = Row::new(rule.kind(), &layers);
+                for bit in 0..4u32 {
+                    if allowed & (1 << bit) != 0 {
+                        row = row.value("angle", ParamValue::Count(45 * bit));
+                    }
+                }
+                row
+            }
+            Rule::RedundantVia {
+                layer,
+                min_count,
+                within,
+            } => one(layer)
+                .value("min_count", ParamValue::Count(min_count.into()))
+                .length("within", within),
+            Rule::ViaArraySpacing {
+                layer,
+                array_threshold,
+                limit,
+            } => one(layer)
+                .value("array_threshold", ParamValue::Count(array_threshold.into()))
+                .length("limit", limit),
+            Rule::MultiPatterning {
+                layer,
+                colors,
+                color_spacing,
+            } => one(layer)
+                .value("colors", ParamValue::Count(colors.into()))
+                .length("color_spacing", color_spacing),
+            Rule::Forbidden { layer } => one(layer),
+            Rule::MustContain {
+                outer,
+                inner,
+                min_count,
+            } => two(outer, inner).value("min_count", ParamValue::Count(min_count)),
+            Rule::MustBeInside { inner, outer } => two(inner, outer),
+            Rule::NetSpacing {
+                layer,
+                same_net,
+                limit,
+            } => one(layer)
+                .value("same_net", ParamValue::Flag(same_net))
+                .length("limit", limit),
+            Rule::SpacingTable { layer, table } => {
+                let mut row = one(layer);
+                if let Some(table) = self.drc.tables.get(table as usize) {
+                    for (param, cells) in [
+                        ("prl", &table.prl),
+                        ("width", &table.width),
+                        ("space", &table.space),
+                    ] {
+                        for &cell in cells {
+                            row = row.length(param, cell);
+                        }
+                    }
+                }
+                row
+            }
+            Rule::AttachedWideSpacing {
+                layer,
+                width_threshold,
+                attached,
+                limit,
+            } => one(layer)
+                .length("width_threshold", width_threshold)
+                .length("attached", attached)
+                .length("limit", limit),
+            Rule::EdgeSpacing { a, b, limit } => {
+                let mut layers = vec![a];
+                layers.extend(b);
+                Row::new(rule.kind(), &layers).length("limit", limit)
+            }
+            Rule::EdgeEnclosure {
+                edges,
+                outer,
+                limit,
+            } => two(edges, outer).length("limit", limit),
+            Rule::Count {
+                layer,
+                limit,
+                sense,
+            } => one(layer)
+                .value("limit", ParamValue::Count(limit))
+                .value("maximum", ParamValue::Flag(sense == LimitSense::Maximum)),
+            Rule::AspectRatio { layer, limit } => one(layer).number("limit", limit),
+            Rule::TotalArea { layer, limit } => one(layer).value("limit", ParamValue::Area(limit)),
+            Rule::CutClass { layer, classes } => {
+                let mut row = one(layer);
+                for &(short, long) in self.drc.classes.get(classes as usize).into_iter().flatten() {
+                    row = row.length("width", short).length("height", long);
+                }
+                row
+            }
+            Rule::EdgeWidth { layer, limit } | Rule::EdgeFacingSpace { layer, limit } => {
+                one(layer).length("limit", limit)
+            }
+            Rule::RegionDensity {
+                layer,
+                region,
+                limit,
+                sense,
+            } => two(layer, region)
+                .number("limit", limit)
+                .value("maximum", ParamValue::Flag(sense == LimitSense::Maximum)),
+            Rule::AllowedWidth { layer, widths } => {
+                let mut row = one(layer);
+                for &width in self.drc.widths.get(widths as usize).into_iter().flatten() {
+                    row = row.length("width", width);
+                }
+                row
+            }
+            Rule::MinInteriorAngle { layer, limit } => {
+                let layers: Vec<LayerId> = layer.into_iter().collect();
+                Row::new(rule.kind(), &layers).number("limit", limit)
+            }
+            Rule::PolygonValidity { layer } => {
+                let layers: Vec<LayerId> = layer.into_iter().collect();
+                Row::new(rule.kind(), &layers)
+            }
+            Rule::MinStep {
+                layer,
+                limit,
+                kind,
+                length_sum,
+            } => {
+                let (name, value) = match kind {
+                    StepKind::MaxEdges(most) => ("max_edges", u32::from(most)),
+                    StepKind::OutsideCorner => ("corner", 0),
+                    StepKind::InsideCorner => ("corner", 1),
+                    StepKind::Step => ("corner", 2),
+                };
+                let mut row = one(layer)
+                    .length("limit", limit)
+                    .value(name, ParamValue::Count(value));
+                if let Some(sum) = length_sum {
+                    row = row.length("length_sum", sum);
+                }
+                row
+            }
+        }
+    }
+
+    /// Every ERC row, in the parameter names `erc::RuleSet::from_deck` reads.
+    #[allow(clippy::too_many_lines, reason = "one arm per table")]
+    fn erc_rows(&self, strings: &StrTable, rows: &mut HashMap<StrId, Row>) {
+        let erc = &self.erc;
+        let span = |start: &[u32], row: usize| start[row] as usize..start[row + 1] as usize;
+        let model = |id: StrId| ParamSource::Model(strings.resolve(id).to_owned());
+        let mut file = |head: &crate::erc::ruleset::RuleHead, row: usize, mut filed: Row| {
+            if head.severity[row] == Severity::Warning {
+                filed = filed.value("warning", ParamValue::Flag(true));
+            }
+            rows.insert(head.rule[row], filed);
+        };
+        let t = &erc.antenna;
+        for r in 0..t.head.len() {
+            let collectors = span(&t.collector_start, r);
+            let mut layers = vec![t.gate[r]];
+            layers.extend_from_slice(&t.collector[collectors.clone()]);
+            let mut row = Row::new("antenna", &layers).number("max_ratio", t.max_ratio[r]);
+            if let Some(&AntennaMeasure::Sidewall { thickness }) =
+                t.collector_measure.get(collectors.start)
+            {
+                row = row.length("sidewall_thickness", thickness);
+            }
+            if let Some(diode) = t.diode[r] {
+                row = row.value("diode_layer", ParamValue::Layer(diode));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.antenna_electrical;
+        for r in 0..t.head.len() {
+            let mut layers = vec![t.gate[r]];
+            layers.extend_from_slice(&t.collector[span(&t.collector_start, r)]);
+            let mut row =
+                Row::new("antenna_electrical", &layers).number("max_ratio", t.max_ratio[r]);
+            if let Some(diode) = t.diode[r] {
+                row = row.value("diode_layer", ParamValue::Layer(diode));
+            }
+            row = row
+                .number("diode_credit", t.diode_credit[r])
+                .number("diode_bonus", t.diode_bonus[r]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.density_cmp;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("density_cmp", &[t.layer[r]])
+                .length("window_x", t.window[r].0)
+                .length("window_y", t.window[r].1)
+                .length("step_x", t.step[r].0)
+                .length("step_y", t.step[r].1);
+            for (param, bound) in [
+                ("min_density", t.min_density[r]),
+                ("max_density", t.max_density[r]),
+                ("max_neighbour_delta", t.max_neighbour_delta[r]),
+            ] {
+                if let Some(bound) = bound {
+                    row = row.number(param, bound);
+                }
+            }
+            row = row.value(
+                "include_partial_windows",
+                ParamValue::Flag(t.include_partial_windows[r]),
+            );
+            if let Some(cmp) = t.cmp[r] {
+                row = row
+                    .number("cmp_target_density", cmp.target_density)
+                    .length("cmp_thickness_sensitivity", cmp.thickness_sensitivity)
+                    .length("cmp_max_abs_thickness_delta", cmp.max_abs_thickness_delta);
+            }
+            file(&t.head, r, row);
+        }
+        for r in 0..erc.domain_crossing.head.len() {
+            file(
+                &erc.domain_crossing.head,
+                r,
+                Row::new("domain_crossing", &[]),
+            );
+        }
+        for (kind, t) in [
+            ("drain_source", &erc.drain_source),
+            ("gate_oxide", &erc.gate_oxide),
+        ] {
+            for r in 0..t.head.len() {
+                let mut row = Row::new(kind, &[]);
+                for &id in &t.model[span(&t.model_start, r)] {
+                    row.params.push(("model", model(id)));
+                }
+                file(
+                    &t.head,
+                    r,
+                    row.number("max_voltage", t.max_voltage[r].raw()),
+                );
+            }
+        }
+        let t = &erc.electromigration;
+        for r in 0..t.head.len() {
+            let layers = span(&t.layer_start, r);
+            let first = layers.start;
+            let row = Row::new("electromigration", &t.layer[layers])
+                .number("max_density", t.max_density[first].raw())
+                .number("max_current_per_cut", t.max_current_per_cut[first].raw())
+                .number("blech_limit", t.blech_limit[first].raw())
+                .number("reference_temperature", t.reference_temperature[r].raw())
+                .number("activation_energy_ev", t.activation_energy_ev[r])
+                .number("current_exponent", t.current_exponent[r]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.em_current_density;
+        for r in 0..t.head.len() {
+            let layers = span(&t.layer_start, r);
+            let first = layers.start;
+            let row = Row::new("em_current_density", &t.layer[layers])
+                .number("max_density", t.max_density[first].raw())
+                .number("max_current_per_cut", t.max_current_per_cut[first].raw());
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_latchup;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_latchup", &[t.pad[r], t.guard_ring[r]])
+                .length("min_guard_ring_width", t.min_guard_ring_width[r])
+                .length("max_tap_distance", t.max_tap_distance[r]);
+            for &id in &t.clamp[span(&t.clamp_start, r)] {
+                row.params.push(("clamp", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_topological;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_topological", &[t.pad[r]]);
+            for &id in &t.clamp[span(&t.clamp_start, r)] {
+                row.params.push(("clamp", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.floating_gate;
+        for r in 0..t.head.len() {
+            let row = Row::new("floating_gate", &[])
+                .value("labels_are_ports", ParamValue::Flag(t.labels_are_ports[r]));
+            file(&t.head, r, row);
+        }
+        let t = &erc.floating_well;
+        for r in 0..t.head.len() {
+            file(
+                &t.head,
+                r,
+                Row::new("floating_well", &[t.well[r], t.tap[r]]),
+            );
+        }
+        let t = &erc.hv_domain;
+        for r in 0..t.head.len() {
+            let mut row =
+                Row::new("hv_domain", &[]).number("max_domain_delta", t.max_domain_delta[r].raw());
+            if let Some(isolation) = t.isolation[r] {
+                row = row.value("isolation", ParamValue::Layer(isolation));
+            }
+            file(&t.head, r, row);
+        }
+        for r in 0..erc.ir_drop.head.len() {
+            file(&erc.ir_drop.head, r, Row::new("ir_drop", &[]));
+        }
+        let t = &erc.missing_level_shifter;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("missing_level_shifter", &[]);
+            for &id in &t.shifter[span(&t.shifter_start, r)] {
+                row.params.push(("shifter", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.missing_tie;
+        for r in 0..t.head.len() {
+            let row = Row::new("missing_tie", &[t.region[r], t.tap[r]])
+                .length("max_distance", t.max_distance[r]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.multiple_drivers;
+        for r in 0..t.head.len() {
+            let row = Row::new("multiple_drivers", &[])
+                .value("max_drivers", ParamValue::Count(t.max_drivers[r]));
+            file(&t.head, r, row);
+        }
+        let t = &erc.p2p_resistance;
+        for r in 0..t.head.len() {
+            let row =
+                Row::new("p2p_resistance", &[]).number("max_resistance", t.max_resistance[r].raw());
+            file(&t.head, r, row);
+        }
+        let t = &erc.reliability;
+        for r in 0..t.head.len() {
+            let row = Row::new("reliability", &[])
+                .number("required_lifetime_hours", t.required_lifetime_hours[r])
+                .number("reference_lifetime_hours", t.reference_lifetime_hours[r])
+                .number("reference_stress", t.reference_stress[r].raw())
+                .number("stress_exponent", t.stress_exponent[r])
+                .number("reference_temperature", t.reference_temperature[r].raw())
+                .number("activation_energy_ev", t.activation_energy_ev[r])
+                .number("max_abs_voltage", t.max_abs_voltage[r].raw())
+                .number("duty_cycle", t.duty_cycle[r]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.soft_connection;
+        for r in 0..t.head.len() {
+            let row = Row::new("soft_connection", &t.soft[span(&t.soft_start, r)]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.supply_short;
+        for r in 0..t.head.len() {
+            let mut layers = vec![t.tap_a[r], t.tap_b[r]];
+            layers.extend(t.within[r]);
+            file(&t.head, r, Row::new("supply_short", &layers));
+        }
+        for r in 0..erc.tie_high_low.head.len() {
+            file(&erc.tie_high_low.head, r, Row::new("tie_high_low", &[]));
+        }
+        let t = &erc.unconnected_pin;
+        for r in 0..t.head.len() {
+            let row = Row::new("unconnected_pin", &t.layer[span(&t.layer_start, r)]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.well_bias;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("well_bias", &[]);
+            for &id in &t.pmos[span(&t.pmos_start, r)] {
+                row.params.push(("pmos", model(id)));
+            }
+            for &id in &t.nmos[span(&t.nmos_start, r)] {
+                row.params.push(("nmos", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+    }
+}

@@ -34,7 +34,7 @@ use gpurify_ingest::StrId;
 /// with no ESD diode, is not checked, and neither is a device whose measured
 /// terminals sit on such nets. The shipped decks state the operating
 /// voltages the PDKs document, not an absolute maximum rating.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ModelLimitTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -70,7 +70,7 @@ pub struct ModelLimitTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct WellBiasTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -110,7 +110,7 @@ pub struct WellBiasTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MissingLevelShifterTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -143,7 +143,7 @@ pub struct MissingLevelShifterTable {
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DomainCrossingTable {
     /// Rule id and severity per row. Rows differ only in id and severity.
     pub head: RuleHead,

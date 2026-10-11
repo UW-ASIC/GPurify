@@ -54,7 +54,7 @@ use gpurify_ingest::StrId;
 /// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
 /// [JS-001]: https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf
 /// [JESD78]: https://www.jedec.org/standards-documents/docs/jesd-78b
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct P2pResistanceTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -97,7 +97,7 @@ pub struct P2pResistanceTable {
 /// [usage.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md#design-intent
 /// [OpenROAD psm]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
 /// [Weste & Harris]: https://pages.hmc.edu/harris/cmosvlsi/4e/cmosvlsidesign_4e_fm.pdf
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct IrDropTable {
     /// Rule id and severity per row. Rows differ only in id and severity: the
     /// limits come from the intent.
@@ -139,7 +139,7 @@ pub struct IrDropTable {
 /// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
 /// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
 /// [ESDA TR22]: https://www.esda.org/store/standards/product/72/esd-tr22-0-01-14
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct EmCurrentDensityTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -199,7 +199,7 @@ pub struct EmCurrentDensityTable {
 /// [Black 1969]: https://doi.org/10.1109/T-ED.1969.16754
 /// [Blech 1976]: https://doi.org/10.1063/1.322842
 /// [JEP122]: https://www.jedec.org/standards-documents/docs/jep-122e
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ElectromigrationTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
