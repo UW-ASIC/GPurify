@@ -120,7 +120,7 @@ pub const MAX_HIERARCHY_DEPTH: u32 = 1024;
 
 /// The most polygons a layout may flatten to.
 ///
-/// GPurify checks a flat copy of the layout, so a 32767 × 32767 array of a
+/// `GPurify` checks a flat copy of the layout, so a 32767 × 32767 array of a
 /// cell is about 10⁹ polygons per shape in it: hours of expansion and more
 /// memory than any machine, before the polygon ids (`u32`) overflow. The count
 /// is taken from the hierarchy first, and a layout over the cap is refused

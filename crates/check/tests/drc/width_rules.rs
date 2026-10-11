@@ -625,7 +625,7 @@ fn diagonal_neck() -> gpurify_geom::GeometryStore {
     layout.finish().0
 }
 
-/// Oracle: KLayout's Euclidean width, which flags this neck (sky130A_mr.drc
+/// Oracle: `KLayout`'s Euclidean width, which flags this neck (`sky130A_mr.drc`
 /// m1.1 at 140 nm). 134² < 18100 < 135², so a limit of 135 reports the one
 /// merged figure at 134 and a limit of 134 is clean.
 #[test]

@@ -83,7 +83,7 @@ pub fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut 
 }
 
 #[cfg(test)]
-#[expect(
+#[allow(
     clippy::float_cmp,
     reason = "the fold order is interface, so these assert bits, not closeness"
 )]

@@ -160,7 +160,7 @@ fn liberty_spec() {
 /// replay hook: it must exist and hold an input, or this would pass on a
 /// missing path. Its first input is a seed, not a crasher: a `min_spacing`
 /// case (index `0x0001_0005`, two cells of one row) under symmetry 3, moved by
-/// (0x1234_5678, -0x1000_0000).
+/// (`0x1234_5678`, `-0x1000_0000`).
 ///
 /// Oracle: `oracles::drc_e2e`: the bitmap reference, written from each rule's
 /// rustdoc.

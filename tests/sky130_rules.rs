@@ -344,7 +344,7 @@ fn ihp_cnt_h_metal1_covers_cont() {
     at_limit_in(IHP, "Cnt.h", &pass, &fail);
 }
 
-/// capm.4: a via3 on the MiM top plate is enclosed by capm by 0.140 um. The
+/// capm.4: a via3 on the MIM top plate is enclosed by capm by 0.140 um. The
 /// pass layout also carries a plain met3-met4 via3 with no capm over it, which
 /// the rule must leave alone.
 ///
@@ -401,7 +401,7 @@ fn cap2m_4_cap2m_encloses_via4_on_the_plate_by_200nm() {
 }
 
 /// m1.1 on the field report's repro (`neck.gds`): two 300 nm met1 squares
-/// overlapping at a corner leave a 134.5 nm diagonal neck. KLayout reports it
+/// overlapping at a corner leave a 134.5 nm diagonal neck. `KLayout` reports it
 /// as two edge pairs; here it is one violation on the one merged figure.
 ///
 /// Oracle: foundry example, sky130 m1.1 (0.14 um), by hand: the concave corners
@@ -419,7 +419,7 @@ fn m1_1_diagonal_neck_at_overlapping_rectangles() {
     assert_eq!(run(SKY130, "m1.1", &wider).0, 0);
 }
 
-/// Oracle: SkyWater's Table Ig (S8PIR-10R), the antenna table for sky130A's
+/// Oracle: `SkyWater`'s Table Ig (S8PIR-10R), the antenna table for sky130A's
 /// five-metal flow, row by row: `MAX_EGAR` without a diode, and `FLT`, the film
 /// thickness the sidewall area is defined with. The deck once took met3 from
 /// Table Ic (the three-metal S8TM flow, FLT 2.0 um) and met4/met5 from Magic's
