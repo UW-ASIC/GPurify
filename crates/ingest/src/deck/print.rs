@@ -211,6 +211,8 @@ impl Printer<'_> {
         // between two derived layers is written there, with every rule
         // before it, so each layer keeps its id.
         let mut written = 0;
+        // The stages headed so far.
+        let mut stage = 0;
         for row in &source.derived {
             if row.name.contains('#') {
                 continue;
@@ -232,12 +234,18 @@ impl Printer<'_> {
                 )));
             };
             for rule in &source.rules[written..=written + at] {
+                self.staged(rule, &mut stage, &mut out)?;
                 let _ = writeln!(out, "{}", self.rule(rule)?);
             }
             written += at + 1;
         }
         for rule in &source.rules[written..] {
+            self.staged(rule, &mut stage, &mut out)?;
             let _ = writeln!(out, "{}", self.rule(rule)?);
+        }
+        // Stages no rule is in, after the last rule.
+        for (name, _) in source.stages.iter().skip(stage) {
+            let _ = writeln!(out, "stage {name}");
         }
         if let Some((operating, nominal)) = source.temperature {
             let _ = writeln!(
@@ -297,6 +305,35 @@ impl Printer<'_> {
             out.push('\n');
         }
         Ok(out)
+    }
+
+    /// Heads `rule` with the `stage` lines up to its own, the last stage for a
+    /// rule no stage lists; `stage` counts the stages headed so far.
+    fn staged(
+        &self,
+        rule: &RuleSource,
+        stage: &mut usize,
+        out: &mut String,
+    ) -> Result<(), PrintError> {
+        let stages = &self.source.stages;
+        if stages.is_empty() {
+            return Ok(());
+        }
+        let own = stages
+            .iter()
+            .position(|(_, ids)| ids.contains(&rule.id))
+            .unwrap_or(stages.len() - 1);
+        if own + 1 < *stage {
+            return Err(PrintError::Unprintable(format!(
+                "rule {} is in stage {}, which an earlier rule's stage follows",
+                rule.id, stages[own].0
+            )));
+        }
+        while *stage <= own {
+            let _ = writeln!(out, "stage {}", stages[*stage].0);
+            *stage += 1;
+        }
+        Ok(())
     }
 
     fn connectivity(&self, out: &mut String) {

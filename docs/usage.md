@@ -41,7 +41,9 @@ it examined:
 
 - **ran**: the rule looked at your layout. Its violations are listed.
 - **skipped**: the rule could not run, and the reason is given: the layer it
-  names holds no geometry, or it needs design intent you did not supply.
+  names holds no geometry, it needs design intent you did not supply, or the
+  deck is staged and an earlier stage found errors (see
+  [deck.md](deck.md#stages)).
 - **refused**: the input is outside what the rule can decide correctly, for
   example a 45° shape on a rectilinear check. GPurify will not guess.
 

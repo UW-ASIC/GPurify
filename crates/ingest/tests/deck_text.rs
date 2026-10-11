@@ -2065,3 +2065,39 @@ fn a_corner_line_varies_the_nominal_pex_rows() {
         Ok(_) => panic!("a corner on a layer with no pex row was accepted"),
     }
 }
+
+/// FLOW-002: `stage` lines put the rules written after them in stages, in
+/// order, `for` loops included; a deck without one is not staged. A staged
+/// deck puts every rule in a stage and writes each stage once.
+#[test]
+fn stage_lines_put_every_rule_in_a_stage() {
+    let (deck, strings) = ok("stage gross\n\
+         rule a width(met1) >= 140nm\n\
+         stage fine\n\
+         for m in [met2, met3] {\n    rule {m}.w width(m) >= 140nm\n}\n\
+         rule b space(met1) >= 140nm\n");
+    let names: Vec<&str> = deck
+        .stages
+        .name
+        .iter()
+        .map(|&name| strings.resolve(name))
+        .collect();
+    assert_eq!(names, ["gross", "fine"]);
+    let of_rule: Vec<(&str, u16)> = (deck.stages.of_rule.iter())
+        .map(|&(id, stage)| (strings.resolve(id), stage))
+        .collect();
+    assert_eq!(of_rule, [("a", 0), ("met2.w", 1), ("met3.w", 1), ("b", 1)]);
+    for spec in &deck.rules.spec {
+        assert!(deck.stages.of(spec.id).is_some(), "every rule is in a stage");
+    }
+    let (plain, _) = ok("rule a width(met1) >= 140nm\n");
+    assert_eq!(plain.stages, gpurify_ingest::deck::Stages::default());
+    one_error(
+        "rule a width(met1) >= 140nm\nstage late\n",
+        "1 rules come before the first `stage` line",
+    );
+    one_error(
+        "stage one\nrule a width(met1) >= 140nm\nstage two\nstage one\n",
+        "stage `one` is already stated",
+    );
+}

@@ -112,6 +112,7 @@ fn skip_reason(reason: SkipReason) -> &'static str {
         SkipReason::NoDesignIntent => "no design intent was supplied",
         SkipReason::NotInDeck => "the deck does not configure this rule",
         SkipReason::EmptyLayer => "the layer it names holds no geometry",
+        SkipReason::EarlierStage => "an earlier stage of the deck found errors; fix those first",
     }
 }
 

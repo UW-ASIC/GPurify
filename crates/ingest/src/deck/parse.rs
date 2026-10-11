@@ -471,11 +471,12 @@ impl<'a> Parser<'a> {
             "temperature" => self.temperature(span),
             "extraction" => self.extraction(span),
             "corner" => self.corner(),
+            "stage" => self.stage(span),
             "ignore" => self.ignore(),
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs, extraction or corner"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs, extraction, corner or stage"),
             )),
         }
     }
@@ -1813,6 +1814,45 @@ impl<'a> Parser<'a> {
             layers,
             params,
         });
+        // The last `stage` line's; a rule before the first one is refused there.
+        if let Some((_, rules)) = self.out.stages.last_mut() {
+            rules.push(
+                self.out
+                    .rules
+                    .last()
+                    .map(|rule| rule.id.clone())
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(())
+    }
+
+    /// `stage <name>`: the rules written after this line, up to the next
+    /// `stage` line, are one stage of a staged run ([`super::Stages`]). A
+    /// staged deck puts every rule in a stage, and writes each stage's rules
+    /// together.
+    fn stage(&mut self, span: (u32, u32)) -> R<()> {
+        let (name, at) = self.ident("a stage name")?;
+        if self.out.stages.iter().any(|(stated, _)| *stated == name) {
+            return Err(self.err(
+                at,
+                &format!("stage `{name}` is already stated; a stage's rules are written together"),
+            ));
+        }
+        if self.out.stages.is_empty() && !self.out.rules.is_empty() {
+            return Err(self.err(
+                span,
+                &format!(
+                    "{} rules come before the first `stage` line; every rule of a staged \
+                     deck belongs to a stage",
+                    self.out.rules.len()
+                ),
+            ));
+        }
+        if self.out.stages.len() >= usize::from(u16::MAX) {
+            return Err(self.err(at, "too many stages"));
+        }
+        self.out.stages.push((name, Vec::new()));
         Ok(())
     }
 

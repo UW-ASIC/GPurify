@@ -11,7 +11,7 @@ use super::kinds::EDGE_KINDS;
 use super::{build_lvs, LvsSrc};
 use super::{
     Connectivity, Deck, DeckError, DerivedOp, DeviceKind, DeviceRecognition, DeviceValue,
-    Extraction, LayerTable, ParamValue, ProcessCorner, ProcessStack, RuleSpec, RuleTable,
+    Extraction, LayerTable, ParamValue, ProcessCorner, ProcessStack, RuleSpec, RuleTable, Stages,
     TemperatureLaw,
 };
 use crate::narrow;
@@ -51,6 +51,9 @@ pub struct DeckSource {
     pub extraction: Option<Extraction>,
     /// The `corner` lines, in deck order.
     pub corners: Vec<CornerSource>,
+    /// The `stage` lines, in deck order, each with the ids of the rules
+    /// written after it. Empty: the deck is not staged.
+    pub stages: Vec<(String, Vec<String>)>,
 }
 
 /// One `corner` line: `corner <corner> <layer> <key> <value> ..`.
@@ -323,6 +326,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         &layers,
         strings,
     )?;
+    let stages = build_stages(&doc.stages, &doc.rules, strings)?;
     let lvs = build_lvs(&doc.lvs, &doc.devices, strings)?;
     let temperature_law = match doc.temperature {
         None => None,
@@ -358,7 +362,46 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         lvs,
         extraction: doc.extraction.unwrap_or_default(),
         corners,
+        stages,
     })
+}
+
+/// The stages, each rule id resolved to its stage.
+///
+/// # Errors
+///
+/// [`DeckError::Malformed`] for a stage named twice, a rule listed in two
+/// stages or in one twice, and an id no rule has.
+fn build_stages(
+    declared: &[(String, Vec<String>)],
+    rules: &[RuleSource],
+    strings: &mut StrTable,
+) -> Result<Stages, DeckError> {
+    let mut stages = Stages::default();
+    let mut seen: Vec<&str> = Vec::new();
+    for (at, (name, ids)) in declared.iter().enumerate() {
+        if declared[..at].iter().any(|(earlier, _)| earlier == name) {
+            return Err(DeckError::Malformed(format!(
+                "stage {name} is stated twice"
+            )));
+        }
+        let stage = u16::try_from(at)
+            .map_err(|_| DeckError::Malformed("a deck has at most 65535 stages".to_owned()))?;
+        stages.name.push(strings.intern(name));
+        for id in ids {
+            if seen.contains(&id.as_str()) {
+                return Err(DeckError::Malformed(format!(
+                    "stage {name}: rule {id} is already in a stage"
+                )));
+            }
+            if !rules.iter().any(|rule| rule.id == *id) {
+                return Err(DeckError::Malformed(format!("stage {name}: no rule {id}")));
+            }
+            seen.push(id);
+            stages.of_rule.push((strings.intern(id), stage));
+        }
+    }
+    Ok(stages)
 }
 
 /// A layer by name, or the error naming the statement that used it.

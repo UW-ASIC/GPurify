@@ -626,6 +626,9 @@ pub struct DeckBuilder<'s> {
     extraction: Option<gpurify_ingest::deck::Extraction>,
     /// The base deck's `corner` lines, kept as they are.
     corners: Vec<gpurify_ingest::deck::CornerSource>,
+    /// The base deck's stages, each with its rules' ids; a rule added here is
+    /// in the last stage.
+    stages: Vec<(String, Vec<String>)>,
     rules: Vec<Slot>,
     added: BTreeMap<String, RuleRow>,
     /// The base deck's provenance, by id.
@@ -673,6 +676,7 @@ impl<'s> DeckBuilder<'s> {
             lvs: LvsSrc::default(),
             extraction: None,
             corners: Vec::new(),
+            stages: Vec::new(),
             rules: Vec::new(),
             added: BTreeMap::new(),
             base_origin: HashMap::new(),
@@ -743,6 +747,7 @@ impl<'s> DeckBuilder<'s> {
             lvs: source.lvs,
             extraction: source.extraction,
             corners: source.corners,
+            stages: source.stages,
             rules: source.rules.into_iter().map(Slot::Kept).collect(),
             added: BTreeMap::new(),
             custom,
@@ -1379,6 +1384,11 @@ impl<'s> DeckBuilder<'s> {
                 row
             })
             .collect();
+        // A removed rule leaves its stage.
+        let mut stages = self.stages;
+        for (_, ids) in &mut stages {
+            ids.retain(|id| rules.iter().any(|rule: &RuleSource| rule.id == *id));
+        }
         let source = DeckSource {
             layers: self.drawn,
             ignored: self.ignored,
@@ -1392,6 +1402,7 @@ impl<'s> DeckBuilder<'s> {
             lvs: self.lvs,
             extraction: self.extraction,
             corners: self.corners,
+            stages,
         };
         let deck = lower(&source, self.strings).map_err(CompileError::from)?;
         let mut compiled = CompiledDeck::from_deck(deck, self.grid, self.strings)?;
