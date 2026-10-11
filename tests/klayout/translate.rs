@@ -1313,6 +1313,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     vec![name],
                 )
             }
+            Rule::SpanLength { .. } => (
+                "span_length",
+                Verdict::None("KLayout measures widths between edges, not the set of a shape's chords"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::EolKeepOut { .. } => (
                 "eol_keep_out",
                 Verdict::None("KLayout has no end-of-line keep-out box"),

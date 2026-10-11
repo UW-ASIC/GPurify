@@ -5,10 +5,12 @@
 //! the scan shows.
 
 use crate::common::{A, RULE};
-use gpurify_check::drc::ruleset::{ClassTable, EolParallel};
-use gpurify_check::drc::{Rule, RuleSet};
+use gpurify_check::drc::ruleset::{ClassTable, EolParallel, SpanTable};
+use gpurify_check::drc::{DrcError, Rule, RuleSet};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
-use gpurify_geom::{Dbu, DbuArea, GeometryStore};
+use gpurify_geom::{Dbu, DbuArea, GeometryStore, Grid};
+use gpurify_ingest::deck::parse_deck;
+use gpurify_ingest::StrTable;
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{assert_rule_ran, dbu, point};
 
@@ -552,6 +554,174 @@ fn a_thin_tab_of_a_wide_plate_is_held_as_thin() {
 
     assert!(out.is_empty());
     assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
+}
+
+// ---------------------------------------------------------------- span_length
+
+/// LEF 5.8's METAL2 span tables: horizontal spans 60, 80, 120, 160 or at
+/// least 200; vertical spans 120, 160 or at least 200.
+fn lef_spans() -> Rule {
+    Rule::SpanLength { layer: A, table: 0 }
+}
+
+fn run_spans(store: &GeometryStore) -> (Violations, Vec<RuleRun>) {
+    let set = RuleSet {
+        rules: vec![(RULE, lef_spans())],
+        span_tables: vec![SpanTable {
+            x: [60, 80, 120, 160, 200].into_iter().map(dbu).collect(),
+            y: [120, 160, 200].into_iter().map(dbu).collect(),
+        }],
+        ..RuleSet::default()
+    };
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    set.run(store, &mut out, &mut runs);
+    (out, runs)
+}
+
+/// Oracle: `LEF58_SPANLENGTHTABLE`, "all of the given span lengths are exact
+/// values, except for the last one, which is greater than equal to the
+/// value". A vertical wire 61 wide is between 60 and 80 and reports 80 as
+/// the shortest legal span above it, at the wire's centre; 59 reports 60;
+/// 60 and 201 are legal.
+#[test]
+fn a_span_is_legal_exactly_on_the_list_or_past_its_last() {
+    let wire = |w: i64| layout(&[[0, 0, w, 1000]]);
+    let (out, runs) = run_spans(&wire(61));
+    assert_eq!(out.measured, [len(61)]);
+    assert_eq!(out.limit, [len(80)]);
+    assert_eq!(out.at, [point(30, 500)]);
+    assert_eq!(
+        assert_rule_ran(&runs, RULE).examined,
+        2,
+        "one chord each way"
+    );
+
+    assert_eq!(run_spans(&wire(59)).0.limit, [len(60)]);
+    assert!(run_spans(&wire(60)).0.is_empty());
+    assert!(run_spans(&wire(201)).0.is_empty());
+}
+
+/// Oracle: construct-from-answer. A U whose right arm steps from 100 to 150
+/// wide: the left arm's 100 is one region from y = 100 to 1000 though the
+/// step splits the lines at y = 500, and the base's 100 one region from
+/// x = 100 to 900 though the step splits it at x = 850. Four findings over
+/// the eight regions of unchanged chord.
+#[test]
+fn a_chord_that_stays_the_same_is_one_region() {
+    let store = layout(&[
+        [0, 0, 1000, 100],
+        [0, 0, 100, 1000],
+        [900, 0, 1000, 500],
+        [850, 500, 1000, 1000],
+    ]);
+    let (out, runs) = run_spans(&store);
+
+    let mut found: Vec<_> = out
+        .at
+        .iter()
+        .zip(&out.measured)
+        .map(|(at, measured)| (at.x.raw(), at.y.raw(), *measured))
+        .collect();
+    found.sort_by_key(|&(x, y, _)| (x, y));
+    assert_eq!(
+        found,
+        [
+            (50, 550, len(100)),
+            (500, 50, len(100)),
+            (925, 750, len(150)),
+            (950, 300, len(100)),
+        ]
+    );
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 8);
+}
+
+// ---------------------------------------------------------------- the deck
+
+/// Oracle: construct-from-answer, the deck language (`docs/deck.md`). Each
+/// new kind's deck row builds exactly the rule its parameters spell, with
+/// optional parameters given and left out.
+#[test]
+fn the_deck_spells_each_kind_s_parameters() {
+    let text = "grid 1nm\nlayer met1 = gds(68, 20)\n\
+        rule e eol_space(met1; eol_width: 1300nm, within: 600nm, \
+        parallel: (space: 1100nm, within: 500nm, two_edges: true), end_to_end: 1400nm) >= 1200nm\n\
+        rule p eol_space(met1; eol_width: 1300nm, within: 0nm, parallel: none, end_to_end: none) >= 1200nm\n\
+        rule k eol_keep_out(met1; eol_width: 1300nm, backward: 0nm, side: 300nm, forward: 1000nm)\n\
+        rule f forbidden_space(met1; min: 100nm, max: 150nm, prl: 0nm)\n\
+        rule s span_length(met1; x: [60nm, 200nm], y: [120nm])\n";
+    let mut strings = StrTable::default();
+    let deck =
+        parse_deck(text, Grid::new(1000).expect("a 1 nm grid"), &mut strings).expect("parses");
+    let set = RuleSet::from_deck(&deck, &strings).expect("builds");
+
+    let rules: Vec<Rule> = set.rules.iter().map(|&(_, rule)| rule).collect();
+    assert_eq!(
+        rules,
+        [
+            Rule::EolWithinSpacing {
+                layer: A,
+                eol_width: dbu(1300),
+                within: dbu(600),
+                parallel: parallel_edge(true),
+                end_to_end: Some(dbu(1400)),
+                limit: dbu(1200),
+            },
+            Rule::EolWithinSpacing {
+                layer: A,
+                eol_width: dbu(1300),
+                within: dbu(0),
+                parallel: None,
+                end_to_end: None,
+                limit: dbu(1200),
+            },
+            Rule::EolKeepOut {
+                layer: A,
+                eol_width: dbu(1300),
+                backward: dbu(0),
+                side: dbu(300),
+                forward: dbu(1000),
+            },
+            Rule::ForbiddenSpacing {
+                layer: A,
+                min: dbu(100),
+                max: dbu(150),
+                prl: dbu(0),
+            },
+            lef_spans(),
+        ]
+    );
+    assert_eq!(
+        set.span_tables,
+        [SpanTable {
+            x: vec![dbu(60), dbu(200)],
+            y: vec![dbu(120)],
+        }]
+    );
+}
+
+/// Oracle: the kinds' contracts. A tip table that is not symmetric, a
+/// forbidden range that ends before it starts, a two-width table whose first
+/// width states a run, and a span list that does not rise are each refused
+/// when the rules are built, never run.
+#[test]
+fn malformed_tables_and_ranges_are_refused_at_load() {
+    for rule in [
+        "tip_space_table(met1; length: [0nm, 24nm], space: [[31nm, 25nm], [27nm, 18nm]])",
+        "forbidden_space(met1; min: 150nm, max: 100nm, prl: 0nm)",
+        "two_width_table(met1; width: [0nm, 250nm], prl: [0nm, 0nm], \
+         space: [[150nm, 200nm], [200nm, 250nm]])",
+        "span_length(met1; x: [120nm, 120nm], y: [60nm])",
+    ] {
+        let mut strings = StrTable::default();
+        let text = format!("grid 1nm\nlayer met1 = gds(68, 20)\nrule t {rule}\n");
+        let deck =
+            parse_deck(&text, Grid::new(1000).expect("a 1 nm grid"), &mut strings).expect("parses");
+        assert_eq!(
+            RuleSet::from_deck(&deck, &strings).unwrap_err(),
+            DrcError::BadTable("t".into()),
+            "{rule}"
+        );
+    }
 }
 
 /// Oracle: the kind's contract. A layer the rule cannot represent exactly

@@ -1112,6 +1112,18 @@ W(r).separation(W(c), s, euclidian, transparent[, projection_limits(...)])  # ot
   run cases it prints; SE), the widths and a run swept one step either side, a thin tab of a wide
   plate, hand-derived under the square's symmetries (SY, MR).
 
+### 41. span_length — NONE: KLayout has no span measure
+
+**GPurify** (`facing.rs` `span_length`, `chords`): the chords horizontal and vertical lines cut
+from each merged figure, read slab by slab between the figure's vertex coordinates; one finding per
+maximal region of an unchanged illegal chord.
+
+**KLayout.** Not mirrored: `width` with `projection` reports edge pairs closer than a limit, not
+the set of chord lengths a span list judges, and a legal set of exact values with an open last one
+has no KLayout check. The oracles: LEF 5.8's own span tables (`SPANLENGTHTABLE 0.06 0.08 0.12 0.16
+0.20` and `WRONGDIRECTION 0.12 0.16 0.20`), every listed value one step either side (SE), an L, a
+ring and a shape drawn in pieces, hand-derived under the square's symmetries (SY, MR).
+
 ### 39. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
 
 **GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 38) owns a box, the end widened
@@ -1170,7 +1182,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 40, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 41, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest
@@ -1205,6 +1217,8 @@ KLayout, but only by positive overlap in GPurify.
 - **eol_within_spacing.** Reported as not mirrored. The oracles are the LEF 5.8 worked example and
   hand-derived fixtures (rule 38).
 - **eol_keep_out.** Reported as not mirrored. The oracle is hand-derived fixtures (rule 39).
+- **span_length.** Reported as not mirrored. The oracles are LEF's own span tables and hand-derived
+  fixtures (rule 41).
 - **net_spacing on a deck without `touch_within_layer`.** The oracle is construct-from-answer
   tests with planted nets.
 

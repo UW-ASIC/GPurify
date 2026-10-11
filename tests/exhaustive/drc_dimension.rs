@@ -75,6 +75,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         two_width_spacing_table(depth),
         tip_spacing_table(depth),
         forbidden_spacing(depth),
+        span_length(depth),
         min_area(depth),
         min_enclosed_area(depth),
         off_grid(depth),
@@ -3243,6 +3244,93 @@ fn forbidden_spacing(depth: Depth) -> Vec<Fixture> {
     );
     let mut out = every_placement(cases);
     out.push(vacuous("forbidden_spacing", &["DRC-033"], RULE, &["f"]));
+    out
+}
+
+// ---------------------------------------------------------------- span_length
+
+/// LEF/DEF 5.8's span tables for its vertical METAL2 (`SPANLENGTHTABLE 0.06
+/// 0.08 0.12 0.16 0.20 ;` and `SPANLENGTHTABLE 0.12 0.16 0.20 WRONGDIRECTION
+/// ;`): horizontal spans, a vertical wire's width, on the first; vertical
+/// spans, parallel to the layer's direction, on the wrong-direction one.
+const SPANS: &str =
+    "rule s span_length(met1; x: [60nm, 80nm, 120nm, 160nm, 200nm], y: [120nm, 160nm, 200nm])";
+
+/// `span_length` (`span_length`, DRC-036): every chord a horizontal or
+/// vertical line cuts from a merged figure is one of its axis's lengths, or
+/// at least the last; one finding per maximal region of an unchanged illegal
+/// chord, at its centre, measuring the chord.
+///
+/// LEF's own lists, each value and one step either side (SE): a vertical
+/// wire's width on `x`, a horizontal piece's height on `y` (the longer
+/// chords, 1000, are legal). A U with a stepped arm: the left arm's 100 is
+/// one region however many vertices the right arm adds beside it, and the
+/// base's 100 one region across the step. A ring's band, four regions. A
+/// 200 long piece drawn as two 100 long halves is one legal span.
+fn span_length(_depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(SPANS);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("span_length/{shape}"),
+            &["DRC-036"],
+            &deck,
+            layout,
+            vec![("s", findings)],
+        ));
+    };
+    let around =
+        |values: &[i64]| -> Vec<i64> { values.iter().flat_map(|&v| [v - 1, v, v + 1]).collect() };
+    for w in around(&[60, 80, 120, 160, 200]) {
+        let legal = [60, 80, 120, 160].contains(&w) || w >= 200;
+        let findings = if legal {
+            Vec::new()
+        } else {
+            vec![pin(Finding::length(w), w, 1000)]
+        };
+        case(format!("x/w{w}"), met1(&[[0, 0, w, 1000]]), findings);
+    }
+    for h in around(&[120, 160, 200]) {
+        let legal = [120, 160].contains(&h) || h >= 200;
+        let findings = if legal {
+            Vec::new()
+        } else {
+            vec![pin(Finding::length(h), 1000, h)]
+        };
+        case(format!("y/h{h}"), met1(&[[0, 0, 1000, h]]), findings);
+    }
+    case(
+        "stepped_u".into(),
+        met1(&[
+            [0, 0, 1000, 100],
+            [0, 0, 100, 1000],
+            [900, 0, 1000, 500],
+            [850, 500, 1000, 1000],
+        ]),
+        vec![
+            pin(Finding::length(100), 100, 1100),
+            pin(Finding::length(100), 1900, 600),
+            pin(Finding::length(150), 1850, 1500),
+            pin(Finding::length(100), 1000, 100),
+        ],
+    );
+    case(
+        "ring".into(),
+        Layout::default().polygon("met1", &holed([0, 0, 1000, 1000], [100, 100, 900, 900])),
+        vec![
+            pin(Finding::length(100), 100, 1000),
+            pin(Finding::length(100), 1900, 1000),
+            pin(Finding::length(100), 1000, 100),
+            pin(Finding::length(100), 1000, 1900),
+        ],
+    );
+    case(
+        "drawn_in_halves".into(),
+        met1(&[[0, 0, 100, 120], [100, 0, 200, 120]]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("span_length", &["DRC-036"], SPANS, &["s"]));
     out
 }
 

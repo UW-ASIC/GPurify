@@ -1555,6 +1555,83 @@ pub enum Rule {
         /// Index into [`RuleSet::class_tables`].
         table: u32,
     },
+    /// A span of a shape whose length is not on the layer's list of legal
+    /// spans.
+    ///
+    /// Deck: `span_length(L; x: [..], y: [..])`, kind `span_length`. A span
+    /// is the length of a maximal run of material along a horizontal (x) or
+    /// vertical (y) line through a figure of the merged layer: every chord
+    /// such a line cuts from the figure, so an L has the spans of both its
+    /// arms, and a ring the width of its band as well as its outer size. A
+    /// horizontal span must be one of `x` exactly, or at least the last of
+    /// them; a vertical one the same with `y` (`LEF58_SPANLENGTHTABLE`: "All of
+    /// the given span lengths are exact values, except for the last one,
+    /// which is greater than equal to the value. All of the possible span
+    /// lengths of an object in both directions should be checked"). For a LEF
+    /// layer whose `DIRECTION` is horizontal, `y` is its `SPANLENGTHTABLE` and
+    /// `x` its `SPANLENGTHTABLE ... WRONGDIRECTION` (the same list when it has
+    /// none), and the other way round for a vertical layer.
+    ///
+    /// One violation per maximal region of a figure over which one illegal
+    /// span runs unchanged (a rectangle: the chord, swept across the lines it
+    /// is the chord of), at its centre (floored). `measured` is the span and
+    /// `limit` the shortest legal span longer than it. `shapes.0` is the
+    /// lowest drawn row under the figure. `examined` counts the regions of
+    /// unchanged span, both axes.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-036. Rules: `LEF58_SPANLENGTHTABLE {spanLength} ... [WRONGDIRECTION]`
+    /// (LEF/DEF 5.8 Language Reference, "Span Length Table Rule" and Figure
+    /// 1-31).
+    ///
+    /// Limits: `ORTHOGONAL` (a length between two inside facing corners) and
+    /// `EXCEPTOTHERSPAN` are missing.
+    SpanLength {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::span_tables`].
+        table: u32,
+    },
+}
+
+/// The legal spans of [`Rule::SpanLength`], per axis: every listed length but
+/// the last is legal exactly, and the last and anything longer are legal.
+///
+/// Every table in a [`RuleSet`] passed [`SpanTable::is_valid`]; one built by
+/// hand must too, or [`RuleSet::run`] may judge every span illegal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanTable {
+    /// The legal lengths of horizontal spans, in grid units: positive and
+    /// rising strictly.
+    pub x: Vec<Dbu>,
+    /// The legal lengths of vertical spans, in grid units: positive and
+    /// rising strictly.
+    pub y: Vec<Dbu>,
+}
+
+impl SpanTable {
+    /// Whether both lists are non-empty, positive and strictly rising.
+    /// [`RuleSet::from_deck`] refuses a table that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        [&self.x, &self.y].into_iter().all(|legal| {
+            legal.first().is_some_and(|first| first.raw() > 0)
+                && legal.windows(2).all(|pair| pair[0] < pair[1])
+        })
+    }
+
+    /// The shortest legal span on `legal` longer than `span`, or `None` when
+    /// `span` itself is legal.
+    pub(crate) fn next_legal(legal: &[Dbu], span: i64) -> Option<i64> {
+        let last = legal.last()?.raw();
+        if span >= last || legal.iter().any(|length| length.raw() == span) {
+            return None;
+        }
+        legal
+            .iter()
+            .map(|length| length.raw())
+            .find(|&length| length > span)
+    }
 }
 
 /// The parallel-edge condition of an end-of-line rule (LEF `PARALLELEDGE
@@ -1784,6 +1861,8 @@ pub struct RuleSet {
     /// The tables [`Rule::TipSpacingTable`] and
     /// [`Rule::TwoWidthSpacingTable`] name.
     pub class_tables: Vec<ClassTable>,
+    /// The tables [`Rule::SpanLength`] names.
+    pub span_tables: Vec<SpanTable>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -2413,6 +2492,22 @@ impl RuleSet {
                             .expect("a deck has few tables"),
                     }
                 }
+                "span_length" => {
+                    let layer = one(spec)?;
+                    let table = SpanTable {
+                        x: lengths(spec, "x_spans")?,
+                        y: lengths(spec, "y_spans")?,
+                    };
+                    if !table.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.span_tables.push(table);
+                    Rule::SpanLength {
+                        layer,
+                        table: u32::try_from(set.span_tables.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
                 "eol_keep_out" => Rule::EolKeepOut {
                     layer: one(spec)?,
                     eol_width: length(spec, "eol_width")?,
@@ -2735,6 +2830,9 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::SpanLength { layer, table } => {
+                    facing::span_length(store, id, layer, &self.span_tables[table as usize], s, out)
+                }
                 Rule::TwoWidthSpacingTable { layer, table } => spacing::two_width_table(
                     store,
                     id,
@@ -3104,7 +3202,8 @@ impl Rule {
             | Rule::ForbiddenSpacing { layer, .. }
             | Rule::EolWithinSpacing { layer, .. }
             | Rule::EolKeepOut { layer, .. }
-            | Rule::TwoWidthSpacingTable { layer, .. } => [Some(layer), None],
+            | Rule::TwoWidthSpacingTable { layer, .. }
+            | Rule::SpanLength { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

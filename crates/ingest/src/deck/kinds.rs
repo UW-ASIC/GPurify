@@ -617,6 +617,19 @@ pub(crate) const KINDS: &[Kind] = &[
             p("space", "space", Dim::LengthRows),
         ],
     ),
+    // Every span (chord) of a shape is a legal length: one of the list, or at
+    // least its last (`LEF58_SPANLENGTHTABLE`).
+    drc(
+        "span_length",
+        Cmp::Absent,
+        "span_length",
+        &[0],
+        None,
+        &[
+            p("x", "x_spans", Dim::LengthList),
+            p("y", "y_spans", Dim::LengthList),
+        ],
+    ),
     // Another shape inside the keep-out box of an end of line
     // (`LEF58_EOLKEEPOUT eolWidth EXTENSION backward side forward`).
     drc(
