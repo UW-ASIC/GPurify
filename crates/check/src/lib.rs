@@ -140,6 +140,7 @@
 //! | `lvs.terminal_net` | [`lvs::check_layout`] | a device marker no recogniser could bind, or a terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
 //! | `lvs.param_range` | [`lvs::check_param_ranges`] | a device parameter outside the range the deck states for its model | LVS-068 |
+//! | `lvs.short_path` | [`lvs::check_net_seed_conflicts`] | a step of the path a short between two labels runs along | LVS-005 |
 
 pub mod deck;
 pub mod drc;

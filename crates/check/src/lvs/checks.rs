@@ -20,7 +20,8 @@ use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
 /// variant but the last, then the five check rows, then the parameter-range
-/// row, then the last variant's, added after the rows it follows. Each is a
+/// row, then the last variant's and the short-path row, each added after the
+/// rows it follows. Each is a
 /// row of the check catalog (`docs/check-catalog.tsv`), which a test keeps in
 /// step with this list.
 ///
@@ -28,11 +29,12 @@ use gpurify_ingest::{StrId, StrTable};
 /// raises them (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`],
 /// `lvs.model_mismatch` [`Discrepancy::ModelMismatch`], and so on), the five
 /// after the first six under [`check_layout`], and `lvs.param_range` under
-/// [`check_param_ranges`]. The crate's
+/// [`check_param_ranges`], and `lvs.short_path` with `lvs.net_seed_conflict`
+/// ([`check_net_seed_conflicts`]). The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 13] = [
+pub const RULE_IDS: [&str; 14] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -46,6 +48,7 @@ pub const RULE_IDS: [&str; 13] = [
     "lvs.terminal_count",
     "lvs.param_range",
     "lvs.model_mismatch",
+    "lvs.short_path",
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
@@ -77,8 +80,9 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// Run the layout-only checks on the unreduced layout graph.
 ///
 /// `layout` must be [`from_layout`](crate::lvs::graph::from_layout) of the
-/// same `design` and `ports`. Records exactly five [`RuleRun`]s, in the order
-/// below, and appends their violations to `out`. Every violation is an error.
+/// same `design` and `ports`. Records five [`RuleRun`]s, in the order below,
+/// and a sixth, `lvs.short_path`, right after `lvs.net_seed_conflict` when a
+/// net carries two names, and appends their violations to `out`. Every violation is an error.
 /// A row on a shape is located at the shape's first vertex, on its layer;
 /// a row on none (a hand-built graph's structural fault) has no layer and no
 /// location (both are sentinels), and its shape is `PolyId(u32::MAX)`.
@@ -103,9 +107,10 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   [`StrId`] order, so `n` names give `n - 1` rows. Shapes: the lowest
 ///   polygon carrying each of the two names, so the two labels are found
 ///   from the row; the location is the first vertex of the first, on its
-///   layer. No path between the two labels is traced (catalog LVS-005).
-///   Measured 2 against a limit of 1. Examines every binding of a name to a
-///   net. Catalog: LVS-001.
+///   layer. Measured 2 against a limit of 1. Examines every binding of a
+///   name to a net. Catalog: LVS-001, LVS-005. Where it finds one, the
+///   short's path follows as `lvs.short_path`
+///   ([`check_net_seed_conflicts`]).
 /// - `lvs.terminal_net`: a device marker no recogniser could bind
 ///   ([`DeviceTable::refused`]): a terminal position with no shape of its
 ///   own under it (a terminal missing, or drawn twice with its twin
@@ -448,7 +453,17 @@ fn check_label_conflicts(
 
 /// The `lvs.net_seed_conflict` row of [`check_layout`] alone: one
 /// [`RuleRun`], and a violation per pair of names on one net, as described
-/// there.
+/// there. Where it finds any, an `lvs.short_path` row follows: for each such
+/// pair, the fewest polygons joining the two labelled shapes
+/// ([`NetTable::path`](crate::topology::NetTable::path)), one error per step
+/// between consecutive polygons of the path, its two shapes those polygons,
+/// located at the first's first vertex on its layer, measured the step's
+/// number against the path's step count; two labels on one polygon are one
+/// row on it, measured 1 against 1. This is where the short runs, as
+/// Calibre's LVS ISOLATE SHORTS and ICV's ShortFinder trace it (catalog
+/// LVS-005). The row examines one pair per conflict, and is refused when a
+/// pair's path cannot be traced. No row is recorded when no net carries two
+/// names, so a run without a short reports nothing more.
 ///
 /// For a run that reports labelled shorts without LVS's other layout rows:
 /// the `gpurify` engine calls it when [`check_layout`] does not run and a
@@ -467,13 +482,37 @@ pub fn check_net_seed_conflicts(
     let rule = rule_id(strings, "lvs.net_seed_conflict");
     let before = out.len();
     let (nets, _, polys) = ports.bindings();
+    let mut shorts = Vec::new();
     for at in 1..nets.len() {
         if nets[at] == nets[at - 1] {
             let row = graph_violation(rule, (polys[at - 1], Some(polys[at])), 2, 1);
             out.push(on_first_shape(design.store, row));
+            shorts.push((polys[at - 1], polys[at]));
         }
     }
     record_run(runs, out, before, rule, Outcome::Ran, ports.len() as u64);
+    if shorts.is_empty() {
+        return;
+    }
+    let rule = rule_id(strings, "lvs.short_path");
+    let before = out.len();
+    let mut outcome = Outcome::Ran;
+    for &(from, to) in &shorts {
+        let Some(path) = design.nets.path(from, to) else {
+            outcome = Outcome::Refused;
+            continue;
+        };
+        let steps = narrow(path.len() - 1);
+        if steps == 0 {
+            let row = graph_violation(rule, (from, None), 1, 1);
+            out.push(on_first_shape(design.store, row));
+        }
+        for (step, pair) in (1u32..).zip(path.windows(2)) {
+            let row = graph_violation(rule, (pair[0], Some(pair[1])), step, steps);
+            out.push(on_first_shape(design.store, row));
+        }
+    }
+    record_run(runs, out, before, rule, outcome, shorts.len() as u64);
 }
 
 /// Structural sanity of the extracted graph: a terminal on no net, a device with
