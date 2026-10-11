@@ -43,7 +43,7 @@ Columns: `id`, `domain`, `category`, `check`, `sources`, `gpurify`, `status`,
 
 **gpurify:** the kind names exactly as in `drc/ruleset.rs` `KINDS` and
 `erc/ruleset.rs` `KINDS`, the LVS report ids (`lvs.*`, `checks.rs:21`), or a
-feature tag (`deck:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
+feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 **oracle** (the test-plan oracle that checks the row):
 

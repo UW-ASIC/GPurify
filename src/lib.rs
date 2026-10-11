@@ -60,6 +60,8 @@
 //!
 //! `lib` is the odd one out: it checks nothing, and writes a hard macro's
 //! Liberty timing model per corner from the extracted layout ([`liberty`]).
+//! `xor` compares two layouts layer by layer instead of checking one
+//! ([`engine::xor`]).
 //!
 //! # Where every rule is defined
 //!

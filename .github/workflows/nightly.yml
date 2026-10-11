@@ -36,7 +36,7 @@ jobs:
       # differentials need the oracle shell and run in the `oracles` job; the
       # bench gate runs alone below, so other tests do not skew its timings.
       - run: >-
-          cargo test --workspace -- --ignored --skip klayout_mirror
+          cargo test --workspace -- --ignored --skip klayout_mirror --skip klayout_xor
           --skip netgen_differential --skip fastcap_differential
           --skip fasthenry_differential --skip ngspice_differential
           --skip magic_differential
@@ -56,7 +56,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
-      # random layouts. One test at a time; each runs at most four klayouts.
+      # random layouts; and `gpurify xor` against KLayout's XOR on 1000
+      # random layout pairs. One test at a time; each runs at most four klayouts.
       - run: nix develop .#oracles --command cargo test --test klayout -- --ignored --test-threads=1
       # Magic's extractor on X6's closed-form geometries and seeded random
       # wires, against the analytical PEX (O2): one GDS, one Magic run.

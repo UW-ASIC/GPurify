@@ -12,6 +12,7 @@ gpurify <command> <layout.gds> --deck <process.deck> [options] > report
 | `pex` | Parasitic resistance and capacitance; inductance for field-solved nets | the deck's `pex` lines |
 | `all` | All four | a check whose input is missing is reported as skipped, never as passed |
 | `lib` | Nothing: writes a macro's Liberty files, see [liberty.md](liberty.md) | `--spec`, `--output-dir` |
+| `xor` | Two layouts against each other: every region where a layer differs, see [below](#comparing-two-layouts) | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
 
 ## Options
 
@@ -64,6 +65,27 @@ summary:
 
 Each violation gives the rule, the layer, a point on the offending shape, what
 was measured and the limit it broke.
+
+## Comparing two layouts
+
+```sh
+gpurify xor before.gds after.gds --deck <process.deck> > report
+```
+
+`xor` reads both layouts against one deck and compares every drawn layer the
+deck declares, as KLayout's `xor` does: it reports each region where exactly
+one of the two has material, with its area, as a violation of the rule
+`xor.<layer>`. A layer's measured areas add up to the area the layouts
+disagree on, so on a cut layer it is the cut area one of them gained or lost:
+SkyWater's IR-drop rules (`ct.irdrop`, `via.irdrop`) compare that between the
+aluminium and the slotted copper database of a product. Two identical
+layouts pass. A layer with a shape `xor` cannot compare exactly, such as a 45°
+edge, is refused. Both layouts must be on the same grid; derived layers and
+text labels are not compared. It takes `--format text` or `json`.
+
+`xor` does not hold a via array's change in cut area to a tolerance by its
+number of cuts, as those rules go on to do: their text leaves the unit of the
+limit and what a "connector" is unsettled.
 
 ## LVS reduction
 

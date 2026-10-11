@@ -24,6 +24,7 @@ mod erc_reference;
 mod harness;
 mod lvs;
 mod pex;
+mod xor;
 
 #[path = "../common/gen_fixtures.rs"]
 mod gen_fixtures;
@@ -42,6 +43,11 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
     (
         "PEX-010",
         "tests/exhaustive/pex.rs::spef_carries_the_closed_form_totals",
+    ),
+    // A fixture holds one layout; xor compares two.
+    (
+        "DRC-068",
+        "tests/exhaustive/xor.rs::a_lost_and_a_slotted_cut_add_up_to_the_cut_area_lost",
     ),
     // The harness writes one flat cell; flattening is proved where it is done.
     (

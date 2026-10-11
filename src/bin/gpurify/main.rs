@@ -33,8 +33,19 @@ fn main() -> ExitCode {
 /// One whole run, rendered in the requested format. An error has already been
 /// reported on stderr when this returns `Err`.
 fn render(cli: &args::Cli) -> Result<(Summary, String), ExitCode> {
-    let (loaded, extracted, outputs, summary) =
-        gpurify::engine::run::run(&cli.inputs, &cli.options).map_err(|error| fail(&error))?;
+    let (loaded, extracted, outputs, summary) = match &cli.other {
+        Some(other) => {
+            let (loaded, outputs, summary) =
+                gpurify::engine::xor::run(&cli.inputs, other).map_err(|error| fail(&error))?;
+            (loaded, None, outputs, summary)
+        }
+        None => {
+            let (loaded, extracted, outputs, summary) =
+                gpurify::engine::run::run(&cli.inputs, &cli.options)
+                    .map_err(|error| fail(&error))?;
+            (loaded, Some(extracted), outputs, summary)
+        }
+    };
 
     let header = Header {
         tool_version: env!("CARGO_PKG_VERSION"),
@@ -62,7 +73,8 @@ fn render(cli: &args::Cli) -> Result<(Summary, String), ExitCode> {
         args::Format::Spef | args::Format::Dspf => {
             let spef = cli.format == args::Format::Spef;
             // An empty netlist would read as a design with no parasitics.
-            let Some(network) = &outputs.parasitics else {
+            // `xor` extracts nothing, and its arguments refuse these formats.
+            let (Some(network), Some(extracted)) = (&outputs.parasitics, &extracted) else {
                 eprintln!(
                     "--format {} asked for a parasitic network, but extraction \
                      produced none, and an empty netlist would read as a design \

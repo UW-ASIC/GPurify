@@ -10,9 +10,11 @@
 //! `KLayout` runs only in the oracle shell, so the comparisons are the release
 //! tier: `nix develop .#oracles --command cargo test --test klayout -- --ignored`.
 //! The merge tier checks that every deck the repository ships translates.
+//! [`xor`] holds `gpurify xor` to `KLayout`'s XOR the same way.
 
 mod compare;
 mod translate;
+mod xor;
 
 #[path = "../exhaustive/bitmap.rs"]
 mod bitmap;

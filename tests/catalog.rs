@@ -31,8 +31,9 @@ const STATUSES: [&str; 6] = [
     "out_of_scope",
 ];
 
-/// Feature tags in the `gpurify` column: a capability, not a rule kind.
-const TAGS: [&str; 6] = ["deck:", "erc:", "lvs:", "pex:", "ingest:", "lib:"];
+/// Feature tags in the `gpurify` column: a capability, not a rule kind
+/// (`drc:xor` is the `xor` command).
+const TAGS: [&str; 7] = ["deck:", "drc:", "erc:", "lvs:", "pex:", "ingest:", "lib:"];
 
 /// The domains in the order the docs list them, with their headings.
 const DOMAINS: [(&str, &str); 5] = [

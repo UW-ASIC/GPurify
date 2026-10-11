@@ -60,6 +60,7 @@ though nothing was found.
 | `pex` | Parasitic resistance and capacitance | `--quasistatic <net>…` to field-solve a net |
 | `all` | Everything | a missing input marks its check skipped, never passed |
 | `lib` | Nothing: writes a hard macro's Liberty `.lib` per corner, and its Verilog blackbox | `--spec <file>`; ngspice above `interface` accuracy |
+| `xor` | Two layouts against each other, layer by layer | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
 
 Every option, the report format and the design intent file are described in
 [docs/usage.md](docs/usage.md).

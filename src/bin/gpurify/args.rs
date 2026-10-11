@@ -1,4 +1,5 @@
-//! Command line: `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`.
+//! Command line: `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`,
+//! or `gpurify xor <layout> <other> --deck <deck> [--format text|json]`.
 
 use gpurify::engine::{Checks, Inputs, RunOptions};
 use gpurify::liberty::Accuracy;
@@ -21,6 +22,8 @@ pub struct Cli {
     pub format: Format,
     /// `lib`: generate a macro's Liberty files instead of checking.
     pub lib: Option<LibArgs>,
+    /// `xor`: the layout compared with `inputs.layout`, instead of checking.
+    pub other: Option<PathBuf>,
 }
 
 /// What `lib` was asked for.
@@ -47,13 +50,14 @@ fn usage<T>(message: String) -> Result<T, ArgError> {
 /// The only options are the files a run reads, the output form, and the choice
 /// of method (`--quasistatic` for PEX, `--accuracy` for `lib`). Everything else
 /// lives where it is already stated: the grid in the layout's `UNITS` record,
-/// layers to skip in the deck (`ignore gds(L, D)`).
+/// layers to skip and the operating temperature in the deck (`ignore gds(L,
+/// D)`, `temperature`). `xor`'s second layout is its second positional input.
 pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let Some((subcommand, rest)) = argv.split_first() else {
-        return usage("expected a subcommand: drc, erc, lvs, pex, all or lib".to_string());
+        return usage("expected a subcommand: drc, erc, lvs, pex, all, lib or xor".to_string());
     };
 
-    let mut layout: Option<&str> = None;
+    let mut layouts: Vec<&str> = Vec::new();
     let mut deck: Option<&str> = None;
     let mut format = Format::Text;
     let mut intent: Option<&str> = None;
@@ -96,13 +100,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             }
             _ if token.starts_with('-') => return usage(format!("unknown option {token}")),
             "" => return usage("the layout file was given as an empty path".to_string()),
-            positional => {
-                if layout.replace(positional).is_some() {
-                    return usage(format!(
-                        "one layout file, but a second was given: {positional}"
-                    ));
-                }
-            }
+            positional => layouts.push(positional),
         }
     }
 
@@ -122,12 +120,29 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         "all" => (Checks::ALL, true, true, false),
         // A reference is cross-checked against the spec's pins, never compared.
         "lib" => (none, false, true, false),
+        // Two layouts compared; its rows report as the DRC stage.
+        "xor" => (Checks { drc: true, ..none }, false, false, false),
         other => {
             return usage(format!(
-                "unknown subcommand {other}; expected drc, erc, lvs, pex, all or lib"
+                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib or xor"
             ))
         }
     };
+    let is_xor = subcommand == "xor";
+    match (is_xor, layouts.as_slice()) {
+        (false, [_, second, ..]) => {
+            return usage(format!("one layout file, but a second was given: {second}"))
+        }
+        (true, [_, _, third, ..]) => {
+            return usage(format!("two layout files, but a third was given: {third}"))
+        }
+        (true, [] | [_]) => {
+            return usage(
+                "xor compares two layout files: xor <layout> <other> --deck <deck>".to_string(),
+            )
+        }
+        _ => {}
+    }
     let is_lib = subcommand == "lib";
     for (flag, given) in [
         ("--spec", spec.is_some()),
@@ -193,7 +208,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             "--format {name} is not something this check produces"
         ));
     }
-    let Some(layout) = layout else {
+    let Some(&layout) = layouts.first() else {
         return usage(format!(
             "{subcommand} needs a layout file: {subcommand} <layout> --deck <deck>"
         ));
@@ -216,6 +231,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         },
         format,
         lib,
+        other: layouts.get(1).copied().map(PathBuf::from),
     })
 }
 
@@ -275,6 +291,24 @@ mod tests {
         );
     }
 
+    /// Oracle: construct-from-answer, against `docs/usage.md`: `xor` takes its
+    /// two layouts in the order given and a report format; no other command
+    /// has a second layout.
+    #[test]
+    fn xor_takes_its_two_layouts_in_order() {
+        let cli = parse_str("xor a.gds b.gds --deck d --format json").expect("legal");
+        assert_eq!(cli.inputs.layout.to_str(), Some("a.gds"));
+        assert_eq!(
+            cli.other.as_deref().and_then(std::path::Path::to_str),
+            Some("b.gds")
+        );
+        assert_eq!(cli.format, Format::Json);
+        assert!(parse_str("drc a.gds --deck d")
+            .expect("legal")
+            .other
+            .is_none());
+    }
+
     /// Oracle: `docs/usage.md`: `--format` defaults to `text`, and `all` is all
     /// four checks.
     #[test]
@@ -294,10 +328,35 @@ mod tests {
     #[test]
     fn every_malformed_command_line_is_refused_with_its_message() {
         let cases = [
-            ("", "expected a subcommand: drc, erc, lvs, pex, all or lib"),
+            (
+                "",
+                "expected a subcommand: drc, erc, lvs, pex, all, lib or xor",
+            ),
             (
                 "dcr t --deck d",
-                "unknown subcommand dcr; expected drc, erc, lvs, pex, all or lib",
+                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib or xor",
+            ),
+            (
+                "xor t --deck d",
+                "xor compares two layout files: xor <layout> <other> --deck <deck>",
+            ),
+            (
+                "xor t u v --deck d",
+                "two layout files, but a third was given: v",
+            ),
+            ("xor t u --deck d --intent i", "xor takes no --intent"),
+            (
+                "xor t u --deck d --quasistatic n",
+                "xor takes no --quasistatic",
+            ),
+            (
+                "xor t u --deck d --format spef",
+                "--format spef is not something this check produces",
+            ),
+            // The temperature is the deck's, never a flag.
+            (
+                "pex t --deck d --temperature 85",
+                "unknown option --temperature",
             ),
             (
                 "lib t --deck d --output-dir o",

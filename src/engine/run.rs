@@ -266,6 +266,13 @@ pub fn run_checks(
         });
     }
 
+    let summary = summarize(&mut out, [drc, erc, lvs, pex]);
+    Ok((out, summary))
+}
+
+/// Put `out` in canonical order and count it, with each stage's status in
+/// DRC, ERC, LVS, PEX order.
+pub(crate) fn summarize(out: &mut Outputs, stages: [StageStatus; 4]) -> Summary {
     out.violations.sort_canonical();
     out.runs.sort_by_key(|run| run.rule);
 
@@ -277,7 +284,8 @@ pub fn run_checks(
     });
     let rules_skipped = count(out.runs.iter(), |run| run.outcome != Outcome::Ran);
 
-    let summary = Summary {
+    let [drc, erc, lvs, pex] = stages;
+    Summary {
         drc,
         erc,
         lvs,
@@ -287,8 +295,7 @@ pub fn run_checks(
         warnings: violations - errors,
         rules_clean,
         rules_skipped,
-    };
-    Ok((out, summary))
+    }
 }
 
 fn count<T>(items: impl Iterator<Item = T>, keep: impl FnMut(&T) -> bool) -> u32 {
@@ -641,6 +648,18 @@ pub enum EngineError {
     /// The deck's rules could not become ERC tables.
     #[error(transparent)]
     Erc(#[from] gpurify_check::erc::ErcError),
+    /// `xor`: the second layout's database unit is not the first's, so their
+    /// coordinates do not compare.
+    #[error(
+        "the layouts are on different grids, {first} and {second} database units per \
+         micrometre, so they cannot be compared"
+    )]
+    GridMismatch {
+        /// The first layout's database units per micrometre.
+        first: i64,
+        /// The second layout's.
+        second: i64,
+    },
 }
 
 /// [`reciprocity_refusal`] is private, so its check lives beside it.
