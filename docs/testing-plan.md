@@ -532,6 +532,13 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B31 | LVS follow-ups: Spectre model-less primitives bound as SPICE's (decided); a diffusion-aware source/drain orientation; counts compared exactly (decided); Liberty reads topology's diffusion measures | F97, F98, F99, F100 | doing (agent/b31) |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | done; bench gate `tests/scaling.rs` (ns/poly at 16× within 3× of 1×, one run, alone on the runner) |
 | H | Catalog gaps in the priority order of check-sources.md §4, one kind per commit | check-sources §4 | doing, in nine branches: agent/h1 DRC spacing; h2 DRC overlay and cut; h3 DRC dimension, integrity, density, device, chip; h4 DRC multi-patterning, DFM, infra; h5 ERC antenna and EM; h6 ERC voltage, DRC net, PERC; h7 ERC ESD and latch-up; h8 LVS; h9 PEX and flow |
+| H10 | Cheap wins brought into scope: DRC-068 (GDS-vs-GDS XOR, cut-area conservation between two databases), PEX-007 (temperature-dependent R from PDK coefficients, CMP thickness variation), DRC-113 (litho/CMP hotspots, as far as public models allow) | catalog | todo |
+| H11 | Reliability and power brought into scope: ERC-E11 (vectorless dynamic IR), ERC-E13 (thermal-aware and statistical EM, self-heating) | catalog | todo |
+| H12 | All-angle geometry brought into scope: DRC-038 (diagonal width and spacing) and DRC-116 (curvilinear / all-angle tolerance); every geometric rule handles 45-degree, then arbitrary-angle edges, checked against KLayout | catalog | todo |
+| H13 | Multi-die and system brought into scope: LVS-073 (3D / system LVS across dies), ERC-C12 (package / 2.5D / 3D ESD), ERC-C13 (system-level ESD) | catalog | todo |
+| B32 | LVS and PEX cases carry the no-vacuous-pass guard DRC and ERC have (expected outcome, minimum examined) | F6 | todo |
+| R2 | Catalog refresh: public commercial-tool material (Calibre, ICV, Pegasus, StarRC, Quantus, RedHawk, Voltus, PathFinder datasheets, public user-guide excerpts, papers; never leaked manuals) compared against the catalog; missing checks added as rows with their sources | catalog | todo |
+| S2 | Shipped decks gain the foundry rules the new kinds make expressible (each with its source), checked by F2's foundry cross-check | F4, limitations | todo: after the H branches merge |
 
 **How code on this branch is written:**
 - **Data-oriented.** Answer the six questions (data in/out, how many, how wide, access pattern, lifetime, parallelism) before writing. SoA tables, the narrowest type the range allows, caller-owned `_into` buffers, indices not pointers, as the existing crates do.

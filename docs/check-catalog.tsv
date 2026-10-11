@@ -34,7 +34,7 @@ DRC-034	drc	spacing	Maximum spacing	LEF58_MAXSPACING; drt	-	missing	TX:drt
 DRC-035	drc	spacing	Pitch / exact pitch / on-track	A7:FIN.S.1,GATE.S.1; LEF:PITCH; LEF58_PITCH; LEF58_RIGHTWAYONGRIDONLY; drt	-	missing	FR	Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010)
 DRC-036	drc	spacing	Span-length table	LEF58_SPANLENGTHTABLE	-	missing	SE	
 DRC-037	drc	spacing	Bent / 45-degree features	IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a	angle	partial	FR; MR; SY	angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer
-DRC-038	drc	spacing	Diagonal width / spacing	LEF:DIAGWIDTH,DIAGSPACING,DIAGMINEDGELENGTH	-	out_of_scope	-	Needs non-rectilinear geometry
+DRC-038	drc	spacing	Diagonal width / spacing	LEF:DIAGWIDTH,DIAGSPACING,DIAGMINEDGELENGTH	-	missing	-	In scope since 2026-10-11 (was: Needs non-rectilinear geometry)
 DRC-040	drc	overlay	Enclosure, all sides	LEF:ENCLOSURE; IHP:M1.c,V1.c; GF:CO.3; SKY:ct.4,m1.4,licon.5a; A7:V3.M4.EN.2; KL:enclosing; MAG:surround	min_enclosure	implemented	BM; FR; TX:KL; MR; SY	
 DRC-041	drc	overlay	Enclosure on two opposite sides	SKY:m1.5; A7:V1.M1.EN.1; LEF:ENCLOSURE o1 o2; KL:rectangle error filter	asymmetric_enclosure	partial	BM; FR; TX:KL; MR; SY	A non-rectangular inner shape is held to the every-side limit (limitations.md, "Rules that can pass a layout signoff would flag")
 DRC-042	drc	overlay	End-cap / one-of-two-adjacent-sides enclosure	IHP:M1.c1,V1.c1; SKY:via.5a,licon.5c; LEF58_ENCLOSURE EOL; MAG:surround directional	asymmetric_enclosure	partial	FR; MR; SY; TX:KL	Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written
@@ -59,7 +59,7 @@ DRC-064	drc	cut	Slotted / bar cut spacing by edge length	SKY:licon.2b-2d; IHP:Cn
 DRC-065	drc	cut	Via stacking / cross-layer cut spacing	LEF:SPACING LAYER STACK,MAXVIASTACK; GF:Vn.5,CUP.5	min_spacing_diff	partial	FR; MR; SY; TX:KL	Cross-layer spacing works; the stack-count limit is missing
 DRC-066	drc	cut	Minimum cut count / redundant via	LEF:MINIMUMCUT; LEF58_MINIMUMCUT; GF:MT30.8a; SKY:x.18; drt	redundant_via	partial	FR; TX:drt; MR; SY	Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing
 DRC-067	drc	cut	Metal-width-dependent via choice	LEF58_METALWIDTHVIAMAP; drt	-	missing	TX:drt	
-DRC-068	drc	cut	Cut-area conservation between two databases	SKY:ct.irdrop,via.irdrop	-	out_of_scope	-	Compares two GDS files
+DRC-068	drc	cut	Cut-area conservation between two databases	SKY:ct.irdrop,via.irdrop	-	missing	-	In scope since 2026-10-11 (was: Compares two GDS files)
 DRC-070	drc	density	Global min/max density	LEF:MINIMUMDENSITY,MAXIMUMDENSITY; IHP:M1.j,M1.k; GF:PL.8,Mn.4; SKY:m1.13	global_density	implemented	CF; FR; TX:KL; MR; SY	Without a boundary layer, the die is the drawn layers' extent (F40, fixed)
 DRC-071	drc	density	Windowed density (window + step)	LEF:DENSITYCHECKWINDOW,DENSITYCHECKSTEP; IHP:MFil.h; SKY:m1.pd.2a,m1.pd.2b; KL:with_density; GF:density tests	density,density_cmp	implemented	CF; FR; TX:KL; MR; SY	GF ships density-M*_4_pass/fail test GDS. Without a boundary layer, the die is the drawn layers' extent (F40, fixed); a window names an outer row, never a hole (F64, fixed)
 DRC-072	drc	density	Local density over a device	SKY:vpp.5a-c,vpp.11	-	missing	FR	The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured
@@ -89,10 +89,10 @@ DRC-105	drc	mpt	Trim / cut-metal layers	LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL
 DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	deck:warning	partial	FR; SY	`warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning
 DRC-111	drc	dfm	DFM scoring of recommended rules	CAL:YieldAnalyzer	-	missing	-	
 DRC-112	drc	dfm	Critical area analysis	CAL:YieldAnalyzer	-	missing	CF	
-DRC-113	drc	dfm	Litho / CMP simulation hotspots	CAL:LFD,CMPAnalyzer; PEG	-	out_of_scope	-	Needs foundry process models
+DRC-113	drc	dfm	Litho / CMP simulation hotspots	CAL:LFD,CMPAnalyzer; PEG	-	missing	-	In scope since 2026-10-11 (was: Needs foundry process models)
 DRC-114	drc	dfm	Pattern-matching DRC	CAL; ICV; PEG; patents P1,P3	-	missing	SY	
 DRC-115	drc	dfm	Equation-based DRC	CAL:eqDRC; patents P10,P11	-	missing	CF	First candidate for Rust custom rules (testing-plan.md L9b)
-DRC-116	drc	dfm	Curvilinear / all-angle tolerance DRC	CAL; SIL; EMP	-	out_of_scope	-	Rectilinear only
+DRC-116	drc	dfm	Curvilinear / all-angle tolerance DRC	CAL; SIL; EMP	-	missing	-	In scope since 2026-10-11 (was: Rectilinear only)
 DRC-117	drc	dfm	Via redundancy scoring / via doubling	CAL:YieldAnalyzer,YieldEnhancer	redundant_via	partial	FR; MR; SY; TX:KL	Counts cuts within a distance; no DFM scoring and no via doubling
 DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, extents)	IHP:4.2; GF:4.2; KL; MAG:templayers	deck:derived	implemented	MR; BM; SY	extents keeps one box per figure, unmerged, as KLayout (F54, fixed); with_width counts diagonal necks at their exact length, every bound exact (F39, F65 fixed)
 DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL; MR; SY	limitations.md, "Checks that do not exist yet"
@@ -143,7 +143,7 @@ LVS-068	lvs	device	Device-count and parameter-range limits (devices per model, W
 LVS-070	lvs	netlist	SPICE / CDL reader	ngspice manual; KL:NetlistSpiceReader	ingest:spice	implemented	SY; fuzz	No open authoritative CDL spec
 LVS-071	lvs	netlist	Spectre reader	-	ingest:spectre	implemented	SY; fuzz	
 LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	lvs:flatten	implemented	SY	Netlist::flatten_top expands every instance below the top at load; a cycle is refused
-LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	out_of_scope	-	Single-die only
+LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	missing	-	In scope since 2026-10-11 (was: Single-die only)
 ERC-A1	erc	antenna	Per-layer area ratio (PAR)	LEF:App.C; IHP:Ant.a; SKY:antenna	antenna	implemented	CF; SE:LEF PAR 2.0/1.0; FR; TX:OR,MAG; MR; SY	
 ERC-A2	erc	antenna	Side-area (sidewall) ratio	LEF:App.C; GF:ANT.1-7; SKY:antenna vertical	antenna	implemented	CF; FR; MR; SY	
 ERC-A3	erc	antenna	Cumulative ratio (CAR)	LEF:App.C; IHP:Ant.b,Ant.d	antenna	implemented	SE:IHP AreaRatio; CF; MR; SY	Per gate: one ratio per etch stage, summed (IHP AreaRatio, LEF CAR); gates sharing a net at every stage reported once
@@ -171,8 +171,8 @@ ERC-C8	erc	esd	Path voltage vs device failure (ESD window)	TR18-01:2.1; TR22:4.1
 ERC-C9	erc	esd	CDM checks (bus inductance, local clamps, driver/receiver ground R)	TR18-01:5.6.3,6.6; JEP157A; PF	-	missing	TX:SPICE	
 ERC-C10	erc	esd	Layout parasitic ESD paths	TR18-01:5.6.1	-	missing	SY	Spacing values are NDA
 ERC-C11	erc	esd	ESD device geometry (DCGS, SCGS, fingers)	GF:LVESD.1-13; IHP:6.8	min_width,min_spacing_diff	expressible	FR; MR; SY	Under an ESD marker
-ERC-C12	erc	esd	Package / 2.5D / 3D ESD	TR18-01:6.3-6.7; JEP196; CAL:3DPERC	-	out_of_scope	-	On-chip only: package and multi-die ESD models are outside a layout verifier
-ERC-C13	erc	esd	System-level ESD	TR18-01:7; WP3	-	out_of_scope	-	A board and system concern, outside a layout verifier
+ERC-C12	erc	esd	Package / 2.5D / 3D ESD	TR18-01:6.3-6.7; JEP196; CAL:3DPERC	-	missing	-	In scope since 2026-10-11 (was: On-chip only: package and multi-die ESD models are outside a layout verifier)
+ERC-C13	erc	esd	System-level ESD	TR18-01:7; WP3	-	missing	-	In scope since 2026-10-11 (was: A board and system concern, outside a layout verifier)
 ERC-D1	erc	latchup	Max distance to well/substrate tap	GF:LU.1-4; IHP:LU.a,LU.b; A7:ACTIVE.LUP.1; TR18-02:3.1.1	max_distance_to_tap,missing_tie	implemented	FR; CF; MR; SY; TX:KL	A well's hole is measured as if filled (over-report only); hole rows are not wells of their own (F34, fixed)
 ERC-D1a	erc	latchup	Tap distance conditional on neighbouring well spacing	GF:LU.1-4	-	missing	FR	
 ERC-D1b	erc	latchup	Minimum well-tie area	TR18-02:Annex A; GF:LU.7	-	missing	FR; CF	
@@ -193,9 +193,9 @@ ERC-E7	erc	em	RMS / Joule heating / peak limits	(NDA only)	-	missing	-	No open s
 ERC-E8	erc	em	Static IR drop vs budget	OR:psm; WH:13.3.2; RH; VOL; MP	ir_drop	implemented	CF; NV; TX:OR psm; MR; SY	One feed point per supply (limitations.md, "Power grid")
 ERC-E9	erc	em	PDN integrity (floating stripes, unconnected instances)	OR:check_power_grid	unconnected_pin	partial	TX:OR; MR; SY	Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing
 ERC-E10	erc	em	Per-segment PDN EM	OR:psm -enable_em	em_current_density	implemented	TX:OR; MR; SY	
-ERC-E11	erc	em	Dynamic / vectorless IR	RH; VOL; MP; TOT	-	out_of_scope	-	Static analysis only: dynamic IR needs switching activity
+ERC-E11	erc	em	Dynamic / vectorless IR	RH; VOL; MP; TOT	-	missing	-	In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity)
 ERC-E12	erc	em	Stress voiding / slotting	JEP139; JESD214; GF:14.6	cheesing	partial	FR; MR; SY	cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing
-ERC-E13	erc	em	Thermal-aware / statistical EM, self-heating	RH; TOT; VOL	-	out_of_scope	-	One temperature, 85 C (limitations.md, "Power grid")
+ERC-E13	erc	em	Thermal-aware / statistical EM, self-heating	RH; TOT; VOL	-	missing	-	In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid"))
 ERC-F1	erc	voltage	Static voltage propagation, conditional on gate voltage	CAL:WP 81822; SKY:hv.X.1; patents P5,P9	erc:voltage	partial	SE:Siemens WP; SY	Channels pass unconditionally
 ERC-F2	erc	voltage	Gate-oxide overstress	GF:14.1.4.2; SKY:hv; TR22:4.1; CAL	gate_oxide	implemented	FR; CF; SY	Can over-report (limitations.md, "Rules that can pass a layout signoff would flag")
 ERC-F3	erc	voltage	Junction / drain-source overstress	SKY:hv; IHP:process spec	drain_source	implemented	FR; SY	
@@ -227,7 +227,7 @@ PEX-003	pex	c	Coupling C (same-layer and cross-layer)	CAL:xACT3D; SRC; QNT; Fast
 PEX-004	pex	l	Partial self / mutual inductance	CAL:xL; FastHenry; Grover	pex:quasistatic	partial	CF:Grover; TX:FastHenry; MR; SY	Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79)
 PEX-005	pex	accuracy	Field-solver reference for selected nets	CAL:xACT3D; SRC:Rapid3D; QNT; SIL	pex:quasistatic	implemented	TX:FastCap,FastHenry; MR; SY	Refining the mesh raises C monotonically (Galerkin near pairs, F77): a 1 µm cube reads 1.8 % under at 2 panels a side, 0.014 % at 32. A solve that cannot mesh a layer, or does not converge, refuses PEX naming the deck layer (F75)
 PEX-006	pex	accuracy	Multi-corner extraction	CAL; SRC	-	missing	-	
-PEX-007	pex	accuracy	Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware)	SRC; CAL	-	out_of_scope	-	Needs foundry models
+PEX-007	pex	accuracy	Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware)	SRC; CAL	-	missing	-	In scope since 2026-10-11 (was: Needs foundry models)
 PEX-008	pex	output	Reduction modes (C-only, RC, RCC, thresholds)	CAL:xACT	-	missing	-	One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef|dspf. No C-only or RC modes and no thresholds
 PEX-009	pex	accuracy	PEX netlist diff / qualification	SIL:PEX Certify	-	missing	TX	Worth building as an internal test tool
 PEX-010	pex	output	SPEF output	IEEE1481	pex:spef	implemented	MR; golden	A net with several labels, or a label on several nets, is refused by every writer, naming them; SPEF has no alias (F71)
