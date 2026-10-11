@@ -37,6 +37,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         asymmetric_enclosure(depth),
         wire_enclosure(),
         noncoincident_enclosure(),
+        full_width(),
         max_enclosure(),
         min_extension(depth),
         gate_corner(),
@@ -692,6 +693,72 @@ fn noncoincident_enclosure() -> Vec<Fixture> {
         lvtn().rect("nwell", 2000, 2000, 3000, 3000),
         lengths(&[0]),
         lengths(&[0]),
+    ));
+    every_placement(cases)
+}
+
+/// `full_width(v1, m2)` (`full_width`, DRC-053, ASAP7 V1.M2.AUX.2 "V1 must
+/// exactly be the same width as M2 along the direction perpendicular to the
+/// M2 length"): one finding per via that meets the wire's edges on neither
+/// axis, measuring the widest straight-out gap on its better axis.
+///
+/// Oracle: drawn gaps between the via's edges and the wire's.
+///
+/// Shapes, a 100 nm via: in a horizontal wire 100 wide, spanning it (clean);
+/// 0 or 1 short of its top edge, and 10 short of both; in a vertical wire 100
+/// wide (spanning it along x: clean); on a 300 nm pad (100 on every side);
+/// alone on a 100 nm pad (both axes span: clean); a via on no wire (not
+/// measured: `inside` is that rule).
+fn full_width() -> Vec<Fixture> {
+    let deck = new_deck(&["v1", "m2"], "rule V1.M2.AUX.2 full_width(v1, m2)\n");
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("full_width/{name}"),
+            &["DRC-053"],
+            &deck,
+            layout,
+            &[("V1.M2.AUX.2", findings)],
+        )
+    };
+    let wire = || Layout::default().rect("m2", -500, 0, 1000, 100);
+    let mut cases = Vec::new();
+    for short in [0, 1] {
+        cases.push(case(
+            &format!("top_short/{short}"),
+            wire().rect("v1", 0, 0, 100, 100 - short),
+            if short > 0 { lengths(&[short]) } else { vec![] },
+        ));
+    }
+    cases.push(case(
+        "narrower",
+        wire().rect("v1", 0, 10, 100, 90),
+        lengths(&[10]),
+    ));
+    cases.push(case(
+        "vertical_wire",
+        Layout::default()
+            .rect("m2", 0, -200, 100, 1000)
+            .rect("v1", 0, 0, 100, 100),
+        vec![],
+    ));
+    cases.push(case(
+        "pad",
+        Layout::default()
+            .rect("m2", -100, -100, 200, 200)
+            .rect("v1", 0, 0, 100, 100),
+        lengths(&[100]),
+    ));
+    cases.push(case(
+        "equal_pad",
+        Layout::default()
+            .rect("m2", 0, 0, 100, 100)
+            .rect("v1", 0, 0, 100, 100),
+        vec![],
+    ));
+    cases.push(case(
+        "off_wire",
+        wire().rect("v1", 3000, 0, 3100, 100),
+        vec![],
     ));
     every_placement(cases)
 }

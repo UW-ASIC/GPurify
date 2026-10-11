@@ -555,6 +555,37 @@ pub enum Rule {
         /// The smallest legal enclosure, in grid units; positive.
         limit: Dbu,
     },
+    /// An `inner` shape that does not span its host's full width along one
+    /// axis.
+    ///
+    /// Deck: `full_width(inner, outer)`, kind `full_width`, as ASAP7
+    /// V1.M2.AUX.2 "V1 must exactly be the same width as M2 along the
+    /// direction perpendicular to the M2 length". Hosts are chosen as for
+    /// [`Rule::MinEnclosure`] (the one reading least). Each edge of the inner
+    /// polygon is read straight out to the nearest host edge facing it, as
+    /// [`Rule::AsymmetricEnclosure`] reads it; the inner spans its host along
+    /// x when every vertical edge reads 0 (it meets the host's edge on both
+    /// sides), along y likewise, and the rule measures the better axis's
+    /// widest reading, `min(max(left, right), max(bottom, top))` for a
+    /// rectangle, which must be 0. An inner shape no host covers is not
+    /// measured: `inside(inner, outer)` is that rule (ASAP7 V1.AUX.1).
+    ///
+    /// One violation per offending inner polygon, on the `inner` layer, in the
+    /// middle of the strip past the widest-reading edge of the better axis,
+    /// with `limit` 0. `shapes` is the inner row and the host's drawn row.
+    /// `examined` counts inner polygons.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-053. Rules: ASAP7 V1.M2.AUX.2.
+    ///
+    /// Limits: `LEF58_SPACING ... EXACTALIGNED`, a spacing rule for exactly
+    /// aligned line ends, is not this rule and is not modelled.
+    FullWidth {
+        /// The host layer, merged; the deck's second argument.
+        outer: LayerId,
+        /// The layer that must span it; findings are reported on it.
+        inner: LayerId,
+    },
     /// An `inner` shape without `min_one_side` of enclosure on both sides of
     /// at least one axis.
     ///
@@ -2639,6 +2670,10 @@ impl RuleSet {
                         wire: wire(spec)?,
                     }
                 }
+                "full_width" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::FullWidth { outer, inner }
+                }
                 "noncoincident_enclosure" => {
                     let (outer, inner) = two(spec)?;
                     Rule::NoncoincidentEnclosure {
@@ -3369,6 +3404,15 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::FullWidth { outer, inner } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (Dbu::new_unchecked(0), WireBand::ANY),
+                    overlay::Mode::FullWidth,
+                    s,
+                    out,
+                ),
                 Rule::NoncoincidentEnclosure {
                     outer,
                     inner,
@@ -4053,6 +4097,7 @@ impl Rule {
             | Rule::NoncoincidentEnclosure {
                 outer: a, inner: b, ..
             }
+            | Rule::FullWidth { outer: a, inner: b }
             | Rule::MinExtension {
                 layer: a,
                 reference: b,

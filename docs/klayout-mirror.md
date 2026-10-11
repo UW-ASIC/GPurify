@@ -278,6 +278,7 @@ explains (kind 30).
 | 40 | max_enclosure | `enclosure(i, o) <= l` | FIG by marker (outer) | EXACT | exact | new |
 | 41 | noncoincident_enclosure | `enclosure(i, o, noncoincident) >= l` | FIG by shape (inner) | APPROX | KLayout ⊆ GPurify | new |
 | 42 | via_stack | `via_stack(C1, C2, ..) <= n` | ROW | EXACT (scripted) | exact | new |
+| 43 | full_width | `full_width(i, o)` | FIG by shape (inner) | EXACT (scripted) | exact | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1320,6 +1321,22 @@ via_stack(id, [C1.dup.raw, C2.dup.raw, ..], MAX)   # one polygon per reported cu
 ```
 
 - Key ROW, the cut's box; the count is compared exactly.
+
+### 43. full_width — EXACT (scripted)
+
+**GPurify** (`overlay.rs` `enclosure_of`, `Mode::FullWidth`): each inner edge read straight out
+to the nearest host edge facing it (`strips`); the inner fails when neither axis reads 0 on every
+edge. Unhosted inners are not measured.
+
+**KLayout** has no per-axis span test, so the prelude's `full_width` reads the same straight-out
+distances from KLayout's merged polygons (projection: host edges whose span overlaps the inner
+edge's, at or beyond it):
+
+```ruby
+full_width(id, O, I)   # each merged I figure covered by an O figure, failing on both axes
+```
+
+- Key FIG by shape (inner); the measurement is not compared.
 
 ---
 
