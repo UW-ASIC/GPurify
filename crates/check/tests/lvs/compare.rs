@@ -570,9 +570,11 @@ fn no_round_budget_makes_a_netlist_differ_from_itself() {
     }
 }
 
-/// Oracle: construct-from-answer. The same structure with the tie-break allowed
-/// to fire matches, so the refusal above is the configuration talking and not
-/// the circuit.
+/// Oracle: law. A netlist compared against itself matches, and this one is
+/// genuinely symmetric: exchanging the two devices with their gate and drain
+/// nets is an automorphism, so refinement alone cannot pair them and only the
+/// tie-break reaches the match. A matcher that gives up on a tie, or pairs the
+/// halves crosswise, reports a mismatch here.
 #[test]
 fn the_same_symmetric_structure_matches_when_the_tie_break_may_fire() {
     let verdict = compare(&differential_pair(), &differential_pair(), decisive());

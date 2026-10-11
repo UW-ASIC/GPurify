@@ -383,13 +383,14 @@ fn without_intent_exactly_the_gated_kinds_record_themselves_skipped() {
     }
 }
 
-/// Oracle: construct-from-answer. A kind the deck did not configure produces no
-/// run row at all, and that silence is correct: nothing claims the rule was
-/// checked. It is a different silence from a skip, which claims the rule was
-/// wanted and could not run.
 /// A failed solve (here an island no pad reaches) refuses exactly the rows
 /// that read the solve, and every other rule still runs as it would have:
 /// one bad rail must not hide an antenna or a floating gate.
+///
+/// Oracle: `erc::power::Power`'s contract ("those rows are refused; every
+/// other rule still runs"), as a differential against the same rule set over
+/// a solved grid: the four grid kinds turn `Refused`, every other outcome is
+/// the solved run's.
 #[test]
 fn a_failed_solve_refuses_only_the_grid_rules() {
     const GRID: [&str; 4] = [
@@ -423,6 +424,10 @@ fn a_failed_solve_refuses_only_the_grid_rules() {
     }
 }
 
+/// Oracle: construct-from-answer. A kind the deck did not configure produces no
+/// run row at all, and that silence is correct: nothing claims the rule was
+/// checked. It is a different silence from a skip, which claims the rule was
+/// wanted and could not run.
 #[test]
 fn a_kind_the_deck_did_not_configure_produces_no_run_row() {
     let rules = RuleSet::default();

@@ -18,10 +18,6 @@ use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 
 /// The 1 nm grid every case in this crate's tests is stated against.
-///
-/// A function rather than a `const`, because [`Grid::new`] is a `const fn` over
-/// a `todo!()` body until the Implementation-Phase and a `const` would evaluate
-/// it at compile time.
 pub fn grid() -> Grid {
     Grid::new(1_000).expect("1000 database units per micrometre is a 1 nm grid")
 }
