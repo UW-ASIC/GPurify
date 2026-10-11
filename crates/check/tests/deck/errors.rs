@@ -95,6 +95,8 @@ fn erc(error: CompileError) -> ErcError {
 }
 
 /// Every `DrcError` variant, each from a deck that breaks only its constraint.
+/// Oracle: construct-from-answer: each deck differs from a legal one in the
+/// one value the variant's documented constraint forbids.
 #[test]
 fn every_drc_error_is_still_produced() {
     let rule = |id: &str| id.to_owned();
@@ -166,6 +168,8 @@ fn every_drc_error_is_still_produced() {
 /// Every `ErcError` variant, each from a deck that breaks only its
 /// constraint. A duplicate id across domains is refused by DRC first, so the
 /// ERC duplicate comes from the ERC rule set alone.
+/// Oracle: construct-from-answer: each deck differs from a legal one in the
+/// one value the variant's documented constraint forbids.
 #[test]
 fn every_erc_error_is_still_produced() {
     let rule = |id: &str| id.to_owned();
@@ -265,6 +269,8 @@ fn every_erc_error_is_still_produced() {
 }
 
 /// The ERC checks hold a table built in code too, not only a deck row.
+/// Oracle: construct-from-answer: a zero resistance limit breaks the
+/// documented positive domain; ten ohms keeps it.
 #[test]
 fn erc_validation_holds_a_table_built_in_code() {
     let mut strings = StrTable::default();
@@ -305,6 +311,8 @@ const COUNT: (&str, &str) = ("0", "2");
 /// Every positive DRC value, one per row: each template compiles with the
 /// legal value and is refused as not positive with zero in its `{}`. Kills a
 /// field the typed check forgets.
+/// Oracle: the kinds' documented domains: each value is a length, area or
+/// count the checker documents as positive.
 #[test]
 fn every_positive_drc_value_written_as_zero_is_refused() {
     let cases: &[(&str, (&str, &str))] = &[
@@ -366,6 +374,7 @@ fn every_positive_drc_value_written_as_zero_is_refused() {
 
 /// Every positive ERC value, one per row, as for DRC: each refusal names
 /// the parameter, by its engine name.
+/// Oracle: the kinds' documented domains, as for DRC.
 #[test]
 fn every_positive_erc_value_written_as_zero_is_refused() {
     const EM: &str = "max_density: 1000A/m, max_current_per_cut: 80uA, blech_limit: 15000uA, \
