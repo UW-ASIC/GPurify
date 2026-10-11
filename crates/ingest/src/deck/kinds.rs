@@ -326,6 +326,12 @@ pub(crate) const KINDS: &[Kind] = &[
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing_diff", &[0, 1], LIMIT, &[]),
+    // Facing edges only, KLayout's `projection` metric:
+    // `space(lvtn, sd, projection) >= 235nm` (sky130 lvtn.3b).
+    Kind {
+        modifier: Some("projection"),
+        ..drc("space", Cmp::Ge, "projection_spacing", &[0, 1], LIMIT, &[])
+    },
     drc(
         "eol_space",
         Cmp::Ge,

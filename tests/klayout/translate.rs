@@ -700,6 +700,24 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("min_spacing_diff", Key::Pair(na, nb, false), Value::Length)
             }
+            Rule::ProjectionSpacing { a, b, limit } => {
+                let (na, nb) = (fig(a, &mut reads), fig(b, &mut reads));
+                writeln!(
+                    body,
+                    "emit({q}, {a}.separation({b}, {}, projection, transparent)) ; emit({q}, {a} & {b})",
+                    lim(limit),
+                    a = var(a),
+                    b = var(b)
+                )
+                .expect("a String");
+                approx(
+                    "projection_spacing",
+                    Compare::KlayoutWithin,
+                    Key::Pair(na, nb, false),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
             Rule::EolSpacing {
                 layer,
                 eol_width,

@@ -50,7 +50,7 @@ DRC-051	drc	overlay	Abutment / butting edges	IHP:pSD.e-g; GF:DF.3b,NP.3d; SKY:di
 DRC-052	drc	overlay	Gate-shape rules (no bends, no poly on inner diff corners)	SKY:poly.10,poly.11; IHP:Gat.f; A7:GATE.AUX.1; GF:PL.6	gate_corner	implemented	FR; MR; SY; TX:KL	
 DRC-053	drc	overlay	Exact alignment / width match across layers	A7:V1.M2.AUX.2; LEF58_SPACING EXACTALIGNED	full_width	partial	FR; MR; SY; TX:KL	ASAP7 V1.M2.AUX.2 only: LEF58_SPACING EXACTALIGNED (the spacing of exactly aligned line ends) is not modelled
 DRC-054	drc	overlay	Enclosure excluding coincident edges	SKY:lvtn.10	noncoincident_enclosure	implemented	FR; MR; SY; TX:KL	
-DRC-055	drc	overlay	Direction-dependent (S/D-direction) spacing	SKY:lvtn.3b	-	missing	FR	
+DRC-055	drc	overlay	Direction-dependent (S/D-direction) spacing	SKY:lvtn.3b	projection_spacing	partial	FR; MR; SY; TX:KL	Facing edges in both axes, as sky130's own KLayout deck reads lvtn.3b; the S/D direction is not derived from the gate
 DRC-060	drc	cut	Cut-to-cut spacing	LEF:cut SPACING; IHP:Cnt.b,V1.b; GF:CO.2a; SKY:ct.2,via.2; A7:V1.S.1; drt	min_spacing	implemented	BM; FR; TX:KL; MR; SY	
 DRC-061	drc	cut	Centre-to-centre cut spacing	LEF:SPACING CENTERTOCENTER; LEF58_SPACINGTABLE CENTERTOCENTER	cut_spacing	implemented	SE; MR; SY; TX:KL	
 DRC-062	drc	cut	Array / adjacent-cut spacing	LEF:ADJACENTCUTS,ARRAYSPACING; IHP:Cnt.b1,V1.b1; GF:CO.2b; LEF58_ARRAYSPACING; ISPD19	cut_spacing,via_array_spacing	implemented	FR; SE; TX:KL; MR; SY	An array (IHP Cnt.b1, GF180 CO.2b) is a cluster of more than `array` cuts, not rows by columns, so a long single row is held too (fails closed); ADJACENTCUTS EXCEPTSAMEPGNET is not modelled (fails closed)

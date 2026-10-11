@@ -44,6 +44,7 @@
 //! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024 |
 //! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-060 |
 //! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-047, DRC-065, DRC-073, ERC-C11 |
+//! | `space(A, B, projection) >= len` | `projection_spacing` | [`drc::Rule::ProjectionSpacing`] | facing edges of A and B too close | DRC-055 |
 //! | `eol_space(L; eol_width: len) >= len` | `eol_spacing` | [`drc::Rule::EolSpacing`] | too little space at an end of line | DRC-029, DRC-031 |
 //! | `prl_space(L; prl: len) >= len` | `prl_spacing` | [`drc::Rule::PrlSpacing`] | shapes running side by side for `prl`, too close | DRC-026 |
 //! | `corner_space(L) >= len` | `corner_to_corner` | [`drc::Rule::CornerToCorner`] | two shapes whose corners are too close | DRC-032 |
