@@ -2406,7 +2406,8 @@ const CORNERS: &str = "corner cmax m1 thickness 440nm sheet 0.09ohm area_cap 30a
                        fringe_cap 44aF/um\ncorner same m1 sheet 0.1ohm\n";
 
 /// PEX-006: each process corner is extracted at its own values, the
-/// nominal at the nominal's. Oracle: closed forms at the corner's
+/// nominal at the nominal's.
+/// Oracle: closed forms at the corner's
 /// coefficients (two `m1` bars 6 x 1 um, 1 um apart: `Rs·L/W`,
 /// `Ca·A + Cf·P`, `ε₀εr·t·L/S`), read through `compare`; and a law: a corner
 /// that states the nominal values is the nominal network, bit for bit.
@@ -2465,7 +2466,8 @@ fn process_corners_extract_at_their_own_values() {
 }
 
 /// PEX-006, PEX-010: with process corners SPEF writes every value as an
-/// IEEE 1481 triplet `min:typ:max`. Oracle: closed forms. Two `m1` bars
+/// IEEE 1481 triplet `min:typ:max`.
+/// Oracle: closed forms. Two `m1` bars
 /// 3.9 um apart couple at the nominal `m1` (lateral coupling reaches ten
 /// thicknesses, 4 um) and not at a 380 nm corner (3.8 um), so their
 /// coupling's triplet runs from 0 to the 440 nm `cmax` corner's sidewall
@@ -2616,7 +2618,8 @@ fn solved_matrix(
 }
 
 /// PEX-003: an 8 um `m1` plate 250 nm over the substrate in a stratified
-/// stack, 7 up to its top and 3.9 over it. Oracle: laws. Capacitance grows
+/// stack, 7 up to its top and 3.9 over it.
+/// Oracle: laws. Capacitance grows
 /// with any permittivity (Thomson's principle), so it lies strictly between
 /// the stack all 3.9 and the stack all 7; it is at least the column under
 /// it, `ε₀·7·A/h` (a flux tube); and with every permittivity doubled it
@@ -2651,7 +2654,8 @@ fn a_stratified_plate_lies_between_its_two_uniform_stacks() {
 
 /// PEX-003: two `m1` bars 3 um long, 500 nm wide and 500 nm apart, the
 /// stratified stack of [`a_stratified_plate_lies_between_its_two_uniform_stacks`]
-/// around them. Oracle: laws, as there: their coupling lies strictly between
+/// around them.
+/// Oracle: laws, as there: their coupling lies strictly between
 /// the all-3.9 and all-7 stacks' (with a per-panel permittivity it read the
 /// all-7 stack's, ignoring the 3.9 over the bars); the solve is reciprocal
 /// within what its interfaces allow and the matrix reported is symmetric;

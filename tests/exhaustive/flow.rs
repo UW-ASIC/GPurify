@@ -152,7 +152,8 @@ fn waivers(_depth: Depth) -> Vec<Fixture> {
 /// hierarchy-invariant waiver of Calibre Auto-Waivers. A cell `IP` holds a
 /// 50 nm `met1` bar and a waiver over it; `TOP` places it plainly and
 /// mirrored and turned a quarter, and has a narrow bar of its own with no
-/// waiver. Oracle: hand-derived through the real reader and engine: of three
+/// waiver.
+/// Oracle: hand-derived through the real reader and engine: of three
 /// width findings, the two inside `IP` are waived (each placement's waiver
 /// moved with it) and `TOP`'s stays, so the run fails on one; and a law:
 /// without the `waive` line all three are reported and none waived.
