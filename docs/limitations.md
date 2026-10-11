@@ -19,7 +19,6 @@ result from them is weaker than it looks.
 | Check | What it misses |
 |---|---|
 | `enclosure(inner, outer, opposite)` | An inner shape that is not a rectangle is held to the every-side limit instead. |
-| `extension`, `overlap` | Measure bounding boxes, so an L-shaped shape can pass. |
 | `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
 | `multiple_drivers`, `tie_high_low` | Source and drain are as extraction assigns them, so a transistor drawn output side first drives its supply or ties its gate (testing-plan F28). |
 | `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
@@ -150,8 +149,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written |
 | DRC-043 | Width-dependent enclosure | missing | — |
 | DRC-044 | Maximum enclosure / min-and-max window | missing | sky130.deck "npc.5 (maximum enclosure)" |
-| DRC-045 | Extension / end-cap / overhang | partial | Measures bounding boxes, so an L-shape can pass (limitations.md, "Rules that can pass a layout signoff would flag"); the bitmap oracle targets this |
-| DRC-046 | Overlap amount | partial | Bounding-box measure (limitations.md, "Rules that can pass a layout signoff would flag") |
+| DRC-045 | Extension / end-cap / overhang | partial | Each gate of merged A ∩ B measured per crossed axis; a gate that bends or carries a stub inside B measures 0 (fails closed) |
 | DRC-049 | Exact or maximum count | partial | Minimum count only (sky130.deck "an exact count") |
 | DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag") |
 | DRC-052 | Gate-shape rules (no bends, no poly on inner diff corners) | missing | Needs corner/turn selection (sky130.deck) |
