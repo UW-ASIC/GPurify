@@ -25,7 +25,8 @@
 //! the finding it fails on. Left: F28's drawing-order cases
 //! ([`topology_cases`]), where a transistor drawn output side first drives
 //! its supply. A fixed finding's fixtures name it in their comments: F25 to
-//! F29 and F35 from `docs/testing-plan.md`, and four found here:
+//! F29, F35 and F72 ([`metal_over_a_gate`]) from `docs/testing-plan.md`, and
+//! four found here:
 //!
 //! - `F59`: the cumulative antenna ratio pooled all gates of the net at the
 //!   top stage, where IHP's `AreaRatio` sums one ratio per layer over the
@@ -622,6 +623,73 @@ fn antenna_variants() -> Vec<Fixture> {
         .expect(Expect::rule("ant", vec![ratio(2.0).at(500, 500)])),
     );
     out.push(ihp_area_ratio());
+    out.extend(metal_over_a_gate());
+    out
+}
+
+/// F72: a gate's net is that of the poly it lies on, never metal drawn over
+/// it. The 1.0 µm² gate's poly is contacted to 2.0 µm² of met1, so the met1
+/// ratio is 2.0 / 1.0 = 2.0, whatever unconnected met1 crosses the gate: a
+/// 10 × 0.6 µm strip (6.0 µm²), a 2.5 × 1.8 µm plate wholly over it (4.5 µm²),
+/// or the strip over a derived `poly and diff` gate. Joined to the metal
+/// over it, the gate read 6.0, 4.5 and 6.0. A via1 cut sits on the met1 it
+/// lands on, not on another net's poly under that met1: 0.04 µm² of via1 over
+/// the 1.0 µm² gate's net is 0.04.
+fn metal_over_a_gate() -> Vec<Fixture> {
+    let contacted = |mut l: Layout| {
+        rect(&mut l, "met1", (0, 1600, 2000, 2600));
+        l
+    };
+    let strip = (-5000, 200, 5000, 800);
+    let derived = {
+        let mut l = Layout::default();
+        rect(&mut l, "diff", (-500, 0, 1500, 1000));
+        rect(&mut l, "poly", (0, 0, 1000, 2000));
+        rect(&mut l, "cont", (400, 1700, 600, 1900));
+        contacted(l)
+    };
+    let mut out = Vec::new();
+    for (name, gate, mut layout, over) in [
+        ("strip", "gate", contacted(gate_stub("gate")), strip),
+        (
+            "plate",
+            "gate",
+            contacted(gate_stub("gate")),
+            (-1000, -500, 1500, 1300),
+        ),
+        ("derived_gate", "gated", derived, strip),
+    ] {
+        rect(&mut layout, "met1", over);
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna/f72/{name}"),
+                &["ERC-A1"],
+                &antenna_deck(&format!(
+                    "rule ant antenna({gate}, met1; max_ratio: 1.0, sidewall: none, diode: none)"
+                )),
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("ant", vec![ratio(2.0).at(500, 500)])),
+        );
+    }
+    // A second poly line, on its own net, runs under the gate's met1; the
+    // via1 cut over it lands on that met1.
+    let mut cut = contacted(gate_stub("gate"));
+    rect(&mut cut, "poly", (1200, 2000, 1800, 3000));
+    rect(&mut cut, "via1", (1400, 2200, 1600, 2400));
+    out.push(
+        Fixture::new(
+            "erc/antenna/f72/cut_over_other_poly",
+            &["ERC-A1", "ERC-A4"],
+            &antenna_deck(
+                "rule ant antenna(gate, via1; max_ratio: 0.01, sidewall: none, diode: none)",
+            ),
+            ERC,
+        )
+        .layout(cut)
+        .expect(Expect::rule("ant", vec![ratio(0.04).at(500, 500)])),
+    );
     out
 }
 

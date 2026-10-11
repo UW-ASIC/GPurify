@@ -130,8 +130,12 @@ pub struct CmpModel {
 ///   net, so overlapping gate polygons are counted once. A figure is on the
 ///   lowest net among the drawn polygons it covers. A layer that is not a
 ///   conductor (a derived `poly and diffusion` gate, a cut, a capacitor
-///   plate) joins the net of the topmost conductor it overlaps with positive
-///   area; touching alone does not join.
+///   plate) is on the net of one conductor it overlaps with positive area
+///   (touching alone does not join): a cut, one its `connect via` rows name;
+///   any other layer, the one it lies on, never metal routed over it. Of the
+///   conductors it overlaps, one that another reaches upward through cuts is
+///   over it, and of the rest the topmost is taken, so a gate sits on its
+///   poly, not on the diffusion or well under it.
 /// - gates on one net at every stage have one ratio and are reported once.
 /// - with a `diode` layer, a gate whose net at the row's highest stage has
 ///   area on that layer is not this row's: a foundry that states a separate
@@ -294,14 +298,24 @@ pub struct DensityCmpTable {
 }
 
 /// The net of every store row on `layer` that is not a conductor: that of the
-/// topmost conductor (last in `conductors`, which is bottom-up) it overlaps
-/// with positive area, the lowest net among that conductor's shapes. A
-/// derived gate `poly and diff` sits on poly, not the well under it; a cut on
-/// the metal under it. Touching alone does not join, so a gate is not put on
-/// the diffusion beside it. `false` when a layer will not validate.
+/// one conductor among `conductors` (bottom-up) the deck connects it to, the
+/// lowest net among that conductor's shapes it overlaps with positive area.
+/// Touching alone does not join, so a gate is not put on the diffusion beside
+/// it. Of the conductors a shape overlaps:
+///
+/// - a cut joins only those its `connect via` rows name, so a via1 cut sits on
+///   met1, not on the poly under it;
+/// - one that another of them reaches upward through cuts (the stack's vias,
+///   followed bottom-up) is routed over the shape, joined to it only through
+///   those cuts, and is passed over: metal drawn over a gate is not its net;
+/// - of the rest the topmost wins, so a derived gate `poly and diff` sits on
+///   poly, not on the diffusion or well under it.
+///
+/// `false` when a layer will not validate.
 fn attach(
     design: Design<'_>,
     layer: LayerId,
+    stack: &Stack,
     conductors: &[LayerId],
     nets: &NetTable,
     net_of: &mut [NetId],
@@ -316,29 +330,68 @@ fn attach(
     }
     let mut mine = LayerRects::default();
     mine.build(store, layer, &scratch.layer_a);
-    let mut best = vec![NetId::NONE; mine.len()];
+    // `hit[poly * width + c]`: the lowest net of `conductors[c]` under `poly`.
+    let width = conductors.len();
+    let mut hit = vec![NetId::NONE; mine.len() * width];
     let mut theirs = LayerRects::default();
-    for &conductor in conductors {
+    for (c, &conductor) in conductors.iter().enumerate() {
         if validate_layer_into(store, conductor, &mut scratch.layer_b).is_err() {
             return false;
         }
         theirs.build(store, conductor, &scratch.layer_b);
         let under = SortedRects::new(theirs.labelled());
-        for (poly, slot) in (0u32..).zip(best.iter_mut()) {
-            let mut here = NetId::NONE;
-            for &r in mine.of(poly) {
+        for poly in 0..mine.len() {
+            let slot = &mut hit[poly * width + c];
+            for &r in mine.of(u32::try_from(poly).expect("a layer's polygons fit a u32")) {
                 for (_, row) in under.overlapping(r) {
-                    here = here.min(nets.net_of(row));
+                    *slot = (*slot).min(nets.net_of(row));
                 }
-            }
-            if here != NetId::NONE {
-                *slot = here;
             }
         }
     }
+
+    // `over[a * width + b]`: `conductors[b]` is above `conductors[a]`, reached
+    // from it through cuts taken bottom-up.
+    let place: Vec<Option<usize>> = conductors
+        .iter()
+        .map(|&c| stack.conductors.iter().position(|&s| s == c))
+        .collect();
+    let mut over = vec![false; width * width];
+    for &(_, a, b) in &stack.vias {
+        let ends =
+            (conductors.iter().position(|&c| c == a)).zip(conductors.iter().position(|&c| c == b));
+        if let Some((a, b)) = ends {
+            if let (Some(pa), Some(pb)) = (place[a], place[b]) {
+                let (lo, hi) = if pa < pb { (a, b) } else { (b, a) };
+                over[lo * width + hi] |= pa != pb;
+            }
+        }
+    }
+    for via in 0..width {
+        for a in 0..width {
+            if over[a * width + via] {
+                for b in 0..width {
+                    over[a * width + b] |= over[via * width + b];
+                }
+            }
+        }
+    }
+    let named: Vec<LayerId> = stack
+        .vias
+        .iter()
+        .filter(|v| v.0 == layer)
+        .flat_map(|&(_, a, b)| [a, b])
+        .collect();
+    let joins = |c: usize| named.is_empty() || named.contains(&conductors[c]);
+
     let first = store.polys_on_layer(layer).start;
     for (offset, &poly) in mine.poly_of_row.iter().enumerate() {
-        net_of[first as usize + offset] = best[poly as usize];
+        let hit = &hit[poly as usize * width..(poly as usize + 1) * width];
+        let lies = |c: usize| hit[c] != NetId::NONE && joins(c);
+        let on = (0..width)
+            .rev()
+            .find(|&c| lies(c) && !(0..width).any(|d| lies(d) && over[d * width + c]));
+        net_of[first as usize + offset] = on.map_or(NetId::NONE, |c| hit[c]);
     }
     true
 }
@@ -475,7 +528,7 @@ fn stage_nets(
             for row in store.polys_on_layer(layer) {
                 net_of[row as usize] = nets.net_of(PolyId(row));
             }
-        } else if !attach(design, layer, &conductors, nets, net_of, scratch) {
+        } else if !attach(design, layer, stack, &conductors, nets, net_of, scratch) {
             return None;
         }
     }
