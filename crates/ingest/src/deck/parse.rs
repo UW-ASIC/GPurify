@@ -709,6 +709,15 @@ impl<'a> Parser<'a> {
                 };
                 (derived, Some(false), None)
             }
+            "with_bbox_max" | "with_bbox_min" => {
+                let (lo, hi) = self.bounds(op, Dim::Length, false)?;
+                let derived = DerivedOp::WithBbox {
+                    longer: op == "with_bbox_max",
+                    lo,
+                    hi,
+                };
+                (derived, Some(false), None)
+            }
             "with_area" => {
                 let (lo, hi) = self.bounds(op, Dim::Area, false)?;
                 (DerivedOp::WithArea(lo, hi), Some(false), None)

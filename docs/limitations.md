@@ -144,7 +144,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-015 | Discrete / allowed width set | missing | — |
 | DRC-016 | Wrong-direction width or spacing | partial | width(E) and facing_space(E) on L.edges().horizontal() or .vertical() measure in one direction (ASAP7 M4.W.1, W.5, S.1, S.2); the PRL and NONEOL qualifiers of LEF58 WRONGDIRECTION spacing are missing |
 | DRC-020 | Minimum step / edge length / jog | partial | MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing |
-| DRC-021 | Feature length min/max | partial | Edge length via .with_length works; whole-feature length does not |
+| DRC-021 | Feature length min/max | partial | Edge length is length(E) (ASAP7 type L); a straight feature's length is its box's longer side, forbidden(L.with_bbox_max(< len)) (sky130 mf.2, IHP Rsil.f); a bent feature's length along its path is not measured |
 | DRC-027 | Two-widths spacing table | partial | The table is keyed on the wider shape only; TWOWIDTHS keys on both widths |
 | DRC-028 | Influence / stub spacing near wide metal | partial | Implements the sky130 m1.3a form; equivalence with LEF INFLUENCE is unverified |
 | DRC-029 | End-of-line spacing | partial | Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing |

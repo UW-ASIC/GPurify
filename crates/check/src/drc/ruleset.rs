@@ -936,8 +936,10 @@ pub enum Rule {
     /// DRC-021, DRC-051. Rules: sky130 difftap.4 and mf.2, IHP Rsil.f and
     /// Rppd.e, GF180 DF.3b.
     ///
-    /// Limits: the length of a whole feature cannot be measured, only of its
-    /// edges, and edge layers cannot be extended (sky130 difftap.6).
+    /// Limits: a straight feature's length is its box's longer side,
+    /// `forbidden(L.with_bbox_max(< len))`; a bent feature's length along its
+    /// path is not measured, and edge layers cannot be extended (sky130
+    /// difftap.6).
     EdgeMinLength {
         /// The edge layer.
         layer: LayerId,

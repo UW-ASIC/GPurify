@@ -320,6 +320,12 @@ impl Layers<'_> {
             DerivedOp::WithWidth(lo, hi) => {
                 format!("with_width2({a}, {}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
             }
+            DerivedOp::WithBbox { longer, lo, hi } => format!(
+                "{a}.with_bbox_{}({}, {})",
+                if longer { "max" } else { "min" },
+                lo_bound(lo, 2),
+                hi_bound(hi, 2)
+            ),
             DerivedOp::Rectangles { square, keep } => format!(
                 "{a}.{}{}",
                 if keep { "" } else { "non_" },

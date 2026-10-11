@@ -137,6 +137,8 @@ this way. Operations on shapes:
 | `.extents()` | The bounding box of each shape. Boxes that overlap stay separate shapes, as in KLayout: `forbidden` reports each, and an operation or a check that merges its layer merges them. |
 | `.with_area(bounds)` | The shapes whose area, not counting holes, is within the bounds. |
 | `.with_width(bounds)` | The shapes whose narrowest width, as `width` measures it, is within the bounds. The diagonal neck where two shapes overlap at a corner counts, at its exact length: a 70.7 nm neck is `> 70nm` and not `<= 70nm`. |
+| `.with_bbox_max(bounds)` | The shapes whose bounding box's longer side is within the bounds: a straight feature's length, as sky130 mf.2 "length of fuse" or IHP Rsil.f "min. RES length", and KLayout's `with_bbox_max`. |
+| `.with_bbox_min(bounds)` | The same on the shorter side (`with_bbox_min`). |
 | `.rectangles()` / `.squares()` | The shapes that are one axis-aligned rectangle with no hole, or one with equal sides, as KLayout's `rectangles` and `squares`. Touching pieces that make one rectangle are one; two rectangles meeting only at a corner are one shape that is none. `forbidden(capm.non_rectangles())` is sky130 capm.7 "only rectangular capacitors" and LEF58 `RECTONLY`. |
 | `.non_rectangles()` / `.non_squares()` | The other shapes. |
 | `.with_text(T, "pattern")` | The shapes holding a text on layer `T` that matches `pattern`, as IHP picks devices by their text. `*` matches any run of characters and `?` one; everything else matches itself, case included. A text on a shape's edge counts. `T` must be a drawn layer. |
