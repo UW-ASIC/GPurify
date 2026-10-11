@@ -277,8 +277,9 @@ explains (kind 30).
 | 61 | via_stack | `via_stack(C1, C2, ..) <= n` | ROW | EXACT (scripted) | exact | new |
 | 62 | full_width | `full_width(i, o)` | FIG by shape (inner) | EXACT (scripted) | exact | new |
 | 63 | projection_spacing | `space(A, B, projection) >= l` | PAIR | APPROX | KLayout ⊆ GPurify | new |
+| 64 | anchored_patterning | `patterning(L, A1, ..; colors) >= l` | — | NONE | reported as not mirrored | — |
 
-41 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
+41 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -731,6 +732,11 @@ colours are a bipartiteness test, three or more a budgeted search (`Refused` whe
 The differential reports every `multi_patterning` rule as not mirrored. The hybrid oracle (a
 KLayout conflict graph, `isolated(SPACING2, euclidian, transparent)` between figures, coloured by
 brute force in the harness) is not built.
+
+`anchored_patterning` (`patterning(L, A1, ..; colors)`, the same graph with pre-coloured figures)
+is not mirrored either. Its graph decision, `anchor_conflict`, is checked against every colouring
+of small random graphs (`crates/check/tests/drc/patterning_rules.rs`), and its geometry by the
+exhaustive fixtures `anchored_patterning/*`.
 
 ### 27. forbidden — EXACT
 
@@ -1366,6 +1372,10 @@ Each operation runs on merged operands at the default coherence (a3).
 |---|---|---|---|
 | `A and B`, `or`, `not` | Exact booleans of the validated operands; the result is merged | `A & B`, `A \| B`, `A - B` ([L] "and"/"or"/"not") | Only the corner model (a3) |
 | `.sized(len)` | Minkowski sum with a square; erosion is the complement of growing the complement (`sized_into`) | `.sized(len)` (default `square_limit`, [L] "sized") | Identical on rectilinear shapes (v T10) |
+| `.sized(dx, dy)` | Minkowski sum with the box `[-dx, dx] x [-dy, dy]`, or erosion by it; one axis grown and the other shrunk is refused | `.sized(dx, dy)` | Fixtures `derived/sized_xy/*` |
+| `.rectangles()`, `.squares()`, `.non_rectangles()`, `.non_squares()` | A merged figure whose area is its box's (no hole, no notch); equal sides for squares (`rectangles_into`) | the methods of those names | Fixture `derived/shape_class` |
+| `.covering(L)` / `.not_covering(L)` | Holds a whole figure of L, touching from inside allowed (`covering_into`) | `.covering(L)` / `.not_covering(L)` | Fixture `derived/covering_overlapping` |
+| `.overlapping(L)` | Shares area with L; touching is not overlapping (`overlapping_into`) | `.overlapping(L)` | `.not_overlapping(L)` is `.outside(L)` |
 | `.interacting(L)` / `.not_interacting(L)` | Touch or overlap; a shared corner counts (`polys_meet`) | `.interacting(L)` / `.not_interacting(L)` | Same (v T11) |
 | `.inside(L)` | No part of the shape lies outside L; touching the boundary from inside is fine | `.inside(L)` | Same (v T11) |
 | `.outside(L)` | No shared area; touching only is outside | `.outside(L)` | Same (v T11) |
@@ -1386,6 +1396,7 @@ Each operation runs on merged operands at the default coherence (a3).
 | `.interacting(L)` on edges | Whole edges that touch, cross or lie inside | `.interacting(L)` | Same (v T13) |
 | `.with_length(b)` | Length within the bounds | `.with_length(2lo, 2hi + 1)` | |
 | `.horizontal()`, `.vertical()` | The edges along that axis | `.with_angle(0)`, `.with_angle(90)` | An edge layer is axis-aligned, so the two split it (x; fixture `directional`) |
+| `.extended(begin, end, out, in)` | One box per edge, unmerged: lengthened before the start and past the end, widened away from and into the shape (`extended_into`) | `.extended(2end, 2begin, 2out, 2in)`, read raw | KLayout's edges run the other way round, so its begin is GPurify's end. Fixtures `derived/extended/*` (the `ends` cases under rotations only) |
 
 ### Connectivity, for net_spacing
 

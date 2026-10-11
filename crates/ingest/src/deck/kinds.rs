@@ -716,6 +716,19 @@ pub(crate) const KINDS: &[Kind] = &[
     // drawn layer.
     drc("valid", Cmp::Absent, "polygon_validity", &[], None, &[]),
     drc("valid", Cmp::Absent, "polygon_validity", &[0], None, &[]),
+    // Pre-coloured shapes, one anchor layer per mask after the patterned one:
+    // `patterning(met1, met1_mask1, met1_mask2; colors: 2) >= 50nm`.
+    Kind {
+        more: true,
+        ..drc(
+            "patterning",
+            Cmp::Ge,
+            "anchored_patterning",
+            &[0, 1],
+            Some(p("", "color_spacing", Dim::Length)),
+            &[p("colors", "colors", Dim::Count)],
+        )
+    },
     // Every shape (or edge) of the layer is a violation: `forbidden(licon and poly and diff)`.
     drc("forbidden", Cmp::Absent, "forbidden", &[0], None, &[]),
     // Each outer shape holds at least `count` inner shapes entirely: `contains(tap, licon) >= 1`.
