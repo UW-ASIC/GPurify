@@ -275,7 +275,7 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
         "*SPEF \"IEEE 1481-1998\"\n*DESIGN \"layouts/test.gds\"\n*DATE \"2020-01-01T00:00:00Z\"\n\
          *VENDOR \"gpurify\"\n*PROGRAM \"gpurify\"\n*VERSION \"gpurify-test\"\n// deck decks/test.json\n\
          *DESIGN_FLOW \"EXTRACTED\"\n*DIVIDER /\n*DELIMITER :\n*BUS_DELIMITER [ ]\n*T_UNIT 1 NS\n\
-         *C_UNIT 1 FF\n*R_UNIT 1 OHM\n*L_UNIT 1 PH\n\n\
+         *C_UNIT 1 FF\n*R_UNIT 1 OHM\n*L_UNIT 0.000001 UH\n\n\
          *D_NET VDD 0.375000\n*CONN\n*P VDD B\n*CAP\n1 VDD:0 0.250000\n2 VDD:1 VSS:0 0.125000\n\
          *RES\n1 VDD:0 VDD:1 12.500000\n*INDUC\n*END\n\n\
          *D_NET VSS 0.125000\n*CONN\n*P VSS B\n*CAP\n*RES\n*INDUC\n*END\n\n"

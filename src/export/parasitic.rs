@@ -194,9 +194,13 @@ fn spef_section(
 /// Write the network as SPEF. Every net it references must have a name: an
 /// anonymous net is [`WriteError::UnnamedNet`], not a generated placeholder.
 ///
-/// IEEE 1481-1998, units `1 FF`, `1 OHM`, `1 PH`. The header carries
-/// `*DESIGN` (the layout path), `*DATE` only when the header has a
-/// timestamp, `*VERSION`, and the deck path as a comment. Then one `*D_NET`
+/// IEEE 1481-1998, units `1 FF`, `1 OHM` and `0.000001 UH`, which is one
+/// picohenry: the standard's inductance units are `HENRY`, `MH` and `UH`
+/// only (its `induc_unit`), so the scale carries the pico. The header has
+/// every field the standard's `header_def` requires, in its order:
+/// `*DESIGN` (the layout path), `*DATE` (the header's timestamp, an empty
+/// string without one, since `*DATE qstring` is required), `*VERSION`, and
+/// the deck path as a comment. Then one `*D_NET`
 /// per net, in ascending net order, with the net's total capacitance
 /// (coupling included), one bidirectional `*CONN` port, and `*CAP`, `*RES`
 /// and `*INDUC` sections. A coupling capacitance is listed once, in the
@@ -229,9 +233,8 @@ pub fn write_spef(
 
     out.push_str("*SPEF \"IEEE 1481-1998\"\n");
     let _ = writeln!(out, "*DESIGN \"{}\"", header.layout_path);
-    if let Some(stamp) = &header.timestamp {
-        let _ = writeln!(out, "*DATE \"{stamp}\"");
-    }
+    let stamp = header.timestamp.as_deref().unwrap_or_default();
+    let _ = writeln!(out, "*DATE \"{stamp}\"");
     out.push_str("*VENDOR \"gpurify\"\n*PROGRAM \"gpurify\"\n");
     let _ = writeln!(out, "*VERSION \"{}\"", header.tool_version);
     let _ = writeln!(out, "// deck {}", header.deck_path);
@@ -243,7 +246,7 @@ pub fn write_spef(
          *T_UNIT 1 NS\n\
          *C_UNIT 1 FF\n\
          *R_UNIT 1 OHM\n\
-         *L_UNIT 1 PH\n\n",
+         *L_UNIT 0.000001 UH\n\n",
     );
 
     let capacitance = network.capacitance_per_net();
