@@ -1054,6 +1054,22 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("edge_enclosure", Key::Point, Value::Ignore)
             }
+            Rule::Count {
+                layer,
+                limit,
+                sense,
+            } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "n = {}.data.merged.count ; \
+                     put({{ rule: {q}, pt: [die.center.x, die.center.y], v: n }}) if !die.empty? && n {} {limit}",
+                    var(layer),
+                    if sense == LimitSense::Maximum { ">" } else { "<" }
+                )
+                .expect("a String");
+                exact("count", Key::Point, Value::Count)
+            }
         };
         reads.sort();
         reads.dedup();

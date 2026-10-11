@@ -996,6 +996,33 @@ pub enum Rule {
         /// The depth the strip must be covered, in grid units; positive.
         limit: Dbu,
     },
+    /// Too many, or too few, shapes on a layer in the whole layout.
+    ///
+    /// Deck: `count(L) <= n` or `count(L) >= n`, kind `count`. The layer is
+    /// merged first, so touching shapes, and shapes meeting at a corner, are
+    /// one; the count is of the merged figures in the whole layout, a
+    /// quantity per chip. Write a device count on its marker layer, and "one
+    /// seal ring per chip" as `count(seal) <= 1` with `count(seal) >= 1`.
+    ///
+    /// One violation when the count is above a maximum or below a minimum, at
+    /// the centre of the die (the extent of the drawn layers, as
+    /// [`Rule::GlobalDensity`] takes it without a boundary), `measured` the
+    /// count. `shapes.0` is the layer's first row, or none on an empty layer.
+    /// `examined` counts figures. Records [`Outcome::Skipped`] when nothing is
+    /// drawn.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-091, DRC-095. Rules: IHP npn13G2.bR (a maximum number of npn13G2
+    /// devices per chip) and Seal.a to Seal.n (one seal ring); `KLayout`
+    /// `count` on a merged layer.
+    Count {
+        /// The layer counted, drawn or derived.
+        layer: LayerId,
+        /// The count, a minimum or a maximum by `sense`; zero is legal.
+        limit: u32,
+        /// `Minimum` for `>=`, `Maximum` for `<=`.
+        sense: LimitSense,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1467,6 +1494,11 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "count" => Rule::Count {
+                    layer: one(spec)?,
+                    limit: count(spec, "limit", u32::MAX)?,
+                    sense: sense(spec)?,
+                },
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -1694,6 +1726,11 @@ impl RuleSet {
                     outer,
                     limit,
                 } => edge::enclosure(store, id, edges, outer, limit, s, out),
+                Rule::Count {
+                    layer,
+                    limit,
+                    sense,
+                } => area::count(store, id, (layer, drawn), limit, sense, s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -1729,7 +1766,8 @@ impl Rule {
             | Rule::NetSpacing { layer, .. }
             | Rule::SpacingTable { layer, .. }
             | Rule::AttachedWideSpacing { layer, .. }
-            | Rule::EdgeMinLength { layer, .. } => [Some(layer), None],
+            | Rule::EdgeMinLength { layer, .. }
+            | Rule::Count { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -1771,7 +1809,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 35] = [
+pub const KINDS: [&str; 36] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -1807,4 +1845,5 @@ pub const KINDS: [&str; 35] = [
     "edge_min_length",
     "edge_spacing",
     "edge_enclosure",
+    "count",
 ];

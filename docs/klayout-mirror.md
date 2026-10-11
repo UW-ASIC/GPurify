@@ -249,8 +249,9 @@ explains (kind 30).
 | 33 | edge_min_length | `length(E) >= l` | EDGE | EXACT | exact | 2162 |
 | 34 | edge_spacing | `space(E[, F]) >= l` | POINT | APPROX | KLayout ⊆ GPurify | 1835 |
 | 35 | edge_enclosure | `enclosure(E, L) >= l` | POINT | EXACT | exact | 3112 |
+| 36 | count | `count(L) <= n` / `>= n` | POINT | EXACT | exact | new in H |
 
-23 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+24 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -846,6 +847,22 @@ edge_enclosure(id, E, O, LIM)   # each edge whose RBA::Edges.new(e).extended_out
 
 - (v t16 Q4/Q5.) Key POINT, the edge midpoint; GPurify's `measured` (the covered depth) is not
   compared.
+
+### 36. count — EXACT
+
+**GPurify** (`area.rs` `count`): the merged figures of the layer in the whole layout, one finding
+when their number is above a maximum or below a minimum, at the centre of the die (the drawn
+layers' extent, as for `global_density`), `measured` the count. Nothing drawn is `Skipped`.
+
+**KLayout**
+
+```ruby
+n = L.data.merged.count
+put({ rule: id, pt: [die.center.x, die.center.y], v: n }) if !die.empty? && n > MAX   # or n < MIN
+```
+
+- `merged` at the default coherence joins shapes meeting at a corner, as the Connected model does
+  (a3), so both count the same figures. Key POINT, the die centre; the count compared exactly.
 
 ---
 
