@@ -149,6 +149,7 @@ A layer without one is not a test.
 | F101 | **`nf` on unsized MOS:** two unsized parallel fingers keep their count in `m`, so they match `m=2` but not a card stating `nf=2` alone. No source settles whether `nf` with no W is a count of channels; recorded as documented behaviour (`docs/usage.md`), not a defect. | `lvs/reduce.rs` | **Closed: a documented behaviour.** Found by B27. |
 | F102 | **SPEF had no `*DATE`** when no timestamp was given, and the CLI never gives one. IEEE 1481 `header_def` requires `*DATE qstring`; OpenSTA's grammar has no empty alternative, so it rejected every SPEF the CLI wrote. **Fixed in P1:** `*DATE ""`. | `src/export/parasitic.rs` | **Reader rejects the file.** Found by P1. |
 | F103 | **SPEF stated `*L_UNIT 1 PH`**, a unit IEEE 1481 does not define (inductance: HENRY, MH, UH); OpenSTA warns (1644) and ignores the scale. **Fixed in P1:** `*L_UNIT 0.000001 UH`, every value unchanged. | `src/export/parasitic.rs` | **Wrong inductance scale in readers.** Found by P1. |
+| F104 | **A deck grid with a long mantissa overflowed when squared** for an area rule (`grid 55555555555555555555555555nm`, then any area): a panic, not a typed error. **Fixed:** the square is a checked multiply that refuses with a diagnostic; the fuzz input is kept in `fuzz/regressions/deck/`. | `crates/ingest/src/deck/parse.rs` | **Panic on hostile input.** Found by the `deck` fuzz target (B30's heavy run). |
 
 ---
 

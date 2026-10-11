@@ -1858,10 +1858,12 @@ impl<'a> Parser<'a> {
         let grid = self
             .deck_grid
             .ok_or_else(|| self.err(value.span(), "no `grid` is stated before this area"))?;
-        let square = Dec {
-            m: grid.m * grid.m,
-            e: grid.e * 2,
-        };
+        let square = grid
+            .m
+            .checked_mul(grid.m)
+            .zip(grid.e.checked_mul(2))
+            .map(|(m, e)| Dec { m, e })
+            .ok_or_else(|| self.err(value.span(), "the grid squared is too long a number"))?;
         if nm2.is_multiple_of(square) != Some(true) {
             return Err(self.err(
                 value.span(),
