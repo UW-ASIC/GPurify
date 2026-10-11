@@ -250,9 +250,7 @@ fn batch(yosys: &Path, boards: &[(String, Board)]) -> Tally {
     if tally.broken.is_empty() {
         let _ = std::fs::remove_dir_all(&dir);
     } else {
-        tally
-            .broken
-            .push(format!("(inputs and outputs kept in {})", dir.display()));
+        tally.broken.push(super::kept(&dir));
     }
     tally
 }
