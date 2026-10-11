@@ -1199,15 +1199,25 @@ fn a_layer_operation_checks_its_arguments() {
 /// Oracle: `docs/deck.md`, Rules: the id is how violations are reported, so it
 /// is unique, and `warning` is "ERC only".
 #[test]
-fn a_duplicate_rule_and_warning_on_drc_are_errors() {
+fn a_duplicate_rule_id_is_an_error() {
     one_error(
         "rule w width(met1) >= 100nm\nrule w width(met1) >= 200nm\n",
         "duplicate rule id `w`",
     );
-    one_error(
-        "rule w warning width(met1) >= 100nm\n",
-        "`warning` is not legal on `width`",
-    );
+}
+
+/// Oracle: deck.md, "Rules": `rule <id> warning <check>` marks any rule, a
+/// design rule as much as an electrical one (a foundry's recommended rule,
+/// catalog DRC-110), and the mark is the `warning` flag after the rule's own
+/// parameters; a row written without it carries no flag.
+#[test]
+fn warning_marks_a_design_rule_as_it_does_an_electrical_one() {
+    let (deck, strings) =
+        ok("rule M1.bR warning space(met1) >= 220nm\nrule M1.b space(met1) >= 180nm\n");
+    let got = rules(&deck, &strings);
+    assert_eq!(got[0].1, "min_spacing");
+    assert_eq!(got[0].3, ["limit=220dbu", "warning=true"]);
+    assert_eq!(got[1].3, ["limit=180dbu"]);
 }
 
 /// Oracle: `docs/deck.md`, Errors: problems are "reported together (up to 50)".

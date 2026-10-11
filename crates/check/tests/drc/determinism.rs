@@ -5,7 +5,7 @@ use crate::common;
 
 use common::{A, B, OTHER_RULE, RULE};
 use gpurify_check::drc::{Rule, RuleSet};
-use gpurify_check::report::{RuleRun, Violations};
+use gpurify_check::report::{RuleRun, Severity, Violations};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{assert_violations_eq, dbu};
 
@@ -128,5 +128,35 @@ fn translating_the_whole_design_translates_the_report_and_changes_nothing_else()
             moved.at[row].y,
             "row {row} moved by something other than the translation in y"
         );
+    }
+}
+
+/// Oracle: the `RuleSet::warnings` contract (deck.md, "Rules"; catalog
+/// DRC-110). A rule the deck writes `warning` reports exactly what it reports
+/// unmarked, every finding demoted to a warning, and the rule beside it keeps
+/// its errors: marking one rule changes the severity column of its own rows
+/// and nothing else.
+#[test]
+fn a_warning_rule_demotes_its_own_findings_and_no_other_rule_s() {
+    let store = busy_layout();
+    let (errors, error_runs) = run_once(&two_rules(), &store);
+    let marked = RuleSet {
+        warnings: vec![RULE],
+        ..two_rules()
+    };
+    let (warned, warned_runs) = run_once(&marked, &store);
+
+    assert_eq!(error_runs, warned_runs, "marking changed what ran");
+    assert!(errors.rule.contains(&RULE) && errors.rule.contains(&OTHER_RULE));
+    assert_eq!(errors.rule, warned.rule);
+    assert_eq!(errors.measured, warned.measured);
+    for row in 0..warned.rule.len() {
+        let want = if warned.rule[row] == RULE {
+            Severity::Warning
+        } else {
+            Severity::Error
+        };
+        assert_eq!(errors.severity[row], Severity::Error);
+        assert_eq!(warned.severity[row], want, "row {row}");
     }
 }

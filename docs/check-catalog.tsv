@@ -86,7 +86,7 @@ DRC-102	drc	mpt	Pre-coloured (MASK) same-/different-mask spacing	LEF:MASK; LEF58
 DRC-103	drc	mpt	Stitch legality	CAL; ICV	-	missing	-	
 DRC-104	drc	mpt	Per-colour density and colour ratio	CAL	-	missing	CF	
 DRC-105	drc	mpt	Trim / cut-metal layers	LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL; A7:GCUT	-	missing	FR	
-DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	deck:warning	partial	FR; SY	`warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning
+DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	deck:warning	implemented	FR; SY; MR	Any DRC row may be written warning; IHP TM2.bR is the fixture
 DRC-111	drc	dfm	DFM scoring of recommended rules	CAL:YieldAnalyzer	-	missing	-	
 DRC-112	drc	dfm	Critical area analysis	CAL:YieldAnalyzer	-	missing	CF	
 DRC-113	drc	dfm	Litho / CMP simulation hotspots	CAL:LFD,CMPAnalyzer; PEG; Ouma2002	density_cmp	partial	CF; MR; SY	CMP hotspots a public model defines: a density step between neighbouring windows (max_delta) and a first-order thickness excursion, sensitivity x (density - target), over a window standing for the planarization length (density_cmp, Ouma2002). Litho hotspots (aerial-image, process-window simulation) and a full CMP topography simulation need a foundry's calibrated optical, resist and polish models, which no open PDK publishes; foundry hotspot pattern libraries are not public

@@ -3593,17 +3593,55 @@ fn dangling_metal() -> Vec<Fixture> {
     ])
 }
 
-/// A DRC rule written `warning` (DRC-110): recommended rules cannot be
-/// reported as warnings, and the deck refuses the row, so the run cannot pass.
+/// A DRC rule written `warning` (DRC-110): a foundry's recommended rule.
+/// deck.md, "Rules": its findings are reported as the same rule unmarked would
+/// report them, but do not fail the run.
+///
+/// The rule is IHP SG13G2 TM2.bR as `pdks/ihp_sg13g2.deck` transcribes it (a
+/// spacing table: 5 um between TopMetal2 lines wider than 5 um running in
+/// parallel for more than 50 um), beside the required TM2.b (2 um), on two
+/// 6 um x 60 um bars swept about the recommended 5 um. Below it, the warning
+/// rule reports the gap and the run still passes; at and above it, nothing.
+/// The same layout under the unmarked rule fails the run below the limit.
 fn drc_warning() -> Vec<Fixture> {
-    vec![Fixture::new(
-        "drc_warning/refused",
-        &["DRC-110"],
-        &new_deck(&["met1"], "rule rr warning width(met1) >= 100nm\n"),
-        DRC,
-    )
-    .layout(Layout::default().rect("met1", 0, 0, 1000, 1000))
-    .expect(Expect::Passes(false))]
+    const TM2_BR: &str = "space_table(topmetal2; prl: [0um, 50um], width: [0um, 5um], \
+                          space: [[2um, 2um], [2um, 5um]])";
+    let bars = |g: i64| {
+        Layout::default()
+            .rect("topmetal2", 0, 0, 6000, 60_000)
+            .rect("topmetal2", 6000 + g, 0, 12_000 + g, 60_000)
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(5000) {
+        let flagged = g < 5000;
+        cases.push(
+            Fixture::new(
+                &format!("drc_warning/tm2_br/{side}"),
+                &["DRC-110"],
+                &new_deck(
+                    &["topmetal2"],
+                    &format!("rule TM2.b space(topmetal2) >= 2um\nrule TM2.bR warning {TM2_BR}\n"),
+                ),
+                DRC,
+            )
+            .layout(bars(g))
+            .expect(Expect::clean("TM2.b"))
+            .expect(Expect::rule("TM2.bR", below(g, 5000)))
+            .expect(Expect::Passes(true)),
+        );
+        cases.push(
+            Fixture::new(
+                &format!("drc_warning/unmarked/{side}"),
+                &["DRC-110"],
+                &new_deck(&["topmetal2"], &format!("rule TM2.bR {TM2_BR}\n")),
+                DRC,
+            )
+            .layout(bars(g))
+            .expect(Expect::rule("TM2.bR", below(g, 5000)))
+            .expect(Expect::Passes(!flagged)),
+        );
+    }
+    every_placement(cases)
 }
 
 // --------------------------------------------------------- multi-patterning

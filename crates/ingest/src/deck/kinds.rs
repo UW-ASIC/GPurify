@@ -164,8 +164,6 @@ pub(crate) struct Kind {
     pub params: &'static [Param],
     /// Engine flag params the row implies.
     pub fixed: &'static [(&'static str, bool)],
-    /// Accepts `warning` after the rule id.
-    pub warns: bool,
 }
 
 const fn p(name: &'static str, engine: &'static str, dim: Dim) -> Param {
@@ -186,7 +184,7 @@ const fn opt(name: &'static str, engine: &'static str, dim: Dim) -> Param {
     }
 }
 
-/// A DRC row: one comparison, no `warning`.
+/// A DRC row: one comparison.
 const fn drc(
     name: &'static str,
     cmp: Cmp,
@@ -205,11 +203,10 @@ const fn drc(
         limit,
         params,
         fixed: &[],
-        warns: false,
     }
 }
 
-/// An ERC row: named arguments only, `warning` allowed.
+/// An ERC row: named arguments only.
 const fn erc(
     name: &'static str,
     layers: &'static [u8],
@@ -226,7 +223,6 @@ const fn erc(
         limit: None,
         params,
         fixed: &[],
-        warns: true,
     }
 }
 
