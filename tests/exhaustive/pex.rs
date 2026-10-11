@@ -2391,6 +2391,168 @@ fn spef_reads_back_through_an_independent_reader_as_the_network() {
     assert_eq!(kinds, [true; 3], "every section is exercised");
 }
 
+/// [`PARAMS`]' `m1` row at the `cmax` corner of [`CORNERS`].
+const CMAX_M1: Row = Row {
+    thickness: 440.0,
+    sheet: 0.09,
+    area: 30.0,
+    fringe: 44.0,
+    ..PARAMS.m1
+};
+
+/// Two corners: `cmax` varies four of `m1`'s values; `same` states `m1`'s
+/// nominal sheet resistance, so it is the nominal stack.
+const CORNERS: &str = "corner cmax m1 thickness 440nm sheet 0.09ohm area_cap 30aF/um2 \
+                       fringe_cap 44aF/um\ncorner same m1 sheet 0.1ohm\n";
+
+/// PEX-006: each process corner is extracted at its own values, the
+/// nominal at the nominal's. Oracle: closed forms at the corner's
+/// coefficients (two `m1` bars 6 x 1 um, 1 um apart: `Rs·L/W`,
+/// `Ca·A + Cf·P`, `ε₀εr·t·L/S`), read through `compare`; and a law: a corner
+/// that states the nominal values is the nominal network, bit for bit.
+/// Fails if a corner reads the nominal stack, or the nominal a corner's.
+#[test]
+fn process_corners_extract_at_their_own_values() {
+    let ran = run(
+        &deck(PARAMS, &[], CORNERS),
+        parallel(Metal::M1, 6_000, 1_000, 1_000, 0),
+        PEX,
+        &[],
+    );
+    let nominal = ran.outputs.parasitics.as_ref().expect("PEX ran");
+    let names: Vec<&str> = ran
+        .outputs
+        .corners
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(names, ["cmax", "same"]);
+    assert_eq!(&ran.outputs.corners[1].1, nominal, "the nominal values");
+
+    let out = gpurify::extract::compare::compare(nominal, &ran.outputs.corners[0].1);
+    for (metric, want_nominal, want_corner) in [
+        (
+            &out.resistance,
+            wire_ohm(PARAMS.m1, 6_000, 1_000),
+            wire_ohm(CMAX_M1, 6_000, 1_000),
+        ),
+        (
+            &out.ground_cap,
+            ground_ff(PARAMS.m1, 6e6, 14_000.0),
+            ground_ff(CMAX_M1, 6e6, 14_000.0),
+        ),
+    ] {
+        assert_eq!(metric.key.len(), 2, "both bars");
+        for (&got_nominal, &got_corner) in metric.reference.iter().zip(&metric.candidate) {
+            assert!(
+                relative(got_nominal, want_nominal) < EXACT
+                    && relative(got_corner, want_corner) < EXACT,
+                "nominal {got_nominal} want {want_nominal}, cmax {got_corner} want {want_corner}"
+            );
+        }
+    }
+    assert_eq!(out.coupling.key.len(), 1);
+    let lateral = (
+        lateral_ff(PARAMS.m1, 6_000, 1_000),
+        lateral_ff(CMAX_M1, 6_000, 1_000),
+    );
+    assert!(
+        relative(out.coupling.reference[0], lateral.0) < EXACT
+            && relative(out.coupling.candidate[0], lateral.1) < EXACT,
+        "coupling {:?}, want {lateral:?}",
+        out.coupling
+    );
+}
+
+/// PEX-006, PEX-010: with process corners SPEF writes every value as an
+/// IEEE 1481 triplet `min:typ:max`. Oracle: closed forms. Two `m1` bars
+/// 3.9 um apart couple at the nominal `m1` (lateral coupling reaches ten
+/// thicknesses, 4 um) and not at a 380 nm corner (3.8 um), so their
+/// coupling's triplet runs from 0 to the 440 nm `cmax` corner's sidewall
+/// coupling; `cmax`'s resistance is the low end of the resistance's (0.09
+/// ohm per square against 0.1). And a
+/// law: with no corners the corner writer is `write_spef` byte for byte.
+#[test]
+fn spef_writes_process_corners_as_triplets() {
+    let corners = format!("{CORNERS}corner thin m1 thickness 380nm\n");
+    let ran = run(
+        &deck(PARAMS, &[], &corners),
+        parallel(Metal::M1, 6_000, 1_000, 3_900, 0),
+        PEX,
+        &[],
+    );
+    let header = gpurify::export::Header {
+        tool_version: "test",
+        deck_path: "pex.deck".into(),
+        layout_path: "pex.gds".into(),
+        timestamp: None,
+    };
+    let nominal = ran.outputs.parasitics.as_ref().expect("PEX ran");
+    let write = |corners: &[&ParasiticNetwork]| {
+        let mut spef = String::new();
+        gpurify::export::parasitic::write_spef_corners(
+            nominal,
+            corners,
+            &ran.extracted.ports,
+            &ran.loaded.strings,
+            &header,
+            &mut spef,
+        )
+        .expect("SPEF writes");
+        spef
+    };
+    let mut plain = String::new();
+    gpurify::export::parasitic::write_spef(
+        nominal,
+        &ran.extracted.ports,
+        &ran.loaded.strings,
+        &header,
+        &mut plain,
+    )
+    .expect("SPEF writes");
+    assert_eq!(write(&[]), plain, "no corners is plain SPEF");
+
+    let all: Vec<&ParasiticNetwork> = ran.outputs.corners.iter().map(|(_, n)| n).collect();
+    let spef = write(&all);
+    let triplet = |line: &str| -> [f64; 3] {
+        let values: Vec<f64> = line
+            .rsplit(' ')
+            .next()
+            .expect("a value")
+            .split(':')
+            .map(|v| v.parse().expect("a number"))
+            .collect();
+        values.try_into().expect("a triplet")
+    };
+    let lateral = lateral_ff(PARAMS.m1, 6_000, 3_900);
+    let thickest = lateral_ff(CMAX_M1, 6_000, 3_900);
+    let coupling = spef
+        .lines()
+        .find(|line| line.split(' ').count() == 4 && line.contains("A:") && line.contains("B:"))
+        .unwrap_or_else(|| panic!("a coupling row\n{spef}"));
+    let [low, typical, high] = triplet(coupling);
+    assert!(
+        low == 0.0 && (typical - lateral).abs() <= 5e-7 && (high - thickest).abs() <= 5e-7,
+        "{coupling}, want 0:{lateral}:{thickest}"
+    );
+    let resistance = spef
+        .lines()
+        .skip_while(|line| *line != "*RES")
+        .nth(1)
+        .unwrap_or_else(|| panic!("a *RES row\n{spef}"));
+    let [low, typical, high] = triplet(resistance);
+    let (r_min, r_nom) = (
+        wire_ohm(CMAX_M1, 6_000, 1_000),
+        wire_ohm(PARAMS.m1, 6_000, 1_000),
+    );
+    assert!(
+        (low - r_min).abs() <= 5e-7
+            && (typical - r_nom).abs() <= 5e-7
+            && (high - r_nom).abs() <= 5e-7,
+        "{resistance}, want {r_min}:{r_nom}:{r_nom}"
+    );
+}
+
 mod fastcap;
 mod fasthenry;
 mod magic;

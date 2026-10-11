@@ -18,6 +18,7 @@
 //! be written under one of them and lose the rest, since neither format can
 //! give a net two names: both refuse that too ([`WriteError::ShortedLabels`]).
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::ops::Range;
 
@@ -26,6 +27,7 @@ use crate::export::{check_labels_one_to_one, narrow, Header, WriteError};
 use gpurify_check::topology::{NetId, PortTable};
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
+use gpurify_geom::Qty;
 use gpurify_ingest::StrTable;
 
 /// Between a net's name and the node's index within it (`*DELIMITER :`).
@@ -229,12 +231,24 @@ pub(crate) fn mutual_couplings(
         .collect()
 }
 
+/// One value per network, `a` or the IEEE 1481 triplet `a:b:c`.
+fn put_values(values: impl Iterator<Item = f64>, out: &mut String) {
+    for (k, value) in values.enumerate() {
+        if k > 0 {
+            out.push(':');
+        }
+        format_f64(value, out);
+    }
+}
+
 /// One `*CAP` / `*RES` / `*INDUC` section of one `*D_NET` block.
 ///
 /// `rows` is this net's element range; `select` picks this section's rows and
-/// magnitudes. Only a `*CAP` row (`far_optional`) may name a single node.
+/// magnitudes, one per network of `values` (the first gives the nodes; the
+/// others are aligned with it, element for element). Only a `*CAP` row
+/// (`far_optional`) may name a single node.
 fn spef_section(
-    network: &ParasiticNetwork,
+    values: &[&ParasiticNetwork],
     rows: Range<usize>,
     keyword: &str,
     select: fn(Parasitic) -> Option<f64>,
@@ -243,13 +257,14 @@ fn spef_section(
     strings: &StrTable,
     out: &mut String,
 ) -> Result<(), WriteError> {
+    let network = values[0];
     let _ = writeln!(out, "{keyword}");
 
     let mut index = 1usize;
     for row in rows {
-        let Some(magnitude) = select(network.value[row]) else {
+        if select(network.value[row]).is_none() {
             continue;
-        };
+        }
 
         let _ = write!(out, "{index} ");
         node_name(network, network.from[row], ports, strings, out)?;
@@ -266,7 +281,12 @@ fn spef_section(
             }
         }
         out.push(' ');
-        format_f64(magnitude, out);
+        put_values(
+            values
+                .iter()
+                .map(|aligned| select(aligned.value[row]).unwrap_or(f64::NAN)),
+            out,
+        );
         out.push('\n');
         index += 1;
     }
@@ -307,9 +327,165 @@ pub fn write_spef(
     header: &Header,
     out: &mut String,
 ) -> Result<(), WriteError> {
+    check_canonical(network)?;
+    write_spef_values(&[network], ports, strings, header, out)
+}
+
+/// Write `nominal` as SPEF with every value an IEEE 1481 triplet
+/// `min:typ:max` over the process corners: the smallest of the nominal's and
+/// every corner's value, the nominal's, and the largest. Without corners it
+/// is [`write_spef`], byte for byte.
+///
+/// The networks must have the same nodes, as one extraction at several
+/// stacks does, and are aligned element by element on canonical order's key
+/// less the value (near node, far node, kind): elements of one kind between
+/// the same two nodes are first combined into one (capacitances and mutual
+/// inductances add; resistances and inductances combine in parallel), and a
+/// capacitance one network lacks reads 0 there, as a coupling a corner's
+/// thinner layer leaves out of the closed forms' reach does.
+///
+/// # Errors
+///
+/// As [`write_spef`], for any of the networks, and
+/// [`WriteError::Unrepresentable`] for networks whose nodes differ, or a
+/// resistance or inductance one network has and another lacks.
+pub fn write_spef_corners(
+    nominal: &ParasiticNetwork,
+    corners: &[&ParasiticNetwork],
+    ports: &PortTable,
+    strings: &StrTable,
+    header: &Header,
+    out: &mut String,
+) -> Result<(), WriteError> {
+    check_canonical(nominal)?;
+    if corners.is_empty() {
+        return write_spef_values(&[nominal], ports, strings, header, out);
+    }
+    for corner in corners {
+        check_canonical(corner)?;
+        if corner.node_net != nominal.node_net {
+            return Err(WriteError::Unrepresentable(
+                "process corners whose networks have different nodes",
+            ));
+        }
+    }
+    let [low, typical, high] = envelope(nominal, corners)?;
+    write_spef_values(&[&low, &typical, &high], ports, strings, header, out)
+}
+
+/// Element order less the value, as [`ParasiticNetwork::sort_canonical`]
+/// keys it: near node, far node with ground first, kind.
+type Slot = (u32, u64, u8);
+
+/// A kind's place in canonical order.
+const fn kind_rank(value: Parasitic) -> u8 {
+    match value {
+        Parasitic::Resistance(_) => 0,
+        Parasitic::GroundCap(_) => 1,
+        Parasitic::CouplingCap(_) => 2,
+        Parasitic::Inductance(_) => 3,
+        Parasitic::MutualInductance(_) => 4,
+    }
+}
+
+/// `template`'s kind with the value `raw`.
+fn with_raw(template: Parasitic, raw: f64) -> Parasitic {
+    match template {
+        Parasitic::Resistance(_) => Parasitic::Resistance(Qty::new(raw)),
+        Parasitic::GroundCap(_) => Parasitic::GroundCap(Qty::new(raw)),
+        Parasitic::CouplingCap(_) => Parasitic::CouplingCap(Qty::new(raw)),
+        Parasitic::Inductance(_) => Parasitic::Inductance(Qty::new(raw)),
+        Parasitic::MutualInductance(_) => Parasitic::MutualInductance(Qty::new(raw)),
+    }
+}
+
+/// Every element of `network` by its [`Slot`], those sharing one combined:
+/// capacitances and mutual inductances add, resistances and inductances
+/// combine in parallel.
+fn slots(network: &ParasiticNetwork) -> BTreeMap<Slot, Parasitic> {
+    let mut out: BTreeMap<Slot, Parasitic> = BTreeMap::new();
+    for row in 0..network.element_count() {
+        let value = network.value[row];
+        let far = network.to[row].map_or(0, |node| u64::from(node.0) + 1);
+        let slot = (network.from[row].0, far, kind_rank(value));
+        out.entry(slot)
+            .and_modify(|have| {
+                let (a, b) = (spice_card(*have).2, spice_card(value).2);
+                let combined = match value {
+                    Parasitic::Resistance(_) | Parasitic::Inductance(_) => a * b / (a + b),
+                    _ => a + b,
+                };
+                *have = with_raw(value, combined);
+            })
+            .or_insert(value);
+    }
+    out
+}
+
+/// The nominal network and its corners as three aligned networks: each
+/// slot's smallest value, the nominal's, and the largest.
+fn envelope(
+    nominal: &ParasiticNetwork,
+    corners: &[&ParasiticNetwork],
+) -> Result<[ParasiticNetwork; 3], WriteError> {
+    let all: Vec<BTreeMap<Slot, Parasitic>> = std::iter::once(nominal)
+        .chain(corners.iter().copied())
+        .map(slots)
+        .collect();
+    let mut keys: Vec<Slot> = all.iter().flat_map(|map| map.keys().copied()).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let empty = || ParasiticNetwork {
+        node_net: nominal.node_net.clone(),
+        node_layer: nominal.node_layer.clone(),
+        ..ParasiticNetwork::default()
+    };
+    let mut out = [empty(), empty(), empty()];
+    for key in keys {
+        let template = all
+            .iter()
+            .find_map(|map| map.get(&key).copied())
+            .expect("a key comes from some network");
+        let mut values = Vec::with_capacity(all.len());
+        for map in &all {
+            match map.get(&key) {
+                Some(&value) => values.push(spice_card(value).2),
+                // A coupling out of reach at one stack is no coupling there.
+                None if as_farads(template).is_some() => values.push(0.0),
+                None => {
+                    return Err(WriteError::Unrepresentable(
+                        "a resistance or inductance at one process corner and not another",
+                    ))
+                }
+            }
+        }
+        let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let far = key
+            .1
+            .checked_sub(1)
+            .map(|far| NodeId(u32::try_from(far).expect("a far node was a NodeId")));
+        let from = NodeId(key.0);
+        for (network, raw) in out.iter_mut().zip([low, values[0], high]) {
+            network.push(from, far, with_raw(template, raw));
+        }
+    }
+    Ok(out)
+}
+
+/// [`write_spef`] over `values`: the first network gives the nodes and
+/// elements, and each value is written once per network, so three aligned
+/// networks write IEEE 1481 triplets. Each must be canonical.
+fn write_spef_values(
+    values: &[&ParasiticNetwork],
+    ports: &PortTable,
+    strings: &StrTable,
+    header: &Header,
+    out: &mut String,
+) -> Result<(), WriteError> {
+    let network = values[0];
     let nodes = network.node_count();
     let elements = network.element_count();
-    check_canonical(network)?;
     check_labels_one_to_one(
         network.node_net.chunk_by(|a, b| a == b).map(|run| run[0]),
         ports,
@@ -334,7 +510,10 @@ pub fn write_spef(
          *L_UNIT 0.000001 UH\n\n",
     );
 
-    let capacitance = network.capacitance_per_net();
+    let capacitance: Vec<Vec<f64>> = values
+        .iter()
+        .map(|aligned| aligned.capacitance_per_net())
+        .collect();
     // One `*D_NET` block per net; two cursors, sound after `check_canonical`.
     let mut node = 0usize;
     let mut element = 0usize;
@@ -344,7 +523,7 @@ pub fn write_spef(
         out.push_str("*D_NET ");
         put_net_name(net, ports, strings, out)?;
         out.push(' ');
-        format_f64(capacitance[net.0 as usize], out);
+        put_values(capacitance.iter().map(|totals| totals[net.0 as usize]), out);
         out.push('\n');
 
         // No per-terminal direction is known, so one bidirectional connection.
@@ -356,7 +535,7 @@ pub fn write_spef(
             element + network.from[element..].partition_point(|from| (from.0 as usize) < node_end);
 
         spef_section(
-            network,
+            values,
             element..element_end,
             "*CAP",
             as_farads,
@@ -366,7 +545,7 @@ pub fn write_spef(
             out,
         )?;
         spef_section(
-            network,
+            values,
             element..element_end,
             "*RES",
             as_ohms,
@@ -376,7 +555,7 @@ pub fn write_spef(
             out,
         )?;
         spef_section(
-            network,
+            values,
             element..element_end,
             "*INDUC",
             as_henries,
@@ -387,9 +566,9 @@ pub fn write_spef(
         )?;
         // IEEE 1481 has no mutual inductance; a comment keeps it in the file.
         for row in element..element_end {
-            let Some(henries) = as_mutual_henries(network.value[row]) else {
+            if as_mutual_henries(network.value[row]).is_none() {
                 continue;
-            };
+            }
             out.push_str("// mutual ");
             node_name(network, network.from[row], ports, strings, out)?;
             out.push(' ');
@@ -398,7 +577,12 @@ pub fn write_spef(
             ))?;
             node_name(network, far, ports, strings, out)?;
             out.push(' ');
-            format_f64(henries, out);
+            put_values(
+                values
+                    .iter()
+                    .map(|aligned| as_mutual_henries(aligned.value[row]).unwrap_or(f64::NAN)),
+                out,
+            );
             out.push('\n');
         }
         out.push_str("*END\n\n");

@@ -102,6 +102,12 @@ pub struct Outputs {
     /// ([`gpurify_extract::reduce`]), in canonical order. `Some` only when
     /// PEX ran; a refused PEX stage leaves `None`, not a partial network.
     pub parasitics: Option<ParasiticNetwork>,
+    /// The same extraction at each of the deck's process corners
+    /// ([`gpurify_ingest::deck::ProcessCorner`]), by the corner's name, in
+    /// deck order: the same nets, nodes and kinds of element as
+    /// [`Self::parasitics`], at the corner's values. Empty without corners or
+    /// when PEX did not run.
+    pub corners: Vec<(String, ParasiticNetwork)>,
 }
 
 /// What happened, at a glance. `0 violations` without `rules_skipped` is a false clean.
@@ -486,8 +492,11 @@ fn run_lvs(
 
 /// Analytical extraction of the whole design; with `quasistatic_nets`, those nets
 /// are field-solved and overlaid on it; then the network is reduced to the
-/// deck's extraction type. Every refusal on the way, a non-reciprocal solve
-/// included, is [`StageStatus::Refused`].
+/// deck's extraction type. The nominal stack gives [`Outputs::parasitics`],
+/// and each of the deck's process corners its own network in
+/// [`Outputs::corners`], the same nets solved the same way. Every refusal on
+/// the way, a non-reciprocal solve included, is [`StageStatus::Refused`], a
+/// corner's naming the corner.
 ///
 /// ponytail: the solve's `CapMatrix`, `InductMatrix` and `Accuracy` are dropped,
 /// as `Outputs` has no slot for them; add fields there when a caller needs them.
@@ -497,7 +506,6 @@ fn run_pex(
     options: &RunOptions,
     out: &mut Outputs,
 ) -> StageStatus {
-    let grid = loaded.grid;
     // The names are the user's input, so they are refused before any
     // extraction is attempted.
     let mut selected = Vec::with_capacity(options.quasistatic_nets.len());
@@ -527,58 +535,80 @@ fn run_pex(
     // system that never converges.
     selected.sort_unstable();
     selected.dedup();
+    let network = match pex_network(loaded, extracted, &selected, &loaded.deck.stack) {
+        Ok(network) => network,
+        Err(refusal) => return StageStatus::Refused(refusal),
+    };
+    let mut corners = Vec::with_capacity(loaded.deck.corners.len());
+    for corner in &loaded.deck.corners {
+        let name = loaded.strings.resolve(corner.name).to_owned();
+        match pex_network(loaded, extracted, &selected, &corner.stack) {
+            Ok(network) => corners.push((name, network)),
+            Err(refusal) => return StageStatus::Refused(format!("corner {name}: {refusal}")),
+        }
+    }
+    out.parasitics = Some(network);
+    out.corners = corners;
+    StageStatus::Ran
+}
+
+/// One stack's network: the closed forms over every net, `selected`
+/// field-solved over them, reduced to the deck's extraction type; or why it
+/// was refused.
+fn pex_network(
+    loaded: &Loaded,
+    extracted: &Extracted,
+    selected: &[gpurify_check::topology::NetId],
+    stack: &gpurify_ingest::deck::ProcessStack,
+) -> Result<ParasiticNetwork, String> {
+    let grid = loaded.grid;
     let mut network = ParasiticNetwork::default();
-    if let Err(why) = gpurify_extract::analytical::extract_into(
+    gpurify_extract::analytical::extract_into(
         &loaded.store,
         &extracted.nets,
         &loaded.deck.connectivity,
-        &loaded.deck.stack,
+        stack,
         grid,
         &mut network,
-    ) {
-        return StageStatus::Refused(pex_refusal(loaded, why));
-    }
-    if !options.quasistatic_nets.is_empty() {
+    )
+    .map_err(|why| pex_refusal(loaded, why))?;
+    if !selected.is_empty() {
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
         let mut solved = ParasiticNetwork::default();
-        let accuracy = match gpurify_extract::quasistatic::extract_into(
+        let accuracy = gpurify_extract::quasistatic::extract_into(
             &loaded.store,
             &extracted.nets,
             &loaded.deck.connectivity,
-            &selected,
-            &loaded.deck.stack,
+            selected,
+            stack,
             grid,
             &mut matrix,
             &mut solved,
-        ) {
-            Ok(accuracy) => accuracy,
-            Err(why) => return StageStatus::Refused(solve_refusal(loaded, why)),
-        };
+        )
+        .map_err(|why| solve_refusal(loaded, why))?;
 
         if let Some(refusal) = reciprocity_refusal(&accuracy) {
-            return StageStatus::Refused(refusal);
+            return Err(refusal);
         }
 
         let mut inductance = gpurify_extract::quasistatic::InductMatrix::default();
-        if let Err(refusal) = gpurify_extract::quasistatic::extract_inductance_into(
+        gpurify_extract::quasistatic::extract_inductance_into(
             &loaded.store,
             &extracted.nets,
             &loaded.deck.connectivity,
-            &selected,
-            &loaded.deck.stack,
+            selected,
+            stack,
             grid,
             &mut inductance,
             &mut solved,
-        ) {
-            return StageStatus::Refused(refusal.to_string());
-        }
+        )
+        .map_err(|refusal| refusal.to_string())?;
 
         gpurify_extract::quasistatic::overlay(&mut network, &solved);
     }
 
     gpurify_extract::reduce::reduce(&mut network, loaded.deck.extraction);
-    out.parasitics = Some(network);
-    StageStatus::Ran
+    Ok(network)
 }
 
 /// A layer as the deck names it; the id for a layer past the deck's table.

@@ -4,9 +4,9 @@
 use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
-    lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
-    DeviceValue, Extraction, ExtractionKind, LabelSource, LvsLimit, ParamSource, ParamValue,
-    RuleSource, StackSource, ToleranceSrc, ViaSource, MAX_CELL_SELECTIONS,
+    lower, CornerSource, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind,
+    DeviceSource, DeviceValue, Extraction, ExtractionKind, LabelSource, LvsLimit, ParamSource,
+    ParamValue, RuleSource, StackSource, ToleranceSrc, ViaSource, MAX_CELL_SELECTIONS,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -470,11 +470,12 @@ impl<'a> Parser<'a> {
             "pex" => self.pex(),
             "temperature" => self.temperature(span),
             "extraction" => self.extraction(span),
+            "corner" => self.corner(),
             "ignore" => self.ignore(),
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs or extraction"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs, extraction or corner"),
             )),
         }
     }
@@ -1503,44 +1504,7 @@ impl<'a> Parser<'a> {
                 &format!("`{layer}` already has a pex row"),
             ));
         }
-        let mut row = [None::<f64>; PEX.len()];
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, span) = self.ident("a pex key")?;
-            let Some(at) = PEX.iter().position(|&(name, _)| name == key) else {
-                return Err(self.err(
-                    span,
-                    &format!("unknown pex key `{key}`; expected {}", pex_keys()),
-                ));
-            };
-            let value = self.value()?;
-            let dim = PEX[at].1;
-            let number = self.quantity(&value, dim, &key)?.f64();
-            // A conductor has a thickness, and a dielectric that is stated
-            // has a permittivity: both are positive. A temperature
-            // coefficient takes either sign. Nothing else here can be below
-            // zero, and a zero reads as "not stated" (`ProcessStack`); an
-            // unstated dielectric is left out of the row instead. Past f64's
-            // range a decimal reads as infinite, which no process has.
-            let (physical, bound) = match key.as_str() {
-                "thickness" | "dielectric" => {
-                    (number > 0.0 && number.is_finite(), "positive and finite")
-                }
-                "tc1" | "tc2" => (number.is_finite(), "finite"),
-                _ => (
-                    number >= 0.0 && number.is_finite(),
-                    "zero or more, and finite",
-                ),
-            };
-            if !physical {
-                return Err(self.err(
-                    value.span(),
-                    &format!("pex `{layer}`: {key} must be {bound}"),
-                ));
-            }
-            if row[at].replace(number).is_some() {
-                return Err(self.err(span, &format!("`{key}` is given twice")));
-            }
-        }
+        let row = self.pex_values(&layer)?;
         let missing: Vec<&str> = PEX
             .iter()
             .zip(&row)
@@ -1581,6 +1545,85 @@ impl<'a> Parser<'a> {
             },
         ));
         Ok(())
+    }
+
+    /// `corner <name> <layer> <key> <value> ..`: the values of one layer's
+    /// `pex` row at a process corner, any of the row's keys, at least one.
+    /// Each corner names each layer once; the layer's `pex` row is checked
+    /// when the deck is lowered, since it may come later.
+    fn corner(&mut self) -> R<()> {
+        let (corner, _) = self.ident("a corner name")?;
+        let layer = self.layer_word()?;
+        let at = self.toks[self.pos - 1];
+        if self
+            .out
+            .corners
+            .iter()
+            .any(|line| line.corner == corner && line.layer == layer)
+        {
+            return Err(self.err_tok(at, &format!("corner `{corner}` already states `{layer}`")));
+        }
+        let values = self.pex_values(&layer)?;
+        if values.iter().all(Option::is_none) {
+            return Err(self.err_tok(
+                at,
+                &format!(
+                    "corner `{corner}` states nothing for `{layer}`; expected {}",
+                    pex_keys()
+                ),
+            ));
+        }
+        self.out.corners.push(CornerSource {
+            corner,
+            layer,
+            values,
+        });
+        Ok(())
+    }
+
+    /// The `key value` pairs of a `pex` row (or a `corner` line) to the end
+    /// of the line, each [`PEX`] key at most once, each value one a process
+    /// can have; `None` for a key not given.
+    fn pex_values(&mut self, layer: &str) -> R<[Option<f64>; PEX.len()]> {
+        let mut row = [None::<f64>; PEX.len()];
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("a pex key")?;
+            let Some(at) = PEX.iter().position(|&(name, _)| name == key) else {
+                return Err(self.err(
+                    span,
+                    &format!("unknown pex key `{key}`; expected {}", pex_keys()),
+                ));
+            };
+            let value = self.value()?;
+            let dim = PEX[at].1;
+            let number = self.quantity(&value, dim, &key)?.f64();
+            // A conductor has a thickness, and a dielectric that is stated
+            // has a permittivity: both are positive. A temperature
+            // coefficient takes either sign. Nothing else here can be below
+            // zero, and a zero reads as "not stated" (`ProcessStack`); an
+            // unstated dielectric is left out of the row instead. Past f64's
+            // range a decimal reads as infinite, which no process has.
+            let (physical, bound) = match key.as_str() {
+                "thickness" | "dielectric" => {
+                    (number > 0.0 && number.is_finite(), "positive and finite")
+                }
+                "tc1" | "tc2" => (number.is_finite(), "finite"),
+                _ => (
+                    number >= 0.0 && number.is_finite(),
+                    "zero or more, and finite",
+                ),
+            };
+            if !physical {
+                return Err(self.err(
+                    value.span(),
+                    &format!("pex `{layer}`: {key} must be {bound}"),
+                ));
+            }
+            if row[at].replace(number).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        Ok(row)
     }
 
     /// `temperature <operating> nominal <nominal>`: the temperature the run is

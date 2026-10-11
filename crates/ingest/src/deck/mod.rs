@@ -49,8 +49,8 @@ mod source;
 pub use parse::{parse_deck, parse_source, Diagnostic};
 pub use print::{print, PrintError};
 pub use source::{
-    lower, ConnectivitySource, DeckSource, DerivedSource, DeviceSource, LabelSource, ParamSource,
-    RuleSource, StackSource, ViaSource,
+    lower, ConnectivitySource, CornerSource, CornerValues, DeckSource, DerivedSource, DeviceSource,
+    LabelSource, ParamSource, RuleSource, StackSource, ViaSource,
 };
 
 /// Why a deck was rejected.
@@ -115,6 +115,9 @@ pub struct Deck {
     pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
     /// The `extraction` statement: which parasitics PEX writes out.
     pub extraction: Extraction,
+    /// The `corner` statements: each process corner's whole stack, in the
+    /// order the deck first names them. Empty: the nominal stack alone.
+    pub corners: Vec<ProcessCorner>,
     /// The `temperature` statement and the `pex` rows' coefficients as
     /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
     /// `None` when the deck states no temperature.
@@ -151,6 +154,20 @@ impl AsRef<LayerTable> for LayerTable {
     fn as_ref(&self) -> &LayerTable {
         self
     }
+}
+
+/// A process corner: the nominal stack ([`Deck::stack`]) with the values
+/// the deck's `corner` lines state for it in place of the nominal ones.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessCorner {
+    /// The corner's name, as the deck writes it (`cmax`, `rcworst`).
+    pub name: StrId,
+    /// Every layer's row at this corner, indexed as [`Deck::stack`] is, its
+    /// sheet resistances at the deck's temperature.
+    pub stack: ProcessStack,
+    /// The corner's lines as written, each a layer and the [`CornerSource`]
+    /// values it states, so the deck prints exactly.
+    pub stated: Vec<(LayerId, CornerValues)>,
 }
 
 /// The deck's `extraction` statement: which parasitics the output keeps.

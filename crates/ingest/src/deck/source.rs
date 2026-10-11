@@ -11,7 +11,8 @@ use super::kinds::EDGE_KINDS;
 use super::{build_lvs, LvsSrc};
 use super::{
     Connectivity, Deck, DeckError, DerivedOp, DeviceKind, DeviceRecognition, DeviceValue,
-    Extraction, LayerTable, ParamValue, ProcessStack, RuleSpec, RuleTable, TemperatureLaw,
+    Extraction, LayerTable, ParamValue, ProcessCorner, ProcessStack, RuleSpec, RuleTable,
+    TemperatureLaw,
 };
 use crate::narrow;
 use gpurify_geom::{LayerId, StrId, StrTable};
@@ -48,7 +49,26 @@ pub struct DeckSource {
     pub lvs: LvsSrc,
     /// The `extraction` statement, if the deck has one.
     pub extraction: Option<Extraction>,
+    /// The `corner` lines, in deck order.
+    pub corners: Vec<CornerSource>,
 }
+
+/// One `corner` line: `corner <corner> <layer> <key> <value> ..`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CornerSource {
+    /// The corner's name.
+    pub corner: String,
+    /// The layer whose `pex` row it varies.
+    pub layer: String,
+    /// The values it states.
+    pub values: CornerValues,
+}
+
+/// A `corner` line's values: one per `pex` key, in the order `thickness`
+/// (nm), `height` (nm), `sheet` (ohms per square, at the nominal
+/// temperature), `dielectric`, `area_cap` (aF/µm²), `fringe_cap` (aF/µm),
+/// `tc1` (1/K) and `tc2` (1/K²); `None` where the line states none.
+pub type CornerValues = [Option<f64>; 8];
 
 /// One derived layer: `name = layers[0] op layers[1] ..`.
 #[derive(Debug, Clone, PartialEq)]
@@ -295,6 +315,14 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     }
     let devices = build_devices(&doc.devices, &layers, strings)?;
     let stack = build_stack(&doc.pex, doc.temperature, &layers, strings)?;
+    let corners = build_corners(
+        &doc.corners,
+        &doc.pex,
+        doc.temperature,
+        &stack,
+        &layers,
+        strings,
+    )?;
     let lvs = build_lvs(&doc.lvs, &doc.devices, strings)?;
     let temperature_law = match doc.temperature {
         None => None,
@@ -329,6 +357,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         temperature_law,
         lvs,
         extraction: doc.extraction.unwrap_or_default(),
+        corners,
     })
 }
 
@@ -651,32 +680,7 @@ fn build_stack(
         dielectric_k: vec![0.0; rows],
     };
     for (name, row) in declared {
-        let factor = match (temperature, row.tc) {
-            (None, None) => 1.0,
-            (Some((operating, nominal)), Some((tc1, tc2))) => {
-                let delta = operating - nominal;
-                let factor = 1.0 + tc1 * delta + tc2 * delta * delta;
-                if !(factor.is_finite() && factor > 0.0) {
-                    return Err(DeckError::Malformed(format!(
-                        "pex {name}: tc1 and tc2 scale its resistance by {factor} at the \
-                         deck's temperature; a resistance stays positive"
-                    )));
-                }
-                factor
-            }
-            (None, Some(_)) => {
-                return Err(DeckError::Malformed(format!(
-                    "pex {name}: tc1 and tc2 need a `temperature` statement to say how far \
-                     from nominal the run is"
-                )))
-            }
-            (Some(_), None) => {
-                return Err(DeckError::Malformed(format!(
-                    "pex {name}: the deck states a temperature, so the row needs tc1 and tc2 \
-                     (0/K and 0/K2 for a resistance that does not vary)"
-                )))
-            }
-        };
+        let factor = temperature_factor(&format!("pex {name}"), temperature, row.tc)?;
         let at = layer_of(layers, strings, name, "pex")?.idx();
         stack.thickness_nm[at] = row.thickness_nm;
         stack.height_nm[at] = row.height_nm;
@@ -686,6 +690,131 @@ fn build_stack(
         stack.dielectric_k[at] = row.dielectric_k;
     }
     Ok(stack)
+}
+
+/// The factor that moves a `sheet` stated at the deck's nominal temperature
+/// to its operating one, `1 + tc1·ΔT + tc2·ΔT²` (the ngspice resistor law),
+/// for the row or corner line `name`; 1 without a temperature.
+///
+/// # Errors
+///
+/// [`DeckError::Malformed`] for coefficients without a temperature, a
+/// temperature without coefficients, or a factor that is not positive.
+fn temperature_factor(
+    name: &str,
+    temperature: Option<(f64, f64)>,
+    tc: Option<(f64, f64)>,
+) -> Result<f64, DeckError> {
+    match (temperature, tc) {
+        (None, None) => Ok(1.0),
+        (Some((operating, nominal)), Some((tc1, tc2))) => {
+            let delta = operating - nominal;
+            let factor = 1.0 + tc1 * delta + tc2 * delta * delta;
+            if factor.is_finite() && factor > 0.0 {
+                Ok(factor)
+            } else {
+                Err(DeckError::Malformed(format!(
+                    "{name}: tc1 and tc2 scale its resistance by {factor} at the \
+                     deck's temperature; a resistance stays positive"
+                )))
+            }
+        }
+        (None, Some(_)) => Err(DeckError::Malformed(format!(
+            "{name}: tc1 and tc2 need a `temperature` statement to say how far \
+             from nominal the run is"
+        ))),
+        (Some(_), None) => Err(DeckError::Malformed(format!(
+            "{name}: the deck states a temperature, so the row needs tc1 and tc2 \
+             (0/K and 0/K2 for a resistance that does not vary)"
+        ))),
+    }
+}
+
+/// Each corner's stack: the nominal one with the corner's stated values in
+/// place, corners in the order the deck first names them.
+///
+/// A corner's `sheet`, like a row's, is stated at the nominal temperature,
+/// and moves to the operating one by the corner line's `tc1` and `tc2` where
+/// it gives both, else by the row's.
+///
+/// # Errors
+///
+/// [`DeckError::Malformed`] for a corner line on a layer with no `pex` row
+/// (a corner varies a row, it does not add one), one that names a layer
+/// twice for one corner or states nothing, one that gives one of `tc1` and
+/// `tc2`, and one whose resistance [`temperature_factor`] refuses.
+fn build_corners(
+    declared: &[CornerSource],
+    pex: &[(String, StackSource)],
+    temperature: Option<(f64, f64)>,
+    nominal: &ProcessStack,
+    layers: &LayerTable,
+    strings: &mut StrTable,
+) -> Result<Vec<ProcessCorner>, DeckError> {
+    let mut corners: Vec<(String, ProcessStack, Vec<(LayerId, CornerValues)>)> = Vec::new();
+    for line in declared {
+        let name = format!("corner {} {}", line.corner, line.layer);
+        let Some((_, base)) = pex.iter().find(|(layer, _)| *layer == line.layer) else {
+            return Err(DeckError::Malformed(format!(
+                "corner {}: layer {} has no pex row to vary",
+                line.corner, line.layer
+            )));
+        };
+        if line.values.iter().all(Option::is_none) {
+            return Err(DeckError::Malformed(format!("{name}: states nothing")));
+        }
+        let at = if let Some(at) = corners
+            .iter()
+            .position(|(corner, ..)| *corner == line.corner)
+        {
+            at
+        } else {
+            corners.push((line.corner.clone(), nominal.clone(), Vec::new()));
+            corners.len() - 1
+        };
+        let layer = layer_of(layers, strings, &line.layer, &name)?;
+        let (_, stack, stated) = &mut corners[at];
+        if stated.iter().any(|&(on, _)| on == layer) {
+            return Err(DeckError::Malformed(format!(
+                "{name}: the layer is stated twice"
+            )));
+        }
+        stated.push((layer, line.values));
+        let row = layer.idx();
+        let columns = [
+            &mut stack.thickness_nm,
+            &mut stack.height_nm,
+            &mut stack.sheet_res_ohm_sq,
+            &mut stack.dielectric_k,
+            &mut stack.area_cap_af_um2,
+            &mut stack.fringe_cap_af_um,
+        ];
+        for (column, value) in columns.into_iter().zip(line.values) {
+            if let Some(value) = value {
+                column[row] = value;
+            }
+        }
+        let [_, _, sheet, _, _, _, tc1, tc2] = line.values;
+        let tc = match (tc1, tc2) {
+            (Some(tc1), Some(tc2)) => Some((tc1, tc2)),
+            (None, None) => base.tc,
+            _ => {
+                return Err(DeckError::Malformed(format!(
+                    "{name}: gives one of tc1 and tc2; give both, or neither"
+                )))
+            }
+        };
+        stack.sheet_res_ohm_sq[row] =
+            sheet.unwrap_or(base.sheet_res_ohm_sq) * temperature_factor(&name, temperature, tc)?;
+    }
+    Ok(corners
+        .into_iter()
+        .map(|(name, stack, stated)| ProcessCorner {
+            name: strings.intern(&name),
+            stack,
+            stated,
+        })
+        .collect())
 }
 
 impl DeckSource {

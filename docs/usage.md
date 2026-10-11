@@ -313,6 +313,11 @@ line, so a ground net tied to the substrate through its taps solves through
 its other shapes, and one whose pieces join only through the substrate is
 not one circuit and is refused. A net named twice is solved once.
 
+A deck with process corners (`corner` lines, see
+[deck.md](deck.md#process-corners)) is extracted at the nominal stack and
+at every corner in the one run, and `--format spef` writes every value as a
+`min:typ:max` triplet over them; `--format dspf` writes the nominal.
+
 The deck's `extraction` line picks which parasitics are written: resistance
 and capacitance with or without the coupling between nets, capacitance alone
 lumped on one node per net, or resistance alone, and a threshold below which

@@ -182,7 +182,7 @@
 //! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, over the substrate plane but without dielectric images |
 //! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net, and the mutual L between every pair of them; no current crowding |
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
-//! | PEX-006 | Multi-corner extraction | missing | — |
+//! | PEX-006 | Multi-corner extraction | implemented | the deck's `corner` lines ([`gpurify_ingest::deck::ProcessCorner`]): the engine runs both methods once per corner's stack; SPEF writes `min:typ:max` triplets |
 //! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R, colour-aware) | partial | temperature-dependent R, already in the deck's stack ([`ProcessStack::sheet_res_ohm_sq`](gpurify_ingest::deck::ProcessStack::sheet_res_ohm_sq)); the rest needs foundry calibration data |
 //! | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | implemented | [`reduce`]: the deck's `extraction` type and coupling threshold |
 //! | PEX-009 | PEX netlist diff and qualification | partial | [`compare`]: two extractions of one layout, net by net; no other tool's netlist |
