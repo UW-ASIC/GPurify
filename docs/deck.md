@@ -381,6 +381,13 @@ One line per conducting layer, with all six values: thickness, height above
 the substrate, sheet resistance per square, the dielectric constant around it,
 and the area and fringe capacitance to substrate.
 
+Every value must be one a process can have: the thickness positive, the rest
+zero or more. A zero means the deck does not state that value: a dielectric
+of 0 gives no closed-form coupling and a layer the field solve refuses (how
+`generic_finfet` says it extracts no capacitance), and a layer whose sheet
+resistance is not stated is refused when PEX reads it. A negative value is
+an error at the value, rather than a capacitance or gap that drops out.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the

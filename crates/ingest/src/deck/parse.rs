@@ -1042,6 +1042,19 @@ impl<'a> Parser<'a> {
             let value = self.value()?;
             let dim = PEX[at].1;
             let number = self.quantity(&value, dim, &key)?.f64();
+            // A conductor has a thickness; nothing else here can be below
+            // zero, and a zero reads as "not stated" (`ProcessStack`).
+            let (physical, bound) = if key == "thickness" {
+                (number > 0.0, "positive")
+            } else {
+                (number >= 0.0, "zero or more")
+            };
+            if !physical {
+                return Err(self.err(
+                    value.span(),
+                    &format!("pex `{layer}`: {key} must be {bound}"),
+                ));
+            }
             if row[at].replace(number).is_some() {
                 return Err(self.err(span, &format!("`{key}` is given twice")));
             }

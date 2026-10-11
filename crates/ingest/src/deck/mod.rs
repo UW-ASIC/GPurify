@@ -512,6 +512,11 @@ pub enum DeviceKind {
 /// Every column is empty when the deck has no `pex` statement, and
 /// [`LayerTable::len`] long otherwise. A layer with no `pex` row reads `0.0`
 /// in every column, which means "not stated", not a measured zero.
+///
+/// A parsed row is physical: its thickness is positive and every other
+/// value zero or more (a zero again reads as "not stated"); the parser
+/// refuses anything else, naming the value. A stack built in code is not
+/// checked.
 #[derive(Debug, Default)]
 pub struct ProcessStack {
     /// Conductor thickness, nm.

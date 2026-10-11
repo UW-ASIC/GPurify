@@ -555,6 +555,57 @@ fn errors_are_collected_and_capped_at_fifty() {
     assert_eq!(three.len(), 3, "{three:#?}");
 }
 
+/// F74: a `pex` row that no process has is refused at the value, not read
+/// as a capacitance or a gap that silently drops out. A conductor has a
+/// thickness, so zero is refused there; every other value only below zero,
+/// since a zero is "not stated" (a dielectric of 0 is how `generic_finfet`
+/// says it extracts no capacitance).
+#[test]
+fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
+    let row = |value: &str| {
+        let text = "pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 \
+                    area_cap 25.8aF/um2 fringe_cap 40.5aF/um";
+        let (key, stated) = value.split_once(' ').expect("key and value");
+        let at = text.find(&format!("{key} ")).expect("a key") + key.len() + 1;
+        let end = at + text[at..].find(' ').unwrap_or(text.len() - at);
+        format!("{}{stated}{}\n", &text[..at], &text[end..])
+    };
+    for (value, bound) in [
+        ("thickness 0nm", "thickness must be positive"),
+        ("thickness -360nm", "thickness must be positive"),
+        ("height -1nm", "height must be zero or more"),
+        ("sheet -0.125ohm", "sheet must be zero or more"),
+        ("dielectric -3.9", "dielectric must be zero or more"),
+        ("area_cap -25aF/um2", "area_cap must be zero or more"),
+        ("fringe_cap -40aF/um", "fringe_cap must be zero or more"),
+    ] {
+        let body = row(value);
+        let mut strings = StrTable::default();
+        let error = parse_deck(&format!("{HEAD}{body}"), grid(), &mut strings)
+            .expect_err(value)
+            .to_string();
+        let stated = value.split_once(' ').expect("a value").1;
+        let caret = format!(
+            "{}{}",
+            " ".repeat(body.find(stated).expect("the value")),
+            "^".repeat(stated.len())
+        );
+        assert!(
+            error.contains(&format!("pex `met1`: {bound}")) && error.ends_with(&caret),
+            "{value}: {error}"
+        );
+    }
+    for value in [
+        "height 0nm",
+        "sheet 0ohm",
+        "dielectric 0",
+        "area_cap 0aF/um2",
+        "fringe_cap 0aF/um",
+    ] {
+        ok(&row(value));
+    }
+}
+
 #[test]
 fn an_error_renders_file_line_column_and_a_caret() {
     let mut strings = StrTable::default();
