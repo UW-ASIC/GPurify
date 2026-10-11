@@ -1,0 +1,811 @@
+# Ledger F2: pdks/ihp_sg13g2.deck against the foundry's KLayout decks,
+# IHP-Open-PDK ihp-sg13g2/libs.tech/klayout/tech/drc (ihp-sg13g2.drc, a
+# table at a time, and sg13g2_maximal.drc, which holds the rest of the
+# manual; pinned in tests/foundry/pdks.tsv). tests/foundry holds every row to it.
+#   ours     our rule ids (several: one foundry check our deck splits)
+#   foundry  the rule id the unit test cells label (63/0 text)
+#   check    the foundry decks' report categories for it
+#   status   agrees | differs | ours_missing | theirs_missing | not_comparable
+#   note     how it differs, or why one side has no rule
+# Compared on the unit cells (testing/testcases/unit: each rule's row, its
+# PASS half must stay clean and its FAIL half must be flagged) and on every
+# sg13g2_stdcell cell (held clean).
+ours	foundry	check	status	note
+AFil.c.Cont AFil.c.GatPoly	AFil.c	AFil.c	agrees	
+AFil.d.NWell AFil.d.nBuLay	AFil.d	AFil.d	agrees	
+AFil.j.nSDblock AFil.j.SalBlock	AFil.j	AFil.j	agrees	
+Gat.d Gat.d.2	Gat.d	Gat.d	differs	Partial (deck note): poly crossing one Activ and passing near another is not held; the unit cell's FAIL is that case.
+GFil.d.Activ GFil.d.GatPoly GFil.d.Cont GFil.d.pSD GFil.d.nSDblock GFil.d.SalBlock	GFil.d	GFil.d	agrees	
+GFil.e.NWell GFil.e.nBuLay	GFil.e	GFil.e	agrees	
+pSD.g.NWellTie pSD.g.SubstrateTie	pSD.g	pSD.g	agrees	
+Sal.c.Activ Sal.c.GatPoly	Sal.c	Sal.c	agrees	
+Sal.d.Activ Sal.d.GatPoly	Sal.d	Sal.d	agrees	
+Cnt.a Cnt.a.max	Cnt.a	Cnt.a	agrees	
+Cnt.h	Cnt.h M1.c	Cnt.h M1.c	agrees	
+Rhi.c.pSD Rhi.c.nSD	Rhi.c	Rhi.c	agrees	
+Seal.c.Cont Seal.c.Cont.max	Seal.c	Seal.c	agrees	
+Seal.c.TopVia1 Seal.c.TopVia1.max	Seal.c2	Seal.c2	agrees	
+Seal.c.TopVia2 Seal.c.TopVia2.max	Seal.c3	Seal.c3	agrees	
+Slt.h1.Cont Slt.h1.Via1	Slt.h1	Slt.h1	agrees	
+Slt.h3.TopVia1 Slt.h3.TopVia2	Slt.h3	Slt.h3	agrees	
+OffGrid	activ_drw_Offgrid activ_filler_Offgrid activ_mask_Offgrid baspoly_drw_Offgrid biwind_drw_Offgrid colwind_drw_Offgrid cont_drw_Offgrid deepco_drw_Offgrid empoly_drw_Offgrid extblock_drw_Offgrid gatpoly_drw_Offgrid gatpoly_filler_Offgrid lbe_drw_Offgrid ldmos_drw_Offgrid metal1_drw_Offgrid metal1_filler_Offgrid metal1_slit_Offgrid metal2_drw_Offgrid metal2_filler_Offgrid metal2_slit_Offgrid metal3_drw_Offgrid metal3_filler_Offgrid metal3_slit_Offgrid metal4_drw_Offgrid metal4_filler_Offgrid metal4_slit_Offgrid metal5_drw_Offgrid metal5_filler_Offgrid metal5_slit_Offgrid mim_drw_Offgrid nbulay_block_Offgrid nbulay_drw_Offgrid nsd_block_Offgrid nsd_drw_Offgrid nwell_drw_Offgrid passiv_drw_Offgrid pbiwind_drw_Offgrid pempoly_drw_Offgrid pemwind_drw_Offgrid polyres_drw_Offgrid prboundary_drw_Offgrid psd_drw_Offgrid pwell_block_Offgrid salblock_drw_Offgrid thickgateox_drw_Offgrid topmetal1_drw_Offgrid topmetal1_filler_Offgrid topmetal1_slit_Offgrid topmetal2_drw_Offgrid topmetal2_filler_Offgrid topmetal2_slit_Offgrid topvia1_drw_Offgrid topvia2_drw_Offgrid via1_drw_Offgrid via2_drw_Offgrid via3_drw_Offgrid via4_drw_Offgrid	activ_drw_Offgrid activ_filler_Offgrid activ_mask_Offgrid baspoly_drw_Offgrid biwind_drw_Offgrid colwind_drw_Offgrid cont_drw_Offgrid deepco_drw_Offgrid empoly_drw_Offgrid extblock_drw_Offgrid gatpoly_drw_Offgrid gatpoly_filler_Offgrid lbe_drw_Offgrid ldmos_drw_Offgrid metal1_drw_Offgrid metal1_filler_Offgrid metal1_slit_Offgrid metal2_drw_Offgrid metal2_filler_Offgrid metal2_slit_Offgrid metal3_drw_Offgrid metal3_filler_Offgrid metal3_slit_Offgrid metal4_drw_Offgrid metal4_filler_Offgrid metal4_slit_Offgrid metal5_drw_Offgrid metal5_filler_Offgrid metal5_slit_Offgrid mim_drw_Offgrid nbulay_block_Offgrid nbulay_drw_Offgrid nsd_block_Offgrid nsd_drw_Offgrid nwell_drw_Offgrid passiv_drw_Offgrid pbiwind_drw_Offgrid pempoly_drw_Offgrid pemwind_drw_Offgrid polyres_drw_Offgrid prboundary_drw_Offgrid psd_drw_Offgrid pwell_block_Offgrid salblock_drw_Offgrid thickgateox_drw_Offgrid topmetal1_drw_Offgrid topmetal1_filler_Offgrid topmetal1_slit_Offgrid topmetal2_drw_Offgrid topmetal2_filler_Offgrid topmetal2_slit_Offgrid topvia1_drw_Offgrid topvia2_drw_Offgrid via1_drw_Offgrid via2_drw_Offgrid via3_drw_Offgrid via4_drw_Offgrid	agrees	
+Angle	activ_drw_Acute activ_filler_Acute activ_mask_Acute baspoly_drw_Acute biwind_drw_Acute colwind_drw_Acute cont_drw_Acute deepco_drw_Acute empoly_drw_Acute extblock_drw_Acute gatpoly_drw_Acute gatpoly_filler_Acute lbe_drw_Acute ldmos_drw_Acute metal1_drw_Acute metal1_filler_Acute metal1_pin_Acute metal1_slit_Acute metal2_drw_Acute metal2_filler_Acute metal2_slit_Acute metal3_drw_Acute metal3_filler_Acute metal3_slit_Acute metal4_drw_Acute metal4_filler_Acute metal4_slit_Acute metal5_drw_Acute metal5_filler_Acute metal5_slit_Acute mim_drw_Acute nbulay_block_Acute nbulay_drw_Acute nsd_block_Acute nsd_drw_Acute nwell_drw_Acute passiv_drw_Acute pbiwind_drw_Acute pempoly_drw_Acute pemwind_drw_Acute polyres_drw_Acute prboundary_drw_Acute psd_drw_Acute pwell_block_Acute salblock_drw_Acute thickgateox_drw_Acute topmetal1_drw_Acute topmetal1_filler_Acute topmetal1_slit_Acute topmetal2_drw_Acute topmetal2_filler_Acute topmetal2_slit_Acute topvia1_drw_Acute topvia2_drw_Acute via1_drw_Acute via2_drw_Acute via3_drw_Acute via4_drw_Acute	activ_drw_Acute activ_filler_Acute activ_mask_Acute baspoly_drw_Acute biwind_drw_Acute colwind_drw_Acute cont_drw_Acute deepco_drw_Acute empoly_drw_Acute extblock_drw_Acute gatpoly_drw_Acute gatpoly_filler_Acute lbe_drw_Acute ldmos_drw_Acute metal1_drw_Acute metal1_filler_Acute metal1_pin_Acute metal1_slit_Acute metal2_drw_Acute metal2_filler_Acute metal2_slit_Acute metal3_drw_Acute metal3_filler_Acute metal3_slit_Acute metal4_drw_Acute metal4_filler_Acute metal4_slit_Acute metal5_drw_Acute metal5_filler_Acute metal5_slit_Acute mim_drw_Acute nbulay_block_Acute nbulay_drw_Acute nsd_block_Acute nsd_drw_Acute nwell_drw_Acute passiv_drw_Acute pbiwind_drw_Acute pempoly_drw_Acute pemwind_drw_Acute polyres_drw_Acute prboundary_drw_Acute psd_drw_Acute pwell_block_Acute salblock_drw_Acute thickgateox_drw_Acute topmetal1_drw_Acute topmetal1_filler_Acute topmetal1_slit_Acute topmetal2_drw_Acute topmetal2_filler_Acute topmetal2_slit_Acute topvia1_drw_Acute topvia2_drw_Acute via1_drw_Acute via2_drw_Acute via3_drw_Acute via4_drw_Acute	agrees	
+Seal.c.Via1 Seal.c.Via1.max	Seal.c1.Via1	Seal.c1.Via1	agrees	
+Seal.c.Via2 Seal.c.Via2.max	Seal.c1.Via2	Seal.c1.Via2	agrees	
+Seal.c.Via3 Seal.c.Via3.max	Seal.c1.Via3	Seal.c1.Via3	agrees	
+Seal.c.Via4 Seal.c.Via4.max	Seal.c1.Via4	Seal.c1.Via4	agrees	
+Slt.h2.M2.below Slt.h2.M2.above	Slt.h2.M2	Slt.h2.M2	agrees	
+Slt.h2.M3.below Slt.h2.M3.above	Slt.h2.M3	Slt.h2.M3	agrees	
+Slt.h2.M4.below Slt.h2.M4.above	Slt.h2.M4	Slt.h2.M4	agrees	
+Slt.h2.M5.below Slt.h2.M5.above	Slt.h2.M5	Slt.h2.M5	agrees	
+Seal.b_Activ	Seal.b_activ Seal.b	Seal.b_activ	agrees	
+Seal.b_pSD	Seal.b_psd Seal.b	Seal.b_psd	agrees	
+Seal.b_Metal1	Seal.b_metal1 Seal.b	Seal.b_metal1	agrees	
+Seal.b_Metal2	Seal.b_metal2 Seal.b	Seal.b_metal2	agrees	
+Seal.b_Metal3	Seal.b_metal3 Seal.b	Seal.b_metal3	agrees	
+Seal.b_Metal4	Seal.b_metal4 Seal.b	Seal.b_metal4	agrees	
+Seal.b_Metal5	Seal.b_metal5 Seal.b	Seal.b_metal5	agrees	
+Seal.b_TopMetal1	Seal.b_topmetal1 Seal.b	Seal.b_topmetal1	agrees	
+Seal.b_TopMetal2	Seal.b_topmetal2 Seal.b	Seal.b_topmetal2	agrees	
+Angle.Cont	cont_drw_Angle90	cont_drw_Angle90	agrees	
+Angle.Via1	via1_drw_Angle90	via1_drw_Angle90	agrees	
+Angle.Via2	via2_drw_Angle90	via2_drw_Angle90	agrees	
+Angle.Via3	via3_drw_Angle90	via3_drw_Angle90	agrees	
+Angle.Via4	via4_drw_Angle90	via4_drw_Angle90	agrees	
+Angle.TopVia1	topvia1_drw_Angle90	topvia1_drw_Angle90	agrees	
+Angle.TopVia2	topvia2_drw_Angle90	topvia2_drw_Angle90	agrees	
+forbidden.BiWind	forbidden.biwind forbidden.BiWind	forbidden.biwind	agrees	
+forbidden.PEmWind	forbidden.pemwind forbidden.PEmWind	forbidden.pemwind	agrees	
+forbidden.BasPoly	forbidden.baspoly forbidden.BasPoly BasPoly	forbidden.baspoly	agrees	
+forbidden.DeepCo	forbidden.deepco forbidden.DeepCo	forbidden.deepco	agrees	
+forbidden.PEmPoly	forbidden.pempoly forbidden.PEmPoly	forbidden.pempoly	agrees	
+forbidden.EmPoly	forbidden.empoly forbidden.EmPoly	forbidden.empoly	agrees	
+forbidden.LDMOS	forbidden.ldmos forbidden.LDMOS	forbidden.ldmos	agrees	
+forbidden.PBiWind	forbidden.pbiwind forbidden.PBiWind	forbidden.pbiwind	agrees	
+forbidden.NoDRC	forbidden.nodrc forbidden.NoDRC	forbidden.nodrc	agrees	
+forbidden.Flash	forbidden.flash forbidden.Flash	forbidden.flash	agrees	
+forbidden.ColWind	forbidden.colwind forbidden.ColWind	forbidden.colwind	agrees	
+NW.a	NW.a	NW.a	agrees	
+NW.b NW.b.notch	NW.b	NW.b	agrees	
+NW.c	NW.c	NW.c	agrees	
+NW.c1	NW.c1	NW.c1	agrees	
+NW.d	NW.d	NW.d	agrees	
+NW.d1	NW.d1	NW.d1	agrees	
+NW.e	NW.e	NW.e	agrees	
+NW.e1	NW.e1	NW.e1	agrees	
+NW.f	NW.f	NW.f	agrees	
+NW.f1	NW.f1	NW.f1	agrees	
+PWB.a	PWB.a PWellBlock.a	PWB.a	agrees	
+PWB.b PWB.b.notch	PWB.b PWellBlock.b	PWB.b	agrees	
+PWB.c	PWB.c PWellBlock.c	PWB.c	agrees	
+PWB.e	PWB.e PWellBlock.e	PWB.e	agrees	
+PWB.e1	PWB.e1 PWellBlock.e1	PWB.e1	agrees	
+PWB.f	PWB.f PWellBlock.f	PWB.f	agrees	
+PWB.f1	PWB.f1 PWellBlock.f1	PWB.f1	agrees	
+NBL.a	NBL.a	NBL.a	agrees	
+NBL.b NBL.b.notch	NBL.b	NBL.b	agrees	
+NBL.e	NBL.e	NBL.e	differs	Unrelated is another net to the foundry (nets with props_ne); the deck reads it as not touching nBuLay (wells are not nets here), so a same-net Activ tied to the well through Metal1 at 0.99 um is flagged.
+NBL.f	NBL.f	NBL.f	differs	Unrelated is another net to the foundry (nets with props_ne); the deck reads it as not touching nBuLay (wells are not nets here), so a same-net Activ tied to the well through Metal1 at 0.99 um is flagged.
+NBLB.a	NBLB.a	NBLB.a	agrees	
+NBLB.b NBLB.b.notch	NBLB.b	NBLB.b	agrees	
+NBLB.c	NBLB.c	NBLB.c	agrees	
+NBLB.d	NBLB.d	NBLB.d	agrees	
+Act.a	Act.a	Act.a	agrees	
+Act.b Act.b.notch	Act.b	Act.b	agrees	
+Act.c	Act.c	Act.c	agrees	
+Act.d	Act.d	Act.d	agrees	
+Act.e	Act.e	Act.e	agrees	
+AFil.a	AFil.a	AFil.a	agrees	
+AFil.a1	AFil.a1	AFil.a1	agrees	
+AFil.b	AFil.b	AFil.b	agrees	
+AFil.c1	AFil.c1	AFil.c1	agrees	
+AFil.e	AFil.e	AFil.e	agrees	
+AFil.g	AFil.g	AFil.g	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+AFil.g1	AFil.g1	AFil.g1	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+AFil.g2	AFil.g2	AFil.g2	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+AFil.g3	AFil.g3	AFil.g3	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+TGO.a	TGO.a	TGO.a	agrees	
+TGO.b	TGO.b	TGO.b	agrees	
+TGO.c	TGO.c	TGO.c	agrees	
+TGO.d	TGO.d	TGO.d	agrees	
+TGO.e TGO.e.notch	TGO.e	TGO.e	agrees	
+TGO.f	TGO.f	TGO.f	agrees	
+Gat.a	Gat.a	Gat.a	agrees	
+Gat.a1	Gat.a1	Gat.a1	agrees	
+Gat.a2	Gat.a2	Gat.a2	agrees	
+Gat.b Gat.b.notch	Gat.b	Gat.b	agrees	
+Gat.b1	Gat.b1	Gat.b1	agrees	
+Gat.c	Gat.c	Gat.c	agrees	
+Gat.e	Gat.e	Gat.e	agrees	
+GFil.a	GFil.a	GFil.a	agrees	
+GFil.b	GFil.b	GFil.b	agrees	
+GFil.c	GFil.c	GFil.c	agrees	
+GFil.f	GFil.f	GFil.f	agrees	
+GFil.g	GFil.g	GFil.g	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+GFil.j	GFil.j	GFil.j	agrees	
+pSD.a	pSD.a	pSD.a	agrees	
+pSD.b pSD.b.notch	pSD.b	pSD.b	agrees	
+pSD.c	pSD.c	pSD.c	differs	The deck leaves Activ that crosses a pSD edge to pSD.e/f (abutted ties, waiting); the unit cell's FAIL is an L-shaped Activ half under pSD.
+pSD.c1	pSD.c1	pSD.c1	agrees	
+pSD.d	pSD.d	pSD.d	agrees	
+pSD.d1	pSD.d1	pSD.d1	agrees	
+pSD.i	pSD.i	pSD.i	agrees	
+pSD.i1	pSD.i1	pSD.i1	agrees	
+pSD.j	pSD.j	pSD.j	agrees	
+pSD.j1	pSD.j1	pSD.j1	agrees	
+pSD.k	pSD.k	pSD.k	differs	Both decks flag the 0.62 x 0.36 um pSD of sg13g2_fill_1 (0.22 um2 < 0.25): the fill cell is clean only abutted to its neighbours.
+pSD.l	pSD.l	pSD.l	agrees	
+pSD.m	pSD.m	pSD.m	differs	The unit cell draws the Rsil body on PolyRes and RES without GatPoly; the deck's resistor bodies are GatPoly under PolyRes ([LVS] res_derivations), so it sees no resistor there.
+pSD.n	pSD.n	pSD.n	differs	As pSD.m, for the Rppd body.
+nSDB.a	nSDB.a	nSDB.a	agrees	
+nSDB.b nSDB.b.notch	nSDB.b	nSDB.b	agrees	
+nSDB.c	nSDB.c	nSDB.c	agrees	
+EXTB.a	EXTB.a	EXTB.a	agrees	
+EXTB.b EXTB.b.notch	EXTB.b	EXTB.b	agrees	
+EXTB.c	EXTB.c	EXTB.c	agrees	
+Sal.a	Sal.a	Sal.a	agrees	
+Sal.b Sal.b.notch	Sal.b	Sal.b	agrees	
+Sal.e	Sal.e	Sal.e	agrees	
+Cnt.b	Cnt.b	Cnt.b	agrees	
+Cnt.b1	Cnt.b1	Cnt.b1	agrees	
+Cnt.c	Cnt.c	Cnt.c	agrees	
+Cnt.d	Cnt.d	Cnt.d	agrees	
+Cnt.e	Cnt.e	Cnt.e	agrees	
+Cnt.f	Cnt.f	Cnt.f	agrees	
+Cnt.g1	Cnt.g1	Cnt.g1	agrees	
+Cnt.g2	Cnt.g2	Cnt.g2	agrees	
+M1.a	M1.a	M1.a	agrees	
+M1.b M1.b.notch	M1.b	M1.b	agrees	
+M1.c1	M1.c1	M1.c1	agrees	
+M1.d	M1.d	M1.d	agrees	
+M1.j	M1.j	M1.j	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M1.k	M1.k	M1.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M2.a	M2.a	M2.a	agrees	
+M2.b M2.b.notch	M2.b	M2.b	agrees	
+M2.c	M2.c	M2.c	agrees	
+M2.c1	M2.c1	M2.c1	agrees	
+M2.d	M2.d	M2.d	agrees	
+M2.j	M2.j	M2.j	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M2.k	M2.k	M2.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M3.a	M3.a	M3.a	agrees	
+M3.b M3.b.notch	M3.b	M3.b	agrees	
+M3.c	M3.c	M3.c	agrees	
+M3.c1	M3.c1	M3.c1	agrees	
+M3.d	M3.d	M3.d	agrees	
+M3.j	M3.j	M3.j	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M3.k	M3.k	M3.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M4.a	M4.a	M4.a	agrees	
+M4.b M4.b.notch	M4.b	M4.b	agrees	
+M4.c	M4.c	M4.c	agrees	
+M4.c1	M4.c1	M4.c1	agrees	
+M4.d	M4.d	M4.d	agrees	
+M4.j	M4.j	M4.j	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M4.k	M4.k	M4.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M5.a	M5.a	M5.a	agrees	
+M5.b M5.b.notch	M5.b	M5.b	agrees	
+M5.c	M5.c	M5.c	agrees	
+M5.c1	M5.c1	M5.c1	agrees	
+M5.d	M5.d	M5.d	agrees	
+M5.j	M5.j	M5.j	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M5.k	M5.k	M5.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M1Fil.a1	M1Fil.a1 MFil.a1	M1Fil.a1	agrees	
+M1Fil.a2	M1Fil.a2 MFil.a2	M1Fil.a2	agrees	
+M1Fil.b	M1Fil.b MFil.b	M1Fil.b	agrees	
+M1Fil.c	M1Fil.c MFil.c	M1Fil.c	agrees	
+M1Fil.d	M1Fil.d MFil.d	M1Fil.d	agrees	
+M1Fil.h	M1Fil.h MFil.h	M1Fil.h	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M1Fil.k	M1Fil.k MFil.k	M1Fil.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M2Fil.a1	M2Fil.a1 MFil.a1	M2Fil.a1	agrees	
+M2Fil.a2	M2Fil.a2 MFil.a2	M2Fil.a2	agrees	
+M2Fil.b	M2Fil.b MFil.b	M2Fil.b	agrees	
+M2Fil.c	M2Fil.c MFil.c	M2Fil.c	agrees	
+M2Fil.d	M2Fil.d MFil.d	M2Fil.d	agrees	
+M2Fil.h	M2Fil.h MFil.h	M2Fil.h	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M2Fil.k	M2Fil.k MFil.k	M2Fil.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M3Fil.a1	M3Fil.a1 MFil.a1	M3Fil.a1	agrees	
+M3Fil.a2	M3Fil.a2 MFil.a2	M3Fil.a2	agrees	
+M3Fil.b	M3Fil.b MFil.b	M3Fil.b	agrees	
+M3Fil.c	M3Fil.c MFil.c	M3Fil.c	agrees	
+M3Fil.d	M3Fil.d MFil.d	M3Fil.d	agrees	
+M3Fil.h	M3Fil.h MFil.h	M3Fil.h	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M3Fil.k	M3Fil.k MFil.k	M3Fil.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M4Fil.a1	M4Fil.a1 MFil.a1	M4Fil.a1	agrees	
+M4Fil.a2	M4Fil.a2 MFil.a2	M4Fil.a2	agrees	
+M4Fil.b	M4Fil.b MFil.b	M4Fil.b	agrees	
+M4Fil.c	M4Fil.c MFil.c	M4Fil.c	agrees	
+M4Fil.d	M4Fil.d MFil.d	M4Fil.d	agrees	
+M4Fil.h	M4Fil.h MFil.h	M4Fil.h	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M4Fil.k	M4Fil.k MFil.k	M4Fil.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M5Fil.a1	M5Fil.a1 MFil.a1	M5Fil.a1	agrees	
+M5Fil.a2	M5Fil.a2 MFil.a2	M5Fil.a2	agrees	
+M5Fil.b	M5Fil.b MFil.b	M5Fil.b	agrees	
+M5Fil.c	M5Fil.c MFil.c	M5Fil.c	agrees	
+M5Fil.d	M5Fil.d MFil.d	M5Fil.d	agrees	
+M5Fil.h	M5Fil.h MFil.h	M5Fil.h	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+M5Fil.k	M5Fil.k MFil.k	M5Fil.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+V1.a	V1.a	V1.a	agrees	
+V1.b	V1.b	V1.b	agrees	
+V1.b1	V1.b1	V1.b1	differs	The deck reads more than 3 x 3 as a cluster of more than 15 cuts (deck note): the PASS cell's cluster is held to 0.29 um.
+V1.c	V1.c	V1.c	agrees	
+V1.c1	V1.c1	V1.c1	agrees	
+V2.a	V2.a	V2.a	agrees	
+V2.b	V2.b	V2.b	agrees	
+V2.b1	V2.b1	V2.b1	agrees	
+V2.c	V2.c	V2.c	agrees	
+V2.c1	V2.c1	V2.c1	agrees	
+V3.a	V3.a	V3.a	agrees	
+V3.b	V3.b	V3.b	agrees	
+V3.b1	V3.b1	V3.b1	agrees	
+V3.c	V3.c	V3.c	agrees	
+V3.c1	V3.c1	V3.c1	agrees	
+V4.a	V4.a	V4.a	agrees	
+V4.b	V4.b	V4.b	agrees	
+V4.b1	V4.b1	V4.b1	agrees	
+V4.c	V4.c	V4.c	agrees	
+V4.c1	V4.c1	V4.c1	agrees	
+TV1.a	TV1.a	TV1.a	agrees	
+TV1.b	TV1.b	TV1.b	agrees	
+TV1.c	TV1.c	TV1.c	agrees	
+TV1.d	TV1.d	TV1.d	agrees	
+TM1.a	TM1.a	TM1.a	agrees	
+TM1.b TM1.b.notch	TM1.b	TM1.b	agrees	
+TM1.c	TM1.c	TM1.c	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+TM1.d	TM1.d	TM1.d	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+TV2.a	TV2.a	TV2.a	agrees	
+TV2.b	TV2.b	TV2.b	agrees	
+TV2.c	TV2.c	TV2.c	agrees	
+TV2.d	TV2.d	TV2.d	agrees	
+TM2.a	TM2.a	TM2.a	agrees	
+TM2.b TM2.b.notch	TM2.b	TM2.b	agrees	
+TM2.c	TM2.c	TM2.c	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+TM2.d	TM2.d	TM2.d	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+TM1Fil.a	TM1Fil.a	TM1Fil.a	agrees	
+TM1Fil.a1	TM1Fil.a1	TM1Fil.a1	agrees	
+TM1Fil.b	TM1Fil.b	TM1Fil.b	agrees	
+TM1Fil.c	TM1Fil.c	TM1Fil.c	agrees	
+TM1Fil.d	TM1Fil.d	TM1Fil.d	agrees	
+TM2Fil.a	TM2Fil.a	TM2Fil.a	agrees	
+TM2Fil.a1	TM2Fil.a1	TM2Fil.a1	agrees	
+TM2Fil.b	TM2Fil.b	TM2Fil.b	agrees	
+TM2Fil.c	TM2Fil.c	TM2Fil.c	agrees	
+TM2Fil.d	TM2Fil.d	TM2Fil.d	agrees	
+Pas.a	Pas.a	Pas.a	agrees	
+Pas.b Pas.b.notch	Pas.b	Pas.b	agrees	
+Pas.c	Pas.c	Pas.c	differs	The foundry checks Passiv only inside the seal ring (EdgeSeal holes); the PASS cell has no seal ring, and GPurify holds its stepped TopMetal2 to 2.1 um everywhere.
+Rsil.a	Rsil.a	Rsil.a	agrees	
+Rsil.b	Rsil.b	Rsil.b	agrees	
+Rsil.d	Rsil.d	Rsil.d	agrees	
+Rsil.e	Rsil.e	Rsil.e	agrees	
+Rsil.f	Rsil.f	Rsil.f	agrees	
+Rppd.a	Rppd.a	Rppd.a	agrees	
+Rppd.b	Rppd.b	Rppd.b	agrees	
+Rppd.c	Rppd.c	Rppd.c	agrees	
+Rppd.d	Rppd.d	Rppd.d	agrees	
+Rppd.e	Rppd.e	Rppd.e	agrees	
+Rhi.a	Rhi.a	Rhi.a	agrees	
+Rhi.d	Rhi.d	Rhi.d	agrees	
+Rhi.e	Rhi.e	Rhi.e	agrees	
+Rhi.f	Rhi.f	Rhi.f	agrees	
+nmosi.b	nmosi.b	nmosi.b	agrees	
+nmosi.c	nmosi.c	nmosi.c	agrees	
+nmosi.f	nmosi.f	nmosi.f	agrees	
+Pad.a1	Pad.a1	Pad.a1	agrees	
+Pad.d	Pad.d	Pad.d	agrees	
+Seal.a_Activ	Seal.a_Activ Seal.a	Seal.a_Activ	agrees	
+Seal.a_pSD	Seal.a_pSD Seal.a	Seal.a_pSD	agrees	
+Seal.a_Metal1	Seal.a_Metal1 Seal.a	Seal.a_Metal1	agrees	
+Seal.a_Metal2	Seal.a_Metal2 Seal.a	Seal.a_Metal2	agrees	
+Seal.a_Metal3	Seal.a_Metal3 Seal.a	Seal.a_Metal3	agrees	
+Seal.a_Metal4	Seal.a_Metal4 Seal.a	Seal.a_Metal4	agrees	
+Seal.a_Metal5	Seal.a_Metal5 Seal.a	Seal.a_Metal5	agrees	
+Seal.a_TopMetal1	Seal.a_TopMetal1 Seal.a	Seal.a_TopMetal1	agrees	
+Seal.a_TopMetal2	Seal.a_TopMetal2 Seal.a	Seal.a_TopMetal2	agrees	
+Seal.d.Cont	Seal.d.Cont Seal.d	Seal.d.Cont	agrees	
+Seal.d.Via1	Seal.d.Via1 Seal.d	Seal.d.Via1	agrees	
+Seal.d.Via2	Seal.d.Via2 Seal.d	Seal.d.Via2	agrees	
+Seal.d.Via3	Seal.d.Via3 Seal.d	Seal.d.Via3	agrees	
+Seal.d.Via4	Seal.d.Via4 Seal.d	Seal.d.Via4	agrees	
+Seal.d.TopVia1	Seal.d.TopVia1 Seal.d	Seal.d.TopVia1	agrees	
+Seal.d.TopVia2	Seal.d.TopVia2 Seal.d	Seal.d.TopVia2	agrees	
+MIM.a	MIM.a Mim.a	MIM.a	agrees	
+MIM.b	MIM.b Mim.b	MIM.b	agrees	
+MIM.c	MIM.c Mim.c	MIM.c	agrees	
+MIM.d	MIM.d Mim.d	MIM.d	agrees	
+MIM.e	MIM.e Mim.e	MIM.e	agrees	
+MIM.f	MIM.f Mim.f	MIM.f	agrees	
+Slt.a.M1	Slt.a.M1	Slt.a.M1	agrees	
+Slt.b.M1	Slt.b.M1	Slt.b.M1	agrees	
+Slt.c.M1	Slt.c.M1	Slt.c.M1	agrees	
+Slt.f.M1	Slt.f.M1	Slt.f.M1	agrees	
+Slt.a.M2	Slt.a.M2	Slt.a.M2	agrees	
+Slt.b.M2	Slt.b.M2	Slt.b.M2	agrees	
+Slt.c.M2	Slt.c.M2	Slt.c.M2	agrees	
+Slt.f.M2	Slt.f.M2	Slt.f.M2	agrees	
+Slt.a.M3	Slt.a.M3	Slt.a.M3	agrees	
+Slt.b.M3	Slt.b.M3	Slt.b.M3	agrees	
+Slt.c.M3	Slt.c.M3	Slt.c.M3	agrees	
+Slt.f.M3	Slt.f.M3	Slt.f.M3	agrees	
+Slt.a.M4	Slt.a.M4	Slt.a.M4	agrees	
+Slt.b.M4	Slt.b.M4	Slt.b.M4	agrees	
+Slt.c.M4	Slt.c.M4	Slt.c.M4	agrees	
+Slt.f.M4	Slt.f.M4	Slt.f.M4	agrees	
+Slt.a.M5	Slt.a.M5	Slt.a.M5	agrees	
+Slt.b.M5	Slt.b.M5	Slt.b.M5	agrees	
+Slt.c.M5	Slt.c.M5	Slt.c.M5	agrees	
+Slt.f.M5	Slt.f.M5	Slt.f.M5	agrees	
+Slt.a.TM1	Slt.a.TM1	Slt.a.TM1	agrees	
+Slt.b.TM1	Slt.b.TM1	Slt.b.TM1	agrees	
+Slt.c.TM1	Slt.c.TM1	Slt.c.TM1	agrees	
+Slt.f.TM1	Slt.f.TM1	Slt.f.TM1	agrees	
+Slt.a.TM2	Slt.a.TM2	Slt.a.TM2	agrees	
+Slt.b.TM2	Slt.b.TM2	Slt.b.TM2	agrees	
+Slt.c.TM2	Slt.c.TM2	Slt.c.TM2	agrees	
+Slt.f.TM2	Slt.f.TM2	Slt.f.TM2	agrees	
+Slt.g.M5	Slt.g.M5	Slt.g.M5	agrees	
+Slt.g.TM1	Slt.g.TM1	Slt.g.TM1	agrees	
+Slt.h4	Slt.h4	Slt.h4	agrees	
+LBE.a	LBE.a	LBE.a	agrees	
+LBE.b	LBE.b	LBE.b	differs	The foundry reads the maximum width as the larger side of the shape's box; GPurify's width <= reads the part where a 1500 um square fits, so a long thin LBE passes.
+LBE.b2	LBE.b2	LBE.b2	differs	The foundry deck flags its own PASS cell (an LBE of at least 30000 um2); GPurify passes it.
+LBE.c LBE.c.notch	LBE.c	LBE.c	agrees	
+LBE.e.dfPad	LBE.e.dfPad	LBE.e.dfPad	agrees	
+LBE.e.Passiv	LBE.e.Passiv	LBE.e.Passiv	agrees	
+LBE.f	LBE.f	LBE.f	agrees	
+LBE.i	LBE.i	LBE.i	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
+Ant.a	Ant.a	Ant.a	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.c	Ant.c	Ant.c	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_Metal1	Ant.b_Metal1	Ant.b_Metal1	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_Metal2	Ant.b_Metal2	Ant.b_Metal2	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_Metal3	Ant.b_Metal3	Ant.b_Metal3	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_Metal4	Ant.b_Metal4	Ant.b_Metal4	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_Metal5	Ant.b_Metal5	Ant.b_Metal5	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_TopMetal1	Ant.b_TopMetal1	Ant.b_TopMetal1	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.b_TopMetal2	Ant.b_TopMetal2	Ant.b_TopMetal2	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.d_Via1	Ant.d_Via1	Ant.d_Via1	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.d_Via2	Ant.d_Via2	Ant.d_Via2	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.d_Via3	Ant.d_Via3	Ant.d_Via3	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.d_Via4	Ant.d_Via4	Ant.d_Via4	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.d_TopVia1	Ant.d_TopVia1	Ant.d_TopVia1	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+Ant.d_TopVia2	Ant.d_TopVia2	Ant.d_TopVia2	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+LU.a	LU.a	LU.a	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+LU.b	LU.b	LU.b	not_comparable	an ERC rule: the cross-check runs GPurify's DRC only
+floating_nwell	floating_nwell	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+supply_short	supply_short	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.Metal1	EM.Metal1	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.Metal2	EM.Metal2	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.Metal3	EM.Metal3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.Metal4	EM.Metal4	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.Metal5	EM.Metal5	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.TopMetal1	EM.TopMetal1	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+EM.TopMetal2	EM.TopMetal2	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+GOX.lv	GOX.lv	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+GOX.hv	GOX.hv	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+VDS.lv	VDS.lv	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+VDS.hv	VDS.hv	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+ESD.pad	ESD.pad	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+floating_gate	floating_gate	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+tie_high_low	tie_high_low	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+multiple_drivers	multiple_drivers	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+ir_drop	ir_drop	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+unconnected_conductor	unconnected_conductor	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
+M1.e	M1.e	M1.e	differs	Finding N-f2-6: GPurify takes the table column from the run of the whole shapes and the row from the wide part, so a narrow line with a short wide stub (sg13g2_buf_2: a 0.305 x 0.33 um tab) is held to 0.22 um along its 1.2 um run; the foundry needs the wide part itself to run over 1 um. 16 sg13g2_stdcell cells, clean under the foundry deck, are flagged.
+M1.f	M1.f	M1.f	agrees	
+M2.e	M2.e	M2.e	agrees	
+M2.f	M2.f	M2.f	agrees	
+M3.e	M3.e	M3.e	agrees	
+M3.f	M3.f	M3.f	agrees	
+M4.e	M4.e	M4.e	agrees	
+M4.f	M4.f	M4.f	agrees	
+M5.e	M5.e	M5.e	agrees	
+M5.f	M5.f	M5.f	agrees	
+Cnt.g	Cnt.g	Cnt.g	agrees	
+Cnt.j	Cnt.j	Cnt.j	agrees	
+nSDB.e	nSDB.e	nSDB.e	agrees	
+MIM.h MIM.h.via	MIM.h Mim.h	MIM.h	agrees	
+Pad.i	Pad.i	Pad.i	agrees	
+Pin.e	Pin.e	Pin.e	agrees	
+-	AFil.i	AFil.i	ours_missing	Activ:filler to PWell:block edges: shape-to-edge spacing (deck: waiting)
+-	Ant.e_Metal1	Ant.e_Metal1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.e_Metal2	Ant.e_Metal2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.e_Metal3	Ant.e_Metal3	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.e_Metal4	Ant.e_Metal4	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.e_Metal5	Ant.e_Metal5	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.e_TopMetal1	Ant.e_TopMetal1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.e_TopMetal2	Ant.e_TopMetal2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.f_TopVia1	Ant.f_TopVia1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.f_TopVia2	Ant.f_TopVia2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.f_Via1	Ant.f_Via1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.f_Via2	Ant.f_Via2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.f_Via3	Ant.f_Via3	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.f_Via4	Ant.f_Via4	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.g	Ant.g	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.h	Ant.h	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Ant.i	Ant.i	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+-	Cnt.c.SRAM	Cnt.c.SRAM	ours_missing	SRAM and digital-boundary variants: not in the deck
+-	Cnt.c.digibnd	Cnt.c.digibnd	ours_missing	SRAM and digital-boundary variants: not in the deck
+-	CntB.a	CntB.a	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.a1	CntB.a1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.b	CntB.b	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.b1	CntB.b1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.b2	CntB.b2	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.c	CntB.c	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.d	CntB.d	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.e	CntB.e	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.f	CntB.f	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.g	CntB.g	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.g1	CntB.g1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.g2	CntB.g2	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.h	CntB.h	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.h1	CntB.h1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	CntB.j	CntB.j	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+-	GFil.i	GFil.i	ours_missing	GatPoly:nofill maximum area: not expressible (deck note)
+-	Gat.a3	Gat.a3	ours_missing	channel length across the gate (deck: waiting)
+-	Gat.a4	Gat.a4	ours_missing	channel length across the gate (deck: waiting)
+-	Gat.f	Gat.f	ours_missing	rectangles only: needs a shape class (deck: waiting)
+-	Gat.g	Gat.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	LBE.b1	LBE.b1	ours_missing	maximum area: no kind (deck: waiting)
+-	LBE.d	LBE.d	ours_missing	EdgeSeal inner edge and LBE ring: left out
+-	LBE.h	LBE.h	ours_missing	EdgeSeal inner edge and LBE ring: left out
+-	LU.c	LU.c	ours_missing	maximum extension of a tie from its contact (deck: waiting)
+-	LU.c1	LU.c1	ours_missing	maximum extension of a tie from its contact (deck: waiting)
+-	LU.d	LU.d	ours_missing	maximum extension of a tie from its contact (deck: waiting)
+-	LU.d1	LU.d1	ours_missing	maximum extension of a tie from its contact (deck: waiting)
+-	M1.g	M1.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M1.i	M1.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M2.g	M2.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M2.i	M2.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M3.g	M3.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M3.i	M3.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M4.g	M4.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M4.i	M4.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M5.g	M5.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	M5.i	M5.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	MIM.g Mim.g	MIM.g	ours_missing	maximum MIM area (deck: waiting)
+-	MIM.gR Mim.gR	MIM.gR	ours_missing	maximum MIM area (deck: waiting)
+-	NBL.c	NBL.c	ours_missing	different-net well spacing: wells are not nets in the deck (deck: waiting)
+-	NBL.d	NBL.d	ours_missing	different-net well spacing: wells are not nets in the deck (deck: waiting)
+-	NW.b1	NW.b1	ours_missing	different-net well spacing: wells are not nets in the deck (deck: waiting)
+-	NW.c1.dig	NW.c1.dig	ours_missing	digital-boundary (DigiBnd) variants: not in the deck
+-	NW.d1.dig	NW.d1.dig	ours_missing	digital-boundary (DigiBnd) variants: not in the deck
+-	NW.e1.dig	NW.e1.dig	ours_missing	digital-boundary (DigiBnd) variants: not in the deck
+-	NW.f1.digibnd	NW.f1.digibnd	ours_missing	digital-boundary (DigiBnd) variants: not in the deck
+-	Pad.aR	Pad.aR	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.bR	Pad.bR	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.d1R	Pad.d1R	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.dR	Pad.dR	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_M1	Pad.fR_M1	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_M2	Pad.fR_M2	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_M3	Pad.fR_M3	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_M4	Pad.fR_M4	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_M5	Pad.fR_M5	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_TM1	Pad.fR_TM1	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.fR_TM2	Pad.fR_TM2	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.gR	Pad.gR	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.jR	Pad.jR	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.kR	Pad.kR	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pad.m	Pad.m	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padb.a	Padb.a	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padb.b	Padb.b	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padb.c	Padb.c	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padb.d	Padb.d	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padc.a	Padc.a	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padc.b	Padc.b	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padc.c	Padc.c	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Padc.d	Padc.d	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	Pin.a	Pin.a	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.b	Pin.b	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.f_M2	Pin.f_M2	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.f_M3	Pin.f_M3	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.f_M4	Pin.f_M4	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.f_M5	Pin.f_M5	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.g	Pin.g	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Pin.h	Pin.h	ours_missing	the other pin layers, as Pin.e (deck note)
+-	Rhi.b	Rhi.b	ours_missing	identical layers: no kind (deck: waiting)
+-	Rsil.c	Rsil.c	ours_missing	full-crossing extension (deck: waiting)
+-	Sdiod.a	Sdiod.a	ours_missing	Schottky diode: not in the deck
+-	Sdiod.b	Sdiod.b	ours_missing	Schottky diode: not in the deck
+-	Sdiod.c	Sdiod.c	ours_missing	Schottky diode: not in the deck
+-	Sdiod.d	Sdiod.d	ours_missing	Schottky diode: not in the deck
+-	Sdiod.e	Sdiod.e	ours_missing	Schottky diode: not in the deck
+-	Seal.e	Seal.e	ours_missing	left out (deck note)
+-	Seal.f.Activ	Seal.f.Activ	ours_missing	left out (deck note)
+-	Seal.f.Metal1	Seal.f.Metal1	ours_missing	left out (deck note)
+-	Seal.f.Metal2	Seal.f.Metal2	ours_missing	left out (deck note)
+-	Seal.f.Metal3	Seal.f.Metal3	ours_missing	left out (deck note)
+-	Seal.f.Metal4	Seal.f.Metal4	ours_missing	left out (deck note)
+-	Seal.f.Metal5	Seal.f.Metal5	ours_missing	left out (deck note)
+-	Seal.f.TopMetal1	Seal.f.TopMetal1	ours_missing	left out (deck note)
+-	Seal.f.TopMetal2	Seal.f.TopMetal2	ours_missing	left out (deck note)
+-	Seal.f.pSD	Seal.f.pSD	ours_missing	left out (deck note)
+-	Seal.k	Seal.k	ours_missing	left out (deck note)
+-	Seal.l	Seal.l	ours_missing	left out (deck note)
+-	Seal.m	Seal.m	ours_missing	left out (deck note)
+-	Seal.n	Seal.n	ours_missing	left out (deck note)
+-	Slt.e.M1	Slt.e.M1	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e.M2	Slt.e.M2	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e.M3	Slt.e.M3	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e.M4	Slt.e.M4	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e.M5	Slt.e.M5	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e.TM1	Slt.e.TM1	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e.TM2	Slt.e.TM2	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_M1	Slt.e1_M1	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_M2	Slt.e1_M2	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_M3	Slt.e1_M3	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_M4	Slt.e1_M4	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_M5	Slt.e1_M5	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_TM1	Slt.e1_TM1	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	Slt.e1_TM2	Slt.e1_TM2	ours_missing	the pad and MIM exemptions are in the deck's slit layer (metal_wide), not a rule
+-	TM2.bR	TM2.bR	ours_missing	recommended (deck note)
+-	activ_drw_Angle45	activ_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	activ_iopc_Acute	activ_iopc_Acute	ours_missing	the deck does not declare layer activ_iopc: a layout drawing it is refused
+-	activ_iopc_Offgrid	activ_iopc_Offgrid	ours_missing	the deck does not declare layer activ_iopc: a layout drawing it is refused
+-	activ_nofill_Acute	activ_nofill_Acute	ours_missing	the deck does not declare layer activ_nofill: a layout drawing it is refused
+-	activ_noqrc_Acute	activ_noqrc_Acute	ours_missing	the deck does not declare layer activ_noqrc: a layout drawing it is refused
+-	activ_opc_Acute	activ_opc_Acute	ours_missing	the deck does not declare layer activ_opc: a layout drawing it is refused
+-	activ_opc_Offgrid	activ_opc_Offgrid	ours_missing	the deck does not declare layer activ_opc: a layout drawing it is refused
+-	activ_pin_Acute	activ_pin_Acute	ours_missing	the deck does not declare layer activ_pin: a layout drawing it is refused
+-	alcustop_drw_Acute	alcustop_drw_Acute	ours_missing	the deck does not declare layer alcustop: a layout drawing it is refused
+-	alcustop_drw_Offgrid	alcustop_drw_Offgrid	ours_missing	the deck does not declare layer alcustop: a layout drawing it is refused
+-	antmetal1_drw_Acute	antmetal1_drw_Acute	ours_missing	the deck does not declare layer antmetal1: a layout drawing it is refused
+-	antmetal1_drw_Offgrid	antmetal1_drw_Offgrid	ours_missing	the deck does not declare layer antmetal1: a layout drawing it is refused
+-	backmetal1_diffprb_Acute	backmetal1_diffprb_Acute	ours_missing	the deck does not declare layer backmetal1_diffprb: a layout drawing it is refused
+-	backmetal1_diffprb_Offgrid	backmetal1_diffprb_Offgrid	ours_missing	the deck does not declare layer backmetal1_diffprb: a layout drawing it is refused
+-	backmetal1_drw_Acute	backmetal1_drw_Acute	ours_missing	the deck does not declare layer backmetal1: a layout drawing it is refused
+-	backmetal1_drw_Offgrid	backmetal1_drw_Offgrid	ours_missing	the deck does not declare layer backmetal1: a layout drawing it is refused
+-	backmetal1_filler_Acute	backmetal1_filler_Acute	ours_missing	the deck does not declare layer backmetal1_filler: a layout drawing it is refused
+-	backmetal1_filler_Offgrid	backmetal1_filler_Offgrid	ours_missing	the deck does not declare layer backmetal1_filler: a layout drawing it is refused
+-	backmetal1_iprobe_Acute	backmetal1_iprobe_Acute	ours_missing	the deck does not declare layer backmetal1_iprobe: a layout drawing it is refused
+-	backmetal1_iprobe_Offgrid	backmetal1_iprobe_Offgrid	ours_missing	the deck does not declare layer backmetal1_iprobe: a layout drawing it is refused
+-	backmetal1_mask_Acute	backmetal1_mask_Acute	ours_missing	the deck does not declare layer backmetal1_mask: a layout drawing it is refused
+-	backmetal1_mask_Offgrid	backmetal1_mask_Offgrid	ours_missing	the deck does not declare layer backmetal1_mask: a layout drawing it is refused
+-	backmetal1_nofill_Acute	backmetal1_nofill_Acute	ours_missing	the deck does not declare layer backmetal1_nofill: a layout drawing it is refused
+-	backmetal1_noqrc_Acute	backmetal1_noqrc_Acute	ours_missing	the deck does not declare layer backmetal1_noqrc: a layout drawing it is refused
+-	backmetal1_noqrc_Offgrid	backmetal1_noqrc_Offgrid	ours_missing	the deck does not declare layer backmetal1_noqrc: a layout drawing it is refused
+-	backmetal1_opc_Acute	backmetal1_opc_Acute	ours_missing	the deck does not declare layer backmetal1_opc: a layout drawing it is refused
+-	backmetal1_opc_Offgrid	backmetal1_opc_Offgrid	ours_missing	the deck does not declare layer backmetal1_opc: a layout drawing it is refused
+-	backmetal1_pin_Acute	backmetal1_pin_Acute	ours_missing	the deck does not declare layer backmetal1_pin: a layout drawing it is refused
+-	backmetal1_res_Acute	backmetal1_res_Acute	ours_missing	the deck does not declare layer backmetal1_res: a layout drawing it is refused
+-	backmetal1_res_Offgrid	backmetal1_res_Offgrid	ours_missing	the deck does not declare layer backmetal1_res: a layout drawing it is refused
+-	backmetal1_slit_Acute	backmetal1_slit_Acute	ours_missing	the deck does not declare layer backmetal1_slit: a layout drawing it is refused
+-	backmetal1_slit_Offgrid	backmetal1_slit_Offgrid	ours_missing	the deck does not declare layer backmetal1_slit: a layout drawing it is refused
+-	backpassiv_drw_Acute	backpassiv_drw_Acute	ours_missing	the deck does not declare layer backpassiv: a layout drawing it is refused
+-	backpassiv_drw_Offgrid	backpassiv_drw_Offgrid	ours_missing	the deck does not declare layer backpassiv: a layout drawing it is refused
+-	baspoly_pin_Acute	baspoly_pin_Acute	ours_missing	the deck does not declare layer baspoly_pin: a layout drawing it is refused
+-	biwind_opc_Acute	biwind_opc_Acute	ours_missing	the deck does not declare layer biwind_opc: a layout drawing it is refused
+-	biwind_opc_Offgrid	biwind_opc_Offgrid	ours_missing	the deck does not declare layer biwind_opc: a layout drawing it is refused
+-	colopen_drw_Acute	colopen_drw_Acute	ours_missing	the deck does not declare layer colopen: a layout drawing it is refused
+-	colopen_drw_Offgrid	colopen_drw_Offgrid	ours_missing	the deck does not declare layer colopen: a layout drawing it is refused
+-	cont_opc_Acute	cont_opc_Acute	ours_missing	the deck does not declare layer cont_opc: a layout drawing it is refused
+-	cont_opc_Offgrid	cont_opc_Offgrid	ours_missing	the deck does not declare layer cont_opc: a layout drawing it is refused
+-	ctrgat_drw_Acute	ctrgat_drw_Acute	ours_missing	the deck does not declare layer ctrgat: a layout drawing it is refused
+-	ctrgat_drw_Offgrid	ctrgat_drw_Offgrid	ours_missing	the deck does not declare layer ctrgat: a layout drawing it is refused
+-	deepvia_drw_Acute	deepvia_drw_Acute	ours_missing	the deck does not declare layer deepvia: a layout drawing it is refused
+-	deepvia_drw_Offgrid	deepvia_drw_Offgrid	ours_missing	the deck does not declare layer deepvia: a layout drawing it is refused
+-	emwihv_drw_Acute	emwihv_drw_Acute	ours_missing	the deck does not declare layer emwihv: a layout drawing it is refused
+-	emwihv_drw_Offgrid	emwihv_drw_Offgrid	ours_missing	the deck does not declare layer emwihv: a layout drawing it is refused
+-	emwind_drw_Acute	emwind_drw_Acute	ours_missing	the deck does not declare layer emwind: a layout drawing it is refused
+-	emwind_drw_Offgrid	emwind_drw_Offgrid	ours_missing	the deck does not declare layer emwind: a layout drawing it is refused
+-	emwind_opc_Acute	emwind_opc_Acute	ours_missing	the deck does not declare layer emwind_opc: a layout drawing it is refused
+-	emwind_opc_Offgrid	emwind_opc_Offgrid	ours_missing	the deck does not declare layer emwind_opc: a layout drawing it is refused
+-	exchange0_drw_Acute	exchange0_drw_Acute	ours_missing	the deck does not declare layer exchange0: a layout drawing it is refused
+-	exchange0_drw_Offgrid	exchange0_drw_Offgrid	ours_missing	the deck does not declare layer exchange0: a layout drawing it is refused
+-	exchange0_pin_Acute	exchange0_pin_Acute	ours_missing	the deck does not declare layer exchange0_pin: a layout drawing it is refused
+-	exchange1_drw_Acute	exchange1_drw_Acute	ours_missing	the deck does not declare layer exchange1: a layout drawing it is refused
+-	exchange1_drw_Offgrid	exchange1_drw_Offgrid	ours_missing	the deck does not declare layer exchange1: a layout drawing it is refused
+-	exchange1_pin_Acute	exchange1_pin_Acute	ours_missing	the deck does not declare layer exchange1_pin: a layout drawing it is refused
+-	exchange2_drw_Acute	exchange2_drw_Acute	ours_missing	the deck does not declare layer exchange2: a layout drawing it is refused
+-	exchange2_drw_Offgrid	exchange2_drw_Offgrid	ours_missing	the deck does not declare layer exchange2: a layout drawing it is refused
+-	exchange2_pin_Acute	exchange2_pin_Acute	ours_missing	the deck does not declare layer exchange2_pin: a layout drawing it is refused
+-	exchange3_drw_Acute	exchange3_drw_Acute	ours_missing	the deck does not declare layer exchange3: a layout drawing it is refused
+-	exchange3_drw_Offgrid	exchange3_drw_Offgrid	ours_missing	the deck does not declare layer exchange3: a layout drawing it is refused
+-	exchange3_pin_Acute	exchange3_pin_Acute	ours_missing	the deck does not declare layer exchange3_pin: a layout drawing it is refused
+-	exchange4_drw_Acute	exchange4_drw_Acute	ours_missing	the deck does not declare layer exchange4: a layout drawing it is refused
+-	exchange4_drw_Offgrid	exchange4_drw_Offgrid	ours_missing	the deck does not declare layer exchange4: a layout drawing it is refused
+-	exchange4_pin_Acute	exchange4_pin_Acute	ours_missing	the deck does not declare layer exchange4_pin: a layout drawing it is refused
+-	fbe_drw_Acute	fbe_drw_Acute	ours_missing	the deck does not declare layer fbe: a layout drawing it is refused
+-	fbe_drw_Offgrid	fbe_drw_Offgrid	ours_missing	the deck does not declare layer fbe: a layout drawing it is refused
+-	fgetch_drw_Acute	fgetch_drw_Acute	ours_missing	the deck does not declare layer fgetch: a layout drawing it is refused
+-	fgetch_drw_Offgrid	fgetch_drw_Offgrid	ours_missing	the deck does not declare layer fgetch: a layout drawing it is refused
+-	fgimp_drw_Acute	fgimp_drw_Acute	ours_missing	the deck does not declare layer fgimp: a layout drawing it is refused
+-	fgimp_drw_Offgrid	fgimp_drw_Offgrid	ours_missing	the deck does not declare layer fgimp: a layout drawing it is refused
+-	flm_drw_Acute	flm_drw_Acute	ours_missing	the deck does not declare layer flm: a layout drawing it is refused
+-	flm_drw_Offgrid	flm_drw_Offgrid	ours_missing	the deck does not declare layer flm: a layout drawing it is refused
+-	gatpoly_drw_Angle45	gatpoly_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	gatpoly_iopc_Acute	gatpoly_iopc_Acute	ours_missing	the deck does not declare layer gatpoly_iopc: a layout drawing it is refused
+-	gatpoly_iopc_Offgrid	gatpoly_iopc_Offgrid	ours_missing	the deck does not declare layer gatpoly_iopc: a layout drawing it is refused
+-	gatpoly_nofill_Acute	gatpoly_nofill_Acute	ours_missing	the deck does not declare layer gatpoly_nofill: a layout drawing it is refused
+-	gatpoly_noqrc_Acute	gatpoly_noqrc_Acute	ours_missing	the deck does not declare layer gatpoly_noqrc: a layout drawing it is refused
+-	gatpoly_noqrc_Offgrid	gatpoly_noqrc_Offgrid	ours_missing	the deck does not declare layer gatpoly_noqrc: a layout drawing it is refused
+-	gatpoly_opc_Acute	gatpoly_opc_Acute	ours_missing	the deck does not declare layer gatpoly_opc: a layout drawing it is refused
+-	gatpoly_opc_Offgrid	gatpoly_opc_Offgrid	ours_missing	the deck does not declare layer gatpoly_opc: a layout drawing it is refused
+-	gatpoly_pin_Acute	gatpoly_pin_Acute	ours_missing	the deck does not declare layer gatpoly_pin: a layout drawing it is refused
+-	graphgate_drw_Acute	graphgate_drw_Acute	ours_missing	the deck does not declare layer graphgate: a layout drawing it is refused
+-	graphgate_drw_Offgrid	graphgate_drw_Offgrid	ours_missing	the deck does not declare layer graphgate: a layout drawing it is refused
+-	hafniumox_drw_Acute	hafniumox_drw_Acute	ours_missing	the deck does not declare layer hafniumox: a layout drawing it is refused
+-	hafniumox_drw_Offgrid	hafniumox_drw_Offgrid	ours_missing	the deck does not declare layer hafniumox: a layout drawing it is refused
+-	ic_drw_Acute	ic_drw_Acute	ours_missing	the deck does not declare layer ic: a layout drawing it is refused
+-	ic_drw_Offgrid	ic_drw_Offgrid	ours_missing	the deck does not declare layer ic: a layout drawing it is refused
+-	inldpwl_drw_Acute	inldpwl_drw_Acute	ours_missing	the deck does not declare layer inldpwl: a layout drawing it is refused
+-	inldpwl_drw_Offgrid	inldpwl_drw_Offgrid	ours_missing	the deck does not declare layer inldpwl: a layout drawing it is refused
+-	isonwell_drw_Acute	isonwell_drw_Acute	ours_missing	the deck does not declare layer isonwell: a layout drawing it is refused
+-	isonwell_drw_Offgrid	isonwell_drw_Offgrid	ours_missing	the deck does not declare layer isonwell: a layout drawing it is refused
+-	mempad_drw_Acute	mempad_drw_Acute	ours_missing	the deck does not declare layer mempad: a layout drawing it is refused
+-	mempad_drw_Offgrid	mempad_drw_Offgrid	ours_missing	the deck does not declare layer mempad: a layout drawing it is refused
+-	memvia_drw_Acute	memvia_drw_Acute	ours_missing	the deck does not declare layer memvia: a layout drawing it is refused
+-	memvia_drw_Offgrid	memvia_drw_Offgrid	ours_missing	the deck does not declare layer memvia: a layout drawing it is refused
+-	metal1_diffprb_Acute	metal1_diffprb_Acute	ours_missing	the deck does not declare layer metal1_diffprb: a layout drawing it is refused
+-	metal1_diffprb_Offgrid	metal1_diffprb_Offgrid	ours_missing	the deck does not declare layer metal1_diffprb: a layout drawing it is refused
+-	metal1_drw_Angle45	metal1_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	metal1_iprobe_Acute	metal1_iprobe_Acute	ours_missing	the deck does not declare layer metal1_iprobe: a layout drawing it is refused
+-	metal1_iprobe_Offgrid	metal1_iprobe_Offgrid	ours_missing	the deck does not declare layer metal1_iprobe: a layout drawing it is refused
+-	metal1_mask_Acute	metal1_mask_Acute	ours_missing	the deck does not declare layer metal1_mask: a layout drawing it is refused
+-	metal1_mask_Offgrid	metal1_mask_Offgrid	ours_missing	the deck does not declare layer metal1_mask: a layout drawing it is refused
+-	metal1_nofill_Acute	metal1_nofill_Acute	ours_missing	the deck does not declare layer metal1_nofill: a layout drawing it is refused
+-	metal1_noqrc_Acute	metal1_noqrc_Acute	ours_missing	the deck does not declare layer metal1_noqrc: a layout drawing it is refused
+-	metal1_noqrc_Offgrid	metal1_noqrc_Offgrid	ours_missing	the deck does not declare layer metal1_noqrc: a layout drawing it is refused
+-	metal1_opc_Acute	metal1_opc_Acute	ours_missing	the deck does not declare layer metal1_opc: a layout drawing it is refused
+-	metal1_opc_Offgrid	metal1_opc_Offgrid	ours_missing	the deck does not declare layer metal1_opc: a layout drawing it is refused
+-	metal1_res_Acute	metal1_res_Acute	ours_missing	the deck does not declare layer metal1_res: a layout drawing it is refused
+-	metal1_res_Offgrid	metal1_res_Offgrid	ours_missing	the deck does not declare layer metal1_res: a layout drawing it is refused
+-	metal2_diffprb_Acute	metal2_diffprb_Acute	ours_missing	the deck does not declare layer metal2_diffprb: a layout drawing it is refused
+-	metal2_diffprb_Offgrid	metal2_diffprb_Offgrid	ours_missing	the deck does not declare layer metal2_diffprb: a layout drawing it is refused
+-	metal2_drw_Angle45	metal2_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	metal2_iprobe_Acute	metal2_iprobe_Acute	ours_missing	the deck does not declare layer metal2_iprobe: a layout drawing it is refused
+-	metal2_iprobe_Offgrid	metal2_iprobe_Offgrid	ours_missing	the deck does not declare layer metal2_iprobe: a layout drawing it is refused
+-	metal2_mask_Acute	metal2_mask_Acute	ours_missing	the deck does not declare layer metal2_mask: a layout drawing it is refused
+-	metal2_mask_Offgrid	metal2_mask_Offgrid	ours_missing	the deck does not declare layer metal2_mask: a layout drawing it is refused
+-	metal2_nofill_Acute	metal2_nofill_Acute	ours_missing	the deck does not declare layer metal2_nofill: a layout drawing it is refused
+-	metal2_noqrc_Acute	metal2_noqrc_Acute	ours_missing	the deck does not declare layer metal2_noqrc: a layout drawing it is refused
+-	metal2_noqrc_Offgrid	metal2_noqrc_Offgrid	ours_missing	the deck does not declare layer metal2_noqrc: a layout drawing it is refused
+-	metal2_opc_Acute	metal2_opc_Acute	ours_missing	the deck does not declare layer metal2_opc: a layout drawing it is refused
+-	metal2_opc_Offgrid	metal2_opc_Offgrid	ours_missing	the deck does not declare layer metal2_opc: a layout drawing it is refused
+-	metal2_pin_Acute	metal2_pin_Acute	ours_missing	the deck does not declare layer metal2_pin: a layout drawing it is refused
+-	metal2_res_Acute	metal2_res_Acute	ours_missing	the deck does not declare layer metal2_res: a layout drawing it is refused
+-	metal2_res_Offgrid	metal2_res_Offgrid	ours_missing	the deck does not declare layer metal2_res: a layout drawing it is refused
+-	metal3_diffprb_Acute	metal3_diffprb_Acute	ours_missing	the deck does not declare layer metal3_diffprb: a layout drawing it is refused
+-	metal3_diffprb_Offgrid	metal3_diffprb_Offgrid	ours_missing	the deck does not declare layer metal3_diffprb: a layout drawing it is refused
+-	metal3_drw_Angle45	metal3_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	metal3_iprobe_Acute	metal3_iprobe_Acute	ours_missing	the deck does not declare layer metal3_iprobe: a layout drawing it is refused
+-	metal3_iprobe_Offgrid	metal3_iprobe_Offgrid	ours_missing	the deck does not declare layer metal3_iprobe: a layout drawing it is refused
+-	metal3_mask_Acute	metal3_mask_Acute	ours_missing	the deck does not declare layer metal3_mask: a layout drawing it is refused
+-	metal3_mask_Offgrid	metal3_mask_Offgrid	ours_missing	the deck does not declare layer metal3_mask: a layout drawing it is refused
+-	metal3_nofill_Acute	metal3_nofill_Acute	ours_missing	the deck does not declare layer metal3_nofill: a layout drawing it is refused
+-	metal3_noqrc_Acute	metal3_noqrc_Acute	ours_missing	the deck does not declare layer metal3_noqrc: a layout drawing it is refused
+-	metal3_noqrc_Offgrid	metal3_noqrc_Offgrid	ours_missing	the deck does not declare layer metal3_noqrc: a layout drawing it is refused
+-	metal3_opc_Acute	metal3_opc_Acute	ours_missing	the deck does not declare layer metal3_opc: a layout drawing it is refused
+-	metal3_opc_Offgrid	metal3_opc_Offgrid	ours_missing	the deck does not declare layer metal3_opc: a layout drawing it is refused
+-	metal3_pin_Acute	metal3_pin_Acute	ours_missing	the deck does not declare layer metal3_pin: a layout drawing it is refused
+-	metal3_res_Acute	metal3_res_Acute	ours_missing	the deck does not declare layer metal3_res: a layout drawing it is refused
+-	metal3_res_Offgrid	metal3_res_Offgrid	ours_missing	the deck does not declare layer metal3_res: a layout drawing it is refused
+-	metal4_diffprb_Acute	metal4_diffprb_Acute	ours_missing	the deck does not declare layer metal4_diffprb: a layout drawing it is refused
+-	metal4_diffprb_Offgrid	metal4_diffprb_Offgrid	ours_missing	the deck does not declare layer metal4_diffprb: a layout drawing it is refused
+-	metal4_drw_Angle45	metal4_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	metal4_iprobe_Acute	metal4_iprobe_Acute	ours_missing	the deck does not declare layer metal4_iprobe: a layout drawing it is refused
+-	metal4_iprobe_Offgrid	metal4_iprobe_Offgrid	ours_missing	the deck does not declare layer metal4_iprobe: a layout drawing it is refused
+-	metal4_mask_Acute	metal4_mask_Acute	ours_missing	the deck does not declare layer metal4_mask: a layout drawing it is refused
+-	metal4_mask_Offgrid	metal4_mask_Offgrid	ours_missing	the deck does not declare layer metal4_mask: a layout drawing it is refused
+-	metal4_nofill_Acute	metal4_nofill_Acute	ours_missing	the deck does not declare layer metal4_nofill: a layout drawing it is refused
+-	metal4_noqrc_Acute	metal4_noqrc_Acute	ours_missing	the deck does not declare layer metal4_noqrc: a layout drawing it is refused
+-	metal4_noqrc_Offgrid	metal4_noqrc_Offgrid	ours_missing	the deck does not declare layer metal4_noqrc: a layout drawing it is refused
+-	metal4_opc_Acute	metal4_opc_Acute	ours_missing	the deck does not declare layer metal4_opc: a layout drawing it is refused
+-	metal4_opc_Offgrid	metal4_opc_Offgrid	ours_missing	the deck does not declare layer metal4_opc: a layout drawing it is refused
+-	metal4_pin_Acute	metal4_pin_Acute	ours_missing	the deck does not declare layer metal4_pin: a layout drawing it is refused
+-	metal4_res_Acute	metal4_res_Acute	ours_missing	the deck does not declare layer metal4_res: a layout drawing it is refused
+-	metal4_res_Offgrid	metal4_res_Offgrid	ours_missing	the deck does not declare layer metal4_res: a layout drawing it is refused
+-	metal5_diffprb_Acute	metal5_diffprb_Acute	ours_missing	the deck does not declare layer metal5_diffprb: a layout drawing it is refused
+-	metal5_diffprb_Offgrid	metal5_diffprb_Offgrid	ours_missing	the deck does not declare layer metal5_diffprb: a layout drawing it is refused
+-	metal5_drw_Angle45	metal5_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	metal5_iprobe_Acute	metal5_iprobe_Acute	ours_missing	the deck does not declare layer metal5_iprobe: a layout drawing it is refused
+-	metal5_iprobe_Offgrid	metal5_iprobe_Offgrid	ours_missing	the deck does not declare layer metal5_iprobe: a layout drawing it is refused
+-	metal5_mask_Acute	metal5_mask_Acute	ours_missing	the deck does not declare layer metal5_mask: a layout drawing it is refused
+-	metal5_mask_Offgrid	metal5_mask_Offgrid	ours_missing	the deck does not declare layer metal5_mask: a layout drawing it is refused
+-	metal5_nofill_Acute	metal5_nofill_Acute	ours_missing	the deck does not declare layer metal5_nofill: a layout drawing it is refused
+-	metal5_noqrc_Acute	metal5_noqrc_Acute	ours_missing	the deck does not declare layer metal5_noqrc: a layout drawing it is refused
+-	metal5_noqrc_Offgrid	metal5_noqrc_Offgrid	ours_missing	the deck does not declare layer metal5_noqrc: a layout drawing it is refused
+-	metal5_opc_Acute	metal5_opc_Acute	ours_missing	the deck does not declare layer metal5_opc: a layout drawing it is refused
+-	metal5_opc_Offgrid	metal5_opc_Offgrid	ours_missing	the deck does not declare layer metal5_opc: a layout drawing it is refused
+-	metal5_pin_Acute	metal5_pin_Acute	ours_missing	the deck does not declare layer metal5_pin: a layout drawing it is refused
+-	metal5_res_Acute	metal5_res_Acute	ours_missing	the deck does not declare layer metal5_res: a layout drawing it is refused
+-	metal5_res_Offgrid	metal5_res_Offgrid	ours_missing	the deck does not declare layer metal5_res: a layout drawing it is refused
+-	nbulay_pin_Acute	nbulay_pin_Acute	ours_missing	the deck does not declare layer nbulay_pin: a layout drawing it is refused
+-	nbulaycut_drw_Acute	nbulaycut_drw_Acute	ours_missing	the deck does not declare layer nbulaycut: a layout drawing it is refused
+-	nbulaycut_drw_Offgrid	nbulaycut_drw_Offgrid	ours_missing	the deck does not declare layer nbulaycut: a layout drawing it is refused
+-	next_drw_Acute	next_drw_Acute	ours_missing	the deck does not declare layer next: a layout drawing it is refused
+-	next_drw_Offgrid	next_drw_Offgrid	ours_missing	the deck does not declare layer next: a layout drawing it is refused
+-	nexthv_drw_Acute	nexthv_drw_Acute	ours_missing	the deck does not declare layer nexthv: a layout drawing it is refused
+-	nexthv_drw_Offgrid	nexthv_drw_Offgrid	ours_missing	the deck does not declare layer nexthv: a layout drawing it is refused
+-	nldb_drw_Acute	nldb_drw_Acute	ours_missing	the deck does not declare layer nldb: a layout drawing it is refused
+-	nldb_drw_Offgrid	nldb_drw_Offgrid	ours_missing	the deck does not declare layer nldb: a layout drawing it is refused
+-	nldd_drw_Acute	nldd_drw_Acute	ours_missing	the deck does not declare layer nldd: a layout drawing it is refused
+-	nldd_drw_Offgrid	nldd_drw_Offgrid	ours_missing	the deck does not declare layer nldd: a layout drawing it is refused
+-	nmosi.d	nmosi.d	ours_missing	left out
+-	nmosi.g	nmosi.g	ours_missing	left out
+-	npn13G2.a	npn13G2.a	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2.bR	npn13G2.bR	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2L.a	npn13G2L.a	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2L.b	npn13G2L.b	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2L.cR	npn13G2L.cR	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2V.a	npn13G2V.a	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2V.b	npn13G2V.b	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npn13G2V.cR	npn13G2V.cR	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.b	npnG2.b	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.c	npnG2.c	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d.NWell	npnG2.d.NWell	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d.N_Activ	npnG2.d.N_Activ	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d.PWell_block	npnG2.d.PWell_block	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d.nBuLay	npnG2.d.nBuLay	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d.nSD_block	npnG2.d.nSD_block	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d1	npnG2.d1	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.d2	npnG2.d2	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	npnG2.e	npnG2.e	ours_missing	npn13G2 devices: emitter windows and substrate as a net (deck note)
+-	nwell_pin_Acute	nwell_pin_Acute	ours_missing	the deck does not declare layer nwell_pin: a layout drawing it is refused
+-	pSD.e	pSD.e	ours_missing	abutted ties (deck: waiting)
+-	pSD.f	pSD.f	ours_missing	abutted ties (deck: waiting)
+-	padb.f	padb.f	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	padc.f	padc.f	ours_missing	pad, solder-bump and copper-pillar options: left out (deck note)
+-	passiv_pdl_Acute	passiv_pdl_Acute	ours_missing	the deck does not declare layer passiv_pdl: a layout drawing it is refused
+-	passiv_pdl_Offgrid	passiv_pdl_Offgrid	ours_missing	the deck does not declare layer passiv_pdl: a layout drawing it is refused
+-	passiv_pillar_Acute	passiv_pillar_Acute	ours_missing	the deck does not declare layer passiv_pillar: a layout drawing it is refused
+-	passiv_pillar_Offgrid	passiv_pillar_Offgrid	ours_missing	the deck does not declare layer passiv_pillar: a layout drawing it is refused
+-	passiv_pin_Acute	passiv_pin_Acute	ours_missing	the deck does not declare layer passiv_pin: a layout drawing it is refused
+-	passiv_sbump_Acute	passiv_sbump_Acute	ours_missing	the deck does not declare layer passiv_sbump: a layout drawing it is refused
+-	passiv_sbump_Offgrid	passiv_sbump_Offgrid	ours_missing	the deck does not declare layer passiv_sbump: a layout drawing it is refused
+-	pext_drw_Acute	pext_drw_Acute	ours_missing	the deck does not declare layer pext: a layout drawing it is refused
+-	pext_drw_Offgrid	pext_drw_Offgrid	ours_missing	the deck does not declare layer pext: a layout drawing it is refused
+-	pexthv_drw_Acute	pexthv_drw_Acute	ours_missing	the deck does not declare layer pexthv: a layout drawing it is refused
+-	pexthv_drw_Offgrid	pexthv_drw_Offgrid	ours_missing	the deck does not declare layer pexthv: a layout drawing it is refused
+-	pldb_drw_Acute	pldb_drw_Acute	ours_missing	the deck does not declare layer pldb: a layout drawing it is refused
+-	pldb_drw_Offgrid	pldb_drw_Offgrid	ours_missing	the deck does not declare layer pldb: a layout drawing it is refused
+-	pldd_drw_Acute	pldd_drw_Acute	ours_missing	the deck does not declare layer pldd: a layout drawing it is refused
+-	pldd_drw_Offgrid	pldd_drw_Offgrid	ours_missing	the deck does not declare layer pldd: a layout drawing it is refused
+-	polyres_pin_Acute	polyres_pin_Acute	ours_missing	the deck does not declare layer polyres_pin: a layout drawing it is refused
+-	pwell_drw_Acute	pwell_drw_Acute	ours_missing	the deck does not declare layer pwell: a layout drawing it is refused
+-	pwell_drw_Offgrid	pwell_drw_Offgrid	ours_missing	the deck does not declare layer pwell: a layout drawing it is refused
+-	pwell_pin_Acute	pwell_pin_Acute	ours_missing	the deck does not declare layer pwell_pin: a layout drawing it is refused
+-	rfmem_drw_Acute	rfmem_drw_Acute	ours_missing	the deck does not declare layer rfmem: a layout drawing it is refused
+-	rfmem_drw_Offgrid	rfmem_drw_Offgrid	ours_missing	the deck does not declare layer rfmem: a layout drawing it is refused
+-	sensor_drw_Acute	sensor_drw_Acute	ours_missing	the deck does not declare layer sensor: a layout drawing it is refused
+-	sensor_drw_Offgrid	sensor_drw_Offgrid	ours_missing	the deck does not declare layer sensor: a layout drawing it is refused
+-	snsarms_drw_Acute	snsarms_drw_Acute	ours_missing	the deck does not declare layer snsarms: a layout drawing it is refused
+-	snsarms_drw_Offgrid	snsarms_drw_Offgrid	ours_missing	the deck does not declare layer snsarms: a layout drawing it is refused
+-	snsbotvia_drw_Acute	snsbotvia_drw_Acute	ours_missing	the deck does not declare layer snsbotvia: a layout drawing it is refused
+-	snsbotvia_drw_Offgrid	snsbotvia_drw_Offgrid	ours_missing	the deck does not declare layer snsbotvia: a layout drawing it is refused
+-	snscmosvia_drw_Acute	snscmosvia_drw_Acute	ours_missing	the deck does not declare layer snscmosvia: a layout drawing it is refused
+-	snscmosvia_drw_Offgrid	snscmosvia_drw_Offgrid	ours_missing	the deck does not declare layer snscmosvia: a layout drawing it is refused
+-	snsring_drw_Acute	snsring_drw_Acute	ours_missing	the deck does not declare layer snsring: a layout drawing it is refused
+-	snsring_drw_Offgrid	snsring_drw_Offgrid	ours_missing	the deck does not declare layer snsring: a layout drawing it is refused
+-	snstopvia_drw_Acute	snstopvia_drw_Acute	ours_missing	the deck does not declare layer snstopvia: a layout drawing it is refused
+-	snstopvia_drw_Offgrid	snstopvia_drw_Offgrid	ours_missing	the deck does not declare layer snstopvia: a layout drawing it is refused
+-	substrate_drw_Acute	substrate_drw_Acute	ours_missing	the deck does not declare layer substrate: a layout drawing it is refused
+-	substrate_drw_Offgrid	substrate_drw_Offgrid	ours_missing	the deck does not declare layer substrate: a layout drawing it is refused
+-	thinfilmres_drw_Acute	thinfilmres_drw_Acute	ours_missing	the deck does not declare layer thinfilmres: a layout drawing it is refused
+-	thinfilmres_drw_Offgrid	thinfilmres_drw_Offgrid	ours_missing	the deck does not declare layer thinfilmres: a layout drawing it is refused
+-	topmetal1_diffprb_Acute	topmetal1_diffprb_Acute	ours_missing	the deck does not declare layer topmetal1_diffprb: a layout drawing it is refused
+-	topmetal1_diffprb_Offgrid	topmetal1_diffprb_Offgrid	ours_missing	the deck does not declare layer topmetal1_diffprb: a layout drawing it is refused
+-	topmetal1_drw_Angle45	topmetal1_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	topmetal1_iprobe_Acute	topmetal1_iprobe_Acute	ours_missing	the deck does not declare layer topmetal1_iprobe: a layout drawing it is refused
+-	topmetal1_iprobe_Offgrid	topmetal1_iprobe_Offgrid	ours_missing	the deck does not declare layer topmetal1_iprobe: a layout drawing it is refused
+-	topmetal1_mask_Acute	topmetal1_mask_Acute	ours_missing	the deck does not declare layer topmetal1_mask: a layout drawing it is refused
+-	topmetal1_mask_Offgrid	topmetal1_mask_Offgrid	ours_missing	the deck does not declare layer topmetal1_mask: a layout drawing it is refused
+-	topmetal1_nofill_Acute	topmetal1_nofill_Acute	ours_missing	the deck does not declare layer topmetal1_nofill: a layout drawing it is refused
+-	topmetal1_noqrc_Acute	topmetal1_noqrc_Acute	ours_missing	the deck does not declare layer topmetal1_noqrc: a layout drawing it is refused
+-	topmetal1_noqrc_Offgrid	topmetal1_noqrc_Offgrid	ours_missing	the deck does not declare layer topmetal1_noqrc: a layout drawing it is refused
+-	topmetal1_pin_Acute	topmetal1_pin_Acute	ours_missing	the deck does not declare layer topmetal1_pin: a layout drawing it is refused
+-	topmetal1_res_Acute	topmetal1_res_Acute	ours_missing	the deck does not declare layer topmetal1_res: a layout drawing it is refused
+-	topmetal1_res_Offgrid	topmetal1_res_Offgrid	ours_missing	the deck does not declare layer topmetal1_res: a layout drawing it is refused
+-	topmetal2_diffprb_Acute	topmetal2_diffprb_Acute	ours_missing	the deck does not declare layer topmetal2_diffprb: a layout drawing it is refused
+-	topmetal2_diffprb_Offgrid	topmetal2_diffprb_Offgrid	ours_missing	the deck does not declare layer topmetal2_diffprb: a layout drawing it is refused
+-	topmetal2_drw_Angle45	topmetal2_drw_Angle45	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
+-	topmetal2_iprobe_Acute	topmetal2_iprobe_Acute	ours_missing	the deck does not declare layer topmetal2_iprobe: a layout drawing it is refused
+-	topmetal2_iprobe_Offgrid	topmetal2_iprobe_Offgrid	ours_missing	the deck does not declare layer topmetal2_iprobe: a layout drawing it is refused
+-	topmetal2_mask_Acute	topmetal2_mask_Acute	ours_missing	the deck does not declare layer topmetal2_mask: a layout drawing it is refused
+-	topmetal2_mask_Offgrid	topmetal2_mask_Offgrid	ours_missing	the deck does not declare layer topmetal2_mask: a layout drawing it is refused
+-	topmetal2_nofill_Acute	topmetal2_nofill_Acute	ours_missing	the deck does not declare layer topmetal2_nofill: a layout drawing it is refused
+-	topmetal2_noqrc_Acute	topmetal2_noqrc_Acute	ours_missing	the deck does not declare layer topmetal2_noqrc: a layout drawing it is refused
+-	topmetal2_noqrc_Offgrid	topmetal2_noqrc_Offgrid	ours_missing	the deck does not declare layer topmetal2_noqrc: a layout drawing it is refused
+-	topmetal2_pin_Acute	topmetal2_pin_Acute	ours_missing	the deck does not declare layer topmetal2_pin: a layout drawing it is refused
+-	topmetal2_res_Acute	topmetal2_res_Acute	ours_missing	the deck does not declare layer topmetal2_res: a layout drawing it is refused
+-	topmetal2_res_Offgrid	topmetal2_res_Offgrid	ours_missing	the deck does not declare layer topmetal2_res: a layout drawing it is refused
+-	vmim_drw_Acute	vmim_drw_Acute	ours_missing	the deck does not declare layer vmim: a layout drawing it is refused
+-	vmim_drw_Angle90	vmim_drw_Angle90	ours_missing	the deck does not declare layer vmim: a layout drawing it is refused
+-	vmim_drw_Offgrid	vmim_drw_Offgrid	ours_missing	the deck does not declare layer vmim: a layout drawing it is refused

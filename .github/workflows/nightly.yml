@@ -40,6 +40,7 @@ jobs:
           --skip netgen_differential --skip fastcap_differential
           --skip fasthenry_differential --skip ngspice_differential
           --skip magic_differential
+          --skip foundry_deck
           --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
           --skip flattening_is_linear_in_the_placements
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
@@ -54,7 +55,7 @@ jobs:
     name: differentials in the oracle shell
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
@@ -81,6 +82,27 @@ jobs:
       - run: >-
           nix develop .#oracles --command cargo test --test liberty --
           --ignored --test-threads=1 ngspice_differential
+      # The foundry cross-check (F2): each shipped deck against the foundry's
+      # own KLayout deck on the foundry's test structures and standard cells.
+      # The repositories are the commits tests/foundry/pdks.tsv pins: treeless
+      # clones checked out sparse (only the decks, structures and cell GDS),
+      # kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/gpurify/foundry
+          key: foundry-pdks-${{ hashFiles('tests/foundry/pdks.tsv') }}
+      - run: |
+          set -euf
+          grep -v '^#' tests/foundry/pdks.tsv | while IFS=$'\t' read -r name url commit paths; do
+            dir="$HOME/.cache/gpurify/foundry/$name-$commit"
+            [ -d "$dir/.git" ] && continue
+            git clone -q --filter=tree:0 --no-checkout "$url" "$dir"
+            git -C "$dir" sparse-checkout set --no-cone $paths
+            git -C "$dir" checkout -q "$commit"
+          done
+      - run: >-
+          nix develop .#oracles --command cargo test --test foundry --
+          --ignored --test-threads=1
 
   fuzz:
     name: fuzz ${{ matrix.target }}
