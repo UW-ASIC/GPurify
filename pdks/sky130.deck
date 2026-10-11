@@ -369,7 +369,15 @@ rule licon.14 space(poly_licon, difftap) >= 190nm
 rule licon.15 enclosure(poly_licon, npc) >= 100nm
 
 # --- Local interconnect, mcon [S1] ---
-rule li.1 width(li) >= 170nm
+# li.1a: li inside cells named s8rf2_xcmvpp_hd5_* (the VPP capacitors) is
+# 0.14um wide; li.1 holds the rest. A cell's li is its own and every cell's
+# it places. li.3a (0.14um spacing in the same cells) is not split out: a
+# pair with one side in the cell would be held to neither number, so li.3
+# holds every pair at 0.17um.
+layer li_vpp = li.in_cells("s8rf2_xcmvpp_hd5_*")
+layer li_not_vpp = li.not_in_cells("s8rf2_xcmvpp_hd5_*")
+rule li.1 width(li_not_vpp) >= 170nm
+rule li.1a width(li_vpp) >= 140nm
 rule li.3 space(li) >= 170nm
 rule li.3.notch notch(li) >= 170nm
 rule li.5 enclosure(licon, li, opposite) >= 80nm
@@ -404,7 +412,12 @@ rule m5.2 space(met5) >= 1600nm
 rule m5.2.notch notch(met5) >= 1600nm
 rule m5.4 area(met5) >= 4um2
 
-rule m1.4 enclosure(mcon, met1) >= 30nm
+# m1.4 is "exempted for cell names documented in rule m1.4a", which holds
+# those cells' mcon to 0.005um; [S3] scopes the pair with `select` the same way.
+layer mcon_m1_4a = mcon.in_cells("s8cell_ee_plus_sseln_a", "s8cell_ee_plus_sseln_b", "s8cell_ee_plus_sselp_a", "s8cell_ee_plus_sselp_b", "s8fpls_pl8", "s8fs_cmux4_fm")
+layer mcon_m1_4 = mcon.not_in_cells("s8cell_ee_plus_sseln_a", "s8cell_ee_plus_sseln_b", "s8cell_ee_plus_sselp_a", "s8cell_ee_plus_sselp_b", "s8fpls_pl8", "s8fs_cmux4_fm")
+rule m1.4 enclosure(mcon_m1_4, met1) >= 30nm
+rule m1.4a enclosure(mcon_m1_4a, met1) >= 5nm
 rule m1.5 enclosure(mcon, met1, opposite) >= 60nm
 rule via.1a size(via) == 150nm x 150nm
 rule via.2 space(via) >= 170nm
@@ -684,7 +697,11 @@ rule licon.16 contains(tap, licon) >= 1
 rule licon.17 forbidden((licon and poly) and difftap)
 rule licon.18 inside(poly_licon, npc)
 rule ct.4 inside(mcon, li)
-rule poly.12 forbidden((poly not nwell_lv) and tap)
+# poly.12 is "exempted for cell name s8fgvr_n_fg2" (and gated_npn and inside
+# UHVI, which this deck does not mark).
+rule poly.12 forbidden((poly.not_in_cells("s8fgvr_n_fg2") not nwell_lv) and tap)
+# x.25: pnp.dg only within the cells s8rf_pnp, s8rf_pnp5x, s8tesd_iref_pnp, stk14ecx_*.
+rule x.25 forbidden(pnp.not_in_cells("s8rf_pnp", "s8rf_pnp5x", "s8tesd_iref_pnp", "stk14ecx_*"))
 rule poly.14 forbidden((gate and hvi).interacting(gate not hvi))
 rule poly.15 forbidden(poly and diff_rs)
 rule nsd.8 forbidden((nsdm and pdifftap) or (psdm and ndifftap))
@@ -733,7 +750,11 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 # SKY130 DRM of 2025-07-22 lists m1-m4.RC.pd1-6 as obsolete and removed and
 # cmm*/waffleDrop as unsupported), the CU-flagged rules, ct/via*.irdrop among
 # them (Cu back end only; this deck is the Al back end), pwres.*, photo.*, tunm.*, denmos.*, depmos.*, extd.*, uhvi.*,
-# vpp.*, mf.*, rdl.*, indm.*, x.12-x.29 (frame, seal ring and cell-name rules).
+# vpp.*, mf.*, rdl.*, indm.*, x.12-x.24 and x.26-x.29 (frame, die, seal ring,
+# and x.26 "advSeal_6um pcell must overlap diff", which is per placement, not
+# per shape). Cell-name scoped rules not written: li.3a (above), licon.11c/11d
+# and x.15b (flow-specific), difftap.2a (no number for sky130), poly.2's
+# sr_bltd_eq exemption (it defers to the core rule poly.c2, absent here).
 # N/A in [S1] and absent from [S3]: capm.2b/5/6/8/10/12 as [S1] numbers them
 #   ([S3] gives capm.2b as a bottom-plate spacing of 1.2um that needs same-net
 #   selection; capm.5 0.14um is via3 to capm, which conflicts with capm.4 over
