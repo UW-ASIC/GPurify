@@ -1092,7 +1092,10 @@ Each operation runs on merged operands at the default coherence (a3).
   ([N] "evaluate_nets").
 - `antenna_electrical`: KLayout's diode spec `[diode, f]` raises the threshold by f × diode area
   in µm², which equals GPurify's `ratio − credit·A − bonus ≤ max` with threshold `max + bonus` and
-  f = credit. Compare only rows that ran.
+  f = credit. Compare only rows that ran. A row with `area_minus_diode`, `gate_plus_diode`,
+  `cut_factor` other than 1, a `diode_reduce` or `diode_max_ratio` table, or an `exempt` layer
+  has no `antenna_check` form; OpenROAD's antenna checker reads the LEF keywords they state
+  (`ANTENNAAREAMINUSDIFF`, `ANTENNAGATEPLUSDIFF`, `ANTENNAAREAFACTOR`, the `PWL` tables).
 
 **Verdict: APPROX.** KLayout merges areas per net (F29); a gate joins poly by touching in
 KLayout, but only by positive overlap in GPurify.
