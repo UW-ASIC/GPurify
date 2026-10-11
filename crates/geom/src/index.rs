@@ -206,6 +206,17 @@ impl Level {
         // Each cursor now holds its bucket's end: shift right to restore offsets.
         bucket_start.copy_within(0..buckets, 1);
         bucket_start[0] = 0;
+        debug_assert_eq!(
+            bucket_start[buckets] as usize,
+            rows.len(),
+            "the bucket offsets end at the filing count"
+        );
+        debug_assert!(
+            bucket_start
+                .windows(2)
+                .all(|w| w[0] <= w[1] && rows[w[0] as usize..w[1] as usize].is_sorted()),
+            "bucket offsets are monotone and each bucket's rows ascend"
+        );
         self.bucket_start = bucket_start;
         self.rows = rows;
     }
@@ -305,6 +316,35 @@ fn prune_pairs<const SAME: bool>(
     // A box filed under several cells is gathered several times.
     out.sort_unstable();
     out.dedup();
+    if cfg!(debug_assertions) {
+        check_superset::<SAME>(store, built(index), layer, distance, out);
+    }
+}
+
+/// Debug check, on small inputs, that the grid missed no pair: every pair of
+/// rows whose boxes are within `distance` is in `pairs` (the brute-force scan
+/// the index exists to avoid).
+fn check_superset<const SAME: bool>(
+    store: &GeometryStore,
+    b_layer: LayerId,
+    a_layer: LayerId,
+    distance: Dbu,
+    pairs: &[(PolyId, PolyId)],
+) {
+    const SMALL: usize = 1 << 12;
+    let (a_rows, b_rows) = (store.polys_on_layer(a_layer), store.polys_on_layer(b_layer));
+    if a_rows.len() * b_rows.len() > SMALL {
+        return;
+    }
+    for a in a_rows.map(PolyId) {
+        for b in b_rows.clone().map(PolyId) {
+            let near = (!SAME || a < b) && store.poly_bbox(a).within(store.poly_bbox(b), distance);
+            debug_assert!(
+                !near || pairs.binary_search(&(a, b)).is_ok(),
+                "the candidate pairs hold every pair of boxes within the distance: {a:?}, {b:?} missing"
+            );
+        }
+    }
 }
 
 /// Every row of one level that `a_box` grown by `distance` can reach, appended

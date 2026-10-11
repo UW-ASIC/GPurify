@@ -332,6 +332,10 @@ struct Run {
 }
 
 fn run_of(s: Seg) -> Run {
+    debug_assert!(
+        s.a.x == s.b.x || s.a.y == s.b.y,
+        "an edge-layer segment is axis-parallel: {s:?}"
+    );
     let vertical = s.a.x == s.b.x;
     let (pos, from, to) = if vertical {
         (s.a.x.raw(), s.a.y.raw(), s.b.y.raw())

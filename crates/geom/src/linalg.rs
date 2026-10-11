@@ -7,8 +7,13 @@
 use fearless_simd::{dispatch, f64x4, prelude::*, Level};
 
 /// Σ aᵢ·bᵢ.
+///
+/// # Panics
+///
+/// When `a` and `b` differ in length: a short `zip` would drop terms.
 #[inline]
 pub fn dot(a: &[f64], b: &[f64]) -> f64 {
+    assert_eq!(a.len(), b.len(), "a dot product of equal-length vectors");
     let mut s = 0.0;
     for (x, y) in a.iter().zip(b) {
         s += x * y;
@@ -23,7 +28,12 @@ pub fn nrm2(a: &[f64]) -> f64 {
 }
 
 /// y += α·x, element-wise, no FMA.
+///
+/// # Panics
+///
+/// When `x` and `y` differ in length.
 pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
+    assert_eq!(x.len(), y.len(), "axpy over equal-length vectors");
     dispatch!(Level::new(), s => axpy_simd(s, alpha, x, y));
 }
 
@@ -47,7 +57,12 @@ fn axpy_scalar(alpha: f64, x: &[f64], y: &mut [f64]) {
 }
 
 /// p = z + β·p, element-wise, no FMA: CG's search-direction update.
+///
+/// # Panics
+///
+/// When `z` and `p` differ in length.
 pub fn xpay(z: &[f64], beta: f64, p: &mut [f64]) {
+    assert_eq!(z.len(), p.len(), "xpay over equal-length vectors");
     dispatch!(Level::new(), s => xpay_simd(s, z, beta, p));
 }
 
@@ -71,7 +86,32 @@ fn xpay_scalar(z: &[f64], beta: f64, p: &mut [f64]) {
 }
 
 /// One sparse mat-vec: `out[i]` is row `i` of a CSR matrix times `v`.
+///
+/// # Panics
+///
+/// When the CSR is malformed: `row_start` is not one longer than `out`, its
+/// last offset is not the entry count `col.len() == value.len()`, or (in
+/// debug builds) its offsets descend or a column is past `v`.
 pub fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64]) {
+    assert_eq!(
+        row_start.len(),
+        out.len() + 1,
+        "one offset per row, plus the end"
+    );
+    assert_eq!(col.len(), value.len(), "one column per stored value");
+    assert_eq!(
+        row_start[out.len()] as usize,
+        col.len(),
+        "the last offset is the entry count"
+    );
+    debug_assert!(
+        row_start.windows(2).all(|w| w[0] <= w[1]),
+        "CSR row offsets are monotone"
+    );
+    debug_assert!(
+        col.iter().all(|&c| (c as usize) < v.len()),
+        "every column indexes the vector"
+    );
     for (i, row) in out.iter_mut().enumerate() {
         let (from, to) = (row_start[i] as usize, row_start[i + 1] as usize);
         let mut acc = 0.0f64;

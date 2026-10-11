@@ -7,7 +7,11 @@
 pub struct ComponentLabel(pub u32);
 
 /// Label every node with its component; `out` is cleared and refilled to
-/// `node_count` rows. An edge naming a node `>= node_count` panics.
+/// `node_count` rows.
+///
+/// # Panics
+///
+/// When an edge names a node `>= node_count`.
 pub fn components_into(node_count: u32, edges: &[(u32, u32)], out: &mut Vec<ComponentLabel>) {
     let n = node_count as usize;
     // `rank` is a tree height, bounded by 64 under path halving.
@@ -15,6 +19,10 @@ pub fn components_into(node_count: u32, edges: &[(u32, u32)], out: &mut Vec<Comp
     let mut rank: Vec<u8> = vec![0; n];
 
     for &(a, b) in edges {
+        assert!(
+            a < node_count && b < node_count,
+            "edge ({a}, {b}) names a node past the {node_count} given"
+        );
         let ra = find(&mut parent, a);
         let rb = find(&mut parent, b);
         let joined = ra != rb;
@@ -40,6 +48,20 @@ pub fn components_into(node_count: u32, edges: &[(u32, u32)], out: &mut Vec<Comp
         label[root] = label[root].min(i);
         out.push(ComponentLabel(label[root]));
     }
+    // Canonical: a label is its component's least node, which labels itself.
+    debug_assert!(
+        (0..node_count).all(|i| {
+            let ComponentLabel(l) = out[i as usize];
+            l <= i && out[l as usize] == ComponentLabel(l)
+        }),
+        "every node's label is a node no greater than it that labels itself"
+    );
+    debug_assert!(
+        edges
+            .iter()
+            .all(|&(a, b)| out[a as usize] == out[b as usize]),
+        "both ends of every edge share a component"
+    );
 }
 
 /// Root of `node`, halving the path on the way.

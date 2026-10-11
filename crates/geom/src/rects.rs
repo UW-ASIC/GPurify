@@ -71,6 +71,10 @@ pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start:
             cuts.clear();
             cuts.extend(active.iter().map(|&(_, _, y)| y));
             cuts.sort_unstable();
+            debug_assert!(
+                cuts.len().is_multiple_of(2),
+                "a slab crosses a closed polygon's boundary an even number of times"
+            );
 
             // Even-odd fill: interior between crossings 1-2, 3-4, ...
             rects.extend(cuts.chunks_exact(2).map(|pair| Bbox {
@@ -81,6 +85,12 @@ pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start:
             }));
         }
 
+        let first = *poly_start.last().expect("seeded with 0") as usize;
+        debug_assert_eq!(
+            2 * covered_area(&rects[first..]).raw(),
+            poly.outer().area2().raw() + poly.holes().map(|h| h.area2().raw()).sum::<i128>(),
+            "a polygon's rectangles cover exactly its area, holes excluded"
+        );
         poly_start.push(u32::try_from(rects.len()).expect("a decomposition fits a u32"));
     }
 }
