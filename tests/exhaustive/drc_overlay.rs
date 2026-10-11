@@ -3607,7 +3607,7 @@ fn dangling_metal() -> Vec<Fixture> {
 /// report them, but do not fail the run.
 ///
 /// The rule is IHP SG13G2 TM2.bR as `pdks/ihp_sg13g2.deck` transcribes it (a
-/// spacing table: 5 um between TopMetal2 lines wider than 5 um running in
+/// spacing table: 5 um between `TopMetal2` lines wider than 5 um running in
 /// parallel for more than 50 um), beside the required TM2.b (2 um), on two
 /// 6 um x 60 um bars swept about the recommended 5 um. Below it, the warning
 /// rule reports the gap and the run still passes; at and above it, nothing.
