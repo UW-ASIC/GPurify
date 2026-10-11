@@ -212,7 +212,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-045 | Extension / end-cap / overhang | partial | Each gate of merged A ∩ B measured per crossed axis; a gate that bends or carries a stub inside B measures 0 (fails closed) |
 | DRC-049 | Exact or maximum count | partial | Minimum count only (sky130.deck "an exact count") |
 | DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag") |
-| DRC-053 | Exact alignment / width match across layers | missing | — |
+| DRC-053 | Exact alignment / width match across layers | partial | ASAP7 V1.M2.AUX.2 only: LEF58_SPACING EXACTALIGNED (the spacing of exactly aligned line ends) is not modelled |
 | DRC-055 | Direction-dependent (S/D-direction) spacing | missing | — |
 | DRC-061 | Centre-to-centre cut spacing | missing | — |
 | DRC-062 | Array / adjacent-cut spacing | partial | ADJACENTCUTS WITHIN variants are unverified |
