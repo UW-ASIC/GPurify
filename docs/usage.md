@@ -125,8 +125,10 @@ same model state, and a parameter the layout does not measure is reported
 (`lvs.undeclared_param`) rather than passed.
 
 An `R` or `C` card may give its value positionally, between its nets and
-its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`. A card with a value and
-no model is refused, since devices are paired by model.
+its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`. Devices are paired by
+model, so an `R`, `C` or `D` card that names none (`R1 a b 1k`, `D1 a b`)
+is the deck's one device of its kind; where the deck has none of that kind,
+or several, the card is refused, and the message names them.
 
 ## Exit code
 

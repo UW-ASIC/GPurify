@@ -373,7 +373,8 @@ base, emitter, collector for `bjt`; anode, cathode for `diode`, which LVS
 compares as polar (a reversed diode is a mismatch), as it does a capacitor's
 two plates. A resistor's two ends may be written either way round.
 Kinds: `mos`, `bjt`, `resistor`, `capacitor`, `diode`. The model name is what
-LVS compares against your schematic. A `mos` row's gate terminal is also where
+LVS compares against your schematic; a schematic resistor, capacitor or
+diode card that names no model is the deck's one `device` of its kind. A `mos` row's gate terminal is also where
 an `antenna` row's gate connects.
 
 Each terminal needs a shape of its own under the marker, and shapes that

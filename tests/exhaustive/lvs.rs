@@ -1668,6 +1668,37 @@ fn curated() -> Vec<Fixture> {
         let name = format!("params/{case}");
         out.push(compared(&name, &[row, "LVS-014"], drawn, &written));
     }
+    // F86 (fixed in B27): a two-pin card with no model is the deck's one
+    // recogniser of its kind, here `rpoly`, `cmim` and `dpn`, so each card
+    // above with its model cut out matches what it matched: 200 ohm, 0.56 fF
+    // and a bare diode.
+    for (case, row, drawn, written, model) in [
+        (
+            "R_r_no_model",
+            "LVS-061",
+            &res,
+            sized(R, |d| d.value(200.0)),
+            " rpoly",
+        ),
+        (
+            "C_c_no_model",
+            "LVS-062",
+            &cap,
+            sized(C, |d| d.value(5.6e-16)),
+            " cmim",
+        ),
+        ("D_no_model", "LVS-063", &dio, dio.clone(), " dpn"),
+    ] {
+        out.push(
+            with_text(
+                &format!("params/{case}"),
+                &[row],
+                draw(drawn),
+                edited(&spice(&written), model, ""),
+            )
+            .expect(Expect::Lvs(true)),
+        );
+    }
     // A deck that gives no sheet resistance computes no `r`, and a card
     // stating one is never taken as agreement.
     let deck = full_deck().replace(" sheet 100ohm", "");

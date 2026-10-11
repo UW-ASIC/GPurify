@@ -25,12 +25,16 @@
 //! its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, and `C1 a b 1p cmim`
 //! is `C1 a b cmim c=1p`. Stating it both ways is refused.
 //!
+//! An `R`, `C` or `D` card may leave its model out (`R1 a b 1k`, `C1 a b
+//! c=1p`, `D1 a b`). LVS pairs a device by its model, so such a card is the
+//! deck's one recogniser of its kind; a deck with none of that kind, or
+//! several, refuses it with [`NetlistError::NoModel`], naming them
+//! (testing-plan F86).
+//!
 //! Refused with [`NetlistError::Unsupported`]: any other dot card (`.param`,
 //! `.include`, `.global`, `.model`, …), sources and other element letters,
-//! a card with a value and no model (`R1 a b 1k`: LVS pairs a device by its
-//! model, and which deck model a bare `R` card is, the deck does not say),
-//! parameters on a `.subckt` line or an `X` card, and a card outside every
-//! subcircuit.
+//! a number where a model belongs on any other card, parameters on a
+//! `.subckt` line or an `X` card, and a card outside every subcircuit.
 
 use crate::deck::DeviceKind;
 use crate::narrow;
@@ -85,6 +89,11 @@ pub enum NetlistError {
     /// its subcircuit's port count.
     #[error("line {}: device {1} has {2} terminals, expected {3}", .0.line)]
     TerminalCount(SourceSpan, String, u32, u32),
+    /// An `R`, `C` or `D` card with no model, where the deck has no one
+    /// recogniser of its kind to bind it to: the card, then what the deck
+    /// has of that kind (none, or the models it would have to choose from).
+    #[error("line {}: {1} states no model, and {2}", .0.line)]
+    NoModel(SourceSpan, String, String),
     /// A subcircuit that places itself, directly or through others: the
     /// hierarchy cannot be flattened ([`Netlist::flatten_top`]).
     #[error("subcircuit {0} places itself through its instances")]
@@ -133,7 +142,8 @@ pub struct Netlist {
     pub subckt_device_start: Vec<u32>,
 
     /// One row per device instance (not per subcircuit instance): its model
-    /// name, interned.
+    /// name, interned. An `R`, `C` or `D` card that names none has the deck's
+    /// one recogniser of its kind.
     pub device_model: Vec<StrId>,
     /// The device's family, from its card letter, its Spectre master, or the
     /// deck `device` statement an `X` card called.
@@ -735,21 +745,44 @@ impl Build<'_> {
         Ok((self.strings.intern(&key), value))
     }
 
+    /// The model a card that names none is: the deck's one recogniser of
+    /// `kind` (testing-plan F86). None, or several, is a refusal naming them.
+    fn only_model(&self, head: Tok, kind: DeviceKind) -> Result<StrId, NetlistError> {
+        let of_kind: Vec<StrId> = self
+            .models
+            .iter()
+            .filter(|&&(_, of)| of == kind)
+            .map(|&(name, _)| name)
+            .collect();
+        if let [model] = of_kind[..] {
+            return Ok(model);
+        }
+        let what = format!("{kind:?}").to_lowercase();
+        let has = if of_kind.is_empty() {
+            format!("the deck has no {what} recogniser to bind it to")
+        } else {
+            let names: Vec<&str> = of_kind.iter().map(|&n| self.strings.resolve(n)).collect();
+            format!("the deck has several {what} models: {}", names.join(", "))
+        };
+        Err(NetlistError::NoModel(head.span, head.text.to_string(), has))
+    }
+
     /// `value`: an `R` or `C` card's positional value token, stored as its
-    /// first parameter, `r` or `c`.
+    /// first parameter, `r` or `c`. `model`: `None` binds the card to the
+    /// deck's one recogniser of its kind.
     fn device(
         &mut self,
         head: Tok,
         kind: DeviceKind,
         nets: &[Tok],
-        (value, model): (Option<Tok>, Tok),
+        (value, model): (Option<Tok>, Option<Tok>),
         params: &[Tok],
         subckt: SubcktId,
         (dialect, micron): (Dialect, bool),
     ) -> Result<(), NetlistError> {
-        // A bare number where a model name belongs is a value with no model,
-        // `R1 a b 1k`, refused rather than interned as a model name.
-        if spice_number(model.text).is_some() {
+        // A bare number where a model name belongs is a value that is not
+        // this card's, refused rather than interned as a model name.
+        if let Some(model) = model.filter(|model| spice_number(model.text).is_some()) {
             return Err(NetlistError::Unsupported(
                 model.span,
                 format!("{} with no model after it", model.text),
@@ -770,7 +803,10 @@ impl Build<'_> {
         };
         // Not stored; interned only because interning order is report order.
         self.strings.intern(head.text);
-        let model = self.strings.intern(model.text);
+        let model = match model {
+            Some(model) => self.strings.intern(model.text),
+            None => self.only_model(head, kind)?,
+        };
         self.out
             .device_terminal_start
             .push(narrow(self.out.terminal_net.len()));
@@ -887,7 +923,7 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
                         head,
                         kind,
                         nets,
-                        (None, model),
+                        (None, Some(model)),
                         params,
                         subckt,
                         (Dialect::Spice, true),
@@ -898,16 +934,20 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
         }
         _ => return Err(NetlistError::Unsupported(head.span, head.text.to_string())),
     };
-    // `R1 a b 1k rpoly`: two nets, the value, the model.
-    let (nets, value, model) =
-        if let (DeviceKind::Resistor | DeviceKind::Capacitor, [_, _, value, model]) =
-            (kind, positional)
-        {
-            (&positional[..2], Some(*value), *model)
-        } else {
+    // `R1 a b 1k rpoly`: two nets, the value, the model. A two-pin card may
+    // leave its model out, `R1 a b 1k` or `D1 a b` (testing-plan F86).
+    let valued = matches!(kind, DeviceKind::Resistor | DeviceKind::Capacitor);
+    let (nets, value, model) = match positional {
+        [_, _, value, model] if valued => (&positional[..2], Some(*value), Some(*model)),
+        [_, _, value] if valued && spice_number(value.text).is_some() => {
+            (&positional[..2], Some(*value), None)
+        }
+        [_, _] if valued || kind == DeviceKind::Diode => (positional, None, None),
+        _ => {
             let (nets, model) = split_terminals(kind, positional, head)?;
-            (nets, None, model)
-        };
+            (nets, None, Some(model))
+        }
+    };
     b.device(
         head,
         kind,
@@ -973,7 +1013,7 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
         head,
         kind,
         nets,
-        (None, model),
+        (None, Some(model)),
         params,
         subckt,
         (Dialect::Spectre, false),
@@ -1071,7 +1111,8 @@ pub mod spice {
     ///
     /// `devices`: the deck's recognisers, whose models an `X` card may call as
     /// a device (`XM1 d g s b sky130_fd_pr__nfet_01v8 W=0.42 L=0.15`). On such a
-    /// card a bare `W`/`L` is in micrometres, as PDK models take it.
+    /// card a bare `W`/`L` is in micrometres, as PDK models take it. An `R`,
+    /// `C` or `D` card with no model is the one recogniser of its kind here.
     ///
     /// # Errors
     ///

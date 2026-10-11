@@ -447,8 +447,9 @@ fn a_reference_over_the_flat_cap_is_refused_before_it_is_expanded() {
 /// "Capacitors": `RXXXXXXX n+ n- <value> <mname>`). A value written between
 /// a card's nets and its model is the device's `r` or `c`, so the positional
 /// card reads back as the card that names it: `1k` is 1000 ohms and `1p` is
-/// 1e-12 farads. A value with no model is refused, since LVS pairs a device
-/// by its model, and so is a value stated both ways.
+/// 1e-12 farads. A value with no model, against a deck with no recogniser of
+/// its kind, is refused, since LVS pairs a device by its model, and so is a
+/// value stated both ways.
 #[test]
 fn an_r_or_c_cards_positional_value_is_its_r_or_c() {
     let mut strings = StrTable::default();
@@ -480,7 +481,7 @@ fn an_r_or_c_cards_positional_value_is_its_r_or_c() {
 
     for card in ["R1 a b 1k", "C1 a b 1p"] {
         match read(card, &mut strings) {
-            Err(NetlistError::Unsupported(span, _)) => assert_eq!(span.line, 2, "{card}"),
+            Err(NetlistError::NoModel(span, ..)) => assert_eq!(span.line, 2, "{card}"),
             other => panic!("{card}: a value with no model read as {other:?}"),
         }
     }
@@ -489,5 +490,76 @@ fn an_r_or_c_cards_positional_value_is_its_r_or_c() {
             assert_eq!((span.line, token.as_str()), (2, "r=2k"));
         }
         other => panic!("a value stated twice read as {other:?}"),
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F86. A two-pin card that names
+/// no model is the deck's one recogniser of its kind, its value read as the
+/// named form's: `R1 a b 1k` and `R2 a b r=2k` are `rpoly` of 1000 and 2000
+/// ohms, `C1 a b 1p` is `cmim` of 1e-12 farads, and `D1 a b` and
+/// `D2 a b area=1p` are `dpn`. A deck with two resistors, or none, has no one
+/// to bind `R1 a b 1k` to, and the refusal names what it has.
+#[test]
+fn a_two_pin_card_with_no_model_is_the_decks_one_recogniser_of_its_kind() {
+    let mut strings = StrTable::default();
+    let deck = |strings: &mut StrTable, models: &[(&str, DeviceKind)]| DeviceRecognition {
+        kind: models.iter().map(|&(_, kind)| kind).collect(),
+        model: models
+            .iter()
+            .map(|&(name, _)| strings.intern(name))
+            .collect(),
+        ..DeviceRecognition::default()
+    };
+    let one_each = deck(
+        &mut strings,
+        &[
+            ("nfet", DeviceKind::Mos),
+            ("rpoly", DeviceKind::Resistor),
+            ("cmim", DeviceKind::Capacitor),
+            ("dpn", DeviceKind::Diode),
+        ],
+    );
+    let source =
+        ".subckt top a b\nR1 a b 1k\nR2 a b r=2k\nC1 a b 1p\nD1 a b\nD2 a b area=1p\n.ends\n";
+    let netlist = spice::read(source, &mut strings, &one_each).expect("each binds");
+    let models: Vec<&str> = netlist
+        .device_model
+        .iter()
+        .map(|&model| strings.resolve(model))
+        .collect();
+    assert_eq!(models, ["rpoly", "rpoly", "cmim", "dpn", "dpn"]);
+    let (r, c, area) = (
+        strings.intern("r"),
+        strings.intern("c"),
+        strings.intern("area"),
+    );
+    assert_eq!(
+        netlist.param,
+        [(r, 1000.0), (r, 2000.0), (c, 1e-12), (area, 1e-12)]
+    );
+
+    let two = deck(
+        &mut strings,
+        &[
+            ("rpoly", DeviceKind::Resistor),
+            ("rdiff", DeviceKind::Resistor),
+        ],
+    );
+    let none = deck(&mut strings, &[("cmim", DeviceKind::Capacitor)]);
+    for (recognisers, names) in [(&two, &["rpoly", "rdiff"][..]), (&none, &[][..])] {
+        match spice::read(
+            ".subckt top a b\nR1 a b 1k\n.ends\n",
+            &mut strings,
+            recognisers,
+        ) {
+            Err(NetlistError::NoModel(span, card, has)) => {
+                assert_eq!((span.line, card.as_str()), (2, "R1"));
+                for name in names {
+                    assert!(has.contains(name), "{has}");
+                }
+                assert!(!has.contains("cmim"), "{has}");
+            }
+            other => panic!("R1 with no model bound against {names:?}: {other:?}"),
+        }
     }
 }
