@@ -164,7 +164,7 @@ impl AsRef<LayerTable> for LayerTable {
 /// A staged deck's stages (`stage <name>` lines, each heading the rules
 /// written after it): a run checks them in order, and once a stage finds an
 /// error the later stages are not checked. The early, dirty-design run of
-/// Calibre nmDRC-Recon and IC Validator Explorer, with the subset written in
+/// Calibre `nmDRC-Recon` and IC Validator Explorer, with the subset written in
 /// the deck: Siemens' public description of Recon is a run of selected
 /// checks that leaves out those "runtime-intensive and/or unlikely to
 /// provide actionable results" on an early design.
@@ -214,7 +214,7 @@ pub struct Extraction {
     pub kind: ExtractionKind,
     /// A coupling capacitance below this many attofarads is grounded: a
     /// capacitance to ground of the same value at each of its two nodes
-    /// (OpenRCX's `-coupling_threshold`). Zero grounds none; positive only
+    /// (`OpenRCX`'s `-coupling_threshold`). Zero grounds none; positive only
     /// for a type that keeps coupling ([`ExtractionKind::keeps_coupling`]).
     /// Attofarads, the deck's capacitance unit, so a printed deck reads back
     /// to the same value.

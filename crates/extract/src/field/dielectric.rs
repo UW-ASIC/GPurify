@@ -19,7 +19,7 @@
 //!
 //! # The formulation
 //!
-//! FastCap's for several dielectrics (Nabors & White, "Multipole-accelerated
+//! `FastCap`'s for several dielectrics (Nabors & White, "Multipole-accelerated
 //! capacitance extraction algorithms for 3-D structures with multiple
 //! dielectrics", *IEEE Trans. Circuits Syst. I* 39(11), 1992): every surface
 //! carries its total charge (free and polarisation) in vacuum, still over the

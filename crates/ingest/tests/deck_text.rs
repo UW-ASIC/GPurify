@@ -1922,7 +1922,7 @@ fn the_multi_patterning_example_in_the_language_spec_parses() {
 }
 
 /// PEX-008: `extraction` names one of Calibre's types and, for a type that
-/// keeps coupling, OpenRCX's coupling threshold in any capacitance unit;
+/// keeps coupling, `OpenRCX`'s coupling threshold in any capacitance unit;
 /// without the line every element is kept. Each misuse is an error at the
 /// value: an unknown type, a threshold on a type that grounds or drops every
 /// coupling, a negative threshold, a second line.

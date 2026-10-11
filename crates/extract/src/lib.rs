@@ -13,7 +13,7 @@
 //!
 //! [`reduce`] then cuts the network to the deck's extraction type (`r`, `c`,
 //! `cc`, `rc` or `rcc`, Calibre's names) and grounds coupling below its
-//! threshold, as OpenRCX does. [`compare`] diffs two extractions of one
+//! threshold, as `OpenRCX` does. [`compare`] diffs two extractions of one
 //! layout net by net (capacitance, net-to-net coupling, pin-to-pin
 //! resistance, Elmore delay) with the error statistics a qualification
 //! reports.
