@@ -3,6 +3,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
+    # OpenROAD alone, from a revision Hydra built it at: at the main pin its
+    # dependency or-tools is marked broken, so nothing there evaluates or is
+    # cached (ledger O1).
+    nixpkgs-openroad.url = "github:NixOS/nixpkgs/f45c6f04c2f013f004bf94e284e95d72898d9393";
   };
 
   outputs =
@@ -11,6 +15,7 @@
       nixpkgs,
       rust-overlay,
       flake-utils,
+      nixpkgs-openroad,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -56,7 +61,7 @@
             pkgs.fasthenry
             # OpenROAD's antenna checker and PDNSim, and Yosys `check`: the
             # ERC differentials (ledger O1).
-            pkgs.openroad
+            nixpkgs-openroad.legacyPackages.${system}.openroad
             pkgs.yosys
           ];
         };
