@@ -1,7 +1,7 @@
 //! Physical verification for integrated circuits: DRC, LVS, ERC and PEX, in one
 //! tool and one library.
 //!
-//! Most verifiers say how many violations they found. GPurify also says how much
+//! Most verifiers say how many violations they found. `GPurify` also says how much
 //! of the chip it looked at: every rule reports whether it ran and how many
 //! shapes it examined, and a run that could not check everything it was asked to
 //! does not pass. The same inputs always give the same bytes.
@@ -76,7 +76,7 @@
 //! expected to check, and
 //! [check-sources.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md)
 //! cites the foundry manual, standard or tool that defines each check. What
-//! GPurify does not check yet is in
+//! `GPurify` does not check yet is in
 //! [limitations.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md);
 //! do not tape out on its verdict alone.
 //!

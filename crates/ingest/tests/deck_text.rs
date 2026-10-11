@@ -273,7 +273,7 @@ rule ds drain_source(; models: both, max: 3.3V)
         [r#"model="nfet""#, r#"model="pfet""#, "max_voltage=1980"]
     );
     assert_eq!(got[1].3, [r#"pmos="pfet""#]);
-    assert!(got[2].3.is_empty());
+    assert_eq!(got[2].3, [] as [&str; 0]);
     assert_eq!(got[3].3, [r#"clamp="nfet""#]);
     assert_eq!(
         got[4].3,

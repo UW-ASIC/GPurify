@@ -714,7 +714,7 @@ pub mod gds {
         if !payload.len().is_multiple_of(8) {
             return Err(LayoutError::Truncated(at));
         }
-        for (x, y) in payload.chunks_exact(8).map(xy) {
+        for (x, y) in payload.as_chunks::<8>().0.iter().map(|p| xy(p)) {
             xs.push(x);
             ys.push(y);
         }
@@ -1291,7 +1291,7 @@ pub mod gds {
                     if !payload.len().is_multiple_of(8) {
                         return Err(LayoutError::Truncated(at));
                     }
-                    for (slot, p) in pt.iter_mut().zip(payload.chunks_exact(8)) {
+                    for (slot, p) in pt.iter_mut().zip(payload.as_chunks::<8>().0) {
                         *slot = xy(p);
                     }
                     points_seen = payload.len() / 8;

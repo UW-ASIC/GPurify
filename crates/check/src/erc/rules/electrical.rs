@@ -88,7 +88,7 @@ pub struct P2pResistanceTable {
 /// dynamic and vectorless IR are out of scope (ERC-E11).
 ///
 /// Catalog: ERC-E8 in the [check catalog]. Defined by [OpenROAD psm];
-/// [Weste & Harris] §13.3.2; RedHawk, Voltus and mPower (public material
+/// [Weste & Harris] §13.3.2; `RedHawk`, Voltus and `mPower` (public material
 /// only). No standards body defines static IR drop. Source tags are in
 /// [check-sources.md]; the intent file is described in [usage.md].
 ///
