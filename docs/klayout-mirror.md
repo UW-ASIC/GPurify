@@ -564,9 +564,10 @@ emit(id, O.enclosing(I, LIM, euclidian, transparent)) ; emit(id, I.not_inside(O)
 
 ### 18. asymmetric_enclosure — APPROX (exact when the inner layer is R, else KLayout ⊆ GPurify)
 
-**GPurify** (`overlay.rs` `strips`, `enclosure_of`): for a rectangular inner row, each side's
-margin is read straight out; the measure is `max(min(l, r), min(b, t))`. A non-rectangular inner
-is held to the limit on every side by Euclidean distance (fails closed); an unhosted one is 0.
+**GPurify** (`overlay.rs` `strips`, `enclosure_of`): each edge of an inner row, holes included,
+is read straight out to the nearest host edge facing it; the measure is the better axis,
+`max(min over vertical edges, min over horizontal edges)`, which is `max(min(l, r), min(b, t))`
+for a rectangle. An unhosted inner is 0.
 
 **KLayout**
 
@@ -578,9 +579,11 @@ emit(id, I.not_inside(O))
 
 - (v t4 T17.) Do not use the classic rectangle filter: it stops waiving when an error covers only
   part of a side (v t3 T9e).
-- A non-rectangular inner that KLayout passes, GPurify may fail (x: fixture
-  `asymmetric_enclosure/l_via_one_axis`), so off R
-  KLayout ⊆ GPurify. The measurement is not compared.
+- The recipe is the same definition edge by edge: an inner fails when it has a short vertical
+  edge and a short horizontal one. Off R, KLayout's projection pairs an inner edge only with
+  outer edges whose projection overlaps it by a positive length, as `strips` does, but a
+  shielded outer edge and a partly unhosted inner can still differ, so off R KLayout ⊆ GPurify
+  (fixtures `asymmetric_enclosure/l_via_*`). The measurement is not compared.
 
 ### 19. min_extension — APPROX (exact on R+, else not compared)
 

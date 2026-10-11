@@ -329,6 +329,64 @@ fn sky130_m1_5_sixty_on_two_opposite_sides_passes_with_thirty_on_the_others() {
     assert_clean(&sink.runs, &sink.out, RULE);
 }
 
+/// The L via of the shapes below: lower arm `[0, 200] x [0, 100]`, upper arm
+/// `[0, 100] x [100, 200]`.
+fn l_via(layout: &mut LayoutBuilder) -> gpurify_testgen::shapes::Handle {
+    layout.push(A, &[0, 200, 200, 100, 100, 0], &[0, 0, 100, 100, 200, 200])
+}
+
+/// Oracle: construct-from-answer (DRC-041). An L via 100 clear of its host
+/// left and right of every vertical edge, and flush with it above and below,
+/// has the limit on both sides along x, so it passes. Held to every side, as
+/// a non-rectangle once was, it read 0.
+#[test]
+fn an_l_shaped_inner_with_the_limit_along_one_axis_passes() {
+    let mut layout = LayoutBuilder::new(2);
+    l_via(&mut layout);
+    layout.rect(B, -100, 0, 300, 200);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(100));
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// Oracle: construct-from-answer (DRC-041). The host clears the L via by 100
+/// all round but for a notch from its top over `x` 150..250 down to `y` 199.
+/// The via's concave top edge (`y` 100, `x` 100..200) reads 99 up to the
+/// notch and its upper arm's right edge (`x` 100) 50, so `x` measures 50 and
+/// `y` 99: 99 under a requirement of 100, reported in the strip above the
+/// concave edge, at `(150, 149)`. A bounding-box reading sees 100 on every
+/// side and passes it.
+#[test]
+fn an_l_shaped_inner_is_measured_edge_by_edge_on_its_better_axis() {
+    let mut layout = LayoutBuilder::new(2);
+    let via = l_via(&mut layout);
+    let host = layout.push(
+        B,
+        &[-100, 300, 300, 250, 250, 150, 150, -100],
+        &[-100, -100, 300, 300, 199, 199, 300, 300],
+    );
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(100));
+
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(150, 149),
+            measured: Measurement::Length(dbu(99)),
+            limit: Measurement::Length(dbu(100)),
+            shapes: (ids.of(via), Some(ids.of(host))),
+        },
+    );
+}
+
 /// A host's hole is not host. A via 100 clear of the pad's outer edge but 20
 /// from a slot on its right and another above has 20 on both axes' near side.
 /// Measured on bounding boxes it read 100 and passed.

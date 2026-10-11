@@ -370,18 +370,25 @@ fn margins4() -> Vec<(i64, i64, i64, i64)> {
 }
 
 /// `enclosure(via, met1, opposite) >= 100nm` (`asymmetric_enclosure`, DRC-041
-/// and DRC-042): a rectangular via measures `max(min(left, right),
-/// min(bottom, top))`, each side read straight out to the nearest host edge
-/// facing it; a via of any other shape is held to the limit on every side, as
-/// `min_enclosure` measures it (fails closed).
+/// and DRC-042): each edge of a via is read straight out to the nearest host
+/// edge facing it; the via measures `max(min over its vertical edges, min
+/// over its horizontal edges)`, which for a rectangle is `max(min(left,
+/// right), min(bottom, top))`.
+///
+/// Oracle: every margin is drawn, so each edge's straight-out reading is a
+/// number the layout was built to have.
 ///
 /// Shapes: the limit on one axis with the other axis touching; one side short
 /// with the other axis far; both axes short; every side touching; a host with
 /// notches down to the via on two sides (a bounding-box measure sees the far
 /// edges); the plus host, clean here because its straight strips run 450 nm
-/// although its concave corners are 70 nm off; an L-shaped via, swept, and
-/// with the limit only on one axis (held to every side, so 0); an unhosted
-/// via; an empty via layer. Nightly: every combination of four margins.
+/// although its concave corners are 70 nm off; an L-shaped via, swept; an L
+/// via with the limit only along x (clean: the old every-side fallback read
+/// 0); an L via whose concave top edge decides the y axis, swept, while a
+/// host notch 50 nm right of its upper arm spoils the x axis (an every-side
+/// or bounding-box measure reads 50 or the box's 100 at every step); an
+/// unhosted via; an empty via layer. Nightly: every combination of four
+/// margins.
 fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 100;
     let deck = new_deck(
@@ -469,8 +476,33 @@ fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
         Layout::default()
             .polygon("via", &l_via)
             .rect("met1", -100, 0, 300, 200),
-        lengths(&[0]),
+        Vec::new(),
     ));
+    // A notch comes down from the host's top over x in [150, 250] to
+    // 100 + k: the via's concave top edge (y = 100, x in [100, 200]) reads k,
+    // its other horizontal edges 100, so y measures min(k, 100). The upper
+    // arm's right edge (x = 100) reads 50 to the notch while the notch
+    // reaches below y = 200, so x measures 50 then, else 100.
+    for (k, side) in sweep(LIMIT) {
+        let host = [
+            (-100, -100),
+            (300, -100),
+            (300, 300),
+            (250, 300),
+            (250, 100 + k),
+            (150, 100 + k),
+            (150, 300),
+            (-100, 300),
+        ];
+        let x = if 100 + k < 200 { 50 } else { 100 };
+        cases.push(case(
+            &format!("l_via_concave_edge/{side}"),
+            Layout::default()
+                .polygon("via", &l_via)
+                .polygon("met1", &host),
+            below(x.max(k.min(100)), LIMIT),
+        ));
+    }
     cases.push(case(
         "unhosted",
         Layout::default()

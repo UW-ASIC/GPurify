@@ -515,24 +515,34 @@ pub enum Rule {
     ///
     /// Deck: `enclosure(inner, outer, opposite) >= len`, kind
     /// `asymmetric_enclosure`. Hosts are chosen as for [`Rule::MinEnclosure`].
-    /// For a rectangular inner polygon, each side's enclosure is read straight
-    /// out from that side to the nearest host edge facing it, and the rule
-    /// measures `max(min(left, right), min(bottom, top))`. Write the every-side
-    /// minimum as its own [`Rule::MinEnclosure`] row (sky130 m1.4 beside m1.5).
+    /// Each edge of the inner polygon, holes included, is read straight out
+    /// from its outside to the nearest host edge facing it (the projection
+    /// metric). The inner is enclosed along x by the least reading of its
+    /// vertical edges and along y by the least of its horizontal edges, and
+    /// the rule measures the better axis: `max(min(left, right), min(bottom,
+    /// top))` for a rectangle. An L-shaped inner's concave edges count as its
+    /// outer ones do. LEF `ENCLOSURE overhang1 overhang2` is two rows: this
+    /// one at `overhang1` and a [`Rule::MinEnclosure`] row at `overhang2`
+    /// (sky130 m1.4 beside m1.5), which together hold exactly when one axis
+    /// has `overhang1` on both sides and every side has `overhang2`.
+    ///
+    /// For a rectangle, "on one of two adjacent sides" (sky130 m1.5, via.5a,
+    /// licon.5c, licon.7, licon.8a, li.5) is this rule: no two adjacent sides
+    /// fall short exactly when one axis has the limit on both sides. sky130's
+    /// own `KLayout` deck checks those rows as two opposite edges too.
     ///
     /// One violation per offending inner polygon, on the `inner` layer, in the
-    /// middle of the strip on the less enclosed side of the better axis.
+    /// middle of the strip past the least enclosed edge of the better axis.
     /// `shapes` is the inner row and the host's drawn row (`None` when
     /// unhosted). `examined` counts inner polygons.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-041, DRC-042. Rules: sky130 m1.5, via.5a and licon.5c, ASAP7
-    /// V1.M1.EN.1, IHP M1.c1 and V1.c1; LEF `ENCLOSURE` with two overhangs.
+    /// V1.M1.EN.1, IHP M1.c1 and V1.c1; LEF `ENCLOSURE` with two overhangs
+    /// (LEF/DEF 5.8, "ENCLOSURE"); `KLayout` `enclosed` with `projection`.
     ///
-    /// Limits: an inner polygon that is not a rectangle is held to
-    /// `min_one_side` on every side, as [`Rule::MinEnclosure`] measures (fails
-    /// closed). Only the two-opposite-sides form exists: one of two adjacent
-    /// sides and end-cap-only enclosure cannot be written.
+    /// Limits: end-cap enclosure that depends on the host's end of line
+    /// (`LEF58_ENCLOSURE EOL`) is not modelled.
     AsymmetricEnclosure {
         /// The enclosing layer, merged; the deck's second argument.
         outer: LayerId,

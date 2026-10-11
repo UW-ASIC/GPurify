@@ -43,15 +43,6 @@ fn lesser(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
     }
 }
 
-/// The larger of two sides, the first on a tie.
-fn greater(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
-    if a.0 >= b.0 {
-        a
-    } else {
-        b
-    }
-}
-
 /// How far the host reaches past a rectangular `inner` on each side, read
 /// along the side's own strip (projection metric): the nearest host edge,
 /// holes included, facing that side. Exact for any rectilinear host that
@@ -107,29 +98,50 @@ fn boundary_dist2(inner: &[Bbox], host: PolygonRef<'_>) -> i128 {
         .fold(i128::MAX, i128::min)
 }
 
-/// A contained inner polygon's enclosure in `host` and the side to report.
-/// All sides: the euclidean distance to the host's boundary. Asymmetric: the
-/// better axis's worse side, `max(min(left, right), min(bottom, top))`, which
-/// needs a rectangular inner; any other inner falls back to all sides (fails
-/// closed). `None` for the side means "not a rectangle, report at the centre".
+/// A contained inner polygon's enclosure in `host` and where to report it
+/// (`None`: at the centre of its box).
+///
+/// All sides: the euclidean distance to the host's boundary, reported in the
+/// strip on the least enclosed side of a rectangle.
+///
+/// Opposite: each edge of the polygon, holes included, is read straight out
+/// from its outside to the nearest host edge facing it ([`strips`]); the
+/// vertical edges enclose it along x by the least of theirs, the horizontal
+/// edges along y, and the polygon measures its better axis,
+/// `max(min(vertical), min(horizontal))`, x on a tie. For a rectangle that
+/// is `max(min(left, right), min(bottom, top))`. Reported in the strip past
+/// the least enclosed edge of that axis: left before right and bottom
+/// before top on a tie, then the first in ring order.
 fn enclosure_of(
-    inner: &[Bbox],
-    inner_box: Bbox,
+    inner: PolygonRef<'_>,
+    rects: &[Bbox],
     host: PolygonRef<'_>,
     asymmetric: bool,
-) -> (Dbu, Option<Side>) {
-    let boxed = inner.len() == 1;
-    if boxed && asymmetric {
-        let [l, r, b, t] = strips(inner_box, host);
-        let (value, side) = greater(lesser(l, r), lesser(b, t));
-        return (value, Some(side));
+) -> (Dbu, Option<Point>) {
+    if asymmetric {
+        // Per axis (vertical edges, horizontal edges): the least enclosed edge.
+        let mut least: [Option<(Dbu, Side, Bbox)>; 2] = [None; 2];
+        for (a, b) in poly_edges(inner) {
+            let edge = Bbox::point(a.x, a.y).include(b.x, b.y);
+            let side = outward(a, b);
+            let (run, _) = strips(edge, host)[side as usize];
+            let axis = &mut least[usize::from(a.y == b.y)];
+            if axis.is_none_or(|(d, s, _)| (run, side) < (d, s)) {
+                *axis = Some((run, side, edge));
+            }
+        }
+        let edges = "a validated polygon has edges along both axes";
+        let (x, y) = (least[0].expect(edges), least[1].expect(edges));
+        let (run, side, edge) = if x.0 >= y.0 { x } else { y };
+        return (run, Some(side_midpoint(edge, run, side)));
     }
-    let value = isqrt(DbuArea::new(saturate(boundary_dist2(inner, host))));
-    let side = boxed.then(|| {
+    let value = isqrt(DbuArea::new(saturate(boundary_dist2(rects, host))));
+    let inner_box = inner.bbox();
+    let at = (rects.len() == 1).then(|| {
         let [l, r, b, t] = strips(inner_box, host);
-        lesser(lesser(l, r), lesser(b, t)).1
+        side_midpoint(inner_box, value, lesser(lesser(l, r), lesser(b, t)).1)
     });
-    (value, side)
+    (value, at)
 }
 
 /// `isqrt` takes at most `MAX_ABS_DBU²`; a larger distance saturates there.
@@ -217,15 +229,15 @@ pub(crate) fn enclosure(
         rect_start: merged_start,
         ..
     } = s;
-    let drawn = validated.get(store, inner_layer).expect("validated above");
-    inner_rects.build(store, inner_layer, drawn);
-    let inner_boxes = drawn.bboxes().to_vec();
     let hosts = validated.get(store, outer).expect("validated above");
     host_rects.build(store, outer, hosts);
     let host_first = store.polys_on_layer(outer).start;
     if union_into(hosts, &ValidatedLayer::default(), merged).is_err() {
         return REFUSED;
     }
+    let drawn = validated.get(store, inner_layer).expect("validated above");
+    inner_rects.build(store, inner_layer, drawn);
+    let inner_boxes = drawn.bboxes();
     decompose_into(merged, merged_rects, merged_start);
     let figure_rects = |f: u32| {
         &merged_rects[merged_start[f as usize] as usize..merged_start[f as usize + 1] as usize]
@@ -267,21 +279,17 @@ pub(crate) fn enclosure(
             if covered != area {
                 continue;
             }
-            let (value, side) = enclosure_of(mine, inner_box, merged.get(figure), asymmetric);
-            acc = acc.max((value.raw(), Reverse(host.0), side));
+            let (value, at) = enclosure_of(drawn.get(poly), mine, merged.get(figure), asymmetric);
+            acc = acc.max((value.raw(), Reverse(host.0), at));
         }
-        let (best, Reverse(host), side) = acc;
+        let (best, Reverse(host), at) = acc;
         let measured = Measurement::Length(Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)));
         if !measured.violates(limit, LimitSense::Minimum) {
             continue;
         }
         let hosted = best >= 0;
-        let at = match side {
-            Some(side) if hosted => side_midpoint(
-                inner_box,
-                Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)),
-                side,
-            ),
+        let at = match at {
+            Some(at) if hosted => at,
             _ => centre(inner_box),
         };
         out.push(Violation {
