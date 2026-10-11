@@ -1482,16 +1482,16 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
 // ---------------------------------------------------------------- prl_spacing
 
 /// `prl_space(met1; prl: 500nm) >= 101nm` (`prl_spacing`, DRC-026): pairs in
-/// different figures whose run (the longer overlap of the projections of their
-/// merged figures' boxes) is at least 500 are held to 101. One finding per
-/// pair, at the middle of the gap between their boxes.
+/// different figures whose run (the longest length over which edges of their
+/// merged figures facing each other at most 101 apart project onto each other)
+/// is at least 500 are held to 101. One finding per pair, at the middle of
+/// the gap between their boxes.
 ///
 /// The run swept around 500 at a gap of 100 (at 500 the limit applies); the
-/// gap swept at a long run; an L whose box overstates the run against a short
-/// bar (the definition holds it to the limit: fails closed); a diagonal pair
-/// (no run); touching shapes (one figure); a wire drawn as segments, each
-/// shorter than the threshold, which runs its whole length beside the other
-/// wire.
+/// gap swept at a long run; an L whose box would overstate the run against a
+/// short bar (its facing edges run 100: clean, F49); a diagonal pair (no
+/// run); touching shapes (one figure); a wire drawn as segments, each shorter
+/// than the threshold, which runs its whole length beside the other wire.
 fn prl_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule prl prl_space(met1; prl: 500nm) >= 101nm");
@@ -1529,6 +1529,10 @@ fn prl_spacing(depth: Depth) -> Vec<Fixture> {
             findings,
         );
     }
+    // The L's arm faces the bar's end, x = 100 against x = 200, over
+    // y = 1900..2000: a run of 100. Its long arm's top, y = 100, faces the
+    // bar's underside 1800 away, past the limit. The boxes would overlap by
+    // 1300 on x.
     case(
         "l_box_overstates_run".into(),
         Layout::default()
@@ -1544,7 +1548,7 @@ fn prl_spacing(depth: Depth) -> Vec<Fixture> {
                 ],
             )
             .rect("met1", 200, 1900, 1500, 2000),
-        vec![Finding::length(100)],
+        Vec::new(),
     );
     case(
         "diagonal".into(),
@@ -2024,18 +2028,20 @@ const TABLE: &str = "rule t space_table(met1;
             [180nm, 220nm]])";
 
 /// `space_table` (`spacing_table`, DRC-025, DRC-026, DRC-027): the column of
-/// the last `prl` the run of the merged figures' boxes strictly exceeds, the
-/// row of the last `width` the wider shape strictly exceeds (measured on its
-/// part that wide), the first row always applied to whole shapes. One finding
-/// per pair, measuring its distance, at the middle of the gap between the
-/// boxes.
+/// the last `prl` strictly exceeded by the run of the merged figures' edges
+/// facing each other at most that column's cell apart, the row of the last
+/// `width` the wider shape strictly exceeds (measured on its part that wide),
+/// the first row always applied to whole shapes. One finding per pair,
+/// measuring its distance, at the middle of the gap between the boxes.
 ///
 /// A `wa`-wide line beside a 100-wide one, `g` apart with a run `r`: the width
 /// swept around 300 (exactly 300 is the first row), the run around 1000
 /// (exactly 1000 is the first column), the gap around 220 and, for two thin
 /// lines, around 180. A thin tab of a wide plate is held to the first row
 /// only; a ring's own hole is never a pair; touching lines are one figure.
-/// A wire drawn as short segments takes the column of its whole run.
+/// A wire drawn as short segments takes the column of its whole run. An L
+/// whose box would overstate the run, and a pair whose long run lies past
+/// the cell it would select, keep the first column (F49).
 fn spacing_table(depth: Depth) -> Vec<Fixture> {
     let deck = one_layer_deck(TABLE);
     let mut cases = Vec::new();
@@ -2119,6 +2125,49 @@ fn spacing_table(depth: Depth) -> Vec<Fixture> {
             vec![("t", Vec::new())],
         ));
     }
+    // A 400-wide line and an L, 200 apart only where the L's top arm reaches
+    // in, over y = 1900..2000 (run 100); its long arm faces the line 1100
+    // away, past every cell. The run is 100, column 0: 180, and 200 is
+    // clean. The boxes would overlap by 2000 on y (column 1: 220, F49).
+    cases.push(fixture(
+        "spacing_table/l_box_overstates_run",
+        &["DRC-026"],
+        &deck,
+        Layout::default().rect("met1", 0, 0, 400, 2000).polygon(
+            "met1",
+            &[
+                (1500, 0),
+                (1600, 0),
+                (1600, 2000),
+                (600, 2000),
+                (600, 1900),
+                (1500, 1900),
+            ],
+        ),
+        vec![("t", Vec::new())],
+    ));
+    // Each cell takes the run of the edges facing closer than itself. Two
+    // thin lines (row 0: 180, then 200 past a 1000 run): a bar 230 off
+    // running 3000, and a stub on it reaching to 190 for 50. Within 200 the
+    // run is the stub's 50, so column 0 holds: 190 is clean. The bar's run
+    // counts only for a cell wider than 230.
+    cases.push(fixture(
+        "spacing_table/run_within_the_cell",
+        &["DRC-026"],
+        &one_layer_deck(
+            "rule t space_table(met1;
+    prl:   [0nm, 1000nm],
+    width: [0nm, 300nm],
+    space: [[180nm, 200nm],
+            [180nm, 260nm]])",
+        ),
+        met1(&[
+            [0, 0, 100, 3000],
+            [330, 0, 430, 3000],
+            [290, 1000, 330, 1050],
+        ]),
+        vec![("t", Vec::new())],
+    ));
     // A 400-wide line and a 100-wide one 200 apart, running 2000 alongside,
     // the thin one drawn as four 500-long segments: the figures' run passes
     // 1000, so each segment's pair is held to 220; read off each segment's

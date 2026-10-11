@@ -245,11 +245,15 @@ pub enum Rule {
     /// closer than `limit`.
     ///
     /// Deck: `prl_space(L; prl: len) >= len`, kind `prl_spacing`. Pairs are
-    /// shapes in different merged figures. The run is the longer of the two
-    /// overlaps of the projections of their merged figures' bounding boxes, so
-    /// a wire drawn as short segments runs its whole length, and an L-shaped
-    /// figure's run is overstated, which holds more pairs to the limit (fails
-    /// closed).
+    /// shapes in different merged figures. The run of two figures is facing
+    /// edge projection, as LEF `PARALLELRUNLENGTH` and `KLayout`'s
+    /// `projection` take it: the longest length over which an edge of one
+    /// merged figure and an edge of the other, parallel, facing each other
+    /// across a gap of at most `limit`, project onto each other. Edges
+    /// are of the merged layer, so a wire drawn as short segments runs its
+    /// whole length; an L whose far arm runs beside a shape past the limit
+    /// runs only where it comes closer. A pair whose figures run at least
+    /// `prl_threshold` is held to `limit`.
     ///
     /// One violation per offending pair, at the middle of the gap between
     /// their bounding boxes. `examined` counts pairs whose run reaches
@@ -842,13 +846,15 @@ pub enum Rule {
     ///
     /// Deck: `space_table(L; prl: [..], width: [..], space: [[..], ..])`, kind
     /// `spacing_table`. Pairs are shapes in different merged figures, never a
-    /// polygon and its own hole. A pair takes the column of the last `prl` its
-    /// run strictly exceeds, the run measured on the merged figures' bounding
-    /// boxes as for [`Rule::PrlSpacing`]. It is held, for each row above the
-    /// first, to that row's cell, measured from the part of either shape
-    /// strictly wider than the row's width (where a `width + 1` square fits in
-    /// the merged layer), and to the first row's cell measured from the whole
-    /// shapes. A thin tab of a wide plate is held to the first row only.
+    /// polygon and its own hole. In each row, a pair takes the column of the
+    /// last `prl` its run strictly exceeds, the run measured as for
+    /// [`Rule::PrlSpacing`] on the edges facing each other across a gap
+    /// of at most that column's cell in that row (the spacing it judges).
+    /// It is held, for each row above the first, to that row's cell, measured
+    /// from the part of either shape strictly wider than the row's width
+    /// (where a `width + 1` square fits in the merged layer), and to the first
+    /// row's cell measured from the whole shapes. A thin tab of a wide plate
+    /// is held to the first row only.
     ///
     /// One violation per pair, at its highest failing row, with `limit` that
     /// row's cell and `measured` the distance that row measured, at the

@@ -6,8 +6,8 @@
 //! within one merged figure (touching shapes) have no gap and are skipped.
 
 use super::{
-    gap_midpoint, join_nested, label_pairs_into, pair_distances_into, rects_ring_dist2, ring_segs,
-    seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
+    gap_midpoint, join_nested, label_pairs_into, owners_of, pair_distances_into, rects_ring_dist2,
+    ring_segs, seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
 use crate::drc::ruleset::SpacingTable;
@@ -21,14 +21,6 @@ use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
-
-/// Signed overlap of two boxes' projections per axis; negative is a gap.
-fn projection_overlaps(a: Bbox, b: Bbox) -> (i64, i64) {
-    (
-        a.xhi.raw().min(b.xhi.raw()) - a.xlo.raw().max(b.xlo.raw()),
-        a.yhi.raw().min(b.yhi.raw()) - a.ylo.raw().max(b.ylo.raw()),
-    )
-}
 
 fn spacing_violation(
     store: &GeometryStore,
@@ -287,22 +279,70 @@ fn on_line(vertical: bool, pos: i64, from: i64, to: i64) -> Seg {
     }
 }
 
-/// How far two boxes run alongside each other: the larger projection overlap,
-/// clamped to `0 ..= MAX_ABS_DBU`. Boxes over-report the run, which fails closed.
-fn parallel_run_length(a: Bbox, b: Bbox) -> Dbu {
-    let (along_x, along_y) = projection_overlaps(a, b);
-    Dbu::new_unchecked(along_x.max(along_y).clamp(0, MAX_ABS_DBU))
+/// Two edges of different merged figures facing each other: the figures'
+/// labels (lower first), the gap between the edges, and the run, the length
+/// over which the edges project onto each other.
+type Facing = (u32, u32, i64, i64);
+
+/// Every two edges of the merged layer `s.layer_out`, in different figures,
+/// that face each other across a gap of at most `within` and run alongside
+/// each other for a positive length, sorted by figure pair. A
+/// figure is labelled as [`prepare`] labelled the drawn rows under it
+/// (`s.rects_a`, built from the layer). Facing: parallel, out of their
+/// material toward each other, the one facing up below the one facing down.
+fn facing_runs(store: &GeometryStore, layer: LayerId, within: Dbu, s: &Scratch) -> Vec<Facing> {
+    let first_row = store.polys_on_layer(layer).start;
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    // Per orientation, the edges whose material lies below (facing up) and above.
+    let (mut up, mut down) = (Vec::new(), Vec::new());
+    for (figure, owner) in (0..).zip(owners) {
+        let label = s.labels[(owner.0 - first_row) as usize].0;
+        for ring in s.layer_out.poly_rings(figure) {
+            let (xs, ys) = ring.coords();
+            for (vertical, pos, forward, lo, hi) in ring_segs(xs, ys).map(line_of) {
+                // Material on the left: up-travelling vertical, left-travelling horizontal.
+                let side = if forward == vertical {
+                    &mut up
+                } else {
+                    &mut down
+                };
+                side.push((vertical, pos, lo, hi, label));
+            }
+        }
+    }
+    down.sort_unstable();
+    let mut runs = Vec::new();
+    // ponytail: every down edge within `within` above each up edge; quadratic
+    // only when many edges share one `within`-wide band.
+    for &(vertical, pos, lo, hi, label) in &up {
+        let first = down.partition_point(|&(v, p, ..)| (v, p) <= (vertical, pos));
+        let facing = down[first..]
+            .iter()
+            .take_while(|&&(v, p, ..)| v == vertical && p - pos <= within.raw());
+        for &(_, p, far_lo, far_hi, other) in facing {
+            let run = hi.min(far_hi) - lo.max(far_lo);
+            if run > 0 && other != label {
+                runs.push((label.min(other), label.max(other), p - pos, run));
+            }
+        }
+    }
+    runs.sort_unstable();
+    runs
 }
 
-/// Each merged figure's bounding box, indexed by the label [`prepare`] gave
-/// its rows, so a figure drawn as several shapes runs its whole length.
-fn figure_boxes(store: &GeometryStore, layer: LayerId, labels: &[ComponentLabel]) -> Vec<Bbox> {
-    let mut boxes = vec![Bbox::EMPTY; labels.len()];
-    for (row, label) in store.polys_on_layer(layer).zip(labels) {
-        let figure = &mut boxes[label.0 as usize];
-        *figure = figure.union(store.poly_bbox(PolyId(row)));
-    }
-    boxes
+/// The run of figures `a` and `b`: the longest their facing edges at most
+/// `spacing` apart project onto each other, or 0. At most, not closer: a
+/// pair exactly `spacing` apart runs alongside and is judged, and passes.
+fn run_within(runs: &[Facing], a: ComponentLabel, b: ComponentLabel, spacing: Dbu) -> i64 {
+    let pair = (a.0.min(b.0), a.0.max(b.0));
+    let from = runs.partition_point(|&(p, q, ..)| (p, q) < pair);
+    runs[from..]
+        .iter()
+        .take_while(|&&(p, q, ..)| (p, q) == pair)
+        .filter(|&&(.., gap, _)| gap <= spacing.raw())
+        .map(|&(.., run)| run)
+        .max()
+        .unwrap_or(0)
 }
 
 /// Each polygon's wide rectangles, CSR: every `wide` rectangle of the
@@ -377,11 +417,12 @@ pub(crate) fn net_spacing(
     (Outcome::Ran, examined)
 }
 
-/// Spacing by table: each separate pair is held to the cell of its run length
-/// (read off the merged figures' boxes) and of each width row either shape
-/// reaches, measured from that shape's part at least as wide (row 0 from the
-/// whole shape). A pair reports once, at its highest failing row. `examined`
-/// counts separate pairs.
+/// Spacing by table: each separate pair is held, in each width row either
+/// shape reaches (measured from that shape's part at least as wide; row 0 from
+/// the whole shape), to the cell of the last column whose run it exceeds, the
+/// run read off the merged figures' edges facing each other at most that
+/// cell apart ([`run_within`]). A pair reports once, at its highest failing row.
+/// `examined` counts separate pairs.
 pub(crate) fn spacing_table(
     store: &GeometryStore,
     rule: StrId,
@@ -391,7 +432,7 @@ pub(crate) fn spacing_table(
     out: &mut Violations,
 ) -> Verdict {
     let widest = *table.space.last().expect("a valid table has a cell");
-    if !prepare(store, layer, widest, s) {
+    if !prepare_merged(store, layer, widest, s) {
         return REFUSED;
     }
     let drawn = s
@@ -415,21 +456,27 @@ pub(crate) fn spacing_table(
             Dbu::new_unchecked(0),
         ));
     }
+    let runs = facing_runs(store, layer, widest, s);
     let polys = &s.rects_a;
     let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize] as usize;
-    let figures = figure_boxes(store, layer, &s.labels);
-    let figure_of = |row: PolyId| figures[s.labels[(row.0 - first_row) as usize].0 as usize];
+    let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
 
     let mut examined = 0u64;
     for (&(a, b), &whole) in s.pairs.iter().zip(&s.dists) {
-        let separate = s.labels[(a.0 - first_row) as usize] != s.labels[(b.0 - first_row) as usize]
-            && poly_of(a) != poly_of(b);
+        let separate = label(a) != label(b) && poly_of(a) != poly_of(b);
         if !separate {
             continue;
         }
         examined += 1;
-        let run = parallel_run_length(figure_of(a), figure_of(b));
-        let column = table.prl[1..].iter().filter(|&&prl| prl < run).count();
+        // A row's column: the last whose run, within that row's cell, it exceeds.
+        let column = |row: usize| {
+            (1..table.prl.len())
+                .rev()
+                .find(|&c| {
+                    table.prl[c].raw() < run_within(&runs, label(a), label(b), table.at(row, c))
+                })
+                .unwrap_or(0)
+        };
         let (axs, ays) = store.poly_verts(a);
         let (bxs, bys) = store.poly_verts(b);
         let failed = (1..table.width.len()).rev().find_map(|row| {
@@ -440,10 +487,10 @@ pub(crate) fn spacing_table(
                 return None;
             }
             let d2 = rects_ring_dist2(wide_a, bxs, bys).min(rects_ring_dist2(wide_b, axs, ays));
-            let need = table.at(row, column);
+            let need = table.at(row, column(row));
             (d2 < need.mul_wide(need).raw()).then_some((DbuArea::new(d2), need))
         });
-        let need = table.at(0, column);
+        let need = table.at(0, column(0));
         let failed = failed.or_else(|| (whole < need.mul_wide(need)).then_some((whole, need)));
         if let Some((d2, need)) = failed {
             out.push(spacing_violation(store, rule, layer, (a, b), d2, need));
@@ -452,8 +499,9 @@ pub(crate) fn spacing_table(
     (Outcome::Ran, examined)
 }
 
-/// Parallel-run-length spacing, the run read off the merged figures' boxes.
-/// `examined` counts separate pairs whose run reaches `threshold`.
+/// Parallel-run-length spacing, the run that of the merged figures' facing
+/// edges at most `limit` apart ([`run_within`]). `examined` counts separate
+/// pairs whose run reaches `threshold`.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn prl_spacing(
     store: &GeometryStore,
@@ -464,14 +512,19 @@ pub(crate) fn prl_spacing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !prepare(store, layer, limit, s) {
+    if !prepare_merged(store, layer, limit, s) {
         return REFUSED;
     }
-    let figures = figure_boxes(store, layer, &s.labels);
+    let drawn = s
+        .validated
+        .get(store, layer)
+        .expect("`prepare` validated it");
+    s.rects_a.build(store, layer, drawn);
+    let runs = facing_runs(store, layer, limit, s);
     let first_row = store.polys_on_layer(layer).start;
-    let figure_of = |row: PolyId| figures[s.labels[(row.0 - first_row) as usize].0 as usize];
+    let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
     let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
-        (parallel_run_length(figure_of(a), figure_of(b)) >= threshold).then_some(d2)
+        (run_within(&runs, label(a), label(b), limit) >= threshold.raw()).then_some(d2)
     });
     (Outcome::Ran, examined)
 }

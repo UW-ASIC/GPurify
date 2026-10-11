@@ -445,10 +445,12 @@ the side-by-side pair is dropped.)
 
 ### 9. prl_spacing — APPROX (EXACT on R)
 
-**GPurify**
-- The run length is the larger of the two row bboxes' projection overlaps
-  (`parallel_run_length`). The bbox over-reports for non-convex rows, which fails closed.
-- A pair is judged when run ≥ prl; it fails when its whole-pair Euclidean distance is < limit.
+**GPurify** (`spacing.rs` `prl_spacing`, `facing_runs`, `run_within`)
+- The run of two merged figures is facing-edge projection: the longest overlap of the
+  projections of two parallel edges of the merged layer, one of each figure, facing each other
+  across a gap ≤ limit (F49, fixed in B24; before, the figures' bbox overlap).
+- A row pair is judged when its figures' run ≥ prl; it fails when its whole-pair Euclidean
+  distance is < limit.
 
 **KLayout**
 
@@ -458,7 +460,13 @@ emit(id, SRC.polygons(l, d).isolated(LIM, euclidian, transparent, projection_lim
 
 (v t11 P3/P4: `projection_limits(100, nil)` behaves exactly like `projecting >= 100`.)
 
-Off R the check is one-sided: KLayout ⊆ GPurify.
+Off R the two can still differ. KLayout filters each edge pair of the merged figures by its own
+projection; GPurify takes the longest run per figure pair and then judges every row pair of the two
+figures by its whole distance, which may come from a corner the run does not include (GPurify
+reports more there). GPurify's run also counts edges exactly the limit apart, which `isolated`
+never pairs; that changes only which pairs are examined, unless such a pair also comes closer
+elsewhere. KLayout's projection of trimmed edge pairs is not verified against GPurify's
+whole-edge overlap.
 
 ### 10. corner_to_corner — APPROX (EXACT on R, with a filter)
 
@@ -877,7 +885,8 @@ emit(id, n.isolated(LIM, euclidian, transparent, props_ne))     # nets: differen
 ### 31. spacing_table — APPROX (EXACT on R)
 
 **GPurify** (`spacing.rs` `spacing_table`)
-- The column is the last `prl` strictly exceeded by the bbox run.
+- Per row r, the column is the last c whose `prl` is strictly exceeded by the facing-edge run of
+  the two figures over edges at most S[r][c] apart (`run_within`; F49, fixed in B24).
 - The pair fails if some row r ≥ 1 has d_r < S[r][col], where d_r is measured from the parts wider
   than `width[r]`, clipped to their row. Otherwise it fails if d_0 < S[0][col].
 - Cells never fall along a row (`SpacingTable::is_valid`). So this equals "there is an (r, c ≤ col)
@@ -898,8 +907,10 @@ end
 ```
 
 - For r ≥ 1, apply the same-figure filter as in rule 11.
-- On R, the run is the projection of the facing edges, so the two definitions agree.
-- Off R, GPurify's run is the bbox overlap; the check is one-sided there (KLayout ⊆ GPurify).
+- Both take the run as the projection of facing edges within the cell. On R the two agree.
+- Off R: for r ≥ 1 KLayout's run is between the wide parts and the figure, GPurify's between the
+  whole figures; and GPurify judges a pair by its distance per row once its run selects a column,
+  as in rule 9. Neither difference is shown one-sided; compare off R as APPROX.
 
 ### 32. attached_wide_spacing — APPROX
 

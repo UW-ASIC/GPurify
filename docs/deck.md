@@ -218,7 +218,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
 | `space(A, B) >= len` | A shape on `A` closer than the limit to a shape on `B`. |
 | `eol_space(L; eol_width: len) >= len` | Space from an end of line (an edge shorter than `eol_width`) below the limit. |
-| `prl_space(L; prl: len) >= len` | Two shapes that run side by side for at least `prl`, closer than the limit. |
+| `prl_space(L; prl: len) >= len` | Two shapes that run side by side for at least `prl`, closer than the limit. The run is how far their facing edges, at most the limit apart, project onto each other (LEF `PARALLELRUNLENGTH`), with touching shapes merged first: a wire drawn as segments runs its whole length. |
 | `corner_space(L) >= len` | Two shapes whose corners are closer than the limit. |
 | `wide_space(L; width: len) >= len` | Space below the limit from the part of a shape at least `width` wide (where a `width` square fits), as sky130's huge metal. |
 | `wide_space(L; width: len, attached: len) >= len` | The same, also from the rest of the shape within `attached` of its wide part, as sky130 m1.3a "features attached to or extending from huge_met1 for a distance of up to 0.28 µm". |
@@ -260,7 +260,9 @@ rule M1.bef space_table(met1;
 
 A pair of shapes needs the cell in the last row whose `width` the wider shape
 exceeds and the last column whose `prl` the two shapes' run alongside each
-other exceeds; the first row and column always apply. "Exceeds" is strict, as
+other exceeds; the first row and column always apply. The run is measured as
+for `prl_space`, over the facing edges at most the cell it would select apart:
+edges 230 nm apart do not make a run for a 200 nm cell. "Exceeds" is strict, as
 the foundry writes "wider than 0.3 µm": a shape exactly 0.3 µm wide is in the
 first row. A row's width is measured on the part of the shape that wide, so a
 thin tab of a wide plate is held to the thin row. `prl` and `width` start at
