@@ -635,6 +635,69 @@ fn a_chord_that_stays_the_same_is_one_region() {
     assert_eq!(assert_rule_ran(&runs, RULE).examined, 8);
 }
 
+// ---------------------------------------------------- convex_corner_spacing
+
+fn corners(corner_to_corner: bool, except_eol: Option<i64>) -> Rule {
+    Rule::ConvexCornerSpacing {
+        layer: A,
+        corner_to_corner,
+        except_eol: except_eol.map(dbu),
+        limit: dbu(101),
+    }
+}
+
+/// Oracle: `TritonRoute`'s `maxXY`, the longer side of the box between two
+/// facing corners. Corners 100 apart on x and 50 on y are 100 apart by the
+/// larger gap, under 101, marked midway (1050, 1025); Euclidean they are
+/// 111.8 apart and clean. Two squares 71 apart on both axes are 71 by the
+/// larger gap and 100.4, floored to 100, Euclidean.
+#[test]
+fn the_corner_distance_is_the_larger_axis_gap_or_euclidean() {
+    let skewed = layout(&[[0, 0, 1000, 1000], [1100, 1050, 2100, 2050]]);
+    let (out, runs) = run(&skewed, corners(false, None), Vec::new());
+    assert_eq!(out.measured, [len(100)]);
+    assert_eq!(out.limit, [len(101)]);
+    assert_eq!(out.at, [point(1050, 1025)]);
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 1);
+    assert!(run(&skewed, corners(true, None), Vec::new()).0.is_empty());
+
+    let diagonal = layout(&[[0, 0, 1000, 1000], [1071, 1071, 2071, 2071]]);
+    assert_eq!(
+        run(&diagonal, corners(false, None), Vec::new()).0.measured,
+        [len(71)]
+    );
+    assert_eq!(
+        run(&diagonal, corners(true, None), Vec::new()).0.measured,
+        [len(100)]
+    );
+}
+
+/// Oracle: `LEF58_CORNERSPACING ... EXCEPTEOL eolWidth`, as `TritonRoute`
+/// skips a corner on an edge shorter than `eolWidth` whose corners are both
+/// convex, on either shape. A 100 wide line end's corner 50 from a square's
+/// is exempt with `except_eol: 200`, whichever shape the line is; two
+/// squares' corners are not, and neither is the line's without the
+/// exception.
+#[test]
+fn an_end_of_line_s_corners_are_exempt_on_either_shape() {
+    let line_first = layout(&[[0, 0, 100, 1000], [150, 1050, 1150, 2050]]);
+    let line_second = layout(&[[0, 0, 1000, 1000], [1050, 1050, 1150, 2050]]);
+    let squares = layout(&[[0, 0, 1000, 1000], [1050, 1050, 2050, 2050]]);
+    let with = corners(false, Some(200));
+
+    let (out, runs) = run(&line_first, with, Vec::new());
+    assert!(out.is_empty());
+    assert_eq!(only(&runs).examined, 0);
+    assert!(run(&line_second, with, Vec::new()).0.is_empty());
+    assert_eq!(run(&squares, with, Vec::new()).0.measured, [len(50)]);
+    assert_eq!(
+        run(&line_first, corners(false, None), Vec::new())
+            .0
+            .measured,
+        [len(50)]
+    );
+}
+
 // ---------------------------------------------------------------- the deck
 
 /// Oracle: construct-from-answer, the deck language (`docs/deck.md`). Each

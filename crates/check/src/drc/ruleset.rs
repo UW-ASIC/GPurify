@@ -312,9 +312,11 @@ pub enum Rule {
     /// DRC-032. Rules: ASAP7 M1.S.6, GF180 MT30.3; `LEF58_CORNERSPACING`;
     /// `KLayout` `corners`.
     ///
-    /// Limits: the `CONVEXCORNER`, `CONCAVECORNER` and `EXCEPTEOL` variants
-    /// are missing. sky130 poly.4, which the manual measures between
-    /// parallel edges only, over-reports when written with this kind.
+    /// Limits: `LEF58_CORNERSPACING CONVEXCORNER`, which measures the larger
+    /// axis gap and can exempt ends of line, is
+    /// [`Rule::ConvexCornerSpacing`]; `CONCAVECORNER` is missing. sky130
+    /// poly.4, which the manual measures between parallel edges only,
+    /// over-reports when written with this kind.
     CornerToCorner {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -1592,6 +1594,49 @@ pub enum Rule {
         /// Index into [`RuleSet::span_tables`].
         table: u32,
     },
+    /// Two shapes whose facing convex corners are closer than `limit`, as
+    /// `LEF58_CORNERSPACING CONVEXCORNER` measures them.
+    ///
+    /// Deck: `corner_space(L; corner_to_corner: bool, except_eol: len | none)
+    /// >= len`, kind `convex_corner_spacing`. Corners are as for
+    /// [`Rule::CornerToCorner`]: convex corners of the merged layer, of
+    /// different merged figures, facing each other (each beyond the other on
+    /// both axes, out along opposite diagonals). Their distance is the larger
+    /// of their two axis gaps (`TritonRoute`'s `maxXY`, the longer side of
+    /// the box between a corner and the other shape), or with
+    /// `corner_to_corner: true` the Euclidean one (`CORNERTOCORNER`). With
+    /// `except_eol`, a corner of an end of line (an edge at the corner
+    /// strictly shorter than `except_eol` whose two corners are convex) on
+    /// either shape is exempt (`EXCEPTEOL eolWidth`).
+    ///
+    /// One violation per pair of merged figures with facing corners closer
+    /// than `limit`: `measured` the smallest such distance (floored when
+    /// Euclidean), at the midpoint of those two corners; among equally near
+    /// pairs, the Euclidean nearest, and among those the middle of the box
+    /// bounding their midpoints. `shapes` is the lowest drawn row under each
+    /// figure. `examined` counts the facing pairs of corners judged.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-032. Rules: `LEF58_CORNERSPACING CONVEXCORNER [CORNERTOCORNER]
+    /// [EXCEPTEOL eolWidth] WIDTH 0 SPACING spacing`; `TritonRoute`
+    /// `checkMetalCornerSpacing_main`.
+    ///
+    /// Limits: one spacing for every width (the `WIDTH` table by the
+    /// corner's shape width, and separate horizontal and vertical spacings,
+    /// are missing); `CONCAVECORNER`, `SAMEMASK`, `CORNERONLY`,
+    /// `EXCEPTJOGLENGTH`, `EXCEPTSAMENET` and `EXCEPTSAMEMETAL` are missing.
+    ConvexCornerSpacing {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Whether the distance is Euclidean (`CORNERTOCORNER`) rather than
+        /// the larger axis gap.
+        corner_to_corner: bool,
+        /// Ends of line strictly shorter than this exempt their corners, in
+        /// grid units; positive. `None` exempts none.
+        except_eol: Option<Dbu>,
+        /// The smallest legal corner distance, in grid units; positive.
+        limit: Dbu,
+    },
 }
 
 /// The legal spans of [`Rule::SpanLength`], per axis: every listed length but
@@ -2492,6 +2537,20 @@ impl RuleSet {
                             .expect("a deck has few tables"),
                     }
                 }
+                "convex_corner_spacing" => {
+                    let layer = one(spec)?;
+                    let corner_to_corner = flag(spec, "corner_to_corner")?;
+                    let except_eol = match optional(spec, "except_eol") {
+                        None => None,
+                        Some(_) => Some(length(spec, "except_eol")?),
+                    };
+                    Rule::ConvexCornerSpacing {
+                        layer,
+                        corner_to_corner,
+                        except_eol,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "span_length" => {
                     let layer = one(spec)?;
                     let table = SpanTable {
@@ -2827,6 +2886,20 @@ impl RuleSet {
                     layer,
                     (eol_width, within, limit),
                     (parallel, end_to_end),
+                    s,
+                    out,
+                ),
+                Rule::ConvexCornerSpacing {
+                    layer,
+                    corner_to_corner,
+                    except_eol,
+                    limit,
+                } => facing::convex_corner_spacing(
+                    store,
+                    id,
+                    layer,
+                    (corner_to_corner, except_eol),
+                    limit,
                     s,
                     out,
                 ),
@@ -3203,7 +3276,8 @@ impl Rule {
             | Rule::EolWithinSpacing { layer, .. }
             | Rule::EolKeepOut { layer, .. }
             | Rule::TwoWidthSpacingTable { layer, .. }
-            | Rule::SpanLength { layer, .. } => [Some(layer), None],
+            | Rule::SpanLength { layer, .. }
+            | Rule::ConvexCornerSpacing { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

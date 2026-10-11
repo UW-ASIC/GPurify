@@ -89,6 +89,7 @@
 //! | `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | `eol_keep_out` | [`drc::Rule::EolKeepOut`] | another shape inside an end of line's keep-out box | DRC-030 |
 //! | `two_width_table(L; width: [..], prl: [..], space: [[..]])` | `two_width_spacing_table` | [`drc::Rule::TwoWidthSpacingTable`] | two shapes closer than the cell both their widths select | DRC-027 |
 //! | `span_length(L; x: [..], y: [..])` | `span_length` | [`drc::Rule::SpanLength`] | a span of a shape not on the list of legal spans | DRC-036 |
+//! | `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | `convex_corner_spacing` | [`drc::Rule::ConvexCornerSpacing`] | facing convex corners closer than the limit, by the larger axis gap, ends of line exempt | DRC-032 |
 //!
 //! ## Electrical rules
 //!

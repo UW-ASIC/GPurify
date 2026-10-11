@@ -1112,6 +1112,25 @@ W(r).separation(W(c), s, euclidian, transparent[, projection_limits(...)])  # ot
   run cases it prints; SE), the widths and a run swept one step either side, a thin tab of a wide
   plate, hand-derived under the square's symmetries (SY, MR).
 
+### 42. convex_corner_spacing — APPROX (GPurify ⊆ KLayout) without `except_eol`, else NONE
+
+**GPurify** (`facing.rs` `convex_corner_spacing`): facing convex corners of different figures, as
+rule 10, measured by the larger axis gap (`TritonRoute`'s `maxXY`) or, with `corner_to_corner`,
+Euclidean; with `except_eol`, the corners of an end of line on either shape are exempt.
+
+**KLayout**
+
+```ruby
+emit(id, L.isolated(LIM, square, transparent, projection_limits(0, 1)))      # the larger axis gap
+emit(id, L.isolated(LIM, euclidian, transparent, projection_limits(0, 1)))   # corner_to_corner
+```
+
+- `square` is the larger of the two axis distances ([L] "metrics"). As rule 10, the harness drops
+  a pair whose edges overlap or touch on an axis, and every GPurify pair is a KLayout pair; KLayout
+  also pairs an edge ending at a concave corner, so the comparison is one-sided, keys only.
+- `except_eol` cannot be stated: NONE. Its oracles are the hand-derived fixtures: a line end's
+  corner exempt on either shape, a wide shape's not (SY, MR).
+
 ### 41. span_length — NONE: KLayout has no span measure
 
 **GPurify** (`facing.rs` `span_length`, `chords`): the chords horizontal and vertical lines cut
@@ -1182,7 +1201,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 41, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 42, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest

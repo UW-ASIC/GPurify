@@ -1313,6 +1313,40 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     vec![name],
                 )
             }
+            Rule::ConvexCornerSpacing {
+                except_eol: Some(_),
+                ..
+            } => (
+                "convex_corner_spacing",
+                Verdict::None("KLayout cannot exempt the corners of an end of line"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::ConvexCornerSpacing {
+                layer,
+                corner_to_corner,
+                except_eol: None,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.isolated({}, {}, transparent, projection_limits(0, 1)))",
+                    var(layer),
+                    lim(limit),
+                    if corner_to_corner { "euclidian" } else { "square" }
+                )
+                .expect("a String");
+                approx(
+                    "convex_corner_spacing",
+                    Compare::GpurifyWithin,
+                    Key::Pair(name.clone(), name, false),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
             Rule::SpanLength { .. } => (
                 "span_length",
                 Verdict::None("KLayout measures widths between edges, not the set of a shape's chords"),
