@@ -450,6 +450,8 @@ rule M1.S tip_space_table(met1;
 /// A table keyed on one edge, or on the shapes' widths, gets one of them
 /// wrong: both tips of M1.S.5 are lines, but only the pair of lengths picks
 /// 31 over 27.
+///
+/// Oracle: the ASAP7 M1.S.1 to M1.S.5 values (foundry rule), construct-from-answer for the pairs.
 #[test]
 fn m1_s_1_to_5_pick_the_cell_by_both_facing_edges() {
     let found = run(
@@ -478,6 +480,8 @@ fn m1_s_1_to_5_pick_the_cell_by_both_facing_edges() {
 /// A tip table must be symmetric: which of two facing edges is "first" is
 /// not a property of the layout, so an asymmetric table has no meaning and
 /// the deck is refused when the rules are built.
+///
+/// Oracle: the kind's contract (a tip table is symmetric), construct-from-answer.
 #[test]
 fn an_asymmetric_tip_table_is_refused_at_load() {
     let mut strings = StrTable::default();
@@ -503,6 +507,8 @@ fn an_asymmetric_tip_table_is_refused_at_load() {
 /// and 0.26, prl 0.0, 0.15; 0.25 and 0.26, prl 0.1, 0.20; 0.26 and 0.26, prl
 /// 0.1, 0.25. A table keyed on the wider shape alone would ask 0.20 of the
 /// second (its wider shape is 0.26) and 0.25 of the third.
+///
+/// Oracle: LEF/DEF 5.8's own worked example (spec example).
 #[test]
 fn lef_two_width_example_gives_the_manual_s_spacings() {
     let found = run(
@@ -543,6 +549,8 @@ fn lef_two_width_example_gives_the_manual_s_spacings() {
 /// c) a block 0.8 above whose side is 0.5 past the end's: violation ("<1.2
 ///    µm spacing within 0.6 µm away");
 /// d) the block 0.6 past: no violation (within is "less than" 0.6).
+///
+/// Oracle: LEF/DEF 5.8 Example 1-18 and Figure 1-23 (spec example).
 #[test]
 fn lef_example_1_18_holds_the_end_of_line_within() {
     let found = run(
@@ -575,6 +583,8 @@ fn lef_example_1_18_holds_the_end_of_line_within() {
 /// pairs of 1 µm bars: 99 apart (below the range: legal), 100 (its lower
 /// end: forbidden) and 150 (its upper end: forbidden). The limit reported is
 /// the narrowest legal gap above the range, 151.
+///
+/// Oracle: `TritonRoute`'s `isForbiddenSpacing` and `isValidPrl`, construct-from-answer.
 #[test]
 fn a_forbidden_range_is_closed_at_both_ends() {
     let found = run(
@@ -598,6 +608,8 @@ fn a_forbidden_range_is_closed_at_both_ends() {
 
 /// A range that ends before it starts forbids nothing a deck could mean,
 /// and is refused when the rules are built.
+///
+/// Oracle: the kind's contract (min at most max), construct-from-answer.
 #[test]
 fn a_forbidden_range_that_ends_before_it_starts_is_refused_at_load() {
     let mut strings = StrTable::default();
@@ -629,6 +641,8 @@ fn a_forbidden_range_that_ends_before_it_starts_is_refused_at_load() {
 /// - the second starts 1.25 µm above, beside only the stub past its first
 ///   micron: 0.515 µm from the influenced stub's corner and 1.25 µm from the
 ///   wire, clean. Holding the whole stub to 0.5 would flag it.
+///
+/// Oracle: LEF/DEF 5.8's INFLUENCE example rule and its stated meaning (spec example), distances derived by hand.
 #[test]
 fn lef_influence_holds_the_stub_s_first_micron_to_the_wide_spacing() {
     let found = run(
