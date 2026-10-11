@@ -12,16 +12,19 @@
 //! The via is a segment from one bar's centre line to the other's, as
 //! `GPurify` models it, its conductivity giving the row's resistance per cut.
 //!
-//! Both sides model a bend as its centre line, turning at the corner square's
-//! middle, and a via as a filament between the two centre lines it joins,
-//! so the corner and the via are counted alike and need no modelling
-//! allowance (X6's `MODEL`, 5 %).
+//! Both sides model a via as a filament between the two centre lines it
+//! joins. A bend `FastHenry` is given as its centre line, turning at the
+//! corner square's middle, one square for the corner; `GPurify` grids it,
+//! so its corner crowds to about 0.62 squares (Hall's conformal map gives
+//! 0.559), 1.1 % under the centre line's resistance at these lengths:
+//! [`CROWDED`].
 //!
 //! **Tolerances:**
 //!
 //! - [`SHEET`], 1e-4: every `R` is `Rs` times the centre line's squares,
 //!   plus `Rcut` per via, on both sides; this is the five digits
 //!   `FastHenry` prints;
+//! - [`CROWDED`], 2 %: a bend's `R`, whose corner `GPurify` crowds;
 //! - [`BAR`], 1 %: every `L`. `GPurify` takes Grover's closed form for each
 //!   filament's partial self-inductance, `FastHenry` the exact integral over
 //!   the rectangular cross-section (Hoer & Love); they differ by a fraction
@@ -38,6 +41,9 @@ use std::time::Duration;
 
 /// A resistance against `FastHenry`.
 const SHEET: f64 = 1e-4;
+/// A bend's resistance against `FastHenry`'s centre line: the corner
+/// square, one square there and about 0.62 here, is 1.1 % of 35.
+const CROWDED: f64 = 2e-2;
 /// An inductance against `FastHenry`.
 const BAR: f64 = 1e-2;
 
@@ -161,6 +167,8 @@ struct Case {
     name: String,
     layout: Layout,
     segments: Vec<Segment>,
+    /// The resistance's tolerance: [`SHEET`], or [`CROWDED`] for a bend.
+    sheet: f64,
 }
 
 fn cases() -> Vec<Case> {
@@ -182,6 +190,7 @@ fn cases() -> Vec<Case> {
                     "A",
                 ),
                 segments: vec![Segment::wire(row, [0, w / 2], [l, w / 2], w)],
+                sheet: SHEET,
             });
         }
     }
@@ -193,6 +202,7 @@ fn cases() -> Vec<Case> {
             .rect("m1", 20_000, 0, 40_000, 1_000)
             .label("m1_label", 500, 500, "A"),
         segments: vec![Segment::wire(m1, [0, 500], [40_000, 500], 1_000)],
+        sheet: SHEET,
     });
     // X6's L: legs of 20 and 16 um, 1 um wide; its centre line turns at
     // (a - w/2, w/2).
@@ -218,6 +228,7 @@ fn cases() -> Vec<Case> {
             name: name.into(),
             layout: layout.label("m1_label", 500, 500, "A"),
             segments: legs(),
+            sheet: CROWDED,
         });
     }
     // X6's via_joined: m1 over [0, 5] um, m2 over [4, 9] um, one 200 nm cut
@@ -249,6 +260,7 @@ fn cases() -> Vec<Case> {
             },
             Segment::wire(m2, [x, 500], [9_000, 500], 1_000),
         ],
+        sheet: SHEET,
     });
     out
 }
@@ -275,7 +287,7 @@ fn fasthenry_differential_every_inductance_geometry() {
         fixture.quasistatic = vec!["A".into()];
         let ran = harness::run(&fixture).unwrap_or_else(|why| panic!("{}: {why}", case.name));
         for (what, quantity, want, tolerance) in [
-            ("R", Quantity::Resistance, want_r, SHEET),
+            ("R", Quantity::Resistance, want_r, case.sheet),
             ("L", Quantity::Inductance, want_l, BAR),
         ] {
             let got = harness::parasitic_total(&ran, "A", quantity)

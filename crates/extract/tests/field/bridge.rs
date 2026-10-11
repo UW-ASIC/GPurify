@@ -115,26 +115,26 @@ fn l_shape(
     (store, nets)
 }
 
-/// Oracle: closed form (F45, and the touching half of F23). A bend of width
-/// `w` and centre-line length `Lc = a + b − w = 35 µm` is `Lc / w = 35`
-/// squares, 3.5 ohm at 0.1 ohm/sq, its corner counted once, however it is
-/// drawn: as one polygon, as two abutting rectangles, or as two full bars
-/// overlapping at the corner. Its legs are perpendicular, so they have no
-/// mutual partial inductance and `L` is Grover's self inductance of each leg
-/// along the centre line, `a − w/2 = 19.5` and `b − w/2 = 15.5` µm, at
-/// 100 nm thick.
-///
-/// R is `Re(Z)` of one series path, the sum of its pieces' resistances, so
-/// it holds to round-off (`1e-9`). L holds to 1%, the accuracy of Grover's
-/// formula at these aspect ratios: the corner is a 0.5 µm junction piece
-/// whose self term is Grover's outside its range, carrying under 1% of the
-/// total. One filament along the bounding box read 0.125 ohm (20 by 16, 1.25
-/// squares), and two rectangles whose centre lines do not meet read zero.
+/// Oracle: closed form (Hall, *Thin Solid Films* 1(4), 1967: the corner
+/// square of a right-angle bend counts 0.559 squares, by conformal map).
+/// An L of legs 20 and 16 um, 1 um wide, is 19 + 15 squares of straight
+/// leg and a corner square, however it is drawn: as one polygon, as two
+/// abutting rectangles, or as two full bars overlapping at the corner (one
+/// region, one grid: the same bits). The grid, four cells across, reads the
+/// corner above Hall's value and below the centre line's one square (a
+/// five-point grid converges to it from above: 0.71 at two cells, 0.62 at
+/// four, 0.58 at eight, worked by hand on this grid); fails if the bend is
+/// a centre line again (exactly one square) or loses its corner (none).
+/// Its legs are perpendicular, so `L` is Grover's self inductance of each
+/// leg along the centre line, `a − w/2 = 19.5` and `b − w/2 = 15.5` µm, at
+/// 100 nm thick, to 1%: the strips of a leg carry its current evenly, and
+/// the corner's cells carry under 1% of the total.
 #[test]
-fn an_l_reads_its_centre_line_however_it_is_drawn() {
+fn an_l_reads_its_corner_crowded_however_it_is_drawn() {
     let want_l =
         self_inductance_bar(19.5e-6, 1e-6, 0.1e-6) + self_inductance_bar(15.5e-6, 1e-6, 0.1e-6);
     let stack = uniform_stack(1, 1.0, 0.25);
+    let mut first: Option<f64> = None;
     for (what, rects, polygon) in [
         ("one polygon", vec![], true),
         (
@@ -161,9 +161,15 @@ fn an_l_reads_its_centre_line_however_it_is_drawn() {
         )
         .expect("an L over a stated stack solves");
         let (r, l) = (out.r_ohm[0], out.l_henry[0]);
+        let corner = r / 0.1 - 34.0;
         assert!(
-            ((r - 3.5) / 3.5).abs() < 1e-9,
-            "{what}: {r} ohm, want 35 squares at 0.1 ohm/sq"
+            corner > 0.559 && corner < 0.66,
+            "{what}: {r} ohm, a corner of {corner} squares"
+        );
+        let same = *first.get_or_insert(r);
+        assert!(
+            ((r - same) / same).abs() < 1e-9,
+            "{what}: {r} ohm against {same}"
         );
         assert!(
             ((l - want_l) / want_l).abs() < 1e-2,
