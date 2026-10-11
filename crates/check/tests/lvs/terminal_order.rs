@@ -27,6 +27,10 @@ use gpurify_check::topology::TerminalRole::{Base, Bulk, Collector, Drain, Emitte
 use gpurify_ingest::deck::DeviceKind;
 
 /// A MOS in recogniser order against the same MOS in SPICE `M` card order.
+///
+/// Oracle: construct-from-answer. Both orders put every role on the same net
+/// (the recogniser's gate, source, drain, bulk; the SPICE `M` card's drain,
+/// gate, source, bulk), so it is one device.
 #[test]
 fn a_mos_in_the_two_documented_terminal_orders_is_one_device() {
     let mut layout = common::GraphBuilder::new(4);
@@ -55,6 +59,10 @@ fn a_mos_in_the_two_documented_terminal_orders_is_one_device() {
 
 /// The bipolar row of the same table: base/emitter/collector against the card's
 /// collector/base/emitter.
+///
+/// Oracle: construct-from-answer. Both orders put every role on the same net
+/// (the recogniser's base, emitter, collector; the SPICE `Q` card's collector,
+/// base, emitter), so it is one device.
 #[test]
 fn a_bjt_in_the_two_documented_terminal_orders_is_one_device() {
     let mut layout = common::GraphBuilder::new(3);
@@ -86,6 +94,10 @@ fn a_bjt_in_the_two_documented_terminal_orders_is_one_device() {
 /// and exchanging two of them is a relabelling rather than a difference. Here
 /// the reference's gate and drain are exchanged on the lower device, which puts
 /// a gate on the shared net and leaves the layout with no net of that shape.
+///
+/// Oracle: construct-from-answer. The reference's lower gate sits on the shared
+/// net 2, which in the layout holds no gate, so no relabelling makes the two
+/// equal: anything but `Match`.
 #[test]
 fn reordering_the_slots_does_not_excuse_a_terminal_on_the_wrong_net() {
     let mut layout = common::GraphBuilder::new(6);

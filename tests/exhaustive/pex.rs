@@ -1103,6 +1103,11 @@ fn four_conductors() -> Layout {
 /// `ε₀εr·t·L/S` over their facing run, within ten thicknesses (4 um on
 /// `params.deck`'s met1) and nothing beyond; invariant under every symmetry
 /// and translation.
+///
+/// Oracle: closed form, `ε₀εr·t·L/S` over the facing run as computed by
+/// `lateral_ff` from the deck's row, zero past ten thicknesses; and the
+/// metamorphic relation that every symmetry and translation leaves it
+/// unchanged.
 #[test]
 fn analytical_lateral_coupling_is_the_facing_sidewall_closed_form() {
     let deck = deck(PARAMS, &[], "");
@@ -1138,6 +1143,9 @@ fn analytical_lateral_coupling_is_the_facing_sidewall_closed_form() {
 
 /// PEX-003: the analytical coupling of overlapping plates on `m1` and `m2` is
 /// `ε₀εr·A/d` over the overlap, `d` the dielectric between them.
+///
+/// Oracle: closed form, `ε₀εr·A/d` over the overlap worked out from the
+/// coordinates, under every symmetry.
 #[test]
 fn analytical_interlayer_coupling_is_the_parallel_plate_closed_form() {
     let deck = deck(PARAMS, &[], "");
@@ -1183,6 +1191,10 @@ fn analytical_interlayer_coupling_is_the_parallel_plate_closed_form() {
 ///   regions come in merge order (`A1` first) and the polygons in drawing
 ///   order (`A2` first), so read as one node per polygon the coupling landed
 ///   on `A1`. `A2` is the strap's other resistor neighbour.
+///
+/// Oracle: closed form and construct-from-answer, worked in the list above:
+/// `ε₀εr·t·L/S` with L 500 and 1000, S 200, placed between `A2` and `B`, the
+/// closest rectangles of the two regions.
 #[test]
 fn a_liberty_circuit_places_each_coupling_on_the_regions_it_joins() {
     use gpurify::liberty::circuit::{build, Wires};
@@ -1270,6 +1282,11 @@ fn a_liberty_circuit_places_each_coupling_on_the_regions_it_joins() {
 /// dominant (each row sums to the capacitance to infinity, which is
 /// positive). The network carries it as documented: each row sum as the
 /// net's ground C, `−C_ij` as the coupling of each pair.
+///
+/// Oracle: law. A Maxwell capacitance matrix is symmetric, has a positive
+/// diagonal and negative off-diagonals, and is strictly diagonally dominant;
+/// and the network's documented reading of it (row sums as ground C, `-C_ij` as
+/// coupling).
 #[test]
 fn a_field_solved_capacitance_matrix_is_a_maxwell_matrix() {
     let (c, network) = maxwell(four_conductors(), &["A", "B", "C", "D"], 1.0);
@@ -1297,6 +1314,10 @@ fn a_field_solved_capacitance_matrix_is_a_maxwell_matrix() {
 /// brought closer only draws more charge); and the fringe share
 /// `C·h / (ε₀εr·A)` grows as `W/h` falls from 32 to 8. With no plane the
 /// field is the same at every height, which breaks all three.
+///
+/// Oracle: law. Thomson's principle bounds the plate's capacitance below by the
+/// column `ε₀εr·A/h`; it falls strictly as the plate rises, and the fringe
+/// share grows as `W/h` falls.
 #[test]
 fn a_field_solved_plate_sees_the_substrate() {
     let mut previous: Option<(f64, f64)> = None;
@@ -1343,6 +1364,9 @@ fn a_field_solved_plate_sees_the_substrate() {
 /// PEX-003: field-solved coupling between two parallel bars falls strictly
 /// as their gap grows, and their pair capacitance never drops below the flux
 /// tube between the facing sidewalls, `ε₀εr·t·L/S`.
+///
+/// Oracle: law. Coupling falls strictly as the gap grows, and the pair
+/// capacitance is bounded below by the sidewall flux tube `ε₀εr·t·L/S`.
 #[test]
 fn field_solved_coupling_falls_as_the_gap_grows() {
     let row = COARSE.m1;
@@ -1367,6 +1391,9 @@ fn field_solved_coupling_falls_as_the_gap_grows() {
 /// PEX-003: field-solved coupling between an `m1` bar and an `m2` bar over it
 /// grows strictly with their overlap, and their pair capacitance never drops
 /// below the parallel plate over the overlap, `ε₀εr·A/d`.
+///
+/// Oracle: law. Coupling grows strictly with the overlap, and the pair
+/// capacitance is bounded below by the parallel plate `ε₀εr·A/d` over it.
 #[test]
 fn field_solved_coupling_grows_with_the_overlap() {
     let mut previous = 0.0;
@@ -1398,6 +1425,10 @@ fn field_solved_coupling_grows_with_the_overlap() {
 /// mesh and solve are the same) plus the junction's `Ca·A + Cf·P`, to
 /// round-off ([`EXACT`]); its resistance runs through the junction, the cut
 /// and the metal in series, as `pex/field/via_joined`'s does ([`MODEL`]).
+///
+/// Oracle: closed form. The ground capacitance is the metal's solved alone plus
+/// the junction's `Ca·A + Cf·P`, to round-off, and the resistance the junction,
+/// the cut and the metal in series.
 #[test]
 fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
     let deck = deck(JUNCTION, &[], "");
@@ -1435,6 +1466,10 @@ fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
 /// the same deck gives with `psub` not connected at all, where the tap's
 /// `psub` shape is on no net: element for element, bit for bit. With the
 /// global layer in the mesh the solve is refused for want of a `psub` row.
+///
+/// Oracle: differential against the same deck with `psub` not connected:
+/// `docs/deck.md` says a global layer carries no parasitics, so the two
+/// networks must be equal element for element, bit for bit.
 #[test]
 fn a_field_solved_net_on_the_substrate_net_leaves_the_global_layer_out() {
     let sky130 = include_str!("../../pdks/sky130.deck");
@@ -1471,6 +1506,9 @@ fn a_field_solved_net_on_the_substrate_net_leaves_the_global_layer_out() {
 /// zero, and a positive zero, since SPEF prints `−0.0` as `-0.000000`. The
 /// junction net `A` is a diffusion on [`JUNCTION`]'s `m1`; `B` is an `m2`
 /// bar beside it.
+///
+/// Oracle: construct-from-answer. A net of junctions only has no panels, so it
+/// shares no field and its coupling is exactly +0.0.
 #[test]
 fn a_junction_only_net_couples_by_a_positive_zero() {
     let layout = Layout::default()
@@ -1514,6 +1552,10 @@ fn a_junction_only_net_couples_by_a_positive_zero() {
 /// naming the layer as the deck does, not an aborted run naming `LayerId`.
 /// An `m1` row with no `dielectric` states no permittivity, which the closed
 /// forms read as no coupling and the field solve cannot mesh.
+///
+/// Oracle: `docs/deck.md`, Parasitic stack: a line with no dielectric gives
+/// "above the substrate, a layer the field solve refuses"; the refusal is
+/// PEX's, naming the deck's layer.
 #[test]
 fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {
     let stack = Stack {
@@ -1563,6 +1605,11 @@ fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {
 /// 0.15–0.2% over at 8 to 32, falling back). Measured now: 1.8%, 0.75%,
 /// 0.27%, 0.078% and 0.014% under the limit, rising, so each mesh is also
 /// within the envelope with room to spare.
+///
+/// Oracle: published value and a convergence law: the unit cube's free-space
+/// capacitance, 0.66068 · 4πε₀a (Read 1997; Hwang, Mascagni and Given 2004),
+/// raised by its image in the plane, approached monotonically inside the
+/// `h^(2/3)` envelope the coarsest mesh's error sets.
 #[test]
 fn a_field_solved_capacitance_converges_as_the_mesh_is_refined() {
     use gpurify::extract::field::mesh::MeshOptions;
@@ -1653,6 +1700,10 @@ fn differences(what: &str, c: &[Vec<f64>], reference: &[Vec<f64>], factor: f64) 
 /// drawn: every symmetry of the square gives the same matrix, and doubling
 /// every length (layout and stack) doubles every capacitance, as it must in a
 /// homogeneous dielectric.
+///
+/// Oracle: metamorphic relations. Every symmetry of the square gives the same
+/// matrix, and doubling every length doubles every capacitance in a homogeneous
+/// dielectric.
 #[test]
 fn a_field_solve_is_invariant_under_symmetry_and_covariant_under_scale() {
     let labels = ["A", "B", "C"];
@@ -1688,6 +1739,9 @@ fn a_field_solve_is_invariant_under_symmetry_and_covariant_under_scale() {
 /// PEX-005: moving a layout moves its field and changes nothing else. A face's
 /// panel count once took round-off from absolute coordinates, so the same
 /// three conductors 1 mm to the right read capacitances 1e-4 apart (F46).
+///
+/// Oracle: metamorphic relation. Translating the layout by 1 mm leaves the
+/// matrix unchanged.
 #[test]
 fn a_field_solve_is_invariant_under_translation() {
     let labels = ["A", "B", "C"];
@@ -1704,6 +1758,10 @@ fn a_field_solve_is_invariant_under_translation() {
 /// PEX-010: SPEF carries the network: a net's `*D_NET` total is its
 /// closed-form capacitance and its `*RES` rows its closed-form resistances,
 /// to the six decimals of fF and Ω the writer prints.
+///
+/// Oracle: closed form. Each net's `*D_NET` total and `*RES` rows are its
+/// closed-form capacitance and resistances, to the six decimals the SPEF writer
+/// prints.
 #[test]
 fn spef_carries_the_closed_form_totals() {
     let layout = joint(

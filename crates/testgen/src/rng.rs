@@ -115,6 +115,10 @@ mod tests {
     use super::Rng;
 
     /// Adjacent seeds give different streams.
+    ///
+    /// Oracle: law. Distinct seeds give distinct streams; here the first draw
+    /// of seed 1 against that of seed 2 (each drawn from a fresh generator
+    /// eight times).
     #[test]
     fn adjacent_seeds_do_not_agree_on_their_first_draws() {
         let first: Vec<u64> = (0..8).map(|_| Rng::new(1).next_u64()).collect();
@@ -123,6 +127,9 @@ mod tests {
     }
 
     /// `below(n)` is in `0..n` for every draw and every bound.
+    ///
+    /// Oracle: the documented range of `below(n)`, `0..n`, on every bound from
+    /// 1 to 63.
     #[test]
     fn below_stays_within_its_bound_for_every_bound() {
         let mut rng = Rng::new(0);
@@ -134,6 +141,9 @@ mod tests {
     }
 
     /// `range` is half-open, so `lo` can occur and `hi` cannot.
+    ///
+    /// Oracle: the documented half-open range: every draw in `-5..5`, and `-5`
+    /// occurs, which 4096 draws miss with probability 0.9^4096.
     #[test]
     fn range_is_half_open() {
         let mut rng = Rng::new(3);
@@ -147,6 +157,9 @@ mod tests {
     }
 
     /// A shuffle preserves the multiset it permutes.
+    ///
+    /// Oracle: law. A shuffle is a permutation, so sorting it gives back
+    /// `0..97`; coming back sorted has odds of 1 in 97!.
     #[test]
     fn shuffle_is_a_permutation() {
         let mut rng = Rng::new(11);
@@ -160,6 +173,10 @@ mod tests {
 
     /// `unit` stays in `0.0..1.0` with mean near a half; the 0.02 tolerance is
     /// over four standard errors at 4096 draws.
+    ///
+    /// Oracle: closed form. A uniform draw on [0, 1) has mean 1/2 and standard
+    /// deviation 1/sqrt(12), so the mean of 4096 has standard error 0.0045 and
+    /// 0.02 is over four of them.
     #[test]
     fn unit_is_in_the_half_open_unit_interval_with_mean_one_half() {
         let mut rng = Rng::new(5);

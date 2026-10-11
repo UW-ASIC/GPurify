@@ -791,6 +791,10 @@ mod tests {
 
     /// F35: the `Angle` triangle is an outer ring, counter-clockwise, in every
     /// quadrant: twice its signed area is `+|dx·dy|`, legs 300 and 200.
+    ///
+    /// Oracle: closed form. A right triangle with legs 300 and 200 has twice
+    /// its area 60 000, positive for a counter-clockwise ring, in every
+    /// quadrant.
     #[test]
     fn the_angle_triangle_winds_counter_clockwise_in_every_quadrant() {
         for run in [(300, 200), (-300, 200), (-300, -200), (300, -200)] {
@@ -819,6 +823,9 @@ mod tests {
     }
 
     /// An odd span has no integer midpoint and is refused.
+    ///
+    /// Oracle: the documented contract of `half`: a span must be positive and
+    /// even, so 40 halves to 20 and 41 and 0 are refused.
     #[test]
     fn half_refuses_a_span_with_no_integer_midpoint() {
         assert_eq!(half(40, "a gap"), 20);
@@ -827,6 +834,9 @@ mod tests {
     }
 
     /// An amount of the wrong dimension is refused, not partly honoured.
+    ///
+    /// Oracle: the documented contract of `Amount`'s accessors: a request in
+    /// the wrong dimension panics rather than being partly honoured.
     #[test]
     fn an_amount_of_the_wrong_dimension_is_refused() {
         assert!(std::panic::catch_unwind(|| Amount::Ohms(3.5).length("a spacing")).is_err());

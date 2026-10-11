@@ -168,6 +168,9 @@ mod tests {
     }
 
     /// The same name gives the same seeds; different names, different seeds.
+    ///
+    /// Oracle: law. `seeds` is documented as a function of the name: one name
+    /// gives one stream, two names two, of the length asked for.
     #[test]
     fn seeds_depend_on_the_name_alone() {
         let a: Vec<u64> = seeds("a", 3).collect();

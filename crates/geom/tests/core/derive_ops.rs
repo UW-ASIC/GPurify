@@ -69,6 +69,8 @@ fn sized(a: &ValidatedLayer, by: i64) -> ValidatedLayer {
     out
 }
 
+/// Oracle: hand-derived. A 10 square grown by 2 with square corners is (-2,
+/// -2)-(12, 12), area 14^2.
 #[test]
 fn growing_a_square_adds_the_distance_on_every_side_with_square_corners() {
     let grown = sized(&rects(&[(0, 0, 10, 10)]), 2);
@@ -76,6 +78,8 @@ fn growing_a_square_adds_the_distance_on_every_side_with_square_corners() {
     assert_eq!(area(&grown), 14 * 14);
 }
 
+/// Oracle: hand-derived. Growing each side by 2 closes a gap of 4 (the edges
+/// meet) and leaves one of 5 open: one shape, then two.
 #[test]
 fn growing_closes_a_gap_no_wider_than_twice_the_distance() {
     // Gap 4 closes at 2 (edges meet), gap 5 stays open.
@@ -89,6 +93,8 @@ fn growing_closes_a_gap_no_wider_than_twice_the_distance() {
     );
 }
 
+/// Oracle: hand-derived. Shrinking by 2 from both sides empties a 4-wide bar
+/// and leaves a 5-wide one its 1-wide core, (2, 2)-(3, 18).
 #[test]
 fn shrinking_deletes_a_shape_no_wider_than_twice_the_distance() {
     assert!(
@@ -102,6 +108,8 @@ fn shrinking_deletes_a_shape_no_wider_than_twice_the_distance() {
     );
 }
 
+/// Oracle: hand-derived. A 20 ring with an 8..12 hole shrunk by 2 is the
+/// 2..18 square less a 6..14 hole, area 16^2 - 8^2.
 #[test]
 fn shrinking_a_ring_widens_its_hole() {
     let (hx, hy) = hole(8, 8, 12, 12);
@@ -122,6 +130,9 @@ fn l_shape(arm: i64) -> ValidatedLayer {
     layer(&[(&[0, 10, 10, 4, 4, 0], &[0, 0, arm, arm, 10, 10])])
 }
 
+/// Oracle: hand-derived, sky130's huge-metal idiom at 1: shrinking then growing
+/// by 1 removes the 2-wide arm and keeps the 4-wide one, (0, 0)-(4, 10), area
+/// 40; an L whose arms are all wider than 2 comes back exactly.
 #[test]
 fn shrink_then_grow_keeps_only_the_parts_wider_than_twice_the_distance() {
     // The sky130 "huge metal" idiom at a = 1: the 2-wide arm is not wider than
@@ -137,6 +148,9 @@ fn shrink_then_grow_keeps_only_the_parts_wider_than_twice_the_distance() {
     );
 }
 
+/// Oracle: construct-from-answer. A rectangle ending one unit inside
+/// `MAX_ABS_DBU` grown by 5 would leave the coordinate domain, so the only
+/// correct answer is `OutOfRange`.
 #[test]
 fn sizing_past_the_coordinate_domain_is_refused() {
     let edge = MAX_ABS_DBU - 1;
@@ -174,6 +188,10 @@ fn boxes(got: &ValidatedLayer) -> Vec<(i64, i64, i64, i64)> {
     out
 }
 
+/// Oracle: hand-derived, from `probes`: `KLayout`'s `interacting` takes every `A`
+/// square that overlaps or touches `B`, a shared corner included (probes 0, 1,
+/// 2, 3, 5), and leaves the two with a gap; the two selections partition `A`'s
+/// area.
 #[test]
 fn interacting_takes_touching_and_overlapping_shapes_and_a_shared_corner() {
     let (a, b) = probes();
@@ -199,6 +217,8 @@ fn interacting_takes_touching_and_overlapping_shapes_and_a_shared_corner() {
     );
 }
 
+/// Oracle: construct-from-answer. The island lies in the ring's hole, apart
+/// from its material; the other square overlaps the ring's corner.
 #[test]
 fn a_shape_in_a_hole_does_not_interact_but_one_over_the_ring_does() {
     let (hx, hy) = hole(5, 5, 15, 15);
@@ -213,6 +233,8 @@ fn a_shape_in_a_hole_does_not_interact_but_one_over_the_ring_does() {
     );
 }
 
+/// Oracle: hand-derived, from `probes`: probes 0 and 1 lie in `B`, 3, 4, 5 and
+/// 6 share no area with it, and the straddler, 4 x 2 of it, is neither.
 #[test]
 fn inside_is_covered_by_b_and_outside_shares_no_area_with_it() {
     let (a, b) = probes();
@@ -234,6 +256,8 @@ fn inside_is_covered_by_b_and_outside_shares_no_area_with_it() {
     assert_eq!(area(&a) - area(&inside) - area(&outside), 4 * 2);
 }
 
+/// Oracle: construct-from-answer. The two halves of `B` abut to cover (0,
+/// 0)-(10, 10), which holds `A` (2..8); `B` merged, `A` is inside.
 #[test]
 fn a_shape_covered_by_two_abutting_shapes_of_b_is_inside() {
     let b = rects(&[(0, 0, 5, 10), (5, 0, 10, 10)]);
@@ -243,6 +267,8 @@ fn a_shape_covered_by_two_abutting_shapes_of_b_is_inside() {
     assert_eq!(got.len(), 1, "B is merged before the test");
 }
 
+/// Oracle: hand-derived. The outer ring's hole is 4..16, island included, so
+/// `holes` is that square; a plain rectangle has none.
 #[test]
 fn holes_fill_each_hole_and_a_hole_holding_an_island_covers_it() {
     // A ring with a 12x12 hole; in the hole an island ring with a 2x2 hole.
@@ -265,6 +291,9 @@ fn holes_fill_each_hole_and_a_hole_holding_an_island_covers_it() {
     assert!(got.is_empty(), "a plain rectangle has no hole");
 }
 
+/// Oracle: hand-derived, with `KLayout`'s `extents` ("The boxes will not be
+/// merged"): the L's box is 10 x 10, and the two Ls keep their own boxes, 100 +
+/// 120 with the overlap counted twice.
 #[test]
 fn extents_give_each_shape_its_own_box() {
     let mut got = ValidatedLayer::default();
@@ -285,6 +314,8 @@ fn extents_give_each_shape_its_own_box() {
     assert_eq!(area(&got), 100 + 120);
 }
 
+/// Oracle: hand-derived areas in the comments: 4, 9, 16, and 16 - 4 = 12 for
+/// the holed square, so `5..=9` keeps the 9 and the holed square is 12, not 16.
 #[test]
 fn with_area_selects_on_the_area_net_of_holes() {
     let (hx, hy) = hole(1, 1, 3, 3);
@@ -304,6 +335,8 @@ fn with_area_selects_on_the_area_net_of_holes() {
     assert!(got.is_empty(), "the hole is not area");
 }
 
+/// Oracle: hand-derived. The L's narrowest width is its 2-wide arm and the bar
+/// is 3 wide; the ranges are squared (`>= 3` is `9..`, `<= 2` `..=4`).
 #[test]
 fn with_width_selects_on_the_narrowest_width() {
     let l = layer(&[
@@ -318,6 +351,9 @@ fn with_width_selects_on_the_narrowest_width() {
     assert_eq!(boxes(&got), [(0, 0, 10, 10)]);
 }
 
+/// Oracle: hand-derived. The concave corners (10, 8) and (8, 10) are sqrt(8)
+/// apart, 8 squared exactly, so the neck is in `5..` and `..=9` and in neither
+/// `..=4` nor `9..` (F65).
 #[test]
 fn with_width_counts_the_diagonal_neck_width_measures() {
     // Two 10-squares overlapping 2 x 2 at a corner: every facing pair is 10
@@ -337,6 +373,9 @@ fn with_width_counts_the_diagonal_neck_width_measures() {
     assert!(got.is_empty(), "nothing is 3 wide at the neck");
 }
 
+/// Oracle: closed form, worked in the comment: the neck squared is n^2 - 1 for
+/// n = 98 000 001, whose integer root is n - 1, at the midpoint of the two
+/// corners.
 #[test]
 fn a_neck_past_two_to_the_53_is_floored_exactly() {
     // Plates overlapping 98_000_000 x 14_000 at a corner: the concave corners
@@ -381,6 +420,8 @@ fn edges(l: &ValidatedLayer) -> Vec<Seg> {
     out
 }
 
+/// Oracle: hand-derived. The 10 square's four edges, counter-clockwise from the
+/// origin, each with the material on its left.
 #[test]
 fn edges_run_counter_clockwise_round_an_outer_with_material_on_the_left() {
     assert_eq!(
@@ -394,6 +435,8 @@ fn edges_run_counter_clockwise_round_an_outer_with_material_on_the_left() {
     );
 }
 
+/// Oracle: hand-derived. `B` butts `A`'s right edge along y 5..10: `and` is
+/// that 5, `not` the other 35 of `A`'s 40, `or` 80 - 5.
 #[test]
 fn butting_edges_are_the_coincident_parts_and_booleans_split_length() {
     // A = [0,10]^2; B = [10,20]x[5,15] butts A's right edge along y 5..10.
@@ -410,6 +453,10 @@ fn butting_edges_are_the_coincident_parts_and_booleans_split_length() {
     assert_eq!(length(&or), 40 + 40 - 5, "the shared part counted once");
 }
 
+/// Oracle: hand-derived. `over` covers x 5..15, so the inside part is the right
+/// halves of the bottom and top and the whole right edge; the outside part is 5
+/// + 5 + 10. A butting square takes the right edge from both, leaving
+/// 30 outside.
 #[test]
 fn edge_parts_split_at_the_other_layers_boundary_and_the_boundary_is_neither() {
     let a = edges(&rects(&[(0, 0, 10, 10)]));
@@ -430,6 +477,9 @@ fn edge_parts_split_at_the_other_layers_boundary_and_the_boundary_is_neither() {
     assert_eq!(length(&outside), 30);
 }
 
+/// Oracle: hand-derived. Each segment's relation to `B` is in its comment:
+/// crossing, along the edge and inside interact, the far one does not; only the
+/// 5-long segment is in `5..=9`.
 #[test]
 fn edge_interacting_takes_whole_edges_that_touch_and_with_length_filters() {
     let a = vec![
@@ -453,6 +503,8 @@ fn edge_interacting_takes_whole_edges_that_touch_and_with_length_filters() {
     assert_eq!(sorted(&kept), [(20, 0, 20, 5)]);
 }
 
+/// Oracle: law. `area(A and B) + area(A not B) = area(A)`, on the `probes`
+/// operands.
 #[test]
 fn intersection_and_difference_split_area() {
     // A = (A and B) + (A not B), for the operands the selections test on.

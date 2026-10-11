@@ -124,6 +124,9 @@ mod tests {
         rx.min(pitch - rx).max(ry.min(pitch - ry))
     }
 
+    /// Oracle: differential against `reference`, the offset written with
+    /// `rem_euclid`, at every listed pitch (powers of two and not) and
+    /// coordinate, signs and domain edges included.
     #[test]
     fn the_power_of_two_mask_is_rem_euclid() {
         let d = Dbu::new_unchecked;

@@ -108,6 +108,11 @@ fn layer_name(deck: &Deck, strings: &StrTable, id: gpurify_geom::LayerId) -> Str
     format!("?{}", id.0)
 }
 
+/// Oracle: hand-derived. Each check's engine kind is the Kind / Deck form table
+/// of `docs/klayout-mirror.md` (`width >=` is `min_width`, `<=` `max_width`,
+/// `enclosure(i, o, opposite)` `asymmetric_enclosure`), and the values are the
+/// deck's units converted by hand on the 1 nm grid: 0.14 um is 140 dbu, 0.083
+/// um2 is 83 000 dbu2, 80 % is 0.8.
 #[test]
 fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
     let (deck, strings) = ok("rule m1.1 width(met1) >= 0.14um\n\
@@ -164,6 +169,10 @@ fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
 
 /// gf180 M1.4 "Metal1 minimum density 30 % over the entire die", and a
 /// windowed row whose die is a named boundary layer.
+///
+/// Oracle: foundry example, gf180 M1.4 (30 % over the die), lowered by the
+/// `global_density` and `density` rows of `docs/deck.md`; the fractions and the
+/// boundary layer's place are read off the rule text.
 #[test]
 fn die_density_lowers_with_an_optional_boundary_layer() {
     let (deck, strings) = ok("rule M1.4 global_density(met1) >= 30%\n\
@@ -180,6 +189,10 @@ fn die_density_lowers_with_an_optional_boundary_layer() {
 }
 
 /// sky130 licon.1 "min and max L and W of licon: 0.17": one exact square.
+///
+/// Oracle: foundry example, sky130 licon.1 (0.17 um square), and
+/// `docs/deck.md`'s `size(L) == len x len`: 170 nm on the 1 nm grid is 170 dbu
+/// a side; `>=` is not the documented comparator.
 #[test]
 fn an_exact_cut_size_lowers_to_both_sides() {
     let (deck, strings) = ok("rule licon.1 size(licon) == 0.17um x 0.17um\n\
@@ -198,6 +211,10 @@ fn an_exact_cut_size_lowers_to_both_sides() {
     one_error("rule licon.1 size(licon) >= 170nm x 170nm\n", "==");
 }
 
+/// Oracle: hand-derived unit conversions: 0.28 mA/um is 280 A/m, 15 mA is
+/// 15 000 uA, 105 C is 378.15 K, 1.8 V is 1800 mV, 50 um is 50 000 dbu, 20 % is
+/// 0.2; and `docs/deck.md`'s rule that `none` states a parameter absent, so it
+/// lowers to no row.
 #[test]
 fn erc_named_arguments_convert_to_engine_units_and_none_leaves_a_param_out() {
     let (deck, strings) = ok("rule em.li warning electromigration(li, licon,
@@ -235,6 +252,10 @@ rule cmp density_cmp(met1; window: 50um x 40um, step: 25um x 20um, min: 20%, max
     );
 }
 
+/// Oracle: the Electrical rules section of `docs/deck.md`: `models` is a list
+/// of quoted names, each declared by a `device` line, and `none` leaves the
+/// parameter out; the lowered rows (one `model` per name, 1.98 V as 1980 mV)
+/// are read off the deck text.
 #[test]
 fn model_lists_lower_to_one_param_per_model_and_must_name_a_device() {
     let (deck, strings) = ok(r#"device mos poly model "nfet" terminals [poly, diff, diff]
@@ -278,6 +299,10 @@ rule ox gate_oxide(; models: ["nfet_typo"], max: 1.98V)
     );
 }
 
+/// Oracle: spec example. The `let`/`for` example of `docs/deck.md` (Reuse),
+/// expanded by hand: a width and a space rule per metal in list order, then a
+/// `max` rule per metal of the second loop; met3's limit is 300 nm and `wide`
+/// 1 um, 300 and 1000 dbu.
 #[test]
 fn let_and_for_expand_with_interpolated_ids() {
     let (deck, strings) = ok("let metals = [(met1, 140nm), (met2, 140nm), (met3, 300nm)]
@@ -310,6 +335,9 @@ for m in [met1, met2] {
     assert_eq!(got[7].3, ["limit=1000dbu"]);
 }
 
+/// Oracle: hand count. `gate = poly and diff` is one operator, one row;
+/// `x = gate or li not met1` is two, folded left to right, so `x` plus one
+/// hidden intermediate `x#1`: the eight drawn layers and three more.
 #[test]
 fn derived_layers_fold_one_operator_and_nest_the_rest() {
     let (deck, strings) = ok("layer gate = poly and diff\n\
@@ -320,6 +348,10 @@ fn derived_layers_fold_one_operator_and_nest_the_rest() {
     assert!(deck.layers.id(&strings, "x#1").is_some());
 }
 
+/// Oracle: construct-from-answer. Each statement's values are read back as
+/// written: three conductors, one via, one label layer, the escaped model name
+/// unescaped, and the `pex` row's 360 nm, 1.376 um (1376 nm) and 25.8 aF/um2,
+/// bit for bit.
 #[test]
 fn connectivity_devices_and_pex_lower() {
     let (deck, strings) = ok("layer gate = poly and diff
@@ -349,6 +381,11 @@ pex met1 thickness 360nm height 1.376um sheet 0.125ohm dielectric 3.9 area_cap 2
 /// optional, in the units of a `pex` row, and lower to one `DeviceValue` per
 /// recogniser; one left out is `None`, never zero. Each belongs to one kind,
 /// and is given once.
+///
+/// Oracle: hand-derived conversions in the units of a `pex` row (0.3 kohm is
+/// 300 ohm, 2 fF/um2 is 2000 aF/um2, a value left out is `None`), and the
+/// Devices section of `docs/deck.md`: `sheet` is a resistor's, `area_cap` and
+/// `fringe_cap` a capacitor's, each optional and given once.
 #[test]
 fn device_values_lower_per_recogniser_and_belong_to_their_kind() {
     use gpurify_ingest::deck::DeviceValue;
@@ -406,6 +443,9 @@ device mos diff model \"nfet\" terminals [poly, diff, diff]
     }
 }
 
+/// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
+/// copy; it holds ten rules, counted in the document: six written out, three
+/// from its `for` loop and the `em.li` row.
 #[test]
 fn the_example_in_the_language_spec_parses() {
     let spec = include_str!("../../../docs/deck.md");
@@ -418,6 +458,9 @@ fn the_example_in_the_language_spec_parses() {
 
 // ---- error classes ----
 
+/// Oracle: the documented forms in `docs/deck.md`: `eol_space(L; eol_width:
+/// len)`, and `antenna(..; max_ratio, sidewall, diode)` under "Every parameter
+/// below is required".
 #[test]
 fn a_missing_parameter_is_an_error() {
     one_error(
@@ -430,6 +473,8 @@ fn a_missing_parameter_is_an_error() {
     );
 }
 
+/// Oracle: the documented parameter lists of `docs/deck.md`: `eol_space` has no
+/// `colour` and the CMP model no `thickness`.
 #[test]
 fn an_unknown_parameter_is_an_error() {
     one_error(
@@ -446,6 +491,8 @@ fn an_unknown_parameter_is_an_error() {
     );
 }
 
+/// Oracle: `docs/deck.md`, Basics: numbers carry units, and only a count, ratio
+/// or exponent is bare; the message is the spec's own Errors example.
 #[test]
 fn a_bare_number_where_a_unit_belongs_is_an_error() {
     one_error(
@@ -454,6 +501,8 @@ fn a_bare_number_where_a_unit_belongs_is_an_error() {
     );
 }
 
+/// Oracle: the units table of `docs/deck.md`: `um2` is an area, `uA` a current,
+/// neither a length nor a voltage.
 #[test]
 fn a_unit_of_the_wrong_dimension_is_an_error() {
     one_error(
@@ -466,6 +515,8 @@ fn a_unit_of_the_wrong_dimension_is_an_error() {
     );
 }
 
+/// Oracle: `docs/deck.md`, Basics: "`142nm` on a 5 nm grid is an error, not a
+/// rounding"; 30 nm2 is likewise not a multiple of 25 nm2.
 #[test]
 fn an_off_grid_length_is_an_error() {
     one_error(
@@ -478,6 +529,9 @@ fn an_off_grid_length_is_an_error() {
     );
 }
 
+/// Oracle: `docs/deck.md`, Rules: "Writing `<=` on a minimum rule is an error,
+/// not a flipped rule"; `tap_distance` is documented with `<=`, `width` with a
+/// comparison, `off_grid` with none.
 #[test]
 fn the_wrong_comparator_is_an_error_not_a_flip() {
     one_error(
@@ -491,11 +545,15 @@ fn the_wrong_comparator_is_an_error_not_a_flip() {
     );
 }
 
+/// Oracle: `docs/deck.md`: a layer must be declared, and `met9` is not in the
+/// header.
 #[test]
 fn an_unknown_layer_is_an_error() {
     one_error("rule w width(met9) >= 100nm\n", "unknown layer `met9`");
 }
 
+/// Oracle: `docs/deck.md`, Layers: "A layer must be declared before anything
+/// uses it", and a `let` name likewise.
 #[test]
 fn a_forward_reference_is_an_error() {
     one_error(
@@ -508,6 +566,8 @@ fn a_forward_reference_is_an_error() {
     );
 }
 
+/// Oracle: `docs/deck.md`, Reuse: "A name can be bound once", whether by `let`
+/// or `layer`.
 #[test]
 fn rebinding_a_name_is_an_error() {
     one_error("let w = 1nm\nlet w = 2nm\n", "`w` is already bound");
@@ -515,6 +575,10 @@ fn rebinding_a_name_is_an_error() {
     one_error("let met1 = 5nm\n", "`met1` is already bound");
 }
 
+/// Oracle: hand count. Each operator or operation is one layer row, the last
+/// named and the others hidden (`huge`, `huge#1`; `x` and three; `gate`,
+/// `gate#1`; `active`, `active#1`), so ten past the eight drawn layers, and the
+/// rule reads `huge` itself.
 #[test]
 fn layer_operations_chain_and_a_rule_can_name_the_result() {
     let (deck, strings) = ok("layer huge = met1.sized(-1500nm).sized(1500nm)\n\
@@ -530,6 +594,9 @@ fn layer_operations_chain_and_a_rule_can_name_the_result() {
     assert_eq!(deck.rules.layers_of(spec), [huge]);
 }
 
+/// Oracle: the Edge checks section of `docs/deck.md`: edge layers come from
+/// `.edges()` and edge operations, and only a check or operation that takes
+/// edges accepts one; each refusal is a documented type rule.
 #[test]
 fn edge_layers_are_typed_and_only_edge_operations_take_them() {
     let (deck, strings) = ok("layer e = diff.edges()\n\
@@ -566,6 +633,9 @@ fn edge_layers_are_typed_and_only_edge_operations_take_them() {
     );
 }
 
+/// Oracle: the operations of `docs/deck.md`, Layers: sizes on the grid, a
+/// documented operation name, a non-empty range with one bound a side, a bound
+/// written with a comparator, an area for `with_area`.
 #[test]
 fn a_layer_operation_checks_its_arguments() {
     one_error(
@@ -592,6 +662,8 @@ fn a_layer_operation_checks_its_arguments() {
     one_error("layer x = met1\n", "a derived layer needs an operator");
 }
 
+/// Oracle: `docs/deck.md`, Rules: the id is how violations are reported, so it
+/// is unique, and `warning` is "ERC only".
 #[test]
 fn a_duplicate_rule_and_warning_on_drc_are_errors() {
     one_error(
@@ -604,6 +676,8 @@ fn a_duplicate_rule_and_warning_on_drc_are_errors() {
     );
 }
 
+/// Oracle: `docs/deck.md`, Errors: problems are "reported together (up to 50)".
+/// Eighty off-grid rules give fifty; three different faults give three.
 #[test]
 fn errors_are_collected_and_capped_at_fifty() {
     let body = (0..80).fold(String::new(), |mut body, i| {
@@ -622,6 +696,10 @@ fn errors_are_collected_and_capped_at_fifty() {
 /// both; every other value only below zero, since a zero is "not stated".
 /// A dielectric is not stated by leaving it out (how `generic_finfet` says
 /// it extracts no capacitance), never by writing 0.
+///
+/// Oracle: `docs/deck.md`, Parasitic stack: "the thickness positive, a stated
+/// dielectric positive, the rest zero or more", and the error marks the value,
+/// so each case's caret is placed by hand under its value.
 #[test]
 fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
     let row = |value: &str| {
@@ -671,6 +749,10 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
 /// F74: a `pex` row may leave its dielectric out, which states none: it
 /// lowers to `0.0`, the stack's "not stated", as a layer with no row does.
 /// Every other key stays required.
+///
+/// Oracle: `docs/deck.md`, Parasitic stack: "Every value is required but the
+/// dielectric", and a zero is "not stated"; the sheet is read back as written,
+/// 1.2675 ohm.
 #[test]
 fn a_pex_row_may_leave_its_dielectric_out_and_nothing_else() {
     let (deck, strings) = ok("pex met1 thickness 36nm height 0nm sheet 1.2675ohm \
@@ -687,6 +769,9 @@ fn a_pex_row_may_leave_its_dielectric_out_and_nothing_else() {
     );
 }
 
+/// Oracle: hand-derived. The format is `docs/deck.md`'s Errors example; the
+/// `60` is on line 3 (after `grid` and `layer`) at column 26, two characters
+/// wide.
 #[test]
 fn an_error_renders_file_line_column_and_a_caret() {
     let mut strings = StrTable::default();
@@ -704,6 +789,10 @@ fn an_error_renders_file_line_column_and_a_caret() {
 /// The presence, net, table and attached-wide rows lower to their engine
 /// kinds; which `space` and `wide_space` row is meant is read off the named
 /// arguments given.
+///
+/// Oracle: the Kind / Deck form table of `docs/klayout-mirror.md` for each
+/// row's kind, and the deck's values on the 1 nm grid by hand (280 nm is
+/// 280 dbu, 3 um 3000, 1 um 1000; the table's cells in row order).
 #[test]
 fn presence_net_table_and_attached_rows_lower() {
     let (deck, strings) = ok("rule f forbidden(met3)\n\
@@ -772,6 +861,10 @@ fn presence_net_table_and_attached_rows_lower() {
 
 /// A spacing table must say what every pair needs, and never less for a wider
 /// shape or a longer run.
+///
+/// Oracle: the spacing table rules of `docs/deck.md`: `prl` and `width` start
+/// at 0 and rise, one row per width and one cell per run length, and no cell
+/// smaller than the one before it in its row or column. Each case breaks one.
 #[test]
 fn a_spacing_table_is_complete_and_monotone() {
     let table = |prl: &str, width: &str, space: &str| {
@@ -822,6 +915,10 @@ fn a_spacing_table_is_complete_and_monotone() {
 
 /// A rule may take a layer expression where it takes a layer; it becomes a
 /// derived layer of its own.
+///
+/// Oracle: `docs/deck.md`'s `forbidden(licon and poly and (diff or tap))` form:
+/// an expression argument becomes a derived layer, and a named layer stays
+/// itself.
 #[test]
 fn a_rule_argument_may_be_a_layer_expression() {
     let (deck, strings) = ok("rule x.1 forbidden(licon and poly and (diff or met1))\n\
@@ -842,6 +939,11 @@ fn a_rule_argument_may_be_a_layer_expression() {
 
 /// Edge checks take edge layers where they say so, and an edge layer picks
 /// the edge form of `space` and `enclosure`.
+///
+/// Oracle: the Edge checks table of `docs/deck.md` with the Kind / Deck form
+/// table of `docs/klayout-mirror.md`: `length(E)` is `edge_min_length`,
+/// `space(E[, F])` `edge_spacing`, `enclosure(E, L)` `edge_enclosure`, and the
+/// same names on polygon layers keep their polygon kinds.
 #[test]
 fn edge_checks_take_edge_layers_in_their_edge_slots() {
     let (deck, strings) = ok("layer e = diff.edges() not poly.edges()\n\
@@ -880,6 +982,9 @@ fn edge_checks_take_edge_layers_in_their_edge_slots() {
 }
 
 /// `with_text` reads a drawn text layer and a quoted pattern.
+///
+/// Oracle: the `with_text` operation of `docs/deck.md`: text is drawn on a GDS
+/// layer, and the pattern is a non-empty quoted string.
 #[test]
 fn a_text_selection_needs_a_drawn_layer_and_a_pattern() {
     let (deck, strings) = ok("layer label = gds(68, 5)\n\
@@ -903,6 +1008,9 @@ fn a_text_selection_needs_a_drawn_layer_and_a_pattern() {
 
 /// `ignore gds(L, D)` lists stream pairs to drop. It may not repeat, nor name a
 /// declared layer's pair, whichever statement comes first.
+///
+/// Oracle: `docs/deck.md`, Layers: "A pair cannot be both ignored and declared,
+/// and cannot be ignored twice", in either statement order.
 #[test]
 fn an_ignored_pair_is_listed_and_may_not_repeat_or_be_declared() {
     let (deck, _) = ok("ignore gds(81, 4)\nignore gds(12, 0)\n");

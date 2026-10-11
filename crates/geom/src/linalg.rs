@@ -119,6 +119,8 @@ mod tests {
         v.iter().map(|x| x.to_bits()).collect()
     }
 
+    /// Oracle: differential against `axpy_scalar` and `xpay_scalar`, bit for
+    /// bit (both documented without FMA), at every length 0 to 13.
     #[test]
     fn the_lane_kernels_match_their_scalar_loops_bit_for_bit() {
         for n in 0..=13 {
@@ -138,6 +140,9 @@ mod tests {
     }
 
     /// `[[2, 0, 1], [0, 3, 0], [1, 0, 4]]` against `[1, 2, 3]`.
+    ///
+    /// Oracle: hand-derived. `[[2, 0, 1], [0, 3, 0], [1, 0, 4]] * [1, 2, 3]` is
+    /// `[5, 6, 13]`.
     #[test]
     fn spmv_reads_the_csr_it_is_given() {
         let row_start = [0u32, 2, 3, 5];
@@ -148,6 +153,8 @@ mod tests {
         assert_eq!(out, [5.0, 6.0, 13.0]);
     }
 
+    /// Oracle: closed form. An empty sum is 0, so the empty dot product and
+    /// norm are 0.
     #[test]
     fn the_empty_case_is_zero_and_not_a_panic() {
         assert_eq!(dot(&[], &[]), 0.0);

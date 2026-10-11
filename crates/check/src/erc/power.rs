@@ -2148,6 +2148,9 @@ mod tests {
     }
 
     /// A rectangle is one slab of its short dimension: length over width.
+    ///
+    /// Oracle: closed form. A 400 x 10 bar is 400 / 10 = 40 squares, and its
+    /// narrowest place is its width, 10.
     #[test]
     fn a_rectangle_profiles_to_its_own_length_over_its_own_width() {
         let store = shape(&[0, 400, 400, 0], &[0, 0, 10, 10]);
@@ -2169,6 +2172,9 @@ mod tests {
 
     /// A `100 x 100` L on ten-wide arms is `10/100 + 90/10 = 9.1` squares, not
     /// its square bounding box's 1 (a drop nine times low).
+    ///
+    /// Oracle: closed form, as above: 10/100 + 90/10 = 9.1 squares along the L,
+    /// its narrowest place the 10-wide arm.
     #[test]
     fn an_l_route_costs_the_squares_its_arms_have_and_not_its_bounding_box() {
         let store = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -2188,6 +2194,9 @@ mod tests {
     }
 
     /// Rayleigh monotonicity: widening a polygon never raises a segment's squares.
+    ///
+    /// Oracle: law, Rayleigh monotonicity: resistance cannot rise when
+    /// conductor is added, so the wider L costs no more squares on any segment.
     #[test]
     fn widening_a_shape_can_only_lower_the_squares_a_segment_costs() {
         let narrow = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -2210,6 +2219,10 @@ mod tests {
 
     /// IC(0): `L D Lᵀ` equals the matrix wherever the matrix is non-zero. A
     /// four-node cycle with one pad is the smallest case with a fill hole.
+    ///
+    /// Oracle: the defining property of IC(0): `L D L^T` equals the matrix on
+    /// its sparsity pattern, checked entry by entry on a four-node cycle with
+    /// one pad.
     #[test]
     fn an_incomplete_factor_reproduces_the_matrix_wherever_the_matrix_is_nonzero() {
         const N: usize = 4;
@@ -2303,6 +2316,10 @@ mod tests {
 
     /// The ring search agrees with an exhaustive scan, including degenerate
     /// aspect ratios and markers outside the extent.
+    ///
+    /// Oracle: differential against `brute_force`, the nearest tap by an
+    /// exhaustive scan, over random taps, degenerate aspect ratios and markers
+    /// outside the extent.
     #[test]
     fn the_ring_search_agrees_with_an_exhaustive_scan() {
         let mut state = 0x2545_F491_4F6C_DD1Du64;
@@ -2345,6 +2362,9 @@ mod tests {
     }
 
     /// The bucketed pass agrees with a masked sum over every node per net.
+    ///
+    /// Oracle: differential against a naive masked sum over every node per net,
+    /// over 500 random grids with zero and cancelling loads.
     #[test]
     fn discarded_budget_agrees_with_a_per_net_masked_sum() {
         use super::{discarded_budget, IntentMap, NetId, PowerGrid};

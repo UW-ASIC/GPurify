@@ -226,6 +226,9 @@ fn cases() -> Vec<Case> {
 }
 
 /// Every case's series `R` and `L` within its tolerance of `FastHenry`'s.
+///
+/// Oracle: differential against `FastHenry`, an independent inductance solver,
+/// series R and L within each case's tolerance.
 #[test]
 #[ignore = "release tier: needs fasthenry (nix develop .#oracles)"]
 fn fasthenry_differential_every_inductance_geometry() {

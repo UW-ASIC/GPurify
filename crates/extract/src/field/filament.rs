@@ -459,6 +459,9 @@ mod tests {
 
     /// Touching collinear filaments (every adjacent segment pair in a path).
     /// Exact: M = (µ₀/4π)[(l+m)ln(l+m) − l·ln l − m·ln m].
+    ///
+    /// Oracle: closed form, the mutual inductance of two touching collinear
+    /// filaments above, to 1e-9.
     #[test]
     fn collinear_touching_matches_closed_form() {
         let (l, m) = (1e-3, 2e-3);
@@ -473,6 +476,9 @@ mod tests {
     }
 
     /// Perpendicular filaments: û₁·û₂ = 0 ⇒ M = 0 exactly.
+    ///
+    /// Oracle: closed form. The Neumann integral carries the factor `u1 . u2`,
+    /// which is exactly 0 for perpendicular filaments.
     #[test]
     #[expect(
         clippy::float_cmp,
@@ -487,6 +493,9 @@ mod tests {
     /// Touching non-parallel pair (45° elbow): GL8 cubature vs a subdivided
     /// reference (split each filament 16× and sum GL8 over sub-pairs — the
     /// singular corner contribution converges under subdivision).
+    ///
+    /// Oracle: differential against a 16 x 16 subdivision of the pair, which
+    /// converges on the singular corner, to 2 %.
     #[test]
     fn touching_elbow_quadrature_accuracy() {
         let l = 1e-3;
@@ -520,6 +529,10 @@ mod tests {
 
     /// Brick formula must reduce to the centreline formula when separation is
     /// large relative to the cross-section.
+    ///
+    /// Oracle: law: at a separation 250 times the width the cross-section no
+    /// longer matters, so the brick formula equals the centreline formula to
+    /// 1e-5.
     #[test]
     fn brick_matches_centerline_when_far() {
         let (l, w, t) = (1e-3, 2e-5, 1e-5);
@@ -537,6 +550,10 @@ mod tests {
     /// bundle — the case the centreline formula gets a few % wrong). Reference:
     /// subdivide each cross-section 16×16 into thin filaments and average the
     /// pairwise centreline mutuals (uniform-current definition of M).
+    ///
+    /// Oracle: differential against the uniform-current definition of M: the
+    /// average of centreline mutuals over a 16 x 16 subdivision of each
+    /// cross-section, to 0.2 %.
     #[test]
     fn brick_matches_cross_section_subdivision() {
         let (l, w, t) = (1e-3, 2e-5, 1e-5);

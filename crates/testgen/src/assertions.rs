@@ -306,6 +306,9 @@ mod tests {
     use super::{assert_bytes_identical, assert_close, assert_close_relative};
 
     /// Inside the tolerance passes, outside fails.
+    ///
+    /// Oracle: hand-derived. |1.0005 - 1| = 5e-4 is inside 1e-3 and |1.01 - 1|
+    /// = 1e-2 outside; a NaN is outside any tolerance.
     #[test]
     fn absolute_tolerance_is_the_boundary_it_says_it_is() {
         assert_close("a length", 1.000_5, 1.0, 1e-3);
@@ -316,6 +319,10 @@ mod tests {
     }
 
     /// A relative tolerance scales, and refuses zero.
+    ///
+    /// Oracle: hand-derived, against the documented contract. 0.5 / 1000 =
+    /// 5e-4 is inside 1e-3 and 5e-4 outside 1e-6, and the doc says an expected
+    /// zero panics ("use `assert_close`").
     #[test]
     fn relative_tolerance_scales_with_magnitude_and_refuses_zero() {
         assert_close_relative("a resistance", 1_000.5, 1_000.0, 1e-3);
@@ -330,6 +337,9 @@ mod tests {
     }
 
     /// A single differing byte fails.
+    ///
+    /// Oracle: construct-from-answer. Byte 137 has one bit flipped, so the two
+    /// buffers differ in exactly one byte.
     #[test]
     fn byte_comparison_catches_a_single_differing_byte() {
         let base: Vec<u8> = (0..200u32).map(|b| (b % 251) as u8).collect();

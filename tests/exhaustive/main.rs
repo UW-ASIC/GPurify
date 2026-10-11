@@ -107,6 +107,10 @@ fn run_all(fixtures: &[Fixture]) {
     );
 }
 
+/// Oracle: each fixture's expected answer, derived from the rule's definition:
+/// the limit one grid step either side, under every symmetry and translation,
+/// or the independent references the module doc names (the bitmap DRC,
+/// brute-force isomorphism, closed forms), at the merge depth.
 #[test]
 fn every_fixture_holds() {
     run_all(&all(Depth::Merge));
@@ -114,6 +118,12 @@ fn every_fixture_holds() {
 
 /// The nightly list, built once: every fixture holds, and the structural checks
 /// the merge tier makes on its sample hold for the whole list.
+///
+/// Oracle: each fixture's expected answer, derived from the rule's definition:
+/// the limit one grid step either side, under every symmetry and translation,
+/// or the independent references the module doc names (the bitmap DRC,
+/// brute-force isomorphism, closed forms), every enumeration in full; and the
+/// structural checks below over the whole list.
 #[test]
 #[ignore = "nightly: every enumeration in full"]
 fn every_fixture_holds_at_nightly_depth() {
@@ -124,6 +134,8 @@ fn every_fixture_holds_at_nightly_depth() {
     run_all(&fixtures);
 }
 
+/// Oracle: the catalog's ids (`docs/check-catalog.tsv`): each fixture's name is
+/// unique and every row it claims exists.
 #[test]
 fn fixture_names_are_unique_and_every_fixture_proves_a_catalog_row() {
     names_are_unique_and_prove_a_row(&all(Depth::Merge));
@@ -131,6 +143,9 @@ fn fixture_names_are_unique_and_every_fixture_proves_a_catalog_row() {
 
 /// Every implemented, partial and expressible row of a finished domain has a
 /// fixture that proves it, and every row a fixture names exists.
+///
+/// Oracle: the catalog's rows: each implemented, partial and expressible row of
+/// a complete domain is named by a fixture or in `PROVED_BY_TEST`.
 #[test]
 fn every_catalog_row_of_a_complete_domain_is_proved() {
     complete_domains_are_proved(&all(Depth::Merge));
@@ -139,6 +154,9 @@ fn every_catalog_row_of_a_complete_domain_is_proved() {
 /// Every expected failure names a finding the testing plan records and has not
 /// fixed: a fixture marked for a fixed finding must be flipped to pass, and an
 /// unrecorded id is a finding nobody will look for.
+///
+/// Oracle: the testing plan's findings table: each expected failure names a
+/// finding recorded there and not marked fixed.
 #[test]
 fn every_known_failure_names_an_open_finding() {
     known_failures_name_open_findings(&all(Depth::Merge));
@@ -247,6 +265,10 @@ fn known_failures_name_open_findings(fixtures: &[Fixture]) {
 /// fixture with a hand-derived answer proves, `MR` where the fixture is also
 /// placed under the square's symmetries or is a corpus relation, and `BM`
 /// where the bitmap reference decides it.
+///
+/// Oracle: the fixtures themselves: a row a synthetic fixture proves must carry
+/// `SY`, one under the symmetries `MR`, one the bitmap decides `BM`, in the
+/// catalog's oracle column.
 #[test]
 fn the_catalog_names_the_evidence_its_fixtures_give() {
     let catalog = std::fs::read_to_string(

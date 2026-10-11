@@ -105,6 +105,8 @@ fn assert_says(doc: &str, name: &str, sentence: &str) {
     assert!(doc.contains(sentence), "{name} should say: {sentence:?}");
 }
 
+/// Oracle: the code's own kind tables, `drc::ruleset::KINDS` and
+/// `erc::ruleset::KINDS`, counted into the sentence README must hold.
 #[test]
 fn the_readme_counts_the_rule_kinds_the_code_has() {
     let readme = read("README.md");
@@ -119,6 +121,8 @@ fn the_readme_counts_the_rule_kinds_the_code_has() {
     );
 }
 
+/// Oracle: the cases in `tests/fixtures/expectations.json`, counted in total
+/// and per domain, against the numbers README states.
 #[test]
 fn the_readme_accuracy_section_is_the_corpus() {
     let readme = read("README.md");
@@ -165,6 +169,8 @@ fn the_readme_accuracy_section_is_the_corpus() {
     }
 }
 
+/// Oracle: the cases in `tests/fixtures/expectations.json`, counted per domain,
+/// strength and corroboration, against the fixtures README's table.
 #[test]
 fn the_fixtures_readme_is_the_corpus() {
     const NAME: &str = "tests/fixtures/README.md";

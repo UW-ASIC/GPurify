@@ -216,6 +216,11 @@ impl World {
 
 /// The table's own order (not canonical), floats through `format_f64`, the
 /// skipped rule carried beside the ones that ran.
+///
+/// Oracle: golden, written by hand from the known world (module doc): the
+/// violation rows in the table's order, floats at six decimals, the skipped
+/// rule beside the ones that ran; and determinism, two worlds built apart give
+/// the same bytes.
 #[test]
 fn the_json_report_is_exactly_these_bytes() {
     let expected = concat!(
@@ -230,6 +235,8 @@ fn the_json_report_is_exactly_these_bytes() {
     assert_eq!(World::new(Some("VSS")).json().expect("writable"), expected);
 }
 
+/// Oracle: RFC 8259 §7: a JSON string escapes the quote, the backslash and the
+/// controls below U+0020, and nothing else (DEL and non-ASCII pass through).
 #[test]
 fn a_json_string_escapes_quotes_backslashes_and_controls_only() {
     let mut world = World::new(Some("VSS"));
@@ -244,6 +251,9 @@ fn a_json_string_escapes_quotes_backslashes_and_controls_only() {
     );
 }
 
+/// Oracle: RFC 8259 §6 ("Numeric values that cannot be represented ... such as
+/// Infinity and NaN are not permitted") and `format_f64`'s doc: `write_report`
+/// refuses one.
 #[test]
 fn a_non_finite_measurement_is_refused_before_a_byte_is_written() {
     let mut world = World::new(Some("VSS"));
@@ -254,6 +264,9 @@ fn a_non_finite_measurement_is_refused_before_a_byte_is_written() {
     );
 }
 
+/// Oracle: golden, written by hand from the known network in the layouts IEEE
+/// 1481-1998 (SPEF) and DSPF 1.4 define: ground C 0.25 fF, coupling 0.125 fF, R
+/// 12.5 ohm, totals 0.375 and 0.125.
 #[test]
 fn the_spef_and_dspf_files_are_exactly_these_bytes() {
     let world = World::new(Some("VSS"));
@@ -282,6 +295,10 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
 /// recogniser listed the terminals in; with parasitics, terminals and pins
 /// attach at each net's first node. A source diffusion shared two ways is
 /// written as the exact quotient, `as='70000/2'` (testing-plan F16).
+///
+/// Oracle: golden, written by hand: the SPICE `M` card's drain, gate, source,
+/// bulk order, and the shared source's area as the exact quotient `70000/2`
+/// (F16).
 #[test]
 fn the_spice_netlist_is_exactly_these_bytes() {
     let head =
@@ -305,6 +322,9 @@ fn the_spice_netlist_is_exactly_these_bytes() {
 
 /// SPICE carries its own netlist, so it numbers an anonymous net where SPEF
 /// and DSPF refuse it.
+///
+/// Oracle: construct-from-answer. The upper rectangle has no label, so SPICE,
+/// which carries its own netlist, names it `n` and its net number.
 #[test]
 fn spice_numbers_an_anonymous_net() {
     let mut world = World::new(None);
@@ -317,6 +337,9 @@ fn spice_numbers_an_anonymous_net() {
 }
 
 /// A placeholder name would change between runs, so an anonymous net is refused by number.
+///
+/// Oracle: construct-from-answer. The upper net has no label, and a placeholder
+/// name would change between runs, so both formats refuse it by number.
 #[test]
 fn both_parasitic_formats_refuse_an_anonymous_net() {
     let world = World::new(None);
@@ -325,6 +348,8 @@ fn both_parasitic_formats_refuse_an_anonymous_net() {
     assert_eq!(world.dspf(), refusal);
 }
 
+/// Oracle: construct-from-answer. The resistor's far node is removed, and
+/// SPEF's `*RES` and DSPF's `R` cards need two nodes.
 #[test]
 fn both_parasitic_formats_refuse_a_resistor_with_no_far_node() {
     let mut world = World::new(Some("VSS"));
@@ -340,6 +365,9 @@ fn both_parasitic_formats_refuse_a_resistor_with_no_far_node() {
 /// `*D_NET VDD` blocks that a reader merges into one net, and SPICE would join
 /// the two pieces into one node (debug builds panicked instead). Every writer
 /// that names nets by label refuses it, naming the label.
+///
+/// Oracle: construct-from-answer (F31). `VDD` labels both rectangles, two nets,
+/// so every writer that names nets by label refuses it.
 #[test]
 fn every_writer_refuses_a_label_on_two_nets() {
     let mut world = World::new(Some("VDD"));
@@ -354,6 +382,10 @@ fn every_writer_refuses_a_label_on_two_nets() {
 /// take one name and neither format has an alias, so writing the net under
 /// its first label drops the other, and a SPICE node is one name too. Every
 /// writer that names nets by label refuses it, naming both labels.
+///
+/// Oracle: construct-from-answer (F71). `VDD` and `AVDD` label one net, and
+/// neither SPEF, DSPF nor a SPICE node has an alias, so every writer refuses
+/// it, naming both.
 #[test]
 fn every_writer_refuses_a_net_with_two_labels() {
     let mut world = World::new(Some("VSS"));
@@ -379,6 +411,10 @@ fn every_writer_refuses_a_net_with_two_labels() {
 /// prints parasitics (F30): SPEF and DSPF would print `NaN` or `inf`, which no
 /// reader parses as a value, and SPICE would hand a simulator a value it
 /// should not believe.
+///
+/// Oracle: construct-from-answer (F30). Each row in turn is made NaN or
+/// infinite, which no SPEF or DSPF reader parses, so every parasitic writer
+/// refuses it; the schematic netlist carries none.
 #[test]
 fn every_parasitic_writer_refuses_a_value_that_is_not_finite() {
     let refusal = Err(WriteError::Unrepresentable("a non-finite parasitic value"));
@@ -407,6 +443,9 @@ fn every_parasitic_writer_refuses_a_value_that_is_not_finite() {
 
 /// Every record is padded to an even length (the odd `TOP` is the case a
 /// missing pad gets wrong), and the reader accepts what the writer emits.
+///
+/// Oracle: round trip, and the GDSII Stream Format rule that every record has
+/// an even length.
 #[test]
 fn an_empty_store_writes_a_library_the_reader_reads_back_empty() {
     let store = LayoutBuilder::new(0).finish().0;
@@ -422,6 +461,9 @@ fn an_empty_store_writes_a_library_the_reader_reads_back_empty() {
     assert_eq!(store.poly_count(), 0);
 }
 
+/// Oracle: `format_f64`'s doc ("`{:.6}`, six decimal places, never an
+/// exponent"), worked by hand: 4e-7 is below 5e-7 and prints 0, and 1e30 is the
+/// nearest double's digits.
 #[test]
 fn format_f64_writes_six_decimal_places_and_no_exponent() {
     for (value, text) in [

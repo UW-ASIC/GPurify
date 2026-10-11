@@ -226,6 +226,9 @@ mod tests {
     use super::tile;
 
     /// Quartering `d` times gives `4^(d-1)` leaves.
+    ///
+    /// Oracle: closed form. Each level below the first quarters every region,
+    /// so depth `d` has `4^(d-1)` leaves.
     #[test]
     fn tiling_depth_gives_four_to_the_power_of_its_levels() {
         for depth in 1..=5u8 {
@@ -236,6 +239,9 @@ mod tests {
 
     /// Leaf origins are distinct and every leaf lies inside the reported
     /// extent.
+    ///
+    /// Oracle: law. Leaf origins are distinct, and each leaf, `leaf` on a side,
+    /// lies in `[0, extent]` on both axes.
     #[test]
     fn leaves_are_distinct_and_inside_the_reported_extent() {
         let leaf = 1_000;
@@ -255,6 +261,10 @@ mod tests {
 
     /// Two leaves never overlap, whatever the depth — the property the per-net
     /// partition rests on.
+    ///
+    /// Oracle: law. Two axis-aligned squares of side `leaf` are disjoint when
+    /// their origins differ by at least `leaf` on one axis, checked for every
+    /// pair.
     #[test]
     fn no_two_leaves_overlap() {
         let leaf = 500;

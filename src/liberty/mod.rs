@@ -1580,6 +1580,8 @@ fn sense(arc: &ArcSpec) -> Option<&'static str> {
 mod tests {
     use super::{lef_pins, Accuracy};
 
+    /// Oracle: `Accuracy::parse`'s doc: a name or a level `0` to `4`, so
+    /// `field` is `Field`, `4` is `Statistical` and `5` is nothing.
     #[test]
     fn accuracy_parses_by_name_and_level() {
         assert_eq!(Accuracy::parse("field"), Some(Accuracy::Field));
@@ -1587,6 +1589,9 @@ mod tests {
         assert_eq!(Accuracy::parse("5"), None);
     }
 
+    /// Oracle: construct-from-answer, by LEF's `MACRO` ... `END` scoping: `m`
+    /// holds `a` and `vdd`, `other`'s `x` is not among them, and a macro the
+    /// file lacks is an error.
     #[test]
     fn lef_pins_are_read_inside_the_named_macro_only() {
         let lef = "MACRO other\n PIN x\n END x\nEND other\nMACRO m\n PIN a\n  DIRECTION INPUT ;\n END a\n PIN vdd\n END vdd\nEND m\n";

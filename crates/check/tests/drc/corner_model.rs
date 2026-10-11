@@ -23,6 +23,10 @@ fn rule(rule: Rule) -> Vec<(StrId, Rule)> {
 /// are one figure joined at two corners. The 10-wide gap between the outer
 /// two faces itself across empty space with a full overlap: a notch of 10 at
 /// its middle, (15, 5), and no space at any limit.
+///
+/// Oracle: the corner model `union_into` states (touching at a corner is one
+/// figure), applied by hand: the 10 gap is a notch of 10 at (15, 5), flagged
+/// under 11 and not under 10, and never a space.
 #[test]
 fn a_gap_between_parts_joined_at_corners_is_a_notch_and_not_a_space() {
     let mut layout = LayoutBuilder::new(1);
@@ -64,6 +68,9 @@ fn a_gap_between_parts_joined_at_corners_is_a_notch_and_not_a_space() {
 
 /// Two 100-squares meeting at (100, 100) are one figure whose two concave
 /// corners there coincide, voids opposite: a width of 0, reported there.
+///
+/// Oracle: the corner model `union_into` states, applied by hand: two squares
+/// meeting at (100, 100) are one figure with a neck of 0 there.
 #[test]
 fn a_corner_contact_is_a_width_of_zero() {
     let mut layout = LayoutBuilder::new(1);
@@ -86,6 +93,10 @@ fn a_corner_contact_is_a_width_of_zero() {
 
 /// The same two squares are one figure of 20 000: clean against 20 000,
 /// reported once at 20 000 against 20 001, never as two of 10 000.
+///
+/// Oracle: the corner model `union_into` states, applied by hand: the two
+/// squares are one figure of 20 000, clean at 20 000 and reported once against
+/// 20 001.
 #[test]
 fn min_area_sums_a_figure_joined_at_a_corner() {
     let mut layout = LayoutBuilder::new(1);
@@ -114,6 +125,10 @@ fn min_area_sums_a_figure_joined_at_a_corner() {
 /// seven empty cells round it are one hole of 70 000 whose box, (100, 100) to
 /// (400, 400), centres on (250, 250). Read as an island, the hole would be
 /// eight cells and the island a figure of its own.
+///
+/// Oracle: the corner model `union_into` states, applied by hand to the
+/// picture: one hole of seven cells, 70 000, centred on (250, 250), and one
+/// figure of 18 cells, 180 000.
 #[test]
 fn a_hole_round_an_island_joined_at_a_corner_excludes_the_island() {
     let picture = ["#####", "#...#", "#.#.#", "##..#", "#####"];

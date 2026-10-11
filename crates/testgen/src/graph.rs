@@ -135,6 +135,9 @@ mod tests {
     use crate::Rng;
 
     /// No edge crosses a component and every component is connected.
+    ///
+    /// Oracle: differential against an independent flood fill over the edges,
+    /// and the dealt partition: every edge joins two nodes of one component.
     #[test]
     fn no_edge_crosses_a_component_and_every_component_is_connected() {
         let mut rng = Rng::new(42);
@@ -173,6 +176,9 @@ mod tests {
     }
 
     /// A node's label is the minimum index in its component.
+    ///
+    /// Oracle: the generator's documented labelling, recomputed from the dealt
+    /// members: each label is the minimum node index of its component.
     #[test]
     fn every_label_is_the_minimum_index_of_its_component() {
         let mut rng = Rng::new(9);

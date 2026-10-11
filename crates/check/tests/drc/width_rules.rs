@@ -108,6 +108,8 @@ fn a_width_one_unit_over_the_maximum_is_reported_with_the_same_measurement() {
     );
 }
 
+/// Oracle: construct-from-answer. The shape is drawn exactly 200 wide, and a
+/// maximum is violated only above it.
 #[test]
 fn a_width_exactly_at_the_maximum_is_clean() {
     let case = width_case(200, 200);
@@ -191,6 +193,8 @@ fn two_short_edges_on_one_shape_are_two_violations_at_two_coordinates() {
     assert_eq!(run.violations, 2);
 }
 
+/// Oracle: construct-from-answer. Every edge is drawn at least the 40 limit, so
+/// the four edges examined report nothing.
 #[test]
 fn edges_exactly_at_the_minimum_length_are_clean_over_a_nonzero_edge_count() {
     let case = layout_with_violation(
@@ -263,6 +267,8 @@ fn a_notch_one_unit_under_the_limit_is_reported_inside_the_void() {
     );
 }
 
+/// Oracle: construct-from-answer. The notch is drawn exactly 60 wide, and a
+/// minimum is violated only below it.
 #[test]
 fn a_notch_exactly_at_the_limit_is_clean() {
     let case = layout_with_violation(
@@ -352,6 +358,8 @@ fn a_notch_across_two_rectangles_of_one_merged_figure_is_still_a_notch() {
 /// The other side of the same boundary, so the test above is not satisfied by a
 /// rule that reports every same-figure pair it sees. Exactly at the limit is
 /// clean, which is what every other case in this file asserts of its own rule.
+///
+/// Oracle: construct-from-answer. `fractured_u`'s gap is 80, exactly the limit.
 #[test]
 fn a_fractured_notch_exactly_at_the_limit_is_clean() {
     let store = fractured_u();
@@ -376,6 +384,11 @@ fn a_fractured_notch_exactly_at_the_limit_is_clean() {
 /// `min_spacing` exempting it is correct — the three rectangles are one
 /// conductor, and a wire is not too close to itself. What made the pair a
 /// fail-open was that `notch` did not pick up what `min_spacing` put down.
+///
+/// Oracle: construct-from-answer. The three rectangles of `fractured_u` merge
+/// into one figure, and `docs/deck.md` makes a gap between two parts of one
+/// shape a `notch` that `space` never measures, so its 80 gap is clean under
+/// 81.
 #[test]
 fn spacing_exempts_the_intra_figure_gap_that_notch_now_reports() {
     let store = fractured_u();
@@ -434,6 +447,10 @@ fn max_width_table(limit: i64) -> Vec<(StrId, Rule)> {
 /// `max_width` of 30 um. A 40 um plate with a 0.2 um tab is 40 um wide where
 /// the plate is; the old rule read the polygon's narrowest width (the tab) and
 /// passed it.
+///
+/// Oracle: foundry example, IHP Slt.c (metal wider than 30 um must be slotted),
+/// and `docs/deck.md`'s maximum width (a plate with a thin tab is as wide as
+/// the plate): one violation of 40 um.
 #[test]
 fn ihp_slt_c_a_plate_with_a_thin_tab_is_as_wide_as_the_plate() {
     let mut layout = LayoutBuilder::new(1);
@@ -453,6 +470,9 @@ fn ihp_slt_c_a_plate_with_a_thin_tab_is_as_wide_as_the_plate() {
 }
 
 /// Two abutting 20 um rectangles are one 40 um plate on the merged layer.
+///
+/// Oracle: hand-derived. The two 20 um rectangles merge into a 40 x 40 um
+/// plate, over 30 um: one violation of 40 um, naming the first drawn row.
 #[test]
 fn two_abutting_narrow_rectangles_are_as_wide_as_their_union() {
     let mut layout = LayoutBuilder::new(1);
@@ -483,6 +503,10 @@ fn cut_size_table(width: i64, height: i64) -> Vec<(StrId, Rule)> {
 /// sky130 licon.1: "min and max L and W of licon: 0.17 um". A 0.17 x 0.34 slot
 /// passes a 0.17 min width and a 0.17 max width (its narrowest width is 0.17);
 /// it is not a licon.
+///
+/// Oracle: foundry example, sky130 licon.1 (min and max L and W 0.17 um): a
+/// 0.17 x 0.34 slot meets a 0.17 maximum width but not the exact size, measured
+/// 340 at its centre (85, 170).
 #[test]
 fn sky130_licon_1_a_slot_is_not_a_licon() {
     let mut layout = LayoutBuilder::new(1);
@@ -510,6 +534,10 @@ fn sky130_licon_1_a_slot_is_not_a_licon() {
 }
 
 /// The licon itself, and two licons drawn abutting (one 0.34 slot once merged).
+///
+/// Oracle: foundry example, sky130 licon.1, and `docs/deck.md` ("touching cuts
+/// count as one shape, so two abutting squares are a slot"): the lone square
+/// passes, the pair is one 340 slot.
 #[test]
 fn sky130_licon_1_a_square_passes_and_two_abutting_squares_do_not() {
     let mut layout = LayoutBuilder::new(1);
@@ -530,6 +558,10 @@ fn sky130_licon_1_a_square_passes_and_two_abutting_squares_do_not() {
 }
 
 /// A rectangular cut either way round, and an L inside the right box.
+///
+/// Oracle: `docs/deck.md`'s `size(L) == len x len` ("either way round"), by
+/// hand: both rectangles pass, and the L is reported with its area, 510 * 100 +
+/// 100 * 70.
 #[test]
 fn a_cut_size_accepts_either_orientation_and_refuses_a_non_rectangle() {
     let mut layout = LayoutBuilder::new(1);

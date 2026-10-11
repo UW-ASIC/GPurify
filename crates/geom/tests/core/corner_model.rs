@@ -104,6 +104,11 @@ fn symmetries(cells: &[(i64, i64)], n: i64) -> Vec<Vec<(i64, i64)>> {
 /// F38/F51's figure: `.#.|#.#`, three cells meeting at two corners, is one
 /// polygon of three cells with no hole, and its outer ring passes each
 /// corner twice. Before the corner model it was three polygons.
+///
+/// Oracle: the corner model `union_into` states (a polygon is one 8-connected
+/// component of cells, a hole one 4-connected component of the space it
+/// encloses), applied by hand: the three cells are one polygon of 30 000 with
+/// no hole, and its ring passes each of the two touch points twice.
 #[test]
 fn cells_joined_only_at_corners_are_one_polygon() {
     let layer = merged(&draw(&cells(".#.|#.#"), 0));
@@ -121,6 +126,11 @@ fn cells_joined_only_at_corners_are_one_polygon() {
 
 /// The touch point is a neck of width 0, and the 100-wide gap between the two
 /// lower cells, across empty space inside the one figure, is a notch.
+///
+/// Oracle: the corner model `union_into` states (a polygon is one 8-connected
+/// component of cells, a hole one 4-connected component of the space it
+/// encloses), applied by hand: the touch point is a width of 0, and the gap
+/// between the two lower cells, inside the one figure, faces itself at `S`.
 #[test]
 fn a_corner_is_a_neck_of_width_zero_and_the_gap_beside_it_a_notch() {
     let layer = merged(&draw(&cells(".#.|#.#"), 0));
@@ -136,6 +146,12 @@ fn a_corner_is_a_neck_of_width_zero_and_the_gap_beside_it_a_notch() {
 /// at a corner of the same orientation. Each is one polygon with one hole,
 /// the empty cells inside, whatever the drawing: every symmetry of the
 /// square, both drawing orders, each ring starting at each of its corners.
+///
+/// Oracle: the corner model `union_into` states (a polygon is one 8-connected
+/// component of cells, a hole one 4-connected component of the space it
+/// encloses), applied by hand, counted from the pictures (7 cells round
+/// 1 empty, 11 round 3), and a metamorphic relation: every symmetry of the
+/// square, drawing order and starting corner gives the same figure.
 #[test]
 fn a_ring_closed_only_at_a_corner_encloses_a_hole_however_it_is_drawn() {
     for (picture, n, cells_in, empty_in) in
@@ -163,6 +179,11 @@ fn a_ring_closed_only_at_a_corner_encloses_a_hole_however_it_is_drawn() {
 /// The same ring drawn as one polygon whose boundary runs round the outside,
 /// through the corner into the centre and back out: validation takes it as one
 /// figure of 70 000, and the merge gives the hole of 10 000 the cells give.
+///
+/// Oracle: the corner model `union_into` states (a polygon is one 8-connected
+/// component of cells, a hole one 4-connected component of the space it
+/// encloses), applied by hand: the boundary encloses seven cells, 70 000, and
+/// the merge gives the one-cell hole of 10 000 the cell drawing gives.
 #[test]
 fn a_ring_closed_at_a_corner_drawn_as_one_boundary_merges_to_the_same_hole() {
     let store = ring(&[
@@ -188,6 +209,11 @@ fn a_ring_closed_at_a_corner_drawn_as_one_boundary_merges_to_the_same_hole() {
 /// 18 cells, and the seven empty cells one hole of 70 000. Under a corner model
 /// that kept the island apart it was a second polygon inside a hole of eight
 /// cells.
+///
+/// Oracle: the corner model `union_into` states (a polygon is one 8-connected
+/// component of cells, a hole one 4-connected component of the space it
+/// encloses), applied by hand: 18 cells joined into one polygon of
+/// 180 000 round one hole of seven empty cells, 70 000.
 #[test]
 fn an_island_joined_to_its_frame_at_a_corner_is_part_of_the_frame() {
     let layer = merged(&draw(&cells("#####|#...#|#.#.#|##..#|#####"), 0));
@@ -196,6 +222,11 @@ fn an_island_joined_to_its_frame_at_a_corner_is_part_of_the_frame() {
 
 /// Two squares drawn as one boundary that passes their shared corner twice
 /// are one valid figure of both their areas.
+///
+/// Oracle: the corner model `union_into` states (a polygon is one 8-connected
+/// component of cells, a hole one 4-connected component of the space it
+/// encloses), applied by hand: two 100 squares meeting at a corner are one
+/// figure of 20 000.
 #[test]
 fn a_boundary_through_a_corner_twice_is_valid() {
     let store = ring(&[
@@ -215,6 +246,10 @@ fn a_boundary_through_a_corner_twice_is_valid() {
 /// What the corner model does not admit: a boundary passing a vertex straight
 /// twice crosses itself there, and a spike out of a vertex and back along the
 /// same edge doubles back. Both stay refused.
+///
+/// Oracle: the corner model's limit, as `union_into` states it: only a corner
+/// touch is admitted, so a boundary passing a vertex straight twice crosses
+/// itself and a spike doubles back; both are `SelfIntersecting`.
 #[test]
 fn a_crossing_or_a_spike_at_a_twice_visited_vertex_is_refused() {
     let crossing = ring(&[

@@ -58,6 +58,10 @@ fn unreadable_inputs() -> Inputs {
 }
 
 /// The deck is read before the layout; a failed load reaches no later stage.
+///
+/// Oracle: construct-from-answer. Both files are missing, so the load must fail
+/// and `run` must return that failure rather than run a stage; the deck is the
+/// first file `load` opens, so its error is the one reported.
 #[test]
 fn a_load_fails_on_the_deck_before_the_layout() {
     assert!(matches!(
@@ -72,6 +76,10 @@ fn a_load_fails_on_the_deck_before_the_layout() {
 
 /// Two overlapping rectangles are one net and a distant one another; an empty
 /// design extracts to empty tables.
+///
+/// Oracle: construct-from-answer. The first two rectangles overlap at x
+/// 90..100 and the third is 300 away: two nets. An empty design has no net,
+/// device or port.
 #[test]
 fn extraction_partitions_by_touch_and_accepts_an_empty_design() {
     let metal = LayerId(0);
@@ -108,6 +116,10 @@ fn extraction_partitions_by_touch_and_accepts_an_empty_design() {
 
 /// Raw diffusion that is both conductor and MOS source/drain under a marker
 /// would merge source and drain into one net; extraction refuses it instead.
+///
+/// Oracle: `extract`'s documented `ExtractError::Channel` ("a transistor's
+/// channel marker overlaps" live conductor): `diff` is a conductor and the
+/// transistor's source and drain under the `nsdm` marker.
 #[test]
 fn a_deck_that_leaves_raw_diffusion_conducting_under_a_mos_marker_is_refused() {
     let mut strings = StrTable::default();
@@ -179,6 +191,10 @@ fn labelled_rails(labels: &[(usize, &str)]) -> Loaded {
 /// (LVS reports it as `lvs.net_seed_conflict`), and ERC refuses design intent
 /// on it rather than resolve the net by one of its names, which would drop
 /// the other's supply. The same intent on the unshorted layout runs.
+///
+/// Oracle: construct-from-answer, with `run_checks`' doc (a net with two labels
+/// keeps both): rectangles 0 and 1 touch, so `VDD` and `VSS` on them are one
+/// net and ERC refuses intent on it; on 0 and 2 they are two nets and ERC runs.
 #[test]
 fn a_short_between_labelled_nets_extracts_and_intent_on_it_is_refused() {
     let intent = r#"{"domains": {"core": {"voltage_mv": 1800}},
@@ -216,6 +232,10 @@ fn a_short_between_labelled_nets_extracts_and_intent_on_it_is_refused() {
 /// pieces, an open; field-solving "the" net of that name would solve one
 /// piece, so PEX refuses it by name (`a_quasistatic_net_is_solved_for_inductance_too`
 /// is the name on one net).
+///
+/// Oracle: construct-from-answer. Rectangles 0 and 2 are apart, so `A` names
+/// two nets, and the field solve refuses it by name rather than solve one
+/// piece.
 #[test]
 fn a_quasistatic_name_on_two_nets_is_refused() {
     let loaded = labelled_rails(&[(0, "A"), (2, "A")]);
@@ -231,6 +251,10 @@ fn a_quasistatic_name_on_two_nets_is_refused() {
 }
 
 /// Nothing selected: four declines, no output, and a pass.
+///
+/// Oracle: `Summary::passed`'s documented criterion (no errors, no skipped
+/// rule, no selected stage skipped or refused): with nothing selected each
+/// stage is `NotSelected`, nothing is produced, and the run passes.
 #[test]
 fn a_run_selecting_no_check_reports_four_declines_and_passes() {
     let loaded = empty_loaded(GeometryStore::default(), Deck::default());
@@ -266,6 +290,11 @@ fn reference_with_one_transistor() -> Netlist {
 /// Without a reference LVS is skipped (not a match) and blocks the pass. With
 /// one against an empty layout it runs, files its five check rows, and every
 /// discrepancy is an error.
+///
+/// Oracle: `docs/usage.md` ("a check whose input is missing is reported as
+/// skipped, never as passed") and construct-from-answer: a one-transistor
+/// reference against an empty layout leaves that device unpaired and nothing on
+/// the layout side, each discrepancy an error.
 #[test]
 fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
     let lvs = Checks { lvs: true, ..NONE };
@@ -329,6 +358,10 @@ fn loaded_with_rule_kinds(kinds: &[&str]) -> Loaded {
 
 /// One deck may hold both domains' kinds; a kind in neither is refused even
 /// when no check is selected, so a misspelling cannot hide behind a DRC-only run.
+///
+/// Oracle: `run_checks`' documented error: a kind neither DRC nor ERC knows is
+/// refused "even when neither is selected"; `min_widht` is no kind, `min_width`
+/// and `antenna_electrical` are each one domain's.
 #[test]
 fn a_kind_in_neither_domain_is_refused_whatever_was_selected() {
     let both = loaded_with_rule_kinds(&["min_width", "antenna_electrical"]);
@@ -346,6 +379,10 @@ fn a_kind_in_neither_domain_is_refused_whatever_was_selected() {
 
 /// A field-solved net gains inductance and keeps its capacitive elements; the
 /// analytical extraction alone carries none.
+///
+/// Oracle: `docs/usage.md`'s `--quasistatic` ("Field-solve this net's
+/// capacitance and inductance"): the analytical run carries no inductance, the
+/// field-solved one at least one, and no fewer capacitive elements.
 #[test]
 fn a_quasistatic_net_is_solved_for_inductance_too() {
     use gpurify_extract::Parasitic;
@@ -378,6 +415,10 @@ fn a_quasistatic_net_is_solved_for_inductance_too() {
 
 /// The pass criterion: errors, skipped rules, and skipped or refused stages
 /// each block it; warnings and declined stages do not.
+///
+/// Oracle: `Summary::passed`'s documented criterion, one row per clause: an
+/// error, a skipped rule and a skipped or refused stage each fail it; "Warnings
+/// do not fail it", nor does a stage not selected.
 #[test]
 fn the_pass_criterion_table() {
     let clean = Summary {

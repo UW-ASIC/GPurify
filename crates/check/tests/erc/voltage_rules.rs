@@ -207,6 +207,10 @@ fn two_domains(circuit: &Circuit) -> IntentMap {
     ])
 }
 
+/// Oracle: construct-from-answer, read off `direct`'s schematic: VDD33 is 3.3 V
+/// in the IO domain, VSS 0 V in none, A swings 0 to 3.3 V (the IO inverter's
+/// rails), Y 0 to 1.8 V, and IN, driven by nothing through a channel, is
+/// unknown.
 #[test]
 fn propagation_gives_each_inverter_output_its_own_rails() {
     let circuit = direct();
@@ -236,6 +240,10 @@ fn propagation_gives_each_inverter_output_its_own_rails() {
 /// The 1.8 V devices see A's 3.3 V on the gate while their drain Y can sit at
 /// 0 V: 3.3 V across the oxide, over a 1.98 V rating. The 3.3 V devices'
 /// gate IN reaches no supply, so they are not examined.
+///
+/// Oracle: construct-from-answer, read off `direct`'s schematic: both 1.8 V
+/// devices see A's 3.3 V across the oxide against a 1.98 V rating, both lack a
+/// shifter, and their own channels see only 1.8 V.
 #[test]
 fn a_3v3_signal_on_a_1v8_gate_overstresses_it_and_lacks_a_level_shifter() {
     let circuit = direct();
@@ -301,6 +309,10 @@ fn a_3v3_signal_on_a_1v8_gate_overstresses_it_and_lacks_a_level_shifter() {
 
 /// A 1.98 V-rated model placed in the 3.3 V inverter: its drain A can sit at
 /// 3.3 V while its source is at 0 V (nfet33) or the reverse (pfet33).
+///
+/// Oracle: construct-from-answer. The 1.98 V-rated models sit in the 3.3 V
+/// inverter, whose drain A swings to 3.3 V against a 0 V source, so both are
+/// flagged at 3.3 V.
 #[test]
 fn a_thin_device_across_3v3_is_a_drain_source_overvoltage() {
     let circuit = direct();
@@ -341,6 +353,10 @@ fn shifted() -> Circuit {
     )
 }
 
+/// Oracle: construct-from-answer, read off `shifted`'s schematic: B swings 0 to
+/// 1.8 V, A's 3.3 V is within the shifter's 3.63 V, the declared shifter needs
+/// no shifter of its own, an undeclared one is the crossing, and no channel
+/// joins the two supplies.
 #[test]
 fn the_same_signal_through_a_declared_level_shifter_is_clean() {
     let circuit = shifted();
@@ -431,6 +447,11 @@ fn the_same_signal_through_a_declared_level_shifter_is_clean() {
 /// drives OUT from 3.3 V: its source junction forward-biases by 1.5 V. An
 /// nfet then passes OUT to X, which a 1.8 V pfet also drives: one channel
 /// path from 3.3 V to 1.8 V.
+///
+/// Oracle: construct-from-answer, read off the schematic above: OUT and X reach
+/// 3.3 V through the pass gate, so both 1.8 V-well pfets are 1.5 V
+/// forward-biased, and every channel touches OUT or X, which reaches both
+/// domains.
 #[test]
 fn a_well_below_its_source_and_a_pass_gate_between_domains_are_flagged() {
     let circuit = build(
@@ -499,6 +520,8 @@ fn a_well_below_its_source_and_a_pass_gate_between_domains_are_flagged() {
     assert_eq!(violations.measured[0], Measurement::Count(2));
 }
 
+/// Oracle: the documented contract of an intent-gated row: with no supply
+/// declared it records `Skipped(NoDesignIntent)` and reports nothing.
 #[test]
 fn the_voltage_rules_skip_without_intent() {
     let circuit = direct();
@@ -558,6 +581,10 @@ fn run_esd(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
 
 /// With no rail clamp, VDD and VSS reach only themselves and PAD2 only VDD:
 /// three pads short of a rail. PAD has a clamp to each and is clean.
+///
+/// Oracle: construct-from-answer, read off `pads`: PAD has a clamp to each
+/// rail, PAD2 only to VDD (its resistor is no clamp model), and the rails reach
+/// only themselves: three of four pads flagged.
 #[test]
 fn a_pad_missing_its_vss_clamp_is_flagged_and_one_with_both_is_clean() {
     let circuit = pads(false);
@@ -576,6 +603,9 @@ fn a_pad_missing_its_vss_clamp_is_flagged_and_one_with_both_is_clean() {
 
 /// A rail clamp from VDD to VSS completes PAD2's path (up diode, then the
 /// rail clamp) and each supply pad's.
+///
+/// Oracle: construct-from-answer. The rail clamp joins VDD to VSS, which
+/// completes PAD2's path and each rail's: four pads, none flagged.
 #[test]
 fn a_rail_clamp_completes_every_pad_path() {
     let circuit = pads(true);

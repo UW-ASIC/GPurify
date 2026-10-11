@@ -108,6 +108,10 @@ fn code_kinds() -> BTreeSet<&'static str> {
         .collect()
 }
 
+/// Oracle: the catalog's schema as this file and `docs/check-sources.md` state
+/// it: unique ids, a listed domain and status, no `verify` once committed, a
+/// covered row naming what covers it, and a partial or out-of-scope row saying
+/// why.
 #[test]
 fn every_row_is_well_formed_and_resolved() {
     let rows = catalog();
@@ -153,6 +157,9 @@ fn every_row_is_well_formed_and_resolved() {
     }
 }
 
+/// Oracle: the code's own kind lists (`drc::ruleset::KINDS`,
+/// `erc::ruleset::KINDS`, `lvs::RULE_IDS`): every name a row gives, feature
+/// tags aside, is in them.
 #[test]
 fn every_kind_the_catalog_names_exists_in_the_code() {
     let known = code_kinds();
@@ -170,6 +177,9 @@ fn every_kind_the_catalog_names_exists_in_the_code() {
     }
 }
 
+/// Oracle: the code's own kind lists (`drc::ruleset::KINDS`,
+/// `erc::ruleset::KINDS`, `lvs::RULE_IDS`): every kind in them is named by a
+/// catalog row.
 #[test]
 fn every_kind_the_code_has_is_in_the_catalog() {
     let named: BTreeSet<String> = catalog().into_iter().flat_map(|row| row.gpurify).collect();
@@ -184,6 +194,9 @@ fn every_kind_the_code_has_is_in_the_catalog() {
 /// The status-count table and the row total of check-sources.md, kept in step
 /// with the catalog: a stale table is rewritten (so CI's `regenerated` artifact
 /// carries it) and the test fails for review.
+///
+/// Oracle: the catalog's rows, counted per domain and status, against the table
+/// `docs/check-sources.md` states.
 #[test]
 fn check_sources_states_the_catalog_s_status_counts() {
     let file = path("docs/check-sources.md");
@@ -293,6 +306,8 @@ fn limitations_block(rows: &[Row]) -> String {
     out
 }
 
+/// Oracle: golden. The block built from the catalog's missing and partial rows
+/// against the reviewed block in `docs/limitations.md`.
 #[test]
 fn limitations_lists_every_missing_and_partial_check() {
     let file = path("docs/limitations.md");
@@ -311,6 +326,9 @@ fn limitations_lists_every_missing_and_partial_check() {
 
 /// The rule reference in `gpurify_check`'s crate docs has a row for every kind
 /// the code has, and each row cites exactly the catalog rows that name it.
+///
+/// Oracle: the catalog. For each kind the code has, the rows naming it are
+/// exactly the ids its rule reference row in `crates/check/src/lib.rs` cites.
 #[test]
 fn the_rule_reference_cites_the_catalog() {
     let doc = read("crates/check/src/lib.rs");
@@ -422,6 +440,10 @@ fn beyond_block(rows: &[Row]) -> String {
 /// `check-sources.md` lists every check `GPurify` performs that no open tool
 /// defines, with the public source that defines it and the evidence that
 /// proves it; each rests on two independent oracles, or is a named gap.
+///
+/// Oracle: the catalog's oracle codes: a supported row no open tool defines has
+/// two independent codes or is a named gap in `EVIDENCE_GAPS`; and golden, the
+/// generated block against the reviewed one in `docs/check-sources.md`.
 #[test]
 fn checks_beyond_open_source_are_listed_with_two_independent_oracles() {
     let rows = catalog();

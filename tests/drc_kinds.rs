@@ -132,6 +132,10 @@ layer met1  = gds(68, 20)
 /// reports the area of the triple overlap, 100 x 50. The licon that only
 /// abuts a poly and a diff on two of its sides overlaps neither: a rule that
 /// flagged licons *interacting* with both would report it.
+///
+/// Oracle: foundry example, sky130 licon.17, by hand: the triple overlap is x
+/// 0..100, y 0..50, area 5000; the abutting licon and the one over poly alone
+/// overlap no diff or tap.
 #[test]
 fn licon_17_flags_the_triple_overlap_and_not_a_licon_that_only_abuts() {
     let deck = format!("{SKY130}rule licon.17 forbidden(licon and poly and (diff or tap))\n");
@@ -160,6 +164,10 @@ fn licon_17_flags_the_triple_overlap_and_not_a_licon_that_only_abuts() {
 /// edge exactly is clean; one covering only its upper half leaves 250 of the
 /// 500-long edge outside, which a rule asking only whether the implant touches
 /// the edge would pass.
+///
+/// Oracle: foundry example, sky130 n/psd.6 (enclosure of the butting edge 0),
+/// by hand: the second implant covers y 2250..2500 of the 500-long edge,
+/// leaving 250 bare with its midpoint at (1000, 2125).
 #[test]
 fn psd_6_flags_the_part_of_the_butting_edge_outside_the_implant() {
     let deck = format!(
@@ -191,6 +199,10 @@ fn psd_6_flags_the_part_of_the_butting_edge_outside_the_implant() {
 /// straddling the tap's edge is not enclosed. The L-shaped tap's bounding box
 /// holds a licon that sits in the L's notch, off the tap: a containment test
 /// on boxes would count it.
+///
+/// Oracle: foundry example, sky130 licon.16, by hand: the first tap holds its
+/// licon; the straddling licon and the one in the L's notch are on no tap
+/// entirely, so two taps hold 0 of 1.
 #[test]
 fn licon_16_counts_only_licons_entirely_on_the_tap() {
     let deck = format!("{SKY130}rule licon.16 contains(tap, licon) >= 1\n");
@@ -219,6 +231,9 @@ fn licon_16_counts_only_licons_entirely_on_the_tap() {
 
 /// Two licons that touch are one shape, so a tap holding only that pair holds
 /// one, short of two.
+///
+/// Oracle: `docs/deck.md`'s `contains` ("touching inner shapes count as one"):
+/// the first tap holds two apart, the second one touching pair, 1 of 2.
 #[test]
 fn contains_counts_touching_inner_shapes_as_one() {
     let deck = format!("{SKY130}rule two contains(tap, licon) >= 2\n");
@@ -243,6 +258,10 @@ fn contains_counts_touching_inner_shapes_as_one() {
 /// npc edge from inside is enclosed; one sticking 20 out of it leaves
 /// 20 x 170 outside. The third sits in the notch of an L-shaped npc, inside
 /// the npc's bounding box but on none of it.
+///
+/// Oracle: foundry example, sky130 licon.18, by hand: the second licon sticks
+/// 20 out of its npc, 20 x 170 outside; the third, in the L's notch, is wholly
+/// outside, 170 x 170.
 #[test]
 fn licon_18_reports_the_area_outside_the_npc() {
     let deck = format!("{SKY130}rule licon.18 inside(licon and poly, npc)\n");
@@ -282,6 +301,10 @@ rule NW.2b space(nwell; nets: different) >= 1400nm
 /// through metal, so they are one net: NW.2a flags them and NW.2b does not,
 /// though a rule that took "not touching" for "different nets" would. W3 is
 /// 800 from W2 and tied to nothing: NW.2b flags it, NW.2a does not.
+///
+/// Oracle: foundry example, gf180 NW.2a (0.6 um, same potential) and NW.2b
+/// (1.4 um, different), by hand: W1 and W2 are one net through the strap,
+/// 500 apart; W3 is 800 from W2 on its own net.
 #[test]
 fn nwell_spacing_follows_the_extracted_net_not_the_drawing() {
     let found = run(
@@ -302,6 +325,9 @@ fn nwell_spacing_follows_the_extracted_net_not_the_drawing() {
 }
 
 /// A layer that carries no net cannot be asked which net it is on.
+///
+/// Oracle: `docs/deck.md`'s `space(L; nets: ...)`: "`L` must be a conductor",
+/// and this deck connects nothing.
 #[test]
 fn net_spacing_on_a_layer_that_is_not_a_conductor_is_refused_at_load() {
     let mut strings = StrTable::default();
@@ -368,6 +394,10 @@ rule M1.bef space_table(met1;
 /// - a 12 µm plate with a 200-wide tab 3 µm long, and a line 500 past the
 ///   tab's end: only the tab is near, and the tab is not wide, so 180 applies
 ///   and 500 is clean. Holding the whole shape to its widest part would ask 600.
+///
+/// Oracle: foundry example, IHP SG13G2 Metal1 M1.b/e/f as a spacing table, each
+/// pair's cell picked by hand in the list above: two pairs flagged, 200 against
+/// 220 and 500 against 600.
 #[test]
 fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
     let found = run(
@@ -403,6 +433,10 @@ fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
 /// only about 201 from the finger's first 280: m1.3a flags it, and spacing
 /// measured from the plate alone does not. A line starting 700 above the
 /// plate is clear of both.
+///
+/// Oracle: foundry example, sky130 m1.3a, by hand: the line is 200 beside and
+/// 20 above the finger's first 280, sqrt(200^2 + 20^2) = 200.99, floored to
+/// 200; it is 300 from the plate, so m1.3b is clean.
 #[test]
 fn m1_3a_measures_from_what_is_attached_to_huge_metal() {
     let deck = format!(
@@ -430,6 +464,10 @@ fn m1_3a_measures_from_what_is_attached_to_huge_metal() {
 /// bound by two diffusions 0.40" (`.space(0.4, projection)` on the same
 /// edges). One tap butts one diff along 250; another sits 350 wide between
 /// two diffs; a third is exactly 400 wide, which is legal.
+///
+/// Oracle: foundry example, sky130 difftap.4 (0.29) and difftap.5 (0.40), by
+/// hand: one butting edge 250 long, one pair of butting edges 350 apart, and a
+/// 400 pair at the limit.
 #[test]
 fn difftap_4_and_5_measure_the_butting_edges() {
     let deck = format!(
@@ -461,6 +499,11 @@ fn difftap_4_and_5_measure_the_butting_edges() {
 /// end to end. So is a tap whose corner sits 60 right and 80 above the diff's
 /// corner, 100 on the diagonal, from its bottom and from its left edge; a
 /// rule measuring only edges that face each other would miss it.
+///
+/// Oracle: foundry example, sky130 difftap.7 (0.13), by hand: the first tap is
+/// 100 above its diff, twice; the second's corner is 60 by 80 from the diff's,
+/// 100 on the diagonal, twice; the locations are the midpoints worked out from
+/// the coordinates.
 #[test]
 fn difftap_7_measures_edge_to_edge_on_the_diagonal_too() {
     let deck = format!(
@@ -487,6 +530,11 @@ fn difftap_7_measures_edge_to_edge_on_the_diagonal_too() {
 /// covered right up to the butting corner. Measured to the corner point
 /// itself, the nsdm's end at the butting edge would be a zero enclosure. A
 /// second diff whose nsdm reaches only 100 below it is flagged at 100.
+///
+/// Oracle: foundry example, sky130 n/psd.5a (0.125, except the butting edge),
+/// by hand: the first diff is covered 125 everywhere it is measured; the
+/// second's nsdm reaches 100 below it, at the bottom edge's midpoint (500,
+/// 2000).
 #[test]
 fn nsd_5a_is_measured_on_every_edge_but_the_butting_one() {
     let deck =
@@ -514,6 +562,9 @@ fn nsd_5a_is_measured_on_every_edge_but_the_butting_one() {
 /// A pad dropped inside a wider shape of the same layer is one figure with it:
 /// boundary distance alone reads the pad's inset as a 100 nm gap. Reported by
 /// the Philis session (a via landing pad on a rail).
+///
+/// Oracle: construct-from-answer. The pad lies wholly inside the rail, so the
+/// two merge into one figure and there is no gap to space.
 #[test]
 fn a_shape_nested_in_another_is_not_a_spacing_gap() {
     let deck = "grid 1nm\nlayer m1 = gds(8, 0)\nrule M1.b space(m1) >= 180nm\n";
@@ -526,6 +577,9 @@ fn a_shape_nested_in_another_is_not_a_spacing_gap() {
 
 /// A derived guard ring is one polygon with a hole. Its ring width is not a
 /// gap, and an island in the hole is spaced from the hole's edge only.
+///
+/// Oracle: construct-from-answer. The ring's 150 width is not a gap; an island
+/// at the centre is 750 from the hole's edge, one at x 200 is 50 from it.
 #[test]
 fn a_holed_polygon_is_spaced_from_its_hole_edge_only() {
     let deck = "grid 1nm\nlayer m1 = gds(8, 0)\nlayer cut = gds(9, 0)\nlayer d = m1 not cut\nrule S space(d) >= 180nm\n";
@@ -559,6 +613,10 @@ fn a_holed_polygon_is_spaced_from_its_hole_edge_only() {
 /// four abutting bands. The host is the merged implant, not any one band, or
 /// no single band covers the ring and it reads as unhosted (0). Reported by
 /// the Philis session (sky130 nsd.5b on every tap ring).
+///
+/// Oracle: construct-from-answer. The implant bands merge into one ring
+/// reaching 125 past every edge of the tap ring, hole edges included; with
+/// 100 past the hole edges it is one violation of 100.
 #[test]
 fn a_ring_is_enclosed_by_a_ring_drawn_as_bands() {
     let deck =
@@ -591,6 +649,9 @@ fn a_ring_is_enclosed_by_a_ring_drawn_as_bands() {
 /// Width is the merged figure's: a 170 nm strip drawn inside a 1 um square adds
 /// no width of its own, while the same strip alone is too narrow. Reported by
 /// the Philis session (an implant fill drawn inside a band).
+///
+/// Oracle: construct-from-answer. The 170 strip inside the 1 um square adds no
+/// width to the merged figure; alone it is 170 against 380.
 #[test]
 fn a_narrow_shape_drawn_inside_a_wide_one_is_not_a_width_violation() {
     let deck = "grid 1nm\nlayer psdm = gds(94, 20)\nrule psd.1 width(psdm) >= 380nm\n";

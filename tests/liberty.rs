@@ -60,6 +60,9 @@ fn run(
     generated
 }
 
+/// Oracle: `docs/liberty.md`'s `interface` level (pins, `pg_pin`s, directions
+/// and area; no arc, no capacitance), in Liberty's syntax, for the corpus
+/// inverter's labelled pins and the spec's 1.8 V supply.
 #[test]
 fn the_interface_level_writes_pins_supplies_and_area_and_no_arcs() {
     let generated = run(&spec_with(PINS), false, None).expect("the spec matches the cell");
@@ -99,6 +102,10 @@ fn the_interface_level_writes_pins_supplies_and_area_and_no_arcs() {
 }
 
 /// Each drift between the spec and the other views is refused, naming it.
+///
+/// Oracle: construct-from-answer. Each case adds one disagreement (a spec pin
+/// no layout label carries, schematic port names that are not the labels, a LEF
+/// pin the spec lacks), and the refusal must name it.
 #[test]
 fn a_pin_the_views_disagree_on_is_refused_by_name() {
     // The spec lists Z, nothing in the layout carries it.
@@ -128,6 +135,10 @@ fn a_pin_the_views_disagree_on_is_refused_by_name() {
 /// a short between the two pins in the layout. Extraction keeps both names,
 /// and the circuit refuses the pair rather than characterise one node as two
 /// pins; without the extra label the same cell's pins resolve.
+///
+/// Oracle: construct-from-answer (F14). The input's name is added to the
+/// output's net, a short between two pins by construction; without it the four
+/// pins are four nets.
 #[test]
 fn two_pins_labelled_on_one_net_are_refused_as_shorted() {
     use gpurify::liberty::circuit::{pin_nets, CircuitError};
@@ -164,6 +175,10 @@ fn two_pins_labelled_on_one_net_are_refused_as_shorted() {
 /// closed forms (`analytical`) with `poly` given no sheet resistance, and
 /// the field solve (`field`) with `poly` given no dielectric, which the
 /// input pin's gate is drawn on.
+///
+/// Oracle: construct-from-answer (F78). `poly` is stripped of its sheet
+/// resistance, then of its dielectric, so the closed forms and the field solve
+/// each refuse it, named as the deck names it.
 #[test]
 fn a_pex_refusal_names_the_deck_layer() {
     let refusal = |accuracy: Accuracy, unstate: fn(&mut ProcessStack, usize)| {
@@ -269,6 +284,10 @@ fn lib_leakage(lib: &str, when: &str) -> f64 {
 /// 0.1 ps is for a delay near zero, which a slow input into a light load
 /// gives. A leakage within 1e-4, since both are the same DC operating point
 /// solved to reltol 1e-6.
+///
+/// Oracle: differential against ngspice, run directly on the netlist `GPurify`
+/// wrote with its own stimulus and `.meas` of the documented definitions,
+/// within the tolerances above.
 #[test]
 #[ignore = "release tier: needs ngspice (nix develop .#oracles)"]
 fn ngspice_differential_inverter() {

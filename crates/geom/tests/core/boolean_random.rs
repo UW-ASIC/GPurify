@@ -207,6 +207,9 @@ fn regressions() -> Vec<u64> {
     )
 }
 
+/// Oracle: differential against the bitmap reference in the module doc: each
+/// operand rasterised on the 32 x 32 grid and combined cell by cell, over
+/// 300 named seeds and the committed regressions.
 #[test]
 fn every_boolean_is_its_bitmap_over_random_operands() {
     check(
@@ -218,6 +221,8 @@ fn every_boolean_is_its_bitmap_over_random_operands() {
     );
 }
 
+/// Oracle: differential against the bitmap reference in the module doc, as
+/// above, over 10^5 seeds.
 #[test]
 #[ignore = "nightly: 10^5 random operand sets"]
 fn every_boolean_is_its_bitmap_over_random_operands_at_nightly_depth() {

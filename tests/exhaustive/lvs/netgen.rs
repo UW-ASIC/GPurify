@@ -530,6 +530,9 @@ fn compare_all(count: usize, batch: impl Fn(usize) -> Vec<Case> + Sync) -> Tally
 
 /// The curated cases and one circuit of the enumeration, drawn by seed, with
 /// every single fault of it: a few dozen comparisons, to run by hand.
+///
+/// Oracle: differential against Netgen, an independent LVS, on the curated
+/// cases and one enumerated circuit with every single fault.
 #[test]
 #[ignore = "release tier: needs netgen (nix develop .#oracles)"]
 fn netgen_differential_sample() {
@@ -547,6 +550,10 @@ fn netgen_differential_sample() {
 /// The full enumeration, 4223 circuits each with every single fault, and the
 /// curated cases: `GPurify` and Netgen agree on every verdict but the
 /// documented differences. The nightly `oracles` job runs it.
+///
+/// Oracle: differential against Netgen, an independent LVS, on all
+/// 4223 circuits with every single fault and the curated cases; the documented
+/// differences aside, every verdict agrees.
 #[test]
 #[ignore = "release tier: needs netgen (nix develop .#oracles)"]
 fn netgen_differential_every_small_circuit_and_single_fault() {

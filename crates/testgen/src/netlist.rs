@@ -406,6 +406,10 @@ mod tests {
     /// Each of the six roles (four MOS terminals, two resistor pins) gets its
     /// own conductor and cut layer, and the ids cover `0..count` with no gaps
     /// or repeats, so the recogniser can tell a gate from a source.
+    ///
+    /// Oracle: law. The rail, the marker and a conductor and a cut for each of
+    /// the six roles are a permutation of `0..count`: sorted, they are exactly
+    /// that range.
     #[test]
     fn assigned_layer_ids_are_dense() {
         let layers = assign_layers(&two_transistors());
