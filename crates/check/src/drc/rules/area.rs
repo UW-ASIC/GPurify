@@ -315,6 +315,78 @@ pub(crate) fn density(
     (Outcome::Ran, sweep)
 }
 
+/// Two masks' balance per window: the lesser covered area over the greater,
+/// each layer merged and clipped to the die, windows as [`density`]'s. A
+/// window neither layer covers is not judged. One violation per window below
+/// `limit`, at its centre, naming no shape. `examined` counts windows; an
+/// empty die is `Skipped(EmptyLayer)`.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn density_balance(
+    store: &GeometryStore,
+    rule: StrId,
+    (a, b, boundary, drawn): (LayerId, LayerId, Option<LayerId>, usize),
+    (window, step): (Dbu, Dbu),
+    limit: f64,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, boundary, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    let (side, stride) = (window.raw(), step.raw());
+    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
+    let cols = positions(die.xhi.raw() - x0, side, stride);
+    let ways = positions(die.yhi.raw() - y0, side, stride);
+    let (xmax, ymax) = (
+        x0 + (cols - 1) * stride + side,
+        y0 + (ways - 1) * stride + side,
+    );
+    if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
+        return REFUSED;
+    }
+    let Some(sweep) = cols.checked_mul(ways).and_then(|n| u64::try_from(n).ok()) else {
+        return REFUSED;
+    };
+    let grid = WindowGrid {
+        x0,
+        y0,
+        side,
+        stride,
+        cols,
+        ways,
+    };
+    if !merge_within(store, a, die, s) {
+        return REFUSED;
+    }
+    let mut first = Vec::new();
+    window_areas(&s.rects, grid, |_, covered| first.push(covered));
+    if !merge_within(store, b, die, s) {
+        return REFUSED;
+    }
+    let mut at = first.into_iter();
+    window_areas(&s.rects, grid, |window, second| {
+        let first = at.next().expect("both sweeps visit every window");
+        let (lo, hi) = (first.min(second), first.max(second));
+        if hi.raw() == 0 {
+            return;
+        }
+        let balance = to_f64(lo.raw()) / to_f64(hi.raw());
+        if balance < limit {
+            out.push(Violation {
+                rule,
+                layer: a,
+                severity: Severity::Error,
+                at: centre(window),
+                measured: Measurement::Ratio(balance),
+                limit: Measurement::Ratio(limit),
+                shapes: (PolyId(u32::MAX), None),
+            });
+        }
+    });
+    (Outcome::Ran, sweep)
+}
+
 /// Whole-die density (gf180 M1.4 "30 % over the entire die", IHP M1.j/k): the
 /// merged layer's area inside the die over the die's area, one violation at the
 /// die's centre. `examined` is one; an empty die is `Skipped(EmptyLayer)`.

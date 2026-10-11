@@ -278,8 +278,9 @@ explains (kind 30).
 | 62 | full_width | `full_width(i, o)` | FIG by shape (inner) | EXACT (scripted) | exact | new |
 | 63 | projection_spacing | `space(A, B, projection) >= l` | PAIR | APPROX | KLayout ⊆ GPurify | new |
 | 64 | anchored_patterning | `patterning(L, A1, ..; colors) >= l` | — | NONE | reported as not mirrored | — |
+| 65 | density_balance | `density_balance(A, B[, d]; window, step) >= f` | POINT | EXACT | exact | — |
 
-41 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+42 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 

@@ -493,6 +493,19 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "limit", Dim::Scalar)),
         &[],
     ),
+    // Two masks' coverage balanced per window, an optional third layer the
+    // die: `density_balance(m1_c1, m1_c2; window: 10um, step: 5um) >= 0.8`.
+    Kind {
+        more: true,
+        ..drc(
+            "density_balance",
+            Cmp::Ge,
+            "density_balance",
+            &[0, 1],
+            DENSITY_LIMIT,
+            DENSITY,
+        )
+    },
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
     // A wire band (`width:`, `below:`, LEF `ENCLOSURE ... WIDTH`) is one more
     // row per combination, the plain row first: a row knowing every given

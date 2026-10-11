@@ -695,3 +695,37 @@ fn a_density_window_over_a_hole_names_the_ring_not_the_hole() {
     assert_eq!(sink.out.measured[0], Measurement::Ratio(0.0));
     assert_eq!(sink.out.shape_a[0], ids.of(ring));
 }
+
+/// Oracle: the balance worked by hand. In a 1000 x 1000 die, layer A covers
+/// 500 x 1000 and layer B 250 x 1000: the lesser over the greater is 0.5.
+/// A limit of 0.6 reports that window at its centre, measuring 0.5; a limit
+/// of 0.5 is met; and a window neither layer covers is not judged.
+#[test]
+fn density_balance_is_the_lesser_coverage_over_the_greater() {
+    let die = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(A, 0, 0, 500, 1_000);
+    layout.rect(B, 500, 0, 750, 1_000);
+    layout.rect(die, 0, 0, 2_000, 1_000);
+    let (store, _ids) = layout.finish();
+    let balance = |limit| {
+        vec![(
+            RULE,
+            Rule::DensityBalance {
+                a: A,
+                b: B,
+                boundary: Some(die),
+                window: gpurify_testgen::dbu(1_000),
+                step: gpurify_testgen::dbu(1_000),
+                limit,
+            },
+        )]
+    };
+    let mut sink = Sink::default();
+    sink.run(&store, &balance(0.6));
+    assert_eq!(sink.out.measured, [Measurement::Ratio(0.5)]);
+    assert_eq!((sink.out.at[0].x.raw(), sink.out.at[0].y.raw()), (500, 500));
+    assert_eq!(sink.runs[0].examined, 2, "two windows swept");
+    sink.run(&store, &balance(0.5));
+    assert!(sink.out.measured.is_empty());
+}

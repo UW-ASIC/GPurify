@@ -180,6 +180,21 @@ def region_density(rule, layer, region, limit, maximum)
     put({ rule: rule }.merge(poly(p)).merge({ v: r })) if (maximum ? r > limit : r < limit)
   end
 end
+def density_balance(rule, a, b, die, w, s, limit)
+  return if die.empty?
+  ca = a.data.merged & RBA::Region.new(die)
+  cb = b.data.merged & RBA::Region.new(die)
+  positions(die.width, w, s).times do |i|
+    positions(die.height, w, s).times do |j|
+      win = RBA::Box.new(die.left + i * s, die.bottom + j * s, die.left + i * s + w, die.bottom + j * s + w)
+      pa = (ca & RBA::Region.new(win)).area
+      pb = (cb & RBA::Region.new(win)).area
+      next if [pa, pb].max == 0
+      r = [pa, pb].min.to_f / [pa, pb].max
+      put({ rule: rule, pt: [win.center.x, win.center.y], v: r }) if r < limit
+    end
+  end
+end
 def global_density(rule, layer, die, limit, maximum)
   return if die.empty?
   r = (layer.data.merged & RBA::Region.new(die)).area.to_f / die.area
@@ -873,6 +888,28 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("density", Key::Point, Value::Ratio)
+            }
+            Rule::DensityBalance {
+                a,
+                b,
+                boundary,
+                window,
+                step,
+                limit,
+            } => {
+                layers.reads(a, &mut reads);
+                layers.reads(b, &mut reads);
+                writeln!(
+                    body,
+                    "density_balance({q}, {}, {}, {}, {}, {}, {limit:?})",
+                    var(a),
+                    var(b),
+                    boundary.map_or("die".to_owned(), |l| format!("{}.data.bbox", var(l))),
+                    lim(window),
+                    lim(step),
+                )
+                .expect("a String");
+                exact("density_balance", Key::Point, Value::Ratio)
             }
             Rule::GlobalDensity {
                 layer,
