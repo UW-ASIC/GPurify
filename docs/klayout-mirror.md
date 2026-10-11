@@ -67,8 +67,9 @@ KLayout pages cited:
   - **MIN (minimum coherence).** Booleans and merges keep two cells that meet at a corner as two
     rings (`boolean.rs` `successors_into`: "At a degree-four pinch the left turn is taken, keeping
     two cells meeting at a corner as two simple rings"). Used by `min_width`, `notch`, `max_width`,
-    `cut_size`, `min_area`, `min_enclosed_area`, `cheesing`, `must_contain`, `must_be_inside`,
-    enclosure hosts, the `edge_enclosure` outer layer, and every derived layer.
+    `cut_size`, `min_edge_length`, `min_area`, `min_enclosed_area`, `cheesing`, `must_contain`,
+    `must_be_inside`, `min_extension`, `overlap`, enclosure hosts, the `edge_enclosure` outer
+    layer, and every derived layer.
   - **MAX (maximum coherence).** "Components" are drawn rows at distance 0 (`spacing.rs`
     `prepare` → `label_pairs_into(|d2| d2 == 0)`, and `patterning.rs`); a shared corner joins.
     Used by `min_spacing`, `eol_spacing`, `prl_spacing`, `corner_to_corner`, the wide kinds,
@@ -227,7 +228,7 @@ Notation in the snippets:
 | 1 | min_width | `width(L) >= l` | MIN | FIG | EXACT (pending Q1) |
 | 2 | max_width | `width(L) <= l` | MIN | FIG (region geometry) | EXACT |
 | 3 | cut_size | `size(L) == w x h` | MIN | FIG | EXACT |
-| 4 | min_edge_length | `edge_length(L) >= l` | raw | EDGE | EXACT (no keyholes) |
+| 4 | min_edge_length | `edge_length(L) >= l` | MIN | EDGE | EXACT |
 | 5 | notch | `notch(L) >= l` | MIN | FIG | EXACT |
 | 6 | min_spacing | `space(L) >= l` | MAX | PAIR | EXACT |
 | 7 | min_spacing_diff | `space(A, B) >= l` | MAX | PAIR | EXACT |
@@ -242,8 +243,8 @@ Notation in the snippets:
 | 16 | global_density | `global_density(L[, bnd])` | n/a | DIE | EXACT, except near-ties |
 | 17 | min_enclosure | `enclosure(i, o) >= l` | rows / MIN host | FIG (inner) | EXACT |
 | 18 | asymmetric_enclosure | `enclosure(i, o, opposite) >= l` | rows | FIG (inner) | APPROX (EXACT for rectangular inners) |
-| 19 | min_extension | `extension(A, B) >= l` | rows (bbox) | PAIR | APPROX (EXACT on R with overlap) |
-| 20 | overlap | `overlap(A, B) >= l` | rows (bbox) | PAIR | APPROX (EXACT on R, disjoint intersections) |
+| 19 | min_extension | `extension(A, B) >= l` | MIN (`A & B`) | PAIR | APPROX (EXACT on R, A inside B or past both ends) |
+| 20 | overlap | `overlap(A, B) >= l` | MIN (`A & B`) | PAIR | EXACT (pending Q1) |
 | 21 | max_distance_to_tap | `tap_distance(w, t) <= l` | rows | ROW | APPROX (bracket) |
 | 22 | off_grid | `off_grid(; pitch)` | raw, every drawn layer | VTX | EXACT |
 | 23 | angle | `angle([L]; allowed)` | raw | EDGE (coverage) | EXACT |
@@ -326,23 +327,21 @@ emit(id, mc(L).drc(if_any(! rectangles, bbox_min != SHORT, bbox_max != LONG)))
 - One universal pass keeps MIN, so two correct cuts touching at a corner pass. (v t15 K1/K2:
   without `mc`, those two cuts fail as one non-rectangle.)
 
-### 4. min_edge_length — EXACT if the layout has no keyholes
+### 4. min_edge_length — EXACT
 
 **GPurify** (`width.rs` `min_edge_length`)
-- Checks every edge of every validated drawn polygon (holes included) without merging (F18), and
-  flags edges shorter than the limit.
-- `at` is the edge midpoint; `examined` is the number of edges.
+- Merges the layer with `union_into` (MIN) and checks every edge of every figure, holes included
+  (B15 fixed F18), flagging edges shorter than the limit.
+- `at` is the edge midpoint; the shape is the lowest drawn row under the figure (`owners_of`);
+  `examined` is the number of figure edges.
 
 **KLayout**
 
 ```ruby
-emit(id, SRC.polygons(l, d).raw.edges.with_length(nil, LIM))   # a drawn layer
-emit(id, DERIVED.edges.with_length(nil, LIM))                  # a derived layer: rows are already figures
+emit(id, mc(L).edges.with_length(nil, LIM))
 ```
 
-**Caveat.** GPurify splits a GDS keyhole into an outer row and hole rows (`ingest/src/layout.rs`
-→ `canonical_rings_into`). KLayout's raw polygon keeps the slit edges, so generators must not
-write keyholes. The mirror encodes the implementation, F18 included.
+- A merged figure has no keyhole slit edges in either tool, so keyholes need no caveat.
 
 ### 5. notch — EXACT
 
@@ -628,47 +627,56 @@ emit(id, I.not_inside(O))
   and KLayout projection per side; for abutting inner rows, GPurify judges each row's side through
   its neighbour.
 
-### 19. min_extension — APPROX (EXACT on R when every judged pair overlaps)
+### 19. min_extension — APPROX (EXACT on R when every A that overlaps a B lies inside it or runs strictly past it at both ends)
 
-**GPurify** (`overlay.rs` `min_extension`, `smallest_protrusion`)
-- Judges every (a, b) row pair whose bboxes touch or overlap. The index prune at distance 0
-  includes boxes that only touch (`index.rs`: "touching at 0").
-- The measure is the smallest positive protrusion of a's bbox past b's bbox, or 0 when a
-  protrudes nowhere; it fails when < limit.
+**GPurify** (`overlay.rs` `min_extension`, `gate_extension`)
+- Merges A (MIN) and intersects it with B; each figure of `A & B` is a gate. Shapes that only touch
+  make no gate (B15 fixed N4/F41).
+- A crosses B along an axis when every gate edge facing along that axis lies on B's boundary
+  (nothing of B just past it). Each such edge measures how far A's figure runs on past it, by
+  projection (`strips`), 0 where A stops flush.
+- The gate measures the least over its crossed axes; crossed along neither, A ends inside B and
+  the gate measures 0, at the centre of its bbox. A bent gate, or one with a stub inside B, is
+  crossed along neither axis and measures 0 (fails closed).
+- One violation per gate < limit, `at` the middle of the strip past the measured edge; shapes are
+  the lowest A row and lowest B row under the gate; `examined` is the number of gates.
 
 **KLayout**
 
 ```ruby
-emit(id, A.enclosing(B, LIM, projection, transparent, without_touching_edges))   # each side where A protrudes
-emit(id, A.inside(B))                                                            # A protrudes nowhere: GPurify measures 0
+emit(id, A.enclosing(B, LIM, projection, transparent, without_touching_edges))   # each B edge A runs past
+emit(id, A.inside(B))                                                            # A inside B: GPurify measures 0
 ```
 
-- For rectangles that overlap with positive area, every side where A protrudes has a B edge
-  facing the same way inside A, with a positive projection.
-- Sides with zero protrusion are excluded by both tools: by "positive" in GPurify and by
-  `without_touching_edges` in KLayout.
+- For a rectangle crossing B with both ends strictly past it, every end has a B edge facing the
+  same way inside A, with a positive projection, and the sides of A face no B edge.
 - **Where it diverges:**
-  - Pairs that only touch: GPurify measures the far protrusion and can report a false violation
-    (N4). KLayout ignores them.
-  - Bounding boxes against real shapes (limitations.md, "Rules that can pass a layout signoff would flag"; F19).
-- The alternative oracle is the bitmap DRC (testing-plan C5).
+  - An A that ends inside B, or flush with B's edge, at one end: GPurify measures 0; the recipe
+    sees only the end that runs past (and `without_touching_edges` drops the flush one).
+  - A B edge inside a gate along an axis A does not cross (a step of the diffusion under the gate,
+    a corner overlap): the recipe measures it, GPurify does not.
+  - A bent gate: GPurify reports 0.
+- The alternative oracle is the bitmap DRC's rectangle pairs (`tests/exhaustive/bitmap.rs`) and the
+  `min_extension` fixtures of `tests/exhaustive/drc_overlay.rs`.
 
-### 20. overlap — APPROX (EXACT on R with disjoint intersections)
+### 20. overlap — EXACT, pending Q1
 
-**GPurify:** for every (a, b) row pair whose bboxes touch or overlap, the measure is the smaller
-side of the bbox intersection, 0 when they only touch. `at` is the intersection centre.
+**GPurify** (`overlay.rs` `overlap`): merges A (MIN) and intersects it with B; each figure of
+`A & B` is measured as `min_width` measures a figure (facing edges and the Euclidean neck), one
+violation per figure < limit, `at` the midpoint of its narrowest pair. Shapes that only touch share
+no area and are not measured (B15 fixed F19 and F56). Shapes are the lowest A row and lowest B row
+under the figure; `examined` is the number of figures.
 
 **KLayout**
 
 ```ruby
-emit(id, mc(A & B).width(LIM, projection))   # an intersection narrower than the limit
-emit(id, A.separation(B, 1))                 # pairs that only touch (d = 0; 1 DBU at x2 is half a DBU)
+emit(id, mc(A & B).width(LIM, euclidian, shielded, without_touching_corners))   # as rule 1, on the shared area
 ```
 
 - The native `overlap` is a two-layer width check ([L] "overlap"). It never sees a full cross,
   where both bounding edges belong to B, so it is not used.
-- The recipe diverges when the intersections of different pairs touch (`A & B` merges them), and
-  for shapes that are not rectangles (F19).
+- Key PAIR: a figure of `A & B` maps to the (A-figure, B-figure) containing it; two figures under
+  one pair of figures dedupe to one key on both sides.
 
 ### 21. max_distance_to_tap — APPROX (bracket)
 
@@ -1037,7 +1045,7 @@ Each operation runs on merged operands. Every polygon result is wrapped in `mc()
 | corner_to_corner | EXACT on R after dropping pairs whose bboxes touch on an axis. Off R, no ordering. |
 | attached_wide_spacing | EXACT on layouts without notches within `attached` of a wide part. |
 | asymmetric_enclosure | Compare rectangular inner rows only. |
-| min_extension, overlap | EXACT on R with positive-area overlaps and disjoint intersections. Otherwise the bitmap oracle (C5). |
+| min_extension | EXACT on R when every A that overlaps a B lies inside it or runs strictly past it at both ends. Otherwise the bitmap oracle's rectangle pairs and the exhaustive fixtures. |
 | max_distance_to_tap, redundant_via, via_array_spacing | Bracket: square ⊆ GPurify ⊆ diamond (the tap kind with its tap-interior allowance). EXACT on X for the via kinds. |
 | edge_spacing | Collinear pairs excluded, or a Ruby check added for them. |
 | density, global_density | Drop windows and dies within 1e-9 of the limit, and pad 1×1 sweeps. |
@@ -1102,7 +1110,8 @@ These are not in testing-plan F1–F35. F18, F19, F29 and F34 were confirmed ind
 - The prune at distance 0 keeps boxes that only touch, yet `overlay.rs` says "The prune at distance
   zero is exactly the overlapping pairs".
 - A line abutting the side of its reference is measured by its far protrusion, which can be a false
-  violation. F19 covers this for `overlap` only.
+  violation. F19 covers this for `overlap` only. (Recorded as F41; fixed in B15: both rules measure
+  the figures of `A & B`, which shapes that only touch do not have.)
 
 **N5. `eol_spacing` reads ends of line from drawn rows.** An edge that two abutting rows share is an
 end of line whose keep-out runs through its own figure. This is the same pattern as F18.

@@ -21,6 +21,7 @@ pub mod width;
 use crate::report::Outcome;
 use crate::topology::net::{in_material, Holes};
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase};
+use gpurify_geom::boolean::union_into;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::{seg_seg_dist2, Point, Seg};
 use gpurify_geom::rects::decompose_into;
@@ -161,6 +162,18 @@ pub(crate) fn owners_of(figures: &ValidatedLayer, drawn: &LayerRects) -> Vec<Pol
                 .unwrap_or(PolyId(u32::MAX))
         })
         .collect()
+}
+
+/// A layer validated and merged; `None` when it does not validate.
+pub(crate) fn merged(
+    store: &GeometryStore,
+    layer: LayerId,
+    s: &mut crate::drc::Scratch,
+) -> Option<ValidatedLayer> {
+    let drawn = s.validated.get(store, layer)?;
+    let mut figures = ValidatedLayer::default();
+    union_into(drawn, &ValidatedLayer::default(), &mut figures).ok()?;
+    Some(figures)
 }
 
 /// One closed ring's edges, in vertex order, closing edge last.

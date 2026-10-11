@@ -18,12 +18,9 @@
 //! four edges whatever pieces drew it.
 //!
 //! Where `GPurify` falls short of a definition, the fixture keeps the
-//! definition and names the finding that explains the gap (`known`): F19
-//! from `docs/testing-plan.md`, and one this pass found (F34, F40, F54 and
-//! F55, also pinned here, are fixed):
-//! - F56: `extension` and `overlap` pair drawn polygons without merging,
-//!   so a diffusion drawn in two pieces abutting under a legal gate reports
-//!   a 50 nm extension at the seam.
+//! definition and names the finding that explains the gap (`known`). None
+//! are carried today: F19, F34, F40, F54, F55 and F56, once pinned here, are
+//! fixed (B15, B16) and their fixtures hold.
 
 use crate::drc_dimension::{every_placement, DRC, OFFSETS};
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Symmetry, Want};
@@ -504,10 +501,12 @@ fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
 /// swept length, one end swept with the other far, a poly covering the
 /// diffusion; a U-shaped poly whose far arm makes its bounding box reach past
 /// on every side while the gate end is swept, and a gate ending inside the
-/// diffusion at one end (both F19); a legal gate over a diffusion drawn as
+/// diffusion at one end (both F19); a gate over a step in the diffusion's
+/// edge, its near end swept; a legal gate over a diffusion drawn as
 /// two pieces abutting under it (F56); a poly abutting the diffusion
-/// without crossing it (no gate, clean); an empty poly layer. Nightly: both
-/// ends across {inside, flush, 99, 100, 101, far}.
+/// without crossing it, one with a far end that is short (no gate, clean;
+/// F41); an empty poly layer. Nightly: both ends across {inside, flush, 99,
+/// 100, 101, far}.
 fn min_extension(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 100;
     let deck = new_deck(
@@ -527,20 +526,16 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
     // The gate's two ends past the diffusion, bottom then top; at or below
     // zero it stops inside, measuring 0.
     let gate = |bottom: i64, top: i64| {
-        let findings = below(bottom.min(top).max(0), LIMIT);
-        // F19: a side where the poly does not reach past is not measured.
-        let known = bottom.min(top) <= 0 && bottom.max(top) > 0;
         (
             diff().rect("poly", 400, -bottom, 500, 400 + top),
-            findings,
-            known,
+            below(bottom.min(top).max(0), LIMIT),
         )
     };
     let mut cases = Vec::new();
     for (m, side) in sweep(LIMIT) {
-        let (layout, findings, _) = gate(m, m);
+        let (layout, findings) = gate(m, m);
         cases.push(case(&format!("crossing/{side}"), layout, findings));
-        let (layout, findings, _) = gate(500, m);
+        let (layout, findings) = gate(500, m);
         cases.push(case(&format!("one_end/{side}"), layout, findings));
         cases.push(case(
             &format!("covering/{side}"),
@@ -557,46 +552,55 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
             (500, 400 + m),
             (400, 400 + m),
         ];
-        let fixture = case(
+        cases.push(case(
             &format!("u_shape/{side}"),
             diff().polygon("poly", &u),
             below(m, LIMIT),
-        );
-        cases.push(if m < LIMIT {
-            fixture.known("F19")
-        } else {
-            fixture
-        });
+        ));
+        // The diffusion steps down from 400 to 300 under the gate. Every gate
+        // edge facing up or down is still on the diffusion's edge, so the
+        // runs are m below, 200 and 300 above; the step's own 50 nm edge
+        // faces sideways, a side of the gate.
+        cases.push(case(
+            &format!("diffusion_jog/{side}"),
+            Layout::default()
+                .rect("diff", 0, 0, 450, 400)
+                .rect("diff", 450, 0, 1000, 300)
+                .rect("poly", 400, -m, 500, 600),
+            below(m, LIMIT),
+        ));
     }
-    let (layout, findings, _) = gate(500, -100);
-    cases.push(case("ends_inside", layout, findings).known("F19"));
+    let (layout, findings) = gate(500, -100);
+    cases.push(case("ends_inside", layout, findings));
     cases.push(case(
         "abutting",
         diff().rect("poly", 400, 400, 500, 900),
         Vec::new(),
     ));
+    // F41: no gate, so its far end, 50 past the diffusion, is not measured.
+    cases.push(case(
+        "abutting_short",
+        diff().rect("poly", 400, 400, 500, 450),
+        Vec::new(),
+    ));
     cases.push(case("empty_poly", diff(), Vec::new()));
     // The diffusion drawn as two pieces abutting under the gate: one
     // diffusion, which the gate crosses with 200 nm to spare at both ends
-    // (F56: each drawn piece is paired on its own).
-    cases.push(
-        case(
-            "split_diffusion",
-            Layout::default()
-                .rect("diff", 0, 0, 450, 400)
-                .rect("diff", 450, 0, 1000, 400)
-                .rect("poly", 400, -200, 500, 600),
-            Vec::new(),
-        )
-        .known("F56"),
-    );
+    // (F56: each drawn piece was paired on its own).
+    cases.push(case(
+        "split_diffusion",
+        Layout::default()
+            .rect("diff", 0, 0, 450, 400)
+            .rect("diff", 450, 0, 1000, 400)
+            .rect("poly", 400, -200, 500, 600),
+        Vec::new(),
+    ));
     if depth == Depth::Nightly {
         let ends = [-100, 0, 99, 100, 101, 500];
         for bottom in ends {
             for top in ends {
-                let (layout, findings, known) = gate(bottom, top);
-                let fixture = case(&format!("ends/b{bottom}_t{top}"), layout, findings);
-                cases.push(if known { fixture.known("F19") } else { fixture });
+                let (layout, findings) = gate(bottom, top);
+                cases.push(case(&format!("ends/b{bottom}_t{top}"), layout, findings));
             }
         }
     }
@@ -635,7 +639,7 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
             below(m, LIMIT),
         ));
     }
-    cases.push(case("touching", edge(0), Vec::new()).known("F19"));
+    cases.push(case("touching", edge(0), Vec::new()));
     let l_shape = [
         (500, 950),
         (1900, 950),
@@ -644,14 +648,11 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
         (2000, 1000),
         (500, 1000),
     ];
-    cases.push(
-        case(
-            "l_shape",
-            Layout::default().polygon("a", &l_shape),
-            lengths(&[50]),
-        )
-        .known("F19"),
-    );
+    cases.push(case(
+        "l_shape",
+        Layout::default().polygon("a", &l_shape),
+        lengths(&[50]),
+    ));
     let notched = [
         (950, 1050),
         (1050, 1050),
@@ -660,27 +661,21 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
         (2000, 2000),
         (950, 2000),
     ];
-    cases.push(
-        case(
-            "notched_square",
-            Layout::default().polygon("a", &notched),
-            Vec::new(),
-        )
-        .known("F19"),
-    );
+    cases.push(case(
+        "notched_square",
+        Layout::default().polygon("a", &notched),
+        Vec::new(),
+    ));
     cases.push(case("empty_a", Layout::default(), Vec::new()));
     // `a` drawn as two abutting pieces: together they overlap `b` by 100
-    // (F56: each drawn piece is paired on its own).
-    cases.push(
-        case(
-            "split_a",
-            Layout::default()
-                .rect("a", 900, 200, 950, 800)
-                .rect("a", 950, 200, 2000, 800),
-            Vec::new(),
-        )
-        .known("F56"),
-    );
+    // (F56: each drawn piece was paired on its own).
+    cases.push(case(
+        "split_a",
+        Layout::default()
+            .rect("a", 900, 200, 950, 800)
+            .rect("a", 950, 200, 2000, 800),
+        Vec::new(),
+    ));
     if depth == Depth::Nightly {
         for m in 90..=110 {
             cases.push(case(&format!("edge_sweep/{m}"), edge(m), below(m, LIMIT)));

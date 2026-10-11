@@ -1,22 +1,26 @@
 //! Overlay family: how two layers must sit relative to each other.
 //!
-//! Data in: two validated layers and their cross-layer candidate pairs.
-//! Data out: one violation per offending inner shape / pair / well.
+//! Data in: two validated layers and their cross-layer candidate pairs, or
+//! their merged figures. Data out: one violation per offending inner shape /
+//! gate / shared figure / well.
 //! Enclosure takes the *best* host polygon (lowest row on a tie) that covers
 //! the inner shape's whole area; an unhosted inner shape measures zero, never
-//! skipped. Extension and overlap still measure bounding boxes, which is
-//! optimistic for a concave shape (a known fail-open).
+//! skipped. Extension and overlap measure the figures of the area the merged
+//! layers share, so shapes that only touch are never measured.
 
-use super::{centre, mid, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED};
+use super::{
+    centre, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
+};
 use crate::drc::Scratch;
 use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
-use gpurify_geom::boolean::union_into;
+use gpurify_geom::boolean::{intersection_into, union_into};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
+use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
@@ -28,17 +32,6 @@ enum Side {
     Right,
     Bottom,
     Top,
-}
-
-/// Per-side margins of `inner` within `outer`: positive where outer extends
-/// past inner. May legally reach `±2^41`.
-fn margins(inner: Bbox, outer: Bbox) -> [(Dbu, Side); 4] {
-    [
-        (inner.xlo - outer.xlo, Side::Left),
-        (outer.xhi - inner.xhi, Side::Right),
-        (inner.ylo - outer.ylo, Side::Bottom),
-        (outer.yhi - inner.yhi, Side::Top),
-    ]
 }
 
 /// The smaller of two sides, the first on a tie.
@@ -163,30 +156,6 @@ fn side_midpoint(inner: Bbox, margin: Dbu, side: Side) -> Point {
         Side::Top => Point {
             x: cx,
             y: mid(inner.yhi, inner.yhi + margin),
-        },
-    }
-}
-
-/// Midpoint of the strip between the two boxes on one side.
-fn strip_midpoint(inner: Bbox, outer: Bbox, side: Side) -> Point {
-    let cross_x = mid(inner.xlo.max(outer.xlo), inner.xhi.min(outer.xhi));
-    let cross_y = mid(inner.ylo.max(outer.ylo), inner.yhi.min(outer.yhi));
-    match side {
-        Side::Left => Point {
-            x: mid(outer.xlo, inner.xlo),
-            y: cross_y,
-        },
-        Side::Right => Point {
-            x: mid(inner.xhi, outer.xhi),
-            y: cross_y,
-        },
-        Side::Bottom => Point {
-            x: cross_x,
-            y: mid(outer.ylo, inner.ylo),
-        },
-        Side::Top => Point {
-            x: cross_x,
-            y: mid(inner.yhi, outer.yhi),
         },
     }
 }
@@ -328,18 +297,87 @@ pub(crate) fn enclosure(
     (Outcome::Ran, inner_rects.len() as u64)
 }
 
-/// The smallest positive protrusion and its side (first on a tie); zero when
-/// the layer protrudes nowhere.
-fn smallest_protrusion(reference: Bbox, line: Bbox) -> (Dbu, Side) {
-    margins(reference, line)
-        .into_iter()
-        .filter(|&(value, _)| value.raw() > 0)
-        .min_by_key(|&(value, _)| value.raw())
-        .unwrap_or((Dbu::new_unchecked(0), Side::Left))
+/// The side of a gate edge `a -> b` the gate does not lie on: material is on
+/// the left of travel.
+fn outward(a: Point, b: Point) -> Side {
+    match (a.x == b.x, b.x > a.x, b.y > a.y) {
+        (false, true, _) => Side::Bottom,
+        (false, false, _) => Side::Top,
+        (true, _, true) => Side::Right,
+        (true, _, false) => Side::Left,
+    }
 }
 
-/// Min extension of `layer` past `reference`, judged on overlapping pairs only.
-/// `examined` counts overlapping pairs.
+/// The one-unit strip just past `edge` (a degenerate box) on `side`.
+fn just_past(edge: Bbox, side: Side) -> Bbox {
+    let one = Dbu::new_unchecked(1);
+    match side {
+        Side::Left => Bbox {
+            xlo: edge.xlo - one,
+            ..edge
+        },
+        Side::Right => Bbox {
+            xhi: edge.xhi + one,
+            ..edge
+        },
+        Side::Bottom => Bbox {
+            ylo: edge.ylo - one,
+            ..edge
+        },
+        Side::Top => Bbox {
+            yhi: edge.yhi + one,
+            ..edge
+        },
+    }
+}
+
+/// How far `line` runs past one figure of `line ∩ reference` (a gate), and
+/// where to report it. The line crosses the reference along an axis when
+/// every gate edge facing along it lies on the reference's boundary; each
+/// such edge measures how far the line runs on past it (projection metric,
+/// 0 where the line stops flush). The gate measures the least over its
+/// crossed axes, the first side on a tie; crossed along neither axis, the
+/// line ends inside the reference: 0, at the gate's centre.
+fn gate_extension(
+    gate: PolygonRef<'_>,
+    line: PolygonRef<'_>,
+    reference: &SortedRects<PolyId>,
+) -> (Dbu, Point) {
+    // Per axis (vertical edges, horizontal edges): still crossed, and the
+    // shortest run past one of its edges.
+    let mut crossed = [true; 2];
+    let mut best: [Option<(Dbu, Side, Bbox)>; 2] = [None; 2];
+    for (a, b) in poly_edges(gate) {
+        let edge = Bbox::point(a.x, a.y).include(b.x, b.y);
+        let side = outward(a, b);
+        let axis = usize::from(a.y == b.y);
+        if reference
+            .overlapping(just_past(edge, side))
+            .next()
+            .is_some()
+        {
+            crossed[axis] = false;
+            continue;
+        }
+        let (run, _) = strips(edge, line)[side as usize];
+        if best[axis].is_none_or(|(d, s, _)| (run, side) < (d, s)) {
+            best[axis] = Some((run, side, edge));
+        }
+    }
+    (0..2)
+        .filter(|&axis| crossed[axis])
+        .filter_map(|axis| best[axis])
+        .min_by_key(|&(run, side, _)| (run, side))
+        .map_or(
+            (Dbu::new_unchecked(0), centre(gate.bbox())),
+            |(run, side, edge)| (run, side_midpoint(edge, run, side)),
+        )
+}
+
+/// Min extension of `layer` past `reference`, per gate: each figure of the
+/// area the merged layers share, measured by [`gate_extension`] and reported
+/// on the lowest drawn row of each layer under it. Shapes that only touch make
+/// no gate. `examined` counts gates.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn min_extension(
     store: &GeometryStore,
@@ -350,32 +388,71 @@ pub(crate) fn min_extension(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !pair_layers(store, layer, reference, Dbu::new_unchecked(0), s) {
+    let Some(lines) = merged(store, layer, s) else {
+        return REFUSED;
+    };
+    let Some(drawn_ref) = s.validated.get(store, reference) else {
+        return REFUSED;
+    };
+    s.rects_b.build(store, reference, drawn_ref);
+    if intersection_into(&lines, drawn_ref, &mut s.layer_out).is_err() {
         return REFUSED;
     }
-    let limit = Measurement::Length(limit);
-    // The prune at distance zero is exactly the overlapping pairs.
-    for &(line, reference) in &s.pairs {
-        let (line_box, ref_box) = (store.poly_bbox(line), store.poly_bbox(reference));
-        let (protrusion, side) = smallest_protrusion(ref_box, line_box);
-        let measured = Measurement::Length(protrusion);
-        if measured.violates(limit, LimitSense::Minimum) {
+    let drawn = s.validated.get(store, layer).expect("merged above");
+    s.rects_a.build(store, layer, drawn);
+    let Scratch {
+        layer_out: gates,
+        rects,
+        rect_start,
+        rects_a,
+        rects_b,
+        ..
+    } = s;
+    // Each gate lies in exactly one line figure.
+    let (mut line_rects, mut line_start) = (Vec::new(), Vec::new());
+    decompose_into(&lines, &mut line_rects, &mut line_start);
+    let line_of = SortedRects::new(
+        line_start
+            .windows(2)
+            .zip(0u32..)
+            .flat_map(|(span, f)| {
+                line_rects[span[0] as usize..span[1] as usize]
+                    .iter()
+                    .map(move |&r| (r, f))
+            })
+            .collect(),
+    );
+    let refs = SortedRects::new(rects_b.labelled());
+    decompose_into(gates, rects, rect_start);
+    let owners = owners_of(gates, rects_a)
+        .into_iter()
+        .zip(owners_of(gates, rects_b));
+    for (g, (line_row, ref_row)) in (0..).zip(owners) {
+        let inside = rects[rect_start[g as usize] as usize];
+        let (_, f) = line_of
+            .overlapping(inside)
+            .next()
+            .expect("a gate lies on its line");
+        let (measured, at) = gate_extension(gates.get(g), lines.get(f), &refs);
+        if measured < limit {
             out.push(Violation {
                 rule,
                 layer,
                 severity: Severity::Error,
-                at: strip_midpoint(ref_box, line_box, side),
-                measured,
-                limit,
-                shapes: (line, Some(reference)),
+                at,
+                measured: Measurement::Length(measured),
+                limit: Measurement::Length(limit),
+                shapes: (line_row, Some(ref_row)),
             });
         }
     }
-    (Outcome::Ran, s.pairs.len() as u64)
+    (Outcome::Ran, gates.len() as u64)
 }
 
-/// Min overlap: the smaller side of each pair's box intersection (a known
-/// fail-open for non-convex shapes). `examined` counts overlapping pairs.
+/// Min overlap: each figure of the area the merged layers share, measured as
+/// `min_width` measures a figure (facing edges, and a diagonal neck under the
+/// limit), on the lowest drawn row of each layer under it. `examined` counts
+/// the figures.
 pub(crate) fn overlap(
     store: &GeometryStore,
     rule: StrId,
@@ -385,30 +462,42 @@ pub(crate) fn overlap(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !pair_layers(store, layer, b, Dbu::new_unchecked(0), s) {
+    let Some(merged_a) = merged(store, layer, s) else {
+        return REFUSED;
+    };
+    let Some(drawn_b) = s.validated.get(store, b) else {
+        return REFUSED;
+    };
+    s.rects_b.build(store, b, drawn_b);
+    if intersection_into(&merged_a, drawn_b, &mut s.layer_out).is_err() {
         return REFUSED;
     }
-    let limit = Measurement::Length(limit);
-    for &(a, b) in &s.pairs {
-        let figure = store
-            .poly_bbox(a)
-            .intersection(store.poly_bbox(b))
-            .expect("the prune at distance zero keeps overlapping boxes only");
-        let smaller = figure.width().raw().min(figure.height().raw());
-        let measured = Measurement::Length(Dbu::new_unchecked(smaller.min(MAX_ABS_DBU)));
-        if measured.violates(limit, LimitSense::Minimum) {
+    let drawn_a = s.validated.get(store, layer).expect("merged above");
+    s.rects_a.build(store, layer, drawn_a);
+    let owners = owners_of(&s.layer_out, &s.rects_a)
+        .into_iter()
+        .zip(owners_of(&s.layer_out, &s.rects_b));
+    for (idx, (a_row, b_row)) in (0..).zip(owners) {
+        let shared = s.layer_out.get(idx);
+        let neck = narrowest_neck(shared, limit);
+        let (measured, at) = narrowest_facing(shared, true, &mut s.facing)
+            .into_iter()
+            .chain(neck)
+            .min_by_key(|&(gap, _)| gap)
+            .expect("every validated polygon has a facing pair across its own material");
+        if measured < limit {
             out.push(Violation {
                 rule,
                 layer,
                 severity: Severity::Error,
-                at: centre(figure),
-                measured,
-                limit,
-                shapes: (a, Some(b)),
+                at,
+                measured: Measurement::Length(measured),
+                limit: Measurement::Length(limit),
+                shapes: (a_row, Some(b_row)),
             });
         }
     }
-    (Outcome::Ran, s.pairs.len() as u64)
+    (Outcome::Ran, s.layer_out.len() as u64)
 }
 
 /// Max distance from any point of a well to the nearest tap (IHP LU.a/b,

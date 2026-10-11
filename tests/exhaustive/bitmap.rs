@@ -32,10 +32,7 @@
 //!   enclosure the Euclidean distance to the nearest point outside the host;
 //!   unhosted measures 0.
 //! - **`min_extension`** (DRC-045) and **`overlap`** (DRC-046), on every pair
-//!   of one rectangle per layer: see [`extension`] and [`overlap`]. Their
-//!   rustdoc measures bounding boxes and says where that departs from the rule
-//!   (F19); a pair where the box measure and the rule differ is marked
-//!   `known("F19")`.
+//!   of one rectangle per layer: see [`extension`] and [`overlap`].
 //!
 //! Lengths are compared exactly (squared, in nm²), and `measured` is the
 //! distance floored to a whole nm, as the `Rule` rustdoc states.
@@ -596,11 +593,9 @@ enum Rel {
     Partial,
 }
 
-/// What a pair measures, by the rule and by the rustdoc's bounding boxes;
-/// `None` is no finding at any limit.
+/// What a pair measures by the rule; `None` is no finding at any limit.
 struct Measures {
     rule: Option<i64>,
-    boxes: Option<i64>,
 }
 
 /// One kind measured on pairs of rectangles.
@@ -630,7 +625,8 @@ const PAIRS: &[PairKind] = &[
 /// `extension(A, B)`: "A not extending past B by the limit, as poly past
 /// diffusion", on one rectangle each. Along each axis A's span is within B's
 /// (equal included), strictly spans it, or is partly past one end.
-/// - Apart (no shared point): nothing. Touching only: undecided.
+/// - Apart or touching only (no shared area): nothing; there is no gate to
+///   extend past (F41).
 /// - A within B on both axes: 0, it extends past nothing.
 /// - A spans one axis and lies within the other, not equal to it (a gate): the
 ///   smaller protrusion along the spanned axis, a flush end measuring 0. With
@@ -639,21 +635,8 @@ const PAIRS: &[PairKind] = &[
 /// - A spans both, protruding on all four sides: the smallest protrusion.
 /// - Everything else (a corner overlap, partly past one axis and spanning the
 ///   other, spanning both with a flush side): undecided.
-///
-/// The boxes: every pair whose boxes touch or overlap, the smallest amount A
-/// reaches past B on any side where it reaches past, or 0 where on none.
 fn extension(a: Rect, b: Rect) -> Option<Measures> {
     let protrusions = [b.0 - a.0, b.1 - a.1, a.2 - b.2, a.3 - b.3];
-    let touch = a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3;
-    let boxes = touch.then(|| {
-        protrusions
-            .iter()
-            .copied()
-            .filter(|&p| p > 0)
-            .min()
-            .unwrap_or(0)
-            * S
-    });
     let overlaps = a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3;
     let rel = |a0, a1, b0, b1| {
         if a0 >= b0 && a1 <= b1 {
@@ -666,11 +649,8 @@ fn extension(a: Rect, b: Rect) -> Option<Measures> {
     };
     let (rx, ry) = (rel(a.0, a.2, b.0, b.2), rel(a.1, a.3, b.1, b.3));
     let (equal_x, equal_y) = ((a.0, a.2) == (b.0, b.2), (a.1, a.3) == (b.1, b.3));
-    if !touch {
-        return Some(Measures { rule: None, boxes });
-    }
     if !overlaps {
-        return None;
+        return Some(Measures { rule: None });
     }
     let units = match (rx, ry) {
         (Rel::Within | Rel::Partial, Rel::Within) | (Rel::Within, Rel::Partial) => 0,
@@ -683,19 +663,16 @@ fn extension(a: Rect, b: Rect) -> Option<Measures> {
     };
     Some(Measures {
         rule: Some(units * S),
-        boxes,
     })
 }
 
 /// `overlap(A, B)`: "A and B overlapping by less than the limit", on one
 /// rectangle each: the shorter side of their shared area; shapes sharing no
-/// area do not overlap and are not measured. The boxes also measure a pair
-/// that only touches, as 0 (F19).
+/// area, touching included, do not overlap and are not measured.
 fn overlap(a: Rect, b: Rect) -> Measures {
     let (ix, iy) = (a.2.min(b.2) - a.0.max(b.0), a.3.min(b.3) - a.1.max(b.1));
-    let boxes = (ix >= 0 && iy >= 0).then(|| ix.min(iy) * S);
     let rule = (ix > 0 && iy > 0).then(|| ix.min(iy) * S);
-    Measures { rule, boxes }
+    Measures { rule }
 }
 
 /// Every pair of rectangles the rule decides, or a sample of them.
@@ -714,7 +691,7 @@ fn rect_pairs(kind: &PairKind, depth: Depth) -> Vec<Fixture> {
 
 /// The fixture for one pair, if the rule decides it.
 fn rect_pair(deck: &str, kind: &PairKind, a: Rect, b: Rect) -> Option<Fixture> {
-    let Measures { rule, boxes } = (kind.measure)(a, b)?;
+    let Measures { rule } = (kind.measure)(a, b)?;
     let name = format!(
         "bitmap/{}/a{}{}{}{}_b{}{}{}{}",
         kind.name, a.0, a.1, a.2, a.3, b.0, b.1, b.2, b.3
@@ -723,16 +700,9 @@ fn rect_pair(deck: &str, kind: &PairKind, a: Rect, b: Rect) -> Option<Fixture> {
         .rect("poly", a.0 * S, a.1 * S, a.2 * S, a.3 * S)
         .rect("diff", b.0 * S, b.1 * S, b.2 * S, b.3 * S);
     let mut fixture = Fixture::new(&name, &[kind.catalog], deck, DRC).layout(layout);
-    let mut differs = false;
     for &limit in PAIR_LIMITS {
-        let found = |m: Option<i64>| m.and_then(|m| short(m * m, limit));
-        differs |= found(rule) != found(boxes);
-        let findings = found(rule).into_iter().collect();
+        let findings = rule.and_then(|m| short(m * m, limit)).into_iter().collect();
         fixture = fixture.expect(Expect::rule(&rule_id(kind.name, limit), findings));
     }
-    Some(if differs {
-        fixture.known("F19")
-    } else {
-        fixture
-    })
+    Some(fixture)
 }

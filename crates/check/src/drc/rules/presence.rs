@@ -4,10 +4,9 @@
 //! except that `forbidden` reports shapes as drawn.
 //! Data out: one violation per offending shape, or per edge of an edge layer.
 
-use super::{centre, mid, owners_of, seg_bbox, SortedRects, Verdict, REFUSED};
+use super::{centre, merged, mid, owners_of, seg_bbox, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::Point;
 use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
@@ -56,14 +55,6 @@ pub(crate) fn forbidden(
         });
     }
     (Outcome::Ran, u64::from(polys) + edges.len() as u64)
-}
-
-/// A layer validated and merged; `None` when it does not validate.
-fn merged(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Option<ValidatedLayer> {
-    let drawn = s.validated.get(store, layer)?;
-    let mut figures = ValidatedLayer::default();
-    union_into(drawn, &ValidatedLayer::default(), &mut figures).ok()?;
-    Some(figures)
 }
 
 /// Rectangles of `figures`, CSR by figure.

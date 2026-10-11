@@ -507,22 +507,29 @@ pub enum Rule {
     /// `layer` not extending past `reference` by `limit`, as poly past
     /// diffusion.
     ///
-    /// Deck: `extension(A, B) >= len`, kind `min_extension`. Every pair of an
-    /// A and a B polygon whose bounding boxes overlap or touch is measured on
-    /// those boxes: the smallest amount A's box reaches past B's on any side
-    /// where it reaches past at all, or 0 where it reaches past on none.
+    /// Deck: `extension(A, B) >= len`, kind `min_extension`. Both layers are
+    /// merged, and each figure of the area they share (a gate) is measured.
+    /// A crosses B along an axis when every gate edge facing along that axis
+    /// lies on B's boundary; each such edge measures how far A runs on past
+    /// it, straight out (0 where A stops flush with B). The gate measures the
+    /// least over the axes A crosses; where A crosses B along neither, A ends
+    /// inside B and the gate measures 0. So a gate measures the shorter of
+    /// its two end caps, a poly that stops inside diffusion at one end
+    /// measures 0 however far its other end runs, and shapes that only touch
+    /// make no gate.
     ///
-    /// One violation per offending pair, on layer A, in the middle of the
-    /// strip between the boxes on the measured side. `shapes` is the A row and
-    /// the B row. `examined` counts the pairs.
+    /// One violation per offending gate, on layer A, in the middle of the
+    /// strip past the measured edge, or at the centre of the gate's bounding
+    /// box when it measures 0 for ending inside B. `shapes` is the lowest A
+    /// row and the lowest B row under the gate. `examined` counts the gates.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-045. Rules: sky130 poly.7 and poly.8, GF180 PL.4, IHP Gat.c, ASAP7
     /// GATE.ACTIVE.EX.1.
     ///
-    /// Limits: bounding boxes, so an L-shaped A can pass. A side where A does
-    /// not reach past B is not measured, so an A that stops inside B on one
-    /// end passes when it extends far enough on another.
+    /// Limits: a gate that bends or carries a stub inside B has edges inside
+    /// B along both axes, so A crosses B along neither and the gate measures
+    /// 0 (fails closed).
     MinExtension {
         /// The extending layer (A); findings are reported on it.
         layer: LayerId,
@@ -533,20 +540,20 @@ pub enum Rule {
     },
     /// `a` and `b` overlapping by less than `limit`.
     ///
-    /// Deck: `overlap(A, B) >= len`, kind `overlap`. Every pair of an A and a
-    /// B polygon whose bounding boxes overlap or touch is measured as the
-    /// shorter side of the boxes' intersection, so boxes that only touch
-    /// measure 0.
+    /// Deck: `overlap(A, B) >= len`, kind `overlap`. Both layers are merged,
+    /// and each figure of the area they share is measured as
+    /// [`Rule::MinWidth`] measures a figure, so two rectangles overlap by the
+    /// shorter side of their intersection. Shapes that only touch share no
+    /// area and are not measured, and the shared areas of two pairs that
+    /// touch are one figure.
     ///
-    /// One violation per offending pair, on layer A, at the centre of the
-    /// intersection. `shapes` is the A row and the B row. `examined` counts
-    /// the pairs.
+    /// One violation per figure narrower than `limit`, on layer A, at the
+    /// middle of its narrowest gap. `shapes` is the lowest A row and the
+    /// lowest B row under the figure. `examined` counts the figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-046. Rules: IHP pSD.e, GF180 NP.5a, sky130 hv.poly.7; `KLayout`
     /// `overlap`.
-    ///
-    /// Limits: bounding boxes, so an L-shaped overlap can pass.
     Overlap {
         /// The first layer; findings are reported on it.
         a: LayerId,
