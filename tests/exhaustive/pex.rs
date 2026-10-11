@@ -2348,6 +2348,9 @@ fn spef_reads_back_through_an_independent_reader_as_the_network() {
                 Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => ("*CAP", 0, q.raw() * 1e-15),
                 Parasitic::Resistance(q) => ("*RES", 1, q.raw()),
                 Parasitic::Inductance(q) => ("*INDUC", 2, q.raw() * 1e-12),
+                // IEEE 1481 has no mutual inductance element: the writer
+                // states it in a comment, which the reader drops.
+                Parasitic::MutualInductance(_) => continue,
             };
             kinds[slot] = true;
             let near = network.from[k];
