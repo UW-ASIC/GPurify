@@ -793,8 +793,8 @@ fn diode_stub(diode: bool) -> Layout {
 /// - With a diode on the net and a bonus of 0.5: 1.5 swept.
 /// - A bonus is credit for a diode, so a net without one keeps 2.0 (F35:
 ///   it was once subtracted from every gate net).
-/// - A diode with a non-zero credit is refused, as its rustdoc and
-///   limitations.md state.
+/// - The credit is per µm² of diode: SKY130's Table Ig limits
+///   ([`sky130_table_ig`]).
 /// - IHP Ant.b (without diode, 1.5 here) and Ant.e (with diode, 100): a net
 ///   with a diode is held to Ant.e only, so at 2.0 it is clean. Ant.b names
 ///   the diode layer it leaves to Ant.e; before `antenna` took one it held
@@ -808,7 +808,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/no_credit/{}", side(limit, 2.0)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, diode: none, diode_credit: 0, diode_bonus: 0)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_credit: 0, diode_bonus: 0)"
                 )),
                 ERC,
             )
@@ -822,7 +822,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/bonus_with_diode/{}", side(limit, 1.5)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, diode: diff, diode_credit: 0, diode_bonus: 0.5)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0.5)"
                 )),
                 ERC,
             )
@@ -835,27 +835,16 @@ fn antenna_electrical() -> Vec<Fixture> {
             "erc/antenna_electrical/bonus_without_diode",
             &["ERC-A5"],
             &antenna_deck(
-                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, diode: diff, diode_credit: 0, diode_bonus: 0.5)",
+                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0.5)",
             ),
             ERC,
         )
         .layout(diode_stub(false))
         .expect(Expect::rule("ae", vec![ratio(2.0).at(500, 500)])),
     );
-    out.push(
-        Fixture::new(
-            "erc/antenna_electrical/credit_is_refused",
-            &["ERC-A5"],
-            &antenna_deck(
-                "rule ae antenna_electrical(gate, met1; max_ratio: 1000, diode: diff, diode_credit: 1, diode_bonus: 0)",
-            ),
-            ERC,
-        )
-        .layout(diode_stub(true))
-        .expect(Expect::outcome("ae", Want::Refused)),
-    );
+    out.extend(sky130_table_ig());
     let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
-rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_credit: 0, diode_bonus: 0)";
+rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0)";
     out.push(
         Fixture::new(
             "erc/antenna_electrical/ihp_b_e/with_diode",
@@ -879,6 +868,166 @@ rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_cre
         .expect(Expect::clean("Ant.e")),
     );
     out
+}
+
+/// A 1.0 µm² gate whose poly a 100 × 100 contact joins to met1 at (450..550,
+/// 1750..1850), and, with `diode` in µm² (a 1000-nm-wide diffusion), a diode
+/// contacted at (-1050..-950, 1750..1850) to the same met1.
+fn egar_stub(diode_um2: Option<f64>) -> Layout {
+    let mut l = Layout::default();
+    rect(&mut l, "poly", (0, 0, 1000, 2000));
+    rect(&mut l, "gate", (0, 0, 1000, 1000));
+    rect(&mut l, "cont", (450, 1750, 550, 1850));
+    if let Some(um2) = diode_um2 {
+        let half = (um2 * 500.0).round() as i64;
+        rect(&mut l, "diff", (-1500, 1800 - half, -500, 1800 + half));
+        rect(&mut l, "cont", (-1050, 1750, -950, 1850));
+    }
+    l
+}
+
+/// `count` square via1 cuts of side `side` nm on a met1 plate over both
+/// contacts of [`egar_stub`], 25 to a row at twice their side.
+fn cut_array(diode_um2: Option<f64>, count: usize, side: i64) -> Layout {
+    let mut l = egar_stub(diode_um2);
+    let rows = count.div_ceil(25) as i64;
+    rect(
+        &mut l,
+        "met1",
+        (-1100, 1700, 1200 + 50 * side, 1900 + 2 * side * rows),
+    );
+    for i in 0..count as i64 {
+        let (x, y) = (1200 + (i % 25) * 2 * side, 1900 + (i / 25) * 2 * side);
+        rect(&mut l, "via1", (x, y, x + side, y + side));
+    }
+    l
+}
+
+/// A met1 line `width` × `length` nm from x = -1100, over both contacts of
+/// [`egar_stub`]: perimeter `2 (length + width)`.
+fn line(diode_um2: Option<f64>, width: i64, length: i64) -> Layout {
+    let mut l = egar_stub(diode_um2);
+    let ylo = 1800 - width / 2;
+    rect(&mut l, "met1", (-1100, ylo, -1100 + length, ylo + width));
+    l
+}
+
+/// SKY130 antenna rules, Table Ig (sky130A's flow) and its "design
+/// limitations due to antenna rules (FET gate = 1um2)", the foundry's own
+/// worked examples of `EGAR = EA / A_gate - K x (AntennaDiode_area in um2) -
+/// diode_bonus`, each at its stated limit (clean) and one step past it
+/// (flagged), with no diode and with a 1 µm² diode:
+///
+/// - Mcon (horizontal, max 3, K 18; 0.17 µm cuts, 0.0289 µm² each): 103
+///   cuts without a diode (2.977), 726 with (20.981 - 18 = 2.981); 104
+///   (3.006) and 727 (3.010) fail.
+/// - LI (vertical, FLT 0.1 µm, max 75, K 450; minimum width 0.17 µm):
+///   370 µm without (2 × 370.17 × 0.1 = 74.034), 2620 µm with (524.034 -
+///   450); 375 µm and 2625 µm fail (75.034).
+/// - Met1 (vertical, FLT 0.35 µm, max 400, K 400, bonus 2200; width 0.14
+///   µm): 570 µm without (399.098), 4280 µm with (2996.098 - 400 - 2200 =
+///   396.098); 572 µm (400.498) and 4286 µm (400.298) fail.
+///
+/// The table's lengths are "approx" (it rounds down); each is checked
+/// against the exact limit it stands for. Then the closed form off the
+/// table: a 0.5 µm² diode halves the credit, so with Via's K 36 and max 6,
+/// 0.15 µm cuts (0.0225 µm²) pass at 1066 (23.985 - 18) and fail at 1067
+/// (24.0075 - 18). A credit per square database unit would pass all of
+/// these, and a credit refused, as it once was, would flag none.
+fn sky130_table_ig() -> Vec<Fixture> {
+    struct Case {
+        name: &'static str,
+        rule: &'static str,
+        layout: Layout,
+        /// The collecting area over the gate, before the credit.
+        ratio: f64,
+        /// `K × diode area + bonus`, or zero without a diode.
+        credit: f64,
+        max: f64,
+    }
+    let mcon = "rule ae antenna_electrical(gate, via1; max_ratio: 3, sidewall: none, diode: diff, diode_credit: 18, diode_bonus: 0)";
+    let li = "rule ae antenna_electrical(gate, met1; max_ratio: 75, sidewall: 100nm, diode: diff, diode_credit: 450, diode_bonus: 0)";
+    let met1 = "rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, diode: diff, diode_credit: 400, diode_bonus: 2200)";
+    let via = "rule ae antenna_electrical(gate, via1; max_ratio: 6, sidewall: none, diode: diff, diode_credit: 36, diode_bonus: 0)";
+    let cuts = |n: usize, side: f64| n as f64 * side * side / 1e6;
+    let side = |width: i64, length: i64, flt: i64| (2 * (length + width) * flt) as f64 / 1e6;
+    let mut cases = Vec::new();
+    for (n, diode) in [(103, None), (104, None), (726, Some(1.0)), (727, Some(1.0))] {
+        cases.push(Case {
+            name: "mcon",
+            rule: mcon,
+            layout: cut_array(diode, n, 170),
+            ratio: cuts(n, 170.0),
+            credit: diode.map_or(0.0, |d| 18.0 * d),
+            max: 3.0,
+        });
+    }
+    for (um, diode) in [
+        (370, None),
+        (375, None),
+        (2620, Some(1.0)),
+        (2625, Some(1.0)),
+    ] {
+        cases.push(Case {
+            name: "li",
+            rule: li,
+            layout: line(diode, 170, um * 1000),
+            ratio: side(170, um * 1000, 100),
+            credit: diode.map_or(0.0, |d| 450.0 * d),
+            max: 75.0,
+        });
+    }
+    for (um, diode) in [
+        (570, None),
+        (572, None),
+        (4280, Some(1.0)),
+        (4286, Some(1.0)),
+    ] {
+        cases.push(Case {
+            name: "met1",
+            rule: met1,
+            layout: line(diode, 140, um * 1000),
+            ratio: side(140, um * 1000, 350),
+            credit: diode.map_or(0.0, |d| 400.0 * d + 2200.0),
+            max: 400.0,
+        });
+    }
+    for n in [1066, 1067] {
+        cases.push(Case {
+            name: "via_half_um2_diode",
+            rule: via,
+            layout: cut_array(Some(0.5), n, 150),
+            ratio: cuts(n, 150.0),
+            credit: 36.0 * 0.5,
+            max: 6.0,
+        });
+    }
+    cases
+        .into_iter()
+        .map(|case| {
+            let value = case.ratio - case.credit;
+            let verdict = if value > case.max { "fails" } else { "passes" };
+            let diode = if case.credit > 0.0 {
+                "diode"
+            } else {
+                "no_diode"
+            };
+            Fixture::new(
+                &format!(
+                    "erc/antenna_electrical/sky130_table_ig/{}/{diode}/{verdict}_{:.3}",
+                    case.name, case.ratio
+                ),
+                &["ERC-A5"],
+                &antenna_deck(case.rule),
+                ERC,
+            )
+            .layout(case.layout)
+            .expect(Expect::rule(
+                "ae",
+                ratio_findings(&[(value, (500, 500))], case.max, true),
+            ))
+        })
+        .collect()
 }
 
 // ------------------------------------------------------------------ density

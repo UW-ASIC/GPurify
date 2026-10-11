@@ -170,11 +170,13 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
     let (mut violations, mut runs) = report();
     check_antenna_electrical(
         design,
+        common::manufacturing_grid(),
         &AntennaElectricalTable {
             head: head(id),
             gate: vec![LayerId(2)],
             collector_start: vec![0, 1],
             collector: vec![LayerId(0)],
+            collector_measure: vec![AntennaMeasure::Area],
             diode: vec![None],
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],

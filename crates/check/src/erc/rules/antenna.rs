@@ -20,7 +20,7 @@ use gpurify_geom::boolean::union_into;
 use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, LayerId, PolyId};
-use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, DbuArea, Grid, MAX_ABS_DBU};
 use gpurify_ingest::deck::Connectivity;
 
 /// What an [`AntennaTable`] row counts as collecting area. A deck row states
@@ -202,34 +202,44 @@ pub struct AntennaTable {
 
 /// Antenna ratio with protection-diode credit: deck kind `antenna_electrical`,
 /// written `antenna_electrical(gate, collectors..; max_ratio: n,
-/// diode: layer | none, diode_credit: n, diode_bonus: n)`.
+/// sidewall: len | none, diode: layer | none, diode_credit: n,
+/// diode_bonus: n)`.
 ///
-/// Nets, collectors, gates and the summed ratio are those of [`AntennaTable`]
-/// (always by area, never sidewall). The value compared with `max_ratio` is
-/// `ratio - diode_credit * diode_area - diode_bonus`, the subtractive credit
-/// sky130 states, where `diode_area` is the `diode` layer area on the gate's
-/// net at the row's highest stage. Both terms are credit for a diode: a gate
+/// Nets, collectors, gates, the [`AntennaMeasure`] and the summed ratio are
+/// those of [`AntennaTable`]. The value compared with `max_ratio` is sky130's
+/// etch gate area ratio with a diode,
+///
+/// `EGAR = ratio - diode_credit * diode_area - diode_bonus`,
+///
+/// where `diode_area` is the `diode` layer's area on the gate's net at the
+/// row's highest stage in square micrometres: SKY130's "K x
+/// (`AntennaDiode_area` in um2)". Both terms are credit for a diode: a gate
 /// with no diode area on its net keeps its ratio, so with `diode: none` the
-/// bonus never applies.
+/// bonus never applies (SKY130: "the `diode_bonus` applies only when at least
+/// one diode is used, regardless from it's size"). Three public definitions
+/// agree on the unit: SKY130's EGAR; the sky130 technology LEF, whose
+/// `ANTENNADIFFSIDEAREARATIO` and `ANTENNADIFFAREARATIO` PWL tables rise by
+/// `K` per µm² of diode (met1: 2609 at 0.0225 µm², 11600 at 22.5 µm², a
+/// slope of 400, met1's `K`); and [KLayout] `antenna_check`, whose diode
+/// factor raises "the ratio threshold by \[the factor\] per square
+/// micrometer of diode area".
 ///
 /// # Limits
 ///
-/// A row with a diode layer and a non-zero `diode_credit` is refused: the unit
-/// of the diode area in the credit is not settled. So today the kind runs only
-/// as `antenna` with a constant bonus (ERC-A5). gf180's additive model
-/// (ERC-A6) and LEF's piecewise-linear diffusion limits (ERC-A7) are missing.
+/// gf180's additive model (ERC-A6) and LEF's piecewise-linear diffusion
+/// limits (ERC-A7) are missing.
 ///
 /// Catalog: ERC-A5 (partial), ERC-A8 in the [check catalog]. Defined by
-/// [SKY130] antenna EGAR; [LEF/DEF 5.8] `ANTENNAAREAMINUSDIFF`; [IHP SG13G2]
-/// Ant.b/e and Ant.d/f. Source tags are in [check-sources.md]; the refusal is
-/// in [limitations.md].
+/// [SKY130] antenna EGAR and Table Ig; [LEF/DEF 5.8] `ANTENNAAREAMINUSDIFF`;
+/// [IHP SG13G2] Ant.b/e and Ant.d/f; [KLayout] `antenna_check` (its diode
+/// factor). Source tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
-/// [limitations.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md
+/// [KLayout]: https://www.klayout.de/doc-qt5/about/drc_ref_netter.html#antenna_check
 /// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
-/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/antenna.html
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct AntennaElectricalTable {
     /// Rule id and severity per row.
@@ -240,10 +250,12 @@ pub struct AntennaElectricalTable {
     pub collector_start: Vec<u32>,
     /// Collector layers, CSR by `collector_start`; at least one per row.
     pub collector: Vec<LayerId>,
-    /// Per row: the protection-diode layer, or `None` for no credit by area.
+    /// Parallel to `collector`; equal within a row.
+    pub collector_measure: Vec<AntennaMeasure>,
+    /// Per row: the protection-diode layer, or `None` for no credit.
     pub diode: Vec<Option<LayerId>>,
-    /// Per row: the credit per unit diode area. Non-zero with a diode refuses
-    /// the row.
+    /// Per row: the credit per square micrometre of diode area on the gate's
+    /// net, sky130's `K`.
     pub diode_credit: Vec<f64>,
     /// Per row: a constant subtracted from the ratio of every gate with diode
     /// area on its net.
@@ -790,36 +802,39 @@ pub fn check_antenna(
 /// Runs every [`AntennaElectricalTable`] row: the credited ratio per gate.
 ///
 /// Reports as [`check_antenna`] does, the measured value being the credited
-/// ratio. A row with a diode layer and a non-zero `diode_credit` is refused
-/// before it is measured, whatever its nets hold: the unit of the diode area
-/// in the credit is not settled.
+/// ratio. `grid` turns the diode's area in square database units into the
+/// square micrometres its credit is stated per.
 ///
 /// # Panics
 ///
 /// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_antenna_electrical(
     design: Design<'_>,
+    grid: Grid,
     table: &AntennaElectricalTable,
     scratch: &mut Scratch,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a resolution squared is far below 2^53"
+    )]
+    let per_um2 = (grid.dbu_per_um() * grid.dbu_per_um()) as f64;
     for row in 0..table.head.len() {
         let rule = table.head.rule[row];
         let (credit, bonus) = (table.diode_credit[row], table.diode_bonus[row]);
         let before = out.len();
         let span = table.collector_start[row] as usize..table.collector_start[row + 1] as usize;
-        let diode = table.diode[row];
-        if diode.is_some() && credit != 0.0 {
-            record_run(runs, out, before, rule, Outcome::Refused, 0);
-            continue;
-        }
-        let collectors = &table.collector[span];
         let examined = antenna_row(
             design,
             (&table.head, row),
-            (table.gate[row], collectors, diode),
-            &vec![AntennaMeasure::Area; collectors.len()],
+            (
+                table.gate[row],
+                &table.collector[span.clone()],
+                table.diode[row],
+            ),
+            &table.collector_measure[span],
             &table.stack,
             table.max_ratio[row],
             #[allow(
@@ -829,7 +844,7 @@ pub fn check_antenna_electrical(
             |ratio, diode_area| {
                 // Both credits are for a diode: no diode on the net, none given.
                 let bonus = if diode_area.raw() > 0 { bonus } else { 0.0 };
-                Some(ratio - credit * diode_area.raw() as f64 - bonus)
+                Some(ratio - credit * (diode_area.raw() as f64 / per_um2) - bonus)
             },
             scratch,
             out,

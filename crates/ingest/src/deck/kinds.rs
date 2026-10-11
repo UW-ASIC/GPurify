@@ -587,6 +587,7 @@ pub(crate) const KINDS: &[Kind] = &[
         true,
         &[
             p("max_ratio", "max_ratio", Dim::Scalar),
+            opt("sidewall", "sidewall_thickness", Dim::Length),
             opt("diode", "diode_layer", Dim::Layer),
             p("diode_credit", "diode_credit", Dim::Scalar),
             p("diode_bonus", "diode_bonus", Dim::Scalar),

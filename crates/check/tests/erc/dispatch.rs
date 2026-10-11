@@ -149,6 +149,7 @@ fn every_kind() -> RuleSet {
             gate: vec![base],
             collector_start: vec![0, 1],
             collector: vec![other],
+            collector_measure: vec![antenna::AntennaMeasure::Area],
             diode: vec![None],
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
