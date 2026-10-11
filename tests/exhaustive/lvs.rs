@@ -3262,6 +3262,7 @@ fn layout_rows() -> Vec<Fixture> {
 }
 
 mod netgen;
+mod system;
 
 #[cfg(test)]
 mod tests {

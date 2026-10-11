@@ -73,6 +73,19 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "FLOW-006",
         "tests/engine/custom.rs::a_binary_s_own_deck_runs_its_custom_rules_by_name",
     ),
+    // A system is several dies, which one fixture's single layout cannot hold.
+    (
+        "LVS-073",
+        "tests/exhaustive/lvs/system.rs::a_two_die_stack_matches_and_a_missing_or_misordered_bump_does_not",
+    ),
+    (
+        "ERC-C12",
+        "tests/exhaustive/lvs/system.rs::die_to_die_and_package_pins_need_their_esd_paths",
+    ),
+    (
+        "ERC-C13",
+        "tests/exhaustive/lvs/system.rs::a_system_pin_needs_a_system_rated_clamp",
+    ),
 ];
 
 fn all(depth: Depth) -> Vec<Fixture> {
