@@ -114,7 +114,7 @@ LVS-016	lvs	compare	Pin / port mismatch	KL:pin_mismatch; NG:Port counts	lvs.unpa
 LVS-017	lvs	compare	Subcircuit instance unpaired	KL:subcircuit_mismatch; NG	lvs:flatten	partial	SY	Instances are flattened, not paired as units: a missing instance shows as its devices unpaired
 LVS-018	lvs	compare	Symmetric / ambiguous matching	KL:match_ambiguous_nets; NG:symmetry by property	lvs:tie_break	implemented	MR; SY	Closest-parameter tie-break as netgen, with a bounded retry (8 per stall) of pairings refinement shows wrong (F58, fixed)
 LVS-019	lvs	compare	Verdict classes	KL:NetlistCrossReference status; NG	lvs:verdict	implemented	SY; TX:NG	Match / Mismatch / Inconclusive{RoundLimit, AmbiguousTop}
-LVS-020	lvs	compare	Undeclared parameter	-	lvs.undeclared_param	implemented	SY	GPurify-specific Per device (F68)
+LVS-020	lvs	compare	Undeclared parameter	-	lvs.undeclared_param	implemented	SY; MR	GPurify-specific Per device (F68)
 LVS-030	lvs	equiv	Swappable pins (S/D, resistor ends, user-declared)	KL:equivalent_pins; NG:permute	lvs:roles	partial	SY; TX:NG	MOS source/drain and resistor ends are interchangeable; diode anode/cathode and capacitor plates are not, as in Netgen. User-declared equivalent pins are missing
 LVS-031	lvs	equiv	Asymmetric devices (S/D not swappable)	KL:dmos3,dmos4	-	missing	SY	
 LVS-032	lvs	equiv	Net-name seeding (same_nets)	KL:same_nets,consider_net_names	-	missing	SY	Names neither seed refinement nor are compared (test net_names_do_not_have_to_agree)
@@ -137,11 +137,11 @@ LVS-062	lvs	device	Capacitor C/A/P	KL:Capacitor; MAG:capacitor	lvs:params	partia
 LVS-063	lvs	device	Diode A/P	KL:Diode	lvs:params	implemented	SY	Marker area (holes out) and perim (every ring) (F85); pj, A, P aliases (F87); a D card with no model is the deck's one diode (F86); polarity compared
 LVS-064	lvs	device	BJT AE/PE/NE, multi-emitter	KL:BJT3,BJT4	lvs:params	partial	SY	ae/pe from the emitter terminal's polygon (B27); marker area and perim; no NE or multi-emitter. sky130 bipolars have no recogniser (limitations.md, "Shipped decks")
 LVS-065	lvs	device	Inductor	KL:Inductor; IHP:6.12	-	missing	SY	
-LVS-066	lvs	device	Device flavour (HVT/LVT) by implant marker	GF:App.A; IHP LVS decks	deck:device	expressible	SY	A flavour is a device statement whose marker includes the implant (gate_n and hvt), with the plain flavour excluding it (gate_n not hvt). The corpus deck does not do this yet, so LVS_HVT/LVS_LVT stay blocked (testing-plan F6)
+LVS-066	lvs	device	Device flavour (HVT/LVT) by implant marker	GF:App.A; IHP LVS decks	deck:device	expressible	SY; MR	A flavour is a device statement whose marker includes the implant (gate_n and hvt), with the plain flavour excluding it (gate_n not hvt). The corpus deck does not do this yet, so LVS_HVT/LVS_LVT stay blocked (testing-plan F6)
 LVS-067	lvs	device	Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD)	MAG:subcircuit kinds; IHP LVS decks	-	missing	SY	sky130 VPP caps have no marker (limitations.md)
 LVS-068	lvs	device	Device-count and parameter-range limits (devices per model, W/L inside the model's valid range)	MAG:param_limits; IHP:npn13G2.bR; GF:App.A	-	missing	FR; SY	No check exists: the deck has no syntax for per-model counts or parameter ranges
 LVS-070	lvs	netlist	SPICE / CDL reader	ngspice manual; KL:NetlistSpiceReader	ingest:spice	implemented	SY; fuzz	No open authoritative CDL spec
-LVS-071	lvs	netlist	Spectre reader	-	ingest:spectre	implemented	SY; fuzz	
+LVS-071	lvs	netlist	Spectre reader	-	ingest:spectre	implemented	SY; MR; fuzz	
 LVS-072	lvs	netlist	Hierarchical reference flattening	KL; NG	lvs:flatten	implemented	SY	Netlist::flatten_top expands every instance below the top at load; a cycle is refused
 LVS-073	lvs	netlist	3D / system LVS across dies	CAL:3DStack	-	missing	-	In scope since 2026-10-11 (was: Single-die only)
 ERC-A1	erc	antenna	Per-layer area ratio (PAR)	LEF:App.C; IHP:Ant.a; SKY:antenna	antenna	implemented	CF; SE:LEF PAR 2.0/1.0; FR; TX:OR,MAG; MR; SY	
@@ -177,7 +177,7 @@ ERC-D1	erc	latchup	Max distance to well/substrate tap	GF:LU.1-4; IHP:LU.a,LU.b; 
 ERC-D1a	erc	latchup	Tap distance conditional on neighbouring well spacing	GF:LU.1-4	-	missing	FR	
 ERC-D1b	erc	latchup	Minimum well-tie area	TR18-02:Annex A; GF:LU.7	-	missing	FR; CF	
 ERC-D2	erc	latchup	Pad-diffusion guard ring (spacing, width)	GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2	esd_latchup	partial	FR; MR; SY	No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap
-ERC-D3	erc	latchup	Guard ring / well tied to the correct rail	GF:LU.9,LU.10	well_bias	partial	SY	Devices only, not guard rings
+ERC-D3	erc	latchup	Guard ring / well tied to the correct rail	GF:LU.9,LU.10	well_bias	partial	SY; NV	Devices only, not guard rings
 ERC-D4	erc	latchup	Guard-ring resistance / current under injection	TR18-02:2.3; JESD78:Table 1; CAL	p2p_resistance,em_current_density	partial	CF; MR; SY	Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled
 ERC-D5	erc	latchup	Voltage-aware aggressor/victim	TR18-02:2.2.3; CAL	-	missing	SY	
 ERC-D6	erc	latchup	HV latch-up between isolated pockets	TR18-02:3.3	-	missing	SY	
@@ -201,13 +201,13 @@ ERC-F2	erc	voltage	Gate-oxide overstress	GF:14.1.4.2; SKY:hv; TR22:4.1; CAL	gate
 ERC-F3	erc	voltage	Junction / drain-source overstress	SKY:hv; IHP:process spec	drain_source	implemented	FR; SY	
 ERC-F4	erc	voltage	HCI susceptibility flag	CAL:WP 81822 Eq.1; GF:14.1.4.1	-	missing	SE	
 ERC-F5	erc	voltage	TDDB/BTI/HCI lifetime	JEP122; JESD263; JESD241; JESD28; JESD60	reliability	implemented	CF; MR; SY	
-ERC-F6	erc	voltage	Missing level shifter	CAL:WP 81822; IEEE1801	missing_level_shifter	implemented	SY	
+ERC-F6	erc	voltage	Missing level shifter	CAL:WP 81822; IEEE1801	missing_level_shifter	implemented	SY; NV	
 ERC-F7	erc	voltage	Missing isolation at switchable-domain outputs	IEEE1801; CPF	-	missing	SY	Needs power states
 ERC-F8	erc	voltage	Power-state-dependent undriven gates	CAL:WP 81822; IEEE1801; IA	-	missing	SE; SY	
 ERC-F9	erc	voltage	DC / sneak path between domains	CAL:datasheet; CAL:WP 81822	domain_crossing	implemented	SE:WP Fig2; SY	
 ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10	hv_domain	partial	FR; SY; MR	The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not
 ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	-	missing	FR	Same row as DRC-082
-ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY	Only sky130 connects wells (limitations.md, "Shipped decks")
+ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY; NV	Only sky130 connects wells (limitations.md, "Shipped decks")
 ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	-	missing	FR	
 ERC-G1	erc	classic	Floating / undriven gate	CAL:WP 81822; YOSYS:check	floating_gate	implemented	SY; NV; TX:YOSYS; MR	
 ERC-G2	erc	classic	Floating well	SKY:nwell.4	floating_well	implemented	FR; SY; MR	
@@ -230,10 +230,10 @@ PEX-006	pex	accuracy	Multi-corner extraction	CAL; SRC	-	missing	-
 PEX-007	pex	accuracy	Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware)	SRC; CAL	-	missing	-	In scope since 2026-10-11 (was: Needs foundry models)
 PEX-008	pex	output	Reduction modes (C-only, RC, RCC, thresholds)	CAL:xACT	-	missing	-	One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef|dspf. No C-only or RC modes and no thresholds
 PEX-009	pex	accuracy	PEX netlist diff / qualification	SIL:PEX Certify	-	missing	TX	Worth building as an internal test tool
-PEX-010	pex	output	SPEF output	IEEE1481	pex:spef	implemented	MR; golden	A net with several labels, or a label on several nets, is refused by every writer, naming them; SPEF has no alias (F71)
+PEX-010	pex	output	SPEF output	IEEE1481	pex:spef	implemented	CF; SE; MR; golden	A net with several labels, or a label on several nets, is refused by every writer, naming them; SPEF has no alias (F71)
 FLOW-001	flow	waiver	Geometric / hierarchy-invariant waivers	CAL:Auto-Waivers; PEG	-	missing	SY	
 FLOW-002	flow	staged	Early / dirty-design staged runs	CAL:Recon; ICV:Explorer	-	missing	-	
 FLOW-003	flow	soc	SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap)	ICV	-	missing	SY	Cheap from LEF/DEF + GDS
 FLOW-004	flow	soc	Interface DRC top vs blocks	CAL; ICV	-	missing	-	
-FLOW-005	flow	ide	In-design / live DRC	CAL:RealTime; ICV:Live; PEG	lib:deck	partial	-	Shared-deck library (Philis) is the first step
+FLOW-005	flow	ide	In-design / live DRC	CAL:RealTime; ICV:Live; PEG	lib:deck	partial	FR; MR	Shared-deck library (Philis) is the first step
 FLOW-006	flow	custom	User-programmable rules	CAL:TVF; KL:Ruby/Python	deck:rust	missing	SY	Rust decks + Rule::Custom (testing-plan.md L9b)
