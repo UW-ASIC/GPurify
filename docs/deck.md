@@ -257,7 +257,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `region_density(L, R) <= frac` | A shape of `R` inside which `L` covers more than the limit of its area, each shape measured on its own: the pattern density over a device, as sky130 vpp.5a "max pattern density of met3.dg over capacitor.dg". Use `>=` for a minimum (vpp.11). |
 | `global_density(L) >= frac` | Coverage of the whole layout (the drawn layers' extent, as for `density`) below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
 | `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side, measured to the outer shape's real edges, holes included. |
-| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (sky130 m1.5 "two opposite sides"). |
+| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (LEF `ENCLOSURE` "on two opposite sides"; for a rectangle the same as sky130 m1.5 "on one of two adjacent sides"). Each edge is measured straight out to the outer shape, so an L-shaped inner needs the limit past every vertical edge, or past every horizontal one. LEF `ENCLOSURE o1 o2` is this rule at `o1` plus `enclosure(inner, outer) >= o2`. |
 | `extension(A, B) >= len` | `A` not extending past `B` by the limit, as poly past diffusion. |
 | `overlap(A, B) >= len` | `A` and `B` overlapping by less than the limit. |
 | `tap_distance(well, tap) <= len` | Any point of a well further than the limit from a tap. |
