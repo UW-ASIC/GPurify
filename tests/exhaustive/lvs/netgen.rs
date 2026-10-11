@@ -8,7 +8,11 @@
 //! reference. Netgen reads the drawn circuit's own SPICE ([`spice`]) as its
 //! layout side, never a netlist `GPurify` extracted, so nothing it sees comes
 //! from the tool under test; a disagreement is in `GPurify`'s extraction or
-//! its comparison. Its reference is the fixture's own text. Both go through
+//! its comparison. That SPICE states a MOS's `w` and `l` only where a
+//! reference card of its model does ([`as_declared`]): `GPurify` measures
+//! every drawn size but keeps one only where the reference declares it, and
+//! Netgen counts a property one side states and the other lacks as an error.
+//! Its reference is the fixture's own text. Both go through
 //! [`for_netgen`], which puts the bulk of every three-terminal MOS on one
 //! extra port: the deck extracts no bulk for those, so `GPurify` drops the
 //! reference's, and Netgen must see the same thing on both sides.
@@ -126,6 +130,18 @@ fn for_netgen(text: &str) -> String {
     out
 }
 
+/// `layout` with each MOS card writing `w` and `l` only where a card of its
+/// model in `reference` does, as `GPurify` keeps a layout measure only where
+/// the reference declares it (testing-plan F22).
+fn as_declared(layout: &Circuit, reference: &Circuit) -> Circuit {
+    let declared = super::Declared::of(reference);
+    let mut out = layout.clone();
+    for dev in &mut out.devs {
+        dev.writes = (declared.has(dev.model, "w"), declared.has(dev.model, "l"));
+    }
+    out
+}
+
 /// A card's nets: every word but the first and the model, up to the first
 /// parameter.
 fn card_nets(line: &str) -> Vec<&str> {
@@ -191,7 +207,7 @@ fn curated() -> Vec<Case> {
                 reference: &Circuit,
                 differs: Option<&'static str>| Case {
         fixture: compared(&format!("netgen/{name}"), catalog, layout, reference),
-        layout: for_netgen(&spice(layout)),
+        layout: for_netgen(&spice(&as_declared(layout, reference))),
         reference: for_netgen(&spice(reference)),
         differs,
     };
@@ -238,6 +254,64 @@ fn curated() -> Vec<Case> {
             None,
         ),
     ];
+    // B27: unsized parallel MOS keep their count (F83), each merge needs only
+    // the size it sums (F84), and a card with no `m` counts one device.
+    let only = |dev: Dev, w, l| Circuit::new(3, vec![dev.writes(w, l)]);
+    let pairs = Circuit::new(
+        4,
+        [[0, 1], [0, 1], [2, 3], [2, 3]]
+            .iter()
+            .map(|pins| Dev::pins(C, pins))
+            .collect(),
+    );
+    let bare_and_m2 = Circuit::new(
+        4,
+        vec![Dev::pins(C, &[0, 1]), Dev::pins(C, &[2, 3]).times(2)],
+    );
+    out.extend([
+        case(
+            "parallel/mos_unsized_two_vs_one",
+            &["LVS-040"],
+            &two,
+            &only(Dev::mos(N, 0, 1, 2), false, false),
+            None,
+        ),
+        case(
+            "parallel/mos_unsized_two_vs_m2",
+            &["LVS-046"],
+            &two,
+            &only(Dev::mos(N, 0, 1, 2).times(2), false, false),
+            None,
+        ),
+        case(
+            "parallel/mos_two_vs_wide_w_only",
+            &["LVS-040"],
+            &two,
+            &only(Dev::mos(N, 0, 1, 2).sized(2000, 150), true, false),
+            None,
+        ),
+        case(
+            "parallel/mos_two_vs_wide_l_only",
+            &["LVS-040"],
+            &two,
+            &only(Dev::mos(N, 0, 1, 2).sized(2000, 150), false, true),
+            None,
+        ),
+        case(
+            "series/stack_vs_long_l_only",
+            &["LVS-041"],
+            &stack,
+            &only(Dev::mos(N, 0, 1, 2).sized(1000, 300), false, true),
+            Some(SERIES),
+        ),
+        case(
+            "multiplier/C_two_pairs_vs_bare_and_m2",
+            &["LVS-046"],
+            &pairs,
+            &bare_and_m2,
+            None,
+        ),
+    ]);
     for model in [R, C, D] {
         let letter = model.letter();
         let one = polar(Dev::pins(model, &[0, 1]));

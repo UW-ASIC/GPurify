@@ -75,8 +75,12 @@
 //! And what the setup must say to agree: the parameter tolerance as Netgen
 //! measures it (see [`CompareOptions::param_tolerance`]), every bulk on one
 //! net on both sides when the layout extracts none (this module drops the
-//! reference's), and no reading of Netgen's pin matching, since names do not
-//! take part here.
+//! reference's), a layout size only where a reference card of its model
+//! states it (this module keeps no other measure, and Netgen counts a
+//! property one side lacks as an error), and no reading of Netgen's pin
+//! matching, since names do not take part here. Unsized transistors in
+//! parallel counted in `m`, and a merge told only `W` or only `L`, agree
+//! with Netgen (B27).
 //!
 //! # Report
 //!
