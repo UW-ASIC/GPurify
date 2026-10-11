@@ -889,8 +889,8 @@ pub enum Rule {
     /// DRC-025, DRC-026, DRC-027. Rules: IHP M1.b, M1.e and M1.f; LEF
     /// `SPACINGTABLE PARALLELRUNLENGTH`.
     ///
-    /// Limits: the row is keyed on the wider shape only. LEF
-    /// `SPACINGTABLE TWOWIDTHS` keys on both widths and cannot be written.
+    /// The row is keyed on the wider shape only; LEF `SPACINGTABLE
+    /// TWOWIDTHS`, keyed on both widths, is [`Rule::TwoWidthSpacingTable`].
     SpacingTable {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -1513,6 +1513,48 @@ pub enum Rule {
         /// positive.
         forward: Dbu,
     },
+    /// Two shapes closer than their cell of a two-width spacing table: the
+    /// space depends on the widths of both shapes, and per width on the run
+    /// between them.
+    ///
+    /// Deck: `two_width_table(L; width: [..], prl: [none | len, ..], space:
+    /// [[..], ..])`, kind `two_width_spacing_table`. The same widths head the
+    /// rows and the columns, each with its optional run (LEF: the table
+    /// "implicitly has the same widths (and optional parallel run lengths)
+    /// for the row and column headings"). Pairs are shapes in different
+    /// merged figures, never a polygon and its own hole. A shape is wider
+    /// than a width where a `width + 1` square fits in the merged layer, as
+    /// [`Rule::SpacingTable`] reads width, and every shape is wider than the
+    /// first width, 0. A width applies to a shape when the shape is wider
+    /// than it and, where the width states a run, the two figures run
+    /// alongside each other for more than that run (measured as for
+    /// [`Rule::SpacingTable`], on the edges facing each other at most the cell
+    /// apart). Each cell whose row applies to one shape and whose column to
+    /// the other holds the pair to it, measured between the parts of the two
+    /// shapes that wide (a whole shape for the first row or column). The
+    /// cells never fall, so this is LEF's rule, the cell at the last row and
+    /// the last column that apply, with each part held to its own width: a
+    /// thin tab of a wide plate is held as thin.
+    ///
+    /// One violation per pair, at its highest failing cell (the largest space
+    /// it fails, the nearest of those), with `limit` that cell and `measured`
+    /// the distance there, at the midpoint of the points it measured.
+    /// `examined` counts the pairs.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-027. Rules: LEF `SPACINGTABLE TWOWIDTHS {WIDTH width [PRL
+    /// runLength] {spacing} ...}` (LEF/DEF 5.8 Language Reference, "Two-Width
+    /// Spacing Tables", with its worked example).
+    ///
+    /// Limits: a negative run, which LEF lets reach diagonal pairs, cannot be
+    /// written; a width with no run is `none`. The table must be symmetric,
+    /// as which shape is the first is not a property of the pair.
+    TwoWidthSpacingTable {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::class_tables`].
+        table: u32,
+    },
 }
 
 /// The parallel-edge condition of an end-of-line rule (LEF `PARALLELEDGE
@@ -1655,14 +1697,15 @@ pub struct SpacingQuery {
     pub end_of_line: Option<Dbu>,
 }
 
-/// A square table indexed by a class of each of two edges, for
-/// [`Rule::TipSpacingTable`]: a pair needs `space[i][j]`, with `i` the class
-/// of one and `j` that of the other, each the last threshold in `class` it
-/// reaches. Classes start at 0, so every edge has one.
+/// A square table indexed by a class of each of two edges or shapes, for
+/// [`Rule::TipSpacingTable`] (classes by edge length) and
+/// [`Rule::TwoWidthSpacingTable`] (classes by width, each with an optional
+/// run): a pair needs `space[i][j]`, with `i` the class of one and `j` that
+/// of the other. Classes start at 0, so every edge or shape has one.
 ///
 /// Every table in a [`RuleSet`] passed its kind's check
-/// ([`ClassTable::is_valid_tips`]); one built by hand must too, or
-/// [`RuleSet::run`] may panic indexing it.
+/// ([`ClassTable::is_valid_tips`], [`ClassTable::is_valid_two_widths`]); one
+/// built by hand must too, or [`RuleSet::run`] may panic indexing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassTable {
     /// The class thresholds, in grid units: starts at 0 and rises.
@@ -1684,6 +1727,27 @@ impl ClassTable {
         self.prl.is_empty()
             && self.is_square()
             && self.class.windows(2).all(|pair| pair[0] < pair[1])
+    }
+
+    /// Whether the table is square, symmetric and positive, its cells never
+    /// fall along a row (nor, by symmetry, a column), its widths start at 0
+    /// and never fall, and its runs start with none (the first width states
+    /// no run) and never fall among those stated, each 0 or more: what
+    /// [`Rule::TwoWidthSpacingTable`] reads (LEF: "The width and runLength
+    /// values must be the same or increasing", the spacings "the same or
+    /// increasing from left to right, and from top to bottom").
+    /// [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid_two_widths(&self) -> bool {
+        let n = self.class.len();
+        let runs: Vec<Dbu> = self.prl.iter().flatten().copied().collect();
+        self.prl.len() == n
+            && self.prl.first().is_some_and(Option::is_none)
+            && runs.iter().all(|run| run.raw() >= 0)
+            && runs.windows(2).all(|pair| pair[0] <= pair[1])
+            && self.is_square()
+            && self.class.windows(2).all(|pair| pair[0] <= pair[1])
+            && (0..n).all(|i| (1..n).all(|j| self.at(i, j - 1) <= self.at(i, j)))
     }
 
     /// Classes from 0, one row and column per class, every cell positive and
@@ -1717,6 +1781,8 @@ pub struct RuleSet {
     /// positive, sorted, without repeats, never empty.
     pub widths: Vec<Vec<Dbu>>,
     /// The tables [`Rule::TipSpacingTable`] names.
+    /// The tables [`Rule::TipSpacingTable`] and
+    /// [`Rule::TwoWidthSpacingTable`] name.
     pub class_tables: Vec<ClassTable>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
@@ -2319,6 +2385,34 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "two_width_spacing_table" => {
+                    let layer = one(spec)?;
+                    let wanted = strings.get("prl");
+                    let prl = rules
+                        .params_of(spec)
+                        .iter()
+                        .filter(|&&(name, _)| Some(name) == wanted)
+                        .map(|&(_, stated)| match stated {
+                            ParamValue::Length(run) => Ok(Some(run)),
+                            ParamValue::Flag(false) => Ok(None),
+                            _ => Err(wrong_type(spec, "prl")),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let table = ClassTable {
+                        class: lengths(spec, "width")?,
+                        prl,
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid_two_widths() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.class_tables.push(table);
+                    Rule::TwoWidthSpacingTable {
+                        layer,
+                        table: u32::try_from(set.class_tables.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
                 "eol_keep_out" => Rule::EolKeepOut {
                     layer: one(spec)?,
                     eol_width: length(spec, "eol_width")?,
@@ -2638,6 +2732,14 @@ impl RuleSet {
                     layer,
                     (eol_width, within, limit),
                     (parallel, end_to_end),
+                    s,
+                    out,
+                ),
+                Rule::TwoWidthSpacingTable { layer, table } => spacing::two_width_table(
+                    store,
+                    id,
+                    layer,
+                    &self.class_tables[table as usize],
                     s,
                     out,
                 ),
@@ -3001,7 +3103,8 @@ impl Rule {
             | Rule::TipSpacingTable { layer, .. }
             | Rule::ForbiddenSpacing { layer, .. }
             | Rule::EolWithinSpacing { layer, .. }
-            | Rule::EolKeepOut { layer, .. } => [Some(layer), None],
+            | Rule::EolKeepOut { layer, .. }
+            | Rule::TwoWidthSpacingTable { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

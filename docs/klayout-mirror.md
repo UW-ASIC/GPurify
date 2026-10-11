@@ -1088,6 +1088,30 @@ the space when the facing edge is an end of line too. `TritonRoute` defines the 
 parallel reach each swept one step either side, and both-sides and end-to-end cases, hand-derived
 under the square's symmetries (SY, MR).
 
+### 40. two_width_spacing_table — APPROX (exact on R, else KLayout ⊆ GPurify)
+
+**GPurify** (`spacing.rs` `two_width_table`): each cell (r, c) holds a pair whose one shape has a
+part wider than `width[r]` and the other a part wider than `width[c]` (the whole shape for the
+first width), when the figures' run within the cell exceeds both widths' stated runs; it fails
+when those two parts are closer than the cell. One finding per pair, at its highest failing cell.
+
+**KLayout**
+
+```ruby
+# One check per cell, s = 2·space[r][c]; W(i) = L.sized(-width[i]).sized(width[i]), W(0) = L
+# (x2: sizing by the undoubled width removes what is at most that wide); the run is the larger
+# of the two widths' stated runs, as projection_limits(2·run + 1, nil).
+L.isolated(s, euclidian, transparent)                                     # r = c = 0
+W(r).separation(W(c), s, euclidian, transparent[, projection_limits(...)])  # otherwise
+```
+
+- The same-figure filter of rule 11 drops a wide part paired with its own figure.
+- On R a wide part is the whole rectangle and the projection between two rectangles is their
+  facing run, so the two agree. Off R, as rule 31: KLayout's run is between the parts, GPurify's
+  between the whole figures. Besides the mirror: LEF's own worked example (the four width and
+  run cases it prints; SE), the widths and a run swept one step either side, a thin tab of a wide
+  plate, hand-derived under the square's symmetries (SY, MR).
+
 ### 39. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
 
 **GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 38) owns a box, the end widened
@@ -1146,7 +1170,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 39, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 40, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest

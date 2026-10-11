@@ -1,7 +1,8 @@
 //! Spacing kinds read off the edges of the merged layer
-//! (`drc::rules::facing`). Every case asserts what was measured, the limit it
-//! was held to, the marker, and `examined`, so a table looked up in the wrong
-//! cell or a pair dropped from the scan shows.
+//! (`drc::rules::facing`), and the two-width spacing table. Every case
+//! asserts what was measured, the limit it was held to, the marker, and
+//! `examined`, so a table looked up in the wrong cell or a pair dropped from
+//! the scan shows.
 
 use crate::common::{A, RULE};
 use gpurify_check::drc::ruleset::{ClassTable, EolParallel};
@@ -463,6 +464,90 @@ fn each_intruding_figure_is_one_finding() {
         Vec::new(),
     );
     assert!(out.is_empty());
+}
+
+// --------------------------------------------------- two_width_spacing_table
+
+/// LEF/DEF 5.8's two-width table ("Two-Width Spacing Tables") in
+/// nanometres: widths 0, 250, 1500 and 3000 with runs none, 0, 1500, 3000.
+fn lef_two_widths() -> Vec<ClassTable> {
+    vec![ClassTable {
+        class: [0, 250, 1500, 3000].into_iter().map(dbu).collect(),
+        prl: vec![None, Some(dbu(0)), Some(dbu(1500)), Some(dbu(3000))],
+        space: [
+            150, 200, 500, 1000, 200, 250, 500, 1000, 500, 500, 600, 1000, 1000, 1000, 1000, 1200,
+        ]
+        .into_iter()
+        .map(dbu)
+        .collect(),
+    }]
+}
+
+const TWO_WIDTHS: Rule = Rule::TwoWidthSpacingTable { layer: A, table: 0 };
+
+/// Lines `wa` and `wb` wide, `gap` apart, running alongside for `run`.
+fn lines(wa: i64, wb: i64, gap: i64, run: i64) -> GeometryStore {
+    layout(&[
+        [0, 0, wa, 2000],
+        [wa + gap, 2000 - run, wa + gap + wb, 4000 - run],
+    ])
+}
+
+/// Oracle: LEF 5.8's worked example, verbatim: "If width1 = 0.25, width2 =
+/// 0.25, and prl = 0.0, then spacing = 0.15. If width1 = 0.25, width2 =
+/// 0.26, and prl = 0.0, then spacing = 0.15. If width1 = 0.25, width2 =
+/// 0.26, and prl = 0.1, then spacing = 0.20. If width1 = 0.26, width2 =
+/// 0.26, and prl = 0.1, then spacing = 0.25." Each pair one unit under its
+/// space reports that space as its limit.
+#[test]
+fn lef_s_worked_example_picks_each_cell() {
+    for (wa, wb, run, space) in [
+        (250, 250, 0, 150),
+        (250, 260, 0, 150),
+        (250, 260, 100, 200),
+        (260, 260, 100, 250),
+    ] {
+        let (out, runs) = run(&lines(wa, wb, space - 1, run), TWO_WIDTHS, lef_two_widths());
+        assert_eq!(out.measured, [len(space - 1)], "{wa} {wb} {run}");
+        assert_eq!(out.limit, [len(space)], "{wa} {wb} {run}");
+        assert_eq!(assert_rule_ran(&runs, RULE).examined, 1);
+
+        let (out, _) = run(&lines(wa, wb, space, run), TWO_WIDTHS, lef_two_widths());
+        assert!(out.is_empty(), "{wa} {wb} {run} at its space");
+    }
+}
+
+/// Oracle: construct-from-answer. Two 1600 wide plates 550 apart need 600
+/// only when they run alongside for more than the 1500 width's run: at 1500
+/// they are held to 250 and pass; at 1501 they fail 600, marked in the
+/// middle of the 1501 run.
+#[test]
+fn a_width_s_run_must_be_exceeded() {
+    let plates = |r: i64| layout(&[[0, 0, 1600, 3000], [2150, 3000 - r, 3750, 6000 - r]]);
+    let (out, _) = run(&plates(1500), TWO_WIDTHS, lef_two_widths());
+    assert!(out.is_empty());
+
+    let (out, _) = run(&plates(1501), TWO_WIDTHS, lef_two_widths());
+    assert_eq!(out.measured, [len(550)]);
+    assert_eq!(out.limit, [len(600)]);
+    assert_eq!(out.at, [point(1875, 2249)]);
+}
+
+/// Oracle: construct-from-answer. A 260 wide line 220 from the 100 wide tab
+/// of a 2 µm plate: the tab is not wider than 250, the plate is 500 away,
+/// so every cell passes (a whole-shape width would hold the tab to 250).
+/// Both rows of the plate's figure pair with the line.
+#[test]
+fn a_thin_tab_of_a_wide_plate_is_held_as_thin() {
+    let store = layout(&[
+        [0, 0, 2000, 2000],
+        [900, 2000, 1000, 3000],
+        [1220, 2500, 1480, 4000],
+    ]);
+    let (out, runs) = run(&store, TWO_WIDTHS, lef_two_widths());
+
+    assert!(out.is_empty());
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
 }
 
 /// Oracle: the kind's contract. A layer the rule cannot represent exactly

@@ -238,6 +238,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `space(L; nets: same) >= len` | Two shapes on the same net closer than the limit, as gf180 NW.2a. Nets are the extracted ones, joined through vias and other layers. `L` must be a conductor. |
 | `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
 | `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
+| `two_width_table(L; width: [len, ..], prl: [none \| len, ..], space: [[len, ..], ..])` | Two shapes closer than the cell both their widths select, as a LEF `SPACINGTABLE TWOWIDTHS` (see below). |
 | `tip_space_table(L; length: [len, ..], space: [[len, ..], ..])` | Two shapes whose facing edges are closer than the cell the two edges' lengths select: tip to tip, tip to side, side to side (see below). |
 | `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | Another shape inside the keep-out box of an end of line (an edge shorter than `eol_width` with both corners convex): the end widened by `side` each way, from `backward` behind it to `forward` past it, as LEF58 `EOLKEEPOUT`. Touching the box is not inside it. Reported with the area inside. |
 | `forbidden_space(L; min: len, max: len, prl: len)` | Two shapes whose facing edges run alongside each other for more than `prl` at a gap from `min` to `max`, both included: a forbidden range, as LEF58 two-wire forbidden spacing. A wider gap is legal, and so is a narrower one, which `space` judges. Edges face each other as in a tip table. |
@@ -290,6 +291,30 @@ first row. A row's width is measured on the part of the shape that wide, so a
 thin tab of a wide plate is held to the thin row. `prl` and `width` start at
 0 and rise, there is one row per width and one cell per run length, and no
 cell is smaller than the one before it in its row or column.
+
+A two-width table, as LEF `SPACINGTABLE TWOWIDTHS`, where the space two
+shapes need depends on the widths of both, not only the wider, and a width
+can also ask for a run alongside:
+
+```
+rule M2.S two_width_table(met2;
+    width: [0nm, 250nm, 1500nm, 3000nm],
+    prl:   [none, 0nm, 1500nm, 3000nm],
+    space: [[150nm, 200nm, 500nm, 1000nm],
+            [200nm, 250nm, 500nm, 1000nm],
+            [500nm, 500nm, 600nm, 1000nm],
+            [1000nm, 1000nm, 1000nm, 1200nm]])
+```
+
+The widths head both the rows and the columns. A width applies to a shape
+that is wider than it (exactly 250 nm is not wider than 250 nm) when, if it
+has a run, the two shapes run alongside each other for more than that run,
+measured as for `space_table`; `none` asks for no run, and the first width is
+0 with `none`. A pair needs the cell at the last width that applies to one
+shape and the last that applies to the other. A width is measured on the part
+of the shape that wide, so a thin tab of a wide plate is held as thin. Widths
+and runs never fall, every cell is positive, no cell falls along its row, and
+the table is symmetric.
 
 A tip table, as ASAP7 M1.S.1 to M1.S.5, where the space two shapes need
 depends on the lengths of the two edges that face each other, so a line end

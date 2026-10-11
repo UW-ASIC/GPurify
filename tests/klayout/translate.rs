@@ -1267,6 +1267,52 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Length,
                 )
             }
+            Rule::TwoWidthSpacingTable { layer, table } => {
+                let name = fig(layer, &mut reads);
+                let table = &set.class_tables[table as usize];
+                let n = table.class.len();
+                let v = var(layer);
+                // The part of the layer wider than width `i` (x2: sizing by
+                // the undoubled width removes what is at most that wide).
+                let part = |i: usize| {
+                    if i == 0 {
+                        v.clone()
+                    } else {
+                        format!("{v}.sized(-{w}).sized({w})", w = table.class[i].raw())
+                    }
+                };
+                for r in 0..n {
+                    for c in 0..n {
+                        let s = 2 * table.space[r * n + c].raw();
+                        let run = [table.prl[r], table.prl[c]]
+                            .into_iter()
+                            .flatten()
+                            .map(|prl| 2 * prl.raw() + 1)
+                            .max()
+                            .map_or(String::new(), |run| {
+                                format!(", projection_limits({run}, nil)")
+                            });
+                        if r == 0 && c == 0 {
+                            writeln!(body, "emit({q}, {v}.isolated({s}, euclidian, transparent{run}))")
+                        } else {
+                            writeln!(
+                                body,
+                                "emit({q}, {}.separation({}, {s}, euclidian, transparent{run}))",
+                                part(r),
+                                part(c)
+                            )
+                        }
+                        .expect("a String");
+                    }
+                }
+                approx(
+                    "two_width_spacing_table",
+                    Compare::KlayoutWithin,
+                    Key::Pair(name.clone(), name.clone(), true),
+                    Value::Ignore,
+                    vec![name],
+                )
+            }
             Rule::EolKeepOut { .. } => (
                 "eol_keep_out",
                 Verdict::None("KLayout has no end-of-line keep-out box"),

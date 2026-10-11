@@ -72,6 +72,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         attached_wide_spacing(depth),
         net_spacing(depth),
         spacing_table(depth),
+        two_width_spacing_table(depth),
         tip_spacing_table(depth),
         forbidden_spacing(depth),
         min_area(depth),
@@ -2919,6 +2920,109 @@ fn spacing_table(depth: Depth) -> Vec<Fixture> {
     ));
     let mut out = every_placement(cases);
     out.push(vacuous("spacing_table", &["DRC-025"], TABLE, &["t"]));
+    out
+}
+
+// ---------------------------------------------------- two_width_spacing_table
+
+/// LEF/DEF 5.8's two-width table ("Two-Width Spacing Tables"), in
+/// nanometres: widths 0, 0.25, 1.5 and 3.0 µm with runs none, 0, 1.5 and
+/// 3.0 µm, and the manual's cells.
+const TWO_WIDTHS: &str = "rule t two_width_table(met1;
+    width: [0nm, 250nm, 1500nm, 3000nm],
+    prl:   [none, 0nm, 1500nm, 3000nm],
+    space: [[150nm, 200nm, 500nm, 1000nm],
+            [200nm, 250nm, 500nm, 1000nm],
+            [500nm, 500nm, 600nm, 1000nm],
+            [1000nm, 1000nm, 1000nm, 1200nm]])";
+
+/// `two_width_table` (`two_width_spacing_table`, DRC-027): a pair needs the
+/// cell at the last width that applies to each shape, a width applying to a
+/// shape wider than it whose figures run alongside for more than its run.
+///
+/// LEF's own worked example (SE), each case's gap swept one step around its
+/// space: widths 250 and 250 with no run, 150; 250 and 260 with no run, 150;
+/// 250 and 260 with a run of 100, 200; 260 and 260 with a run of 100, 250.
+/// The 1500 run swept around 1500 between two 1600 wide plates 550 apart
+/// (600 only past it). A 260 wide line 220 from the thin tab of a 2 µm plate
+/// is clean: the plate is wide, the tab is not (holding the whole shape to
+/// its widest part would ask 250). A ring's own hole, and touching shapes,
+/// are no pair.
+fn two_width_spacing_table(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(TWO_WIDTHS);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, catalog: &[&'static str], layout: Layout, findings| {
+        cases.push(fixture(
+            &format!("two_width_spacing_table/{shape}"),
+            catalog,
+            &deck,
+            layout,
+            vec![("t", findings)],
+        ));
+    };
+    // Lines `wa` and `wb` wide, `g` apart, overlapping by `r` along y.
+    for (example, wa, wb, r, need) in [
+        ("w250_w250_run0", 250, 250, 0, 150),
+        ("w250_w260_run0", 250, 260, 0, 150),
+        ("w250_w260_run100", 250, 260, 100, 200),
+        ("w260_w260_run100", 260, 260, 100, 250),
+    ] {
+        for g in sweep(depth, need) {
+            let findings = if g < need {
+                vec![pin(Finding::length(g), 2 * wa + g, 4000 - r)]
+            } else {
+                Vec::new()
+            };
+            case(
+                format!("lef_example/{example}/{}", side(g, need)),
+                &["DRC-027"],
+                met1(&[[0, 0, wa, 2000], [wa + g, 2000 - r, wa + g + wb, 4000 - r]]),
+                findings,
+            );
+        }
+    }
+    for r in sweep(depth, 1500) {
+        let findings = if r > 1500 {
+            vec![pin(Finding::length(550), 3750, 6000 - r)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("run_1500/{}", side(r, 1500)),
+            &["DRC-027"],
+            met1(&[[0, 0, 1600, 3000], [2150, 3000 - r, 3750, 6000 - r]]),
+            findings,
+        );
+    }
+    case(
+        "thin_tab_is_thin".into(),
+        &["DRC-027"],
+        met1(&[
+            [0, 0, 2000, 2000],
+            [900, 2000, 1000, 3000],
+            [1220, 2500, 1480, 4000],
+        ]),
+        Vec::new(),
+    );
+    case(
+        "own_hole".into(),
+        &["DRC-027"],
+        Layout::default().polygon("met1", &holed([0, 0, 2000, 2000], [100, 100, 1900, 1900])),
+        Vec::new(),
+    );
+    case(
+        "touching".into(),
+        &["DRC-027"],
+        met1(&[[0, 0, 400, 2000], [400, 0, 500, 2000]]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "two_width_spacing_table",
+        &["DRC-027"],
+        TWO_WIDTHS,
+        &["t"],
+    ));
     out
 }
 
