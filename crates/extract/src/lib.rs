@@ -101,11 +101,17 @@
 //!   substrate, a grounded plane at height 0, so a net's ground capacitance
 //!   is to the substrate; but each panel pair sees the mean of their two
 //!   permittivities and dielectric interfaces reflect nothing, so same-layer
-//!   coupling is under-predicted by 14–159%. A conductor at height 0 sits on
-//!   the plane and is refused ([`field::mesh::MeshError::OnSubstrate`]). The
-//!   panel edge is set by the stack's thicknesses and gaps, not by a
-//!   layer's height, so a panel much wider than twice its height reads its
-//!   own image coarsely.
+//!   coupling is under-predicted by 14–159%. The panel edge is set by the
+//!   stack's thicknesses and gaps, not by a layer's height, so a panel much
+//!   wider than twice its height reads its own image coarsely.
+//! - **Junctions are closed form**: a shape on a layer at height 0 (a well,
+//!   a diffusion) sits in the substrate plane, and its capacitance to it is
+//!   a depletion capacitance, so the field solve leaves it out and adds
+//!   `Ca·A + Cf·P` from its `pex` row to its net's ground capacitance. The
+//!   field then reads a junction as part of the grounded plane: metal over
+//!   another selected net's diffusion couples to ground, not to that net,
+//!   and metal over its own net's diffusion counts that field as ground
+//!   capacitance too.
 //! - **Panel self-terms** use a square panel's shape factor, which
 //!   under-reports C on elongated panels: 3.5% at 2:1, up to 64% at 100:1.
 //! - **Only selected nets are in the field.** Coupling from a solved net to an

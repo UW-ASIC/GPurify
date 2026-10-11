@@ -74,12 +74,18 @@ pub enum MeshError {
     /// cannot be cut into rectangles exactly.
     #[error("layer {0:?} is not valid rectilinear geometry, so it cannot be meshed exactly")]
     InvalidGeometry(LayerId),
-    /// A selected polygon is on a layer the stack puts at height 0 (or
-    /// below): it touches the substrate, which the solve holds at ground as
-    /// a plane at `z = 0`, so its capacitance to it is unbounded. The
-    /// smallest such layer id is named.
-    #[error("layer {0:?} sits on the substrate (height 0), so its capacitance to it is unbounded")]
-    OnSubstrate(LayerId),
+}
+
+/// Whether the stack puts `layer` on the substrate, at height 0 or below: a
+/// well or a diffusion. Such a shape is a junction in the substrate, whose
+/// capacitance to it is a depletion capacitance, not an electrostatic one,
+/// so the mesh leaves it out and the solve adds its closed form
+/// ([`super::extract_into`]).
+pub(crate) fn on_substrate(stack: &ProcessStack, layer: LayerId) -> bool {
+    stack
+        .height_nm
+        .get(layer.idx())
+        .is_some_and(|&height| !(height > 0.0))
 }
 
 /// Mesh the selected nets, one conductor per entry of `selected`, in that order.
@@ -87,7 +93,9 @@ pub enum MeshError {
 /// `out` is cleared first. Each polygon is cut into disjoint rectangles,
 /// extruded from its layer's height through its thickness, and each face is
 /// cut into panels no longer than `options.max_edge` on a side (half that
-/// near another conductor).
+/// near another conductor). A polygon on a layer the stack puts on the
+/// substrate (height 0) is a junction and gets no panels, so a conductor
+/// made only of such polygons has an empty band.
 ///
 /// # Errors
 ///
@@ -145,16 +153,12 @@ pub fn build_into(
         if let Some(layer) = undescribed {
             return Err(MeshError::MissingThickness(layer));
         }
-        let grounded = polys
-            .iter()
-            .map(|&poly| store.poly_layer(poly))
-            .filter(|layer| !(table[layer.idx()].z[0] > 0.0))
-            .min();
-        if let Some(layer) = grounded {
-            return Err(MeshError::OnSubstrate(layer));
-        }
         for &poly in polys {
             let layer = store.poly_layer(poly);
+            // A junction: not in the field.
+            if on_substrate(stack, layer) {
+                continue;
+            }
             let row = table[layer.idx().min(sentinel)];
             for &bbox in rects.of(store, layer, poly)? {
                 solid.push(Solid {

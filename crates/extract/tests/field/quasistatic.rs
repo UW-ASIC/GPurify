@@ -285,17 +285,18 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
     );
 }
 
-/// Oracle: definition (F24). The solve holds the substrate at ground as a
-/// plane at height 0, so a conductor whose layer sits at height 0 touches it
-/// and has an unbounded capacitance to it: the mesh refuses it by layer
-/// rather than solve a system whose panels coincide with their own images.
+/// Oracle: definition (F73). The solve holds the substrate at ground as a
+/// plane at height 0, so a shape on a layer at height 0 is a junction in that
+/// plane, not a conductor above it: the mesh gives it no panels (its
+/// capacitance is the closed form's) and refuses nothing. With every layer
+/// at height 0, every conductor's band is empty.
 #[test]
-fn a_conductor_on_the_substrate_is_refused() {
+fn a_conductor_on_the_substrate_gets_no_panels() {
     let case = extracted(163, 24, 2);
     let mut grounded = stack();
     grounded.height_nm = vec![0.0; 3];
     let mut mesh = Mesh::default();
-    let refusal = build_into(
+    build_into(
         case.store(),
         &case.nets,
         &case.selected,
@@ -303,11 +304,11 @@ fn a_conductor_on_the_substrate_is_refused() {
         mesh_options(400, 1 << 20),
         grid(),
         &mut mesh,
-    );
-    assert!(
-        matches!(refusal, Err(MeshError::OnSubstrate(_))),
-        "a layer at height 0 meshed: {refusal:?}"
-    );
+    )
+    .expect("a junction is left out, not refused");
+    assert!(mesh.panel.is_empty(), "{} panels", mesh.panel.len());
+    assert_eq!(mesh.conductor_start, vec![0; case.selected.len() + 1]);
+    assert_eq!(mesh.conductor_net, case.selected);
 }
 
 /// Oracle: determinism. Panels are sorted into spatial tree order by a key

@@ -7,7 +7,8 @@
 //! each panel's charge `q` at height `z` is paired with `−q` at `−z`, so the
 //! potential vanishes on the plane and a conductor's charge is its
 //! capacitance to the substrate (Jackson, *Classical Electrodynamics*, 3e,
-//! §2.1). Every panel sits above the plane; the mesh refuses one on it.
+//! §2.1). Every panel sits above the plane; the mesh leaves a shape on it
+//! out (a junction, closed form).
 
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase, SimdFloat};
 use rayon::prelude::*;

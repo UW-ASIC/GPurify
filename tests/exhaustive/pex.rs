@@ -176,6 +176,17 @@ const COARSE: Stack = Stack {
     },
 };
 
+/// [`COARSE`] with `m1` a junction, as a diffusion is: on the substrate
+/// (height 0) and up to `v1`, so the field solve reads it in closed form.
+const JUNCTION: Stack = Stack {
+    m1: Row {
+        thickness: 750.0,
+        height: 0.0,
+        ..COARSE.m1
+    },
+    ..COARSE
+};
+
 impl Stack {
     fn scaled(self, k: f64) -> Self {
         Stack {
@@ -693,6 +704,8 @@ fn solved(name: &str, catalog: &[&'static str], layout: Layout, nets: &[&str]) -
 /// - A plate's ground capacitance is at least the parallel-plate `ε₀εr·A/h`
 ///   to the substrate (F24, fixed).
 /// - A net named twice is solved once, and the run passes (F31, fixed).
+/// - A net on the substrate alone (a diffusion) is not in the field: its
+///   ground capacitance is its closed form (F73, fixed).
 /// - Four ordinary conductors solved together are not refused (F47, fixed).
 fn field(depth: Depth) -> Vec<Fixture> {
     let sizes: &[(i64, i64)] = match depth {
@@ -840,6 +853,36 @@ fn field(depth: Depth) -> Vec<Fixture> {
         )
         .expect(claim("A", Quantity::GroundCap, 1.5 * column, 1.0 / 3.0)),
     );
+
+    // F73: a net on the substrate alone (a diffusion) has nothing in the
+    // field: its ground capacitance is its closed form, and its resistance
+    // the bar's, as any filament's.
+    let mut junction = Fixture::new(
+        "pex/field/junction_only",
+        &["PEX-002", "PEX-005"],
+        &deck(JUNCTION, &[], ""),
+        PEX,
+    )
+    .layout(
+        Layout::default()
+            .rect("m1", 0, 0, 5_000, 1_000)
+            .label("m1_label", 500, 500, "A"),
+    )
+    .expect(claim(
+        "A",
+        Quantity::GroundCap,
+        ground_ff(JUNCTION.m1, 5e6, 12_000.0),
+        EXACT,
+    ))
+    .expect(claim(
+        "A",
+        Quantity::Resistance,
+        wire_ohm(JUNCTION.m1, 5_000, 1_000),
+        EXACT,
+    ))
+    .expect(Expect::Passes(true));
+    junction.quasistatic = vec!["A".into()];
+    out.push(junction);
 
     // The DRC row stands for "the run completed": an abort loses it, and both
     // a refusal and a deduplicated solve report it.
@@ -1191,6 +1234,41 @@ fn field_solved_coupling_grows_with_the_overlap() {
         );
         previous = coupling;
     }
+}
+
+/// PEX-005 (F73): a net of metal and a junction field-solves its metal and
+/// adds the junction in closed form. Its ground capacitance is the same
+/// metal's solved alone (the junction is not in the field, so the metal's
+/// mesh and solve are the same) plus the junction's `Ca·A + Cf·P`, to
+/// round-off ([`EXACT`]); its resistance runs through the junction, the cut
+/// and the metal in series, as `pex/field/via_joined`'s does ([`MODEL`]).
+#[test]
+fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
+    let deck = deck(JUNCTION, &[], "");
+    let total = |layout: Layout, quantity: Quantity| {
+        let ran = run(&deck, layout, PEX, &["A"]);
+        harness::parasitic_total(&ran, "A", quantity)
+            .unwrap_or_else(|| panic!("no {quantity:?} for A: {:?}", ran.summary.pex))
+    };
+    let metal = Layout::default()
+        .rect("m2", 4_000, 0, 9_000, 1_000)
+        .label("m2_label", 8_500, 500, "A");
+    let joined = joint(metal.clone().rect("m1", 0, 0, 5_000, 1_000), 0, 1);
+
+    let alone = total(metal, Quantity::GroundCap);
+    let both = total(joined.clone(), Quantity::GroundCap);
+    let junction = ground_ff(JUNCTION.m1, 5e6, 12_000.0);
+    assert!(
+        relative(both - alone, junction) <= EXACT,
+        "ground C {both} fF with the junction, {alone} fF without: {} fF, want {junction}",
+        both - alone
+    );
+
+    let ohm = total(joined, Quantity::Resistance);
+    let series = wire_ohm(JUNCTION.m1, 5_000, 1_000)
+        + wire_ohm(JUNCTION.m2, 5_000, 1_000)
+        + JUNCTION.v1.sheet;
+    assert!(relative(ohm, series) <= MODEL, "R {ohm} ohm, want {series}");
 }
 
 /// The three conductors the invariance laws solve: two parallel `m1` bars,

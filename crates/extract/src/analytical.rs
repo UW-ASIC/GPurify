@@ -554,10 +554,7 @@ fn region_into(
     out: &mut ParasiticNetwork,
 ) {
     // A region's layer is described: `refuse_undescribed` ran first.
-    let row = regions.layer[region].idx();
-    let sheet_ohm_sq = stack.sheet_res_ohm_sq[row];
-    let area_af_um2 = stack.area_cap_af_um2.get(row).copied().unwrap_or(0.0);
-    let fringe_af_um = stack.fringe_cap_af_um.get(row).copied().unwrap_or(0.0);
+    let sheet_ohm_sq = stack.sheet_res_ohm_sq[regions.layer[region].idx()];
     let (area, perimeter) = (regions.area[region], regions.perimeter[region]);
 
     {
@@ -574,8 +571,7 @@ fn region_into(
         } else {
             0.0
         };
-        let femtofarads =
-            ground_capacitance(area_af_um2, fringe_af_um, area, perimeter, grid).raw();
+        let femtofarads = region_ground_ff(regions, region, stack, grid);
 
         // Ground first is canonical order. Zero values are dropped: a zero-ohm
         // resistor is a short.
@@ -586,6 +582,21 @@ fn region_into(
             out.push(node, Some(next), Parasitic::Resistance(Qty::new(ohm)));
         }
     }
+}
+
+/// Region `region`'s capacitance to the substrate in fF, `Ca·A + Cf·P` from
+/// its layer's row (zero past the stack).
+pub(crate) fn region_ground_ff(
+    regions: &Regions,
+    region: usize,
+    stack: &ProcessStack,
+    grid: Grid,
+) -> f64 {
+    let row = regions.layer[region].idx();
+    let area_af_um2 = stack.area_cap_af_um2.get(row).copied().unwrap_or(0.0);
+    let fringe_af_um = stack.fringe_cap_af_um.get(row).copied().unwrap_or(0.0);
+    let (area, perimeter) = (regions.area[region], regions.perimeter[region]);
+    ground_capacitance(area_af_um2, fringe_af_um, area, perimeter, grid).raw()
 }
 
 /// A layer's process-stack row, or `None` past the stack.

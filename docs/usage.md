@@ -143,9 +143,14 @@ through every bend and every via, however the wire was cut into polygons. A
 field-solved net whose shapes do not join into one circuit (two pieces that
 meet only at a corner) is refused. The field solve holds the substrate at
 ground as a plane at height 0, so a field-solved net's capacitance to ground
-is to the substrate, as the closed forms' is; a net with a shape on a layer
-at height 0 (a well, say) sits on that plane and cannot be field-solved. A
-net named twice is solved once.
+is to the substrate, as the closed forms' is. A shape on a layer at height 0
+(a well or a diffusion) is a junction in that plane, whose capacitance is a
+depletion capacitance rather than a field: it is left out of the solve, and
+the net's capacitance to ground adds the closed form from that layer's `pex`
+line (area and fringe), while its resistance through the shape is computed
+as for any other. So a net of metal and diffusion field-solves its metal,
+and the field reads every junction as part of the grounded substrate. A net
+named twice is solved once.
 
 A net with no text label in the layout has no name to write, and the run
 refuses it rather than inventing one. A label on two nets that are not

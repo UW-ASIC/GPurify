@@ -7,7 +7,11 @@
 //! The pipeline is [`mesh::build_into`], then one [`solve::refine`] per
 //! column. The kernel images every panel in the substrate, a grounded plane
 //! at height 0, so ground is the substrate; no dielectric interface is in
-//! the field. See the [crate docs](crate#accuracy-and-known-gaps).
+//! the field. A shape on a layer at height 0 (a well, a diffusion) is a
+//! junction in that plane, not a conductor above it: it is left out of the
+//! mesh, and its closed-form capacitance `Ca·A + Cf·P` (the layer's `pex`
+//! row) sits on its conductor's diagonal. See the
+//! [crate docs](crate#accuracy-and-known-gaps).
 //!
 //! # Time complexity
 //!
@@ -23,6 +27,8 @@ mod matvec;
 pub mod mesh;
 pub mod solve;
 
+use crate::analytical::region_ground_ff;
+use crate::conductor::Regions;
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::GeometryStore;
 use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
@@ -32,7 +38,10 @@ use gpurify_ingest::deck::ProcessStack;
 ///
 /// `C[i][i]` is positive, `C[i][j]` for `i ≠ j` is minus the coupling between
 /// nets `i` and `j`, and a row sums to net `i`'s capacitance to the
-/// substrate (a grounded plane at height 0). A
+/// substrate (a grounded plane at height 0). `C[i][i]` also holds the
+/// closed-form junction capacitance of net `i`'s shapes on the substrate,
+/// which are not in the field (so a net of only such shapes has that alone
+/// on its diagonal and no coupling). A
 /// converged solve is symmetric to about its tolerance (reciprocity), which is
 /// what [`Self::asymmetry`] measures.
 #[derive(Debug, Default)]
@@ -107,10 +116,9 @@ pub struct Accuracy {
 ///
 /// [`solve::SolveError::Mesh`] when the selection cannot be meshed: a net
 /// with no polygons, a polygon on a layer the stack gives no thickness,
-/// height or permittivity or puts on the substrate (height 0), a layer whose
-/// geometry does not validate as
-/// rectilinear, or too many panels. The other variants when a column does
-/// not converge, breaks down or goes non-finite.
+/// height or permittivity, a layer whose geometry (a junction's included)
+/// does not validate as rectilinear, or too many panels. The other variants
+/// when a column does not converge, breaks down or goes non-finite.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -209,13 +217,24 @@ fn columns_meshed_into(
 
     let mut mesh = mesh::Mesh::default();
     mesh::build_into(store, nets, order, stack, meshing, grid, &mut mesh)?;
+    let junction = junctions_farad(store, nets, order, stack, grid)?;
 
     let n = order.len();
+    let width = columns.len();
     matrix.net.extend_from_slice(order);
-    matrix.value.resize(n * columns.len(), 0.0);
+    matrix.value.resize(n * width, 0.0);
 
     let operator = matvec::CpuMatVec::build(&mesh);
     let iterations = columns_into(&operator, &mesh, options, columns, matrix)?;
+    // A junction is a capacitor from its conductor to the substrate, in
+    // parallel with the field: at one volt it adds its own charge.
+    for (slot, column) in columns.iter().enumerate() {
+        for (row, &farads) in junction.iter().enumerate() {
+            if column.contains(&row) {
+                matrix.value[row * width + slot] += farads;
+            }
+        }
+    }
 
     // Asymmetry is only defined on a square matrix.
     let asymmetry = if columns.len() == n {
@@ -228,6 +247,32 @@ fn columns_meshed_into(
         iterations,
         asymmetry,
     })
+}
+
+/// Each conductor's junction capacitance in farads: the closed form
+/// `Ca·A + Cf·P` of its regions on layers the stack puts on the substrate,
+/// which the mesh leaves out ([`mesh::build_into`]).
+fn junctions_farad(
+    store: &GeometryStore,
+    nets: &NetTable,
+    order: &[NetId],
+    stack: &ProcessStack,
+    grid: Grid,
+) -> Result<Vec<f64>, mesh::MeshError> {
+    let mut regions = Regions::default();
+    let mut out = Vec::with_capacity(order.len());
+    for &net in order {
+        let first = regions.len();
+        regions
+            .push_net(store, nets, net, |layer| mesh::on_substrate(stack, layer))
+            .map_err(mesh::MeshError::InvalidGeometry)?;
+        let mut femtofarads = 0.0_f64;
+        for region in first..regions.len() {
+            femtofarads += region_ground_ff(&regions, region, stack, grid);
+        }
+        out.push(femtofarads * 1e-15);
+    }
+    Ok(out)
 }
 
 /// One solve per conductor into a sized [`CapMatrix`]; returns the total

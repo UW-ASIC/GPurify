@@ -26,7 +26,11 @@ const PICOHENRIES_PER_HENRY: f64 = 1e12;
 /// net's lowest layer. Each node carries its row sum as a ground capacitance,
 /// and every pair `i < j` gets a coupling of `−C_ij`. Every pair is written,
 /// even where the solve gives zero or a slightly negative value; nothing is
-/// dropped. Ground is the substrate, a grounded plane at height 0.
+/// dropped. Ground is the substrate, a grounded plane at height 0. A net's
+/// shapes on a layer at height 0 (wells, diffusion) are junctions in that
+/// plane: they are not in the field, and the ground capacitance includes
+/// their closed form `Ca·A + Cf·P` from the layer's `pex` row. A net's
+/// resistance through them is the inductance solve's, as for any shape.
 ///
 /// # Errors
 ///

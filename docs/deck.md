@@ -388,6 +388,10 @@ of 0 gives no closed-form coupling and a layer the field solve refuses (how
 resistance is not stated is refused when PEX reads it. A negative value is
 an error at the value, rather than a capacitance or gap that drops out.
 
+A layer at height 0 (a well or a diffusion) is a junction in the substrate:
+its `area_cap` and `fringe_cap` are its junction capacitance, which a field
+solve (`--quasistatic`) adds in closed form rather than solving.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the
