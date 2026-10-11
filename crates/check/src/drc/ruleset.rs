@@ -124,9 +124,9 @@ pub enum Rule {
     /// DRC-013, DRC-014. Rules: sky130 licon.1, ct.1, via.1a; GF180 CO.1,
     /// Vn.1; IHP Cnt.a, V1.a; `LEF58_CUTCLASS`.
     ///
-    /// Limits: one legal size per rule. A layer with several legal cut
-    /// classes (sky130 via.1b) cannot be checked, because a rule per size
-    /// flags the cuts of every other size.
+    /// One legal size per rule: a rule per size flags the cuts of every other
+    /// size, so a layer with several legal sizes (sky130 via.1b) is one
+    /// [`Rule::CutClass`].
     CutSize {
         /// The cut layer.
         layer: LayerId,
@@ -1074,6 +1074,32 @@ pub enum Rule {
         /// The largest legal area, in square grid units; positive.
         limit: DbuArea,
     },
+    /// A cut whose size is none of the legal classes.
+    ///
+    /// Deck: `size(L; allowed: [w x h, ..])`, kind `cut_class`. The layer is
+    /// merged first, as for [`Rule::CutSize`], so two abutting cuts are one
+    /// slot. A figure passes when it is a rectangle with no hole whose shorter
+    /// and longer sides are one listed size's, either way round: a cut class
+    /// as LEF58 `CUTCLASS` defines one (a cut belongs to the class whose
+    /// width is its shorter side and length its longer, as `OpenROAD` matches
+    /// it).
+    ///
+    /// One violation per figure in no class, at the centre of its bounding
+    /// box, `measured` the number of classes it matches (0) against a `limit`
+    /// of 1. `shapes.0` is the lowest drawn row under the figure. `examined`
+    /// counts figures.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-014. Rules: sky130 via.1b ("three sizes of square vias allowed
+    /// inside areaid:mt: 0.150um, 0.230um and 0.280um"); LEF58 `CUTCLASS`.
+    /// `OpenROAD` raises nothing for a cut in no class; this rule does, as
+    /// via.1b requires.
+    CutClass {
+        /// The cut layer.
+        layer: LayerId,
+        /// Index into [`RuleSet::classes`].
+        classes: u32,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1131,6 +1157,9 @@ pub struct RuleSet {
     pub rules: Vec<(StrId, Rule)>,
     /// The tables [`Rule::SpacingTable`] names.
     pub tables: Vec<SpacingTable>,
+    /// The cut classes each [`Rule::CutClass`] names: `(short, long)` sides
+    /// in grid units, each positive, sorted, without repeats, never empty.
+    pub classes: Vec<Vec<(Dbu, Dbu)>>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -1558,6 +1587,45 @@ impl RuleSet {
                     layer: one(spec)?,
                     limit: area_limit(spec, "limit")?,
                 },
+                "cut_class" => {
+                    let layer = one(spec)?;
+                    let sides = |param: &'static str| -> Result<Vec<Dbu>, DrcError> {
+                        let wanted = strings.get(param);
+                        rules
+                            .params_of(spec)
+                            .iter()
+                            .filter(|&&(name, _)| Some(name) == wanted)
+                            .map(|&(_, stated)| match stated {
+                                ParamValue::Length(side) if side.raw() > 0 => Ok(side),
+                                ParamValue::Length(side) => Err(DrcError::NonPositiveLimit {
+                                    rule: name_of(spec.id),
+                                    limit: side.raw(),
+                                }),
+                                _ => Err(wrong_type(spec, param)),
+                            })
+                            .collect()
+                    };
+                    let (widths, heights) = (sides("width")?, sides("height")?);
+                    if widths.is_empty() || widths.len() != heights.len() {
+                        return Err(DrcError::MissingParam {
+                            rule: name_of(spec.id),
+                            param: "allowed",
+                        });
+                    }
+                    let mut classes: Vec<(Dbu, Dbu)> = widths
+                        .iter()
+                        .zip(&heights)
+                        .map(|(&w, &h)| (w.min(h), w.max(h)))
+                        .collect();
+                    classes.sort_unstable();
+                    classes.dedup();
+                    set.classes.push(classes);
+                    Rule::CutClass {
+                        layer,
+                        classes: u32::try_from(set.classes.len() - 1)
+                            .expect("a deck has few class lists"),
+                    }
+                }
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -1591,8 +1659,9 @@ impl RuleSet {
     /// # Panics
     ///
     /// When `nets` is not the extraction of `store` and misses a row a
-    /// [`Rule::NetSpacing`] layer holds, or when a [`Rule::SpacingTable`]
-    /// names a table that is missing or fails [`SpacingTable::is_valid`].
+    /// [`Rule::NetSpacing`] layer holds, when a [`Rule::SpacingTable`] names a
+    /// table that is missing or fails [`SpacingTable::is_valid`], or when a
+    /// [`Rule::CutClass`] names a class list that is missing.
     pub fn run_with_nets(
         &self,
         store: &GeometryStore,
@@ -1796,6 +1865,9 @@ impl RuleSet {
                 Rule::TotalArea { layer, limit } => {
                     area::total_area(store, id, (layer, drawn), limit, s, out)
                 }
+                Rule::CutClass { layer, classes } => {
+                    width::cut_class(store, id, layer, &self.classes[classes as usize], s, out)
+                }
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -1834,7 +1906,8 @@ impl Rule {
             | Rule::EdgeMinLength { layer, .. }
             | Rule::Count { layer, .. }
             | Rule::AspectRatio { layer, .. }
-            | Rule::TotalArea { layer, .. } => [Some(layer), None],
+            | Rule::TotalArea { layer, .. }
+            | Rule::CutClass { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -1876,7 +1949,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 38] = [
+pub const KINDS: [&str; 39] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -1915,4 +1988,5 @@ pub const KINDS: [&str; 38] = [
     "count",
     "aspect_ratio",
     "total_area",
+    "cut_class",
 ];

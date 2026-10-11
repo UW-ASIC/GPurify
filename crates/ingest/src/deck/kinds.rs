@@ -58,6 +58,9 @@ pub(crate) enum Dim {
     LengthList,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
+    /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
+    /// engine name and the second to the named one.
+    LengthPairList(&'static str),
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -323,6 +326,17 @@ pub(crate) const KINDS: &[Kind] = &[
         fixed: &[("maximum", true)],
         ..drc("count", Cmp::Le, "count", &[0], COUNT, &[])
     },
+    // Several legal cut sizes, `size(via; allowed: [150nm x 150nm, 230nm x
+    // 230nm])` (sky130 via.1b, LEF58_CUTCLASS): each merged figure is one of
+    // them, either way round.
+    drc(
+        "size",
+        Cmp::Absent,
+        "cut_class",
+        &[0],
+        None,
+        &[p("allowed", "width", Dim::LengthPairList("height"))],
+    ),
     // The area a layer covers in the whole layout (IHP MIM.gR).
     drc("total_area", Cmp::Le, "total_area", &[0], AREA, &[]),
     // A shape's bounding box, its longer side over its shorter (sky130 capm.6).
