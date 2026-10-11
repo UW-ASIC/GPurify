@@ -58,10 +58,12 @@ junction capacitance with no Miller term, averaged over the swing.
   rectangles are joined through the sheet resistance between their centres,
   and every via cut is its own resistor.
 - Ground capacitance comes from the stack, per rectangle. Coupling capacitance
-  comes from the analytical extractor's polygon pairs, placed between the two
-  closest rectangles. The whole design is then field-solved, wires only, and
-  every net's ground and every net pair's coupling is rescaled to the solved
-  totals.
+  comes from the analytical extractor, which measures it between conductor
+  regions (a net's merged shapes, one per edge-connected piece on a layer,
+  however many polygons drew them); each coupling is placed between the two
+  closest rectangles of its two regions. The whole design is then
+  field-solved, wires only, and every net's ground and every net pair's
+  coupling is rescaled to the solved totals.
 - Rectangles of one net that overlap, from shapes drawn over each other,
   are joined. A net whose resistor network still falls into pieces is
   refused by name, because a terminal on the detached piece would float.

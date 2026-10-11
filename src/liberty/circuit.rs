@@ -14,9 +14,11 @@
 //! capacitance is taken per rectangle from the stack (area less what lies over
 //! a channel, which the device model already counts as gate oxide, plus the
 //! perimeter no same-net rectangle covers). Coupling is the analytical
-//! extractor's polygon pairs, each placed between the two closest rectangles
-//! of its polygons; a field solve, when given, rescales every net's ground and
-//! every net pair's coupling to the solved totals without moving them.
+//! extractor's, measured between conductor regions (a net's merged shapes,
+//! one per edge-connected piece on a layer), each element placed between the
+//! two closest rectangles of its two regions; a field solve, when given,
+//! rescales every net's ground and every net pair's coupling to the solved
+//! totals without moving them.
 
 use std::collections::BTreeMap;
 
@@ -40,8 +42,10 @@ pub enum Wires<'a> {
     /// The rectangle graph, coupling from `analytical`, rescaled to `field`.
     /// What `spice` and `statistical` simulate.
     Distributed {
-        /// The analytical extraction of the same layout and nets. Its
-        /// polygon-pair coupling is placed between the closest rectangles.
+        /// The analytical extraction of the same layout and nets. Each of
+        /// its couplings joins two regions
+        /// ([`node_rects`](gpurify_extract::analytical::node_rects)) and is
+        /// placed between their closest rectangles.
         analytical: &'a ParasiticNetwork,
         /// A field solve with one node per net. When given, every net's
         /// ground and every net pair's coupling is rescaled to its totals.
@@ -328,7 +332,7 @@ pub fn build(
         builder.overlaps();
         builder.vias();
         builder.ground_caps();
-        builder.couplings(analytical);
+        builder.couplings(analytical)?;
         if let Some(field) = field {
             builder.calibrate(field);
         }
@@ -347,12 +351,10 @@ struct Builder<'a> {
     rect: Vec<Bbox>,
     rect_layer: Vec<LayerId>,
     rect_net: Vec<NetId>,
-    rect_poly: Vec<PolyId>,
     /// Same-net perimeter each rectangle shares with a neighbour, dbu.
     rect_shared: Vec<i64>,
-    /// CSR of rectangles per net and per polygon.
+    /// Rectangles per net.
     net_rects: Vec<Vec<u32>>,
-    poly_rects: BTreeMap<PolyId, Vec<u32>>,
     index: BTreeMap<LayerId, RectIndex>,
     /// One proto node per net with no rectangle, lazily.
     hub: Vec<u32>,
@@ -376,10 +378,8 @@ impl<'a> Builder<'a> {
             rect: Vec::new(),
             rect_layer: Vec::new(),
             rect_net: Vec::new(),
-            rect_poly: Vec::new(),
             rect_shared: Vec::new(),
             net_rects: vec![Vec::new(); nets],
-            poly_rects: BTreeMap::new(),
             index: BTreeMap::new(),
             hub: vec![u32::MAX; nets],
             union: Union(vec![GROUND]),
@@ -459,10 +459,8 @@ impl<'a> Builder<'a> {
                     self.rect.push(r);
                     self.rect_layer.push(conductor);
                     self.rect_net.push(net);
-                    self.rect_poly.push(row);
                     self.rect_shared.push(0);
                     self.net_rects[net.idx()].push(id);
-                    self.poly_rects.entry(row).or_default().push(id);
                     index.insert(id, r);
                 }
             }
@@ -705,39 +703,75 @@ impl<'a> Builder<'a> {
     }
 
     /// The analytical extractor's coupling, each between the closest pair of
-    /// rectangles of its two polygons.
-    fn couplings(&mut self, analytical: &ParasiticNetwork) {
-        let poly_of = node_polys(self.extracted, analytical);
+    /// rectangles of the two regions it was measured between.
+    fn couplings(&mut self, analytical: &ParasiticNetwork) -> Result<(), CircuitError> {
+        let rects_of = self.node_rects(analytical)?;
         for row in 0..analytical.element_count() {
             let (Parasitic::CouplingCap(q), Some(to)) = (analytical.value[row], analytical.to[row])
             else {
                 continue;
             };
-            let poly = |node: NodeId| poly_of.get(node.0 as usize).copied().flatten();
-            let (Some(p), Some(q_poly)) = (poly(analytical.from[row]), poly(to)) else {
-                continue;
-            };
+            let from = analytical.from[row];
             // Diffusions and wells couple through junctions, the models' job.
-            if !self.is_wire(p) || !self.is_wire(q_poly) {
+            let layer = |node: NodeId| analytical.node_layer[node.0 as usize];
+            if !self.is_wire(layer(from)) || !self.is_wire(layer(to)) {
                 continue;
             }
-            if let Some((a, b)) = self.closest(p, q_poly) {
+            let rects = |node: NodeId| &rects_of[node.0 as usize][..];
+            if let Some((a, b)) = self.closest(rects(from), rects(to)) {
                 self.cap(Self::rect_node(a), Self::rect_node(b), q.raw() * 1e-15);
             }
         }
+        Ok(())
     }
 
-    /// A polygon on a layer the stack gives wire capacitance to.
-    fn is_wire(&self, poly: PolyId) -> bool {
+    /// This circuit's rectangles in each analytical node's region, by
+    /// [`NodeId`]: those of the node's net and layer that share area with one
+    /// of the region's rectangles. A drawn rectangle lies in one region, the
+    /// edge-connected piece its interior is in.
+    fn node_rects(&self, analytical: &ParasiticNetwork) -> Result<Vec<Vec<u32>>, CircuitError> {
+        let loaded = self.loaded;
+        let regions = gpurify_extract::analytical::node_rects(
+            &loaded.store,
+            &self.extracted.nets,
+            &loaded.deck.connectivity,
+        )
+        .map_err(|why| {
+            let name = loaded.deck.layers.name(why.layer());
+            CircuitError::Geometry(loaded.strings.resolve(name).to_owned(), why.to_string())
+        })?;
+        let mut out = vec![Vec::new(); analytical.node_count()];
+        let mut found = Vec::new();
+        for (node, region) in regions {
+            let node = node.0 as usize;
+            let Some(index) = self.index.get(&analytical.node_layer[node]) else {
+                continue;
+            };
+            index.query(region, &mut found);
+            let net = analytical.node_net[node];
+            out[node].extend(found.iter().copied().filter(|&r| {
+                let (x, y) = shared(self.rect[r as usize], region);
+                self.rect_net[r as usize] == net && x > 0 && y > 0
+            }));
+        }
+        for rects in &mut out {
+            rects.sort_unstable();
+            rects.dedup();
+        }
+        Ok(out)
+    }
+
+    /// Whether the stack gives `layer` wire capacitance.
+    fn is_wire(&self, layer: LayerId) -> bool {
         let stack = &self.loaded.deck.stack;
-        self.stack_row(self.loaded.store.poly_layer(poly))
-            .is_some_and(|row| {
-                stack.area_cap_af_um2[row] > 0.0 || stack.fringe_cap_af_um[row] > 0.0
-            })
+        self.stack_row(layer).is_some_and(|row| {
+            stack.area_cap_af_um2[row] > 0.0 || stack.fringe_cap_af_um[row] > 0.0
+        })
     }
 
-    fn closest(&self, p: PolyId, q: PolyId) -> Option<(u32, u32)> {
-        let (ps, qs) = (self.poly_rects.get(&p)?, self.poly_rects.get(&q)?);
+    /// The closest pair, one of `ps` and one of `qs`; the first such pair in
+    /// rectangle order on a tie.
+    fn closest(&self, ps: &[u32], qs: &[u32]) -> Option<(u32, u32)> {
         let mut best: Option<(i128, u32, u32)> = None;
         for &a in ps {
             for &b in qs {
@@ -1273,25 +1307,4 @@ const fn card_rank(role: TerminalRole) -> u8 {
         TerminalRole::Bulk => 3,
         TerminalRole::Pin(position) => position,
     }
-}
-
-/// The polygon behind each analytical node, by [`NodeId`]; `None` for a net's
-/// closing node. Mirrors the analytical extractor's allocation.
-fn node_polys(extracted: &Extracted, network: &ParasiticNetwork) -> Vec<Option<PolyId>> {
-    let mut out = Vec::with_capacity(network.node_count());
-    for net in 0..extracted.nets.net_count() {
-        let polys = extracted
-            .nets
-            .polys_of(NetId(u32::try_from(net).expect("a net id is a u32")));
-        out.extend(polys.iter().map(|&p| Some(p)));
-        if !polys.is_empty() {
-            out.push(None);
-        }
-    }
-    debug_assert_eq!(
-        out.len(),
-        network.node_count(),
-        "the analytical network's node allocation changed"
-    );
-    out
 }

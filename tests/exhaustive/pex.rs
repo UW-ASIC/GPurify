@@ -1150,6 +1150,106 @@ fn analytical_interlayer_coupling_is_the_parallel_plate_closed_form() {
     assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
 
+/// PEX-003 (F93): the Liberty circuit places each analytical coupling between
+/// the closest rectangles of the two regions the extractor measured it
+/// between, whatever the drawn polygon count. Each layout is on [`PARAMS`],
+/// `A` labelled on its rectangle `A1` and `B` an `m1` bar 200 above `A2`;
+/// the only coupling is `A2`–`B`'s facing run, `ε₀εr·t·L/S`.
+///
+/// - Abutting: `A` is `A1` = (0, 0)–(1000, 200) and `A2` = (1000, 0)–(2000,
+///   200) side by side, one region; `B` = (1500, 400)–(2500, 600) faces it
+///   over x = 1500..2000, so L = 500, S = 200. `A2` is `A1`'s only resistor
+///   neighbour. Read as one node per polygon, `A`'s two polygons outnumber
+///   its one region and every later node shifts by one: `B`'s region read
+///   as `A`'s closing node, and the coupling was dropped.
+/// - Corner-joined: `A2` = (1000, 200)–(2000, 400) meets `A1` only at a
+///   corner, so they are two regions, joined through an `m2` strap over both
+///   by a `v1` cut each; `A2` is drawn first. `B` = (1000, 600)–(2000, 800)
+///   faces `A2` over L = 1000, S = 200, and meets `A1` only diagonally. The
+///   regions come in merge order (`A1` first) and the polygons in drawing
+///   order (`A2` first), so read as one node per polygon the coupling landed
+///   on `A1`. `A2` is the strap's other resistor neighbour.
+#[test]
+fn a_liberty_circuit_places_each_coupling_on_the_regions_it_joins() {
+    use gpurify::liberty::circuit::{build, Wires};
+
+    let deck = deck(PARAMS, &[], "");
+    let spec = gpurify::liberty::spec::parse(
+        r#"{"cell": "T", "pins": [{"name": "A", "role": "power"}, {"name": "B", "role": "ground"}],
+            "corners": [{"name": "c", "temperature": 25, "supplies": {"A": 1.8, "B": 0}, "models": []}]}"#,
+    )
+    .expect("a valid spec");
+    let abutting = Layout::default()
+        .rect("m1", 0, 0, 1_000, 200)
+        .rect("m1", 1_000, 0, 2_000, 200)
+        .label("m1_label", 500, 100, "A")
+        .rect("m1", 1_500, 400, 2_500, 600)
+        .label("m1_label", 2_000, 500, "B");
+    let corner = Layout::default()
+        .rect("m1", 1_000, 200, 2_000, 400)
+        .rect("m1", 0, 0, 1_000, 200)
+        .rect("m2", 0, 0, 2_000, 400)
+        .rect("v1", 100, 50, 200, 150)
+        .rect("v1", 1_800, 250, 1_900, 350)
+        .label("m1_label", 500, 100, "A")
+        .rect("m1", 1_000, 600, 2_000, 800)
+        .label("m1_label", 1_500, 700, "B");
+    let mut broken = Vec::new();
+    for (name, layout, hops, run_len) in
+        [("abutting", abutting, 1, 500), ("corner", corner, 2, 1_000)]
+    {
+        let want = lateral_ff(PARAMS.m1, run_len, 200) * 1e-15;
+        for symmetry in Symmetry::ALL {
+            let ran = run(&deck, layout.transformed(symmetry, 0, 0), PEX, &[]);
+            let analytical = ran.outputs.parasitics.as_ref().expect("PEX ran");
+            let circuit = build(
+                &ran.loaded,
+                &ran.extracted,
+                &spec,
+                Wires::Distributed {
+                    analytical,
+                    field: None,
+                },
+            )
+            .unwrap_or_else(|why| panic!("{name} {}: {why}", symmetry.name()));
+            // Walk `hops` resistors out from A1, never back.
+            let (mut at, mut from) = (circuit.pin_node[0], u32::MAX);
+            for _ in 0..hops {
+                let next: Vec<u32> = circuit
+                    .resistors
+                    .iter()
+                    .filter_map(|&(a, b, _)| match (a == at, b == at) {
+                        (true, _) => Some(b),
+                        (_, true) => Some(a),
+                        _ => None,
+                    })
+                    .filter(|&n| n != from)
+                    .collect();
+                assert_eq!(next.len(), 1, "{name}: one way on from {at}: {next:?}");
+                (from, at) = (at, next[0]);
+            }
+            let (a2, b) = (at, circuit.pin_node[1]);
+            let couplings: Vec<(u32, u32, f64)> = circuit
+                .capacitors
+                .iter()
+                .copied()
+                .filter(|&(_, to, _)| to != 0)
+                .collect();
+            let placed = matches!(
+                couplings[..],
+                [(p, q, f)] if (p, q) == (a2.max(b), a2.min(b)) && relative(f, want) <= EXACT
+            );
+            if !placed {
+                broken.push(format!(
+                    "{name} {}: couplings {couplings:?}, want {want:e} F between A2 {a2} and B {b}",
+                    symmetry.name()
+                ));
+            }
+        }
+    }
+    assert!(broken.is_empty(), "{}", broken.join("\n"));
+}
+
 /// PEX-003, PEX-005: a field-solved capacitance matrix is a Maxwell matrix:
 /// symmetric (reciprocity), a positive diagonal, negative off-diagonals
 /// (every pair sees each other in free space), and strictly diagonally

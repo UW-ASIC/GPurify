@@ -173,16 +173,7 @@ pub fn extract_into(
     out.clear();
     refuse_undescribed(store, nets, connectivity, stack)?;
 
-    // Ascending nets make `node_net` grouped-and-ascending.
-    let mut regions = Regions::default();
-    let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32");
-    for net in 0..net_count {
-        regions
-            .push_net(store, nets, NetId(net), |layer| {
-                !connectivity.global.contains(&layer)
-            })
-            .map_err(AnalyticalError::InvalidGeometry)?;
-    }
+    let regions = regions(store, nets, connectivity)?;
     let node_of = regions_into(&regions, stack, grid, out);
     let (rects, owner) = rect_store(store, connectivity, &regions);
     couple_into(
@@ -198,6 +189,65 @@ pub fn extract_into(
     vias_into(&rects, &owner, connectivity, stack, &node_of, out)?;
     out.sort_canonical();
     Ok(())
+}
+
+/// The conductor rectangles behind the nodes [`extract_into`] allocates for
+/// the same `store`, `nets` and `connectivity`: each region's disjoint
+/// rectangles, tagged with the region's node, ascending by node. A net's
+/// closing node has none.
+///
+/// A node is a region, not a drawn polygon: a bar drawn as two abutting
+/// polygons is one node, and two pieces that meet only at a corner are two,
+/// whatever the polygon count. A caller that places the network's elements
+/// on geometry of its own (the Liberty circuit's rectangles) reads each
+/// node's place here.
+///
+/// # Errors
+///
+/// [`AnalyticalError::InvalidGeometry`], as [`extract_into`] gives for the
+/// same inputs; where `extract_into` succeeded, this does too.
+///
+/// # Time complexity
+///
+/// The merge per net and layer that [`extract_into`] does, and no spatial
+/// join.
+pub fn node_rects(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+) -> Result<Vec<(NodeId, Bbox)>, AnalyticalError> {
+    let regions = regions(store, nets, connectivity)?;
+    let mut out = Vec::with_capacity(regions.rects.len());
+    let mut node = 0u32;
+    for region in 0..regions.len() {
+        out.extend(regions.rects_of(region).iter().map(|&r| (NodeId(node), r)));
+        node += 1;
+        // A net's last region is followed by its closing node, as in
+        // `regions_into`.
+        if regions.net.get(region + 1) != Some(&regions.net[region]) {
+            node += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Every net's regions, in ascending [`NetId`], so the nodes `regions_into`
+/// allocates are grouped by net and ascending. A global layer makes none.
+fn regions(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+) -> Result<Regions, AnalyticalError> {
+    let mut regions = Regions::default();
+    let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32");
+    for net in 0..net_count {
+        regions
+            .push_net(store, nets, NetId(net), |layer| {
+                !connectivity.global.contains(&layer)
+            })
+            .map_err(AnalyticalError::InvalidGeometry)?;
+    }
+    Ok(regions)
 }
 
 /// Every region's rectangles on its layer and every via cut as drawn, in one
@@ -892,6 +942,70 @@ mod tests {
             stack_row(&ProcessStack::default(), LayerId(0)),
             None,
             "an empty stack describes no layer"
+        );
+    }
+
+    /// Oracle: definition (testing-plan F93). Net `X` is a bar drawn as two
+    /// abutting pieces, one region, and a piece meeting the bar only at a
+    /// corner, a second region; so `X` has nodes 0 and 1 and closes on 2, and
+    /// `Y`, one bar, is node 3 and closes on 4. `node_rects` names each
+    /// region's rectangle by the node `extract_into` gave it, and no closing
+    /// node; read as one node per drawn polygon, `X`'s three polygons would
+    /// have put `Y`'s bar on node 4.
+    #[test]
+    fn node_rects_names_the_nodes_extract_into_allocates() {
+        use super::{extract_into, node_rects};
+        use crate::network::NodeId;
+        use crate::ParasiticNetwork;
+        use gpurify_check::topology::net::extract_nets_into;
+        use gpurify_check::topology::NetTable;
+        use gpurify_geom::{Bbox, GeometryStoreBuilder, PolyId};
+        use gpurify_ingest::deck::Connectivity;
+
+        let boxes = [(0, 0, 4, 1), (4, 0, 8, 1), (8, 1, 12, 2), (0, 3, 4, 4)];
+        let mut builder = GeometryStoreBuilder::default();
+        for (xlo, ylo, xhi, yhi) in boxes {
+            builder.push(
+                LayerId(0),
+                &[dbu(xlo), dbu(xhi), dbu(xhi), dbu(xlo)],
+                &[dbu(ylo), dbu(ylo), dbu(yhi), dbu(yhi)],
+            );
+        }
+        let (store, _) = builder.finish(1);
+        let connectivity = Connectivity {
+            conductors: vec![LayerId(0)],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&store, &connectivity, &mut nets);
+        let stack = ProcessStack {
+            thickness_nm: vec![1.0],
+            height_nm: vec![1.0],
+            sheet_res_ohm_sq: vec![1.0],
+            area_cap_af_um2: vec![1.0],
+            fringe_cap_af_um: vec![1.0],
+            dielectric_k: vec![0.0],
+        };
+        let mut network = ParasiticNetwork::default();
+        extract_into(&store, &nets, &connectivity, &stack, grid(), &mut network)
+            .expect("described and rectilinear");
+        let (x, y) = (nets.net_of(PolyId(0)), nets.net_of(PolyId(3)));
+        assert_eq!(network.node_net, [x, x, x, y, y]);
+
+        let b = |xlo, ylo, xhi, yhi| Bbox {
+            xlo: dbu(xlo),
+            ylo: dbu(ylo),
+            xhi: dbu(xhi),
+            yhi: dbu(yhi),
+        };
+        assert_eq!(
+            node_rects(&store, &nets, &connectivity).expect("rectilinear"),
+            [
+                (NodeId(0), b(0, 0, 8, 1)),
+                (NodeId(1), b(8, 1, 12, 2)),
+                (NodeId(3), b(0, 3, 4, 4)),
+            ]
         );
     }
 }
