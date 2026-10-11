@@ -268,8 +268,25 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
     }
 
     rebuild_index(&out.poly_net, &mut out.net_start, &mut out.polys);
+    // Inside the assertion, so cargo-mutants does not count the check as code:
+    // every polygon with a net is listed once, under that net.
     debug_assert!(
-        is_canonical_partition(out),
+        {
+            let mut listed = 0usize;
+            let mut least = None;
+            let nets_hold = (0..out.net_count()).all(|n| {
+                let net = NetId(u32::try_from(n).expect("a net id is a u32"));
+                let polys = out.polys_of(net);
+                listed += polys.len();
+                let first = polys.first().copied();
+                let holds = first > least
+                    && polys.windows(2).all(|w| w[0] < w[1])
+                    && polys.iter().all(|&p| out.net_of(p) == net);
+                least = first;
+                holds
+            });
+            nets_hold && listed == out.poly_net.iter().filter(|&&n| n != NetId::NONE).count()
+        },
         "the nets partition the conductor shapes: each shape on exactly one net, \
          each net's shapes ascending, nets numbered by their least shape"
     );
@@ -280,26 +297,6 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
             out.global_only[net.idx()] = false;
         }
     }
-}
-
-/// Debug check of [`NetTable`]'s promise: every polygon with a net is listed
-/// once, under that net; each net is non-empty and ascending; nets ascend by
-/// their least polygon.
-fn is_canonical_partition(table: &NetTable) -> bool {
-    let mut listed = 0usize;
-    let mut least = None;
-    let nets_hold = (0..table.net_count()).all(|n| {
-        let net = NetId(u32::try_from(n).expect("a net id is a u32"));
-        let polys = table.polys_of(net);
-        listed += polys.len();
-        let first = polys.first().copied();
-        let holds = first > least
-            && polys.windows(2).all(|w| w[0] < w[1])
-            && polys.iter().all(|&p| table.net_of(p) == net);
-        least = first;
-        holds
-    });
-    nets_hold && listed == table.poly_net.iter().filter(|&&n| n != NetId::NONE).count()
 }
 
 /// Whether two of the store's polygons share at least one point, holes
