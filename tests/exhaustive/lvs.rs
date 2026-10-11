@@ -2228,6 +2228,40 @@ fn curated() -> Vec<Fixture> {
             0,
         );
     }
+    // LVS-032: the fingers alone, their nets labelled. Nothing but the
+    // labels tells n1 from n2, so names break the tie, as KLayout's
+    // `consider_net_names`: the card that puts 1 um² at its source n1
+    // matches, and the one that puts it at n2 does not, as labelled.
+    let mut fingers = shared.clone();
+    for net in 0..3 {
+        let t = track(net);
+        fingers = fingers.rect("met2", -1000, t, column(1), t + 200).label(
+            "met2_label",
+            -900,
+            t + 100,
+            &format!("n{net}"),
+        );
+    }
+    for (case, ends, matched) in [
+        ("as_labelled", [1e-12, 5e-13, 6e-6, 3e-6], true),
+        ("against_the_labels", [5e-13, 1e-12, 3e-6, 6e-6], false),
+    ] {
+        let card = DIFFUSIONS
+            .into_iter()
+            .zip(ends)
+            .fold(Dev::mos(N, 0, 1, 2).sized(2000, 150), |dev, (name, v)| {
+                dev.param(name, v)
+            });
+        out.push(
+            with_text(
+                &format!("names/shared_diffusion_{case}"),
+                &["LVS-032", "LVS-060"],
+                fingers.clone(),
+                spice(&Circuit::new(3, vec![card])),
+            )
+            .expect(Expect::Lvs(matched)),
+        );
+    }
     let sensor = Dev::mos(N, 1, 0, 0);
     let tracked = |mut layout: Layout| {
         for net in 0..3 {

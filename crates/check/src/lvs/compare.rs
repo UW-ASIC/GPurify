@@ -74,8 +74,9 @@ impl Default for CompareOptions {
 /// whatever other cards of the model state (testing-plan F68), and its count
 /// `m`, 1 where a side states none, once the `m` name is given. A
 /// symmetry pairs its lowest layout node with the reference node whose
-/// parameters are closest, so a stall resolves by property value rather than
-/// by row order, and a pairing that leaves a class short of layout nodes or
+/// parameters are closest, and between nets the one its label names, so a
+/// stall resolves by property value and by name rather than by row order,
+/// and a pairing that leaves a class short of layout nodes or
 /// pairs devices that disagree is taken back for the next closest, so card
 /// order does not decide a match either. Neither input is modified.
 ///
