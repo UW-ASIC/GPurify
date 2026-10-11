@@ -443,7 +443,7 @@ impl DerivedOp {
     pub(crate) fn makes_edges(self) -> Option<bool> {
         match self {
             Self::Edges => Some(true),
-            Self::Sized(_)
+            Self::Sized(..)
             | Self::Inside
             | Self::Outside
             | Self::Overlapping
