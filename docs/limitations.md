@@ -144,6 +144,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-035 | Pitch / exact pitch / on-track | missing | Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
 | DRC-036 | Span-length table | missing | — |
 | DRC-037 | Bent / 45-degree features | partial | angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer |
+| DRC-038 | Diagonal width / spacing | missing | In scope since 2026-10-11 (was: Needs non-rectilinear geometry) |
 | DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md, "Rules that can pass a layout signoff would flag") |
 | DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written |
 | DRC-043 | Width-dependent enclosure | missing | — |
@@ -162,6 +163,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
 | DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
+| DRC-068 | Cut-area conservation between two databases | missing | In scope since 2026-10-11 (was: Compares two GDS files) |
 | DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind; slot geometry uses the generic kinds |
 | DRC-076 | Waffle-window density | missing | sky130.deck left out |
@@ -183,8 +185,10 @@ says which foundry manual, standard or tool defines each one.
 | DRC-110 | Recommended rules reported as warnings | partial | `warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning |
 | DRC-111 | DFM scoring of recommended rules | missing | — |
 | DRC-112 | Critical area analysis | missing | — |
+| DRC-113 | Litho / CMP simulation hotspots | missing | In scope since 2026-10-11 (was: Needs foundry process models) |
 | DRC-114 | Pattern-matching DRC | missing | — |
 | DRC-115 | Equation-based DRC | missing | First candidate for Rust custom rules (testing-plan.md L9b) |
+| DRC-116 | Curvilinear / all-angle tolerance DRC | missing | In scope since 2026-10-11 (was: Rectilinear only) |
 | DRC-117 | Via redundancy scoring / via doubling | partial | Counts cuts within a distance; no DFM scoring and no via doubling |
 | DRC-121 | Selection by shape class, net or angle; covering/overlapping; anisotropic size | partial | limitations.md, "Checks that do not exist yet" |
 | DRC-122 | Edge-layer ops incl. extension | partial | limitations.md, "Checks that do not exist yet" |
@@ -221,6 +225,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | No check exists: the deck has no syntax for per-model counts or parameter ranges |
+| LVS-073 | 3D / system LVS across dies | missing | In scope since 2026-10-11 (was: Single-die only) |
 
 ### Electrical rules (ERC)
 
@@ -245,6 +250,8 @@ says which foundry manual, standard or tool defines each one.
 | ERC-C8 | Path voltage vs device failure (ESD window) | missing | — |
 | ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | missing | — |
 | ERC-C10 | Layout parasitic ESD paths | missing | Spacing values are NDA |
+| ERC-C12 | Package / 2.5D / 3D ESD | missing | In scope since 2026-10-11 (was: On-chip only: package and multi-die ESD models are outside a layout verifier) |
+| ERC-C13 | System-level ESD | missing | In scope since 2026-10-11 (was: A board and system concern, outside a layout verifier) |
 | ERC-D1a | Tap distance conditional on neighbouring well spacing | missing | — |
 | ERC-D1b | Minimum well-tie area | missing | — |
 | ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap |
@@ -257,7 +264,9 @@ says which foundry manual, standard or tool defines each one.
 | ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report |
 | ERC-E7 | RMS / Joule heating / peak limits | missing | No open source |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
+| ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
+| ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
 | ERC-F4 | HCI susceptibility flag | missing | — |
 | ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |
@@ -278,6 +287,7 @@ says which foundry manual, standard or tool defines each one.
 | PEX-003 | Coupling C (same-layer and cross-layer) | partial | No dielectric images: each panel pair sees the mean of their two permittivities and interfaces reflect nothing, so same-layer coupling is under-predicted 14-159% (extract::field). The substrate is a grounded plane at height 0 (testing-plan F24); a shape at height 0 (well, diffusion) is a junction, out of the field and in closed form, so the field reads metal over another net's junction as coupling to ground (F73); a junction layer needs no dielectric (F94) |
 | PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79) |
 | PEX-006 | Multi-corner extraction | missing | — |
+| PEX-007 | Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware) | missing | In scope since 2026-10-11 (was: Needs foundry models) |
 | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds |
 | PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
 
