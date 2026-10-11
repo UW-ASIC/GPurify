@@ -193,6 +193,8 @@ struct Sides<'a> {
     /// Each node's seed, layout nodes first: nodes of one seed start in a
     /// class of their own; `u32::MAX`, or a node past the end, has none.
     seeds: &'a [u32],
+    /// Whether devices of one kind start in one class whatever their model.
+    models_aside: bool,
 }
 
 impl Sides<'_> {
@@ -343,8 +345,12 @@ impl Partition {
         let mut key: Vec<(u64, u32)> = Vec::new();
         for (graph, offset) in [(sides.layout, 0), (sides.reference, sides.split)] {
             for device in 0..graph.device_count() {
-                let identity = (kind_code(graph.device_kind[device]) << 32)
-                    | u64::from(graph.device_model[device].0);
+                let model = if sides.models_aside {
+                    0
+                } else {
+                    u64::from(graph.device_model[device].0)
+                };
+                let identity = (kind_code(graph.device_kind[device]) << 32) | model;
                 key.push((identity, offset + narrow(device)));
             }
             let devices = graph.device_count();
@@ -798,11 +804,13 @@ impl Partition {
 /// at each tie-break and each trial of one, so the number of symmetries does
 /// not spend it. `tolerance` and the deck's `controls` are the verdict's,
 /// which a trial pairing's devices must meet. Nets sharing a `seeds` entry
-/// (indexed by node, layout nodes first) start in a class of their own.
+/// (indexed by node, layout nodes first) start in a class of their own, and
+/// with `models_aside` devices start one class per kind rather than per
+/// kind and model.
 pub(crate) fn refine_into(
     (layout, reference): (&Graph, &Graph),
     (max_rounds, tolerance): (u32, f64),
-    (names, controls, seeds): (ParamNames, &LvsControls, &[u32]),
+    (names, controls, seeds, models_aside): (ParamNames, &LvsControls, &[u32], bool),
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -813,6 +821,7 @@ pub(crate) fn refine_into(
         names,
         controls,
         seeds,
+        models_aside,
     };
     out.seed(sides);
 

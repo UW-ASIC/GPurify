@@ -932,3 +932,79 @@ fn nets_nothing_else_tells_apart_pair_by_name() {
     let exchanged = mos([b, a, g, bulk], [2e-12, 1e-12]);
     assert_ne!(compare(&layout, &exchanged, options), Verdict::Match);
 }
+
+/// Two transistors in a chain, the second gated by the first's drain:
+/// gate 0, source 1, drain 2; then gate 2, source 3, drain 4; one bulk on
+/// net 3. Rigid: no two nets or devices trade places. The second is of
+/// model `second`, and `extra` adds a third, gate 0, source 1, drain 4.
+fn chain_of_two(second: StrId, extra: bool) -> Graph {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(5);
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+    );
+    builder.device(
+        DeviceKind::Mos,
+        second,
+        &[(Gate, 2), (Source, 3), (Drain, 4), (Bulk, 3)],
+    );
+    if extra {
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 4), (Bulk, 3)],
+        );
+    }
+    builder.finish()
+}
+
+/// Oracle: construct-from-answer, and `KLayout`'s report of "two devices
+/// [that] are identified but have different device classes". The reference
+/// writes the second transistor `PCH`, the layout draws it `NCH`, and
+/// nothing else differs, so the report is that one pair with its two
+/// models, and nothing else; both ways round it is the mirror image. With a
+/// device added as well, the models are not all that differs, and the
+/// comparison by model stands: unpaired devices, no model mismatch. Breaks
+/// if a model swap is reported as unpaired devices, or a model mismatch is
+/// claimed where the wiring differs too.
+#[test]
+fn a_device_whose_model_alone_differs_is_one_model_mismatch() {
+    const PCH: StrId = common::PCH;
+    let verdict = compare(
+        &chain_of_two(NCH, false),
+        &chain_of_two(PCH, false),
+        decisive(),
+    );
+    let expected = [Discrepancy::ModelMismatch {
+        layout_device: 1,
+        ref_device: 1,
+        layout_model: NCH,
+        ref_model: PCH,
+    }];
+    assert_same_discrepancies(discrepancies(&verdict), &expected);
+    let backward = compare(
+        &chain_of_two(PCH, false),
+        &chain_of_two(NCH, false),
+        decisive(),
+    );
+    let flipped: Vec<Discrepancy> = expected.iter().map(flip).collect();
+    assert_same_discrepancies(discrepancies(&backward), &flipped);
+
+    let found = compare(
+        &chain_of_two(NCH, false),
+        &chain_of_two(PCH, true),
+        decisive(),
+    );
+    let found = discrepancies(&found);
+    assert!(
+        !found
+            .iter()
+            .any(|d| matches!(d, Discrepancy::ModelMismatch { .. })),
+        "a model mismatch claimed where the wiring differs too: {found:?}"
+    );
+    assert!(found
+        .iter()
+        .any(|d| matches!(d, Discrepancy::UnpairedDevice { .. })));
+}

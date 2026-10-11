@@ -130,7 +130,7 @@
 //! ## Layout against schematic
 //!
 //! LVS compares the extracted layout with a reference netlist ([`lvs::compare`])
-//! and reports under these ids. The first six are [`lvs::Discrepancy`] variants;
+//! and reports under these ids. The first seven are [`lvs::Discrepancy`] variants;
 //! the rest are checks on the layout's own graph ([`lvs::check_layout`]), and
 //! on its devices' measures where the deck states ranges
 //! ([`lvs::check_param_ranges`]).
@@ -142,6 +142,7 @@
 //! | `lvs.terminal_mismatch` | [`lvs::Discrepancy::TerminalMismatch`] | paired devices whose terminals reach different nets | LVS-015 |
 //! | `lvs.parameter_mismatch` | [`lvs::Discrepancy::ParameterMismatch`] | paired devices whose parameters differ beyond the tolerance | LVS-014 |
 //! | `lvs.undeclared_param` | [`lvs::Discrepancy::UndeclaredParam`] | a parameter the reference card states that the layout does not measure | LVS-020 |
+//! | `lvs.model_mismatch` | [`lvs::Discrepancy::ModelMismatch`] | two devices wired alike whose models differ | LVS-013 |
 //! | `lvs.class_imbalance` | [`lvs::Discrepancy::ClassImbalance`] | a class with different member counts on the two sides | LVS-012, LVS-015, LVS-049 |
 //! | `lvs.floating_net` | [`lvs::check_layout`] | a layout net that reaches no device | LVS-006 |
 //! | `lvs.label_conflict` | [`lvs::check_layout`] | one label on several nets | LVS-001, LVS-002 |

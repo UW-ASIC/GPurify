@@ -47,8 +47,15 @@
 //!    (testing-plan F68). The count `m` is no measure: a card without one
 //!    counts one device, and is compared so. Counts, `m` and `nf`, are
 //!    whole numbers and compared exactly, every other parameter within
-//!    [`CompareOptions::param_tolerance`] (testing-plan F99). Everything
-//!    else is a [`Discrepancy`].
+//!    [`CompareOptions::param_tolerance`] (testing-plan F99), unless the
+//!    deck's `lvs tolerance` says otherwise. Everything else is a
+//!    [`Discrepancy`];
+//! 6. when that leaves a device unpaired on each side, refines again with
+//!    every device of one kind in one class, models aside: if that pairs
+//!    every node and only models differ, the report is those pairs, each a
+//!    [`Discrepancy::ModelMismatch`] (catalog LVS-013, `KLayout`'s devices
+//!    "identified but [with] different device classes"); otherwise the
+//!    first report stands. The verdict is a mismatch either way.
 //!
 //! Roles decide which terminals are interchangeable. Positions never matter.
 //!

@@ -19,18 +19,20 @@ use gpurify_ingest::deck::{LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
-/// variant, then the five check rows, then the parameter-range row. Each is
-/// a row of the check catalog (`docs/check-catalog.tsv`), which a test keeps
-/// in step with this list.
+/// variant but the last, then the five check rows, then the parameter-range
+/// row, then the last variant's, added after the rows it follows. Each is a
+/// row of the check catalog (`docs/check-catalog.tsv`), which a test keeps in
+/// step with this list.
 ///
-/// The first six are defined on the [`Discrepancy`] variant that raises them
-/// (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`], and so on), the
-/// next five under [`check_layout`], and the last under
+/// The first six and the last are defined on the [`Discrepancy`] variant that
+/// raises them (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`],
+/// `lvs.model_mismatch` [`Discrepancy::ModelMismatch`], and so on), the five
+/// after the first six under [`check_layout`], and `lvs.param_range` under
 /// [`check_param_ranges`]. The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 12] = [
+pub const RULE_IDS: [&str; 13] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -43,6 +45,7 @@ pub const RULE_IDS: [&str; 12] = [
     "lvs.terminal_net",
     "lvs.terminal_count",
     "lvs.param_range",
+    "lvs.model_mismatch",
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
@@ -315,6 +318,7 @@ pub fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut
             Discrepancy::TerminalMismatch { .. } => ("lvs.terminal_mismatch", 1, 0),
             Discrepancy::ParameterMismatch { .. } => ("lvs.parameter_mismatch", 1, 0),
             Discrepancy::UndeclaredParam { .. } => ("lvs.undeclared_param", 1, 0),
+            Discrepancy::ModelMismatch { .. } => ("lvs.model_mismatch", 1, 0),
             Discrepancy::ClassImbalance {
                 layout_nodes,
                 ref_nodes,
