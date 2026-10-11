@@ -32,11 +32,13 @@
 //! # The closed forms
 //!
 //! From Weste & Harris, *CMOS VLSI Design* 4e (2011), ch. 6. They are applied
-//! to conductor regions, not drawn polygons: a region is one connected piece
-//! of the union of a net's shapes on one layer, so a wire drawn as abutting or
-//! overlapping polygons is one region with its outline's area and perimeter
-//! (testing-plan F44). A layer whose shapes are not valid rectilinear rings
-//! cannot be merged exactly and is refused.
+//! to conductor regions, not drawn polygons: a region is one piece of the union
+//! of a net's shapes on one layer, its parts joined by edges, so a wire drawn
+//! as abutting or overlapping polygons is one region with its outline's area
+//! and perimeter (testing-plan F44). Two pieces that meet only at a corner are
+//! two regions: a neck of zero width carries no current (F76). A layer whose
+//! shapes are not valid rectilinear rings cannot be merged exactly and is
+//! refused.
 //!
 //! | Element | Formula | Applied to |
 //! |---|---|---|
@@ -91,7 +93,10 @@
 //!   current path. The net's total is the sum of its region resistances, but
 //!   the node a resistor sits between is not the drawn topology: a comb's
 //!   fingers come out in series, and a region that is not a constant-width
-//!   path reads as the rectangle of its area and perimeter.
+//!   path reads as the rectangle of its area and perimeter. Two regions that
+//!   meet only at a corner are chained like any others, so the corner itself
+//!   reads as no resistance where, a neck of zero width, it carries no
+//!   current.
 //! - **Analytical coupling** is parallel-plate between the regions'
 //!   rectangles: no fringing field, so lateral coupling is a lower bound. No
 //!   shielding either: a third shape or layer between two plates does not

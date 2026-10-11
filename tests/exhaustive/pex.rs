@@ -577,6 +577,32 @@ fn pieces() -> Vec<Fixture> {
         wire_ohm(row, 3_000, 1_000),
         EXACT,
     )));
+    // F76: two 4 x 1 um bars meeting only at a corner are one net, but a
+    // corner carries no current, so they are two conductors of four squares
+    // each, chained as the closed forms chain a net's conductors; their C is
+    // both bars' (the corner adds no edge). Read as one conductor they were
+    // the rectangle of area 8 um² and perimeter 20 um, `(5 + √17) / (5 − √17)`
+    // or 10.4 squares.
+    holds.push(
+        case(
+            "corner_joined",
+            Layout::default()
+                .rect("m1", 0, 0, 4_000, 1_000)
+                .rect("m1", 4_000, 1_000, 8_000, 2_000),
+        )
+        .expect(claim(
+            "A",
+            Quantity::Resistance,
+            2.0 * wire_ohm(row, 4_000, 1_000),
+            EXACT,
+        ))
+        .expect(claim(
+            "A",
+            Quantity::GroundCap,
+            2.0 * ground_ff(row, 4e6, 10_000.0),
+            EXACT,
+        )),
+    );
 
     every_placement(&holds)
 }

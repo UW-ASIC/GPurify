@@ -3,8 +3,8 @@
 //! Data in: every net's polygons, the conductor/via connectivity, the stack.
 //! Data out: a canonical [`ParasiticNetwork`] — per conductor region a series
 //! R and a ground C, lateral and interlayer coupling C, and via R. A region
-//! is one connected piece of a net's merged shapes on one layer, so a wire
-//! reads the same however it was cut into polygons. The formulas and what
+//! is one edge-connected piece of a net's merged shapes on one layer, so a
+//! wire reads the same however it was cut into polygons. The formulas and what
 //! they leave out are in the
 //! [crate docs](crate#the-closed-forms).
 
@@ -122,13 +122,14 @@ const CUT: u32 = u32::MAX;
 ///
 /// `nets` must have been traced from `store` with `connectivity`, and `stack`
 /// is indexed by [`LayerId`]. Each net's shapes on a non-global layer are
-/// merged, and each connected piece of the merge is one region (two pieces
-/// that meet only at a corner are one, as the merge joins them): a bar drawn
-/// as abutting or overlapping polygons is one region with the outline's area
-/// and perimeter. Net `k`'s nodes follow those of nets `0..k`; a net of `n`
-/// regions has `n + 1` nodes, its regions ascending by layer. Region `i` contributes a ground capacitance on node
-/// `i` and a resistor from node `i` to `i + 1`, and node `i` is that region's
-/// node. A net with no region (shapes on global layers only) has no node.
+/// merged, and each piece of the merge whose parts share edges is one region
+/// (two pieces that meet only at a corner are two, though the merge joins
+/// them: a corner carries no current): a bar drawn as abutting or overlapping
+/// polygons is one region with the outline's area and perimeter. Net `k`'s
+/// nodes follow those of nets `0..k`; a net of `n` regions has `n + 1` nodes,
+/// its regions ascending by layer. Region `i` contributes a ground
+/// capacitance on node `i` and a resistor from node `i` to `i + 1`, and node
+/// `i` is that region's node. A net with no region (shapes on global layers only) has no node.
 /// Coupling is measured between the regions' rectangles and joins the
 /// regions' nodes. A via array, the cuts that land on the same two regions
 /// (the lowest region on each side, touching included), is one resistor

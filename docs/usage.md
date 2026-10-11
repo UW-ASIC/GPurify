@@ -187,8 +187,11 @@ one.
 
 A wire is measured as drawn, not as cut into polygons: a net's shapes on one
 layer are merged first, so pieces that abut or overlap read as the one
-conductor they draw. A conductor layer with a diagonal edge cannot be merged
-exactly, and PEX is refused for it.
+conductor they draw. Two pieces that meet only at a corner are one net but
+two conductors, since a point carries no current: each is measured on its
+own, and the closed forms chain them as they chain any two conductors of a
+net. A conductor layer with a diagonal edge cannot be merged exactly, and
+PEX is refused for it.
 
 Every conductor layer that carries a net, and every via layer whose cuts join
 two conductors, needs a `pex` line with a positive sheet resistance (see
