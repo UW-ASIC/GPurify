@@ -101,6 +101,9 @@
 //! - `lvs ports_by_name`: each reference port pairs only with the layout
 //!   net its name labels (catalog LVS-016, LVS-001; `KLayout`'s
 //!   `flag_missing_ports`), seeded as a class of its own.
+//! - `lvs range "model" param >= min <= max`: every layout device of the
+//!   model is held to the bounds on a measured parameter, a layout check of
+//!   its own ([`check_param_ranges`], catalog LVS-068).
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).
@@ -182,7 +185,8 @@ mod refine;
 pub mod verdict;
 
 pub use checks::{
-    check_layout, check_net_seed_conflicts, intern_rule_ids, record_discrepancies, RULE_IDS,
+    check_layout, check_net_seed_conflicts, check_param_ranges, intern_rule_ids,
+    record_discrepancies, RULE_IDS,
 };
 pub use compare::{compare, compare_logged, compare_with, CompareOptions};
 pub use graph::Graph;

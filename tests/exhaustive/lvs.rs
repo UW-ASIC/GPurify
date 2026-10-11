@@ -2820,6 +2820,60 @@ fn layout_rows() -> Vec<Fixture> {
     let mut out = Vec::new();
     let one = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
 
+    // LVS-068: a deck's `lvs range` holds every device of the model to the
+    // bounds on what is drawn: the `nmos` 1000 by 150 nm, the capacitor's
+    // marker 0.32 um² ([`draw_mos`], [`draw_pins`]). A value at its bound is
+    // legal, a model with no device is examined zero times, and another
+    // model is not held.
+    let cap = Circuit::new(2, vec![Dev::pins(Model::C, &[0, 1])]);
+    let ranged: [(&str, &Circuit, &str, Vec<Finding>); 7] = [
+        (
+            "w_below_min",
+            &one,
+            "\"nmos\" w >= 1100nm",
+            vec![Finding::length(1000)],
+        ),
+        (
+            "w_at_both_bounds",
+            &one,
+            "\"nmos\" w >= 1000nm <= 1000nm",
+            Vec::new(),
+        ),
+        (
+            "l_above_max",
+            &one,
+            "\"nmos\" l <= 100nm",
+            vec![Finding::length(150)],
+        ),
+        (
+            "nf_below_min",
+            &one,
+            "\"nmos\" nf >= 2",
+            vec![Finding::any()],
+        ),
+        ("other_model", &one, "\"pmos\" w >= 1100nm", Vec::new()),
+        (
+            "C_area_below_min",
+            &cap,
+            "\"cmim\" area >= 0.4um2",
+            vec![Finding::area(320_000)],
+        ),
+        (
+            "C_area_within",
+            &cap,
+            "\"cmim\" area <= 0.32um2",
+            Vec::new(),
+        ),
+    ];
+    for (name, c, bounds, findings) in ranged {
+        let deck = format!("{}lvs range {bounds}\n", full_deck());
+        let mut fixture = Fixture::new(&format!("lvs/range/{name}"), &["LVS-068"], &deck, LVS)
+            .layout(draw(c))
+            .expect(Expect::rule("lvs.param_range", findings));
+        fixture.reference = Some(spice(c));
+        out.push(fixture);
+    }
+
     // LVS-006: an unlabelled track no terminal lands on floats; a labelled one
     // is a port and does not.
     let mut floating = one.clone();

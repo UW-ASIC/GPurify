@@ -646,6 +646,37 @@ pub struct LvsControls {
     /// only with the layout net its label names, `KLayout`'s
     /// `flag_missing_ports` (catalog LVS-001, LVS-016).
     pub ports_by_name: bool,
+    /// `lvs range "model" param >= min <= max`, one row per statement, at
+    /// most one per model and parameter (catalog LVS-068).
+    pub range: Vec<LvsRange>,
+}
+
+/// One `lvs range` statement: the bounds a parameter measured on every
+/// layout device of a model must lie within, either or both, a value at a
+/// bound being legal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsRange {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The parameter, lowercase: a length (`w`, `l`, `perim`, `ps`, `pd`,
+    /// `pe`), an area (`area`, `as`, `ad`, `ae`) or the count `nf`.
+    pub param: StrId,
+    /// The least legal value, when stated.
+    pub min: Option<LvsLimit>,
+    /// The greatest legal value, when stated.
+    pub max: Option<LvsLimit>,
+}
+
+/// A bound of an `lvs range` row, on the layout's grid, of the kind its
+/// parameter is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LvsLimit {
+    /// A length, in database units.
+    Length(Dbu),
+    /// An area, in square database units.
+    Area(DbuArea),
+    /// A count.
+    Count(u32),
 }
 
 /// The names `lvs permute` gives the pins of a device of `kind`, in its
@@ -775,6 +806,15 @@ fn build_lvs(
         lvs.ignore_shorted.push(strings.intern(model));
     }
     lvs.ports_by_name = declared.ports_by_name;
+    for (model, param, min, max) in &declared.range {
+        known(model, "range")?;
+        lvs.range.push(LvsRange {
+            model: strings.intern(model),
+            param: strings.intern(param),
+            min: *min,
+            max: *max,
+        });
+    }
     for model in &declared.asymmetric {
         known(model, "asymmetric")?;
         if devices
@@ -827,6 +867,8 @@ pub struct LvsSrc {
     ignore: Vec<String>,
     ignore_shorted: Vec<String>,
     ports_by_name: bool,
+    /// `(model, parameter, min, max)`, the parameter lowercase.
+    range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

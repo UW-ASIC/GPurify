@@ -688,6 +688,74 @@ fn lvs_ports_by_name_is_a_flag() {
     );
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"), converted by hand
+/// on the 5 nm deck grid and 1 nm layout grid. `lvs range` lowers each
+/// bound to the parameter's kind: 420 nm and 100 um as lengths, 0.2 um² as
+/// 200 000 square units, an `nf` as a count. A parameter no device has, a
+/// length off the grid, a bound twice, a range that admits nothing, a row
+/// with no bound, a repeat and an undeclared model are refused.
+#[test]
+fn lvs_ranges_lower_to_layout_units() {
+    use gpurify_geom::{Dbu, DbuArea};
+    use gpurify_ingest::deck::{LvsLimit, LvsRange};
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs range \"nfet\" W >= 420nm <= 100um
+lvs range \"nfet\" as >= 0.2um2
+lvs range \"nfet\" nf <= 4
+"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    let length = |nm| Some(LvsLimit::Length(Dbu::new_unchecked(nm)));
+    assert_eq!(
+        deck.lvs.range,
+        [
+            LvsRange {
+                model: id("nfet"),
+                param: id("w"),
+                min: length(420),
+                max: length(100_000),
+            },
+            LvsRange {
+                model: id("nfet"),
+                param: id("as"),
+                min: Some(LvsLimit::Area(DbuArea::new(200_000))),
+                max: None,
+            },
+            LvsRange {
+                model: id("nfet"),
+                param: id("nf"),
+                min: None,
+                max: Some(LvsLimit::Count(4)),
+            },
+        ]
+    );
+    for (body, needle) in [
+        ("lvs range \"nfet\" r >= 1ohm\n", "not measured on a device"),
+        (
+            "lvs range \"nfet\" w >= 422nm\n",
+            "not a multiple of the grid",
+        ),
+        ("lvs range \"nfet\" w >= 420nm >= 500nm\n", "already given"),
+        ("lvs range \"nfet\" w >= 1um <= 500nm\n", "admits no value"),
+        ("lvs range \"nfet\" w\n", "needs >=, <= or both"),
+        ("lvs range \"nfet\" w > 1um\n", "expected >= or <="),
+        (
+            "lvs range \"nfet\" w >= 1um\nlvs range \"nfet\" w <= 2um\n",
+            "already has a range",
+        ),
+    ] {
+        one_error(&format!("{devices}{body}"), needle);
+    }
+    assert!(
+        matches!(
+            parse("lvs range \"pfet\" w >= 1um\n"),
+            Err(DeckError::Malformed(_))
+        ),
+        "a range on a model no device declares"
+    );
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.
