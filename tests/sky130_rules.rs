@@ -509,3 +509,64 @@ fn the_sky130_antenna_rows_are_table_ig() {
         assert_eq!(exempt, short, "{id}: .ar.1 exempts a pAntennaShort net");
     }
 }
+
+/// Oracle: IHP SG13G2 Layout Rules §7.1. Without a protection diode, Ant.b
+/// (cumulative metal) 200 and Ant.d (cumulative via) 20; with one, Ant.e
+/// 20000 and Ant.f 500. The no-diode rows leave a gate with a diode to the
+/// protected rows, which credit the same diode layer, each row's stage
+/// collecting Metal1 (or Via1) up to its own layer.
+#[test]
+fn the_ihp_antenna_rows_switch_on_a_protection_diode() {
+    let (deck, strings) = load(IHP);
+    let rule = |id: &str| {
+        deck.rules
+            .spec
+            .iter()
+            .find(|rule| strings.resolve(rule.id) == id)
+            .unwrap_or_else(|| panic!("the IHP deck has no {id}"))
+    };
+    let param = |id: &str, name: &str| {
+        strings
+            .get(name)
+            .and_then(|name| deck.rules.param(rule(id), name))
+    };
+    let diode = deck.layers.id(&strings, "ant_diode");
+    assert!(diode.is_some(), "the IHP deck derives its protection diode");
+    let metals = [
+        "Metal1",
+        "Metal2",
+        "Metal3",
+        "Metal4",
+        "Metal5",
+        "TopMetal1",
+        "TopMetal2",
+    ];
+    let vias = ["Via1", "Via2", "Via3", "Via4", "TopVia1", "TopVia2"];
+    for (without, with, limits, names) in [
+        ("Ant.b", "Ant.e", (200.0, 20000.0), &metals[..]),
+        ("Ant.d", "Ant.f", (20.0, 500.0), &vias[..]),
+    ] {
+        for (n, name) in names.iter().enumerate() {
+            let (bare, protected) = (format!("{without}_{name}"), format!("{with}_{name}"));
+            for (id, limit, kind) in [
+                (&bare, limits.0, "antenna"),
+                (&protected, limits.1, "antenna_electrical"),
+            ] {
+                assert_eq!(strings.resolve(rule(id).kind), kind, "{id}");
+                assert!(
+                    matches!(param(id, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r == limit),
+                    "{id}: max_ratio should be {limit}"
+                );
+                assert!(
+                    matches!(param(id, "diode_layer"), Some(gpurify_ingest::deck::ParamValue::Layer(l)) if Some(l) == diode),
+                    "{id}: the protection diode is ant_diode"
+                );
+                assert_eq!(
+                    deck.rules.layers_of(rule(id)).len(),
+                    n + 2,
+                    "{id}: the gate and every layer up to {name}"
+                );
+            }
+        }
+    }
+}
