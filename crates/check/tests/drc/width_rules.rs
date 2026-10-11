@@ -602,7 +602,7 @@ fn a_diagonal_neck_between_concave_corners_is_a_width_violation() {
     let mut sink = Sink::default();
 
     sink.run(&store, &min_width_table(135));
-    assert_rule_ran(&sink.runs, RULE);
+    let _ = assert_rule_ran(&sink.runs, RULE);
     assert_eq!(sink.out.len(), 1, "the 134.5-unit neck went unreported");
     assert_eq!(sink.out.measured[0], Measurement::Length(dbu(134)));
 
