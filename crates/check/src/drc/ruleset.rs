@@ -557,7 +557,7 @@ pub enum Rule {
     ///
     /// Deck: `enclosure(inner, outer, noncoincident) >= len`, kind
     /// `noncoincident_enclosure`, as sky130 lvtn.10 "Min enclosure of lvtn by
-    /// (nwell not overlapping Var_channel) (exclude coincident edges)". Hosts
+    /// (nwell not overlapping `Var_channel`) (exclude coincident edges)". Hosts
     /// are chosen as for [`Rule::MinEnclosure`]. Each edge of the inner
     /// polygon is measured to each edge of the host that is parallel to it,
     /// faces the same way and lies at or beyond its line, Euclidean, end to
@@ -671,7 +671,7 @@ pub enum Rule {
     ///
     /// Deck: `enclosure(inner, outer) <= len`, kind `max_enclosure`: a
     /// maximum enclosure, as sky130 npc.5 "Max enclosure of poly overlapping
-    /// slotted_licon by npcm" or IHP LU.c "Max. extension of an abutted NWell
+    /// `slotted_licon` by npcm" or IHP LU.c "Max. extension of an abutted `NWell`
     /// tie beyond Cont". Both layers are merged. An outer figure holds the
     /// inner figures it covers entirely, and must lie within `limit` of them
     /// in every direction, corners included: inside the union of its held
@@ -689,7 +689,7 @@ pub enum Rule {
     /// figure. `examined` counts the outer figures that hold an inner one.
     ///
     /// Min-and-max rules (IHP Sdiod.a "Min. and max. PWell:block enclosure
-    /// of ContBar") are this row beside a [`Rule::MinEnclosure`] row.
+    /// of `ContBar`") are this row beside a [`Rule::MinEnclosure`] row.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-044. Rules: sky130 npc.5, IHP LU.c, LU.c1 and Sdiod.a to Sdiod.c;
@@ -1180,8 +1180,8 @@ pub enum Rule {
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-048, DRC-049, DRC-085. Rules: sky130 licon.4, licon.16 and
     /// nwell.4, IHP Cnt.g and Cnt.h, GF180 DN.3; the maximum is sky130 rpm.1g
-    /// to rpm.1k ("only 1 licon is allowed in xhrpoly_0p35
-    /// prec_resistor_terminal"); `KLayout` `covering` and `not_covering` with
+    /// to rpm.1k ("only 1 licon is allowed in `xhrpoly_0p35`
+    /// `prec_resistor_terminal`"); `KLayout` `covering` and `not_covering` with
     /// a count range.
     MustContain {
         /// The holding layer; findings are reported on it.

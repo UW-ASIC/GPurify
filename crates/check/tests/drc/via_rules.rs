@@ -14,9 +14,9 @@
 
 use crate::common;
 
-use common::{Sink, A, RULE};
+use common::{Sink, A, B, RULE};
 use gpurify_check::drc::{CutClassTable, Rule, RuleSet};
-use gpurify_check::report::{Measurement, Severity, Violation};
+use gpurify_check::report::{Measurement, Outcome, Severity, Violation};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
@@ -295,8 +295,9 @@ fn adjacent_cuts_hold_only_a_cut_with_enough_close_neighbours() {
     let (store, _) = cut_row(3, 300);
     let mut sink = Sink::default();
     sink.run(&store, &cut_spacing_table(false, 3, 250, 220));
-    assert_clean(&sink.runs, &sink.out, RULE);
-    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 0);
+    assert_eq!(sink.runs[0].outcome, Outcome::Ran);
+    assert!(sink.out.is_empty(), "no cut is held, so no pair fails");
+    assert_eq!(sink.runs[0].examined, 0, "no cut is held");
 
     let mut layout = LayoutBuilder::new(1);
     for x in [0, 300, 600] {
@@ -417,25 +418,25 @@ fn a_via_on_a_wire_wider_than_the_limit_needs_the_cut_count() {
         let (store, ids) = layout.finish();
         let mut sink = Sink::default();
         sink.run(&store, &rule);
-        match want {
-            Some(count) => {
-                assert_has_violation(
-                    &sink.out,
-                    &Violation {
-                        rule: RULE,
-                        layer: A,
-                        severity: Severity::Error,
-                        at: point(1_050, 150),
-                        measured: Measurement::Count(count),
-                        limit: Measurement::Count(2),
-                        shapes: (ids.of(single), None),
-                    },
-                );
-            }
-            None => assert_clean(&sink.runs, &sink.out, RULE),
+        if let Some(count) = want {
+            let _row = assert_has_violation(
+                &sink.out,
+                &Violation {
+                    rule: RULE,
+                    layer: A,
+                    severity: Severity::Error,
+                    at: point(1_050, 150),
+                    measured: Measurement::Count(count),
+                    limit: Measurement::Count(2),
+                    shapes: (ids.of(single), None),
+                },
+            );
+        } else {
+            assert_eq!(sink.runs[0].outcome, Outcome::Ran);
+            assert!(sink.out.is_empty(), "wire {wire}, {cuts} cuts");
         }
         let held = u64::from(wire > 500);
-        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, held);
+        assert_eq!(sink.runs[0].examined, held, "held vias");
     }
 }
 

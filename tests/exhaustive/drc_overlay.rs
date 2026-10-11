@@ -765,7 +765,7 @@ fn full_width() -> Vec<Fixture> {
 }
 
 /// `space(lvtn, sd, projection) >= 235nm` (`projection_spacing`, DRC-055,
-/// sky130 lvtn.3b as its KLayout deck writes it) beside the Euclidean
+/// sky130 lvtn.3b as its `KLayout` deck writes it) beside the Euclidean
 /// `space(lvtn, sd) >= 235nm`: a pair is measured across facing edges that
 /// overlap in projection, so a pair offset diagonally passes the first.
 ///
@@ -1081,13 +1081,12 @@ fn gate_corner() -> Vec<Fixture> {
             (400, y + 100),
         ]
     };
-    let mut cases = Vec::new();
-    cases.push(case(
+    let mut cases = vec![case(
         "straight",
         diff().rect("poly", 400, -200, 500, 1200),
         vec![],
         vec![],
-    ));
+    )];
     cases.push(case(
         "bent_inside",
         diff().polygon("poly", &l_poly(500)),
@@ -2361,7 +2360,7 @@ fn adjacent_cut_spacing() -> Vec<Fixture> {
 /// (licon.2d). One finding per pair closer than its cell, measuring the gap.
 ///
 /// Oracle: the sky130 manual's values, and gaps drawn to them; a pair apart
-/// along both axes needs the larger of its two readings (OpenROAD's
+/// along both axes needs the larger of its two readings (`OpenROAD`'s
 /// `checkLef58CutSpacingTbl_helper` checks both directions).
 ///
 /// Shapes: squares, slots end to end, slots side by side, a slot beside a
