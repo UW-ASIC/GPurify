@@ -1,14 +1,15 @@
 //! Rules that ask what is connected to what, and the well-tap containment
 //! test.
 //!
-//! Data in: nets, devices, [`NetFacts`], and for `floating_well` the well and
-//! tap geometry. Data out: violations and one run per row. Nothing here
+//! Data in: nets, devices, [`NetFacts`], for `floating_well` the well and
+//! tap geometry, and for `multiple_drivers` the rails the design intent
+//! declares. Data out: violations and one run per row. Nothing here
 //! re-derives connectivity.
 
 use crate::drc::rules::{owners_of, LayerRects, SortedRects};
-use crate::erc::facts::{NetFacts, RoleMask};
+use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
-use crate::erc::{first_vertex, push_net_violations, record_run, Design, Scratch};
+use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{DeviceId, NetId, PortTable, TerminalRole};
 use gpurify_geom::boolean::union_into;
@@ -74,22 +75,22 @@ pub struct FloatingWellTable {
 /// Contending drivers: deck kind `multiple_drivers`, written
 /// `multiple_drivers(; max: count)`.
 ///
-/// A net driven by more than `max_drivers` distinct drivers. A transistor
-/// with its drain on the net pulls it, through the network below its source:
-/// every transistor reached by following drain to source away from the net
-/// (a NAND's series pull-down). Pull networks that share a gate net are one
-/// driver, so an inverter's pair is one, a parallel pair sharing a gate is
-/// one, and a NAND's or NOR's complementary pull-up and pull-down, gated by
-/// the same inputs, are one. A drain with no gate is not a driver. Needs no
-/// design intent.
-///
-/// # Limits
-///
-/// A transistor's source and drain are as extraction assigns them, by the
-/// order of the two diffusion polygons under its marker, not by circuit
-/// function, so the verdict can depend on that order: a transistor drawn
-/// output side first drives its supply. Telling them apart needs to know
-/// which nets are rails.
+/// A net driven by more than `max_drivers` distinct drivers. A driver is a
+/// pull network: a channel-connected path from the net to a rail, a supply
+/// the design intent declares (a pull-up to a power rail, a pull-down to a
+/// ground rail). A transistor with either end of its channel on the net
+/// pulls it when a walk from its other end, through every transistor whose
+/// channel touches the nets reached, stopping at rails and never back
+/// through the net, reaches a rail (a NAND's series pull-down); its network
+/// is every transistor that walk passes. Source and drain are alike: the
+/// rails orient each channel, not the order extraction gives its two ends.
+/// Pull networks that share a gate net are one driver, so an inverter's pair
+/// is one, a parallel pair sharing a gate is one, and a NAND's or NOR's
+/// complementary pull-up and pull-down, gated by the same inputs, are one.
+/// A pass gate or transmission gate that reaches no rail drives nothing by
+/// itself, and a transistor with no gate is not a driver. A rail is driven
+/// by its supply and is not examined. Needs design intent, for which nets
+/// are the rails.
 ///
 /// Catalog: ERC-G3 in the [check catalog]. Defined by [Yosys `check`]
 /// (conflicting drivers). Source tags are in [check-sources.md].
@@ -278,60 +279,89 @@ pub fn check_floating_well(
     }
 }
 
-/// The gate slot of a device with no gate (or a gate on no net). Equal to
-/// `NetId::NONE`, so it sorts last in a net's group.
+/// The gate slot of a device with no gate (or a gate on no net), and a
+/// channel end on no net. Equal to `NetId::NONE`, so it sorts last in a net's
+/// group.
 const NO_GATE: u32 = u32::MAX;
 
 /// Runs every [`MultipleDriversTable`] row.
 ///
-/// `examined` counts nets with at least one drain terminal. A violation sits
-/// at the first vertex of the net's lowest-numbered polygon, on its layer,
-/// measuring the distinct drivers (pull networks joined by a shared gate net)
-/// against `max`. Every row runs.
+/// `examined` counts the nets, other than rails, with a source or drain
+/// terminal. A violation sits at the first vertex of the net's
+/// lowest-numbered polygon, on its layer, measuring the distinct drivers
+/// (pull networks joined by a shared gate net) against `max`. Every row is
+/// skipped when no design intent was given or it declares no supply this
+/// layout has.
 ///
 /// # Panics
 ///
 /// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_multiple_drivers(
     design: Design<'_>,
+    intent: &IntentMap,
     table: &MultipleDriversTable,
     scratch: &mut Scratch,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    // Per device: its first gate's net (`NO_GATE` for none or no net) and its
-    // source's net; every drain on a net as `(net, device)`, sorted, so a
-    // net's drains are one run.
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let is_rail = |net: u32| intent.supply_net.binary_search(&NetId(net)).is_ok();
+    // Per device: its first gate's net (`NO_GATE` for none or no net) and the
+    // two ends of its channel, source and drain alike; every channel end on a
+    // net as `(net, device)`, sorted, so a net's channel ends are one run.
     let devices = design.devices;
     let mut gate = vec![NO_GATE; devices.len()];
-    let mut source = vec![NO_GATE; devices.len()];
-    let mut drains: Vec<(u32, u32)> = Vec::new();
+    let mut ends = vec![[NO_GATE; 2]; devices.len()];
+    let mut channel: Vec<(u32, u32)> = Vec::new();
     for device in 0..devices.len() {
         let id = DeviceId(u32::try_from(device).expect("a device index is a u32"));
         let (nets, roles) = devices.terminals_of(id);
         for (&net, role) in nets.iter().zip(roles) {
-            match role {
-                TerminalRole::Gate if gate[device] == NO_GATE => gate[device] = net.0,
-                TerminalRole::Source if source[device] == NO_GATE => source[device] = net.0,
-                TerminalRole::Drain if net != NetId::NONE => drains.push((net.0, id.0)),
-                _ => {}
+            let end = match role {
+                TerminalRole::Gate if gate[device] == NO_GATE => {
+                    gate[device] = net.0;
+                    continue;
+                }
+                TerminalRole::Source => 0,
+                TerminalRole::Drain => 1,
+                _ => continue,
+            };
+            if ends[device][end] == NO_GATE {
+                ends[device][end] = net.0;
             }
         }
+        channel.extend(
+            ends[device]
+                .iter()
+                .filter(|&&net| net != NO_GATE)
+                .map(|&net| (net, id.0)),
+        );
     }
-    drains.sort_unstable();
-    drains.dedup();
-    let drains_on = |net: u32| {
-        let lo = drains.partition_point(|&(n, _)| n < net);
-        &drains[lo..lo + drains[lo..].partition_point(|&(n, _)| n == net)]
+    channel.sort_unstable();
+    channel.dedup();
+    let channel_on = |net: u32| {
+        let lo = channel.partition_point(|&(n, _)| n < net);
+        &channel[lo..lo + channel[lo..].partition_point(|&(n, _)| n == net)]
+    };
+    // The end of `device`'s channel away from `net`: `net` itself when both
+    // ends are on it.
+    let across = |device: u32, net: u32| {
+        let [a, b] = ends[device as usize];
+        if a == net {
+            b
+        } else {
+            a
+        }
     };
 
-    // `(net, distinct drivers)` per net with a drain. A driver is a pull
-    // network: a transistor with its drain on the net, and every transistor
-    // below its source, followed drain to source away from the net. Members
-    // whose networks share a gate net are one driver: a NAND's parallel
-    // pull-up and series pull-down share their inputs.
+    // `(net, distinct drivers)` per examined net. Members whose networks
+    // share a gate net are one driver: a NAND's parallel pull-up and series
+    // pull-down share their inputs.
     // ponytail: one walk per member; a pass-transistor array walked from each
-    // of its nets is quadratic. Share the walks per source net if that bites.
+    // of its nets is quadratic. Share the walks per far net if that bites.
     scratch.edges.clear();
     let mut seen = vec![0u32; design.nets.net_count()];
     let mut stamp = 0u32;
@@ -341,32 +371,44 @@ pub fn check_multiple_drivers(
     let mut shared: Vec<(u32, u32)> = Vec::new();
     let mut labels = Vec::new();
     let mut start = 0;
-    while start < drains.len() {
-        let net = drains[start].0;
-        let run = drains_on(net);
+    while start < channel.len() {
+        let net = channel[start].0;
+        let run = channel_on(net);
         start += run.len();
+        if is_rail(net) {
+            continue;
+        }
         gates.clear();
         for (member, &(_, device)) in (0u32..).zip(run) {
-            // A drain with no gate drives nothing.
             if gate[device as usize] == NO_GATE {
                 continue;
             }
+            let mine = gates.len();
             gates.push((gate[device as usize], member));
             stamp += 1;
+            let mut rail = false;
             queue.clear();
-            queue.push(source[device as usize]);
+            queue.push(across(device, net));
             while let Some(at) = queue.pop() {
                 let fresh = seen.get(at as usize).is_some_and(|&s| s != stamp);
                 if at == net || !fresh {
                     continue;
                 }
                 seen[at as usize] = stamp;
-                for &(_, below) in drains_on(at) {
-                    if gate[below as usize] != NO_GATE {
-                        gates.push((gate[below as usize], member));
-                    }
-                    queue.push(source[below as usize]);
+                if is_rail(at) {
+                    rail = true;
+                    continue;
                 }
+                for &(_, next) in channel_on(at) {
+                    if gate[next as usize] != NO_GATE {
+                        gates.push((gate[next as usize], member));
+                    }
+                    queue.push(across(next, at));
+                }
+            }
+            // A pass gate that reaches no rail drives nothing by itself.
+            if !rail {
+                gates.truncate(mine);
             }
         }
         gates.sort_unstable();
@@ -377,7 +419,7 @@ pub fn check_multiple_drivers(
                 .filter(|pair| pair[0].0 == pair[1].0)
                 .map(|pair| (pair[0].1, pair[1].1)),
         );
-        let members = u32::try_from(run.len()).expect("a net's drains fit a u32");
+        let members = u32::try_from(run.len()).expect("a net's channel ends fit a u32");
         components_into(members, &shared, &mut labels);
         let mut drivers: Vec<ComponentLabel> =
             gates.iter().map(|&(_, m)| labels[m as usize]).collect();

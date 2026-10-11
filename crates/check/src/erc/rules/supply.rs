@@ -1,10 +1,10 @@
 //! Supply, substrate and pad integrity: topological but geometry-aware, and
 //! independent of design intent (a supply short is an n-tie and a p-tie on one
-//! conductor, provable from the deck's tap markers), except the ESD path, which
-//! needs to know which nets are the rails.
+//! conductor, provable from the deck's tap markers), except a gate tied to a
+//! rail and the ESD path, which need to know which nets are the rails.
 //!
-//! Data in: the store, nets, devices, [`NetFacts`]. Data out: violations and
-//! one run per row.
+//! Data in: the store, nets, devices, [`NetFacts`], the design intent's
+//! supplies. Data out: violations and one run per row.
 
 use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
@@ -127,17 +127,13 @@ pub struct MissingTieTable {
 /// A gate tied straight to a rail: deck kind `tie_high_low`, written
 /// `tie_high_low()`.
 ///
-/// A row flags every net that reaches a transistor gate and a transistor
-/// source but no drain: a gate tied directly to a supply instead of through a
-/// tie cell, which leaves the gate oxide exposed to every transient on the
-/// rail. Every row flags the same nets; rows differ only in id and severity.
-/// Needs no design intent.
-///
-/// # Limits
-///
-/// A transistor's source and drain are as extraction assigns them, by the
-/// order of the two diffusion polygons under its marker, not by circuit
-/// function, so the verdict can depend on that order.
+/// A row flags every rail, a supply the design intent declares (power or
+/// ground), that reaches a transistor gate: a gate tied directly to a supply
+/// instead of through a tie cell, which leaves the gate oxide exposed to
+/// every transient on the rail. The rails decide, never which end of a
+/// channel extraction calls the source. Every row flags the same nets; rows
+/// differ only in id and severity. Needs design intent, for which nets are
+/// the rails.
 ///
 /// Catalog: ERC-G7 in the [check catalog]. Defined by Calibre's weak-sourcing
 /// checks (public material only). Source tags are in [check-sources.md].
@@ -539,25 +535,37 @@ pub(crate) fn untied_points(
 /// Runs every [`TieHighLowTable`] row.
 ///
 /// `examined` counts nets with a gate terminal. A violation sits at the first
-/// vertex of the net's lowest-numbered polygon, on its layer, measuring the
-/// count of drains, 0, against 1. Every row runs.
+/// vertex of the rail's lowest-numbered polygon, on its layer, measuring the
+/// count of tie cells between the rail and its gates, 0, against 1. Every
+/// row is skipped when no design intent was given or it declares no supply
+/// this layout has.
 pub fn check_tie_high_low(
     design: Design<'_>,
     facts: &NetFacts,
+    intent: &IntentMap,
     table: &TieHighLowTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    let held = RoleMask::GATE.union(RoleMask::SOURCE);
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
     let examined = facts
         .role
         .iter()
         .filter(|mask| mask.contains(RoleMask::GATE))
         .count() as u64;
-    let flagged: Vec<u32> = (0u32..)
-        .zip(&facts.role)
-        .filter(|&(_, &mask)| mask.contains(held) & !mask.intersects(RoleMask::DRAIN))
-        .map(|(net, _)| net)
+    let flagged: Vec<u32> = intent
+        .supply_net
+        .iter()
+        .filter(|net| {
+            facts
+                .role
+                .get(net.idx())
+                .is_some_and(|mask| mask.contains(RoleMask::GATE))
+        })
+        .map(|net| net.0)
         .collect();
 
     for row in 0..table.head.len() {

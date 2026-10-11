@@ -320,10 +320,10 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `floating_gate(; labels_are_ports: bool)` | A net that only connects to gates. With `labels_are_ports: true`, a labelled net is a block input driven from outside the cell and is skipped. |
 | `floating_well(well, tap)` | A well with no tap in it. |
 | `missing_tie(region, tap; max_distance: len)` | A point of a `region` shape (a device polarity's active area, say) further than `max_distance` from the nearest `tap` edge. |
-| `multiple_drivers(; max: count)` | A net driven by more than `max` separate drivers. |
+| `multiple_drivers(; max: count)` | A net driven by more than `max` separate drivers. A driver is a path through transistor channels from the net to a supply the intent file declares; networks that share a gate net (an inverter, a NAND's pull-up and pull-down) are one driver, and a pass gate that reaches no supply drives nothing by itself. Which end of a channel is the source does not matter. Needs `--intent`. |
 | `soft_connection(layers…)` | A net held together only through the listed high-resistance layers. |
 | `supply_short(tap_a, tap_b[, within])` | A net that touches both kinds of tap, such as an n-tap and a p-tap. With `within`, a `tap_a` shape counts only when its centre lies in a `within` shape (sky130: n-taps in a well holding a PMOS, so a PNP's base contact is not a short). |
-| `tie_high_low()` | A net that reaches a gate and a transistor source but no drain: a gate tied straight to a rail instead of through a tie cell. |
+| `tie_high_low()` | A supply the intent file declares that reaches a transistor gate: a gate tied straight to a rail instead of through a tie cell. Needs `--intent`. |
 | `unconnected_pin(layers…)` | A shape on the listed layers that reaches no device. |
 | `gate_oxide(; models: models, max: voltage)` | A device of those models whose gate can differ from its source, drain or bulk by more than `max`. Needs `--intent`. |
 | `drain_source(; models: models, max: voltage)` | A device of those models whose drain can differ from its source by more than `max`. Needs `--intent`. |

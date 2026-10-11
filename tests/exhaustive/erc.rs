@@ -13,20 +13,19 @@
 //!   transistors are drawn as diffusion, poly and a channel marker, wired by
 //!   met1 risers to one met2 track per net, and every assignment of terminals
 //!   to nets is enumerated (a seeded sample at merge depth). The oracle
-//!   re-derives each rule from its rustdoc: role masks per net, distinct gate
-//!   nets per drain net, supply reach over transistor channels, the clamp path
-//!   from a pad.
+//!   re-derives each rule from its rustdoc: role masks per net, pull networks
+//!   to the declared rails per net, supply reach over transistor channels, the
+//!   clamp path from a pad.
 //! - Geometric kinds (`floating_well`, `missing_tie`, `supply_short`,
 //!   `soft_connection`, the `esd_latchup` guard ring) on shapes whose answer is
 //!   known by construction, and the three expressible rows on DRC kinds.
 //! - Every kind that needs design intent records Skipped without it.
 //!
 //! A fixture that fails because `GPurify` disagrees with the definition carries
-//! the finding it fails on. Left: F28's drawing-order cases
-//! ([`topology_cases`]), where a transistor drawn output side first drives
-//! its supply. A fixed finding's fixtures name it in their comments: F25 to
-//! F29, F35 and F72 ([`metal_over_a_gate`]) from `docs/testing-plan.md`, and
-//! four found here:
+//! the finding it fails on; none is left. A fixed finding's fixtures name it
+//! in their comments: F25 to F29 (F28's drawing-order cases in
+//! [`topology_cases`]), F35 and F72 ([`metal_over_a_gate`]) from
+//! `docs/testing-plan.md`, and four found here:
 //!
 //! - `F59`: the cumulative antenna ratio pooled all gates of the net at the
 //!   top stage, where IHP's `AreaRatio` sums one ratio per layer over the
@@ -2250,9 +2249,9 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 const TOPO_RULES: [(&str, &str, bool); 17] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
-    ("md1", "multiple_drivers(; max: 1)", false),
-    ("md2", "multiple_drivers(; max: 2)", false),
-    ("thl", "tie_high_low()", false),
+    ("md1", "multiple_drivers(; max: 1)", true),
+    ("md2", "multiple_drivers(; max: 2)", true),
+    ("thl", "tie_high_low()", true),
     ("up", "unconnected_pin(met1, met2)", false),
     ("ss", "supply_short(ntap, ptap)", false),
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
@@ -2279,12 +2278,14 @@ const TOPO_RULES: [(&str, &str, bool); 17] = [
     ),
 ];
 
-/// The catalog rows a board fixture proves.
 /// The catalog rows every board proves: the intent-free connectivity kinds,
 /// which judge every net of every board.
-const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G3", "ERC-G6", "ERC-G7", "ERC-E9"];
-/// The rows a board with intent proves too: propagation and the voltage kinds.
-const VOLTAGE_CATALOG: &[&str] = &["ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6", "ERC-F9", "ERC-F10"];
+const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9"];
+/// The rows a board with intent proves too: the kinds the rails orient,
+/// propagation and the voltage kinds.
+const VOLTAGE_CATALOG: &[&str] = &[
+    "ERC-G3", "ERC-G7", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6", "ERC-F9", "ERC-F10",
+];
 
 /// The voltage limits of a board's `gate_oxide`, `drain_source` and
 /// `hv_domain` rows, mV.
@@ -2580,69 +2581,6 @@ impl Board {
                 .map(|_| count(0))
                 .collect(),
         ));
-        // multiple_drivers: each transistor with its drain on the net pulls it
-        // through every transistor below its source (drain to source, never
-        // back through the net); pull networks sharing a gate net are one
-        // driver.
-        for (id, max) in [("md1", 1), ("md2", 2)] {
-            let findings = (0..NETS)
-                .filter_map(|n| {
-                    let gates: Vec<Vec<usize>> = self
-                        .devs
-                        .iter()
-                        .filter(|d| d.d == n)
-                        .map(|m| {
-                            let (mut gates, mut seen, mut walk) =
-                                (vec![m.g], [false; NETS], vec![m.s]);
-                            while let Some(at) = walk.pop() {
-                                if at == n || seen[at] {
-                                    continue;
-                                }
-                                seen[at] = true;
-                                for below in self.devs.iter().filter(|u| u.d == at) {
-                                    gates.push(below.g);
-                                    walk.push(below.s);
-                                }
-                            }
-                            gates
-                        })
-                        .collect();
-                    let mut group: Vec<usize> = (0..gates.len()).collect();
-                    let mut changed = true;
-                    while changed {
-                        changed = false;
-                        for i in 0..gates.len() {
-                            for j in 0..gates.len() {
-                                let shared = gates[i].iter().any(|g| gates[j].contains(g));
-                                if shared && group[j] > group[i] {
-                                    let (old, new) = (group[j], group[i]);
-                                    group
-                                        .iter_mut()
-                                        .filter(|g| **g == old)
-                                        .for_each(|g| *g = new);
-                                    changed = true;
-                                }
-                            }
-                        }
-                    }
-                    group.sort_unstable();
-                    group.dedup();
-                    (group.len() > max).then(|| count(group.len() as u32))
-                })
-                .collect();
-            out.push(Expect::rule(id, findings));
-        }
-        // tie_high_low: a gate and a source, no drain.
-        out.push(Expect::rule(
-            "thl",
-            (0..NETS)
-                .filter(|&n| {
-                    let (g, s, d, _) = terminals(n);
-                    g && s && !d
-                })
-                .map(|_| count(0))
-                .collect(),
-        ));
         // unconnected_pin(met1, met2): every met1 and met2 polygon of a net no
         // device terminal reaches: its track, and the riser of each tap on it.
         let mut unconnected = Vec::new();
@@ -2682,6 +2620,76 @@ impl Board {
             }
             return out;
         }
+        // multiple_drivers: a transistor with either channel end on a net that
+        // is not a rail pulls it when a walk from its other end, through every
+        // transistor with a channel end on the nets reached, stopping at rails
+        // and never back through the net, reaches a rail; its gates are those
+        // of every transistor the walk passes. Networks sharing a gate net are
+        // one driver.
+        let rail = |n: usize| self.supply(n).is_some();
+        let far = |d: &Dev, n: usize| if d.s == n { d.d } else { d.s };
+        for (id, max) in [("md1", 1), ("md2", 2)] {
+            let findings = (0..NETS)
+                .filter(|&n| !rail(n))
+                .filter_map(|n| {
+                    let gates: Vec<Vec<usize>> = self
+                        .devs
+                        .iter()
+                        .filter(|d| d.s == n || d.d == n)
+                        .filter_map(|m| {
+                            let (mut gates, mut seen, mut walk) =
+                                (vec![m.g], [false; NETS], vec![far(m, n)]);
+                            let mut reached = false;
+                            while let Some(at) = walk.pop() {
+                                if at == n || seen[at] {
+                                    continue;
+                                }
+                                seen[at] = true;
+                                if rail(at) {
+                                    reached = true;
+                                    continue;
+                                }
+                                for u in self.devs.iter().filter(|u| u.s == at || u.d == at) {
+                                    gates.push(u.g);
+                                    walk.push(far(u, at));
+                                }
+                            }
+                            reached.then_some(gates)
+                        })
+                        .collect();
+                    let mut group: Vec<usize> = (0..gates.len()).collect();
+                    let mut changed = true;
+                    while changed {
+                        changed = false;
+                        for i in 0..gates.len() {
+                            for j in 0..gates.len() {
+                                let shared = gates[i].iter().any(|g| gates[j].contains(g));
+                                if shared && group[j] > group[i] {
+                                    let (old, new) = (group[j], group[i]);
+                                    group
+                                        .iter_mut()
+                                        .filter(|g| **g == old)
+                                        .for_each(|g| *g = new);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    group.sort_unstable();
+                    group.dedup();
+                    (group.len() > max).then(|| count(group.len() as u32))
+                })
+                .collect();
+            out.push(Expect::rule(id, findings));
+        }
+        // tie_high_low: a rail that reaches a gate.
+        out.push(Expect::rule(
+            "thl",
+            (0..NETS)
+                .filter(|&n| rail(n) && self.devs.iter().any(|d| d.g == n))
+                .map(|_| count(0))
+                .collect(),
+        ));
         let reach = self.reach();
         let worst = |a: usize, b: usize| -> Option<f64> {
             let (a, b) = (reach[a]?, reach[b]?);
@@ -2894,6 +2902,16 @@ fn three_rails(with_intent: bool) -> Board {
     }
 }
 
+/// Nets 0-3 as VDD (1.8 V, domain a), VSS (ground, a) and two unlabelled
+/// signals.
+fn two_rails() -> Board {
+    let mut board = three_rails(true);
+    board.labels = [Some("VDD"), Some("VSS"), None, None];
+    board.supplies.truncate(2);
+    board.domains.truncate(1);
+    board
+}
+
 /// Every assignment of `terminals` terminals to at most [`NETS`] nets up to
 /// renaming the nets: restricted growth strings, each first use of a net
 /// numbered one past the largest so far.
@@ -2943,7 +2961,8 @@ fn assignment_name(nets: &[usize]) -> String {
 /// - an nfet and a pfet (exempt as a level shifter, not checked for gate
 ///   oxide) on four nets, every one of the 4^6 assignments, against VDD, VSS
 ///   and VDDH;
-/// - three transistors against the same rails, sampled;
+/// - three transistors against the same rails, sampled, and against VDD and
+///   VSS alone, so a pull network can run through two signal nets;
 /// - one four-terminal transistor of each polarity, every 4^4 assignment,
 ///   for the bulk-reading kinds.
 fn topology_enumerations(depth: Depth) -> Vec<Fixture> {
@@ -2982,6 +3001,21 @@ fn topology_enumerations(depth: Depth) -> Vec<Fixture> {
             dev(Model::Nfet, a[6], a[7], a[8]),
         ];
         out.push(board.fixture(&format!("erc/topology/intent3/{}", assignment_name(&a))));
+    }
+    let mut rng = Rng::new(0x7_0005);
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.len() < three {
+        let a: Vec<usize> = (0..9).map(|_| rng.below(NETS as u64) as usize).collect();
+        if !seen.insert(a.clone()) {
+            continue;
+        }
+        let mut board = two_rails();
+        board.devs = vec![
+            dev(Model::Nfet, a[0], a[1], a[2]),
+            dev(Model::Pfet, a[3], a[4], a[5]),
+            dev(Model::Nfet, a[6], a[7], a[8]),
+        ];
+        out.push(board.fixture(&format!("erc/topology/rails2/{}", assignment_name(&a))));
     }
     let bulk: Vec<(Model, Vec<usize>)> = [Model::NfetB, Model::PfetB]
         .into_iter()
@@ -3134,35 +3168,21 @@ fn topology_cases() -> Vec<Fixture> {
     board.domains.truncate(1);
     board.devs = vec![dev(Model::Pfet, 2, vdd, 3), dev(Model::Nfet, 2, vss, 3)];
     out.push(board.fixture("erc/topology/inverter"));
-    out.push(nand2_fixture());
+    out.push(nand2_fixture(false));
+    out.push(nand2_fixture(true));
 
     // F28: a pmos whose output diffusion is drawn first is extracted with its
-    // source on OUT and its drain on VDD, so two inverters with different
-    // inputs "drive" VDD twice. VDD is a supply, driven by nothing.
-    let mut swapped = Board {
-        labels: [Some("VDD"), Some("VSS"), None, None],
-        ..Board::default()
-    };
+    // source on OUT and its drain on VDD; read in that order, two inverters
+    // with different inputs "drive" VDD twice. VDD is a rail, driven by its
+    // supply, and each output has one driver.
+    let mut swapped = two_rails();
     swapped.devs = vec![dev(Model::Pfet, 2, 3, vdd), dev(Model::Pfet, 3, 2, vdd)];
-    let mut f = Fixture::new(
-        "erc/topology/f28/drawing_order",
-        &["ERC-G3"],
-        &topo_deck(Limits::default()),
-        ERC,
-    )
-    .layout(swapped.layout())
-    .expect(Expect::clean("md1"))
-    .known("F28");
-    f.intent = None;
-    out.push(f);
+    out.push(swapped.fixture("erc/topology/f28/drawing_order"));
 
     // F28 on tie_high_low: an inverter pair in a loop (A drives B, B drives
     // A) whose first inverter is drawn output-first, so A is extracted as both
     // its transistors' source. A is a gate and a drain, never tied to a rail.
-    let mut ring = Board {
-        labels: [Some("VDD"), Some("VSS"), None, None],
-        ..Board::default()
-    };
+    let mut ring = two_rails();
     let (a, b) = (2, 3);
     ring.devs = vec![
         dev(Model::Pfet, b, a, vdd),
@@ -3170,17 +3190,7 @@ fn topology_cases() -> Vec<Fixture> {
         dev(Model::Pfet, a, vdd, b),
         dev(Model::Nfet, a, vss, b),
     ];
-    out.push(
-        Fixture::new(
-            "erc/topology/f28/tie_drawing_order",
-            &["ERC-G7"],
-            &topo_deck(Limits::default()),
-            ERC,
-        )
-        .layout(ring.layout())
-        .expect(Expect::clean("thl"))
-        .known("F28"),
-    );
+    out.push(ring.fixture("erc/topology/f28/tie_drawing_order"));
 
     // A layer listed twice is checked, and reported, twice.
     out.push(
@@ -3200,8 +3210,11 @@ fn topology_cases() -> Vec<Fixture> {
 /// inner node X): two parallel pmos from VDD to OUT gated by A and B, nmos A
 /// from X to OUT, nmos B from VSS to X. OUT has one driver, the gate, and
 /// Yosys's "conflicting drivers" asks for one cell output per net; counting
-/// gate nets per drain read two (F28).
-fn nand2_fixture() -> Fixture {
+/// gate nets per drain read two. With `output_first`, every transistor is
+/// drawn with its output side (OUT, or X for nmos B) first, so extraction
+/// calls that end the source; the rails still orient each channel, and VDD,
+/// VSS and X are not driven twice.
+fn nand2_fixture(output_first: bool) -> Fixture {
     const SIX: usize = 6;
     let ty = |net: usize| TRACK_Y0 + net as i64 * TRACK_PITCH;
     let (vdd, vss, out_, a, b, x) = (0, 1, 2, 3, 4, 5);
@@ -3210,7 +3223,14 @@ fn nand2_fixture() -> Fixture {
         (Model::Pfet, b, vdd, out_),
         (Model::Nfet, a, x, out_),
         (Model::Nfet, b, vss, x),
-    ];
+    ]
+    .map(|(model, g, s, d)| {
+        if output_first {
+            (model, g, d, s)
+        } else {
+            (model, g, s, d)
+        }
+    });
     let mut l = Layout::default();
     let riser6 = |l: &mut Layout, x0: i64, base: i64, net: usize| {
         rect(l, "cont", (x0 + 50, base + 50, x0 + 150, base + 150));
@@ -3234,14 +3254,27 @@ fn nand2_fixture() -> Fixture {
             (-1000, ty(net), 4 * PITCH + 1000, ty(net) + TRACK_H),
         );
     }
-    Fixture::new(
-        "erc/topology/f28/nand2",
+    l = l
+        .label("m2txt", -900, ty(vdd) + 200, "VDD")
+        .label("m2txt", -900, ty(vss) + 200, "VSS");
+    let mut f = Fixture::new(
+        if output_first {
+            "erc/topology/f28/nand2_output_first"
+        } else {
+            "erc/topology/f28/nand2"
+        },
         &["ERC-G3"],
         &topo_deck(Limits::default()),
         ERC,
     )
     .layout(l)
-    .expect(Expect::clean("md1"))
+    .expect(Expect::clean("md1"));
+    f.intent = Some(intent(
+        &[("a", 1800.0)],
+        &[("VDD", "a", "power"), ("VSS", "a", "ground")],
+        &[],
+    ));
+    f
 }
 
 /// ESD clamp paths (ERC-C1): a pad on net 0, VDD and VSS supplies, and a

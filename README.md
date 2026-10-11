@@ -150,10 +150,10 @@ grade for how much evidence is behind it:
 
 ```
 strong       ███████████████████████████████████  122   the rule ran, had real geometry to look at, and the measurement came close to the limit
-blocked      ███                                   11   the expected answer is sound but the tool cannot currently reach it
-vacuous      ███                                    9   the rule ran but never came close to the limit
+underivable  ███                                   11   nothing in the test data determines the answer
+blocked      ███                                    9   the expected answer is sound but the tool cannot currently reach it
+vacuous      ██                                     7   the rule ran but never came close to the limit
 skipped      ██                                     7   the rule reported skipped, and a clean count here would be a lie
-underivable  ██                                     7   nothing in the test data determines the answer
 weak         ██                                     6   nothing to check, for a legitimate reason
 refused      █                                      5   the rule correctly refuses this input rather than guessing
 ```

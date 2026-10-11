@@ -13,7 +13,7 @@
 use crate::common;
 
 use common::{head, rule};
-use gpurify_check::erc::facts::{classify_nets_into, NetFacts};
+use gpurify_check::erc::facts::{classify_nets_into, IntentMap, NetFacts};
 use gpurify_check::erc::rules::supply::{
     check_esd_topological, check_missing_tie, check_soft_connection, check_supply_short,
     check_tie_high_low, EsdTopologicalTable, MissingTieTable, SoftConnectionTable,
@@ -583,8 +583,12 @@ fn a_net_that_survives_losing_its_soft_layer_is_clean() {
 
 /// A layout emitted from `spec`, extracted and classified, together with every
 /// polygon of netlist net zero — the net each case below is built around, and
-/// the one a per-net violation has to name.
-fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
+/// the one a per-net violation has to name — and intent declaring netlist
+/// nets `power` and `ground` the supplies (no intent for `None`).
+fn tie_case(
+    spec: &NetlistSpec,
+    rails: Option<(usize, usize)>,
+) -> (Drawn, NetFacts, Vec<PolyId>, IntentMap) {
     let mut strings = StrTable::default();
     let case = layout_from_netlist(spec, Floorplan::default(), &mut strings);
     let mut nets = NetTable::default();
@@ -598,6 +602,10 @@ fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
     );
     let mut facts = NetFacts::default();
     classify_nets_into(&nets, &devices, &mut facts);
+    let intent = rails.map_or_else(IntentMap::default, |(power, ground)| {
+        let net = |n: usize| nets.net_of(case.expected_net_polys[n][0]);
+        common::declared_supplies(net(power), net(ground), 1_800.0)
+    });
     let net_zero = case.expected_net_polys[0].clone();
     (
         Drawn {
@@ -607,10 +615,13 @@ fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
         },
         facts,
         net_zero,
+        intent,
     )
 }
 
-fn tied_off(drain_net: u32) -> NetlistSpec {
+/// One transistor with its gate and its first channel end on net zero, its
+/// other end on `other_end`, and its bulk on net two.
+fn tied_off(other_end: u32) -> NetlistSpec {
     NetlistSpec {
         nets: 3,
         devices: vec![DeviceSpec {
@@ -619,64 +630,91 @@ fn tied_off(drain_net: u32) -> NetlistSpec {
             terminals: vec![
                 (TerminalRole::Gate, 0),
                 (TerminalRole::Source, 0),
-                (TerminalRole::Drain, drain_net),
+                (TerminalRole::Drain, other_end),
                 (TerminalRole::Bulk, 2),
             ],
         }],
     }
 }
 
-/// Oracle: construct-from-answer. Net zero carries a gate and a source and no
-/// drain, so nothing in the design can change its state: it is held at a rail.
-/// Often that is deliberate, which is why the severity is a deck column — but
-/// the rule still has to find it.
+/// Oracle: construct-from-answer. Net zero is declared a power rail and
+/// carries a transistor gate: the gate is tied straight to the rail, and
+/// nothing in the design can change its state. Often that is deliberate,
+/// which is why the severity is a deck column — but the rule still has to
+/// find it. The rail decides, not the channel end extraction calls the
+/// source: with the transistor's other end on the rail too (net zero then
+/// extracts as a drain as well), the gate is still tied (F28).
 #[test]
-fn a_net_holding_a_gate_and_a_source_with_no_drain_is_flagged() {
-    let (drawn, facts, net_zero) = tie_case(&tied_off(1));
-    let id = rule(59);
-    let (mut violations, mut runs) = report();
-    check_tie_high_low(
-        drawn.design(),
-        &facts,
-        &TieHighLowTable { head: head(id) },
-        &mut violations,
-        &mut runs,
-    );
+fn a_rail_reaching_a_gate_is_flagged() {
+    for other_end in [1, 0] {
+        let (drawn, facts, net_zero, intent) = tie_case(&tied_off(other_end), Some((0, 2)));
+        let id = rule(59);
+        let (mut violations, mut runs) = report();
+        check_tie_high_low(
+            drawn.design(),
+            &facts,
+            &intent,
+            &TieHighLowTable { head: head(id) },
+            &mut violations,
+            &mut runs,
+        );
 
-    assert_eq!(violations.rule.len(), 1);
-    assert_eq!(violations.rule[0], id);
-    assert_eq!(
-        violations.shape_a[0], net_zero[0],
-        "the tied-off net is net zero, and a per-net violation is reported at its \
-         lowest-numbered polygon"
-    );
-    assert_eq!(
-        violations.layer[0],
-        drawn.store.poly_layer(net_zero[0]),
-        "the reported layer is the layer of the reported shape"
-    );
-    common::assert_at_is_on_a_named_shape(&drawn.store, &violations, 0);
-    let run = assert_rule_ran(&runs, id);
-    assert_eq!(run.examined, 1, "one net carries a gate terminal");
-    assert_eq!(run.violations, 1);
+        assert_eq!(violations.rule.len(), 1, "other end on net {other_end}");
+        assert_eq!(violations.rule[0], id);
+        assert_eq!(
+            violations.shape_a[0], net_zero[0],
+            "the tied rail is net zero, and a per-net violation is reported at its \
+             lowest-numbered polygon"
+        );
+        assert_eq!(
+            violations.layer[0],
+            drawn.store.poly_layer(net_zero[0]),
+            "the reported layer is the layer of the reported shape"
+        );
+        common::assert_at_is_on_a_named_shape(&drawn.store, &violations, 0);
+        let run = assert_rule_ran(&runs, id);
+        assert_eq!(run.examined, 1, "one net carries a gate terminal");
+        assert_eq!(run.violations, 1);
+    }
 }
 
-/// Oracle: construct-from-answer. The same net, now also carrying the drain, is
-/// drivable and is not tied off. Three bit tests per net, and this is the one
-/// that must come out the other way.
+/// Oracle: construct-from-answer. Net zero holds a gate and the channel end
+/// extraction calls the source, with no drain: the old proxy for a rail. But
+/// the rails are nets one and two, so net zero is a signal (the transistor
+/// pulls it to rail one) and no gate is tied off (F28).
 #[test]
-fn a_net_that_also_holds_a_drain_is_not_tied_off() {
-    let (drawn, facts, _) = tie_case(&tied_off(0));
+fn a_gate_on_a_signal_net_is_not_tied_off_whatever_its_channel_end_is_called() {
+    let (drawn, facts, _, intent) = tie_case(&tied_off(1), Some((1, 2)));
     let id = rule(60);
     let (mut violations, mut runs) = report();
     check_tie_high_low(
         drawn.design(),
         &facts,
+        &intent,
         &TieHighLowTable { head: head(id) },
         &mut violations,
         &mut runs,
     );
     assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: construct-from-answer. Without intent no net is known to be a
+/// rail, so no gate can be shown tied to one: the rule skips rather than
+/// report every gate clean.
+#[test]
+fn tie_high_low_skips_without_intent() {
+    let (drawn, facts, _, intent) = tie_case(&tied_off(1), None);
+    let id = rule(62);
+    let (mut violations, mut runs) = report();
+    check_tie_high_low(
+        drawn.design(),
+        &facts,
+        &intent,
+        &TieHighLowTable { head: head(id) },
+        &mut violations,
+        &mut runs,
+    );
+    common::assert_skipped_for_intent(&runs, &violations, id);
 }
 
 // ------------------------------------------------------------ ESD topological

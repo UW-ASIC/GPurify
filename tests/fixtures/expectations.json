@@ -3702,15 +3702,15 @@
     "domain": "erc",
     "check": "multiple_drivers",
     "expect_violations": 0,
-    "expect_outcome": "Ran",
-    "examined": 2,
-    "examined_min": 2,
+    "expect_outcome": "Skipped(NoDesignIntent)",
+    "examined": 0,
+    "examined_min": 0,
     "examined_population": "nets",
     "violations": [],
-    "provenance": "derived_from_geometry",
+    "provenance": "underivable",
     "corroboration": "manifest_disagrees",
-    "dispute": "fixture_incomplete",
-    "strength": "blocked",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
@@ -3719,7 +3719,7 @@
     "manifest": {
      "expect_violations": 1
     },
-    "note": "The two diffs are meant to be joined by li (350,50)-(450,550), which spans both - but li-to-diff needs a licon and none is drawn, so each drain sits on its own net with one driver. With the contact, the merged net would carry drains from two devices with distinct gate nets -> Count(2) against Count(1) at (0,0) on diff. Note the deck brief's claim that a complementary pair must count as one driver is already true: `check_multiple_drivers` counts distinct GATE nets, so a pair sharing a gate counts once. max_drivers = 1 is correct."
+    "note": "`check_multiple_drivers` orients each transistor channel by the rails the design intent declares, so without intent it records Skipped(NoDesignIntent) with examined = 0, and the corpus supplies no intent file. The manifest's 1 also needs the li strap (350,50)-(450,550) contacted to both diffs, which no licon does: each drain would sit on its own net with one driver."
    },
    {
     "id": "ERC_MULTI_DRIVER_PASS",
@@ -3727,15 +3727,15 @@
     "domain": "erc",
     "check": "multiple_drivers",
     "expect_violations": 0,
-    "expect_outcome": "Ran",
-    "examined": 1,
-    "examined_min": 1,
+    "expect_outcome": "Skipped(NoDesignIntent)",
+    "examined": 0,
+    "examined_min": 0,
     "examined_population": "nets",
     "violations": [],
-    "provenance": "derived_from_geometry",
+    "provenance": "underivable",
     "corroboration": "manifest_agrees",
-    "dispute": null,
-    "strength": "vacuous",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
@@ -3743,7 +3743,8 @@
     ],
     "manifest": {
      "expect_violations": 0
-    }
+    },
+    "note": "Skipped for want of the rails the design intent declares, which orient each channel; the corpus supplies no intent file. With VDD and VSS declared, the inverter is one driver."
    },
    {
     "id": "ERC_TIE_HL",
@@ -3751,15 +3752,15 @@
     "domain": "erc",
     "check": "tie_high_low",
     "expect_violations": 0,
-    "expect_outcome": "Ran",
-    "examined": 1,
-    "examined_min": 1,
+    "expect_outcome": "Skipped(NoDesignIntent)",
+    "examined": 0,
+    "examined_min": 0,
     "examined_population": "nets",
     "violations": [],
-    "provenance": "derived_from_geometry",
+    "provenance": "underivable",
     "corroboration": "manifest_disagrees",
-    "dispute": "signature_defect",
-    "strength": "blocked",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
@@ -3768,7 +3769,7 @@
     "manifest": {
      "expect_violations": 1
     },
-    "note": "Needs a net whose mask is GATE|SOURCE with no DRAIN. The added li overlaps the poly but there is no licon, so net 5's mask stays GATE. Even with the full contact stack, `recognise_into` binds terminals 1 and 2 to the SAME lowest diff polygon under the marker, so any net carrying a source also carries a drain. This rule is unreachable for MOS devices under the current recogniser, independent of the corpus: `DeviceRecognition` has no channel direction."
+    "note": "`check_tie_high_low` flags a supply the design intent declares that reaches a gate, so without intent it records Skipped(NoDesignIntent) with examined = 0, and the corpus supplies no intent file. The manifest's 1 also needs the li over the poly contacted, which no licon does."
    },
    {
     "id": "ERC_TIE_HL_PASS",
@@ -3776,15 +3777,15 @@
     "domain": "erc",
     "check": "tie_high_low",
     "expect_violations": 0,
-    "expect_outcome": "Ran",
-    "examined": 1,
-    "examined_min": 1,
+    "expect_outcome": "Skipped(NoDesignIntent)",
+    "examined": 0,
+    "examined_min": 0,
     "examined_population": "nets",
     "violations": [],
-    "provenance": "derived_from_geometry",
+    "provenance": "underivable",
     "corroboration": "manifest_agrees",
-    "dispute": null,
-    "strength": "vacuous",
+    "dispute": "no_intent_fixture",
+    "strength": "underivable",
     "assert": [
      "violation_count",
      "outcome",
@@ -3792,7 +3793,8 @@
     ],
     "manifest": {
      "expect_violations": 0
-    }
+    },
+    "note": "Skipped for want of the rails the design intent declares; the corpus supplies no intent file."
    },
    {
     "id": "ERC_ANTENNA_ELEC_PASS",

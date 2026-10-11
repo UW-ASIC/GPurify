@@ -8,8 +8,8 @@
 //!
 //! | Module | Kinds | Reads |
 //! |---|---|---|
-//! | [`topology`] | `floating_gate`, `floating_well`, `multiple_drivers`, `unconnected_pin` | nets, devices, geometry |
-//! | [`supply`] | `supply_short`, `soft_connection`, `missing_tie`, `tie_high_low`, `esd_topological` | nets, devices, geometry; `esd_topological` also the intent |
+//! | [`topology`] | `floating_gate`, `floating_well`, `multiple_drivers`, `unconnected_pin` | nets, devices, geometry; `multiple_drivers` also the intent |
+//! | [`supply`] | `supply_short`, `soft_connection`, `missing_tie`, `tie_high_low`, `esd_topological` | nets, devices, geometry; `tie_high_low` and `esd_topological` also the intent |
 //! | [`antenna`] | `antenna`, `antenna_electrical`, `density_cmp` | geometry, the deck's connectivity, the die box |
 //! | [`electrical`] | `p2p_resistance`, `ir_drop`, `em_current_density`, `electromigration` | per-net resistor networks, the solved supply grid |
 //! | [`reliability`] | `reliability`, `hv_domain`, `esd_latchup` | the solved supply grid, propagated voltages, the intent |

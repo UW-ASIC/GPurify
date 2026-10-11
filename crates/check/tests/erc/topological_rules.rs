@@ -15,13 +15,13 @@
 use crate::common;
 
 use common::{head, rule};
-use gpurify_check::erc::facts::{classify_nets_into, NetFacts};
+use gpurify_check::erc::facts::{classify_nets_into, IntentMap, NetFacts};
 use gpurify_check::erc::rules::topology::{
     check_floating_gate, check_multiple_drivers, check_unconnected_pin, FloatingGateTable,
     MultipleDriversTable, UnconnectedPinTable,
 };
 use gpurify_check::erc::{Design, Scratch};
-use gpurify_check::report::{Measurement, Severity, Violations};
+use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_check::topology::{bind_ports_into, DeviceTable, NetTable, PortTable, TerminalRole};
 use gpurify_geom::PolyId;
 use gpurify_ingest::deck::DeviceKind;
@@ -250,16 +250,17 @@ fn a_labelled_gate_only_net_is_clean_only_where_labels_are_ports() {
     assert_clean(&runs, &violations, id);
 }
 
-/// Two transistors whose drains meet on net two, driven from `gate_a` and
-/// `gate_b`. Passing the same net for both is the multi-finger case.
+/// Two transistors whose channels meet on net two, gated from `gate_a` and
+/// `gate_b`: an nch from rail three and a pch from rail four. Passing the same
+/// net for both is the multi-finger case. With `output_first`, the nch's
+/// output end is the one extraction calls its source.
 ///
 /// Terminals are listed in `topology::role_at`'s MOS order — `Gate, Source,
 /// Drain, Bulk` — because `DeviceSpec::terminals` is documented as "the order
 /// the recogniser will report them" and the role written beside each net only
-/// picks the layer. Listing `Drain` second puts the shared net on the *source*,
-/// which makes the test contradict itself: no implementation can both report
-/// one drain-carrying net and flag net two.
-fn contended_output(gate_a: u32, gate_b: u32) -> NetlistSpec {
+/// picks the layer.
+fn contended_output(gate_a: u32, gate_b: u32, output_first: bool) -> NetlistSpec {
+    let (source, drain) = if output_first { (2, 3) } else { (3, 2) };
     NetlistSpec {
         nets: 5,
         devices: vec![
@@ -267,8 +268,8 @@ fn contended_output(gate_a: u32, gate_b: u32) -> NetlistSpec {
                 "nch",
                 vec![
                     (TerminalRole::Gate, gate_a),
-                    (TerminalRole::Source, 3),
-                    (TerminalRole::Drain, 2),
+                    (TerminalRole::Source, source),
+                    (TerminalRole::Drain, drain),
                     (TerminalRole::Bulk, 3),
                 ],
             ),
@@ -285,55 +286,22 @@ fn contended_output(gate_a: u32, gate_b: u32) -> NetlistSpec {
     }
 }
 
-/// Oracle: construct-from-answer. Two drains on net two, belonging to devices
-/// whose gates are on different nets, is contention: two things can drive the
-/// net at once. The measurement is the number of distinct driving gate nets —
-/// two — against the configured maximum of one.
-#[test]
-fn a_net_with_two_independently_gated_drains_is_flagged_with_its_driver_count() {
-    let extracted = extract(&contended_output(0, 1));
-    let id = rule(42);
-    let mut scratch = Scratch::default();
-    let mut violations = Violations::default();
-    let mut runs = Vec::new();
-    check_multiple_drivers(
-        extracted.design(),
-        &MultipleDriversTable {
-            head: head(id),
-            max_drivers: vec![1],
-        },
-        &mut scratch,
-        &mut violations,
-        &mut runs,
-    );
-
-    assert_one_violation_on(&extracted, &violations, id, 2);
-    assert_eq!(
-        violations.measured[0],
-        Measurement::Count(2),
-        "the measurement is how many distinct gate nets drive this one"
-    );
-    assert_eq!(violations.limit[0], Measurement::Count(1));
-
-    let run = assert_rule_ran(&runs, id);
-    assert_eq!(run.examined, 1, "one net carries a drain terminal");
-    assert_eq!(run.violations, 1);
+/// Intent declaring netlist nets `power` and `ground` the supplies, keyed by
+/// the nets extraction gave them.
+fn rails(extracted: &Extracted, power: usize, ground: usize) -> IntentMap {
+    let net = |n: usize| extracted.nets.net_of(extracted.lowest_poly(n));
+    common::declared_supplies(net(power), net(ground), 1_800.0)
 }
 
-/// Oracle: construct-from-answer. The same two drains, now sharing one gate
-/// net: this is one driver built wide, which is how every multi-finger output
-/// in a standard cell library is drawn. Counting drains instead of distinct
-/// gate nets would make all of them violations, which is the false positive
-/// this rule's doc comment is written against.
-#[test]
-fn two_drains_sharing_one_gate_net_are_one_driver_and_are_clean() {
-    let extracted = extract(&contended_output(0, 0));
-    let id = rule(43);
+/// One `multiple_drivers` row at `max: 1` over `extracted`, rails four
+/// (power) and three (ground).
+fn drivers(extracted: &Extracted, id: gpurify_ingest::StrId) -> (Violations, Vec<RuleRun>) {
     let mut scratch = Scratch::default();
     let mut violations = Violations::default();
     let mut runs = Vec::new();
     check_multiple_drivers(
         extracted.design(),
+        &rails(extracted, 4, 3),
         &MultipleDriversTable {
             head: head(id),
             max_drivers: vec![1],
@@ -342,7 +310,127 @@ fn two_drains_sharing_one_gate_net_are_one_driver_and_are_clean() {
         &mut violations,
         &mut runs,
     );
+    (violations, runs)
+}
+
+/// Oracle: construct-from-answer. Net two is pulled down to rail three by a
+/// transistor gated from net zero and up to rail four by one gated from net
+/// one: contention, two things can drive the net at once. The measurement is
+/// the number of distinct drivers — two — against the configured maximum of
+/// one. Which channel end extraction calls the source does not matter: with
+/// the nch drawn output end first, its "drain" is on the rail, and a rule
+/// orienting channels by that order saw one driver (F28).
+#[test]
+fn a_net_with_two_independently_gated_pull_networks_is_flagged_with_its_driver_count() {
+    for output_first in [false, true] {
+        let extracted = extract(&contended_output(0, 1, output_first));
+        let id = rule(42);
+        let (violations, runs) = drivers(&extracted, id);
+
+        assert_one_violation_on(&extracted, &violations, id, 2);
+        assert_eq!(
+            violations.measured[0],
+            Measurement::Count(2),
+            "the measurement is how many distinct drivers pull this net"
+        );
+        assert_eq!(violations.limit[0], Measurement::Count(1));
+
+        let run = assert_rule_ran(&runs, id);
+        assert_eq!(
+            run.examined, 1,
+            "one net other than the rails carries a channel end"
+        );
+        assert_eq!(run.violations, 1);
+    }
+}
+
+/// Oracle: construct-from-answer. The same two transistors, now sharing one
+/// gate net: an inverter, one driver. Counting channels instead of pull
+/// networks joined by their gates would make every inverter a violation,
+/// which is the false positive this rule's doc comment is written against.
+#[test]
+fn two_pull_networks_sharing_one_gate_net_are_one_driver_and_are_clean() {
+    let extracted = extract(&contended_output(0, 0, false));
+    let id = rule(43);
+    let (violations, runs) = drivers(&extracted, id);
     assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: construct-from-answer. An inverter gated from net zero drives net
+/// two; a pass transistor gated from net one joins net two to net five. With
+/// nothing else on net five, the pass transistor reaches no rail and drives
+/// nothing by itself: one driver. With a pull-down on net five gated from net
+/// six, the pass transistor carries that pull-down onto net two: two drivers
+/// on net two, and on net five the inverter (through the pass transistor)
+/// and the pull-down, two again.
+#[test]
+fn a_pass_gate_drives_only_what_reaches_a_rail_through_it() {
+    for pulled in [false, true] {
+        let mut spec = contended_output(0, 0, false);
+        spec.nets = 7;
+        spec.devices.push(mos(
+            "nch",
+            vec![
+                (TerminalRole::Gate, 1),
+                (TerminalRole::Source, 5),
+                (TerminalRole::Drain, 2),
+                (TerminalRole::Bulk, 3),
+            ],
+        ));
+        if pulled {
+            spec.devices.push(mos(
+                "nch",
+                vec![
+                    (TerminalRole::Gate, 6),
+                    (TerminalRole::Source, 3),
+                    (TerminalRole::Drain, 5),
+                    (TerminalRole::Bulk, 3),
+                ],
+            ));
+        }
+        let extracted = extract(&spec);
+        let id = rule(47);
+        let (violations, runs) = drivers(&extracted, id);
+        let run = assert_rule_ran(&runs, id);
+        assert_eq!(run.examined, 2, "nets two and five carry channel ends");
+        if !pulled {
+            assert_clean(&runs, &violations, id);
+            continue;
+        }
+        let mut flagged: Vec<PolyId> = violations.shape_a.clone();
+        flagged.sort_unstable();
+        let mut want = vec![extracted.lowest_poly(2), extracted.lowest_poly(5)];
+        want.sort_unstable();
+        assert_eq!(flagged, want);
+        assert!(violations
+            .measured
+            .iter()
+            .all(|&m| m == Measurement::Count(2)));
+    }
+}
+
+/// Oracle: construct-from-answer. Without intent no net is known to be a
+/// rail, so no pull network can be told from a pass gate: the rule skips
+/// rather than report every net clean.
+#[test]
+fn multiple_drivers_skips_without_intent() {
+    let extracted = extract(&contended_output(0, 1, false));
+    let id = rule(48);
+    let mut scratch = Scratch::default();
+    let mut violations = Violations::default();
+    let mut runs = Vec::new();
+    check_multiple_drivers(
+        extracted.design(),
+        &IntentMap::default(),
+        &MultipleDriversTable {
+            head: head(id),
+            max_drivers: vec![1],
+        },
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    common::assert_skipped_for_intent(&runs, &violations, id);
 }
 
 /// Oracle: construct-from-answer. `layout_from_netlist` gives every net a rail,
@@ -422,7 +510,8 @@ fn an_unconnected_pin_rule_naming_no_layer_examines_nothing() {
 /// happened in.
 #[test]
 fn running_the_topological_rules_twice_produces_identical_rows() {
-    let extracted = extract(&contended_output(0, 1));
+    let extracted = extract(&contended_output(0, 1, false));
+    let intent = rails(&extracted, 4, 3);
     let id = rule(46);
     let table = MultipleDriversTable {
         head: head(id),
@@ -434,6 +523,7 @@ fn running_the_topological_rules_twice_produces_identical_rows() {
     let mut first_runs = Vec::new();
     check_multiple_drivers(
         extracted.design(),
+        &intent,
         &table,
         &mut scratch,
         &mut first,
@@ -444,6 +534,7 @@ fn running_the_topological_rules_twice_produces_identical_rows() {
     let mut second_runs = Vec::new();
     check_multiple_drivers(
         extracted.design(),
+        &intent,
         &table,
         &mut scratch,
         &mut second,

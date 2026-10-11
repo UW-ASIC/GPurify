@@ -99,8 +99,9 @@ missing input, a file that could not be read.
 Some electrical rules need facts about the chip that no process deck can know:
 `ir_drop`, `em_current_density`, `electromigration`, `reliability`,
 `hv_domain`, `esd_latchup`, `esd_topological`, `gate_oxide`, `drain_source`,
-`well_bias`, `missing_level_shifter` and `domain_crossing`. Without
-`--intent` they report skipped.
+`well_bias`, `missing_level_shifter`, `domain_crossing`, and
+`multiple_drivers` and `tie_high_low`, which read the supplies as the rails
+that orient each transistor channel. Without `--intent` they report skipped.
 
 ```json
 {

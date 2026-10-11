@@ -61,10 +61,10 @@ rather than pretending. `strength` grades each case:
 | `strength` | meaning | count |
 |---|---|---:|
 | `strong` | rule ran, jurisdiction non-empty, measurement approaches the limit | 122 |
-| `blocked` | derivation sound, corpus or frozen interface prevents reaching it | 11 |
-| `vacuous` | rule ran but never approached the limit | 9 |
+| `underivable` | nothing determines the answer | 11 |
+| `blocked` | derivation sound, corpus or frozen interface prevents reaching it | 9 |
+| `vacuous` | rule ran but never approached the limit | 7 |
 | `skipped` | rule recorded `Skipped`; a clean count here is a false clean | 7 |
-| `underivable` | nothing determines the answer | 7 |
 | `weak` | rule ran with a legitimately empty jurisdiction, or right for an unrelated reason | 6 |
 | `refused` | rule fails closed on this input; assert `Refused`, never a clean `Ran` | 5 |
 
@@ -108,12 +108,11 @@ while disagreeing with what it means. The split is the point:
 | `not_a_rule` | the manifest states a claim that is not a rule kind | 2 |
 | `fixture_out_of_domain` | geometry outside what a rectilinear-only tree represents; it fails closed | 2 |
 | `code_wrong` | the manifest is physically right and the implementation cannot reach it (`known_defects`) | 3 |
-| `fixture_incomplete` | the fixture cannot express the premise (no cell draws a `licon`) | 6 |
-| `no_intent_fixture` | an intent-gated rule with no design-intent file | 10 |
+| `fixture_incomplete` | the fixture cannot express the premise (no cell draws a `licon`) | 5 |
+| `no_intent_fixture` | an intent-gated rule with no design-intent file | 14 |
 | `no_deck_coefficient` | a coupling value with no coefficient column in the process stack | 4 |
 | `deck_gap` | a tap that cannot be spelled as a derived layer | 1 |
-| `signature_defect` | a condition a frozen signature makes unsatisfiable | 1 |
-| **total** | | **39** |
+| **total** | | **41** |
 
 Cases expected to fail are explained under `known_defects` and
 `blocking_findings` at the top of `expectations.json`. Weakening them to match

@@ -782,13 +782,20 @@ impl RuleSet {
 
         topology::check_floating_gate(design, facts, ports, &self.floating_gate, out, runs);
         topology::check_floating_well(design, &self.floating_well, scratch, out, runs);
-        topology::check_multiple_drivers(design, &self.multiple_drivers, scratch, out, runs);
+        topology::check_multiple_drivers(
+            design,
+            intent,
+            &self.multiple_drivers,
+            scratch,
+            out,
+            runs,
+        );
         topology::check_unconnected_pin(design, facts, &self.unconnected_pin, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);
         supply::check_missing_tie(design, &self.missing_tie, scratch, out, runs);
-        supply::check_tie_high_low(design, facts, &self.tie_high_low, out, runs);
+        supply::check_tie_high_low(design, facts, intent, &self.tie_high_low, out, runs);
         supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);

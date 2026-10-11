@@ -41,7 +41,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 12] = [
+const INTENT_GATED: [&str; 14] = [
     "domain_crossing",
     "drain_source",
     "electromigration",
@@ -52,7 +52,9 @@ const INTENT_GATED: [&str; 12] = [
     "hv_domain",
     "ir_drop",
     "missing_level_shifter",
+    "multiple_drivers",
     "reliability",
+    "tie_high_low",
     "well_bias",
 ];
 
@@ -114,7 +116,7 @@ fn every_kind() -> RuleSet {
             head: head(id_of("soft_connection")),
             soft_start: vec![0, 1],
             soft: vec![other],
-            connectivity: Default::default(),
+            connectivity: Connectivity::default(),
         },
         missing_tie: supply::MissingTieTable {
             head: head(id_of("missing_tie")),
