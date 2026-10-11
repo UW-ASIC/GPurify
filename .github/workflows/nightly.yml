@@ -105,7 +105,9 @@ jobs:
       # minimised (`cargo fuzz tmin`) into fuzz/regressions/<target>/.
       - run: |
           mkdir -p fuzz/corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} ${{ matrix.seeds }} -- \
+          # The prebuilt cargo-fuzz is a musl binary and defaults to the triple
+          # it was built for; AddressSanitizer cannot link static musl.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} ${{ matrix.seeds }} -- \
             -max_total_time=3600 -rss_limit_mb=2048 -timeout=20
       - if: failure()
         uses: actions/upload-artifact@v4
