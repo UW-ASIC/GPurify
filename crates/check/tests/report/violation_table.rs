@@ -340,10 +340,10 @@ fn extending_by_an_empty_table_changes_nothing() {
     assert_violations_eq(&table, &table_of(&rows));
 }
 
-/// Oracle: law. `Warning` is defined as never downgrading a genuine violation,
-/// which is a statement about the derived order: a writer reducing a set of
-/// findings to their worst must land on `Error`. The variant order is the only
-/// thing carrying that, and swapping the two variants is a silent change.
+/// Oracle: the order `Severity` documents, "Ordered, `Warning < Error`, so the
+/// `max` over a run is its worst": a writer reducing a set of findings to
+/// their worst must land on `Error`. The variant order is the only thing
+/// carrying that, and swapping the two variants is a silent change.
 #[test]
 fn a_warning_never_outranks_an_error() {
     assert!(Severity::Warning < Severity::Error);

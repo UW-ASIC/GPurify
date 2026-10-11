@@ -401,15 +401,12 @@ fn reducing_an_already_reduced_graph_changes_nothing() {
 ///
 /// The empty graph is in the list because it is the one input whose CSR columns
 /// are *absent* rather than holding a lone terminator, and a rebuild would give
-/// it one — so it is the case the copy path exists for.
+/// it one — so it is the case the copy path exists for. A parallel pair of
+/// two models is the same law's case in
+/// `a_different_model_on_one_side_blocks_the_parallel_merge`.
 #[test]
 fn an_unreducible_graph_comes_through_byte_identical() {
-    for src in [
-        Graph::default(),
-        mos_and_bjt(),
-        series_pair(5),
-        parallel_pair(PCH, 1, 2),
-    ] {
+    for src in [Graph::default(), mos_and_bjt(), series_pair(5)] {
         assert_eq!(reduce(&src), src);
     }
 }

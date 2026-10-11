@@ -129,23 +129,25 @@ fn a_node_conflicting_with_itself_is_infeasible_under_every_palette() {
     }
 }
 
-/// Oracle: determinism. The reported node is specified as a function of the
-/// graph, not of the path the search took through it, so two calls on the same
-/// graph name the same node. A search reporting wherever it happened to stop
-/// would pass the test above and fail this one.
+/// Oracle: the documented node, hand-derived. `Coloring::Infeasible` names,
+/// for two colours, the lowest root of an odd-cycle component. Here nodes 0
+/// and 1 form a bipartite pair and nodes 2 to 6 a five-cycle, so the answer is
+/// node 2, the five-cycle's lowest node. The edges are listed from the
+/// cycle's highest node and then reversed: a search reporting wherever it
+/// stopped, or the first edge it read, names 6 or another cycle node.
 #[test]
-fn the_node_an_infeasible_graph_names_is_the_same_on_every_run() {
-    let five_cycle = [(0u32, 1u32), (1, 2), (2, 3), (3, 4), (4, 0)];
-    let mut first_out = Vec::new();
-    let mut second_out = Vec::new();
-    let first = color_into(5, &five_cycle, 2, &mut first_out);
-    let second = color_into(5, &five_cycle, 2, &mut second_out);
-
-    assert!(matches!(first, Coloring::Infeasible { .. }));
-    assert_eq!(
-        first, second,
-        "the node named by an infeasible verdict is a function of the graph"
-    );
+fn an_infeasible_graph_names_the_lowest_node_of_its_odd_cycle_component() {
+    let mut edges = vec![(5u32, 6u32), (4, 5), (0, 1), (3, 4), (2, 3), (6, 2)];
+    for order in ["listed", "reversed"] {
+        let mut colours = vec![7; 7];
+        assert_eq!(
+            color_into(7, &edges, 2, &mut colours),
+            Coloring::Infeasible { node: 2 },
+            "edges {order}: the lowest root of the odd-cycle component"
+        );
+        assert!(colours.is_empty(), "edges {order} left a colouring");
+        edges.reverse();
+    }
 }
 
 /// Oracle: law. A graph containing a four-clique cannot be split across three

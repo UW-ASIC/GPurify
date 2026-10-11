@@ -77,6 +77,8 @@ fn replay(target: &str, oracle: fn(&[u8]), seeds: &[&str]) {
 
 /// A directory under `fuzz/regressions` that names no target would be
 /// replayed by nothing.
+///
+/// Oracle: `fuzz/Cargo.toml`'s target names, copied into `TARGETS`.
 #[test]
 fn every_regression_directory_names_a_target() {
     let Ok(entries) = std::fs::read_dir(repo().join("fuzz/regressions")) else {
@@ -92,21 +94,31 @@ fn every_regression_directory_names_a_target() {
     }
 }
 
+/// Oracle: `oracles::gds`: a typed error, never a panic; flattening within
+/// budget; a layout that can be written back reads back to the same store
+/// (round trip).
 #[test]
 fn gds() {
     replay("gds", oracles::gds, &["tests/fixtures/_source"]);
 }
 
+/// Oracle: `oracles::gds_structured`: the flat count and area computed from
+/// the decoded structures, and the hierarchy errors the limits define.
 #[test]
 fn gds_structured() {
     replay("gds_structured", oracles::gds_structured, &[]);
 }
 
+/// Oracle: `oracles::deck`: every diagnostic's span lies inside the input on
+/// character boundaries, and every rule of an accepted deck gets a run row.
 #[test]
 fn deck() {
     replay("deck", oracles::deck, &["pdks", "fuzz/seeds/deck"]);
 }
 
+/// Oracle: `oracles::netlist_spice`: a typed error, never a panic; device
+/// and instance counts counted from the card text; the flattening counted
+/// from the subcircuit tables.
 #[test]
 fn netlist_spice() {
     replay(
@@ -116,6 +128,9 @@ fn netlist_spice() {
     );
 }
 
+/// Oracle: `oracles::netlist_spectre`: a typed error, never a panic; device
+/// and instance counts counted from the statements; the flattening counted
+/// from the subcircuit tables.
 #[test]
 fn netlist_spectre() {
     replay(
@@ -125,11 +140,13 @@ fn netlist_spectre() {
     );
 }
 
+/// Oracle: `oracles::intent`: a typed error, never a panic.
 #[test]
 fn intent() {
     replay("intent", oracles::intent, &["fuzz/seeds/intent"]);
 }
 
+/// Oracle: `oracles::liberty_spec`: a typed error, never a panic.
 #[test]
 fn liberty_spec() {
     replay(
@@ -139,7 +156,21 @@ fn liberty_spec() {
     );
 }
 
+/// The target has no seed directory, so its regressions directory is the
+/// replay hook: it must exist and hold an input, or this would pass on a
+/// missing path. Its first input is a seed, not a crasher: a `min_spacing`
+/// case (index `0x0001_0005`, two cells of one row) under symmetry 3, moved by
+/// (0x1234_5678, -0x1000_0000).
+///
+/// Oracle: `oracles::drc_e2e`: the bitmap reference, written from each rule's
+/// rustdoc.
 #[test]
 fn drc_e2e() {
+    let hook = repo().join("fuzz/regressions/drc_e2e");
+    assert!(
+        !files(&hook).is_empty(),
+        "{} holds no input to replay",
+        hook.display()
+    );
     replay("drc_e2e", oracles::drc_e2e, &[]);
 }
