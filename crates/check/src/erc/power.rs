@@ -868,8 +868,9 @@ pub fn extract_into(
     let metal_req = taps.push_links(store, &links.metal, shape_of);
     let via_req = taps.push_links(store, &links.via, shape_of);
 
-    // One tap per device on the rail at its nearest shape, and one load share
-    // per terminal it lands on the rail (source and drain both draw).
+    // One tap per device on the rail, on the nearest shape its marker touches
+    // (else the nearest), and one load share per terminal it lands on the
+    // rail (source and drain both draw).
     let mut attach: Vec<u32> = Vec::new();
     let mut load: Vec<(u32, Qty<Current, { prefix::MICRO }>)> = Vec::new();
     let mut index = TapIndex::default();
@@ -884,8 +885,9 @@ pub fn extract_into(
         }
         TapIndex::build_into(store, &shape[from..to], &mut index);
         for &device in devices.devices_on(net) {
-            let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
-            let host_index = from + index.nearest(marker) as usize;
+            let marker_box = store.poly_bbox(devices.marker[device.0 as usize]);
+            let marker = centre(marker_box);
+            let host_index = from + index.host(marker_box) as usize;
             let host = store.poly_bbox(shape[host_index]);
             let request = taps.push(
                 u32::try_from(host_index).expect("a shape index is a u32"),
@@ -1088,10 +1090,17 @@ fn conducting<'a>(
         .filter(|&poly| conductor[store.poly_layer(poly).idx()])
 }
 
-/// A uniform grid over one net's shape centres, for exact nearest-point
-/// queries by expanding rings.
+/// The shapes of one net a device can draw its current from: their boxes,
+/// for "which holds this point", and a uniform grid over their centres, for
+/// exact nearest-point queries by expanding rings.
 #[derive(Debug, Default)]
 struct TapIndex {
+    /// Box of each candidate, in candidate order.
+    boxes: Vec<Bbox>,
+    /// Candidate indices by ascending box `xlo`.
+    by_xlo: Vec<u32>,
+    /// The widest box: how far left of a point a box holding it can start.
+    reach: i64,
     /// Centre of each candidate, in candidate order.
     at: Vec<Point>,
     origin_x: Dbu,
@@ -1108,16 +1117,57 @@ struct TapIndex {
 impl TapIndex {
     /// Build over one net's conducting shapes.
     fn build_into(store: &GeometryStore, candidate: &[PolyId], out: &mut Self) {
+        out.boxes.clear();
+        out.boxes
+            .extend(candidate.iter().map(|&p| store.poly_bbox(p)));
         out.at.clear();
-        out.at.reserve(candidate.len());
-        out.at
-            .extend(candidate.iter().map(|&p| centre(store.poly_bbox(p))));
+        out.at.extend(out.boxes.iter().map(|&b| centre(b)));
         out.grid();
+    }
+
+    /// The candidate a device draws its current from: of those whose box
+    /// touches or overlaps the device marker's box `marker` (shapes the
+    /// device can be connected to), the one whose centre is nearest the
+    /// marker's centre, the lower index winning a tie; with none touching,
+    /// [`Self::nearest`] over every candidate. Panics on an empty index.
+    fn host(&self, marker: Bbox) -> u32 {
+        let at = centre(marker);
+        let lo = self
+            .by_xlo
+            .partition_point(|&i| self.boxes[i as usize].xlo.raw() < marker.xlo.raw() - self.reach);
+        self.by_xlo[lo..]
+            .iter()
+            .take_while(|&&i| self.boxes[i as usize].xlo <= marker.xhi)
+            .filter(|&&i| {
+                let b = self.boxes[i as usize];
+                marker.xlo <= b.xhi && b.ylo <= marker.yhi && marker.ylo <= b.yhi
+            })
+            .map(|&i| {
+                let c = self.at[i as usize];
+                let (dx, dy) = (
+                    i128::from(c.x.raw() - at.x.raw()),
+                    i128::from(c.y.raw() - at.y.raw()),
+                );
+                (dx * dx + dy * dy, i)
+            })
+            .min()
+            .map_or_else(|| self.nearest(at), |(_, i)| i)
     }
 
     /// Bucket the points already in `at` (split out so tests need no store).
     fn grid(&mut self) {
         let out = self;
+        out.by_xlo.clear();
+        out.by_xlo
+            .extend(0..u32::try_from(out.boxes.len()).expect("a shape index is a u32"));
+        let boxes = &out.boxes;
+        out.by_xlo.sort_unstable_by_key(|&i| boxes[i as usize].xlo);
+        out.reach = out
+            .boxes
+            .iter()
+            .map(|b| (b.xhi - b.xlo).raw())
+            .max()
+            .unwrap_or(0);
         out.bucket_start.clear();
         out.rows.clear();
         out.cell = 1;
@@ -1705,15 +1755,17 @@ pub fn extract_nets_into(
         let metal_req = taps.push_links(store, metal, shape_of);
         let via_req = taps.push_links(store, via, shape_of);
 
-        // Every device on the net taps its nearest shape; one with a terminal
-        // here is an attach point (once, however many terminals).
+        // Every device on the net taps the nearest shape its marker touches
+        // (else the nearest); one with a terminal here is an attach point
+        // (once, however many terminals).
         let mut attach: Vec<u32> = Vec::new();
         if shapes > 0 {
             TapIndex::build_into(store, &candidate[from..to], &mut index);
             for &device in devices.devices_on(id) {
-                let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
+                let marker_box = store.poly_bbox(devices.marker[device.0 as usize]);
+                let marker = centre(marker_box);
                 let (on, _) = devices.terminals_of(device);
-                let local = index.nearest(marker);
+                let local = index.host(marker_box);
                 let host = store.poly_bbox(candidate[from + local as usize]);
                 let request = taps.push(local, tap_on(host, Bbox::point(marker.x, marker.y)));
                 if on.contains(&id) {
@@ -2332,7 +2384,7 @@ mod tests {
         assemble_into, factorise_into, ChainProfile, Point, SolveScratch, TapIndex, NOT_AN_UNKNOWN,
     };
     use gpurify_geom::Dbu;
-    use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
+    use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 
     /// One polygon on layer zero, from its rectilinear ring.
     fn shape(xs: &[i64], ys: &[i64]) -> GeometryStore {
@@ -2555,6 +2607,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A device draws its current from a shape its marker touches, not from
+    /// the shape whose centre is nearest: a load whose marker sits on a 40 µm
+    /// rail at x = 2.5 µm is 18.5 µm from the rail's centre but 5.0 µm from
+    /// the centre of a strap crossing at x = 5 µm that it does not touch (O1,
+    /// PDNSim). Of several it touches, the nearest centre decides (a MOS
+    /// draws from the diffusion beside its channel rather than metal routed
+    /// over it, as before); touching none, the nearest centre.
+    ///
+    /// Oracle: hand-derived from the boxes. Marker (2.4..2.6, 2.9..3.1) µm
+    /// touches the rail (1..41 by 2.8..3.2) and not the strap (4.8..5.2 by
+    /// 1.4..9.0); marker (4.9..5.1, 2.9..3.1) touches both, the strap's
+    /// centre (5.0, 5.2) 2.2 µm away and the rail's (21, 3) 16 µm; marker
+    /// (0.4..0.6, 8.9..9.1) touches neither.
+    #[test]
+    fn a_device_draws_from_a_shape_its_marker_touches() {
+        let b = |xlo, ylo, xhi, yhi| Bbox {
+            xlo: Dbu::new_unchecked(xlo),
+            ylo: Dbu::new_unchecked(ylo),
+            xhi: Dbu::new_unchecked(xhi),
+            yhi: Dbu::new_unchecked(yhi),
+        };
+        let mut index = TapIndex {
+            boxes: vec![b(4800, 1400, 5200, 9000), b(1000, 2800, 41_000, 3200)],
+            ..TapIndex::default()
+        };
+        index.at = index.boxes.iter().map(|&x| super::centre(x)).collect();
+        index.grid();
+        let marker = b(2400, 2900, 2600, 3100);
+        assert_eq!(
+            index.nearest(super::centre(marker)),
+            0,
+            "the strap's centre is nearer"
+        );
+        assert_eq!(index.host(marker), 1, "the load touches only the rail");
+        assert_eq!(
+            index.host(b(4900, 2900, 5100, 3100)),
+            0,
+            "both: the nearer centre"
+        );
+        assert_eq!(
+            index.host(b(400, 8900, 600, 9100)),
+            0,
+            "neither: the nearest centre"
+        );
     }
 
     /// The bucketed pass agrees with a masked sum over every node per net.
