@@ -64,6 +64,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_spacing(depth),
         min_spacing_diff(depth),
         eol_spacing(depth),
+        eol_within_spacing(depth),
         prl_spacing(depth),
         corner_to_corner(depth),
         wide_spacing(depth),
@@ -1881,6 +1882,179 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
         &["DRC-029"],
         "rule eol eol_space(met1; eol_width: 200nm) >= 101nm",
         &["eol"],
+    ));
+    out
+}
+
+// --------------------------------------------------------- eol_within_spacing
+
+/// LEF/DEF 5.8 Example 1-18 in nanometres, `SPACING 1.2 ENDOFLINE 1.3 WITHIN
+/// 0.6`, with `parallel` and `end_to_end` as the deck writes them.
+fn lef_eol(parallel: &str, end_to_end: &str) -> String {
+    one_layer_deck(&format!(
+        "rule e eol_space(met1; eol_width: 1300nm, within: 600nm, parallel: {parallel}, \
+         end_to_end: {end_to_end}) >= 1200nm"
+    ))
+}
+
+/// A 1000 wide line ending at y = 0: its top is an end of line (shorter
+/// than 1300, both corners convex) facing up, its keep-out x in
+/// (-600, 1600), y from 0 up to 1200.
+const LINE: [i64; 4] = [0, -5000, 1000, 0];
+
+/// `eol_space(met1; eol_width: 1300nm, within: 600nm, parallel: ..,
+/// end_to_end: ..) >= 1200nm` (`eol_within_spacing`, DRC-029), LEF's
+/// `SPACING ENDOFLINE`: a facing edge of another figure in an end's keep-out
+/// (the end widened by `within` each side, out to the limit) fails by its
+/// depth; one finding per pair of figures, at the middle of the stretch
+/// where the facing edge overlaps the widened end.
+///
+/// Without `parallel`: a 5000 wide bar's depth swept around 1200 (LEF
+/// Figure 1-23 a, b); a 2000 square 300 above, its side swept around 600
+/// past the end (Figure 1-23 c, d: within is "less than"); a 1000 long edge
+/// whose one corner is concave (no end, clean); an end facing its own figure.
+/// With `PARALLELEDGE 1.1 WITHIN 0.5` (Figure 1-24), a bar 1000 above fails
+/// only with a neighbour beside the line: its distance swept around 1100,
+/// its top swept around 500 behind the end's line; none at all, clean. With
+/// `TWOEDGES`, one side is not enough and two are. With `end_to_end:
+/// 1400nm`, two ends facing each other need 1400 (swept), and an end facing
+/// a side still 1200.
+fn eol_within_spacing(depth: Depth) -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("eol_within_spacing/{shape}"),
+            &["DRC-029"],
+            deck,
+            layout,
+            vec![("e", findings)],
+        ));
+    };
+    let plain = lef_eol("none", "none");
+    let parallel = lef_eol("(space: 1100nm, within: 500nm, two_edges: false)", "none");
+    let two_edges = lef_eol("(space: 1100nm, within: 500nm, two_edges: true)", "none");
+    let ends = lef_eol("none", "1400nm");
+    // A 7000 wide bar 1000 above the line: inside the keep-out, its bottom
+    // overlapping the widened end over x = -600..1600.
+    let bar_above = [-3000, 1000, 4000, 2000];
+    let at_1000 = || vec![pin(Finding::length(1000), 1000, 1000)];
+    for g in sweep(depth, 1200) {
+        let findings = if g < 1200 {
+            vec![pin(Finding::length(g), 1000, g)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("depth/{}", side(g, 1200)),
+            &plain,
+            met1(&[LINE, [-2000, g, 3000, g + 1000]]),
+            findings,
+        );
+    }
+    for d in sweep(depth, 600) {
+        let findings = if d < 600 {
+            vec![pin(Finding::length(300), 2600 + d, 300)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("within/{}", side(d, 600)),
+            &plain,
+            met1(&[LINE, [1000 + d, 300, 3000 + d, 2300]]),
+            findings,
+        );
+    }
+    // A tab on a base: its left side is 1000 long but its lower corner is
+    // concave, so it is no end, and the wide shape 500 to its left is clean.
+    case(
+        "concave_corner_is_no_end".into(),
+        &plain,
+        met1(&[
+            [-3000, -5000, 4000, -1000],
+            [0, -1000, 1000, 0],
+            [-3000, -900, -500, 3000],
+        ]),
+        Vec::new(),
+    );
+    // The line's end faces a bar 1000 above that a frame joins to the line.
+    case(
+        "facing_its_own_figure".into(),
+        &plain,
+        met1(&[
+            LINE,
+            [0, -6000, 3000, -5000],
+            [2000, -6000, 3000, 1000],
+            [-2000, 1000, 3000, 2000],
+        ]),
+        Vec::new(),
+    );
+    for p in sweep(depth, 1100) {
+        let findings = if p < 1100 { at_1000() } else { Vec::new() };
+        case(
+            format!("parallel_space/{}", side(p, 1100)),
+            &parallel,
+            met1(&[LINE, bar_above, [-p - 2000, -5000, -p, 0]]),
+            findings,
+        );
+    }
+    for t in sweep(depth, -500) {
+        let findings = if t > -500 { at_1000() } else { Vec::new() };
+        case(
+            format!("parallel_within/{}", side(t, -500)),
+            &parallel,
+            met1(&[LINE, bar_above, [-2500, -5000, -500, t]]),
+            findings,
+        );
+    }
+    case(
+        "no_parallel_edge".into(),
+        &parallel,
+        met1(&[LINE, bar_above]),
+        Vec::new(),
+    );
+    case(
+        "two_edges/one_side".into(),
+        &two_edges,
+        met1(&[LINE, bar_above, [-2500, -5000, -500, 0]]),
+        Vec::new(),
+    );
+    case(
+        "two_edges/both_sides".into(),
+        &two_edges,
+        met1(&[
+            LINE,
+            bar_above,
+            [-2500, -5000, -500, 0],
+            [1500, -5000, 3500, 0],
+        ]),
+        at_1000(),
+    );
+    for g in sweep(depth, 1400) {
+        let findings = if g < 1400 {
+            vec![pin(Finding::length(g), 1000, g)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("end_to_end/{}", side(g, 1400)),
+            &ends,
+            met1(&[LINE, [0, g, 1000, g + 5000]]),
+            findings,
+        );
+    }
+    case(
+        "end_to_side_keeps_the_limit".into(),
+        &ends,
+        met1(&[LINE, [-2000, 1300, 3000, 2300]]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "eol_within_spacing",
+        &["DRC-029"],
+        "rule e eol_space(met1; eol_width: 1300nm, within: 600nm, parallel: none, \
+         end_to_end: none) >= 1200nm",
+        &["e"],
     ));
     out
 }

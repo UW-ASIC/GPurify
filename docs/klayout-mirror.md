@@ -1070,6 +1070,24 @@ forbidden_gap(id, L.isolated(MAX + 1, projection, transparent, projection_limits
   of the range and the run swept one step either side (SY, MR); `TritonRoute`'s
   `isForbiddenSpacing` and `isValidPrl` give the closed range and the strict run.
 
+### 38. eol_within_spacing — NONE: KLayout has no end-of-line keep-out
+
+**GPurify** (`facing.rs` `eol_within_spacing`, `beside`): an end of line is an edge of the merged
+layer shorter than `eol_width` with both corners convex. Its keep-out is the end widened by
+`within` on each side (open) and reaching straight out to the limit (open); a facing edge of
+another figure in it, at depth 0 or more and overlapping the widened span, fails below the limit,
+or below `end_to_end` when it is an end of line too. With `parallel`, an end is checked only where
+an edge faces the line's side less than `space` away, overlapping the stretch from `within` behind
+the end's line to the end's `within` past it (both sides with `two_edges`).
+
+**KLayout.** Not mirrored. KLayout's checks pair edges or polygons by distance and projection; none
+widens a keep-out past an edge's ends, gates a check on a parallel edge beside the line, or swaps
+the space when the facing edge is an end of line too. `TritonRoute` defines the rule
+(`FlexGC_eol.cpp`), but it is not run as a differential. The oracles: the LEF 5.8 worked example
+(Example 1-18, Figures 1-23 and 1-24; SE), the keep-out's depth, sideways reach, parallel space and
+parallel reach each swept one step either side, and both-sides and end-to-end cases, hand-derived
+under the square's symmetries (SY, MR).
+
 ---
 
 ## (c) Derived layers, connectivity, antenna
@@ -1116,7 +1134,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 37, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 38, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest
@@ -1148,6 +1166,8 @@ KLayout, but only by positive overlap in GPurify.
 **NONE**
 - **multi_patterning.** Reported as not mirrored. The oracle stays brute-force colouring of small
   conflict graphs (testing-plan L6 skip list); a KLayout conflict graph could feed it.
+- **eol_within_spacing.** Reported as not mirrored. The oracles are the LEF 5.8 worked example and
+  hand-derived fixtures (rule 38).
 - **net_spacing on a deck without `touch_within_layer`.** The oracle is construct-from-answer
   tests with planted nets.
 

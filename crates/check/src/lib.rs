@@ -85,6 +85,7 @@
 //! | `aspect_ratio(L) <= r` | `aspect_ratio` | [`drc::Rule::AspectRatio`] | a shape whose bounding box is longer than `r` times its width | DRC-022 |
 //! | `tip_space_table(L; length: [..], space: [[..]])` | `tip_spacing_table` | [`drc::Rule::TipSpacingTable`] | facing edges closer than the cell their two length classes select | DRC-031 |
 //! | `forbidden_space(L; min: len, max: len, prl: len)` | `forbidden_spacing` | [`drc::Rule::ForbiddenSpacing`] | facing edges running alongside at a gap in a forbidden range | DRC-033 |
+//! | `eol_space(L; eol_width: len, within: len, parallel: .., end_to_end: ..) >= len` | `eol_within_spacing` | [`drc::Rule::EolWithinSpacing`] | too little space in a LEF end-of-line keep-out, with parallel-edge and end-to-end qualifiers | DRC-029 |
 //!
 //! ## Electrical rules
 //!

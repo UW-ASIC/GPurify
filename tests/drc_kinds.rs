@@ -495,6 +495,40 @@ fn an_asymmetric_tip_table_is_refused_at_load() {
     );
 }
 
+// ---------------------------------------------------------- end of line
+
+/// LEF/DEF 5.8 Language Reference, Example 1-18 and Figure 1-23, as the
+/// manual writes it: `SPACING 1.2 ENDOFLINE 1.3 WITHIN 0.6`. Four 1 µm lines
+/// (each end, 1.0, is under 1.3), 10 µm apart, each with one shape above:
+/// a) a bar 1.2 above: no violation ("has 1.2 µm spacing");
+/// b) a bar 1.0 above: violation ("has only 1.0 µm spacing");
+/// c) a block 0.8 above whose side is 0.5 past the end's: violation ("<1.2
+///    µm spacing within 0.6 µm away");
+/// d) the block 0.6 past: no violation (within is "less than" 0.6).
+#[test]
+fn lef_example_1_18_holds_the_end_of_line_within() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule e eol_space(met1; eol_width: 1.3um, within: 0.6um, parallel: none, \
+         end_to_end: none) >= 1.2um\n",
+        &[
+            ("met1", [0, -5_000, 1_000, 0]),
+            ("met1", [-2_000, 1_200, 3_000, 2_200]),
+            ("met1", [10_000, -5_000, 11_000, 0]),
+            ("met1", [8_000, 1_000, 13_000, 2_000]),
+            ("met1", [20_000, -5_000, 21_000, 0]),
+            ("met1", [21_500, 800, 23_500, 2_800]),
+            ("met1", [30_000, -5_000, 31_000, 0]),
+            ("met1", [31_600, 800, 33_600, 2_800]),
+        ],
+    );
+    let got = found.of("e");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(count((len(1_000), len(1_200))), 1, "{got:?}");
+    assert_eq!(count((len(800), len(1_200))), 1, "{got:?}");
+}
+
 // ---------------------------------------------------------- forbidden range
 
 /// A forbidden range written as `LEF58_TWOWIRESFORBIDDENSPACING 0.10 0.15
