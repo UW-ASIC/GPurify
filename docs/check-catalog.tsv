@@ -66,7 +66,7 @@ DRC-072	drc	density	Local density over a device	SKY:vpp.5a-c,vpp.11	region_densi
 DRC-073	drc	density	Fill geometry and fill-to-drawn spacing	IHP:AFil,GFil,MFil; GF:DCF,DPF,DM; LEF:FILLACTIVESPACING	min_width,min_spacing_diff	expressible	FR; MR; SY; TX:KL	
 DRC-074	drc	density	No-fill / exclusion regions	GF:DCF.8a,DPF.15,DM.8; IHP:GFil.i,6.12	forbidden	expressible	FR; MR; SY; TX:KL	
 DRC-075	drc	density	Wide-metal slotting	IHP:Slt.a-i; GF:MSLOT; SKY:m1.11,m1.12	cheesing,region_density	partial	FR; MR; SY; TX:KL	Slot required is a kind (cheesing); slot geometry uses the generic kinds; slit density over a plate is region_density (IHP Slt.i). Missing: a maximum slot spacing (GF180 MSLOT.4) and staggered slots (MSLOT.6)
-DRC-076	drc	density	Waffle-window density	SKY:m1.X.1	-	missing	FR	sky130.deck left out
+DRC-076	drc	density	Waffle-window density	SKY:m1.X.1	-	missing	FR	sky130's waffle rule (m1.- for met1 to met4, RC) holds a 700 um window's metal density to a floor set by how much of it cmm waffle-drop covers (70% when all of it, then 65/60/50/40/30% by band); the public text states neither the window step nor whether the band edges are inclusive, so it is not written
 DRC-080	drc	net	Same-net vs different-net spacing, one layer	LEF:SPACING SAMENET; GF:NW.2a,NW.2b,DN.2a; IHP:NW.b; KL:nets+props_eq/props_ne; drt	net_spacing	implemented	FR; TX:KL; MR; SY	
 DRC-081	drc	net	Net spacing between two layers / on wells	SKY:nwell.7,hvnwell.8,hv.nwell.1,vhvi.8; IHP:NW.b1,NBL.c	-	missing	FR	Net spacing takes one layer; only sky130 connects wells as nets
 DRC-082	drc	net	Voltage-dependent spacing (VA-DRC)	SKY:hvnwell.8,hv.*; GF:DV.9; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP	-	missing	FR; CF	Top cross-source gap; needs ERC-F1 voltage propagation
