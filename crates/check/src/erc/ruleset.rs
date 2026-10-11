@@ -1,4 +1,4 @@
-//! The twenty-eight tables, the deck parser that fills them, and the dispatcher.
+//! The thirty tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -20,7 +20,7 @@ use gpurify_ingest::{StrId, StrTable};
 ///
 /// Each name is a [`RuleSet`] field of the same name; the crate's
 /// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 28] = [
+pub const KINDS: [&str; 30] = [
     "antenna",
     "antenna_electrical",
     "density_cmp",
@@ -37,6 +37,7 @@ pub const KINDS: [&str; 28] = [
     "hv_domain",
     "hv_tag",
     "ir_drop",
+    "missing_isolation",
     "missing_level_shifter",
     "missing_tie",
     "mixed_tag",
@@ -47,6 +48,7 @@ pub const KINDS: [&str; 28] = [
     "supply_short",
     "tie_high_low",
     "unconnected_pin",
+    "undriven_gate",
     "voltage_spacing",
     "well_bias",
 ];
@@ -142,6 +144,10 @@ pub struct RuleSet {
     pub voltage_spacing: domain::VoltageSpacingTable,
     /// `hv_tag` rows: [`domain::HvTagTable`].
     pub hv_tag: domain::HvTagTable,
+    /// `undriven_gate` rows: [`domain::UndrivenGateTable`].
+    pub undriven_gate: domain::UndrivenGateTable,
+    /// `missing_isolation` rows: [`domain::MissingIsolationTable`].
+    pub missing_isolation: domain::MissingIsolationTable,
 }
 
 /// Everything one run reads, borrowed.
@@ -160,6 +166,10 @@ pub struct RunInputs<'a> {
     pub intent: &'a IntentMap,
     /// What each net can reach from the declared supplies.
     pub voltage: &'a NetVoltage,
+    /// What each net can reach in each declared power state, in the intent's
+    /// order: that state's supplies off and inputs held
+    /// ([`IntentMap::in_state`]). Empty when the intent declares no state.
+    pub states: &'a [NetVoltage],
     /// The per-net networks, or why they could not be built.
     pub networks: Result<&'a NetNetworks, PowerError>,
     /// The solved supply grid, or `None` when intent declared no supplies.
@@ -657,6 +667,18 @@ impl RuleSet {
                     row.layers(0)?;
                     row.head(&mut set.domain_crossing.head)?;
                 }
+                "undriven_gate" => {
+                    row.layers(0)?;
+                    row.head(&mut set.undriven_gate.head)?;
+                }
+                "missing_isolation" => {
+                    row.layers(0)?;
+                    let isolation = row.models("isolation")?;
+                    let table = &mut set.missing_isolation;
+                    row.head(&mut table.head)?;
+                    table.isolation.extend(isolation);
+                    close_csr(&mut table.isolation_start, table.isolation.len());
+                }
                 "hv_tag" => {
                     let layers = row.layers(2)?;
                     let voltage = Qty::new(row.positive("voltage")?);
@@ -859,6 +881,8 @@ impl RuleSet {
             &self.domain_crossing.head,
             &self.voltage_spacing.head,
             &self.hv_tag.head,
+            &self.undriven_gate.head,
+            &self.missing_isolation.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -891,6 +915,7 @@ impl RuleSet {
             ports,
             intent,
             voltage,
+            states,
             networks,
             power,
             die,
@@ -974,5 +999,23 @@ impl RuleSet {
         domain::check_domain_crossing(design, intent, voltage, &self.domain_crossing, out, runs);
         domain::check_voltage_spacing(design, intent, voltage, &self.voltage_spacing, out, runs);
         domain::check_hv_tag(design, intent, voltage, &self.hv_tag, out, runs);
+        domain::check_undriven_gate(
+            design,
+            intent,
+            voltage,
+            states,
+            &self.undriven_gate,
+            out,
+            runs,
+        );
+        domain::check_missing_isolation(
+            design,
+            intent,
+            voltage,
+            states,
+            &self.missing_isolation,
+            out,
+            runs,
+        );
     }
 }

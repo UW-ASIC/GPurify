@@ -41,7 +41,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 16] = [
+const INTENT_GATED: [&str; 18] = [
     "domain_crossing",
     "drain_source",
     "electromigration",
@@ -52,10 +52,12 @@ const INTENT_GATED: [&str; 16] = [
     "hv_domain",
     "hv_tag",
     "ir_drop",
+    "missing_isolation",
     "missing_level_shifter",
     "multiple_drivers",
     "reliability",
     "tie_high_low",
+    "undriven_gate",
     "voltage_spacing",
     "well_bias",
 ];
@@ -265,6 +267,14 @@ fn every_kind() -> RuleSet {
             voltage: vec![millivolts(0.0)],
             space: vec![dbu(100)],
         },
+        undriven_gate: domain::UndrivenGateTable {
+            head: head(id_of("undriven_gate")),
+        },
+        missing_isolation: domain::MissingIsolationTable {
+            head: head(id_of("missing_isolation")),
+            isolation_start: vec![0, 0],
+            isolation: Vec::new(),
+        },
         hv_tag: domain::HvTagTable {
             head: head(id_of("hv_tag")),
             layer: vec![base],
@@ -313,6 +323,7 @@ impl Cell {
             ports: &self.ports,
             intent,
             voltage: &self.voltage,
+            states: &[],
             networks: Ok(&self.networks),
             power: Ok(None),
             die: Bbox {

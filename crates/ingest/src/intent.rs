@@ -11,7 +11,9 @@ use gpurify_geom::{StrId, StrTable};
 pub enum IntentError {
     /// Not JSON of the schema (an unknown key, a wrong type), more than 64
     /// domains, a domain voltage that is not finite, a supply naming an
-    /// undeclared domain, or two `limits` entries for one net.
+    /// undeclared domain, two `limits` entries for one net, or a power state
+    /// that repeats a name, turns off a net no supply declares, or pins an
+    /// input twice or to a voltage that is not finite.
     #[error("malformed intent file: {0}")]
     Malformed(String),
     /// A net listed more than once in `supplies`, in one domain or two.
@@ -61,6 +63,24 @@ pub struct DesignIntent {
     supplies: Vec<(StrId, DomainId, SupplyRole)>,
     /// Per-net limits, strictly ascending by net. Sparse.
     limits: Vec<(StrId, NetLimits)>,
+    /// Declared power states, in file order.
+    states: Vec<PowerState>,
+}
+
+/// One power state of the design: which supplies are switched off, and which
+/// inputs are held at a voltage, while it lasts (IEEE 1801 power states, cited
+/// for scope; Calibre PERC's vectored inputs, public white paper 81822).
+///
+/// Every supply not listed in `off` stays on at its domain's voltage.
+#[derive(Debug, Clone)]
+pub struct PowerState {
+    /// The state's name, unique in the file.
+    pub name: StrId,
+    /// Declared supply nets switched off: they hold no voltage in this state.
+    pub off: Vec<StrId>,
+    /// Nets held at a voltage in this state, mV, each named once: an enable
+    /// tied low, a control input driven high.
+    pub inputs: Vec<(StrId, Qty<Voltage, { prefix::MILLI }>)>,
 }
 
 /// The limits a design states for one net. `None` means *not checked*, never
@@ -103,9 +123,17 @@ impl DesignIntent {
         self.domain_voltage[domain.0 as usize]
     }
 
+    /// The declared power states, in file order; empty when the file has none.
+    pub fn states(&self) -> &[PowerState] {
+        &self.states
+    }
+
     /// True when nothing was declared, so every intent-dependent rule reports skipped, not clean.
     pub fn is_empty(&self) -> bool {
-        self.domain_voltage.is_empty() && self.supplies.is_empty() && self.limits.is_empty()
+        self.domain_voltage.is_empty()
+            && self.supplies.is_empty()
+            && self.limits.is_empty()
+            && self.states.is_empty()
     }
 }
 
@@ -122,6 +150,25 @@ struct IntentFile {
     supplies: Vec<SupplySpec>,
     #[serde(default)]
     limits: Vec<LimitSpec>,
+    #[serde(default)]
+    states: Vec<StateSpec>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StateSpec {
+    name: String,
+    #[serde(default)]
+    off: Vec<String>,
+    #[serde(default)]
+    inputs: Vec<InputSpec>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InputSpec {
+    net: String,
+    voltage_mv: f64,
 }
 
 #[derive(serde::Deserialize)]
@@ -184,7 +231,9 @@ fn checked_limit(
 ///                  "role": "power"|"ground" }],
 ///   "limits":   [{ "net": "<name>", "max_drop_mv": <n>,
 ///                  "max_drop_fraction": <f>, "max_overvoltage_mv": <n>,
-///                  "budget_current_ua": <f> }]
+///                  "budget_current_ua": <f> }],
+///   "states":   [{ "name": "<state>", "off": ["<supply net>"],
+///                  "inputs": [{ "net": "<name>", "voltage_mv": <n> }] }]
 /// }
 /// ```
 ///
@@ -291,6 +340,46 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     }
 
     out.limits = limit;
+
+    for spec in &file.states {
+        let name = strings.intern(&spec.name);
+        if out.states.iter().any(|state| state.name == name) {
+            return Err(IntentError::Malformed(format!(
+                "power state {} is declared twice",
+                spec.name
+            )));
+        }
+        let mut off = Vec::with_capacity(spec.off.len());
+        for net in &spec.off {
+            let id = strings.intern(net);
+            if out.supply_role(id).is_none() {
+                return Err(IntentError::Malformed(format!(
+                    "power state {} turns off {net}, which no supply declares",
+                    spec.name
+                )));
+            }
+            off.push(id);
+        }
+        let mut inputs: Vec<(StrId, Qty<Voltage, { prefix::MILLI }>)> =
+            Vec::with_capacity(spec.inputs.len());
+        for input in &spec.inputs {
+            if !input.voltage_mv.is_finite() {
+                return Err(IntentError::Malformed(format!(
+                    "power state {}: input {} has voltage_mv {}, not a number",
+                    spec.name, input.net, input.voltage_mv
+                )));
+            }
+            let id = strings.intern(&input.net);
+            if inputs.iter().any(|&(seen, _)| seen == id) {
+                return Err(IntentError::Malformed(format!(
+                    "power state {}: input {} is held twice",
+                    spec.name, input.net
+                )));
+            }
+            inputs.push((id, Qty::new(input.voltage_mv)));
+        }
+        out.states.push(PowerState { name, off, inputs });
+    }
     Ok(out)
 }
 

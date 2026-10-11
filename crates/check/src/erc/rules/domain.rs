@@ -252,6 +252,79 @@ pub struct HvTagTable {
     pub voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
 }
 
+/// Gates left undriven in a power state: deck kind `undriven_gate`, written
+/// `undriven_gate()`.
+///
+/// A row flags every net with a transistor gate on it that some supply
+/// reaches with every supply on, but that none reaches in a power state the
+/// intent declares (its switched-off supplies holding nothing, its inputs
+/// held at their voltages, and gate-conditioned transistors switching on
+/// the result, [`propagate_into`](crate::erc::voltage::propagate_into)): the
+/// gate floats in that state. As the Calibre PERC white paper states it, "If
+/// the EN pin of the tristate buffer is at zero volts, the output pin Y of
+/// the tristate buffer has no definitive voltage value and becomes floating.
+/// Subsequent gates connected to pin Y become un-driven". Every row flags
+/// the same nets.
+///
+/// # Limits
+///
+/// Only the declared states are examined, never every combination of
+/// inputs. A gate no supply reaches with every supply on (a primary input)
+/// is `floating_gate`'s, not this rule's.
+///
+/// Catalog: ERC-F8 in the [check catalog]. Defined by Calibre PERC (white
+/// paper 81822, "Finding un-driven gates", public material only); [IEEE
+/// 1801] power states (cited for scope, not read); Siemens Insight Analyzer
+/// (public material only). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
+#[derive(Debug, Default)]
+pub struct UndrivenGateTable {
+    /// Rule id and severity per row. Rows differ only in id and severity.
+    pub head: RuleHead,
+}
+
+/// A floating input to a powered transistor in a power state: deck kind
+/// `missing_isolation`, written `missing_isolation(; isolation: models |
+/// none)`.
+///
+/// A row flags a transistor, not of an `isolation` model, whose gate some
+/// supply reaches with every supply on but none reaches in a declared power
+/// state (as [`UndrivenGateTable`] finds it), while a power supply still
+/// reaches its source or drain in that state: a powered stage with a
+/// floating input, which leaks statically and can switch at random. With a
+/// switched-off domain driving the gate, this is the missing isolation cell
+/// of IEEE 1801 at a switchable domain's output; an isolation cell's models
+/// are exempt, since clamping its own floating input is its job.
+///
+/// # Limits
+///
+/// Only the declared states are examined. A stage is powered when a power
+/// supply reaches its channel through conducting devices; a channel reached
+/// only by grounds is not.
+///
+/// Catalog: ERC-F7, ERC-H1 in the [check catalog]. Defined by [IEEE 1801]
+/// and Si2 CPF isolation (cited for scope, not read); Calibre PERC
+/// (white paper 81822) and Siemens Insight Analyzer, static leakage through
+/// floating inputs (public material only). Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
+#[derive(Debug, Default)]
+pub struct MissingIsolationTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// `isolation[isolation_start[i] .. isolation_start[i + 1]]` are row
+    /// `i`'s exempt models; a row may name none.
+    pub isolation_start: Vec<u32>,
+    /// Isolation-cell models, exempt from the row; CSR by `isolation_start`.
+    pub isolation: Vec<StrId>,
+}
+
 /// Row `row` of a CSR column; an empty column (no rows pushed) answers empty.
 fn csr<'a>(start: &[u32], column: &'a [StrId], row: usize) -> &'a [StrId] {
     match (start.get(row), start.get(row + 1)) {
@@ -588,6 +661,139 @@ pub fn check_domain_crossing(
             }
             examined += 1;
             let measured = Measurement::Count(mask.count_ones());
+            if measured.violates(limit, LimitSense::Maximum) {
+                let severity = table.head.severity[row];
+                push_device(design, device, rule, severity, measured, limit, out);
+            }
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// The gate net of each MOS device, `NetId::NONE` for another kind or a
+/// gate on no net.
+fn gate_nets(design: Design<'_>) -> Vec<NetId> {
+    let devices = design.devices;
+    (0..devices.len())
+        .map(|device| {
+            if devices.kind[device] != DeviceKind::Mos {
+                return NetId::NONE;
+            }
+            let (nets, roles) = devices.terminals_of(device_id(device));
+            terminal(nets, roles, TerminalRole::Gate)
+        })
+        .collect()
+}
+
+/// Runs every [`UndrivenGateTable`] row.
+///
+/// `examined` counts the gate nets some supply reaches with every supply on.
+/// A violation sits at the first vertex of the net's lowest-numbered
+/// polygon, on its layer, measuring the count of states the net floats in
+/// against 0; a net with no polygon is not reported. Every row is skipped
+/// without usable intent, or when the intent declares no power state.
+///
+/// # Panics
+///
+/// Panics if `states` holds a propagation over other nets.
+pub fn check_undriven_gate(
+    design: Design<'_>,
+    intent: &IntentMap,
+    voltage: &NetVoltage,
+    states: &[NetVoltage],
+    table: &UndrivenGateTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if !intent.is_usable() || states.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let mut gates: Vec<NetId> = gate_nets(design)
+        .into_iter()
+        .filter(|&net| voltage.known(net))
+        .collect();
+    gates.sort_unstable();
+    gates.dedup();
+    let floating: Vec<(NetId, u32)> = gates
+        .iter()
+        .map(|&net| {
+            let off = states.iter().filter(|state| !state.known(net)).count();
+            (net, u32::try_from(off).expect("a state count fits a u32"))
+        })
+        .filter(|&(_, off)| off > 0)
+        .collect();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        for &(net, off) in &floating {
+            let Some(&poly) = design.nets.polys_of(net).first() else {
+                continue;
+            };
+            out.push(Violation {
+                rule,
+                layer: design.store.poly_layer(poly),
+                severity: table.head.severity[row],
+                at: first_vertex(design.store, poly),
+                measured: Measurement::Count(off),
+                limit: Measurement::Count(0),
+                shapes: (poly, None),
+            });
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, gates.len() as u64);
+    }
+}
+
+/// Runs every [`MissingIsolationTable`] row over every MOS device.
+///
+/// `examined` counts the transistors, not of an isolation model, whose gate
+/// some supply reaches with every supply on. A violation sits at the first
+/// vertex of the device's marker, on the marker layer, measuring the count
+/// of states in which its gate floats while its channel is powered, against
+/// 0. Every row is skipped without usable intent, or when the intent
+/// declares no power state.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables),
+/// or `states` holds a propagation over other nets.
+pub fn check_missing_isolation(
+    design: Design<'_>,
+    intent: &IntentMap,
+    voltage: &NetVoltage,
+    states: &[NetVoltage],
+    table: &MissingIsolationTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if !intent.is_usable() || states.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let devices = design.devices;
+    let gates = gate_nets(design);
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let exempt = csr(&table.isolation_start, &table.isolation, row);
+        let mut examined = 0u64;
+        for (device, &gate) in gates.iter().enumerate() {
+            if !voltage.known(gate) || exempt.contains(&devices.model[device]) {
+                continue;
+            }
+            examined += 1;
+            let (nets, roles) = devices.terminals_of(device_id(device));
+            let channel =
+                [TerminalRole::Source, TerminalRole::Drain].map(|role| terminal(nets, roles, role));
+            let leaking = states
+                .iter()
+                .filter(|state| {
+                    !state.known(gate) && channel.iter().any(|&net| state.power_of(net) != 0)
+                })
+                .count();
+            let measured =
+                Measurement::Count(u32::try_from(leaking).expect("a state count fits a u32"));
+            let limit = Measurement::Count(0);
             if measured.violates(limit, LimitSense::Maximum) {
                 let severity = table.head.severity[row];
                 push_device(design, device, rule, severity, measured, limit, out);

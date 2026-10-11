@@ -2334,7 +2334,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 18] = [
+const TOPO_RULES: [(&str, &str, bool); 20] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -2345,6 +2345,8 @@ const TOPO_RULES: [(&str, &str, bool); 18] = [
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
     ("soft", "soft_connection(well)", false),
     ("fo", "fanout(; max: 1)", false),
+    ("ug", "undriven_gate()", true),
+    ("iso", "missing_isolation(; isolation: [\"pfet\"])", true),
     (
         "gox",
         "gate_oxide(; models: [\"nfet\", \"nfet_b\", \"pfet_b\"], max: {gox})",
@@ -2532,6 +2534,17 @@ struct Board {
     domains: Vec<(&'static str, f64)>,
     with_intent: bool,
     limits: Limits,
+    /// Power states the intent declares.
+    states: Vec<BoardState>,
+}
+
+/// A power state of a [`Board`]: the supply nets it switches off and the
+/// nets it holds, at mV.
+#[derive(Clone, Debug)]
+struct BoardState {
+    name: &'static str,
+    off: Vec<usize>,
+    inputs: Vec<(usize, f64)>,
 }
 
 impl Board {
@@ -2601,7 +2614,58 @@ impl Board {
                 )
             })
             .collect();
-        intent(&self.domains, &supplies, &[])
+        let base = intent(&self.domains, &supplies, &[]);
+        if self.states.is_empty() {
+            return base;
+        }
+        let name = |net: usize| self.labels[net].expect("a state names a labelled net");
+        let states: Vec<String> = self
+            .states
+            .iter()
+            .map(|st| {
+                let off: Vec<String> = st
+                    .off
+                    .iter()
+                    .map(|&n| format!(r#""{}""#, name(n)))
+                    .collect();
+                let inputs: Vec<String> = st
+                    .inputs
+                    .iter()
+                    .map(|&(n, mv)| format!(r#"{{"net":"{}","voltage_mv":{mv}}}"#, name(n)))
+                    .collect();
+                format!(
+                    r#"{{"name":"{}","off":[{}],"inputs":[{}]}}"#,
+                    st.name,
+                    off.join(","),
+                    inputs.join(",")
+                )
+            })
+            .collect();
+        format!(
+            "{},\"states\":[{}]}}",
+            &base[..base.len() - 1],
+            states.join(",")
+        )
+    }
+
+    /// The supplies of power state `st`, as `IntentMap::in_state` states
+    /// them: every supply it does not switch off and does not hold, and each
+    /// held net as a supply at its voltage (a ground at 0 V, otherwise power
+    /// of domain 0).
+    fn state_supplies(&self, st: &BoardState) -> Vec<Supply> {
+        let mut out: Vec<Supply> = self
+            .supplies
+            .iter()
+            .filter(|s| !st.off.contains(&s.net) && !st.inputs.iter().any(|i| i.0 == s.net))
+            .copied()
+            .collect();
+        out.extend(st.inputs.iter().map(|&(net, mv)| Supply {
+            net,
+            power: mv != 0.0,
+            domain: 0,
+            nominal: mv,
+        }));
+        out
     }
 
     fn supply(&self, net: usize) -> Option<&Supply> {
@@ -2618,10 +2682,16 @@ impl Board {
     /// supply reaches it even with every channel conducting, or, after a
     /// sweep, still none does (it floats behind switches that never turn on).
     fn reach(&self) -> Vec<Option<Reach>> {
+        self.reach_with(&self.supplies)
+    }
+
+    /// [`Board::reach`] from `supplies` in place of the board's own.
+    fn reach_with(&self, supplies: &[Supply]) -> Vec<Option<Reach>> {
+        let supply = |net: usize| supplies.iter().find(|s| s.net == net);
         let sweep = |free: &[bool]| -> Vec<Option<Reach>> {
             let mut r: Vec<Option<Reach>> = (0..NETS)
                 .map(|net| {
-                    self.supply(net).map(|s| Reach {
+                    supply(net).map(|s| Reach {
                         lo: if s.power { s.nominal } else { 0.0 },
                         hi: if s.power { s.nominal } else { 0.0 },
                         nominal_lo: s.nominal,
@@ -2657,7 +2727,7 @@ impl Board {
                     let both = union(r[dv.s], r[dv.d]);
                     for n in [dv.s, dv.d] {
                         let widened = union(r[n], both);
-                        if self.supply(n).is_none() && widened != r[n] {
+                        if supply(n).is_none() && widened != r[n] {
                             r[n] = widened;
                             changed = true;
                         }
@@ -2764,6 +2834,7 @@ impl Board {
             }
             return out;
         }
+        out.extend(self.expect_states());
         // multiple_drivers: a transistor with either channel end on a net that
         // is not a rail pulls it when a walk from its other end, through every
         // transistor with a channel end on the nets reached, stopping at rails
@@ -2984,6 +3055,54 @@ impl Board {
         out
     }
 
+    /// `undriven_gate` and `missing_isolation(; isolation: ["pfet"])`, from
+    /// their rustdoc: per declared state, the board's reach from that
+    /// state's supplies ([`Board::state_supplies`]). A gate net reached with
+    /// every supply on that a state leaves unreached floats there; a
+    /// transistor (not a pfet) whose gate floats in a state while a power
+    /// supply reaches its source or drain there leaks. Each measures the
+    /// count of such states. Without states both are Skipped.
+    fn expect_states(&self) -> Vec<Expect> {
+        if self.states.is_empty() {
+            return vec![
+                Expect::outcome("ug", Want::Skipped),
+                Expect::outcome("iso", Want::Skipped),
+            ];
+        }
+        let base = self.reach();
+        let states: Vec<Vec<Option<Reach>>> = self
+            .states
+            .iter()
+            .map(|st| self.reach_with(&self.state_supplies(st)))
+            .collect();
+        let floats =
+            |reach: &[Option<Reach>], net: usize| base[net].is_some() && reach[net].is_none();
+        let undriven = (0..NETS)
+            .filter(|&n| self.devs.iter().any(|d| d.g == n))
+            .filter_map(|n| {
+                let off = states.iter().filter(|r| floats(r.as_slice(), n)).count() as u32;
+                (off > 0).then(|| count(off))
+            })
+            .collect();
+        let power = |reach: &[Option<Reach>], net: usize| reach[net].map_or(0, |r| r.power);
+        let leaking = self
+            .devs
+            .iter()
+            .filter(|d| d.model != Model::Pfet)
+            .filter_map(|d| {
+                let off = states
+                    .iter()
+                    .filter(|r| {
+                        floats(r.as_slice(), d.g)
+                            && (power(r.as_slice(), d.s) | power(r.as_slice(), d.d)) != 0
+                    })
+                    .count() as u32;
+                (off > 0).then(|| count(off))
+            })
+            .collect();
+        vec![Expect::rule("ug", undriven), Expect::rule("iso", leaking)]
+    }
+
     fn fixture(&self, name: &str) -> Fixture {
         // The rows this board's content exercises: taps for supply shorts, a
         // pad for the clamp path, a ring for its limits, a bulk for well bias.
@@ -3001,6 +3120,9 @@ impl Board {
             }
             if self.ring.is_some() {
                 catalog.push("ERC-D2");
+            }
+            if !self.states.is_empty() {
+                catalog.extend(["ERC-F7", "ERC-F8", "ERC-H1"]);
             }
         }
         let mut f =
@@ -3202,6 +3324,42 @@ fn topology_enumerations(depth: Depth) -> Vec<Fixture> {
             )));
         }
     }
+    // Power states (ERC-F7, ERC-F8, ERC-H1): net 3 is the labelled input IN;
+    // VDDH switched off, IN held at 0 V, and IN held at 1.8 V, over the same
+    // two switches and a plain nfet, sampled.
+    let mut rng = Rng::new(0x7_0009);
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.len() < three {
+        let a: Vec<usize> = (0..9).map(|_| rng.below(NETS as u64) as usize).collect();
+        if !seen.insert(a.clone()) {
+            continue;
+        }
+        let mut board = three_rails(true);
+        board.labels[3] = Some("IN");
+        board.states = vec![
+            BoardState {
+                name: "sleep",
+                off: vec![2],
+                inputs: Vec::new(),
+            },
+            BoardState {
+                name: "in_low",
+                off: Vec::new(),
+                inputs: vec![(3, 0.0)],
+            },
+            BoardState {
+                name: "in_high",
+                off: Vec::new(),
+                inputs: vec![(3, 1800.0)],
+            },
+        ];
+        board.devs = vec![
+            dev(Model::NfetC, a[0], a[1], a[2]),
+            dev(Model::PfetC, a[3], a[4], a[5]),
+            dev(Model::Nfet, a[6], a[7], a[8]),
+        ];
+        out.push(board.fixture(&format!("erc/topology/states/{}", assignment_name(&a))));
+    }
     let bulk: Vec<(Model, Vec<usize>)> = [Model::NfetB, Model::PfetB]
         .into_iter()
         .flat_map(|m| all_assignments(4).into_iter().map(move |a| (m, a)))
@@ -3376,6 +3534,50 @@ fn topology_cases() -> Vec<Fixture> {
         dev(Model::Nfet, a, vss, b),
     ];
     out.push(ring.fixture("erc/topology/f28/tie_drawing_order"));
+
+    // Power states, hand-derived. The white paper's tristate (Siemens 81822,
+    // figure 3): an `on_gate_min 1V` switch from VDD to Y gated by the input
+    // EN, and a load nfet gated by Y between VSS and VDD. With EN held at
+    // 0 V the switch never turns on and Y "becomes floating. Subsequent
+    // gates connected to pin Y become un-driven": Y is undriven in one state,
+    // and the load, its channel on VDD, leaks in one. EN at 1.8 V drives Y.
+    let mut tristate = two_rails();
+    tristate.labels = [Some("VDD"), Some("VSS"), Some("EN"), Some("Y")];
+    tristate.devs = vec![dev(Model::NfetC, 2, vdd, 3), dev(Model::Nfet, 3, vss, vdd)];
+    tristate.states = vec![
+        BoardState {
+            name: "en_low",
+            off: Vec::new(),
+            inputs: vec![(2, 0.0)],
+        },
+        BoardState {
+            name: "en_high",
+            off: Vec::new(),
+            inputs: vec![(2, 1800.0)],
+        },
+    ];
+    // VDDH drives the signal through an always-on nfet; a pfet (the
+    // isolation model) and an nfet load it. Switching VDDH off floats the
+    // signal: undriven once, the nfet leaks once, the pfet is exempt.
+    let mut sleep = three_rails(true);
+    sleep.devs = vec![
+        dev(Model::Nfet, vss, vddh, sig),
+        dev(Model::Pfet, sig, vdd, vss),
+        dev(Model::Nfet, sig, vss, vdd),
+    ];
+    sleep.states = vec![BoardState {
+        name: "sleep",
+        off: vec![vddh],
+        inputs: Vec::new(),
+    }];
+    for (name, board) in [("tristate", tristate), ("sleep", sleep)] {
+        let mut f = board.fixture(&format!("erc/topology/states/{name}"));
+        f.expect
+            .retain(|e| !matches!(e, Expect::Rule { id, .. } if id == "ug" || id == "iso"));
+        f.expect.push(Expect::rule("ug", vec![count(1)]));
+        f.expect.push(Expect::rule("iso", vec![count(1)]));
+        out.push(f);
+    }
 
     // A layer listed twice is checked, and reported, twice.
     out.push(

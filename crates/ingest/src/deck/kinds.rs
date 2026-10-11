@@ -769,6 +769,15 @@ pub(crate) const KINDS: &[Kind] = &[
         &[p("voltage", "voltage", Dim::Voltage)],
     ),
     erc("mixed_tag", &[0, 1], false, &[]),
+    // In the intent's power states: a gate left floating (ERC-F8), and a
+    // powered transistor with a floating gate, not an isolation cell (ERC-F7).
+    erc("undriven_gate", &[], false, &[]),
+    erc(
+        "missing_isolation",
+        &[],
+        false,
+        &[opt("isolation", "isolation", Dim::Models)],
+    ),
     // Spacing that grows with the worst-case voltage between two nets
     // (LEF58_VOLTAGESPACING, sky130 hvnwell.8): one layer, or two.
     Kind {

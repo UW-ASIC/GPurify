@@ -34,8 +34,9 @@ result from them is weaker than it looks.
   `.vertical()`) and bounding-box size (`.with_bbox_max()`) are selectable.
 - Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
   allowed to extend beyond their abutting edge" cannot be written.
-- A way to state the voltage or domain of an input signal in the intent file,
-  and checks for inputs driven from a powered-down domain.
+- A way to state the voltage or domain of an input signal for the whole run:
+  an input is held only within a power state (`states`), and the power-state
+  rules examine only the declared states, never every combination.
 - Lithography hotspots (aerial-image or process-window simulation) and a full
   CMP topography simulation: both need a foundry's calibrated optical, resist
   or polish model, which no open PDK publishes. The CMP hotspots a public

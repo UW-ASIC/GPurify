@@ -101,6 +101,8 @@
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |
 //! | `hv_tag(L, tag; voltage)` | `hv_tag` | [`erc::RuleSet::hv_tag`] | a figure on a net that can reach `voltage` or more, not inside `tag` | DRC-083 |
+//! | `undriven_gate()` | `undriven_gate` | [`erc::RuleSet::undriven_gate`] | a gate net that floats in a declared power state | ERC-F8 |
+//! | `missing_isolation(; isolation)` | `missing_isolation` | [`erc::RuleSet::missing_isolation`] | a powered transistor whose gate floats in a declared power state | ERC-F7, ERC-H1 |
 //! | `mixed_tag(L, tag)` | `mixed_tag` | [`erc::RuleSet::mixed_tag`] | an untagged figure on a net that also holds a tagged one | ERC-F10 |
 //! | `esd_latchup(pad, guard_ring; ..)` | `esd_latchup` | [`erc::RuleSet::esd_latchup`] | a narrow or untapped guard ring, or an unclamped pad | ERC-C1, ERC-D2 |
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |

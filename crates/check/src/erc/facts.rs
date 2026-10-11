@@ -170,6 +170,103 @@ impl IntentMap {
     }
 }
 
+/// One declared power state re-keyed onto extracted nets (see
+/// [`PowerState`](gpurify_ingest::intent::PowerState)). A name no labelled
+/// net carries is dropped, as for [`IntentMap`].
+#[derive(Debug, Clone)]
+pub struct StateMap {
+    /// The state's name.
+    pub name: gpurify_geom::StrId,
+    /// Supply nets switched off in this state, ascending.
+    pub off: Vec<NetId>,
+    /// Nets held at a voltage in this state, ascending by net, and the
+    /// voltage.
+    pub input: Vec<(NetId, Qty<Voltage, { prefix::MILLI }>)>,
+}
+
+/// Every power state the intent declares, keyed onto extracted nets, in file
+/// order; empty without intent or states.
+pub fn resolve_states(
+    intent: Option<&DesignIntent>,
+    ports: &PortTable,
+    nets: &NetTable,
+) -> Vec<StateMap> {
+    let Some(intent) = intent else {
+        return Vec::new();
+    };
+    let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32, so the count fits");
+    intent
+        .states()
+        .iter()
+        .map(|state| {
+            let mut map = StateMap {
+                name: state.name,
+                off: Vec::new(),
+                input: Vec::new(),
+            };
+            for net in (0..net_count).map(NetId) {
+                let Some(name) = ports.name_of(net) else {
+                    continue;
+                };
+                if state.off.contains(&name) {
+                    map.off.push(net);
+                }
+                if let Some(&(_, voltage)) = state.inputs.iter().find(|input| input.0 == name) {
+                    map.input.push((net, voltage));
+                }
+            }
+            map
+        })
+        .collect()
+}
+
+impl IntentMap {
+    /// The supplies of power state `state`: every declared supply it does not
+    /// switch off, and every net it holds, as a supply at that voltage (a
+    /// ground at 0 V, otherwise a power supply of domain 0). A held net that
+    /// is also a supply is held, not supplied. Limits are not carried.
+    #[allow(
+        clippy::float_cmp,
+        reason = "exactly 0 V is a ground; any other voltage is held as power"
+    )]
+    pub fn in_state(&self, state: &StateMap) -> IntentMap {
+        let held = |net: NetId| state.input.iter().any(|input| input.0 == net);
+        let mut rows: Vec<(NetId, SupplyRole, DomainId, Qty<Voltage, { prefix::MILLI }>)> = (0
+            ..self.supply_net.len())
+            .filter(|&row| {
+                let net = self.supply_net[row];
+                state.off.binary_search(&net).is_err() && !held(net)
+            })
+            .map(|row| {
+                (
+                    self.supply_net[row],
+                    self.supply_role[row],
+                    self.supply_domain[row],
+                    self.supply_voltage[row],
+                )
+            })
+            .collect();
+        for &(net, voltage) in &state.input {
+            let role = if voltage.raw() == 0.0 {
+                SupplyRole::Ground
+            } else {
+                SupplyRole::Power
+            };
+            rows.push((net, role, DomainId(0), voltage));
+        }
+        rows.sort_by_key(|row| row.0);
+        IntentMap {
+            declared: true,
+            supply_net: rows.iter().map(|row| row.0).collect(),
+            supply_role: rows.iter().map(|row| row.1).collect(),
+            supply_domain: rows.iter().map(|row| row.2).collect(),
+            supply_voltage: rows.iter().map(|row| row.3).collect(),
+            limit_net: Vec::new(),
+            limit: Vec::new(),
+        }
+    }
+}
+
 /// Re-keys design intent onto extracted nets; `out` is cleared and refilled.
 /// `None` leaves `declared == false`, which is how the intent rules report skipped.
 ///

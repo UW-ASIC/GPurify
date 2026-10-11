@@ -83,6 +83,17 @@ pub fn check(
     resolve_intent_into(intent, ports, design.nets, &mut intent_map);
     let mut voltage = voltage::NetVoltage::default();
     voltage::propagate_into(design.nets, design.devices, &intent_map, &mut voltage);
+    // One propagation per declared power state, its supplies off and its
+    // inputs held.
+    let state_voltage: Vec<voltage::NetVoltage> = facts::resolve_states(intent, ports, design.nets)
+        .iter()
+        .map(|state| {
+            let mut reach = voltage::NetVoltage::default();
+            let supplies = intent_map.in_state(state);
+            voltage::propagate_into(design.nets, design.devices, &supplies, &mut reach);
+            reach
+        })
+        .collect();
 
     let mut networks = NetNetworks::default();
     let built = power::extract_nets_into(
@@ -123,6 +134,7 @@ pub fn check(
             ports,
             intent: &intent_map,
             voltage: &voltage,
+            states: &state_voltage,
             networks: built.map(|()| &networks),
             power,
             die,

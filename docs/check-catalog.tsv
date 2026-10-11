@@ -213,8 +213,8 @@ ERC-F3	erc	voltage	Junction / drain-source overstress	SKY:hv; IHP:process spec	d
 ERC-F4	erc	voltage	HCI susceptibility flag	CAL:WP 81822 Eq.1; GF:14.1.4.1	-	missing	SE	
 ERC-F5	erc	voltage	TDDB/BTI/HCI lifetime	JEP122; JESD263; JESD241; JESD28; JESD60	reliability	implemented	CF; MR; SY	
 ERC-F6	erc	voltage	Missing level shifter	CAL:WP 81822; IEEE1801	missing_level_shifter	implemented	SY; NV	
-ERC-F7	erc	voltage	Missing isolation at switchable-domain outputs	IEEE1801; CPF	-	missing	SY	Needs power states
-ERC-F8	erc	voltage	Power-state-dependent undriven gates	CAL:WP 81822; IEEE1801; IA	-	missing	SE; SY	
+ERC-F7	erc	voltage	Missing isolation at switchable-domain outputs	IEEE1801; CPF	missing_isolation	implemented	SY; NV	In each power state the intent declares (supplies off, inputs held), a powered transistor whose gate floats, not of an isolation model; only the declared states are examined
+ERC-F8	erc	voltage	Power-state-dependent undriven gates	CAL:WP 81822; IEEE1801; IA	undriven_gate	implemented	SE:Siemens WP; SY; NV	A gate net driven with every supply on but by none in a declared power state (WP 81822 fig. 3 tristate); only the declared states are examined, never every input vector
 ERC-F9	erc	voltage	DC / sneak path between domains	CAL:datasheet; CAL:WP 81822	domain_crossing	implemented	SE:WP Fig2; SY	
 ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10; GF:DV.9	hv_domain, mixed_tag	implemented	FR; SY; MR	mixed_tag: an untagged figure on a net (joined through resistors) that holds a tagged one, hvnwell.10, without its lv_net text exemption; hv_domain: the domain span across a device; hvnwell.9 and GF DV.9 are DRC rules on derived layers (inside, forbidden of nwell.interacting)
 ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	voltage_spacing	implemented	SY; MR	Same row as DRC-082
@@ -230,7 +230,7 @@ ERC-G6	erc	classic	Unconnected pin / dangling conductor	OR:check_power_grid	unco
 ERC-G7	erc	classic	Gate tied directly to a rail	CAL (weak sourcing)	tie_high_low	implemented	SY; NV; MR	Needs design intent: a declared rail that reaches a gate (F28, fixed)
 ERC-G8	erc	classic	Combinational loops	YOSYS:check	-	missing	TX:YOSYS	Digital only, optional
 ERC-G9	erc	classic	Path check: nets with no path to power or ground	CAL:ERC PATHCHK,LVS PATHCHK	-	missing	SY; NV	
-ERC-H1	erc	perc	Static leakage / HiZ / floating in power-down	IA	-	missing	SY	
+ERC-H1	erc	perc	Static leakage / HiZ / floating in power-down	IA	missing_isolation	implemented	SY; NV	missing_isolation(; isolation: none): a powered transistor whose gate floats (HiZ) in a declared power state leaks statically; only the declared states are examined; leakage is not quantified
 ERC-H2	erc	perc	Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI)	CAL:PERC packaged; ICV:NDL; PEG:Constraint Validator	-	missing	SY	Overlaps Philis's own properties
 ERC-H3	erc	perc	Netlist path checks (gate to ground within N devices; net types)	CAL:patent P12	-	missing	SY	
 ERC-H4	erc	perc	Fanout limits	ICV; GF:14.1.4.1	fanout	implemented	SY; NV	The count of transistor gates on a net against max; load (gate area, wire capacitance, driver strength) is not weighed
