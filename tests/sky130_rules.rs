@@ -468,7 +468,7 @@ fn the_sky130_antenna_rows_are_table_ig() {
             .find(|rule| strings.resolve(rule.id) == id)
             .unwrap_or_else(|| panic!("the sky130 deck has no {id}"));
         assert!(
-            matches!(param(rule, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r == ratio),
+            matches!(param(rule, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r.total_cmp(&ratio).is_eq()),
             "{id}: max_ratio should be {ratio}"
         );
         let sidewall = match param(rule, "sidewall_thickness") {
@@ -554,7 +554,7 @@ fn the_ihp_antenna_rows_switch_on_a_protection_diode() {
             ] {
                 assert_eq!(strings.resolve(rule(id).kind), kind, "{id}");
                 assert!(
-                    matches!(param(id, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r == limit),
+                    matches!(param(id, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r.total_cmp(&limit).is_eq()),
                     "{id}: max_ratio should be {limit}"
                 );
                 assert!(
