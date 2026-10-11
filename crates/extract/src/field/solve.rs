@@ -95,6 +95,10 @@ pub struct Converged {
 /// tolerance, [`SolveError::Breakdown`] on a singular least-squares step, and
 /// [`SolveError::NonFinite`] when the operator returns NaN or infinity.
 ///
+/// # Panics
+///
+/// When `x` and `b` differ in length.
+///
 /// # Time complexity
 ///
 /// One operator application per iteration, plus *O*(n · restart) per
@@ -106,6 +110,7 @@ pub fn gmres(
     x: &mut [f64],
     workspace: &mut Workspace,
 ) -> Result<Converged, SolveError> {
+    assert_eq!(x.len(), b.len(), "the initial guess is as long as `b`");
     let n = b.len();
     // Basis no larger than the space; `max(1)` so `restart == 0` still progresses.
     let m = usize::try_from(options.restart)
@@ -310,7 +315,12 @@ fn scale_of(norm_b: f64) -> f64 {
 /// [`SolveError::NotConverged`] when the true residual is still above the
 /// tolerance after `max_iterations` or after a pass that did not reduce it.
 /// [`SolveError::Breakdown`] and [`SolveError::NonFinite`] from an inner
-/// solve end the refinement at once.
+/// solve end the refinement at once, and a true residual that is not finite
+/// is [`SolveError::NonFinite`].
+///
+/// # Panics
+///
+/// When `x` and `b` differ in length.
 pub fn refine(
     operator: impl Fn(&[f64], &mut [f64]) + Copy,
     b: &[f64],
@@ -318,6 +328,7 @@ pub fn refine(
     x: &mut [f64],
     workspace: &mut Workspace,
 ) -> Result<Converged, SolveError> {
+    assert_eq!(x.len(), b.len(), "the initial guess is as long as `b`");
     let n = b.len();
     let mut scratch = Vec::new();
     let mut correction = vec![0.0_f64; n];
@@ -360,6 +371,11 @@ pub fn refine(
         achieved = next;
     }
 
+    // A `NaN` residual compares false against the tolerance, so it is caught
+    // here and never read as converged.
+    if !achieved.is_finite() {
+        return Err(SolveError::NonFinite(iterations));
+    }
     if achieved > options.tolerance {
         return Err(SolveError::NotConverged {
             residual: achieved,
