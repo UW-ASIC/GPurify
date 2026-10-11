@@ -231,7 +231,7 @@ says which foundry manual, standard or tool defines each one.
 | ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
 | ERC-A7 | PWL diffusion-dependent limit | missing | — |
 | ERC-A9 | Minimum protection-diode size | missing | — |
-| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the conductor it lies on, never metal routed over it (F72, fixed; F81 open). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
+| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the layer a device mos row names as its gate terminal, else the conductor it lies on, never metal routed over it (F72, F81 fixed). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
 | ERC-A12 | Oxide-class-specific limits | partial | One row per gate layer |
 | ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna) |
 | ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
