@@ -331,6 +331,9 @@ impl Layers<'_> {
             DerivedOp::WithLength(lo, hi) => {
                 format!("{a}.with_length({}, {})", lo_bound(lo, 2), hi_bound(hi, 2))
             }
+            DerivedOp::Oriented(vertical) => {
+                format!("{a}.with_angle({})", if vertical { 90 } else { 0 })
+            }
             DerivedOp::WithText { keep, text } => {
                 let operand = self.deck.layers.operands(layer)[1];
                 let (l, d) = self.deck.layers.stream_of(operand);
@@ -1118,6 +1121,21 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_class", Key::Point, Value::Ignore)
+            }
+            Rule::EdgeWidth { layer, limit } | Rule::EdgeFacingSpace { layer, limit } => {
+                let (kind, check) = if matches!(rule, Rule::EdgeWidth { .. }) {
+                    ("edge_width", "width")
+                } else {
+                    ("edge_facing_space", "space")
+                };
+                writeln!(
+                    body,
+                    "emit({q}, {}.{check}({}, projection, transparent))",
+                    var(layer),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact(kind, Key::Point, Value::Length)
             }
         };
         reads.sort();

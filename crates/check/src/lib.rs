@@ -73,6 +73,8 @@
 //! | `enclosure(E, L) >= len` | `edge_enclosure` | [`drc::Rule::EdgeEnclosure`] | an edge whose outside is not covered by L for the limit | DRC-051 |
 //! | `count(L) >= n`, `count(L) <= n` | `count` | [`drc::Rule::Count`] | too few or too many shapes on `L` in the whole layout | DRC-091, DRC-095 |
 //! | `size(L; allowed: [w x h, ..])` | `cut_class` | [`drc::Rule::CutClass`] | a cut whose size is none of the listed classes | DRC-014 |
+//! | `width(E) >= len` | `edge_width` | [`drc::Rule::EdgeWidth`] | two edges facing each other across their shapes closer than the limit: a channel length or width, a width in one direction | DRC-011, DRC-016 |
+//! | `facing_space(E) >= len` | `edge_facing_space` | [`drc::Rule::EdgeFacingSpace`] | two edges whose outer sides face each other closer than the limit: a spacing in one direction | DRC-016 |
 //! | `total_area(L) <= area` | `total_area` | [`drc::Rule::TotalArea`] | more area on `L` in the whole layout than the limit | DRC-091 |
 //! | `aspect_ratio(L) <= r` | `aspect_ratio` | [`drc::Rule::AspectRatio`] | a shape whose bounding box is longer than `r` times its width | DRC-022 |
 //!

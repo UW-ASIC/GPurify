@@ -269,6 +269,16 @@ fn derive_layers_into(
                 DerivedOp::WithLength(lo, hi) => {
                     with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
                 }
+                DerivedOp::Oriented(vertical) => {
+                    edges.clear();
+                    edges.extend(
+                        store
+                            .edges_on_layer(receiver)
+                            .iter()
+                            .filter(|e| (e.a.x == e.b.x) == vertical)
+                            .copied(),
+                    );
+                }
                 _ => unreachable!("the parser gives an edge result only to edge operations"),
             }
             store.append_edges(*layer, &edges);

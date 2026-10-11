@@ -259,6 +259,12 @@ for (m, w, wmax) in sadp_metals {
     rule {m}.W.2 width(m) <= wmax
     rule {m}.S.1 space(m) >= w
 }
+# M4.W.5 "minimum horizontal width of M4" and M4.S.2 "minimum horizontal
+# spacing", measured between vertical edges; M5 is M4 turned 90 degrees.
+rule M4.W.5 width(M4.edges().vertical()) >= 44nm
+rule M4.S.2 facing_space(M4.edges().vertical()) >= 40nm
+rule M5.W.5 width(M5.edges().horizontal()) >= 44nm
+rule M5.S.2 facing_space(M5.edges().horizontal()) >= 40nm
 
 # 3.15 V4-V5 and 3.17 V6-V7 (LELE). W.1 is an exact width: at least w across,
 # nowhere wider than w in every direction. S.1 and S.2 (same and different
@@ -372,7 +378,8 @@ pex M9 thickness 80nm height 824nm sheet 0.355822ohm area_cap 0aF/um2 fringe_cap
 #   GCUT.S.3 vertical space(GCUT) >= 35nm
 #   LIG.GATE.S.9A vertical space(LIG, GATE_UNCUT) >= 14nm; LIG.GATE.S.9B horizontal >= 17nm
 #   LIG.GCUT.S.11 vertical space(LIG, GCUT) >= 5nm
-#   M4-M7 .W.5 along-track width >= 44nm; .S.2/.S.3/.S.4 along-track space >= 40nm
+#   M6-M7 .W.5 along-track width >= 44nm; M4-M7 .S.3/.S.4 and M6-M7 .S.2
+#     along-track space >= 40nm (M4 and M5 .W.5 and .S.2 are written above)
 #   M4-M7 .S.5 parallel run length on adjacent tracks >= 44nm
 #   WELL.GATE.EX.1 horizontal extension(WELL, GATE_UNCUT) >= 7nm;
 #   WELL.GATE.EX.2 vertical, GATE not interacting SRAMDRC, >= 7nm

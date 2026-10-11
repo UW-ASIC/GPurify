@@ -428,7 +428,12 @@ impl Ctx<'_> {
                 }
             }
             Key::Point => match item {
-                Item::Pair(e, f) if self.m.kind == "edge_spacing" => {
+                Item::Pair(e, f)
+                    if matches!(
+                        self.m.kind,
+                        "edge_spacing" | "edge_width" | "edge_facing_space"
+                    ) =>
+                {
                     gap_mid(seg_box(*e), seg_box(*f))
                 }
                 Item::Pair(e, ..) => vec![half(e[0]), half(e[1])],

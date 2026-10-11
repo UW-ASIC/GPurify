@@ -1100,6 +1100,65 @@ pub enum Rule {
         /// Index into [`RuleSet::classes`].
         classes: u32,
     },
+    /// Two edges facing each other across their shapes' material, closer
+    /// than `limit`: a width measured between chosen edges.
+    ///
+    /// Deck: `width(E) >= len` on an edge layer, kind `edge_width`. A pair is
+    /// two parallel edges of `E` whose inner sides face each other (each
+    /// edge's shape lies toward the other: `KLayout`'s "back to back" relation
+    /// for `width` on an edge layer), with projections overlapping by a
+    /// positive length, measured straight across. Every such pair counts:
+    /// an edge between them does not shield them (`KLayout`'s `transparent`).
+    ///
+    /// The edges choose the width measured. A transistor's channel length is
+    /// the gap between the gate's sides inside the diffusion,
+    /// `width(gate.edges() not diff.edges())`, and its channel width the gap
+    /// between the sides on the diffusion's edge,
+    /// `width(gate.edges() and diff.edges())`, each exact for a straight gate;
+    /// a width along one axis only is `width(L.edges().horizontal())`.
+    ///
+    /// One violation per pair closer than `limit`, at the middle of the gap
+    /// between their bounding boxes, naming no shape. `examined` counts the
+    /// parallel pairs within reach. Records [`Outcome::Refused`] when an edge
+    /// is not axis-aligned.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-011, DRC-016. Rules: sky130 poly.1b ("min channel length (poly
+    /// width)") and difftap.2 ("minimum channel width (diff and poly)"), IHP
+    /// Gat.a1 to Gat.a4 (channel length per device), GF180 PL.2 ("gate width
+    /// (channel length)"); ASAP7 M4.W.1 and M4.W.5 (vertical and horizontal
+    /// width); `KLayout` `width` on an edge layer.
+    EdgeWidth {
+        /// The edge layer.
+        layer: LayerId,
+        /// The narrowest legal gap, in grid units; positive.
+        limit: Dbu,
+    },
+    /// Two edges whose outer sides face each other, closer than `limit`: a
+    /// spacing measured between chosen edges.
+    ///
+    /// Deck: `facing_space(E) >= len`, kind `edge_facing_space`. As
+    /// [`Rule::EdgeWidth`] with the sides turned out: each edge's shape lies
+    /// away from the other (`KLayout`'s "face to face" relation for `space`
+    /// on an edge layer), so a gap between shapes, or a notch in one, is
+    /// measured, and a shape's own width is not. [`Rule::EdgeSpacing`]
+    /// measures whatever the sides.
+    ///
+    /// One violation per pair closer than `limit`, at the middle of the gap
+    /// between their bounding boxes, naming no shape. `examined` counts the
+    /// parallel pairs within reach. Records [`Outcome::Refused`] when an edge
+    /// is not axis-aligned.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-016. Rules: ASAP7 M4.S.1 and M4.S.2 ("minimum vertical (horizontal)
+    /// spacing between two M4 layer polygons' edges"), LEF58 `SPACING ..
+    /// WRONGDIRECTION`; `KLayout` `space` on an edge layer.
+    EdgeFacingSpace {
+        /// The edge layer.
+        layer: LayerId,
+        /// The smallest legal gap, in grid units; positive.
+        limit: Dbu,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1626,6 +1685,14 @@ impl RuleSet {
                             .expect("a deck has few class lists"),
                     }
                 }
+                "edge_width" => Rule::EdgeWidth {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
+                "edge_facing_space" => Rule::EdgeFacingSpace {
+                    layer: one(spec)?,
+                    limit: length(spec, "limit")?,
+                },
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -1868,6 +1935,12 @@ impl RuleSet {
                 Rule::CutClass { layer, classes } => {
                     width::cut_class(store, id, layer, &self.classes[classes as usize], s, out)
                 }
+                Rule::EdgeWidth { layer, limit } => {
+                    edge::facing(store, id, layer, limit, true, out)
+                }
+                Rule::EdgeFacingSpace { layer, limit } => {
+                    edge::facing(store, id, layer, limit, false, out)
+                }
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -1907,7 +1980,9 @@ impl Rule {
             | Rule::Count { layer, .. }
             | Rule::AspectRatio { layer, .. }
             | Rule::TotalArea { layer, .. }
-            | Rule::CutClass { layer, .. } => [Some(layer), None],
+            | Rule::CutClass { layer, .. }
+            | Rule::EdgeWidth { layer, .. }
+            | Rule::EdgeFacingSpace { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -1949,7 +2024,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 39] = [
+pub const KINDS: [&str; 41] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -1989,4 +2064,6 @@ pub const KINDS: [&str; 39] = [
     "aspect_ratio",
     "total_area",
     "cut_class",
+    "edge_width",
+    "edge_facing_space",
 ];
