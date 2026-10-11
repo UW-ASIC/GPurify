@@ -151,7 +151,8 @@ net. Where nothing else tells a transistor's two channel nets apart, they
 pair the way its diffusions agree, so a card with them the other way round
 is the same transistor. Each parameter a
 schematic card states is compared on that device, within 2 % of the larger
-value. A card that
+value, except the counts `m` and `nf`: they are whole numbers and must be
+equal, so `m=50` does not match `m=51`. A card that
 leaves a parameter out says nothing about it, whatever other cards of the
 same model state, and a parameter the layout does not measure is reported
 (`lvs.undeclared_param`) rather than passed.

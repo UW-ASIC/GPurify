@@ -740,6 +740,49 @@ fn parallel_passives_keep_their_value_and_count_the_devices() {
     }
 }
 
+/// Oracle: the definition of a count, testing-plan F99. `m` counts devices
+/// and `nf` fingers, whole numbers, so each is compared exactly and not
+/// within the 2 % parameter tolerance: 50 against 51 is 1/51 = 1.96 %
+/// apart, inside 2 %, and mismatches, on a resistor's `m` and a
+/// transistor's `nf`; 50 against 50 matches. A value is still compared
+/// within the tolerance: `r` 1000 against 1019 is 1.86 % apart and agrees.
+#[test]
+fn counts_are_compared_exactly_and_values_within_the_tolerance() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let fingers = NAMES.fingers.expect("named");
+    let resistor = |m: f64| passives(DeviceKind::Resistor, &[&[(R_VALUE, 1e3), (M, m)]]);
+    let transistor = |nf: f64| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            &[(fingers, nf)],
+        );
+        builder.finish()
+    };
+    let cases = [
+        ("m", resistor(50.0), resistor(51.0)),
+        ("nf", transistor(50.0), transistor(51.0)),
+    ];
+    for (what, fifty, fifty_one) in &cases {
+        assert_eq!(compare(fifty, fifty, options), Verdict::Match, "{what}");
+        assert_ne!(
+            compare(fifty, fifty_one, options),
+            Verdict::Match,
+            "{what} = 50 matched {what} = 51"
+        );
+    }
+    let valued = |r: f64| passives(DeviceKind::Resistor, &[&[(R_VALUE, r)]]);
+    assert_eq!(
+        compare(&valued(1e3), &valued(1019.0), options),
+        Verdict::Match
+    );
+}
+
 /// Oracle: construct-from-answer. Values that differ are not one device,
 /// and with no `m` name the count has nowhere to go, so nothing merges and
 /// both stay: under-reduction, never a count lost.

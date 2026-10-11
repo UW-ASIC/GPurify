@@ -44,8 +44,10 @@
 //!    reference card states must be measured and agree, and a measure the
 //!    card omits is not compared, whatever other cards of the model state
 //!    (testing-plan F68). The count `m` is no measure: a card without one
-//!    counts one device, and is compared so. Everything else is a
-//!    [`Discrepancy`].
+//!    counts one device, and is compared so. Counts, `m` and `nf`, are
+//!    whole numbers and compared exactly, every other parameter within
+//!    [`CompareOptions::param_tolerance`] (testing-plan F99). Everything
+//!    else is a [`Discrepancy`].
 //!
 //! Roles decide which terminals are interchangeable. Positions never matter.
 //!
