@@ -700,6 +700,15 @@ impl<'a> Parser<'a> {
                 };
                 (derived, Some(false), None)
             }
+            "rectangles" | "non_rectangles" | "squares" | "non_squares" => {
+                self.expect("(")?;
+                self.expect(")")?;
+                let derived = DerivedOp::Rectangles {
+                    square: op.ends_with("squares"),
+                    keep: !op.starts_with("non_"),
+                };
+                (derived, Some(false), None)
+            }
             "with_area" => {
                 let (lo, hi) = self.bounds(op, Dim::Area, false)?;
                 (DerivedOp::WithArea(lo, hi), Some(false), None)

@@ -320,6 +320,11 @@ impl Layers<'_> {
             DerivedOp::WithWidth(lo, hi) => {
                 format!("with_width2({a}, {}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
             }
+            DerivedOp::Rectangles { square, keep } => format!(
+                "{a}.{}{}",
+                if keep { "" } else { "non_" },
+                if square { "squares" } else { "rectangles" }
+            ),
             DerivedOp::Edges => format!("{a}.edges"),
             DerivedOp::Part(true) => format!("{a}.inside_part({})", b()),
             DerivedOp::Part(false) => format!("({a}.outside_part({b}) - {b}.edges)", b = b()),

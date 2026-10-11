@@ -766,9 +766,10 @@ pub enum Rule {
     /// Every shape on the layer, and every edge of an edge layer.
     ///
     /// Deck: `forbidden(L)`, kind `forbidden`. Write what is forbidden as the
-    /// layer: `forbidden(licon and poly and (diff or tap))`, or a maximum area
-    /// as `forbidden(L.with_area(> area))`. Shapes are reported as the store
-    /// holds them, not merged.
+    /// layer: `forbidden(licon and poly and (diff or tap))`, a maximum area as
+    /// `forbidden(L.with_area(> area))`, or rectangle-only shapes as
+    /// `forbidden(L.non_rectangles())`. Shapes are reported as the store holds
+    /// them, not merged.
     ///
     /// One violation per polygon, at a vertex of its outer ring, with
     /// `measured` its area (holes excluded) against a `limit` of 0. One per
@@ -777,9 +778,10 @@ pub enum Rule {
     /// edges.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-006, DRC-018, DRC-050, DRC-074, DRC-090, DRC-095, ERC-A10. Rules:
-    /// sky130 x.8, licon.6 and licon.17, IHP 3.2 and Cnt.j, GF180 PL.9;
-    /// `KLayout` `overlapping`.
+    /// DRC-005, DRC-006, DRC-018, DRC-050, DRC-074, DRC-090, DRC-095,
+    /// ERC-A10. Rules: sky130 x.8, licon.6, licon.17 and capm.7, IHP 3.2 and
+    /// Cnt.j, GF180 PL.9; LEF58 `RECTONLY`; `KLayout` `overlapping` and
+    /// `non_rectangles`.
     ///
     /// Limits: device-family and seal-ring geometry is expressible through
     /// marker layers, but device-parameter rules and "one seal ring per chip,
