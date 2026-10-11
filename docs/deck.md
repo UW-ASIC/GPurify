@@ -237,7 +237,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `overlap(A, B) >= len` | `A` and `B` overlapping by less than the limit. |
 | `tap_distance(well, tap) <= len` | Any point of a well further than the limit from a tap. |
 | `off_grid(; pitch: len)` | A vertex of a drawn shape off the manufacturing grid. Derived layers are not checked: they repeat the drawn vertices, and sizing by less than the grid would put on-grid drawing off it. |
-| `angle(; allowed: [0deg, 90deg])` | An edge at an angle not in the list (multiples of 45°), on any layer. |
+| `angle(; allowed: [0deg, 90deg])` | An edge at an angle not in the list (multiples of 45°), on any drawn layer. Derived layers are not checked: they repeat the drawn edges. |
 | `angle(L; allowed: [0deg, 90deg])` | The same, on layer `L` only. |
 | `redundant_via(L; within: len) >= count` | A cut with fewer than `count` cuts, itself included, within `within`. |
 | `via_array_space(L; array: count) >= len` | Cuts in a cluster larger than `array`, closer than the limit. |

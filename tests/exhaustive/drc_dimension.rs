@@ -2405,7 +2405,10 @@ fn off_grid(depth: Depth) -> Vec<Fixture> {
 /// are its vertices in any order), the same on `met2`, and a right triangle
 /// whose hypotenuse is at 45 or 135 degrees. The rustdoc's Limits say a
 /// non-rectilinear layout is refused at load; its body says the rule checks
-/// the lines, and with no rule validating the layer nothing refuses it.
+/// the lines, and with no rule validating the layer nothing refuses it. A
+/// deck deriving `met1.sized(5nm)` and a copy `met1 not met2` (F63): with no
+/// layer only drawn layers are checked, so the rectangle's corners are
+/// reported once, not again on the copy and the halo.
 fn angle(_depth: Depth) -> Vec<Fixture> {
     let deck = "grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n\
                 rule a angle(met1; allowed: [0deg, 90deg])\n\
@@ -2444,6 +2447,15 @@ fn angle(_depth: Depth) -> Vec<Fixture> {
                 ("all", Vec::new()),
                 ("d", vec![count(0), count(0)]),
             ],
+        ),
+        fixture(
+            "angle/derived",
+            &["DRC-002"],
+            "grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n\
+             layer halo = met1.sized(5nm)\nlayer copy = met1 not met2\n\
+             rule d angle(; allowed: [45deg, 135deg])\n",
+            met1(&[[0, 0, 1000, 500]]),
+            vec![("d", corners())],
         ),
     ];
     let mut out = every_placement(cases);

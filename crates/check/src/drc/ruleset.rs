@@ -625,8 +625,10 @@ pub enum Rule {
     /// An edge at an angle not in the allowed list.
     ///
     /// Deck: `angle([L]; allowed: [0deg, 90deg])`, kind `angle`. Every
-    /// non-zero edge of every row on `layer`, or on every layer, must lie
-    /// along an allowed line.
+    /// non-zero edge of every row on `layer`, or with no layer on every drawn
+    /// layer, must lie along an allowed line. With no layer, a derived layer
+    /// is not checked ([`RuleSet::first_derived`]): it repeats the edges of
+    /// the drawn layers it is computed from.
     ///
     /// One violation per offending edge, at its first vertex in store order,
     /// on its row's layer. `measured` is `Count(0)` (no allowed line matched)
@@ -641,7 +643,7 @@ pub enum Rule {
     /// them; it is the one geometric rule that does not validate its layer,
     /// so it never records `Refused` for a non-rectilinear one.
     Angle {
-        /// The layer whose edges are checked; `None` checks every layer.
+        /// The layer whose edges are checked; `None` checks every drawn layer.
         layer: Option<LayerId>,
         /// Bit `i` allows the line at `45 * i` degrees, for `i` in `0..4`. A
         /// line has no direction, so 180 degrees is 0. Non-zero: `from_deck`
@@ -1028,7 +1030,8 @@ pub struct RuleSet {
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
     /// [`Rule::GlobalDensity`] without a boundary takes its die from the drawn
-    /// layers, and [`Rule::OffGrid`] checks drawn rows only.
+    /// layers, and [`Rule::OffGrid`] and an [`Rule::Angle`] without a layer
+    /// check drawn rows only.
     pub first_derived: Option<LayerId>,
 }
 
@@ -1601,7 +1604,9 @@ impl RuleSet {
                     overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
                 }
                 Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, drawn, out),
-                Rule::Angle { layer, allowed } => grid::angle(store, id, layer, allowed, out),
+                Rule::Angle { layer, allowed } => {
+                    grid::angle(store, id, (layer, drawn), allowed, out)
+                }
                 Rule::RedundantVia {
                     layer,
                     min_count,

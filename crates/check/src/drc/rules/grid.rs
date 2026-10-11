@@ -1,6 +1,6 @@
 //! Grid family: off-grid vertices, over every drawn polygon, and disallowed
-//! edge angles, over every polygon in the store (or one layer's), reported at
-//! the vertex.
+//! edge angles, over every drawn polygon (or one layer's), reported at the
+//! vertex.
 //!
 //! Data in: the store's coordinate columns. Data out: one violation per
 //! offending vertex (off-grid) or edge (angle, at the vertex it leaves).
@@ -27,8 +27,13 @@ fn lattice_offset(x: Dbu, y: Dbu, pitch: i64) -> i64 {
     rx.min(pitch - rx).max(ry.min(pitch - ry))
 }
 
-fn store_polys(store: &GeometryStore) -> impl Iterator<Item = PolyId> {
-    (0..u32::try_from(store.poly_count()).expect("a store indexes polygons with a u32")).map(PolyId)
+/// Every row on the drawn layers `0..drawn`.
+fn drawn_rows(store: &GeometryStore, drawn: usize) -> impl Iterator<Item = PolyId> + '_ {
+    (0..drawn)
+        .flat_map(|layer| {
+            store.polys_on_layer(LayerId(u16::try_from(layer).expect("a LayerId is a u16")))
+        })
+        .map(PolyId)
 }
 
 /// Every vertex on the drawn layers `0..drawn` must sit on the `pitch`
@@ -43,12 +48,7 @@ pub(crate) fn off_grid(
 ) -> Verdict {
     let pitch = pitch.raw();
     let mut examined = 0u64;
-    let drawn_rows = (0..drawn)
-        .flat_map(|layer| {
-            store.polys_on_layer(LayerId(u16::try_from(layer).expect("a LayerId is a u16")))
-        })
-        .map(PolyId);
-    for poly in drawn_rows {
+    for poly in drawn_rows(store, drawn) {
         let (xs, ys) = store.poly_verts(poly);
         examined += xs.len() as u64;
         for (&x, &y) in xs.iter().zip(ys) {
@@ -74,20 +74,21 @@ fn line_bit(dx: i64, dy: i64) -> u8 {
     u8::from(dy == 0) | u8::from(dx == dy) << 1 | u8::from(dx == 0) << 2 | u8::from(dx == -dy) << 3
 }
 
-/// Every non-zero edge on `layer` (every layer when `None`) must lie along an
+/// Every non-zero edge on `layer`, or on every drawn layer `0..drawn` when
+/// `None` (a derived layer repeats its operands' edges), must lie along an
 /// `allowed` line. Measured as the count of allowed lines matched (zero)
 /// against a limit of one. `examined` counts non-zero edges.
 pub(crate) fn angle(
     store: &GeometryStore,
     rule: StrId,
-    layer: Option<LayerId>,
+    (layer, drawn): (Option<LayerId>, usize),
     allowed: u8,
     out: &mut Violations,
 ) -> Verdict {
     let mut examined = 0u64;
     let polys: Box<dyn Iterator<Item = PolyId>> = match layer {
         Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
-        None => Box::new(store_polys(store)),
+        None => Box::new(drawn_rows(store, drawn)),
     };
     for poly in polys {
         let (xs, ys) = store.poly_verts(poly);

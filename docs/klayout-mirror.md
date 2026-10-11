@@ -739,8 +739,8 @@ DRAWN.each { |x| emit(id, x.raw.ongrid(PITCH)) }   # every drawn polygon layer; 
 ### 23. angle — EXACT
 
 **GPurify** (`grid.rs` `angle`)
-- Checks every non-zero edge of every row on the layer (or on every layer) against the allowed
-  lines 0, 45, 90 and 135.
+- Checks every non-zero edge of every row on the layer (or, with no layer, on every drawn layer:
+  derived layers are not checked, F63, fixed in B24) against the allowed lines 0, 45, 90 and 135.
 - `at` is the start vertex in counter-clockwise order.
 
 **KLayout**
