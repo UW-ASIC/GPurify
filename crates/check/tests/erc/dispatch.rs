@@ -187,6 +187,7 @@ fn every_kind() -> RuleSet {
             layer: vec![LayerId(0)],
             max_density: vec![density(1e9)],
             max_current_per_cut: vec![microamps(200.0)],
+            narrow: vec![None],
         },
         electromigration: electrical::ElectromigrationTable {
             head: head(id_of("electromigration")),

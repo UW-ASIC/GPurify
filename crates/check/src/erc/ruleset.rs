@@ -548,6 +548,11 @@ impl RuleSet {
                     let layers = row.layers_from(1)?;
                     let max_density = Qty::new(row.number("max_density")?);
                     let per_cut = Qty::new(row.number("max_current_per_cut")?);
+                    // The band's width and current are one statement: both or none.
+                    let narrow = match row.opt_length("narrow_width")? {
+                        Some(width) => Some((width, Qty::new(row.number("narrow_current")?))),
+                        None => None,
+                    };
                     let table = &mut set.em_current_density;
                     row.head(&mut table.head)?;
                     table.layer.extend_from_slice(layers);
@@ -555,6 +560,7 @@ impl RuleSet {
                     table
                         .max_current_per_cut
                         .extend(layers.iter().map(|_| per_cut));
+                    table.narrow.extend(layers.iter().map(|_| narrow));
                     close_csr(&mut table.layer_start, table.layer.len());
                 }
                 "esd_latchup" => {
@@ -890,6 +896,10 @@ impl RuleSet {
                 for at in span(&t.layer_start) {
                     c.positive("max_density", t.max_density[at].raw())?;
                     c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;
+                    if let Some((width, current)) = t.narrow[at] {
+                        c.length("narrow_width", width)?;
+                        c.positive("narrow_current", current.raw())?;
+                    }
                 }
             }
             "esd_latchup" => {
