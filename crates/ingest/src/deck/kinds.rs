@@ -231,6 +231,12 @@ const EM_NARROW: &[Param] = &[
     p("width", "narrow_width", Dim::Length),
     p("current", "narrow_current", Dim::Current),
 ];
+/// LEF `PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]`.
+const EOL_PARALLEL: &[Param] = &[
+    p("space", "par_space", Dim::Length),
+    p("within", "par_within", Dim::Length),
+    p("two_edges", "two_edges", Dim::Bool),
+];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -294,6 +300,22 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         LIMIT,
         &[p("eol_width", "eol_width", Dim::Length)],
+    ),
+    // LEF `SPACING ENDOFLINE`: a keep-out reaching `within` past the end's
+    // sides, optionally only beside parallel edges, with its own space
+    // between two ends (`LEF58_SPACING ENDOFLINE ... ENDTOEND`).
+    drc(
+        "eol_space",
+        Cmp::Ge,
+        "eol_within_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("within", "eol_within", Dim::Length),
+            opt("parallel", "", Dim::Group(EOL_PARALLEL)),
+            opt("end_to_end", "end_to_end", Dim::Length),
+        ],
     ),
     drc(
         "prl_space",

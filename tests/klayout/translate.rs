@@ -1267,6 +1267,16 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Length,
                 )
             }
+            Rule::EolWithinSpacing { .. } => (
+                "eol_within_spacing",
+                Verdict::None(
+                    "KLayout has no end-of-line keep-out widened past the end, parallel-edge trigger or end-to-end space",
+                ),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::ForbiddenSpacing {
                 layer,
                 min,

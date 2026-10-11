@@ -4,7 +4,7 @@
 //! cell or a pair dropped from the scan shows.
 
 use crate::common::{A, RULE};
-use gpurify_check::drc::ruleset::ClassTable;
+use gpurify_check::drc::ruleset::{ClassTable, EolParallel};
 use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
 use gpurify_geom::GeometryStore;
@@ -228,6 +228,148 @@ fn a_narrower_legal_gap_does_not_hide_a_forbidden_one() {
     assert_eq!(out.measured, [len(130)]);
     assert_eq!(out.at, [point(165, 700)]);
     assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
+}
+
+// ------------------------------------------------------- eol_within_spacing
+
+/// LEF/DEF 5.8 Example 1-18 in nanometres: `SPACING 1.2 ENDOFLINE 1.3
+/// WITHIN 0.6`, with `parallel` and `end_to_end`.
+fn lef_eol(parallel: Option<EolParallel>, end_to_end: Option<i64>) -> Rule {
+    Rule::EolWithinSpacing {
+        layer: A,
+        eol_width: dbu(1300),
+        within: dbu(600),
+        parallel,
+        end_to_end: end_to_end.map(dbu),
+        limit: dbu(1200),
+    }
+}
+
+/// `PARALLELEDGE 1.1 WITHIN 0.5`, with or without `TWOEDGES`.
+fn parallel_edge(two_edges: bool) -> Option<EolParallel> {
+    Some(EolParallel {
+        space: dbu(1100),
+        within: dbu(500),
+        two_edges,
+    })
+}
+
+/// A 1000 wide line ending at y = 0, so its top is an end of line.
+const LINE: [i64; 4] = [0, -5000, 1000, 0];
+
+/// A 7000 wide bar 1000 above the line, inside its keep-out.
+const BAR: [i64; 4] = [-3000, 1000, 4000, 2000];
+
+/// Oracle: LEF 5.8 Figure 1-23 b, construct-from-answer for the marker. A
+/// bar 1199 above the end is one unit inside the keep-out: depth 1199,
+/// marked over the end widened by 600, x = -600..1600, midway up the gap.
+/// The line's two ends and the bar's two 1000 long sides are the ends of
+/// line examined.
+#[test]
+fn a_facing_edge_inside_the_keep_out_fails_by_its_depth() {
+    let (out, runs) = run(
+        &layout(&[LINE, [-2000, 1199, 3000, 2199]]),
+        lef_eol(None, None),
+        Vec::new(),
+    );
+
+    assert_eq!(out.measured, [len(1199)]);
+    assert_eq!(out.limit, [len(1200)]);
+    assert_eq!(out.at, [point(500, 599)]);
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 4);
+
+    let (out, _) = run(
+        &layout(&[LINE, [-2000, 1200, 3000, 2200]]),
+        lef_eol(None, None),
+        Vec::new(),
+    );
+    assert!(out.is_empty(), "exactly at the space is legal");
+}
+
+/// Oracle: LEF 5.8 Figure 1-23 c and d, "within (that is, less than)
+/// eolWithin". A square 300 above whose side lies 599 past the end's side
+/// is in the keep-out; 600 past it is not.
+#[test]
+fn the_keep_out_reaches_less_than_within_past_the_end() {
+    let (out, _) = run(
+        &layout(&[LINE, [1599, 300, 3599, 2300]]),
+        lef_eol(None, None),
+        Vec::new(),
+    );
+    assert_eq!(out.measured, [len(300)]);
+
+    let (out, _) = run(
+        &layout(&[LINE, [1600, 300, 3600, 2300]]),
+        lef_eol(None, None),
+        Vec::new(),
+    );
+    assert!(out.is_empty());
+}
+
+/// Oracle: `TritonRoute`'s end of line, both corners convex. A tab's side is
+/// 1000 long but meets its base at a concave corner, so it is no end: the
+/// wide shape 500 beside it is clean, and only the tab's top is examined.
+#[test]
+fn an_edge_with_a_concave_corner_is_no_end() {
+    let store = layout(&[
+        [-3000, -5000, 4000, -1000],
+        [0, -1000, 1000, 0],
+        [-3000, -900, -500, 3000],
+    ]);
+    let (out, runs) = run(&store, lef_eol(None, None), Vec::new());
+
+    assert!(out.is_empty());
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 1);
+}
+
+/// Oracle: LEF 5.8 Figure 1-24, `PARALLELEDGE 1.1 WITHIN 0.5`. The bar
+/// 1000 above fails only when a neighbour runs beside the line less than
+/// 1100 from its side (1099 does, 1100 does not), with its top reaching
+/// less than 500 behind the end's line (-499 does, -500 does not).
+#[test]
+fn a_parallel_edge_beside_the_line_triggers_the_rule() {
+    let rule = lef_eol(parallel_edge(false), None);
+    let with = |neighbour: [i64; 4]| run(&layout(&[LINE, BAR, neighbour]), rule, Vec::new()).0;
+
+    assert_eq!(with([-3099, -5000, -1099, 0]).measured, [len(1000)]);
+    assert!(with([-3100, -5000, -1100, 0]).is_empty());
+    assert_eq!(with([-2500, -5000, -500, -499]).measured, [len(1000)]);
+    assert!(with([-2500, -5000, -500, -500]).is_empty());
+    assert!(run(&layout(&[LINE, BAR]), rule, Vec::new()).0.is_empty());
+}
+
+/// Oracle: LEF 5.8 Figure 1-19, `TWOEDGES`. One neighbour beside the line
+/// is not enough; one on each side is.
+#[test]
+fn two_edges_needs_a_parallel_edge_on_both_sides() {
+    let rule = lef_eol(parallel_edge(true), None);
+    let left = [-2500, -5000, -500, 0];
+    let right = [1500, -5000, 3500, 0];
+
+    assert!(run(&layout(&[LINE, BAR, left]), rule, Vec::new())
+        .0
+        .is_empty());
+    let (out, _) = run(&layout(&[LINE, BAR, left, right]), rule, Vec::new());
+    assert_eq!(out.measured, [len(1000)]);
+}
+
+/// Oracle: `LEF58_SPACING ENDOFLINE ... ENDTOEND`, construct-from-answer.
+/// Two ends of line 1399 apart need the end-to-end 1400; an end 1300 below
+/// a wide bar (no end) needs only 1200.
+#[test]
+fn two_ends_facing_each_other_need_the_end_to_end_space() {
+    let rule = lef_eol(None, Some(1400));
+    let (out, _) = run(&layout(&[LINE, [0, 1399, 1000, 6399]]), rule, Vec::new());
+    assert_eq!(out.measured, [len(1399)]);
+    assert_eq!(out.limit, [len(1400)]);
+
+    assert!(run(
+        &layout(&[LINE, [-2000, 1300, 3000, 2300]]),
+        rule,
+        Vec::new()
+    )
+    .0
+    .is_empty());
 }
 
 /// Oracle: the kind's contract. A layer the rule cannot represent exactly

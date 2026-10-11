@@ -1404,6 +1404,89 @@ pub enum Rule {
         /// or more.
         prl: Dbu,
     },
+    /// Too little space in front of an end of line, as LEF `SPACING
+    /// ENDOFLINE` defines it: a keep-out widened past the end's sides, which
+    /// may apply only beside parallel edges, with its own space between two
+    /// ends.
+    ///
+    /// Deck: `eol_space(L; eol_width: len, within: len, parallel: none |
+    /// (space: len, within: len, two_edges: bool), end_to_end: len | none) >=
+    /// len`, kind `eol_within_spacing`. An end of line is an edge of the
+    /// merged layer strictly shorter than `eol_width` whose two corners are
+    /// convex: a line's end, not the floor of a notch (`TritonRoute`'s
+    /// `checkMetalEndOfLine_eol_isEolEdge`). Its keep-out spans the end
+    /// widened by `within` on each side, both ends open, and reaches straight
+    /// out of the material from the end's line, open at its far side (LEF
+    /// 5.8: "spacing greater than or equal to eolSpace beyond the EOL
+    /// anywhere within (that is, less than) eolWithin distance"). An edge of
+    /// another merged figure, parallel to the end and facing it, at a depth
+    /// of 0 or more out from the end's line, whose span overlaps the widened
+    /// span by a positive length, violates when its depth is below the space
+    /// it needs: `end_to_end` when that edge is itself an end of line and
+    /// `end_to_end` is given (`LEF58_SPACING ENDOFLINE ... ENDTOEND`), else
+    /// `limit`.
+    ///
+    /// With `parallel`, the rule applies to an end only where a parallel
+    /// edge runs beside its line (LEF `PARALLELEDGE parSpace WITHIN
+    /// parWithin`): at a corner of the end, an edge of the merged layer, of
+    /// any figure (the line's own included), parallel to the line's side
+    /// there and facing it, less than `space` out from that side's line,
+    /// whose span overlaps by a positive length the stretch from the
+    /// parallel `within` back behind the end's line to the end's own
+    /// `within` past it. With `two_edges`, both corners need one
+    /// (`TWOEDGES`).
+    ///
+    /// One violation per pair of merged figures with such an approach, from
+    /// either figure's end: `measured` the smallest depth (straight out from
+    /// the end, not Euclidean, as the keep-out is a box), `limit` the space
+    /// it needed, at the middle of the stretch where the facing edge overlaps
+    /// the widened span, midway between their lines. `shapes` is the lowest
+    /// drawn row under each figure. `examined` counts the ends of line the
+    /// rule applies to.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-029. Rules: LEF `SPACING eolSpace ENDOFLINE eolWidth WITHIN
+    /// eolWithin [PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]]` (LEF/DEF
+    /// 5.8 Language Reference, Figures 1-17 to 1-19 and Example 1-18);
+    /// `LEF58_SPACING ENDOFLINE ... ENDTOEND`; `TritonRoute` `FlexGC_eol.cpp`.
+    ///
+    /// Limits: `ENCLOSECUT`, the `LEF58_SPACING ENDOFLINE` qualifiers
+    /// `MINLENGTH`, `MAXLENGTH`, `ENDPRLSPACING` and `WRONGDIRSPACING`, and
+    /// the `ENDTOEND` extensions are missing. An edge beside the line, behind
+    /// the end's line, is not in the keep-out; the minimum spacing measures
+    /// it, and LEF asks `eolWithin` to be under that spacing.
+    EolWithinSpacing {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// An edge strictly shorter than this, with convex corners, is an end
+        /// of line, in grid units; positive.
+        eol_width: Dbu,
+        /// How far past each side of the end the keep-out reaches, exclusive,
+        /// in grid units; 0 or more.
+        within: Dbu,
+        /// The parallel-edge condition; `None` applies the rule to every end.
+        parallel: Option<EolParallel>,
+        /// The space between two ends of line facing each other, in grid
+        /// units; positive. `None` holds them to `limit`.
+        end_to_end: Option<Dbu>,
+        /// The space an end of line needs, in grid units; positive.
+        limit: Dbu,
+    },
+}
+
+/// The parallel-edge condition of an end-of-line rule (LEF `PARALLELEDGE
+/// parSpace WITHIN parWithin [TWOEDGES]`), read by
+/// [`Rule::EolWithinSpacing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EolParallel {
+    /// How far out from the line's side a parallel edge may lie, exclusive,
+    /// in grid units; positive.
+    pub space: Dbu,
+    /// How far back from the end's line the parallel edge's stretch reaches,
+    /// exclusive, in grid units; 0 or more.
+    pub within: Dbu,
+    /// Whether both sides of the line need a parallel edge.
+    pub two_edges: bool,
 }
 
 /// Which runs of short edges a [`Rule::MinStep`] rejects, after LEF
@@ -1707,6 +1790,18 @@ impl RuleSet {
                 });
             }
             Ok(value)
+        };
+        // A parameter a row may leave out (`none` in the deck).
+        let optional = |spec: &RuleSpec, param: &'static str| {
+            strings
+                .get(param)
+                .and_then(|interned| rules.param(spec, interned))
+        };
+        let flag = |spec: &RuleSpec, param| -> Result<bool, DrcError> {
+            match value(spec, param)? {
+                ParamValue::Flag(set) => Ok(set),
+                _ => Err(wrong_type(spec, param)),
+            }
         };
         // Every length given for a list parameter, in deck order.
         let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
@@ -2158,6 +2253,31 @@ impl RuleSet {
                             .expect("a deck has few tables"),
                     }
                 }
+                "eol_within_spacing" => {
+                    let layer = one(spec)?;
+                    let eol_width = length(spec, "eol_width")?;
+                    let within = at_least_zero(spec, "eol_within")?;
+                    let parallel = match optional(spec, "par_space") {
+                        None => None,
+                        Some(_) => Some(EolParallel {
+                            space: length(spec, "par_space")?,
+                            within: at_least_zero(spec, "par_within")?,
+                            two_edges: flag(spec, "two_edges")?,
+                        }),
+                    };
+                    let end_to_end = match optional(spec, "end_to_end") {
+                        None => None,
+                        Some(_) => Some(length(spec, "end_to_end")?),
+                    };
+                    Rule::EolWithinSpacing {
+                        layer,
+                        eol_width,
+                        within,
+                        parallel,
+                        end_to_end,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "forbidden_spacing" => {
                     let layer = one(spec)?;
                     let (min, max) = (length(spec, "min")?, length(spec, "max")?);
@@ -2457,6 +2577,22 @@ impl RuleSet {
                     max,
                     prl,
                 } => facing::forbidden_spacing(store, id, layer, (min, max, prl), s, out),
+                Rule::EolWithinSpacing {
+                    layer,
+                    eol_width,
+                    within,
+                    parallel,
+                    end_to_end,
+                    limit,
+                } => facing::eol_within_spacing(
+                    store,
+                    id,
+                    layer,
+                    (eol_width, within, limit),
+                    (parallel, end_to_end),
+                    s,
+                    out,
+                ),
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -2790,7 +2926,8 @@ impl Rule {
             | Rule::AllowedWidth { layer, .. }
             | Rule::MinStep { layer, .. }
             | Rule::TipSpacingTable { layer, .. }
-            | Rule::ForbiddenSpacing { layer, .. } => [Some(layer), None],
+            | Rule::ForbiddenSpacing { layer, .. }
+            | Rule::EolWithinSpacing { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

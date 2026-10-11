@@ -1,5 +1,6 @@
 //! Spacing read off the edges of the merged layer: facing edges classed by
-//! their lengths, and gaps in a forbidden range.
+//! their lengths, gaps in a forbidden range, and the space in front of an end
+//! of line as LEF defines it.
 //!
 //! Data in: one layer, validated and merged into `s.layer_out`; every rule
 //! here reads whole edges of the merged figures, so a side drawn as several
@@ -9,7 +10,7 @@
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
 use super::{owners_of, ring_segs, Verdict, REFUSED};
-use crate::drc::ruleset::ClassTable;
+use crate::drc::ruleset::{ClassTable, EolParallel};
 use crate::drc::Scratch;
 use crate::report::{Outcome, Violations};
 use gpurify_geom::derive::merge_into;
@@ -234,4 +235,95 @@ pub(crate) fn forbidden_spacing(
     });
     report_pairs(rule, layer, &owners, &mut hits, out);
     (Outcome::Ran, examined)
+}
+
+/// LEF end-of-line spacing (`SPACING ENDOFLINE ... WITHIN`, with
+/// `PARALLELEDGE`, `TWOEDGES` and the `LEF58` `ENDTOEND`): each end of line
+/// the rule applies to holds the facing edges of other figures in its
+/// widened keep-out to `limit`, or to `end_to_end` when the facing edge is an
+/// end of line too. `examined` counts the ends of line the rule applies to.
+pub(crate) fn eol_within_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (eol_width, within, limit): (Dbu, Dbu, Dbu),
+    (parallel, end_to_end): (Option<EolParallel>, Option<Dbu>),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(owners) = merged_owners(store, layer, s) else {
+        return REFUSED;
+    };
+    let edges = figure_edges(&s.layer_out);
+    let is_end = |e: &Edge| e.convex && e.length() < eol_width.raw();
+    let w = within.raw();
+    let reach = limit.raw().max(end_to_end.map_or(0, Dbu::raw));
+    let (mut hits, mut examined) = (Vec::new(), 0u64);
+    for end in edges.iter().filter(|&e| is_end(e)) {
+        if !parallel.is_none_or(|p| beside(&edges, end, p, w)) {
+            continue;
+        }
+        examined += 1;
+        // The facing edges out in front: on the end's orientation, facing
+        // back at it, from depth 0 to just under `reach`.
+        let (first, last) = if end.faces_up {
+            (end.pos, end.pos + reach - 1)
+        } else {
+            (end.pos - reach + 1, end.pos)
+        };
+        let from = edges.partition_point(|f| {
+            (f.vertical, f.faces_up, f.pos) < (end.vertical, !end.faces_up, first)
+        });
+        let facing = edges[from..].iter().take_while(|f| {
+            f.vertical == end.vertical && f.faces_up != end.faces_up && f.pos <= last
+        });
+        for f in facing {
+            let (lo, hi) = (f.lo.max(end.lo - w), f.hi.min(end.hi + w));
+            if f.figure == end.figure || hi <= lo {
+                continue;
+            }
+            let need = match end_to_end {
+                Some(ends) if is_end(f) => ends.raw(),
+                _ => limit.raw(),
+            };
+            let depth = (f.pos - end.pos).abs();
+            if depth < need {
+                hits.push(hit(end, f, depth, (lo, hi), need));
+            }
+        }
+    }
+    report_pairs(rule, layer, &owners, &mut hits, out);
+    (Outcome::Ran, examined)
+}
+
+/// Whether a parallel edge runs beside the line that ends at `end` (LEF
+/// `PARALLELEDGE`): at its low corner an edge facing up toward the line's
+/// side, at its high corner one facing down, its line less than
+/// `parallel.space` out from the side's, its span overlapping the stretch
+/// from `parallel.within` behind the end's line to `within` past it. Both
+/// corners with `two_edges`, either without.
+fn beside(edges: &[Edge], end: &Edge, parallel: EolParallel, within: i64) -> bool {
+    let (space, back) = (parallel.space.raw(), parallel.within.raw());
+    // The stretch along the line's sides, across the end's line.
+    let (wlo, whi) = if end.faces_up {
+        (end.pos - back, end.pos + within)
+    } else {
+        (end.pos - within, end.pos + back)
+    };
+    // An edge across the end, facing `faces_up`, its line from `from` to `to`.
+    let side = |faces_up: bool, from: i64, to: i64| {
+        let first = edges
+            .partition_point(|f| (f.vertical, f.faces_up, f.pos) < (!end.vertical, faces_up, from));
+        edges[first..]
+            .iter()
+            .take_while(|f| f.vertical != end.vertical && f.faces_up == faces_up && f.pos <= to)
+            .any(|f| f.lo.max(wlo) < f.hi.min(whi))
+    };
+    let low = side(true, end.lo - space + 1, end.lo);
+    let high = side(false, end.hi, end.hi + space - 1);
+    if parallel.two_edges {
+        low && high
+    } else {
+        low || high
+    }
 }
