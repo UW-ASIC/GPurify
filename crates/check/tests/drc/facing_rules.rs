@@ -188,9 +188,9 @@ fn bars(gap: i64) -> GeometryStore {
 /// though still examined.
 #[test]
 fn both_ends_of_the_range_are_forbidden_and_one_step_out_is_legal() {
-    for (gap, forbidden) in [(99, false), (100, true), (150, true), (151, false)] {
+    for (gap, in_range) in [(99, false), (100, true), (150, true), (151, false)] {
         let (out, runs) = run(&bars(gap), forbidden(), Vec::new());
-        if forbidden {
+        if in_range {
             assert_eq!(out.measured, [len(gap)], "gap {gap}");
             assert_eq!(out.limit, [len(151)], "gap {gap}");
             assert_eq!(out.at, [point((200 + gap) / 2, 500)], "gap {gap}");
@@ -501,19 +501,23 @@ fn lines(wa: i64, wb: i64, gap: i64, run: i64) -> GeometryStore {
 /// space reports that space as its limit.
 #[test]
 fn lef_s_worked_example_picks_each_cell() {
-    for (wa, wb, run, space) in [
+    for (wa, wb, overlap, space) in [
         (250, 250, 0, 150),
         (250, 260, 0, 150),
         (250, 260, 100, 200),
         (260, 260, 100, 250),
     ] {
-        let (out, runs) = run(&lines(wa, wb, space - 1, run), TWO_WIDTHS, lef_two_widths());
-        assert_eq!(out.measured, [len(space - 1)], "{wa} {wb} {run}");
-        assert_eq!(out.limit, [len(space)], "{wa} {wb} {run}");
+        let (out, runs) = run(
+            &lines(wa, wb, space - 1, overlap),
+            TWO_WIDTHS,
+            lef_two_widths(),
+        );
+        assert_eq!(out.measured, [len(space - 1)], "{wa} {wb} {overlap}");
+        assert_eq!(out.limit, [len(space)], "{wa} {wb} {overlap}");
         assert_eq!(assert_rule_ran(&runs, RULE).examined, 1);
 
-        let (out, _) = run(&lines(wa, wb, space, run), TWO_WIDTHS, lef_two_widths());
-        assert!(out.is_empty(), "{wa} {wb} {run} at its space");
+        let (out, _) = run(&lines(wa, wb, space, overlap), TWO_WIDTHS, lef_two_widths());
+        assert!(out.is_empty(), "{wa} {wb} {overlap} at its space");
     }
 }
 
