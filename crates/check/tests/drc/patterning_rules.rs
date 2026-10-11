@@ -4,7 +4,7 @@
 use crate::common;
 
 use common::{Sink, A, RULE};
-use gpurify_check::drc::rules::patterning::{color_into, Coloring};
+use gpurify_check::drc::rules::patterning::{anchor_conflict, color_into, Anchoring, Coloring};
 use gpurify_check::drc::Rule;
 use gpurify_check::report::Severity;
 use gpurify_ingest::StrId;
@@ -328,4 +328,86 @@ fn a_figure_whose_own_notch_is_below_the_colour_spacing_has_no_colouring() {
 
     sink.run(&store, &patterning_table(1, 100));
     assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// Whether some colouring of `0 .. n` with `k` colours is proper and, with
+/// `honour`, gives every anchored node its anchor's colour (two anchors on
+/// one node are never honoured): every one of the `k^n` assignments tried.
+fn brute_force(n: u32, edges: &[(u32, u32)], anchors: &[u8], k: u8, honour: bool) -> bool {
+    let k64 = u64::from(k);
+    (0..k64.pow(n)).any(|code| {
+        let colour = |i: u32| u8::try_from(code / k64.pow(i) % k64).expect("below k");
+        edges.iter().all(|&(a, b)| colour(a) != colour(b))
+            && (!honour
+                || (0..n)
+                    .all(|i| anchors[i as usize] == 0 || anchors[i as usize] == 1 << colour(i)))
+    })
+}
+
+/// Oracle: brute-force colouring (NV). On 4000 random connected graphs of 1 to
+/// 6 nodes, 1 to 3 colours, and random anchors (a fifth of them on two
+/// colours at once), `anchor_conflict` says Unsplittable exactly when no
+/// colouring exists, Honoured exactly when one honours the anchors, and
+/// Conflict otherwise; and the conflict it names is one: with two colours
+/// the pair it names cannot both be honoured, or the node it names holds two
+/// anchors, and with more the node it names is the lowest anchored.
+#[test]
+fn anchor_conflicts_agree_with_every_colouring_tried() {
+    let mut rng = Rng::new(0x00a1_1c40);
+    let mut out = Vec::new();
+    for _ in 0..4000 {
+        let n = u32::try_from(rng.below(6) + 1).expect("small");
+        let k = u8::try_from(rng.below(3) + 1).expect("small");
+        let mut edges: Vec<(u32, u32)> = (1..n)
+            .map(|i| (u32::try_from(rng.below(u64::from(i))).expect("small"), i))
+            .collect();
+        for a in 0..n {
+            for b in a + 1..n {
+                if rng.unit() < 0.3 {
+                    edges.push((a, b));
+                }
+            }
+        }
+        let anchors: Vec<u8> = (0..n)
+            .map(|_| {
+                if rng.unit() < 0.5 {
+                    return 0;
+                }
+                let one = 1u8 << rng.below(u64::from(k));
+                if k > 1 && rng.unit() < 0.2 {
+                    one | 1 << ((one.trailing_zeros() + 1) % u32::from(k))
+                } else {
+                    one
+                }
+            })
+            .collect();
+        let got = anchor_conflict(n, &edges, &anchors, k, &mut out);
+        let splittable = brute_force(n, &edges, &anchors, k, false);
+        let honoured = brute_force(n, &edges, &anchors, k, true);
+        let case = format!("n {n}, k {k}, edges {edges:?}, anchors {anchors:?}: {got:?}");
+        match got {
+            Anchoring::Unsplittable => assert!(!splittable, "{case}"),
+            Anchoring::Honoured => assert!(splittable && honoured, "{case}"),
+            Anchoring::Exhausted => panic!("a six-node search ran out: {case}"),
+            Anchoring::Conflict { node, other } => {
+                assert!(splittable && !honoured, "{case}");
+                assert_ne!(anchors[node as usize], 0, "{case}");
+                match (k, other) {
+                    (2, Some(v)) => {
+                        let mut pair = vec![0; n as usize];
+                        pair[node as usize] = anchors[node as usize];
+                        pair[v as usize] = anchors[v as usize];
+                        assert!(!brute_force(n, &edges, &pair, k, true), "{case}");
+                    }
+                    (_, None) if anchors[node as usize].count_ones() > 1 => {}
+                    (_, None) => {
+                        assert!(k != 2, "{case}");
+                        let lowest = anchors.iter().position(|&a| a != 0);
+                        assert_eq!(lowest, Some(node as usize), "{case}");
+                    }
+                    _ => panic!("a pair named with {k} colours: {case}"),
+                }
+            }
+        }
+    }
 }

@@ -72,6 +72,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         dangling_metal(),
         drc_warning(),
         multi_patterning(depth),
+        anchored_patterning(),
+        colour_spacing(),
         booleans(),
         sizing(),
         selections(),
@@ -3852,6 +3854,199 @@ fn multi_patterning(depth: Depth) -> Vec<Fixture> {
             .expect(Expect::outcome("mp3", Want::Skipped)),
     );
     every_placement(cases)
+}
+
+/// Same-mask and different-mask spacing of pre-coloured shapes (DRC-102), as
+/// a deck writes LEF `SPACING ... SAMEMASK`: each mask's shapes are a layer
+/// (`met1 and c1`), so same-mask spacing is `space` on it and different-mask
+/// spacing is `space` between two of them. Two 500 x 500 squares `g` apart,
+/// swept about the 100 nm same-mask limit: both on mask 1, the same-mask rule
+/// reports the gap below it; one on each mask, only the 40 nm different-mask
+/// rule applies and the gap clears it.
+fn colour_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1", "c1", "c2"],
+        "rule same space(met1 and c1) >= 100nm\n\
+         rule apart space(met1 and c1, met1 and c2) >= 40nm\n",
+    );
+    let mut cases = Vec::new();
+    for (g, side) in sweep(100) {
+        let squares = || {
+            Layout::default()
+                .rect("met1", 0, 0, 500, 500)
+                .rect("met1", 500 + g, 0, 1000 + g, 500)
+                .rect("c1", 0, 0, 500, 500)
+        };
+        cases.push(fixture(
+            &format!("colour_spacing/same/{side}"),
+            &["DRC-102"],
+            &deck,
+            squares().rect("c1", 500 + g, 0, 1000 + g, 500),
+            &[("same", below(g, 100)), ("apart", vec![])],
+        ));
+        cases.push(fixture(
+            &format!("colour_spacing/apart/{side}"),
+            &["DRC-102"],
+            &deck,
+            squares().rect("c2", 500 + g, 0, 1000 + g, 500),
+            &[("same", vec![]), ("apart", vec![])],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// `patterning(met1, c1, c2; colors: 2) >= 100nm` (`anchored_patterning`,
+/// DRC-101, DRC-102): a figure sharing area with a `c1` shape must take mask
+/// 1, with a `c2` shape mask 2, and an anchor conflict is a component two
+/// masks can split but not with its anchors. Its finding names the lowest
+/// anchored figure and the first whose chain of conflicts to it has the
+/// wrong parity, at the middle of the gap between them, or one figure both
+/// anchor layers claim, at its centre; it measures 3 masks against 2. The
+/// plain `patterning(met1; colors: 2)` row beside it reports what no split
+/// fixes.
+///
+/// Bars 100 x 500, 150 apart in x (a 50 gap, a conflict), in a chain, as
+/// US8473873B2's FIG. 1, 5 and 6: four bars anchored alike at both ends
+/// (three conflicts, odd: an anchor path), or apart (honoured); five bars
+/// (four conflicts) alike (honoured) or apart (a path); four unanchored; the
+/// end anchored only in part (any overlap anchors); an anchor that only
+/// touches its bar (no anchor); one bar under both anchor layers (anchor
+/// self-conflict); a triangle with an anchor (no split at all: the plain
+/// row's). With three masks: a triangle with two corners anchored to mask 1
+/// (the lowest anchored, 4 against 3), and with one anchor per mask
+/// (honoured). The empty layer is skipped.
+fn anchored_patterning() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1", "c1", "c2", "c3"],
+        "rule odd patterning(met1; colors: 2) >= 100nm\n\
+         rule ap patterning(met1, c1, c2; colors: 2) >= 100nm\n\
+         rule ap3 patterning(met1, c1, c2, c3; colors: 3) >= 100nm\n",
+    );
+    let bar = |i: i64| (150 * i, 0, 150 * i + 100, 500);
+    let chain = |n: i64| {
+        rects(
+            Layout::default(),
+            "met1",
+            &(0..n).map(bar).collect::<Vec<_>>(),
+        )
+    };
+    let case =
+        |name: &str, layout: Layout, odd: Vec<Finding>, ap: Vec<Finding>, ap3: Vec<Finding>| {
+            fixture(
+                &format!("anchored_patterning/{name}"),
+                &["DRC-101", "DRC-102"],
+                &deck,
+                layout,
+                &[("odd", odd), ("ap", ap), ("ap3", ap3)],
+            )
+        };
+    let triangle = || {
+        rects(
+            Layout::default(),
+            "met1",
+            &[(0, 0, 500, 500), (550, 0, 1050, 500), (0, 550, 1050, 1050)],
+        )
+    };
+    let mut cases = vec![
+        case(
+            "chain4/alike",
+            chain(4)
+                .rect("c1", 0, 0, 100, 500)
+                .rect("c1", 450, 0, 550, 500),
+            vec![],
+            vec![count(3).at(275, 250)],
+            vec![],
+        ),
+        case(
+            "chain4/apart",
+            chain(4)
+                .rect("c1", 0, 0, 100, 500)
+                .rect("c2", 450, 0, 550, 500),
+            vec![],
+            vec![],
+            vec![],
+        ),
+        case(
+            "chain5/alike",
+            chain(5)
+                .rect("c1", 0, 0, 100, 500)
+                .rect("c1", 600, 0, 700, 500),
+            vec![],
+            vec![],
+            vec![],
+        ),
+        case(
+            "chain5/apart",
+            chain(5)
+                .rect("c1", 0, 0, 100, 500)
+                .rect("c2", 600, 0, 700, 500),
+            vec![],
+            vec![count(3).at(350, 250)],
+            vec![],
+        ),
+        case("chain4/unanchored", chain(4), vec![], vec![], vec![]),
+        case(
+            "chain4/partial_anchor",
+            chain(4)
+                .rect("c1", 0, 0, 50, 50)
+                .rect("c1", 450, 0, 550, 500),
+            vec![],
+            vec![count(3).at(275, 250)],
+            vec![],
+        ),
+        case(
+            "chain4/touching_anchor",
+            chain(4)
+                .rect("c1", -100, 0, 0, 500)
+                .rect("c1", 450, 0, 550, 500),
+            vec![],
+            vec![],
+            vec![],
+        ),
+        case(
+            "self_conflict",
+            chain(1)
+                .rect("c1", 0, 0, 100, 500)
+                .rect("c2", 0, 0, 100, 500),
+            vec![],
+            vec![count(3).at(50, 250)],
+            vec![count(4).at(50, 250)],
+        ),
+        case(
+            "odd_cycle",
+            triangle().rect("c1", 0, 0, 500, 500),
+            vec![count(3)],
+            vec![],
+            vec![],
+        ),
+        case(
+            "triangle/alike",
+            triangle()
+                .rect("c1", 0, 0, 500, 500)
+                .rect("c1", 550, 0, 1050, 500),
+            vec![count(3)],
+            vec![],
+            vec![count(4).at(250, 250)],
+        ),
+        case(
+            "triangle/each",
+            triangle()
+                .rect("c1", 0, 0, 500, 500)
+                .rect("c2", 550, 0, 1050, 500)
+                .rect("c3", 0, 550, 1050, 1050),
+            vec![count(3)],
+            vec![],
+            vec![],
+        ),
+    ];
+    cases = every_placement(cases);
+    cases.push(
+        Fixture::new("anchored_patterning/empty", &["DRC-101"], &deck, DRC)
+            .layout(Layout::default().rect("c1", 0, 0, 100, 100))
+            .expect(Expect::outcome("ap", Want::Skipped))
+            .expect(Expect::outcome("ap3", Want::Skipped)),
+    );
+    cases
 }
 
 // --------------------------------------------------- derived-layer operations

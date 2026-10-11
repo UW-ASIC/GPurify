@@ -1181,6 +1181,58 @@ pub enum Rule {
         /// positive.
         color_spacing: Dbu,
     },
+    /// Pre-coloured shapes whose masks no split of the layer can honour.
+    ///
+    /// Deck: `patterning(L, A1[, A2, ..]; colors: count) >= len`, kind
+    /// `anchored_patterning`. The conflict graph is [`Rule::MultiPatterning`]'s.
+    /// A figure sharing area with a shape of the `i`-th anchor layer is
+    /// anchored to mask `i`, as a LEF/DEF `MASK i` shape is pre-coloured; a
+    /// figure no anchor touches may take any mask, as LEF/DEF's uncoloured
+    /// shapes ("can be assigned to an arbitrary mask as long as they do not
+    /// have a spacing conflict"). A component of the graph that `colors` masks
+    /// can split, but not with every anchored figure on its own mask, is an
+    /// anchor conflict. A component no split exists for is
+    /// [`Rule::MultiPatterning`]'s to report, not this rule's.
+    ///
+    /// One violation per anchor conflict, `measured` `colors + 1` masks
+    /// against a `limit` of `colors`. With two masks it names the conflict:
+    /// the lowest anchored figure and the first anchored figure whose path of
+    /// conflicts to it has the wrong parity for their anchors (an odd number
+    /// of conflicts between two figures anchored alike, an even number
+    /// between two anchored apart: Calibre's anchor path), at the middle of
+    /// the gap between their boxes; or one figure that two anchor layers
+    /// both anchor (anchor self-conflict), at the centre of its box. With more
+    /// masks it decides exactly, colouring the component with one node per
+    /// mask, joined as a clique, and each anchored figure joined to every
+    /// mask node but its own, and names the lowest anchored figure; a search
+    /// that runs out of budget records [`Outcome::Refused`]. `examined`
+    /// counts the layer's rows. Records [`Outcome::Skipped`] on an empty
+    /// layer.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-101, DRC-102. The anchor path, "a path of interacting polygons
+    /// between the two anchors that cannot be colored in alternating colors
+    /// to align with the anchor masks", and the anchor self-conflict, "a
+    /// single polygon with two color anchor markers", are Calibre's
+    /// (J. Abercrombie, Semiconductor Engineering, 2012-06-29, and the
+    /// Siemens Calibre blog, 2016-03-02); the parity test is US8473873B2
+    /// claims 1(e) and 2(i); LEF/DEF 5.8 `MASK` (p. 132) defines pre-coloured
+    /// and uncoloured shapes.
+    ///
+    /// Limits: a figure is anchored by any overlap with an anchor shape, so
+    /// a partial marker (Calibre's seed) anchors as a full one does.
+    AnchoredPatterning {
+        /// The layer to split.
+        layer: LayerId,
+        /// The anchor layer of mask `i + 1` at index `i`; `None` past the
+        /// last. At least one, and no more than `colors`.
+        anchors: [Option<LayerId>; 4],
+        /// The number of masks; at least 1.
+        colors: u8,
+        /// The smallest gap between two shapes on one mask, in grid units;
+        /// positive.
+        color_spacing: Dbu,
+    },
     /// Every shape on the layer, and every edge of an edge layer.
     ///
     /// Deck: `forbidden(L)`, kind `forbidden`. Write what is forbidden as the
@@ -2962,6 +3014,28 @@ impl RuleSet {
                         color_spacing: length(spec, "color_spacing")?,
                     }
                 }
+                "anchored_patterning" => {
+                    let all = rules.layers_of(spec);
+                    let colors = positive(spec, count(spec, "colors", u8::MAX.into())?)?;
+                    let most = colors.min(4);
+                    if all.len() < 2 || all.len() > 1 + most as usize {
+                        return Err(DrcError::WrongLayerCount {
+                            rule: name_of(spec.id),
+                            expected: 1 + most,
+                            found: spec.layer_len,
+                        });
+                    }
+                    let mut anchors = [None; 4];
+                    for (slot, &anchor) in anchors.iter_mut().zip(&all[1..]) {
+                        *slot = Some(anchor);
+                    }
+                    Rule::AnchoredPatterning {
+                        layer: all[0],
+                        anchors,
+                        colors: u8::try_from(colors).expect("checked against the ceiling"),
+                        color_spacing: length(spec, "color_spacing")?,
+                    }
+                }
                 "forbidden" => Rule::Forbidden { layer: one(spec)? },
                 "must_contain" => {
                     let (outer, inner) = two(spec)?;
@@ -3408,7 +3482,7 @@ impl RuleSet {
         // The last rule reading each layer; its validation is dropped after that rule.
         let mut last_use: Vec<usize> = Vec::new();
         for (at, (_, rule)) in self.rules.iter().enumerate() {
-            for layer in rule.layers().into_iter().flatten() {
+            for layer in rule.layers().into_iter().chain(rule.anchors()).flatten() {
                 if last_use.len() <= layer.idx() {
                     last_use.resize(layer.idx() + 1, 0);
                 }
@@ -3646,6 +3720,23 @@ impl RuleSet {
                     colors,
                     color_spacing,
                 } => patterning::multi_patterning(store, id, layer, colors, color_spacing, s, out),
+                Rule::AnchoredPatterning {
+                    layer,
+                    anchors,
+                    colors,
+                    color_spacing,
+                } => {
+                    let anchors: Vec<LayerId> = anchors.into_iter().flatten().collect();
+                    patterning::anchored_patterning(
+                        store,
+                        id,
+                        (layer, &anchors),
+                        colors,
+                        color_spacing,
+                        s,
+                        out,
+                    )
+                }
                 Rule::Forbidden { layer } => presence::forbidden(store, id, layer, s, out),
                 Rule::MustContain {
                     outer,
@@ -3838,7 +3929,7 @@ impl RuleSet {
                         .all(|&layer| declared.contains(&Some(layer))),
                 "rule {id:?} reports only on a layer it reads, {declared:?}"
             );
-            for layer in rule.layers().into_iter().flatten() {
+            for layer in rule.layers().into_iter().chain(rule.anchors()).flatten() {
                 if last_use[layer.idx()] == at {
                     s.validated.forget(layer);
                 }
@@ -3848,6 +3939,14 @@ impl RuleSet {
 }
 
 impl Rule {
+    /// The anchor layers of [`Rule::AnchoredPatterning`]; none for any other.
+    fn anchors(&self) -> [Option<LayerId>; 4] {
+        match *self {
+            Rule::AnchoredPatterning { anchors, .. } => anchors,
+            _ => [None; 4],
+        }
+    }
+
     /// Whether the rule's values are ones its kind can hold, as each variant
     /// states: every length, area and fraction positive (a fraction also
     /// finite), every required count at least 1, an angle rule allowing some
@@ -4237,6 +4336,7 @@ impl Rule {
             | Rule::CutSpacing { layer, .. }
             | Rule::CutClassSpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. }
+            | Rule::AnchoredPatterning { layer, .. }
             | Rule::Forbidden { layer }
             | Rule::SpacingTable { layer, .. }
             | Rule::AttachedWideSpacing { layer, .. }

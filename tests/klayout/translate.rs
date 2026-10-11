@@ -1282,6 +1282,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
+            Rule::AnchoredPatterning { .. } => (
+                "anchored_patterning",
+                Verdict::None("KLayout has no mask colouring"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::Forbidden { layer } => {
                 layers.reads(layer, &mut reads);
                 let what = if deck.layers.is_edges(layer) {

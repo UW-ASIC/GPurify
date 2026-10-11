@@ -341,14 +341,23 @@ pub fn overlapping_into(
     keep: bool,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
-    let mut common = ValidatedLayer::default();
-    crate::boolean::intersection_into(a, b, &mut common)?;
-    let flags: Vec<bool> = free_of(a, &common)
+    let flags: Vec<bool> = overlapping_flags(a, b)?
         .into_iter()
-        .map(|free| free != keep)
+        .map(|hit| hit == keep)
         .collect();
     a.select_into(&flags, out);
     Ok(())
+}
+
+/// Per polygon of `a`, in order: whether it shares area with `b`, as
+/// [`overlapping_into`] selects. Touching is not sharing.
+pub fn overlapping_flags(
+    a: &ValidatedLayer,
+    b: &ValidatedLayer,
+) -> Result<Vec<bool>, BooleanError> {
+    let mut common = ValidatedLayer::default();
+    crate::boolean::intersection_into(a, b, &mut common)?;
+    Ok(free_of(a, &common).into_iter().map(|free| !free).collect())
 }
 
 /// `KLayout` `covering` (`keep`) / `not_covering` (`!keep`): polygons of `a`

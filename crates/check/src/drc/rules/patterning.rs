@@ -6,10 +6,13 @@
 //! two masks by bipartiteness (never gives up), three or more by DSATUR with
 //! backtracking under a budget. Running out of budget is `Refused`, never clean.
 
-use super::{centre, join_nested, label_pairs_into, owners_of, pair_distances_into, Verdict};
+use super::{
+    centre, gap_midpoint, join_nested, label_pairs_into, owners_of, pair_distances_into, Verdict,
+};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
 use gpurify_geom::boolean::union_into;
+use gpurify_geom::derive::overlapping_flags;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::view::ValidatedLayer;
 use gpurify_geom::width::narrowest_facing;
@@ -330,28 +333,21 @@ impl SatQueue {
     }
 }
 
-/// Colourability of one layer's merged figures. One violation (on the node
-/// `Infeasible` names, measured `colors + 1`) per uncolourable layer.
-/// `examined` counts shapes, also when `Refused`; an empty layer is skipped.
-#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
-pub(crate) fn multi_patterning(
+/// One layer's conflict graph: its figures (touching rows merged, a figure
+/// named by its lowest row, node `row - first_row`) into `s.labels`, an edge
+/// per pair of figures closer than `spacing` and a loop per figure whose own
+/// notch is narrower into `s.edges`, and the merged figures into
+/// `s.layer_out`. Returns each merged figure's node, in `s.layer_out` order;
+/// `None` when the layer fails validation or will not merge.
+fn conflict_graph(
     store: &GeometryStore,
-    rule: StrId,
     layer: LayerId,
-    colors: u8,
     spacing: Dbu,
     s: &mut Scratch,
-    out: &mut Violations,
-) -> Verdict {
+) -> Option<Vec<u32>> {
     let shapes = store.polys_on_layer(layer);
-    let examined = u64::from(shapes.end - shapes.start);
-    if examined == 0 {
-        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
-    }
-    if s.validated.get(store, layer).is_none() {
-        return (Outcome::Refused, examined);
-    }
     let (first_row, node_count) = (shapes.start, shapes.end - shapes.start);
+    s.validated.get(store, layer)?;
     SpatialIndex::build_into(store, layer, &mut s.index_a);
     candidate_pairs_into(store, &s.index_a, spacing, &mut s.pairs);
     pair_distances_into(store, &s.pairs, spacing, &mut s.dists);
@@ -382,21 +378,43 @@ pub(crate) fn multi_patterning(
     // A figure whose own notch is narrower than `spacing` holds two parts
     // closer than one mask allows (Calibre's self-conflict, "an odd cycle
     // of one"): a loop on its node, which no palette colours.
-    let Some(drawn) = s.validated.get(store, layer) else {
-        return (Outcome::Refused, examined);
-    };
-    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return (Outcome::Refused, examined);
-    }
+    let drawn = s.validated.get(store, layer)?;
+    union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).ok()?;
     s.rects_a.build(store, layer, drawn);
+    let mut figure_node = Vec::with_capacity(s.layer_out.len());
     for (idx, owner) in (0..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        let node = s.labels[(owner.0 - first_row) as usize].0;
+        figure_node.push(node);
         let notch = narrowest_facing(s.layer_out.get(idx), false, &mut s.facing);
         if notch.is_some_and(|(gap, _)| gap < spacing) {
-            let node = s.labels[(owner.0 - first_row) as usize].0;
             s.edges.push((node, node));
         }
     }
+    Some(figure_node)
+}
 
+/// Colourability of one layer's merged figures. One violation (on the node
+/// `Infeasible` names, measured `colors + 1`) per uncolourable layer.
+/// `examined` counts shapes, also when `Refused`; an empty layer is skipped.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn multi_patterning(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    colors: u8,
+    spacing: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let shapes = store.polys_on_layer(layer);
+    let examined = u64::from(shapes.end - shapes.start);
+    if examined == 0 {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    if conflict_graph(store, layer, spacing, s).is_none() {
+        return (Outcome::Refused, examined);
+    }
+    let (first_row, node_count) = (shapes.start, shapes.end - shapes.start);
     let outcome = match color_into(node_count, &s.edges, colors, &mut s.bytes) {
         Coloring::Complete => Outcome::Ran,
         Coloring::Exhausted => Outcome::Refused,
@@ -415,4 +433,234 @@ pub(crate) fn multi_patterning(
         }
     };
     (outcome, examined)
+}
+
+/// Anchor conflicts of one layer: per component of its conflict graph that
+/// `colors` masks can split, but not with every anchored figure on its
+/// anchor's mask, one violation. Figure `f` is anchored to mask `i + 1` when
+/// it shares area with a shape of `anchors[i]`. Two masks name the pair whose
+/// parity contradicts their anchors (Calibre's anchor path), or a figure on
+/// two masks' anchors (anchor self-conflict); more masks decide by colouring
+/// the component with one node per mask joined as a clique, each anchored
+/// figure joined to every mask node but its own, and name the lowest anchored
+/// figure. A component no colouring splits is `multi_patterning`'s, not
+/// reported here. `examined` counts the layer's shapes.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn anchored_patterning(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, anchors): (LayerId, &[LayerId]),
+    colors: u8,
+    spacing: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let shapes = store.polys_on_layer(layer);
+    let examined = u64::from(shapes.end - shapes.start);
+    if examined == 0 {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    let Some(figure_node) = conflict_graph(store, layer, spacing, s) else {
+        return (Outcome::Refused, examined);
+    };
+    let (first_row, n) = (shapes.start, (shapes.end - shapes.start) as usize);
+
+    // Anchor bits per node, bit `i` for `anchors[i]`.
+    let mut anchor = vec![0u8; n];
+    for (bit, &marker) in anchors.iter().enumerate() {
+        let Some(drawn) = s.validated.get(store, marker) else {
+            return (Outcome::Refused, examined);
+        };
+        let mut merged = ValidatedLayer::default();
+        let Ok(hit) = union_into(drawn, &ValidatedLayer::default(), &mut merged)
+            .and_then(|()| overlapping_flags(&s.layer_out, &merged))
+        else {
+            return (Outcome::Refused, examined);
+        };
+        for (&node, _) in figure_node.iter().zip(hit).filter(|(_, hit)| *hit) {
+            anchor[node as usize] |= 1 << bit;
+        }
+    }
+
+    // Components by union-find over the conflicts, each listed in node order.
+    let mut parent: Vec<u32> = (0..u32::try_from(n).expect("a layer's rows fit a u32")).collect();
+    for &(a, b) in &s.edges {
+        let (ra, rb) = (root_of(&mut parent, a), root_of(&mut parent, b));
+        parent[ra.max(rb) as usize] = ra.min(rb);
+    }
+    let mut members: Vec<(u32, u32)> = (0..u32::try_from(n).expect("fits"))
+        .map(|node| (root_of(&mut parent, node), node))
+        .collect();
+    members.sort_unstable();
+    let mut component_edges: Vec<Vec<(u32, u32)>> = vec![Vec::new(); n];
+    for &(a, b) in &s.edges {
+        component_edges[root_of(&mut parent, a) as usize].push((a, b));
+    }
+
+    let k = u32::from(colors);
+    let mut outcome = Outcome::Ran;
+    let mut local = vec![u32::MAX; n];
+    let (mut edges, mut held) = (Vec::new(), Vec::new());
+    for group in members.chunk_by(|x, y| x.0 == y.0) {
+        if group.iter().all(|&(_, node)| anchor[node as usize] == 0) {
+            continue;
+        }
+        for (i, &(_, node)) in (0..).zip(group) {
+            local[node as usize] = i;
+        }
+        edges.clear();
+        edges.extend(
+            component_edges[group[0].0 as usize]
+                .iter()
+                .map(|&(a, b)| (local[a as usize], local[b as usize])),
+        );
+        held.clear();
+        held.extend(group.iter().map(|&(_, node)| anchor[node as usize]));
+        let m = u32::try_from(group.len()).expect("a layer's rows fit a u32");
+        let (a, b) = match anchor_conflict(m, &edges, &held, colors, &mut s.bytes) {
+            Anchoring::Honoured | Anchoring::Unsplittable => continue,
+            Anchoring::Exhausted => {
+                outcome = Outcome::Refused;
+                continue;
+            }
+            Anchoring::Conflict { node, other } => (
+                group[node as usize].1,
+                other.map(|other| group[other as usize].1),
+            ),
+        };
+        let (pa, pb) = (PolyId(first_row + a), b.map(|b| PolyId(first_row + b)));
+        let at = match pb {
+            Some(pb) => gap_midpoint(store.poly_bbox(pa), store.poly_bbox(pb)),
+            None => centre(store.poly_bbox(pa)),
+        };
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at,
+            measured: Measurement::Count(k + 1),
+            limit: Measurement::Count(k),
+            shapes: (pa, pb),
+        });
+    }
+    (outcome, examined)
+}
+
+/// How honouring pre-coloured nodes ended, on one connected conflict graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchoring {
+    /// A colouring gives every anchored node its anchor's colour.
+    Honoured,
+    /// No colouring exists, anchors aside ([`color_into`] proves it).
+    Unsplittable,
+    /// Colourings exist, and none honours the anchors. `node` is anchored.
+    /// With two colours `other` is the first anchored node whose anchor the
+    /// colouring through `node`'s contradicts (an anchor path), and `None`
+    /// means `node` holds two anchors (an anchor self-conflict); with more,
+    /// `node` is the lowest anchored node and `other` is `None`.
+    Conflict {
+        /// An anchored node of the conflict.
+        node: u32,
+        /// The other end of an anchor path.
+        other: Option<u32>,
+    },
+    /// The colouring search ran out of budget (three or more colours).
+    Exhausted,
+}
+
+/// Whether a connected conflict graph over `0 .. node_count` can be coloured
+/// with `colors` colours so that each anchored node takes its anchor's colour:
+/// node `i` is anchored to colour `c` when bit `c` of `anchors[i]` is set
+/// (`0` is unanchored, two bits can never both be honoured). `out` is
+/// scratch.
+///
+/// Exact. Two colours: a connected graph's two-colouring is unique up to
+/// swapping the colours, so two anchored nodes take one colour exactly when
+/// they take one in [`color_into`]'s. More: colour the graph plus one node
+/// per colour, the colour nodes a clique, each anchored node joined to every
+/// colour node but its anchor's (to all of them when it holds two), with the
+/// same search and budget as [`color_into`].
+///
+/// # Panics
+///
+/// When `anchors` is shorter than `node_count`, or a conflict names a node at
+/// or above it.
+pub fn anchor_conflict(
+    node_count: u32,
+    conflicts: &[(u32, u32)],
+    anchors: &[u8],
+    colors: u8,
+    out: &mut Vec<u8>,
+) -> Anchoring {
+    match color_into(node_count, conflicts, colors, out) {
+        Coloring::Complete => {}
+        Coloring::Infeasible { .. } => return Anchoring::Unsplittable,
+        Coloring::Exhausted => return Anchoring::Exhausted,
+    }
+    let bits = |node: u32| anchors[node as usize].count_ones();
+    let mut anchored = (0..node_count).filter(|&node| anchors[node as usize] != 0);
+    let Some(u) = anchored.next() else {
+        return Anchoring::Honoured;
+    };
+    if bits(u) > 1 {
+        return Anchoring::Conflict {
+            node: u,
+            other: None,
+        };
+    }
+    if colors == 2 {
+        let colour = |node: u32| out[node as usize];
+        return anchored
+            .find_map(|v| {
+                if bits(v) > 1 {
+                    Some(Anchoring::Conflict {
+                        node: v,
+                        other: None,
+                    })
+                } else {
+                    let same_anchor = anchors[v as usize] == anchors[u as usize];
+                    (same_anchor != (colour(v) == colour(u))).then_some(Anchoring::Conflict {
+                        node: u,
+                        other: Some(v),
+                    })
+                }
+            })
+            .unwrap_or(Anchoring::Honoured);
+    }
+    let k = u32::from(colors);
+    let mut edges = conflicts.to_vec();
+    for a in 0..k {
+        for b in a + 1..k {
+            edges.push((node_count + a, node_count + b));
+        }
+    }
+    for node in 0..node_count {
+        let held = anchors[node as usize];
+        if held == 0 {
+            continue;
+        }
+        let own = if bits(node) > 1 {
+            u32::MAX
+        } else {
+            held.trailing_zeros()
+        };
+        edges.extend((0..k).filter(|&c| c != own).map(|c| (node, node_count + c)));
+    }
+    match color_into(node_count + k, &edges, colors, out) {
+        Coloring::Complete => Anchoring::Honoured,
+        Coloring::Infeasible { .. } => Anchoring::Conflict {
+            node: u,
+            other: None,
+        },
+        Coloring::Exhausted => Anchoring::Exhausted,
+    }
+}
+
+/// The root of `x`'s set in a union-find forest, halving the path on the way.
+fn root_of(parent: &mut [u32], mut x: u32) -> u32 {
+    while parent[x as usize] != x {
+        parent[x as usize] = parent[parent[x as usize] as usize];
+        x = parent[x as usize];
+    }
+    x
 }
