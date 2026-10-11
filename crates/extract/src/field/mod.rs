@@ -273,6 +273,19 @@ fn columns_meshed_into(
 
     let operator = matvec::CpuMatVec::build(&mesh);
     let iterations = columns_into(&operator, &mesh, options, columns, matrix)?;
+    // The field's part, before the junctions: `columns_into` refuses a
+    // non-finite charge, and a lone conductor at one volt over grounded
+    // neighbours holds a non-negative charge (a Maxwell diagonal).
+    debug_assert!(
+        matrix.value.iter().all(|c| c.is_finite()),
+        "a solved capacitance matrix is finite"
+    );
+    debug_assert!(
+        columns.iter().enumerate().all(|(slot, column)| {
+            column.len() != 1 || matrix.value[column[0] * width + slot] >= 0.0
+        }),
+        "a lone driven conductor's field self-capacitance is non-negative"
+    );
     // A junction is a capacitor from its conductor to the substrate, in
     // parallel with the field: at one volt it adds its own charge.
     for (slot, column) in columns.iter().enumerate() {
@@ -361,6 +374,13 @@ fn columns_into(
         charge.fill(0.0);
         let apply = |x: &[f64], y: &mut [f64]| operator.apply(x, y);
         let converged = solve::refine(apply, &potential, options, &mut charge, &mut workspace)?;
+        // `Converged` means the tolerance was reached, never a spent budget.
+        debug_assert!(
+            converged.residual <= options.tolerance,
+            "a converged column's residual {} is within the tolerance {}",
+            converged.residual,
+            options.tolerance
+        );
         iterations = iterations.saturating_add(converged.iterations);
 
         for row in 0..n {

@@ -188,6 +188,15 @@ pub fn extract_into(
     );
     vias_into(&rects, &owner, connectivity, stack, &node_of, out)?;
     out.sort_canonical();
+    out.debug_check();
+    // A zero element is left out and every resistance is a positive sheet
+    // or via value over a positive count.
+    debug_assert!(
+        out.value
+            .iter()
+            .all(|value| !matches!(*value, Parasitic::Resistance(r) if !(r.raw() > 0.0))),
+        "every closed-form resistance is positive"
+    );
     Ok(())
 }
 
