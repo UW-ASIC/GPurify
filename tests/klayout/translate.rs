@@ -1098,7 +1098,7 @@ fn approx(
 /// conductor joins itself, each via its two layers, each global layer one net.
 /// Labels only name nets, so they join nothing. Each cut layer with a cut on
 /// two shapes of one of its layers, or two cuts that touch, is marked
-/// `bridge`: `KLayout`'s cut conducts there and `GPurify`'s does not (N-f1-1).
+/// `bridge`: `KLayout`'s cut conducts there and `GPurify`'s does not (F88).
 fn connect(deck: &Deck) -> String {
     let c = &deck.connectivity;
     let mut out = String::from("clear_connections\n");

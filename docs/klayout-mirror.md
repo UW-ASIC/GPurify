@@ -240,7 +240,7 @@ explains (a3, kind 30).
 | 27 | forbidden | `forbidden(L)` | ROW / EDGE | EXACT | exact | 3916 |
 | 28 | must_contain | `contains(o, i) >= n` | FIG by marker (outer) | EXACT | exact | 3236 |
 | 29 | must_be_inside | `inside(i, o)` | FIG by marker (inner) | EXACT | exact | 3106 / 1 (F53) |
-| 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT with `touch_within_layer`, else NONE | exact | 1141 / 10 (N-f1-1) |
+| 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT with `touch_within_layer`, else NONE | exact | 1141 / 10 (F88) |
 | 31 | spacing_table | `space_table(L; …)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 1217 |
 | 32 | attached_wide_spacing | `wide_space(L; width, attached)` | PAIR | APPROX | KLayout ⊆ GPurify | 986 |
 | 33 | edge_min_length | `length(E) >= l` | EDGE | EXACT | exact | 2162 |
@@ -748,11 +748,11 @@ emit(id, L.nets.isolated(LIM, euclidian, transparent, props_eq))   # nets: same 
 
 - `props_eq` and `props_ne` work on `isolated` (v t5 T19). `isolated`, not `space`, which would
   add notches inside one polygon.
-- **Known difference, N-f1-1.** A KLayout cut conducts: one cut on two shapes of one layer, or two
+- **Known difference, F88.** A KLayout cut conducts: one cut on two shapes of one layer, or two
   touching cuts, joins what they touch (v t18 Z8). A GPurify cut joins one shape on each of its
   two layers and belongs to no net (`topology/net.rs` `extract_nets_into`), so those shapes stay
   on different nets. The script marks a cut layer where this occurs (`{bridge: layer}`), and the
-  differential attributes a `net_spacing` disagreement there to N-f1-1 while it is open (x: 5
+  differential attributes a `net_spacing` disagreement there to F88 while it is open (x: 5
   random layouts).
 
 ### 31. spacing_table — APPROX (exact on R, else KLayout ⊆ GPurify)
@@ -875,7 +875,7 @@ Each operation runs on merged operands at the default coherence (a3).
 |---|---|---|
 | `connect conductors [c…]` with `connect touch_within_layer` | `connect(c, c)` for each conductor ([N] "connect") | (v t9 N1: touching shapes on one layer join a net.) |
 | `connect conductors` without `touch_within_layer` | Cannot be mirrored | KLayout always joins touching shapes on a connected layer ([N]). Such decks are **NONE**. |
-| `connect via V [a, b]` | `connect(a, V); connect(V, b)` | GPurify: the cut is no net member and joins one shape of a to one of b where it lands on both. KLayout: the cut belongs to the net, so a cut on two shapes of one layer, or two touching cuts, joins them (v t18 Z8; N-f1-1). Marked `{bridge}` per layout. |
+| `connect via V [a, b]` | `connect(a, V); connect(V, b)` | GPurify: the cut is no net member and joins one shape of a to one of b where it lands on both. KLayout: the cut belongs to the net, so a cut on two shapes of one layer, or two touching cuts, joins them (v t18 Z8; F88). Marked `{bridge}` per layout. |
 | `connect global G` | `connect_global(G, "G")` ([N] "connect_global") | |
 | `connect label T names C` | nothing | Labels only name nets; neither tool joins nets by label without `connect_implicit`. |
 | Net identity | `L.nets` → property, then `props_eq` / `props_ne` | (v t5 T19) |
@@ -991,7 +991,7 @@ superseded (`header.drc`, `mirror_t.drc`, `p.drc`, `lib.rb`, `mk*.rb`).
 **N7. `corner_to_corner` could miss an L-shaped row** whose bounding box overlaps its neighbour on
 one axis. Fixed in B14 (convex corners of the merged layer).
 
-**N-f1-1. A via cut joins only one shape on each of its two layers.** `extract_nets_into` treats
+**F88. A via cut joins only one shape on each of its two layers.** `extract_nets_into` treats
 a cut as joining one shape of its first layer to one of its second where it lands on both, and as
 no net member. A cut that lands on two met1 shapes and nothing above, or two touching cuts that
 each land on one, leaves those shapes on different nets, though the cut conducts (KLayout and

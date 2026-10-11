@@ -4,9 +4,7 @@
 //!
 //! The translation and each kind's verdict (exact, approximate with its
 //! bracket, or not mirrored) are `docs/klayout-mirror.md`'s. A disagreement
-//! fails the test unless a layer the rule reads has a corner contact while
-//! the corner-model finding (F53, ledger B20) is open: `KLayout`'s merge already
-//! joins material at a corner, as B20 decided, and `GPurify`'s does not yet.
+//! fails the test unless an open finding in [`compare::KNOWN`] explains it.
 //!
 //! `KLayout` runs only in the oracle shell, so the comparisons are the release
 //! tier: `nix develop .#oracles --command cargo test --test klayout -- --ignored`.

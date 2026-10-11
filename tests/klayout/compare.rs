@@ -135,16 +135,10 @@ impl Klayout {
 }
 
 /// Open `GPurify` findings that explain a disagreement, and where:
-/// - F53 (ledger B20), on a layout with a corner contact on a layer the rule
-///   reads: `KLayout` joins material at a corner, as B20 decided, and
-///   `GPurify`'s booleans do not yet;
-/// - N-f1-1, for a net rule on a layout where a cut bridges two shapes of one
+/// - F88, for a net rule on a layout where a cut bridges two shapes of one
 ///   layer or two cuts touch: `KLayout`'s cut conducts, `GPurify`'s joins only
 ///   one shape on each of its two layers.
-pub const KNOWN: &[(&str, &str)] = &[
-    ("F53", "corner contact"),
-    ("N-f1-1", "cut bridging shapes of one layer"),
-];
+pub const KNOWN: &[(&str, &str)] = &[("F88", "cut bridging shapes of one layer")];
 
 /// One `GPurify` finding, in its database units.
 #[derive(Debug, Clone)]
@@ -612,8 +606,10 @@ fn within(value: Value, sub: &Side, sup: &Side, values: bool) -> Result<(), Stri
     Ok(())
 }
 
-/// Compares one rule. `f53_open` says whether the corner model is still the
-/// open finding that explains a disagreement on a corner contact.
+/// Compares one rule. `open` lists the findings of [`KNOWN`] the plan does not
+/// mark fixed. A disagreement on a layout with a corner contact on a layer the
+/// rule reads says so: the corner model (F53, fixed in B20) is the first
+/// suspect there.
 pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding], open: &[&str]) -> Outcome {
     let ctx = Ctx { m, kl };
     let mut g = Side::new();
@@ -683,14 +679,12 @@ pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding], open: &[&str]) ->
     }
     match result {
         Ok(()) => Outcome::Agree(found),
-        Err(why) if open.contains(&"F53") && m.reads.iter().any(|l| kl.corner.contains(l)) => {
-            Outcome::Known("F53", why)
+        Err(why) if open.contains(&"F88") && m.kind == "net_spacing" && !kl.bridge.is_empty() => {
+            Outcome::Known("F88", why)
         }
-        Err(why)
-            if open.contains(&"N-f1-1") && m.kind == "net_spacing" && !kl.bridge.is_empty() =>
-        {
-            Outcome::Known("N-f1-1", why)
-        }
-        Err(why) => Outcome::Disagree(why),
+        Err(why) => match m.reads.iter().find(|l| kl.corner.contains(*l)) {
+            Some(layer) => Outcome::Disagree(format!("{why} (corner contact on {layer})")),
+            None => Outcome::Disagree(why),
+        },
     }
 }
