@@ -1428,7 +1428,7 @@ fn sky130_ar1() -> Vec<Fixture> {
 layer adiode = diff not ptap
 rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: adiode, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: ptap)
 rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
-    let ratio_of = (2 * (4_286_000 + 140) * 350) as f64 / 1e6;
+    let ratio_of = (2 * (4_286_000_i64 + 140) * 350) as f64 / 1e6;
     let mut out = Vec::new();
     for tap in [false, true] {
         let mut layout = line(Some(1.0), 140, 4_286_000);
