@@ -434,6 +434,7 @@ lvs tolerance "nfet" w relative 1%
 lvs tolerance "nfet" l relative 0.5% absolute 5nm
 lvs tolerance "rpoly" r absolute 10ohm
 lvs ignore_parameter "nfet" as
+lvs asymmetric "nfet_ldmos"
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -458,6 +459,14 @@ comparison for one model, as KLayout's `ignore_parameter` and Netgen's
 merged, so it is never compared and never stops a merge, whatever the
 schematic cards state. `m` counts devices and cannot be ignored, and an
 ignored parameter cannot also have a tolerance.
+
+**`lvs asymmetric "model"`** declares a transistor whose source and drain
+are not interchangeable, such as an LDMOS (KLayout's DMOS devices): its
+source only ever pairs with a schematic source and its drain with a drain,
+where any other transistor's two ends trade places freely. Such transistors
+merge in parallel only source on source and drain on drain, and never in
+series, so a drawn stack of them does not match one long schematic device.
+The model must be a `mos` device.
 
 ## Parasitic stack
 

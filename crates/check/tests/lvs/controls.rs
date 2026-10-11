@@ -156,3 +156,68 @@ fn an_ignored_parameter_is_neither_compared_nor_merged_on() {
     assert_ne!(run(&LvsControls::default()), Verdict::Match);
     assert_eq!(run(&ignore(NCH, LENGTH)), Verdict::Match);
 }
+
+/// An `NCH` transistor on gate 0, source `source`, drain `drain`, bulk 3,
+/// beside a `PCH` gated by net 1 whose channel and bulk sit on net 3: the
+/// gate tells net 1 from net 2, so exchanging them is no relabelling.
+fn anchored_mos(source: u32, drain: u32) -> Graph {
+    let mut builder = GraphBuilder::new(4);
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 3)],
+    );
+    builder.device(
+        DeviceKind::Mos,
+        PCH,
+        &[(Gate, 1), (Source, 3), (Drain, 3), (Bulk, 3)],
+    );
+    builder.finish()
+}
+
+/// Oracle: the definition (`KLayout`'s DMOS: "source and drain are not
+/// swappable"). A transistor written with source and drain exchanged is
+/// the same circuit, and another one once its model is asymmetric; a
+/// second model's row changes nothing. Two in parallel merge into one of
+/// twice the width when aligned, and, asymmetric, not when opposed. Breaks
+/// if the control is ignored, leaks to another model, or a parallel merge
+/// still exchanges the ends.
+#[test]
+fn an_asymmetric_transistor_keeps_its_source_and_drain_apart() {
+    let asymmetric = |model| LvsControls {
+        asymmetric: vec![model],
+        ..LvsControls::default()
+    };
+    let (drawn, written) = (anchored_mos(1, 2), anchored_mos(2, 1));
+    let none = LvsControls::default();
+    assert_eq!(verdict(&drawn, &written, &none), Verdict::Match);
+    assert_ne!(verdict(&drawn, &written, &asymmetric(NCH)), Verdict::Match);
+    assert_eq!(verdict(&drawn, &drawn, &asymmetric(NCH)), Verdict::Match);
+    assert_eq!(verdict(&drawn, &written, &asymmetric(PCH)), Verdict::Match);
+
+    let options = CompareOptions {
+        params: ParamNames {
+            width: Some(WIDTH),
+            ..ParamNames::default()
+        },
+        ..CompareOptions::default()
+    };
+    let pair = |second: (u32, u32)| {
+        let mut builder = GraphBuilder::new(4);
+        for (source, drain) in [(1, 2), second] {
+            builder.device_with_params(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 3)],
+                &[(WIDTH, 1.0e-6)],
+            );
+        }
+        builder.finish()
+    };
+    let wide = parallel_mos(&[&[(WIDTH, 2.0e-6)]]);
+    let run =
+        |layout: &Graph, controls: &LvsControls| compare_with(layout, &wide, options, controls).0;
+    assert_eq!(run(&pair((2, 1)), &none), Verdict::Match);
+    assert_ne!(run(&pair((2, 1)), &asymmetric(NCH)), Verdict::Match);
+    assert_eq!(run(&pair((1, 2)), &asymmetric(NCH)), Verdict::Match);
+}

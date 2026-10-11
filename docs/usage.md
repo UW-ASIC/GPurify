@@ -93,8 +93,9 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
 (the differences are listed below):
 
 - **Parallel:** devices of one model with every terminal on the same nets
-  become one device. Source and drain are interchangeable, and so are a
-  resistor's ends. For transistors, W and `nf` are summed, and every other
+  become one device. Source and drain are interchangeable, except on a
+  model the deck declares `lvs asymmetric` (see
+  [deck.md](deck.md#lvs-controls)), and so are a resistor's ends. For transistors, W and `nf` are summed, and every other
   parameter, L included, must agree. Any other device keeps its value and
   counts: two equal capacitors in parallel are one with `m=2`, which matches
   a card with `m=2` but not one card of twice the capacitance. A transistor
@@ -105,7 +106,7 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
   finger calls its source.
 - **Series:** transistors stacked through a node nothing else touches, with
   their gates strapped, become one device whose L is the sum, if every other
-  parameter agrees. Both must state L: with no length to add, two transistors
+  parameter agrees. An asymmetric transistor never merges in series. Both must state L: with no length to add, two transistors
   in series stay two, so a stack does not match one unsized transistor.
   Transistors stating a diffusion do not merge in series: the diffusion
   between them would vanish, and no rule says what becomes of it.

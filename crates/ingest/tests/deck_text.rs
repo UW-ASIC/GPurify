@@ -575,6 +575,34 @@ fn lvs_ignored_parameters_lower_and_exclude_a_tolerance() {
     }
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs asymmetric`
+/// lowers to the model; a model declared twice, one that is no `mos`
+/// device, and one no device declares are refused.
+#[test]
+fn lvs_asymmetric_names_a_declared_transistor() {
+    let devices = "device mos poly model \"ldmos\" terminals [poly, diff, diff]
+device resistor met1 model \"rpoly\" terminals [met1, met1]
+";
+    let (deck, strings) = ok(&format!("{devices}lvs asymmetric \"ldmos\"\n"));
+    assert_eq!(
+        deck.lvs.asymmetric,
+        [strings.get("ldmos").expect("interned")]
+    );
+    one_error(
+        &format!("{devices}lvs asymmetric \"ldmos\"\nlvs asymmetric \"ldmos\"\n"),
+        "already asymmetric",
+    );
+    for body in ["lvs asymmetric \"rpoly\"\n", "lvs asymmetric \"nfet\"\n"] {
+        assert!(
+            matches!(
+                parse(&format!("{devices}{body}")),
+                Err(DeckError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.

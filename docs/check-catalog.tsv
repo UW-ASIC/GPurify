@@ -123,7 +123,7 @@ LVS-018	lvs	compare	Symmetric / ambiguous matching	KL:match_ambiguous_nets; NG:s
 LVS-019	lvs	compare	Verdict classes	KL:NetlistCrossReference status; NG	lvs:verdict	implemented	SY; TX:NG	Match / Mismatch / Inconclusive{RoundLimit, AmbiguousTop}
 LVS-020	lvs	compare	Undeclared parameter	-	lvs.undeclared_param	implemented	SY; MR	GPurify-specific Per device (F68)
 LVS-030	lvs	equiv	Swappable pins (S/D, resistor ends, user-declared)	KL:equivalent_pins; NG:permute	lvs:roles	partial	SY; TX:NG	MOS source/drain and resistor ends are interchangeable; diode anode/cathode and capacitor plates are not, as in Netgen. User-declared equivalent pins are missing
-LVS-031	lvs	equiv	Asymmetric devices (S/D not swappable)	KL:dmos3,dmos4	-	missing	SY	
+LVS-031	lvs	equiv	Asymmetric devices (S/D not swappable)	KL:dmos3,dmos4	deck:lvs,lvs:roles	implemented	SY; TX:NG	`lvs asymmetric "model"` (a mos model): its source pairs only with a source and its drain with a drain, in refinement, the terminal comparison and a parallel merge, and a diffusion is compared at the end it is named for (KLayout DMOS3/DMOS4; a Netgen setup with no permute of the model). Such transistors never merge in series, so a stack of them does not match one long card: a false mismatch, never a false match
 LVS-032	lvs	equiv	Net-name seeding (same_nets)	KL:same_nets,consider_net_names	-	missing	SY	Names neither seed refinement nor are compared (test net_names_do_not_have_to_agree)
 LVS-033	lvs	equiv	Black boxes	KL:blank_circuit; NG:model blackbox	-	missing	SY	
 LVS-034	lvs	equiv	Ignore device class (fill, decap, tap cells), parasitic filters	KL:same_device_classes nil,max_res,min_caps; NG:ignore class; MAG:cthresh	-	missing	SY	sky130 netgen setup ignores fill/tap/fakediode classes

@@ -5,7 +5,7 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::controls::{bound, drop_ignored_params};
+use crate::lvs::controls::{bound, drop_ignored_params, fix_channels, unfix_roles};
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
@@ -148,6 +148,14 @@ pub fn compare_logged(
 ///   from every device of the model on both sides before reduction, so it
 ///   is neither compared nor read by a merge, as `KLayout`'s
 ///   `ignore_parameter` and Netgen's `property ... remove` leave it out.
+/// - **`lvs asymmetric`** (catalog LVS-031): a transistor of the model has
+///   a source and a drain that do not trade places, `KLayout`'s DMOS: its
+///   source pairs only with a source and its drain with a drain, in
+///   refinement, in the terminal comparison and in a parallel merge, and a
+///   diffusion is compared at the end it is named for. Such transistors
+///   never merge in series (`KLayout` merges no transistor in series, and
+///   Netgen 1.5.323 none at all), so a stack of them does not match one
+///   long card: a false mismatch, never a false match.
 ///
 /// # Panics
 ///
@@ -165,6 +173,8 @@ pub fn compare_with(
     keep_declared_params(reference, &mut measured);
     drop_ignored_params(&mut measured, controls);
     drop_ignored_params(&mut declared, controls);
+    fix_channels(&mut measured, controls);
+    fix_channels(&mut declared, controls);
     let (mut layout, layout_merges) = reduce_with(&measured, options.params);
     let (mut reference, reference_merges) = reduce_with(&declared, options.params);
     if let Some(multiplier) = options.params.multiplier {
@@ -186,10 +196,11 @@ pub fn compare_with(
     ) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
-    (
-        interpret((&layout, &reference), &partition, (options, controls)),
-        merges,
-    )
+    let mut verdict = interpret((&layout, &reference), &partition, (options, controls));
+    if let Verdict::Mismatch(found) = &mut verdict {
+        unfix_roles(found, &reference, controls);
+    }
+    (verdict, merges)
 }
 
 /// Writes the count every card has, `m = 1`, on each device that states
