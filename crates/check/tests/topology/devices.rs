@@ -871,6 +871,61 @@ fn a_resistor_body_measures_its_length_between_its_ends() {
     }
 }
 
+/// Oracle: construct-from-answer, testing-plan F85. A diode marker drawn as a
+/// ring, 0..2000 square with a 200 wall, a pad on each side wall. The ring's
+/// area is 2000² − 1600² = 1 440 000 and its edge both rings, 4 · 2000 +
+/// 4 · 1600 = 14 400. The hole, a row of its own in the store, is part of
+/// the ring and no second marker: it used to be measured as the outer square
+/// alone (4 000 000 and 8000) and the hole refused as a marker binding
+/// nothing.
+#[test]
+fn a_marker_with_a_hole_is_one_device_measured_without_the_hole() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_geom::{Dbu, DbuArea};
+    use gpurify_testgen::shapes::hole;
+    const MARK: LayerId = LayerId(0);
+    const ANODE: LayerId = LayerId(1);
+    const CATHODE: LayerId = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(MARK, 0, 0, 2000, 2000);
+    layout.shape(MARK, &hole(200, 200, 1800, 1800));
+    layout.rect(ANODE, 0, 900, 200, 1100);
+    layout.rect(CATHODE, 1800, 900, 2000, 1100);
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![ANODE, CATHODE],
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Diode],
+        marker: vec![MARK],
+        terminal_start: vec![0, 2],
+        terminal: vec![ANODE, CATHODE],
+        model: vec![strings.intern("dpn")],
+        value: Vec::new(),
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    assert_eq!(devices.refused, [], "the hole was taken for a marker");
+    assert_eq!(devices.len(), 1);
+    assert_eq!(
+        devices.params_of(DeviceId(0)),
+        [
+            (
+                DeviceParam::Area,
+                DeviceMeasure::Area(DbuArea::new(1_440_000))
+            ),
+            (
+                DeviceParam::Perimeter,
+                DeviceMeasure::Length(Dbu::new_unchecked(14_400))
+            ),
+        ]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The conduction guard: a MOS channel marker must not sit on live conductor
 // area, or net extraction fuses source and drain into one net in silence.

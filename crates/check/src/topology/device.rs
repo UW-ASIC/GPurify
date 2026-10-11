@@ -6,7 +6,7 @@
 
 use crate::drc::rules::{owners_of, LayerRects};
 use crate::topology::csr_run;
-use crate::topology::net::{polys_intersect, retain_intersecting_into, NetId, NetTable};
+use crate::topology::net::{polys_intersect, retain_intersecting_into, Holes, NetId, NetTable};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{area2, isqrt};
@@ -120,10 +120,10 @@ pub enum DeviceParam {
     /// axis on which the first source or drain polygon (a resistor's first
     /// end) sits off the marker's centre (`x` on a diagonal tie).
     Length,
-    /// `area`: the marker polygon's area, its holes not subtracted.
+    /// `area`: the marker polygon's area, its holes taken out.
     Area,
-    /// `perim`: the length of the marker polygon's outer ring, a diagonal
-    /// edge rounded down to the database unit.
+    /// `perim`: the length of every ring of the marker polygon, its holes'
+    /// included, a diagonal edge rounded down to the database unit.
     Perimeter,
     /// `nf`: 1 per MOS, since one marker polygon is one channel. A parallel
     /// merge sums it, so fingers drawn apart match a card's `nf`.
@@ -223,8 +223,9 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 /// Positions naming one layer take that layer's polygons under the marker in
 /// ascending [`PolyId`] order.
 ///
-/// Each polygon on a recogniser's marker layer is one candidate device. A
-/// terminal polygon is under the marker when the two share at least one
+/// Each polygon on a recogniser's marker layer is one candidate device; a
+/// hole, which the store keeps as a row of its own, is part of its polygon
+/// and never a marker (testing-plan F85). A terminal polygon is under the marker when the two share at least one
 /// point, touching included. Polygons under it that touch or overlap each
 /// other are one shape: a terminal drawn twice is still one terminal. Each
 /// position needs a shape of its own, so too few shapes refuse the marker: a
@@ -419,6 +420,10 @@ pub fn recognise_into(
         matched.reserve(marker_count);
         for offset in 0..marker_count {
             let slots = &bind[offset * width..offset * width + width];
+            // A hole binds nothing, being no material, and is its outer's.
+            if nets.holes.is_hole(PolyId(markers.start + narrow(offset))) {
+                continue;
+            }
             if slots.contains(&NetId::NONE) {
                 let filled = slots.iter().filter(|&&net| net != NetId::NONE).count();
                 out.refused.push((
@@ -499,17 +504,11 @@ pub fn recognise_into(
                 .push((DeviceParam::Fingers, DeviceMeasure::Count(1)));
         }
 
-        // `abs`: a store polygon carries no winding guarantee.
-        let (marker_x, marker_y) = store.poly_verts(marker);
-        let doubled = area2(marker_x, marker_y).raw().abs();
-        out.param.push((
-            DeviceParam::Area,
-            DeviceMeasure::Area(DbuArea::new(doubled / 2)),
-        ));
-        out.param.push((
-            DeviceParam::Perimeter,
-            DeviceMeasure::Length(ring_length(marker_x, marker_y)),
-        ));
+        let (area, perimeter) = area_and_perimeter(store, &nets.holes, marker);
+        out.param
+            .push((DeviceParam::Area, DeviceMeasure::Area(area)));
+        out.param
+            .push((DeviceParam::Perimeter, DeviceMeasure::Length(perimeter)));
         out.param_start.push(narrow(out.param.len()));
         out.value
             .push(recognition.value.get(row).copied().unwrap_or_default());
@@ -531,6 +530,19 @@ pub fn recognise_into(
     // Sorted by `(net, device)`, so the device column is already in CSR order.
     out.net_device
         .extend(attach.iter().map(|&(_, device)| device));
+}
+
+/// A polygon's area with its holes taken out, and the length of all its
+/// rings, its holes' included: every ring is an edge of the material.
+fn area_and_perimeter(store: &GeometryStore, holes: &Holes, poly: PolyId) -> (DbuArea, Dbu) {
+    let (mut doubled, mut perimeter) = (0i128, 0i64);
+    for (ring, sign) in std::iter::once((poly, 1)).chain(holes.of(poly).map(|hole| (hole, -1))) {
+        let (xs, ys) = store.poly_verts(ring);
+        // `abs`: a store polygon carries no winding guarantee.
+        doubled += sign * area2(xs, ys).raw().abs();
+        perimeter += ring_length(xs, ys).raw();
+    }
+    (DbuArea::new(doubled / 2), Dbu::new_unchecked(perimeter))
 }
 
 /// A ring's length, its closing edge included; a diagonal edge counts its

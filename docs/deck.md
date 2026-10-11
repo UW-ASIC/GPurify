@@ -391,7 +391,7 @@ compares each value a schematic card states under the card's name for it:
 |---|---|---|
 | `w`, `l` | `mos`, `resistor` | The marker's extent across and along the current, which runs toward the first source or drain (a resistor's first end). Exact for a straight rectangle; a bent resistor body reads its bounding box. |
 | `nf` | `mos` | 1: a marker is one channel, and fingers in parallel add up. |
-| `area`, `perim` | every kind | The marker's area and perimeter. |
+| `area`, `perim` | every kind | The marker's area, less any hole in it, and its perimeter, a hole's edge included. A hole is part of its marker, never a device of its own. |
 | `r` | `resistor` with `sheet` | `sheet × l / w`. |
 | `c` | `capacitor` with `area_cap` or `fringe_cap` | `area_cap × area + fringe_cap × perim`, of the terms given. |
 

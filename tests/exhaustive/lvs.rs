@@ -1682,6 +1682,45 @@ fn curated() -> Vec<Fixture> {
     fixture.reference = Some(spice(&sized(R, |d| d.value(200.0))));
     out.push(fixture);
 
+    // F85 (fixed in B27): a diode marker drawn as a ring, 0..2000 square with
+    // a 200 wall (its hole a clockwise polygon of its own), a pad on each
+    // side wall. Derived by hand: area 2000² − 1600² nm² = 1.44 µm², edge
+    // both rings, 8000 + 6400 nm = 14.4 µm. The hole is no second marker, so
+    // `lvs.terminal_net` is clean.
+    let mut ring = Layout::default()
+        .rect("diom", 0, 0, 2000, 2000)
+        .polygon(
+            "diom",
+            &[(200, 200), (200, 1800), (1800, 1800), (1800, 200)],
+        )
+        .rect("pina", 0, 900, 200, 1100)
+        .rect("cont", 50, 950, 150, 1050)
+        .rect("pinb", 1800, 900, 2000, 1100)
+        .rect("cont", 1850, 950, 1950, 1050);
+    ring = stub(stub(ring, 50, 150, 950, 0), 1850, 1950, 950, 1);
+    for (net, name) in ["n0", "n1"].into_iter().enumerate() {
+        let t = track(net);
+        ring = ring
+            .rect("met2", -1000, t, 3000, t + 200)
+            .label("met2_label", -900, t + 100, name);
+    }
+    let ring_card = Circuit::new(
+        2,
+        vec![Dev::pins(D, &[0, 1])
+            .param("area", 1.44e-12)
+            .param("perim", 1.44e-5)],
+    );
+    out.push(
+        with_text(
+            "params/D_ring_area_perim",
+            &["LVS-063", "LVS-004"],
+            ring,
+            spice(&ring_card),
+        )
+        .expect(Expect::Lvs(true))
+        .expect(Expect::clean("lvs.terminal_net")),
+    );
+
     let nf = edited(&spice(&one), "l=150n", "l=150n nf=1");
     out.push(
         with_text(
