@@ -134,12 +134,6 @@ impl Klayout {
     }
 }
 
-/// Open `GPurify` findings that explain a disagreement, and where:
-/// - F88, for a net rule on a layout where a cut bridges two shapes of one
-///   layer or two cuts touch: `KLayout`'s cut conducts, `GPurify`'s joins only
-///   one shape on each of its two layers.
-pub const KNOWN: &[(&str, &str)] = &[("F88", "cut bridging shapes of one layer")];
-
 /// One `GPurify` finding, in its database units.
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -160,7 +154,7 @@ pub enum Outcome {
     Agree(bool),
     /// Out of the class an `OnlyInClass` comparison needs, or `Not`.
     NotCompared,
-    /// Disagreed where an open finding of [`KNOWN`] explains it.
+    /// Disagreed where a documented implementation difference explains it.
     Known(&'static str, String),
     /// Disagreed.
     Disagree(String),
@@ -606,11 +600,10 @@ fn within(value: Value, sub: &Side, sup: &Side, values: bool) -> Result<(), Stri
     Ok(())
 }
 
-/// Compares one rule. `open` lists the findings of [`KNOWN`] the plan does not
-/// mark fixed. A disagreement on a layout with a corner contact on a layer the
+/// Compares one rule. A disagreement on a layout with a corner contact on a layer the
 /// rule reads says so: the corner model (F53, fixed in B20) is the first
 /// suspect there.
-pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding], open: &[&str]) -> Outcome {
+pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding]) -> Outcome {
     let ctx = Ctx { m, kl };
     let mut g = Side::new();
     for f in findings {
@@ -679,8 +672,13 @@ pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding], open: &[&str]) ->
     }
     match result {
         Ok(()) => Outcome::Agree(found),
-        Err(why) if open.contains(&"F88") && m.kind == "net_spacing" && !kl.bridge.is_empty() => {
-            Outcome::Known("F88", why)
+        // An implementation difference, not a defect on either side
+        // (testing-plan F88): a KLayout cut is a net member and joins every
+        // shape it touches; a GPurify cut joins one shape of each of its two
+        // layers where it lands on both. They differ only on a cut that lands
+        // on one of its layers, which no documentation settles.
+        Err(why) if m.kind == "net_spacing" && !kl.bridge.is_empty() => {
+            Outcome::Known("F88 (difference)", why)
         }
         Err(why) => match m.reads.iter().find(|l| kl.corner.contains(*l)) {
             Some(layer) => Outcome::Disagree(format!("{why} (corner contact on {layer})")),

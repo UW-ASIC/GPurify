@@ -98,7 +98,7 @@ pub fn case(index: u32) -> Option<Fixture> {
     if index < singles {
         let kind = &KINDS[(index >> 16) as usize];
         let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
-        return single_case(kind, &deck, index & 0xffff);
+        return Some(single_case(kind, &deck, index & 0xffff));
     }
     let index = index - singles;
     if index < 1 << 18 {
@@ -432,15 +432,13 @@ fn single_layer(kind: &Kind, depth: Depth) -> Vec<Fixture> {
     let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
     sample(depth, 1 << 16, kind.name)
         .into_iter()
-        .filter_map(|bits| single_case(kind, &deck, bits))
+        .map(|bits| single_case(kind, &deck, bits))
         .collect()
 }
 
 /// The 4×4 pattern `bits` of `kind`, or `None` where the corner model decides it.
-fn single_case(kind: &Kind, deck: &str, bits: u32) -> Option<Fixture> {
-    // Every pattern has a defined answer since B20 settled the corner model;
-    // the `Option` is the fuzz target's contract.
-    Some(single(kind, deck, Pattern { n: 4, bits }))
+fn single_case(kind: &Kind, deck: &str, bits: u32) -> Fixture {
+    single(kind, deck, Pattern { n: 4, bits })
 }
 
 fn single(kind: &Kind, deck: &str, p: Pattern) -> Fixture {

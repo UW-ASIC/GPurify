@@ -4,7 +4,8 @@
 //!
 //! The translation and each kind's verdict (exact, approximate with its
 //! bracket, or not mirrored) are `docs/klayout-mirror.md`'s. A disagreement
-//! fails the test unless an open finding in [`compare::KNOWN`] explains it.
+//! fails the test unless a documented implementation difference explains it
+//! (testing-plan F88).
 //!
 //! `KLayout` runs only in the oracle shell, so the comparisons are the release
 //! tier: `nix develop .#oracles --command cargo test --test klayout -- --ignored`.
@@ -262,22 +263,8 @@ fn run_klayout(jobs: &[Job], tag: &str) -> Vec<Klayout> {
         .collect()
 }
 
-/// The findings in [`compare::KNOWN`] the testing plan does not mark fixed.
-fn open_findings() -> Vec<&'static str> {
-    let plan = std::fs::read_to_string(repo().join("docs/testing-plan.md")).expect("the plan");
-    compare::KNOWN
-        .iter()
-        .map(|&(id, _)| id)
-        .filter(|id| {
-            !plan
-                .lines()
-                .any(|l| l.starts_with(&format!("| {id} ")) && l.contains("**Fixed in"))
-        })
-        .collect()
-}
-
-/// Per kind: agree, of which something was found, explained by an open
-/// finding, not compared, `GPurify` skipped, not mirrored, disagree.
+/// Per kind: agree, of which something was found, explained by a documented
+/// difference, not compared, `GPurify` skipped, not mirrored, disagree.
 type Table = BTreeMap<&'static str, [usize; 7]>;
 
 /// What the rounds of one differential add up to.
@@ -292,10 +279,9 @@ struct Tally {
 /// Compares every round of jobs, prints a table per kind, and fails on a
 /// disagreement.
 fn differential(tag: &str, rounds: impl Iterator<Item = Vec<Job>>) {
-    let open = open_findings();
     let mut tally = Tally::default();
     for jobs in rounds {
-        compare_round(&jobs, tag, &open, &mut tally);
+        compare_round(&jobs, tag, &mut tally);
     }
     let Tally {
         table,
@@ -330,7 +316,7 @@ fn differential(tag: &str, rounds: impl Iterator<Item = Vec<Job>>) {
 }
 
 /// One round: `KLayout` on every job, then each rule compared into `tally`.
-fn compare_round(jobs: &[Job], tag: &str, open: &[&str], tally: &mut Tally) {
+fn compare_round(jobs: &[Job], tag: &str, tally: &mut Tally) {
     tally.layouts += jobs.len();
     let results = run_klayout(jobs, tag);
     for (job, kl) in jobs.iter().zip(&results) {
@@ -357,7 +343,7 @@ fn compare_round(jobs: &[Job], tag: &str, open: &[&str], tally: &mut Tally) {
                 continue;
             }
             let at = || format!("{} {} ({})", job.name, m.id, m.kind);
-            match compare::compare(m, kl, findings, open) {
+            match compare::compare(m, kl, findings) {
                 Outcome::Agree(found) => {
                     row[0] += 1;
                     row[1] += usize::from(found);

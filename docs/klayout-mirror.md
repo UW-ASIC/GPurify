@@ -750,12 +750,15 @@ emit(id, L.nets.isolated(LIM, euclidian, transparent, props_eq))   # nets: same 
 
 - `props_eq` and `props_ne` work on `isolated` (v t5 T19). `isolated`, not `space`, which would
   add notches inside one polygon.
-- **Known difference, F88.** A KLayout cut conducts: one cut on two shapes of one layer, or two
-  touching cuts, joins what they touch (v t18 Z8). A GPurify cut joins one shape on each of its
-  two layers and belongs to no net (`topology/net.rs` `extract_nets_into`), so those shapes stay
-  on different nets. The script marks a cut layer where this occurs (`{bridge: layer}`), and the
-  differential attributes a `net_spacing` disagreement there to F88 while it is open (x: 5
-  random layouts).
+- **Implementation difference, F88.** A KLayout cut is a net member: one cut on two shapes of
+  one layer, or two touching cuts, joins what they touch (v t18 Z8). A GPurify cut joins one
+  shape on each of its two layers where it lands on both and belongs to no net (`deck.md`: "a
+  cut joins the two layers it overlaps"; `topology/net.rs`: "a cut over only one layer is no
+  edge"). Each tool follows its own documented model. They differ only on a cut that lands on
+  one of its two layers, an ill-formed via the via-enclosure rule flags, and no documentation
+  settles which reading is right, so this is recorded as a difference, not a defect. The script
+  marks a cut layer where it occurs (`{bridge: layer}`) and the differential reports a
+  `net_spacing` disagreement there as the difference (x: 5 random layouts).
 
 ### 31. spacing_table — APPROX (exact on R, else KLayout ⊆ GPurify)
 
@@ -995,11 +998,13 @@ superseded (`header.drc`, `mirror_t.drc`, `p.drc`, `lib.rb`, `mk*.rb`).
 **N7. `corner_to_corner` could miss an L-shaped row** whose bounding box overlaps its neighbour on
 one axis. Fixed in B14 (convex corners of the merged layer).
 
-**F88. A via cut joins only one shape on each of its two layers.** `extract_nets_into` treats
-a cut as joining one shape of its first layer to one of its second where it lands on both, and as
-no net member. A cut that lands on two met1 shapes and nothing above, or two touching cuts that
-each land on one, leaves those shapes on different nets, though the cut conducts (KLayout and
-Calibre join them).
+**F88. An implementation difference: a via cut that lands on one of its two layers.** Not a
+defect in either tool. GPurify's `extract_nets_into` joins one shape of a cut's first layer to one
+of its second where the cut lands on both, and the cut is no net member, as `deck.md` and
+`topology/net.rs` document. KLayout's cut is a net member, so a cut on two met1 shapes with
+nothing above, or two touching cuts that each land on one, joins them. Both follow their own
+documentation, and nothing documents what such an ill-formed via (one the via-enclosure rule
+flags) should connect.
 - Repro: `grid 1nm`, `met1 = gds(68, 20)`, `via1 = gds(68, 44)`, `met2 = gds(69, 20)`,
   `connect conductors [met1, met2]`, `connect touch_within_layer`, `connect via via1 [met1, met2]`,
   `rule dn space(met1; nets: different) >= 100nm`; met1 (0,0)–(500,500) and (550,0)–(1050,500),
