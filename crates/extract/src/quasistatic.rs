@@ -163,7 +163,7 @@ pub fn extract_inductance_into(
                 matrix.m_henry[other * n + row],
             );
             // `0 + x`, so no pair reads −0 (F80).
-            let henry = 0.0 + 0.5 * (there + back) * PICOHENRIES_PER_HENRY;
+            let henry = 0.0 + there.midpoint(back) * PICOHENRIES_PER_HENRY;
             out.push(
                 node(2 * row),
                 Some(node(2 * other)),

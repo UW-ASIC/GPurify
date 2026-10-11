@@ -248,8 +248,8 @@ pub fn write_spice(
     if let Some(network) = spliced {
         let elements = network.element_count();
 
-        for row in 0..elements {
-            if let Some((a, b, k)) = couplings[row] {
+        for (row, &coupling) in couplings.iter().enumerate().take(elements) {
+            if let Some((a, b, k)) = coupling {
                 let _ = write!(out, "Kp{row} Lp{a} Lp{b} ");
                 format_f64(k, out);
                 out.push('\n');
