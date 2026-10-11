@@ -1,13 +1,15 @@
-//! Spacing read off the edges of the merged layer: facing edges classed by
-//! their lengths, gaps in a forbidden range, and the space in front of an end
-//! of line as LEF defines it, keep-out boxes included; and the spans of a
-//! figure, the chords lines across it cut, read off the same edges.
+//! Rules read off the edges and corners of the merged layer: facing edges
+//! classed by their lengths, gaps in a forbidden range, the space in front of
+//! an end of line as LEF defines it and its keep-out box, convex corners as
+//! LEF58 spaces them, the spans (chords) of a figure, and the pitch of
+//! neighbouring rectangles.
 //!
 //! Data in: one layer, validated and merged into `s.layer_out`; every rule
 //! here reads whole edges of the merged figures, so a side drawn as several
-//! strips is one edge. Data out: one violation per pair of merged figures,
-//! named by the lowest drawn row under each, at the middle of the stretch the
-//! two nearest offending edges face each other over.
+//! strips is one edge. Data out: the violations each kind's
+//! [`Rule`](crate::drc::Rule) variant states, named by the lowest drawn row
+//! under each figure; a pair of figures reports once, at the middle of the
+//! stretch its two nearest offending edges face each other over.
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
 use super::{centre, mid, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
