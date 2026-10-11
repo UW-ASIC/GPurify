@@ -236,6 +236,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `space(L; nets: same) >= len` | Two shapes on the same net closer than the limit, as gf180 NW.2a. Nets are the extracted ones, joined through vias and other layers. `L` must be a conductor. |
 | `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
 | `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
+| `tip_space_table(L; length: [len, ..], space: [[len, ..], ..])` | Two shapes whose facing edges are closer than the cell the two edges' lengths select: tip to tip, tip to side, side to side (see below). |
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |
 | `cheesing(L) <= area` | A shape larger than the limit with no slot in it. |
@@ -285,6 +286,28 @@ first row. A row's width is measured on the part of the shape that wide, so a
 thin tab of a wide plate is held to the thin row. `prl` and `width` start at
 0 and rise, there is one row per width and one cell per run length, and no
 cell is smaller than the one before it in its row or column.
+
+A tip table, as ASAP7 M1.S.1 to M1.S.5, where the space two shapes need
+depends on the lengths of the two edges that face each other, so a line end
+(a tip) can need more room than a long side:
+
+```
+rule M1.S tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space:  [[31nm, 31nm, 25nm],
+             [31nm, 27nm, 25nm],
+             [25nm, 25nm, 18nm]])
+```
+
+Two edges of different shapes face each other when they are parallel, each
+faces away from its own shape toward the other, and they overlap along their
+length; the gap is the distance between them. Edges are whole, with touching
+shapes merged first, so a line end drawn as two strips is one end. An edge's
+class is the last `length` it reaches, here below 24 nm, 24 to 36 nm, or
+37 nm and more, and a pair of facing edges needs the cell at its two classes.
+`length` starts at 0 and rises, `space` has one row and one column per class,
+and the table is symmetric; it need not rise. Edges that meet only at a
+diagonal do not face: `corner_space` measures those.
 
 ### Edge checks
 

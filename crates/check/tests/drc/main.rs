@@ -4,6 +4,7 @@ mod area_rules;
 mod common;
 mod corner_model;
 mod determinism;
+mod facing_rules;
 mod grid_rules;
 mod overlay_laws;
 mod overlay_rules;

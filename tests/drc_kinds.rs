@@ -426,6 +426,75 @@ fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
     );
 }
 
+// ---------------------------------------------------------- tip table
+
+/// ASAP7 M1.S.1 to M1.S.5 (DRM r1p7, Table 3.12.1) as one tip table: edges
+/// below 24 nm, from 24 to 36 nm, and above 36 nm.
+const ASAP7_M1: &str = "grid 1nm
+layer met1 = gds(68, 20)
+rule M1.S tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space:  [[31nm, 31nm, 25nm],
+             [31nm, 27nm, 25nm],
+             [25nm, 25nm, 18nm]])
+";
+
+/// Five pairs, each 26 apart and 2 µm from the next, read off the table by
+/// the lengths of the two edges that face each other:
+/// - two 1000 nm sides: M1.S.1, 18, clean;
+/// - a 20 wide tip under a 1000 wide bar: M1.S.2, 25, clean;
+/// - two 30 wide tips: M1.S.3, 27, flagged;
+/// - two 20 wide tips: M1.S.4, 31, flagged;
+/// - a 30 wide tip facing a 20 wide one: M1.S.5, 31, flagged.
+///
+/// A table keyed on one edge, or on the shapes' widths, gets one of them
+/// wrong: both tips of M1.S.5 are lines, but only the pair of lengths picks
+/// 31 over 27.
+#[test]
+fn m1_s_1_to_5_pick_the_cell_by_both_facing_edges() {
+    let found = run(
+        ASAP7_M1,
+        &[
+            ("met1", [0, 0, 100, 1_000]),
+            ("met1", [126, 0, 226, 1_000]),
+            ("met1", [2_000, 0, 2_020, 1_000]),
+            ("met1", [1_500, 1_026, 2_500, 1_126]),
+            ("met1", [4_000, 0, 4_030, 1_000]),
+            ("met1", [4_000, 1_026, 4_030, 2_026]),
+            ("met1", [6_000, 0, 6_020, 1_000]),
+            ("met1", [6_000, 1_026, 6_020, 2_026]),
+            ("met1", [8_000, 0, 8_030, 1_000]),
+            ("met1", [8_000, 1_026, 8_020, 2_026]),
+        ],
+    );
+    let got = found.of("M1.S");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(count((len(26), len(27))), 1, "{got:?}");
+    assert_eq!(count((len(26), len(31))), 2, "{got:?}");
+    assert_eq!(found.outcome("M1.S"), Outcome::Ran);
+}
+
+/// A tip table must be symmetric: which of two facing edges is "first" is
+/// not a property of the layout, so an asymmetric table has no meaning and
+/// the deck is refused when the rules are built.
+#[test]
+fn an_asymmetric_tip_table_is_refused_at_load() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule t tip_space_table(met1; length: [0nm, 24nm], space: [[31nm, 25nm], [27nm, 18nm]])\n",
+        grid(),
+        &mut strings,
+    )
+    .expect("parses");
+    let built = gpurify_check::drc::RuleSet::from_deck(&deck, &strings);
+    assert!(
+        matches!(&built, Err(gpurify_check::drc::DrcError::BadTable(id)) if id == "t"),
+        "{built:?}"
+    );
+}
+
 // ---------------------------------------------------------- huge metal
 
 /// sky130 m1.3a "Min. spacing of features attached to or extending from

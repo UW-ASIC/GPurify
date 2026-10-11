@@ -40,7 +40,7 @@ use std::cmp::Ordering;
 /// corner, which can put it off the gap); it does not depend on the order of
 /// the rings and maps with the layout under every symmetry of the square.
 /// `None` when `pairs` is empty.
-fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
+pub(super) fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
     let mut best: Option<DbuArea> = None;
     // Each nearest pair's stretch, doubled: `(vertical, across, lo, hi)`, the
     // line's doubled middle across it and its extent along it. A pair that
@@ -178,7 +178,7 @@ fn wide_at(
     marker(store, (a, b), d2, found)
 }
 
-fn spacing_violation(
+pub(super) fn spacing_violation(
     rule: StrId,
     layer: LayerId,
     (a, b): (PolyId, PolyId),
@@ -369,9 +369,9 @@ pub(crate) fn eol_spacing(
 /// An axis-parallel edge on its line: whether it is vertical, its fixed
 /// coordinate, whether it travels toward higher coordinates, and its span
 /// `lo < hi`.
-type Line = (bool, i64, bool, i64, i64);
+pub(super) type Line = (bool, i64, bool, i64, i64);
 
-fn line_of(edge: Seg) -> Line {
+pub(super) fn line_of(edge: Seg) -> Line {
     let vertical = edge.a.x == edge.b.x;
     let (pos, from, to) = if vertical {
         (edge.a.x.raw(), edge.a.y.raw(), edge.b.y.raw())
@@ -443,7 +443,7 @@ fn eol_hits(
 }
 
 /// The segment from `from` to `to` along the line `pos`.
-fn on_line(vertical: bool, pos: i64, from: i64, to: i64) -> Seg {
+pub(super) fn on_line(vertical: bool, pos: i64, from: i64, to: i64) -> Seg {
     let point = |along: i64| {
         let (x, y) = if vertical { (pos, along) } else { (along, pos) };
         Point {
