@@ -323,6 +323,15 @@ pub(crate) const KINDS: &[Kind] = &[
         fixed: &[("maximum", true)],
         ..drc("count", Cmp::Le, "count", &[0], COUNT, &[])
     },
+    // A shape's bounding box, its longer side over its shorter (sky130 capm.6).
+    drc(
+        "aspect_ratio",
+        Cmp::Le,
+        "aspect_ratio",
+        &[0],
+        Some(p("", "limit", Dim::Scalar)),
+        &[],
+    ),
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),
     Kind {

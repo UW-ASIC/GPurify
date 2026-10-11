@@ -385,6 +385,41 @@ pub(crate) fn count(
     (Outcome::Ran, u64::from(figures))
 }
 
+/// Each merged figure's bounding-box aspect ratio, its longer side over its
+/// shorter (sky130 capm.6), against a maximum, at the centre of the figure's
+/// first rectangle. `examined` counts figures.
+pub(crate) fn aspect_ratio(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    limit: f64,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    if !merge_layer(store, layer, s) {
+        return REFUSED;
+    }
+    let owners = figure_owners(store, layer, s);
+    for (index, owner) in (0u32..).zip(owners) {
+        let b = s.layer_out.get(index).bbox();
+        let (short, long) = (b.width().min(b.height()), b.width().max(b.height()));
+        let ratio = to_f64(i128::from(long.raw())) / to_f64(i128::from(short.raw()));
+        if !Measurement::Ratio(ratio).violates(Measurement::Ratio(limit), LimitSense::Maximum) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(s.rects[s.rect_start[index as usize] as usize]),
+            measured: Measurement::Ratio(ratio),
+            limit: Measurement::Ratio(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
+}
+
 /// A density sweep: `cols x ways` windows of `side`, origins `stride` apart
 /// from `(x0, y0)`.
 #[derive(Debug, Clone, Copy)]
