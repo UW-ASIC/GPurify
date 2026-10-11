@@ -151,6 +151,9 @@ pub struct CmpModel {
 ///   limit with a protection diode (IHP Ant.b without, Ant.e with) writes it
 ///   as another row. This is [KLayout] `antenna_check` with a diode layer and
 ///   no factor: "the respective network is skipped".
+/// - an oxide class is a gate layer of its own, one row each: LEF's
+///   `ANTENNAMODEL OXIDE1-4` gives each model its own gate area and limits,
+///   and gf180 states ANT.1-ANT.15 per "related gate oxide area".
 ///
 /// The ratio is dimensionless. No design intent is needed.
 ///
@@ -160,12 +163,11 @@ pub struct CmpModel {
 ///   exempts nothing (ERC-A13). Any area on the `diode` layer counts as a
 ///   protection diode; IHP's minimum diode size (Ant.g, ERC-A9) is not
 ///   checked.
-/// - LEF `ANTENNACUMROUTINGPLUSCUT` is missing (ERC-A4); oxide classes are one
-///   row per gate layer (ERC-A12); a MIM victim works as a gate layer, but
-///   gf180's deck leaves ANT.14/15 out (ERC-A11).
+/// - LEF `ANTENNACUMROUTINGPLUSCUT` is missing (ERC-A4); a MIM victim works
+///   as a gate layer, but gf180's deck leaves ANT.14/15 out (ERC-A11).
 ///
 /// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4 (partial), ERC-A8, ERC-A11
-/// (partial), ERC-A12 (partial) in the [check catalog]. Defined by
+/// (partial), ERC-A12 in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
 /// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
 /// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
@@ -203,22 +205,25 @@ pub struct AntennaTable {
 /// Antenna ratio with protection-diode credit: deck kind `antenna_electrical`,
 /// written `antenna_electrical(gate, collectors..; max_ratio: n,
 /// sidewall: len | none, diode: layer | none, diode_credit: n,
-/// diode_bonus: n, area_minus_diode: n)`.
+/// diode_bonus: n, area_minus_diode: n, gate_plus_diode: n)`.
 ///
 /// Nets, collectors, gates, the [`AntennaMeasure`] and the etch stages are
 /// those of [`AntennaTable`]. The ratio is LEF/DEF 5.8 Appendix C's
 /// cumulative antenna ratio: each collector layer adds the partial ratio of
 /// the gate's node on it, conductors before the cuts on them,
 ///
-/// `PAR = (area - area_minus_diode * diode) / gate`,
+/// `PAR = (area - area_minus_diode * diode) / (gate + gate_plus_diode * diode)`,
 ///
 /// every area the node's when that layer is etched, `diode` being the
-/// `diode` layer's (`ANTENNAAREAMINUSDIFF`, whose `diff_area` is the
-/// diffusion the node reaches through the current and lower layers). A layer
-/// with no shape on the gate's net adds nothing, and the running sum is
-/// truncated at zero after each layer, as LEF states ("if the resulting
-/// value is less than 0, it should be truncated to 0"; its Example 2 carries
-/// the 0 to the next layer). With `area_minus_diode: 0` the ratio is
+/// `diode` layer's (`ANTENNAAREAMINUSDIFF` and `ANTENNAGATEPLUSDIFF`, whose
+/// `diff_area` is the diffusion the node reaches through the current and
+/// lower layers). `gate_plus_diode` is also gf180's ANT.16: "treat gate area
+/// = (thin gate area + MF * (COMP area directly connection that node))", MF
+/// 2 for a thin gate, 15 for a thick one or a MIM plate, one row per oxide
+/// class. A layer with no shape on the gate's net adds nothing, and the
+/// running sum is truncated at zero after each layer, as LEF states ("if the
+/// resulting value is less than 0, it should be truncated to 0"; its Example
+/// 2 carries the 0 to the next layer). With both factors 0 the ratio is
 /// [`AntennaTable`]'s. The value compared with `max_ratio` is then sky130's
 /// etch gate area ratio with a diode,
 ///
@@ -239,18 +244,20 @@ pub struct AntennaTable {
 ///
 /// # Limits
 ///
-/// gf180's additive model (ERC-A6) and LEF's piecewise-linear diffusion
-/// limits (ERC-A7) are missing.
+/// LEF's piecewise-linear diffusion limits (ERC-A7) are missing.
 ///
-/// Catalog: ERC-A5, ERC-A8 in the [check catalog]. Defined by
-/// [SKY130] antenna EGAR and Table Ig; [LEF/DEF 5.8] `ANTENNAAREAMINUSDIFF`;
-/// [IHP SG13G2] Ant.b/e and Ant.d/f; [KLayout] `antenna_check` (its diode
-/// factor). Source tags are in [check-sources.md].
+/// Catalog: ERC-A5, ERC-A6, ERC-A8, ERC-A12 in the [check catalog]. Defined
+/// by [SKY130] antenna EGAR and Table Ig; [LEF/DEF 5.8]
+/// `ANTENNAAREAMINUSDIFF`, `ANTENNAGATEPLUSDIFF` and `ANTENNAMODEL`;
+/// [GF180MCU] ANT.16; [IHP SG13G2] Ant.b/e and Ant.d/f; [KLayout]
+/// `antenna_check` (its diode factor). Source tags are in
+/// [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [KLayout]: https://www.klayout.de/doc-qt5/about/drc_ref_netter.html#antenna_check
 /// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/antenna.html
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -277,6 +284,9 @@ pub struct AntennaElectricalTable {
     /// many times, from each layer's collecting area. Not negative from a
     /// deck.
     pub area_minus_diode: Vec<f64>,
+    /// Per row: LEF's `ANTENNAGATEPLUSDIFF` (gf180's MF), the diode area
+    /// added, so many times, to the gate area. Not negative from a deck.
+    pub gate_plus_diode: Vec<f64>,
     /// Per row: the largest allowed credited ratio. Positive from a deck.
     pub max_ratio: Vec<f64>,
     /// The deck's connectivity, shared by every row.
@@ -592,11 +602,14 @@ fn stage_nets(
 
 /// LEF/DEF 5.8 Appendix C's partial antenna ratio of one collector layer on
 /// a gate's node, for an [`AntennaElectricalTable`] row: `(area - minus *
-/// diode) / gate`, every area the node's at that layer's etch.
+/// diode) / (gate + plus * diode)`, every area the node's at that layer's
+/// etch.
 #[derive(Debug, Clone, Copy)]
 struct Par {
     /// `ANTENNAAREAMINUSDIFF`.
     minus: f64,
+    /// `ANTENNAGATEPLUSDIFF`.
+    plus: f64,
 }
 
 /// One antenna row. Each gate figure's ratio is summed over the row's etch
@@ -743,9 +756,10 @@ fn antenna_row(
                 if *net == NetId::NONE || mine[net.idx()] == 0 {
                     continue;
                 }
-                let at = net.idx();
-                let numerator = mine[at] as f64 - par.minus * on_net[at] as f64;
-                ratio[g] = (ratio[g] + numerator / gate_area[at] as f64).max(0.0);
+                let (at, diode) = (net.idx(), on_net[net.idx()] as f64);
+                let numerator = mine[at] as f64 - par.minus * diode;
+                let denominator = gate_area[at] as f64 + par.plus * diode;
+                ratio[g] = (ratio[g] + numerator / denominator).max(0.0);
             }
         }
         for (g, net) in gate_net.iter().enumerate() {
@@ -889,6 +903,7 @@ pub fn check_antenna_electrical(
             &table.stack,
             Some(Par {
                 minus: table.area_minus_diode[row],
+                plus: table.gate_plus_diode[row],
             }),
             table.max_ratio[row],
             #[allow(

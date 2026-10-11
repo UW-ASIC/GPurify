@@ -181,6 +181,7 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
             diode_credit: vec![0.0],
             diode_bonus: vec![0.0],
             area_minus_diode: vec![0.0],
+            gate_plus_diode: vec![0.0],
             max_ratio: vec![3.0],
             stack: Stack::default(),
         },
