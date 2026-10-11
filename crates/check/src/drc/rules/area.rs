@@ -6,6 +6,7 @@
 //! decomposed into disjoint rectangles (canonical). Data out: one violation per
 //! offending figure, hole or window.
 
+use super::width::rects_layer;
 use super::{centre, owners_of, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{
@@ -385,6 +386,86 @@ pub(crate) fn density_balance(
         }
     });
     (Outcome::Ran, sweep)
+}
+
+/// Short-circuit critical area for a square defect of half-side `radius`:
+/// the area where the defect's centre makes it overlap two different merged
+/// figures, the union over every pair of the intersection of the two figures
+/// each grown by `radius` (square corners). One violation when it is above
+/// `limit`, at the centre of that area's bounding box, naming no shape.
+/// `examined` counts figures.
+// ponytail: every pair of figures by their grown boxes, O(figures²); sweep by
+// x if a large layer makes this slow.
+pub(crate) fn critical_area(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    radius: Dbu,
+    limit: DbuArea,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    if !merge_layer(store, layer, s) {
+        return REFUSED;
+    }
+    let r = radius.raw();
+    let grow = |b: Bbox| -> Option<Bbox> {
+        Some(Bbox {
+            xlo: Dbu::new(b.xlo.raw() - r)?,
+            ylo: Dbu::new(b.ylo.raw() - r)?,
+            xhi: Dbu::new(b.xhi.raw() + r)?,
+            yhi: Dbu::new(b.yhi.raw() + r)?,
+        })
+    };
+    let Some(grown) = s.rects.iter().map(|&b| grow(b)).collect::<Option<Vec<_>>>() else {
+        return REFUSED;
+    };
+    let figures: Vec<&[Bbox]> = s
+        .rect_start
+        .windows(2)
+        .map(|span| &grown[span[0] as usize..span[1] as usize])
+        .collect();
+    let reach: Vec<Bbox> = figures
+        .iter()
+        .map(|rects| rects.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b)))
+        .collect();
+    let positive = |b: Option<Bbox>| b.filter(|c| c.xlo < c.xhi && c.ylo < c.yhi);
+    let mut critical = Vec::new();
+    for (i, (fi, ri)) in figures.iter().zip(&reach).enumerate() {
+        for (fj, rj) in figures.iter().zip(&reach).skip(i + 1) {
+            if positive(ri.intersection(*rj)).is_none() {
+                continue;
+            }
+            for &a in *fi {
+                critical.extend(fj.iter().filter_map(|&b| positive(a.intersection(b))));
+            }
+        }
+    }
+    let examined = figures.len() as u64;
+    if critical.is_empty() {
+        return (Outcome::Ran, examined);
+    }
+    let Ok(pieces) = rects_layer(&critical) else {
+        return REFUSED;
+    };
+    if union_into(&pieces, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    let area = covered_area(&s.rects);
+    if area > limit {
+        let extent = s.rects.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b));
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(extent),
+            measured: Measurement::Area(area),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(u32::MAX), None),
+        });
+    }
+    (Outcome::Ran, examined)
 }
 
 /// Whole-die density (gf180 M1.4 "30 % over the entire die", IHP M1.j/k): the

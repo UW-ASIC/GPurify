@@ -518,6 +518,44 @@ pub enum Rule {
         /// Whether `limit` is a minimum (deck `>=`) or a maximum (`<=`).
         sense: LimitSense,
     },
+    /// Too much short-circuit critical area for one defect size.
+    ///
+    /// Deck: `critical_area(L; radius: len) <= area`, kind `critical_area`.
+    /// A defect is a square of half-side `radius` (the L-infinity "defect of
+    /// radius r"); it shorts two merged figures of the layer when it overlaps
+    /// both. The critical area is the area where its centre does that: the
+    /// union, over every pair of figures, of the intersection of the two
+    /// figures each grown by `radius` with square corners. Two parallel
+    /// lines of length `L` a gap `s` apart give `(L + 2r)(2r - s)` for
+    /// `2r >= s`.
+    ///
+    /// One violation per layer when the critical area is above `limit`,
+    /// at the centre of that area's bounding box, naming no shape, with
+    /// `measured` the area. `examined` counts merged figures.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-112. Critical area for shorts: E. Papadopoulou and D. T. Lee,
+    /// "Critical Area Computation via Voronoi Diagrams", IEEE TCAD 18(4),
+    /// 1999 ("The critical region for radius r is the locus of points where
+    /// if the center of a square defect of radius r is placed it causes a
+    /// short, i.e., the defect overlaps with two polygons in different
+    /// nets"); I. and Z. Koren, "Defect Tolerance in VLSI Circuits", Proc.
+    /// IEEE 86(9), 1998, p. 1821 (adjacent polygons "expanded by x/2 and the
+    /// intersection of the expanded polygons is the critical area for
+    /// short-circuit faults of diameter x"); Calibre `YieldAnalyzer` (Siemens
+    /// white paper 81850, average critical area over a defect density).
+    ///
+    /// Limits: shorts only, for one defect size, between figures of one
+    /// layer rather than nets. Opens, the average over a defect-size
+    /// distribution, and yield are not computed.
+    CriticalArea {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The defect's half-side, in grid units; positive.
+        radius: Dbu,
+        /// The largest legal critical area, in square grid units; positive.
+        limit: DbuArea,
+    },
     /// A window where two masks' coverage is out of balance.
     ///
     /// Deck: `density_balance(A, B[, boundary]; window: len, step: len) >=
@@ -2790,6 +2828,11 @@ impl RuleSet {
                         sense: sense(spec)?,
                     }
                 }
+                "critical_area" => Rule::CriticalArea {
+                    layer: one(spec)?,
+                    radius: length(spec, "radius")?,
+                    limit: area_limit(spec, "limit")?,
+                },
                 "density_balance" => {
                     let (a, b, boundary) = match spec.layer_len {
                         2 => (layer(spec, 0), layer(spec, 1), None),
@@ -3565,6 +3608,11 @@ impl RuleSet {
                 } => {
                     area::global_density(store, id, (layer, boundary, drawn), limit, sense, s, out)
                 }
+                Rule::CriticalArea {
+                    layer,
+                    radius,
+                    limit,
+                } => area::critical_area(store, id, layer, radius, limit, s, out),
                 Rule::DensityBalance {
                     a,
                     b,
@@ -4317,6 +4365,7 @@ impl Rule {
             | Rule::MinArea { layer, .. }
             | Rule::MinEnclosedArea { layer, .. }
             | Rule::Cheesing { layer, .. }
+            | Rule::CriticalArea { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
             | Rule::CutSpacing { layer, .. }

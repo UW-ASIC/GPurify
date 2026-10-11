@@ -75,6 +75,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         anchored_patterning(),
         colour_spacing(),
         density_balance(),
+        critical_area(),
         stitch(),
         trim_cut(),
         booleans(),
@@ -3982,6 +3983,87 @@ fn trim_cut() -> Vec<Fixture> {
         }
     }
     out
+}
+
+/// `critical_area(met1; radius: r) <= a` (`critical_area`, DRC-112): the
+/// short-circuit critical area for a square defect of half-side `r`, the
+/// union over every pair of figures of their intersection once each is
+/// grown by `r`, reported once when above the limit, measuring it, at the
+/// centre of its box.
+///
+/// Closed form (Papadopoulou and Lee, 1999; Koren and Koren, 1998): two
+/// parallel lines of length 1000 and a gap 200, under a defect of half-side
+/// 150, have `(1000 + 300)(300 - 200) = 130000`, against limits one square
+/// unit either side and at it. Three such lines 200 apart under half-side
+/// 350 overlap three ways: the pairwise regions cover 1700 x 800 =
+/// 1360000, not their sum (the 150 defect sees 260000 there, above every
+/// limit). Lines 400 apart are out of reach of a 300 defect and leave 510000
+/// under a 700 one, within its 1 um2; one L-shaped figure has no pair.
+fn critical_area() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1"],
+        "rule below critical_area(met1; radius: 150nm) <= 129999nm2\n\
+         rule at critical_area(met1; radius: 150nm) <= 130000nm2\n\
+         rule above critical_area(met1; radius: 150nm) <= 130001nm2\n\
+         rule wide critical_area(met1; radius: 350nm) <= 1um2\n",
+    );
+    let lines = |ys: &[i64]| {
+        rects(
+            Layout::default(),
+            "met1",
+            &ys.iter()
+                .map(|&y| (0, y, 1000, y + 100))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let case = |name: &str, layout: Layout, rules: [Vec<Finding>; 4]| {
+        let [below, at, above, wide] = rules;
+        fixture(
+            &format!("critical_area/{name}"),
+            &["DRC-112"],
+            &deck,
+            layout,
+            &[
+                ("below", below),
+                ("at", at),
+                ("above", above),
+                ("wide", wide),
+            ],
+        )
+    };
+    let three = || vec![Finding::area(260_000).at(500, 350)];
+    every_placement(vec![
+        case(
+            "two_lines",
+            lines(&[0, 300]),
+            [
+                vec![Finding::area(130_000).at(500, 200)],
+                vec![],
+                vec![],
+                vec![],
+            ],
+        ),
+        case(
+            "three_lines",
+            lines(&[0, 300, 600]),
+            [
+                three(),
+                three(),
+                three(),
+                vec![Finding::area(1_360_000).at(500, 350)],
+            ],
+        ),
+        case("apart", lines(&[0, 500]), [vec![], vec![], vec![], vec![]]),
+        case(
+            "one_figure",
+            rects(
+                Layout::default(),
+                "met1",
+                &[(0, 0, 1000, 100), (0, 100, 100, 1000)],
+            ),
+            [vec![], vec![], vec![], vec![]],
+        ),
+    ])
 }
 
 /// `density_balance(c1, c2, die; window: 1000nm, step: 1000nm) >= 0.5`
