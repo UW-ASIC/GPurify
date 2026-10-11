@@ -152,7 +152,9 @@ pair the way its diffusions agree, so a card with them the other way round
 is the same transistor. Each parameter a
 schematic card states is compared on that device, within 2 % of the larger
 value, except the counts `m` and `nf`: they are whole numbers and must be
-equal, so `m=50` does not match `m=51`. A card that
+equal, so `m=50` does not match `m=51`. The deck's `lvs tolerance` for a
+parameter of a model replaces either (see
+[deck.md](deck.md#lvs-controls)). A card that
 leaves a parameter out says nothing about it, whatever other cards of the
 same model state, and a parameter the layout does not measure is reported
 (`lvs.undeclared_param`) rather than passed.

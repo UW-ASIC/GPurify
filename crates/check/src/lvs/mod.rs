@@ -64,6 +64,22 @@
 //! Net names do not take part: they neither seed refinement nor are compared,
 //! so a misnamed or reordered port passes (catalog LVS-016, LVS-032).
 //!
+//! # Deck controls
+//!
+//! The deck's `lvs` statements ([`LvsControls`](gpurify_ingest::deck::LvsControls),
+//! [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md#lvs-controls))
+//! change the comparison per device model; [`compare_with`] applies them:
+//!
+//! - `lvs tolerance "model" param relative r absolute a`: the bound a paired
+//!   parameter must meet, `|a - b| <= absolute + relative * max(|a|, |b|)`,
+//!   in place of the run's relative tolerance (catalog LVS-014; `KLayout`'s
+//!   `tolerance`, whose two parts add the same way, and Netgen's `property
+//!   ... tolerance`, a relative one).
+//! - `lvs ignore_parameter "model" param`: the parameter is dropped on both
+//!   sides before reduction, never compared nor read by a merge (catalog
+//!   LVS-014; `KLayout`'s `ignore_parameter`, Netgen's `property ...
+//!   remove`).
+//!
 //! # Against Netgen
 //!
 //! The Netgen differential (`tests/exhaustive/lvs/netgen.rs`, testing-plan
@@ -134,6 +150,7 @@
 
 pub mod checks;
 mod compare;
+mod controls;
 pub mod graph;
 pub mod reduce;
 mod refine;
@@ -142,7 +159,7 @@ pub mod verdict;
 pub use checks::{
     check_layout, check_net_seed_conflicts, intern_rule_ids, record_discrepancies, RULE_IDS,
 };
-pub use compare::{compare, compare_logged, CompareOptions};
+pub use compare::{compare, compare_logged, compare_with, CompareOptions};
 pub use graph::Graph;
 pub use reduce::{Merge, MergeKind, ParamNames};
 pub use verdict::{Discrepancy, Verdict};

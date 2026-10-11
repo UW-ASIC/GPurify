@@ -448,6 +448,133 @@ device mos diff model \"nfet\" terminals [poly, diff, diff]
     }
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"), values converted by
+/// hand. `lvs tolerance` lowers to SI: 1 % is 0.01, 5 nm is 5e-9 m, 0.2 um²
+/// is 2e-13 m², 2 kohm is 2000 ohm, 3 fF is 3e-15 F, and a part left out is
+/// zero. The parameter is lowercased, as the netlist reader stores it. Each
+/// error class is refused: an unknown control or part, a part given twice,
+/// a parameter given a row twice, a row with no part, a relative part past
+/// 100 %, an absolute part in the wrong unit, negative, or on a parameter
+/// with no known unit, and a model no device declares.
+#[test]
+fn lvs_tolerances_lower_to_si_on_a_declared_model() {
+    use gpurify_ingest::deck::LvsTolerance;
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]
+device resistor met1 model \"rpoly\" terminals [met1, met1]
+device capacitor met2 model \"cmim\" terminals [met2, met1]
+";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs tolerance \"nfet\" W relative 1%
+lvs tolerance \"nfet\" l relative 0.5% absolute 5nm
+lvs tolerance \"nfet\" as absolute 0.2um2
+lvs tolerance \"rpoly\" r absolute 2kohm
+lvs tolerance \"cmim\" c relative 0.02 absolute 3fF
+lvs tolerance \"nfet\" m absolute 1
+"
+    ));
+    let row = |model: &str, param: &str, relative: f64, absolute: f64| LvsTolerance {
+        model: strings.get(model).expect("interned"),
+        param: strings.get(param).expect("interned"),
+        relative,
+        absolute,
+    };
+    let want = [
+        row("nfet", "w", 0.01, 0.0),
+        row("nfet", "l", 0.005, 5e-9),
+        row("nfet", "as", 0.0, 2e-13),
+        row("rpoly", "r", 0.0, 2000.0),
+        row("cmim", "c", 0.02, 3e-15),
+        row("nfet", "m", 0.0, 1.0),
+    ];
+    assert_eq!(deck.lvs.tolerance.len(), want.len());
+    for (got, want) in deck.lvs.tolerance.iter().zip(&want) {
+        assert_eq!((got.model, got.param), (want.model, want.param));
+        for (a, b) in [(got.relative, want.relative), (got.absolute, want.absolute)] {
+            assert!((a - b).abs() <= 1e-12 * b.abs(), "{got:?} against {want:?}");
+        }
+    }
+
+    for (body, needle) in [
+        (
+            "lvs widen \"nfet\" w relative 1%\n",
+            "unknown lvs control `widen`",
+        ),
+        (
+            "lvs tolerance \"nfet\" w by 1%\n",
+            "unknown tolerance part `by`",
+        ),
+        (
+            "lvs tolerance \"nfet\" w relative 1% relative 2%\n",
+            "`relative` is given twice",
+        ),
+        (
+            "lvs tolerance \"nfet\" w relative 1%\nlvs tolerance \"nfet\" W absolute 1nm\n",
+            "`w` of \"nfet\" already has a tolerance",
+        ),
+        (
+            "lvs tolerance \"nfet\" w\n",
+            "needs relative, absolute or both",
+        ),
+        ("lvs tolerance \"nfet\" w relative 150%\n", "0% to 100%"),
+        ("lvs tolerance \"nfet\" w absolute 1ohm\n", "a length"),
+        ("lvs tolerance \"nfet\" w absolute -1nm\n", "zero or more"),
+        (
+            "lvs tolerance \"nfet\" vth0 absolute 1mV\n",
+            "takes a relative tolerance only",
+        ),
+        (
+            "lvs tolerance nfet w relative 1%\n",
+            "a model name in quotes",
+        ),
+    ] {
+        one_error(&format!("{devices}{body}"), needle);
+    }
+    let typo = parse(&format!(
+        "{devices}lvs tolerance \"nfet_typo\" w relative 1%\n"
+    ));
+    assert!(
+        matches!(typo, Err(DeckError::Malformed(ref why)) if why.contains("nfet_typo")),
+        "a tolerance on a model no device declares changes nothing and must be refused"
+    );
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs
+/// ignore_parameter` lowers to `(model, parameter)`, the parameter
+/// lowercased; `m` is refused, and so are a repeat, a tolerance on an
+/// ignored parameter, and a model no device declares.
+#[test]
+fn lvs_ignored_parameters_lower_and_exclude_a_tolerance() {
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs ignore_parameter \"nfet\" AS\nlvs ignore_parameter \"nfet\" pd\n"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(
+        deck.lvs.ignore_parameter,
+        [(id("nfet"), id("as")), (id("nfet"), id("pd"))]
+    );
+    one_error(
+        &format!("{devices}lvs ignore_parameter \"nfet\" m\n"),
+        "cannot be ignored",
+    );
+    one_error(
+        &format!("{devices}lvs ignore_parameter \"nfet\" w\nlvs ignore_parameter \"nfet\" W\n"),
+        "already ignored",
+    );
+    for body in [
+        "lvs ignore_parameter \"nfet\" w\nlvs tolerance \"nfet\" w relative 1%\n",
+        "lvs ignore_parameter \"pfet\" w\n",
+    ] {
+        assert!(
+            matches!(
+                parse(&format!("{devices}{body}")),
+                Err(DeckError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.

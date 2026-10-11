@@ -104,16 +104,16 @@ impl ParamNames {
         }
     }
 
-    /// Whether `a` and `b`, two values of the parameter `name`, agree: within
-    /// the relative `tolerance`, `|a - b| <= tolerance * max(|a|, |b|)`,
+    /// The run's relative tolerance for the parameter `name`: `tolerance`,
     /// except a count, `m` or `nf`, which is a whole number and agrees only
-    /// exactly (testing-plan F99). `NaN` never agrees.
-    #[expect(clippy::float_cmp, reason = "a count agrees only exactly")]
-    pub(crate) fn agree(self, name: StrId, (a, b): (f64, f64), tolerance: f64) -> bool {
+    /// exactly (testing-plan F99), so zero. A deck's `lvs tolerance` row on
+    /// the parameter replaces either.
+    pub(crate) fn tolerance(self, name: StrId, tolerance: f64) -> f64 {
         if Some(name) == self.multiplier || Some(name) == self.fingers {
-            return a == b;
+            0.0
+        } else {
+            tolerance
         }
-        (a - b).abs() <= tolerance * a.abs().max(b.abs())
     }
 
     /// How many of the four diffusion names `params` states.

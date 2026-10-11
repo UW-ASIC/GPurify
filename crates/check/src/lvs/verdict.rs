@@ -124,8 +124,11 @@ pub enum Discrepancy {
     },
     /// A parameter both paired devices declare, whose values differ by more
     /// than [`CompareOptions::param_tolerance`](crate::lvs::CompareOptions::param_tolerance)
-    /// `tol`: `|a - b| > tol * max(|a|, |b|)`. A `NaN` on either side always
-    /// differs.
+    /// `tol`: `|a - b| > tol * max(|a|, |b|)`, or, where the deck has an `lvs
+    /// tolerance` row for that parameter of that model, by more than
+    /// `absolute + relative * max(|a|, |b|)` ([`compare_with`](crate::lvs::compare_with)).
+    /// A `NaN` on either side always differs. A parameter the deck ignores
+    /// (`lvs ignore_parameter`) is never compared.
     ///
     /// Values are in SI base units (metres, square metres) and are compared
     /// after reduction, so a merged MOS carries its summed `W`, `nf` or `L`,
@@ -137,9 +140,8 @@ pub enum Discrepancy {
     ///
     /// # Limits
     ///
-    /// One relative tolerance covers every parameter, with no absolute or
-    /// per-parameter tolerance. A resistor's `r` and a capacitor's `c` are
-    /// compared only where the deck gives their coefficients
+    /// A resistor's `r` and a capacitor's `c` are compared only where the
+    /// deck gives their coefficients
     /// ([`from_layout`](crate::lvs::graph::from_layout)).
     ParameterMismatch {
         /// The device's row in the reduced layout graph.

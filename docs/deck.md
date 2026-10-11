@@ -78,6 +78,7 @@ Numbers carry units. `140nm`, `0.14um` and `0.00014mm` are the same length.
 | current | `nA`, `uA`, `mA`, `A` |
 | current per width | `uA/um`, `mA/um`, `A/m` |
 | resistance | `mohm`, `ohm`, `kohm`, `Mohm` |
+| capacitance | `aF`, `fF`, `pF` |
 | capacitance per area | `aF/um2`, `fF/um2` |
 | capacitance per length | `aF/um`, `fF/um` |
 | temperature | `K`, or `C` |
@@ -425,6 +426,38 @@ the emitter region as a `bjt`'s second, and these are their measures.
 A value the deck does not give is not computed, never taken as zero, so a
 schematic that states it is reported (`lvs.undeclared_param`). Nothing
 measures a capacitor's `w` and `l`.
+
+## LVS controls
+
+```
+lvs tolerance "nfet" w relative 1%
+lvs tolerance "nfet" l relative 0.5% absolute 5nm
+lvs tolerance "rpoly" r absolute 10ohm
+lvs ignore_parameter "nfet" as
+```
+
+An `lvs` statement changes how LVS compares the devices of one model, which
+a `device` statement must declare.
+
+**`lvs tolerance "model" param relative r absolute a`** sets how far apart
+one parameter may be on the layout and the schematic and still agree:
+`|a - b| <= absolute + relative × max(|a|, |b|)`. Give `relative`,
+`absolute`, or both; the parts add, as in KLayout's `tolerance`. The row
+replaces the default for that parameter of that model, 2 % of the larger
+value, so a part it leaves out is zero: `absolute 10ohm` alone allows 10
+ohms and nothing relative. `relative` is a fraction from 0 to 1, or a
+percentage. `absolute` is written in the parameter's unit: a length for
+`w`, `l`, `ps`, `pd`, `pe` and `perim`, an area for `area`, `as`, `ad` and
+`ae`, a resistance for `r`, a capacitance (`aF`, `fF`, `pF`) for `c`, a
+bare count for `m` and `nf`; any other parameter takes a relative
+tolerance only. A parameter has at most one row per model.
+
+**`lvs ignore_parameter "model" param`** leaves a parameter out of the
+comparison for one model, as KLayout's `ignore_parameter` and Netgen's
+`property ... remove` do: it is dropped from both sides before devices are
+merged, so it is never compared and never stops a merge, whatever the
+schematic cards state. `m` counts devices and cannot be ignored, and an
+ignored parameter cannot also have a tolerance.
 
 ## Parasitic stack
 

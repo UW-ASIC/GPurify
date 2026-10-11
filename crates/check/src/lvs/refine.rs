@@ -21,10 +21,11 @@
 //! next closest is tried, up to [`TRIES`]. When none fits, the closest is kept
 //! and no later stall tries again, since a match is then out of reach.
 
+use crate::lvs::controls::bound;
 use crate::lvs::graph::{narrow, Graph};
 use crate::lvs::reduce::ParamNames;
 use crate::topology::TerminalRole;
-use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::deck::{DeviceKind, LvsControls};
 use gpurify_ingest::StrId;
 
 #[derive(Debug, Clone, Copy)]
@@ -142,6 +143,8 @@ struct Sides<'a> {
     split: u32,
     /// Which names trade places with source and drain.
     names: ParamNames,
+    /// The deck's per-parameter tolerances.
+    controls: &'a LvsControls,
 }
 
 impl Sides<'_> {
@@ -235,8 +238,9 @@ impl Sides<'_> {
 
     /// Whether layout node `layout` and reference node `reference` would pass
     /// the verdict's parameter comparison: every name the reference states
-    /// stated by the layout too, each value [agreeing](ParamNames::agree)
-    /// with the other, diffusions either way round. Nets always do.
+    /// stated by the layout too, each value within its bound of the other
+    /// (the deck's row for the name, or `tolerance` relatively, a count
+    /// exactly; `NaN` never is), diffusions either way round. Nets always do.
     fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
         let reference = reference - self.split;
         if layout >= narrow(self.layout.device_count())
@@ -244,6 +248,7 @@ impl Sides<'_> {
         {
             return true;
         }
+        let model = self.reference.device_model[reference as usize];
         let (mine, theirs) = (
             self.layout.params_of(layout),
             self.reference.params_of(reference),
@@ -251,9 +256,14 @@ impl Sides<'_> {
         let agree = |crossed: bool| {
             theirs.iter().all(|&(name, b)| {
                 let read = self.read(name, crossed);
-                mine.iter().any(|&(other, a)| {
-                    Some(other) == read && self.names.agree(name, (a, b), tolerance)
-                })
+                let within = bound(
+                    self.controls,
+                    self.names.tolerance(name, tolerance),
+                    model,
+                    name,
+                );
+                mine.iter()
+                    .any(|&(other, a)| Some(other) == read && within.agree(a, b))
             })
         };
         agree(false) || agree(true)
@@ -698,12 +708,12 @@ impl Partition {
 /// when more than `max_rounds` passes in a row split a class without reaching a
 /// stall, which says nothing about whether the graphs match. The count restarts
 /// at each tie-break and each trial of one, so the number of symmetries does
-/// not spend it. `tolerance` is the verdict's, which a trial pairing's devices
-/// must meet.
+/// not spend it. `tolerance` and the deck's `controls` are the verdict's,
+/// which a trial pairing's devices must meet.
 pub(crate) fn refine_into(
     (layout, reference): (&Graph, &Graph),
     (max_rounds, tolerance): (u32, f64),
-    names: ParamNames,
+    (names, controls): (ParamNames, &LvsControls),
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -712,6 +722,7 @@ pub(crate) fn refine_into(
         reference,
         split,
         names,
+        controls,
     };
     out.seed(sides);
 

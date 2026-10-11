@@ -5,7 +5,8 @@ use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, 
 use super::lex::{lex, Tok, Token};
 use super::{
     lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
-    DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource, ViaSource,
+    DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource, ToleranceSrc,
+    ViaSource,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -466,9 +467,10 @@ impl<'a> Parser<'a> {
             "pex" => self.pex(),
             "temperature" => self.temperature(span),
             "ignore" => self.ignore(),
+            "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex or temperature"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature or lvs"),
             )),
         }
     }
@@ -1024,15 +1026,7 @@ impl<'a> Parser<'a> {
         };
         let marker = self.layer_word()?;
         self.expect("model")?;
-        let t = self.peek();
-        if t.tok != Tok::Str {
-            return Err(self.err_tok(
-                t,
-                &format!("expected a model name in quotes, found {}", self.found(t)),
-            ));
-        }
-        self.bump();
-        let model = self.string(t)?;
+        let model = self.model()?;
         self.expect("terminals")?;
         let terminals = self.layer_list()?;
         let mut value = DeviceValue::default();
@@ -1088,6 +1082,122 @@ impl<'a> Parser<'a> {
             model,
             terminals,
             value,
+        });
+        Ok(())
+    }
+
+    /// `lvs <control> "model" ...`, one comparison control (deck.md, "LVS
+    /// controls").
+    fn lvs(&mut self) -> R<()> {
+        let (control, span) = self.ident("an lvs control")?;
+        match control.as_str() {
+            "tolerance" => self.lvs_tolerance(),
+            "ignore_parameter" => self.lvs_ignore_parameter(),
+            _ => Err(self.err(
+                span,
+                &format!("unknown lvs control `{control}`; expected tolerance or ignore_parameter"),
+            )),
+        }
+    }
+
+    /// A device model name in quotes.
+    fn model(&mut self) -> R<String> {
+        let t = self.peek();
+        if t.tok != Tok::Str {
+            return Err(self.err_tok(
+                t,
+                &format!("expected a model name in quotes, found {}", self.found(t)),
+            ));
+        }
+        self.bump();
+        self.string(t)
+    }
+
+    /// `lvs ignore_parameter "model" param`. The count `m` is no parameter to
+    /// ignore: it says how many devices a card is.
+    fn lvs_ignore_parameter(&mut self) -> R<()> {
+        let model = self.model()?;
+        let (param, span) = self.ident("a parameter name")?;
+        let param = param.to_ascii_lowercase();
+        if param == "m" {
+            return Err(self.err(span, "`m` counts devices, and cannot be ignored"));
+        }
+        let row = (model, param);
+        if self.out.lvs.ignore_parameter.contains(&row) {
+            return Err(self.err(span, &format!("`{}` is already ignored", row.1)));
+        }
+        self.out.lvs.ignore_parameter.push(row);
+        Ok(())
+    }
+
+    /// `lvs tolerance "model" param relative r absolute a`, either part or
+    /// both, the absolute one in the parameter's unit, converted to SI.
+    fn lvs_tolerance(&mut self) -> R<()> {
+        let model = self.model()?;
+        let (param, param_span) = self.ident("a parameter name")?;
+        let param = param.to_ascii_lowercase();
+        if self
+            .out
+            .lvs
+            .tolerance
+            .iter()
+            .any(|row| row.model == model && row.param == param)
+        {
+            return Err(self.err(
+                param_span,
+                &format!("`{param}` of \"{model}\" already has a tolerance"),
+            ));
+        }
+        let (mut relative, mut absolute) = (None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("relative or absolute")?;
+            let value = self.value()?;
+            let (slot, number) = match key.as_str() {
+                "relative" => {
+                    let fraction = self.quantity(&value, Dim::Fraction, &key)?.f64();
+                    if !(0.0..=1.0).contains(&fraction) {
+                        return Err(self.err(
+                            value.span(),
+                            "a relative tolerance is a fraction: 0 to 1, or 0% to 100%",
+                        ));
+                    }
+                    (&mut relative, fraction)
+                }
+                "absolute" => {
+                    let Some((dim, to_si)) = absolute_unit(&param) else {
+                        return Err(self.err(
+                            span,
+                            &format!(
+                                "`{param}` has no known unit, so it takes a relative tolerance only"
+                            ),
+                        ));
+                    };
+                    let amount = self.quantity(&value, dim, &key)?.f64();
+                    if amount < 0.0 {
+                        return Err(self.err(value.span(), "an absolute tolerance is zero or more"));
+                    }
+                    (&mut absolute, amount * to_si)
+                }
+                _ => {
+                    return Err(self.err(
+                        span,
+                        &format!("unknown tolerance part `{key}`; expected relative or absolute"),
+                    ))
+                }
+            };
+            if slot.replace(number).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        if relative.is_none() && absolute.is_none() {
+            let t = self.peek();
+            return Err(self.err_tok(t, "a tolerance needs relative, absolute or both"));
+        }
+        self.out.lvs.tolerance.push(ToleranceSrc {
+            model,
+            param,
+            relative: relative.unwrap_or(0.0),
+            absolute: absolute.unwrap_or(0.0),
         });
         Ok(())
     }
@@ -2173,6 +2283,21 @@ fn cmp_text(cmp: Cmp) -> &'static str {
     }
 }
 
+/// The unit an absolute tolerance on `param` is written in, and the factor
+/// from the deck's engine unit to SI: a length in nm, an area in nm², a
+/// resistance in ohms, a capacitance in aF, a count. A parameter not listed
+/// has no known unit.
+fn absolute_unit(param: &str) -> Option<(Dim, f64)> {
+    match param {
+        "w" | "l" | "ps" | "pd" | "pe" | "perim" => Some((Dim::Length, 1e-9)),
+        "area" | "as" | "ad" | "ae" => Some((Dim::Area, 1e-18)),
+        "r" => Some((Dim::Resistance, 1.0)),
+        "c" => Some((Dim::Capacitance, 1e-18)),
+        "m" | "nf" => Some((Dim::Count, 1.0)),
+        _ => None,
+    }
+}
+
 fn pex_keys() -> String {
     PEX.iter()
         .map(|&(name, _)| name)
@@ -2195,6 +2320,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::CapPerLength => "a capacitance per length",
         Dim::PerKelvin => "a coefficient per kelvin",
         Dim::PerKelvin2 => "a coefficient per kelvin squared",
+        Dim::Capacitance => "a capacitance",
         Dim::Fraction => "a fraction",
         Dim::Angle => "an angle",
         Dim::Scalar => "a number",

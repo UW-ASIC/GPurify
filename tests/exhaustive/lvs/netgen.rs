@@ -33,6 +33,9 @@
 //!   `GPurify`'s `t`, which puts the boundary in the same place exactly
 //!   (LVS-014).
 //!
+//! A case whose deck states `lvs` controls (deck.md, "LVS controls") adds
+//! their Netgen form after the setup ([`netgen_controls`]).
+//!
 //! **Netgen's verdict** is read from its log: "Netlists do not match" is a
 //! mismatch, and "Netlists match" a match unless property errors were found.
 //! Its pin matching is not read: `GPurify` never compares net or port names
@@ -48,7 +51,10 @@
 //! with its device deleted), which Netgen declines to check ("has no
 //! elements"). They are counted, and `GPurify` must call each a mismatch.
 
-use super::{circuits, compared, enumerated, polar, spice, Circuit, Dev, Model, TOLERANCE};
+use super::{
+    circuits, compared, compared_under, enumerated, polar, spice, Circuit, Controls, Dev, Model,
+    TOLERANCE,
+};
 use crate::harness::{self, Expect, Fixture};
 use gpurify::check::lvs::Verdict;
 use gpurify_testgen::{oracle, Rng};
@@ -111,6 +117,9 @@ struct Case {
     reference: String,
     /// The documented difference that makes the verdicts differ here.
     differs: Option<&'static str>,
+    /// Netgen setup lines after [`SETUP`] that state the fixture's deck
+    /// controls ([`netgen_controls`]).
+    setup: String,
 }
 
 /// `text` as Netgen reads it: the bulk of every [`THREE_TERMINAL`] MOS on one
@@ -192,6 +201,7 @@ fn enumeration(c: &Circuit) -> Vec<Case> {
                 layout: layout.clone(),
                 reference,
                 differs: None,
+                setup: String::new(),
             }
         })
         .collect()
@@ -210,6 +220,7 @@ fn curated() -> Vec<Case> {
         layout: for_netgen(&spice(&as_declared(layout, reference))),
         reference: for_netgen(&spice(reference)),
         differs,
+        setup: String::new(),
     };
     let stack = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
     let long = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300)]);
@@ -352,6 +363,98 @@ fn curated() -> Vec<Case> {
         &flipped,
         None,
     ));
+    out.extend(controlled());
+    out
+}
+
+/// A case under the deck's `controls`, which Netgen reads as the setup lines
+/// [`netgen_controls`] writes for them.
+fn controlled_case(
+    name: &str,
+    catalog: &[&'static str],
+    (layout, reference): (&Circuit, &Circuit),
+    controls: &Controls,
+) -> Case {
+    Case {
+        fixture: compared_under(
+            &format!("netgen/{name}"),
+            catalog,
+            (layout, reference),
+            controls,
+        ),
+        layout: for_netgen(&spice(&as_declared(layout, reference))),
+        reference: for_netgen(&spice(reference)),
+        differs: None,
+        setup: netgen_controls(controls),
+    }
+}
+
+/// `body`, a Tcl line naming `$side`, for each circuit that has `model`.
+fn on_each_side(model: &str, body: &str) -> String {
+    format!(
+        "foreach side {{-circuit1 -circuit2}} {{\n    \
+         if {{[lsearch [cells list -all $side] {model}] >= 0}} {{\n        \
+         {body}\n    }}\n}}\n"
+    )
+}
+
+/// The deck's `lvs` statements in Netgen's terms, for each circuit that has
+/// the model: a relative `lvs tolerance` is `property ... tolerance`, given
+/// as `2t/(2 - t)` since Netgen measures against the mean (as [`SETUP`]
+/// does for the default), and `lvs ignore_parameter` is `property ...
+/// remove`. An absolute part has no Netgen counterpart for a real-valued
+/// property, so no case states one.
+fn netgen_controls(controls: &Controls) -> String {
+    let mut out = String::new();
+    for &(model, param) in &controls.ignored {
+        let model = model.name();
+        out.push_str(&on_each_side(
+            model,
+            &format!("property \"$side {model}\" remove {param}"),
+        ));
+    }
+    for &(model, param, relative, absolute) in &controls.tolerance {
+        assert!(absolute.is_none(), "Netgen has no absolute tolerance");
+        let netgen = 2.0 * relative / (2.0 - relative);
+        let model = model.name();
+        out.push_str(&on_each_side(
+            model,
+            &format!("property \"$side {model}\" tolerance {{{param} {netgen}}}"),
+        ));
+    }
+    out
+}
+
+/// The deck controls Netgen states too: each a case either side of what the
+/// control changes.
+fn controlled() -> Vec<Case> {
+    use Model::{N, P};
+    let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
+    // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
+    // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
+    let w_of = |w| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(w, 150)]);
+    let mut out = Vec::new();
+    for (name, controls) in [
+        ("tolerance/deck/w+3.85_relative_5pct", row(N, "w", 0.05)),
+        ("tolerance/deck/w+3.85_relative_3pct", row(N, "w", 0.03)),
+        ("tolerance/deck/w+3.85_row_on_pmos", row(P, "w", 0.05)),
+        // LVS-014: an ignored `w` is not compared.
+        (
+            "ignore_parameter/w+3.85_w_ignored",
+            Controls::default().ignore(N, "w"),
+        ),
+        (
+            "ignore_parameter/w+3.85_l_ignored",
+            Controls::default().ignore(N, "l"),
+        ),
+    ] {
+        out.push(controlled_case(
+            name,
+            &["LVS-014"],
+            (&w_of(3000), &w_of(3120)),
+            &controls,
+        ));
+    }
     out
 }
 
@@ -445,7 +548,7 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
         std::fs::write(dir.join(name), text).expect("the scratch directory is writable");
     };
     let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
-    write("setup.tcl", &SETUP.replace("TOL", &tolerance.to_string()));
+    let setup = SETUP.replace("TOL", &tolerance.to_string());
     let mut tally = Tally {
         cases: cases.len(),
         ..Tally::default()
@@ -455,9 +558,10 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
         if has_device(&case.reference) {
             write(&format!("l{i}.spice"), &case.layout);
             write(&format!("r{i}.spice"), &case.reference);
+            write(&format!("s{i}.tcl"), &format!("{setup}{}", case.setup));
             let _ = writeln!(
                 batch,
-                "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} setup.tcl o{i}.log"
+                "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} s{i}.tcl o{i}.log"
             );
         }
     }

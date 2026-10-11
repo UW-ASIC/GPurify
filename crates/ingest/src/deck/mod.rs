@@ -117,6 +117,8 @@ pub struct Deck {
     /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
     /// `None` when the deck states no temperature.
     pub temperature_law: Option<TemperatureLaw>,
+    /// The `lvs` statements: how the comparison treats each device model.
+    pub lvs: LvsControls,
 }
 
 /// A deck's `temperature T nominal T0` and, per `pex` row, its sheet
@@ -609,6 +611,40 @@ pub enum DeviceKind {
     Diode,
 }
 
+/// The `lvs` statements: what the layout-versus-schematic comparison does
+/// with a device model beyond what its `device` statement says. Every column
+/// is empty when the deck has no `lvs` statement, and LVS then compares as
+/// `gpurify_check::lvs` documents.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct LvsControls {
+    /// `lvs tolerance`, one row per statement in deck order, at most one per
+    /// model and parameter (catalog LVS-014).
+    pub tolerance: Vec<LvsTolerance>,
+    /// `lvs ignore_parameter "model" param`: `(model, parameter)`, a
+    /// parameter that is not compared on that model, nor read by its merges,
+    /// as if no card stated it and the layout measured none (catalog
+    /// LVS-014). Never `m`, and never one with a tolerance row.
+    pub ignore_parameter: Vec<(StrId, StrId)>,
+}
+
+/// One `lvs tolerance` statement: how far apart one parameter of one model
+/// may be on the two sides and still agree. Two values `a` and `b` agree when
+/// `|a - b| <= absolute + relative * max(|a|, |b|)`, the two parts adding as
+/// `KLayout`'s `tolerance` does. The row replaces the run's tolerance for that
+/// parameter of that model, so a part it leaves out is zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LvsTolerance {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The parameter, lowercase, as LVS compares it (`w`, `l`, `r`, ...).
+    pub param: StrId,
+    /// The relative part, a fraction from 0 to 1 of the larger value.
+    pub relative: f64,
+    /// The absolute part, in the parameter's SI unit (metres, square
+    /// metres, ohms, farads, or a count), zero or more.
+    pub absolute: f64,
+}
+
 /// Per-layer process parameters, for parasitic extraction, indexed by [`LayerId`].
 ///
 /// Every column is empty when the deck has no `pex` statement, and
@@ -642,6 +678,68 @@ pub struct ProcessStack {
     /// Relative permittivity of the surrounding dielectric; `0.0` where the
     /// row leaves it out.
     pub dielectric_k: Vec<f64>,
+}
+
+/// The `lvs` statements, models interned. A control on a model no `device`
+/// statement declares is refused: it would change nothing, silently.
+fn build_lvs(
+    declared: &LvsSrc,
+    devices: &[DeviceSource],
+    strings: &mut StrTable,
+) -> Result<LvsControls, DeckError> {
+    let known = |model: &str, control: &str| {
+        if devices.iter().any(|device| device.model == model) {
+            Ok(())
+        } else {
+            Err(DeckError::Malformed(format!(
+                "lvs {control}: model \"{model}\" is not declared by any device statement"
+            )))
+        }
+    };
+    let mut lvs = LvsControls::default();
+    for (model, param) in &declared.ignore_parameter {
+        known(model, "ignore_parameter")?;
+        if let Some(row) = declared
+            .tolerance
+            .iter()
+            .find(|row| row.model == *model && row.param == *param)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs tolerance: `{}` of \"{}\" is ignored, so a tolerance on it means nothing",
+                row.param, row.model
+            )));
+        }
+        lvs.ignore_parameter
+            .push((strings.intern(model), strings.intern(param)));
+    }
+    for row in &declared.tolerance {
+        known(&row.model, "tolerance")?;
+        lvs.tolerance.push(LvsTolerance {
+            model: strings.intern(&row.model),
+            param: strings.intern(&row.param),
+            relative: row.relative,
+            absolute: row.absolute,
+        });
+    }
+    Ok(lvs)
+}
+
+/// The `lvs` statements as written, models unresolved: a deck source's
+/// [`DeckSource::lvs`], which [`lower`] resolves to [`LvsControls`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LvsSrc {
+    tolerance: Vec<ToleranceSrc>,
+    /// `(model, parameter)`, the parameter lowercase.
+    ignore_parameter: Vec<(String, String)>,
+}
+
+/// `lvs tolerance "model" param relative r absolute a`, converted to SI.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ToleranceSrc {
+    model: String,
+    param: String,
+    relative: f64,
+    absolute: f64,
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.

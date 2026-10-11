@@ -906,9 +906,96 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= TOLERANCE * a.abs().max(b.abs())
 }
 
+/// The deck's `lvs` statements a fixture states, as the oracle reads them
+/// from deck.md ("LVS controls"), and the deck lines that state them.
+#[derive(Debug, Clone, Default)]
+struct Controls {
+    /// `lvs tolerance`: model, parameter, the relative part, and the
+    /// absolute part as the deck writes it and in SI.
+    tolerance: Vec<(Model, &'static str, f64, Option<(&'static str, f64)>)>,
+    /// `lvs ignore_parameter`: model and parameter.
+    ignored: Vec<(Model, &'static str)>,
+}
+
+impl Controls {
+    /// A tolerance row: `relative` as a fraction, `absolute` as the deck
+    /// writes it and in SI.
+    fn tolerance(
+        mut self,
+        model: Model,
+        param: &'static str,
+        relative: f64,
+        absolute: Option<(&'static str, f64)>,
+    ) -> Self {
+        self.tolerance.push((model, param, relative, absolute));
+        self
+    }
+
+    /// An `lvs ignore_parameter` row.
+    fn ignore(mut self, model: Model, param: &'static str) -> Self {
+        self.ignored.push((model, param));
+        self
+    }
+
+    /// `c` with every parameter `lvs ignore_parameter` names dropped from
+    /// its cards. Dropped from both sides is the same thing: the layout is
+    /// measured only on what the reference's cards declare.
+    fn strip(&self, c: &Circuit) -> Circuit {
+        let mut out = c.clone();
+        for dev in &mut out.devs {
+            let model = dev.model;
+            let ignored = |name: &str| self.ignored.iter().any(|&(m, n)| m == model && n == name);
+            dev.writes.0 &= !ignored("w");
+            dev.writes.1 &= !ignored("l");
+            if ignored("area") {
+                dev.area = None;
+            }
+            if ignored(if model == Model::C { "c" } else { "r" }) {
+                dev.value = None;
+            }
+            dev.params.retain(|&(name, _)| !ignored(name));
+        }
+        out
+    }
+
+    /// The deck lines stating these controls.
+    fn deck(&self) -> String {
+        let mut out = String::new();
+        for &(model, param) in &self.ignored {
+            let _ = writeln!(out, "lvs ignore_parameter \"{}\" {param}", model.name());
+        }
+        for &(model, param, relative, absolute) in &self.tolerance {
+            let _ = write!(out, "lvs tolerance \"{}\" {param}", model.name());
+            if relative > 0.0 {
+                let _ = write!(out, " relative {relative}");
+            }
+            if let Some((text, _)) = absolute {
+                let _ = write!(out, " absolute {text}");
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Whether `a` and `b`, values of `param` on `model` in a unit `si` times
+    /// SI's, agree: under the model's row, `|a - b| <= absolute + relative *
+    /// max(|a|, |b|)` with the parts adding as deck.md says; with no row,
+    /// [`close`].
+    fn close(&self, model: Model, param: &str, (a, b): (f64, f64), si: f64) -> bool {
+        match self.tolerance.iter().find(|t| t.0 == model && t.1 == param) {
+            None => close(a, b),
+            Some(&(_, _, relative, absolute)) => {
+                let absolute = absolute.map_or(0.0, |(_, value)| value);
+                (a - b).abs() * si <= absolute + relative * a.abs().max(b.abs()) * si
+            }
+        }
+    }
+}
+
 /// Whether layout device `a`, its nets renamed by `map`, is reference device
-/// `b`. An area is compared only where the reference declares one (F22).
-fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
+/// `b` under `controls`. An area is compared only where the reference
+/// declares one (F22).
+fn pairs(a: &Reduced, b: &Reduced, map: &[usize], controls: &Controls) -> bool {
     if a.model != b.model || a.mult != b.mult {
         return false;
     }
@@ -920,9 +1007,15 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
         Model::Q => BJT_AREA,
         _ => PIN2_AREA,
     };
+    let model = b.model;
     #[allow(clippy::cast_precision_loss, reason = "nanometre areas are small")]
     let area = match b.area {
-        Some(declared) => close(a.area.unwrap_or(drawn) as f64, declared as f64),
+        Some(declared) => controls.close(
+            model,
+            "area",
+            (a.area.unwrap_or(drawn) as f64, declared as f64),
+            1e-18,
+        ),
         None => true,
     };
     // Every other value the card states, against what was drawn; one the
@@ -936,15 +1029,18 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
         .iter()
         .copied()
         .chain(b.value.map(|v| (primary, v)));
-    let sized = stated
-        .into_iter()
-        .all(|(name, v)| measured(b.model, name).is_some_and(|d| close(d, v)));
+    let sized = stated.into_iter().all(|(name, v)| {
+        measured(b.model, name).is_some_and(|d| controls.close(model, name, (d, v), 1.0))
+    });
     // A size the card writes, against the layout's, which measures it since
-    // the card's model declares it; a diffusion at its channel end.
-    let size = |a: Option<f64>, b: Option<f64>| b.is_none_or(|b| a.is_some_and(|a| close(a, b)));
+    // the card's model declares it, in nm (`si` 1e-9); a diffusion at its
+    // channel end, in SI.
+    let size = |name: &str, (a, b): (Option<f64>, Option<f64>), si: f64| {
+        b.is_none_or(|b| a.is_some_and(|a| controls.close(model, name, (a, b), si)))
+    };
     let across = usize::from(crossed(a, b, |n| map[n]));
-    let diffusions = (0..4).all(|k| size(a.sd[k ^ across], b.sd[k]));
-    area && sized && size(a.w, b.w) && size(a.l, b.l) && diffusions
+    let diffusions = (0..4).all(|k| size(DIFFUSIONS[k], (a.sd[k ^ across], b.sd[k]), 1.0));
+    area && sized && size("w", (a.w, b.w), 1e-9) && size("l", (a.l, b.l), 1e-9) && diffusions
 }
 
 /// What the layout measures on a drawn passive or bipolar of `model`, in SI,
@@ -997,14 +1093,19 @@ fn permutations(n: usize) -> &'static [Vec<usize>] {
 
 /// Whether some assignment pairs each of `a[from..]` with a distinct unused
 /// device of `b`.
-fn assign(a: &[Reduced], b: &[Reduced], map: &[usize], used: &mut [bool], from: usize) -> bool {
+fn assign(
+    (a, b): (&[Reduced], &[Reduced]),
+    (map, controls): (&[usize], &Controls),
+    used: &mut [bool],
+    from: usize,
+) -> bool {
     let Some(dev) = a.get(from) else {
         return true;
     };
     for j in 0..b.len() {
-        if !used[j] && pairs(dev, &b[j], map) {
+        if !used[j] && pairs(dev, &b[j], map, controls) {
             used[j] = true;
-            if assign(a, b, map, used, from + 1) {
+            if assign((a, b), (map, controls), used, from + 1) {
                 return true;
             }
             used[j] = false;
@@ -1016,16 +1117,23 @@ fn assign(a: &[Reduced], b: &[Reduced], map: &[usize], used: &mut [bool], from: 
 /// The oracle: whether `layout` and `reference` are one circuit, by brute
 /// force over every bijection of their reduced nets.
 fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
-    let declared = Declared::of(reference);
+    equivalent_under(layout, reference, &Controls::default())
+}
+
+/// [`equivalent`] under the deck's `lvs` statements.
+fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) -> bool {
+    let reference = controls.strip(reference);
+    let declared = Declared::of(&reference);
     matches(
         &reduce(layout, &declared, true),
-        &reduce(reference, &declared, false),
+        &reduce(&reference, &declared, false),
+        controls,
     )
 }
 
 /// Whether some bijection of `a`'s surviving nets onto `b`'s pairs every
 /// device.
-fn matches(a: &Reduction, b: &Reduction) -> bool {
+fn matches(a: &Reduction, b: &Reduction, controls: &Controls) -> bool {
     if a.live.len() != b.live.len() || a.models != b.models {
         return false;
     }
@@ -1034,7 +1142,8 @@ fn matches(a: &Reduction, b: &Reduction) -> bool {
         for (i, &k) in a.live.iter().enumerate() {
             map[k] = b.live[perm[i]];
         }
-        assign(&a.devs, &b.devs, &map, &mut vec![false; b.devs.len()], 0)
+        let used = &mut vec![false; b.devs.len()];
+        assign((&a.devs, &b.devs), (&map, controls), used, 0)
     })
 }
 
@@ -1292,6 +1401,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         }
     }
     out.extend(curated());
+    out.extend(controlled());
     out.extend(layout_rows());
     out
 }
@@ -1307,9 +1417,21 @@ fn compared(
     layout: &Circuit,
     reference: &Circuit,
 ) -> Fixture {
-    let mut fixture = Fixture::new(&format!("lvs/{name}"), catalog, &full_deck(), LVS)
+    compared_under(name, catalog, (layout, reference), &Controls::default())
+}
+
+/// [`compared`] with the deck's `controls` stated after the full deck, the
+/// verdict the oracle's under them.
+fn compared_under(
+    name: &str,
+    catalog: &[&'static str],
+    (layout, reference): (&Circuit, &Circuit),
+    controls: &Controls,
+) -> Fixture {
+    let deck = format!("{}{}", full_deck(), controls.deck());
+    let mut fixture = Fixture::new(&format!("lvs/{name}"), catalog, &deck, LVS)
         .layout(draw(layout))
-        .expect(Expect::Lvs(equivalent(layout, reference)));
+        .expect(Expect::Lvs(equivalent_under(layout, reference, controls)));
     fixture.reference = Some(spice(reference));
     fixture
 }
@@ -2169,6 +2291,102 @@ fn curated() -> Vec<Fixture> {
             .expect(Expect::Lvs(false))
             .expect(Expect::Passes(false)),
     );
+    out
+}
+
+/// The deck's `lvs` statements (deck.md, "LVS controls"), each verdict the
+/// oracle's under the statements the fixture's deck adds.
+fn controlled() -> Vec<Fixture> {
+    use Model::{C, N, P, R};
+    let mut out = Vec::new();
+    let row = |model, param, relative, absolute| {
+        Controls::default().tolerance(model, param, relative, absolute)
+    };
+
+    // LVS-014: a row bounds one parameter of one model in place of the 2 %,
+    // its relative and absolute parts adding. `w` 1000 against 1040 nm is
+    // 3.85 % of the larger: past 2 %, within a 5 % row and not a 3 % one,
+    // within 50 nm and not 30 nm, within 2 % plus 20 nm (40.8 nm). 1.5 %
+    // matches by default and not under a 1 % row. A row on `l`, or on
+    // `pmos`, leaves this `w` at 2 %.
+    let w_of = |w| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(w, 1000)]);
+    let nm = |text, value: f64| Some((text, value * 1e-9));
+    for (name, written, controls) in [
+        ("w+3.85_default", 1040, Controls::default()),
+        ("w+3.85_relative_5pct", 1040, row(N, "w", 0.05, None)),
+        ("w+3.85_relative_3pct", 1040, row(N, "w", 0.03, None)),
+        (
+            "w+3.85_absolute_50nm",
+            1040,
+            row(N, "w", 0.0, nm("50nm", 50.0)),
+        ),
+        (
+            "w+3.85_absolute_30nm",
+            1040,
+            row(N, "w", 0.0, nm("30nm", 30.0)),
+        ),
+        (
+            "w+3.85_2pct_plus_20nm",
+            1040,
+            row(N, "w", 0.02, nm("20nm", 20.0)),
+        ),
+        ("w+1.5_default", 1015, Controls::default()),
+        ("w+1.5_relative_1pct", 1015, row(N, "w", 0.01, None)),
+        ("w+3.85_row_on_l", 1040, row(N, "l", 0.05, None)),
+        ("w+3.85_row_on_pmos", 1040, row(P, "w", 0.05, None)),
+    ] {
+        out.push(compared_under(
+            &format!("tolerance/deck/{name}"),
+            &["LVS-014", "LVS-060"],
+            (&w_of(1000), &w_of(written)),
+            &controls,
+        ));
+    }
+    // An ignored parameter is neither compared nor merged on: `w` 1000
+    // against 1500 nm matches once `nmos` `w` is ignored, and two
+    // transistors of `l` 150 and 200 nm are one of twice the width once `l`
+    // is.
+    let two = Circuit::new(
+        3,
+        vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1).sized(1000, 200)],
+    );
+    let wide = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(2000, 150)]);
+    let ignore = |param| Controls::default().ignore(N, param);
+    for (name, layout, reference, controls) in [
+        ("w+50pct", &w_of(1000), &w_of(1500), Controls::default()),
+        ("w+50pct_w_ignored", &w_of(1000), &w_of(1500), ignore("w")),
+        ("w+50pct_l_ignored", &w_of(1000), &w_of(1500), ignore("l")),
+        ("lengths_differ_vs_wide", &two, &wide, Controls::default()),
+        ("lengths_differ_vs_wide_l_ignored", &two, &wide, ignore("l")),
+    ] {
+        out.push(compared_under(
+            &format!("ignore_parameter/{name}"),
+            &["LVS-014", "LVS-040"],
+            (layout, reference),
+            &controls,
+        ));
+    }
+    // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against
+    // 210 ohm and 0.6 fF: 10 ohm and 40 aF apart, so within 15 ohm and
+    // 50 aF and not 5 ohm or 30 aF.
+    let one = |dev: Dev| Circuit::new(2, vec![dev]);
+    for (name, model, written, absolute, row_name) in [
+        ("R_r_absolute_15ohm", R, 210.0, ("15ohm", 15.0), "LVS-061"),
+        ("R_r_absolute_5ohm", R, 210.0, ("5ohm", 5.0), "LVS-061"),
+        ("C_c_absolute_50aF", C, 6e-16, ("50aF", 5e-17), "LVS-062"),
+        ("C_c_absolute_30aF", C, 6e-16, ("30aF", 3e-17), "LVS-062"),
+    ] {
+        let param = if model == R { "r" } else { "c" };
+        out.push(compared_under(
+            &format!("tolerance/deck/{name}"),
+            &["LVS-014", row_name],
+            (
+                &one(Dev::pins(model, &[0, 1])),
+                &one(Dev::pins(model, &[0, 1]).value(written)),
+            ),
+            &row(model, param, 0.0, Some(absolute)),
+        ));
+    }
     out
 }
 
