@@ -62,10 +62,10 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 23 | 4 | 34 | 38 | 0 | 0 |
+| DRC | 23 | 4 | 36 | 36 | 0 | 0 |
 | LVS | 17 | 1 | 16 | 12 | 0 | 0 |
 | ERC | 27 | 2 | 14 | 34 | 0 | 0 |
-| PEX | 4 | 0 | 2 | 4 | 0 | 0 |
+| PEX | 4 | 0 | 3 | 3 | 0 | 0 |
 | Flow | 0 | 0 | 1 | 5 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
@@ -290,6 +290,7 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-100 | Colouring legality (odd cycle) | implemented | Kahng2008; Yu2011; YuPan2016; CAL; ICV; PEG | NV:brute-force k-colouring; MR; SY |
 | DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | CAL | NV; MR; SY |
 | DRC-110 | Recommended rules reported as warnings | partial | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY |
+| DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |

@@ -179,7 +179,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
 | DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
-| DRC-068 | Cut-area conservation between two databases | missing | In scope since 2026-10-11 (was: Compares two GDS files) |
+| DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked: the irdrop rules' tolerance per connector by cut count, whose text leaves unsettled what a connector is and the unit of its limit (um) |
 | DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind; slot geometry uses the generic kinds |
 | DRC-076 | Waffle-window density | missing | sky130.deck left out |
@@ -201,7 +201,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-110 | Recommended rules reported as warnings | partial | `warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning |
 | DRC-111 | DFM scoring of recommended rules | missing | — |
 | DRC-112 | Critical area analysis | missing | — |
-| DRC-113 | Litho / CMP simulation hotspots | missing | In scope since 2026-10-11 (was: Needs foundry process models) |
+| DRC-113 | Litho / CMP simulation hotspots | partial | CMP hotspots a public model defines: a density step between neighbouring windows (max_delta) and a first-order thickness excursion, sensitivity x (density - target), over a window standing for the planarization length (density_cmp, Ouma2002). Litho hotspots (aerial-image, process-window simulation) and a full CMP topography simulation need a foundry's calibrated optical, resist and polish models, which no open PDK publishes; foundry hotspot pattern libraries are not public |
 | DRC-114 | Pattern-matching DRC | missing | — |
 | DRC-115 | Equation-based DRC | missing | First candidate for Rust custom rules (testing-plan.md L9b) |
 | DRC-116 | Curvilinear / all-angle tolerance DRC | missing | In scope since 2026-10-11 (was: Rectilinear only) |
@@ -303,7 +303,7 @@ says which foundry manual, standard or tool defines each one.
 | PEX-003 | Coupling C (same-layer and cross-layer) | partial | No dielectric images: each panel pair sees the mean of their two permittivities and interfaces reflect nothing, so same-layer coupling is under-predicted 14-159% (extract::field). The substrate is a grounded plane at height 0 (testing-plan F24); a shape at height 0 (well, diffusion) is a junction, out of the field and in closed form, so the field reads metal over another net's junction as coupling to ground (F73); a junction layer needs no dielectric (F94) |
 | PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79) |
 | PEX-006 | Multi-corner extraction | missing | — |
-| PEX-007 | Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware) | missing | In scope since 2026-10-11 (was: Needs foundry models) |
+| PEX-007 | Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware) | partial | Temperature-dependent R: the deck's temperature T nominal T0 and each pex row's tc1/tc2 give R(T) = R(T0)(1 + tc1(T - T0) + tc2(T - T0)^2), the ngspice resistor law with the coefficients PDKs publish; extraction, the power grid and lib read it. Not modelled: CMP thickness from pattern density, current-dependent via R, colour (mask-shift) effects: their models need foundry calibration data no open PDK publishes |
 | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds |
 | PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
 
