@@ -264,6 +264,33 @@ def cut_spacing(rule, layer, lim, n, within, center)
     put({ rule: rule, rows: [i, j] }) if d < lim * lim && (count[i] >= n || count[j] >= n)
   end
 end
+# LEF58 cut-class spacing over the drawn cuts of `layer`, by index into `raw:`:
+# a cut's class is the [short, long] pair of `cls` its box matches; `tbl` holds
+# two rows and columns per class (END, SIDE). Apart along y, a cut faces with
+# its SIDE when wider than tall; along x, when taller than wide; apart along
+# both, the larger cell; touching or overlapping, the class pair's largest.
+def cut_class_spacing(rule, layer, cls, tbl)
+  bs = layer.data.each.to_a.map(&:bbox)
+  klass = bs.map { |b| cls.index([b.width, b.height].minmax) }
+  bs.each_with_index do |a, i|
+    ((i + 1)...bs.size).each do |j|
+      b = bs[j]
+      next if klass[i].nil? || klass[j].nil?
+      cell = lambda { |p, q| tbl[2 * klass[i] + (p ? 1 : 0)][2 * klass[j] + (q ? 1 : 0)] }
+      apart_x = b.left > a.right || a.left > b.right
+      apart_y = b.bottom > a.top || a.bottom > b.top
+      need = if apart_x || apart_y
+        [apart_y ? cell.(a.width > a.height, b.width > b.height) : 0,
+         apart_x ? cell.(a.height > a.width, b.height > b.width) : 0].max
+      else
+        [[false, false], [false, true], [true, false], [true, true]].map { |p, q| cell.(p, q) }.max
+      end
+      dx = [b.left - a.right, a.left - b.right, 0].max
+      dy = [b.bottom - a.top, a.bottom - b.top, 0].max
+      put({ rule: rule, rows: [i, j] }) if dx * dx + dy * dy < need * need
+    end
+  end
+end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
 # two corners is irrational, so each width pair under the bound is measured
@@ -949,6 +976,36 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::CutClassSpacing { layer, table } => {
+                layers.reads(layer, &mut reads);
+                let name = layers.name(layer);
+                let table = &set.cut_tables[table as usize];
+                let classes: Vec<String> = table
+                    .short
+                    .iter()
+                    .zip(&table.long)
+                    .map(|(&s, &l)| format!("[{}, {}]", lim(s), lim(l)))
+                    .collect();
+                let side = 2 * table.short.len();
+                let rows: Vec<String> = table
+                    .space
+                    .chunks(side)
+                    .map(|row| {
+                        let cells: Vec<String> = row.iter().map(|&c| lim(c).to_string()).collect();
+                        format!("[{}]", cells.join(", "))
+                    })
+                    .collect();
+                writeln!(
+                    body,
+                    "emit({raw}, {v}.dup.raw) ; cut_class_spacing({q}, {v}.dup.raw, [{}], [{}])",
+                    classes.join(", "),
+                    rows.join(", "),
+                    raw = rb(&format!("raw:{name}")),
+                    v = var(layer)
+                )
+                .expect("a String");
+                exact("cut_class_spacing", Key::RowPair(name), Value::Ignore)
             }
             Rule::MultiPatterning { .. } => (
                 "multi_patterning",

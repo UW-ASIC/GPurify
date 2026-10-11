@@ -6,7 +6,7 @@
 
 use super::spacing::whole_at;
 use super::{centre, join_nested, label_pairs_into, pair_distances_into, Verdict};
-use crate::drc::Scratch;
+use crate::drc::{CutClassTable, Scratch};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
@@ -226,4 +226,62 @@ pub(crate) fn cut_spacing(
         .filter(|&i| neighbours[i] >= u32::from(adjacent))
         .count();
     (Outcome::Ran, examined as u64)
+}
+
+/// A cut-class spacing table (`LEF58_SPACINGTABLE` with `CUTCLASS` SIDE/END
+/// entries): every pair of classed cuts closer than its cell, read as
+/// [`Rule::CutClassSpacing`](crate::drc::Rule::CutClassSpacing) says.
+/// `examined` counts the pairs of classed cuts within the largest cell.
+pub(crate) fn cut_class_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    table: &CutClassTable,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let reach = *table.space.iter().max().expect("a valid table has cells");
+    measured_pairs(store, layer, reach, s);
+    s.holes.build(store, [layer]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    let class = |b: Bbox| table.class_of(b.xhi - b.xlo, b.yhi - b.ylo);
+    let wider = |b: Bbox| b.xhi - b.xlo > b.yhi - b.ylo;
+    let taller = |b: Bbox| b.yhi - b.ylo > b.xhi - b.xlo;
+    let mut examined = 0u64;
+    for (&(a, b), &d2) in s.pairs.iter().zip(&s.dists) {
+        let (ba, bb) = (store.poly_bbox(a), store.poly_bbox(b));
+        let (Some(ca), Some(cb)) = (class(ba), class(bb)) else {
+            continue;
+        };
+        examined += 1;
+        // Row and column 2c are class c's END, 2c + 1 its SIDE.
+        let cell = |side_a: bool, side_b: bool| {
+            table.at(2 * ca + usize::from(side_a), 2 * cb + usize::from(side_b))
+        };
+        let apart_x = bb.xlo > ba.xhi || ba.xlo > bb.xhi;
+        let apart_y = bb.ylo > ba.yhi || ba.ylo > bb.yhi;
+        let need = if apart_x || apart_y {
+            let across_y = apart_y.then(|| cell(wider(ba), wider(bb)));
+            let across_x = apart_x.then(|| cell(taller(ba), taller(bb)));
+            across_y.max(across_x).expect("apart along one axis")
+        } else {
+            [(false, false), (false, true), (true, false), (true, true)]
+                .into_iter()
+                .map(|(p, q)| cell(p, q))
+                .max()
+                .expect("four cells")
+        };
+        if d2 < need.mul_wide(need) {
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: whole_at(store, (a, b), d2),
+                measured: Measurement::Length(isqrt(d2)),
+                limit: Measurement::Length(need),
+                shapes: (a, Some(b)),
+            });
+        }
+    }
+    (Outcome::Ran, examined)
 }

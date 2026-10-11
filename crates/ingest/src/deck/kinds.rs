@@ -597,6 +597,20 @@ pub(crate) const KINDS: &[Kind] = &[
             ADJACENT,
         )
     },
+    // LEF58_SPACINGTABLE on a cut layer, by cut class: `short`/`long` are the
+    // classes' sizes, `space` two rows and columns per class (END, SIDE).
+    drc(
+        "cut_class_space",
+        Cmp::Absent,
+        "cut_class_spacing",
+        &[0],
+        None,
+        &[
+            p("short", "class_short", Dim::LengthList),
+            p("long", "class_long", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
     drc(
         "patterning",
         Cmp::Ge,

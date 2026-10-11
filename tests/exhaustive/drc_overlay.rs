@@ -48,6 +48,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         via_array_spacing(depth),
         center_spacing(),
         adjacent_cut_spacing(),
+        cut_class_spacing(),
         global_density(),
         density(depth),
         cheesing(),
@@ -1745,6 +1746,101 @@ fn adjacent_cut_spacing() -> Vec<Fixture> {
             (299, 299, 399, 399),
         ],
         vec![],
+    ));
+    every_placement(cases)
+}
+
+/// sky130 licon.2 to licon.2d as one cut-class table (`cut_class_spacing`,
+/// DRC-063 and DRC-064): square 170 nm licons 170 apart (licon.2), slotted
+/// 190 x 2000 licons 350 apart end to end (licon.2b, "when both the edges are
+/// 0.19um in length") and 510 otherwise (licon.2c), and 510 from a square
+/// (licon.2d). One finding per pair closer than its cell, measuring the gap.
+///
+/// Oracle: the sky130 manual's values, and gaps drawn to them; a pair apart
+/// along both axes needs the larger of its two readings (OpenROAD's
+/// `checkLef58CutSpacingTbl_helper` checks both directions).
+///
+/// Shapes: squares, slots end to end, slots side by side, a slot beside a
+/// square and a square past a slot's end, each swept around its cell; slots
+/// end to end 400 apart (only an END-to-END reading passes them); slots
+/// offset diagonally 414.8 apart (END to END along y, SIDE to SIDE along x:
+/// 510); a 200 nm cut of no class 10 from a square (not checked);
+/// overlapping squares, and a slot abutting a square (0, held to the
+/// largest cell).
+fn cut_class_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["licon"],
+        "rule licon.2 cut_class_space(licon;\n\
+         short: [170nm, 190nm], long: [170nm, 2000nm],\n\
+         space: [[170nm, 170nm, 510nm, 510nm], [170nm, 170nm, 510nm, 510nm],\n\
+         [510nm, 510nm, 350nm, 510nm], [510nm, 510nm, 510nm, 510nm]])\n",
+    );
+    let case = |name: &str, cuts: &[Rect], findings: Vec<Finding>| {
+        fixture(
+            &format!("cut_class_spacing/{name}"),
+            &["DRC-063", "DRC-064"],
+            &deck,
+            rects(Layout::default(), "licon", cuts),
+            &[("licon.2", findings)],
+        )
+    };
+    let slot: Rect = (0, 0, 190, 2000);
+    let mut cases = Vec::new();
+    for (g, side) in sweep(170) {
+        cases.push(case(
+            &format!("squares/{side}"),
+            &[(0, 0, 170, 170), (170 + g, 0, 340 + g, 170)],
+            below(g, 170),
+        ));
+    }
+    for (g, side) in sweep(350) {
+        cases.push(case(
+            &format!("end_to_end/{side}"),
+            &[slot, (0, 2000 + g, 190, 4000 + g)],
+            below(g, 350),
+        ));
+    }
+    for (g, side) in sweep(510) {
+        cases.push(case(
+            &format!("side_by_side/{side}"),
+            &[slot, (190 + g, 0, 380 + g, 2000)],
+            below(g, 510),
+        ));
+        cases.push(case(
+            &format!("slot_beside_square/{side}"),
+            &[slot, (190 + g, 900, 360 + g, 1070)],
+            below(g, 510),
+        ));
+        cases.push(case(
+            &format!("square_past_slot_end/{side}"),
+            &[slot, (10, 2000 + g, 180, 2170 + g)],
+            below(g, 510),
+        ));
+    }
+    cases.push(case(
+        "end_to_end_400",
+        &[slot, (0, 2400, 190, 4400)],
+        vec![],
+    ));
+    cases.push(case(
+        "diagonal",
+        &[slot, (300, 2400, 490, 4400)],
+        lengths(&[414]),
+    ));
+    cases.push(case(
+        "unclassed",
+        &[(0, 0, 170, 170), (180, 0, 380, 200)],
+        vec![],
+    ));
+    cases.push(case(
+        "overlapping_squares",
+        &[(0, 0, 170, 170), (100, 0, 270, 170)],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "slot_abutting_square",
+        &[slot, (190, 0, 360, 170)],
+        lengths(&[0]),
     ));
     every_placement(cases)
 }

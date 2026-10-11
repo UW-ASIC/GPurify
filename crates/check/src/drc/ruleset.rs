@@ -805,6 +805,47 @@ pub enum Rule {
         /// The smallest legal distance, in grid units; positive.
         limit: Dbu,
     },
+    /// Two cuts closer than their cell of a cut-class spacing table.
+    ///
+    /// Deck: `cut_class_space(L; short: [len, ..], long: [len, ..], space:
+    /// [[len, ..], ..])`, kind `cut_class_spacing`. Cuts are the rows on the
+    /// layer, as drawn. A cut's class is the first whose `short` x `long`
+    /// matches its bounding box either way round (`LEF58_CUTCLASS WIDTH ...
+    /// LENGTH ...`); a cut of no class is not checked. Each class has two rows
+    /// and two columns of `space`, in class order: its END, then its SIDE. Two
+    /// cuts apart along y face each other with their sides across y, so a cut
+    /// faces with its SIDE (a long side) when it is wider than tall, else
+    /// with its END; apart along x, when it is taller than wide. A square cut
+    /// always faces with its END. A pair apart along both axes is held to
+    /// both readings, the larger cell, as `OpenROAD`'s detailed router checks
+    /// a `LEF58_SPACINGTABLE` of `CUTCLASS` SIDE/END entries
+    /// (`checkLef58CutSpacingTbl_helper`). A pair that touches or overlaps is
+    /// held to the largest cell of its two classes. Distances are boundary
+    /// to boundary, Euclidean. So sky130 licon.2 to licon.2d are one table:
+    /// slotted licons end to end 350 nm apart, otherwise 510 nm, and 510 nm
+    /// to a square licon.
+    ///
+    /// One violation per pair closer than its cell, at the midpoint of its
+    /// measured points, with `limit` the cell. `examined` counts the pairs of
+    /// classed cuts whose boxes come within the table's largest cell. The
+    /// layer is not validated, so this rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-063, DRC-064. Rules: sky130 licon.2, licon.2b, licon.2c and
+    /// licon.2d; `LEF58_SPACINGTABLE` on a cut layer with `CUTCLASS` entries,
+    /// and `LEF58_CUTCLASS`, as `OpenROAD` reads them.
+    ///
+    /// Limits: the second, parallel-run value of a cell (`PRL`), the
+    /// `CENTERTOCENTER` and `CENTERANDEDGE` cells, same-net, same-metal and
+    /// cross-layer (`LAYER`) tables, `EXACTALIGNEDSPACING` and LEF's
+    /// `SPACINGTABLE ORTHOGONAL` are missing. A bar of free length (IHP
+    /// `CntB`) has no class.
+    CutClassSpacing {
+        /// The cut layer.
+        layer: LayerId,
+        /// Index into [`RuleSet::cut_tables`].
+        table: u32,
+    },
     /// Shapes that cannot be split onto `colors` masks with same-mask shapes
     /// at least `color_spacing` apart.
     ///
@@ -2039,6 +2080,55 @@ impl ClassTable {
     /// The cell for classes `i` and `j`.
     pub(crate) fn at(&self, i: usize, j: usize) -> Dbu {
         self.space[i * self.class.len() + j]
+/// A cut-class spacing table, `LEF58_SPACINGTABLE` on a cut layer with
+/// `CUTCLASS` SIDE/END entries: class `i` is the cut size `short[i]` x
+/// `long[i]`, and `space` is square, two rows and columns per class (its END,
+/// then its SIDE), the space two cuts facing that way need.
+/// [`Rule::CutClassSpacing`] says how a pair's classes and facings are read.
+///
+/// Every table in a [`RuleSet`] passed [`CutClassTable::is_valid`]; one built
+/// by hand must too, or [`RuleSet::run`] may panic indexing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutClassTable {
+    /// Each class's shorter side, in grid units; positive.
+    pub short: Vec<Dbu>,
+    /// Each class's longer side, in grid units; at least its `short`.
+    pub long: Vec<Dbu>,
+    /// Row-major, `2n` rows of `2n` positive cells for `n` classes; the
+    /// space for row `r`, column `c` is the space for column `r`, row `c`.
+    pub space: Vec<Dbu>,
+}
+
+impl CutClassTable {
+    /// Whether the table is complete and symmetric, with distinct classes, as
+    /// the struct states. [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        let n = self.short.len();
+        let classes: Vec<(Dbu, Dbu)> = self
+            .short
+            .iter()
+            .copied()
+            .zip(self.long.iter().copied())
+            .collect();
+        n > 0
+            && self.long.len() == n
+            && classes.iter().all(|&(s, l)| s.raw() > 0 && s <= l)
+            && (0..n).all(|i| !classes[..i].contains(&classes[i]))
+            && self.space.len() == 4 * n * n
+            && self.space.iter().all(|cell| cell.raw() > 0)
+            && (0..2 * n).all(|r| (0..2 * n).all(|c| self.at(r, c) == self.at(c, r)))
+    }
+
+    /// The cell at `row`, `column`.
+    pub(crate) fn at(&self, row: usize, column: usize) -> Dbu {
+        self.space[row * 2 * self.short.len() + column]
+    }
+
+    /// The class a `w` x `h` cut belongs to, either way round.
+    pub(crate) fn class_of(&self, w: Dbu, h: Dbu) -> Option<usize> {
+        let (short, long) = (w.min(h), w.max(h));
+        (0..self.short.len()).find(|&i| self.short[i] == short && self.long[i] == long)
     }
 }
 
@@ -2062,6 +2152,8 @@ pub struct RuleSet {
     pub class_tables: Vec<ClassTable>,
     /// The tables [`Rule::SpanLength`] names.
     pub span_tables: Vec<SpanTable>,
+    /// The tables [`Rule::CutClassSpacing`] names.
+    pub cut_tables: Vec<CutClassTable>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -2094,6 +2186,10 @@ impl RuleSet {
     ///   spacing table that is not complete and monotone;
     /// - [`DrcError::BadTable`] when a class or span table fails its kind's
     ///   check, or a forbidden range has `min` above `max`.
+    ///   spacing table that is not complete and monotone.
+    /// - [`DrcError::BadTable`] when a spacing table fails
+    ///   [`SpacingTable::is_valid`], or a cut-class table
+    ///   [`CutClassTable::is_valid`].
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -2130,6 +2226,26 @@ impl RuleSet {
                 ParamValue::Area(area) => Ok(area),
                 _ => Err(wrong_type(spec, param)),
             }
+        // Every length a row states under `param`, in order: a list's elements.
+        let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
+            let wanted = strings.get(param);
+            rules
+                .params_of(spec)
+                .iter()
+                .filter(|&&(name, _)| Some(name) == wanted)
+                .map(|&(_, stated)| match stated {
+                    ParamValue::Length(length) => Ok(length),
+                    _ => Err(wrong_type(spec, param)),
+                })
+                .collect()
+        };
+        let area_limit = |spec: &RuleSpec, param| match value(spec, param)? {
+            ParamValue::Area(area) if area.raw() > 0 => Ok(area),
+            ParamValue::Area(area) => Err(DrcError::NonPositiveLimit {
+                rule: name_of(spec.id),
+                limit: i64::try_from(area.raw()).unwrap_or(i64::MIN),
+            }),
+            _ => Err(wrong_type(spec, param)),
         };
         let ratio = |spec: &RuleSpec, param| -> Result<f64, DrcError> {
             match value(spec, param)? {
@@ -2505,9 +2621,35 @@ impl RuleSet {
                         width: lengths(spec, "width")?,
                         space: lengths(spec, "space")?,
                     });
+                    let table = SpacingTable {
+                        prl: lengths(spec, "prl")?,
+                        width: lengths(spec, "width")?,
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.tables.push(table);
                     Rule::SpacingTable {
                         layer,
                         table: u32::try_from(set.tables.len() - 1).expect("a deck has few tables"),
+                    }
+                }
+                "cut_class_spacing" => {
+                    let layer = one(spec)?;
+                    let table = CutClassTable {
+                        short: lengths(spec, "class_short")?,
+                        long: lengths(spec, "class_long")?,
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.cut_tables.push(table);
+                    Rule::CutClassSpacing {
+                        layer,
+                        table: u32::try_from(set.cut_tables.len() - 1)
+                            .expect("a deck has few tables"),
                     }
                 }
                 "attached_wide_spacing" => Rule::AttachedWideSpacing {
@@ -2849,6 +2991,9 @@ impl RuleSet {
     /// table that is missing or fails [`SpacingTable::is_valid`], or when a
     /// [`Rule::CutClass`] or [`Rule::AllowedWidth`] names a list that is
     /// missing.
+    /// [`Rule::NetSpacing`] layer holds, or when a [`Rule::SpacingTable`] or
+    /// [`Rule::CutClassSpacing`] names a table that is missing or fails its
+    /// `is_valid`.
     pub fn run_with_nets(
         &self,
         store: &GeometryStore,
@@ -3013,6 +3158,14 @@ impl RuleSet {
                     (layer, center),
                     (adjacent, within),
                     limit,
+                    s,
+                    out,
+                ),
+                Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
+                    store,
+                    id,
+                    layer,
+                    &self.cut_tables[table as usize],
                     s,
                     out,
                 ),
@@ -3550,6 +3703,7 @@ impl Rule {
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
             | Rule::CutSpacing { layer, .. }
+            | Rule::CutClassSpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. }
             | Rule::Forbidden { layer }
             | Rule::NetSpacing { layer, .. }

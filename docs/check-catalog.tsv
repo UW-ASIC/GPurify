@@ -54,8 +54,8 @@ DRC-055	drc	overlay	Direction-dependent (S/D-direction) spacing	SKY:lvtn.3b	-	mi
 DRC-060	drc	cut	Cut-to-cut spacing	LEF:cut SPACING; IHP:Cnt.b,V1.b; GF:CO.2a; SKY:ct.2,via.2; A7:V1.S.1; drt	min_spacing	implemented	BM; FR; TX:KL; MR; SY	
 DRC-061	drc	cut	Centre-to-centre cut spacing	LEF:SPACING CENTERTOCENTER; LEF58_SPACINGTABLE CENTERTOCENTER	cut_spacing	implemented	SE; MR; SY; TX:KL	
 DRC-062	drc	cut	Array / adjacent-cut spacing	LEF:ADJACENTCUTS,ARRAYSPACING; IHP:Cnt.b1,V1.b1; GF:CO.2b; LEF58_ARRAYSPACING; ISPD19	cut_spacing,via_array_spacing	implemented	FR; SE; TX:KL; MR; SY	An array (IHP Cnt.b1, GF180 CO.2b) is a cluster of more than `array` cuts, not rows by columns, so a long single row is held too (fails closed); ADJACENTCUTS EXCEPTSAMEPGNET is not modelled (fails closed)
-DRC-063	drc	cut	Cut-class spacing tables	LEF58_SPACINGTABLE cut; LEF:SPACINGTABLE ORTHOGONAL; drt	-	missing	TX:drt	
-DRC-064	drc	cut	Slotted / bar cut spacing by edge length	SKY:licon.2b-2d; IHP:CntB.*	-	missing	FR	sky130.deck left out
+DRC-063	drc	cut	Cut-class spacing tables	LEF58_SPACINGTABLE cut; LEF:SPACINGTABLE ORTHOGONAL; drt	cut_class_spacing	partial	FR; MR; SY; TX:KL	Class-pair SIDE/END cells only: the PRL second value, CENTERTOCENTER and CENTERANDEDGE cells, SAMENET/SAMEMETAL and LAYER tables, EXACTALIGNEDSPACING and LEF SPACINGTABLE ORTHOGONAL are missing
+DRC-064	drc	cut	Slotted / bar cut spacing by edge length	SKY:licon.2b-2d; IHP:CntB.*	cut_class_spacing	partial	FR; MR; SY; TX:KL	sky130 licon.2b-2d are a cut-class table; IHP CntB bars of free length have no class (classes are exact sizes, as LEF58_CUTCLASS)
 DRC-065	drc	cut	Via stacking / cross-layer cut spacing	LEF:SPACING LAYER STACK,MAXVIASTACK; GF:Vn.5,CUP.5	min_spacing_diff	partial	FR; MR; SY; TX:KL	Cross-layer spacing works; the stack-count limit is missing
 DRC-066	drc	cut	Minimum cut count / redundant via	LEF:MINIMUMCUT; LEF58_MINIMUMCUT; GF:MT30.8a; SKY:x.18; drt	redundant_via	partial	FR; TX:drt; MR; SY	Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing
 DRC-067	drc	cut	Metal-width-dependent via choice	LEF58_METALWIDTHVIAMAP; drt	-	missing	TX:drt	

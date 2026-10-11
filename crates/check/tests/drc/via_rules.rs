@@ -15,7 +15,7 @@
 use crate::common;
 
 use common::{Sink, A, RULE};
-use gpurify_check::drc::Rule;
+use gpurify_check::drc::{CutClassTable, Rule, RuleSet};
 use gpurify_check::report::{Measurement, Severity, Violation};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
@@ -313,4 +313,74 @@ fn adjacent_cuts_hold_only_a_cut_with_enough_close_neighbours() {
         .iter()
         .all(|&m| m == Measurement::Length(dbu(200))));
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+}
+
+// -------------------------------------------------------- cut_class_spacing
+
+/// sky130 licon.2 to licon.2d as one table: classes 170 x 170 and 190 x 2000,
+/// END then SIDE per class.
+fn licon_table() -> RuleSet {
+    let cells = [
+        [170, 170, 510, 510],
+        [170, 170, 510, 510],
+        [510, 510, 350, 510],
+        [510, 510, 510, 510],
+    ];
+    RuleSet {
+        rules: vec![(RULE, Rule::CutClassSpacing { layer: A, table: 0 })],
+        cut_tables: vec![CutClassTable {
+            short: vec![dbu(170), dbu(190)],
+            long: vec![dbu(170), dbu(2_000)],
+            space: cells.iter().flatten().map(|&c| dbu(c)).collect(),
+        }],
+        ..RuleSet::default()
+    }
+}
+
+/// Oracle: the sky130 manual (licon.2b, licon.2c). Two slotted licons 349
+/// apart end to end break licon.2b's 350; side by side, 509 apart, they break
+/// licon.2c's 510; 400 apart end to end they pass. Each finding names the
+/// cell it broke.
+#[test]
+fn a_cut_class_table_reads_slots_end_to_end_and_side_by_side() {
+    let set = licon_table();
+    assert!(set.cut_tables[0].is_valid());
+    for (second, broken) in [
+        ((0, 2_349, 190, 4_349), Some((349, 350))),
+        ((699, 0, 889, 2_000), Some((509, 510))),
+        ((0, 2_400, 190, 4_400), None),
+    ] {
+        let mut layout = LayoutBuilder::new(1);
+        layout.rect(A, 0, 0, 190, 2_000);
+        layout.rect(A, second.0, second.1, second.2, second.3);
+        let (store, _) = layout.finish();
+        let mut sink = Sink::default();
+        set.run(&store, &mut sink.out, &mut sink.runs);
+        let found: Vec<(Measurement, Measurement)> = sink
+            .out
+            .measured
+            .iter()
+            .copied()
+            .zip(sink.out.limit.iter().copied())
+            .collect();
+        let want: Vec<(Measurement, Measurement)> = broken
+            .into_iter()
+            .map(|(m, l)| (Measurement::Length(dbu(m)), Measurement::Length(dbu(l))))
+            .collect();
+        assert_eq!(found, want, "{second:?}");
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    }
+}
+
+/// Oracle: construct-from-answer. A table whose cells are not symmetric, or
+/// whose two classes are one size, is not a table the rule can read.
+#[test]
+fn a_cut_class_table_must_be_symmetric_with_distinct_classes() {
+    let mut table = licon_table().cut_tables.remove(0);
+    table.space[1] = dbu(200);
+    assert!(!table.is_valid());
+    let mut table = licon_table().cut_tables.remove(0);
+    table.short[1] = dbu(170);
+    table.long[1] = dbu(170);
+    assert!(!table.is_valid());
 }
