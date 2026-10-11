@@ -39,6 +39,7 @@ jobs:
           cargo test --workspace -- --ignored --skip klayout_mirror
           --skip netgen_differential --skip fastcap_differential
           --skip fasthenry_differential --skip ngspice_differential
+          --skip magic_differential
           --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
       # size within 3x of 1x's, on an otherwise idle runner.
@@ -57,6 +58,11 @@ jobs:
       # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
       # random layouts. One test at a time; each runs at most four klayouts.
       - run: nix develop .#oracles --command cargo test --test klayout -- --ignored --test-threads=1
+      # Magic's extractor on X6's closed-form geometries and seeded random
+      # wires, against the analytical PEX (O2): one GDS, one Magic run.
+      - run: >-
+          nix develop .#oracles --command cargo test --test exhaustive --
+          --ignored --test-threads=1 --nocapture magic_differential
       # Netgen on every circuit of the LVS enumeration with every single
       # fault (4223 circuits), FastCap and FastHenry on X6's field-solved
       # geometries, and ngspice on the inverter's Liberty tables (F3). One

@@ -138,6 +138,29 @@
 //!   between nets never reaches the output. A single frequency (1 MHz) means
 //!   there is no skin effect.
 //!
+//! # Against Magic's extractor
+//!
+//! The closed forms are compared with Magic 8.3's extractor under a tech file
+//! carrying the same coefficients (`tests/exhaustive/pex/magic.rs`, testing
+//! plan ledger O2). Magic defines four of them the same way: a node's lumped
+//! resistance is, per layer, the rectangle of that layer's area and
+//! perimeter; its ground capacitance is `areacap·A + perimc·P`; same-layer
+//! coupling is `sidewall·L/S` between facing edges; and interlayer coupling is
+//! `overlap·A`. They agree to the digits Magic prints, except where the
+//! definitions differ:
+//!
+//! - Magic takes an upper plate's area capacitance over a lower conductor
+//!   off its ground capacitance; here a plate's ground capacitance ignores the
+//!   plates beneath it.
+//! - Magic's lumped resistance leaves via cuts out and lumps a net's pieces
+//!   on one layer into one rectangle; here each via array adds `Rcut/n` and
+//!   each region is its own rectangle.
+//! - Magic's coupling reach is exclusive: facing edges exactly ten
+//!   thicknesses apart couple here and not in Magic.
+//! - Magic's sidewall coupling stops at the nearest edge, and by default
+//!   Magic takes the fringe a neighbour blocks off the ground capacitance;
+//!   here nothing shields and the fringe is the whole perimeter's.
+//!
 //! # Catalog rows
 //!
 //! The [check catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)

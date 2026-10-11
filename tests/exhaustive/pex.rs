@@ -1828,3 +1828,4 @@ fn spef_carries_the_closed_form_totals() {
 
 mod fastcap;
 mod fasthenry;
+mod magic;
