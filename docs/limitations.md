@@ -140,7 +140,6 @@ says which foundry manual, standard or tool defines each one.
 | DRC-002 | Allowed edge angles | partial | 45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer; with no layer, drawn layers only (F63, fixed) |
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
-| DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md, "Checks that do not exist yet"; sky130.deck) |
 | DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible |
 | DRC-011 | Device channel width / length | missing | Needs device W/L as a rule input (sky130.deck "needs W, not width") |
 | DRC-014 | Cut classes (several legal cut sizes) | partial | One exact size per rule; class-dependent spacing is DRC-063 |
@@ -148,7 +147,6 @@ says which foundry manual, standard or tool defines each one.
 | DRC-016 | Wrong-direction width or spacing | missing | Direction-dependent rules (limitations.md, "Shipped decks") |
 | DRC-020 | Minimum step / edge length / jog | partial | MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing |
 | DRC-021 | Feature length min/max | partial | Edge length via .with_length works; whole-feature length does not |
-| DRC-022 | Aspect ratio | missing | — |
 | DRC-027 | Two-widths spacing table | partial | The table is keyed on the wider shape only; TWOWIDTHS keys on both widths |
 | DRC-028 | Influence / stub spacing near wide metal | partial | Implements the sky130 m1.3a form; equivalence with LEF INFLUENCE is unverified |
 | DRC-029 | End-of-line spacing | partial | Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing |
@@ -189,9 +187,8 @@ says which foundry manual, standard or tool defines each one.
 | DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
 | DRC-086 | Shorts between labelled nets | partial | Reported in every run as lvs.net_seed_conflict, naming both labelled shapes, located at the first; no abort |
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing |
-| DRC-091 | Per-chip count / total-quantity limits | missing | — |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
-| DRC-095 | Seal ring | partial | Geometry is expressible; "one seal ring per chip" and "nothing outside it" are not |
+| DRC-095 | Seal ring | partial | Geometry through the generic kinds; one seal ring per chip (IHP Seal.m) is count(seal) <= 1 with >= 1, nothing outside it (Seal.l) forbidden(L not (seal or seal.holes())). Missing: the seal ring at the origin (sky130 x.19) and a partnum beside it (x.27) |
 | DRC-097 | Frame / die / cell-name rules | missing | sky130.deck left out |
 | DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | Reports a colouring failure, not its class |
 | DRC-102 | Pre-coloured (MASK) same-/different-mask spacing | missing | — |
