@@ -1325,6 +1325,29 @@ fn polar(dev: Dev) -> Circuit {
     Circuit::new(3, vec![Dev::mos(Model::N, 0, 1, 2), dev])
 }
 
+/// One circuit per model past `nmos`, each with its last device's first two
+/// pins swapped beside it: `(drawn, swapped)`.
+fn every_model() -> Vec<(Circuit, Circuit)> {
+    use Model::{B, C, D, H, P, Q, R};
+    [
+        polar(Dev::mos(P, 1, 0, 2)),
+        polar(Dev::mos(H, 1, 0, 2)),
+        Circuit::new(4, vec![Dev::mos(B, 0, 1, 2).sized(2000, 150).bulk(3)]),
+        polar(Dev::pins(R, &[0, 1])),
+        polar(Dev::pins(C, &[0, 1])),
+        polar(Dev::pins(D, &[0, 1])),
+        polar(Dev::pins(Q, &[0, 1, 2])),
+    ]
+    .into_iter()
+    .map(|drawn| {
+        let mut moved = drawn.clone();
+        let last = moved.devs.len() - 1;
+        moved.devs[last].pins.swap(0, 1);
+        (drawn, moved)
+    })
+    .collect()
+}
+
 /// Hierarchy, stacks, parallel devices, polarity, multipliers, tolerance,
 /// declared parameters, flavours, bulk, symmetry, ports and verdict classes.
 fn curated() -> Vec<Fixture> {
@@ -1540,20 +1563,8 @@ fn curated() -> Vec<Fixture> {
 
     // LVS-071: every model through the Spectre reader, as drawn and with a
     // fault, so the reader is held to the SPICE reader's verdicts.
-    let every_model = [
-        polar(Dev::mos(P, 1, 0, 2)),
-        polar(Dev::mos(H, 1, 0, 2)),
-        Circuit::new(4, vec![Dev::mos(B, 0, 1, 2).sized(2000, 150).bulk(3)]),
-        polar(Dev::pins(R, &[0, 1])),
-        polar(Dev::pins(C, &[0, 1])),
-        polar(Dev::pins(D, &[0, 1])),
-        polar(Dev::pins(Q, &[0, 1, 2])),
-    ];
-    for (index, drawn) in every_model.iter().enumerate() {
-        let mut moved = drawn.clone();
-        let last = moved.devs.len() - 1;
-        moved.devs[last].pins.swap(0, 1);
-        for (label, written) in [("same", drawn), ("swapped", &moved)] {
+    for (index, (drawn, moved)) in every_model().iter().enumerate() {
+        for (label, written) in [("same", drawn), ("swapped", moved)] {
             out.push(
                 with_text(
                     &format!("spectre/{index}_{label}"),
@@ -2518,5 +2529,187 @@ mod tests {
             );
         }
         assert_eq!((all.len(), orbits(4)), (4223, 4223));
+    }
+
+    // Metamorphic relations (P1): each compares two runs of the tool, so it
+    // takes no expected value from the brute-force oracle above, and is a
+    // second, independent oracle for the rows the fixtures prove with it.
+
+    /// A run of `layout` on [`full_deck`] against `reference`, as sorted text
+    /// with names resolved: every rule row and every finding, then whether
+    /// LVS matched.
+    fn report(layout: &Layout, reference: String) -> Vec<String> {
+        let mut fixture =
+            Fixture::new("lvs/relation", &["LVS-019"], &full_deck(), LVS).layout(layout.clone());
+        fixture.reference = Some(reference);
+        let ran = crate::harness::run(&fixture).unwrap_or_else(|why| panic!("{why}"));
+        let mut lines: Vec<String> = ran
+            .rows
+            .iter()
+            .map(|(rule, outcome)| format!("{rule} {outcome:?}"))
+            .chain(
+                ran.findings
+                    .iter()
+                    .map(|(rule, measured, at)| format!("{rule} {measured:?} {at:?}")),
+            )
+            .collect();
+        lines.sort();
+        lines.push(format!(
+            "matched {:?}",
+            ran.lvs
+                .map(|verdict| matches!(verdict, gpurify::check::lvs::Verdict::Match))
+        ));
+        lines
+    }
+
+    /// Every one-device circuit of the enumeration and every 211th other
+    /// (ponytail: a fixed stride, not a seeded draw; the fixtures sample
+    /// the rest).
+    fn sample() -> Vec<Circuit> {
+        circuits()
+            .into_iter()
+            .enumerate()
+            .filter(|(index, c)| c.devs.len() == 1 || index % 211 == 0)
+            .map(|(_, c)| c)
+            .collect()
+    }
+
+    /// LVS-071: one circuit gets one report whichever dialect states it.
+    ///
+    /// Oracle: metamorphic relation. [`spice`] and [`spectre`] write the
+    /// same circuit in the reader's two documented dialects (the `netlist`
+    /// module docs), so every rule row, every finding and the verdict must be
+    /// the same for both: on every circuit of [`sample`] against itself and
+    /// each of its single [`faults`], and on [`every_model`] as drawn and with
+    /// two pins swapped. A Spectre card read as another device, terminal
+    /// order or parameter breaks it.
+    #[test]
+    fn a_reference_reads_the_same_in_spice_and_spectre() {
+        let mut pairs = Vec::new();
+        for (drawn, moved) in every_model() {
+            pairs.push((drawn.clone(), drawn.clone()));
+            pairs.push((drawn, moved));
+        }
+        for c in sample() {
+            pairs.push((c.clone(), c.clone()));
+            for (_, written, _) in faults(&c) {
+                pairs.push((c.clone(), written));
+            }
+        }
+        for (drawn, written) in &pairs {
+            let layout = draw(drawn);
+            assert_eq!(
+                report(&layout, spice(written)),
+                report(&layout, spectre(written)),
+                "{} drawn, {} written",
+                drawn.code(),
+                written.code()
+            );
+        }
+    }
+
+    /// LVS-020: a parameter the layout cannot measure, stated on one card, is
+    /// one `lvs.undeclared_param` row and changes nothing else, whatever its
+    /// value.
+    ///
+    /// Oracle: metamorphic relation. From a reference that matches its
+    /// layout, adding `nrd` (BSIM's drain squares, which no recogniser
+    /// measures: `DeviceParam` lists what one does) to any one card keeps
+    /// every other row and finding, and adds exactly one
+    /// `lvs.undeclared_param` finding and the mismatch; `nrd=1` and
+    /// `nrd=1000` give the same report. On every device of every circuit of
+    /// [`sample`] and [`every_model`] that reduces nothing, so the added
+    /// parameter cannot stop a merge. A stated value taken as agreement with
+    /// the layout's silence, or one compared by value, breaks it.
+    #[test]
+    fn an_unmeasured_parameter_is_one_undeclared_row_whatever_its_value() {
+        let drawn = every_model().into_iter().map(|(drawn, _)| drawn);
+        let mut checked = 0;
+        for c in sample().into_iter().chain(drawn) {
+            if reduce(&c, &Declared::of(&c), false).devs.len() < c.devs.len() {
+                continue;
+            }
+            let layout = draw(&c);
+            let base = report(&layout, spice(&c));
+            let (verdict, rows) = base.split_last().expect("a verdict line");
+            assert_eq!(verdict, "matched Some(true)", "{}", c.code());
+            for i in 0..c.devs.len() {
+                let stated = |value| {
+                    let mut written = c.clone();
+                    written.devs[i] = written.devs[i].clone().param("nrd", value);
+                    report(&layout, spice(&written))
+                };
+                let mut added = stated(1.0);
+                assert_eq!(added, stated(1000.0), "{}: device {i}", c.code());
+                for line in rows {
+                    let at = added
+                        .iter()
+                        .position(|have| have == line)
+                        .unwrap_or_else(|| panic!("{}: device {i} lost {line}", c.code()));
+                    added.remove(at);
+                }
+                assert!(
+                    added.len() == 2
+                        && added[0].starts_with("lvs.undeclared_param ")
+                        && added[1] == "matched Some(false)",
+                    "{}: device {i} added {added:?}",
+                    c.code()
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 30, "only {checked} cards checked");
+    }
+
+    /// LVS-066: the `hvt` implant over an `nmos` gate, and only over its
+    /// gate, makes it the deck's `nmos_hvt` flavour (`gate_nh = gate_n and
+    /// hvt`, `gate_nl = gate_n not hvt`).
+    ///
+    /// Oracle: metamorphic relation. Adding `hvt` over exactly one `nmos`
+    /// gate gives, against any reference, the report of the same circuit
+    /// drawn with that device an `nmos_hvt` (the implant over its whole
+    /// device), and so flips the verdict against both the plain reference
+    /// and the flavoured one; adding it over that device's source diffusion,
+    /// beside the gate, changes nothing. On every `nmos` of every circuit of
+    /// [`sample`]. A flavour read from anything but the gate's implant
+    /// breaks it.
+    #[test]
+    fn an_implant_marker_on_a_gate_flips_its_flavour() {
+        let mut checked = 0;
+        for c in sample() {
+            for (i, dev) in c.devs.iter().enumerate() {
+                if dev.model != Model::N {
+                    continue;
+                }
+                // [`draw_mos`]'s channel, and its source diffusion short of it.
+                let x0 = column(i);
+                let gate = (x0 + SD, 0, x0 + SD + dev.l, dev.w);
+                let beside = (x0, 0, x0 + SD - 100, dev.w);
+                let marked = |(xlo, ylo, xhi, yhi): (i64, i64, i64, i64)| {
+                    draw(&c).rect("hvt", xlo, ylo, xhi, yhi)
+                };
+                let mut flavoured = c.clone();
+                flavoured.devs[i].model = Model::H;
+                for reference in [&c, &flavoured] {
+                    let text = spice(reference);
+                    let plain = report(&draw(&c), text.clone());
+                    let on_gate = report(&marked(gate), text.clone());
+                    let what = format!("{} device {i} against {}", c.code(), reference.code());
+                    assert_eq!(
+                        on_gate,
+                        report(&draw(&flavoured), text.clone()),
+                        "{what}: on the gate"
+                    );
+                    assert_ne!(on_gate.last(), plain.last(), "{what}: the verdict flips");
+                    assert_eq!(
+                        report(&marked(beside), text),
+                        plain,
+                        "{what}: beside the gate"
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 20, "only {checked} nmos checked");
     }
 }
