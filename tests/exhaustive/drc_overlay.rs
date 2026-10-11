@@ -3058,6 +3058,21 @@ fn selections() -> Vec<Fixture> {
         ],
         plates(),
     ));
+    // Plates overlapping 70 x 1: a neck of sqrt(70² + 1²) = sqrt(4901), within
+    // half a unit of 70, where a whole-unit `width` limit at x2 cannot tell it
+    // from 70 (the KLayout mirror measures it exactly).
+    cases.push(derived(
+        "derived/with_width_neck_band",
+        cat,
+        &["a"],
+        &[
+            ("a.with_width(<= 70nm)", vec![]),
+            ("a.with_width(> 70nm)", areas(&[1_999_930])),
+        ],
+        Layout::default()
+            .rect("a", 0, 0, 1000, 1000)
+            .rect("a", 930, 999, 1930, 1999),
+    ));
 
     let texts = rects(
         ring(

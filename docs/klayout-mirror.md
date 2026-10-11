@@ -203,27 +203,27 @@ Notation in the snippets:
   layers built per (a2) and (c).
 - Uppercase literals are already doubled: `LIM` = 2·limit DBU, `AREA4` = 4·limit DBU².
 - Any other scaling is stated next to the literal. Helpers (`figs`, `holes_below`, `density`,
-  `extension`, `touching`, `edge_enclosure`) are the prelude's.
+  `extension`, `touching`, `edge_enclosure`, `with_width2`) are the prelude's.
 
 The **found** column counts the comparisons, over the corpus, the fixtures and the random
 layouts, where either side reported something (x); **known** counts those an open finding
-explains (a3, kind 30).
+explains (kind 30).
 
 | # | Kind | Deck form | Key | Verdict | Compared as | Found / known |
 |---|---|---|---|---|---|---|
-| 1 | min_width | `width(L) >= l` | FIG by marker | EXACT | exact | 5009 / 755 (F53) |
+| 1 | min_width | `width(L) >= l` | FIG by marker | EXACT | exact | 5764 |
 | 2 | max_width | `width(L) <= l` | FIG by marker (wide regions) | EXACT | exact | 1202 |
-| 3 | cut_size | `size(L) == w x h` | POINT | EXACT | exact | 3196 / 1 (F53) |
+| 3 | cut_size | `size(L) == w x h` | POINT | EXACT | exact | 3197 |
 | 4 | min_edge_length | `edge_length(L) >= l` | EDGE | EXACT | exact | 1885 |
-| 5 | notch | `notch(L) >= l` | FIG by shape | EXACT | exact | 521 / 379 (F53) |
-| 6 | min_spacing | `space(L) >= l` | PAIR | EXACT | exact | 2313 |
+| 5 | notch | `notch(L) >= l` | FIG by shape | EXACT | exact | 900 |
+| 6 | min_spacing | `space(L) >= l` | PAIR | EXACT | exact | 2329 |
 | 7 | min_spacing_diff | `space(A, B) >= l` | PAIR | EXACT | exact | 2852 |
 | 8 | eol_spacing | `eol_space(L; eol_width)` | PAIR | APPROX | KLayout ⊆ GPurify | 459 |
-| 9 | prl_spacing | `prl_space(L; prl)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 384 |
+| 9 | prl_spacing | `prl_space(L; prl)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 273 |
 | 10 | corner_to_corner | `corner_space(L)` | PAIR | APPROX | exact on R, else GPurify ⊆ KLayout | 369 |
-| 11 | wide_dependent_spacing | `wide_space(L; width)` | PAIR | EXACT | exact, same-figure pairs dropped | 1039 |
-| 12 | min_area | `area(L) >= a` | FIG by marker | EXACT | exact | 2640 / 605 (F53) |
-| 13 | min_enclosed_area | `hole_area(L) >= a` | POINT | EXACT | exact | 59 / 109 (F53) |
+| 11 | wide_dependent_spacing | `wide_space(L; width)` | PAIR | EXACT | exact, same-figure pairs dropped | 1055 |
+| 12 | min_area | `area(L) >= a` | FIG by marker | EXACT | exact | 2808 |
+| 13 | min_enclosed_area | `hole_area(L) >= a` | POINT | EXACT | exact | 192 |
 | 14 | cheesing | `cheesing(L) <= a` | FIG by marker | EXACT | exact | 1430 |
 | 15 | density | `density(L[, bnd]; window, step)` | POINT | EXACT | exact | 3453 |
 | 16 | global_density | `global_density(L[, bnd])` | POINT | EXACT | exact | 228 |
@@ -233,15 +233,15 @@ explains (a3, kind 30).
 | 20 | overlap | `overlap(A, B) >= l` | FIG by marker (`A & B`) | EXACT | exact | 795 |
 | 21 | max_distance_to_tap | `tap_distance(w, t) <= l` | ROW | APPROX | lo ⊆ GPurify ⊆ hi | 3083 |
 | 22 | off_grid | `off_grid(; pitch)` | POINT | EXACT | exact (as sets) | 3164 |
-| 23 | angle | `angle([L]; allowed)` | SEGMENT | EXACT | exact | 86 |
+| 23 | angle | `angle([L]; allowed)` | SEGMENT | EXACT | exact | 102 |
 | 24 | redundant_via | `redundant_via(L; within) >= n` | ROW | APPROX | lo ⊆ GPurify ⊆ hi | 3153 |
 | 25 | via_array_spacing | `via_array_space(L; array) >= l` | ROW PAIR | APPROX | lo ⊆ GPurify ⊆ hi | 67 |
 | 26 | multi_patterning | `patterning(L; colors) >= l` | — | NONE | reported as not mirrored | — |
-| 27 | forbidden | `forbidden(L)` | ROW / EDGE | EXACT | exact | 3916 |
+| 27 | forbidden | `forbidden(L)` | ROW / EDGE | EXACT | exact | 3964 |
 | 28 | must_contain | `contains(o, i) >= n` | FIG by marker (outer) | EXACT | exact | 3236 |
-| 29 | must_be_inside | `inside(i, o)` | FIG by marker (inner) | EXACT | exact | 3106 / 1 (F53) |
+| 29 | must_be_inside | `inside(i, o)` | FIG by marker (inner) | EXACT | exact | 3107 |
 | 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT with `touch_within_layer`, else NONE | exact | 1141 / 10 (F88) |
-| 31 | spacing_table | `space_table(L; …)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 1217 |
+| 31 | spacing_table | `space_table(L; …)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 1209 |
 | 32 | attached_wide_spacing | `wide_space(L; width, attached)` | PAIR | APPROX | KLayout ⊆ GPurify | 986 |
 | 33 | edge_min_length | `length(E) >= l` | EDGE | EXACT | exact | 2162 |
 | 34 | edge_spacing | `space(E[, F]) >= l` | POINT | APPROX | KLayout ⊆ GPurify | 1835 |
@@ -250,7 +250,7 @@ explains (a3, kind 30).
 23 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
-The counts were measured at 1907ab3, before B20 and B24; the F53 column no longer applies.
+The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
 
 ### 1. min_width — EXACT
 
@@ -642,12 +642,14 @@ DRAWN.each { |x| emit(id, x.dup.raw.ongrid(PITCH)) }   # PITCH = 2·pitch
 **KLayout**
 
 ```ruby
-bad = x.dup.raw.edges
+bad = x.dup.raw.edges         # x: the named layer, or with none each drawn polygon layer
 ALLOWED.each { |a| bad = bad.without_angle(a) }   # deck 135deg → -45
 emit(id, bad)
 ```
 
 - 45 and −45 are distinct angles (v T16). Compared as undirected segments.
+- With no layer, a derived layer is not emitted, as GPurify does not check it (F63, B24); the
+  fixture `angle/derived` holds that (x).
 
 ### 24. redundant_via — APPROX (bracket)
 
@@ -857,7 +859,7 @@ Each operation runs on merged operands at the default coherence (a3).
 | `.holes()` | Each hole filled, island included, merged | `.holes` | Same (v T12) |
 | `.extents()` | The bbox of each figure, one row per box, unmerged (`extents_into`) | `.extents` | Same: "The boxes will not be merged" ([R]) |
 | `.with_area(b)` | Area without holes, inclusive bounds | `.with_area(4lo, 4hi + 1)` | (v T12, T15) |
-| `.with_width(b)` | `narrowest_width2`: facing edges and diagonal necks, as `width` (rule 1), squared and exact, against bounds squared at parse time (`> n` is `>= n² + 1`; `geom/width.rs`, `deck/parse.rs` `bounds`) | `L.drc(if_all(!(width(euclidian) < LO), width(euclidian) < HI))`, with LO and HI mapped per (a5) | (v t13 W1, T4.) Exact for every bound, an irrational neck included (N2, fixed in B16; F65, fixed in B24). KLayout's side compares `EdgePair#distance`, whose rounding is Q9 |
+| `.with_width(b)` | `narrowest_width2`: facing edges and diagonal necks, as `width` (rule 1), squared and exact, against bounds squared at parse time (`> n` is `>= n² + 1`; `geom/width.rs`, `deck/parse.rs` `bounds`) | `with_width2(L, 4lo, 4hi + 1)` (prelude): the merged figures whose narrowest width, squared, lies in [4lo, 4hi + 1); the pairs `width_check` finds under the bound are measured exactly, endpoint to segment as a `Rational` | A threshold recipe, `L.drc(if_all(!(width(euclidian) < LO), width(euclidian) < HI))`, resolves only half units at ×2: `width` compares the true distance with a whole limit, and `width <= v` is `width < v + 1` (v t18 Z9: √19604 = 140.01 is under 141, not 140, and `<= 140` flags it). It is exact on whole widths, which every rectilinear facing width is, and for `>=` and `<` bounds, but a neck between n and n + ½ (n² < w² ≤ n² + n) would count as within `<= n` and `== n` and not `> n`; the fixture `derived/with_width_neck_band` (√4901 under `<= 70nm` and `> 70nm`) disagrees under it. Measured exactly, EXACT for every bound (x; N2, fixed in B16; F65, fixed in B24) |
 | `.with_text(T, "p")` | A text point on the material or its edge; glob `*` and `?` only; case-sensitive | `.interacting(src.labels(T).texts(pattern("p")))` | Text on an edge and on a corner count (v T14, T18). KLayout globs also have `[…]`, `{a,b}` and `\` escapes (Q3) |
 | `.without_text(…)` | | `.not_interacting(…)` | |
 | `.edges()` | Merged boundary, kept as directed runs, material on the left | `.edges` | KLayout edges are clockwise: same side, opposite direction. Compare edges undirected. |
@@ -948,7 +950,9 @@ KLayout, but only by positive overlap in GPurify.
 - **Recipe corrections** the differential forced: `covering` and straddling inners (rule 28),
   layer-wide `enclosing` artifacts (rule 19), a raw polygon never overlapping itself (rule 21),
   `|` on edges and split runs (c), touching cuts (rule 25), the notch and enclosure markers lying
-  outside the figure (a4).
+  outside the figure (a4), and `with_width`'s squared bounds, measured exactly (c): after B24
+  squared them, the threshold recipe read `< 150nm` as a limit of 45000 and kept every figure,
+  so `notch` over the selection reported figures GPurify had not selected.
 
 ### Not resolved
 

@@ -213,6 +213,27 @@ def edge_enclosure(rule, edges, outer, depth)
     put({ rule: rule, e: seg(e) }) unless (RBA::Edges.new(e).extended_out(depth) - outer.data).is_empty?
   end
 end
+# The squared distance from point p to segment a-b, exact.
+def sq_dist(p, a, b)
+  dx, dy = b.x - a.x, b.y - a.y
+  t, l2 = (p.x - a.x) * dx + (p.y - a.y) * dy, dx * dx + dy * dy
+  q = t <= 0 ? a : t >= l2 ? b : nil
+  q ? (p.x - q.x)**2 + (p.y - q.y)**2 : Rational(((p.x - a.x) * dy - (p.y - a.y) * dx)**2, l2)
+end
+# The figures of `layer` whose narrowest Euclidean width, squared, lies in
+# [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
+# two corners is irrational, so each width pair under the bound is measured
+# exactly here.
+def with_width2(layer, lo, hi)
+  lim = Integer.sqrt([hi || lo, 0].max) + 1
+  layer.merged.select do |p|
+    w2 = RBA::Region.new(p.to_itype(dbu)).width_check(lim).each.map do |ep|
+      e, f = ep.first, ep.second
+      [sq_dist(e.p1, f.p1, f.p2), sq_dist(e.p2, f.p1, f.p2), sq_dist(f.p1, e.p1, e.p2), sq_dist(f.p2, e.p1, e.p2)].min
+    end.min || Float::INFINITY
+    (lo.nil? || w2 >= lo) && (hi.nil? || w2 < hi)
+  end
+end
 "#;
 
 /// A Ruby string literal.
@@ -294,20 +315,10 @@ impl Layers<'_> {
             DerivedOp::WithArea(lo, hi) => {
                 format!("{a}.with_area({}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
             }
-            // A neck is floored to whole units: w <= hi holds while 2w < 2hi + 2.
+            // The bounds are on the squared width, so 4x at x2.
+            DerivedOp::WithWidth(i128::MIN, i128::MAX) => a.clone(),
             DerivedOp::WithWidth(lo, hi) => {
-                let mut conditions = Vec::new();
-                if lo != i128::MIN {
-                    conditions.push(format!("!(width(euclidian) < {})", 2 * lo));
-                }
-                if hi != i128::MAX {
-                    conditions.push(format!("width(euclidian) < {}", 2 * hi + 2));
-                }
-                if conditions.is_empty() {
-                    a.clone()
-                } else {
-                    format!("{a}.drc(if_all({}))", conditions.join(", "))
-                }
+                format!("with_width2({a}, {}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
             }
             DerivedOp::Edges => format!("{a}.edges"),
             DerivedOp::Part(true) => format!("{a}.inside_part({})", b()),
@@ -757,14 +768,8 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 exact("off_grid", Key::Point, Value::Ignore)
             }
             Rule::Angle { layer, allowed } => {
-                let targets: Vec<LayerId> = match layer {
-                    Some(layer) => vec![layer],
-                    None => all
-                        .iter()
-                        .copied()
-                        .filter(|&l| !deck.layers.is_edges(l))
-                        .collect(),
-                };
+                // With no layer, the drawn layers only (F63).
+                let targets = layer.map_or_else(|| drawn.clone(), |layer| vec![layer]);
                 let mut drop = String::new();
                 for (bit, angle) in [(0, 0), (1, 45), (2, 90), (3, -45)] {
                     if allowed >> bit & 1 == 1 {
