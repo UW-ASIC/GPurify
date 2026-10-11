@@ -134,6 +134,7 @@ impl World {
             &Report {
                 header: &self.header,
                 violations: &self.violations,
+                waived: &gpurify_check::report::Violations::default(),
                 runs: &self.runs,
                 strings: &self.strings,
                 grid: Grid::new(1000).expect("a 1 nm grid"),

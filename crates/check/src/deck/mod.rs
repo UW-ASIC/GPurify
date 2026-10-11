@@ -84,6 +84,9 @@ pub struct CompiledDeck {
     pub corners: Vec<ProcessCorner>,
     /// The `stage` statements: the order a staged run checks the rules in.
     pub stages: Stages,
+    /// The `waive` statements: each a rule and the layer whose shapes waive
+    /// that rule's violations, in deck order.
+    pub waivers: Vec<(StrId, gpurify_geom::LayerId)>,
     /// Every DRC rule, typed, in deck order.
     pub drc: drc::RuleSet,
     /// Every ERC rule, typed, one table per kind.
@@ -239,6 +242,7 @@ impl CompiledDeck {
             extraction,
             corners,
             stages,
+            waivers,
         } = deck;
         Ok(Self {
             grid,
@@ -252,6 +256,7 @@ impl CompiledDeck {
             extraction,
             corners,
             stages,
+            waivers,
             drc,
             erc,
             custom: Vec::new(),

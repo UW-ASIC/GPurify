@@ -47,6 +47,10 @@ it examined:
 - **refused**: the input is outside what the rule can decide correctly, for
   example a 45° shape on a rectilinear check. GPurify will not guess.
 
+A deck with waivers (`waive` lines, see [deck.md](deck.md#waivers)) lists
+the violations its waiver shapes cover after the others, under `waived`
+(the JSON report's `waived` key); they do not fail the run.
+
 Read the skipped and refused counts before the violation count. A skipped
 rule looked at nothing, so zero violations from it proves nothing, and the run
 does not pass.

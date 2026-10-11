@@ -629,6 +629,8 @@ pub struct DeckBuilder<'s> {
     /// The base deck's stages, each with its rules' ids; a rule added here is
     /// in the last stage.
     stages: Vec<(String, Vec<String>)>,
+    /// The base deck's waivers; one whose rule is removed goes with it.
+    waivers: Vec<(String, String)>,
     rules: Vec<Slot>,
     added: BTreeMap<String, RuleRow>,
     /// The base deck's provenance, by id.
@@ -677,6 +679,7 @@ impl<'s> DeckBuilder<'s> {
             extraction: None,
             corners: Vec::new(),
             stages: Vec::new(),
+            waivers: Vec::new(),
             rules: Vec::new(),
             added: BTreeMap::new(),
             base_origin: HashMap::new(),
@@ -748,6 +751,7 @@ impl<'s> DeckBuilder<'s> {
             extraction: source.extraction,
             corners: source.corners,
             stages: source.stages,
+            waivers: source.waivers,
             rules: source.rules.into_iter().map(Slot::Kept).collect(),
             added: BTreeMap::new(),
             custom,
@@ -1389,6 +1393,8 @@ impl<'s> DeckBuilder<'s> {
         for (_, ids) in &mut stages {
             ids.retain(|id| rules.iter().any(|rule: &RuleSource| rule.id == *id));
         }
+        let mut waivers = self.waivers;
+        waivers.retain(|(id, _)| rules.iter().any(|rule: &RuleSource| rule.id == *id));
         let source = DeckSource {
             layers: self.drawn,
             ignored: self.ignored,
@@ -1403,6 +1409,7 @@ impl<'s> DeckBuilder<'s> {
             extraction: self.extraction,
             corners: self.corners,
             stages,
+            waivers,
         };
         let deck = lower(&source, self.strings).map_err(CompileError::from)?;
         let mut compiled = CompiledDeck::from_deck(deck, self.grid, self.strings)?;

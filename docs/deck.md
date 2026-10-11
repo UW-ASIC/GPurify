@@ -223,6 +223,23 @@ for (m, w) in metals {
 A name can be bound once. Loops only run over lists written in the deck, so a
 deck always finishes loading.
 
+### Waivers
+
+```
+layer waive_m1_1 = gds(255, 1)
+waive m1.1 waive_m1_1
+```
+
+A waiver is a shape in the layout on a layer the deck names for a rule: a
+violation of that rule whose marker lies on a waiver shape (its boundary
+included) is waived. It is reported apart, as `waived`, and does not fail
+the run; its rule's count drops by one. Because the waiver is geometry, a
+waiver drawn inside a cell (an IP block's known exceptions) waives at every
+placement of the cell, however it is turned or mirrored, as Calibre
+Auto-Waivers' waivers on their own geometry layer do. A rule may have
+several waiver layers, and the rule must be one of the deck's: a waiver for
+a misspelled rule would waive nothing, so the deck is refused.
+
 ### Stages
 
 ```

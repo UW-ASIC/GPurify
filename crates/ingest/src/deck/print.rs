@@ -39,7 +39,7 @@ pub enum PrintError {
 /// pairs, derived layers and rules in declaration order (each rule where its
 /// first inline layer was made, every other after the layers), then its
 /// connectivity, devices, `lvs` statements, parasitic stack, process
-/// corners and extraction type. `for` loops
+/// corners, waivers and extraction type. `for` loops
 /// and `let` bindings are not reconstructed: a loop's rules are written
 /// one by one.
 ///
@@ -285,6 +285,9 @@ impl Printer<'_> {
                 }
             }
             out.push('\n');
+        }
+        for (rule, layer) in &source.waivers {
+            let _ = writeln!(out, "waive {rule} {layer}");
         }
         if let Some(extraction) = source.extraction {
             let kind = match extraction.kind {

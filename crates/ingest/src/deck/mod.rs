@@ -120,6 +120,9 @@ pub struct Deck {
     pub corners: Vec<ProcessCorner>,
     /// The `stage` statements: the order a staged run checks the rules in.
     pub stages: Stages,
+    /// The `waive` statements: each a rule and the layer whose shapes waive
+    /// that rule's violations, in deck order.
+    pub waivers: Vec<(StrId, LayerId)>,
     /// The `temperature` statement and the `pex` rows' coefficients as
     /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
     /// `None` when the deck states no temperature.

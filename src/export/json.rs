@@ -3,7 +3,7 @@
 //! Data in: a [`Report`] (violations, rule records, strings, grid, header). Data
 //! out: one JSON object appended to a `String`, lengths in nanometres.
 //!
-//! The object has three keys, in this order:
+//! The object has three keys, four with waived findings, in this order:
 //!
 //! - `header`: `tool_version`, `deck_path`, `layout_path`, and `timestamp`
 //!   (a string or `null`).
@@ -11,6 +11,8 @@
 //!   id), `severity` (`"error"` or `"warning"`), `at` (`x` and `y` in nm),
 //!   `measured` and `limit` (each `kind`, `unit` and `value`), and `shapes`
 //!   (two polygon ids, the second `null` for a one-shape violation).
+//! - `waived`, only when the deck's waivers cover any finding: those
+//!   findings, as `violations` writes them.
 //! - `runs`: one object per rule, with `rule`, `outcome` (`ran`, `refused`,
 //!   or `skipped:` and the reason), `examined` and `violations`.
 //!
@@ -35,6 +37,9 @@ pub struct Report<'a> {
     /// The findings, written in their own order: sort them canonically first
     /// ([`run_checks`](crate::engine::run::run_checks) does).
     pub violations: &'a Violations,
+    /// The waived findings, written as `"waived"` after the violations when
+    /// there are any, in their own order (sort them as the violations).
+    pub waived: &'a Violations,
     /// One record per rule, written in slice order.
     pub runs: &'a [RuleRun],
     /// Resolves every rule name. It must be the table the ids came from.
@@ -51,13 +56,13 @@ pub struct Report<'a> {
 /// [`WriteError::Unrepresentable`] when a measured value or limit is NaN or
 /// infinite, which JSON cannot carry.
 pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteError> {
-    let v = report.violations;
-    let all_finite = v
-        .measured
-        .iter()
-        .zip(&v.limit)
-        .all(|(measured, limit)| measured.is_finite() && limit.is_finite());
-    if !all_finite {
+    let finite = |v: &Violations| {
+        v.measured
+            .iter()
+            .zip(&v.limit)
+            .all(|(measured, limit)| measured.is_finite() && limit.is_finite())
+    };
+    if !finite(report.violations) || !finite(report.waived) {
         return Err(WriteError::Unrepresentable("a non-finite measurement"));
     }
 
@@ -65,6 +70,34 @@ pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteEr
     write_header(report.header, out);
 
     out.push_str(",\"violations\":[");
+    write_rows(report.violations, report, out);
+    // Only a deck with waivers has any; a report without them reads as before.
+    if !report.waived.is_empty() {
+        out.push_str("],\"waived\":[");
+        write_rows(report.waived, report, out);
+    }
+
+    out.push_str("],\"runs\":[");
+    for (index, run) in report.runs.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"rule\":");
+        write_name(report.strings, run.rule, out);
+        out.push_str(",\"outcome\":\"");
+        out.push_str(outcome_name(run.outcome));
+        let _ = write!(
+            out,
+            "\",\"examined\":{},\"violations\":{}}}",
+            run.examined, run.violations
+        );
+    }
+    out.push_str("]}");
+    Ok(())
+}
+
+/// Each row of `v` as a JSON object, comma-separated.
+fn write_rows(v: &Violations, report: &Report<'_>, out: &mut String) {
     for row in 0..v.rule.len() {
         if row > 0 {
             out.push(',');
@@ -94,24 +127,6 @@ pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteEr
         }
         out.push_str("]}");
     }
-
-    out.push_str("],\"runs\":[");
-    for (index, run) in report.runs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str("{\"rule\":");
-        write_name(report.strings, run.rule, out);
-        out.push_str(",\"outcome\":\"");
-        out.push_str(outcome_name(run.outcome));
-        let _ = write!(
-            out,
-            "\",\"examined\":{},\"violations\":{}}}",
-            run.examined, run.violations
-        );
-    }
-    out.push_str("]}");
-    Ok(())
 }
 
 fn write_header(header: &Header, out: &mut String) {

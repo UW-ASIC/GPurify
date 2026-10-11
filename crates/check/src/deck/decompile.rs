@@ -93,6 +93,14 @@ impl CompiledDeck {
                 (strings.resolve(name).to_owned(), ids)
             })
             .collect();
+        source.waivers = (self.waivers.iter())
+            .map(|&(rule, layer)| {
+                (
+                    strings.resolve(rule).to_owned(),
+                    strings.resolve(self.layers.name(layer)).to_owned(),
+                )
+            })
+            .collect();
         source.extraction = (self.extraction != gpurify_ingest::deck::Extraction::default())
             .then_some(self.extraction);
         let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();

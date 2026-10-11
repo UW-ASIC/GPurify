@@ -54,6 +54,8 @@ pub struct DeckSource {
     /// The `stage` lines, in deck order, each with the ids of the rules
     /// written after it. Empty: the deck is not staged.
     pub stages: Vec<(String, Vec<String>)>,
+    /// The `waive` lines, each a rule id and a layer, in deck order.
+    pub waivers: Vec<(String, String)>,
 }
 
 /// One `corner` line: `corner <corner> <layer> <key> <value> ..`.
@@ -327,6 +329,28 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         strings,
     )?;
     let stages = build_stages(&doc.stages, &doc.rules, strings)?;
+    // A waiver for a rule the deck does not have would waive nothing, silently.
+    let mut waivers = Vec::with_capacity(doc.waivers.len());
+    for (rule, layer) in &doc.waivers {
+        if !doc.rules.iter().any(|declared| declared.id == *rule) {
+            return Err(DeckError::Malformed(format!(
+                "waive {rule}: no rule of the deck has that id"
+            )));
+        }
+        if waivers.contains(&(rule, layer)) {
+            return Err(DeckError::Malformed(format!(
+                "waive {rule}: {layer} is stated twice"
+            )));
+        }
+        waivers.push((rule, layer));
+    }
+    let waivers = waivers
+        .into_iter()
+        .map(|(rule, layer)| {
+            let layer = layer_of(&layers, strings, layer, &format!("waive {rule}"))?;
+            Ok((strings.intern(rule), layer))
+        })
+        .collect::<Result<Vec<_>, DeckError>>()?;
     let lvs = build_lvs(&doc.lvs, &doc.devices, strings)?;
     let temperature_law = match doc.temperature {
         None => None,
@@ -363,6 +387,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         extraction: doc.extraction.unwrap_or_default(),
         corners,
         stages,
+        waivers,
     })
 }
 

@@ -31,8 +31,32 @@ pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: 
 
     let rows = outputs.violations.len();
     let _ = writeln!(out, "violations: {rows}");
-    for row in 0..rows {
-        let violation = outputs.violations.get(row);
+    write_rows(&outputs.violations, strings, grid, out);
+    // Only a deck with waivers has any; a run without them reads as before.
+    if !outputs.waived.is_empty() {
+        let _ = writeln!(out, "waived: {}", outputs.waived.len());
+        write_rows(&outputs.waived, strings, grid, out);
+    }
+
+    // Every merge LVS made before matching, so a paired device can be traced
+    // back to the rows it stands for.
+    write_merges(outputs, strings, out);
+
+    // Debug-printed; every discrepancy of a mismatch is already an error row above.
+    if let Some(verdict) = &outputs.lvs {
+        let _ = writeln!(out, "lvs: {verdict:?}");
+    }
+}
+
+/// One line per violation row.
+fn write_rows(
+    violations: &gpurify_check::report::Violations,
+    strings: &StrTable,
+    grid: Grid,
+    out: &mut String,
+) {
+    for row in 0..violations.len() {
+        let violation = violations.get(row);
         let _ = write!(
             out,
             "  {} {} layer {} at ({}, {}) measured ",
@@ -54,9 +78,10 @@ pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: 
         }
         out.push('\n');
     }
+}
 
-    // Every merge LVS made before matching, so a paired device can be traced
-    // back to the rows it stands for.
+/// The merges LVS made, one line each.
+fn write_merges(outputs: &Outputs, strings: &StrTable, out: &mut String) {
     if !outputs.lvs_merges.is_empty() {
         out.push_str("lvs merges:\n");
     }
@@ -77,11 +102,6 @@ pub fn write_violations(outputs: &Outputs, strings: &StrTable, grid: Grid, out: 
             strings.resolve(merge.model),
             rows.join(", ")
         );
-    }
-
-    // Debug-printed; every discrepancy of a mismatch is already an error row above.
-    if let Some(verdict) = &outputs.lvs {
-        let _ = writeln!(out, "lvs: {verdict:?}");
     }
 }
 

@@ -102,6 +102,12 @@ pub struct Outputs {
     /// ([`gpurify_extract::reduce`]), in canonical order. `Some` only when
     /// PEX ran; a refused PEX stage leaves `None`, not a partial network.
     pub parasitics: Option<ParasiticNetwork>,
+    /// The violations the deck's waivers cover (`waive <rule> <layer>`: a
+    /// finding whose marker lies on a shape of that layer), moved out of
+    /// [`Self::violations`], sorted canonically: reported, not counted
+    /// against the run, and taken off their rule's
+    /// [`RuleRun::violations`](gpurify_check::report::RuleRun::violations).
+    pub waived: Violations,
     /// The same extraction at each of the deck's process corners
     /// ([`gpurify_ingest::deck::ProcessCorner`]), by the corner's name, in
     /// deck order: the same nets, nodes and kinds of element as
@@ -263,6 +269,7 @@ pub fn run_checks(
         });
     }
 
+    apply_waivers(loaded, &mut out);
     let summary = summarize(&mut out, [drc, erc, lvs, pex]);
     Ok((out, summary))
 }
@@ -271,6 +278,7 @@ pub fn run_checks(
 /// DRC, ERC, LVS, PEX order.
 pub(crate) fn summarize(out: &mut Outputs, stages: [StageStatus; 4]) -> Summary {
     out.violations.sort_canonical();
+    out.waived.sort_canonical();
     out.runs.sort_by_key(|run| run.rule);
 
     let violations =
@@ -333,6 +341,53 @@ fn hold_back_later_stages(loaded: &Loaded, out: &mut Outputs) {
             run.violations = 0;
         }
     }
+}
+
+/// The deck's waivers (`waive <rule> <layer>`): a violation whose marker
+/// lies on a shape of a layer that waives its rule, the boundary counting as
+/// on it, moves from `out.violations` to `out.waived`, and its rule's
+/// [`RuleRun::violations`] drops by one. The waivers are geometry in the
+/// layout, the record Calibre Auto-Waivers keeps on "a specific geometry
+/// layer" (Siemens' public description), so a waiver drawn in a cell waives
+/// at every placement of it: hierarchy-invariant because the layout is
+/// flattened with it.
+///
+/// ponytail: every waived rule's violation tests every shape of its waiver
+/// layers; a spatial index if waiver layers grow to thousands of shapes.
+fn apply_waivers(loaded: &Loaded, out: &mut Outputs) {
+    let waivers = &loaded.deck.waivers;
+    if waivers.is_empty() {
+        return;
+    }
+    let store = &loaded.store;
+    let covers = |layer: LayerId, at: gpurify_geom::ops::Point| {
+        layer.idx() < store.layer_count()
+            && store.polys_on_layer(layer).any(|row| {
+                let poly = gpurify_geom::PolyId(row);
+                let b = store.poly_bbox(poly);
+                b.xlo <= at.x
+                    && at.x <= b.xhi
+                    && b.ylo <= at.y
+                    && at.y <= b.yhi
+                    && store.poly_contains_point(poly, at)
+            })
+    };
+    let mut kept = Violations::default();
+    for row in 0..out.violations.len() {
+        let violation = out.violations.get(row);
+        let waived = waivers
+            .iter()
+            .any(|&(rule, layer)| rule == violation.rule && covers(layer, violation.at));
+        if !waived {
+            kept.push(violation);
+            continue;
+        }
+        if let Some(run) = out.runs.iter_mut().find(|run| run.rule == violation.rule) {
+            run.violations = run.violations.saturating_sub(1);
+        }
+        out.waived.push(violation);
+    }
+    out.violations = kept;
 }
 
 /// Run one rule set into fresh buffers (DRC and ERC clear what they are
