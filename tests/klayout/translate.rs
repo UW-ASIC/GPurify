@@ -291,6 +291,39 @@ def cut_class_spacing(rule, layer, cls, tbl)
     end
   end
 end
+# LEF MINIMUMCUT over the drawn cuts of `cuts`: a via is the cuts joining one
+# figure of `wide` to one of `other` (the first each overlaps), split into
+# groups closer than `within` (nil: one group); a group with a cut on the part
+# of `wide` where a square T + 1 fits (x2) and fewer than `n` cuts reports
+# every cut, with the count.
+def minimum_cut(rule, cuts, wide, other, t, n, within)
+  part = wide.data.merged.sized(-t).sized(t)
+  wf = wide.data.merged.each.to_a
+  of = other.data.merged.each.to_a
+  first = lambda { |figs, c| figs.index { |f| !(RBA::Region.new(f) & RBA::Region.new(c)).is_empty? } }
+  vias = Hash.new { |h, k| h[k] = [] }
+  cuts.data.each do |c|
+    w = first.(wf, c)
+    vias[[w, first.(of, c)]] << c unless w.nil?
+  end
+  vias.each_value do |cs|
+    group = (0...cs.size).to_a
+    root = lambda { |i| group[i] == i ? i : (group[i] = root.(group[i])) }
+    cs.each_index do |i|
+      ((i + 1)...cs.size).each do |j|
+        a, b = cs[i].bbox, cs[j].bbox
+        dx = [b.left - a.right, a.left - b.right, 0].max
+        dy = [b.bottom - a.top, a.bottom - b.top, 0].max
+        group[root.(j)] = root.(i) if within.nil? || dx * dx + dy * dy < within * within
+      end
+    end
+    cs.each_index.group_by { |i| root.(i) }.each_value do |members|
+      held = members.any? { |i| !(part & RBA::Region.new(cs[i])).is_empty? }
+      next if !held || members.size >= n
+      members.each { |i| put({ rule: rule }.merge(poly(cs[i])).merge({ v: members.size })) }
+    end
+  end
+end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
 # two corners is irrational, so each width pair under the bound is measured
@@ -914,6 +947,31 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Ignore,
                     vec![],
                 )
+            }
+            Rule::MinimumCut {
+                cut,
+                wide,
+                other,
+                width,
+                within,
+                min_count,
+            } => {
+                layers.reads(cut, &mut reads);
+                layers.reads(wide, &mut reads);
+                layers.reads(other, &mut reads);
+                writeln!(
+                    body,
+                    "minimum_cut({q}, {}.dup.raw, {}, {}, {}, {min_count}, {})",
+                    var(cut),
+                    var(wide),
+                    var(other),
+                    // A `width + 1` square fits where sizing by `width`
+                    // at x2 leaves material.
+                    width.raw(),
+                    within.map_or("nil".to_owned(), |w| lim(w).to_string())
+                )
+                .expect("a String");
+                exact("minimum_cut", Key::Row(None), Value::Count)
             }
             Rule::ViaArraySpacing {
                 layer,

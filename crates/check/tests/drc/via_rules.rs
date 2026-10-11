@@ -384,3 +384,57 @@ fn a_cut_class_table_must_be_symmetric_with_distinct_classes() {
     table.long[1] = dbu(170);
     assert!(!table.is_valid());
 }
+
+// -------------------------------------------------------------- minimum_cut
+
+/// Oracle: LEF/DEF 5.8 Minimum Cut Rule Example 1, "two via cuts are
+/// required for metal4 wires that are greater than 0.5 um": on a 600 wide
+/// wire, a via of one cut under its own pad fails with its count, one of two
+/// cuts under one pad passes, and on a 500 wide wire (not greater) a single
+/// cut passes. Layer A holds the cuts, B the wide metal, C the far metal.
+#[test]
+fn a_via_on_a_wire_wider_than_the_limit_needs_the_cut_count() {
+    const C: gpurify_geom::LayerId = gpurify_geom::LayerId(2);
+    let rule = vec![(
+        RULE,
+        Rule::MinimumCut {
+            cut: A,
+            wide: B,
+            other: C,
+            width: dbu(500),
+            within: None,
+            min_count: 2,
+        },
+    )];
+    for (wire, cuts, want) in [(600, 1, Some(1)), (600, 2, None), (500, 1, None)] {
+        let mut layout = LayoutBuilder::new(3);
+        layout.rect(B, 0, 0, 5_000, wire);
+        let single = layout.rect(A, 1_000, 100, 1_100, 200);
+        if cuts == 2 {
+            layout.rect(A, 1_200, 100, 1_300, 200);
+        }
+        layout.rect(C, 900, 0, 1_400, 300);
+        let (store, ids) = layout.finish();
+        let mut sink = Sink::default();
+        sink.run(&store, &rule);
+        match want {
+            Some(count) => {
+                assert_has_violation(
+                    &sink.out,
+                    &Violation {
+                        rule: RULE,
+                        layer: A,
+                        severity: Severity::Error,
+                        at: point(1_050, 150),
+                        measured: Measurement::Count(count),
+                        limit: Measurement::Count(2),
+                        shapes: (ids.of(single), None),
+                    },
+                );
+            }
+            None => assert_clean(&sink.runs, &sink.out, RULE),
+        }
+        let held = u64::from(wire > 500);
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, held);
+    }
+}

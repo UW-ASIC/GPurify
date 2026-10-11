@@ -731,6 +731,53 @@ pub enum Rule {
         /// inclusive.
         within: Dbu,
     },
+    /// A via on a wide wire with fewer than `min_count` cuts.
+    ///
+    /// Deck: `min_cuts(cut, wide, other; width: len) >= count`, and with
+    /// `within: len`, kind `minimum_cut`: LEF `MINIMUMCUT numCuts WIDTH width
+    /// [WITHIN cutDistance]` on layer `wide`, "the number of cuts a via must
+    /// have when it is on a wide wire or pin whose width is greater than
+    /// width". `other` is the metal on the via's far side, so `FROMABOVE` and
+    /// `FROMBELOW` are the choice of `other`; LEF's default, both, is two
+    /// rows. Cuts are the rows on `cut`, as drawn, read by their bounding
+    /// boxes. A via is the cuts joining one figure of merged `wide` to one
+    /// figure of merged `other` (the lowest of each it overlaps; a cut on no
+    /// `other` figure joins the others like it); with `within`, the via splits
+    /// into groups of cuts closer than `within` to one another ("numCuts via
+    /// cuts must be less than cutDistance from each other in order to be
+    /// counted together"). A via is held when one of its cuts overlaps the
+    /// part of `wide` wider than `width`: where a `width + 1` square fits,
+    /// strictly wider, as LEF says.
+    ///
+    /// One violation per cut of a held via with too few cuts, at the cut's
+    /// centre, `measured` the via's cut count. `examined` counts the held
+    /// vias. Records [`Outcome::Refused`] when `wide` or `other` fails
+    /// validation.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-066. Rules: LEF `MINIMUMCUT` (LEF/DEF 5.8, Minimum Cut Rule
+    /// Examples 1 to 3); GF180 MT30.8a, "single top via ... at one location
+    /// cannot exist under the thick (3um thick) metal", is `width: 1nm` with
+    /// `>= 2` on the thick metal.
+    ///
+    /// Limits: the `LENGTH length WITHIN distance` form (thin wires near a
+    /// wide one) and `LEF58_MINIMUMCUT`'s cut classes and `AREA` are missing.
+    MinimumCut {
+        /// The cut layer.
+        cut: LayerId,
+        /// The metal whose width triggers the rule; findings name its cuts.
+        wide: LayerId,
+        /// The metal on the vias' far side.
+        other: LayerId,
+        /// The wire width, in grid units, strictly above which the rule
+        /// holds a via; positive.
+        width: Dbu,
+        /// How close, in grid units, cuts must be to count together; `None`
+        /// counts every cut of a via.
+        within: Option<Dbu>,
+        /// The fewest cuts a held via needs; at least 1.
+        min_count: u16,
+    },
     /// Cuts in a large array closer than `limit`.
     ///
     /// Deck: `via_array_space(L; array: count) >= len`, kind
@@ -2525,6 +2572,23 @@ impl RuleSet {
                         within: length(spec, "within")?,
                     }
                 }
+                "minimum_cut" => {
+                    layers(spec, 3)?;
+                    let width = length(spec, "width")?;
+                    let within = match strings.get("within").and_then(|p| rules.param(spec, p)) {
+                        Some(_) => Some(length(spec, "within")?),
+                        None => None,
+                    };
+                    let min_count = positive(spec, count(spec, "min_count", u16::MAX.into())?)?;
+                    Rule::MinimumCut {
+                        cut: layer(spec, 0),
+                        wide: layer(spec, 1),
+                        other: layer(spec, 2),
+                        width,
+                        within,
+                        min_count: u16::try_from(min_count).expect("checked against the ceiling"),
+                    }
+                }
                 "via_array_spacing" => {
                     let layer = one(spec)?;
                     // Zero is legal: it makes every cluster an array.
@@ -3161,6 +3225,22 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::MinimumCut {
+                    cut,
+                    wide,
+                    other,
+                    width,
+                    within,
+                    min_count,
+                } => via::minimum_cut(
+                    store,
+                    id,
+                    (cut, wide, other),
+                    (width, within),
+                    min_count,
+                    s,
+                    out,
+                ),
                 Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
                     store,
                     id,
@@ -3686,6 +3766,8 @@ impl Rule {
     /// [`Rule::OffGrid`] reads none of its own; an [`Rule::Angle`] without a
     /// layer reads every drawn one).
     pub fn layers(&self) -> [Option<LayerId>; 2] {
+    /// Every layer the rule reads.
+    fn layers(&self) -> [Option<LayerId>; 3] {
         match *self {
             Rule::MinWidth { layer, .. }
             | Rule::MaxWidth { layer, .. }
@@ -3727,12 +3809,14 @@ impl Rule {
             | Rule::ConvexCornerSpacing { layer, .. }
             | Rule::ExactPitch { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
+            | Rule::EdgeMinLength { layer, .. } => [Some(layer), None, None],
+            Rule::EdgeSpacing { a, b, .. } => [Some(a), b, None],
             Rule::Density {
                 layer, boundary, ..
             }
             | Rule::GlobalDensity {
                 layer, boundary, ..
-            } => [Some(layer), boundary],
+            } => [Some(layer), boundary, None],
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
@@ -3765,6 +3849,12 @@ impl Rule {
             | Rule::MinInteriorAngle { layer, .. }
             | Rule::PolygonValidity { layer } => [layer, None],
             Rule::OffGrid { .. } => [None, None],
+            } => [Some(a), Some(b), None],
+            Rule::MinimumCut {
+                cut, wide, other, ..
+            } => [Some(cut), Some(wide), Some(other)],
+            Rule::Angle { layer, .. } => [layer, None, None],
+            Rule::OffGrid { .. } => [None, None, None],
         }
     }
 }

@@ -559,6 +559,28 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "min_count", Dim::Count)),
         &[p("within", "within", Dim::Length)],
     ),
+    // LEF MINIMUMCUT on the wide layer, the via's far metal third:
+    // `min_cuts(via1, met2, met1; width: 1um) >= 2` is MINIMUMCUT 2 WIDTH 1.0
+    // FROMBELOW on met2.
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[p("width", "width", Dim::Length)],
+    ),
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("within", "within", Dim::Length),
+        ],
+    ),
     drc(
         "via_array_space",
         Cmp::Ge,
