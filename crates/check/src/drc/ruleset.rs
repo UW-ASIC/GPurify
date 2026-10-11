@@ -2264,6 +2264,16 @@ impl RuleSet {
                 } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
+            // A rule over every layer (`angle` with none named, `off_grid`)
+            // declares none.
+            let declared = rule.layers();
+            debug_assert!(
+                declared == [None, None]
+                    || out.layer[before..]
+                        .iter()
+                        .all(|&layer| declared.contains(&Some(layer))),
+                "rule {id:?} reports only on a layer it reads, {declared:?}"
+            );
             for layer in rule.layers().into_iter().flatten() {
                 if last_use[layer.idx()] == at {
                     s.validated.forget(layer);

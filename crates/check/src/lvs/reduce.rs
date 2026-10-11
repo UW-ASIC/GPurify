@@ -666,6 +666,13 @@ fn order_by_group(plan: &mut Plan, devices: usize) {
         let head = find(&mut plan.root, device);
         plan.root[device as usize] = head;
     }
+    debug_assert!(
+        (0..devices).all(|device| {
+            let head = plan.root[device] as usize;
+            head <= device && plan.root[head] as usize == head
+        }),
+        "each group's root is its lowest device and its own root"
+    );
     let Plan { root, order, .. } = plan;
     order.clear();
     order.extend(0..narrow(devices));
