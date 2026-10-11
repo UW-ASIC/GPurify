@@ -26,7 +26,7 @@ const PICOHENRIES_PER_HENRY: f64 = 1e12;
 /// net's lowest layer. Each node carries its row sum as a ground capacitance,
 /// and every pair `i < j` gets a coupling of `−C_ij`. Every pair is written,
 /// even where the solve gives zero or a slightly negative value; nothing is
-/// dropped. Ground is the substrate, a grounded plane at height 0. A net's
+/// dropped, and a zero is `+0.0`, never `−0.0`. Ground is the substrate, a grounded plane at height 0. A net's
 /// shapes on a layer at height 0 (wells, diffusion) are junctions in that
 /// plane: they are not in the field, and the ground capacitance includes
 /// their closed form `Ca·A + Cf·P` from the layer's `pex` row. A net's
@@ -65,7 +65,9 @@ pub fn extract_into(
             Parasitic::GroundCap(Qty::new(ground * FEMTOFARADS_PER_FARAD)),
         );
         for other in (row + 1)..n {
-            let coupling = -matrix.value[row * n + other] * FEMTOFARADS_PER_FARAD;
+            // `0 − x`, not `−x`: a pair with no field between them (a net of
+            // junctions only has no panels) reads +0, never −0 (F80).
+            let coupling = 0.0 - matrix.value[row * n + other] * FEMTOFARADS_PER_FARAD;
             out.push(
                 from,
                 Some(node(other)),

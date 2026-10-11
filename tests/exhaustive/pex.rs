@@ -1284,6 +1284,50 @@ fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
     assert!(relative(ohm, series) <= MODEL, "R {ohm} ohm, want {series}");
 }
 
+/// PEX-005, PEX-010 (F80): a net of junctions only has no panels, so solved
+/// with another net it shares no field with it: their coupling is exactly
+/// zero, and a positive zero, since SPEF prints `−0.0` as `-0.000000`. The
+/// junction net `A` is a diffusion on [`JUNCTION`]'s `m1`; `B` is an `m2`
+/// bar beside it.
+#[test]
+fn a_junction_only_net_couples_by_a_positive_zero() {
+    let layout = Layout::default()
+        .rect("m1", 0, 0, 5_000, 1_000)
+        .label("m1_label", 500, 500, "A")
+        .rect("m2", 0, 3_000, 5_000, 4_000)
+        .label("m2_label", 500, 3_500, "B");
+    let ran = run(&deck(JUNCTION, &[], ""), layout, PEX, &["A", "B"]);
+    let network = ran.outputs.parasitics.as_ref().expect("PEX ran");
+    let couplings: Vec<f64> = network
+        .value
+        .iter()
+        .filter_map(|value| match value {
+            Parasitic::CouplingCap(q) => Some(q.raw()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        couplings.len() == 1 && couplings[0].to_bits() == 0.0_f64.to_bits(),
+        "couplings {couplings:?}, want one +0.0"
+    );
+    let header = gpurify::export::Header {
+        tool_version: "test",
+        deck_path: "pex.deck".into(),
+        layout_path: "pex.gds".into(),
+        timestamp: None,
+    };
+    let mut spef = String::new();
+    gpurify::export::parasitic::write_spef(
+        network,
+        &ran.extracted.ports,
+        &ran.loaded.strings,
+        &header,
+        &mut spef,
+    )
+    .expect("SPEF writes");
+    assert!(!spef.contains("-0.000000"), "{spef}");
+}
+
 /// PEX-005 (F75): a field-solved net the mesh cannot take is a PEX refusal
 /// naming the layer as the deck does, not an aborted run naming `LayerId`.
 /// An `m1` row with no `dielectric` states no permittivity, which the closed
