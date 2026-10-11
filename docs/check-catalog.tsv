@@ -18,7 +18,7 @@ DRC-018	drc	dimension	Maximum area	IHP:MIM.g,GFil.i,LBE.b1; SKY:capm.12,pad.3	fo
 DRC-019	drc	dimension	Minimum enclosed (hole) area	LEF:MINENCLOSEDAREA; IHP:Act.e; GF:DF.10; SKY:m1.7; KL:holes; drt	min_enclosed_area	implemented	BM; FR; TX:KL; MR; SY	
 DRC-020	drc	dimension	Minimum step / edge length / jog	LEF:MINSTEP,MINSIZE; LEF58_MINSTEP; GF:DF.11; MAG:area minedge; drt	min_edge_length	partial	BM; FR; TX:KL; MR; SY	MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing
 DRC-021	drc	dimension	Feature length min/max	A7:type L; IHP:Rsil.f,Rppd.e; SKY:mf.2	edge_min_length	partial	FR; MR; SY; TX:KL	Edge length via .with_length works; whole-feature length does not
-DRC-022	drc	dimension	Aspect ratio	SKY:capm.6,li.2; KL:with_bbox_aspect_ratio	-	missing	FR	
+DRC-022	drc	dimension	Aspect ratio	SKY:capm.6,li.2; KL:with_bbox_aspect_ratio	aspect_ratio	implemented	FR; TX:KL; SY; MR	aspect_ratio(L) <= r: the merged figure's bounding box, longer side over shorter (KLayout with_bbox_aspect_ratio)
 DRC-023	drc	spacing	Same-layer spacing	LEF:SPACING; IHP:M1.b; GF:Mn.2a; SKY:m1.2; A7:M1.S.1; KL:space; MAG:spacing; drt	min_spacing	implemented	BM; FR; TX:KL; MR; SY	
 DRC-024	drc	spacing	Notch	LEF:NOTCHLENGTH,ENDOFNOTCHWIDTH; SKY:x.6; IHP:M1.b; KL:notch	notch	implemented	BM; FR; TX:KL; MR; SY	
 DRC-025	drc	spacing	Width-dependent (wide-metal) spacing	LEF:SPACING RANGE,SPACINGTABLE; IHP:M1.e,M1.f; GF:Mn.2b; SKY:m1.3b,m3.3c; MAG:widespacing; drt	wide_dependent_spacing,spacing_table	implemented	FR; TX:KL; MR; SY	

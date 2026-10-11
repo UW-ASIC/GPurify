@@ -73,6 +73,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         angle(depth),
         forbidden(depth),
         max_area(depth),
+        aspect_ratio(depth),
         validity(depth),
         pins(depth),
     ]
@@ -2780,6 +2781,102 @@ fn max_area(depth: Depth) -> Vec<Fixture> {
         &["DRC-018"],
         "rule ma forbidden(met1.with_area(> 10000nm2))",
         &["ma"],
+    ));
+    out
+}
+
+// ------------------------------------------------------------ aspect_ratio
+
+/// A finding whose measured value is a ratio.
+fn ratio(r: f64) -> Finding {
+    Finding {
+        measured: Some(Measurement::Ratio(r)),
+        at: None,
+    }
+}
+
+/// `aspect_ratio(met1) <= 3` (`aspect_ratio`, DRC-022: sky130 capm.6 "maximum
+/// aspect ratio (length/width)", li.2 "max ratio of length to width"): one
+/// finding per merged figure whose bounding box's longer side over its
+/// shorter is above the limit, measuring that ratio, at the centre of the
+/// figure's first rectangle.
+///
+/// Oracle: ratios fixed by construction, the limit swept one grid step either
+/// side (a 100-wide bar 299, 300 and 301 long; and 249, 250, 251 under a
+/// limit of 2.5, a ratio the deck writes as a decimal): at the limit is
+/// legal. The 301 bar drawn as two abutting halves (each 1.5 alone: a check
+/// that does not merge passes it); an L of two 400 x 100 arms (its box is
+/// square: a check per drawn row or per rectangle flags each arm at 4); a
+/// square joined at a corner to a 400 x 100 bar (one figure of box 500 x 200
+/// under the corner model, 2.5; the bar alone would read 4); a 1000 x 200
+/// ring (5, its hole changes nothing); an empty layer.
+fn aspect_ratio(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck("rule ar aspect_ratio(met1) <= 3");
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("aspect_ratio/{name}"),
+            &["DRC-022"],
+            &deck,
+            layout,
+            vec![("ar", findings)],
+        ));
+    };
+    for l in sweep(depth, 300) {
+        #[allow(clippy::cast_precision_loss, reason = "small integers")]
+        let findings = if l > 300 {
+            vec![pin(ratio(l as f64 / 100.0), 100, l)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("bar/{}", side(l, 300)),
+            met1(&[[0, 0, 100, l]]),
+            findings,
+        );
+    }
+    case(
+        "halves".into(),
+        met1(&[[0, 0, 100, 150], [0, 150, 100, 301]]),
+        vec![ratio(3.01)],
+    );
+    case(
+        "l_of_two_long_arms".into(),
+        met1(&[[0, 0, 400, 100], [0, 100, 100, 400]]),
+        Vec::new(),
+    );
+    case(
+        "bar_joined_at_a_corner".into(),
+        met1(&[[0, 0, 100, 100], [100, 100, 500, 200]]),
+        Vec::new(),
+    );
+    case(
+        "ring".into(),
+        Layout::default().polygon("met1", &holed([0, 0, 1000, 200], [100, 50, 900, 150])),
+        vec![ratio(5.0)],
+    );
+    let decimal = one_layer_deck("rule ar aspect_ratio(met1) <= 2.5");
+    for l in sweep(depth, 250) {
+        #[allow(clippy::cast_precision_loss, reason = "small integers")]
+        let findings = if l > 250 {
+            vec![pin(ratio(l as f64 / 100.0), 100, l)]
+        } else {
+            Vec::new()
+        };
+        cases.push(fixture(
+            &format!("aspect_ratio/decimal/{}", side(l, 250)),
+            &["DRC-022"],
+            &decimal,
+            met1(&[[0, 0, 100, l]]),
+            vec![("ar", findings)],
+        ));
+    }
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "aspect_ratio",
+        &["DRC-022"],
+        "rule ar aspect_ratio(met1) <= 3",
+        &["ar"],
     ));
     out
 }

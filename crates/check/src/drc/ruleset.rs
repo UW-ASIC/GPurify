@@ -1012,9 +1012,9 @@ pub enum Rule {
     /// drawn.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-091, DRC-095. Rules: IHP npn13G2.bR (a maximum number of npn13G2
-    /// devices per chip) and Seal.a to Seal.n (one seal ring); `KLayout`
-    /// `count` on a merged layer.
+    /// DRC-091, DRC-095. Rules: IHP npn13G2.bR ("max. recommended total
+    /// number of npn13G2 emitters per chip") and Seal.m ("only one sealring
+    /// per chip"); `KLayout` `count` on a merged layer.
     Count {
         /// The layer counted, drawn or derived.
         layer: LayerId,
@@ -1022,6 +1022,35 @@ pub enum Rule {
         limit: u32,
         /// `Minimum` for `>=`, `Maximum` for `<=`.
         sense: LimitSense,
+    },
+    /// A shape whose bounding box is more than `limit` times as long as it is
+    /// wide.
+    ///
+    /// Deck: `aspect_ratio(L) <= r`, kind `aspect_ratio`, `r` a bare number.
+    /// The layer is merged first. A figure's aspect ratio is its bounding
+    /// box's longer side over its shorter, so it is at least 1 and a square
+    /// box reads 1 whichever way round, as `KLayout`'s
+    /// `with_bbox_aspect_ratio` reads it. A plate's length over its width is
+    /// this ratio for a rectangle, which a rectangle-only rule
+    /// ([`Rule::Forbidden`] on `L.non_rectangles()`) can require.
+    ///
+    /// One violation per merged figure whose ratio is above `limit`, at the
+    /// centre of its first rectangle (inside the figure), `measured` the
+    /// ratio. `shapes.0` is the lowest drawn row under the figure. `examined`
+    /// counts figures. The ratio is the nearest `f64` to the quotient of the
+    /// two sides, and the limit the nearest to the deck's number, so a figure
+    /// exactly at the limit passes.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-022. Rules: sky130 capm.6 ("maximum aspect ratio (length/width)"
+    /// of a MiM capacitor) and li.2 ("max ratio of length to width of LI
+    /// without licon or mcon", 10); `KLayout` `with_bbox_aspect_ratio` and
+    /// `bbox_aspect_ratio`.
+    AspectRatio {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The largest legal ratio; positive and finite.
+        limit: f64,
     },
 }
 
@@ -1499,6 +1528,10 @@ impl RuleSet {
                     limit: count(spec, "limit", u32::MAX)?,
                     sense: sense(spec)?,
                 },
+                "aspect_ratio" => Rule::AspectRatio {
+                    layer: one(spec)?,
+                    limit: ratio(spec, "limit")?,
+                },
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -1731,6 +1764,9 @@ impl RuleSet {
                     limit,
                     sense,
                 } => area::count(store, id, (layer, drawn), limit, sense, s, out),
+                Rule::AspectRatio { layer, limit } => {
+                    area::aspect_ratio(store, id, layer, limit, s, out)
+                }
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -1767,7 +1803,8 @@ impl Rule {
             | Rule::SpacingTable { layer, .. }
             | Rule::AttachedWideSpacing { layer, .. }
             | Rule::EdgeMinLength { layer, .. }
-            | Rule::Count { layer, .. } => [Some(layer), None],
+            | Rule::Count { layer, .. }
+            | Rule::AspectRatio { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -1809,7 +1846,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 36] = [
+pub const KINDS: [&str; 37] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -1846,4 +1883,5 @@ pub const KINDS: [&str; 36] = [
     "edge_spacing",
     "edge_enclosure",
     "count",
+    "aspect_ratio",
 ];

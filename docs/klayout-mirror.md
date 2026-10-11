@@ -250,8 +250,9 @@ explains (kind 30).
 | 34 | edge_spacing | `space(E[, F]) >= l` | POINT | APPROX | KLayout ⊆ GPurify | 1835 |
 | 35 | edge_enclosure | `enclosure(E, L) >= l` | POINT | EXACT | exact | 3112 |
 | 36 | count | `count(L) <= n` / `>= n` | POINT | EXACT | exact | new in H |
+| 37 | aspect_ratio | `aspect_ratio(L) <= r` | FIG by marker | EXACT | exact | new in H |
 
-24 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+25 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -863,6 +864,23 @@ put({ rule: id, pt: [die.center.x, die.center.y], v: n }) if !die.empty? && n > 
 
 - `merged` at the default coherence joins shapes meeting at a corner, as the Connected model does
   (a3), so both count the same figures. Key POINT, the die centre; the count compared exactly.
+
+### 37. aspect_ratio — EXACT
+
+**GPurify** (`area.rs` `aspect_ratio`): per merged figure, its bounding box's longer side over its
+shorter, as an `f64`; one finding per figure above the limit, at the centre of its first
+rectangle, `measured` the ratio.
+
+**KLayout**
+
+```ruby
+emit(id, L.drc(bbox_aspect_ratio > R)) { |p| { v: [p.bbox.width, p.bbox.height].max.to_f / [p.bbox.width, p.bbox.height].min } }
+```
+
+- `bbox_aspect_ratio` is "the larger dimension divided by the smaller one" of the bounding box
+  ([X]; the layer form is `with_bbox_aspect_ratio`, [L]), on merged figures. At ×2 both sides
+  double, so the quotient, and its comparison with the unscaled limit, is the same double. Key FIG
+  by marker; the ratio compared to 1e-9.
 
 ---
 

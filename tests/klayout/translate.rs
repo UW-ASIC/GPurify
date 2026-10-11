@@ -1070,6 +1070,17 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("count", Key::Point, Value::Count)
             }
+            Rule::AspectRatio { layer, limit } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.drc(bbox_aspect_ratio > {limit:?})) \
+                     {{ |p| {{ v: [p.bbox.width, p.bbox.height].max.to_f / [p.bbox.width, p.bbox.height].min }} }}",
+                    var(layer)
+                )
+                .expect("a String");
+                exact("aspect_ratio", Key::FigAt(name), Value::Ratio)
+            }
         };
         reads.sort();
         reads.dedup();

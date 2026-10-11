@@ -72,6 +72,7 @@
 //! | `space(E[, F]) >= len` | `edge_spacing` | [`drc::Rule::EdgeSpacing`] | parallel edges on edge layers too close | DRC-051 |
 //! | `enclosure(E, L) >= len` | `edge_enclosure` | [`drc::Rule::EdgeEnclosure`] | an edge whose outside is not covered by L for the limit | DRC-051 |
 //! | `count(L) >= n`, `count(L) <= n` | `count` | [`drc::Rule::Count`] | too few or too many shapes on `L` in the whole layout | DRC-091, DRC-095 |
+//! | `aspect_ratio(L) <= r` | `aspect_ratio` | [`drc::Rule::AspectRatio`] | a shape whose bounding box is longer than `r` times its width | DRC-022 |
 //!
 //! ## Electrical rules
 //!
