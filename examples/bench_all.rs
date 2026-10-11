@@ -1,11 +1,13 @@
-//! Timing tables, recorded and never gated:
+//! Timing tables, printed and never gated:
 //!
 //! ```sh
-//! cargo test --release --test bench_all -- --ignored --nocapture
+//! cargo run --release --example bench_all
 //! ```
 //!
-//! One table per stage against polygon count (watch `ns/poly` stay flat), and
-//! one per deck rule on `tests/fixtures/_source/conformance.gds`.
+//! One table per stage against polygon count (watch `ns/poly` stay flat;
+//! `tests/scaling.rs` holds the engine to it), one per deck rule on
+//! `tests/fixtures/_source/conformance.gds`, and the flattening of a placed
+//! cell. A timing is not a check, so these are an example, not a test.
 
 use gpurify::check::topology::NetTable;
 use gpurify::engine::pipeline::{extract, load, Inputs};
@@ -47,15 +49,19 @@ fn pairs_on(store: &gpurify::geom::GeometryStore, layer: LayerId) -> usize {
     pairs.len()
 }
 
-#[test]
-#[ignore = "timing table; run with --release -- --ignored --nocapture"]
+fn main() {
+    stage_timings_across_the_scale_corpus();
+    every_rule_in_the_deck_timed_on_its_own();
+    flattening_a_placed_cell();
+}
+
 fn stage_timings_across_the_scale_corpus() {
     println!("\n  stage                    polygons        total      ns/poly");
     for polygons in SIZES {
         let n = polygons as usize;
         let (corpus, elapsed) = timed(|| corpus(polygons));
         row("testgen::scale_corpus", n, elapsed);
-        let (_, elapsed) = timed(|| {
+        let ((), elapsed) = timed(|| {
             let mut nets = NetTable::default();
             gpurify::check::topology::extract_nets_into(
                 &corpus.store,
@@ -126,8 +132,6 @@ const RULE_ITERS: u32 = 50;
 /// Each deck rule alone, averaged over `RULE_ITERS` `run_checks` calls, less the
 /// cost of the same call on a deck with no rules (the minimum of three, after
 /// one cold call).
-#[test]
-#[ignore = "timing table; run with --release -- --ignored --nocapture"]
 fn every_rule_in_the_deck_timed_on_its_own() {
     let (rules, base): (Vec<String>, Vec<String>) = unlabelled_deck()
         .into_iter()
@@ -200,4 +204,57 @@ fn every_rule_in_the_deck_timed_on_its_own() {
         println!("  {id:<32} {outcome:<24} {examined:>8} {rule_only:>13?} {call:>15?}");
     }
     println!("\n  baseline: drc {drc_floor:?}, erc {erc_floor:?}\n");
+}
+
+/// Flattening 4000 placements of a 400-rectangle cell, every quarter turn,
+/// half of them mirrored: 1.6M rectangles, best of five.
+fn flattening_a_placed_cell() {
+    use gpurify::geom::{Grid, StrTable};
+    use gpurify::ingest::deck::parse_deck;
+    use gpurify::ingest::layout::{gds, UnknownLayers};
+    use gpurify_testgen::gds::{write_library, Placement, Structure};
+
+    let leaf = Structure {
+        name: "LEAF".into(),
+        rects: (0..400)
+            .map(|i| {
+                let (x, y) = ((i % 20) * 50, (i / 20) * 50);
+                (1, 0, [x, y, x + 30, y + 30])
+            })
+            .collect(),
+        refs: Vec::new(),
+    };
+    let top = Structure {
+        name: "TOP".into(),
+        rects: Vec::new(),
+        refs: (0..4000)
+            .map(|i| Placement {
+                cell: "LEAF".into(),
+                reflect: i % 2 == 1,
+                quarter_turns: u8::try_from(i % 4).expect("0..4"),
+                mag: 1,
+                at: ((i % 64) * 2000, (i / 64) * 2000),
+                array: None,
+            })
+            .collect(),
+    };
+    let mut bytes = Vec::new();
+    write_library(&[leaf, top], &mut bytes).expect("a writable library");
+    let mut strings = StrTable::default();
+    let grid = Grid::new(1000).expect("a 1 nm grid");
+    let deck = parse_deck("grid 1nm\nlayer a = gds(1, 0)\n", grid, &mut strings)
+        .expect("a one-layer deck");
+    let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
+    let best = (0..5)
+        .map(|_| {
+            timed(|| {
+                library
+                    .flatten(&deck, &strings, UnknownLayers::Reject)
+                    .expect("flattens")
+            })
+            .1
+        })
+        .min()
+        .expect("five runs");
+    println!("\n  flatten 1.6M rectangles from 4000 placements: best of 5 {best:?}\n");
 }

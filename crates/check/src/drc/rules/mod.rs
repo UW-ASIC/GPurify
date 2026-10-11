@@ -548,46 +548,4 @@ mod tests {
             }
         }
     }
-
-    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_pair`
-    #[test]
-    #[ignore = "timing"]
-    fn bench_pair_distances() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        let mut r = Rng(7);
-        let mut b = GeometryStoreBuilder::default();
-        for k in [2usize, 2, 2, 2, 3, 6, 12] {
-            for _ in 0..300 {
-                let c = (r.below(20_000), r.below(20_000));
-                let (xs, ys) = staircase(&mut r, k, c, 300);
-                b.push(LayerId(0), &xs, &ys);
-            }
-        }
-        let (store, _) = b.finish(1);
-        // Real candidate pairs: boxes within the limit, as the spacing rules see them.
-        let mut index = gpurify_geom::index::SpatialIndex::default();
-        gpurify_geom::index::SpatialIndex::build_into(&store, LayerId(0), &mut index);
-        let mut pairs = Vec::new();
-        let limit = Dbu::new_unchecked(100);
-        gpurify_geom::index::candidate_pairs_into(&store, &index, limit, &mut pairs);
-        let (mut exact, mut capped) = (Vec::new(), Vec::new());
-        let big = Dbu::new_unchecked(GAP_CAP);
-        let t = Instant::now();
-        pair_distances_into(&store, black_box(&pairs), big, &mut exact);
-        let slow = t.elapsed();
-        let t = Instant::now();
-        pair_distances_into(
-            &store,
-            black_box(&pairs),
-            Dbu::new_unchecked(100),
-            &mut capped,
-        );
-        let fast = t.elapsed();
-        assert_eq!(exact, capped);
-        eprintln!(
-            "{} pairs: exact i128 {slow:?}  capped simd {fast:?}",
-            pairs.len()
-        );
-    }
 }

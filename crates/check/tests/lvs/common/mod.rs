@@ -577,3 +577,70 @@ pub fn blames_net(discrepancy: &Discrepancy, side: Side, index: u32) -> bool {
         _ => false,
     }
 }
+
+/// A random permutation of `0..n`.
+pub fn perm(rng: &mut Rng, n: usize) -> Vec<u32> {
+    let mut map: Vec<u32> = (0..u32::try_from(n).expect("small")).collect();
+    rng.shuffle(&mut map);
+    map
+}
+
+/// A copy with one terminal moved to another net: a real mismatch.
+pub fn perturbed(rng: &mut Rng, graph: &Graph) -> Graph {
+    let mut out = graph.clone();
+    let slot = usize::try_from(rng.below(out.terminal_net.len() as u64)).expect("small");
+    let nets = out.net_name.len() as u64;
+    out.terminal_net[slot] = u32::try_from(rng.below(nets)).expect("small");
+    let net_count = out.net_name.len();
+    // Rebuild the net side through a no-op reduce-free transpose: permute with identity.
+    let ids: Vec<u32> = (0..u32::try_from(out.device_kind.len()).expect("small")).collect();
+    let nets: Vec<u32> = (0..u32::try_from(net_count).expect("small")).collect();
+    permute(&out, &ids, &nets)
+}
+
+/// Every verdict of the seeded corpus, in a fixed order: 320 random graphs
+/// against a permuted twin, every other one perturbed, then chains and a
+/// differential pair against themselves. The `lvs` digest test locks it and
+/// the `lvs_corpus` example prints it.
+pub fn seeded_corpus() -> Vec<Verdict> {
+    let run = |layout: &Graph, reference: &Graph| {
+        gpurify_check::lvs::compare(
+            layout,
+            reference,
+            gpurify_check::lvs::CompareOptions::default(),
+        )
+    };
+    let mut verdicts = Vec::new();
+    let mut rng = Rng::new(0x5eed);
+    for round in 0..320u32 {
+        let scale = if round < 300 { 40 } else { 400 };
+        let devices = 1 + u32::try_from(rng.below(scale)).expect("small");
+        let nets = 1 + u32::try_from(rng.below(scale * 3 / 4)).expect("small");
+        let graph = random_graph(&mut rng, devices, nets);
+        let d = perm(&mut rng, graph.device_kind.len());
+        let n = perm(&mut rng, graph.net_name.len());
+        let twin = permute(&graph, &d, &n);
+        let other = if round % 2 == 0 {
+            perturbed(&mut rng, &twin)
+        } else {
+            twin
+        };
+        verdicts.push(run(&graph, &other));
+    }
+    for length in [1u32, 2, 7, 40] {
+        verdicts.push(run(&chain(length), &chain(length)));
+    }
+    verdicts.push(run(&differential_pair(), &differential_pair()));
+    verdicts
+}
+
+/// A verdict's text with its discrepancies sorted: equal exactly when two
+/// verdicts report the same differences, whatever order they list them in.
+pub fn canonical(verdict: &Verdict) -> String {
+    let Verdict::Mismatch(found) = verdict else {
+        return format!("{verdict:?}");
+    };
+    let mut lines: Vec<String> = found.iter().map(|d| format!("{d:?}")).collect();
+    lines.sort_unstable();
+    format!("Mismatch{lines:?}")
+}

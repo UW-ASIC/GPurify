@@ -243,9 +243,9 @@ KLayout's DRC is a programmable Ruby DSL, so it can express rules a fixed
 vocabulary of rule kinds cannot; a rule count is not a comparison between the two.
 
 Everything above is one release build on an Intel i9-14900HX. Timings are
-recorded, not enforced: no run fails a build for being slow. `cargo test
---release --test bench_all` reprints these tables on your own machine, including
-a per-rule breakdown of which rule costs what.
+recorded, not enforced: no run fails a build for being slow. `cargo run
+--release --example bench_all` reprints these tables on your own machine,
+including a per-rule breakdown of which rule costs what.
 
 ## What it cannot do yet
 
@@ -269,5 +269,5 @@ There is no licence file yet.
 
 ```sh
 cargo test --workspace                    # the test suite, golden reports included
-cargo test --release --test bench_all     # the timing tables above
+cargo run --release --example bench_all   # the timing tables above
 ```

@@ -483,45 +483,4 @@ mod tests {
             assert_eq!(seen, want, "{rects:?} {g:?}");
         }
     }
-
-    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_window`
-    #[test]
-    #[ignore = "timing"]
-    fn bench_window_areas() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        // A 200 x 200 array of 10 x 10 squares on a 20 pitch; 100-wide windows, step 50.
-        let rects: Vec<Bbox> = (0..200 * 200)
-            .map(|k| {
-                b(
-                    k % 200 * 20,
-                    k / 200 * 20,
-                    k % 200 * 20 + 10,
-                    k / 200 * 20 + 10,
-                )
-            })
-            .collect();
-        let g = WindowGrid {
-            x0: 0,
-            y0: 0,
-            side: 100,
-            stride: 50,
-            cols: 80,
-            ways: 80,
-        };
-        let t = Instant::now();
-        let mut sum = 0i128;
-        window_areas(black_box(&rects), g, |_, a| sum += a.raw());
-        let binned = t.elapsed();
-        let t = Instant::now();
-        let mut brute = 0i128;
-        for iy in 0..g.ways {
-            for ix in 0..g.cols {
-                brute += clipped_area(black_box(&rects), g.window(ix, iy)).raw();
-            }
-        }
-        let clipped = t.elapsed();
-        assert_eq!(sum, brute);
-        eprintln!("window_areas {binned:?}  clip-every-rect {clipped:?}");
-    }
 }

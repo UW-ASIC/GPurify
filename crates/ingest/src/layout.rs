@@ -3716,50 +3716,6 @@ rule huge.w width(huge) >= 1um
         assert_eq!(deck.rules.layers_of(rule), [id("huge")]);
     }
 
-    /// Flatten timing: 4000 placements (every quarter turn, half mirrored) of a
-    /// 400-rectangle cell. `cargo test --release -p gpurify-ingest -- --ignored flatten_timing --nocapture`.
-    #[test]
-    #[ignore = "timing, not a check"]
-    fn flatten_timing() {
-        let leaf: Vec<Boundary> = (0..400)
-            .map(|i| {
-                let (x, y) = ((i % 20) * 50, (i / 20) * 50);
-                boundary(
-                    ROWS[0].1,
-                    ROWS[0].2,
-                    &[x, x + 30, x + 30, x],
-                    &[y, y, y + 30, y + 30],
-                )
-            })
-            .collect();
-        let refs: Vec<Ref> = (0..4000)
-            .map(|i| {
-                let strans = if i % 2 == 0 { 0 } else { REFLECT };
-                sref(
-                    "LEAF",
-                    strans,
-                    f64::from(u8::try_from(i % 4).expect("0..4")) * 90.0,
-                    (i % 64) * 2000,
-                    (i / 64) * 2000,
-                )
-            })
-            .collect();
-        let bytes = gds_hierarchy(&[("LEAF", &leaf, &[]), ("TOP", &[], &refs)]);
-        let mut strings = StrTable::default();
-        let deck = three_layer_deck(&mut strings);
-        let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
-        let mut best = std::time::Duration::MAX;
-        for _ in 0..5 {
-            let t = std::time::Instant::now();
-            let out = library
-                .flatten(&deck, &strings, UnknownLayers::Reject)
-                .expect("flattens");
-            best = best.min(t.elapsed());
-            std::hint::black_box(out);
-        }
-        eprintln!("flatten 1.6M rects: best of 5 {best:?}");
-    }
-
     /// IHP picks devices by their text (`ext_interacting_with_text(..,
     /// "npn13G2*")`). Squares labelled "npn13G2" and, on the square's edge,
     /// "npn13G2L" match the glob; "pnpMPA" does not. An L whose label sits in

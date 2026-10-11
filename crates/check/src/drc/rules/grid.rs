@@ -147,25 +147,4 @@ mod tests {
             }
         }
     }
-
-    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_lattice`
-    #[test]
-    #[ignore = "timing"]
-    fn bench_lattice_offset() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        let xs: Vec<i64> = (0..4_000_000i64).map(|i| i * 7919 - (1 << 34)).collect();
-        let pitch = black_box(8);
-        let t = Instant::now();
-        let masked: i64 = xs
-            .iter()
-            .map(|&x| lattice_offset(Dbu::new_unchecked(x), Dbu::new_unchecked(x), pitch))
-            .sum();
-        let fast = t.elapsed();
-        let t = Instant::now();
-        let divided: i64 = xs.iter().map(|&x| reference(x, x, pitch)).sum();
-        let slow = t.elapsed();
-        assert_eq!(masked, divided);
-        eprintln!("mask {fast:?}  rem_euclid {slow:?}");
-    }
 }

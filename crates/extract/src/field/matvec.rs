@@ -514,33 +514,4 @@ mod tests {
             }
         }
     }
-
-    /// `cargo test -p gpurify-extract --release -- --ignored --nocapture matvec_timing`
-    #[test]
-    #[ignore = "timing, run by hand in --release"]
-    fn matvec_timing() {
-        let mut rng = Rng::new(5);
-        for n in [256, 2_048, 8_192] {
-            let (m, x) = random(&mut rng, n);
-            let mut y = vec![0.0; n];
-            let reps = (8_192 * 8_192 / (n * n)).clamp(1, 200);
-            let start = std::time::Instant::now();
-            for _ in 0..reps {
-                for (i, value) in y.iter_mut().enumerate() {
-                    *value = m.row_scalar(i, std::hint::black_box(&x));
-                }
-            }
-            let scalar = start.elapsed() / u32::try_from(reps).expect("small");
-            let start = std::time::Instant::now();
-            for _ in 0..reps {
-                m.apply(std::hint::black_box(&x), &mut y);
-            }
-            let simd = start.elapsed() / u32::try_from(reps).expect("small");
-            std::hint::black_box(&y);
-            println!(
-                "n {n}: scalar 1-thread {scalar:?}, simd+rayon {simd:?}, {:.1}x",
-                scalar.as_secs_f64() / simd.as_secs_f64()
-            );
-        }
-    }
 }

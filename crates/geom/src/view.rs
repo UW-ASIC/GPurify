@@ -491,41 +491,4 @@ mod tests {
             }
         }
     }
-
-    /// `cargo test -p gpurify-geom --release -- --ignored --nocapture bench_`
-    #[test]
-    #[ignore = "timing, not a check"]
-    fn bench_edge_flags() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        for ring in [4i64, 8, 32, 200] {
-            let rings = 400_000 / ring;
-            // A staircase: rectilinear, distinct, so neither loop exits early.
-            let (xs, ys): (Vec<Dbu>, Vec<Dbu>) = (0..ring)
-                .map(|i| (Dbu::new_unchecked((i + 1) / 2), Dbu::new_unchecked(i / 2)))
-                .unzip();
-            let simd = (0..9)
-                .map(|_| {
-                    let t = Instant::now();
-                    dispatch!(Level::new(), s => for _ in 0..rings {
-                        black_box(edge_flags(s, black_box(&xs), black_box(&ys)));
-                    });
-                    t.elapsed()
-                })
-                .min()
-                .unwrap();
-            let scalar = (0..9)
-                .map(|_| {
-                    let t = Instant::now();
-                    for _ in 0..rings {
-                        let (xs, ys) = (black_box(&xs), black_box(&ys));
-                        black_box(edge_flags_scalar(xs, ys, xs[0], ys[0]));
-                    }
-                    t.elapsed()
-                })
-                .min()
-                .unwrap();
-            println!("ring={ring}: simd {simd:?} scalar {scalar:?} (400k verts, best of 9)");
-        }
-    }
 }

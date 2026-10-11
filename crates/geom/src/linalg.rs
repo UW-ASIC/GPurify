@@ -137,41 +137,6 @@ mod tests {
         }
     }
 
-    /// `cargo test -p gpurify-geom --release -- --ignored --nocapture bench_`
-    #[test]
-    #[ignore = "timing, not a check"]
-    fn bench_axpy_xpay() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        type Kernel = fn(&[f64], &mut [f64]);
-        let kernels: [(&str, Kernel); 4] = [
-            ("axpy simd", |x, y| axpy(1e-3, x, y)),
-            ("axpy scalar", |x, y| axpy_scalar(1e-3, x, y)),
-            ("xpay simd", |x, y| xpay(x, 0.5, y)),
-            ("xpay scalar", |x, y| xpay_scalar(x, 0.5, y)),
-        ];
-        for n in [1_000usize, 10_000, 100_000] {
-            let x: Vec<f64> = (0..u32::try_from(n).unwrap())
-                .map(|i| f64::from(i) * 0.37 + 1.0)
-                .collect();
-            let mut y = x.clone();
-            let reps = 20_000_000 / n;
-            for (name, f) in kernels {
-                let best = (0..9)
-                    .map(|_| {
-                        let t = Instant::now();
-                        for _ in 0..reps {
-                            f(black_box(&x), black_box(&mut y));
-                        }
-                        t.elapsed() / u32::try_from(reps).unwrap()
-                    })
-                    .min()
-                    .unwrap();
-                println!("n={n} {name}: {best:?} (best of 9)");
-            }
-        }
-    }
-
     /// `[[2, 0, 1], [0, 3, 0], [1, 0, 4]]` against `[1, 2, 3]`.
     #[test]
     fn spmv_reads_the_csr_it_is_given() {
