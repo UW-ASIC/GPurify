@@ -586,7 +586,9 @@ fn same(a: Measurement, b: Measurement) -> bool {
     }
 }
 
-/// Every claim of `fixture` that `ran` breaks, or the run's error.
+/// Every claim of `fixture` that `ran` breaks, or the run's error; and,
+/// whatever it claims, every element of its parasitic network that is not
+/// passive ([`passivity`]).
 pub fn violations_of(fixture: &Fixture, ran: &Result<Ran, String>) -> Vec<String> {
     let ran = match ran {
         Ok(ran) => ran,
@@ -693,7 +695,35 @@ pub fn violations_of(fixture: &Fixture, ran: &Result<Ran, String>) -> Vec<String
             }
         }
     }
+    broken.extend(passivity(ran));
     broken
+}
+
+/// C6: an extracted network is passive. A resistance, a capacitance to
+/// ground or to another net, or an inductance below zero is an element that
+/// returns more energy than it stores, so every one must be zero or more
+/// (NaN fails too), and so every net's capacitance to ground, their sum, is
+/// zero or more. This is element by element, which a passive network need
+/// not be (a Maxwell matrix may carry a slightly positive off-diagonal and
+/// stay positive definite), but the network SPEF carries is its elements.
+fn passivity(ran: &Ran) -> Vec<String> {
+    let Some(network) = ran.outputs.parasitics.as_ref() else {
+        return Vec::new();
+    };
+    network
+        .value
+        .iter()
+        .enumerate()
+        .filter(|(_, value)| {
+            let raw = match value {
+                Parasitic::Resistance(q) => q.raw(),
+                Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.raw(),
+                Parasitic::Inductance(q) => q.raw(),
+            };
+            !(raw >= 0.0)
+        })
+        .map(|(row, value)| format!("pex: element {row}, {value:?}, is not passive"))
+        .collect()
 }
 
 /// The total of one quantity over a net's elements, by the net's label.

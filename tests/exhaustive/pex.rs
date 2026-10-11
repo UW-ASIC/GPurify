@@ -32,6 +32,13 @@
 //!   symmetry or scaled; two orders above the solve's own `1e-10` residual.
 //! - The field-solve bounds (Thomson's principle: a flux tube's capacitance
 //!   is a lower bound) and monotone laws are inequalities, held exactly.
+//! - Mesh refinement (C6): the error against a cube's known capacitance
+//!   stays inside `|e₀| (h/h₀)^(2/3)`, the rate a cube edge's charge
+//!   singularity allows, from the coarsest mesh's own error `e₀`.
+//!
+//! Every run's network is also held to passivity (C6), whatever the fixture
+//! claims: no resistance, capacitance or inductance below zero
+//! (`harness::violations_of`).
 //!
 //! What a fixture cannot state (coupling, the Maxwell matrix, SPEF) is a
 //! `#[test]` at the end of the file, against the same closed forms.
@@ -1296,6 +1303,92 @@ fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {
         status => panic!("PEX {status:?}, want a refusal naming m1"),
     }
     assert!(ran.outputs.parasitics.is_none() && !ran.summary.passed());
+}
+
+/// C6: a field-solved capacitance converges as the panel edge shrinks.
+///
+/// A 1 µm cube in vacuum (`k = 1`), its centre `H = 50` µm over the
+/// substrate, cut into 2, 4, 8, 16 and 32 panels a side, each mesh the last
+/// one with every panel quartered. The limit is the cube's capacitance in
+/// free space, `0.66068 · 4πε₀a` (Read, *J. Comput. Phys.* 1997; Hwang,
+/// Mascagni & Given 2004, to 1e-5), raised by its image in the plane: the
+/// image charge `−Q` at `2H` lowers the potential by `Q / (4πε₀ · 2H)`, so
+/// `C = C₀ / (1 − C₀ / (8πε₀H))`, a 0.66% rise whose next term is
+/// `(a/2H)³ ≈ 1e-6`.
+///
+/// The rate: charge on a cube's edge, an exterior angle of 3π/2, grows as
+/// `d^(−1/3)` with the distance `d` to it, so constant panels of edge `h`
+/// misplace a share of the charge of order `h^(2/3)`, the slowest term.
+/// The error against the limit therefore stays inside the envelope
+/// `|e₀| (h/h₀)^(2/3)` set by the coarsest mesh's own error `e₀`, and at 32
+/// panels a side is at most `16^(−2/3)`, 16%, of it.
+///
+/// Monotone within a stated tolerance: collocation at the centroids with a
+/// softened near field is not a Galerkin solve, so Thomson's principle does
+/// not make each refinement raise C. The tolerance is the envelope: a
+/// refinement may lower C by no more than the envelope at the two meshes it
+/// joins, which is all a convergent sequence inside it can do. (It is not
+/// monotone: the crate docs' accuracy notes give the overshoot.)
+#[test]
+fn a_field_solved_capacitance_converges_as_the_mesh_is_refined() {
+    use gpurify::extract::field::mesh::MeshOptions;
+    use gpurify::geom::Dbu;
+
+    let (side, centre) = (1_000.0, 50_000.0);
+    let cube = Stack {
+        m1: Row {
+            thickness: side,
+            height: centre - side / 2.0,
+            k: 1.0,
+            ..COARSE.m1
+        },
+        ..COARSE
+    };
+    let layout = Layout::default()
+        .rect("m1", 0, 0, 1_000, 1_000)
+        .label("m1_label", 500, 500, "A");
+    let ran = run(&deck(cube, &[], ""), layout, NONE, &[]);
+    let solve = |edge: i64| {
+        let mut matrix = CapMatrix::default();
+        gpurify::extract::field::extract_meshed_into(
+            &ran.loaded.store,
+            &ran.extracted.nets,
+            &[net(&ran, "A")],
+            &ran.loaded.deck.stack,
+            ran.loaded.grid,
+            MeshOptions {
+                max_edge: Dbu::new_unchecked(edge),
+                proximity_refine: Dbu::new_unchecked(0),
+                max_panels: 1 << 20,
+            },
+            &mut matrix,
+        )
+        .expect("the field solve converges");
+        matrix.value[0] * 1e15
+    };
+    // 1000 nm over these edges is 2, 4, 8, 16 and 32 panels a side.
+    let c = [500, 250, 125, 63, 32].map(solve);
+
+    let four_pi_eps0_ff_per_um = 4.0 * std::f64::consts::PI * EPSILON0_AF_PER_UM / 1e3;
+    let free = 0.660_68 * four_pi_eps0_ff_per_um * side / 1e3;
+    let limit = free / (1.0 - free / (2.0 * four_pi_eps0_ff_per_um * centre / 1e3));
+    // Each mesh's edge is the coarsest's over these.
+    let e0 = (c[0] - limit).abs();
+    let envelope = [1.0, 2.0, 4.0, 8.0, 16.0_f64].map(|finer| e0 / finer.powf(2.0 / 3.0));
+
+    let shown = format!("C {c:?} fF, limit {limit} fF, envelope {envelope:?}");
+    for k in 1..c.len() {
+        assert!(
+            (c[k] - limit).abs() <= envelope[k],
+            "{} panels a side: outside the envelope: {shown}",
+            2 << k
+        );
+        assert!(
+            c[k] - c[k - 1] >= -(envelope[k - 1] + envelope[k]),
+            "{} panels a side fell past the tolerance: {shown}",
+            2 << k
+        );
+    }
 }
 
 /// The three conductors the invariance laws solve: two parallel `m1` bars,

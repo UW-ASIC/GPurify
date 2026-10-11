@@ -114,6 +114,11 @@
 //!   capacitance too.
 //! - **Panel self-terms** use a square panel's shape factor, which
 //!   under-reports C on elongated panels: 3.5% at 2:1, up to 64% at 100:1.
+//! - **Refining a mesh is not monotone.** Near panels see each other
+//!   centroid to centroid through a softened distance, not the integral
+//!   over the panel, and a 1 µm cube reads 2% under its capacitance at 2
+//!   panels a side, 0.15–0.2% over it at 8 to 32, falling back toward it as
+//!   the panels shrink.
 //! - **Only selected nets are in the field.** Coupling from a solved net to an
 //!   unselected one is the analytical estimate, which `overlay` keeps.
 //! - **Inductance** models each rectangle of a net's merged shapes as one
