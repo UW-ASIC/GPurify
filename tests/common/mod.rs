@@ -12,7 +12,9 @@ mod gen_fixtures;
 use gpurify::check::lvs;
 use gpurify::check::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
 use gpurify::engine::pipeline::{extract, load, Extracted, Inputs, LoadError, Loaded};
-use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
+use gpurify::engine::run::{
+    run_checks, Checks, EngineError, Outputs, RunOptions, StageStatus, Summary,
+};
 use gpurify::extract::Parasitic;
 use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
 use gpurify::geom::{Dbu, Grid};
@@ -490,11 +492,34 @@ pub struct LvsCase {
     pub expect_match: bool,
     pub expect_devices: usize,
     pub expect_nets: usize,
+    /// The LVS stage's status (`StageStatus`): `Ran` when the comparison
+    /// concludes, match or mismatch.
+    pub expect_outcome: String,
+    pub examined_min: LvsExamined,
     #[serde(rename = "assert")]
     pub asserts: Vec<String>,
     pub blocked_by: Vec<String>,
     pub strength: String,
     pub note: Option<String>,
+}
+
+/// The least the LVS stage must examine on a case's layout, from what the
+/// cell draws: `devices` is the floor on `lvs.terminal_count`'s `examined`
+/// (every device of the layout graph the comparison is handed), `nets` on
+/// `lvs.floating_net`'s (every extracted net).
+#[derive(Debug, Deserialize)]
+pub struct LvsExamined {
+    pub devices: u64,
+    pub nets: u64,
+}
+
+/// The least the PEX stage must extract on a case's layout, from what the
+/// cell draws: `nets` with a node in the parasitic network, and the
+/// network's `elements`.
+#[derive(Debug, Deserialize)]
+pub struct PexExamined {
+    pub nets: u64,
+    pub elements: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +531,9 @@ pub struct PexCase {
     pub unit: Option<String>,
     pub tol: f64,
     pub expect_mismatch: bool,
+    /// The PEX stage's status (`StageStatus`).
+    pub expect_outcome: String,
+    pub examined_min: PexExamined,
     pub seam: String,
     pub provenance: String,
     #[serde(rename = "assert")]
@@ -556,6 +584,7 @@ pub struct CaseRun {
     pub loaded: Loaded,
     pub extracted: Extracted,
     pub outputs: Outputs,
+    pub summary: Summary,
 }
 
 /// Load, extract and check one fixture cell against `params.deck`.
@@ -606,13 +635,14 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
         quasistatic_nets: Vec::new(),
     };
 
-    let (outputs, _) =
+    let (outputs, summary) =
         run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun {
         loaded,
         extracted,
         outputs,
+        summary,
     })
 }
 
@@ -652,13 +682,14 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
         quasistatic_nets: named,
     };
 
-    let (outputs, _) =
+    let (outputs, summary) =
         run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun {
         loaded,
         extracted,
         outputs,
+        summary,
     })
 }
 
@@ -1064,8 +1095,19 @@ fn context_of(case: &GeometryCase) -> String {
 // LVS.
 // ---------------------------------------------------------------------------
 
-/// Every way an LVS case disagreed with the geometry: its extraction (device
-/// and net counts), and its verdict against `lvs_refs/<id>.spice`.
+/// A stage's status as `expect_outcome` writes it.
+fn stage_outcome(status: &StageStatus) -> &'static str {
+    match status {
+        StageStatus::Ran => "Ran",
+        StageStatus::NotSelected => "NotSelected",
+        StageStatus::Skipped(_) => "Skipped",
+        StageStatus::Refused(_) => "Refused",
+    }
+}
+
+/// Every way an LVS case disagreed with the geometry, from one run against
+/// `lvs_refs/<id>.spice`: its extraction (device and net counts), its verdict,
+/// the stage's outcome, and what the stage examined.
 ///
 /// A case blocked by a finding in `open` is expected to fail its verdict; one
 /// that holds anyway is reported too, so a fix that resolves the finding is
@@ -1078,18 +1120,22 @@ pub fn check_lvs_case(case: &LvsCase, open: &std::collections::BTreeSet<&str>) -
         case.expect_match,
         case.blocked_by.join(", ")
     );
+    let wants = |claim: &str| case.asserts.iter().any(|asserted| asserted == claim);
 
-    if case.asserts.iter().any(|claim| claim == "match") {
-        let reference = format!("lvs_refs/{}.spice", case.id);
-        let lvs = Checks {
-            drc: false,
-            erc: false,
-            lvs: true,
-            pex: false,
-        };
-        let verdict = run_case_with_reference("lvs", &case.id, lvs, &reference).map(|run| {
+    let reference = format!("lvs_refs/{}.spice", case.id);
+    let checks = Checks {
+        drc: false,
+        erc: false,
+        lvs: true,
+        pex: false,
+    };
+    let run = run_case_with_reference("lvs", &case.id, checks, &reference);
+
+    if wants("match") {
+        let verdict = run.as_ref().map(|run| {
             run.outputs
                 .lvs
+                .as_ref()
                 .map(|verdict| matches!(verdict, lvs::Verdict::Match))
         });
         let holds = matches!(verdict, Ok(Some(matched)) if matched == case.expect_match);
@@ -1111,13 +1157,7 @@ pub fn check_lvs_case(case: &LvsCase, open: &std::collections::BTreeSet<&str>) -
         }
     }
 
-    let checks = Checks {
-        drc: false,
-        erc: false,
-        lvs: false,
-        pex: false,
-    };
-    let run = match run_case("lvs", &case.id, checks) {
+    let run = match run {
         Ok(run) => run,
         Err(why) => {
             failed.push(format!(
@@ -1127,6 +1167,40 @@ pub fn check_lvs_case(case: &LvsCase, open: &std::collections::BTreeSet<&str>) -
             return failed;
         }
     };
+
+    // An inconclusive comparison is a refused stage, and `expect_match: false`
+    // alone would read it as the mismatch the case is about.
+    if wants("outcome") && stage_outcome(&run.summary.lvs) != case.expect_outcome {
+        failed.push(format!(
+            "{}: the LVS stage on cell {} against {reference} recorded {:?}; the \
+             geometry says it records {}{blocked}",
+            case.id, case.cell, run.summary.lvs, case.expect_outcome
+        ));
+    }
+
+    if wants("examined_min") {
+        let floors = [
+            ("lvs.terminal_count", "devices", case.examined_min.devices),
+            ("lvs.floating_net", "nets", case.examined_min.nets),
+        ];
+        for (row, what, floor) in floors {
+            let examined = run.loaded.strings.get(row).and_then(|id| {
+                run.outputs
+                    .runs
+                    .iter()
+                    .find(|record| record.rule == id)
+                    .map(|record| record.examined)
+            });
+            if examined.is_none_or(|examined| examined < floor) {
+                failed.push(format!(
+                    "{}: {row} examined {examined:?} {what} on cell {}, and the \
+                     geometry draws {floor}. A verdict over fewer is a comparison \
+                     of less than the layout{blocked}",
+                    case.id, case.cell
+                ));
+            }
+        }
+    }
 
     if case.asserts.iter().any(|claim| claim == "device_count") {
         let got = run.extracted.devices.len();
@@ -1222,13 +1296,6 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
             .map_or(String::new(), |d| format!(", dispute: {d}"))
     );
 
-    if case.provenance == "underivable" {
-        // Says so rather than pretending. The claims that *are* derivable about
-        // these three are relations, and they are asserted in
-        // `check_coupling_laws`.
-        return failed;
-    }
-
     let checks = Checks {
         drc: false,
         erc: false,
@@ -1245,6 +1312,14 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
             return failed;
         }
     };
+    failed.extend(check_pex_examined(case, &run, &context));
+
+    if case.provenance == "underivable" {
+        // Says so rather than pretending. The value's claims that *are*
+        // derivable about these three are relations, and they are asserted in
+        // `check_coupling_laws`; what the cell draws is checked above.
+        return failed;
+    }
     // A kind ending in a conductor name scopes the fold to that conductor;
     // every other kind is the whole cell. `PEX_DIFF` is met1 *and* met2 in one
     // cell and its two cases derive 1.0 ohm and 0.8 ohm separately, so a
@@ -1325,6 +1400,38 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
         ));
     }
 
+    failed
+}
+
+/// The PEX stage recorded `expect_outcome`, and its network holds at least
+/// the nets and elements the cell draws: a value checked over a network
+/// missing them is checked over an absence.
+fn check_pex_examined(case: &PexCase, run: &CaseRun, context: &str) -> Vec<String> {
+    let mut failed = Vec::new();
+    let wants = |claim: &str| case.asserts.iter().any(|asserted| asserted == claim);
+    if wants("outcome") && stage_outcome(&run.summary.pex) != case.expect_outcome {
+        failed.push(format!(
+            "{}: the PEX stage on cell {} recorded {:?}; the geometry says it \
+             records {}{context}",
+            case.id, case.cell, run.summary.pex, case.expect_outcome
+        ));
+    }
+    if wants("examined_min") {
+        let (nets, elements) = run.outputs.parasitics.as_ref().map_or((0, 0), |network| {
+            let mut nets = network.node_net.clone();
+            nets.sort_unstable();
+            nets.dedup();
+            (nets.len() as u64, network.element_count() as u64)
+        });
+        let floor = &case.examined_min;
+        if nets < floor.nets || elements < floor.elements {
+            failed.push(format!(
+                "{}: cell {} extracted {nets} nets and {elements} elements; the \
+                 geometry draws at least {} nets and {} elements{context}",
+                case.id, case.cell, floor.nets, floor.elements
+            ));
+        }
+    }
     failed
 }
 

@@ -50,7 +50,9 @@
   "min_extension": "overlapping pairs",
   "min_area/cheesing": "merged figures",
   "off_grid": "vertices, design-wide - `check_off_grid` iterates the whole store with no layer column",
-  "angle": "edges, design-wide, and with no validation - it runs on geometry `min_width` refuses"
+  "angle": "edges, design-wide, and with no validation - it runs on geometry `min_width` refuses",
+  "lvs": "`examined_min.devices` is the transistors the cell draws and `examined_min.nets` the nets, each derived in the case's note (the same counts as `expect_devices` and `expect_nets`). They are floors on the LVS stage's own rows in the run that compares: `lvs.terminal_count` examines every device of the layout graph the comparison is handed, and `lvs.floating_net` every extracted net. `expect_outcome` is the stage's status: `Ran` whenever the comparison concludes, match or mismatch. An inconclusive comparison is `Refused`, which `expect_match: false` alone would accept as the mismatch.",
+  "pex": "`examined_min.nets` counts the nets with a node in the parasitic network: every net with a region on a conductor layer. `examined_min.elements` is a floor on the network's elements: per region its series R and its ground C, one resistor per via array landing on both plates, and one coupling per pair of regions on different nets that the case draws facing within ten thicknesses on one layer or overlapping across two. Each case's note counts them under EXAMINED. `expect_outcome` is the PEX stage's status."
  },
  "known_defects": {
   "bbox_only_enclosure": {
@@ -4367,6 +4369,11 @@
     "expect_match": true,
     "expect_devices": 2,
     "expect_nets": 4,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 4
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4380,7 +4387,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4395,6 +4404,11 @@
     "expect_match": true,
     "expect_devices": 2,
     "expect_nets": 4,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 4
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4409,7 +4423,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4424,6 +4440,11 @@
     "expect_match": false,
     "expect_devices": 1,
     "expect_nets": 3,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 1,
+     "nets": 3
+    },
     "expect_difference": "The reference's second nmos (g=B, d=D2, s=S2) and its three nets have no counterpart: at least one UnpairedDevice{side: Reference}.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4437,7 +4458,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4452,6 +4475,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 5,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 5
+    },
     "expect_difference": "The gate net splits in two where the reference has one A.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4466,7 +4494,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4481,6 +4511,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 3,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 3
+    },
     "expect_difference": "A and Y are one net.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4495,7 +4530,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4510,6 +4547,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 5,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 5
+    },
     "expect_difference": "Y is open between the two drains.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4524,7 +4566,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4539,6 +4583,11 @@
     "expect_match": true,
     "expect_devices": 2,
     "expect_nets": 5,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 5
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4552,7 +4601,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4567,6 +4618,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 5,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 5
+    },
     "expect_difference": "The reference's single nmos cannot absorb the second finger: the layout's poly at x 600..650 and net M are surplus.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4581,7 +4637,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4596,6 +4654,11 @@
     "expect_match": true,
     "expect_devices": 2,
     "expect_nets": 4,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 4
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4610,7 +4673,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4625,6 +4690,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 4,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 4
+    },
     "expect_difference": "Two ParameterMismatch{param: W, layout_value: 200, ref_value: 300}; spread 100/300 = 0.333, far past 0.02.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4640,7 +4710,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4655,6 +4727,11 @@
     "expect_match": true,
     "expect_devices": 1,
     "expect_nets": 3,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 1,
+     "nets": 3
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4668,7 +4745,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4683,6 +4762,11 @@
     "expect_match": false,
     "expect_devices": 1,
     "expect_nets": 3,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 1,
+     "nets": 3
+    },
     "expect_difference": "Layout flavour is hvt; the reference says standard.",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4697,7 +4781,9 @@
      "match",
      "device_count",
      "net_count",
-     "difference_kind"
+     "difference_kind",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": false
@@ -4712,6 +4798,11 @@
     "expect_match": true,
     "expect_devices": 1,
     "expect_nets": 3,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 1,
+     "nets": 3
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4725,7 +4816,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4740,6 +4833,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 4,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 4
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_disagrees",
@@ -4751,7 +4849,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4766,6 +4866,11 @@
     "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 3,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 3
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_disagrees",
@@ -4777,7 +4882,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4792,6 +4899,11 @@
     "expect_match": true,
     "expect_devices": 2,
     "expect_nets": 4,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "devices": 2,
+     "nets": 4
+    },
     "expect_difference": null,
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
@@ -4805,7 +4917,9 @@
     "assert": [
      "match",
      "device_count",
-     "net_count"
+     "net_count",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expect_match": true
@@ -4825,13 +4939,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -4839,7 +4960,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 2000x200 = 10 squares x 0.1 ohm/sq. Equivalent-rectangle recovery from (area, perimeter) is exact: roots of t^2-(P/2)t+A give (2000,200)."
+    "note": "met1 2000x200 = 10 squares x 0.1 ohm/sq. Equivalent-rectangle recovery from (area, perimeter) is exact: roots of t^2-(P/2)t+A give (2000,200). EXAMINED (B32): one met1 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_PLATE_C",
@@ -4850,13 +4971,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -4864,7 +4992,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 1000x1000: 25 aF/um^2 x 1.0 um^2 + 40 aF/um x 4.0 um = 25 + 160."
+    "note": "met1 1000x1000: 25 aF/um^2 x 1.0 um^2 + 40 aF/um x 4.0 um = 25 + 160. EXAMINED (B32): one met1 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_COUPLING_C",
@@ -4875,13 +5003,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::quasistatic",
     "provenance": "underivable",
     "corroboration": "manifest_uncheckable",
     "dispute": "no_deck_coefficient",
     "strength": "underivable",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -4889,7 +5024,7 @@
      },
      "tol": 1e-06
     },
-    "note": "Two met1 2000x200 bars, gap 200. The parallel-plate lower bound eps*t*L/S is 138.1 aF. The manifest's 200 implies a lateral coefficient of 20 aF/um, and `StackJson` has no `coupling_cap_af_um` column, so the absolute value cannot be derived from the deck at all. What IS derivable and exact is the 1/S law against PEX_SPACING_100 and PEX_SPACING_400, and equality with PEX_VERT_COUPLING."
+    "note": "Two met1 2000x200 bars, gap 200. The parallel-plate lower bound eps*t*L/S is 138.1 aF. The manifest's 200 implies a lateral coefficient of 20 aF/um, and `StackJson` has no `coupling_cap_af_um` column, so the absolute value cannot be derived from the deck at all. What IS derivable and exact is the 1/S law against PEX_SPACING_100 and PEX_SPACING_400, and equality with PEX_VERT_COUPLING. EXAMINED (B32): two met1 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 200 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements."
    },
    {
     "id": "PEX_LONG_WIRE_R",
@@ -4900,13 +5035,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -4914,7 +5056,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 5000x100 = 50 squares x 0.1."
+    "note": "met1 5000x100 = 50 squares x 0.1. EXAMINED (B32): one met1 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_PER_NET",
@@ -4925,6 +5067,11 @@
     "unit": null,
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_partial",
@@ -4932,7 +5079,9 @@
     "strength": "strong",
     "assert": [
      "per_net_r",
-     "per_net_ground_cap"
+     "per_net_ground_cap",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -4947,7 +5096,7 @@
      },
      "tol": 1e-06
     },
-    "note": "Two met1 2000x200 bars, gap 200. Per net: 10 squares x 0.1 = 1.0 ohm (agrees), and ground capacitance 25 x 0.4 + 40 x 4.4 = 10 + 176 = 186 aF (derived). The manifest's 386 = 186 + 200, so its lateral term is the same non-deck-expressible 200 as PEX_COUPLING_C. The ground half is corroborated; the lateral half is not derivable.",
+    "note": "Two met1 2000x200 bars, gap 200. Per net: 10 squares x 0.1 = 1.0 ohm (agrees), and ground capacitance 25 x 0.4 + 40 x 4.4 = 10 + 176 = 186 aF (derived). The manifest's 386 = 186 + 200, so its lateral term is the same non-deck-expressible 200 as PEX_COUPLING_C. The ground half is corroborated; the lateral half is not derivable. EXAMINED (B32): two met1 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 200 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements.",
     "expect_per_net": {
      "0": {
       "r_ohm": 1.0,
@@ -4968,13 +5117,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::quasistatic",
     "provenance": "underivable",
     "corroboration": "manifest_uncheckable",
     "dispute": "no_deck_coefficient",
     "strength": "underivable",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -4982,7 +5138,7 @@
      },
      "tol": 1e-06
     },
-    "note": "Gap 100, L 2000: plate bound 276.3 aF; the manifest's 400 needs k=20 aF/um. Absolute underivable, 1/S ratio against PEX_COUPLING_C and PEX_SPACING_400 exact."
+    "note": "Gap 100, L 2000: plate bound 276.3 aF; the manifest's 400 needs k=20 aF/um. Absolute underivable, 1/S ratio against PEX_COUPLING_C and PEX_SPACING_400 exact. EXAMINED (B32): two met1 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 100 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements."
    },
    {
     "id": "PEX_SPACING_400",
@@ -4993,13 +5149,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::quasistatic",
     "provenance": "underivable",
     "corroboration": "manifest_uncheckable",
     "dispute": "no_deck_coefficient",
     "strength": "underivable",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5007,7 +5170,7 @@
      },
      "tol": 1e-06
     },
-    "note": "Gap 400, L 2000: plate bound 69.1 aF; manifest 100 at k=20."
+    "note": "Gap 400, L 2000: plate bound 69.1 aF; manifest 100 at k=20. EXAMINED (B32): two met1 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 400 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements."
    },
    {
     "id": "PEX_WIDTH_100",
@@ -5018,13 +5181,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5032,7 +5202,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 2000x100 = 20 squares x 0.1."
+    "note": "met1 2000x100 = 20 squares x 0.1. EXAMINED (B32): one met1 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_WIDTH_400",
@@ -5043,13 +5213,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5057,7 +5234,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 2000x400 = 5 squares x 0.1."
+    "note": "met1 2000x400 = 5 squares x 0.1. EXAMINED (B32): one met1 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_VERT_COUPLING",
@@ -5068,13 +5245,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::quasistatic",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5082,7 +5266,7 @@
      },
      "tol": 1e-06
     },
-    "note": "PEX_CC rotated 90 degrees. LAW: rotation invariance, so this must equal PEX_COUPLING_C exactly whatever the coefficient. The manifest agrees (200 == 200), which is what makes this the strongest coupling case in the corpus. The value is the parallel-plate lateral limit eps0 * k * t * L / S with eps0 = 8.8541878128 aF/um (CODATA 2018), k = 3.9, t = 0.4 um, L = 2 um and S = 0.2 um, which is 138.12532987967998 aF. The 138.1 that stood here was that same number rounded to four significant figures against an absolute tolerance of 1e-6, so the case could only ever fail once anything was extracted at all."
+    "note": "PEX_CC rotated 90 degrees. LAW: rotation invariance, so this must equal PEX_COUPLING_C exactly whatever the coefficient. The manifest agrees (200 == 200), which is what makes this the strongest coupling case in the corpus. The value is the parallel-plate lateral limit eps0 * k * t * L / S with eps0 = 8.8541878128 aF/um (CODATA 2018), k = 3.9, t = 0.4 um, L = 2 um and S = 0.2 um, which is 138.12532987967998 aF. The 138.1 that stood here was that same number rounded to four significant figures against an absolute tolerance of 1e-6, so the case could only ever fail once anything was extracted at all. EXAMINED (B32): two met1 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 200 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements."
    },
    {
     "id": "PEX_VIA_R",
@@ -5093,6 +5277,11 @@
     "unit": null,
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 5
+    },
     "seam": "pex::via_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_partial",
@@ -5100,7 +5289,9 @@
     "strength": "strong",
     "assert": [
      "per_net_r",
-     "per_net_ground_cap"
+     "per_net_ground_cap",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5114,7 +5305,7 @@
       "ground_cap_af": 118.4
      }
     },
-    "note": "The cell gained its landing plates: met1 (0,0)-(400,400) and met2 (0,0)-(400,400), both covering the via1 cut at (0,0)-(100,100), so the cut joins two conductors and carries current. One net, two polygons. The closed form is the whole series chain, every term from `params.json`: via_resistance(5.0, 1) = 5.0 ohm, plus met1 400x400 = 1 square x 0.1 ohm/sq = 0.1, plus met2 400x400 = 1 square x 0.08 ohm/sq = 0.08. Total 5.18. The equivalent-rectangle recovery is exact for a square: A = 160000, P = 1600, t^2 - 800t + 160000 has the double root 400. The manifest's 5.0 is the via term alone and is the corroboration for it; the two plate terms are new geometry the manifest predates. Why the total and not the via term alone: `extract_net_into` allocates node 0 = met1, node 1 = met2 and emits met1's segment as 0 -> 1, and `vias_into` emits the cut as node_of[lower] -> node_of[upper] = 0 -> 1 as well, so a via element and a wire element are the same `Parasitic::Resistance` between the same node pair and no fold over the public columns can separate them (finding F13). A dead via still moves this number by 5.0 out of 5.18, and PEX_VIA_R2 is the same two plates with a second cut, so the difference between the two cases is exactly the via term. Asserted per net rather than as a cell total, for two reasons a total cannot carry. First, resistance alone does not pin the plates: squares is length over width, so an 800x800 plate is also one square and also 0.1 ohm, and only the capacitance sees the size. Ground capacitance closes that - met1 0.4x0.4 um is A = 0.16 um^2 and P = 1.6 um, 25 aF/um^2 x 0.16 + 40 aF/um x 1.6 = 4.0 + 64.0 = 68.0 aF; met2 the same shape at its own coefficients is 15 x 0.16 + 30 x 1.6 = 2.4 + 48.0 = 50.4 aF; total 118.4 aF. Second, keying on net 0 is what asserts the cut MERGED the two plates into one net rather than leaving two - a two-net partition would put met2's 0.08 ohm and 50.4 aF on net 1 and this case would go red. Both halves were seen red: perturbed to 5.19 / 118.5 the case reports `extracts 5.18 ohm` and `extracts 118.4 aF`."
+    "note": "The cell gained its landing plates: met1 (0,0)-(400,400) and met2 (0,0)-(400,400), both covering the via1 cut at (0,0)-(100,100), so the cut joins two conductors and carries current. One net, two polygons. The closed form is the whole series chain, every term from `params.json`: via_resistance(5.0, 1) = 5.0 ohm, plus met1 400x400 = 1 square x 0.1 ohm/sq = 0.1, plus met2 400x400 = 1 square x 0.08 ohm/sq = 0.08. Total 5.18. The equivalent-rectangle recovery is exact for a square: A = 160000, P = 1600, t^2 - 800t + 160000 has the double root 400. The manifest's 5.0 is the via term alone and is the corroboration for it; the two plate terms are new geometry the manifest predates. Why the total and not the via term alone: `extract_net_into` allocates node 0 = met1, node 1 = met2 and emits met1's segment as 0 -> 1, and `vias_into` emits the cut as node_of[lower] -> node_of[upper] = 0 -> 1 as well, so a via element and a wire element are the same `Parasitic::Resistance` between the same node pair and no fold over the public columns can separate them (finding F13). A dead via still moves this number by 5.0 out of 5.18, and PEX_VIA_R2 is the same two plates with a second cut, so the difference between the two cases is exactly the via term. Asserted per net rather than as a cell total, for two reasons a total cannot carry. First, resistance alone does not pin the plates: squares is length over width, so an 800x800 plate is also one square and also 0.1 ohm, and only the capacitance sees the size. Ground capacitance closes that - met1 0.4x0.4 um is A = 0.16 um^2 and P = 1.6 um, 25 aF/um^2 x 0.16 + 40 aF/um x 1.6 = 4.0 + 64.0 = 68.0 aF; met2 the same shape at its own coefficients is 15 x 0.16 + 30 x 1.6 = 2.4 + 48.0 = 50.4 aF; total 118.4 aF. Second, keying on net 0 is what asserts the cut MERGED the two plates into one net rather than leaving two - a two-net partition would put met2's 0.08 ohm and 50.4 aF on net 1 and this case would go red. Both halves were seen red: perturbed to 5.19 / 118.5 the case reports `extracts 5.18 ohm` and `extracts 118.4 aF`. EXAMINED (B32): met1 and met2 plates joined by one via1 cut: one net of two regions, so 2 R and 2 ground C, plus one via-array resistor: 1 net, 5 elements. The plates are one net, so they do not couple."
    },
    {
     "id": "PEX_VIA_R2",
@@ -5125,6 +5316,11 @@
     "unit": null,
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 5
+    },
     "seam": "pex::via_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_disagrees",
@@ -5132,7 +5328,9 @@
     "strength": "strong",
     "assert": [
      "per_net_r",
-     "per_net_ground_cap"
+     "per_net_ground_cap",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5146,7 +5344,7 @@
       "ground_cap_af": 118.4
      }
     },
-    "note": "PEX_VIA1's two plates, unchanged, plus the second cut this cell already drew: met1 (0,0)-(400,400) and met2 (0,0)-(400,400) over via1 cuts at (0,0)-(100,100) and (200,0)-(300,100). Both cuts join the SAME conductor pair, so `vias_into` groups them into one array and `via_resistance`'s frozen doc divides: 5.0 / 2 = 2.5 ohm, vias in parallel, which is why a redundant via lowers resistance. Plus the same two plate terms as PEX_VIA_R - met1 1 square x 0.1 and met2 1 square x 0.08. Total 2.68. The plates are identical to PEX_VIA_R's, so 5.18 - 2.68 = 2.5 is exactly the via term and the pair of cases isolates it by subtraction even though no fold over the public element columns can (see PEX_VIA_R's note and finding F13). The manifest's 10.0 is 5.0 x 2, the old tree summing independent cuts in series; it disagrees with the derivation in the direction the frozen doc comment forbids, and that is the finding this case carries. The ground capacitance is PEX_VIA_R's 118.4 aF unchanged, because the plates are the same two rectangles and a cut is not a conductor - which is the second thing this pair asserts: adding a redundant via must move the resistance and must NOT move the capacitance."
+    "note": "PEX_VIA1's two plates, unchanged, plus the second cut this cell already drew: met1 (0,0)-(400,400) and met2 (0,0)-(400,400) over via1 cuts at (0,0)-(100,100) and (200,0)-(300,100). Both cuts join the SAME conductor pair, so `vias_into` groups them into one array and `via_resistance`'s frozen doc divides: 5.0 / 2 = 2.5 ohm, vias in parallel, which is why a redundant via lowers resistance. Plus the same two plate terms as PEX_VIA_R - met1 1 square x 0.1 and met2 1 square x 0.08. Total 2.68. The plates are identical to PEX_VIA_R's, so 5.18 - 2.68 = 2.5 is exactly the via term and the pair of cases isolates it by subtraction even though no fold over the public element columns can (see PEX_VIA_R's note and finding F13). The manifest's 10.0 is 5.0 x 2, the old tree summing independent cuts in series; it disagrees with the derivation in the direction the frozen doc comment forbids, and that is the finding this case carries. The ground capacitance is PEX_VIA_R's 118.4 aF unchanged, because the plates are the same two rectangles and a cut is not a conductor - which is the second thing this pair asserts: adding a redundant via must move the resistance and must NOT move the capacitance. EXAMINED (B32): PEX_VIA1's plates with two cuts on the same plate pair, which are one array and one resistor: 1 net, 5 elements."
    },
    {
     "id": "PEX_CROSSOVER",
@@ -5157,13 +5355,20 @@
     "unit": "aF",
     "tol": 0.1,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_disagrees",
     "dispute": "manifest_wrong",
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5171,7 +5376,7 @@
      },
      "tol": 0.1
     },
-    "note": "met1 AND met2 = 200x200 = 0.04 um^2; d = met2 bottom 2000 - met1 top 1700 = 300 nm; eps*A/d with k=3.9 gives 4.604 aF. The manifest's 0.4 aF implies a plate coefficient of 10 aF/um^2, which back-solves to a 3.45 um dielectric gap - 11.5x what the stack states and physically absurd for met1-to-met2. Fringe pushes the true value above 4.6, not below. 300 nm is also the correct sky130 met1-met2 separation, so the stack is not the suspect side."
+    "note": "met1 AND met2 = 200x200 = 0.04 um^2; d = met2 bottom 2000 - met1 top 1700 = 300 nm; eps*A/d with k=3.9 gives 4.604 aF. The manifest's 0.4 aF implies a plate coefficient of 10 aF/um^2, which back-solves to a 3.45 um dielectric gap - 11.5x what the stack states and physically absurd for met1-to-met2. Fringe pushes the true value above 4.6, not below. 300 nm is also the correct sky130 met1-met2 separation, so the stack is not the suspect side. EXAMINED (B32): a met1 bar and a met2 bar on two nets, crossing over 200 x 200 nm: 4 elements of R and ground C plus one interlayer coupling: 2 nets, 5 elements."
    },
    {
     "id": "PEX_FILL",
@@ -5182,13 +5387,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5196,7 +5408,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 90x90: 25 x 0.0081 + 40 x 0.36 = 0.2025 + 14.4."
+    "note": "met1 90x90: 25 x 0.0081 + 40 x 0.36 = 0.2025 + 14.4. EXAMINED (B32): one met1 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_MET2_R",
@@ -5207,13 +5419,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5221,7 +5440,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met2 2000x200 = 10 squares x 0.08."
+    "note": "met2 2000x200 = 10 squares x 0.08. EXAMINED (B32): one met2 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_MET2_CAP",
@@ -5232,13 +5451,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 1,
+     "elements": 2
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5246,7 +5472,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met2 1000x1000: 15 x 1.0 + 30 x 4.0."
+    "note": "met2 1000x1000: 15 x 1.0 + 30 x 4.0. EXAMINED (B32): one met2 rectangle, one region: 1 net and 2 elements, its series R and its ground C (`analytical::extract_into`: a region contributes one of each)."
    },
    {
     "id": "PEX_DIFF_M1R",
@@ -5257,13 +5483,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 4
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5271,7 +5504,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 2000x200 = 10 squares x 0.1. The cell contains no `diff` layer - it is met1 + met2, 'different layers'; misleading name, not a defect. The kind names met1 explicitly because the cell carries two conductors and a whole-cell fold would answer 1.8 to this and to PEX_DIFF_M2R alike."
+    "note": "met1 2000x200 = 10 squares x 0.1. The cell contains no `diff` layer - it is met1 + met2, 'different layers'; misleading name, not a defect. The kind names met1 explicitly because the cell carries two conductors and a whole-cell fold would answer 1.8 to this and to PEX_DIFF_M2R alike. EXAMINED (B32): a met1 bar and a met2 bar on two nets, on different layers (no lateral coupling) and not overlapping (no interlayer coupling): 2 nets, 4 elements of R and ground C."
    },
    {
     "id": "PEX_DIFF_M2R",
@@ -5282,13 +5515,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 4
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5296,7 +5536,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met2 2000x200 = 10 squares x 0.08."
+    "note": "met2 2000x200 = 10 squares x 0.08. EXAMINED (B32): a met1 bar and a met2 bar on two nets, on different layers (no lateral coupling) and not overlapping (no interlayer coupling): 2 nets, 4 elements of R and ground C."
    },
    {
     "id": "PEX_MET2_COUPLING",
@@ -5307,13 +5547,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": false,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::quasistatic",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_disagrees",
     "dispute": "manifest_wrong",
     "strength": "strong",
     "assert": [
-     "value"
+     "value",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5321,7 +5568,7 @@
      },
      "tol": 1e-06
     },
-    "note": "LAW VIOLATED BY THE MANIFEST. PEX_M2CC is PEX_CC with layer 7 swapped for layer 9: same 2000x200 bars, same 200 nm gap. The deck gives met1 and met2 the same thickness (400 nm) and the same dielectric_k (3.9), so lateral coupling eps*t*L/S is identical - this must equal PEX_COUPLING_C. The manifest asserts 200 there and 160 here. No physics with this stack produces a 0.8 ratio; the only 0.8 in the deck is the sheet-resistance ratio 0.08/0.1, which has nothing to do with capacitance. The manifest is new-deck-inconsistent and 160 is the number to distrust. Cleanest cross-check in the pex corpus, worth keeping precisely because it fails. The value is the parallel-plate lateral limit eps0 * k * t * L / S with eps0 = 8.8541878128 aF/um (CODATA 2018), k = 3.9, t = 0.4 um, L = 2 um and S = 0.2 um, which is 138.12532987967998 aF. The 138.1 that stood here was that same number rounded to four significant figures against an absolute tolerance of 1e-6, so the case could only ever fail once anything was extracted at all."
+    "note": "LAW VIOLATED BY THE MANIFEST. PEX_M2CC is PEX_CC with layer 7 swapped for layer 9: same 2000x200 bars, same 200 nm gap. The deck gives met1 and met2 the same thickness (400 nm) and the same dielectric_k (3.9), so lateral coupling eps*t*L/S is identical - this must equal PEX_COUPLING_C. The manifest asserts 200 there and 160 here. No physics with this stack produces a 0.8 ratio; the only 0.8 in the deck is the sheet-resistance ratio 0.08/0.1, which has nothing to do with capacitance. The manifest is new-deck-inconsistent and 160 is the number to distrust. Cleanest cross-check in the pex corpus, worth keeping precisely because it fails. The value is the parallel-plate lateral limit eps0 * k * t * L / S with eps0 = 8.8541878128 aF/um (CODATA 2018), k = 3.9, t = 0.4 um, L = 2 um and S = 0.2 um, which is 138.12532987967998 aF. The 138.1 that stood here was that same number rounded to four significant figures against an absolute tolerance of 1e-6, so the case could only ever fail once anything was extracted at all. EXAMINED (B32): two met2 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 200 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements."
    },
    {
     "id": "PEX_NEG_R",
@@ -5332,13 +5579,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5346,7 +5600,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 A 2000x200 = 1.0 ohm against a deliberately wrong claim of 1.5. The mismatch holds."
+    "note": "met1 A 2000x200 = 1.0 ohm against a deliberately wrong claim of 1.5. The mismatch holds. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_R2",
@@ -5357,13 +5611,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::analytical::segment_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5371,7 +5632,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met2 C 2000x200 = 0.8 against a claim of 1.2. Mismatch holds."
+    "note": "met2 C 2000x200 = 0.8 against a claim of 1.2. Mismatch holds. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_VIA",
@@ -5382,13 +5643,20 @@
     "unit": "ohm",
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::via_resistance",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5396,7 +5664,7 @@
      },
      "tol": 1e-06
     },
-    "note": "One cut, 5.0/1 = 5.0 against a claim of 9.0. Mismatch holds."
+    "note": "One cut, 5.0/1 = 5.0 against a claim of 9.0. Mismatch holds. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_AC",
@@ -5407,13 +5675,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5421,7 +5696,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 A: 25 x 0.4 + 40 x 4.4 = 186 against a claim of 999. Mismatch holds."
+    "note": "met1 A: 25 x 0.4 + 40 x 4.4 = 186 against a claim of 999. Mismatch holds. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_CC",
@@ -5432,13 +5707,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::quasistatic",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5446,7 +5728,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met1 A-B gap 600-200 = 400: plate 69.1, or 100 at k=20. The claim is 300, so the mismatch holds on either model."
+    "note": "met1 A-B gap 600-200 = 400: plate 69.1, or 100 at k=20. The claim is 300, so the mismatch holds on either model. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_CC2",
@@ -5457,13 +5739,20 @@
     "unit": "aF",
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::quasistatic",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5471,7 +5760,7 @@
      },
      "tol": 1e-06
     },
-    "note": "met2 C-D gap 1800-1400 = 400: plate 69.1, or 80-100 depending on k. The claim is 200, so the mismatch holds on either model."
+    "note": "met2 C-D gap 1800-1400 = 400: plate 69.1, or 80-100 depending on k. The claim is 200, so the mismatch holds on either model. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_IL",
@@ -5482,13 +5771,20 @@
     "unit": "aF",
     "tol": 0.1,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 6,
+     "elements": 15
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "weak",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5496,7 +5792,7 @@
      },
      "tol": 0.1
     },
-    "note": "met2 E (500,100)-(700,500) AND met1 A = 200x100 = 0.02 um^2, d = 300 nm -> 2.302 aF against a claim of 2.0 with tol 0.1. The mismatch holds, but by 0.30 aF against a 0.10 aF window - a 15% margin. It was designed to mismatch a 0.2 aF answer under the old 10 aF/um^2 coefficient; under the corrected coefficient it nearly matches. Move the claim well away from 2.3 or this test silently inverts."
+    "note": "met2 E (500,100)-(700,500) AND met1 A = 200x100 = 0.02 um^2, d = 300 nm -> 2.302 aF against a claim of 2.0 with tol 0.1. The mismatch holds, but by 0.30 aF against a 0.10 aF window - a 15% margin. It was designed to mismatch a 0.2 aF answer under the old 10 aF/um^2 coefficient; under the corrected coefficient it nearly matches. Move the claim well away from 2.3 or this test silently inverts. EXAMINED (B32): six conductor shapes on six nets, none touching and none joined (the via1 cut at (3000,0) lands on no plate): met1 A, B, F and met2 C, D, E, so 12 elements of R and ground C; plus A-B and C-D facing across 400 nm and A under E, the three couplings the NEG_CC, NEG_CC2 and NEG_IL claims are about: 6 nets, at least 15 elements. E also faces C and D across 700 and 1300 nm, which this floor does not count."
    },
    {
     "id": "PEX_NEG_PNET",
@@ -5507,13 +5803,20 @@
     "unit": null,
     "tol": 1e-06,
     "expect_mismatch": true,
+    "expect_outcome": "Ran",
+    "examined_min": {
+     "nets": 2,
+     "elements": 5
+    },
     "seam": "pex::analytical",
     "provenance": "derived_from_geometry",
     "corroboration": "manifest_agrees",
     "dispute": null,
     "strength": "strong",
     "assert": [
-     "mismatch"
+     "mismatch",
+     "outcome",
+     "examined_min"
     ],
     "manifest": {
      "expected": {
@@ -5528,7 +5831,7 @@
      },
      "tol": 1e-06
     },
-    "note": "Two met1 2000x200 bars, gap 200, identical to PEX_PNET: both nets are 10 squares x 0.1 = 1.0 ohm and 186 aF ground. The CLAIM refuted here is the manifest's, which injects one error (net0 R = 2.0) on top of the same non-deck-expressible 200 aF lateral term PEX_PER_NET's manifest carries (386 = 186 + 200). `expect_per_net` therefore holds the claim, not the derivation - a negative case whose expectation is the CORRECT number can only ever fail, and it did: the extraction gave 1.0 / 186 and the harness read the agreement as the fixture reproducing a value it was drawn to avoid. Because both bars are identical the case is robust to net ordering.",
+    "note": "Two met1 2000x200 bars, gap 200, identical to PEX_PNET: both nets are 10 squares x 0.1 = 1.0 ohm and 186 aF ground. The CLAIM refuted here is the manifest's, which injects one error (net0 R = 2.0) on top of the same non-deck-expressible 200 aF lateral term PEX_PER_NET's manifest carries (386 = 186 + 200). `expect_per_net` therefore holds the claim, not the derivation - a negative case whose expectation is the CORRECT number can only ever fail, and it did: the extraction gave 1.0 / 186 and the harness read the agreement as the fixture reproducing a value it was drawn to avoid. Because both bars are identical the case is robust to net ordering. EXAMINED (B32): two met1 bars on two nets, one region each: 4 elements of R and ground C, plus the lateral coupling across their 200 nm gap, inside the ten-thickness (4000 nm) halo: 2 nets, 5 elements.",
     "expect_per_net": {
      "0": {
       "r_ohm": 2.0,

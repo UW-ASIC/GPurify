@@ -118,6 +118,15 @@ Cases expected to fail are explained under `known_defects` and
 `blocking_findings` at the top of `expectations.json`. Weakening them to match
 the code would erase the finding.
 
+167 of 167 cases carry `expect_outcome` and `examined_min`. On an LVS
+case they are the LVS stage's status (`Ran` when the comparison concludes,
+so an inconclusive one cannot pass as a mismatch) and the devices and nets
+the cell draws, floors on what `lvs.terminal_count` and `lvs.floating_net`
+examine in the run that compares. On a PEX case they are the PEX stage's
+status and the nets and elements (series R and ground C per region, one
+resistor per via array, the couplings the cell draws) its parasitic network
+must hold at least, counted in each case's note under EXAMINED.
+
 LVS cases assert device and net counts, and their verdict against their own
 reference netlist in `lvs_refs/<id>.spice`. Each reference was transcribed once
 from the manifest's `reference_netlist` for that case, the schematic the case was
@@ -129,7 +138,9 @@ three HVT/LVT cases are expected to fail until device flavour is recognised
 
 `expectations.json` is table-driven. Per case: `id`, `cell`, `domain`, the rule
 or check, `expect_violations`, `expect_outcome`, `examined_min`, and for
-positive cases the `measured` value and the `at` coordinate in dbu.
+positive cases the `measured` value and the `at` coordinate in dbu. An LVS
+case's `examined_min` is `{devices, nets}` and a PEX case's `{nets,
+elements}`; `examined_semantics` says what each counts.
 
 **Read `assert` before asserting anything.** It lists the only claims derivable
 for that case. A field absent from it was not derivable and must not be
