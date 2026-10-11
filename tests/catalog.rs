@@ -181,8 +181,12 @@ fn every_kind_the_code_has_is_in_the_catalog() {
     }
 }
 
+/// The status-count table and the row total of check-sources.md, kept in step
+/// with the catalog: a stale table is rewritten (so CI's `regenerated` artifact
+/// carries it) and the test fails for review.
 #[test]
 fn check_sources_states_the_catalog_s_status_counts() {
+    let file = path("docs/check-sources.md");
     let doc = read("docs/check-sources.md");
     let rows = catalog();
     let columns = [
@@ -195,10 +199,20 @@ fn check_sources_states_the_catalog_s_status_counts() {
     ];
     assert_eq!(columns, STATUSES, "the doc's column order");
     let total = rows.len();
-    assert!(
-        doc.contains(&format!("({total} rows)")),
-        "check-sources.md should state ({total} rows)"
-    );
+    let mut lines: Vec<String> = doc.lines().map(str::to_owned).collect();
+    let mut stale = Vec::new();
+    for line in &mut lines {
+        if line.starts_with("**Snapshot") && line.ends_with(" rows):") {
+            let want = match line.rfind('(') {
+                Some(open) => format!("{}({total} rows):", &line[..open]),
+                None => line.clone(),
+            };
+            if *line != want {
+                stale.push(want.clone());
+                *line = want;
+            }
+        }
+    }
     for (domain, _) in DOMAINS {
         let counts: Vec<String> = columns
             .iter()
@@ -214,10 +228,28 @@ fn check_sources_states_the_catalog_s_status_counts() {
         } else {
             domain.to_uppercase()
         };
-        let line = format!("| {label} | {} |", counts.join(" | "));
-        assert!(
-            doc.contains(&line),
-            "check-sources.md should have the row {line:?}"
+        let want = format!("| {label} | {} |", counts.join(" | "));
+        let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.starts_with(&format!("| {label} | ")))
+        else {
+            panic!("check-sources.md has no status-count row for {label}");
+        };
+        if *line != want {
+            stale.push(want.clone());
+            *line = want;
+        }
+    }
+    if !stale.is_empty() {
+        let mut updated = lines.join("\n");
+        if doc.ends_with('\n') {
+            updated.push('\n');
+        }
+        std::fs::write(&file, updated).expect("docs/check-sources.md is writable");
+        panic!(
+            "docs/check-sources.md's status counts were stale against the catalog; they are \
+             rewritten: review and commit them:\n{}",
+            stale.join("\n")
         );
     }
 }
