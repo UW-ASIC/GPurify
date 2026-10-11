@@ -62,8 +62,9 @@ pub enum LayoutError {
     /// An `SREF` or `AREF` names a structure the library does not define.
     #[error("cell {0} is referenced but not defined")]
     MissingCell(String),
-    /// A structure reached from a root reaches itself again through its
-    /// references, or every structure is referenced so none is a root.
+    /// A structure reaches itself again through its references, whether a
+    /// root reaches it or not (a library whose every structure is referenced
+    /// has such a cycle).
     #[error("cell hierarchy contains a cycle through {0}")]
     CyclicHierarchy(String),
     /// A layout that would flatten to more than [`MAX_FLAT_POLYGONS`] polygons,
@@ -1437,27 +1438,7 @@ pub mod gds {
             unknown: UnknownLayers,
             labels: LabelDepth,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
-            let mut referenced = vec![false; self.cells.len()];
-            for reference in &self.refs {
-                referenced[reference.child as usize] = true;
-            }
-            // Every cell referenced means no root, which means a cycle.
-            if !self.cells.is_empty() && referenced.iter().all(|&r| r) {
-                return Err(LayoutError::CyclicHierarchy(
-                    strings.resolve(self.cells[0].name).to_owned(),
-                ));
-            }
-
-            let mut counted = vec![None; self.cells.len()];
-            let mut on_chain = vec![false; self.cells.len()];
-            let mut total = 0u64;
-            for (index, &is_referenced) in referenced.iter().enumerate() {
-                if !is_referenced {
-                    let polygons =
-                        self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
-                    total = total.saturating_add(polygons);
-                }
-            }
+            let total = self.flat_polygons(strings)?;
             if total > MAX_FLAT_POLYGONS {
                 return Err(LayoutError::TooManyPolygons(total));
             }
@@ -1477,7 +1458,7 @@ pub mod gds {
                 tx: Vec::new(),
                 ty: Vec::new(),
             };
-            for (index, &is_referenced) in referenced.iter().enumerate() {
+            for (index, &is_referenced) in self.referenced().iter().enumerate() {
                 if !is_referenced {
                     walk.visit(narrow(index), Xform::IDENTITY, true, 1)?;
                 }
@@ -1491,6 +1472,49 @@ pub mod gds {
     }
 
     impl Library {
+        /// How many polygons [`Self::flatten`] would produce, before derived
+        /// layers and keyhole splitting, counted from the hierarchy without
+        /// expanding anything: each root's elements plus each placed child's
+        /// count times the placement's array size, saturating. Linear in the
+        /// library, so a caller can refuse a layout too large to flatten.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::CyclicHierarchy`] for any structure that reaches
+        /// itself, whether a root reaches it or not, and
+        /// [`LayoutError::HierarchyTooDeep`].
+        pub fn flat_polygons(&self, strings: &StrTable) -> Result<u64, LayoutError> {
+            let referenced = self.referenced();
+            let mut counted = vec![None; self.cells.len()];
+            let mut on_chain = vec![false; self.cells.len()];
+            let mut total = 0u64;
+            for (index, &is_referenced) in referenced.iter().enumerate() {
+                if !is_referenced {
+                    let polygons =
+                        self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
+                    total = total.saturating_add(polygons);
+                }
+            }
+            // A cycle no root reaches is as malformed as one a root reaches:
+            // counting what is left refuses it. A library whose every cell is
+            // referenced has no root and is caught here too.
+            for index in 0..self.cells.len() {
+                if counted[index].is_none() {
+                    self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
+                }
+            }
+            Ok(total)
+        }
+
+        /// Whether each cell is placed by some reference; the roots are the rest.
+        fn referenced(&self) -> Vec<bool> {
+            let mut referenced = vec![false; self.cells.len()];
+            for reference in &self.refs {
+                referenced[reference.child as usize] = true;
+            }
+            referenced
+        }
+
         /// How many polygons `cell` flattens to: its own elements, plus each
         /// placed child's count times the placement's array size, saturating.
         /// Memoised in `counted`; refuses a cycle and a chain past the depth cap.
@@ -2319,6 +2343,24 @@ mod tests {
         assert!(matches!(
             read(&chain(at_cap + 1), &deck, UnknownLayers::Reject),
             Err(LayoutError::HierarchyTooDeep(_))
+        ));
+    }
+
+    /// F35: a reference cycle is refused whether a root reaches it or not.
+    /// `TOP` places nothing, and `A` and `B` place each other: `TOP` is the
+    /// only root, the count then starts at `A` (the first cell left), and the
+    /// chain `A`, `B`, `A` closes at `A`.
+    #[test]
+    fn a_reference_cycle_no_root_reaches_is_refused() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let square = [first_layer_square()];
+        let (to_a, to_b) = ([sref("A", 0, 0.0, 0, 0)], [sref("B", 0, 0.0, 0, 0)]);
+        let unreached =
+            gds_hierarchy(&[("TOP", &square, &[]), ("A", &[], &to_b), ("B", &[], &to_a)]);
+        assert!(matches!(
+            read(&unreached, &deck, UnknownLayers::Reject),
+            Err(LayoutError::CyclicHierarchy(name)) if name == "A"
         ));
     }
 

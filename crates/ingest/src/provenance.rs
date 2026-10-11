@@ -44,6 +44,9 @@ pub enum LabelError {
 pub struct Provenance {
     /// Ascending by `PolyId`, arrival order kept among equal ids.
     labelled: Vec<(PolyId, StrId)>,
+    /// The rows [`Self::label`] attached, in arrival order: what a
+    /// [`Self::resolve_labels`] call keeps when it rebinds.
+    attached: Vec<(PolyId, StrId)>,
     pub(crate) placed: Vec<PlacedLabel>,
 }
 
@@ -55,6 +58,7 @@ impl Provenance {
             .labelled
             .partition_point(|&(labelled, _)| labelled <= poly);
         self.labelled.insert(at, (poly, name));
+        self.attached.push((poly, name));
     }
 
     /// Every labelled polygon, ascending by [`PolyId`]; `topology` binds against it without sorting.
@@ -72,10 +76,11 @@ impl Provenance {
         self.placed.push(PlacedLabel { at, layer, name });
     }
 
-    /// Binds each placed label to the polygon it sits on. Run once, after the
-    /// store is finished and its derived layers appended: a second call binds
-    /// every label again, duplicating [`Self::labels`]. One sweep in x per
-    /// label row: each text tests only the shapes whose box spans its x.
+    /// Binds each placed label to the polygon it sits on. Run after the store
+    /// is finished and its derived layers appended. Each call rebinds from
+    /// scratch: what an earlier call bound is replaced, never duplicated, and
+    /// what [`Self::label`] attached is kept. One sweep in x per label row:
+    /// each text tests only the shapes whose box spans its x.
     ///
     /// The boundary counts as inside; the first pairing row, then the lowest `PolyId`, wins.
     /// A text on a layer no pairing row names binds nothing.
@@ -104,6 +109,7 @@ impl Provenance {
             bind_on_layer(store, conductor, &self.placed, &mut pending, &mut bound);
         }
 
+        self.labelled.clone_from(&self.attached);
         for (label, poly) in self.placed.iter().zip(bound) {
             match poly {
                 Some(poly) => self.labelled.push((poly, label.name)),
