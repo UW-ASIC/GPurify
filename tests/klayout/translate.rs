@@ -1135,6 +1135,34 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("cut_class", Key::Point, Value::Ignore)
             }
+            Rule::MinInteriorAngle { layer, limit } => {
+                // With no layer, the drawn layers only, as for `angle`.
+                let targets = layer.map_or_else(|| drawn.clone(), |layer| vec![layer]);
+                // `corners` measures the turn, which is 180 less the angle
+                // inside; a hair under the bound keeps a corner exactly at the
+                // limit out whichever end of the range KLayout includes.
+                for layer in targets {
+                    writeln!(
+                        body,
+                        "emit({q}, {}.dup.raw.corners(as_dots, -180.0, {:?}))",
+                        var(layer),
+                        limit - 180.0 - 1e-6
+                    )
+                    .expect("a String");
+                }
+                exact("min_interior_angle", Key::Point, Value::Ignore)
+            }
+            Rule::PolygonValidity { .. } => (
+                "polygon_validity",
+                Verdict::None(
+                    "KLayout's odd_polygons reports the parts of a polygon that are not \
+                     orientable, not the drawn polygon, and no ring of zero area",
+                ),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::AllowedWidth { layer, widths } => {
                 let name = fig(layer, &mut reads);
                 let kept: Vec<String> = set.widths[widths as usize]

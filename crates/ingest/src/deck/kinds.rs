@@ -454,6 +454,29 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "color_spacing", Dim::Length)),
         &[p("colors", "colors", Dim::Count)],
     ),
+    // A corner whose angle inside its shape is under the limit (IHP 3.1
+    // "acute angles <87 degree"); with no layer, every drawn layer.
+    drc(
+        "interior_angle",
+        Cmp::Ge,
+        "min_interior_angle",
+        &[],
+        Some(p("", "limit", Dim::Angle)),
+        &[],
+    ),
+    drc(
+        "interior_angle",
+        Cmp::Ge,
+        "min_interior_angle",
+        &[0],
+        Some(p("", "limit", Dim::Angle)),
+        &[],
+    ),
+    // A drawn polygon that crosses itself or encloses no area (IHP 3.1
+    // "self-intersecting polygons must be avoided"); with no layer, every
+    // drawn layer.
+    drc("valid", Cmp::Absent, "polygon_validity", &[], None, &[]),
+    drc("valid", Cmp::Absent, "polygon_validity", &[0], None, &[]),
     // Every shape (or edge) of the layer is a violation: `forbidden(licon and poly and diff)`.
     drc("forbidden", Cmp::Absent, "forbidden", &[0], None, &[]),
     // Each outer shape holds at least `count` inner shapes entirely: `contains(tap, licon) >= 1`.

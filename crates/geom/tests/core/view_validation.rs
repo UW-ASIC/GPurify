@@ -9,7 +9,9 @@
 //! told the two failures apart.
 
 use gpurify_geom::ops::{self_intersects, winding_of, Winding};
-use gpurify_geom::view::{validate_layer_into, RingRef, ValidatedLayer, ValidityError};
+use gpurify_geom::view::{
+    ring_defect, validate_layer_into, RingRef, ValidatedLayer, ValidityError,
+};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_testgen::shapes::polygon_area;
@@ -40,6 +42,34 @@ fn store_of(runs: &[(LayerId, Vec<i64>, Vec<i64>)]) -> GeometryStore {
         builder.push(*layer, &xs, &ys);
     }
     builder.finish(2).0
+}
+
+/// Oracle: differential against the layer validator. On a rectilinear ring,
+/// `ring_defect` names exactly the defect `validate_layer_into` reports for
+/// a layer holding that ring alone, and nothing for a valid ring or a lone
+/// clockwise one (an orphan hole is the layer's defect, not the ring's).
+/// Staircases over a 4 x 4 lattice cross, touch and double back often.
+#[test]
+fn ring_defect_names_what_layer_validation_refuses() {
+    let mut rng = Rng::new(0x51_6e_5f_de);
+    for _ in 0..5000 {
+        let k = usize::try_from(rng.range(1, 6)).expect("small");
+        let px: Vec<i64> = (0..k).map(|_| rng.range(0, 4)).collect();
+        let py: Vec<i64> = (0..k).map(|_| rng.range(0, 4)).collect();
+        let (mut xs, mut ys) = (Vec::new(), Vec::new());
+        for i in 0..k {
+            xs.extend([px[i], px[(i + 1) % k]]);
+            ys.extend([py[i], py[i]]);
+        }
+        let store = store_of(&[(LAYER, xs.clone(), ys.clone())]);
+        let want = match validate(&store, LAYER) {
+            Ok(_) | Err(ValidityError::OrphanHole(_)) => None,
+            Err(defect) => Some(defect),
+        };
+        let row = PolyId(store.polys_on_layer(LAYER).start);
+        let (rx, ry) = store.poly_verts(row);
+        assert_eq!(ring_defect(rx, ry, row), want, "{xs:?} {ys:?}");
+    }
 }
 
 fn validate(store: &GeometryStore, layer: LayerId) -> Result<ValidatedLayer, ValidityError> {

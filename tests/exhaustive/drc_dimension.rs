@@ -73,6 +73,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_enclosed_area(depth),
         off_grid(depth),
         angle(depth),
+        interior_angle(depth),
+        polygon_validity(depth),
         forbidden(depth),
         max_area(depth),
         aspect_ratio(depth),
@@ -2785,6 +2787,144 @@ fn angle(_depth: Depth) -> Vec<Fixture> {
         vec![("a", Vec::new()), ("all", Vec::new()), ("d", Vec::new())],
     ));
     out
+}
+
+/// `interior_angle` (`min_interior_angle`, DRC-003: IHP 3.1 "shapes with
+/// acute angles <87 degree are not allowed on any layer", GF180 SH.2 "angles
+/// <90 deg"): one finding per drawn corner whose angle inside its shape is
+/// under the limit, at the vertex, measuring the angle.
+///
+/// Oracle: angles fixed by construction. A rectangle (90 at a limit of 90:
+/// legal), an L (its inner corner 270), a ring (its hole's corners 270 on the
+/// shape's side, 90 inside the hole: a check that reads a hole's own inside
+/// flags nothing either way, but one that takes the smaller angle of a
+/// corner flags an L's inner corner), an octagon (135); a right isosceles
+/// triangle (two 45-degree corners, exactly 45 once rounded) under both
+/// limits; a 30-60-90 triangle whose two acute corners are under both; and
+/// the triangle on another layer, which only the every-layer rule reads.
+fn interior_angle(_depth: Depth) -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n\
+                rule r interior_angle(met1) >= 90deg\n\
+                rule ihp interior_angle() >= 87deg\n";
+    let triangle = [(0, 0), (1000, 0), (0, 1000)];
+    let acute = || vec![ratio(45.0).at(1000, 0), ratio(45.0).at(0, 1000)];
+    let both = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("interior_angle/{name}"),
+            &["DRC-003"],
+            deck,
+            layout,
+            vec![("r", findings.clone()), ("ihp", findings)],
+        )
+    };
+    let cases = vec![
+        both("rectangle", met1(&[[0, 0, 1000, 500]]), Vec::new()),
+        both(
+            "l_shape",
+            met1(&[[0, 0, 1000, 100], [0, 100, 100, 1000]]),
+            Vec::new(),
+        ),
+        both(
+            "ring",
+            Layout::default().polygon("met1", &holed([0, 0, 1000, 1000], [300, 300, 700, 700])),
+            Vec::new(),
+        ),
+        both(
+            "octagon",
+            Layout::default().polygon(
+                "met1",
+                &[
+                    (100, 0),
+                    (900, 0),
+                    (1000, 100),
+                    (1000, 900),
+                    (900, 1000),
+                    (100, 1000),
+                    (0, 900),
+                    (0, 100),
+                ],
+            ),
+            Vec::new(),
+        ),
+        both(
+            "right_triangle",
+            Layout::default().polygon("met1", &triangle),
+            acute(),
+        ),
+        both(
+            "thirty_sixty",
+            Layout::default().polygon("met1", &[(0, 0), (1732, 0), (0, 1000)]),
+            vec![Finding::any().at(1732, 0), Finding::any().at(0, 1000)],
+        ),
+        fixture(
+            "interior_angle/other_layer",
+            &["DRC-003"],
+            deck,
+            Layout::default().polygon("met2", &triangle),
+            vec![("r", Vec::new()), ("ihp", acute())],
+        ),
+    ];
+    every_placement(cases)
+}
+
+/// `valid` (`polygon_validity`, DRC-004: IHP 3.1 "self-intersecting polygons
+/// must be avoided"): one finding per drawn polygon that crosses itself or
+/// encloses no area, where every other rule reading its layer records
+/// `Refused`.
+///
+/// Oracle: polygons drawn with the defect by construction: a ring crossing
+/// itself, a ring doubling back on itself (zero area), and beside them a
+/// rectangle and a 45-degree triangle, both valid (a check that also refuses
+/// diagonal edges flags the triangle). `valid(met1)` reads met1 only, and
+/// `valid()` every drawn layer, so a crossing ring on met2 is the second's.
+fn polygon_validity(_depth: Depth) -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n\
+                rule v valid(met1)\nrule all valid()\n";
+    let crossing = [
+        (0, 0),
+        (2000, 0),
+        (2000, 2000),
+        (1000, 2000),
+        (1000, -1000),
+        (0, -1000),
+    ];
+    let case = |name: &str, layout: Layout, v: Vec<Finding>, all: Vec<Finding>| {
+        fixture(
+            &format!("polygon_validity/{name}"),
+            &["DRC-004"],
+            deck,
+            layout.rect("met1", 5000, 5000, 6000, 6000),
+            vec![("v", v), ("all", all)],
+        )
+    };
+    every_placement(vec![
+        case(
+            "self_crossing",
+            Layout::default().polygon("met1", &crossing),
+            vec![count(0)],
+            vec![count(0)],
+        ),
+        case(
+            "zero_area",
+            Layout::default().polygon("met1", &[(0, 0), (1000, 0), (500, 0)]),
+            vec![count(0)],
+            vec![count(0)],
+        ),
+        case(
+            "valid_shapes",
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .polygon("met1", &[(2000, 0), (3000, 0), (2000, 1000)]),
+            Vec::new(),
+            Vec::new(),
+        ),
+        case(
+            "other_layer",
+            Layout::default().polygon("met2", &crossing),
+            Vec::new(),
+            vec![count(0)],
+        ),
+    ])
 }
 
 // ------------------------------------------------------------ forbidden

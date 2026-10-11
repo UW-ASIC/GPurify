@@ -138,8 +138,6 @@ says which foundry manual, standard or tool defines each one.
 | Id | Check | Status | What is missing |
 |---|---|---|---|
 | DRC-002 | Allowed edge angles | partial | 45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer; with no layer, drawn layers only (F63, fixed) |
-| DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
-| DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
 | DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible |
 | DRC-015 | Discrete / allowed width set | partial | width(L; allowed: [..]) holds each merged figure's narrowest width to a list (sky130 rpm.1b-1f). Missing: LEF58 WIDTHTABLE's fracture into rectangles and its open-ended last width, and ASAP7 M4.W.3/W.4 (no even multiple of the minimum width) |
 | DRC-016 | Wrong-direction width or spacing | partial | width(E) and facing_space(E) on L.edges().horizontal() or .vertical() measure in one direction (ASAP7 M4.W.1, W.5, S.1, S.2); the PRL and NONEOL qualifiers of LEF58 WRONGDIRECTION spacing are missing |

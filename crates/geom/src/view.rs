@@ -358,6 +358,25 @@ impl ValidatedLayer {
     }
 }
 
+/// Why one ring, a store row, is no valid polygon whatever its angles, checked
+/// as [`validate_layer_into`] checks it: [`ValidityError::Degenerate`] for
+/// fewer than three vertices, two equal consecutive vertices or zero signed
+/// area, and [`ValidityError::SelfIntersecting`] for two non-adjacent edges
+/// sharing a point other than a pinch. `None` for a valid ring.
+/// Rectilinearity is not asked, so a 45-degree ring is valid here, and a hole
+/// with no outer is a property of the layer, not of the ring.
+pub fn ring_defect(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Option<ValidityError> {
+    if xs.len() < 3 || !edge_flags_scalar(xs, ys, xs[0], ys[0]).0 {
+        return Some(ValidityError::Degenerate(poly));
+    }
+    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, true, &mut Vec::new()) {
+        return Some(ValidityError::SelfIntersecting(poly));
+    }
+    winding_of(xs, ys)
+        .is_none()
+        .then_some(ValidityError::Degenerate(poly))
+}
+
 /// Validate one coordinate run and report its winding. Check order is part of the
 /// answer: a bowtie is reported as self-intersecting, not non-rectilinear.
 #[inline(always)]
