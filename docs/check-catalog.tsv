@@ -1,6 +1,6 @@
 id	domain	category	check	sources	gpurify	status	oracle	notes
 DRC-001	drc	integrity	Off-grid vertex	LEF:MANUFACTURINGGRID; GF:GRID,OFFGRID; SKY:x.1a,x.1b; IHP:3.1; drt; KL:ongrid; MAG:off_grid	off_grid	implemented	FR; TX:KL; MR	Drawn layers only (F50, fixed)
-DRC-002	drc	integrity	Allowed edge angles	IHP:3.1; SKY:x.2,x.3; GF:ACUTE; KL:with_angle; MAG:angles	angle	partial	FR; TX:KL	45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer
+DRC-002	drc	integrity	Allowed edge angles	IHP:3.1; SKY:x.2,x.3; GF:ACUTE; KL:with_angle; MAG:angles	angle	partial	FR; TX:KL	45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer; with no layer, drawn layers only (F63, fixed)
 DRC-003	drc	integrity	Acute angles	IHP:3.1; GF:ACUTE; CAL:FLAG ACUTE	angle	partial	FR	Same ceiling as DRC-002
 DRC-004	drc	integrity	Self-intersecting / zero-area polygons	IHP:3.1; KL:odd_polygons; CAL:FLAG NONSIMPLE	ingest:layer_validity	partial	SY; TX:KL	Corpus VALID_SELF and VALID_ZERO are in the disagree list
 DRC-005	drc	integrity	Rectangle-only / square-only shapes	SKY:capm.7,x.2a,licon.3; LEF58_RECTONLY; KL:rectangles,squares; MAG:rect_only; drt	-	missing	FR; TX:KL	No selection by shape class (limitations.md, "Checks that do not exist yet"; sky130.deck)
@@ -22,7 +22,7 @@ DRC-022	drc	dimension	Aspect ratio	SKY:capm.6,li.2; KL:with_bbox_aspect_ratio	-	
 DRC-023	drc	spacing	Same-layer spacing	LEF:SPACING; IHP:M1.b; GF:Mn.2a; SKY:m1.2; A7:M1.S.1; KL:space; MAG:spacing; drt	min_spacing	implemented	BM; FR; TX:KL; MR	
 DRC-024	drc	spacing	Notch	LEF:NOTCHLENGTH,ENDOFNOTCHWIDTH; SKY:x.6; IHP:M1.b; KL:notch	notch	implemented	BM; FR; TX:KL	
 DRC-025	drc	spacing	Width-dependent (wide-metal) spacing	LEF:SPACING RANGE,SPACINGTABLE; IHP:M1.e,M1.f; GF:Mn.2b; SKY:m1.3b,m3.3c; MAG:widespacing; drt	wide_dependent_spacing,spacing_table	implemented	FR; TX:KL	
-DRC-026	drc	spacing	Parallel-run-length spacing	LEF:SPACINGTABLE PARALLELRUNLENGTH; IHP:CntB.b1; MAG:widespacing runlength; KL:projection	prl_spacing,spacing_table	implemented	FR; TX:KL	The run is the overlap of the merged figures' bounding boxes, so a non-rectangular figure's run is overstated (fails closed); facing-edge projection is not measured
+DRC-026	drc	spacing	Parallel-run-length spacing	LEF:SPACINGTABLE PARALLELRUNLENGTH; IHP:CntB.b1; MAG:widespacing runlength; KL:projection	prl_spacing,spacing_table	implemented	FR; TX:KL	The run is facing-edge projection on the merged figures: edges at most the limit (prl_spacing) or the cell (spacing_table) apart (F49, fixed)
 DRC-027	drc	spacing	Two-widths spacing table	LEF:SPACINGTABLE TWOWIDTHS; LEF58_SPACINGTABLE; drt	spacing_table	partial	FR; TX:drt	The table is keyed on the wider shape only; TWOWIDTHS keys on both widths
 DRC-028	drc	spacing	Influence / stub spacing near wide metal	LEF:SPACING RANGE INFLUENCE,SPACINGTABLE INFLUENCE; SKY:m1.3a; drt	attached_wide_spacing	partial	FR	Implements the sky130 m1.3a form; equivalence with LEF INFLUENCE is unverified
 DRC-029	drc	spacing	End-of-line spacing	LEF:SPACING ENDOFLINE PARALLELEDGE TWOEDGES; LEF58_SPACING ENDOFLINE; A7:M1.S.2-S.5; ISPD19; drt	eol_spacing	partial	FR; TX:drt	Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing
@@ -61,7 +61,7 @@ DRC-066	drc	cut	Minimum cut count / redundant via	LEF:MINIMUMCUT; LEF58_MINIMUMC
 DRC-067	drc	cut	Metal-width-dependent via choice	LEF58_METALWIDTHVIAMAP; drt	-	missing	TX:drt	
 DRC-068	drc	cut	Cut-area conservation between two databases	SKY:ct.irdrop,via.irdrop	-	out_of_scope	-	Compares two GDS files
 DRC-070	drc	density	Global min/max density	LEF:MINIMUMDENSITY,MAXIMUMDENSITY; IHP:M1.j,M1.k; GF:PL.8,Mn.4; SKY:m1.13	global_density	implemented	CF; FR; TX:KL	Without a boundary layer, the die is the drawn layers' extent (F40, fixed)
-DRC-071	drc	density	Windowed density (window + step)	LEF:DENSITYCHECKWINDOW,DENSITYCHECKSTEP; IHP:MFil.h; SKY:m1.pd.2a,m1.pd.2b; KL:with_density; GF:density tests	density,density_cmp	implemented	CF; FR; TX:KL	GF ships density-M*_4_pass/fail test GDS. Without a boundary layer, the die is the drawn layers' extent (F40, fixed)
+DRC-071	drc	density	Windowed density (window + step)	LEF:DENSITYCHECKWINDOW,DENSITYCHECKSTEP; IHP:MFil.h; SKY:m1.pd.2a,m1.pd.2b; KL:with_density; GF:density tests	density,density_cmp	implemented	CF; FR; TX:KL	GF ships density-M*_4_pass/fail test GDS. Without a boundary layer, the die is the drawn layers' extent (F40, fixed); a window names an outer row, never a hole (F64, fixed)
 DRC-072	drc	density	Local density over a device	SKY:vpp.5a-c,vpp.11	-	missing	FR	The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured
 DRC-073	drc	density	Fill geometry and fill-to-drawn spacing	IHP:AFil,GFil,MFil; GF:DCF,DPF,DM; LEF:FILLACTIVESPACING	min_width,min_spacing_diff	expressible	FR	
 DRC-074	drc	density	No-fill / exclusion regions	GF:DCF.8a,DPF.15,DM.8; IHP:GFil.i,6.12	forbidden	expressible	FR	
@@ -94,7 +94,7 @@ DRC-114	drc	dfm	Pattern-matching DRC	CAL; ICV; PEG; patents P1,P3	-	missing	SY
 DRC-115	drc	dfm	Equation-based DRC	CAL:eqDRC; patents P10,P11	-	missing	CF	First candidate for Rust custom rules (testing-plan.md L9b)
 DRC-116	drc	dfm	Curvilinear / all-angle tolerance DRC	CAL; SIL; EMP	-	out_of_scope	-	Rectilinear only
 DRC-117	drc	dfm	Via redundancy scoring / via doubling	CAL:YieldAnalyzer,YieldEnhancer	redundant_via	partial	FR	Counts cuts within a distance; no DFM scoring and no via doubling
-DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, extents)	IHP:4.2; GF:4.2; KL; MAG:templayers	deck:derived	implemented	MR; BM	extents keeps one box per figure, unmerged, as KLayout (F54, fixed); with_width counts diagonal necks, floored (F39, fixed; F65 open)
+DRC-120	drc	infra	Derived layers (booleans, sizing, interacting, inside, holes, extents)	IHP:4.2; GF:4.2; KL; MAG:templayers	deck:derived	implemented	MR; BM	extents keeps one box per figure, unmerged, as KLayout (F54, fixed); with_width counts diagonal necks at their exact length, every bound exact (F39, F65 fixed)
 DRC-121	drc	infra	Selection by shape class, net or angle; covering/overlapping; anisotropic size	KL:rectangles,covering,overlapping,sized(dx,dy)	deck:derived	partial	TX:KL	limitations.md, "Checks that do not exist yet"
 DRC-122	drc	infra	Edge-layer ops incl. extension	KL:extended,edges	deck:edge	partial	TX:KL	limitations.md, "Checks that do not exist yet"
 DRC-123	drc	infra	Hierarchical processing	KL:deep	ingest:flatten	partial	MR	Flattened at load (gds::Library::flatten); a scale issue, not correctness

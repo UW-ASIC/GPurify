@@ -121,7 +121,7 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| DRC-002 | Allowed edge angles | partial | 45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer |
+| DRC-002 | Allowed edge angles | partial | 45-degree and acute edges load and angle checks them; every other geometric rule records Refused on a non-rectilinear layer; with no layer, drawn layers only (F63, fixed) |
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
 | DRC-005 | Rectangle-only / square-only shapes | missing | No selection by shape class (limitations.md, "Checks that do not exist yet"; sky130.deck) |
