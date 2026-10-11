@@ -332,12 +332,18 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |
 | ERC-F5 | TDDB/BTI/HCI lifetime | implemented | JEP122; JESD263; JESD241; JESD28; JESD60 | CF; MR; SY |
 | ERC-F6 | Missing level shifter | implemented | CAL:WP 81822; IEEE1801 | SY; NV |
+| ERC-F7 | Missing isolation at switchable-domain outputs | implemented | IEEE1801; CPF | SY; NV |
+| ERC-F8 | Power-state-dependent undriven gates | implemented | CAL:WP 81822; IEEE1801; IA | SE:Siemens WP; SY; NV |
 | ERC-F9 | DC / sneak path between domains | implemented | CAL:datasheet; CAL:WP 81822 | SE:WP Fig2; SY |
-| ERC-F10 | HV tag consistency | partial | SKY:hv.X.1,hvnwell.9,hvnwell.10 | FR; SY; MR |
+| ERC-F10 | HV tag consistency | implemented | SKY:hv.X.1,hvnwell.9,hvnwell.10; GF:DV.9 | FR; SY; MR |
+| ERC-F11 | Voltage-dependent spacing | implemented | (see DRC-082) | SY; MR |
 | ERC-F12 | Well / body bias | implemented | GF:LU.9,LU.10 | SY; NV |
+| ERC-F13 | Inter-metal dielectric breakdown | implemented | ICV; JEP159A | CF; SY; MR |
 | ERC-G2 | Floating well | implemented | SKY:nwell.4 | FR; SY; MR |
 | ERC-G4 | Supply short (n-tie + p-tie, VDD-GND) | implemented | CAL | SY; MR |
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
+| ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
+| ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
 
