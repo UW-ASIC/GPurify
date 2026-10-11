@@ -19,7 +19,9 @@
 //! - **Spectre** ([`spectre::read`]): `subckt`/`ends`, `model <name> <master>`
 //!   cards, and instances `name (nets) master params` of a subcircuit, a
 //!   `model`, or a built-in primitive master; `\` continuation, `//` comments.
-//!   Case-sensitive.
+//!   Case-sensitive. A primitive master (`resistor`, `nmos`, …) names no
+//!   model, so the instance is the deck's one recogniser of its kind, as a
+//!   SPICE card naming none is (below).
 //!
 //! An `R` or `C` card may state its value positionally, between its nets and
 //! its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, and `C1 a b 1p cmim`
@@ -35,14 +37,16 @@
 //! c=1p`, `D1 a b`). LVS pairs a device by its model, so such a card is the
 //! deck's one recogniser of its kind; a deck with none of that kind, or
 //! several, refuses it with [`NetlistError::NoModel`], naming them
-//! (testing-plan F86).
+//! (testing-plan F86). So is a Spectre instance of a primitive master with
+//! no `model` card, of any kind (testing-plan F97): `R1 (a b) resistor
+//! r=1k` is the deck's one resistor, not a device of model `resistor`.
 //!
 //! Refused with [`NetlistError::Unsupported`]: any other dot card (`.param`,
 //! `.include`, `.global`, `.model`, …), sources and other element letters,
 //! a number where a model belongs on any other card, parameters on a
 //! `.subckt` line or an `X` card, and a card outside every subcircuit.
 
-use crate::deck::DeviceKind;
+use crate::deck::{DeviceKind, DeviceRecognition};
 use crate::layout::MAX_HIERARCHY_DEPTH;
 use crate::narrow;
 use gpurify_geom::{StrId, StrTable};
@@ -97,9 +101,10 @@ pub enum NetlistError {
     /// its subcircuit's port count.
     #[error("line {}: device {1} has {2} terminals, expected {3}", .0.line)]
     TerminalCount(SourceSpan, String, u32, u32),
-    /// An `R`, `C` or `D` card with no model, where the deck has no one
-    /// recogniser of its kind to bind it to: the card, then what the deck
-    /// has of that kind (none, or the models it would have to choose from).
+    /// An `R`, `C` or `D` card with no model, or a Spectre instance of a
+    /// primitive master, where the deck has no one recogniser of its kind to
+    /// bind it to: the card, then what the deck has of that kind (none, or
+    /// the models it would have to choose from).
     #[error("line {}: {1} states no model, and {2}", .0.line)]
     NoModel(SourceSpan, String, String),
     /// A subcircuit that places itself, directly or through others: the
@@ -157,8 +162,9 @@ pub struct Netlist {
     pub subckt_device_start: Vec<u32>,
 
     /// One row per device instance (not per subcircuit instance): its model
-    /// name, interned. An `R`, `C` or `D` card that names none has the deck's
-    /// one recogniser of its kind.
+    /// name, interned. An `R`, `C` or `D` card that names none, and a
+    /// Spectre instance of a primitive master, has the deck's one recogniser
+    /// of its kind.
     pub device_model: Vec<StrId>,
     /// The device's family, from its card letter, its Spectre master, or the
     /// deck `device` statement an `X` card called.
@@ -726,6 +732,9 @@ struct Build<'a> {
     /// Spectre `model` cards, and for SPICE the deck's device models an `X`
     /// card may call, sorted the same way.
     models: Vec<(StrId, DeviceKind)>,
+    /// The deck's device models, sorted the same way, one row per name: what
+    /// a card that names no model binds to.
+    deck: Vec<(StrId, DeviceKind)>,
     /// The open subcircuit and the `net_name` row its nets start at.
     open: Option<(SubcktId, u32)>,
     open_span: SourceSpan,
@@ -840,10 +849,11 @@ impl Build<'_> {
     }
 
     /// The model a card that names none is: the deck's one recogniser of
-    /// `kind` (testing-plan F86). None, or several, is a refusal naming them.
+    /// `kind` (testing-plan F86, F97). None, or several, is a refusal naming
+    /// them.
     fn only_model(&self, head: Tok, kind: DeviceKind) -> Result<StrId, NetlistError> {
         let of_kind: Vec<StrId> = self
-            .models
+            .deck
             .iter()
             .filter(|&&(_, of)| of == kind)
             .map(|&(name, _)| name)
@@ -1098,20 +1108,22 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
         let subckt = b.open_id(head)?;
         return b.instance(head, *master, nets, params, subckt);
     }
-    let kind = b
-        .models
-        .binary_search_by_key(&master_id, |&(name, _)| name)
-        .map(|at| b.models[at].1)
-        .ok()
-        .or_else(|| spectre_primitive(master.text))
-        .ok_or_else(unsupported)?;
+    // A `model` card's name is the model; a primitive master names none, so
+    // the instance is the deck's one recogniser of its kind (F97).
+    let (kind, named) = match b.models.binary_search_by_key(&master_id, |&(name, _)| name) {
+        Ok(at) => (b.models[at].1, true),
+        Err(_) => (
+            spectre_primitive(master.text).ok_or_else(unsupported)?,
+            false,
+        ),
+    };
     let subckt = b.open_id(head)?;
     let (nets, model) = split_terminals(kind, positional, head)?;
     b.device(
         head,
         kind,
         nets,
-        (None, Some(model)),
+        (None, named.then_some(model)),
         params,
         subckt,
         (Dialect::Spectre, false),
@@ -1124,10 +1136,21 @@ fn read_dialect(
     source: &str,
     strings: &mut StrTable,
     dialect: Dialect,
-    mut models: Vec<(StrId, DeviceKind)>,
+    devices: &DeviceRecognition,
 ) -> Result<Netlist, NetlistError> {
-    models.sort_unstable_by_key(|&(name, _)| name);
-    models.dedup_by_key(|&mut (name, _)| name);
+    let mut deck: Vec<(StrId, DeviceKind)> = devices
+        .model
+        .iter()
+        .copied()
+        .zip(devices.kind.iter().copied())
+        .collect();
+    deck.sort_unstable_by_key(|&(name, _)| name);
+    deck.dedup_by_key(|&mut (name, _)| name);
+    // SPICE's `X` card may call a deck model; Spectre's models are its cards.
+    let models = match dialect {
+        Dialect::Spice => deck.clone(),
+        Dialect::Spectre => Vec::new(),
+    };
     let (toks, card_start) = lex(source, dialect);
     let cards = card_start.len() - 1;
     let mut b = Build {
@@ -1136,6 +1159,7 @@ fn read_dialect(
         net_of: Vec::new(),
         defs: Vec::new(),
         models,
+        deck,
         open: None,
         open_span: SourceSpan { line: 0 },
         instances: Vec::new(),
@@ -1222,13 +1246,7 @@ pub mod spice {
         strings: &mut StrTable,
         devices: &DeviceRecognition,
     ) -> Result<Netlist, NetlistError> {
-        let models = devices
-            .model
-            .iter()
-            .copied()
-            .zip(devices.kind.iter().copied())
-            .collect();
-        super::read_dialect(source, strings, super::Dialect::Spice, models)
+        super::read_dialect(source, strings, super::Dialect::Spice, devices)
     }
 }
 
@@ -1239,18 +1257,26 @@ pub mod spice {
 /// subset is in the [module docs](super).
 pub mod spectre {
     use super::{Netlist, NetlistError};
+    use crate::deck::DeviceRecognition;
     use gpurify_geom::StrTable;
 
     /// Reads a Spectre netlist, interning its names into `strings`. A device's
     /// family comes from its `model` card's master or a built-in primitive
     /// master (`nmos`, `bsim4`, `resistor`, …); any other master is refused.
     ///
+    /// `devices`: the deck's recognisers. An instance of a primitive master
+    /// names no model, so it is the one recogniser of its kind here.
+    ///
     /// # Errors
     ///
     /// The first [`NetlistError`] found, with its line; nothing partial is
     /// returned. Definitions are read before cards, and instance port counts
     /// checked last, so the first error found need not be the first in the file.
-    pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
-        super::read_dialect(source, strings, super::Dialect::Spectre, Vec::new())
+    pub fn read(
+        source: &str,
+        strings: &mut StrTable,
+        devices: &DeviceRecognition,
+    ) -> Result<Netlist, NetlistError> {
+        super::read_dialect(source, strings, super::Dialect::Spectre, devices)
     }
 }

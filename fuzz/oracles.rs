@@ -757,7 +757,8 @@ pub fn netlist_spectre(data: &[u8]) {
         return;
     };
     let mut strings = StrTable::default();
-    if let Ok(netlist) = gpurify_ingest::netlist::spectre::read(text, &mut strings) {
+    let devices = DeviceRecognition::default();
+    if let Ok(netlist) = gpurify_ingest::netlist::spectre::read(text, &mut strings, &devices) {
         assert_eq!(
             netlist.device_model.len() + netlist.instance_of.len(),
             spectre_statements(text),

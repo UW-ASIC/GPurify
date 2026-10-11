@@ -261,7 +261,7 @@ ends inv
 alter corner_tt dev=nfet param=vth value=0.4
 ";
     let mut strings = StrTable::default();
-    match spectre::read(source, &mut strings) {
+    match spectre::read(source, &mut strings, &DeviceRecognition::default()) {
         Err(NetlistError::Unsupported(span, _)) => {
             assert_eq!(
                 span.line, 3,
@@ -706,6 +706,69 @@ fn a_two_pin_card_with_no_model_is_the_decks_one_recogniser_of_its_kind() {
                 assert!(!has.contains("cmim"), "{has}");
             }
             other => panic!("R1 with no model bound against {names:?}: {other:?}"),
+        }
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F97, as F86 decided for
+/// SPICE. A Spectre instance of a primitive master names no model, so it
+/// is the deck's one recogniser of its kind: `R1 (a b) resistor r=1k` is
+/// `rpoly` of 1000 ohms, `C1 (a b) capacitor` is `cmim` and `M1 (a b a a)
+/// nmos` is `nfet`. An instance of a `model` card is that card's name: `R2
+/// (a b) rhi` is `rhi`. A deck with two resistors, or none, has no one to
+/// bind `R1` to, and the refusal names what it has.
+#[test]
+fn a_spectre_primitive_with_no_model_card_is_the_decks_one_recogniser_of_its_kind() {
+    let mut strings = StrTable::default();
+    let deck = |strings: &mut StrTable, models: &[(&str, DeviceKind)]| DeviceRecognition {
+        kind: models.iter().map(|&(_, kind)| kind).collect(),
+        model: models
+            .iter()
+            .map(|&(name, _)| strings.intern(name))
+            .collect(),
+        ..DeviceRecognition::default()
+    };
+    let one_each = deck(
+        &mut strings,
+        &[
+            ("nfet", DeviceKind::Mos),
+            ("rpoly", DeviceKind::Resistor),
+            ("cmim", DeviceKind::Capacitor),
+        ],
+    );
+    let source = "model rhi resistor\nsubckt top a b\nR1 (a b) resistor r=1k\n\
+                  C1 (a b) capacitor\nM1 (a b a a) nmos\nR2 (a b) rhi\nends top\n";
+    let netlist = spectre::read(source, &mut strings, &one_each).expect("each binds");
+    let models: Vec<&str> = netlist
+        .device_model
+        .iter()
+        .map(|&model| strings.resolve(model))
+        .collect();
+    assert_eq!(models, ["rpoly", "cmim", "nfet", "rhi"]);
+    assert_eq!(netlist.param, [(strings.intern("r"), 1000.0)]);
+
+    let two = deck(
+        &mut strings,
+        &[
+            ("rpoly", DeviceKind::Resistor),
+            ("rdiff", DeviceKind::Resistor),
+        ],
+    );
+    let none = deck(&mut strings, &[("cmim", DeviceKind::Capacitor)]);
+    for (recognisers, names) in [(&two, &["rpoly", "rdiff"][..]), (&none, &[][..])] {
+        match spectre::read(
+            "subckt top a b\nR1 (a b) resistor r=1k\nends top\n",
+            &mut strings,
+            recognisers,
+        ) {
+            Err(NetlistError::NoModel(span, card, has)) => {
+                assert_eq!((span.line, card.as_str()), (2, "R1"));
+                for name in names {
+                    assert!(has.contains(name), "{has}");
+                }
+                assert!(!has.contains("cmim"), "{has}");
+            }
+            other => panic!("R1 with no model card bound against {names:?}: {other:?}"),
         }
     }
 }

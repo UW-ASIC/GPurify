@@ -1,6 +1,7 @@
 // tests/fixtures/lvs_inv.cdl in Spectre, placed once by a top cell.
 model nfet_01v8 bsim4
 model pfet_01v8 bsim4
+model rpoly resistor
 subckt LVS_INV A Y VDD VSS
 MN (Y A VSS VSS) nfet_01v8 w=0.42u l=0.15u
 MP (Y A VDD VDD) pfet_01v8 \
@@ -8,5 +9,5 @@ MP (Y A VDD VDD) pfet_01v8 \
 ends LVS_INV
 subckt top in out vdd vss
 X1 (in out vdd vss) LVS_INV
-R1 (out vss) resistor r=1k
+R1 (out vss) rpoly r=1k
 ends top
