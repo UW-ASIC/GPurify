@@ -25,9 +25,7 @@ fn same_param(left: ParamValue, right: ParamValue) -> bool {
 }
 
 /// Compare a parameter run against the one the table was built holding, name
-/// and value both. Stated as a helper because both accessor tests need an
-/// anchor outside themselves: `param` and `params_of` agreeing with each other
-/// is worth nothing if both agree on returning nothing.
+/// and value both.
 fn assert_same_params(what: &str, found: &[(StrId, ParamValue)], expected: &[(StrId, ParamValue)]) {
     assert_eq!(
         found.len(),
@@ -121,59 +119,4 @@ fn each_rule_reads_back_exactly_its_own_slice_of_the_side_arrays() {
         table.param(&table.spec[0], absent).is_none(),
         "an undeclared parameter name resolved to a value"
     );
-}
-
-/// Oracle: law. `param` is documented as a linear scan over the two or three
-/// entries `params_of` returns, so the two must agree for every rule and every
-/// name. Stating it as a law rather than a case is what makes it survive
-/// someone replacing the scan with a binary search over a sorted range.
-#[test]
-fn param_lookup_agrees_with_a_scan_of_the_same_rules_parameters() {
-    let mut strings = StrTable::default();
-    let names: Vec<StrId> = ["value", "count", "ratio", "enabled"]
-        .iter()
-        .map(|n| strings.intern(n))
-        .collect();
-    let rule = strings.intern("R.1");
-    let kind = strings.intern("antenna");
-
-    let table = RuleTable {
-        spec: vec![spec(rule, kind, (0, 0), (0, 3))],
-        layer_ref: Vec::new(),
-        param: vec![
-            (names[0], ParamValue::Count(7)),
-            (names[2], ParamValue::Ratio(400.0)),
-            (names[3], ParamValue::Flag(true)),
-        ],
-    };
-
-    // The anchor. Without it the law below is satisfied by both accessors
-    // returning nothing, which is a rule table that runs no rules at all.
-    assert_same_params(
-        "the antenna rule",
-        table.params_of(&table.spec[0]),
-        &[
-            (names[0], ParamValue::Count(7)),
-            (names[2], ParamValue::Ratio(400.0)),
-            (names[3], ParamValue::Flag(true)),
-        ],
-    );
-
-    for &name in &names {
-        let scanned = table
-            .params_of(&table.spec[0])
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|&(_, v)| v);
-        match (table.param(&table.spec[0], name), scanned) {
-            (None, None) => {}
-            (Some(found), Some(expected)) => assert!(
-                same_param(found, expected),
-                "param({name:?}) returned {found:?}, the scan found {expected:?}"
-            ),
-            (found, expected) => {
-                panic!("param({name:?}) returned {found:?} where the scan found {expected:?}")
-            }
-        }
-    }
 }

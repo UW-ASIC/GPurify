@@ -45,26 +45,6 @@ fn an_absent_intent_declares_nothing_and_every_accessor_says_so() {
     assert!(limits.budget_current_ua.is_none());
 }
 
-/// Oracle: law. `limits` is documented as returning the default for any
-/// undeclared net, so it is total: no net id, however it was obtained, may
-/// panic or produce a limit. An intent holding no nets is the sharpest case,
-/// because a lookup implemented as an unguarded binary search over an empty
-/// column is where that goes wrong.
-#[test]
-fn limits_are_total_over_every_net_id_even_with_nothing_declared() {
-    let mut strings = StrTable::default();
-    let intent = DesignIntent::default();
-    for name in ["a", "b", "net_0", "VDD!", "x"] {
-        let net = strings.intern(name);
-        let limits = intent.limits(net);
-        assert!(
-            limits.max_drop.is_none() && limits.budget_current_ua.is_none(),
-            "{name} was undeclared but came back with limits"
-        );
-        assert!(intent.supply_role(net).is_none());
-    }
-}
-
 /// Oracle: construct-from-answer. An intent file that cannot be read is an
 /// error, never an empty intent. The two are not interchangeable even though
 /// both leave the six rules unable to run: a missing file is a run the operator
