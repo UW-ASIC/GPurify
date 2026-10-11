@@ -221,8 +221,9 @@ pub enum Rule {
     /// GF180 DF.16, IHP NW.d and Gat.d, ASAP7 GATE.ACTIVE.S.4; `KLayout`
     /// `separation`.
     ///
-    /// Limits: cross-layer spacing only; the via stack-count limit of DRC-065
-    /// (LEF `MAXVIASTACK`) is missing.
+    /// Limits: LEF `SPACING ... LAYER ... STACK`, which lets aligned
+    /// same-net cuts of two layers stack, is not modelled; the stack-count
+    /// limit is [`Rule::ViaStack`].
     MinSpacingDiff {
         /// The first layer; findings are reported on it.
         a: LayerId,
@@ -888,6 +889,37 @@ pub enum Rule {
         within: Option<Dbu>,
         /// The fewest cuts a held via needs; at least 1.
         min_count: u16,
+    },
+    /// A stack of overlapping cuts taller than `max_height`.
+    ///
+    /// Deck: `via_stack(cut1, cut2, ..) <= count`, the cut layers bottom to
+    /// top, kind `via_stack`: LEF `MAXVIASTACK value [RANGE bottomLayer
+    /// topLayer]`, "the maximum number of single-cut stacked vias that are
+    /// allowed on top of each other ... A via is considered to be in a stack
+    /// with another via if the cut of the first via overlaps any part of the
+    /// cut of the second via". Cuts are the rows on each layer, as drawn,
+    /// read by their bounding boxes; a cut stacks on a cut of the layer
+    /// listed before it when the two overlap with positive area. A stack's
+    /// height through a cut is the longest chain of stacked cuts through it,
+    /// one per layer. The layers listed are the `RANGE`.
+    ///
+    /// One violation per cut at the height `max_height + 1` of a taller stack,
+    /// at its centre and on its layer, `measured` the tallest stack through
+    /// it. `examined` counts the cuts. The layers are not validated, so this
+    /// rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-065. Rules: LEF `MAXVIASTACK` (LEF/DEF 5.8, "Maximum Via Stack",
+    /// Example 1-34).
+    ///
+    /// Limits: every cut counts as a single-cut via, so a double-cut via does
+    /// not interrupt a stack (it fails closed: a stack LEF would split is
+    /// read as one).
+    ViaStack {
+        /// Index into [`RuleSet::stacks`]: the cut layers, bottom to top.
+        stack: u32,
+        /// The tallest legal stack; at least 1.
+        max_height: u16,
     },
     /// Cuts in a large array closer than `limit`.
     ///
@@ -2312,6 +2344,8 @@ pub struct RuleSet {
     pub span_tables: Vec<SpanTable>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
+    /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
+    pub stacks: Vec<Vec<LayerId>>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -2725,6 +2759,21 @@ impl RuleSet {
                         width,
                         within,
                         min_count: u16::try_from(min_count).expect("checked against the ceiling"),
+                    }
+                }
+                "via_stack" => {
+                    if spec.layer_len < 2 {
+                        return Err(DrcError::WrongLayerCount {
+                            rule: name_of(spec.id),
+                            expected: 2,
+                            found: spec.layer_len,
+                        });
+                    }
+                    let max_height = positive(spec, count(spec, "max_height", u16::MAX.into())?)?;
+                    set.stacks.push(rules.layers_of(spec).to_vec());
+                    Rule::ViaStack {
+                        stack: u32::try_from(set.stacks.len() - 1).expect("a deck has few stacks"),
+                        max_height: u16::try_from(max_height).expect("checked against the ceiling"),
                     }
                 }
                 "via_array_spacing" => {
@@ -3410,6 +3459,9 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::ViaStack { stack, max_height } => {
+                    via::via_stack(store, id, &self.stacks[stack as usize], max_height, out)
+                }
                 Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
                     store,
                     id,
@@ -4034,7 +4086,8 @@ impl Rule {
                 cut, wide, other, ..
             } => [Some(cut), Some(wide), Some(other)],
             Rule::Angle { layer, .. } => [layer, None, None],
-            Rule::OffGrid { .. } => [None, None, None],
+            // Raw rows, never validated: nothing to forget.
+            Rule::OffGrid { .. } | Rule::ViaStack { .. } => [None, None, None],
         }
     }
 }

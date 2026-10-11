@@ -49,6 +49,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cut_spacing(),
         redundant_via(),
         minimum_cut(),
+        via_stack(),
         via_array_spacing(depth),
         center_spacing(),
         adjacent_cut_spacing(),
@@ -1794,6 +1795,94 @@ fn minimum_cut() -> Vec<Fixture> {
             .rect("m2", 4900, 4900, 5200, 5200),
         &[],
         &[],
+    ));
+    every_placement(cases)
+}
+
+/// `via_stack(v1, v2, v3, v4) <= 2` (`via_stack`, DRC-065, LEF `MAXVIASTACK
+/// 2`): a cut stacks on a cut of the layer below that it overlaps; the cut
+/// third from the bottom of each stack taller than two is one finding,
+/// measuring the stack's height.
+///
+/// Oracle: LEF/DEF 5.8 "a via is considered to be in a stack with another
+/// via if the cut of the first via overlaps any part of the cut of the
+/// second via", on stacks drawn to a height.
+///
+/// Shapes, 100 nm cuts: stacks of two, three and four aligned cuts (the
+/// four-high stack is reported once, on its third cut, measuring 4); a stack
+/// of three whose cuts overlap by half; a v3 cut beside the v2 cut, not on
+/// it (two stacks of two); a v2 cut abutting the v1 cut (touching is not
+/// stacking); a v1 cut under two v2 cuts each carrying a v3 (two stacks of
+/// three, two findings).
+fn via_stack() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v1", "v2", "v3", "v4"],
+        "rule stack via_stack(v1, v2, v3, v4) <= 2\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("via_stack/{name}"),
+            &["DRC-065"],
+            &deck,
+            layout,
+            &[("stack", findings)],
+        )
+    };
+    let cut =
+        |layout: Layout, layer: &str, x: i64, y: i64| layout.rect(layer, x, y, x + 100, y + 100);
+    let tower = |height: usize| {
+        ["v1", "v2", "v3", "v4"][..height]
+            .iter()
+            .fold(Layout::default(), |l, layer| cut(l, layer, 0, 0))
+    };
+    let mut cases = Vec::new();
+    for (height, findings) in [(2, vec![]), (3, vec![count(3)]), (4, vec![count(4)])] {
+        cases.push(case(&format!("tower/{height}"), tower(height), findings));
+    }
+    cases.push(case(
+        "half_overlap",
+        cut(
+            cut(cut(Layout::default(), "v1", 0, 0), "v2", 50, 0),
+            "v3",
+            100,
+            0,
+        ),
+        vec![count(3)],
+    ));
+    cases.push(case(
+        "broken",
+        cut(
+            cut(
+                cut(cut(Layout::default(), "v1", 0, 0), "v2", 0, 0),
+                "v3",
+                300,
+                0,
+            ),
+            "v4",
+            300,
+            0,
+        ),
+        vec![],
+    ));
+    cases.push(case(
+        "abutting",
+        cut(
+            cut(cut(Layout::default(), "v1", 0, 0), "v2", 100, 0),
+            "v3",
+            100,
+            0,
+        ),
+        vec![],
+    ));
+    cases.push(case(
+        "branching",
+        Layout::default()
+            .rect("v1", 0, 0, 300, 100)
+            .rect("v2", 0, 0, 100, 100)
+            .rect("v2", 200, 0, 300, 100)
+            .rect("v3", 0, 0, 100, 100)
+            .rect("v3", 200, 0, 300, 100),
+        vec![count(3), count(3)],
     ));
     every_placement(cases)
 }

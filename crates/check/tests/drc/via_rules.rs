@@ -438,3 +438,52 @@ fn a_via_on_a_wire_wider_than_the_limit_needs_the_cut_count() {
         assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, held);
     }
 }
+
+// ---------------------------------------------------------------- via_stack
+
+/// Oracle: LEF/DEF 5.8 "Maximum Via Stack": a cut is in a stack with another
+/// when it overlaps any part of it. Three aligned cuts on three layers under
+/// a limit of two: the third cut is reported, measuring 3. With the middle
+/// cut moved off the bottom one there are two stacks, each within the limit.
+#[test]
+fn a_stack_of_overlapping_cuts_taller_than_the_limit_is_reported_once() {
+    const C: gpurify_geom::LayerId = gpurify_geom::LayerId(2);
+    let set = RuleSet {
+        rules: vec![(
+            RULE,
+            Rule::ViaStack {
+                stack: 0,
+                max_height: 2,
+            },
+        )],
+        stacks: vec![vec![A, B, C]],
+        ..RuleSet::default()
+    };
+    for (middle, want) in [(0, Some(3)), (300, None)] {
+        let mut layout = LayoutBuilder::new(3);
+        layout.rect(A, 0, 0, 100, 100);
+        layout.rect(B, middle, 0, middle + 100, 100);
+        let top = layout.rect(C, middle, 0, middle + 100, 100);
+        let (store, ids) = layout.finish();
+        let mut sink = Sink::default();
+        set.run(&store, &mut sink.out, &mut sink.runs);
+        match want {
+            Some(height) => {
+                assert_only_violation(
+                    &sink.out,
+                    &Violation {
+                        rule: RULE,
+                        layer: C,
+                        severity: Severity::Error,
+                        at: point(middle + 50, 50),
+                        measured: Measurement::Count(height),
+                        limit: Measurement::Count(2),
+                        shapes: (ids.of(top), None),
+                    },
+                );
+            }
+            None => assert_clean(&sink.runs, &sink.out, RULE),
+        }
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 3);
+    }
+}

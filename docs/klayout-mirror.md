@@ -277,6 +277,7 @@ explains (kind 30).
 | 39 | gate_corner | `bend(A, B)`, `covers_corner(A, B)` | POINT | EXACT | exact | new |
 | 40 | max_enclosure | `enclosure(i, o) <= l` | FIG by marker (outer) | EXACT | exact | new |
 | 41 | noncoincident_enclosure | `enclosure(i, o, noncoincident) >= l` | FIG by shape (inner) | APPROX | KLayout ⊆ GPurify | new |
+| 42 | via_stack | `via_stack(C1, C2, ..) <= n` | ROW | EXACT (scripted) | exact | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1304,6 +1305,21 @@ emit(id, O.enclosing(I, LIM, euclidian, transparent, without_touching_edges)) ; 
   orientation filter, which this repository has not run against the per-edge definition, so the
   comparison is the safe bracket until a run settles it. Key FIG by shape (inner); the
   measurement is not compared.
+
+### 42. via_stack — EXACT (scripted)
+
+**GPurify** (`via.rs` `via_stack`): LEF `MAXVIASTACK` over the cut layers listed, bottom to top.
+A drawn cut stacks on a cut of the layer before whose box it overlaps with positive area; the
+tallest chain from below (`down`) and from above (`up`) through each cut; each cut with
+`down == max + 1` is reported, `measured` `down + up - 1`.
+
+**KLayout** has no stack count, so the prelude's `via_stack` runs the same chains over raw boxes:
+
+```ruby
+via_stack(id, [C1.dup.raw, C2.dup.raw, ..], MAX)   # one polygon per reported cut, v = its stack
+```
+
+- Key ROW, the cut's box; the count is compared exactly.
 
 ---
 

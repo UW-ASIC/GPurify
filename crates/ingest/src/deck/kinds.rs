@@ -614,6 +614,19 @@ pub(crate) const KINDS: &[Kind] = &[
             p("within", "within", Dim::Length),
         ],
     ),
+    // LEF MAXVIASTACK over the cut layers listed, bottom to top:
+    // `via_stack(via1, via2, via3) <= 2`.
+    Kind {
+        more: true,
+        ..drc(
+            "via_stack",
+            Cmp::Le,
+            "via_stack",
+            &[0],
+            Some(p("", "max_height", Dim::Count)),
+            &[],
+        )
+    },
     drc(
         "via_array_space",
         Cmp::Ge,
