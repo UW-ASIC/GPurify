@@ -1,11 +1,12 @@
 //! Byte-identity lock on the whole comparison: every verdict of a seeded corpus,
 //! folded into one hash twice: as listed, and with each report's lines sorted.
 //! Class numbering orders `ClassImbalance`, so a numbering change moves only the
-//! first; a change in what is reported moves both. Last moved when parallel
-//! MOS whose source and drain share a net began to merge (testing-plan F57):
-//! the same 188 of 325 verdicts match, and three mismatches list fewer
-//! unpaired devices (72 to 70, 60 to 58, 57 to 47), the shorted fingers that
-//! are now one.
+//! first; a change in what is reported moves both. Last moved when a series
+//! merge began to need `L` on both devices (testing-plan F67): the generated
+//! graphs state no parameters, so their stacks stop merging. The same 188 of
+//! 325 verdicts match, and one mismatch lists one more unpaired device on
+//! each side (10 to 11) and one more unpaired net on each (7 to 8), the stack
+//! that is now two devices and keeps its middle net.
 
 use crate::common::{chain, differential_pair, permute, random_graph, GraphBuilder, NCH, PCH};
 use gpurify_check::lvs::{compare, CompareOptions, Graph, Verdict};
@@ -92,14 +93,14 @@ fn the_seeded_corpus_verdicts_are_unchanged() {
     assert_eq!(verdicts.len(), 325);
     assert_eq!(
         digest(&verdicts, |v| format!("{v:?}")),
-        7_145_629_598_479_366_894
+        4_344_967_435_229_249_166
     );
 }
 
 /// What each report says, whatever its order.
 #[test]
 fn the_seeded_corpus_verdicts_say_the_same_in_any_order() {
-    assert_eq!(digest(&corpus(), canonical), 17_717_626_842_790_545);
+    assert_eq!(digest(&corpus(), canonical), 9_965_298_889_440_497_151);
 }
 
 /// `cargo test --release -p gpurify-check --test lvs dump_corpus -- --ignored`

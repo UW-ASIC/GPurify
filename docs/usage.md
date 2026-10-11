@@ -77,7 +77,8 @@ Before matching, both sides are reduced the way netgen reduces them:
   a card with `m=2` but not one card of twice the capacitance.
 - **Series:** transistors stacked through a node nothing else touches, with
   their gates strapped, become one device whose L is the sum, if every other
-  parameter agrees.
+  parameter agrees. Both must state L: with no length to add, two transistors
+  in series stay two, so a stack does not match one unsized transistor.
 - **Multiplier:** a transistor card's `m` multiplies its `W`, and `m` is then
   dropped (`nf` is untouched). Any other card's `m` is its count of devices
   in parallel, so `m=2` matches two drawn devices and not one. `m=1` is the

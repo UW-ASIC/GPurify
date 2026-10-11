@@ -88,9 +88,9 @@ How each case's derived answer compares with the old implementation's
 |---|---:|---:|---:|---:|---:|---:|---:|
 | drc | 94 | 71 | 11 | 12 | 0 | 0 | 0 |
 | erc | 30 | 11 | 6 | 11 | 0 | 0 | 2 |
-| lvs | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
+| lvs | 16 | 15 | 0 | 1 | 0 | 0 | 0 |
 | pex | 27 | 19 | 0 | 3 | 2 | 3 | 0 |
-| **total** | **167** | **117** | **17** | **26** | **2** | **3** | **2** |
+| **total** | **167** | **116** | **17** | **27** | **2** | **3** | **2** |
 
 "count only" means the manifest carried a violation count but no measurement,
 so only the count could be compared; the measurement in `expectations.json` is
@@ -103,7 +103,7 @@ while disagreeing with what it means. The split is the point:
 
 | `dispute` | meaning | cases |
 |---|---|---:|
-| `manifest_wrong` | the old implementation got it wrong; the derivation stands | 8 |
+| `manifest_wrong` | the old implementation got it wrong; the derivation stands | 9 |
 | `convention` | the old tree reported per side where the frozen doc says per pair | 2 |
 | `not_a_rule` | the manifest states a claim that is not a rule kind | 2 |
 | `fixture_out_of_domain` | geometry outside what a rectilinear-only tree represents; it fails closed | 2 |
@@ -112,7 +112,8 @@ while disagreeing with what it means. The split is the point:
 | `no_intent_fixture` | an intent-gated rule with no design-intent file | 14 |
 | `no_deck_coefficient` | a coupling value with no coefficient column in the process stack | 4 |
 | `deck_gap` | a tap that cannot be spelled as a derived layer | 1 |
-| **total** | | **41** |
+| `signature_defect` | a condition a frozen signature makes unsatisfiable | 1 |
+| **total** | | **42** |
 
 Cases expected to fail are explained under `known_defects` and
 `blocking_findings` at the top of `expectations.json`. Weakening them to match

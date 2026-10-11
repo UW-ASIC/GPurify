@@ -8,12 +8,15 @@
 //!
 //! # The bracket the fixtures are built around
 //!
-//! `LVS_SERIES` is two nmos in series with their gates strapped together and must
-//! become one device; `LVS_FINGERS` is the same cell **minus that strap** — same
-//! diffusion, same two gates, same contacts — and must stay two. [`series_pair`]
-//! is that bracket written as one function of one argument, so the two halves
-//! differ in exactly one `u32` of one column and a test over them cannot be
-//! passing for some other reason.
+//! `LVS_SERIES` is two nmos in series with their gates strapped together, one
+//! device of their summed length; `LVS_FINGERS` is the same cell **minus that
+//! strap** — same diffusion, same two gates, same contacts — and must stay
+//! two. [`series_pair`] is that bracket written as one function of one
+//! argument, so the two halves differ in exactly one `u32` of one column and a
+//! test over them cannot be passing for some other reason. Its devices state
+//! `L`, since a series merge sums it and a stack with none stays two
+//! (testing-plan F67); the corpus's `LVS_SERIES_MERGE` reference states none,
+//! so that case is a mismatch.
 
 use crate::common;
 
@@ -36,15 +39,17 @@ use gpurify_ingest::StrId;
 /// else at all.
 fn series_pair(gate_b: u32) -> Graph {
     let mut builder = GraphBuilder::new(6);
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        SHORT,
     );
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, gate_b), (Source, 2), (Drain, 3), (Bulk, 4)],
+        SHORT,
     );
     builder.finish()
 }
@@ -55,17 +60,29 @@ fn series_pair(gate_b: u32) -> Graph {
 /// Nets: 0 gate, 1 outer source, 2 internal, 3 outer drain, 4 bulk.
 fn series_pair_tight() -> Graph {
     let mut builder = GraphBuilder::new(5);
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        SHORT,
     );
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        SHORT,
     );
     builder.finish()
+}
+
+/// The length every stacked device here states: a series merge sums `L`,
+/// and a device that states none never merges in series (testing-plan F67).
+const SHORT: &[(StrId, f64)] = &[(LENGTH, 1.5e-7)];
+
+/// [`reduce`] told which parameters are `W`, `L`, `nf` and `m`, as the
+/// `gpurify` binary is.
+fn reduce_sized(src: &Graph) -> Graph {
+    gpurify_check::lvs::reduce::reduce_with(src, NAMES).0
 }
 
 /// Two transistors across one pair of nets. `model_b` and the upper device's
@@ -101,7 +118,7 @@ fn terminals(graph: &Graph, device: u32) -> Vec<(TerminalRole, u32)> {
 /// share, and the two channel ends that are *not* the internal node.
 #[test]
 fn two_transistors_in_series_with_tied_gates_become_one() {
-    let out = reduce(&series_pair(0));
+    let out = reduce_sized(&series_pair(0));
 
     assert_eq!(out.device_count(), 1, "the strapped pair is one device");
     // Net 2 was the internal node and is consumed; 0, 1, 3, 4, 5 rank down to
@@ -113,6 +130,7 @@ fn two_transistors_in_series_with_tied_gates_become_one() {
     );
     assert_eq!(out.device_kind, [DeviceKind::Mos]);
     assert_eq!(out.device_model, [NCH]);
+    assert_eq!(out.params_of(0), [(LENGTH, 3e-7)], "the lengths add");
 }
 
 /// Oracle: construct-from-answer. `LVS_FINGERS` is `LVS_SERIES` minus the strap,
@@ -122,7 +140,7 @@ fn two_transistors_in_series_with_tied_gates_become_one() {
 #[test]
 fn the_same_pair_with_its_gates_on_two_nets_stays_two_devices() {
     let src = series_pair(5);
-    let out = reduce(&src);
+    let out = reduce_sized(&src);
 
     assert_eq!(out.device_count(), 2, "two gate nets are two transistors");
     assert_eq!(out, src, "an unreducible graph is passed through unchanged");
@@ -176,21 +194,27 @@ fn a_different_model_on_one_side_blocks_the_parallel_merge() {
 #[test]
 fn a_shared_node_that_is_a_port_blocks_the_series_merge() {
     let mut builder = GraphBuilder::new(6);
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        SHORT,
     );
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        SHORT,
     );
     builder.port(2);
     let src = builder.finish();
 
-    assert_eq!(reduce(&src).device_count(), 2, "a port is not internal");
-    assert_eq!(reduce(&src), src);
+    assert_eq!(
+        reduce_sized(&src).device_count(),
+        2,
+        "a port is not internal"
+    );
+    assert_eq!(reduce_sized(&src), src);
 }
 
 /// Oracle: construct-from-answer. A name alone does not make a node external:
@@ -201,19 +225,21 @@ fn a_shared_node_that_is_a_port_blocks_the_series_merge() {
 #[test]
 fn a_name_alone_does_not_block_the_series_merge() {
     let mut builder = GraphBuilder::new(6);
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        SHORT,
     );
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        SHORT,
     );
     builder.name_net(2, VSS);
     assert_eq!(
-        reduce(&builder.finish()).device_count(),
+        reduce_sized(&builder.finish()).device_count(),
         1,
         "a named node is internal"
     );
@@ -227,25 +253,27 @@ fn a_name_alone_does_not_block_the_series_merge() {
 #[test]
 fn a_shared_node_with_a_third_terminal_blocks_the_series_merge() {
     let mut builder = GraphBuilder::new(6);
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        SHORT,
     );
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        SHORT,
     );
     builder.device(DeviceKind::Capacitor, NCH, &[(Pin(0), 2), (Pin(1), 4)]);
     let src = builder.finish();
 
     assert_eq!(
-        reduce(&src).device_count(),
+        reduce_sized(&src).device_count(),
         3,
         "the node has somewhere else to go"
     );
-    assert_eq!(reduce(&src), src);
+    assert_eq!(reduce_sized(&src), src);
 }
 
 /// Oracle: construct-from-answer. Reduction is transitive: three fingers over two
@@ -259,13 +287,14 @@ fn a_shared_node_with_a_third_terminal_blocks_the_series_merge() {
 fn three_in_series_reduce_to_one() {
     let mut builder = GraphBuilder::new(6);
     for (source, drain) in [(1, 2), (2, 3), (3, 4)] {
-        builder.device(
+        builder.device_with_params(
             DeviceKind::Mos,
             NCH,
             &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 5)],
+            SHORT,
         );
     }
-    let out = reduce(&builder.finish());
+    let out = reduce_sized(&builder.finish());
 
     assert_eq!(out.device_count(), 1);
     assert_eq!(out.net_count(), 4, "both internal nodes are consumed");
@@ -287,15 +316,16 @@ fn three_in_series_reduce_to_one() {
 fn a_series_merge_that_creates_a_parallel_pair_reduces_again() {
     let mut builder = GraphBuilder::new(6);
     for (source, drain) in [(1, 2), (2, 3), (1, 4), (4, 3)] {
-        builder.device(
+        builder.device_with_params(
             DeviceKind::Mos,
             NCH,
             &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 5)],
+            SHORT,
         );
     }
     builder.port(1);
     builder.port(3);
-    let out = reduce(&builder.finish());
+    let out = reduce_sized(&builder.finish());
 
     assert_eq!(out.device_count(), 1, "two passes, not one");
     assert_eq!(out.net_count(), 4);
@@ -312,8 +342,8 @@ fn reducing_an_already_reduced_graph_changes_nothing() {
         parallel_pair(NCH, 1, 2),
         series_pair_tight(),
     ] {
-        let once = reduce(&src);
-        let twice = reduce(&once);
+        let once = reduce_sized(&src);
+        let twice = reduce_sized(&once);
         assert_eq!(twice, once, "reduction is not idempotent");
     }
 }
@@ -376,7 +406,7 @@ fn exchanging_two_devices_of_one_group_does_not_move_the_result() {
         let nets: Vec<u32> = (0..u32::try_from(src.net_count()).expect("small")).collect();
         let swapped = permute(&src, &[1, 0], &nets);
         assert_ne!(swapped, src, "the permutation did nothing to permute");
-        assert_eq!(reduce(&swapped), reduce(&src));
+        assert_eq!(reduce_sized(&swapped), reduce_sized(&src));
     }
 }
 
@@ -393,23 +423,71 @@ fn exchanging_two_devices_of_one_group_does_not_move_the_result() {
 #[test]
 fn a_reduced_layout_matches_an_already_reduced_reference() {
     assert_eq!(
-        reduce(&series_pair_tight()).device_count(),
+        reduce_sized(&series_pair_tight()).device_count(),
         1,
         "the layout side did not reduce"
     );
 
     let mut builder = GraphBuilder::new(4);
-    builder.device(
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Drain, 3), (Gate, 1), (Source, 0), (Bulk, 2)],
+        &[(LENGTH, 3e-7)],
+    );
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let verdict = compare(&series_pair_tight(), &builder.finish(), options);
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: the decision on testing-plan F67. A series merge sums `L`, and two
+/// transistors stacked with no `L` on either have nothing to sum: merged, the
+/// stack would be one transistor of no stated length, which pairs with one
+/// unsized card and loses the stack count. So they stay two whether or not
+/// the names are given, and so does a stack only one of whose devices states
+/// `L`; the stack does not match one unsized card, and does match two.
+#[test]
+fn an_unsized_stack_stays_two_and_does_not_match_one_unsized_card() {
+    let stack = |lower: &[(StrId, f64)]| {
+        let mut builder = GraphBuilder::new(5);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+            lower,
+        );
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        );
+        builder.finish()
+    };
+    for src in [stack(&[]), stack(SHORT)] {
+        assert_eq!(reduce(&src), src);
+        assert_eq!(reduce_sized(&src), src, "a length came from nowhere");
+    }
+
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let mut one = GraphBuilder::new(4);
+    one.device(
         DeviceKind::Mos,
         NCH,
         &[(Drain, 3), (Gate, 1), (Source, 0), (Bulk, 2)],
     );
-    let verdict = compare(
-        &series_pair_tight(),
-        &builder.finish(),
-        CompareOptions::default(),
+    let verdict = compare(&stack(&[]), &one.finish(), options);
+    assert_ne!(verdict, Verdict::Match, "a stack of two matched one card");
+    assert_eq!(
+        compare(&stack(&[]), &stack(&[]), options),
+        Verdict::Match,
+        "the stack is its own schematic"
     );
-    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
 }
 
 /// The names the sized tests merge by; `nf` and `m` are two spare ids.

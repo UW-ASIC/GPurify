@@ -7,7 +7,7 @@
 //!
 //! | Kind | Parallel | Series | `m` |
 //! |---|---|---|---|
-//! | MOS | sums `W` and `nf`; every other parameter, `L` included, agrees | sums `L`; every other parameter agrees | folded into `W` |
+//! | MOS | sums `W` and `nf`; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees | folded into `W` |
 //! | resistor, capacitor, diode, bipolar | sums the count `m` (1 when the card states none); every other parameter agrees | never | kept: that many in parallel |
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
@@ -15,11 +15,14 @@
 //! stated by every member or by none, so no member's share is dropped. A sized
 //! MOS merges only when [`ParamNames`] says which parameter is `W` and which
 //! is `L`, and any other device only when it names `m`, the parameter its
-//! count is kept in. A passive's value is kept, not combined: two capacitors
+//! count is kept in. A series merge also needs `L` stated on both devices:
+//! with no length to sum, two transistors in series would read as one and
+//! the stack count would be lost, so they stay two (testing-plan F67). A
+//! passive's value is kept, not combined: two capacitors
 //! of one `c` in parallel are one of that `c` with `m = 2`, as a card stating
 //! `m = 2` is, and do not match one card of twice the `c`.
 //!
-//! - **Parallel** (catalog LVS-040, LVS-043, LVS-044; KLayout and Netgen both
+//! - **Parallel** (catalog LVS-040, LVS-043, LVS-044; `KLayout` and Netgen both
 //!   do it): devices of one kind and one model whose terminals land on the
 //!   same nets role for role become one, with the first's terminals. MOS
 //!   source and drain are interchangeable, and so are a resistor's ends; a
@@ -30,7 +33,8 @@
 //!   devices of one kind and one model whose channels (`Source`/`Drain`) meet
 //!   at a net carrying exactly those two terminals, with every other terminal
 //!   on the same nets (gates strapped, one bulk; catalog LVS-045) and at least
-//!   one such terminal, become one. The shared net must not be a port, and
+//!   one such terminal, become one, their `L`s summed; a device stating no
+//!   `L` never merges in series. The shared net must not be a port, and
 //!   is consumed; a name alone does not protect it, since every reference
 //!   net is named. [`compare`](crate::lvs::compare) makes a reference net a
 //!   port when a layout label names it, so a labelled node stops the merge on
@@ -54,14 +58,15 @@ use gpurify_ingest::StrId;
 /// A name absent from both netlists is `None`.
 ///
 /// The default names nothing, and then a MOS that declares any parameter, and
-/// every other device, never merges.
+/// every other device, never merges, and nothing merges in series.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ParamNames {
     /// `W`: summed by a parallel MOS merge, multiplied by `m`. With `length`,
     /// it lets sized MOS merge at all.
     pub width: Option<StrId>,
-    /// `L`: summed by a series merge. With `width`, it lets sized MOS merge
-    /// at all.
+    /// `L`: summed by a series merge, which needs it stated on both devices,
+    /// so without this name nothing merges in series. With `width`, it lets
+    /// sized MOS merge at all.
     pub length: Option<StrId>,
     /// `nf`: summed by a parallel MOS merge.
     pub fingers: Option<StrId>,
@@ -208,9 +213,11 @@ struct Plan {
     /// Kept because the consumed mask is rebuilt from it after a dissolution.
     series: Vec<(u32, u32, u32)>,
     /// Per device: the parameters a parallel merge needs equal (all but `W`,
-    /// `nf`) and a series merge needs equal (all but `L`).
+    /// `nf`) and a series merge needs equal (all but `L`). A device that
+    /// states no `L` has no series signature: it has nothing for a series
+    /// merge to sum, so it never merges in series (testing-plan F67).
     parallel_sig: Vec<Vec<(StrId, u64)>>,
-    series_sig: Vec<Vec<(StrId, u64)>>,
+    series_sig: Vec<Option<Vec<(StrId, u64)>>>,
     /// Which law this pass applies.
     mode: Option<MergeKind>,
     /// Groups after dissolution — the device count the emission writes.
@@ -267,8 +274,9 @@ fn join(root: &mut [u32], a: u32, b: u32) {
     root[left.max(right) as usize] = left.min(right);
 }
 
-/// Reduce to series/parallel normal form, merging only MOS that state no
-/// parameter: with no `m` name, no other kind has a count to keep.
+/// Reduce to parallel normal form, merging only MOS that state no parameter:
+/// with no `m` name, no other kind has a count to keep, and with no `L` name
+/// no series merge has a length to sum (testing-plan F67).
 /// Devices come out one per group ascending by the group's lowest row;
 /// surviving nets keep their order. A graph with nothing to merge comes through
 /// byte-identical.
@@ -456,8 +464,11 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         let counted = names.multiplier.filter(|_| kind != DeviceKind::Mos);
         plan.parallel_sig
             .push(signature(params, &parallel_sums(kind, names), counted));
+        let states_length = names
+            .length
+            .is_some_and(|length| params.iter().any(|&(name, _)| name == length));
         plan.series_sig
-            .push(signature(params, &[names.length], None));
+            .push(states_length.then(|| signature(params, &[names.length], None)));
     }
 }
 
@@ -541,8 +552,11 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
         if !(plan.mergeable[first as usize] & plan.mergeable[second as usize]) {
             continue;
         }
+        // Two stacked devices are one only as long as the two lengths: with
+        // no `L` on either, the stack count would be lost (testing-plan F67).
         if (src.device_kind[first as usize] != src.device_kind[second as usize])
             || (src.device_model[first as usize] != src.device_model[second as usize])
+            || plan.series_sig[first as usize].is_none()
             || (plan.series_sig[first as usize] != plan.series_sig[second as usize])
         {
             continue;

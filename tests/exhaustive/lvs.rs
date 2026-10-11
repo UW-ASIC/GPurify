@@ -1180,6 +1180,19 @@ fn curated() -> Vec<Fixture> {
         &apart,
         &long,
     ));
+    // F67 (fixed in B21): with no `l` written anywhere, the run measures none,
+    // and a stack with no length to sum stays two transistors: it does not
+    // match one unsized card, and does match its own two unsized cards.
+    let bare = |c: &Circuit| edited(&spice(c), " w=1000n l=150n", "");
+    let one_unsized = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+    for (name, reference, matched) in [
+        ("series/unsized_stack_vs_one", bare(&one_unsized), false),
+        ("series/unsized_stack_vs_stack", bare(&inner), true),
+    ] {
+        out.push(
+            with_text(name, &["LVS-041"], draw(&inner), reference).expect(Expect::Lvs(matched)),
+        );
+    }
 
     // LVS-040 and F57 (fixed in B17): parallel MOS, source and drain shorted too.
     let two = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);

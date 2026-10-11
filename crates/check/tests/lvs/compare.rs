@@ -11,7 +11,7 @@ use crate::common;
 use common::{
     assert_same_discrepancies, blames_device, blames_net, chain, differential_pair, discrepancies,
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
-    stacked_pair_with_params, GraphBuilder, NCH, NPN, RES, VDD, VSS, WIDTH,
+    stacked_pair_with_params, GraphBuilder, LENGTH, NCH, NPN, RES, VDD, VSS, WIDTH,
 };
 use gpurify_check::lvs::graph::{from_reference, Graph};
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
@@ -712,21 +712,24 @@ fn a_resistor_written_either_way_round_is_the_same_resistor() {
     );
 }
 
-/// Two NMOS in series from net 1 to net 3 through net 2, gates on 0, bulk on 4.
-/// Nets 0, 1, 3 and 4 are named ports; `middle` names net 2, and `middle_port`
-/// makes it a port as well.
+/// Two NMOS in series from net 1 to net 3 through net 2, gates on 0, bulk on 4,
+/// each stating its `L`, which a series merge sums. Nets 0, 1, 3 and 4 are
+/// named ports; `middle` names net 2, and `middle_port` makes it a port as
+/// well.
 fn series_stack(middle: Option<StrId>, middle_port: bool) -> gpurify_check::lvs::Graph {
     use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
     let mut builder = GraphBuilder::new(5);
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        &[(LENGTH, 1.5e-7)],
     );
-    builder.device(
+    builder.device_with_params(
         DeviceKind::Mos,
         NCH,
         &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        &[(LENGTH, 1.5e-7)],
     );
     for (net, name) in [(0, 60), (1, 61), (3, 63), (4, 64)] {
         builder.name_net(net, StrId(name));
@@ -741,6 +744,18 @@ fn series_stack(middle: Option<StrId>, middle_port: bool) -> gpurify_check::lvs:
     builder.finish()
 }
 
+/// [`decisive`], told which parameter is `L`, so a stack can merge.
+fn sized() -> CompareOptions {
+    CompareOptions {
+        params: gpurify_check::lvs::ParamNames {
+            length: Some(LENGTH),
+            width: Some(WIDTH),
+            ..gpurify_check::lvs::ParamNames::default()
+        },
+        ..decisive()
+    }
+}
+
 /// Oracle: the stack is the same circuit on both sides. The layout's middle
 /// node is unlabelled and the reference's is named, as every reference net is;
 /// both must reduce to one device. Before B4 only the layout did, and the
@@ -749,7 +764,7 @@ fn series_stack(middle: Option<StrId>, middle_port: bool) -> gpurify_check::lvs:
 fn a_stack_matches_its_schematic_whether_or_not_the_middle_is_named() {
     let layout = series_stack(None, false);
     let reference = series_stack(Some(StrId(62)), false);
-    let (verdict, merges) = compare_logged(&layout, &reference, decisive());
+    let (verdict, merges) = compare_logged(&layout, &reference, sized());
     assert_eq!(verdict, Verdict::Match);
     assert_eq!(merges.len(), 2, "each side merged its stack: {merges:?}");
 }
@@ -761,15 +776,14 @@ fn a_stack_matches_its_schematic_whether_or_not_the_middle_is_named() {
 #[test]
 fn a_labelled_middle_node_is_kept_on_both_sides() {
     let layout = series_stack(Some(StrId(62)), true);
-    let (verdict, merges) =
-        compare_logged(&layout, &series_stack(Some(StrId(62)), false), decisive());
+    let (verdict, merges) = compare_logged(&layout, &series_stack(Some(StrId(62)), false), sized());
     assert_eq!(verdict, Verdict::Match);
     assert!(
         merges.is_empty(),
         "nothing merges across a labelled node: {merges:?}"
     );
     assert_ne!(
-        compare(&layout, &series_stack(Some(StrId(65)), false), decisive()),
+        compare(&layout, &series_stack(Some(StrId(65)), false), sized()),
         Verdict::Match,
         "the label names a node the schematic does not"
     );
