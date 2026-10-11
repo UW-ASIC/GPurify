@@ -1245,6 +1245,47 @@ fn parallel(metal: Metal, length: i64, width: i64, gap: i64, shift: i64) -> Layo
         .label(metal.label(), shift + half, width + gap + half, "B")
 }
 
+/// PEX-009: `rc` qualified against `rcc` on the two bars of [`extraction`].
+/// Oracle: law, through `compare`: grounding a coupling conserves each net's
+/// total capacitance and every node's capacitance, so each net's total C,
+/// pin-to-pin resistance and Elmore delay agree to round-off; the one
+/// coupling reads 0 in the candidate, an error of −100 %; each bar's ground
+/// C grows by the coupling, `ε₀εr·t·L/S` over `Ca·A + Cf·P`. Fails if the
+/// comparison leaves the coupling out of a total or a delay, or pairs the
+/// wrong nets.
+#[test]
+fn a_qualification_of_rc_against_rcc_finds_every_net_s_totals_unchanged() {
+    let layout = parallel(Metal::M1, 6_000, 1_000, 1_000, 0);
+    let network = |line: &str| {
+        run(&deck(PARAMS, &[], line), layout.clone(), PEX, &[])
+            .outputs
+            .parasitics
+            .expect("PEX ran")
+    };
+    let out = gpurify::extract::compare::compare(&network(""), &network("extraction rc\n"));
+    assert_eq!(out.only_reference, Vec::new());
+    assert_eq!(out.only_candidate, Vec::new());
+    for (what, metric) in [
+        ("total C", &out.total_cap),
+        ("resistance", &out.resistance),
+        ("delay", &out.delay),
+    ] {
+        let errors = metric.errors(1e-12, 1e-9);
+        assert_eq!((errors.count, errors.within), (2, 2), "{what}: {errors:?}");
+    }
+    let coupling = out.coupling.errors(1e-12, 1e-9);
+    assert_eq!((coupling.count, coupling.within), (1, 0), "{coupling:?}");
+    assert!((coupling.worst + 1.0).abs() < 1e-12, "{coupling:?}");
+    let row = PARAMS.m1;
+    let grown = lateral_ff(row, 6_000, 1_000) / ground_ff(row, 6e6, 14_000.0);
+    let ground = out.ground_cap.errors(1.0, 1e-9);
+    assert_eq!(ground.count, 2);
+    assert!(
+        relative(ground.worst, grown) < EXACT && relative(ground.mean, grown) < EXACT,
+        "{ground:?}, want {grown}"
+    );
+}
+
 /// The four conductors of the matrix laws: two parallel `m1` bars, an `m2`
 /// bar crossing both, and an `m1` plate off to one side. Small, because each
 /// solve is dense in its panels.

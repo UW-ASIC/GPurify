@@ -13,7 +13,10 @@
 //!
 //! [`reduce`] then cuts the network to the deck's extraction type (`r`, `c`,
 //! `cc`, `rc` or `rcc`, Calibre's names) and grounds coupling below its
-//! threshold, as OpenRCX does.
+//! threshold, as OpenRCX does. [`compare`] diffs two extractions of one
+//! layout net by net (capacitance, net-to-net coupling, pin-to-pin
+//! resistance, Elmore delay) with the error statistics a qualification
+//! reports.
 //!
 //! Data in: the layout ([`GeometryStore`](gpurify_geom::GeometryStore)), its
 //! nets ([`NetTable`](gpurify_check::topology::NetTable)), and the deck's
@@ -182,13 +185,14 @@
 //! | PEX-006 | Multi-corner extraction | missing | — |
 //! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R, colour-aware) | partial | temperature-dependent R, already in the deck's stack ([`ProcessStack::sheet_res_ohm_sq`](gpurify_ingest::deck::ProcessStack::sheet_res_ohm_sq)); the rest needs foundry calibration data |
 //! | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | implemented | [`reduce`]: the deck's `extraction` type and coupling threshold |
-//! | PEX-009 | PEX netlist diff and qualification | missing | — |
+//! | PEX-009 | PEX netlist diff and qualification | partial | [`compare`]: two extractions of one layout, net by net; no other tool's netlist |
 //! | PEX-010 | SPEF output | implemented | `gpurify::export::parasitic::write_spef` |
 //!
 //! [limitations.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md)
 //! says what each partial row lacks.
 
 pub mod analytical;
+pub mod compare;
 mod conductor;
 pub mod field;
 pub mod network;
