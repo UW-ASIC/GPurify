@@ -8,7 +8,10 @@
 //! stall is broken by pairing the lowest layout node of the stalled class holding
 //! it with the reference node of that class whose parameters are closest (netgen's
 //! "resolving symmetries by property value"), the lowest such on a tie, one class
-//! per stall.
+//! per stall. A net has no parameters of its own: its closest is the one whose
+//! pairing puts the diffusions of the transistors already paired closest at each
+//! channel end, so symmetric channel nets pair the way the diffusions agree
+//! (testing-plan F98).
 //!
 //! Refinement cannot always split nodes that no relabelling exchanges, so the
 //! closest node can be the wrong one (testing-plan F58). A pairing is a trial
@@ -166,6 +169,26 @@ impl Sides<'_> {
     }
 }
 
+/// `|a - b|` relative to the larger magnitude; zero when both are zero.
+fn relative(a: f64, b: f64) -> f64 {
+    let scale = a.abs().max(b.abs());
+    if scale == 0.0 {
+        0.0
+    } else {
+        (a - b).abs() / scale
+    }
+}
+
+/// Which channel end a role is, as an index into [`ParamNames::diffusion`]:
+/// 0 (`as`, `ps` at 2) for the source, 1 (`ad`, `pd` at 3) for the drain.
+const fn channel_end(role: TerminalRole) -> Option<usize> {
+    match role {
+        TerminalRole::Source => Some(0),
+        TerminalRole::Drain => Some(1),
+        _ => None,
+    }
+}
+
 impl Sides<'_> {
     /// How far apart the parameters of layout node `layout` and reference node
     /// `reference` are: per name the reference states, the relative difference
@@ -186,14 +209,6 @@ impl Sides<'_> {
             self.layout.params_of(layout),
             self.reference.params_of(reference),
         );
-        let relative = |a: f64, b: f64| {
-            let scale = a.abs().max(b.abs());
-            if scale == 0.0 {
-                0.0
-            } else {
-                (a - b).abs() / scale
-            }
-        };
         let apart = |crossed: bool| -> f64 {
             theirs
                 .iter()
@@ -470,15 +485,75 @@ impl Partition {
             .filter(move |&member| member >= split)
     }
 
-    /// The reference node of `node`'s class whose parameters are closest, the
-    /// lowest on a tie.
+    /// How far apart layout node `node` and reference node `mate` are:
+    /// their parameters' [distance](Sides::distance) for devices, and for
+    /// nets the diffusions pairing them would put at one channel end
+    /// ([`Self::end_distance`]).
+    fn apart(&self, node: u32, mate: u32, sides: Sides) -> f64 {
+        if node < narrow(sides.layout.device_count()) {
+            sides.distance(node, mate)
+        } else {
+            self.end_distance(node, mate, sides)
+        }
+    }
+
+    /// How far apart the diffusions are that pairing layout net `net` with
+    /// reference net `mate` puts at one channel end: for each source or
+    /// drain on `net` whose transistor a class already pairs one to one, and
+    /// whose mate has a source or drain on `mate`, each diffusion name the
+    /// mate states at that end against the layout's at its own, as
+    /// [`Sides::distance`] weighs them. Nothing else is told apart by a
+    /// net's pairing, so it is zero where no such transistor is.
+    fn end_distance(&self, net: u32, mate: u32, sides: Sides) -> f64 {
+        let ref_devices = narrow(sides.reference.device_count());
+        let ref_net = mate - sides.split - ref_devices;
+        let names = sides.names.diffusion;
+        let mut apart = 0.0;
+        sides.for_each_neighbour(net, |role, device| {
+            let class = self.class[device as usize] as usize;
+            let Some(mine) = channel_end(role) else {
+                return;
+            };
+            if self.size[class] != 2 || self.layout_size[class] != 1 {
+                return;
+            }
+            let from = self.start[class] as usize;
+            let other = self.member[from].max(self.member[from + 1]) - sides.split;
+            let (nets, roles) = sides.reference.terminals_of(other);
+            let Some(theirs) = nets
+                .iter()
+                .zip(roles)
+                .find_map(|(&at, &role)| channel_end(role).filter(|_| at == ref_net))
+            else {
+                return;
+            };
+            let (layout, reference) = (
+                sides.layout.params_of(device),
+                sides.reference.params_of(other),
+            );
+            // Area, then perimeter.
+            for k in [0, 2] {
+                let (Some(read), Some(stated)) = (names[mine + k], names[theirs + k]) else {
+                    continue;
+                };
+                if let Some(&(_, b)) = reference.iter().find(|&&(name, _)| name == stated) {
+                    let a = layout.iter().find(|&&(name, _)| name == read);
+                    apart += a.map_or(1.0, |&(_, a)| relative(a, b));
+                }
+            }
+        });
+        apart
+    }
+
+    /// The reference node of `node`'s class that is [closest](Self::apart),
+    /// the lowest on a tie.
     ///
     /// ponytail: O(class size) per stall; keep members sorted per class if a
     /// huge class of isolated nodes ever shows up in a profile.
     fn closest(&self, node: u32, sides: Sides) -> u32 {
         self.mates(node, sides.split)
             .min_by(|&a, &b| {
-                let (da, db) = (sides.distance(node, a), sides.distance(node, b));
+                let (da, db) = (self.apart(node, a, sides), self.apart(node, b, sides));
                 da.total_cmp(&db).then(a.cmp(&b))
             })
             .expect("a stalled class holds reference nodes")
@@ -491,7 +566,7 @@ impl Partition {
         let mut ranked: Vec<(f64, u32)> = self
             .mates(node, sides.split)
             .filter(|&mate| mate != closest)
-            .map(|mate| (sides.distance(node, mate), mate))
+            .map(|mate| (self.apart(node, mate, sides), mate))
             .collect();
         ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         ranked.truncate(TRIES - 1);

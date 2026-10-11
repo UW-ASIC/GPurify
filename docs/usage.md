@@ -147,7 +147,9 @@ drain diffusions `as`, `ad`, `ps` and `pd`, a bipolar's emitter `ae` and
 capacitor's `c` where the deck gives their coefficients (see
 [deck.md](deck.md#devices)). A diffusion is compared on the net it is drawn
 on: a card that writes the transistor drain first gives its `as` to that
-net. Each parameter a
+net. Where nothing else tells a transistor's two channel nets apart, they
+pair the way its diffusions agree, so a card with them the other way round
+is the same transistor. Each parameter a
 schematic card states is compared on that device, within 2 % of the larger
 value. A card that
 leaves a parameter out says nothing about it, whatever other cards of the
