@@ -2553,7 +2553,7 @@ mod tests {
         let mut lines: Vec<String> = ran
             .rows
             .iter()
-            .map(|(rule, outcome)| format!("{rule} {outcome:?}"))
+            .map(|(rule, outcome, _)| format!("{rule} {outcome:?}"))
             .chain(
                 ran.findings
                     .iter()
