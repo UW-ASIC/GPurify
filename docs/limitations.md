@@ -333,9 +333,8 @@ says which foundry manual, standard or tool defines each one.
 | ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report |
 | ERC-E7 | RMS / Joule heating / peak limits | missing | LEF 5.8 publishes the grammar (limits tabled by frequency and width); no open PDK publishes values |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
-| ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
+| ERC-E11 | Dynamic / vectorless IR | partial | Vectorless worst cycle: every load on a net switches in phase once, a triangular pulse from its budget, toggle rate and rise time, against the net's decap; an RC grid with no package, bump or wire inductance (L di/dt), and one feed point per supply (limitations.md, "Power grid") |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
-| ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
 | ERC-F4 | HCI susceptibility flag | missing | — |
 | ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |
