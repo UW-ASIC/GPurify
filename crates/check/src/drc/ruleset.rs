@@ -1637,6 +1637,43 @@ pub enum Rule {
         /// The smallest legal corner distance, in grid units; positive.
         limit: Dbu,
     },
+    /// Two neighbouring rectangles whose centres are not exactly `pitch`
+    /// apart along one axis.
+    ///
+    /// Deck: `pitch(L, vertical) == len` or `pitch(L, horizontal) == len`,
+    /// kind `exact_pitch`. Every figure of the merged layer must be a
+    /// rectangle, as fins and gates are (ASAP7 FIN.AUX.1 and GATE.AUX.1, "may
+    /// not bend"); a layer with any other figure is refused. Along the axis
+    /// (y for `vertical`), the neighbours of a rectangle are the rectangles
+    /// that overlap it on the other axis by a positive length and lie past
+    /// it, nearest first: those whose low side is the lowest among them. A
+    /// rectangle and each neighbour must have their centre lines exactly
+    /// `pitch` apart. A missing line between two others is a pitch of twice
+    /// the value, and a violation.
+    ///
+    /// One violation per rectangle and neighbour off the pitch, in the middle
+    /// of the gap between them over their overlap. `measured` is the
+    /// distance between their centre lines, floored when it is a half unit;
+    /// `limit` is `pitch`. `shapes` is the lowest drawn row under each.
+    /// `examined` counts the neighbouring pairs.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-035. Rules: ASAP7 FIN.S.1 ("Exact vertical FIN pitch", 27 nm) and
+    /// GATE.S.1 ("Exact horizontal GATE pitch", 54 nm), DRM r1p7 Tables 3.3.1
+    /// and 3.4.1.
+    ///
+    /// Limits: the pitch is between neighbours, not to a track grid: LEF
+    /// `PITCH` tracks, `LEF58_PITCH FIRSTLASTPITCH` and
+    /// `LEF58_RIGHTWAYONGRIDONLY` (wires on the routing grid) are missing.
+    ExactPitch {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Whether the pitch is along y (between lines stacked vertically)
+        /// rather than along x.
+        vertical: bool,
+        /// The exact centre-to-centre distance, in grid units; positive.
+        pitch: Dbu,
+    },
 }
 
 /// The legal spans of [`Rule::SpanLength`], per axis: every listed length but
@@ -2537,6 +2574,11 @@ impl RuleSet {
                             .expect("a deck has few tables"),
                     }
                 }
+                "exact_pitch" => Rule::ExactPitch {
+                    layer: one(spec)?,
+                    vertical: flag(spec, "vertical")?,
+                    pitch: length(spec, "limit")?,
+                },
                 "convex_corner_spacing" => {
                     let layer = one(spec)?;
                     let corner_to_corner = flag(spec, "corner_to_corner")?;
@@ -2889,6 +2931,11 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::ExactPitch {
+                    layer,
+                    vertical,
+                    pitch,
+                } => facing::exact_pitch(store, id, layer, vertical, pitch, s, out),
                 Rule::ConvexCornerSpacing {
                     layer,
                     corner_to_corner,
@@ -3267,7 +3314,8 @@ impl Rule {
             | Rule::EolKeepOut { layer, .. }
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
-            | Rule::ConvexCornerSpacing { layer, .. } => [Some(layer), None],
+            | Rule::ConvexCornerSpacing { layer, .. }
+            | Rule::ExactPitch { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

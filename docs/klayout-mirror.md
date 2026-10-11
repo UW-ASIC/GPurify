@@ -1131,6 +1131,18 @@ emit(id, L.isolated(LIM, euclidian, transparent, projection_limits(0, 1)))   # c
 - `except_eol` cannot be stated: NONE. Its oracles are the hand-derived fixtures: a line end's
   corner exempt on either shape, a wide shape's not (SY, MR).
 
+### 43. exact_pitch — NONE: KLayout has no pitch between neighbours
+
+**GPurify** (`facing.rs` `exact_pitch`): every merged figure a rectangle (else refused); each
+rectangle's neighbours along the axis are the nearest rectangles past it that overlap it across;
+their centre lines must be exactly the pitch apart.
+
+**KLayout.** Not mirrored: KLayout's checks compare distances between edges against a limit, and
+none relates the centre lines of neighbouring shapes or flags a distance that is too large as well
+as too small. The oracles: ASAP7's own values (FIN.S.1 27 nm on 7 nm fins, GATE.S.1 54 nm on 20 nm
+gates) at the pitch and one step either side (FR), a missing line, rows that do not overlap, and a
+bent shape refused, hand-derived under the square's symmetries (SY, MR).
+
 ### 41. span_length — NONE: KLayout has no span measure
 
 **GPurify** (`facing.rs` `span_length`, `chords`): the chords horizontal and vertical lines cut
@@ -1201,7 +1213,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 42, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 43, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest
@@ -1238,6 +1250,8 @@ KLayout, but only by positive overlap in GPurify.
 - **eol_keep_out.** Reported as not mirrored. The oracle is hand-derived fixtures (rule 39).
 - **span_length.** Reported as not mirrored. The oracles are LEF's own span tables and hand-derived
   fixtures (rule 41).
+- **exact_pitch.** Reported as not mirrored. The oracles are ASAP7's pitch values and hand-derived
+  fixtures (rule 43).
 - **net_spacing on a deck without `touch_within_layer`.** The oracle is construct-from-answer
   tests with planted nets.
 
