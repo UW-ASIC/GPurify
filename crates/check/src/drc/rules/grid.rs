@@ -219,7 +219,14 @@ pub(crate) fn polygon_validity(
             rule,
             layer: store.poly_layer(poly),
             severity: Severity::Error,
-            at: Point { x: xs[0], y: ys[0] },
+            // A row with no vertex at all is reported at the origin.
+            at: xs.first().zip(ys.first()).map_or(
+                Point {
+                    x: Dbu::new_unchecked(0),
+                    y: Dbu::new_unchecked(0),
+                },
+                |(&x, &y)| Point { x, y },
+            ),
             measured: Measurement::Count(0),
             limit: Measurement::Count(1),
             shapes: (poly, None),
