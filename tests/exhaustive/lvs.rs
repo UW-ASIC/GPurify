@@ -2154,7 +2154,10 @@ fn layout_rows() -> Vec<Fixture> {
             &floating,
             &one,
         )
-        .expect(Expect::rule("lvs.floating_net", vec![Finding::any()])),
+        // `lvs.floating_net` examines every net: the four tracks drawn.
+        .expect(
+            Expect::rule("lvs.floating_net", vec![Finding::any()]).examined(floating.nets() as u64),
+        ),
     );
     let mut port = floating.clone();
     port.ports[3] = true;
@@ -2165,7 +2168,7 @@ fn layout_rows() -> Vec<Fixture> {
             &port,
             &port,
         )
-        .expect(Expect::clean("lvs.floating_net")),
+        .expect(Expect::clean("lvs.floating_net").examined(port.nets() as u64)),
     );
 
     // LVS-001, LVS-002: one label on two nets is an open, not a join.
@@ -2212,7 +2215,11 @@ fn layout_rows() -> Vec<Fixture> {
     }
     let mut fixture = Fixture::new("lvs/checks/two_terminal_mos", &["LVS-004"], &deck, LVS)
         .layout(layout)
-        .expect(Expect::rule("lvs.terminal_count", vec![Finding::any()]));
+        // `lvs.terminal_count` examines every device: the one transistor drawn.
+        .expect(
+            Expect::rule("lvs.terminal_count", vec![Finding::any()])
+                .examined(shorted.devs.len() as u64),
+        );
     fixture.reference = Some(spice(&shorted));
     out.push(fixture);
 

@@ -100,7 +100,7 @@ fn claims_of(ran: &harness::Ran, nets: &[String]) -> Vec<(Expect, String)> {
         })
         .collect();
     let mut claims = Vec::new();
-    for (rule, outcome) in &ran.rows {
+    for (rule, outcome, _) in &ran.rows {
         let findings = ran
             .findings
             .iter()
@@ -121,6 +121,9 @@ fn claims_of(ran: &harness::Ran, nets: &[String]) -> Vec<(Expect, String)> {
                 id: rule.clone(),
                 outcome,
                 findings,
+                // Not carried over: the corpus case states its own floor,
+                // and a count a run reported is not a definition.
+                examined: None,
             },
             kind,
         ));
