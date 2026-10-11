@@ -133,8 +133,12 @@ None has been compared against foundry signoff results.
   covers only poly that touches no diffusion.
 - IHP: parasitic area capacitance other than Metal1 is computed from the
   documented layer heights and dielectric constants, and fringe capacitance
-  is zero. Its antenna rows say `diode: none` (no antenna-diode layer is
-  chosen), so a gate with a diode is held to the no-diode limit.
+  is zero. Its antenna rows count a source/drain or tap Activ piece of at
+  least 0.16 µm² as a protection diode (Ant.e/f), where IHP's own KLayout
+  deck sums a net's diode area and counts it above 0.16 µm², so a net
+  protected only by several small pieces is held to the no-diode limit here.
+- gf180mcu: the antenna rows pool thin and thick gates and take no ANT.16
+  diode credit, so a gate with a diode can over-report.
 - `generic_finfet` is ASAP7, a predictive process no fab builds. It
   recognises no transistors and extracts no capacitance: the manual gives no
   resistance for the gate and local-interconnect layers and no capacitance at
