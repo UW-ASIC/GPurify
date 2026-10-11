@@ -37,13 +37,13 @@
 //!
 //! | Deck | Kind | Checked by | Flags | Catalog |
 //! |---|---|---|---|---|
-//! | `width(L) >= len` | `min_width` | [`drc::Rule::MinWidth`] | a shape narrower than the limit anywhere | DRC-010, DRC-073, DRC-090, DRC-095, DRC-096, ERC-C11 |
+//! | `width(L) >= len` | `min_width` | [`drc::Rule::MinWidth`] | a shape narrower than the limit anywhere | DRC-010, DRC-037, DRC-038, DRC-073, DRC-090, DRC-095, DRC-096, ERC-C11 |
 //! | `width(L) <= len` | `max_width` | [`drc::Rule::MaxWidth`] | a part of a shape wider than the limit in every direction | DRC-012 |
 //! | `size(L) == w x h` | `cut_size` | [`drc::Rule::CutSize`] | a cut that is not exactly that rectangle | DRC-013, DRC-014 |
-//! | `edge_length(L) >= len` | `min_edge_length` | [`drc::Rule::MinEdgeLength`] | an edge shorter than the limit | DRC-020 |
-//! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024 |
-//! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-060 |
-//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-047, DRC-065, DRC-073, ERC-C11 |
+//! | `edge_length(L) >= len` | `min_edge_length` | [`drc::Rule::MinEdgeLength`] | an edge shorter than the limit | DRC-020, DRC-038 |
+//! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024, DRC-038 |
+//! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-037, DRC-038, DRC-060 |
+//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-065, DRC-073, ERC-C11 |
 //! | `space(A, B, projection) >= len` | `projection_spacing` | [`drc::Rule::ProjectionSpacing`] | facing edges of A and B too close | DRC-055 |
 //! | `eol_space(L; eol_width: len) >= len` | `eol_spacing` | [`drc::Rule::EolSpacing`] | too little space at an end of line | DRC-029, DRC-031 |
 //! | `prl_space(L; prl: len) >= len` | `prl_spacing` | [`drc::Rule::PrlSpacing`] | shapes running side by side for `prl`, too close | DRC-026 |

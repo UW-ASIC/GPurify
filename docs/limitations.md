@@ -10,11 +10,12 @@ A layout with 45° edges loads, its derived layers are computed (booleans,
 `sized`, the selections and the edge operations all take 45° edges), and the
 `angle` rule checks every edge of it. A vertex a boolean would place between
 grid points, where two diagonals cross, is snapped onto the grid
-(`docs/deck.md`, "45-degree geometry"). Every other rule that measures
-geometry validates its layer first and records `Refused` for a layer with a
-non-rectilinear edge, so diagonal routing is checked for its angles and
-nothing else. Edges at angles other than multiples of 45° are refused by every
-derived layer as well.
+(`docs/deck.md`, "45-degree geometry"). `width`, `notch`, `space` (one layer
+or two), `area`, `hole_area` and `edge_length` measure 45° shapes exactly.
+Every other rule that measures geometry records `Refused` for a layer with a
+non-rectilinear edge. Edges at angles other than multiples of 45° (curved
+shapes written as polygons) are refused by every rule and derived layer, and
+the KLayout mirror differential has not yet been run on 45° layouts.
 
 ## Rules that can pass a layout signoff would flag
 

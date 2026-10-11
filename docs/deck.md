@@ -201,6 +201,15 @@ Every result keeps its vertices on the grid and its edges at multiples of 45°:
   points at the last grid point inside it.
 - `.with_width` refuses a layer with a 45° edge.
 
+Of the checks, `width`, `notch`, `space`, `area`, `hole_area` and
+`edge_length` measure 45° shapes; every other check refuses a layer with a
+45° edge. `width` is the distance between facing edges, measured square to
+them, a neck between two inside corners measured corner to corner, and 0 at a
+corner sharper than 90°; two edges that only converge, such as a chamfer and
+the far side, are not a width (KLayout's Euclidean `width` at its default
+`ignore_angle` measures that pair too). Distances to a 45° edge can fall
+between whole units and are compared exactly; a reported value is floored.
+
 Wherever a rule takes a layer, it can take a layer expression instead:
 `forbidden(licon and poly and (diff or tap))` is the same as declaring that
 layer and naming it.

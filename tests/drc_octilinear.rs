@@ -121,6 +121,8 @@ fn bar(c: i64, d: i64) -> Vec<(i64, i64)> {
     ]
 }
 
+/// DRC-038, diagonal width; DRC-037, bent 45-degree features.
+///
 /// Oracle: hand-derived. The bar between `y = x` and `y = x + 7` is `7/√2 =
 /// √24.5 ≈ 4.95` wide: `width >= 5nm` flags it at 4 (floored), `width >=
 /// 4nm` passes. A width squared and rounded up (25) would pass at 5. The bar
@@ -143,6 +145,8 @@ fn a_45_degree_bar_is_as_wide_as_its_perpendicular() {
     assert_eq!(found.of("w201"), [(len(200), len(201))]);
 }
 
+/// DRC-038, diagonal spacing (and width, below).
+///
 /// Oracle: hand-derived. Bars between `y = x .. x + 10` and `y = x + 17 ..
 /// x + 27` are `7/√2 ≈ 4.95` apart, the nearest any two of their points come
 /// (two parallel strips): `space >= 5nm` flags them at 4, `>= 4nm` passes.

@@ -63,6 +63,11 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "DRC-123",
         "crates/ingest/src/layout.rs::a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise",
     ),
+    // 45-degree shapes are drawn as polygons; the harness draws rectangles.
+    (
+        "DRC-038",
+        "tests/drc_octilinear.rs::two_45_degree_bars_are_as_far_apart_as_their_lines",
+    ),
     // Live DRC is a library consumer's loop, not a run of the CLI.
     (
         "FLOW-005",
