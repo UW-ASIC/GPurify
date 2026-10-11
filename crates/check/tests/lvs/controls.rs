@@ -512,7 +512,7 @@ fn relaxed_parallel_passives_combine_their_value_by_its_law() {
         relaxed,
         ..ParamNames::default()
     };
-    let parallel = |kind, model, params: &[&[(StrId, f64)]]| {
+    let parallel = |kind: DeviceKind, model: StrId, params: &[&[(StrId, f64)]]| {
         let mut builder = GraphBuilder::new(2);
         for &stated in params {
             let ends = if kind == DeviceKind::Resistor {
