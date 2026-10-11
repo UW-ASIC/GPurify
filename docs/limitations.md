@@ -62,7 +62,7 @@ None has been compared against foundry signoff results.
   `well_bias`. Its pd2nw diodes and bipolars still have no recogniser. The
   other decks' transistors have no bulk terminal and no `well_bias`. The
   substrate carries no modelled current: a supply reached only through it is
-  an island to the power grid, and a field solve refuses a net that holds it.
+  an island to the power grid, and a field solve leaves it out of a net that holds it, and refuses a net whose pieces join only through it.
 - No deck carries `esd_latchup`: none of the manuals states a pad guard-ring
   width and tap distance in the form the rule takes.
 - `gate_oxide` and `drain_source` use the operating voltages the PDK
@@ -276,7 +276,7 @@ says which foundry manual, standard or tool defines each one.
 | Id | Check | Status | What is missing |
 |---|---|---|---|
 | PEX-003 | Coupling C (same-layer and cross-layer) | partial | No dielectric images: each panel pair sees the mean of their two permittivities and interfaces reflect nothing, so same-layer coupling is under-predicted 14-159% (extract::field). The substrate is a grounded plane at height 0 (testing-plan F24); a shape at height 0 (well, diffusion) is a junction, out of the field and in closed form, so the field reads metal over another net's junction as coupling to ground (F73) |
-| PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner is refused (testing-plan F23, F45) |
+| PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79) |
 | PEX-006 | Multi-corner extraction | missing | — |
 | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds |
 | PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
