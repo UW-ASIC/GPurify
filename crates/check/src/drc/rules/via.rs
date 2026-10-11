@@ -5,12 +5,18 @@
 //! an array cluster or around a cut with many neighbours.
 
 use super::spacing::whole_at;
-use super::{centre, join_nested, label_pairs_into, pair_distances_into, Verdict};
+use super::width::wide_rects_into;
+use super::{
+    bbox_gap2, centre, join_nested, label_pairs_into, merged, pair_distances_into, SortedRects,
+    Verdict, REFUSED,
+};
 use crate::drc::{CutClassTable, Scratch};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
+use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
-use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId};
+use gpurify_geom::rects::decompose_into;
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
 fn measured_pairs(store: &GeometryStore, layer: LayerId, radius: Dbu, s: &mut Scratch) {
@@ -281,6 +287,114 @@ pub(crate) fn cut_class_spacing(
                 limit: Measurement::Length(need),
                 shapes: (a, Some(b)),
             });
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// A merged layer's rectangles, each labelled with its figure.
+fn figure_rects(figures: &ValidatedLayer) -> SortedRects<u32> {
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(figures, &mut rects, &mut start);
+    SortedRects::new(
+        start
+            .windows(2)
+            .zip(0u32..)
+            .flat_map(|(span, f)| {
+                rects[span[0] as usize..span[1] as usize]
+                    .iter()
+                    .map(move |&r| (r, f))
+            })
+            .collect(),
+    )
+}
+
+/// LEF `MINIMUMCUT`: every via held by the wide part of `wide` (where a
+/// `width + 1` square fits) needs `min_count` cuts, a via being the cuts that
+/// join one `wide` figure to one `other` figure, split by `within` when given.
+/// One violation per cut of a short via. `examined` counts held vias.
+pub(crate) fn minimum_cut(
+    store: &GeometryStore,
+    rule: StrId,
+    (cut, wide, other): (LayerId, LayerId, LayerId),
+    (width, within): (Dbu, Option<Dbu>),
+    min_count: u16,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(wide_figures), Some(other_figures)) =
+        (merged(store, wide, s), merged(store, other, s))
+    else {
+        return REFUSED;
+    };
+    let drawn = s.validated.get(store, wide).expect("merged above");
+    let mut part = Vec::new();
+    if wide_rects_into(drawn, width + Dbu::new_unchecked(1), &mut part).is_err() {
+        return REFUSED;
+    }
+    let part = SortedRects::new(part.into_iter().map(|r| (r, ())).collect());
+    let (on_wide, on_other) = (figure_rects(&wide_figures), figure_rects(&other_figures));
+    // Each cut on a wide figure, keyed by the figures it joins.
+    let mut keyed: Vec<((u32, Option<u32>), PolyId)> = store
+        .polys_on_layer(cut)
+        .filter_map(|row| {
+            let b = store.poly_bbox(PolyId(row));
+            let w = on_wide.overlapping(b).map(|(_, f)| f).min()?;
+            let o = on_other.overlapping(b).map(|(_, f)| f).min();
+            Some(((w, o), PolyId(row)))
+        })
+        .collect();
+    keyed.sort_unstable();
+    let within2 = within.map(|d| d.mul_wide(d));
+    let mut examined = 0u64;
+    let (mut edges, mut labels) = (Vec::new(), Vec::new());
+    for via in keyed.chunk_by(|p, q| p.0 == q.0) {
+        // Groups of the via's cuts, by `within`.
+        edges.clear();
+        if let Some(within2) = within2 {
+            for (i, &(_, a)) in (0u32..).zip(via) {
+                for (j, &(_, b)) in (0u32..).zip(via).skip(i as usize + 1) {
+                    if bbox_gap2(store.poly_bbox(a), store.poly_bbox(b)) < within2 {
+                        edges.push((i, j));
+                    }
+                }
+            }
+        } else {
+            edges.extend((1..via.len()).map(|j| (0, u32::try_from(j).expect("few cuts"))));
+        }
+        components_into(
+            u32::try_from(via.len()).expect("a via has few cuts"),
+            &edges,
+            &mut labels,
+        );
+        let mut groups: Vec<(u32, PolyId)> = labels
+            .iter()
+            .zip(via)
+            .map(|(label, &(_, row))| (label.0, row))
+            .collect();
+        groups.sort_unstable();
+        for group in groups.chunk_by(|p, q| p.0 == q.0) {
+            let held = group
+                .iter()
+                .any(|&(_, row)| part.overlapping(store.poly_bbox(row)).next().is_some());
+            if !held {
+                continue;
+            }
+            examined += 1;
+            let cuts = u32::try_from(group.len()).expect("a via has few cuts");
+            if cuts < u32::from(min_count) {
+                for &(_, row) in group {
+                    out.push(Violation {
+                        rule,
+                        layer: cut,
+                        severity: Severity::Error,
+                        at: centre(store.poly_bbox(row)),
+                        measured: Measurement::Count(cuts),
+                        limit: Measurement::Count(u32::from(min_count)),
+                        shapes: (row, None),
+                    });
+                }
+            }
         }
     }
     (Outcome::Ran, examined)

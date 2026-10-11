@@ -273,6 +273,7 @@ explains (kind 30).
 `except_eol`, and `net_spacing` on a deck without
 | 36 | cut_spacing | `space(L, center) >= l`, `adjacent_space(L[, center]; cuts, within) >= l` | ROW PAIR | EXACT (scripted) | exact | new |
 | 37 | cut_class_spacing | `cut_class_space(L; short, long, space)` | ROW PAIR | EXACT (scripted) | exact | new |
+| 38 | minimum_cut | `min_cuts(C, W, O; width[, within]) >= n` | ROW | EXACT (scripted) | exact | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1230,6 +1231,25 @@ emit("raw:" + C, C.dup.raw) ; cut_class_spacing(id, C.dup.raw, [[S0, L0], ..], [
 ```
 
 - Key ROW PAIR; the measurement is not compared.
+
+### 38. minimum_cut — EXACT (scripted)
+
+**GPurify** (`via.rs` `minimum_cut`): LEF `MINIMUMCUT n WIDTH w [WITHIN d]`. A via is the drawn
+cuts (by box) joining one merged figure of the wide layer to one of the far layer, split into
+groups closer than `d`; a group with a cut on the part of the wide layer where a `w + 1` square
+fits and fewer than `n` cuts reports each cut, `measured` the group's count.
+
+**KLayout** has no via or cut count by connection, so the prelude's `minimum_cut` groups KLayout's
+raw cuts by the merged figures they overlap, with the wide part `W.merged.sized(-w).sized(w)` at x2
+(kind 11's wide part for `w + 1`):
+
+```ruby
+minimum_cut(id, C.dup.raw, W, O, w, N, D2 or nil)   # one polygon per reported cut, v = its count
+```
+
+- Key ROW, the cut's box; the count is compared exactly. A cut that bridges two figures of one
+  layer is grouped by a figure each tool picks in its own order, so the random deck carries no
+  `min_cuts` row.
 
 ---
 

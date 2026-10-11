@@ -64,6 +64,7 @@
 //! | `off_grid(; pitch: len)` | `off_grid` | [`drc::Rule::OffGrid`] | a vertex off the manufacturing grid | DRC-001 |
 //! | `angle([L]; allowed: [..])` | `angle` | [`drc::Rule::Angle`] | an edge at an angle not in the list | DRC-002, DRC-003, DRC-037 |
 //! | `redundant_via(L; within: len) >= count` | `redundant_via` | [`drc::Rule::RedundantVia`] | a cut with too few neighbours | DRC-066, DRC-117 |
+//! | `min_cuts(cut, wide, other; width: len[, within: len]) >= count` | `minimum_cut` | [`drc::Rule::MinimumCut`] | a via on a wide wire with too few cuts | DRC-066 |
 //! | `via_array_space(L; array: count) >= len` | `via_array_spacing` | [`drc::Rule::ViaArraySpacing`] | cuts in a large cluster too close | DRC-062 |
 //! | `space(L, center) >= len`, `adjacent_space(L[, center]; cuts: count, within: len) >= len` | `cut_spacing` | [`drc::Rule::CutSpacing`] | cut centres too close, or cuts with many close neighbours too close | DRC-061, DRC-062 |
 //! | `cut_class_space(L; short: [..], long: [..], space: [[..]])` | `cut_class_spacing` | [`drc::Rule::CutClassSpacing`] | two cuts closer than their cut-class cell | DRC-063, DRC-064 |

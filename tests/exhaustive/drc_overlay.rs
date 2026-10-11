@@ -45,6 +45,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         edge_enclosure(),
         cut_spacing(),
         redundant_via(),
+        minimum_cut(),
         via_array_spacing(depth),
         center_spacing(),
         adjacent_cut_spacing(),
@@ -1421,6 +1422,109 @@ fn redundant_via() -> Vec<Fixture> {
         vec![count(2); 2],
     ));
     cases.push(case("empty", &[], vec![], vec![]));
+    every_placement(cases)
+}
+
+/// LEF `MINIMUMCUT 2 WIDTH 1.0` on `m1`, vias from `m2`: `min_cuts(via, m1,
+/// m2; width: 1000nm) >= 2` (`mc`) and with `within: 300nm` (`mcw`,
+/// `MINIMUMCUT 2 WIDTH 1.0 WITHIN 0.3`) (`minimum_cut`, DRC-066): a via is the
+/// cuts joining one `m1` figure to one `m2` figure, split by `within` into
+/// groups of cuts closer than 300 nm; one held by the part of `m1` wider than
+/// 1000 nm needs two cuts, and each of its cuts is reported with its count.
+///
+/// Oracle: LEF/DEF 5.8 "the number of cuts a via must have when it is on a
+/// wide wire or pin whose width is greater than width", on vias and wires
+/// drawn to a count and a width.
+///
+/// Shapes, 100 nm cuts on a 3000 nm `m1` plate: one cut under an `m2` pad;
+/// two under one pad 200 apart (one via, one group) and 400 apart (one via,
+/// two groups under `within`); two cuts under two pads (two vias); a cut with
+/// no `m2` over it; a wire 999, 1000 and 1001 wide with one cut (held only
+/// when strictly wider); a cut on a 500 nm tab off the plate (not held); a cut
+/// on no `m1` (not held).
+fn minimum_cut() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["via", "m1", "m2"],
+        "rule mc min_cuts(via, m1, m2; width: 1000nm) >= 2\n\
+         rule mcw min_cuts(via, m1, m2; width: 1000nm, within: 300nm) >= 2\n",
+    );
+    let case = |name: &str, layout: Layout, mc: &[u32], mcw: &[u32]| {
+        let counts = |n: &[u32]| n.iter().map(|&c| count(c)).collect::<Vec<_>>();
+        fixture(
+            &format!("minimum_cut/{name}"),
+            &["DRC-066"],
+            &deck,
+            layout,
+            &[("mc", counts(mc)), ("mcw", counts(mcw))],
+        )
+    };
+    let plate = || Layout::default().rect("m1", 0, 0, 3000, 3000);
+    let mut cases = Vec::new();
+    cases.push(case(
+        "single",
+        plate()
+            .rect("via", 1000, 1000, 1100, 1100)
+            .rect("m2", 900, 900, 1200, 1200),
+        &[1],
+        &[1],
+    ));
+    for (gap, name, mcw) in [(200, "pair_close", &[][..]), (400, "pair_far", &[1, 1][..])] {
+        let x = 1100 + gap;
+        cases.push(case(
+            name,
+            plate()
+                .rect("via", 1000, 1000, 1100, 1100)
+                .rect("via", x, 1000, x + 100, 1100)
+                .rect("m2", 900, 900, x + 200, 1200),
+            &[],
+            mcw,
+        ));
+    }
+    cases.push(case(
+        "two_pads",
+        plate()
+            .rect("via", 1000, 1000, 1100, 1100)
+            .rect("via", 1300, 1000, 1400, 1100)
+            .rect("m2", 900, 900, 1150, 1200)
+            .rect("m2", 1250, 900, 1500, 1200),
+        &[1, 1],
+        &[1, 1],
+    ));
+    cases.push(case(
+        "no_far_metal",
+        plate().rect("via", 1000, 1000, 1100, 1100),
+        &[1],
+        &[1],
+    ));
+    for (w, held) in [(999, false), (1000, false), (1001, true)] {
+        let one: &[u32] = if held { &[1] } else { &[] };
+        cases.push(case(
+            &format!("wire/{w}"),
+            Layout::default()
+                .rect("m1", 0, 0, 5000, w)
+                .rect("via", 2000, 100, 2100, 200)
+                .rect("m2", 1900, 0, 2200, 300),
+            one,
+            one,
+        ));
+    }
+    cases.push(case(
+        "narrow_tab",
+        plate()
+            .rect("m1", 3000, 1000, 4000, 1500)
+            .rect("via", 3500, 1200, 3600, 1300)
+            .rect("m2", 3400, 1100, 3700, 1400),
+        &[],
+        &[],
+    ));
+    cases.push(case(
+        "off_metal",
+        plate()
+            .rect("via", 5000, 5000, 5100, 5100)
+            .rect("m2", 4900, 4900, 5200, 5200),
+        &[],
+        &[],
+    ));
     every_placement(cases)
 }
 
