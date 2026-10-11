@@ -253,8 +253,10 @@ explains (kind 30).
 | 37 | aspect_ratio | `aspect_ratio(L) <= r` | FIG by marker | EXACT | exact | new in H |
 | 38 | total_area | `total_area(L) <= a` | POINT | EXACT | exact | new in H |
 | 39 | cut_class | `size(L; allowed: [..])` | POINT | EXACT | exact | new in H |
+| 40 | edge_width | `width(E) >= l` | POINT | EXACT | exact | new in H |
+| 41 | edge_facing_space | `facing_space(E) >= l` | POINT | EXACT | exact | new in H |
 
-27 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+29 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -914,6 +916,39 @@ emit(id, C.drc(if_any(!rectangles, if_all(if_any(bbox_min != S1, bbox_max != L1)
 - The cut_size recipe (rule 3) once per class: a figure fails when it is no rectangle or every
   class rejects it. Key POINT, the box centre; the measurement is not compared.
 
+### 40. edge_width — EXACT
+
+**GPurify** (`edge.rs` `facing`, `inside = true`): two parallel edges of the edge layer whose
+shapes lie toward each other (back to back), projections overlapping by a positive length,
+measured straight across; every pair, nothing shields one. `at` the middle of the gap between
+their boxes.
+
+**KLayout**
+
+```ruby
+emit(id, E.width(LIM, projection, transparent))
+```
+
+- On an edge layer `width` reports pairs in a "back to back" relation, "their inner sides face
+  each other", the inside being the right of an edge (KLayout's hulls run clockwise; GPurify's
+  edges carry their shape on the left, so both mean the shape's side) ([L]). `projection` measures
+  straight across overlapping parts, `transparent` turns off shielding as GPurify has none. Key
+  POINT, the gap's middle (as rule 34); the length compared.
+
+### 41. edge_facing_space — EXACT
+
+**GPurify** (`edge.rs` `facing`, `inside = false`): as rule 40 with the shapes turned away from
+each other (face to face).
+
+**KLayout**
+
+```ruby
+emit(id, E.space(LIM, projection, transparent))
+```
+
+- On an edge layer `space` reports pairs in a "face to face" relation, "their outer sides face
+  each other" ([L]). Key POINT, the gap's middle; the length compared.
+
 ---
 
 ## (c) Derived layers, connectivity, antenna
@@ -944,6 +979,7 @@ Each operation runs on merged operands at the default coherence (a3).
 | `.outside_part(L)` | Strictly outside | `E.outside_part(L) - L.edges` | KLayout keeps parts on L's boundary (v t13 B2) |
 | `.interacting(L)` on edges | Whole edges that touch, cross or lie inside | `.interacting(L)` | Same (v T13) |
 | `.with_length(b)` | Length within the bounds | `.with_length(2lo, 2hi + 1)` | |
+| `.horizontal()`, `.vertical()` | The edges along that axis | `.with_angle(0)`, `.with_angle(90)` | An edge layer is axis-aligned, so the two split it (x; fixture `directional`) |
 
 ### Connectivity, for net_spacing
 

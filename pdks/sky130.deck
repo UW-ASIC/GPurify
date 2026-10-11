@@ -292,7 +292,11 @@ rule difftap.11 space(ptap, nwell) >= 130nm
 
 # --- Poly [S1] ---
 rule poly.1a width(poly) >= 150nm
-rule poly.1b width(lvtn_pfet) >= 350nm
+# poly.1b is the channel length: the gate's sides inside the diffusion.
+rule poly.1b width(lvtn_pfet.edges() not diff.edges()) >= 350nm
+# difftap.2/2b, the channel width: the gate's sides on the diffusion's edge.
+rule difftap.2 width(gate_nsc.edges() and diff.edges()) >= 420nm
+rule difftap.2b width(gate_sc.edges() and diff.edges()) >= 360nm
 rule poly.2 space(poly) >= 210nm
 rule poly.2.notch notch(poly) >= 210nm
 rule poly.3 width(poly_res) >= 330nm
@@ -687,8 +691,7 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 #   layer.
 
 # --- Left out ---
-# Not expressible yet: difftap.2/2b (channel width, 0.42/0.36um: needs W, not
-# width), difftap.16 (tap bound by diffusion), poly.10/11 (corner and turn
+# Not expressible yet: difftap.16 (tap bound by diffusion), poly.10/11 (corner and turn
 # rules), poly.13 (gate length inside hvi, 0.5um: needs L, not width),
 # lvtn.3b (S/D direction spacing), lvtn.10 (enclosure excluding coincident
 # edges), difftap.6 (edges cannot be extended), npc.5 (maximum enclosure), licon.2b/2c/2d (slotted-licon spacing by

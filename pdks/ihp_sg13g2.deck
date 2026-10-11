@@ -282,6 +282,9 @@ rule TGO.f width(thickgateox) >= 860nm
 rule Gat.a  width(gatpoly) >= 130nm
 rule Gat.a1 width(ngate_lv) >= 130nm
 rule Gat.a2 width(pgate_lv) >= 130nm
+# Gat.a3/a4, the 3.3 V channel length: the gate's sides inside Activ.
+rule Gat.a3 width(ngate_hv.edges() not activ.edges()) >= 450nm
+rule Gat.a4 width(pgate_hv.edges() not activ.edges()) >= 400nm
 rule Gat.b  space(gatpoly) >= 180nm
 rule Gat.b.notch notch(gatpoly) >= 180nm
 rule Gat.b1 space(gate_hv) >= 250nm
@@ -760,9 +763,7 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 # rule Rhi.b  identical(psd.interacting(rhigh_body), nsd)
 # rule Rsil.c extension(res, gatpoly) >= 0nm      # RES must reach across the GatPoly
 
-# needs: channel length across the gate, and the abutted-tie rules' exact reading
-# rule Gat.a3 channel_length(ngate_hv) >= 450nm
-# rule Gat.a4 channel_length(pgate_hv) >= 400nm
+# needs: the abutted-tie rules' exact reading
 # rule pSD.e  abutted_overlap(psd, activ) >= 300nm
 # rule pSD.f  abutted_extension(activ, psd) >= 300nm
 # rule AFil.i space(activ_filler, pwell_block.edges()) >= 1.5um   # shape to edge

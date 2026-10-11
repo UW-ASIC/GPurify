@@ -339,6 +339,10 @@ pub enum DerivedOp {
     Part(bool),
     /// The edges whose length lies in `lo..=hi` grid units.
     WithLength(i128, i128),
+    /// `vertical` (`true`) or `horizontal`: the edges of operand 0 running
+    /// along that axis, as `KLayout`'s `with_angle(90)` and `with_angle(0)`
+    /// select them. An edge layer is axis-aligned, so the two split it.
+    Oriented(bool),
     /// `with_text` (`keep`) or `without_text`: the shapes of operand 0 that
     /// hold, on their material or boundary, a `TEXT` drawn on operand 1 (always
     /// a drawn layer) whose string matches [`LayerTable::text`] `text`.
@@ -370,7 +374,8 @@ impl DerivedOp {
             | Self::Not
             | Self::Interacting(_)
             | Self::Part(_)
-            | Self::WithLength(..) => None,
+            | Self::WithLength(..)
+            | Self::Oriented(_) => None,
         }
     }
 }

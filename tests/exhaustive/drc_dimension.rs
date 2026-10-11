@@ -24,7 +24,7 @@
 //! since B14 and B15.
 
 pub use crate::harness::DRC;
-use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Want};
+use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Symmetry, Want};
 use gpurify::check::report::Measurement;
 
 /// The translations every case is repeated at: the origin, and far off it in
@@ -75,6 +75,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         forbidden(depth),
         max_area(depth),
         aspect_ratio(depth),
+        channel(depth),
+        directional(depth),
         validity(depth),
         pins(depth),
     ]
@@ -2987,6 +2989,235 @@ fn aspect_ratio(depth: Depth) -> Vec<Fixture> {
         &["ar"],
     ));
     out
+}
+
+// ------------------------------------------------------- edge width, facing
+
+/// A transistor's channel length and width (`edge_width`, DRC-011: sky130
+/// poly.1b "min channel length (poly width)", difftap.2 "minimum channel width
+/// (diff and poly)", IHP Gat.a1 to a4, GF180 PL.2): `width(gate.edges() not
+/// diff.edges()) >= 150nm` measures the gap between the gate's sides inside
+/// the diffusion, `width(gate.edges() and diff.edges()) >= 420nm` the gap
+/// between its sides on the diffusion's edge; one finding per pair, at the
+/// middle of the gap, measuring it.
+///
+/// Oracle: channels drawn to a length and a width, each swept one step either
+/// side of its limit with the other legal. A gate 300 long and 200 wide: its
+/// length passes and its width fails, where a plain `width(gate)` would read
+/// 200 for both. Two fingers on one diffusion: the sides facing across the
+/// shared source are face to face and not a width, and the outer sides, 450
+/// apart, are no finding at 150; at a length of 149 each finger is one
+/// finding. An empty layout.
+fn channel(depth: Depth) -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer diff = gds(65, 20)\nlayer poly = gds(66, 20)\n\
+                layer gate = poly and diff\n\
+                layer lsides = gate.edges() not diff.edges()\n\
+                layer wsides = gate.edges() and diff.edges()\n\
+                rule l width(lsides) >= 150nm\nrule w width(wsides) >= 420nm\n";
+    let fet = |w: i64, polys: &[[i64; 4]]| {
+        rects(
+            rects(Layout::default(), "diff", &[[0, 0, 1000, w]]),
+            "poly",
+            polys,
+        )
+    };
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, l: Vec<Finding>, w: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("channel/{name}"),
+            &["DRC-011"],
+            deck,
+            layout,
+            vec![("l", l), ("w", w)],
+        ));
+    };
+    for l in sweep(depth, 150) {
+        let findings = if l < 150 {
+            vec![pin(Finding::length(l), 900 + l, 1000)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("length/{}", side(l, 150)),
+            fet(1000, &[[450, -200, 450 + l, 1200]]),
+            findings,
+            Vec::new(),
+        );
+    }
+    for w in sweep(depth, 420) {
+        let findings = if w < 420 {
+            vec![pin(Finding::length(w), 1050, w)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("width/{}", side(w, 420)),
+            fet(w, &[[450, -200, 600, w + 200]]),
+            Vec::new(),
+            findings,
+        );
+    }
+    case(
+        "long_and_narrow".into(),
+        fet(200, &[[450, -200, 750, 400]]),
+        Vec::new(),
+        vec![Finding::length(200).at(600, 100)],
+    );
+    case(
+        "two_fingers".into(),
+        fet(1000, &[[300, -200, 450, 1200], [600, -200, 750, 1200]]),
+        Vec::new(),
+        Vec::new(),
+    );
+    case(
+        "two_short_fingers".into(),
+        fet(1000, &[[300, -200, 449, 1200], [600, -200, 749, 1200]]),
+        vec![Finding::length(149), Finding::length(149)],
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(fixture(
+        "channel/empty",
+        &["DRC-011"],
+        deck,
+        rects(Layout::default(), "diff", &[[0, 0, 1000, 1000]]),
+        vec![("l", Vec::new()), ("w", Vec::new())],
+    ));
+    out
+}
+
+/// Width and spacing in one direction (DRC-016: ASAP7 M4.W.1 "minimum
+/// vertical width of M4" 24, M4.W.5 "minimum horizontal width" 44, M4.S.1
+/// "minimum vertical spacing" 24, M4.S.2 "minimum horizontal spacing" 40):
+/// `width` (`edge_width`) and `facing_space` (`edge_facing_space`) on
+/// `met4.edges().horizontal()` (a vertical measure) and `.vertical()`.
+///
+/// Oracle: wires drawn to a width or gap, each swept one step either side of
+/// its limit: a horizontal wire's thickness is a vertical width, two
+/// horizontal wires' gap a vertical spacing, and the same transposed. One gap
+/// of 30 between two horizontal wires passes (24) where the same gap between
+/// two vertical wires fails (40): a direction-blind spacing reads both alike.
+/// A U whose arms are 30 apart is a horizontal notch, which `facing_space`
+/// measures as `KLayout`'s `space` does, while each arm's 50 is a width and
+/// not a spacing. A quarter turn swaps the axes, so the turned placements
+/// swap `horizontal()` and `vertical()` in the deck and keep the expectation.
+fn directional(depth: Depth) -> Vec<Fixture> {
+    let deck = |turned: bool| {
+        let (h, v) = if turned {
+            ("vertical", "horizontal")
+        } else {
+            ("horizontal", "vertical")
+        };
+        format!(
+            "grid 1nm\nlayer met4 = gds(71, 20)\nlayer h = met4.edges().{h}()\n\
+             layer v = met4.edges().{v}()\nrule w1 width(h) >= 24nm\n\
+             rule w5 width(v) >= 44nm\nrule s1 facing_space(h) >= 24nm\n\
+             rule s2 facing_space(v) >= 40nm\n"
+        )
+    };
+    let flat = deck(false);
+    let met4 = |boxes: &[[i64; 4]]| rects(Layout::default(), "met4", boxes);
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, rows: [Vec<Finding>; 4]| {
+        let [w1, w5, s1, s2] = rows;
+        cases.push(fixture(
+            &format!("directional/{name}"),
+            &["DRC-016"],
+            &flat,
+            layout,
+            vec![("w1", w1), ("w5", w5), ("s1", s1), ("s2", s2)],
+        ));
+    };
+    let below = |v: i64, limit: i64, x2: i64, y2: i64| {
+        if v < limit {
+            vec![pin(Finding::length(v), x2, y2)]
+        } else {
+            Vec::new()
+        }
+    };
+    for t in sweep(depth, 24).into_iter().filter(|&v| v > 0) {
+        case(
+            format!("vertical_width/{}", side(t, 24)),
+            met4(&[[0, 0, 1000, t]]),
+            [below(t, 24, 1000, t), vec![], vec![], vec![]],
+        );
+    }
+    for t in sweep(depth, 44).into_iter().filter(|&v| v > 0) {
+        case(
+            format!("horizontal_width/{}", side(t, 44)),
+            met4(&[[0, 0, t, 1000]]),
+            [vec![], below(t, 44, t, 1000), vec![], vec![]],
+        );
+    }
+    for g in sweep(depth, 24).into_iter().filter(|&v| v > 0) {
+        case(
+            format!("vertical_space/{}", side(g, 24)),
+            met4(&[[0, 0, 1000, 50], [0, 50 + g, 1000, 100 + g]]),
+            [vec![], vec![], below(g, 24, 1000, 100 + g), vec![]],
+        );
+    }
+    for g in sweep(depth, 40).into_iter().filter(|&v| v > 0) {
+        case(
+            format!("horizontal_space/{}", side(g, 40)),
+            met4(&[[0, 0, 50, 1000], [50 + g, 0, 100 + g, 1000]]),
+            [vec![], vec![], vec![], below(g, 40, 100 + g, 1000)],
+        );
+    }
+    case(
+        "same_gap_two_directions".into(),
+        met4(&[
+            [0, 0, 1000, 50],
+            [0, 80, 1000, 130],
+            [2000, 0, 2050, 1000],
+            [2080, 0, 2130, 1000],
+        ]),
+        [
+            vec![],
+            vec![],
+            vec![],
+            vec![Finding::length(30).at(2065, 500)],
+        ],
+    );
+    case(
+        "notch".into(),
+        Layout::default().polygon(
+            "met4",
+            &[
+                (0, 0),
+                (130, 0),
+                (130, 500),
+                (80, 500),
+                (80, 50),
+                (50, 50),
+                (50, 500),
+                (0, 500),
+            ],
+        ),
+        [
+            vec![],
+            vec![],
+            vec![],
+            vec![Finding::length(30).at(65, 275)],
+        ],
+    );
+    let turned = deck(true);
+    cases
+        .iter()
+        .flat_map(|fixture| {
+            OFFSETS.iter().flat_map(move |&(dx, dy)| {
+                Symmetry::ALL
+                    .iter()
+                    .map(move |&symmetry| (fixture, symmetry, dx, dy))
+            })
+        })
+        .map(|(fixture, symmetry, dx, dy)| {
+            let mut placed = fixture.transformed(symmetry, dx, dy);
+            if symmetry.turns % 2 == 1 {
+                placed.deck.clone_from(&turned);
+            }
+            placed
+        })
+        .collect()
 }
 
 // ------------------------------------------------------------ integrity

@@ -473,6 +473,20 @@ pub(crate) const KINDS: &[Kind] = &[
     drc("space", Cmp::Ge, "edge_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "edge_spacing", &[0, 1], LIMIT, &[]),
     drc("enclosure", Cmp::Ge, "edge_enclosure", &[0, 1], LIMIT, &[]),
+    // Edges facing each other across their shapes' material (back to back), as
+    // a channel's length and width (sky130 poly.1b, difftap.2) or a width in
+    // one direction (ASAP7 M4.W.1 on `met4.edges().horizontal()`).
+    drc("width", Cmp::Ge, "edge_width", &[0], LIMIT, &[]),
+    // Edges whose outer sides face each other (face to face): a spacing in one
+    // direction (ASAP7 M4.S.2 on `met4.edges().vertical()`).
+    drc(
+        "facing_space",
+        Cmp::Ge,
+        "edge_facing_space",
+        &[0],
+        LIMIT,
+        &[],
+    ),
     // ERC.
     erc(
         "antenna",
@@ -674,4 +688,6 @@ pub(crate) const EDGE_KINDS: &[(&str, &[Option<bool>])] = &[
     ("edge_min_length", &[Some(true)]),
     ("edge_spacing", &[Some(true), Some(true)]),
     ("edge_enclosure", &[Some(true), Some(false)]),
+    ("edge_width", &[Some(true)]),
+    ("edge_facing_space", &[Some(true)]),
 ];

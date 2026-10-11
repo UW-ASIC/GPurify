@@ -721,6 +721,11 @@ impl<'a> Parser<'a> {
                 let (lo, hi) = self.bounds(op, Dim::Length, false)?;
                 (DerivedOp::WithLength(lo, hi), Some(true), None)
             }
+            "horizontal" | "vertical" => {
+                self.expect("(")?;
+                self.expect(")")?;
+                (DerivedOp::Oriented(op == "vertical"), Some(true), None)
+            }
             "with_text" | "without_text" => {
                 self.expect("(")?;
                 let at = self.peek();

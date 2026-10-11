@@ -159,6 +159,7 @@ its shape was on. It combines only with other edge layers:
 | `.outside_part(L)` | The parts of each edge strictly outside `L`. |
 | `.interacting(L)` / `.not_interacting(L)` | The whole edges that touch or lie in a shape on `L`, or that do not. |
 | `.with_length(bounds)` | The edges whose length is within the bounds. |
+| `.horizontal()` / `.vertical()` | The edges running along that axis, as KLayout's `with_angle(0)` and `with_angle(90)`. A width between horizontal edges is measured vertically. |
 
 A check that takes an edge layer says so (see [Edge checks](#edge-checks)).
 Every other check refuses one.
@@ -287,6 +288,8 @@ diff.edges()`. A finding is placed on the edge and names no shape.
 | `space(E) >= len` | Two parallel edges of `E` closer than the limit, measured edge to edge and end to end, whatever side their shapes are on. Edges that touch are not measured. As difftap.5 "min tap bound by two diffusions". |
 | `space(E, F) >= len` | The same between an edge of `E` and one of `F`, as difftap.7. |
 | `enclosure(E, L) >= len` | An edge whose outside is not covered by `L` for the limit, measured straight out from the edge along its length, as n/psd.5a "enclosure of diff by nsdm, except for butting edge" with `diff.edges() not tap.edges()`. |
+| `width(E) >= len` | Two parallel edges facing each other across their shapes (each edge's shape lies toward the other), overlapping along their length, closer than the limit, measured straight across. With `layer gate = poly and diff`, a channel length is `width(gate.edges() not diff.edges())` (sky130 poly.1b, IHP Gat.a1) and a channel width `width(gate.edges() and diff.edges())` (difftap.2); a vertical width is `width(met4.edges().horizontal())` (ASAP7 M4.W.1). Every pair counts: an edge between two others does not shield them. |
+| `facing_space(E) >= len` | The same with the shapes turned away from each other: a gap between shapes, or a notch in one, measured between the chosen edges. A horizontal spacing is `facing_space(met4.edges().vertical())` (ASAP7 M4.S.2). `space(E)` measures whatever the sides. |
 | `forbidden(E)` | Every edge, as n/psd.6 `forbidden((tap.edges() and diff.edges()).outside_part(psdm))`. |
 
 ## Electrical rules

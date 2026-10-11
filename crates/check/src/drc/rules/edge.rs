@@ -124,6 +124,94 @@ pub(crate) fn spacing(
     (Outcome::Ran, pairs.len() as u64)
 }
 
+/// The sign of the normal into an axis-aligned edge's shape, its left side,
+/// along x and y; `(0, 0)` for a zero-length edge.
+fn inward(e: Seg) -> (i64, i64) {
+    let (dx, dy) = (
+        (e.b.x - e.a.x).raw().signum(),
+        (e.b.y - e.a.y).raw().signum(),
+    );
+    (-dy, dx)
+}
+
+/// The perpendicular gap between two axis-aligned edges that are parallel,
+/// apart, overlap in projection by a positive length, and face each other
+/// with their shapes between them (`inside`, back to back) or with their
+/// shapes turned away (`!inside`, face to face); `None` for any other pair.
+fn facing_gap(e: Seg, f: Seg, inside: bool) -> Option<Dbu> {
+    let (be, bf) = (seg_bbox(e), seg_bbox(f));
+    let horizontal = e.a.y == e.b.y;
+    if horizontal != (f.a.y == f.b.y) {
+        return None;
+    }
+    let (overlap, from_e_to_f) = if horizontal {
+        (
+            be.xhi.min(bf.xhi) - be.xlo.max(bf.xlo),
+            (bf.ylo - be.ylo).raw(),
+        )
+    } else {
+        (
+            be.yhi.min(bf.yhi) - be.ylo.max(bf.ylo),
+            (bf.xlo - be.xlo).raw(),
+        )
+    };
+    if overlap.raw() <= 0 || from_e_to_f == 0 {
+        return None;
+    }
+    let toward = from_e_to_f.signum();
+    let (ne, nf) = (inward(e), inward(f));
+    let (ae, af) = if horizontal {
+        (ne.1, nf.1)
+    } else {
+        (ne.0, nf.0)
+    };
+    // Back to back: each edge's shape lies toward the other edge.
+    let back_to_back = ae == toward && af == -toward;
+    let face_to_face = ae == -toward && af == toward;
+    (if inside { back_to_back } else { face_to_face })
+        .then_some(Dbu::new_unchecked(from_e_to_f.abs()))
+}
+
+/// Two parallel edges of `layer` whose shapes lie between them (`inside`, a
+/// width: sky130 poly.1b and difftap.2 on a gate's sides) or away from each
+/// other (`!inside`, a spacing: ASAP7 M4.S.2 on vertical edges), overlapping
+/// in projection, closer than `limit`, measured straight across. Every pair
+/// counts; nothing between them shields it. `examined` counts the parallel
+/// pairs within reach.
+pub(crate) fn facing(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    limit: Dbu,
+    inside: bool,
+    out: &mut Violations,
+) -> Verdict {
+    let edges = store.edges_on_layer(layer);
+    if !axis_aligned(edges) {
+        return REFUSED;
+    }
+    let horizontal = |e: Seg| e.a.y == e.b.y;
+    let mut pairs = near_pairs(edges, edges, true, limit);
+    pairs.retain(|&(i, j)| horizontal(edges[i]) == horizontal(edges[j]));
+    for &(i, j) in &pairs {
+        let Some(gap) = facing_gap(edges[i], edges[j], inside) else {
+            continue;
+        };
+        if gap < limit {
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: gap_midpoint(seg_bbox(edges[i]), seg_bbox(edges[j])),
+                measured: Measurement::Length(gap),
+                limit: Measurement::Length(limit),
+                shapes: (NO_SHAPE, None),
+            });
+        }
+    }
+    (Outcome::Ran, pairs.len() as u64)
+}
+
 /// The strip `depth` deep on the outer side of an axis-aligned edge (its
 /// shape is on the left), and the axis its depth runs along: `(strip, along_y,
 /// sign)` with `sign` +1 when depth grows with the coordinate.

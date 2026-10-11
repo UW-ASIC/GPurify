@@ -141,9 +141,8 @@ says which foundry manual, standard or tool defines each one.
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
 | DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible |
-| DRC-011 | Device channel width / length | missing | Needs device W/L as a rule input (sky130.deck "needs W, not width") |
 | DRC-015 | Discrete / allowed width set | missing | — |
-| DRC-016 | Wrong-direction width or spacing | missing | Direction-dependent rules (limitations.md, "Shipped decks") |
+| DRC-016 | Wrong-direction width or spacing | partial | width(E) and facing_space(E) on L.edges().horizontal() or .vertical() measure in one direction (ASAP7 M4.W.1, W.5, S.1, S.2); the PRL and NONEOL qualifiers of LEF58 WRONGDIRECTION spacing are missing |
 | DRC-020 | Minimum step / edge length / jog | partial | MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing |
 | DRC-021 | Feature length min/max | partial | Edge length via .with_length works; whole-feature length does not |
 | DRC-027 | Two-widths spacing table | partial | The table is keyed on the wider shape only; TWOWIDTHS keys on both widths |
