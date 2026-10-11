@@ -100,6 +100,8 @@
 //! | `p2p_resistance(; max)` | `p2p_resistance` | [`erc::RuleSet::p2p_resistance`] | two points on one net too far apart in resistance | ERC-C6, ERC-D4 |
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |
+//! | `hv_tag(L, tag; voltage)` | `hv_tag` | [`erc::RuleSet::hv_tag`] | a figure on a net that can reach `voltage` or more, not inside `tag` | DRC-083 |
+//! | `mixed_tag(L, tag)` | `mixed_tag` | [`erc::RuleSet::mixed_tag`] | an untagged figure on a net that also holds a tagged one | ERC-F10 |
 //! | `esd_latchup(pad, guard_ring; ..)` | `esd_latchup` | [`erc::RuleSet::esd_latchup`] | a narrow or untapped guard ring, or an unclamped pad | ERC-C1, ERC-D2 |
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |

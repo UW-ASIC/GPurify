@@ -41,7 +41,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 15] = [
+const INTENT_GATED: [&str; 16] = [
     "domain_crossing",
     "drain_source",
     "electromigration",
@@ -50,6 +50,7 @@ const INTENT_GATED: [&str; 15] = [
     "esd_topological",
     "gate_oxide",
     "hv_domain",
+    "hv_tag",
     "ir_drop",
     "missing_level_shifter",
     "multiple_drivers",
@@ -133,6 +134,11 @@ fn every_kind() -> RuleSet {
             pad: vec![LayerId(0)],
             clamp_start: vec![0, 1],
             clamp: vec![rule(900)],
+        },
+        mixed_tag: supply::MixedTagTable {
+            head: head(id_of("mixed_tag")),
+            layer: vec![base],
+            tag: vec![other],
         },
 
         antenna: antenna::AntennaTable {
@@ -254,6 +260,12 @@ fn every_kind() -> RuleSet {
             step_start: vec![0, 1],
             voltage: vec![millivolts(0.0)],
             space: vec![dbu(100)],
+        },
+        hv_tag: domain::HvTagTable {
+            head: head(id_of("hv_tag")),
+            layer: vec![base],
+            tag: vec![other],
+            voltage: vec![millivolts(1_980.0)],
         },
     }
 }

@@ -212,6 +212,46 @@ pub struct VoltageSpacingTable {
     pub space: Vec<Dbu>,
 }
 
+/// High-voltage features tagged: deck kind `hv_tag`, written
+/// `hv_tag(L, tag; voltage: v)`.
+///
+/// A merged figure of the conductor layer `L` whose net can reach `voltage`
+/// or more ([`NetVoltage::hi`]) is a high-voltage feature, and must lie
+/// entirely inside the `tag` layer, touching its edge from inside allowed
+/// (as `inside(L, tag)` measures it). Because a net's range spans every
+/// supply its channels can join it to, any layout shorted to a high-voltage
+/// net, directly or through a conducting device, is a high-voltage feature
+/// too. A figure's net is its lowest-numbered drawn polygon's.
+///
+/// # Limits
+///
+/// Voltage alone decides what is high-voltage: sky130's text tags
+/// (`shv_nwell`, `hv_bb`, `hv_lv`, `lv_net`) are not read, and a net no
+/// supply reaches is not judged. Ranges over-report as
+/// [`ModelLimitTable`]'s do.
+///
+/// Catalog: DRC-083 in the [check catalog]. Defined by [SKY130] hv.X.1
+/// ("High voltage source/drain regions must be tagged by diff:hv"), hv.X.4
+/// ("Any piece of layout that is shorted to hv_source/drain becomes a high
+/// voltage feature"), hv.X.6 (an n-well biased at 7.2 V or more is tagged)
+/// and hvnwell.11 (an n-well on a high-voltage supply is enclosed by `hvi`).
+/// Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+#[derive(Debug, Default)]
+pub struct HvTagTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the conductor layer whose figures are judged.
+    pub layer: Vec<LayerId>,
+    /// Per row: the tag layer a high-voltage figure must lie inside.
+    pub tag: Vec<LayerId>,
+    /// Per row: the voltage from which a net is high-voltage, mV.
+    pub voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
+}
+
 /// Row `row` of a CSR column; an empty column (no rows pushed) answers empty.
 fn csr<'a>(start: &[u32], column: &'a [StrId], row: usize) -> &'a [StrId] {
     match (start.get(row), start.get(row + 1)) {
@@ -554,6 +594,62 @@ pub fn check_domain_crossing(
             }
         }
         record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// Runs every [`HvTagTable`] row.
+///
+/// `examined` counts the high-voltage figures. A violation sits at the
+/// centre of the figure's first rectangle, on `L`, measuring the area left
+/// outside `tag` against 0, named by the figure's lowest drawn polygon.
+/// Every row is skipped without usable intent; a row is refused when a layer
+/// will not validate or merge, or `L` holds a shape on no net.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_hv_tag(
+    design: Design<'_>,
+    intent: &IntentMap,
+    voltage: &NetVoltage,
+    table: &HvTagTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if !intent.is_usable() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let mut scratch = crate::drc::Scratch::default();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let layer = table.layer[row];
+        let unnetted = design
+            .store
+            .polys_on_layer(layer)
+            .any(|poly| design.nets.net_of(gpurify_geom::PolyId(poly)) == NetId::NONE);
+        let (outcome, examined) = if unnetted {
+            (Outcome::Refused, 0)
+        } else {
+            let from = table.voltage[row].raw();
+            crate::drc::rules::presence::inside_where(
+                design.store,
+                rule,
+                (layer, table.tag[row]),
+                &mut scratch,
+                out,
+                |owner| {
+                    let net = design.nets.net_of(owner);
+                    voltage.known(net) && voltage.hi[net.idx()] >= from
+                },
+            )
+        };
+        let severity = table.head.severity[row];
+        for at in &mut out.severity[before..] {
+            *at = severity;
+        }
+        record_run(runs, out, before, rule, outcome, examined);
     }
 }
 

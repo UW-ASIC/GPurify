@@ -758,6 +758,16 @@ pub(crate) const KINDS: &[Kind] = &[
         &[opt("shifters", "shifter", Dim::Models)],
     ),
     erc("domain_crossing", &[], false, &[]),
+    // A high-voltage figure of a conductor lies inside its tag (sky130 hv.X.1,
+    // hv.X.4, hvnwell.11); a net holds no tagged and untagged figure at once
+    // (hvnwell.10).
+    erc(
+        "hv_tag",
+        &[0, 1],
+        false,
+        &[p("voltage", "voltage", Dim::Voltage)],
+    ),
+    erc("mixed_tag", &[0, 1], false, &[]),
     // Spacing that grows with the worst-case voltage between two nets
     // (LEF58_VOLTAGESPACING, sky130 hvnwell.8): one layer, or two.
     Kind {

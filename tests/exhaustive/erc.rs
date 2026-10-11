@@ -87,6 +87,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(missing_tie());
     out.extend(expressible());
     out.extend(voltage_spacing());
+    out.extend(hv_tag());
+    out.extend(mixed_tag());
     out
 }
 
@@ -4188,4 +4190,205 @@ fn voltage_spacing() -> Vec<Fixture> {
             .expect(Expect::outcome("vs2", Want::Skipped)),
     );
     out
+}
+
+// ------------------------------------------------------- hv_tag, mixed_tag
+
+/// A transistor whose source and drain diffusions reach met1 through
+/// contacts, its poly through a poly contact; `hvi` tags; `sw` conducts
+/// only while its gate can reach 1 V.
+const TAG_DECK: &str = "grid 1nm
+layer diff = gds(1, 0)
+layer poly = gds(2, 0)
+layer mk = gds(3, 0)
+layer mks = gds(4, 0)
+layer cont = gds(5, 0)
+layer pcont = gds(6, 0)
+layer met1 = gds(7, 0)
+layer m1txt = gds(7, 1)
+layer met2 = gds(8, 0)
+layer v1 = gds(9, 0)
+layer res = gds(10, 0)
+layer hvi = gds(11, 0)
+connect conductors [diff, poly, met1, met2]
+connect touch_within_layer
+connect via cont [diff, met1]
+connect via pcont [poly, met1]
+connect via v1 [met1, met2]
+connect label m1txt names met1
+device mos mk model \"n\" terminals [poly, diff, diff]
+device mos mks model \"sw\" terminals [poly, diff, diff] on_gate_min 1V
+device resistor res model \"r\" terminals [met1, met1]
+rule hvt hv_tag(met1, hvi; voltage: 3V)
+rule mix mixed_tag(met1, hvi)
+";
+
+/// A transistor of marker `marker` at the origin: source diffusion on met1
+/// pad S (0..1000), drain on met1 pad D (1200..2200), the gate's poly out
+/// to a met1 pad G above, each pad 1000 × 500.
+fn tagged_transistor(marker: &str) -> Layout {
+    let mut l = Layout::default();
+    rect(&mut l, "diff", (0, 0, 1000, 1000));
+    rect(&mut l, "diff", (1200, 0, 2200, 1000));
+    rect(&mut l, "poly", (1000, 0, 1200, 2000));
+    rect(&mut l, marker, (1000, 0, 1200, 1000));
+    rect(&mut l, "cont", (400, 400, 600, 600));
+    rect(&mut l, "cont", (1600, 400, 1800, 600));
+    rect(&mut l, "pcont", (1050, 1700, 1150, 1800));
+    rect(&mut l, "met1", (0, 250, 1000, 750));
+    rect(&mut l, "met1", (1200, 250, 2200, 750));
+    rect(&mut l, "met1", (900, 1600, 1300, 2100));
+    l
+}
+
+/// `hv_tag(met1, hvi; voltage: 3V)` (DRC-083). Oracle: the definition by
+/// hand: a met1 figure whose net can reach 3 V or more lies inside `hvi`,
+/// or is reported with the area it leaves outside. A pad on a supply swept
+/// a millivolt either side of 3 V, uncovered and half covered; a pad joined
+/// to the 3.3 V supply through a transistor channel is high-voltage too
+/// (sky130 hv.X.4), unless the transistor is a switch whose gate, tied to
+/// ground, never turns it on (ERC-F1); a 1.8 V pad is never judged; no
+/// intent, Skipped. Every case under every symmetry and offset.
+fn hv_tag() -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let pad = Layout::default()
+        .rect("met1", 0, 0, 1000, 500)
+        .label("m1txt", 100, 250, "HV");
+    for mv in [2999.0, 3000.0, 3001.0] {
+        for (name, hvi, outside) in [
+            ("bare", None, 500_000),
+            ("half", Some((500, -100, 1100, 600)), 250_000),
+            ("covered", Some((-100, -100, 1100, 600)), 0),
+        ] {
+            let mut layout = pad.clone();
+            if let Some(hvi) = hvi {
+                rect(&mut layout, "hvi", hvi);
+            }
+            let findings = if mv >= 3000.0 && outside > 0 {
+                vec![Finding::area(outside)]
+            } else {
+                Vec::new()
+            };
+            let mut f = Fixture::new(
+                &format!("erc/hv_tag/pad/{}/{name}", side(3000.0, mv)),
+                &["DRC-083"],
+                TAG_DECK,
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("hvt", findings));
+            f.intent = Some(intent(&[("hv", mv)], &[("HV", "hv", "power")], &[]));
+            cases.push(f);
+        }
+    }
+    // HV on S, the 1.8 V core supply on G, VSS on nothing: D reaches 3.3 V
+    // through the channel. `hvi` covers S only, so D (500 000 nm²) is
+    // reported; with the switch and G on VSS the channel never conducts.
+    for (name, marker, gate_net, findings) in [
+        ("through_channel", "mk", "VDD", vec![Finding::area(500_000)]),
+        ("switch_on", "mks", "VDD", vec![Finding::area(500_000)]),
+        ("switch_off", "mks", "VSS", Vec::new()),
+    ] {
+        let mut layout = tagged_transistor(marker)
+            .label("m1txt", 100, 500, "HV")
+            .label("m1txt", 1000, 2000, gate_net);
+        rect(&mut layout, "hvi", (-100, 150, 1100, 850));
+        let mut f = Fixture::new(
+            &format!("erc/hv_tag/propagated/{name}"),
+            &["DRC-083"],
+            TAG_DECK,
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule("hvt", findings));
+        f.intent = Some(intent(
+            &[("core", 1800.0), ("hv", 3300.0)],
+            &[
+                ("HV", "hv", "power"),
+                ("VDD", "core", "power"),
+                ("VSS", "core", "ground"),
+            ],
+            &[],
+        ));
+        cases.push(f);
+    }
+    let mut f = Fixture::new("erc/hv_tag/low_voltage", &["DRC-083"], TAG_DECK, ERC)
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .label("m1txt", 100, 250, "VDD"),
+        )
+        .expect(Expect::clean("hvt"));
+    f.intent = Some(intent(
+        &[("core", 1800.0)],
+        &[("VDD", "core", "power")],
+        &[],
+    ));
+    cases.push(f);
+    let mut out = every_placement(&cases);
+    out.push(
+        Fixture::new("erc/hv_tag/no_intent", &["DRC-083"], TAG_DECK, ERC)
+            .layout(pad)
+            .expect(Expect::outcome("hvt", Want::Skipped)),
+    );
+    out
+}
+
+/// `mixed_tag(met1, hvi)` (ERC-F10, sky130 hvnwell.10). Oracle: the
+/// definition by hand: a met1 figure sharing no area with `hvi`, on a net
+/// (nets joined through a resistor counted as one) that holds a figure
+/// sharing area with it, is reported with the count of such figures. Two
+/// pads, one under `hvi`, joined on met2 through vias, joined through a
+/// resistor, or apart; a pad that only abuts `hvi` is untagged; two tagged
+/// pads on one net; no `hvi` at all. Needs no intent. Every case under every
+/// symmetry and offset.
+fn mixed_tag() -> Vec<Fixture> {
+    let pads = |joined: &str| {
+        let mut l = Layout::default()
+            .rect("met1", 0, 0, 1000, 500)
+            .rect("met1", 3000, 0, 4000, 500);
+        match joined {
+            "strapped" => {
+                rect(&mut l, "met2", (0, 0, 4000, 500));
+                rect(&mut l, "v1", (400, 200, 500, 300));
+                rect(&mut l, "v1", (3400, 200, 3500, 300));
+            }
+            "resistor" => {
+                rect(&mut l, "met1", (1000, 0, 1500, 500));
+                rect(&mut l, "res", (1500, 0, 2500, 500));
+                rect(&mut l, "met1", (2500, 0, 3000, 500));
+            }
+            _ => {}
+        }
+        l
+    };
+    let mut cases = Vec::new();
+    for (joined, hvi, findings) in [
+        ("strapped", Some((-100, -100, 1100, 600)), vec![count(1)]),
+        ("resistor", Some((-100, -100, 1100, 600)), vec![count(1)]),
+        ("apart", Some((-100, -100, 1100, 600)), Vec::new()),
+        ("strapped", None, Vec::new()),
+        ("strapped", Some((-1000, -100, 0, 600)), Vec::new()),
+        ("strapped", Some((-100, -100, 4100, 600)), Vec::new()),
+    ] {
+        let mut layout = pads(joined);
+        let tag = match hvi {
+            None => "untagged".to_owned(),
+            Some(hvi) => {
+                rect(&mut layout, "hvi", hvi);
+                format!("{}_{}", hvi.0, hvi.2)
+            }
+        };
+        cases.push(
+            Fixture::new(
+                &format!("erc/mixed_tag/{joined}/{tag}"),
+                &["ERC-F10"],
+                TAG_DECK,
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("mix", findings)),
+        );
+    }
+    every_placement(&cases)
 }

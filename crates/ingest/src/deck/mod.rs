@@ -647,18 +647,20 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
     // Only a conductor's shapes carry a net; any other layer would read as all
     // different nets, or none the same.
-    for rule in doc
-        .rules
-        .iter()
-        .filter(|rule| matches!(rule.kind, "net_spacing" | "voltage_spacing"))
-    {
-        for layer in &rule.layers {
+    for rule in &doc.rules {
+        // Every layer of a spacing by net; the judged layer of a tag rule.
+        let judged: &[String] = match rule.kind {
+            "net_spacing" | "voltage_spacing" => &rule.layers[..],
+            "hv_tag" | "mixed_tag" => &rule.layers[..1],
+            _ => &[],
+        };
+        for layer in judged {
             if !connectivity
                 .conductors
                 .contains(&layer_of(&layers, strings, layer))
             {
                 return Err(DeckError::Malformed(format!(
-                    "rule {}: net spacing on {layer}, which is not a conductor",
+                    "rule {}: judges nets on {layer}, which is not a conductor",
                     rule.id
                 )));
             }

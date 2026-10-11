@@ -157,6 +157,48 @@ pub(crate) fn must_be_inside(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
+    inside_where(store, rule, (inner, outer), s, out, |_| true)
+}
+
+/// Each merged figure of `layer`, by its lowest-numbered drawn polygon, and
+/// whether it shares area with `tag` (an edge or a corner is no share).
+/// `None` when either layer will not validate or merge.
+pub(crate) fn tagged_figures(
+    store: &GeometryStore,
+    layer: LayerId,
+    tag: LayerId,
+    s: &mut Scratch,
+) -> Option<Vec<(PolyId, bool)>> {
+    let (figures, tags) = (merged(store, layer, s)?, merged(store, tag, s)?);
+    let (rects, tag_rects) = (rects_of(&figures), rects_of(&tags));
+    let tagged = SortedRects::new(tag_rects.0.iter().map(|&r| (r, ())).collect());
+    let drawn = s.validated.get(store, layer).expect("merged above");
+    s.rects_a.build(store, layer, drawn);
+    let owners = owners_of(&figures, &s.rects_a);
+    Some(
+        rects
+            .1
+            .windows(2)
+            .zip(owners)
+            .map(|(span, owner)| {
+                let mine = &rects.0[span[0] as usize..span[1] as usize];
+                let shares = mine.iter().any(|&r| tagged.overlapping(r).next().is_some());
+                (owner, shares)
+            })
+            .collect(),
+    )
+}
+
+/// [`must_be_inside`] for the merged `inner` figures `judge` takes, each by
+/// its lowest-numbered drawn polygon; `examined` counts those.
+pub(crate) fn inside_where(
+    store: &GeometryStore,
+    rule: StrId,
+    (inner, outer): (LayerId, LayerId),
+    s: &mut Scratch,
+    out: &mut Violations,
+    judge: impl Fn(PolyId) -> bool,
+) -> Verdict {
     let (Some(inner_figures), Some(outer_figures)) =
         (merged(store, inner, s), merged(store, outer, s))
     else {
@@ -167,7 +209,12 @@ pub(crate) fn must_be_inside(
     let drawn = s.validated.get(store, inner).expect("merged above");
     s.rects_a.build(store, inner, drawn);
     let owners = owners_of(&inner_figures, &s.rects_a);
+    let mut examined = 0u64;
     for (figure, host) in hosts(&inner_rects, &outer_rects).into_iter().enumerate() {
+        if !judge(owners[figure]) {
+            continue;
+        }
+        examined += 1;
         if host.is_some() {
             continue;
         }
@@ -187,5 +234,5 @@ pub(crate) fn must_be_inside(
             shapes: (owners[figure], None),
         });
     }
-    (Outcome::Ran, inner_figures.len() as u64)
+    (Outcome::Ran, examined)
 }

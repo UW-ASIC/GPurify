@@ -1,4 +1,4 @@
-//! The twenty-five tables, the deck parser that fills them, and the dispatcher.
+//! The twenty-seven tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -20,7 +20,7 @@ use gpurify_ingest::{StrId, StrTable};
 ///
 /// Each name is a [`RuleSet`] field of the same name; the crate's
 /// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 25] = [
+pub const KINDS: [&str; 27] = [
     "antenna",
     "antenna_electrical",
     "density_cmp",
@@ -34,9 +34,11 @@ pub const KINDS: [&str; 25] = [
     "floating_well",
     "gate_oxide",
     "hv_domain",
+    "hv_tag",
     "ir_drop",
     "missing_level_shifter",
     "missing_tie",
+    "mixed_tag",
     "multiple_drivers",
     "p2p_resistance",
     "reliability",
@@ -95,6 +97,8 @@ pub struct RuleSet {
     pub tie_high_low: supply::TieHighLowTable,
     /// `esd_topological` rows: [`supply::EsdTopologicalTable`].
     pub esd_topological: supply::EsdTopologicalTable,
+    /// `mixed_tag` rows: [`supply::MixedTagTable`].
+    pub mixed_tag: supply::MixedTagTable,
 
     /// `antenna` rows: [`antenna::AntennaTable`].
     pub antenna: antenna::AntennaTable,
@@ -133,6 +137,8 @@ pub struct RuleSet {
     pub domain_crossing: domain::DomainCrossingTable,
     /// `voltage_spacing` rows: [`domain::VoltageSpacingTable`].
     pub voltage_spacing: domain::VoltageSpacingTable,
+    /// `hv_tag` rows: [`domain::HvTagTable`].
+    pub hv_tag: domain::HvTagTable,
 }
 
 /// Everything one run reads, borrowed.
@@ -648,6 +654,22 @@ impl RuleSet {
                     row.layers(0)?;
                     row.head(&mut set.domain_crossing.head)?;
                 }
+                "hv_tag" => {
+                    let layers = row.layers(2)?;
+                    let voltage = Qty::new(row.positive("voltage")?);
+                    let table = &mut set.hv_tag;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.tag.push(layers[1]);
+                    table.voltage.push(voltage);
+                }
+                "mixed_tag" => {
+                    let layers = row.layers(2)?;
+                    let table = &mut set.mixed_tag;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.tag.push(layers[1]);
+                }
                 "voltage_spacing" => {
                     let count = narrow(row.rules.layers_of(row.spec).len());
                     let layers = row.layers_where(2, (1..=2).contains(&count))?;
@@ -804,6 +826,7 @@ impl RuleSet {
             &self.missing_tie.head,
             &self.tie_high_low.head,
             &self.esd_topological.head,
+            &self.mixed_tag.head,
             &self.antenna.head,
             &self.antenna_electrical.head,
             &self.density_cmp.head,
@@ -820,6 +843,7 @@ impl RuleSet {
             &self.missing_level_shifter.head,
             &self.domain_crossing.head,
             &self.voltage_spacing.head,
+            &self.hv_tag.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -876,6 +900,7 @@ impl RuleSet {
         supply::check_missing_tie(design, &self.missing_tie, scratch, out, runs);
         supply::check_tie_high_low(design, facts, intent, &self.tie_high_low, out, runs);
         supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
+        supply::check_mixed_tag(design, &self.mixed_tag, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);
         antenna::check_antenna_electrical(design, &self.antenna_electrical, scratch, out, runs);
@@ -932,5 +957,6 @@ impl RuleSet {
         );
         domain::check_domain_crossing(design, intent, voltage, &self.domain_crossing, out, runs);
         domain::check_voltage_spacing(design, intent, voltage, &self.voltage_spacing, out, runs);
+        domain::check_hv_tag(design, intent, voltage, &self.hv_tag, out, runs);
     }
 }

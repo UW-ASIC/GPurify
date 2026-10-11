@@ -96,9 +96,10 @@ pub struct ReliabilityTable {
 ///
 /// # Limits
 ///
-/// The span across a device is checked. A net shorted to a high-voltage net is
-/// not tagged high-voltage (DRC-083), and the tag consistency of low- and
-/// high-voltage wells on one net is not checked (ERC-F10). A transistor
+/// The span across a device is checked. Layout shorted to a high-voltage net
+/// and left untagged is [`HvTagTable`](crate::erc::rules::domain::HvTagTable)'s
+/// (DRC-083), and low- and high-voltage wells on one net are
+/// [`MixedTagTable`](crate::erc::rules::supply::MixedTagTable)'s (ERC-F10). A transistor
 /// whose deck row states no gate condition passes voltage whatever its gate,
 /// so the span can over-report (ERC-F1).
 ///
