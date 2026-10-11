@@ -105,7 +105,11 @@ layer met5_pin = gds(72, 16)
 layer nwell_label = gds(64, 5)
 layer nwell_pin = gds(64, 16)
 layer pwell_label = gds(64, 59)
-layer pwell_pin = gds(122, 16)
+# The pwell pin purpose [S2] makes no mask, so x.1b's grid does not bind it:
+# sky130_fd_sc_hd draws its pwell pins off the 5 nm grid (y = -0.067 um),
+# and the foundry's sky130A_mr.drc (release 2025.11.17_01.10, ledger
+# docs/xcheck/sky130.tsv) checks no grid on it. No rule reads it.
+ignore gds(122, 16)
 layer pwell_drawing = gds(64, 44)
 # The cell outline, which a macro's area is read from.
 layer prBoundary = gds(235, 4)
