@@ -5,7 +5,7 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::controls::{bound, drop_ignored_params, fix_channels, unfix_roles};
+use crate::lvs::controls::{assign_roles, bound, drop_ignored_params, report_roles};
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
@@ -156,6 +156,14 @@ pub fn compare_logged(
 ///   never merge in series (`KLayout` merges no transistor in series, and
 ///   Netgen 1.5.323 none at all), so a stack of them does not match one
 ///   long card: a false mismatch, never a false match.
+/// - **`lvs permute`** (catalog LVS-030): the two pins of every device of
+///   the model are interchangeable, joined with its default classes (a
+///   transistor's source and drain, unless asymmetric, and a resistor's
+///   ends) as Netgen's `permute` and `KLayout`'s `equivalent_pins` declare
+///   them. The pins of one class compare under one role, in refinement, the
+///   terminal comparison and a parallel merge; a class other than a
+///   transistor's channel is no channel, so no series merge takes it, and a
+///   terminal mismatch on it is reported under its lowest pin's role.
 ///
 /// # Panics
 ///
@@ -173,8 +181,8 @@ pub fn compare_with(
     keep_declared_params(reference, &mut measured);
     drop_ignored_params(&mut measured, controls);
     drop_ignored_params(&mut declared, controls);
-    fix_channels(&mut measured, controls);
-    fix_channels(&mut declared, controls);
+    assign_roles(&mut measured, controls);
+    assign_roles(&mut declared, controls);
     let (mut layout, layout_merges) = reduce_with(&measured, options.params);
     let (mut reference, reference_merges) = reduce_with(&declared, options.params);
     if let Some(multiplier) = options.params.multiplier {
@@ -198,7 +206,7 @@ pub fn compare_with(
     }
     let mut verdict = interpret((&layout, &reference), &partition, (options, controls));
     if let Verdict::Mismatch(found) = &mut verdict {
-        unfix_roles(found, &reference, controls);
+        report_roles(found, &reference, controls);
     }
     (verdict, merges)
 }

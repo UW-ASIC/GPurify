@@ -54,8 +54,8 @@
 //! elements"). They are counted, and `GPurify` must call each a mismatch.
 
 use super::{
-    circuits, compared, compared_under, enumerated, polar, spice, Circuit, Controls, Dev, Model,
-    TOLERANCE,
+    circuits, compared, compared_under, enumerated, pin_names, polar, spice, Circuit, Controls,
+    Dev, Model, TOLERANCE,
 };
 use crate::harness::{self, Expect, Fixture};
 use gpurify::check::lvs::Verdict;
@@ -421,10 +421,19 @@ fn netgen_setup(setup: &str, controls: &Controls) -> String {
 /// the model: a relative `lvs tolerance` is `property ... tolerance`, given
 /// as `2t/(2 - t)` since Netgen measures against the mean (as [`SETUP`]
 /// does for the default), and `lvs ignore_parameter` is `property ...
-/// remove`. An absolute part has no Netgen counterpart for a real-valued
-/// property, so no case states one.
+/// remove`, and `lvs permute` is `permute` with Netgen's pin names, which
+/// are the deck's. An absolute part has no Netgen counterpart for a
+/// real-valued property, so no case states one.
 fn netgen_controls(controls: &Controls) -> String {
     let mut out = String::new();
+    for &(model, a, b) in &controls.permuted {
+        let names = pin_names(model);
+        let model = model.name();
+        out.push_str(&on_each_side(
+            model,
+            &format!("permute \"$side {model}\" {} {}", names[a], names[b]),
+        ));
+    }
     for &(model, param) in &controls.ignored {
         let model = model.name();
         out.push_str(&on_each_side(
@@ -449,6 +458,7 @@ fn netgen_controls(controls: &Controls) -> String {
 fn controlled() -> Vec<Case> {
     use Model::{N, P};
     let mut out = asymmetric();
+    out.extend(permuted());
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
     // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
@@ -504,6 +514,55 @@ fn asymmetric() -> Vec<Case> {
                 &format!("asymmetric/{name}/{label}"),
                 &["LVS-031"],
                 (layout, reference),
+                &controls,
+            ));
+        }
+    }
+    out
+}
+
+/// LVS-030: pins the deck permutes, against Netgen's `permute`. A capacitor
+/// or diode reversed, a bipolar with emitter and collector exchanged (its
+/// base on n1, its emitter on n0, which the `nmos` gate fixes), and two
+/// capacitors in opposite directions against one of `m = 2`, each with and
+/// without the permutation.
+fn permuted() -> Vec<Case> {
+    use Model::{C, D, Q};
+    let mut opposed = polar(Dev::pins(C, &[0, 1]));
+    opposed.devs.push(Dev::pins(C, &[1, 0]));
+    let pairs = [
+        (
+            "C_reversed",
+            polar(Dev::pins(C, &[0, 1])),
+            polar(Dev::pins(C, &[1, 0])),
+            Controls::default().permute(C, 0, 1),
+        ),
+        (
+            "D_reversed",
+            polar(Dev::pins(D, &[0, 1])),
+            polar(Dev::pins(D, &[1, 0])),
+            Controls::default().permute(D, 0, 1),
+        ),
+        (
+            "Q_emitter_collector_swapped",
+            polar(Dev::pins(Q, &[1, 0, 2])),
+            polar(Dev::pins(Q, &[1, 2, 0])),
+            Controls::default().permute(Q, 1, 2),
+        ),
+        (
+            "C_opposed_vs_m2",
+            opposed,
+            polar(Dev::pins(C, &[0, 1]).times(2)),
+            Controls::default().permute(C, 0, 1),
+        ),
+    ];
+    let mut out = Vec::new();
+    for (name, layout, reference, controls) in pairs {
+        for (label, controls) in [("permuted", controls), ("default", Controls::default())] {
+            out.push(controlled_case(
+                &format!("permute/{name}/{label}"),
+                &["LVS-030"],
+                (&layout, &reference),
                 &controls,
             ));
         }

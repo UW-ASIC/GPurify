@@ -221,3 +221,100 @@ fn an_asymmetric_transistor_keeps_its_source_and_drain_apart() {
     assert_ne!(run(&pair((2, 1)), &asymmetric(NCH)), Verdict::Match);
     assert_eq!(run(&pair((1, 2)), &asymmetric(NCH)), Verdict::Match);
 }
+
+/// A capacitor model and a multiplier name of this file's own.
+const CAP: StrId = StrId(40);
+const MULT: StrId = StrId(41);
+
+/// A device of `kind` and `model` with these `(role, net)` terminals, beside
+/// an `NCH` gated by net 0 whose other terminals sit on net 3: the gate
+/// tells net 0 from net 1.
+fn anchored(
+    kind: DeviceKind,
+    model: StrId,
+    terminals: &[(gpurify_check::topology::TerminalRole, u32)],
+) -> Graph {
+    let mut builder = GraphBuilder::new(4);
+    builder.device(kind, model, terminals);
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 3), (Drain, 3), (Bulk, 3)],
+    );
+    builder.finish()
+}
+
+fn permute(model: StrId, a: u8, b: u8) -> LvsControls {
+    LvsControls {
+        permute: vec![(model, a, b)],
+        ..LvsControls::default()
+    }
+}
+
+/// Oracle: the definition (Netgen's `permute`, `KLayout`'s
+/// `equivalent_pins`). A capacitor written with its plates reversed, and a
+/// bipolar with its emitter and collector exchanged, are other circuits by
+/// default (testing-plan F15) and the same once the deck permutes those
+/// pins; a permutation on another model changes nothing. Two capacitors on
+/// the same nets in opposite directions merge into one of `m = 2` only when
+/// their plates permute. Breaks if a permutation is ignored, leaks to
+/// another model, or does not reach the parallel merge.
+#[test]
+fn permuted_pins_are_interchangeable() {
+    use gpurify_check::topology::TerminalRole::{Base, Collector, Emitter, Pin};
+    let none = LvsControls::default();
+    let cap = |a, b| anchored(DeviceKind::Capacitor, CAP, &[(Pin(0), a), (Pin(1), b)]);
+    let (drawn, reversed) = (cap(0, 1), cap(1, 0));
+    assert_ne!(verdict(&drawn, &reversed, &none), Verdict::Match);
+    assert_eq!(
+        verdict(&drawn, &reversed, &permute(CAP, 0, 1)),
+        Verdict::Match
+    );
+    assert_ne!(
+        verdict(&drawn, &reversed, &permute(PCH, 0, 1)),
+        Verdict::Match
+    );
+
+    let bjt = |emitter, collector| {
+        anchored(
+            DeviceKind::Bjt,
+            common::NPN,
+            &[(Base, 2), (Emitter, emitter), (Collector, collector)],
+        )
+    };
+    let (drawn, flipped) = (bjt(0, 1), bjt(1, 0));
+    assert_ne!(verdict(&drawn, &flipped, &none), Verdict::Match);
+    assert_eq!(
+        verdict(&drawn, &flipped, &permute(common::NPN, 1, 2)),
+        Verdict::Match
+    );
+    assert_ne!(
+        verdict(&drawn, &flipped, &permute(common::NPN, 0, 1)),
+        Verdict::Match,
+        "base with emitter is not emitter with collector"
+    );
+
+    let options = CompareOptions {
+        params: ParamNames {
+            multiplier: Some(MULT),
+            ..ParamNames::default()
+        },
+        ..CompareOptions::default()
+    };
+    let mut opposed = GraphBuilder::new(2);
+    for (a, b) in [(0, 1), (1, 0)] {
+        opposed.device(DeviceKind::Capacitor, CAP, &[(Pin(0), a), (Pin(1), b)]);
+    }
+    let opposed = opposed.finish();
+    let mut counted = GraphBuilder::new(2);
+    counted.device_with_params(
+        DeviceKind::Capacitor,
+        CAP,
+        &[(Pin(0), 0), (Pin(1), 1)],
+        &[(MULT, 2.0)],
+    );
+    let counted = counted.finish();
+    let run = |controls: &LvsControls| compare_with(&opposed, &counted, options, controls).0;
+    assert_ne!(run(&none), Verdict::Match);
+    assert_eq!(run(&permute(CAP, 0, 1)), Verdict::Match);
+}

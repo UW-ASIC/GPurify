@@ -106,7 +106,9 @@ pub enum Discrepancy {
     /// net its partner's terminal of the same role lands on.
     ///
     /// Terminals are matched by role, never by position, and interchangeable
-    /// roles count as one: MOS `Source` and `Drain`, and a resistor's ends. A
+    /// roles count as one: MOS `Source` and `Drain`, a resistor's ends, and
+    /// pins the deck's `lvs permute` joins, whose row names the class's first
+    /// pin; an `lvs asymmetric` transistor's source and drain are two. A
     /// terminal on no net, or on a net that did not pair, never matches. One
     /// moved terminal usually gives a row from each side.
     ///

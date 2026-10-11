@@ -628,6 +628,27 @@ pub struct LvsControls {
     /// `lvs asymmetric "model"`: MOS models whose source and drain are not
     /// interchangeable, `KLayout`'s DMOS (catalog LVS-031), each once.
     pub asymmetric: Vec<StrId>,
+    /// `lvs permute "model" pin pin`: `(model, pin, pin)`, two pins of the
+    /// model's devices that are interchangeable (catalog LVS-030), each a
+    /// position in its `device` statement's terminal order (see
+    /// [`DeviceRecognition`]), the two distinct.
+    pub permute: Vec<(StrId, u8, u8)>,
+}
+
+/// The names `lvs permute` gives the pins of a device of `kind`, in its
+/// `device` statement's terminal order: Netgen's pin names for the SPICE
+/// primitives, `end_a` and `end_b`, `top` and `bottom`, `anode` and
+/// `cathode`, and a transistor's `gate`, `source`, `drain` and `bulk` and a
+/// bipolar's `base`, `emitter` and `collector`.
+#[must_use]
+pub const fn pin_names(kind: DeviceKind) -> &'static [&'static str] {
+    match kind {
+        DeviceKind::Mos => &["gate", "source", "drain", "bulk"],
+        DeviceKind::Bjt => &["base", "emitter", "collector"],
+        DeviceKind::Resistor => &["end_a", "end_b"],
+        DeviceKind::Capacitor => &["top", "bottom"],
+        DeviceKind::Diode => &["anode", "cathode"],
+    }
 }
 
 /// One `lvs tolerance` statement: how far apart one parameter of one model
@@ -700,6 +721,40 @@ fn build_lvs(
         }
     };
     let mut lvs = LvsControls::default();
+    for (model, a, b) in &declared.permute {
+        known(model, "permute")?;
+        let kind = devices
+            .iter()
+            .find(|device| device.model == *model)
+            .map_or(DeviceKind::Mos, |device| device.kind);
+        let names = pin_names(kind);
+        let position = |pin: &str| {
+            names
+                .iter()
+                .position(|&name| name == pin)
+                .and_then(|at| u8::try_from(at).ok())
+                .ok_or_else(|| {
+                    DeckError::Malformed(format!(
+                        "lvs permute: \"{model}\" has no pin `{pin}`; its pins are {}",
+                        names.join(", ")
+                    ))
+                })
+        };
+        let (a, b) = (position(a)?, position(b)?);
+        if a == b {
+            return Err(DeckError::Malformed(format!(
+                "lvs permute: \"{model}\" permutes `{}` with itself",
+                names[usize::from(a)]
+            )));
+        }
+        let channel = kind == DeviceKind::Mos && a.min(b) == 1 && a.max(b) == 2;
+        if channel && declared.asymmetric.contains(model) {
+            return Err(DeckError::Malformed(format!(
+                "lvs permute: \"{model}\" is asymmetric, so its source and drain do not permute"
+            )));
+        }
+        lvs.permute.push((strings.intern(model), a, b));
+    }
     for model in &declared.asymmetric {
         known(model, "asymmetric")?;
         if devices
@@ -747,6 +802,8 @@ pub struct LvsSrc {
     /// `(model, parameter)`, the parameter lowercase.
     ignore_parameter: Vec<(String, String)>,
     asymmetric: Vec<String>,
+    /// `(model, pin, pin)`, the pins as written.
+    permute: Vec<(String, String, String)>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

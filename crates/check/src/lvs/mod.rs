@@ -58,8 +58,8 @@
 //! | A diode's anode and cathode, a capacitor's plates | nothing: a reversed diode is another circuit, and Netgen does not permute capacitor plates either |
 //! | `Gate`, `Bulk`, `Base`, `Emitter`, `Collector` | nothing |
 //!
-//! That is catalog LVS-030; the deck's `lvs asymmetric` changes it per model
-//! (below). Pins a user declares equivalent are not supported.
+//! That is catalog LVS-030; the deck's `lvs asymmetric` and `lvs permute`
+//! change it per model (below).
 //!
 //! Net names do not take part: they neither seed refinement nor are compared,
 //! so a misnamed or reordered port passes (catalog LVS-016, LVS-032).
@@ -83,6 +83,11 @@
 //!   interchangeable (catalog LVS-031; `KLayout`'s DMOS device classes, and
 //!   a Netgen setup with no `permute` of the model's source and drain);
 //!   such transistors merge in parallel source on source, never in series.
+//! - `lvs permute "model" pin pin`: the two pins are interchangeable, joined
+//!   with the model's default classes (catalog LVS-030; Netgen's `permute`,
+//!   `KLayout`'s `equivalent_pins`); a class other than a transistor's
+//!   channel is no channel, so it merges in parallel either way round and
+//!   never in series.
 //!
 //! # Against Netgen
 //!
