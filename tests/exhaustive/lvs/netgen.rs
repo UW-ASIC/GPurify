@@ -422,10 +422,18 @@ fn netgen_setup(setup: &str, controls: &Controls) -> String {
 /// as `2t/(2 - t)` since Netgen measures against the mean (as [`SETUP`]
 /// does for the default), and `lvs ignore_parameter` is `property ...
 /// remove`, `lvs permute` is `permute` with Netgen's pin names, which are
-/// the deck's, and `lvs ignore` is `ignore class`. An absolute part has no
-/// Netgen counterpart for a real-valued property, so no case states one.
+/// the deck's, `lvs ignore` is `ignore class` and `lvs ignore_shorted` is
+/// `ignore shorted`. An absolute part has no Netgen counterpart for a
+/// real-valued property, so no case states one.
 fn netgen_controls(controls: &Controls) -> String {
     let mut out = String::new();
+    for &model in &controls.dummies_out {
+        let model = model.name();
+        out.push_str(&on_each_side(
+            model,
+            &format!("ignore shorted \"$side {model}\""),
+        ));
+    }
     for &model in &controls.left_out {
         let model = model.name();
         out.push_str(&on_each_side(
@@ -467,6 +475,7 @@ fn controlled() -> Vec<Case> {
     let mut out = asymmetric();
     out.extend(permuted());
     out.extend(ignored());
+    out.extend(dummies());
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
     // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
@@ -603,6 +612,33 @@ fn ignored() -> Vec<Case> {
             out.push(controlled_case(
                 &format!("ignore/{name}/{label}"),
                 &["LVS-034"],
+                (layout, reference),
+                &controls,
+            ));
+        }
+    }
+    out
+}
+
+/// LVS-035: an `nmosb` dummy with all four pins on n3, drawn and not
+/// written and the other way round, against Netgen's `ignore shorted`, with
+/// and without the control. The four-terminal model, because Netgen reads a
+/// three-terminal one's bulk on the extra port ([`for_netgen`]), where no
+/// dummy is shorted.
+fn dummies() -> Vec<Case> {
+    use Model::B;
+    let real = Circuit::new(4, vec![Dev::mos(B, 0, 1, 2).bulk(3)]);
+    let mut dummy = real.clone();
+    dummy.devs.push(Dev::mos(B, 3, 3, 3).bulk(3));
+    let mut out = Vec::new();
+    for (name, layout, reference) in [("drawn", &dummy, &real), ("written", &real, &dummy)] {
+        for (label, controls) in [
+            ("ignored", Controls::default().leave_out_dummies(B)),
+            ("default", Controls::default()),
+        ] {
+            out.push(controlled_case(
+                &format!("ignore_shorted/{name}/{label}"),
+                &["LVS-035"],
                 (layout, reference),
                 &controls,
             ));

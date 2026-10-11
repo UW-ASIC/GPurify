@@ -92,6 +92,9 @@
 //!   before reduction (catalog LVS-034; Netgen's `ignore class`, `KLayout`'s
 //!   `same_device_classes` with `nil`), and a net only they reached is no
 //!   node unless it is a port.
+//! - `lvs ignore_shorted "model"`: the same for each device of the model
+//!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
+//!   `ignore shorted`).
 //!
 //! # Against Netgen
 //!
