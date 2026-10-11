@@ -328,7 +328,6 @@ says which foundry manual, standard or tool defines each one.
 | ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
 | ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
-| ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
 | ERC-F4 | HCI susceptibility flag | missing | — |
 | ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |
 | ERC-F8 | Power-state-dependent undriven gates | missing | — |
@@ -341,7 +340,6 @@ says which foundry manual, standard or tool defines each one.
 | ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
 | ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | missing | — |
-| ERC-H4 | Fanout limits | missing | — |
 
 ### Parasitic extraction (PEX)
 

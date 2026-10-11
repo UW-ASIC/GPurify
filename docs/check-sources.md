@@ -291,7 +291,9 @@ single oracle is a named gap that ledger P1 closes.
 | Id | Check | Status | Defined by (public) | Evidence |
 |---|---|---|---|---|
 | DRC-037 | Bent / 45-degree features | partial | IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a | FR; MR; SY |
-| DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | SKY:hv.X.1-hv.X.6 | FR; SY; MR |
+| DRC-081 | Net spacing between two layers / on wells | partial | SKY:nwell.7,hvnwell.8,hv.nwell.1,vhvi.8; IHP:NW.b1,NBL.c | SY; MR |
+| DRC-082 | Voltage-dependent spacing (VA-DRC) | implemented | SKY:hvnwell.8,hv.*; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP | SY; MR |
+| DRC-083 | HV tag propagation (shorted to HV becomes HV) | implemented | SKY:hv.X.1-hv.X.6 | FR; SY; MR |
 | DRC-084 | Floating interconnect / must-join ports | partial | SKY:x.22; LEF58_MUSTJOINALLPORTS | SY; MR |
 | DRC-085 | Tap presence per well | implemented | SKY:nwell.4; GF:DN.3; IHP:nmosi.d | FR; SY; MR |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | SKY:flags,areaid.*,m1.4a,licon.11c; IHP:6.12 IND,8 DigiBnd | FR; MR; SY |
@@ -325,7 +327,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
 | ERC-E6 | Blech short-length immortality | implemented | Blech1976 | CF; MR; SY |
 | ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6 | FR; MR; SY |
-| ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY |
+| ERC-F1 | Static voltage propagation, conditional on gate voltage | implemented | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY; NV |
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |
 | ERC-F5 | TDDB/BTI/HCI lifetime | implemented | JEP122; JESD263; JESD241; JESD28; JESD60 | CF; MR; SY |
