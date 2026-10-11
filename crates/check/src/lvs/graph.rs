@@ -135,10 +135,18 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
 /// kind and model the reference declares it for, and compares it only on a
 /// device whose own reference card states it.
 ///
+/// Two values follow from the measures and the device's [`DeviceValue`],
+/// under the same rule: a resistor's `r` in ohms, `sheet * l / w`, and a
+/// capacitor's `c` in farads, `area_cap * area + fringe_cap * perim` over
+/// the coefficients its recogniser states. One its recogniser does not state
+/// is not computed, so a card stating it is `lvs.undeclared_param`.
+///
 /// # Limits
 ///
-/// Extraction measures MOS `w` and `l` and every device's marker `area`, and
-/// nothing else (testing-plan F16).
+/// No BJT emitter area, MOS `as`/`ad`/`ps`/`pd` or capacitor `w`/`l` is
+/// measured (testing-plan F16).
+///
+/// [`DeviceValue`]: gpurify_ingest::deck::DeviceValue
 ///
 /// # Panics
 ///
@@ -184,17 +192,46 @@ pub fn from_layout(
         reason = "measured extents are bounded by the coordinate domain"
     )]
     for device in 0..devices.len() {
+        // `w`, `l`, `area`, `perim` in metres, whether or not their names are
+        // interned: `r` and `c` follow from them.
+        let (mut w, mut l, mut area, mut perim) = (None, None, None, None);
         for &(param, measure) in devices.params_of(crate::topology::DeviceId(narrow(device))) {
-            let Some(name) = strings.get(spice_param_name(param)) else {
-                continue;
-            };
             let value = match (measure, metre_per_dbu) {
                 (DeviceMeasure::Count(count), _) => f64::from(count),
                 (DeviceMeasure::Length(length), Some(scale)) => length.raw() as f64 * scale,
                 (DeviceMeasure::Area(area), Some(scale)) => area.raw() as f64 * scale * scale,
                 (_, None) => continue,
             };
-            graph.param.push((name, value));
+            match param {
+                DeviceParam::Width => w = Some(value),
+                DeviceParam::Length => l = Some(value),
+                DeviceParam::Area => area = Some(value),
+                DeviceParam::Perimeter => perim = Some(value),
+                DeviceParam::Fingers => {}
+            }
+            if let Some(name) = strings.get(spice_param_name(param)) {
+                graph.param.push((name, value));
+            }
+        }
+        let law = devices.value.get(device).copied().unwrap_or_default();
+        // Ω/□ times squares.
+        let r = law
+            .sheet_ohm_sq
+            .zip(l.zip(w))
+            .map(|(sheet, (l, w))| sheet * l / w);
+        // aF/µm² is 1e-6 F/m², aF/µm is 1e-12 F/m.
+        let terms = [
+            law.area_cap_af_um2.zip(area).map(|(k, a)| k * 1e-6 * a),
+            law.fringe_cap_af_um.zip(perim).map(|(k, p)| k * 1e-12 * p),
+        ];
+        let c = terms
+            .iter()
+            .any(Option::is_some)
+            .then(|| terms.iter().flatten().sum());
+        for (name, value) in [("r", r), ("c", c)] {
+            if let (Some(name), Some(value)) = (strings.get(name), value) {
+                graph.param.push((name, value));
+            }
         }
         graph.device_param_start.push(narrow(graph.param.len()));
     }

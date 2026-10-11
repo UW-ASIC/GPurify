@@ -492,6 +492,27 @@ pub struct DeviceRecognition {
     pub terminal: Vec<LayerId>,
     /// Interned model name, for netlist comparison.
     pub model: Vec<StrId>,
+    /// What each recogniser states for its kind's value law, one row per
+    /// recogniser as the deck fills it. A table built by hand may leave it
+    /// short, and a recogniser past its end states nothing.
+    pub value: Vec<DeviceValue>,
+}
+
+/// The coefficients a `device` statement may give, from which LVS computes a
+/// resistor's `r` and a capacitor's `c` from what is drawn. One left out is
+/// `None`, and the value it would give is then not computed: never taken as
+/// zero, so a reference that states it gets `lvs.undeclared_param`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DeviceValue {
+    /// `sheet`: a resistor body's resistance per square, in ohms. `r` is
+    /// `sheet * l / w`.
+    pub sheet_ohm_sq: Option<f64>,
+    /// `area_cap`: a capacitor's capacitance per area of its marker, aF/µm².
+    pub area_cap_af_um2: Option<f64>,
+    /// `fringe_cap`: a capacitor's capacitance per length of its marker's
+    /// perimeter, aF/µm. `c` is `area_cap * area + fringe_cap * perim`, of
+    /// the terms the statement gives.
+    pub fringe_cap_af_um: Option<f64>,
 }
 
 /// The device families this tool recognises, in the deck as `mos`, `bjt`,
@@ -725,6 +746,7 @@ fn build_devices(
             devices.terminal.push(layer_of(layers, strings, name));
         }
         devices.terminal_start.push(narrow(devices.terminal.len()));
+        devices.value.push(device.value);
     }
     devices
 }
@@ -819,6 +841,7 @@ struct DeviceSrc {
     marker: String,
     model: String,
     terminals: Vec<String>,
+    value: DeviceValue,
 }
 
 /// `layer <name> = a op b op ..`, one operator folded left.

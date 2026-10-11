@@ -88,6 +88,21 @@ The parameter names are `w`, `l`, `nf` and `m`. The report lists every merge
 under `lvs merges:` with the device rows it joined, so a paired device can be
 traced back to what was drawn.
 
+## LVS parameters
+
+The layout's devices are sized from what is drawn: transistor and resistor
+`w` and `l`, a transistor's `nf` (one per drawn channel), every device's
+`area` and `perim`, and a resistor's `r` and a capacitor's `c` where the deck
+gives their coefficients (see [deck.md](deck.md#devices)). Each parameter a
+schematic card states is compared on that device, within 2 %. A card that
+leaves a parameter out says nothing about it, whatever other cards of the
+same model state, and a parameter the layout does not measure is reported
+(`lvs.undeclared_param`) rather than passed.
+
+An `R` or `C` card may give its value positionally, between its nets and
+its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`. A card with a value and
+no model is refused, since devices are paired by model.
+
 ## Exit code
 
 `0` only when every selected check ran, no rule was skipped or refused, and

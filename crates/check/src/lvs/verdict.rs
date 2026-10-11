@@ -138,9 +138,9 @@ pub enum Discrepancy {
     /// # Limits
     ///
     /// One relative tolerance covers every parameter, with no absolute or
-    /// per-parameter tolerance. The layout measures only MOS `w` and `l` and
-    /// each device's marker `area` (testing-plan F16), so a resistor's `r` or
-    /// a capacitor's `c` is never compared.
+    /// per-parameter tolerance. A resistor's `r` and a capacitor's `c` are
+    /// compared only where the deck gives their coefficients
+    /// ([`from_layout`](crate::lvs::graph::from_layout)).
     ParameterMismatch {
         /// The device's row in the reduced layout graph.
         layout_device: u32,
@@ -157,8 +157,9 @@ pub enum Discrepancy {
     /// does not measure. A value stated on one side is never taken as
     /// agreement with silence on the other.
     ///
-    /// Every reference parameter the layout does not measure (`nf`, `as`,
-    /// `ad`, `ps`, `pd`, a resistor's `r`, a capacitor's `c`) lands here
+    /// Every reference parameter the layout does not measure (`as`, `ad`,
+    /// `ps`, `pd`, a bipolar's emitter area, a resistor's `r` or a
+    /// capacitor's `c` the deck gives no coefficients for) lands here
     /// (testing-plan F16). Presence is per
     /// device: a layout measure the partner's card omits is not compared,
     /// even when another card of the same model states it (testing-plan

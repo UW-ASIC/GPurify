@@ -4,8 +4,8 @@
 use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
-    build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, LabelSrc,
-    ParamSrc, ParamValue, RuleSrc, StackSrc, ViaSrc,
+    build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, DeviceValue,
+    LabelSrc, ParamSrc, ParamValue, RuleSrc, StackSrc, ViaSrc,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -1000,11 +1000,55 @@ impl<'a> Parser<'a> {
         let model = self.string(t)?;
         self.expect("terminals")?;
         let terminals = self.layer_list()?;
+        let mut value = DeviceValue::default();
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("a device value")?;
+            let (slot, dim, owner) = match key.as_str() {
+                "sheet" => (
+                    &mut value.sheet_ohm_sq,
+                    Dim::Resistance,
+                    DeviceKind::Resistor,
+                ),
+                "area_cap" => (
+                    &mut value.area_cap_af_um2,
+                    Dim::CapPerArea,
+                    DeviceKind::Capacitor,
+                ),
+                "fringe_cap" => (
+                    &mut value.fringe_cap_af_um,
+                    Dim::CapPerLength,
+                    DeviceKind::Capacitor,
+                ),
+                _ => {
+                    return Err(self.err(
+                        span,
+                        &format!(
+                            "unknown device value `{key}`; expected sheet (a resistor), \
+                             area_cap or fringe_cap (a capacitor)"
+                        ),
+                    ))
+                }
+            };
+            if owner != kind {
+                let word = |of| DEVICES.iter().find(|&&(_, k)| k == of).map_or("", |d| d.0);
+                let (owner, kind) = (word(owner), word(kind));
+                return Err(self.err(
+                    span,
+                    &format!("`{key}` is a {owner}'s value, not a {kind}'s"),
+                ));
+            }
+            let stated = self.value()?;
+            let number = self.quantity(&stated, dim, &key)?.f64();
+            if slot.replace(number).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
         self.out.devices.push(DeviceSrc {
             kind,
             marker,
             model,
             terminals,
+            value,
         });
         Ok(())
     }

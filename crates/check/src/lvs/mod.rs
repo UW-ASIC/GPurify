@@ -77,8 +77,12 @@
 //!   first ([`Netlist::flatten_top`](gpurify_ingest::netlist::Netlist::flatten_top)):
 //!   a block placed by instance is compared device by device, never cell by
 //!   cell (catalog LVS-010, LVS-017).
-//! - **F16, weak parameters.** The layout measures only MOS `w` and `l` and
-//!   each device's marker `area`, so passives are not sized.
+//! - **F16, parameters the deck cannot define.** The layout measures MOS and
+//!   resistor `w` and `l`, MOS `nf`, every marker's `area` and `perim`, and
+//!   a resistor's `r` and a capacitor's `c` where the deck gives their
+//!   coefficients. A bipolar's emitter area, a capacitor's `w` and `l` and a
+//!   MOS's `as`, `ad`, `ps` and `pd` are not measured, so a card stating one
+//!   is `lvs.undeclared_param`.
 //! - **Bounded symmetry search.** A tie-break takes back only a pairing whose
 //!   own refinement shows it wrong, and tries at most eight candidates; a
 //!   wrong pairing exposed only after a later tie-break, or a right one past

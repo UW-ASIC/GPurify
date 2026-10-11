@@ -353,6 +353,7 @@ fn recognition_of(
         terminal_start: Vec::with_capacity(spec.devices.len() + 1),
         terminal: Vec::new(),
         model: Vec::with_capacity(spec.devices.len()),
+        value: Vec::new(),
     };
     recognition.terminal_start.push(0);
     for device in &spec.devices {

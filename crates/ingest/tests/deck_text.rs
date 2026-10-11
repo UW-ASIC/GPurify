@@ -345,6 +345,67 @@ pex met1 thickness 360nm height 1.376um sheet 0.125ohm dielectric 3.9 area_cap 2
     );
 }
 
+/// A resistor's `sheet` and a capacitor's `area_cap` and `fringe_cap` are
+/// optional, in the units of a `pex` row, and lower to one `DeviceValue` per
+/// recogniser; one left out is `None`, never zero. Each belongs to one kind,
+/// and is given once.
+#[test]
+fn device_values_lower_per_recogniser_and_belong_to_their_kind() {
+    use gpurify_ingest::deck::DeviceValue;
+    let (deck, _) = ok(
+        "device resistor poly model \"rpoly\" terminals [li, li] sheet 0.3kohm
+device capacitor met2 model \"cmim\" terminals [met2, met1] area_cap 2fF/um2 fringe_cap 190aF/um
+device capacitor met3 model \"cvar\" terminals [met3, met2] area_cap 1fF/um2
+device mos diff model \"nfet\" terminals [poly, diff, diff]
+",
+    );
+    assert_eq!(
+        deck.devices.value,
+        [
+            DeviceValue {
+                sheet_ohm_sq: Some(300.0),
+                ..DeviceValue::default()
+            },
+            DeviceValue {
+                area_cap_af_um2: Some(2000.0),
+                fringe_cap_af_um: Some(190.0),
+                ..DeviceValue::default()
+            },
+            DeviceValue {
+                area_cap_af_um2: Some(1000.0),
+                ..DeviceValue::default()
+            },
+            DeviceValue::default(),
+        ]
+    );
+
+    let wrong = [
+        (
+            "device capacitor met2 model \"c\" terminals [met2, met1] sheet 1ohm\n",
+            "`sheet` is a resistor's value, not a capacitor's",
+        ),
+        (
+            "device resistor poly model \"r\" terminals [li, li] area_cap 1fF/um2\n",
+            "`area_cap` is a capacitor's value, not a resistor's",
+        ),
+        (
+            "device resistor poly model \"r\" terminals [li, li] sheet 1ohm sheet 2ohm\n",
+            "`sheet` is given twice",
+        ),
+        (
+            "device resistor poly model \"r\" terminals [li, li] rho 1ohm\n",
+            "unknown device value `rho`",
+        ),
+        (
+            "device resistor poly model \"r\" terminals [li, li] sheet 1fF/um2\n",
+            "a resistance",
+        ),
+    ];
+    for (body, needle) in wrong {
+        one_error(body, needle);
+    }
+}
+
 #[test]
 fn the_example_in_the_language_spec_parses() {
     let spec = include_str!("../../../docs/deck.md");

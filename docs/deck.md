@@ -363,6 +363,8 @@ a via into it needs a sheet resistance, and it cannot also be listed in
 
 ```
 device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, diff_active]
+device resistor rbody model "rpoly" terminals [poly_c, poly_c] sheet 300ohm
+device capacitor cmim model "cmim" terminals [met4, met3] area_cap 2fF/um2 fringe_cap 0.2fF/um
 ```
 
 A device is found wherever its marker layer (`ngate`) has shapes. Its
@@ -372,6 +374,30 @@ compares as polar (a reversed diode is a mismatch), as it does a capacitor's
 two plates. A resistor's two ends may be written either way round.
 Kinds: `mos`, `bjt`, `resistor`, `capacitor`, `diode`. The model name is what
 LVS compares against your schematic.
+
+Each terminal needs a shape of its own under the marker, and shapes that
+touch or overlap are one shape. A source drawn twice with no drain is not a
+transistor with its source and drain shorted: it is no device, and LVS
+reports the marker (`lvs.terminal_net`).
+
+A resistor may give its body's resistance per square, `sheet`, and a
+capacitor its capacitance per area and per perimeter, `area_cap` and
+`fringe_cap`, in the units of a `pex` line. Each is optional, given once,
+and only on its own kind. LVS measures every device from what is drawn, and
+compares each value a schematic card states under the card's name for it:
+
+| Name | Device | Measured |
+|---|---|---|
+| `w`, `l` | `mos`, `resistor` | The marker's extent across and along the current, which runs toward the first source or drain (a resistor's first end). Exact for a straight rectangle; a bent resistor body reads its bounding box. |
+| `nf` | `mos` | 1: a marker is one channel, and fingers in parallel add up. |
+| `area`, `perim` | every kind | The marker's area and perimeter. |
+| `r` | `resistor` with `sheet` | `sheet × l / w`. |
+| `c` | `capacitor` with `area_cap` or `fringe_cap` | `area_cap × area + fringe_cap × perim`, of the terms given. |
+
+A value the deck does not give is not computed, never taken as zero, so a
+schematic that states it is reported (`lvs.undeclared_param`). Nothing
+measures a bipolar's emitter area, a capacitor's `w` and `l`, or a
+transistor's `as`, `ad`, `ps` and `pd`.
 
 ## Parasitic stack
 

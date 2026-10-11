@@ -16,11 +16,12 @@
 //! bijection, which is affordable because the circuits are small.
 //!
 //! Where the docs describe a defect rather than the intended semantics, the
-//! oracle follows the intended one and the fixture is marked with the finding:
-//! `nf=1` is one drawn finger (F16). A diode's and a capacitor's ends are
-//! ordered (F15), a series merge crosses a net that is not a port on either
-//! side (F12), and a reference `X` instance is flattened (F1): those fixtures
-//! hold since B3, B4 and B2. Parallel passives keep their count (F20), `m`
+//! oracle follows the intended one and the fixture is marked with the finding.
+//! A diode's and a capacitor's ends are ordered (F15), a series merge crosses
+//! a net that is not a port on either side (F12), and a reference `X`
+//! instance is flattened (F1): those fixtures hold since B3, B4 and B2.
+//! `nf=1` is one drawn finger, and a passive is sized by what the deck lets
+//! the layout measure (F16): those hold since B6. Parallel passives keep their count (F20), `m`
 //! multiplies a passive (F21), and a parameter is compared only where the
 //! reference declares it (F22): those hold since B9; since B21 that is per
 //! paired device, a card without a parameter stating nothing about it (F68).
@@ -81,7 +82,9 @@ device mos gate_p model \"pmos\" terminals [poly, diff_active, diff_active]
 ";
 
 /// Every other device: the `hvt` flavour, a MOS with a bulk terminal on
-/// `pwell`, and one passive or bipolar per kind, each a marker over pads.
+/// `pwell`, and one passive or bipolar per kind, each a marker over pads. The
+/// resistor states its sheet resistance and the capacitor its area and
+/// fringe capacitance, so the layout's `r` and `c` follow ([`measured`]).
 const EXTRA_DECK: &str = "layer bsdm = gds(6, 0)
 layer pwell = gds(7, 0)
 layer tap = gds(9, 0)
@@ -101,8 +104,8 @@ connect via cont [pinc, met1]
 connect via tap [pwell, met1]
 device mos gate_nh model \"nmos_hvt\" terminals [poly, diff_active, diff_active]
 device mos gate_b model \"nmosb\" terminals [poly, diff_active, diff_active, pwell]
-device resistor resm model \"rpoly\" terminals [pina, pina]
-device capacitor capm model \"cmim\" terminals [pina, pinb]
+device resistor resm model \"rpoly\" terminals [pina, pina] sheet 100ohm
+device capacitor capm model \"cmim\" terminals [pina, pinb] area_cap 1fF/um2 fringe_cap 100aF/um
 device diode diom model \"dpn\" terminals [pina, pinb]
 device bjt bjtm model \"npn\" terminals [pina, pinb, pinc]
 ";
@@ -190,6 +193,12 @@ struct Dev {
     /// An `area=` the card declares, in nm². The layout always has its
     /// marker's, and it is compared only where the reference declares one.
     area: Option<i64>,
+    /// A resistor's or capacitor's value, `r` or `c` in SI, written
+    /// positionally between the nets and the model.
+    value: Option<f64>,
+    /// Any other `name=value` the card states, in SI. Each is compared,
+    /// with the value, against what the layout measures ([`measured`]).
+    params: Vec<(&'static str, f64)>,
 }
 
 impl Dev {
@@ -202,6 +211,8 @@ impl Dev {
             l: 150,
             m: 1,
             area: None,
+            value: None,
+            params: Vec::new(),
         }
     }
 
@@ -214,6 +225,8 @@ impl Dev {
             l: 0,
             m: 1,
             area: None,
+            value: None,
+            params: Vec::new(),
         }
     }
 
@@ -235,6 +248,16 @@ impl Dev {
 
     fn area(mut self, nm2: i64) -> Self {
         self.area = Some(nm2);
+        self
+    }
+
+    fn value(mut self, si: f64) -> Self {
+        self.value = Some(si);
+        self
+    }
+
+    fn param(mut self, name: &'static str, si: f64) -> Self {
+        self.params.push((name, si));
         self
     }
 }
@@ -453,9 +476,14 @@ fn card(out: &mut String, index: usize, dev: &Dev, names: &[String], spectre: bo
         }
         Model::R | Model::C | Model::D => {
             let letter = dev.model.letter();
+            let value = dev.value.map_or(String::new(), |v| format!(" {v:e}"));
+            assert!(
+                !spectre || value.is_empty(),
+                "Spectre has no positional value"
+            );
             write!(
                 out,
-                "{letter}{index} {open}{} {}{close} {}",
+                "{letter}{index} {open}{} {}{close}{value} {}",
                 n(0),
                 n(1),
                 dev.model.name()
@@ -470,6 +498,9 @@ fn card(out: &mut String, index: usize, dev: &Dev, names: &[String], spectre: bo
         // nm² as µm², which SPICE writes with `p` (1e-12 m²).
         #[allow(clippy::cast_precision_loss, reason = "nanometre areas are small")]
         let _ = write!(out, " area={}p", area as f64 / 1e6);
+    }
+    for (name, value) in &dev.params {
+        let _ = write!(out, " {name}={value:e}");
     }
     out.push('\n');
 }
@@ -598,6 +629,8 @@ struct Reduced {
     l: f64,
     mult: u32,
     area: Option<i64>,
+    value: Option<f64>,
+    params: Vec<(&'static str, f64)>,
 }
 
 /// Whether two devices of `model` land on the same nets role for role: a
@@ -649,6 +682,8 @@ fn reduce(c: &Circuit) -> Reduction {
                 l: d.l as f64,
                 mult,
                 area: d.area,
+                value: d.value,
+                params: d.params.clone(),
             }
         })
         .collect();
@@ -661,7 +696,7 @@ fn reduce(c: &Circuit) -> Reduction {
                 let params = if a.model.is_mos() {
                     a.l == b.l
                 } else {
-                    a.area == b.area
+                    a.area == b.area && a.value == b.value && a.params == b.params
                 };
                 if a.model == b.model && params && same_pins(a.model, &a.pins, &b.pins, |n| n) {
                     let b = devs.remove(j);
@@ -757,7 +792,44 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
         Some(declared) => close(a.area.unwrap_or(drawn) as f64, declared as f64),
         None => true,
     };
-    area && (!a.model.is_mos() || (close(a.w, b.w) && close(a.l, b.l)))
+    // Every other value the card states, against what was drawn; one the
+    // layout cannot measure never agrees.
+    let primary = match b.model {
+        Model::C => "c",
+        _ => "r",
+    };
+    let stated = b
+        .params
+        .iter()
+        .copied()
+        .chain(b.value.map(|v| (primary, v)));
+    let sized = stated
+        .into_iter()
+        .all(|(name, v)| measured(b.model, name).is_some_and(|d| close(d, v)));
+    area && sized && (!a.model.is_mos() || (close(a.w, b.w) && close(a.l, b.l)))
+}
+
+/// What the layout measures on a drawn passive or bipolar of `model`, in SI,
+/// from [`draw_pins`]'s marker, 800 (1600 for a bipolar) by 400 nm, and
+/// [`EXTRA_DECK`]'s coefficients: the marker's `area` and `perim`; a
+/// resistor's body along its pads, `l` 800 nm, across them `w` 400 nm, and
+/// `r` = 100 ohm/sq x 800 / 400 = 200 ohm; a capacitor's `c` = 1 fF/um² x
+/// 0.32 um² + 0.1 fF/um x 2.4 um = 0.56 fF. Nothing else.
+fn measured(model: Model, name: &str) -> Option<f64> {
+    let (along, across) = match model {
+        Model::Q => (1600e-9, 400e-9),
+        _ => (800e-9, 400e-9),
+    };
+    let (area, perim) = (along * across, 2.0 * (along + across));
+    match (model, name) {
+        (_, "area") => Some(area),
+        (_, "perim") => Some(perim),
+        (Model::R, "l") => Some(along),
+        (Model::R, "w") => Some(across),
+        (Model::R, "r") => Some(100.0 * along / across),
+        (Model::C, "c") => Some(1e-3 * area + 1e-10 * perim),
+        _ => None,
+    }
 }
 
 /// Every permutation of `0..n`, for `n` up to 7, computed once.
@@ -1400,6 +1472,86 @@ fn curated() -> Vec<Fixture> {
         let name = format!("params/D_area_on_one_card_{case}");
         out.push(compared(&name, &["LVS-020", "LVS-063"], &diodes, &r));
     }
+    // F16 (fixed in B6), LVS-061..063: what the deck lets the layout
+    // measure on a passive, each value either side of the 2 % tolerance.
+    // The resistor's body is 800 by 400 nm along its pads, at 100 ohm/sq;
+    // the capacitor's marker 0.32 um² and 2.4 um round, at 1 fF/um² and
+    // 0.1 fF/um ([`measured`]). `r` and `c` are written positionally.
+    let sized =
+        |model: Model, size: fn(Dev) -> Dev| Circuit::new(2, vec![size(Dev::pins(model, &[0, 1]))]);
+    let res = sized(R, |d| d);
+    let cap = sized(C, |d| d);
+    let dio = sized(D, |d| d);
+    let passives: [(&str, &str, &Circuit, Circuit); 10] = [
+        (
+            "R_wl_exact",
+            "LVS-061",
+            &res,
+            sized(R, |d| d.param("w", 400e-9).param("l", 800e-9)),
+        ),
+        (
+            "R_l_10pct_over",
+            "LVS-061",
+            &res,
+            sized(R, |d| d.param("l", 880e-9)),
+        ),
+        ("R_r_exact", "LVS-061", &res, sized(R, |d| d.value(200.0))),
+        (
+            "R_r_5pct_over",
+            "LVS-061",
+            &res,
+            sized(R, |d| d.value(210.0)),
+        ),
+        ("C_c_exact", "LVS-062", &cap, sized(C, |d| d.value(5.6e-16))),
+        (
+            "C_c_area_term_only",
+            "LVS-062",
+            &cap,
+            sized(C, |d| d.value(3.2e-16)),
+        ),
+        (
+            "C_perim_exact",
+            "LVS-062",
+            &cap,
+            sized(C, |d| d.param("perim", 2.4e-6)),
+        ),
+        (
+            "D_area_perim_exact",
+            "LVS-063",
+            &dio,
+            sized(D, |d| d.param("area", 3.2e-13).param("perim", 2.4e-6)),
+        ),
+        (
+            "D_perim_10pct_over",
+            "LVS-063",
+            &dio,
+            sized(D, |d| d.param("perim", 2.64e-6)),
+        ),
+        (
+            "D_r_unmeasurable",
+            "LVS-020",
+            &dio,
+            sized(D, |d| d.param("r", 200.0)),
+        ),
+    ];
+    for (case, row, drawn, written) in passives {
+        let name = format!("params/{case}");
+        out.push(compared(&name, &[row, "LVS-014"], drawn, &written));
+    }
+    // A deck that gives no sheet resistance computes no `r`, and a card
+    // stating one is never taken as agreement.
+    let deck = full_deck().replace(" sheet 100ohm", "");
+    let mut fixture = Fixture::new(
+        "lvs/params/R_r_without_sheet",
+        &["LVS-061", "LVS-020"],
+        &deck,
+        LVS,
+    )
+    .layout(draw(&res))
+    .expect(Expect::Lvs(false));
+    fixture.reference = Some(spice(&sized(R, |d| d.value(200.0))));
+    out.push(fixture);
+
     let nf = edited(&spice(&one), "l=150n", "l=150n nf=1");
     out.push(
         with_text(
@@ -1408,8 +1560,7 @@ fn curated() -> Vec<Fixture> {
             draw(&one),
             nf,
         )
-        .expect(Expect::Lvs(true))
-        .known("F16"),
+        .expect(Expect::Lvs(true)),
     );
     let unknown = edited(&spice(&one), "l=150n", "l=150n foo=1");
     out.push(
@@ -1790,6 +1941,21 @@ mod tests {
         assert!(!equivalent(&caps, &cap), "two capacitors are not one");
         let m2 = Circuit::new(2, vec![Dev::pins(C, &[0, 1]).times(2)]);
         assert!(equivalent(&caps, &m2), "but they are one of m = 2");
+        let one = |dev: Dev| Circuit::new(2, vec![dev]);
+        let res = one(Dev::pins(R, &[0, 1]));
+        let r = |ohms| one(Dev::pins(R, &[0, 1]).value(ohms));
+        assert!(equivalent(&res, &r(200.0)), "100 ohm/sq over 800 / 400");
+        assert!(!equivalent(&res, &r(210.0)), "5 % over");
+        let c = |farads| one(Dev::pins(C, &[0, 1]).value(farads));
+        assert!(
+            equivalent(&cap, &c(5.6e-16)),
+            "0.32 fF of plate and 0.24 fF of fringe"
+        );
+        assert!(!equivalent(&cap, &c(3.2e-16)), "the plate alone");
+        let diode = one(Dev::pins(D, &[0, 1]));
+        let perim = |metres| one(Dev::pins(D, &[0, 1]).param("perim", metres));
+        assert!(equivalent(&diode, &perim(2.4e-6)), "2 (800 + 400) nm");
+        assert!(!equivalent(&diode, &perim(2.64e-6)), "10 % over");
         let top = Circuit::new(3, vec![Dev::mos(N, 0, 2, 1)]);
         let block = Circuit::new(3, vec![Dev::mos(P, 1, 2, 0)]);
         let flat = flatten(&top, &block, &[1, 0, 2]);

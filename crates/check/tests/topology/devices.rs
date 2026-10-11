@@ -39,6 +39,7 @@ fn one_mos_recogniser(layers: &NetlistLayers, strings: &mut StrTable) -> DeviceR
         terminal_start: vec![0, terminal_len],
         terminal,
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     }
 }
 
@@ -300,6 +301,7 @@ fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
         terminal_start: vec![0, 3],
         terminal: vec![GATE, SD, SD],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let mut devices = DeviceTable::default();
     recognise_into(&store, &nets, &recognition, &mut devices);
@@ -407,6 +409,7 @@ impl Fingers {
             terminal_start: vec![0, 3],
             terminal: vec![Self::POLY, Self::ACTIVE, Self::ACTIVE],
             model: vec![strings.intern("nch")],
+            value: Vec::new(),
         }
     }
 
@@ -494,6 +497,7 @@ fn one_channel(active: &[(i64, i64)]) -> (DeviceTable, NetId, Vec<NetId>) {
         terminal_start: vec![0, 3],
         terminal: vec![POLY, ACTIVE, ACTIVE],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let mut devices = DeviceTable::default();
     recognise_into(&store, &nets, &recognition, &mut devices);
@@ -590,6 +594,7 @@ fn a_terminal_drawn_twice_on_one_net_still_binds() {
         terminal_start: vec![0, 4],
         terminal: vec![POLY, ACTIVE, ACTIVE, WELL],
         model: vec![strings.intern("pch")],
+        value: Vec::new(),
     };
     let mut devices = DeviceTable::default();
     recognise_into(&store, &nets, &recognition, &mut devices);
@@ -665,7 +670,8 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
     // The marker is the device's extent. Its area is W x L — on the implant it
     // was the whole active region, 33x too large, the measuring half of F8 —
     // and the flanking diffusion is offset in x, which names x the channel
-    // axis: L = 50 along the current, W = 200 across it.
+    // axis: L = 50 along the current, W = 200 across it. One channel is one
+    // finger, and the marker's perimeter is 2 (W + L).
     assert_eq!(
         devices.params_of(DeviceId(0)),
         [
@@ -677,12 +683,17 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
                 DeviceParam::Length,
                 DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(50))
             ),
+            (DeviceParam::Fingers, DeviceMeasure::Count(1)),
             (
                 DeviceParam::Area,
                 DeviceMeasure::Area(gpurify_geom::DbuArea::new(50 * 200))
             ),
+            (
+                DeviceParam::Perimeter,
+                DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(2 * (50 + 200)))
+            ),
         ],
-        "a channel marker measures W, L and W x L"
+        "a channel marker measures W, L, one finger, W x L and 2 (W + L)"
     );
 }
 
@@ -788,6 +799,78 @@ fn a_resistor_recogniser_gives_its_two_terminals_interchangeable_pins() {
     );
 }
 
+/// Oracle: construct-from-answer, testing-plan F16. A resistor body 1000 by
+/// 200 with its two ends abutting it: its first end sits off the body's
+/// centre along the body, so that is its axis, `L` = 1000 along it and `W` =
+/// 200 across, whichever way round the body is drawn. Its area is 200 000
+/// and its perimeter 2 (1000 + 200) = 2400, and the recogniser's `sheet` is
+/// carried to the device for LVS to compute `r` from.
+#[test]
+fn a_resistor_body_measures_its_length_between_its_ends() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_geom::{Dbu, DbuArea};
+    use gpurify_ingest::deck::DeviceValue;
+    const BODY: LayerId = LayerId(0);
+    const END: LayerId = LayerId(1);
+    let value = DeviceValue {
+        sheet_ohm_sq: Some(100.0),
+        ..DeviceValue::default()
+    };
+    let swap = |(a, b, c, d): (i64, i64, i64, i64)| (b, a, d, c);
+    let along_x = [(0, 0, 1000, 200), (-300, 0, 0, 200), (1000, 0, 1300, 200)];
+    for rects in [along_x, along_x.map(swap)] {
+        let mut layout = LayoutBuilder::new(2);
+        let (x0, y0, x1, y1) = rects[0];
+        layout.rect(BODY, x0, y0, x1, y1);
+        for &(x0, y0, x1, y1) in &rects[1..] {
+            layout.rect(END, x0, y0, x1, y1);
+        }
+        let (store, _) = layout.finish();
+        let connectivity = Connectivity {
+            conductors: vec![END],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&store, &connectivity, &mut nets);
+        let mut strings = StrTable::default();
+        let recognition = DeviceRecognition {
+            kind: vec![DeviceKind::Resistor],
+            marker: vec![BODY],
+            terminal_start: vec![0, 2],
+            terminal: vec![END, END],
+            model: vec![strings.intern("rpoly")],
+            value: vec![value],
+        };
+        let mut devices = DeviceTable::default();
+        recognise_into(&store, &nets, &recognition, &mut devices);
+        assert_eq!(devices.len(), 1, "{rects:?}: {:?}", devices.refused);
+        assert_eq!(
+            devices.params_of(DeviceId(0)),
+            [
+                (
+                    DeviceParam::Width,
+                    DeviceMeasure::Length(Dbu::new_unchecked(200))
+                ),
+                (
+                    DeviceParam::Length,
+                    DeviceMeasure::Length(Dbu::new_unchecked(1000))
+                ),
+                (
+                    DeviceParam::Area,
+                    DeviceMeasure::Area(DbuArea::new(200_000))
+                ),
+                (
+                    DeviceParam::Perimeter,
+                    DeviceMeasure::Length(Dbu::new_unchecked(2400))
+                ),
+            ],
+            "{rects:?}"
+        );
+        assert_eq!(devices.value, [value]);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The conduction guard: a MOS channel marker must not sit on live conductor
 // area, or net extraction fuses source and drain into one net in silence.
@@ -854,6 +937,7 @@ fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
         terminal_start: vec![0, 3],
         terminal: vec![POLY, DIFF, DIFF],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let connectivity = Connectivity {
         conductors: vec![POLY, DIFF],
@@ -903,6 +987,7 @@ fn a_non_rectilinear_source_drain_layer_is_refused_not_split() {
         terminal_start: vec![0, 3],
         terminal: vec![POLY, DIFF, DIFF],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let connectivity = Connectivity {
         conductors: vec![POLY, DIFF],

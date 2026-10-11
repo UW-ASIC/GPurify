@@ -9,11 +9,11 @@ use crate::topology::csr_run;
 use crate::topology::net::{polys_intersect, retain_intersecting_into, NetId, NetTable};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::area2;
+use gpurify_geom::ops::{area2, isqrt};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
-use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition};
+use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition, DeviceValue};
 use gpurify_ingest::StrId;
 
 /// Identifies one recognised device: its row in the [`DeviceTable`]. Rows
@@ -84,9 +84,15 @@ pub struct DeviceTable {
     /// Measured geometry, CSR into `param`.
     pub param_start: Vec<u32>,
     /// `(parameter, measure)` per measured parameter. A MOS gets `Width` and
-    /// `Length` when a source or drain polygon fixes its channel direction;
-    /// every device gets `Area`.
+    /// `Length` when a source or drain polygon fixes its channel direction,
+    /// and a resistor when one of its ends does; a MOS gets `Fingers`, 1;
+    /// every device gets `Area` and `Perimeter`.
     pub param: Vec<(DeviceParam, DeviceMeasure)>,
+    /// The coefficients each device's recogniser states (`sheet`,
+    /// `area_cap`, `fringe_cap`), from which LVS computes a resistor's `r`
+    /// and a capacitor's `c`. A table built by hand may leave it short, and
+    /// a device past its end has none.
+    pub value: Vec<DeviceValue>,
     /// Markers that are no device, ascending: `(marker, bound, listed)` for
     /// each marker polygon no recogniser naming its layer could bind, with
     /// the terminals the first such recogniser in deck order bound and the
@@ -98,24 +104,29 @@ pub struct DeviceTable {
     net_device: Vec<DeviceId>,
 }
 
-/// A measured device parameter, and the SPICE name LVS compares it under.
+/// A measured device parameter, and the SPICE name LVS compares it under:
+/// Netgen's, as the sky130 setup compares them (`w`, `l`, `nf`, `area`,
+/// `perim`). LVS also computes a resistor's `r` and a capacitor's `c` from
+/// these and the deck's [`DeviceValue`].
 ///
-/// Extraction measures `Width`, `Length` and `Area` only; nothing yields
-/// `Perimeter` or `Fingers` yet (testing-plan F16).
+/// A BJT's emitter area and a MOS's `as`, `ad`, `ps`, `pd` are not measured
+/// (testing-plan F16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceParam {
-    /// `w`: a MOS marker's bounding-box extent across the channel. Exact for
-    /// a straight rectangular gate.
+    /// `w`: a MOS or resistor marker's bounding-box extent across the
+    /// channel or body. Exact for a straight rectangle.
     Width,
-    /// `l`: a MOS marker's bounding-box extent along the channel, the axis
-    /// on which the first source or drain polygon sits off the marker's
-    /// centre (`x` on a diagonal tie).
+    /// `l`: the marker's bounding-box extent along the channel or body, the
+    /// axis on which the first source or drain polygon (a resistor's first
+    /// end) sits off the marker's centre (`x` on a diagonal tie).
     Length,
-    /// `area`: the marker polygon's area.
+    /// `area`: the marker polygon's area, its holes not subtracted.
     Area,
-    /// `perim`: not measured yet.
+    /// `perim`: the length of the marker polygon's outer ring, a diagonal
+    /// edge rounded down to the database unit.
     Perimeter,
-    /// `nf`: not measured yet.
+    /// `nf`: 1 per MOS, since one marker polygon is one channel. A parallel
+    /// merge sums it, so fingers drawn apart match a card's `nf`.
     Fingers,
 }
 
@@ -181,10 +192,11 @@ impl DeviceTable {
 /// `(marker polygon, recogniser row, offset into `bound`, channel axis)`.
 type Match = (PolyId, u32, u32, Axis);
 
-/// Which axis a MOS channel's current flows along.
+/// Which axis a MOS channel's or a resistor body's current flows along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Axis {
-    /// Not a MOS, or no source/drain polygon voted.
+    /// Neither a MOS nor a resistor, or no source/drain polygon (resistor
+    /// end) voted.
     Unknown,
     X,
     Y,
@@ -231,7 +243,9 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 ///
 /// # Limits
 ///
-/// - Only MOS `W`/`L` and each marker's area are measured (testing-plan F16).
+/// - `W` and `L` are the marker's bounding box, exact for a straight
+///   rectangle; a bent resistor body reads its box. A BJT's emitter area is
+///   not measured (testing-plan F16).
 /// - With three or more positions on one layer, a surplus of shapes on fewer
 ///   nets than positions refuses the marker, even when each position could
 ///   have had a shape of its own.
@@ -305,16 +319,20 @@ pub fn recognise_into(
                     .map(|(position, _)| position),
             );
 
-            // Whether this layer carries the MOS source/drain, which tells W from L.
-            let votes_axis = recognition.kind[row] == DeviceKind::Mos
-                && positions.iter().any(|&position| {
+            // Whether this layer carries the MOS source/drain or a resistor's
+            // ends, which tells W from L.
+            let votes_axis = match recognition.kind[row] {
+                DeviceKind::Mos => positions.iter().any(|&position| {
                     let position = u8::try_from(position)
                         .expect("a device family has fewer than 256 terminals");
                     matches!(
                         role_at(DeviceKind::Mos, position),
                         TerminalRole::Source | TerminalRole::Drain
                     )
-                });
+                }),
+                DeviceKind::Resistor => true,
+                DeviceKind::Bjt | DeviceKind::Capacitor | DeviceKind::Diode => false,
+            };
 
             let at = terminal_index
                 .iter()
@@ -450,9 +468,12 @@ pub fn recognise_into(
         out.terminal_role.extend_from_slice(&role[span]);
         out.terminal_start.push(narrow(out.terminal_net.len()));
 
-        // MOS W/L from the marker's bbox extents: L runs along the channel
-        // axis, W across it. Exact for a straight gate crossing.
-        if recognition.kind[row] == DeviceKind::Mos && axis != Axis::Unknown {
+        // W/L from the marker's bbox extents: L runs along the channel or
+        // the resistor body, W across it. Exact for a straight rectangle.
+        // ponytail: a bent resistor reads its bounding box; KLayout's W from
+        // the edges the body shares with its terminals, L = area / W, fits it.
+        let kind = recognition.kind[row];
+        if matches!(kind, DeviceKind::Mos | DeviceKind::Resistor) && axis != Axis::Unknown {
             let bbox = store.poly_bbox(marker);
             let (extent_x, extent_y) = (
                 bbox.xhi.raw() - bbox.xlo.raw(),
@@ -472,6 +493,12 @@ pub fn recognise_into(
             ));
         }
 
+        // One channel is one finger; a parallel merge sums them.
+        if kind == DeviceKind::Mos {
+            out.param
+                .push((DeviceParam::Fingers, DeviceMeasure::Count(1)));
+        }
+
         // `abs`: a store polygon carries no winding guarantee.
         let (marker_x, marker_y) = store.poly_verts(marker);
         let doubled = area2(marker_x, marker_y).raw().abs();
@@ -479,7 +506,13 @@ pub fn recognise_into(
             DeviceParam::Area,
             DeviceMeasure::Area(DbuArea::new(doubled / 2)),
         ));
+        out.param.push((
+            DeviceParam::Perimeter,
+            DeviceMeasure::Length(ring_length(marker_x, marker_y)),
+        ));
         out.param_start.push(narrow(out.param.len()));
+        out.value
+            .push(recognition.value.get(row).copied().unwrap_or_default());
 
         let device = DeviceId(narrow(device));
         attach.extend(nets_of_device.iter().map(|&net| (net, device)));
@@ -498,6 +531,23 @@ pub fn recognise_into(
     // Sorted by `(net, device)`, so the device column is already in CSR order.
     out.net_device
         .extend(attach.iter().map(|&(_, device)| device));
+}
+
+/// A ring's length, its closing edge included; a diagonal edge counts its
+/// length rounded down to the database unit.
+fn ring_length(xs: &[Dbu], ys: &[Dbu]) -> Dbu {
+    let n = xs.len();
+    let length = (0..n)
+        .map(|i| {
+            let j = (i + 1) % n;
+            let (dx, dy) = (
+                i128::from(xs[j].raw() - xs[i].raw()),
+                i128::from(ys[j].raw() - ys[i].raw()),
+            );
+            isqrt(DbuArea::new(dx * dx + dy * dy)).raw()
+        })
+        .sum();
+    Dbu::new_unchecked(length)
 }
 
 /// The group of entry `at` in a parent-pointer forest whose roots are their
@@ -519,6 +569,7 @@ fn clear(out: &mut DeviceTable) {
     out.terminal_role.clear();
     out.param_start.clear();
     out.param.clear();
+    out.value.clear();
     out.refused.clear();
     out.net_start.clear();
     out.net_device.clear();
