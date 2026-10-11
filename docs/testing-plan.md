@@ -278,6 +278,10 @@ output.
 
 ### L6. Differential against independent tools (nightly)
 
+A differential test runs at most two external tool processes at a time and kills any it
+starts when it finishes or times out. One that ran a Netgen per core (32 at about 850 MB each)
+exhausted a 31 GB machine.
+
 The tools are open and in nixpkgs. Add a `nix develop .#oracles` shell with
 `klayout`, `magic-vlsi`, `netgen-vlsi` and `ngspice`, plus FasterCap/FastHenry
 built from source.
