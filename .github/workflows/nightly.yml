@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+  # A pull request labelled `heavy` runs this tier too, so heavy work runs here
+  # rather than on a developer's machine.
+  pull_request:
+    types: [labeled, synchronize]
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,6 +17,7 @@ env:
 jobs:
   ignored:
     name: cargo test -- --ignored
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -20,11 +25,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # The exhaustive enumerations, the 10^5-case property twins and the
-      # nightly golden field solves; a failing property prints its seed.
-      - run: cargo test --workspace -- --ignored
+      # nightly golden field solves; a failing property prints its seed. The
+      # differentials need the oracle shell and run in the `oracles` job.
+      - run: cargo test --workspace -- --ignored --skip klayout_mirror
+
+  oracles:
+    name: differentials in the oracle shell
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
+      # random layouts. One test at a time; each runs at most four klayouts.
+      - run: nix develop .#oracles --command cargo test --test klayout -- --ignored --test-threads=1
 
   fuzz:
     name: fuzz ${{ matrix.target }}
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -79,6 +100,7 @@ jobs:
 
   mutants:
     name: cargo mutants (geom, check)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -124,6 +146,7 @@ jobs:
 
   coverage:
     name: coverage floor (geom, check)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
