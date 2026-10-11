@@ -7,7 +7,7 @@ use crate::common::{A, RULE};
 use gpurify_check::drc::ruleset::{ClassTable, EolParallel};
 use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
-use gpurify_geom::GeometryStore;
+use gpurify_geom::{Dbu, DbuArea, GeometryStore};
 use gpurify_testgen::shapes::LayoutBuilder;
 use gpurify_testgen::{assert_rule_ran, dbu, point};
 
@@ -370,6 +370,99 @@ fn two_ends_facing_each_other_need_the_end_to_end_space() {
     )
     .0
     .is_empty());
+}
+
+// -------------------------------------------------------------- eol_keep_out
+
+/// `LEF58_EOLKEEPOUT 1.3 EXTENSION 0.2 0.3 1.0` in nanometres: the line's
+/// end keeps out x = -300..1300, y = -200..1000.
+const KEEP_OUT: Rule = Rule::EolKeepOut {
+    layer: A,
+    eol_width: Dbu::new_unchecked(1300),
+    backward: Dbu::new_unchecked(200),
+    side: Dbu::new_unchecked(300),
+    forward: Dbu::new_unchecked(1000),
+};
+
+fn area(v: i128) -> Measurement {
+    Measurement::Area(DbuArea::new(v))
+}
+
+/// Oracle: construct-from-answer, the box as `TritonRoute`'s
+/// `getEolKeepOutQueryBox` builds it. A bar whose bottom is 999 past the
+/// end overlaps the box by 1600 x 1, marked at the centre of that strip,
+/// (500, 999) floored; at 1000 it only touches the box. The line's two ends
+/// and the bar's two 500 long sides are the ends examined.
+#[test]
+fn a_shape_one_unit_inside_the_far_side_of_the_box_is_reported_by_area() {
+    let (out, runs) = run(
+        &layout(&[LINE, [-2000, 999, 3000, 1499]]),
+        KEEP_OUT,
+        Vec::new(),
+    );
+    assert_eq!(out.measured, [area(1600)]);
+    assert_eq!(out.limit, [area(0)]);
+    assert_eq!(out.at, [point(500, 999)]);
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 4);
+
+    let (out, _) = run(
+        &layout(&[LINE, [-2000, 1000, 3000, 1500]]),
+        KEEP_OUT,
+        Vec::new(),
+    );
+    assert!(out.is_empty(), "touching the box is not inside it");
+}
+
+/// Oracle: construct-from-answer at the box's side and back. A block 299
+/// past the end's side overlaps it by 1 x 500, at 300 it touches; a block
+/// beside the line whose top is 199 behind the end overlaps by 200 x 1, at
+/// 200 behind it touches.
+#[test]
+fn the_box_reaches_side_past_the_end_and_backward_behind_it() {
+    let inside = |block: [i64; 4]| run(&layout(&[LINE, block]), KEEP_OUT, Vec::new()).0;
+
+    assert_eq!(inside([1299, 500, 3299, 2500]).measured, [area(500)]);
+    assert!(inside([1300, 500, 3300, 2500]).is_empty());
+    assert_eq!(inside([1100, -2199, 3100, -199]).measured, [area(200)]);
+    assert!(inside([1100, -2200, 3100, -200]).is_empty());
+}
+
+/// Oracle: construct-from-answer. One finding per intruding figure: two
+/// blocks are two (500 x 700 and 600 x 700), a bar drawn as two rectangles
+/// is one with the summed 1600 x 500, and the line's own figure turning
+/// back into the box is none.
+#[test]
+fn each_intruding_figure_is_one_finding() {
+    let (out, _) = run(
+        &layout(&[LINE, [-2000, 300, 200, 1800], [700, 300, 2500, 1800]]),
+        KEEP_OUT,
+        Vec::new(),
+    );
+    let mut areas = out.measured.clone();
+    areas.sort_by_key(|m| match m {
+        Measurement::Area(a) => a.raw(),
+        _ => 0,
+    });
+    assert_eq!(areas, [area(350_000), area(420_000)]);
+
+    let (out, _) = run(
+        &layout(&[LINE, [-2000, 500, 500, 1500], [500, 500, 3000, 1500]]),
+        KEEP_OUT,
+        Vec::new(),
+    );
+    assert_eq!(out.measured, [area(800_000)]);
+
+    let (out, _) = run(
+        &layout(&[
+            LINE,
+            [0, -6000, 3000, -5000],
+            [2000, -6000, 3000, 1100],
+            [-500, 600, 3000, 1100],
+        ]),
+        KEEP_OUT,
+        Vec::new(),
+    );
+    assert!(out.is_empty());
 }
 
 /// Oracle: the kind's contract. A layer the rule cannot represent exactly

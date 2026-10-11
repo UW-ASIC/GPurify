@@ -65,6 +65,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_spacing_diff(depth),
         eol_spacing(depth),
         eol_within_spacing(depth),
+        eol_keep_out(depth),
         prl_spacing(depth),
         corner_to_corner(depth),
         wide_spacing(depth),
@@ -2056,6 +2057,111 @@ fn eol_within_spacing(depth: Depth) -> Vec<Fixture> {
          end_to_end: none) >= 1200nm",
         &["e"],
     ));
+    out
+}
+
+// --------------------------------------------------------------- eol_keep_out
+
+/// `eol_keep_out(met1; eol_width: 1300nm, backward: 200nm, side: 300nm,
+/// forward: 1000nm)` (`eol_keep_out`, DRC-030), `LEF58_EOLKEEPOUT 1.3
+/// EXTENSION 0.2 0.3 1.0`: the line's end (1000 wide, both corners convex)
+/// keeps out x = -300..1300, y = -200..1000; each other figure overlapping
+/// that box with a positive area is one finding, measuring the area inside,
+/// at the centre of its box.
+///
+/// The box's far side swept with a bar's bottom around y = 1000, its side
+/// with a block's left side around x = 1300, its back with a block beside
+/// the line whose top is swept around y = -200 (touching is outside). Two
+/// figures inside are two findings; a bar drawn as two rectangles is one
+/// figure, one finding with the summed area; the line's own figure turning
+/// back into the box is not an intruder.
+fn eol_keep_out(depth: Depth) -> Vec<Fixture> {
+    const RULE: &str =
+        "rule k eol_keep_out(met1; eol_width: 1300nm, backward: 200nm, side: 300nm, forward: 1000nm)";
+    let deck = one_layer_deck(RULE);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("eol_keep_out/{shape}"),
+            &["DRC-030"],
+            &deck,
+            layout,
+            vec![("k", findings)],
+        ));
+    };
+    for g in sweep(depth, 1000) {
+        let findings = if g < 1000 {
+            vec![pin(
+                Finding::area(i128::from(1600 * (1000 - g))),
+                1000,
+                g + 1000,
+            )]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("forward/{}", side(g, 1000)),
+            met1(&[LINE, [-2000, g, 3000, g + 500]]),
+            findings,
+        );
+    }
+    for d in sweep(depth, 300) {
+        let findings = if d < 300 {
+            vec![pin(
+                Finding::area(i128::from((300 - d) * 500)),
+                2300 + d,
+                1500,
+            )]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("side/{}", side(d, 300)),
+            met1(&[LINE, [1000 + d, 500, 3000 + d, 2500]]),
+            findings,
+        );
+    }
+    for b in sweep(depth, -200) {
+        let findings = if b > -200 {
+            vec![pin(
+                Finding::area(i128::from(200 * (b + 200))),
+                2400,
+                b - 200,
+            )]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("backward/{}", side(b, -200)),
+            met1(&[LINE, [1100, b - 2000, 3100, b]]),
+            findings,
+        );
+    }
+    case(
+        "two_figures".into(),
+        met1(&[LINE, [-2000, 300, 200, 1800], [700, 300, 2500, 1800]]),
+        vec![
+            pin(Finding::area(350_000), -100, 1300),
+            pin(Finding::area(420_000), 2000, 1300),
+        ],
+    );
+    case(
+        "one_figure_drawn_twice".into(),
+        met1(&[LINE, [-2000, 500, 500, 1500], [500, 500, 3000, 1500]]),
+        vec![pin(Finding::area(800_000), 1000, 1500)],
+    );
+    case(
+        "own_figure_in_the_box".into(),
+        met1(&[
+            LINE,
+            [0, -6000, 3000, -5000],
+            [2000, -6000, 3000, 1100],
+            [-500, 600, 3000, 1100],
+        ]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("eol_keep_out", &["DRC-030"], RULE, &["k"]));
     out
 }
 

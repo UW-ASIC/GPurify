@@ -1472,6 +1472,47 @@ pub enum Rule {
         /// The space an end of line needs, in grid units; positive.
         limit: Dbu,
     },
+    /// Material of another shape inside the keep-out box of an end of line.
+    ///
+    /// Deck: `eol_keep_out(L; eol_width: len, backward: len, side: len,
+    /// forward: len)`, kind `eol_keep_out`. An end of line is as for
+    /// [`Rule::EolWithinSpacing`]: an edge of the merged layer strictly
+    /// shorter than `eol_width` with both corners convex. Its keep-out is the
+    /// box spanning the end widened by `side` on each side, from `backward`
+    /// behind the end's line (into its line) to `forward` past it. Material
+    /// of another merged figure overlapping the box with a positive area is a
+    /// violation; touching it is not (`LEF58_EOLKEEPOUT eolWidth EXTENSION
+    /// backwardExt sideExt forwardExt`, as `OpenROAD` `TritonRoute` checks it:
+    /// `getEolKeepOutQueryBox`, and `checkMetalEOLkeepout_helper`'s
+    /// interior intersection with another pin's rectangles).
+    ///
+    /// One violation per end of line and intruding figure: `measured` the
+    /// area of that figure inside the box against a `limit` of 0, at the
+    /// centre of the bounding box of that area (floored). `shapes` is the
+    /// lowest drawn row under the end's figure, then under the intruder's.
+    /// `examined` counts ends of line.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-030. Rules: `LEF58_EOLKEEPOUT`.
+    ///
+    /// Limits: the `EXCEPTWITHIN`, `CORNERONLY` and `CLASS` qualifiers are
+    /// missing, and so is `LEF58_EOLEXTENSIONSPACING`.
+    EolKeepOut {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// An edge strictly shorter than this, with convex corners, is an end
+        /// of line, in grid units; positive.
+        eol_width: Dbu,
+        /// How far the box reaches behind the end's line, in grid units; 0 or
+        /// more.
+        backward: Dbu,
+        /// How far the box reaches past each side of the end, in grid units;
+        /// 0 or more.
+        side: Dbu,
+        /// How far the box reaches past the end's line, in grid units;
+        /// positive.
+        forward: Dbu,
+    },
 }
 
 /// The parallel-edge condition of an end-of-line rule (LEF `PARALLELEDGE
@@ -2278,6 +2319,13 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "eol_keep_out" => Rule::EolKeepOut {
+                    layer: one(spec)?,
+                    eol_width: length(spec, "eol_width")?,
+                    backward: at_least_zero(spec, "backward")?,
+                    side: at_least_zero(spec, "side")?,
+                    forward: length(spec, "forward")?,
+                },
                 "forbidden_spacing" => {
                     let layer = one(spec)?;
                     let (min, max) = (length(spec, "min")?, length(spec, "max")?);
@@ -2590,6 +2638,21 @@ impl RuleSet {
                     layer,
                     (eol_width, within, limit),
                     (parallel, end_to_end),
+                    s,
+                    out,
+                ),
+                Rule::EolKeepOut {
+                    layer,
+                    eol_width,
+                    backward,
+                    side,
+                    forward,
+                } => facing::eol_keep_out(
+                    store,
+                    id,
+                    layer,
+                    eol_width,
+                    (backward, side, forward),
                     s,
                     out,
                 ),
@@ -2937,7 +3000,8 @@ impl Rule {
             | Rule::MinStep { layer, .. }
             | Rule::TipSpacingTable { layer, .. }
             | Rule::ForbiddenSpacing { layer, .. }
-            | Rule::EolWithinSpacing { layer, .. } => [Some(layer), None],
+            | Rule::EolWithinSpacing { layer, .. }
+            | Rule::EolKeepOut { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

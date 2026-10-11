@@ -239,6 +239,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
 | `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
 | `tip_space_table(L; length: [len, ..], space: [[len, ..], ..])` | Two shapes whose facing edges are closer than the cell the two edges' lengths select: tip to tip, tip to side, side to side (see below). |
+| `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | Another shape inside the keep-out box of an end of line (an edge shorter than `eol_width` with both corners convex): the end widened by `side` each way, from `backward` behind it to `forward` past it, as LEF58 `EOLKEEPOUT`. Touching the box is not inside it. Reported with the area inside. |
 | `forbidden_space(L; min: len, max: len, prl: len)` | Two shapes whose facing edges run alongside each other for more than `prl` at a gap from `min` to `max`, both included: a forbidden range, as LEF58 two-wire forbidden spacing. A wider gap is legal, and so is a narrower one, which `space` judges. Edges face each other as in a tip table. |
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |

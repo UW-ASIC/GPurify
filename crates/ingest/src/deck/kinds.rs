@@ -600,6 +600,21 @@ pub(crate) const KINDS: &[Kind] = &[
             p("space", "space", Dim::LengthRows),
         ],
     ),
+    // Another shape inside the keep-out box of an end of line
+    // (`LEF58_EOLKEEPOUT eolWidth EXTENSION backward side forward`).
+    drc(
+        "eol_keep_out",
+        Cmp::Absent,
+        "eol_keep_out",
+        &[0],
+        None,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("backward", "backward", Dim::Length),
+            p("side", "side", Dim::Length),
+            p("forward", "forward", Dim::Length),
+        ],
+    ),
     // A gap in a forbidden range between facing edges that run alongside
     // (`LEF58_TWOWIRESFORBIDDENSPACING`).
     drc(

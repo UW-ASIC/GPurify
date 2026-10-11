@@ -1267,6 +1267,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Length,
                 )
             }
+            Rule::EolKeepOut { .. } => (
+                "eol_keep_out",
+                Verdict::None("KLayout has no end-of-line keep-out box"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::EolWithinSpacing { .. } => (
                 "eol_within_spacing",
                 Verdict::None(
