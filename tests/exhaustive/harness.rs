@@ -331,6 +331,9 @@ pub const NONE: Checks = Checks {
     pex: false,
 };
 
+/// DRC alone.
+pub const DRC: Checks = Checks { drc: true, ..NONE };
+
 impl Fixture {
     /// A fixture with no reference, intent or field solve.
     pub fn new(name: &str, catalog: &[&'static str], deck: &str, checks: Checks) -> Self {

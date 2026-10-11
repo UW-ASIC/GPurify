@@ -47,8 +47,7 @@
 //! depth runs a fixed-seed sample of [`SAMPLE`] of each. Pictures are rows
 //! top to bottom.
 
-use crate::drc_dimension::DRC;
-use crate::harness::{Depth, Expect, Finding, Fixture, Layout};
+use crate::harness::{Depth, Expect, Finding, Fixture, Layout, DRC};
 use gpurify_testgen::Rng;
 use std::fmt::Write as _;
 
@@ -79,6 +78,43 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
             .flat_map(|job| job.join().expect("generating fixtures does not panic"))
             .collect()
     })
+}
+
+/// One case of the whole domain [`fixtures`] samples, at the identity, or
+/// `None` where the rule's words do not decide it. The cases are numbered
+/// each single-layer kind's 4×4 patterns first, then the two-layer 3×3
+/// enclosure patterns, then each pair kind's pairs of lattice rectangles;
+/// `index` is taken modulo their count. The `drc_e2e` fuzz target
+/// (`fuzz/oracles.rs`) reads cases here, under transforms the enumeration
+/// does not try.
+#[allow(
+    dead_code,
+    reason = "fuzz/oracles.rs reads it; the enumeration does not"
+)]
+pub fn case(index: u32) -> Option<Fixture> {
+    const CASES: u32 = 5 * (1 << 16) + (1 << 18) + 2 * 100 * 100;
+    let index = index % CASES;
+    let singles = u32::try_from(KINDS.len()).expect("five kinds") << 16;
+    if index < singles {
+        let kind = &KINDS[(index >> 16) as usize];
+        let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
+        return single_case(kind, &deck, index & 0xffff);
+    }
+    let index = index - singles;
+    if index < 1 << 18 {
+        let outer = Pattern {
+            n: 3,
+            bits: index & 0x1ff,
+        };
+        return Some(enclosure(&enclosure_deck(), index, hosting(outer)));
+    }
+    let index = (index - (1 << 18)) as usize;
+    let rects = rects();
+    let pairs = rects.len() * rects.len();
+    let kind = PAIRS.get(index / pairs)?;
+    let deck = deck(&["poly", "diff"], kind.name, kind.check, "nm", PAIR_LIMITS);
+    let i = index % pairs;
+    rect_pair(&deck, kind, rects[i / rects.len()], rects[i % rects.len()])
 }
 
 /// Every index below `domain` at nightly; a fixed-seed sample of [`SAMPLE`] at
@@ -396,8 +432,15 @@ fn single_layer(kind: &Kind, depth: Depth) -> Vec<Fixture> {
     let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
     sample(depth, 1 << 16, kind.name)
         .into_iter()
-        .map(|bits| single(kind, &deck, Pattern { n: 4, bits }))
+        .filter_map(|bits| single_case(kind, &deck, bits))
         .collect()
+}
+
+/// The 4×4 pattern `bits` of `kind`, or `None` where the corner model decides it.
+fn single_case(kind: &Kind, deck: &str, bits: u32) -> Option<Fixture> {
+    // Every pattern has a defined answer since B20 settled the corner model;
+    // the `Option` is the fuzz target's contract.
+    Some(single(kind, deck, Pattern { n: 4, bits }))
 }
 
 fn single(kind: &Kind, deck: &str, p: Pattern) -> Fixture {
@@ -448,15 +491,19 @@ fn hosting(outer: Pattern) -> Hosting {
     (e2, None)
 }
 
-fn enclosures(depth: Depth) -> Vec<Fixture> {
-    let check = "enclosure(via1, met1)";
-    let deck = deck(
+/// The enclosure kind's deck.
+fn enclosure_deck() -> String {
+    deck(
         &["met1", "via1"],
         "min_enclosure",
-        check,
+        "enclosure(via1, met1)",
         "nm",
         ENCLOSURE_LIMITS,
-    );
+    )
+}
+
+fn enclosures(depth: Depth) -> Vec<Fixture> {
+    let deck = enclosure_deck();
     let hostings: Vec<Hosting> = (0..1 << 9)
         .map(|bits| hosting(Pattern { n: 3, bits }))
         .collect();

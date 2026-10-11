@@ -1,0 +1,11 @@
+{
+  "domains":  { "core": { "voltage_mv": 1800 } },
+  "supplies": [
+    { "net": "VDD", "domain": "core", "role": "power" },
+    { "net": "VSS", "domain": "core", "role": "ground" }
+  ],
+  "limits": [
+    { "net": "VDD", "max_drop_mv": 90, "max_drop_fraction": 0.05,
+      "max_overvoltage_mv": 100, "budget_current_ua": 2000 }
+  ]
+}

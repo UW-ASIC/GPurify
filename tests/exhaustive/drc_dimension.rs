@@ -23,15 +23,9 @@
 //! None are carried today: the fixtures F18, F42, F48 and F49 marked hold
 //! since B14 and B15.
 
+pub use crate::harness::DRC;
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Want};
 use gpurify::check::report::Measurement;
-use gpurify::engine::run::Checks;
-
-/// DRC alone.
-pub const DRC: Checks = Checks {
-    drc: true,
-    ..crate::harness::NONE
-};
 
 /// The translations every case is repeated at: the origin, and far off it in
 /// the negative quadrant, so nothing depends on coordinates being small or

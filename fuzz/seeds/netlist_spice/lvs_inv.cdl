@@ -1,0 +1,23 @@
+* The schematic of the LVS_INV cell in _source/conformance.gds: one inverter.
+*
+* Authored, not generated, and it is the first reference netlist this corpus has
+* ever carried - `tests/common/mod.rs` set `Inputs::reference` to `None` on every
+* case, so the LVS stage of the engine had never run on real geometry.
+*
+* Derived from the cell's own geometry and from `params.json`'s two device
+* recognisers, not from a run: LVS_INV draws one nsdm marker and one psdm marker
+* over a shared poly gate, which the deck recognises as `nfet_01v8` and
+* `pfet_01v8`. A is the gate rail, Y the shared drain, VDD and VSS the two
+* supplies. `manifest.json` records the same two devices for LVS_CLEAN_MATCH,
+* which corroborates the derivation without being its source.
+*
+* No `w` or `l` parameters, still - but the reason changed. `from_layout_into`
+* now projects measured `w`/`l` in SI metres, gated per name on the string
+* table: a name this file never declares is never interned, so the layout emits
+* none and the comparison stays purely structural. Declaring `w`/`l` here would
+* switch the parametric comparison on against the drawn channel dimensions;
+* LVS_PARAM_MATCH and LVS_PARAM_MISMATCH are the cases meant to exercise that.
+.subckt LVS_INV A Y VDD VSS
+MN Y A VSS VSS nfet_01v8
+MP Y A VDD VDD pfet_01v8
+.ends
