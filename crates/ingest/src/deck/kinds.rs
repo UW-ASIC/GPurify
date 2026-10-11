@@ -69,6 +69,9 @@ pub(crate) enum Dim {
     /// rising strictly; per point, the area goes to the param's engine name
     /// and the number to the named one.
     AreaTable(&'static str),
+    /// `[none, a, ..]`, lengths or `none`; one engine param per element, a
+    /// length or, for `none`, the flag `false`.
+    OptLengthList,
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -597,6 +600,20 @@ pub(crate) const KINDS: &[Kind] = &[
         None,
         &[
             p("length", "length", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
+    // Spacing by the widths of both shapes and, per width, a run: LEF
+    // `SPACINGTABLE TWOWIDTHS {WIDTH width [PRL runLength] {spacing}...}`.
+    drc(
+        "two_width_table",
+        Cmp::Absent,
+        "two_width_spacing_table",
+        &[0],
+        None,
+        &[
+            p("width", "width", Dim::LengthList),
+            p("prl", "prl", Dim::OptLengthList),
             p("space", "space", Dim::LengthRows),
         ],
     ),

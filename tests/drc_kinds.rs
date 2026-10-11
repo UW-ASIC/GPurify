@@ -495,6 +495,44 @@ fn an_asymmetric_tip_table_is_refused_at_load() {
     );
 }
 
+// ---------------------------------------------------------- two widths
+
+/// LEF/DEF 5.8 Language Reference, "Two-Width Spacing Tables", written as
+/// the manual prints it, and its four worked cases, each pair 1 nm under the
+/// space the manual gives: width1 0.25 and width2 0.25, prl 0.0, 0.15; 0.25
+/// and 0.26, prl 0.0, 0.15; 0.25 and 0.26, prl 0.1, 0.20; 0.26 and 0.26, prl
+/// 0.1, 0.25. A table keyed on the wider shape alone would ask 0.20 of the
+/// second (its wider shape is 0.26) and 0.25 of the third.
+#[test]
+fn lef_two_width_example_gives_the_manual_s_spacings() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule tw two_width_table(met1;
+             width: [0um, 0.25um, 1.5um, 3um],
+             prl:   [none, 0um, 1.5um, 3um],
+             space: [[0.15um, 0.2um, 0.5um, 1um],
+                     [0.2um, 0.25um, 0.5um, 1um],
+                     [0.5um, 0.5um, 0.6um, 1um],
+                     [1um, 1um, 1um, 1.2um]])\n",
+        &[
+            ("met1", [0, 0, 250, 2_000]),
+            ("met1", [399, 2_000, 649, 4_000]),
+            ("met1", [10_000, 0, 10_250, 2_000]),
+            ("met1", [10_399, 2_000, 10_659, 4_000]),
+            ("met1", [20_000, 0, 20_250, 2_000]),
+            ("met1", [20_449, 1_900, 20_709, 3_900]),
+            ("met1", [30_000, 0, 30_260, 2_000]),
+            ("met1", [30_509, 1_900, 30_769, 3_900]),
+        ],
+    );
+    let got = found.of("tw");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(count((len(149), len(150))), 2, "{got:?}");
+    assert_eq!(count((len(199), len(200))), 1, "{got:?}");
+    assert_eq!(count((len(249), len(250))), 1, "{got:?}");
+}
+
 // ---------------------------------------------------------- end of line
 
 /// LEF/DEF 5.8 Language Reference, Example 1-18 and Figure 1-23, as the

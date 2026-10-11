@@ -1720,6 +1720,23 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::OptLengthList => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, "a list of lengths or none", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one entry")));
+                }
+                for item in items {
+                    let stated = if matches!(item, Val::Word { name, .. } if name == "none") {
+                        ParamValue::Flag(false)
+                    } else {
+                        ParamValue::Length(self.length(item, label)?)
+                    };
+                    out.push((engine, ParamSrc::Value(stated)));
+                }
+                return Ok(());
+            }
             Dim::LengthRows => {
                 let Val::List(rows, _) = value else {
                     return Err(self.wrong(value, "a list of rows of lengths", label));
@@ -2212,5 +2229,6 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::LengthPairList(_) => "a list of pairs of lengths",
         Dim::Word(_) => "one of the listed words",
         Dim::AreaTable(_) => "a list of (area, number) points",
+        Dim::OptLengthList => "a list of lengths or none",
     }
 }
