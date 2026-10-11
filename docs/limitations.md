@@ -221,7 +221,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-063 | Cut-class spacing tables | missing | — |
 | DRC-064 | Slotted / bar cut spacing by edge length | missing | sky130.deck left out |
 | DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
-| DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
+| DRC-066 | Minimum cut count / redundant via | partial | LEF MINIMUMCUT's LENGTH ... WITHIN form (thin wires beside a wide one) and LEF58_MINIMUMCUT's cut classes and AREA are missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
 | DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked, and not checkable from public sources: the irdrop tolerance per connector by cut count (ct.irdrop.1-3, via.irdrop.1-4 to via4.irdrop.1-4). Its flags are CU (Cu back end only, which sky130 does not offer) and IR (an Al layout against its slotted Cu twin); no public source defines a connector, and the unit (um) was added by a script (skywater-pdk 9039be3), not by SkyWater. No public deck implements it; see docs/limitations.md |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind (cheesing); slot geometry uses the generic kinds; slit density over a plate is region_density (IHP Slt.i). Missing: a maximum slot spacing (GF180 MSLOT.4) and staggered slots (MSLOT.6) |
