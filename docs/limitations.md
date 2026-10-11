@@ -48,8 +48,20 @@ result from them is weaker than it looks.
   near that point than it really has.
 - A net's current budget is shared equally among the devices on it, so one
   device that draws more than its share reads cooler than it is.
-- `electromigration` and `reliability` use one temperature for the whole run,
-  the deck's `temperature` (85 °C when it states none), with no self-heating.
+- `electromigration` and `reliability` use one temperature for the whole run:
+  the intent's `temperature_c`, else the deck's `temperature`, else 85 °C,
+  with no self-heating.
+  `em_thermal` adds each wire's own Joule heating to it, but a wire heats
+  only itself: heat from neighbouring wires, heat carried along a line to
+  cooler vias, and resistance rising with temperature are not modelled, so a
+  dense bundle of wires reads cooler than it is. Its current is the static
+  budget's, so AC signal-line RMS and peak limits stay missing (ERC-E7).
+- `dynamic_ir_drop` is vectorless: every load on a net switches at once in
+  one worst cycle, with no timing windows (which errs high). The grid is
+  resistors and decap only, with no package, bump or wire inductance, and
+  only that cycle is followed from the static drop: when decap holds charge
+  longer than a clock period, the cycles before count only as their average.
+  Backward Euler reads a pulse's peak up to 0.61 % low on an RC node.
 
 ## Parasitics
 

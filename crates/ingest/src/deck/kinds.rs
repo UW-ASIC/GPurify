@@ -22,6 +22,8 @@ pub(crate) enum Dim {
     Temperature,
     /// eV.
     Energy,
+    /// W/(m·K), written `W/mK`.
+    ThermalConductivity,
     /// h.
     Time,
     /// aF/um2 (PEX only).
@@ -89,6 +91,7 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("Mohm", Dim::Resistance, 6),
     ("K", Dim::Temperature, 0),
     ("eV", Dim::Energy, 0),
+    ("W/mK", Dim::ThermalConductivity, 0),
     ("h", Dim::Time, 0),
     ("aF/um2", Dim::CapPerArea, 0),
     ("fF/um2", Dim::CapPerArea, 3),
@@ -665,6 +668,33 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc("ir_drop", &[], false, &[]),
+    erc("dynamic_ir_drop", &[], false, &[]),
+    erc(
+        "em_thermal",
+        &[0],
+        true,
+        &[
+            p("max_density", "max_density", Dim::CurrentPerWidth),
+            p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+            p("blech_limit", "blech_limit", Dim::Current),
+            p(
+                "reference_temperature",
+                "reference_temperature",
+                Dim::Temperature,
+            ),
+            p("activation_energy", "activation_energy_ev", Dim::Energy),
+            p("current_exponent", "current_exponent", Dim::Scalar),
+            p(
+                "thermal_conductivity",
+                "thermal_conductivity",
+                Dim::ThermalConductivity,
+            ),
+            p("spreading", "heat_spreading", Dim::Scalar),
+            p("sigma", "sigma", Dim::Scalar),
+            p("limit_failure", "limit_failure", Dim::Fraction),
+            p("max_failure", "max_failure", Dim::Fraction),
+        ],
+    ),
     erc(
         "missing_tie",
         &[0, 1],

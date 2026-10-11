@@ -3,6 +3,7 @@
 mod antenna_and_density;
 mod common;
 mod dispatch;
+mod dynamic_and_thermal;
 mod effective_resistance_laws;
 mod electrical_limits;
 mod intent_gate;

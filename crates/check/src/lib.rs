@@ -98,6 +98,8 @@
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
 //! | `em_current_density(layers..; ..)` | `em_current_density` | [`erc::RuleSet::em_current_density`] | a wire or cut above its instantaneous current limit | ERC-C7, ERC-D4, ERC-E1, ERC-E2, ERC-E3, ERC-E10 |
 //! | `ir_drop()` | `ir_drop` | [`erc::RuleSet::ir_drop`] | a node whose drop exceeds its net's limit | ERC-E8 |
+//! | `dynamic_ir_drop()` | `dynamic_ir_drop` | [`erc::RuleSet::dynamic_ir_drop`] | a node whose drop in the worst switching cycle exceeds its net's limit | ERC-E11 |
+//! | `em_thermal(layers..; ..)` | `em_thermal` | [`erc::RuleSet::em_thermal`] | a wire or cut above its rated current at its self-heated temperature, or a chip too likely to fail by EM | ERC-E13 |
 //! | `p2p_resistance(; max)` | `p2p_resistance` | [`erc::RuleSet::p2p_resistance`] | two points on one net too far apart in resistance | ERC-C6, ERC-D4 |
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |

@@ -432,6 +432,9 @@ kinds! {
     /// [`ModelLimitTable`](crate::erc::rules::domain::ModelLimitTable):
     /// `drain_source(; models, max)`, `max_voltage` in mV.
     drain_source() [] { models: &[&str] = "model", max_voltage: f64 = "max_voltage" }
+    /// [`DynamicIrDropTable`](crate::erc::rules::electrical::DynamicIrDropTable):
+    /// `dynamic_ir_drop()`.
+    dynamic_ir_drop() [] {}
     /// [`ElectromigrationTable`](crate::erc::rules::electrical::ElectromigrationTable):
     /// `electromigration(layers..; ..)`, densities in A/m, currents in µA,
     /// the temperature in kelvin, the energy in eV.
@@ -448,6 +451,23 @@ kinds! {
     em_current_density(layers: many) [] {
         max_density: f64 = "max_density",
         max_current_per_cut: f64 = "max_current_per_cut",
+    }
+    /// [`EmThermalTable`](crate::erc::rules::electrical::EmThermalTable):
+    /// `em_thermal(layers..; ..)`, as `electromigration` plus the
+    /// dielectric's thermal conductivity in W/(m·K), the heat-spreading
+    /// factor, the lognormal sigma and the two failure fractions.
+    em_thermal(layers: many) [] {
+        max_density: f64 = "max_density",
+        max_current_per_cut: f64 = "max_current_per_cut",
+        blech_limit: f64 = "blech_limit",
+        reference_temperature: f64 = "reference_temperature",
+        activation_energy_ev: f64 = "activation_energy_ev",
+        current_exponent: f64 = "current_exponent",
+        thermal_conductivity: f64 = "thermal_conductivity",
+        heat_spreading: f64 = "heat_spreading",
+        sigma: f64 = "sigma",
+        limit_failure: f64 = "limit_failure",
+        max_failure: f64 = "max_failure",
     }
     /// [`EsdLatchupTable`](crate::erc::rules::reliability::EsdLatchupTable):
     /// `esd_latchup(pad, guard_ring; min_guard_ring_width, max_tap_distance, clamps)`.

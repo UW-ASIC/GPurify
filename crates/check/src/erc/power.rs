@@ -689,11 +689,10 @@ fn precondition(
     }
 }
 
-/// Preconditioned CG on the assembled system, from the guess in `scratch.x`.
-/// A `NaN` residual refuses.
+/// Preconditioned CG on the assembled and factorised system, from the guess
+/// in `scratch.x`. A `NaN` residual refuses.
 fn conjugate_gradient(scratch: &mut SolveScratch) -> Result<(), PowerError> {
     let unknowns = scratch.x.len();
-    factorise_into(scratch, unknowns);
     scratch.z.clear();
     scratch.z.resize(unknowns, 0.0);
 
@@ -1786,47 +1785,12 @@ fn bad_resistance(resistance: &[Qty<Resistance, { prefix::BASE }>]) -> Result<()
     }
 }
 
-/// Solve the grid for node voltages and branch currents; `out` is refilled.
-///
-/// Pads are eliminated before the iteration (leaving an SPD system), and an
-/// island no pad reaches is refused first: CG on a singular system converges
-/// to a meaningless solution.
-///
-/// # Errors
-///
-/// [`PowerError::NotFinite`] for a non-finite nominal, load or pad voltage,
-/// or a non-finite result; [`PowerError::BadResistance`] for an edge that is
-/// not positive and finite; [`PowerError::Unanchored`] with no pad;
-/// [`PowerError::UnanchoredIsland`] for a node no pad reaches;
-/// [`PowerError::NotConverged`] when the iteration limit is hit. `out` is
-/// not a solution after an error.
-pub fn solve_into(
-    grid: &PowerGrid,
-    scratch: &mut SolveScratch,
-    out: &mut PowerSolution,
-) -> Result<(), PowerError> {
+/// Refuse a grid no solve can pose (an edge that is not positive and finite,
+/// no pad, an island no pad reaches) and number its unknowns into `scratch`:
+/// every node but a pad, ascending. Returns how many there are.
+fn pose_into(grid: &PowerGrid, scratch: &mut SolveScratch) -> Result<usize, PowerError> {
     let nodes = grid.node_count();
-    let edges = grid.edge_count();
     let node_width = u32::try_from(nodes).expect("a node index is a u32");
-    *out = PowerSolution::default();
-
-    // Non-finite inputs first: a `NaN` would pass every check downstream.
-    let not_finite = grid
-        .node_nominal
-        .iter()
-        .zip(&grid.node_load)
-        .position(|(v, i)| !(v.is_finite() && i.is_finite()))
-        .or_else(|| {
-            grid.source_voltage
-                .iter()
-                .position(|v| !v.is_finite())
-                .map(|pad| grid.source_node[pad] as usize)
-        });
-    if let Some(node) = not_finite {
-        return Err(PowerError::NotFinite(
-            u32::try_from(node).expect("a node index is a u32"),
-        ));
-    }
     bad_resistance(&grid.edge_resistance)?;
     if grid.source_node.is_empty() {
         return Err(PowerError::Unanchored);
@@ -1877,7 +1841,68 @@ pub fn solve_into(
             .node_of_unknown
             .push(u32::try_from(node).expect("a node index is a u32"));
     }
-    let unknowns = scratch.node_of_unknown.len();
+    Ok(scratch.node_of_unknown.len())
+}
+
+/// Assemble the grid's reduced Laplacian over the unknowns [`pose_into`]
+/// numbered.
+fn assemble_grid_into(grid: &PowerGrid, scratch: &mut SolveScratch, unknowns: usize) {
+    let SolveScratch {
+        branch,
+        unknown_of_node,
+        ..
+    } = &mut *scratch;
+    branch.clear();
+    branch.extend((0..grid.edge_count()).map(|i| {
+        (
+            unknown_of_node[grid.edge_from[i] as usize],
+            unknown_of_node[grid.edge_to[i] as usize],
+            UA_PER_MV_OHM / grid.edge_resistance[i].raw(),
+        )
+    }));
+    assemble_into(scratch, unknowns);
+}
+
+/// Solve the grid for node voltages and branch currents; `out` is refilled.
+///
+/// Pads are eliminated before the iteration (leaving an SPD system), and an
+/// island no pad reaches is refused first: CG on a singular system converges
+/// to a meaningless solution.
+///
+/// # Errors
+///
+/// [`PowerError::NotFinite`] for a non-finite nominal, load or pad voltage,
+/// or a non-finite result; [`PowerError::BadResistance`] for an edge that is
+/// not positive and finite; [`PowerError::Unanchored`] with no pad;
+/// [`PowerError::UnanchoredIsland`] for a node no pad reaches;
+/// [`PowerError::NotConverged`] when the iteration limit is hit. `out` is
+/// not a solution after an error.
+pub fn solve_into(
+    grid: &PowerGrid,
+    scratch: &mut SolveScratch,
+    out: &mut PowerSolution,
+) -> Result<(), PowerError> {
+    let edges = grid.edge_count();
+    *out = PowerSolution::default();
+
+    // Non-finite inputs first: a `NaN` would pass every check downstream.
+    let not_finite = grid
+        .node_nominal
+        .iter()
+        .zip(&grid.node_load)
+        .position(|(v, i)| !(v.is_finite() && i.is_finite()))
+        .or_else(|| {
+            grid.source_voltage
+                .iter()
+                .position(|v| !v.is_finite())
+                .map(|pad| grid.source_node[pad] as usize)
+        });
+    if let Some(node) = not_finite {
+        return Err(PowerError::NotFinite(
+            u32::try_from(node).expect("a node index is a u32"),
+        ));
+    }
+    let unknowns = pose_into(grid, scratch)?;
 
     // Start at nominal (pads at their fixed voltage), so the residual measures
     // interconnect loss and the tolerance is a fraction of the drop.
@@ -1918,20 +1943,8 @@ pub fn solve_into(
     }
     scratch.rhs.truncate(unknowns);
 
-    let SolveScratch {
-        branch,
-        unknown_of_node,
-        ..
-    } = &mut *scratch;
-    branch.clear();
-    branch.extend((0..edges).map(|i| {
-        (
-            unknown_of_node[grid.edge_from[i] as usize],
-            unknown_of_node[grid.edge_to[i] as usize],
-            UA_PER_MV_OHM / grid.edge_resistance[i].raw(),
-        )
-    }));
-    assemble_into(scratch, unknowns);
+    assemble_grid_into(grid, scratch, unknowns);
+    factorise_into(scratch, unknowns);
     conjugate_gradient(scratch)?;
 
     // Pads keep their exact fixed voltage.
@@ -1967,6 +1980,177 @@ pub fn solve_into(
         return Err(PowerError::NotFinite(
             u32::try_from(node).expect("a node index is a u32"),
         ));
+    }
+    Ok(())
+}
+
+/// Backward-Euler steps per rise time of the fastest switching node in
+/// [`transient_into`]. Even, so that node's peak falls on a step. At 128 the
+/// peak of an RC node's response to its pulse reads low by at most 0.61 % of
+/// the closed form, at a time constant near a tenth of the rise, and by less
+/// at any other (`dynamic_and_thermal.rs` in this crate's tests).
+pub const STEPS_PER_RISE: u32 = 128;
+
+/// Microamps per millivolt from a capacitance in pF over a step in ps:
+/// `pF · mV / ps = mA`. Wrong here scales every decap and still passes the
+/// laws.
+const UA_PER_MV_PER_PF_PS: f64 = 1_000.0;
+
+/// One switching event per node of a [`PowerGrid`], for [`transient_into`].
+/// Every node column has one entry per node of the grid.
+#[derive(Debug, Default)]
+pub struct Stimulus {
+    /// The peak of the node's triangular current pulse, µA, signed as
+    /// [`PowerGrid::node_load`] (a ground rail's injects); zero for a node
+    /// that does not switch.
+    pub node_peak: Vec<Qty<Current, { prefix::MICRO }>>,
+    /// The pulse's base, ps: it rises for the first half and falls for the
+    /// second. Read only where the peak is not zero.
+    pub node_rise_ps: Vec<f64>,
+    /// Capacitance from the node to an ideal reference, pF: its decap.
+    pub node_cap_pf: Vec<f64>,
+    /// How long after the pulses start the grid is followed, ps; never less
+    /// than the longest pulse.
+    pub window_ps: f64,
+}
+
+/// The grid's response to one switching event at every node, from rest:
+/// `out` is refilled, node for node, with the drop of largest magnitude each
+/// node reaches, signed as [`PowerSolution::node_drop`]; a pad's is zero.
+///
+/// Each node's decap ties it to an ideal reference, and each switching node
+/// draws a triangle from zero at `t = 0` to its peak at half its rise and
+/// back to zero at its rise. Pads hold their voltage, so by superposition the
+/// static solution adds to this response unchanged. Backward Euler with a
+/// fixed step `h`, the shortest rise over [`STEPS_PER_RISE`], solves
+/// `(G + C/h) r[k+1] = (C/h) r[k] + i[k+1]` with the static solve's
+/// preconditioned conjugate gradient, factorised once (Kouroussis and Najm,
+/// DAC 2003, pose the same recurrence for an RC grid). Once every pulse has
+/// ended, the walk stops at the first step in which no node's drop grew:
+/// `(G + C/h)⁻¹ C/h` is nonnegative, so each node's change keeps its sign
+/// from then on and none can grow again. Otherwise it stops at the window.
+///
+/// Cost: one conjugate-gradient solve per step, at most `window / h` steps.
+///
+/// # Errors
+///
+/// As [`solve_into`] for the grid itself: [`PowerError::BadResistance`],
+/// [`PowerError::Unanchored`], [`PowerError::UnanchoredIsland`],
+/// [`PowerError::NotConverged`]. [`PowerError::NotFinite`] for a node whose
+/// peak or decap is not finite, whose decap is negative, or whose rise is not
+/// positive and finite where it switches, and for a non-finite response. A
+/// grid with no switching node responds with zeros, never an error.
+///
+/// # Panics
+///
+/// Panics if a node column of `stimulus` does not have one entry per node.
+pub fn transient_into(
+    grid: &PowerGrid,
+    stimulus: &Stimulus,
+    scratch: &mut SolveScratch,
+    out: &mut Vec<Qty<Voltage, { prefix::MILLI }>>,
+) -> Result<(), PowerError> {
+    // ponytail: one fixed step for the whole window; a step that grows after
+    // the pulses if long windows cost too many solves.
+    let nodes = grid.node_count();
+    assert!(
+        stimulus.node_peak.len() == nodes
+            && stimulus.node_rise_ps.len() == nodes
+            && stimulus.node_cap_pf.len() == nodes,
+        "one stimulus entry per node"
+    );
+    out.clear();
+    out.resize(nodes, Qty::new(0.0));
+    let node_index = |node: usize| u32::try_from(node).expect("a node index is a u32");
+    let bad = (0..nodes).position(|node| {
+        let peak = stimulus.node_peak[node].raw();
+        let (rise, cap) = (stimulus.node_rise_ps[node], stimulus.node_cap_pf[node]);
+        !(peak.is_finite()
+            && cap.is_finite()
+            && cap >= 0.0
+            && (peak == 0.0 || (rise.is_finite() && rise > 0.0)))
+    });
+    if let Some(node) = bad {
+        return Err(PowerError::NotFinite(node_index(node)));
+    }
+    let Some(shortest) = (0..nodes)
+        .filter(|&node| stimulus.node_peak[node].raw() != 0.0)
+        .map(|node| stimulus.node_rise_ps[node])
+        .reduce(f64::min)
+    else {
+        return Ok(());
+    };
+
+    let unknowns = pose_into(grid, scratch)?;
+    assemble_grid_into(grid, scratch, unknowns);
+    let steps_per_rise = f64::from(STEPS_PER_RISE);
+    let step_ps = shortest / steps_per_rise;
+    // Each unknown's `C/h`, on its diagonal and in its right-hand side, and
+    // its pulse's length in steps: exactly `STEPS_PER_RISE` for the fastest.
+    let mut decap = Vec::with_capacity(unknowns);
+    let mut span = Vec::with_capacity(unknowns);
+    let mut pulses_end = 0.0f64;
+    for unknown in 0..unknowns {
+        let node = scratch.node_of_unknown[unknown] as usize;
+        let c = UA_PER_MV_PER_PF_PS * stimulus.node_cap_pf[node] / step_ps;
+        let slot = scratch.row_start[unknown] as usize;
+        scratch.value[slot] += c;
+        scratch.inv_diag[unknown] = 1.0 / scratch.value[slot];
+        decap.push(c);
+        span.push(steps_per_rise * (stimulus.node_rise_ps[node] / shortest));
+        if stimulus.node_peak[node].raw() != 0.0 {
+            pulses_end = pulses_end.max(span[unknown]);
+        }
+    }
+    factorise_into(scratch, unknowns);
+    let last = (stimulus.window_ps / step_ps)
+        .max(pulses_end)
+        .min(f64::from(u32::MAX));
+
+    scratch.x.clear();
+    scratch.x.resize(unknowns, 0.0);
+    let mut previous = vec![0.0f64; unknowns];
+    let mut step = 0u32;
+    while f64::from(step) < last {
+        step += 1;
+        let at = f64::from(step);
+        let SolveScratch {
+            rhs,
+            x,
+            node_of_unknown,
+            ..
+        } = &mut *scratch;
+        rhs.clear();
+        rhs.extend((0..unknowns).map(|unknown| {
+            let node = node_of_unknown[unknown] as usize;
+            let fraction = at / span[unknown];
+            let shape = if fraction <= 1.0 {
+                1.0 - (2.0 * fraction - 1.0).abs()
+            } else {
+                0.0
+            };
+            decap[unknown] * x[unknown] + stimulus.node_peak[node].raw() * shape
+        }));
+        conjugate_gradient(scratch)?;
+
+        let mut grew = false;
+        for (unknown, before) in previous.iter_mut().enumerate() {
+            let (drop, node) = (
+                scratch.x[unknown],
+                scratch.node_of_unknown[unknown] as usize,
+            );
+            if !drop.is_finite() {
+                return Err(PowerError::NotFinite(node_index(node)));
+            }
+            grew |= drop.abs() > before.abs();
+            *before = drop;
+            if drop.abs() > out[node].raw().abs() {
+                out[node] = Qty::new(drop);
+            }
+        }
+        if at >= pulses_end && !grew {
+            break;
+        }
     }
     Ok(())
 }

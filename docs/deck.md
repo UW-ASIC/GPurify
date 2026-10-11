@@ -83,6 +83,7 @@ Numbers carry units. `140nm`, `0.14um` and `0.00014mm` are the same length.
 | temperature | `K`, or `C` |
 | temperature coefficient | `/K` (first order), `/K2` (second order) |
 | energy | `eV` |
+| thermal conductivity | `W/mK` |
 | time | `h` |
 | fraction | `%`, or a bare number from 0 to 1 |
 | angle | `deg` |
@@ -332,6 +333,8 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `electromigration(layers…; max_density: current per width, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: n)` | A wire or cut carrying more current than its rated limit at the operating temperature. Needs `--intent`. |
 | `em_current_density(layers…; max_density: current per width, max_current_per_cut: current)` | A wire or cut above its instantaneous current limit. Needs `--intent`. |
 | `ir_drop()` | A node whose voltage drop or overvoltage exceeds its net's stated limit. Needs `--intent`. |
+| `dynamic_ir_drop()` | A node whose drop in its net's worst clock cycle, static plus dynamic, exceeds the net's `dynamic` `max_drop_mv`. Every load on the net switches at once, drawing its share of `budget_current_ua` over the cycles it switches in (`toggle_rate`) as a triangular pulse `rise_time_ps` wide, against the net's `decap_pf`; an RC grid, with no inductance. Needs `--intent`. |
+| `em_thermal(layers…; max_density: current per width, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: n, thermal_conductivity: W/mK, spreading: n, sigma: n, limit_failure: frac, max_failure: frac)` | As `electromigration`, but each wire is derated at its own temperature, the run's plus its Joule self-heating `I² R t / (K L (W + spreading × t))` (`t` its layer's `pex` height, `K` the dielectric's conductivity), a cut at the hotter metal at its ends; and the chip, whose wires each fail lognormally (`sigma`, `limit_failure` at a wire exactly at its limit), when its chance of any EM failure exceeds `max_failure`. Needs `--intent`. |
 | `p2p_resistance(; max: resistance)` | Two points on one net further apart in resistance than the limit. |
 | `reliability(; required_lifetime: h, reference_lifetime: h, reference_stress: voltage, stress_exponent: n, reference_temperature: temp, activation_energy: eV, max_abs_voltage: voltage, duty_cycle: frac)` | A supply-grid node whose voltage stress predicts a lifetime below `required_lifetime` (inverse power law in voltage times Arrhenius in temperature), or whose voltage exceeds `max_abs_voltage`. It reads the solved supply grid, not individual devices. Needs `--intent`. |
 | `hv_domain(; max_delta: voltage, isolation: layer \| none)` | A device whose terminals reach supply domains more than `max_delta` apart, directly or through other devices' channels. Needs `--intent`. |
