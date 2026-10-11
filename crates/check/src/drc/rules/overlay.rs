@@ -8,7 +8,8 @@
 //! skipped. Extension and overlap measure the figures of the area the merged
 //! layers share, so shapes that only touch are never measured.
 
-use super::width::wide_rects_into;
+use super::presence::{hosts, inside_point, rects_of};
+use super::width::{rects_layer, wide_rects_into};
 use super::{
     centre, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
 };
@@ -17,7 +18,7 @@ use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
-use gpurify_geom::boolean::{intersection_into, union_into, BooleanError};
+use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
@@ -331,6 +332,95 @@ pub(crate) fn enclosure(
             measured,
             limit,
             shapes: (inner, hosted.then_some(PolyId(host))),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The part of `host` (its rectangles) that `held` (rectangles) grown by
+/// `by` with square corners does not cover, or `Err` for a failed boolean.
+fn beyond(host: &[Bbox], held: &[Bbox], by: i64) -> Result<ValidatedLayer, BooleanError> {
+    let grow = |v: Dbu, d: i64| Dbu::new_unchecked((v.raw() + d).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let grown: Vec<Bbox> = held
+        .iter()
+        .map(|r| Bbox {
+            xlo: grow(r.xlo, -by),
+            ylo: grow(r.ylo, -by),
+            xhi: grow(r.xhi, by),
+            yhi: grow(r.yhi, by),
+        })
+        .collect();
+    let mut out = ValidatedLayer::default();
+    subtraction_into(&rects_layer(host)?, &rects_layer(&grown)?, &mut out)?;
+    Ok(out)
+}
+
+/// Max enclosure: each merged outer figure holding inner figures must lie
+/// inside their union grown by `limit` (square corners). One violation per
+/// offending figure, at its part beyond the limit, measuring the least whole
+/// growth that covers it (a binary search over growths). `examined` counts
+/// the outer figures that hold an inner one.
+pub(crate) fn max_enclosure(
+    store: &GeometryStore,
+    rule: StrId,
+    (outer, inner): (LayerId, LayerId),
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(inner_figures), Some(outer_figures)) =
+        (merged(store, inner, s), merged(store, outer, s))
+    else {
+        return REFUSED;
+    };
+    let (inner_rects, outer_rects) = (rects_of(&inner_figures), rects_of(&outer_figures));
+    let figure = |rects: &(Vec<Bbox>, Vec<u32>), f: usize| -> Vec<Bbox> {
+        rects.0[rects.1[f] as usize..rects.1[f + 1] as usize].to_vec()
+    };
+    // Each outer figure's held inner rectangles.
+    let mut held: Vec<Vec<Bbox>> = vec![Vec::new(); outer_figures.len()];
+    for (i, host) in hosts(&inner_rects, &outer_rects).into_iter().enumerate() {
+        if let Some(host) = host {
+            held[host as usize].extend(figure(&inner_rects, i));
+        }
+    }
+    let drawn = s.validated.get(store, outer).expect("merged above");
+    s.rects_a.build(store, outer, drawn);
+    let owners = owners_of(&outer_figures, &s.rects_a);
+    let mut examined = 0u64;
+    for (f, mine) in held.iter().enumerate().filter(|(_, mine)| !mine.is_empty()) {
+        examined += 1;
+        let host = figure(&outer_rects, f);
+        let Ok(excess) = beyond(&host, mine, limit.raw()) else {
+            return REFUSED;
+        };
+        if excess.is_empty() {
+            continue;
+        }
+        // The least growth that covers the host: past `limit`, and at most
+        // the host's own span, which covers it from any point inside it.
+        let span = host.iter().fold(Bbox::EMPTY, |acc, &r| acc.union(r));
+        let (mut lo, mut hi) = (
+            limit.raw(),
+            (span.xhi - span.xlo).raw().max((span.yhi - span.ylo).raw()),
+        );
+        while hi - lo > 1 {
+            let at = lo + (hi - lo) / 2;
+            match beyond(&host, mine, at) {
+                Ok(left) if left.is_empty() => hi = at,
+                Ok(_) => lo = at,
+                Err(_) => return REFUSED,
+            }
+        }
+        let (rects, start) = rects_of(&excess);
+        out.push(Violation {
+            rule,
+            layer: outer,
+            severity: Severity::Error,
+            at: inside_point(&(rects, start), 0),
+            measured: Measurement::Length(Dbu::new_unchecked(hi)),
+            limit: Measurement::Length(limit),
+            shapes: (owners[f], None),
         });
     }
     (Outcome::Ran, examined)

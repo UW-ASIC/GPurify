@@ -36,6 +36,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_enclosure(depth),
         asymmetric_enclosure(depth),
         wire_enclosure(),
+        max_enclosure(),
         min_extension(depth),
         gate_corner(),
         overlap(depth),
@@ -604,6 +605,86 @@ fn wire_enclosure() -> Vec<Fixture> {
         "unhosted",
         via().rect("met2", 5000, 5000, 6000, 6000),
         [lengths(&[0]), vec![], vec![]],
+    ));
+    every_placement(cases)
+}
+
+/// `enclosure(licon, npc) <= 95nm` (`max_enclosure`, DRC-044, sky130 npc.5):
+/// each npc figure holding licons must lie inside their union grown by 95 nm
+/// with square corners; one finding per npc figure that reaches further,
+/// measuring its furthest reach rounded up.
+///
+/// Oracle: the reach is drawn. A licon `[0, 100]^2` in npc 50 past it on
+/// three sides and `m` on the fourth reaches `max(50, m)`; a corner square
+/// added off the npc's corner reaches its diagonal point's Chebyshev
+/// distance; between two licons `g` apart under one npc the furthest point
+/// is midway, `g / 2` from both.
+///
+/// Shapes: one side swept 94/95/96; a corner square to (195, 195) and to
+/// (196, 196), which every straight strip from the licon reads as 50; two
+/// licons 190, 191 and 192 apart under one npc (reach 95, 95.5 and 96); an
+/// npc holding no licon, and one only straddled by a licon (neither is
+/// measured).
+fn max_enclosure() -> Vec<Fixture> {
+    const LIMIT: i64 = 95;
+    let deck = new_deck(
+        &["licon", "npc"],
+        "rule npc.5 enclosure(licon, npc) <= 95nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("max_enclosure/{name}"),
+            &["DRC-044"],
+            &deck,
+            layout,
+            &[("npc.5", findings)],
+        )
+    };
+    let above = |reach: i64| {
+        if reach > LIMIT {
+            lengths(&[reach])
+        } else {
+            vec![]
+        }
+    };
+    let licon = || Layout::default().rect("licon", 0, 0, 100, 100);
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("side/{side}"),
+            licon().rect("npc", -50, -50, 100 + m, 150),
+            above(m),
+        ));
+    }
+    for c in [195, 196] {
+        cases.push(case(
+            &format!("corner/{c}"),
+            licon()
+                .rect("npc", -50, -50, 150, 150)
+                .rect("npc", 100, 100, c, c),
+            above(c - 100),
+        ));
+    }
+    for (g, reach) in [(190, 95), (191, 96), (192, 96)] {
+        cases.push(case(
+            &format!("two_licons/{g}"),
+            licon()
+                .rect("licon", 100 + g, 0, 200 + g, 100)
+                .rect("npc", -50, -50, 250 + g, 150),
+            above(reach),
+        ));
+    }
+    cases.push(case(
+        "holding_nothing",
+        licon()
+            .rect("npc", -50, -50, 150, 150)
+            .rect("npc", 1000, 1000, 2000, 2000),
+        vec![],
+    ));
+    cases.push(case(
+        "straddled",
+        licon().rect("npc", 50, -500, 1000, 500),
+        vec![],
     ));
     every_placement(cases)
 }

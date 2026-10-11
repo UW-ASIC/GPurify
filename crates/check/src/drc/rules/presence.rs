@@ -58,7 +58,7 @@ pub(crate) fn forbidden(
 }
 
 /// Rectangles of `figures`, CSR by figure.
-fn rects_of(figures: &ValidatedLayer) -> (Vec<Bbox>, Vec<u32>) {
+pub(super) fn rects_of(figures: &ValidatedLayer) -> (Vec<Bbox>, Vec<u32>) {
     let (mut rects, mut start) = (Vec::new(), Vec::new());
     decompose_into(figures, &mut rects, &mut start);
     (rects, start)
@@ -66,7 +66,10 @@ fn rects_of(figures: &ValidatedLayer) -> (Vec<Bbox>, Vec<u32>) {
 
 /// Per inner figure, the outer figure covering all of it, if one does. Outer
 /// figures share no area, so an inner figure fully covered lies in exactly one.
-fn hosts(inner: &(Vec<Bbox>, Vec<u32>), outer: &(Vec<Bbox>, Vec<u32>)) -> Vec<Option<u32>> {
+pub(super) fn hosts(
+    inner: &(Vec<Bbox>, Vec<u32>),
+    outer: &(Vec<Bbox>, Vec<u32>),
+) -> Vec<Option<u32>> {
     let labelled = outer
         .1
         .windows(2)
@@ -96,7 +99,7 @@ fn hosts(inner: &(Vec<Bbox>, Vec<u32>), outer: &(Vec<Bbox>, Vec<u32>)) -> Vec<Op
 }
 
 /// A point on figure `figure`'s material: the centre of its first rectangle.
-fn inside_point(rects: &(Vec<Bbox>, Vec<u32>), figure: usize) -> Point {
+pub(super) fn inside_point(rects: &(Vec<Bbox>, Vec<u32>), figure: usize) -> Point {
     let r = rects.0[rects.1[figure] as usize];
     Point {
         x: mid(r.xlo, r.xhi),

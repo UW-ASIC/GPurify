@@ -512,6 +512,8 @@ pub(crate) const KINDS: &[Kind] = &[
         WIRE_BELOW,
     ),
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, WIRE),
+    // A maximum enclosure, `enclosure(licon, npc) <= 95nm` (sky130 npc.5).
+    drc("enclosure", Cmp::Le, "max_enclosure", &[1, 0], LIMIT, &[]),
     opposite(&[]),
     opposite(WIRE_WIDTH),
     opposite(WIRE_BELOW),

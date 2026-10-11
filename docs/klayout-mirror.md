@@ -275,6 +275,7 @@ explains (kind 30).
 | 37 | cut_class_spacing | `cut_class_space(L; short, long, space)` | ROW PAIR | EXACT (scripted) | exact | new |
 | 38 | minimum_cut | `min_cuts(C, W, O; width[, within]) >= n` | ROW | EXACT (scripted) | exact | new |
 | 39 | gate_corner | `bend(A, B)`, `covers_corner(A, B)` | POINT | EXACT | exact | new |
+| 40 | max_enclosure | `enclosure(i, o) <= l` | FIG by marker (outer) | EXACT | exact | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1268,6 +1269,22 @@ emit(id, (A & B).corners(90) & A.corners(90))   # bend; B.corners(90) for covers
   (inner) corners", marked by "small 2x2 DBU boxes". Boxes of two corners overlap only when the
   corners are one point (one unit apart is two DBU at x2, so their boxes only touch), and the
   overlap's centre, halved and floored, is the corner. Key POINT.
+
+### 40. max_enclosure — EXACT
+
+**GPurify** (`overlay.rs` `max_enclosure`, `beyond`): each merged outer figure holding inner
+figures (covering them entirely) fails when it reaches past their union grown by the limit with
+square corners; `at` a point of that excess, `measured` the least whole growth that covers it.
+
+**KLayout**
+
+```ruby
+max_enclosure(id, O, I, LIM)   # per merged O figure: held = merged I figures inside it;
+                               # fails when Region(o) - Region(held).sized(LIM) is not empty
+```
+
+- Key FIG by marker over the outer figures; the measurement is not compared. `sized` grows a
+  rectilinear region with square corners, as `.sized()` in a derived layer (c).
 
 ---
 

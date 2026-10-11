@@ -565,6 +565,46 @@ pub enum Rule {
         /// The wire widths at which the rule holds an inner polygon.
         wire: WireBand,
     },
+    /// An `outer` shape reaching further than `limit` from the `inner` shapes
+    /// it holds.
+    ///
+    /// Deck: `enclosure(inner, outer) <= len`, kind `max_enclosure`: a
+    /// maximum enclosure, as sky130 npc.5 "Max enclosure of poly overlapping
+    /// slotted_licon by npcm" or IHP LU.c "Max. extension of an abutted NWell
+    /// tie beyond Cont". Both layers are merged. An outer figure holds the
+    /// inner figures it covers entirely, and must lie within `limit` of them
+    /// in every direction, corners included: inside the union of its held
+    /// inner figures grown by `limit` with square corners (`KLayout`
+    /// `sized`), the reading a deck's `outer not inner.sized(limit)` gives.
+    /// So two cuts under one host are measured together, the host's part
+    /// between them included (npc.5's "merge between adjacent short edges").
+    /// An outer figure that holds no inner shape is not measured.
+    ///
+    /// One violation per offending outer figure, on the `outer` layer, at the
+    /// centre of a rectangle of its part beyond `limit`. `measured` is the
+    /// least whole distance the held figures would have to be grown by to
+    /// cover it (the furthest reach, rounded up, so an exceeded limit never
+    /// reads as met); `shapes.0` is the lowest drawn outer row under the
+    /// figure. `examined` counts the outer figures that hold an inner one.
+    ///
+    /// Min-and-max rules (IHP Sdiod.a "Min. and max. PWell:block enclosure
+    /// of ContBar") are this row beside a [`Rule::MinEnclosure`] row.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-044. Rules: sky130 npc.5, IHP LU.c, LU.c1 and Sdiod.a to Sdiod.c;
+    /// `KLayout` `sized` and boolean `-`.
+    ///
+    /// Limits: a maximum space (IHP Rppd.c, GF180 NP.3d "min/max space") is
+    /// not this rule and cannot be written.
+    MaxEnclosure {
+        /// The enclosing layer, merged; findings are reported on it.
+        outer: LayerId,
+        /// The enclosed layer, merged.
+        inner: LayerId,
+        /// The furthest the outer figure may reach past what it holds, in
+        /// grid units; positive.
+        limit: Dbu,
+    },
     /// `layer` not extending past `reference` by `limit`, as poly past
     /// diffusion.
     ///
@@ -2537,6 +2577,14 @@ impl RuleSet {
                         wire: wire(spec)?,
                     }
                 }
+                "max_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::MaxEnclosure {
+                        outer,
+                        inner,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "min_extension" => {
                     let (layer, reference) = two(spec)?;
                     Rule::MinExtension {
@@ -3233,6 +3281,11 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::MaxEnclosure {
+                    outer,
+                    inner,
+                    limit,
+                } => overlay::max_enclosure(store, id, (outer, inner), limit, s, out),
                 Rule::MinExtension {
                     layer,
                     reference,
@@ -3874,6 +3927,9 @@ impl Rule {
                 outer: a, inner: b, ..
             }
             | Rule::AsymmetricEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::MaxEnclosure {
                 outer: a, inner: b, ..
             }
             | Rule::MinExtension {
