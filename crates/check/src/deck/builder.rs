@@ -622,6 +622,8 @@ pub struct DeckBuilder<'s> {
     temperature: Option<(f64, f64)>,
     /// The base deck's `lvs` statements, kept as they are.
     lvs: LvsSrc,
+    /// The base deck's `extraction` statement, kept as it is.
+    extraction: Option<gpurify_ingest::deck::Extraction>,
     rules: Vec<Slot>,
     added: BTreeMap<String, RuleRow>,
     /// The base deck's provenance, by id.
@@ -667,6 +669,7 @@ impl<'s> DeckBuilder<'s> {
             pex: Vec::new(),
             temperature: None,
             lvs: LvsSrc::default(),
+            extraction: None,
             rules: Vec::new(),
             added: BTreeMap::new(),
             base_origin: HashMap::new(),
@@ -735,6 +738,7 @@ impl<'s> DeckBuilder<'s> {
             pex: source.pex,
             temperature: source.temperature,
             lvs: source.lvs,
+            extraction: source.extraction,
             rules: source.rules.into_iter().map(Slot::Kept).collect(),
             added: BTreeMap::new(),
             custom,
@@ -1382,6 +1386,7 @@ impl<'s> DeckBuilder<'s> {
             pex: self.pex,
             temperature: self.temperature,
             lvs: self.lvs,
+            extraction: self.extraction,
         };
         let deck = lower(&source, self.strings).map_err(CompileError::from)?;
         let mut compiled = CompiledDeck::from_deck(deck, self.grid, self.strings)?;

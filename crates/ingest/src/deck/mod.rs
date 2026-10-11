@@ -113,6 +113,8 @@ pub struct Deck {
     /// when the deck states none. [`ProcessStack::sheet_res_ohm_sq`] is
     /// already at it.
     pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
+    /// The `extraction` statement: which parasitics PEX writes out.
+    pub extraction: Extraction,
     /// The `temperature` statement and the `pex` rows' coefficients as
     /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
     /// `None` when the deck states no temperature.
@@ -148,6 +150,52 @@ impl AsRef<LayerTable> for Deck {
 impl AsRef<LayerTable> for LayerTable {
     fn as_ref(&self) -> &LayerTable {
         self
+    }
+}
+
+/// The deck's `extraction` statement: which parasitics the output keeps.
+/// Without one, every element is kept (`rcc`) and no coupling is grounded.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Extraction {
+    /// The extraction type.
+    pub kind: ExtractionKind,
+    /// A coupling capacitance below this many attofarads is grounded: a
+    /// capacitance to ground of the same value at each of its two nodes
+    /// (OpenRCX's `-coupling_threshold`). Zero grounds none; positive only
+    /// for a type that keeps coupling ([`ExtractionKind::keeps_coupling`]).
+    /// Attofarads, the deck's capacitance unit, so a printed deck reads back
+    /// to the same value.
+    pub coupling_threshold_af: f64,
+}
+
+/// An extraction type, as Calibre names them (Siemens, "How to use Calibre
+/// parasitic extraction tools", Calibre blog, 2026-02-17; the Calibre xRC-CB
+/// datasheet): which elements of the network the output keeps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExtractionKind {
+    /// `r`: resistance only (and a field-solved net's series and mutual
+    /// inductance, which sit with its resistance); no capacitance.
+    R,
+    /// `c`: lumped capacitance to ground, one node per net, every coupling
+    /// grounded; no resistance.
+    C,
+    /// `cc`: lumped capacitance, one node per net, with the coupling between
+    /// nets kept (Calibre's "C+CC"); no resistance.
+    Cc,
+    /// `rc`: distributed resistance and capacitance to ground, every
+    /// coupling grounded.
+    Rc,
+    /// `rcc`: distributed resistance, capacitance to ground and coupling
+    /// capacitance: the whole network.
+    #[default]
+    Rcc,
+}
+
+impl ExtractionKind {
+    /// Whether the type keeps coupling capacitance between nets (`cc` and
+    /// `rcc`); the others ground every coupling or drop capacitance.
+    pub fn keeps_coupling(self) -> bool {
+        matches!(self, Self::Cc | Self::Rcc)
     }
 }
 

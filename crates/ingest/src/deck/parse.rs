@@ -5,8 +5,8 @@ use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, 
 use super::lex::{lex, Tok, Token};
 use super::{
     lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
-    DeviceValue, LabelSource, LvsLimit, ParamSource, ParamValue, RuleSource, StackSource,
-    ToleranceSrc, ViaSource, MAX_CELL_SELECTIONS,
+    DeviceValue, Extraction, ExtractionKind, LabelSource, LvsLimit, ParamSource, ParamValue,
+    RuleSource, StackSource, ToleranceSrc, ViaSource, MAX_CELL_SELECTIONS,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -469,11 +469,12 @@ impl<'a> Parser<'a> {
             "device" => self.device(),
             "pex" => self.pex(),
             "temperature" => self.temperature(span),
+            "extraction" => self.extraction(span),
             "ignore" => self.ignore(),
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature or lvs"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs or extraction"),
             )),
         }
     }
@@ -1590,6 +1591,59 @@ impl<'a> Parser<'a> {
         let nominal = self.kelvin("nominal")?;
         if self.out.temperature.replace((operating, nominal)).is_some() {
             return Err(self.err(span, "the temperature is already stated"));
+        }
+        Ok(())
+    }
+
+    /// `extraction <type> [coupling_threshold <capacitance>]`, at most once:
+    /// which parasitics the output keeps ([`super::Extraction`]).
+    fn extraction(&mut self, span: (u32, u32)) -> R<()> {
+        let (word, at) = self.ident("an extraction type")?;
+        let kind = match word.as_str() {
+            "r" => ExtractionKind::R,
+            "c" => ExtractionKind::C,
+            "cc" => ExtractionKind::Cc,
+            "rc" => ExtractionKind::Rc,
+            "rcc" => ExtractionKind::Rcc,
+            _ => {
+                return Err(self.err(
+                    at,
+                    &format!("unknown extraction type `{word}`; expected r, c, cc, rc or rcc"),
+                ))
+            }
+        };
+        let mut coupling_threshold_af = 0.0;
+        if !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, key_span) = self.ident("`coupling_threshold`")?;
+            if key != "coupling_threshold" {
+                return Err(self.err(
+                    key_span,
+                    &format!("unknown extraction key `{key}`; expected coupling_threshold"),
+                ));
+            }
+            let value = self.value()?;
+            let af = self
+                .quantity(&value, Dim::Capacitance, "coupling_threshold")?
+                .f64();
+            if !(af >= 0.0) {
+                return Err(self.err(value.span(), "coupling_threshold must be zero or more"));
+            }
+            if af > 0.0 && !kind.keeps_coupling() {
+                return Err(self.err(
+                    key_span,
+                    &format!(
+                        "coupling_threshold grounds the coupling below it, and `{word}` keeps no coupling"
+                    ),
+                ));
+            }
+            coupling_threshold_af = af;
+        }
+        let stated = Extraction {
+            kind,
+            coupling_threshold_af,
+        };
+        if self.out.extraction.replace(stated).is_some() {
+            return Err(self.err(span, "the extraction type is already stated"));
         }
         Ok(())
     }

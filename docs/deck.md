@@ -807,6 +807,30 @@ Only resistance moves with temperature. Thickness variation from CMP,
 current-dependent via resistance and mask-shift (colour) effects need
 calibration data no open PDK publishes, and are not modelled.
 
+### Extraction type
+
+```
+extraction rcc coupling_threshold 0.1fF
+```
+
+Which parasitics `pex` writes, at most one line. The types are Calibre's:
+
+| Type | Writes |
+|---|---|
+| `rcc` | resistance, capacitance to ground and coupling capacitance: everything (the default) |
+| `rc` | resistance and capacitance to ground; every coupling is grounded |
+| `r` | resistance only, no capacitance |
+| `cc` | capacitance only, one node per net, with the coupling between nets ("C+CC") |
+| `c` | capacitance to ground only, one node per net, every coupling grounded |
+
+A field-solved net's inductance and mutual inductance stay wherever its
+resistance does. To ground a coupling capacitance is to put the same
+capacitance from each of its two nets to ground, so every net keeps its total
+capacitance. `coupling_threshold` grounds every coupling below it, as
+OpenROAD's extractor does (`extract_parasitics -coupling_threshold`); it is
+legal only with a type that keeps coupling (`cc`, `rcc`), and zero or more.
+Without an `extraction` line the output is `rcc` with nothing grounded.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the

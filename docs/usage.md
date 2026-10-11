@@ -313,6 +313,12 @@ line, so a ground net tied to the substrate through its taps solves through
 its other shapes, and one whose pieces join only through the substrate is
 not one circuit and is refused. A net named twice is solved once.
 
+The deck's `extraction` line picks which parasitics are written: resistance
+and capacitance with or without the coupling between nets, capacitance alone
+lumped on one node per net, or resistance alone, and a threshold below which
+a coupling capacitance is grounded (see
+[deck.md](deck.md#extraction-type)). Without one, everything is written.
+
 A net with no text label in the layout has no name to write, and the run
 refuses it rather than inventing one. A label on two nets that are not
 connected cannot name either in a SPEF or DSPF file, which would merge them,

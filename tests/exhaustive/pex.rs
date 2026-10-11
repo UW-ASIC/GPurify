@@ -366,6 +366,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         stack_gaps(),
         field(depth),
         mutual(depth),
+        extraction(),
     ]
     .concat()
 }
@@ -1077,6 +1078,56 @@ fn mutual(depth: Depth) -> Vec<Fixture> {
             )
             .expect(claim("A", Quantity::Mutual, m, MUTUAL))
             .expect(claim("B", Quantity::Mutual, m, MUTUAL)),
+        );
+    }
+    every_placement(&out)
+}
+
+/// PEX-008: the deck's extraction type, on two `m1` bars of [`PARAMS`]
+/// 6 x 1 um, 1 um apart. Each bar alone is `Rs·L/W` and `Ca·A + Cf·P` to
+/// ground; between them the facing sidewalls' `ε₀εr·t·L/S`, 0.083 fF. A
+/// type that grounds the coupling (`rc`, `c`, or a threshold above it) adds
+/// it to each bar's ground capacitance, one that drops resistance (`c`,
+/// `cc`) leaves none, and `r` leaves no capacitance.
+fn extraction() -> Vec<Fixture> {
+    let row = PARAMS.m1;
+    let (r, g) = (wire_ohm(row, 6_000, 1_000), ground_ff(row, 6e6, 14_000.0));
+    let lateral = lateral_ff(row, 6_000, 1_000);
+    assert!(
+        lateral > 0.05 && lateral < 0.1,
+        "the thresholds below bracket it"
+    );
+    let mut out = Vec::new();
+    for (name, line, ohm, ground) in [
+        ("rcc", "", r, g),
+        (
+            "rcc_threshold_above",
+            "extraction rcc coupling_threshold 0.1fF\n",
+            r,
+            g + lateral,
+        ),
+        (
+            "rcc_threshold_below",
+            "extraction rcc coupling_threshold 50aF\n",
+            r,
+            g,
+        ),
+        ("rc", "extraction rc\n", r, g + lateral),
+        ("r", "extraction r\n", r, 0.0),
+        ("cc", "extraction cc\n", 0.0, g),
+        ("c", "extraction c\n", 0.0, g + lateral),
+    ] {
+        out.push(
+            Fixture::new(
+                &format!("pex/extraction/{name}"),
+                &["PEX-008"],
+                &deck(PARAMS, &[], line),
+                PEX,
+            )
+            .layout(parallel(Metal::M1, 6_000, 1_000, 1_000, 0))
+            .expect(claim("A", Quantity::Resistance, ohm, EXACT))
+            .expect(claim("A", Quantity::GroundCap, ground, EXACT))
+            .expect(claim("B", Quantity::GroundCap, ground, EXACT)),
         );
     }
     every_placement(&out)

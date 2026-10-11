@@ -11,7 +11,7 @@ use super::kinds::EDGE_KINDS;
 use super::{build_lvs, LvsSrc};
 use super::{
     Connectivity, Deck, DeckError, DerivedOp, DeviceKind, DeviceRecognition, DeviceValue,
-    LayerTable, ParamValue, ProcessStack, RuleSpec, RuleTable, TemperatureLaw,
+    Extraction, LayerTable, ParamValue, ProcessStack, RuleSpec, RuleTable, TemperatureLaw,
 };
 use crate::narrow;
 use gpurify_geom::{LayerId, StrId, StrTable};
@@ -46,6 +46,8 @@ pub struct DeckSource {
     pub temperature: Option<(f64, f64)>,
     /// The `lvs` statements, as the parser reads them.
     pub lvs: LvsSrc,
+    /// The `extraction` statement, if the deck has one.
+    pub extraction: Option<Extraction>,
 }
 
 /// One derived layer: `name = layers[0] op layers[1] ..`.
@@ -326,6 +328,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
             .map(|(operating, _)| gpurify_geom::Qty::new(operating)),
         temperature_law,
         lvs,
+        extraction: doc.extraction.unwrap_or_default(),
     })
 }
 

@@ -750,6 +750,7 @@ fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) 
         temperature: None,
         temperature_law: None,
         lvs: LvsControls::default(),
+        ..Deck::default()
     };
     (deck, ids)
 }
