@@ -1,6 +1,6 @@
 //! GDSII reader: a record stream to one flat, layer-sorted `GeometryStore`.
 //!
-//! Data in: GDSII bytes (gzip or plain) and a [`Deck`] mapping stream pairs to layers.
+//! Data in: GDSII bytes (gzip or plain) and a deck's [`LayerTable`] mapping stream pairs to layers.
 //! Data out: [`gds::Library::flatten`]'s store with deck-derived layers appended, and placed
 //! labels. An inexact transform is an error, never rounded.
 //!
@@ -10,7 +10,7 @@
 //! places every shape in the root frame on the deck's layers. Coordinates stay
 //! in the file's database units throughout; nothing is scaled.
 
-use crate::deck::{Deck, DerivedOp, LayerTable};
+use crate::deck::{DerivedOp, LayerTable};
 use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
@@ -183,12 +183,15 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 }
 
 /// Compute `deck`'s derived layers into a store built in memory from its base
-/// layers, as [`gds::Library::flatten`] does after reading a stream. `with_text`
-/// reads `provenance`'s placed labels; bind them afterwards with
+/// layers, as [`gds::Library::flatten`] does after reading a stream. `deck` is
+/// anything holding the layer table: a [`Deck`](crate::deck::Deck), or a deck
+/// compiled from one.
+/// `with_text` reads `provenance`'s placed labels; bind them afterwards with
 /// [`Provenance::resolve_labels`].
 ///
-/// `store` must have been finished with `deck.layers.len()` layers and hold
-/// shapes on drawn layers only; derived layers are appended in id order.
+/// `store` must have been finished with the table's
+/// [`len`](LayerTable::len) layers and hold shapes on drawn layers only;
+/// derived layers are appended in id order.
 ///
 /// # Errors
 ///
@@ -199,13 +202,13 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 ///
 /// When `store` has fewer layers than the deck, or already holds shapes on a
 /// derived layer.
-pub fn derive_layers(
+pub fn derive_layers<D: AsRef<LayerTable> + ?Sized>(
     store: &mut GeometryStore,
-    deck: &Deck,
+    deck: &D,
     provenance: &Provenance,
     strings: &StrTable,
 ) -> Result<(), LayoutError> {
-    derive_layers_into(store, &deck.layers, &provenance.placed, strings)
+    derive_layers_into(store, deck.as_ref(), &provenance.placed, strings)
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
@@ -440,7 +443,7 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
     use super::{
-        Deck, LabelDepth, LayoutError, UnknownLayers, MAX_FLAT_POLYGONS, MAX_HIERARCHY_DEPTH,
+        LabelDepth, LayerTable, LayoutError, UnknownLayers, MAX_FLAT_POLYGONS, MAX_HIERARCHY_DEPTH,
     };
     use crate::narrow;
     use crate::provenance::Provenance;
@@ -1403,7 +1406,7 @@ pub mod gds {
     /// The hierarchy walk and the tables it fills.
     struct Flatten<'a> {
         lib: &'a Library,
-        deck: &'a Deck,
+        layers: &'a LayerTable,
         strings: &'a StrTable,
         unknown: UnknownLayers,
         labels: LabelDepth,
@@ -1430,8 +1433,9 @@ pub mod gds {
         /// A root is a structure no reference names; a library with several
         /// roots flattens them all into one store. Rows on one layer keep the
         /// walk's order: roots in file order, each cell's own shapes before its
-        /// references'. `deck` must have been parsed against [`Self::grid`];
-        /// nothing checks it. `strings` is the table [`Self::parse`] and the
+        /// references'. `deck` is anything holding the layer table (a
+        /// [`Deck`](crate::deck::Deck), or a deck compiled from one) and must
+        /// have been parsed against [`Self::grid`]; nothing checks it. `strings` is the table [`Self::parse`] and the
         /// deck interned into; it is read for error names and `with_text`
         /// patterns, never written.
         ///
@@ -1451,9 +1455,9 @@ pub mod gds {
         /// [`LayoutError::UnsupportedTransform`] or
         /// [`LayoutError::CoordinateOutOfRange`] while placing, and
         /// [`LayoutError::Derived`] while computing derived layers.
-        pub fn flatten(
+        pub fn flatten<D: AsRef<LayerTable> + ?Sized>(
             &self,
-            deck: &Deck,
+            deck: &D,
             strings: &StrTable,
             unknown: UnknownLayers,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
@@ -1472,9 +1476,9 @@ pub mod gds {
         /// As [`Self::flatten`], and with [`LabelDepth::All`]
         /// [`LayoutError::TooManyLabels`] from the count, after
         /// [`LayoutError::TooManyPolygons`].
-        pub fn flatten_labels(
+        pub fn flatten_labels<D: AsRef<LayerTable> + ?Sized>(
             &self,
-            deck: &Deck,
+            deck: &D,
             strings: &StrTable,
             unknown: UnknownLayers,
             labels: LabelDepth,
@@ -1487,9 +1491,10 @@ pub mod gds {
                 return Err(LayoutError::TooManyLabels(texts));
             }
 
+            let layers = deck.as_ref();
             let mut walk = Flatten {
                 lib: self,
-                deck,
+                layers,
                 strings,
                 unknown,
                 labels,
@@ -1510,8 +1515,8 @@ pub mod gds {
             }
 
             // Labels are not bound yet, so the layer-sort permutation has nothing to move.
-            let (mut store, _) = walk.builder.finish(deck.layers.len());
-            super::derive_layers_into(&mut store, &deck.layers, &walk.provenance.placed, strings)?;
+            let (mut store, _) = walk.builder.finish(layers.len());
+            super::derive_layers_into(&mut store, layers, &walk.provenance.placed, strings)?;
             Ok((store, walk.provenance))
         }
     }
@@ -1689,9 +1694,9 @@ pub mod gds {
         /// The deck layer for a stream pair; `None` means drop it. A pair the
         /// deck ignores is dropped whatever `unknown` says.
         fn layer(&self, layer: u16, datatype: u16) -> Result<Option<LayerId>, LayoutError> {
-            match (self.deck.layers.of_stream(layer, datatype), self.unknown) {
+            match (self.layers.of_stream(layer, datatype), self.unknown) {
                 (Some(id), _) => Ok(Some(id)),
-                (None, _) if self.deck.layers.is_ignored(layer, datatype) => Ok(None),
+                (None, _) if self.layers.is_ignored(layer, datatype) => Ok(None),
                 (None, UnknownLayers::Reject) => Err(LayoutError::UnknownLayer(layer, datatype)),
                 (None, UnknownLayers::Drop) => Ok(None),
             }
@@ -1829,8 +1834,9 @@ pub mod gds {
 /// test.
 #[cfg(test)]
 mod tests {
-    use super::{gds, Deck, LayoutError, UnknownLayers};
+    use super::{gds, LayoutError, UnknownLayers};
     use crate::deck::tests::{layer_table, ROWS};
+    use crate::deck::Deck;
     use gpurify_geom::StrTable;
     use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
     use gpurify_testgen::shapes::polygon_area;

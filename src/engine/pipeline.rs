@@ -4,11 +4,12 @@
 //! in one string table, on the grid the layout's `UNITS` record states) and
 //! [`Extracted`] (nets, devices, ports).
 
+use gpurify_check::deck::{CompileError, CompiledDeck};
 use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::netlist::Netlist;
-use gpurify_ingest::{Deck, DesignIntent, Provenance, StrTable};
+use gpurify_ingest::{DesignIntent, Provenance, StrTable};
 use std::path::PathBuf;
 
 /// What a run was asked to work on: files only. The grid is the layout's own
@@ -37,9 +38,9 @@ pub struct Loaded {
     /// The layout's database unit. Every deck length was converted onto it
     /// exactly, or the deck was refused.
     pub grid: Grid,
-    /// The parsed deck: layers, rules, connectivity, devices and the
-    /// parasitic stack.
-    pub deck: Deck,
+    /// The compiled deck: layers, connectivity, devices, the parasitic
+    /// stack, and every rule typed.
+    pub deck: CompiledDeck,
     /// The flattened layout geometry, on the deck's layer ids.
     pub store: GeometryStore,
     /// The layout's text labels, placed and bound to the polygons they name.
@@ -83,8 +84,9 @@ impl Extracted {
 ///
 /// # Errors
 ///
-/// - [`LoadError::Deck`]: the deck cannot be read or parsed, or a limit is
-///   not a whole number of the layout's database units.
+/// - [`LoadError::Deck`]: the deck cannot be read or compiled: it does not
+///   parse, a limit is not a whole number of the layout's database units, or
+///   a rule's values are not ones its kind can hold.
 /// - [`LoadError::Layout`]: the layout cannot be read or parsed, has no
 ///   usable `UNITS` record, or has a shape on a stream pair the deck neither
 ///   declares nor ignores.
@@ -98,7 +100,10 @@ impl Extracted {
 /// on its grid.
 pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     let source = std::fs::read_to_string(&inputs.deck).map_err(|why| {
-        gpurify_ingest::DeckError::Io(format!("{}: {why}", inputs.deck.display()))
+        CompileError::from(gpurify_ingest::DeckError::Io(format!(
+            "{}: {why}",
+            inputs.deck.display()
+        )))
     })?;
     let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
 
@@ -107,7 +112,7 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
     // The deck's lengths are converted on the layout's grid, so the layout states it.
     let grid = library.grid()?;
-    let deck = gpurify_ingest::deck::parse_deck(&source, grid, &mut strings)
+    let deck = gpurify_check::deck::compile(&source, grid, &mut strings)
         .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?;
     let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
@@ -249,9 +254,10 @@ pub enum LoadError {
     /// on an undeclared layer.
     #[error(transparent)]
     Layout(#[from] gpurify_ingest::layout::LayoutError),
-    /// The deck: unreadable, malformed, or a length off the layout's grid.
+    /// The deck: unreadable, malformed, a length off the layout's grid, or
+    /// a rule its kind cannot hold.
     #[error(transparent)]
-    Deck(#[from] gpurify_ingest::DeckError),
+    Deck(#[from] CompileError),
     /// The design-intent file.
     #[error(transparent)]
     Intent(#[from] gpurify_ingest::IntentError),

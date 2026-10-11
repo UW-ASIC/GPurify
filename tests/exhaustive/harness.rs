@@ -493,6 +493,8 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         ),
     };
     intern_report_ids(&mut strings);
+    let deck = gpurify::deck::CompiledDeck::from_deck(deck, grid, &strings)
+        .map_err(|why| format!("compile: {why}"))?;
     let loaded = Loaded {
         strings,
         grid,

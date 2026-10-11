@@ -601,7 +601,7 @@ fn from_deck_files_each_row_under_the_kind_the_deck_named() {
 /// no row behind — it is another domain's, and one deck feeds every domain.
 ///
 /// This test used to assert `ErcError::UnknownKind`, and the assertion moved
-/// rather than disappeared: `engine::run::run_checks` refuses a kind that is in
+/// rather than disappeared: `deck::CompiledDeck::from_deck` refuses a kind that is in
 /// neither `erc::ruleset::KINDS` nor `drc::ruleset::KINDS`, which is the layer
 /// that can tell "another domain's rule" from "a typo". What is checkable
 /// *here* is the half this crate is responsible for: the skipped row is not

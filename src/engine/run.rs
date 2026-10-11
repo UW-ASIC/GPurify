@@ -15,7 +15,8 @@ use gpurify_geom::{Bbox, LayerId};
 ///
 /// A check left out is [`StageStatus::NotSelected`], which does not fail
 /// [`Summary::passed`], so a run with none selected passes having checked
-/// nothing. Unknown rule kinds in the deck are refused whatever is selected.
+/// nothing. A deck whose rules do not compile was refused when it was loaded,
+/// whatever is selected.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checks {
@@ -181,26 +182,9 @@ fn drawn_bbox(loaded: &Loaded) -> Bbox {
         })
 }
 
-/// Refuse a deck row whose kind neither DRC nor ERC implements. A rule nobody
-/// runs is a report that looks complete.
-fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
-    for spec in &loaded.deck.rules.spec {
-        let kind = loaded.strings.resolve(spec.kind);
-        let known = gpurify_check::drc::ruleset::KINDS.contains(&kind)
-            || gpurify_check::erc::ruleset::KINDS.contains(&kind);
-        if !known {
-            return Err(gpurify_check::drc::DrcError::UnknownKind {
-                rule: loaded.strings.resolve(spec.id).to_owned(),
-                kind: kind.to_owned(),
-            }
-            .into());
-        }
-    }
-    Ok(())
-}
-
-/// Run the selected checks. A deck that cannot become rule tables fails the whole
-/// run: a run against a wrong deck has no verdict to report.
+/// Run the selected checks over a deck whose rules are already typed:
+/// [`load`](crate::engine::pipeline::load) refused a deck that could not
+/// become rule tables, since a run against a wrong deck has no verdict.
 ///
 /// The checks run once each, in the order DRC, ERC, LVS, PEX. A check that
 /// cannot run is reported in its [`StageStatus`], never as an empty result.
@@ -213,26 +197,21 @@ fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
 ///
 /// # Errors
 ///
-/// - [`EngineError::Drc`]: a deck rule names a kind neither DRC nor ERC
-///   knows (checked even when neither is selected), or DRC is selected and
-///   its rules cannot be built.
-/// - [`EngineError::Erc`]: ERC is selected and its rules cannot be built.
+/// None today: a check that cannot run is a [`StageStatus`], not an error.
+/// The `Result` is the room a later failure of the whole run needs.
 pub fn run_checks(
     loaded: &Loaded,
     extracted: &Extracted,
     options: &RunOptions,
 ) -> Result<(Outputs, Summary), EngineError> {
-    // Before `options.checks` is read, so a misspelled ERC kind fails a DRC-only run.
-    reject_unknown_rule_kinds(loaded)?;
-
     let mut out = Outputs::default();
     let drc = if options.checks.drc {
-        run_drc(loaded, extracted, &mut out)?
+        run_drc(loaded, extracted, &mut out)
     } else {
         StageStatus::NotSelected
     };
     let erc = if options.checks.erc {
-        run_erc(loaded, extracted, &mut out)?
+        run_erc(loaded, extracted, &mut out)
     } else {
         StageStatus::NotSelected
     };
@@ -312,16 +291,14 @@ fn append_stage(out: &mut Outputs, run: impl FnOnce(&mut Violations, &mut Vec<Ru
     out.runs.append(&mut runs);
 }
 
-fn run_drc(
-    loaded: &Loaded,
-    extracted: &Extracted,
-    out: &mut Outputs,
-) -> Result<StageStatus, EngineError> {
-    let rules = gpurify_check::drc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
+fn run_drc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageStatus {
     append_stage(out, |violations, runs| {
-        rules.run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
+        loaded
+            .deck
+            .drc
+            .run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
     });
-    Ok(StageStatus::Ran)
+    StageStatus::Ran
 }
 
 /// Classify nets, resolve intent, build and solve the supply grid, then run the
@@ -329,14 +306,7 @@ fn run_drc(
 /// that read it; `erc::check` refusing the whole stage maps to
 /// [`StageStatus::Refused`], and so does design intent on a layout with a net
 /// carrying two labels.
-fn run_erc(
-    loaded: &Loaded,
-    extracted: &Extracted,
-    out: &mut Outputs,
-) -> Result<StageStatus, EngineError> {
-    // Before any skip, so a missing input cannot hide a wrong deck.
-    let rules = gpurify_check::erc::RuleSet::from_deck(&loaded.deck, &loaded.strings)?;
-
+fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageStatus {
     // Intent finds nets by label, and a net with two labels is two named nets
     // shorted: resolving it by one name would drop the other's supply.
     if let Some(net) = extracted
@@ -350,19 +320,19 @@ fn run_erc(
             .iter()
             .map(|&name| loaded.strings.resolve(name))
             .collect();
-        return Ok(StageStatus::Refused(format!(
+        return StageStatus::Refused(format!(
             "one net carries the labels {}, a short between named nets, so design \
              intent cannot say which of them it is",
             names.join(", ")
-        )));
+        ));
     }
 
     let grid = loaded.grid;
     let die = design_extent(loaded);
     if die.is_empty() {
-        return Ok(StageStatus::Skipped(
+        return StageStatus::Skipped(
             "the layout holds no geometry, so no die boundary bounds a density",
-        ));
+        );
     }
 
     let inputs = gpurify_check::erc::Inputs {
@@ -383,12 +353,12 @@ fn run_erc(
     };
     let mut result = Ok(());
     append_stage(out, |violations, runs| {
-        result = gpurify_check::erc::check(&rules, inputs, violations, runs);
+        result = gpurify_check::erc::check(&loaded.deck.erc, inputs, violations, runs);
     });
-    Ok(result.map_or_else(
+    result.map_or_else(
         |error| StageStatus::Refused(error.to_string()),
         |()| StageStatus::Ran,
-    ))
+    )
 }
 
 /// The five layout-only checks on the unreduced graph, then a flat comparison of
@@ -636,18 +606,13 @@ pub fn run(
 /// Why a run produced no report at all. The CLI prints it and exits `1`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum EngineError {
-    /// An input file could not be read or parsed.
+    /// An input file could not be read or parsed, or the deck did not
+    /// compile.
     #[error(transparent)]
     Load(#[from] crate::engine::pipeline::LoadError),
     /// Nets, devices or ports could not be extracted.
     #[error(transparent)]
     Extract(#[from] crate::engine::pipeline::ExtractError),
-    /// The deck's rules could not become DRC tables, or name an unknown kind.
-    #[error(transparent)]
-    Drc(#[from] gpurify_check::drc::DrcError),
-    /// The deck's rules could not become ERC tables.
-    #[error(transparent)]
-    Erc(#[from] gpurify_check::erc::ErcError),
     /// `xor`: the second layout's database unit is not the first's, so their
     /// coordinates do not compare.
     #[error(

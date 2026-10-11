@@ -29,6 +29,7 @@
 //! every loop below pass vacuously, which is the same false clean in the test
 //! suite that the tests themselves exist to prevent in the tool.
 
+use gpurify::deck::{CompileError, CompiledDeck};
 use gpurify::geom::Grid;
 use gpurify::geom::LayerId;
 use gpurify::ingest::deck::{Deck, DeviceKind, ParamValue};
@@ -144,20 +145,33 @@ fn every_deck_file_is_a_shipped_constant_byte_for_byte() {
     }
 }
 
-/// Oracle: construct-from-answer. Each shipped constant is a deck: it parses,
-/// and both domains build a rule set from it, as a consumer compiling it
-/// from the library would.
+/// Oracle: construct-from-answer. Each shipped constant compiles, as a
+/// consumer compiling it from the library would, and configures rules; and
+/// each `gpurify::pdks` function compiles its own constant (one compiling
+/// another deck configures another number of rules).
 #[test]
 fn every_shipped_constant_compiles() {
+    type Compiles = fn(Grid, &mut StrTable) -> Result<CompiledDeck, CompileError>;
+    let functions: [(&str, Compiles); 4] = [
+        ("generic_finfet", gpurify::pdks::generic_finfet),
+        ("gf180mcu", gpurify::pdks::gf180mcu),
+        ("ihp_sg13g2", gpurify::pdks::ihp_sg13g2),
+        ("sky130", gpurify::pdks::sky130),
+    ];
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
-    for (name, text) in gpurify::pdks::ALL {
+    for ((name, text), (named, compiles)) in gpurify::pdks::ALL.iter().zip(functions) {
+        assert_eq!(*name, named, "gpurify::pdks::ALL is sorted by file stem");
         let mut strings = StrTable::default();
-        let deck = gpurify::ingest::deck::parse_deck(text, grid, &mut strings)
-            .unwrap_or_else(|why| panic!("gpurify::pdks {name} does not parse: {why}"));
-        gpurify::check::drc::RuleSet::from_deck(&deck, &strings)
-            .unwrap_or_else(|why| panic!("gpurify::pdks {name}: the DRC rule set: {why}"));
-        gpurify::check::erc::RuleSet::from_deck(&deck, &strings)
-            .unwrap_or_else(|why| panic!("gpurify::pdks {name}: the ERC rule set: {why}"));
+        let deck = gpurify::deck::compile(text, grid, &mut strings)
+            .unwrap_or_else(|why| panic!("gpurify::pdks {name} does not compile: {why}"));
+        assert!(deck.rule_count() > 0, "{name} configures no rule");
+        let again = compiles(grid, &mut StrTable::default())
+            .unwrap_or_else(|why| panic!("gpurify::pdks::{name}() does not compile: {why}"));
+        assert_eq!(
+            again.rule_count(),
+            deck.rule_count(),
+            "gpurify::pdks::{name}() compiles another deck than its constant"
+        );
     }
 }
 

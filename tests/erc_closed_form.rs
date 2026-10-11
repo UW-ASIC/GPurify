@@ -124,6 +124,8 @@ fn erc(
     }
     let intent =
         gpurify::ingest::intent::parse_intent(intent, &mut strings).expect("intent parses");
+    let deck =
+        gpurify::deck::CompiledDeck::from_deck(deck, grid, &strings).expect("the deck compiles");
     let loaded = Loaded {
         strings,
         grid,

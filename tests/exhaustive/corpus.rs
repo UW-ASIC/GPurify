@@ -89,15 +89,8 @@ fn claims_of(ran: &harness::Ran, nets: &[String]) -> Vec<(Expect, String)> {
     let kind_of: BTreeMap<String, String> = ran
         .loaded
         .deck
-        .rules
-        .spec
-        .iter()
-        .map(|spec| {
-            (
-                ran.loaded.strings.resolve(spec.id).to_owned(),
-                ran.loaded.strings.resolve(spec.kind).to_owned(),
-            )
-        })
+        .rules()
+        .map(|(id, kind)| (ran.loaded.strings.resolve(id).to_owned(), kind.to_owned()))
         .collect();
     let mut claims = Vec::new();
     for (rule, outcome, _) in &ran.rows {

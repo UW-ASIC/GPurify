@@ -45,8 +45,9 @@
 //!
 //! 1. **Load** ([`engine::pipeline::load`]). The GDSII layout is read and
 //!    flattened onto the grid its `UNITS` record states
-//!    ([`ingest::layout`]). The deck is parsed and every limit converted to
-//!    that grid exactly, or refused ([`ingest::deck`]). The reference netlist and
+//!    ([`ingest::layout`]). The deck is compiled ([`deck::compile`]): parsed,
+//!    every limit converted to that grid exactly or refused ([`ingest::deck`]),
+//!    and every rule typed and held to what its kind can hold. The reference netlist and
 //!    design intent are read if given ([`ingest::netlist`], [`ingest::intent`]).
 //! 2. **Extract** ([`engine::pipeline::extract`]). Nets are traced through the
 //!    deck's conductors and vias, devices are recognised from their marker
@@ -97,6 +98,7 @@
 //! A consumer that only probes geometry can depend on `gpurify-geom` alone.
 
 pub use gpurify_check as check;
+pub use gpurify_check::deck;
 pub use gpurify_geom as geom;
 pub mod engine;
 pub mod export;

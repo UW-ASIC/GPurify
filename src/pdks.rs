@@ -7,7 +7,9 @@
 //! what it leaves out at its end.
 //!
 //! Every deck is authored on its own `grid` (5 nm, or 1 nm for
-//! [`GENERIC_FINFET`]) and parses on any layout grid that grid divides.
+//! [`GENERIC_FINFET`]) and compiles on any layout grid that grid divides. The
+//! functions compile one, so its lengths are in the units of the layout it
+//! will check and its names in that run's string table.
 //!
 //! # Examples
 //!
@@ -16,10 +18,14 @@
 //!
 //! let mut strings = StrTable::default();
 //! // A 1 nm layout grid: 1000 database units per micrometre.
-//! let deck = gpurify::ingest::deck::parse_deck(gpurify::pdks::SKY130, Grid::new(1000)?, &mut strings)?;
+//! let deck = gpurify::pdks::sky130(Grid::new(1000)?, &mut strings)?;
 //! assert!(deck.layers.id(&strings, "met1").is_some());
+//! assert!(deck.drc.rule_count() > 0);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+
+use crate::check::deck::{compile, CompileError, CompiledDeck};
+use crate::geom::{Grid, StrTable};
 
 /// SkyWater SKY130 (`sky130A`, five-metal aluminium back end), `pdks/sky130.deck`.
 pub const SKY130: &str = include_str!("../pdks/sky130.deck");
@@ -43,3 +49,43 @@ pub const ALL: [(&str, &str); 4] = [
     ("ihp_sg13g2", IHP_SG13G2),
     ("sky130", SKY130),
 ];
+
+/// [`SKY130`] compiled on the layout grid `grid`, its names interned into
+/// `strings`.
+///
+/// # Errors
+///
+/// A grid the deck's lengths are not whole numbers of ([`compile`]).
+pub fn sky130(grid: Grid, strings: &mut StrTable) -> Result<CompiledDeck, CompileError> {
+    compile(SKY130, grid, strings)
+}
+
+/// [`GF180MCU`] compiled on the layout grid `grid`, its names interned into
+/// `strings`.
+///
+/// # Errors
+///
+/// A grid the deck's lengths are not whole numbers of ([`compile`]).
+pub fn gf180mcu(grid: Grid, strings: &mut StrTable) -> Result<CompiledDeck, CompileError> {
+    compile(GF180MCU, grid, strings)
+}
+
+/// [`IHP_SG13G2`] compiled on the layout grid `grid`, its names interned into
+/// `strings`.
+///
+/// # Errors
+///
+/// A grid the deck's lengths are not whole numbers of ([`compile`]).
+pub fn ihp_sg13g2(grid: Grid, strings: &mut StrTable) -> Result<CompiledDeck, CompileError> {
+    compile(IHP_SG13G2, grid, strings)
+}
+
+/// [`GENERIC_FINFET`] compiled on the layout grid `grid`, its names interned
+/// into `strings`.
+///
+/// # Errors
+///
+/// A grid the deck's lengths are not whole numbers of ([`compile`]).
+pub fn generic_finfet(grid: Grid, strings: &mut StrTable) -> Result<CompiledDeck, CompileError> {
+    compile(GENERIC_FINFET, grid, strings)
+}

@@ -2,7 +2,8 @@
 //! the rule engines ([`drc`], [`erc`], [`lvs`]) and the report they share
 //! ([`report`]).
 //!
-//! Data in: the deck's rules, and the layout tables a load produced
+//! Data in: the deck, compiled with its rules typed ([`deck::compile`]), and
+//! the layout tables a load produced
 //! ([`gpurify_geom::GeometryStore`], plus [`topology::NetTable`] and
 //! [`topology::DeviceTable`] from extraction). Data out: the
 //! [`report::Violations`] columns, and one [`report::RuleRun`] per configured
@@ -136,6 +137,7 @@
 //! | `lvs.terminal_net` | [`lvs::check_layout`] | a device marker no recogniser could bind, or a terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
 
+pub mod deck;
 pub mod drc;
 pub mod erc;
 pub mod lvs;
