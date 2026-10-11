@@ -75,6 +75,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         anchored_patterning(),
         colour_spacing(),
         density_balance(),
+        stitch(),
+        trim_cut(),
         booleans(),
         sizing(),
         selections(),
@@ -3855,6 +3857,131 @@ fn multi_patterning(depth: Depth) -> Vec<Fixture> {
             .expect(Expect::outcome("mp3", Want::Skipped)),
     );
     every_placement(cases)
+}
+
+/// Stitches (DRC-103), written in the deck language: a wire split across
+/// masks `c1` and `c2` overlaps itself where the pieces meet, and that
+/// overlap must run at least the overlap margin along the wire,
+/// `overlap(c1, c2) >= 10nm` (Ghaida et al., IEEE TCAD 2013, Table I: 10 nm;
+/// Kahng et al., ICCAD 2008: the overlap length), and must sit where no
+/// other figure is within the same-mask spacing, `space(c1 and c2, (c1 or
+/// c2).not_interacting(c1 and c2)) >= 110nm` ("stitches should be located
+/// only in non-violating parts", Ghaida et al.).
+///
+/// A 40 nm wire, its two pieces overlapping 9/10/11 along it, with a `c1`
+/// wire 500 above; and the same wire overlapping 20, with that `c1` wire
+/// 109/110/111 above. Orientation-free: all symmetries.
+fn stitch() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["c1", "c2"],
+        "rule ST.OV overlap(c1, c2) >= 10nm\n\
+         rule ST.SP space(c1 and c2, (c1 or c2).not_interacting(c1 and c2)) >= 110nm\n",
+    );
+    let wire = |t: i64| {
+        Layout::default()
+            .rect("c1", 0, 0, 500, 40)
+            .rect("c2", 500 - t, 0, 1000, 40)
+    };
+    let mut cases = Vec::new();
+    for (t, side) in sweep(10) {
+        cases.push(fixture(
+            &format!("stitch/overlap/{side}"),
+            &["DRC-103"],
+            &deck,
+            wire(t).rect("c1", 0, 540, 1000, 580),
+            &[("ST.OV", below(t, 10)), ("ST.SP", vec![])],
+        ));
+    }
+    for (g, side) in sweep(110) {
+        cases.push(fixture(
+            &format!("stitch/keep_out/{side}"),
+            &["DRC-103"],
+            &deck,
+            wire(20).rect("c1", 0, 40 + g, 1000, 80 + g),
+            &[("ST.OV", vec![]), ("ST.SP", below(g, 110))],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// Trim and cut layers (DRC-105), written in the deck language: ASAP7's gate
+/// cut, DRM Table 3.6.1. GCUT.W.1 `width(GCUT) >= 17nm`; GCUT.GATE.EX.1
+/// `extension(GCUT, GATE) >= 17nm`, past each gate edge it crosses;
+/// GCUT.AUX.1 "GCUT layer may not exist without the layer GATE",
+/// `forbidden(GCUT.not_interacting(GATE))`; GCUT.AUX.2 "GCUT layer vertical
+/// edge may not lie inside, or coincide with, the GATE layer", the vertical
+/// GCUT edges strictly inside GATE or on a GATE edge.
+///
+/// A 20 x 200 gate. A 17-tall cut across it reaching 16/17/18 past each side
+/// (EX.1 at the limit); a cut 16/17/18 tall reaching 30 past (W.1 at the
+/// limit); a cut ending inside the gate and one ending on its far edge (each
+/// a 17 nm vertical edge for AUX.2, and an extension of 0); a cut away from
+/// any gate (AUX.1, its area). AUX.2 names an axis, so only the symmetries
+/// that keep each axis apply.
+fn trim_cut() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["GATE", "GCUT"],
+        "rule GCUT.W.1 width(GCUT) >= 17nm\n\
+         rule GCUT.GATE.EX.1 extension(GCUT, GATE) >= 17nm\n\
+         rule GCUT.AUX.1 forbidden(GCUT.not_interacting(GATE))\n\
+         rule GCUT.AUX.2 forbidden(GCUT.edges().with_angle(90deg).inside_part(GATE) \
+         or (GCUT.edges().with_angle(90deg) and GATE.edges()))\n",
+    );
+    let gate = || Layout::default().rect("GATE", 0, 0, 20, 200);
+    let case = |name: &str, cut: Rect, rules: [Vec<Finding>; 4]| {
+        let [w1, ex1, aux1, aux2] = rules;
+        fixture(
+            &format!("trim_cut/{name}"),
+            &["DRC-105"],
+            &deck,
+            rects(gate(), "GCUT", &[cut]),
+            &[
+                ("GCUT.W.1", w1),
+                ("GCUT.GATE.EX.1", ex1),
+                ("GCUT.AUX.1", aux1),
+                ("GCUT.AUX.2", aux2),
+            ],
+        )
+    };
+    let mut cases = Vec::new();
+    for (e, side) in sweep(17) {
+        cases.push(case(
+            &format!("extension/{side}"),
+            (-e, 90, 20 + e, 107),
+            [vec![], below(e, 17), vec![], vec![]],
+        ));
+    }
+    for (h, side) in sweep(17) {
+        cases.push(case(
+            &format!("width/{side}"),
+            (-30, 90, 50, 90 + h),
+            [below(h, 17), vec![], vec![], vec![]],
+        ));
+    }
+    cases.push(case(
+        "ends_inside",
+        (-30, 90, 10, 107),
+        [vec![], lengths(&[0]), vec![], lengths(&[17])],
+    ));
+    cases.push(case(
+        "ends_on_edge",
+        (-30, 90, 20, 107),
+        [vec![], lengths(&[0]), vec![], lengths(&[17])],
+    ));
+    cases.push(case(
+        "alone",
+        (100, 90, 150, 107),
+        [vec![], vec![], areas(&[850]), vec![]],
+    ));
+    let mut out = Vec::new();
+    for fixture in &cases {
+        for symmetry in Symmetry::ALL.into_iter().filter(|s| s.turns % 2 == 0) {
+            for &(dx, dy) in &OFFSETS {
+                out.push(fixture.transformed(symmetry, dx, dy));
+            }
+        }
+    }
+    out
 }
 
 /// `density_balance(c1, c2, die; window: 1000nm, step: 1000nm) >= 0.5`
