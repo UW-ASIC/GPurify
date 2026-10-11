@@ -916,7 +916,17 @@ pub enum Rule {
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-028. Rules: sky130 m1.3a; LEF `SPACING RANGE INFLUENCE`.
     ///
-    /// Limits: equivalence with LEF `INFLUENCE` is unverified.
+    /// This is LEF `SPACING spacing RANGE minWidth maxWidth INFLUENCE
+    /// influenceLength` with its plain `RANGE` row: "any length of the stub
+    /// wire that is less than or equal to influenceLength from the wide wire
+    /// inherits the wide wire spacing" (LEF/DEF 5.8, `SPACING`), for a wide
+    /// part at least `width_threshold` wide.
+    ///
+    /// Limits: the stub-width `RANGE stubMinWidth stubMaxWidth` and LEF
+    /// `SPACINGTABLE INFLUENCE` (spacing between two stubs near a wide wire)
+    /// are missing, and so is the wide range's upper bound. The growth is
+    /// square, so near a corner of the wide part a little more of a stub is
+    /// held than LEF's distance asks (fails closed).
     AttachedWideSpacing {
         /// The layer measured, drawn or derived.
         layer: LayerId,

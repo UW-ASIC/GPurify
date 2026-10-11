@@ -615,6 +615,37 @@ fn a_forbidden_range_that_ends_before_it_starts_is_refused_at_load() {
     );
 }
 
+// ---------------------------------------------------------- influence
+
+/// LEF/DEF 5.8 Language Reference, "Using Spacing Rules": `SPACING 0.5 RANGE
+/// 2.01 2000.0 ;` with `SPACING 0.5 RANGE 2.01 2000.0 INFLUENCE 1.000 ;`,
+/// "Stub wires <= 1.0 um from wide wires >= 2.01 require 0.5 um spacing",
+/// written as one row: the wide part where a 2.01 µm square fits, grown by
+/// 1 µm within its own shape. Two 2.01 µm wide wires, each with a 0.2 µm
+/// stub 2 µm long rising from its top, and a line 0.45 µm beside the stub:
+/// - the first line starts 0.5 µm above its wire, beside the stub's first
+///   micron: 0.45 from the influenced stub, flagged against 0.5 (and exactly
+///   0.5 from the wide wire, which is legal);
+/// - the second starts 1.25 µm above, beside only the stub past its first
+///   micron: 0.515 µm from the influenced stub's corner and 1.25 µm from the
+///   wire, clean. Holding the whole stub to 0.5 would flag it.
+#[test]
+fn lef_influence_holds_the_stub_s_first_micron_to_the_wide_spacing() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule inf wide_space(met1; width: 2.01um, attached: 1um) >= 0.5um\n",
+        &[
+            ("met1", [0, 0, 10_000, 2_010]),
+            ("met1", [5_000, 2_010, 5_200, 4_010]),
+            ("met1", [5_650, 2_510, 5_850, 4_000]),
+            ("met1", [20_000, 0, 30_000, 2_010]),
+            ("met1", [25_000, 2_010, 25_200, 4_010]),
+            ("met1", [25_650, 3_260, 25_850, 4_500]),
+        ],
+    );
+    assert_eq!(found.of("inf"), [(len(450), len(500))]);
+}
+
 // ---------------------------------------------------------- huge metal
 
 /// sky130 m1.3a "Min. spacing of features attached to or extending from
