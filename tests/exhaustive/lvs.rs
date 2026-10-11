@@ -2813,6 +2813,15 @@ fn controlled() -> Vec<Fixture> {
     out
 }
 
+/// An `lvs.short_path` row measuring step `k` of its path (the harness
+/// compares the measure, not the limit).
+fn step(k: u32) -> Finding {
+    Finding {
+        measured: Some(gpurify::check::report::Measurement::Count(k)),
+        at: None,
+    }
+}
+
 /// The rows `check_layout` records from the layout alone (its rustdoc), and
 /// device recognition's corner cases.
 fn layout_rows() -> Vec<Fixture> {
@@ -2927,7 +2936,28 @@ fn layout_rows() -> Vec<Fixture> {
             shorted,
             spice(&one),
         )
-        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()])),
+        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
+        .expect(Expect::rule("lvs.short_path", vec![step(1)])),
+    );
+    // LVS-005: where the short runs. A met1 bridge, a via1 at each end,
+    // joins track n0 to track n1, so labels n0 and n1 are on one net, and
+    // the fewest polygons between their tracks are the track, the bridge
+    // and the other track: two steps, each reported (derived by hand; the
+    // transistor joins n0 to no other track).
+    let x = -600;
+    let bridged = draw(&one)
+        .rect("met1", x, track(0), x + 200, track(1) + 200)
+        .rect("via1", x, track(0), x + 200, track(0) + 200)
+        .rect("via1", x, track(1), x + 200, track(1) + 200);
+    out.push(
+        with_text(
+            "checks/short_path_through_a_bridge",
+            &["LVS-005"],
+            bridged,
+            spice(&one),
+        )
+        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
+        .expect(Expect::rule("lvs.short_path", vec![step(1), step(2)])),
     );
 
     // LVS-004: a MOS recogniser with two terminals. Its source and drain

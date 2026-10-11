@@ -433,3 +433,38 @@ fn shapes_that_touch_nothing_each_form_their_own_net() {
         );
     }
 }
+
+/// Oracle: construct-from-answer. Three rectangles in a row, `a`, `b`, `c`,
+/// each touching the next, and a detour from `a` up, across and down to
+/// `c` through three more; one rectangle apart. The fewest polygons from
+/// `a` to `c` are the row, not the detour; a polygon is its own path; one
+/// on another net has none, and neither does a table that extracted
+/// nothing. Breaks if the walk is not breadth first, leaves the net, or
+/// does not end where it was asked to.
+#[test]
+fn a_path_is_the_fewest_polygons_between_two_on_one_net() {
+    let layer = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let a = layout.rect(layer, 0, 0, 1_000, 200);
+    let b = layout.rect(layer, 1_000, 0, 2_000, 200);
+    let c = layout.rect(layer, 2_000, 0, 3_000, 200);
+    layout.rect(layer, 0, 200, 200, 1_200);
+    layout.rect(layer, 0, 1_200, 3_000, 1_400);
+    layout.rect(layer, 2_800, 200, 3_000, 1_200);
+    let apart = layout.rect(layer, 5_000, 0, 6_000, 200);
+    let (store, ids) = layout.finish();
+    let [a, b, c, apart] = [a, b, c, apart].map(|handle| ids.of(handle));
+
+    let touching = Connectivity {
+        conductors: vec![layer],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    assert_eq!(nets.path(a, c), None, "an empty table knows no path");
+    extract_nets_into(&store, &touching, &mut nets);
+    assert_eq!(nets.path(a, c), Some(vec![a, b, c]));
+    assert_eq!(nets.path(c, a), Some(vec![c, b, a]));
+    assert_eq!(nets.path(a, a), Some(vec![a]));
+    assert_eq!(nets.path(a, apart), None);
+}

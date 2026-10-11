@@ -48,7 +48,10 @@ pub struct NetTable {
     /// `polys[net_start[n]..net_start[n + 1]]` is net `n`, ascending.
     net_start: Vec<u32>,
     polys: Vec<PolyId>,
-    /// Scratch, kept so a second extraction reuses the allocations.
+    /// Every join the last extraction made, `(a, b)` polygon rows: touching
+    /// shapes on one conductor, the two shapes a cut lands on, a global
+    /// layer's shapes, a polygon and its holes. Kept, so a second extraction
+    /// reuses the allocation and [`NetTable::path`] can walk them.
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,
     scratch: EdgeScratch,
@@ -148,6 +151,82 @@ impl NetTable {
     pub fn same_net(&self, a: PolyId, b: PolyId) -> bool {
         let (a, b) = (self.net_of(a), self.net_of(b));
         a != NetId::NONE && a == b
+    }
+
+    /// The fewest polygons that join `from` to `to` through the joins the
+    /// extraction made (shapes touching on one conductor, the two shapes a
+    /// cut lands on, a global layer's shapes, a polygon and its holes; a cut
+    /// itself is no step), `from` first and `to` last, `[from]` when they
+    /// are one polygon. Of several such paths, the one a breadth-first walk
+    /// from `from` taking each polygon's neighbours lowest first reaches
+    /// `to` along, so the answer is the same on every run. `None` when the
+    /// two are on different nets or
+    /// on none, or the table holds no joins (a [`Default`] one). This is
+    /// where a short between two labelled nets runs (catalog LVS-005).
+    ///
+    /// Breadth first over the net's joins: O(joins) time and O(polygons)
+    /// memory per call. A polygon the table never saw has no path.
+    pub fn path(&self, from: PolyId, to: PolyId) -> Option<Vec<PolyId>> {
+        let (&net, &other) = (self.poly_net.get(from.idx())?, self.poly_net.get(to.idx())?);
+        if net == NetId::NONE || net != other {
+            return None;
+        }
+        if from == to {
+            return Some(vec![from]);
+        }
+        let rows = self.poly_net.len();
+        // The net's joins as CSR, each list ascending, so the walk is
+        // deterministic.
+        let on_net = |&&(a, b): &&(u32, u32)| {
+            self.poly_net.get(a as usize) == Some(&net)
+                && self.poly_net.get(b as usize) == Some(&net)
+        };
+        // Degrees, then their exclusive prefix sums: `start[row]` is where
+        // row's neighbours begin, `start[rows]` how many there are.
+        let mut start = vec![0u32; rows + 1];
+        for &(a, b) in self.edges.iter().filter(on_net) {
+            start[a as usize] += 1;
+            start[b as usize] += 1;
+        }
+        let mut sum = 0u32;
+        for slot in &mut start {
+            let degree = *slot;
+            *slot = sum;
+            sum += degree;
+        }
+        let mut next_free = start.clone();
+        let mut neighbour = vec![0u32; sum as usize];
+        for &(a, b) in self.edges.iter().filter(on_net) {
+            for (at, to) in [(a, b), (b, a)] {
+                neighbour[next_free[at as usize] as usize] = to;
+                next_free[at as usize] += 1;
+            }
+        }
+        for run in start.windows(2) {
+            neighbour[run[0] as usize..run[1] as usize].sort_unstable();
+        }
+        let mut parent = vec![u32::MAX; rows];
+        parent[from.idx()] = from.0;
+        let mut queue = std::collections::VecDeque::from([from.0]);
+        while let Some(at) = queue.pop_front() {
+            if at == to.0 {
+                let mut path = vec![to];
+                let mut step = at;
+                while step != from.0 {
+                    step = parent[step as usize];
+                    path.push(PolyId(step));
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for &next in &neighbour[start[at as usize] as usize..start[at as usize + 1] as usize] {
+                if parent[next as usize] == u32::MAX {
+                    parent[next as usize] = at;
+                    queue.push_back(next);
+                }
+            }
+        }
+        None
     }
 }
 

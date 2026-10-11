@@ -423,7 +423,10 @@ Name your nets with text labels in the layout. LVS, SPEF and the intent file
 all refer to nets by those names. One name on two nets the layout does not
 join is an open (`lvs.label_conflict`), and a field solve or netlist export of
 that name is refused. Two names on one net is a short between them
-(`lvs.net_seed_conflict`, reported by every run).
+(`lvs.net_seed_conflict`, reported by every run), and where the short runs
+follows as `lvs.short_path`: the fewest shapes joining the two labelled
+ones, one row per step from shape to shape (a via joins the shapes it
+lands on and is no step itself).
 
 ```
 connect global psub                                # every psub shape is one net: the substrate
