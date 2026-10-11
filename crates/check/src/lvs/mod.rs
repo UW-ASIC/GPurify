@@ -14,10 +14,11 @@
 //!
 //! 1. drops every reference `Bulk` terminal when the layout has none (the
 //!    deck's MOS recogniser lists three layers), and every layout parameter
-//!    that no reference device of the same kind and model declares;
+//!    that no reference device of the same kind and model declares, so it
+//!    cannot block a merge;
 //! 2. reduces both sides by parallel and series merges ([`reduce`]);
 //! 3. partitions the nodes of both sides together by iterative refinement, the
-//!    graph-labelling algorithm of C. Ebeling, "GeminiII: a second generation
+//!    graph-labelling algorithm of C. Ebeling, "`GeminiII`: a second generation
 //!    layout validation program", ICCAD 1988,
 //!    [doi:10.1109/ICCAD.1988.122520](https://doi.org/10.1109/ICCAD.1988.122520).
 //!    Devices start in one class per `(kind, model)` and nets in one class.
@@ -36,7 +37,10 @@
 //!    tried, up to eight per stall (testing-plan F58);
 //! 5. reads the final partition: a class with exactly one node per side pairs
 //!    them, and every paired device must also agree on kind, model, terminals
-//!    and parameters. Everything else is a [`Discrepancy`].
+//!    and parameters. Parameter presence is per device: each parameter the
+//!    reference card states must be measured and agree, and a measure the
+//!    card omits is not compared, whatever other cards of the model state
+//!    (testing-plan F68). Everything else is a [`Discrepancy`].
 //!
 //! Roles decide which terminals are interchangeable. Positions never matter.
 //!

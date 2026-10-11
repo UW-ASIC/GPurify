@@ -14,7 +14,7 @@ use gpurify_ingest::StrId;
 /// Only [`Verdict::Match`] passes. The `gpurify` binary records a
 /// [`Verdict::Inconclusive`] as a refused LVS stage, so that run fails too.
 ///
-/// Catalog: LVS-019. KLayout's counterpart is the `NetlistCrossReference`
+/// Catalog: LVS-019. `KLayout`'s counterpart is the `NetlistCrossReference`
 /// status of the circuit pair; Netgen's is its final "Netlists match uniquely"
 /// or "Netlists do not match" line.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +77,7 @@ pub enum Discrepancy {
     /// shows as two plain unpaired devices.
     ///
     /// Report id `lvs.unpaired_device`. Catalog: LVS-012, LVS-013, LVS-049.
-    /// KLayout: `device_mismatch`. Netgen: listed under "DEVICE mismatches".
+    /// `KLayout`: `device_mismatch`. Netgen: listed under "DEVICE mismatches".
     UnpairedDevice {
         /// Which netlist holds the device.
         side: Side,
@@ -91,7 +91,7 @@ pub enum Discrepancy {
     /// too; port names themselves are never compared (catalog LVS-016 is
     /// partial).
     ///
-    /// Report id `lvs.unpaired_net`. Catalog: LVS-015, LVS-016. KLayout:
+    /// Report id `lvs.unpaired_net`. Catalog: LVS-015, LVS-016. `KLayout`:
     /// `net_mismatch`. Netgen: listed under "NET mismatches".
     UnpairedNet {
         /// Which netlist holds the net.
@@ -110,7 +110,7 @@ pub enum Discrepancy {
     /// terminal on no net, or on a net that did not pair, never matches. One
     /// moved terminal usually gives a row from each side.
     ///
-    /// Report id `lvs.terminal_mismatch`. Catalog: LVS-015. KLayout and Netgen
+    /// Report id `lvs.terminal_mismatch`. Catalog: LVS-015. `KLayout` and Netgen
     /// have no separate class for it: they pair a device only when its nets
     /// pair, so the same fault shows there as device and net mismatches.
     TerminalMismatch {
@@ -132,7 +132,7 @@ pub enum Discrepancy {
     /// and `W` already multiplied by `m`; any other merged device carries
     /// its count of parallel devices as `m`.
     ///
-    /// Report id `lvs.parameter_mismatch`. Catalog: LVS-014. KLayout:
+    /// Report id `lvs.parameter_mismatch`. Catalog: LVS-014. `KLayout`:
     /// `match_devices_with_different_parameters`. Netgen: a property error.
     ///
     /// # Limits
@@ -153,21 +153,22 @@ pub enum Discrepancy {
         /// The reference's value.
         ref_value: f64,
     },
-    /// A parameter name that only one of two paired devices declares. A value
-    /// stated on one side is never taken as agreement with silence on the
-    /// other.
+    /// A parameter a paired device's reference card states that the layout
+    /// does not measure. A value stated on one side is never taken as
+    /// agreement with silence on the other.
     ///
     /// Every reference parameter the layout does not measure (`nf`, `as`,
     /// `ad`, `ps`, `pd`, a resistor's `r`, a capacitor's `c`) lands here
-    /// (testing-plan F16). A layout measure lands here only when the
-    /// reference declares it on another device of the same kind and model
-    /// but not on this one's partner: one the reference never declares for
-    /// that model is not compared.
+    /// (testing-plan F16). Presence is per
+    /// device: a layout measure the partner's card omits is not compared,
+    /// even when another card of the same model states it (testing-plan
+    /// F68), so a layout measure never lands here.
     ///
     /// Report id `lvs.undeclared_param`. Catalog: LVS-020, which is
     /// GPurify-specific and cites no tool.
     UndeclaredParam {
-        /// The side that declares it.
+        /// The side that declares it: always [`Side::Reference`], since a
+        /// card that omits a parameter states nothing about it.
         side: Side,
         /// The device's row in the reduced layout graph.
         layout_device: u32,

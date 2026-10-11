@@ -420,28 +420,36 @@ fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
     );
 }
 
-/// The mirror image, so the previous test is not satisfied by a comparator that
-/// only ever blames the reference. The layout measures; the reference says
-/// which measures its devices are sized by, per kind and model (testing-plan
-/// F22). Here it sizes the `NCH` model by `W` on its upper card and leaves
-/// the lower card's out, so the layout's lower `W` is the lone one and the
-/// layout is the side named. A reference that sizes `NCH` by nothing says
-/// nothing against the layout's `W`s, which are then not compared.
+/// Oracle: the decision on testing-plan F68. Parameter presence is per
+/// device: the layout measures, and each reference card says which measures
+/// its own device is sized by. Here the reference sizes its upper `NCH` card
+/// by `W` and leaves the lower card's out, so the lower pair compares no `W`
+/// and the upper pair compares theirs: a match, where sizing per model used
+/// to report the layout's lower `W` as `undeclared_param`. The upper card's
+/// `W` still has to agree, and a reference that sizes `NCH` by nothing says
+/// nothing against the layout's `W`s either.
 #[test]
-fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
+fn a_measure_the_paired_card_omits_is_not_compared() {
     let layout = stacked_pair_with_params(&[(WIDTH, 1.0)], &[(WIDTH, 1.0)]);
     let verdict = compare(
         &layout,
         &stacked_pair_with_params(&[], &[(WIDTH, 1.0)]),
         decisive(),
     );
+    assert_eq!(verdict, Verdict::Match, "the lower card states no W");
+
     assert_same_discrepancies(
-        discrepancies(&verdict),
-        &[Discrepancy::UndeclaredParam {
-            side: Side::Layout,
-            layout_device: 0,
-            ref_device: 0,
+        discrepancies(&compare(
+            &layout,
+            &stacked_pair_with_params(&[], &[(WIDTH, 2.0)]),
+            decisive(),
+        )),
+        &[Discrepancy::ParameterMismatch {
+            layout_device: 1,
+            ref_device: 1,
             param: WIDTH,
+            layout_value: 1.0,
+            ref_value: 2.0,
         }],
     );
 

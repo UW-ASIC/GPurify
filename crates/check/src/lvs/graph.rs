@@ -132,7 +132,8 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
 /// grid is given; otherwise it is omitted. The names are `w`, `l`, `area`,
 /// `perim` and `nf`. Interned anywhere means every device carries it, so
 /// [`compare`](crate::lvs::compare) keeps a measure only on devices whose
-/// kind and model the reference declares it for.
+/// kind and model the reference declares it for, and compares it only on a
+/// device whose own reference card states it.
 ///
 /// # Limits
 ///
@@ -388,8 +389,12 @@ pub(crate) fn drop_unextracted_bulk(layout: &Graph, graph: &mut Graph) {
 /// Keep each layout parameter only where the reference declares that name on
 /// some device of the same kind and model. [`from_layout`] measures a name for
 /// every device once anything declares it, and a reference that sizes one
-/// model says nothing about another (testing-plan F22). Only parameters are
-/// dropped, never devices.
+/// model says nothing about another (testing-plan F22), so such a measure must
+/// not block a merge either. Only parameters are dropped, never devices.
+///
+/// This is what reduction sees. Which parameters a paired device is compared
+/// on is decided per device after it, by its own reference card (testing-plan
+/// F68).
 pub(crate) fn keep_declared_params(reference: &Graph, layout: &mut Graph) {
     let identity = |graph: &Graph, device: usize| {
         (

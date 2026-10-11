@@ -117,7 +117,7 @@
 //! | `lvs.unpaired_net` | [`lvs::Discrepancy::UnpairedNet`] | a net with no partner on the other side | LVS-015, LVS-016 |
 //! | `lvs.terminal_mismatch` | [`lvs::Discrepancy::TerminalMismatch`] | paired devices whose terminals reach different nets | LVS-015 |
 //! | `lvs.parameter_mismatch` | [`lvs::Discrepancy::ParameterMismatch`] | paired devices whose parameters differ beyond the tolerance | LVS-014 |
-//! | `lvs.undeclared_param` | [`lvs::Discrepancy::UndeclaredParam`] | a parameter only one side declares | LVS-020 |
+//! | `lvs.undeclared_param` | [`lvs::Discrepancy::UndeclaredParam`] | a parameter the reference card states that the layout does not measure | LVS-020 |
 //! | `lvs.class_imbalance` | [`lvs::Discrepancy::ClassImbalance`] | a class with different member counts on the two sides | LVS-012, LVS-015, LVS-049 |
 //! | `lvs.floating_net` | [`lvs::check_layout`] | a layout net that reaches no device | LVS-006 |
 //! | `lvs.label_conflict` | [`lvs::check_layout`] | one label on several nets | LVS-001, LVS-002 |

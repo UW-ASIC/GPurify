@@ -1,5 +1,5 @@
 //! Partition refinement: the matching algorithm, the iterative graph labelling
-//! of C. Ebeling, "GeminiII: a second generation layout validation program",
+//! of C. Ebeling, "`GeminiII`: a second generation layout validation program",
 //! ICCAD 1988, doi:10.1109/ICCAD.1988.122520.
 //!
 //! Data in: two graphs. Data out: a class per node on each side, plus per-class tallies.
@@ -164,8 +164,10 @@ impl Sides<'_> {
 
 impl Sides<'_> {
     /// How far apart the parameters of layout node `layout` and reference node
-    /// `reference` are: per name, the relative difference when both state it
-    /// and one when only one does, summed. Zero for nets.
+    /// `reference` are: per name the reference states, the relative difference
+    /// when the layout states it too and one when it does not, summed. A name
+    /// only the layout states is not compared (testing-plan F68). Zero for
+    /// nets.
     fn distance(self, layout: u32, reference: u32) -> f64 {
         let reference = reference - self.split;
         let (layout_devices, ref_devices) = (
@@ -187,32 +189,20 @@ impl Sides<'_> {
                 (a - b).abs() / scale
             }
         };
-        let one_sided = |from: &[(gpurify_ingest::StrId, f64)],
-                         to: &[(gpurify_ingest::StrId, f64)]| {
-            from.iter()
-                .filter(|(name, _)| !to.iter().any(|(n, _)| n == name))
-                .count()
-        };
-        let shared: f64 = mine
+        theirs
             .iter()
-            .filter_map(|&(name, a)| {
-                theirs
-                    .iter()
+            .map(|&(name, b)| {
+                mine.iter()
                     .find(|&&(n, _)| n == name)
-                    .map(|&(_, b)| relative(a, b))
+                    .map_or(1.0, |&(_, a)| relative(a, b))
             })
-            .sum();
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a device states a handful of parameters"
-        )]
-        let missing = (one_sided(mine, theirs) + one_sided(theirs, mine)) as f64;
-        shared + missing
+            .sum()
     }
 
     /// Whether layout node `layout` and reference node `reference` would pass
-    /// the verdict's parameter comparison: the same names, each value within
-    /// `tolerance` of the other relatively (`NaN` never is). Nets always do.
+    /// the verdict's parameter comparison: every name the reference states
+    /// stated by the layout too, each value within `tolerance` of the other
+    /// relatively (`NaN` never is). Nets always do.
     fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
         let reference = reference - self.split;
         if layout >= narrow(self.layout.device_count())
@@ -224,12 +214,11 @@ impl Sides<'_> {
             self.layout.params_of(layout),
             self.reference.params_of(reference),
         );
-        mine.len() == theirs.len()
-            && mine.iter().all(|&(name, a)| {
-                theirs.iter().any(|&(other, b)| {
-                    other == name && (a - b).abs() <= tolerance * a.abs().max(b.abs())
-                })
+        theirs.iter().all(|&(name, b)| {
+            mine.iter().any(|&(other, a)| {
+                other == name && (a - b).abs() <= tolerance * a.abs().max(b.abs())
             })
+        })
     }
 }
 

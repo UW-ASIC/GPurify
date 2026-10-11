@@ -22,7 +22,8 @@
 //! side (F12), and a reference `X` instance is flattened (F1): those fixtures
 //! hold since B3, B4 and B2. Parallel passives keep their count (F20), `m`
 //! multiplies a passive (F21), and a parameter is compared only where the
-//! reference declares it for the model (F22): those hold since B9.
+//! reference declares it (F22): those hold since B9; since B21 that is per
+//! paired device, a card without a parameter stating nothing about it (F68).
 //!
 //! The enumeration is every circuit of one to three `nmos`/`pmos` over one to
 //! four nets, every net used, one per class under renaming nets and devices and
@@ -1389,6 +1390,16 @@ fn curated() -> Vec<Fixture> {
         &diode,
         &declared,
     ));
+    // F68 (fixed in B21): presence is per device. Two `dpn` cards, one with
+    // `area=` and one without, against two drawn diodes: the card without
+    // states nothing about its diode's area, so only the other's is compared.
+    let diodes = Circuit::new(4, vec![Dev::pins(D, &[0, 1]), Dev::pins(D, &[2, 3])]);
+    for (case, declared) in [("exact", PIN2_AREA), ("5pct_over", PIN2_AREA * 105 / 100)] {
+        let mut r = diodes.clone();
+        r.devs[0] = r.devs[0].clone().area(declared);
+        let name = format!("params/D_area_on_one_card_{case}");
+        out.push(compared(&name, &["LVS-020", "LVS-063"], &diodes, &r));
+    }
     let nf = edited(&spice(&one), "l=150n", "l=150n nf=1");
     out.push(
         with_text(

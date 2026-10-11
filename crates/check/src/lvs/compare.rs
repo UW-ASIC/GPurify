@@ -30,7 +30,7 @@ pub struct CompareOptions {
     /// one (catalog LVS-014), and it does not apply to reduction, whose merges
     /// need the other parameters bit-identical.
     ///
-    /// Netgen's counterpart is `property ... tolerance`, KLayout's `tolerance`.
+    /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
     pub param_tolerance: f64,
     /// Which parameters are `W`, `L`, `nf` and `m`, so sized devices can be
     /// merged in parallel and series. Default: none, and sized devices never
@@ -53,9 +53,12 @@ impl Default for CompareOptions {
 ///
 /// Reference `Bulk` terminals are dropped when no layout terminal is `Bulk`
 /// (a three-terminal MOS recogniser), and a layout device keeps a parameter
-/// only when the reference declares it on some device of the same kind and
-/// model (a reference that sizes its diodes by `area` says nothing about its
-/// transistors' areas). Then both sides are reduced and refined together. A
+/// through reduction only when the reference declares it on some device of
+/// the same kind and model (a reference that sizes its diodes by `area` says
+/// nothing about its transistors' areas, which must not block their merges).
+/// Then both sides are reduced and refined together. A paired device's
+/// parameters are compared per device: those its reference card states,
+/// whatever other cards of the model state (testing-plan F68). A
 /// symmetry pairs its lowest layout node with the reference node whose
 /// parameters are closest, so a stall resolves by property value rather than
 /// by row order, and a pairing that leaves a class short of layout nodes or
@@ -89,9 +92,9 @@ fn protect_labelled(layout: &Graph, reference: &mut Graph) {
     for &net in &reference.port_net {
         is_port[net as usize] = true;
     }
-    for net in 0..reference.net_count() {
+    for (net, &port) in is_port.iter().enumerate() {
         let named = reference.net_name[net].is_some_and(|name| labels.binary_search(&name).is_ok());
-        if named && !is_port[net] {
+        if named && !port {
             reference.port_net.push(narrow(net));
         }
     }
@@ -317,8 +320,11 @@ fn compare_terminals(
     }
 }
 
-/// Parameters joined by name within relative tolerance (`NaN` fails); a name only
-/// one side declares is [`Discrepancy::UndeclaredParam`], never a pass.
+/// The parameters the reference card states, each joined by name to the
+/// layout's within relative tolerance (`NaN` fails). One the layout does not
+/// measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
+/// layout measures is not compared: presence is per device, and a card that
+/// omits a parameter states nothing about it (testing-plan F68).
 fn compare_params(
     layout: &Graph,
     reference: &Graph,
@@ -341,19 +347,14 @@ fn compare_params(
     while at_mine < mine.len() && at_theirs < theirs.len() {
         let ((layout_param, layout_value), (ref_param, ref_value)) =
             (mine[at_mine], theirs[at_theirs]);
-        if layout_param != ref_param {
-            let mine_first = layout_param < ref_param;
-            found.push(undeclared_param(
-                pair,
-                if mine_first {
-                    Side::Layout
-                } else {
-                    Side::Reference
-                },
-                if mine_first { layout_param } else { ref_param },
-            ));
-            at_mine += usize::from(mine_first);
-            at_theirs += usize::from(!mine_first);
+        if layout_param < ref_param {
+            // Measured, but this card says nothing about it.
+            at_mine += 1;
+            continue;
+        }
+        if layout_param > ref_param {
+            found.push(undeclared_param(pair, ref_param));
+            at_theirs += 1;
             continue;
         }
         at_mine += 1;
@@ -373,18 +374,16 @@ fn compare_params(
         }
     }
 
-    for &(param, _) in &mine[at_mine..] {
-        found.push(undeclared_param(pair, Side::Layout, param));
-    }
     for &(param, _) in &theirs[at_theirs..] {
-        found.push(undeclared_param(pair, Side::Reference, param));
+        found.push(undeclared_param(pair, param));
     }
 }
 
-/// One parameter of a paired device that only `side` declares.
-const fn undeclared_param(pair: (u32, u32), side: Side, param: StrId) -> Discrepancy {
+/// One parameter the reference card of a paired device states and the layout
+/// does not measure.
+const fn undeclared_param(pair: (u32, u32), param: StrId) -> Discrepancy {
     Discrepancy::UndeclaredParam {
-        side,
+        side: Side::Reference,
         layout_device: pair.0,
         ref_device: pair.1,
         param,
