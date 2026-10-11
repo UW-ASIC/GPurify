@@ -729,3 +729,34 @@ fn density_balance_is_the_lesser_coverage_over_the_greater() {
     sink.run(&store, &balance(0.5));
     assert!(sink.out.measured.is_empty());
 }
+
+/// Oracle: the closed form for two parallel lines (Koren and Koren, 1998):
+/// lines of length 500 a gap 100 apart under a square defect of half-side
+/// 100 have a short-circuit critical area of `(500 + 200)(200 - 100)`, 70000.
+/// A limit one square unit under it reports exactly that; at it, nothing.
+#[test]
+fn critical_area_of_two_parallel_lines_is_the_closed_form() {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 500, 50);
+    layout.rect(A, 0, 150, 500, 200);
+    let (store, _ids) = layout.finish();
+    let rule = |limit| {
+        vec![(
+            RULE,
+            Rule::CriticalArea {
+                layer: A,
+                radius: gpurify_testgen::dbu(100),
+                limit: gpurify_geom::DbuArea::new(limit),
+            },
+        )]
+    };
+    let mut sink = Sink::default();
+    sink.run(&store, &rule(69_999));
+    assert_eq!(
+        sink.out.measured,
+        [Measurement::Area(gpurify_geom::DbuArea::new(70_000))]
+    );
+    assert_eq!(sink.runs[0].examined, 2, "two figures");
+    sink.run(&store, &rule(70_000));
+    assert!(sink.out.measured.is_empty());
+}

@@ -506,6 +506,16 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "limit", Dim::Scalar)),
         &[],
     ),
+    // Short-circuit critical area for a square defect of half-side `radius`:
+    // `critical_area(met1; radius: 100nm) <= 50um2`.
+    drc(
+        "critical_area",
+        Cmp::Le,
+        "critical_area",
+        &[0],
+        AREA,
+        &[p("radius", "radius", Dim::Length)],
+    ),
     // Two masks' coverage balanced per window, an optional third layer the
     // die: `density_balance(m1_c1, m1_c2; window: 10um, step: 5um) >= 0.8`.
     Kind {

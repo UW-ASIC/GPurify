@@ -280,6 +280,7 @@ explains (kind 30).
 | 64 | adjacent_enclosure | `enclosure(i, o, adjacent) >= l` | FIG by shape (inner) | APPROX | exact when the inner layer is R, else KLayout ⊆ GPurify | new |
 | 65 | anchored_patterning | `patterning(L, A1, ..; colors) >= l` | — | NONE | reported as not mirrored | — |
 | 66 | density_balance | `density_balance(A, B[, d]; window, step) >= f` | POINT | EXACT | exact | — |
+| 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
 
 41 kinds are EXACT (five scripted over KLayout's polygons), 16 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without

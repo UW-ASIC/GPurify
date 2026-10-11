@@ -180,6 +180,13 @@ def region_density(rule, layer, region, limit, maximum)
     put({ rule: rule }.merge(poly(p)).merge({ v: r })) if (maximum ? r > limit : r < limit)
   end
 end
+def critical_area(rule, layer, r, limit4)
+  g = layer.data.merged.each.map { |p| RBA::Region.new(p).sized(r) }
+  c = RBA::Region.new
+  g.each_with_index { |a, i| g.each_with_index { |b, j| c += (a & b) if j > i } }
+  c = c.merged
+  put({ rule: rule, pt: [c.bbox.center.x, c.bbox.center.y], v: c.area / 4.0 }) if c.area > limit4
+end
 def density_balance(rule, a, b, die, w, s, limit)
   return if die.empty?
   ca = a.data.merged & RBA::Region.new(die)
@@ -888,6 +895,22 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("density", Key::Point, Value::Ratio)
+            }
+            Rule::CriticalArea {
+                layer,
+                radius,
+                limit,
+            } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "critical_area({q}, {}, {}, {})",
+                    var(layer),
+                    lim(radius),
+                    4 * limit.raw()
+                )
+                .expect("a String");
+                exact("critical_area", Key::Point, Value::Area)
             }
             Rule::DensityBalance {
                 a,
