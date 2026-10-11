@@ -1088,6 +1088,18 @@ the space when the facing edge is an end of line too. `TritonRoute` defines the 
 parallel reach each swept one step either side, and both-sides and end-to-end cases, hand-derived
 under the square's symmetries (SY, MR).
 
+### 39. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
+
+**GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 38) owns a box, the end widened
+by `side` each way, from `backward` behind its line to `forward` past it; each other figure whose
+material overlaps the box with positive area is a finding, measuring that area.
+
+**KLayout.** Not mirrored: picking the edges whose two corners are convex and testing each one's
+box against the other figures is a loop over polygons, not a KLayout check. `TritonRoute` defines
+the rule (`checkMetalEOLkeepout_main`), but it is not run as a differential. The oracles: the
+box's forward, side and backward reaches each swept one step either side, with the area inside
+derived by hand as a rectangle's, under the square's symmetries (SY, MR).
+
 ### 40. two_width_spacing_table — APPROX (exact on R, else KLayout ⊆ GPurify)
 
 **GPurify** (`spacing.rs` `two_width_table`): each cell (r, c) holds a pair whose one shape has a
@@ -1111,6 +1123,18 @@ W(r).separation(W(c), s, euclidian, transparent[, projection_limits(...)])  # ot
   between the whole figures. Besides the mirror: LEF's own worked example (the four width and
   run cases it prints; SE), the widths and a run swept one step either side, a thin tab of a wide
   plate, hand-derived under the square's symmetries (SY, MR).
+
+### 41. span_length — NONE: KLayout has no span measure
+
+**GPurify** (`facing.rs` `span_length`, `chords`): the chords horizontal and vertical lines cut
+from each merged figure, read slab by slab between the figure's vertex coordinates; one finding per
+maximal region of an unchanged illegal chord.
+
+**KLayout.** Not mirrored: `width` with `projection` reports edge pairs closer than a limit, not
+the set of chord lengths a span list judges, and a legal set of exact values with an open last one
+has no KLayout check. The oracles: LEF 5.8's own span tables (`SPANLENGTHTABLE 0.06 0.08 0.12 0.16
+0.20` and `WRONGDIRECTION 0.12 0.16 0.20`), every listed value one step either side (SE), an L, a
+ring and a shape drawn in pieces, hand-derived under the square's symmetries (SY, MR).
 
 ### 42. convex_corner_spacing — APPROX (GPurify ⊆ KLayout) without `except_eol`, else NONE
 
@@ -1141,31 +1165,7 @@ their centre lines must be exactly the pitch apart.
 none relates the centre lines of neighbouring shapes or flags a distance that is too large as well
 as too small. The oracles: ASAP7's own values (FIN.S.1 27 nm on 7 nm fins, GATE.S.1 54 nm on 20 nm
 gates) at the pitch and one step either side (FR), a missing line, rows that do not overlap, and a
-bent shape refused, hand-derived under the square's symmetries (SY, MR).
-
-### 41. span_length — NONE: KLayout has no span measure
-
-**GPurify** (`facing.rs` `span_length`, `chords`): the chords horizontal and vertical lines cut
-from each merged figure, read slab by slab between the figure's vertex coordinates; one finding per
-maximal region of an unchanged illegal chord.
-
-**KLayout.** Not mirrored: `width` with `projection` reports edge pairs closer than a limit, not
-the set of chord lengths a span list judges, and a legal set of exact values with an open last one
-has no KLayout check. The oracles: LEF 5.8's own span tables (`SPANLENGTHTABLE 0.06 0.08 0.12 0.16
-0.20` and `WRONGDIRECTION 0.12 0.16 0.20`), every listed value one step either side (SE), an L, a
-ring and a shape drawn in pieces, hand-derived under the square's symmetries (SY, MR).
-
-### 39. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
-
-**GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 38) owns a box, the end widened
-by `side` each way, from `backward` behind its line to `forward` past it; each other figure whose
-material overlaps the box with positive area is a finding, measuring that area.
-
-**KLayout.** Not mirrored: picking the edges whose two corners are convex and testing each one's
-box against the other figures is a loop over polygons, not a KLayout check. `TritonRoute` defines
-the rule (`checkMetalEOLkeepout_main`), but it is not run as a differential. The oracles: the
-box's forward, side and backward reaches each swept one step either side, with the area inside
-derived by hand as a rectangle's, under the square's symmetries (SY, MR).
+bent shape refused, hand-derived under the four symmetries that keep the axes (SY, MR).
 
 ---
 
