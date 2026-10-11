@@ -101,10 +101,10 @@ pub struct WellBiasTable {
 /// # Limits
 ///
 /// Ranges over-report as [`ModelLimitTable`]'s do, and a gate or channel no
-/// power supply reaches is not checked. Power states are not modelled, so
-/// isolation at switchable-domain outputs (ERC-F7) and power-down undriven
-/// gates (ERC-F8) are missing. This is a functional check, not ESD protection
-/// of a domain crossing (ERC-C4).
+/// power supply reaches is not checked. It reads every supply on: isolation
+/// at switchable-domain outputs (ERC-F7) and gates undriven in a power state
+/// (ERC-F8) are [`MissingIsolationTable`]'s and [`UndrivenGateTable`]'s. This
+/// is a functional check, not ESD protection of a domain crossing (ERC-C4).
 ///
 /// Catalog: ERC-F6 in the [check catalog]. Defined by Calibre PERC (white
 /// paper 81822, public material only); [IEEE 1801] (UPF, cited for scope and
