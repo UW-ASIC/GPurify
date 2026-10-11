@@ -695,8 +695,11 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 # edge length), rpm.1b-1f (exact resistor widths), varac.2/6 (tap-width and
 # varactor-tap spacing), hv.* and vhvi.* (net propagation of high voltage),
 # m1.pd.1-m4.pd.1 and x.18 (recommended only; pd.1's "oxide pattern density"
-# is not a metal density this deck can state with certainty), m1.X.1 (waffle
-# windows), pwres.*, photo.*, tunm.*, denmos.*, depmos.*, extd.*, uhvi.*,
+# is not a metal density this deck can state with certainty), m1.X.1-m4.X.1
+# (waffle-drop window density: [S1] states no window step, and Cadence's
+# SKY130 DRM of 2025-07-22 lists m1-m4.RC.pd1-6 as obsolete and removed and
+# cmm*/waffleDrop as unsupported), the CU-flagged rules, ct/via*.irdrop among
+# them (Cu back end only; this deck is the Al back end), pwres.*, photo.*, tunm.*, denmos.*, depmos.*, extd.*, uhvi.*,
 # vpp.*, mf.*, rdl.*, indm.*, x.12-x.29 (frame, seal ring and cell-name rules).
 # N/A in [S1] and absent from [S3]: capm.2b/5/6/8/10/12 as [S1] numbers them
 #   ([S3] gives capm.2b as a bottom-plate spacing of 1.2um that needs same-net

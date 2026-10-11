@@ -87,6 +87,44 @@ None has been compared against foundry signoff results.
 - sky130: maximum metal density (met1-met4, 70% in 700um windows) is the
   standard-cell tech LEF's router limit, not a manual rule, so it is an ERC
   warning over whole windows, not a DRC error.
+- sky130: the waffle-drop window density rules (m1.- to m4.-, the DRC
+  messages m1.x.1 to m4.x.1: met1-met4 density in a 700x700 window must be
+  at least 70% when cmm waffle-drop covers all of it, then 65/60/50/40/30%
+  by coverage band) are not checked, and nothing public says how they
+  should be. The rule text (google/skywater-pdk 7198cf6,
+  docs/rules/periphery-rules.rst lines 2017-2028 and the m2-m4 tables;
+  docs/rules/errors.csv lines 1196-1219) gives no window step, and its bands
+  share endpoints (80-100% and 60-80%). The 700 um window and 70 um step of
+  m1.pd.2a/2b are stated for m1.pd.1 only. No open deck codes the rule:
+  open_pdks sky130.lydrc and sky130.tech (0ec4fa6), mpw_precheck
+  sky130A_mr.drc (0941bdc) and efabless sky130_klayout_pdk (dace518) have
+  no waffle-drop density check. Cadence's SKY130 Pegasus deck (a no-NDA
+  release under the Cadence Public License, v0.0_2.12) leaves it commented
+  out in Include/m1.drc.pvl, with the note "Unclear if a step should be
+  used; maybe 350um ?" and with bands chosen as [low, high). Its DRM of
+  2025-07-22, which says it uses information from SkyWater, says
+  m1-m4.RC.pd1-6 "are obsolete and removed". It also says cmm*/waffleDrop is
+  not supported and should be replaced by metX/fill_block (warning
+  mX.oldfill.2). Writing the rule would mean guessing a step, so GPurify
+  leaves it out.
+- sky130: the IR-drop rules (ct.irdrop.1-3 and via.irdrop to
+  via4.irdrop.1-4: "for n contacts on the same connector, mcon area pre-
+  and post- Cu conversion must differ by no more than" 0.0-0.9) are not
+  checked. `gpurify xor` finds every region where a cut layer differs
+  between two layouts. The rules are flagged CU (Cu back end only) and IR
+  (compare the Al database with the slotted Cu database). sky130 offers no
+  Cu back end: Cadence's DRM says "CU option is not currently offered for
+  this PDK" and lists mcon.IR.1-3 as "Rule not implemented", and
+  google/skywater-pdk issue 28 is still open on removing the Cu rules. The
+  text does not say what a connector is. Its descriptions are cut short
+  ("…"), and the via rules say "mcon area". The unit column's "µm" was
+  added by a script in google/skywater-pdk 9039be3 (2020-11-06, "Unit
+  column generated"), not by SkyWater, and the June 2020 import has no unit.
+  The only public code for any of these rules is open_pdks sky130.lydrc
+  lines 464-467. It reads ct.irdrop.1-2 as a single-layout li enclosure of
+  1-10 or 11-100 mcons (0.2/0.3 um), runs that only under its CU switch,
+  and leaves via*.irdrop "not coded because not understandable". That
+  reading uses only one layout, which does not match the IR flag.
 - sky130: the periphery rules also apply inside SRAM cores (`areaid.ce`).
   The implant-enclosure rules nsd/psd.5a and 5b on diffusion and taps that
   butt each other are measured straight out from each edge (see
@@ -179,10 +217,10 @@ says which foundry manual, standard or tool defines each one.
 | DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
 | DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
-| DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked: the irdrop rules' tolerance per connector by cut count, whose text leaves unsettled what a connector is and the unit of its limit (um) |
+| DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked, and not checkable from public sources: the irdrop tolerance per connector by cut count (ct.irdrop.1-3, via.irdrop.1-4 to via4.irdrop.1-4). Its flags are CU (Cu back end only, which sky130 does not offer) and IR (an Al layout against its slotted Cu twin); no public source defines a connector, and the unit (um) was added by a script (skywater-pdk 9039be3), not by SkyWater. No public deck implements it; see docs/limitations.md |
 | DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind; slot geometry uses the generic kinds |
-| DRC-076 | Waffle-window density | missing | sky130.deck left out |
+| DRC-076 | Waffle-window density | missing | Not implemented, by decision: the rule text (SKY m1.- to m4.-, flag RC) gives a 700 um window and coverage bands but no window step, and no public deck codes it. Cadence's public SKY130 DRM (2025-07-22) lists it as obsolete and removed and cmm*/waffleDrop as unsupported; see docs/limitations.md |
 | DRC-081 | Net spacing between two layers / on wells | missing | Net spacing takes one layer; only sky130 connects wells as nets |
 | DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
 | DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
