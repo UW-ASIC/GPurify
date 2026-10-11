@@ -34,7 +34,8 @@
 //!   is a lower bound) and monotone laws are inequalities, held exactly.
 //! - Mesh refinement (C6): the error against a cube's known capacitance
 //!   stays inside `|e₀| (h/h₀)^(2/3)`, the rate a cube edge's charge
-//!   singularity allows, from the coarsest mesh's own error `e₀`.
+//!   singularity allows, from the coarsest mesh's own error `e₀`, and each
+//!   refinement raises the capacitance (F77), held exactly.
 //!
 //! Every run's network is also held to passivity (C6), whatever the fixture
 //! claims: no resistance, capacitance or inductance below zero
@@ -1440,12 +1441,14 @@ fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {
 /// `|e₀| (h/h₀)^(2/3)` set by the coarsest mesh's own error `e₀`, and at 32
 /// panels a side is at most `16^(−2/3)`, 16%, of it.
 ///
-/// Monotone within a stated tolerance: collocation at the centroids with a
-/// softened near field is not a Galerkin solve, so Thomson's principle does
-/// not make each refinement raise C. The tolerance is the envelope: a
-/// refinement may lower C by no more than the envelope at the two meshes it
-/// joins, which is all a convergent sequence inside it can do. (It is not
-/// monotone: the crate docs' accuracy notes give the overshoot.)
+/// Monotone, with no tolerance (F77): each refinement raises C. Collocation
+/// with centroid-to-centroid far pairs is not a Galerkin solve, so
+/// Thomson's principle does not promise it; it is what integrating near
+/// panel pairs over both rectangles achieves, where the softened
+/// centroid-to-centroid near field overshot (2% under at 2 panels a side,
+/// 0.15–0.2% over at 8 to 32, falling back). Measured now: 1.8%, 0.75%,
+/// 0.27%, 0.078% and 0.014% under the limit, rising, so each mesh is also
+/// within the envelope with room to spare.
 #[test]
 fn a_field_solved_capacitance_converges_as_the_mesh_is_refined() {
     use gpurify::extract::field::mesh::MeshOptions;
@@ -1502,8 +1505,8 @@ fn a_field_solved_capacitance_converges_as_the_mesh_is_refined() {
             2 << k
         );
         assert!(
-            c[k] - c[k - 1] >= -(envelope[k - 1] + envelope[k]),
-            "{} panels a side fell past the tolerance: {shown}",
+            c[k] > c[k - 1],
+            "{} panels a side did not raise C: {shown}",
             2 << k
         );
     }

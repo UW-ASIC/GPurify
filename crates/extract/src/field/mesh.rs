@@ -24,10 +24,15 @@ use std::collections::BTreeMap;
 pub struct Panel {
     /// Centroid, in metres.
     pub centre: [f64; 3],
-    /// Area, in square metres.
+    /// Area, in square metres: `4 · half[0] · half[1]`.
     pub area: f64,
     /// Which conductor this panel belongs to.
     pub conductor: u32,
+    /// The axis the face is normal to: 0 for x, 1 for y, 2 for z.
+    pub normal: u8,
+    /// Half the panel's sides, in metres, along the axes `normal + 1` and
+    /// `normal + 2` (mod 3).
+    pub half: [f64; 2],
 }
 
 /// The meshed problem: panels in spatial order, banded by conductor.
@@ -503,6 +508,8 @@ fn mesh_face(
                     centre,
                     area,
                     conductor,
+                    normal: u8::try_from(axis).expect("an axis is 0, 1 or 2"),
+                    half: [du / 2.0, dv / 2.0],
                 },
                 epsilon,
             ));

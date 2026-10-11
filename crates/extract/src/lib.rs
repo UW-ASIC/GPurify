@@ -117,13 +117,12 @@
 //!   another selected net's diffusion couples to ground, not to that net,
 //!   and metal over its own net's diffusion counts that field as ground
 //!   capacitance too.
-//! - **Panel self-terms** use a square panel's shape factor, which
-//!   under-reports C on elongated panels: 3.5% at 2:1, up to 64% at 100:1.
-//! - **Refining a mesh is not monotone.** Near panels see each other
-//!   centroid to centroid through a softened distance, not the integral
-//!   over the panel, and a 1 µm cube reads 2% under its capacitance at 2
-//!   panels a side, 0.15–0.2% over it at 8 to 32, falling back toward it as
-//!   the panels shrink.
+//! - **A coarse mesh reads low.** Each panel with itself and with its near
+//!   neighbours is integrated over both rectangles (any aspect ratio); far
+//!   pairs see each other centroid to centroid. Refining raises C
+//!   monotonically toward the limit: a 1 µm cube reads 1.8% under its
+//!   capacitance at 2 panels a side and 0.014% under at 32. The stack sets
+//!   the panel edge, at which small wires read 0.2–1% low.
 //! - **Only selected nets are in the field.** Coupling from a solved net to an
 //!   unselected one is the analytical estimate, which `overlay` keeps.
 //! - **Inductance** models each rectangle of a net's merged shapes as one
