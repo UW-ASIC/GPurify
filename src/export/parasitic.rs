@@ -7,6 +7,11 @@
 //! node, and both write in the network's canonical order. Units are fF, Ω
 //! and pH, with six decimals.
 //!
+//! A mutual inductance between two field-solved nets is a SPICE `K` card in
+//! DSPF, naming the two series inductances it couples and their coefficient
+//! `k = M / √(L₁L₂)`. SPEF (IEEE 1481) has no mutual inductance, so SPEF
+//! carries it as a comment in the first net's `*D_NET` block, in pH.
+//!
 //! A label on several disconnected nets would write one `*D_NET` per piece
 //! under one name, so the pieces read as one net: both writers refuse it
 //! ([`WriteError::SplitLabel`]). A net with several labels, a short, would
@@ -116,7 +121,9 @@ fn put_net_name(
 const fn as_farads(value: Parasitic) -> Option<f64> {
     match value {
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => Some(q.raw()),
-        Parasitic::Resistance(_) | Parasitic::Inductance(_) => None,
+        Parasitic::Resistance(_) | Parasitic::Inductance(_) | Parasitic::MutualInductance(_) => {
+            None
+        }
     }
 }
 
@@ -124,7 +131,10 @@ const fn as_farads(value: Parasitic) -> Option<f64> {
 const fn as_ohms(value: Parasitic) -> Option<f64> {
     match value {
         Parasitic::Resistance(q) => Some(q.raw()),
-        Parasitic::GroundCap(_) | Parasitic::CouplingCap(_) | Parasitic::Inductance(_) => None,
+        Parasitic::GroundCap(_)
+        | Parasitic::CouplingCap(_)
+        | Parasitic::Inductance(_)
+        | Parasitic::MutualInductance(_) => None,
     }
 }
 
@@ -132,18 +142,91 @@ const fn as_ohms(value: Parasitic) -> Option<f64> {
 const fn as_henries(value: Parasitic) -> Option<f64> {
     match value {
         Parasitic::Inductance(q) => Some(q.raw()),
-        Parasitic::Resistance(_) | Parasitic::GroundCap(_) | Parasitic::CouplingCap(_) => None,
+        Parasitic::Resistance(_)
+        | Parasitic::GroundCap(_)
+        | Parasitic::CouplingCap(_)
+        | Parasitic::MutualInductance(_) => None,
+    }
+}
+
+/// Picohenries on a mutual inductance, `None` on any other kind.
+const fn as_mutual_henries(value: Parasitic) -> Option<f64> {
+    match value {
+        Parasitic::MutualInductance(q) => Some(q.raw()),
+        Parasitic::Resistance(_)
+        | Parasitic::GroundCap(_)
+        | Parasitic::CouplingCap(_)
+        | Parasitic::Inductance(_) => None,
     }
 }
 
 /// A SPICE card's prefix letter, counter slot, magnitude and unit suffix. The
 /// suffix matters: SPICE reads a bare number as SI.
+///
+/// A mutual inductance's magnitude here is its value in pH; its `K` card
+/// states the coefficient instead ([`mutual_couplings`]).
 pub(crate) const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {
     match value {
         Parasitic::Resistance(q) => ('R', 0, q.raw(), ""),
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => ('C', 1, q.raw(), "f"),
         Parasitic::Inductance(q) => ('L', 2, q.raw(), "p"),
+        Parasitic::MutualInductance(q) => ('K', 3, q.raw(), ""),
     }
+}
+
+/// A mutual inductance as SPICE's `K` card states it: the rows of the two
+/// series inductances it couples, and their coupling coefficient.
+pub(crate) type Coupling = (usize, usize, f64);
+
+/// Each element's [`Coupling`], `None` for any element but a
+/// [`Parasitic::MutualInductance`]: the rows of the
+/// [`Parasitic::Inductance`] elements whose near nodes are its own two nodes
+/// (the first such row of each node), and `k = M / √(L_a L_b)`.
+///
+/// # Errors
+///
+/// [`WriteError::Unrepresentable`] for a mutual inductance on a node no
+/// inductance starts at, and for one whose coefficient is not within
+/// `[−1, 1]`: larger than the two inductances it couples allow, which no
+/// passive pair is (NaN included).
+pub(crate) fn mutual_couplings(
+    network: &ParasiticNetwork,
+) -> Result<Vec<Option<Coupling>>, WriteError> {
+    let mut inductor: Vec<Option<usize>> = vec![None; network.node_count()];
+    for (row, value) in network.value.iter().enumerate() {
+        if matches!(value, Parasitic::Inductance(_)) {
+            if let Some(slot) = inductor.get_mut(network.from[row].0 as usize) {
+                slot.get_or_insert(row);
+            }
+        }
+    }
+    let inductor_at = |node: NodeId| inductor.get(node.0 as usize).copied().flatten();
+    let henries = |row: usize| as_henries(network.value[row]).unwrap_or(f64::NAN);
+    network
+        .value
+        .iter()
+        .enumerate()
+        .map(|(row, &value)| {
+            let Some(mutual) = as_mutual_henries(value) else {
+                return Ok(None);
+            };
+            let (Some(a), Some(b)) = (
+                inductor_at(network.from[row]),
+                network.to[row].and_then(inductor_at),
+            ) else {
+                return Err(WriteError::Unrepresentable(
+                    "a mutual inductance on a node no inductance starts at",
+                ));
+            };
+            let k = mutual / (henries(a) * henries(b)).sqrt();
+            if !(k.abs() <= 1.0) {
+                return Err(WriteError::Unrepresentable(
+                    "a mutual inductance larger than the two inductances it couples allow",
+                ));
+            }
+            Ok(Some((a, b, k)))
+        })
+        .collect()
 }
 
 /// One `*CAP` / `*RES` / `*INDUC` section of one `*D_NET` block.
@@ -204,7 +287,9 @@ fn spef_section(
 /// per net, in ascending net order, with the net's total capacitance
 /// (coupling included), one bidirectional `*CONN` port, and `*CAP`, `*RES`
 /// and `*INDUC` sections. A coupling capacitance is listed once, in the
-/// section of the net that holds its near node.
+/// section of the net that holds its near node. A mutual inductance, which
+/// the standard has no element for, is a comment after `*INDUC` in the same
+/// net's block: `// mutual <node> <node> <pH>`.
 ///
 /// # Errors
 ///
@@ -300,6 +385,22 @@ pub fn write_spef(
             strings,
             out,
         )?;
+        // IEEE 1481 has no mutual inductance; a comment keeps it in the file.
+        for row in element..element_end {
+            let Some(henries) = as_mutual_henries(network.value[row]) else {
+                continue;
+            };
+            out.push_str("// mutual ");
+            node_name(network, network.from[row], ports, strings, out)?;
+            out.push(' ');
+            let far = network.to[row].ok_or(WriteError::Unrepresentable(
+                "a resistance or inductance with no far node",
+            ))?;
+            node_name(network, far, ports, strings, out)?;
+            out.push(' ');
+            format_f64(henries, out);
+            out.push('\n');
+        }
         out.push_str("*END\n\n");
 
         node = node_end;
@@ -321,12 +422,16 @@ pub fn write_spef(
 /// path), `*|DATE` only when the header has a timestamp, `*|VERSION`, and
 /// the deck path as a comment. Then, per net, `*|NET` with its total
 /// capacitance and one `*|S` line per node, with the node's layer standing
-/// in for its position. Then every element as a card, `R`, `C` and `L`
-/// numbered separately from 1, capacitances in `f` and inductances in `p`.
+/// in for its position. Then every element as a card, `R`, `C`, `L` and `K`
+/// numbered separately from 1, capacitances in `f` and inductances in `p`. A
+/// mutual inductance is a `K` card naming the two `L` cards it couples and
+/// their coefficient `M / √(L₁L₂)`.
 ///
 /// # Errors
 ///
-/// As [`write_spef`].
+/// As [`write_spef`], and [`WriteError::Unrepresentable`] for a mutual
+/// inductance on a node no inductance starts at or larger than its two
+/// inductances allow, checked before anything is written.
 pub fn write_dspf(
     network: &ParasiticNetwork,
     ports: &PortTable,
@@ -342,6 +447,7 @@ pub fn write_dspf(
         ports,
         strings,
     )?;
+    let couplings = mutual_couplings(network)?;
 
     out.push_str("*|DSPF \"1.4\"\n");
     let _ = writeln!(out, "*|DESIGN \"{}\"", header.layout_path);
@@ -375,12 +481,28 @@ pub fn write_dspf(
 
         node = node_end;
     }
-    // Numbered per prefix, so `R1` and `C1` are two different cards.
-    let mut next = [1usize; 3];
+    // Numbered per prefix, so `R1` and `C1` are two different cards; numbered
+    // first, so a `K` card can name an `L` card written after it.
+    let mut next = [1usize; 4];
+    let card: Vec<usize> = network
+        .value
+        .iter()
+        .map(|&value| {
+            let slot = spice_card(value).1;
+            next[slot] += 1;
+            next[slot] - 1
+        })
+        .collect();
     for row in 0..elements {
-        let (prefix, slot, magnitude, suffix) = spice_card(network.value[row]);
+        let (prefix, _, magnitude, suffix) = spice_card(network.value[row]);
 
-        let _ = write!(out, "{prefix}{} ", next[slot]);
+        if let Some((a, b, k)) = couplings[row] {
+            let _ = write!(out, "K{} L{} L{} ", card[row], card[a], card[b]);
+            format_f64(k, out);
+            out.push('\n');
+            continue;
+        }
+        let _ = write!(out, "{prefix}{} ", card[row]);
         node_name(network, network.from[row], ports, strings, out)?;
         out.push(' ');
         // A missing far end is ground; `check_canonical` allows it only on a capacitance.
@@ -392,7 +514,6 @@ pub fn write_dspf(
         out.push(' ');
         format_f64(magnitude, out);
         let _ = writeln!(out, "{suffix}");
-        next[slot] += 1;
     }
     Ok(())
 }

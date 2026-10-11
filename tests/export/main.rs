@@ -426,6 +426,7 @@ fn every_parasitic_writer_refuses_a_value_that_is_not_finite() {
                 Parasitic::Resistance(_) => Parasitic::Resistance(Qty::new(bad)),
                 Parasitic::CouplingCap(_) => Parasitic::CouplingCap(Qty::new(bad)),
                 Parasitic::Inductance(_) => Parasitic::Inductance(Qty::new(bad)),
+                Parasitic::MutualInductance(_) => Parasitic::MutualInductance(Qty::new(bad)),
             };
             assert_eq!(world.spef(), refusal, "spef, {bad} in row {row}");
             assert_eq!(world.dspf(), refusal, "dspf, {bad} in row {row}");

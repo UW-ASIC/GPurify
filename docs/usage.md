@@ -285,7 +285,13 @@ resistance and capacitance. Nets named with `--quasistatic` are solved from
 the field instead, which is slower and more accurate, and their coupling to
 nets that were not field-solved is kept. A field-solved net also gets its
 inductance, and its resistance and inductance follow the wire's centre line
-through every bend and every via, however the wire was cut into polygons. A
+through every bend and every via, however the wire was cut into polygons.
+Every two field-solved nets also get their mutual inductance, from one
+solve of all of them: the open-circuit coupling between their ports (each
+port's current enters at the end of the net that comes first by x, then
+y), so two parallel wires read a positive one. DSPF writes it as a `K` card
+coupling the two nets' inductances by `M / √(L₁L₂)`; SPEF has no element for it, so the SPEF file carries it as a
+`// mutual <node> <node> <pH>` comment in the first net's block. A
 field-solved net whose shapes do not join into one circuit (two pieces that
 meet only at a corner) is refused, and so is one with a shape the solve
 cannot mesh (a layer above the substrate whose `pex` line states no

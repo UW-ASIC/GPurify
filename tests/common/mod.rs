@@ -1281,7 +1281,7 @@ pub fn totals_of(run: &CaseRun, only: Option<gpurify::geom::LayerId>) -> Totals 
             Parasitic::Resistance(ohm) => totals.resistance_ohm += ohm.raw(),
             Parasitic::GroundCap(ff) => totals.ground_cap_af += ff.raw() * AF_PER_FF,
             Parasitic::CouplingCap(ff) => totals.coupling_cap_af += ff.raw() * AF_PER_FF,
-            Parasitic::Inductance(_) => {}
+            Parasitic::Inductance(_) | Parasitic::MutualInductance(_) => {}
         }
     }
     totals
@@ -1476,7 +1476,9 @@ fn check_per_net(
             match network.value[row] {
                 Parasitic::Resistance(ohm) => resistance += ohm.raw(),
                 Parasitic::GroundCap(ff) => ground += ff.raw() * AF_PER_FF,
-                Parasitic::CouplingCap(_) | Parasitic::Inductance(_) => {}
+                Parasitic::CouplingCap(_)
+                | Parasitic::Inductance(_)
+                | Parasitic::MutualInductance(_) => {}
             }
         }
 

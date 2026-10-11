@@ -6,8 +6,19 @@
 //! rectangles that share an edge are joined by a short filament through the
 //! middle of that edge. One port per net runs across its two most distant
 //! filament end points.
-//! Data out: [`InductMatrix`] — the port impedance diagonal at one frequency,
-//! `L = Im(Z)/ω`, `R = Re(Z)`, from a dense nodal solve of `Zb = R + jωL`.
+//! Data out: [`InductMatrix`] — the port impedance matrix at one frequency:
+//! each net's `L = Im(Z_ii)/ω` and `R = Re(Z_ii)`, and the mutual inductance
+//! `M_ij = Im(Z_ij)/ω` between every pair of nets, from a dense nodal solve
+//! of `Zb = R + jωL`.
+//!
+//! The mutual inductance is the open-circuit one (Ruehli, *IBM J. Res. Dev.*
+//! 16(5), 1972; Kamon, Tsuk & White, *IEEE Trans. MTT* 42(9), 1994, the
+//! `FastHenry` port matrix): a unit current through net `j`'s port, every
+//! other port open, induces `Z_ij` across net `i`'s. Its sign is the ports'
+//! orientation: each port's current enters at the lower of its two end
+//! points in node order (`x`, then `y`, then layer, as the layout states
+//! them) and leaves at the other, so two parallel wires drawn side by side
+//! read a positive `M`.
 //!
 //! The frequency is 1 MHz: skin effect is negligible on chip there, and `ωL`
 //! still stands well above round-off next to `R`. The filament integrals are
@@ -32,16 +43,20 @@ use std::cmp::Reverse;
 const FREQUENCY_HZ: f64 = 1e6;
 
 /// Per-net self inductance (H) and series resistance (Ω), one row per selected
-/// net in ascending [`NetId`] order.
-///
-/// Despite the name, only the diagonal is computed: each net's own port
-/// impedance. Mutual inductance between nets is not reported.
+/// net in ascending [`NetId`] order, and the mutual inductance between every
+/// pair of them.
 #[derive(Debug, Default)]
 pub struct InductMatrix {
     /// The net of each row.
     pub net: Vec<NetId>,
     /// Series inductance between the net's port terminals, henries.
     pub l_henry: Vec<f64>,
+    /// The inductance matrix, henries, row-major `n × n`: `m_henry[i·n + j]`
+    /// is `Im(Z_ij)/ω`, the voltage across net `i`'s port per unit current
+    /// through net `j`'s, every other port open. The diagonal is
+    /// [`Self::l_henry`]. Reciprocal (`Z` is symmetric, as `Zb` is) to
+    /// round-off; signed by the ports' orientation (module docs).
+    pub m_henry: Vec<f64>,
     /// Series resistance between the net's port terminals, ohms. At 1 MHz
     /// and one filament across each rectangle's width this is the DC
     /// resistance.
@@ -163,11 +178,13 @@ fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
     None
 }
 
-/// Solve per-net L and R for `selected` in one magnetoquasistatic solve.
+/// Solve per-net L and R, and the mutual inductance between every pair of
+/// nets, for `selected` in one magnetoquasistatic solve.
 ///
 /// `out` is cleared first and gets one row per selected net, in ascending
-/// [`NetId`] order. All selected nets share one solve, and each net's value
-/// is its port's self impedance with every other port open.
+/// [`NetId`] order. All selected nets share one solve: each net's L and R are
+/// its port's self impedance with every other port open, and
+/// [`InductMatrix::m_henry`] holds the impedance between ports.
 ///
 /// Each selected net's shapes are merged per layer and cut into disjoint
 /// rectangles (vertical slabs), as the closed forms read them, so a wire is
@@ -224,6 +241,7 @@ pub fn extract_inductance_into(
 ) -> Result<(), InductanceError> {
     out.net.clear();
     out.l_henry.clear();
+    out.m_henry.clear();
     out.r_ohm.clear();
 
     let mut order = selected.to_vec();
@@ -445,12 +463,16 @@ pub fn extract_inductance_into(
     }
 
     let f = FREQUENCY_HZ;
-    let z = port_impedance_diagonal(&set, nodes.len(), &ports, f)?;
+    let z = port_impedance_matrix(&set, nodes.len(), &ports, f)?;
     let w = 2.0 * std::f64::consts::PI * f;
-    for zp in z {
-        out.l_henry.push(if w == 0.0 { 0.0 } else { zp.im / w });
+    let henry = |z: Complex64| if w == 0.0 { 0.0 } else { z.im / w };
+    let n = ports.len();
+    for p in 0..n {
+        let zp = z[p * n + p];
+        out.l_henry.push(henry(zp));
         out.r_ohm.push(zp.re);
     }
+    out.m_henry.extend(z.iter().map(|&zqp| henry(zqp)));
     Ok(())
 }
 
@@ -502,9 +524,11 @@ impl FilamentSet {
     }
 }
 
-/// `Z[p][p]` for every port at frequency `f`: nodal solve `A Zb⁻¹ Aᵀ V = I`
-/// with one ground node per galvanically connected component.
-fn port_impedance_diagonal(
+/// The port impedance matrix at frequency `f`, row-major `n × n` for `n`
+/// ports: `Z[q][p]` is the voltage across port `q` for a unit current into
+/// port `p`, every other port open. Nodal solve `A Zb⁻¹ Aᵀ V = I` with one
+/// ground node per galvanically connected component.
+fn port_impedance_matrix(
     set: &FilamentSet,
     nn: usize,
     ports: &[(usize, usize)],
@@ -613,28 +637,30 @@ fn port_impedance_diagonal(
     }
     let yn_lu = Lu::factor(yn, nred).ok_or(InductanceError::Singular(f))?;
 
-    // Unit current into each port; its own voltage is Z[p][p].
-    Ok(ports
-        .iter()
-        .map(|&(a, c)| {
-            let mut iinj = vec![Complex64::new(0.0, 0.0); nred];
-            if !is_ground[a] {
-                iinj[red_of[a]] += Complex64::new(1.0, 0.0);
+    // Unit current into each port p; the voltage across every port q is Z[q][p].
+    let n = ports.len();
+    let mut z = vec![Complex64::new(0.0, 0.0); n * n];
+    for (p, &(a, c)) in ports.iter().enumerate() {
+        let mut iinj = vec![Complex64::new(0.0, 0.0); nred];
+        if !is_ground[a] {
+            iinj[red_of[a]] += Complex64::new(1.0, 0.0);
+        }
+        if !is_ground[c] {
+            iinj[red_of[c]] -= Complex64::new(1.0, 0.0);
+        }
+        let v = yn_lu.solve(&iinj);
+        let volt = |node: usize| {
+            if is_ground[node] {
+                Complex64::new(0.0, 0.0)
+            } else {
+                v[red_of[node]]
             }
-            if !is_ground[c] {
-                iinj[red_of[c]] -= Complex64::new(1.0, 0.0);
-            }
-            let v = yn_lu.solve(&iinj);
-            let volt = |node: usize| {
-                if is_ground[node] {
-                    Complex64::new(0.0, 0.0)
-                } else {
-                    v[red_of[node]]
-                }
-            };
-            volt(a) - volt(c)
-        })
-        .collect())
+        };
+        for (q, &(aq, cq)) in ports.iter().enumerate() {
+            z[q * n + p] = volt(aq) - volt(cq);
+        }
+    }
+    Ok(z)
 }
 
 /// Component id per node (union-find over branches), numbered in ascending
