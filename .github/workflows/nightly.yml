@@ -86,12 +86,14 @@ jobs:
       # own KLayout deck on the foundry's test structures and standard cells.
       # The repositories are the commits tests/foundry/pdks.tsv pins: treeless
       # clones checked out sparse (only the decks, structures and cell GDS),
-      # kept between runs.
-      - uses: actions/cache@v4
+      # kept between runs. It runs even when a differential above failed.
+      - if: ${{ !cancelled() }}
+        uses: actions/cache@v4
         with:
           path: ~/.cache/gpurify/foundry
           key: foundry-pdks-${{ hashFiles('tests/foundry/pdks.tsv') }}
-      - run: |
+      - if: ${{ !cancelled() }}
+        run: |
           set -euf
           grep -v '^#' tests/foundry/pdks.tsv | while IFS=$'\t' read -r name url commit paths; do
             dir="$HOME/.cache/gpurify/foundry/$name-$commit"
@@ -100,7 +102,8 @@ jobs:
             git -C "$dir" sparse-checkout set --no-cone $paths
             git -C "$dir" checkout -q "$commit"
           done
-      - run: >-
+      - if: ${{ !cancelled() }}
+        run: >-
           nix develop .#oracles --command cargo test --test foundry --
           --ignored --test-threads=1
 
