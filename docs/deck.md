@@ -222,6 +222,8 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `width(L; allowed: [len, ..])` | A shape whose width, its narrowest as `width` measures it, is none of the listed widths: sky130 rpm.1b-1f, the legal widths of a precision resistor (a list of one gives one type's exact width). Touching shapes count as one; a shape with parts of several widths is judged by its narrowest. |
 | `size(L; allowed: [w x h, ..])` | A cut that is none of the listed sizes, each either way round: sky130 via.1b's three square via sizes, and LEF58 `CUTCLASS`. Touching cuts count as one shape. |
 | `edge_length(L) >= len` | An edge shorter than the limit. |
+| `min_step(L; max_edges: n) >= len` | More than `n` edges shorter than the limit in a row: LEF `MINSTEP .. MAXEDGES`. |
+| `min_step(L; corner: outside, length_sum: len \| none) >= len` | Two or more edges shorter than the limit in a row at an outside (convex) corner, the two long edges either side turning left: LEF `MINSTEP .. OUTSIDECORNER`, its default. `corner: inside` is a concave corner (`INSIDECORNER`); `corner: step` one or more short edges between long edges running the same way (`STEP`). With `length_sum`, a run passes while its total length is at most that (`LENGTHSUM`). An end of line is no corner and no step. |
 | `notch(L) >= len` | A gap narrower than the limit between two parts of the same shape. |
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
 | `space(A, B) >= len` | A shape on `A` closer than the limit to a shape on `B`. |

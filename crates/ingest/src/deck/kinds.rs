@@ -61,6 +61,8 @@ pub(crate) enum Dim {
     /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
     /// engine name and the second to the named one.
     LengthPairList(&'static str),
+    /// One of the listed bare words; the engine param is its index, a count.
+    Word(&'static [&'static str]),
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -214,6 +216,8 @@ const DENSITY: &[Param] = &[
 ];
 const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
 const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
+/// MINSTEP's corner kinds, in the order of the engine's index.
+const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -235,6 +239,28 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
     ),
     drc("edge_length", Cmp::Ge, "min_edge_length", &[0], LIMIT, &[]),
+    // LEF MINSTEP's variants: more than `max_edges` short edges in a row, or a
+    // run of short edges at an outside corner, an inside corner or a step,
+    // with LENGTHSUM's allowance (`length_sum: none` for none).
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step",
+        &[0],
+        LIMIT,
+        &[p("max_edges", "max_edges", Dim::Count)],
+    ),
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step",
+        &[0],
+        LIMIT,
+        &[
+            p("corner", "corner", Dim::Word(STEP_CORNERS)),
+            opt("length_sum", "length_sum", Dim::Length),
+        ],
+    ),
     // A set of legal widths, `width(L; allowed: [350nm, 690nm])` (sky130
     // rpm.1b-1f): each merged figure's narrowest width is one of them.
     drc(

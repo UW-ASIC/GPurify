@@ -259,8 +259,9 @@ explains (kind 30).
 | 43 | allowed_width | `width(L; allowed: [..])` | FIG by marker | EXACT | exact (keys) | new in H |
 | 44 | min_interior_angle | `interior_angle([L]) >= deg` | POINT | EXACT | exact (keys) | new in H |
 | 45 | polygon_validity | `valid([L])` | — | NONE | reported as not mirrored | — |
+| 46 | min_step | `min_step(L; ..) >= l` | — | NONE | reported as not mirrored | — |
 
-32 kinds are EXACT, 11 APPROX and two NONE; `net_spacing` is NONE on a deck without
+32 kinds are EXACT, 11 APPROX and three NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -1015,6 +1016,18 @@ KLayout's `odd_polygons` returns "the parts of the polygons which are not orient
 self-overlapping", not the drawn polygon, and a ring of zero area has no such part, so the two
 answer different questions. The fixtures (hand-drawn defects) and a differential against the
 layer validator (`ring_defect_names_what_layer_validation_refuses`) are the oracles.
+
+### 46. min_step — NONE: KLayout has no runs of short edges
+
+**GPurify** (`width.rs` `min_step`): runs of consecutive edges shorter than the limit along each
+ring of the merged layer, classified by the long edges either side (left turn: outside corner;
+right turn: inside corner; same way: step), rejected per LEF 5.8 `MINSTEP`'s keyword.
+
+KLayout states edge lengths (`with_length`) but not runs of them or the corner they make. The
+oracle is LEF 5.8's own Example 1-16 and Figures 1-14 and 1-15, drawn as fixtures, with the
+staircase swept at the limit. OpenROAD's TritonRoute implements base `MINSTEP` runs, but its
+typed `INSIDECORNER`/`OUTSIDECORNER` branch never sets its corner flags (read from
+`FlexGC_main.cpp`), so it is not an oracle for them.
 
 ---
 

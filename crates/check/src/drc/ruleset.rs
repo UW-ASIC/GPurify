@@ -150,8 +150,8 @@ pub enum Rule {
     /// DRC-020. Rules: GF180 DF.11; LEF `MINSTEP` and `MINSIZE`;
     /// `LEF58_MINSTEP`.
     ///
-    /// Limits: the `MINSTEP` variants (`INSIDECORNER`, `OUTSIDECORNER`,
-    /// `LENGTHSUM`, `MAXEDGES`, `MINADJACENTLENGTH`) are missing.
+    /// The `MINSTEP` variants (`INSIDECORNER`, `OUTSIDECORNER`, `STEP`,
+    /// `LENGTHSUM`, `MAXEDGES`) are [`Rule::MinStep`].
     MinEdgeLength {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -1274,6 +1274,63 @@ pub enum Rule {
         /// One layer's rows, or `None` for every drawn layer.
         layer: Option<LayerId>,
     },
+    /// A run of short edges that LEF `MINSTEP` rejects.
+    ///
+    /// Deck: `min_step(L; max_edges: n) >= len`, or `min_step(L; corner:
+    /// outside | inside | step, length_sum: len | none) >= len`, kind
+    /// `min_step`. The layer is merged first. An edge is short when it is
+    /// shorter than `limit` (LEF's minStepLength), and a run is a maximal
+    /// sequence of consecutive short edges along a ring, holes included. The
+    /// two long edges on either side of a run make it an outside corner (a
+    /// left turn from the first to the second, a convex corner), an inside
+    /// corner (a right turn) or a step (both running the same way); an end of
+    /// line, where they run opposite ways, is none of these. Per LEF 5.8:
+    /// `MAXEDGES` flags more than `n` short edges in a row; `OUTSIDECORNER`
+    /// and `INSIDECORNER` "two or more consecutive edges" of that corner;
+    /// `STEP` "one or more consecutive edges of a step"; with `LENGTHSUM`, a
+    /// corner or step run only when its total length exceeds the sum. A ring
+    /// with no long edge is one run of a corner of no kind, which only
+    /// `max_edges` holds. [`Rule::MinEdgeLength`] is `MINSTEP` alone, every
+    /// short edge flagged.
+    ///
+    /// One violation per offending run, at the centre of the box of its
+    /// vertices. `measured` is the run's edge count against `max_edges`, or
+    /// against the most a corner (1) or step (0) may have; with `length_sum`,
+    /// the run's total length against it. `shapes.0` is the lowest drawn row
+    /// under the figure. `examined` counts the runs.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-020. Rules: LEF 5.8 `MINSTEP minStepLength [INSIDECORNER |
+    /// OUTSIDECORNER | STEP] [LENGTHSUM maxLength] | [MAXEDGES maxEdges]` and
+    /// its Example 1-16 and Figure 1-15.
+    ///
+    /// Limits: `LEF58_MINSTEP`'s `MINADJACENTLENGTH`, `MINBETWEENLENGTH`,
+    /// `NOADJACENTEOL` and `NOBETWEENEOL` are missing.
+    MinStep {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The shortest edge that is not short, in grid units; positive.
+        limit: Dbu,
+        /// Which runs are rejected.
+        kind: StepKind,
+        /// `LENGTHSUM`: a corner or step run's total length allowed; `None`
+        /// for no allowance, and always `None` with [`StepKind::MaxEdges`].
+        length_sum: Option<Dbu>,
+    },
+}
+
+/// Which runs of short edges a [`Rule::MinStep`] rejects, after LEF
+/// `MINSTEP`'s keywords.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    /// `MAXEDGES n`: more than `n` short edges in a row, whatever the corner.
+    MaxEdges(u16),
+    /// `OUTSIDECORNER`: two or more at a convex corner, LEF's default.
+    OutsideCorner,
+    /// `INSIDECORNER`: two or more at a concave corner.
+    InsideCorner,
+    /// `STEP`: one or more between two long edges running the same way.
+    Step,
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1855,6 +1912,39 @@ impl RuleSet {
                         _ => Some(one(spec)?),
                     },
                 },
+                "min_step" => {
+                    let layer = one(spec)?;
+                    let limit = length(spec, "limit")?;
+                    let stated = |param: &str| {
+                        strings
+                            .get(param)
+                            .and_then(|name| rules.param(spec, name))
+                            .is_some()
+                    };
+                    let kind = if stated("max_edges") {
+                        let most = count(spec, "max_edges", u16::MAX.into())?;
+                        StepKind::MaxEdges(
+                            u16::try_from(most).expect("checked against the ceiling"),
+                        )
+                    } else {
+                        match count(spec, "corner", 2)? {
+                            0 => StepKind::OutsideCorner,
+                            1 => StepKind::InsideCorner,
+                            _ => StepKind::Step,
+                        }
+                    };
+                    let length_sum = if stated("length_sum") {
+                        Some(length(spec, "length_sum")?)
+                    } else {
+                        None
+                    };
+                    Rule::MinStep {
+                        layer,
+                        limit,
+                        kind,
+                        length_sum,
+                    }
+                }
                 "region_density" => {
                     let (layer, region) = two(spec)?;
                     Rule::RegionDensity {
@@ -2128,6 +2218,12 @@ impl RuleSet {
                 Rule::PolygonValidity { layer } => {
                     grid::polygon_validity(store, id, (layer, drawn), out)
                 }
+                Rule::MinStep {
+                    layer,
+                    limit,
+                    kind,
+                    length_sum,
+                } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -2170,7 +2266,8 @@ impl Rule {
             | Rule::CutClass { layer, .. }
             | Rule::EdgeWidth { layer, .. }
             | Rule::EdgeFacingSpace { layer, .. }
-            | Rule::AllowedWidth { layer, .. } => [Some(layer), None],
+            | Rule::AllowedWidth { layer, .. }
+            | Rule::MinStep { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -2219,7 +2316,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 45] = [
+pub const KINDS: [&str; 46] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -2265,4 +2362,5 @@ pub const KINDS: [&str; 45] = [
     "allowed_width",
     "min_interior_angle",
     "polygon_validity",
+    "min_step",
 ];
