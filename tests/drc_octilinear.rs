@@ -245,3 +245,73 @@ fn a_kind_not_proved_on_45_degree_edges_still_refuses_them() {
     let found = run("rule p prl_space(met1; prl: 50nm) >= 20nm", &[bar(0, 10)]);
     assert_eq!(found.outcome("p"), Outcome::Refused);
 }
+
+/// The eight symmetries of the square: the identity, the mirrors and the
+/// quarter turns, each re-winding a ring counter-clockwise when it mirrors.
+fn symmetric(ring: &[(i64, i64)], t: usize) -> Vec<(i64, i64)> {
+    let mut out: Vec<(i64, i64)> = ring
+        .iter()
+        .map(|&(x, y)| {
+            let (x, y) = if t & 4 == 0 { (x, y) } else { (y, x) };
+            (
+                if t & 1 == 0 { x } else { -x },
+                if t & 2 == 0 { y } else { -y },
+            )
+        })
+        .collect();
+    if (t & 1 != 0) ^ (t & 2 != 0) ^ (t & 4 != 0) {
+        out.reverse();
+    }
+    out
+}
+
+/// DRC-002, DRC-037, DRC-038: every kind proved on 45-degree shapes gives
+/// the same findings under all eight symmetries of the grid.
+///
+/// Oracle: metamorphic, the symmetry law: a mirror or a quarter turn maps a
+/// 45-degree edge to a 45-degree edge and preserves every distance and area,
+/// so each rule's measurements and limits are those of the untransformed
+/// layout, which the tests above derive by hand.
+#[test]
+fn the_45_degree_kinds_are_invariant_under_the_symmetries_of_the_grid() {
+    let rules = "rule w5 width(met1) >= 5nm\nrule n142 notch(met1) >= 142nm\n\
+                 rule s5 space(met1) >= 5nm\nrule a41 area(met1) >= 41nm2\n\
+                 rule e15 edge_length(met1) >= 15nm";
+    let u = [
+        (0, 0),
+        (300, 0),
+        (300, 200),
+        (200, 200),
+        (200, 50),
+        (100, 50),
+        (100, 200),
+        (0, 200),
+    ];
+    let turned: Vec<(i64, i64)> = u.iter().map(|&(x, y)| (x - y + 1000, x + y)).collect();
+    let rings = vec![
+        bar(0, 7),
+        bar(14, 10),
+        vec![(500, 0), (509, 0), (500, 9)],
+        vec![(700, 0), (710, 10), (700, 20), (690, 10)],
+        turned,
+    ];
+    let measured = |found: &Found| {
+        let mut all: Vec<String> = ["w5", "n142", "s5", "a41", "e15"]
+            .iter()
+            .flat_map(|rule| {
+                found
+                    .of(rule)
+                    .into_iter()
+                    .map(move |f| format!("{rule} {f:?}"))
+            })
+            .collect();
+        all.sort();
+        all
+    };
+    let base = measured(&run(rules, &rings));
+    assert!(!base.is_empty());
+    for t in 1..8 {
+        let moved: Vec<Vec<(i64, i64)>> = rings.iter().map(|r| symmetric(r, t)).collect();
+        assert_eq!(measured(&run(rules, &moved)), base, "symmetry {t}");
+    }
+}
