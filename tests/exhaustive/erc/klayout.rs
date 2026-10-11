@@ -601,14 +601,14 @@ fn batch(klayout: &Path, fixtures: &[Fixture]) -> Tally {
     oracle::run(klayout, &["-b", "-r", "batch.drc"], &dir, LIMIT);
     let mut tally = Tally::default();
     for (i, job) in jobs.iter().enumerate() {
-        let text = std::fs::read_to_string(dir.join(format!("{i}.jsonl"))).unwrap_or_default();
-        let m = if text.is_empty() {
-            Measured {
-                errors: vec!["no output".to_owned()],
+        // A fixture with no mirrored row opens its file and writes nothing; a
+        // script that stopped before it never opens it.
+        let m = match std::fs::read_to_string(dir.join(format!("{i}.jsonl"))) {
+            Ok(text) => Measured::parse(&text),
+            Err(why) => Measured {
+                errors: vec![format!("no output: {why}")],
                 ..Measured::default()
-            }
-        } else {
-            Measured::parse(&text)
+            },
         };
         compare(job, &m, &mut tally);
     }
