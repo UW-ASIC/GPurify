@@ -257,8 +257,10 @@ explains (kind 30).
 | 41 | edge_facing_space | `facing_space(E) >= l` | POINT | EXACT | exact | new in H |
 | 42 | region_density | `region_density(L, R) <= f` | FIG by marker (`R`) | EXACT | exact | new in H |
 | 43 | allowed_width | `width(L; allowed: [..])` | FIG by marker | EXACT | exact (keys) | new in H |
+| 44 | min_interior_angle | `interior_angle([L]) >= deg` | POINT | EXACT | exact (keys) | new in H |
+| 45 | polygon_validity | `valid([L])` | — | NONE | reported as not mirrored | — |
 
-31 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+32 kinds are EXACT, 11 APPROX and two NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -980,6 +982,36 @@ emit(id, L.merged - [with_width2(L, W1², W1² + 1), with_width2(L, W2², W2² +
 
 - `with_width2` (c) keeps the figures whose narrowest width squared is in the range, measured
   exactly; the figures in no range are the findings. Key FIG by marker; the width is not compared.
+
+### 44. min_interior_angle — EXACT
+
+**GPurify** (`grid.rs` `min_interior_angle`): every corner of every drawn row (one layer's, or
+every drawn layer's), its angle on the shape's side (rows carry their shape on the left, holes
+included) 180 less the signed turn, rounded to 1e-9 degree; a corner under the limit is one
+finding at the vertex.
+
+**KLayout**
+
+```ruby
+emit(id, L.dup.raw.corners(as_dots, -180.0, LIMIT - 180.0 - 1e-6))
+```
+
+- `corners` measures the turn, "positive angles indicate a left turn … since polygons are
+  oriented clockwise, … negative ones indicate convex (outer) corners" ([L]): an angle θ inside
+  the shape is a turn of θ − 180. The bound sits 1e-6 degree under the limit, so a corner exactly
+  at it is out whichever end KLayout includes. IHP's own deck checks 3.1 with the polygon form of
+  `with_angle(0, 87)`, which measures θ itself. Raw rows, as GPurify reads them. Key POINT, the
+  vertex; the angle is not compared.
+
+### 45. polygon_validity — NONE: KLayout reports parts, not polygons
+
+**GPurify** (`grid.rs` `polygon_validity`, `geom/view.rs` `ring_defect`): each drawn row that
+layer validation refuses as degenerate or self-intersecting is one finding at its first vertex.
+
+KLayout's `odd_polygons` returns "the parts of the polygons which are not orientable … or
+self-overlapping", not the drawn polygon, and a ring of zero area has no such part, so the two
+answer different questions. The fixtures (hand-drawn defects) and a differential against the
+layer validator (`ring_defect_names_what_layer_validation_refuses`) are the oracles.
 
 ---
 

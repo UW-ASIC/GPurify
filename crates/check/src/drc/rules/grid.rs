@@ -8,6 +8,7 @@
 use super::{ring_segs, Verdict};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::ops::Point;
+use gpurify_geom::view::ring_defect;
 use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
@@ -110,6 +111,119 @@ pub(crate) fn angle(
                 });
             }
         }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The rows a rule reads: `layer`'s, or every drawn layer's (`0..drawn`) when
+/// `None`.
+fn rows_of(
+    store: &GeometryStore,
+    (layer, drawn): (Option<LayerId>, usize),
+) -> Box<dyn Iterator<Item = PolyId> + '_> {
+    match layer {
+        Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
+        None => Box::new(drawn_rows(store, drawn)),
+    }
+}
+
+/// The angle at a corner on its shape's side, in degrees from 0 to 360, from
+/// the edge arriving at it, `(ax, ay)`, and the edge leaving it, `(bx, by)`.
+/// A row's shape lies left of travel (outer rings counter-clockwise, holes
+/// clockwise), so the angle is 180 less the signed turn. Rounded to 1e-9
+/// degree, so a right angle reads exactly 90.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "the products are exact in i128; their ratio is all the angle needs"
+)]
+fn interior_degrees((ax, ay): (i64, i64), (bx, by): (i64, i64)) -> f64 {
+    let (ax, ay, bx, by) = (
+        i128::from(ax),
+        i128::from(ay),
+        i128::from(bx),
+        i128::from(by),
+    );
+    let (cross, dot) = (ax * by - ay * bx, ax * bx + ay * by);
+    let turn = (cross as f64).atan2(dot as f64).to_degrees();
+    ((180.0 - turn) * 1e9).round() / 1e9
+}
+
+/// Every corner of the rows read (one layer's, or every drawn layer's) whose
+/// angle inside its shape is below `limit` degrees (IHP 3.1 "acute angles
+/// <87 degree"), at the vertex, measuring the angle. A zero-length edge is
+/// skipped. `examined` counts the corners measured.
+pub(crate) fn min_interior_angle(
+    store: &GeometryStore,
+    rule: StrId,
+    read: (Option<LayerId>, usize),
+    limit: f64,
+    out: &mut Violations,
+) -> Verdict {
+    let mut examined = 0u64;
+    for poly in rows_of(store, read) {
+        let (xs, ys) = store.poly_verts(poly);
+        let n = xs.len();
+        for at in 0..n {
+            let (before, after) = ((at + n - 1) % n, (at + 1) % n);
+            let arriving = (
+                xs[at].raw() - xs[before].raw(),
+                ys[at].raw() - ys[before].raw(),
+            );
+            let leaving = (
+                xs[after].raw() - xs[at].raw(),
+                ys[after].raw() - ys[at].raw(),
+            );
+            if arriving == (0, 0) || leaving == (0, 0) {
+                continue;
+            }
+            examined += 1;
+            let angle = interior_degrees(arriving, leaving);
+            if angle < limit {
+                out.push(Violation {
+                    rule,
+                    layer: store.poly_layer(poly),
+                    severity: Severity::Error,
+                    at: Point {
+                        x: xs[at],
+                        y: ys[at],
+                    },
+                    measured: Measurement::Ratio(angle),
+                    limit: Measurement::Ratio(limit),
+                    shapes: (poly, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// Every row read (one layer's, or every drawn layer's) that is no valid
+/// polygon whatever its angles (IHP 3.1 "self-intersecting polygons must be
+/// avoided"): degenerate or self-intersecting, as layer validation decides
+/// ([`ring_defect`]). One violation per row at its first vertex. `examined`
+/// counts rows.
+pub(crate) fn polygon_validity(
+    store: &GeometryStore,
+    rule: StrId,
+    read: (Option<LayerId>, usize),
+    out: &mut Violations,
+) -> Verdict {
+    let mut examined = 0u64;
+    for poly in rows_of(store, read) {
+        examined += 1;
+        let (xs, ys) = store.poly_verts(poly);
+        if ring_defect(xs, ys, poly).is_none() {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer: store.poly_layer(poly),
+            severity: Severity::Error,
+            at: Point { x: xs[0], y: ys[0] },
+            measured: Measurement::Count(0),
+            limit: Measurement::Count(1),
+            shapes: (poly, None),
+        });
     }
     (Outcome::Ran, examined)
 }

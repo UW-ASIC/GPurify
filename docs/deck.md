@@ -251,6 +251,8 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `off_grid(; pitch: len)` | A vertex of a drawn shape off the manufacturing grid. Derived layers are not checked: they repeat the drawn vertices, and sizing by less than the grid would put on-grid drawing off it. |
 | `angle(; allowed: [0deg, 90deg])` | An edge at an angle not in the list (multiples of 45°), on any drawn layer. Derived layers are not checked: they repeat the drawn edges. |
 | `angle(L; allowed: [0deg, 90deg])` | The same, on layer `L` only. |
+| `interior_angle(L) >= deg` | A corner whose angle inside its shape is under the limit, as IHP 3.1 "shapes with acute angles <87 degree are not allowed": 90 at a rectangle's corner, 270 at an L's inner corner, 45 at a right isosceles triangle's acute corners. Drawn shapes are read as drawn, diagonal ones included; write `interior_angle() >= deg` for every drawn layer. |
+| `valid(L)` | A drawn polygon that crosses itself or encloses no area (IHP 3.1 "self-intersecting polygons must be avoided"), named one by one, where every other rule on its layer is refused. Write `valid()` for every drawn layer. |
 | `redundant_via(L; within: len) >= count` | A cut with fewer than `count` cuts, itself included, within `within`. |
 | `via_array_space(L; array: count) >= len` | Cuts in a cluster larger than `array`, closer than the limit. |
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |

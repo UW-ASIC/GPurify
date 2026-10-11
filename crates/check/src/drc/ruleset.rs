@@ -1220,6 +1220,59 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A corner whose angle inside its shape is below `limit` degrees: an
+    /// acute angle.
+    ///
+    /// Deck: `interior_angle(L) >= deg`, or `interior_angle() >= deg` for
+    /// every drawn layer, kind `min_interior_angle`. Reads each store row as
+    /// drawn, as [`Rule::Angle`] does (a derived layer repeats its operands'
+    /// corners), so it measures 45-degree and other diagonal geometry and
+    /// never refuses. A corner's interior angle is measured on its shape's
+    /// side, 0 to 360 degrees: 90 at a rectangle's corner, 270 at an L's
+    /// inner corner, 45 at a right isosceles triangle's acute corners, 0 at a
+    /// spike that doubles back. A corner on a hole's ring is measured on the
+    /// shape's side too, so a hole's corner is never acute.
+    ///
+    /// One violation per vertex below the limit, at the vertex, `measured`
+    /// its angle in degrees, rounded to 1e-9 degree so a right angle reads
+    /// exactly 90. A zero-length edge is skipped. `examined` counts the
+    /// vertices measured.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-003. Rules: IHP 3.1 ("shapes with acute angles <87 degree are not
+    /// allowed on any layer"), GF180 SH.2 ("avoid … shapes with acute angles
+    /// (angles <90 deg)"); Calibre `FLAG ACUTE`; `KLayout` `corners` (by its
+    /// turn angle) and the polygon form of `with_angle`, as IHP's deck uses.
+    MinInteriorAngle {
+        /// One layer's rows, or `None` for every drawn layer.
+        layer: Option<LayerId>,
+        /// The smallest legal angle, in degrees; positive and finite.
+        limit: f64,
+    },
+    /// A drawn polygon that is no valid polygon: it crosses or touches
+    /// itself, or it encloses no area.
+    ///
+    /// Deck: `valid(L)`, or `valid()` for every drawn layer, kind
+    /// `polygon_validity`. Each store row is checked as drawn, as the layer
+    /// validation every other rule runs checks it
+    /// ([`gpurify_geom::view::ring_defect`]): fewer than three vertices, two
+    /// equal consecutive vertices or zero signed area is degenerate, and two
+    /// non-adjacent edges sharing a point, other than a pinch where two parts
+    /// meet at a corner, is a self-intersection. Its angles are not asked: a
+    /// 45-degree polygon is valid. Where another rule records
+    /// [`Outcome::Refused`] for such a layer, this one names each polygon.
+    ///
+    /// One violation per invalid row, at its first vertex, `measured`
+    /// `Count(0)` against a `limit` of 1, `shapes.0` the row. `examined`
+    /// counts rows. Never refuses.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-004. Rules: IHP 3.1 ("self-intersecting polygons must be
+    /// avoided"); Calibre `FLAG NONSIMPLE`; `KLayout` `odd_polygons`.
+    PolygonValidity {
+        /// One layer's rows, or `None` for every drawn layer.
+        layer: Option<LayerId>,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1788,6 +1841,19 @@ impl RuleSet {
                             .expect("a deck has few width lists"),
                     }
                 }
+                "min_interior_angle" => Rule::MinInteriorAngle {
+                    layer: match spec.layer_len {
+                        0 => None,
+                        _ => Some(one(spec)?),
+                    },
+                    limit: ratio(spec, "limit")?,
+                },
+                "polygon_validity" => Rule::PolygonValidity {
+                    layer: match spec.layer_len {
+                        0 => None,
+                        _ => Some(one(spec)?),
+                    },
+                },
                 "region_density" => {
                     let (layer, region) = two(spec)?;
                     Rule::RegionDensity {
@@ -2055,6 +2121,12 @@ impl RuleSet {
                 Rule::AllowedWidth { layer, widths } => {
                     width::allowed_width(store, id, layer, &self.widths[widths as usize], s, out)
                 }
+                Rule::MinInteriorAngle { layer, limit } => {
+                    grid::min_interior_angle(store, id, (layer, drawn), limit, out)
+                }
+                Rule::PolygonValidity { layer } => {
+                    grid::polygon_validity(store, id, (layer, drawn), out)
+                }
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -2133,7 +2205,9 @@ impl Rule {
             | Rule::EdgeEnclosure {
                 edges: a, outer: b, ..
             } => [Some(a), Some(b)],
-            Rule::Angle { layer, .. } => [layer, None],
+            Rule::Angle { layer, .. }
+            | Rule::MinInteriorAngle { layer, .. }
+            | Rule::PolygonValidity { layer } => [layer, None],
             Rule::OffGrid { .. } => [None, None],
         }
     }
@@ -2144,7 +2218,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 43] = [
+pub const KINDS: [&str; 45] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -2188,4 +2262,6 @@ pub const KINDS: [&str; 43] = [
     "edge_facing_space",
     "region_density",
     "allowed_width",
+    "min_interior_angle",
+    "polygon_validity",
 ];

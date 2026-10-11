@@ -73,6 +73,8 @@
 //! | `enclosure(E, L) >= len` | `edge_enclosure` | [`drc::Rule::EdgeEnclosure`] | an edge whose outside is not covered by L for the limit | DRC-051 |
 //! | `count(L) >= n`, `count(L) <= n` | `count` | [`drc::Rule::Count`] | too few or too many shapes on `L` in the whole layout | DRC-091, DRC-095 |
 //! | `size(L; allowed: [w x h, ..])` | `cut_class` | [`drc::Rule::CutClass`] | a cut whose size is none of the listed classes | DRC-014 |
+//! | `interior_angle([L]) >= deg` | `min_interior_angle` | [`drc::Rule::MinInteriorAngle`] | a drawn corner whose angle inside its shape is under the limit: an acute angle | DRC-003 |
+//! | `valid([L])` | `polygon_validity` | [`drc::Rule::PolygonValidity`] | a drawn polygon that crosses itself or encloses no area | DRC-004 |
 //! | `width(L; allowed: [w, ..])` | `allowed_width` | [`drc::Rule::AllowedWidth`] | a shape whose width is none of the listed widths | DRC-015, DRC-090 |
 //! | `width(E) >= len` | `edge_width` | [`drc::Rule::EdgeWidth`] | two edges facing each other across their shapes closer than the limit: a channel length or width, a width in one direction | DRC-011, DRC-016, DRC-090 |
 //! | `facing_space(E) >= len` | `edge_facing_space` | [`drc::Rule::EdgeFacingSpace`] | two edges whose outer sides face each other closer than the limit: a spacing in one direction | DRC-016 |
