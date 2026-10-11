@@ -323,6 +323,8 @@ pub(crate) const KINDS: &[Kind] = &[
         fixed: &[("maximum", true)],
         ..drc("count", Cmp::Le, "count", &[0], COUNT, &[])
     },
+    // The area a layer covers in the whole layout (IHP MIM.gR).
+    drc("total_area", Cmp::Le, "total_area", &[0], AREA, &[]),
     // A shape's bounding box, its longer side over its shorter (sky130 capm.6).
     drc(
         "aspect_ratio",

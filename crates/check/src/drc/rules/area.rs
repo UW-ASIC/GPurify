@@ -385,6 +385,40 @@ pub(crate) fn count(
     (Outcome::Ran, u64::from(figures))
 }
 
+/// The area the merged layer covers in the whole layout, holes excluded,
+/// against a maximum (IHP MIM.gR, total MIM area per chip), one violation at
+/// the die's centre. `examined` counts figures; nothing drawn is
+/// `Skipped(EmptyLayer)`.
+pub(crate) fn total_area(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, drawn): (LayerId, usize),
+    limit: DbuArea,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, None, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    if !merge_layer(store, layer, s) {
+        return REFUSED;
+    }
+    let area = covered_area(&s.rects);
+    if Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Maximum) {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(die),
+            measured: Measurement::Area(area),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(first_row_or_none(store, layer)), None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
+}
+
 /// Each merged figure's bounding-box aspect ratio, its longer side over its
 /// shorter (sky130 capm.6), against a maximum, at the centre of the figure's
 /// first rectangle. `examined` counts figures.
