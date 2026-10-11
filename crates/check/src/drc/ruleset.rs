@@ -1125,7 +1125,7 @@ pub enum Rule {
     /// is not axis-aligned.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-011, DRC-016. Rules: sky130 poly.1b ("min channel length (poly
+    /// DRC-011, DRC-016, DRC-090. Rules: sky130 poly.1b ("min channel length (poly
     /// width)") and difftap.2 ("minimum channel width (diff and poly)"), IHP
     /// Gat.a1 to Gat.a4 (channel length per device), GF180 PL.2 ("gate width
     /// (channel length)"); ASAP7 M4.W.1 and M4.W.5 (vertical and horizontal
@@ -1191,6 +1191,35 @@ pub enum Rule {
         /// `Minimum` for `>=`, `Maximum` for `<=`.
         sense: LimitSense,
     },
+    /// A shape whose width is none of the legal widths.
+    ///
+    /// Deck: `width(L; allowed: [w, ..])`, kind `allowed_width`. The layer is
+    /// merged first. A figure's width is its narrowest width as
+    /// [`Rule::MinWidth`] measures it (facing edges, and the Euclidean neck
+    /// between two concave corners), compared exactly: for a rectangle, its
+    /// shorter side. A figure with parts of several widths is judged by its
+    /// narrowest.
+    ///
+    /// One violation per figure whose width is not listed, at the centre of
+    /// its first rectangle, `measured` the width (floored) against the nearest
+    /// listed width (the smaller on a tie). `shapes.0` is the lowest drawn
+    /// row under the figure. `examined` counts figures.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-015, DRC-090. Rules: sky130 rpm.1b to rpm.1f ("min/max
+    /// prec_resistor width" 0.35, 0.69, 1.41, 2.85, 5.73 µm, one per
+    /// resistor type: one rule per type with a one-width list, or one rule
+    /// with all five); LEF58 `WIDTHTABLE`'s exact widths.
+    ///
+    /// Limits: LEF58 `WIDTHTABLE` fractures a polygon into rectangles and
+    /// admits any width from its last value up; ASAP7 M4.W.3 and M4.W.4
+    /// (no even multiple of the minimum width) are not a list.
+    AllowedWidth {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::widths`].
+        widths: u32,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1251,6 +1280,9 @@ pub struct RuleSet {
     /// The cut classes each [`Rule::CutClass`] names: `(short, long)` sides
     /// in grid units, each positive, sorted, without repeats, never empty.
     pub classes: Vec<Vec<(Dbu, Dbu)>>,
+    /// The width lists each [`Rule::AllowedWidth`] names: grid units, each
+    /// positive, sorted, without repeats, never empty.
+    pub widths: Vec<Vec<Dbu>>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -1725,6 +1757,37 @@ impl RuleSet {
                     layer: one(spec)?,
                     limit: length(spec, "limit")?,
                 },
+                "allowed_width" => {
+                    let layer = one(spec)?;
+                    let wanted = strings.get("width");
+                    let mut widths = rules
+                        .params_of(spec)
+                        .iter()
+                        .filter(|&&(name, _)| Some(name) == wanted)
+                        .map(|&(_, stated)| match stated {
+                            ParamValue::Length(width) if width.raw() > 0 => Ok(width),
+                            ParamValue::Length(width) => Err(DrcError::NonPositiveLimit {
+                                rule: name_of(spec.id),
+                                limit: width.raw(),
+                            }),
+                            _ => Err(wrong_type(spec, "allowed")),
+                        })
+                        .collect::<Result<Vec<Dbu>, DrcError>>()?;
+                    if widths.is_empty() {
+                        return Err(DrcError::MissingParam {
+                            rule: name_of(spec.id),
+                            param: "allowed",
+                        });
+                    }
+                    widths.sort_unstable();
+                    widths.dedup();
+                    set.widths.push(widths);
+                    Rule::AllowedWidth {
+                        layer,
+                        widths: u32::try_from(set.widths.len() - 1)
+                            .expect("a deck has few width lists"),
+                    }
+                }
                 "region_density" => {
                     let (layer, region) = two(spec)?;
                     Rule::RegionDensity {
@@ -1769,7 +1832,8 @@ impl RuleSet {
     /// When `nets` is not the extraction of `store` and misses a row a
     /// [`Rule::NetSpacing`] layer holds, when a [`Rule::SpacingTable`] names a
     /// table that is missing or fails [`SpacingTable::is_valid`], or when a
-    /// [`Rule::CutClass`] names a class list that is missing.
+    /// [`Rule::CutClass`] or [`Rule::AllowedWidth`] names a list that is
+    /// missing.
     pub fn run_with_nets(
         &self,
         store: &GeometryStore,
@@ -1988,6 +2052,9 @@ impl RuleSet {
                     limit,
                     sense,
                 } => area::region_density(store, id, (layer, region), limit, sense, s, out),
+                Rule::AllowedWidth { layer, widths } => {
+                    width::allowed_width(store, id, layer, &self.widths[widths as usize], s, out)
+                }
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -2029,7 +2096,8 @@ impl Rule {
             | Rule::TotalArea { layer, .. }
             | Rule::CutClass { layer, .. }
             | Rule::EdgeWidth { layer, .. }
-            | Rule::EdgeFacingSpace { layer, .. } => [Some(layer), None],
+            | Rule::EdgeFacingSpace { layer, .. }
+            | Rule::AllowedWidth { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -2076,7 +2144,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 42] = [
+pub const KINDS: [&str; 43] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -2119,4 +2187,5 @@ pub const KINDS: [&str; 42] = [
     "edge_width",
     "edge_facing_space",
     "region_density",
+    "allowed_width",
 ];

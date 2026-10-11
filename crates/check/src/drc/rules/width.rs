@@ -5,15 +5,16 @@
 //! merged figure (per edge of one for min edge length). Exact on the whole
 //! input domain.
 
-use super::{mid, owners_of, Verdict, REFUSED};
+use super::{centre, mid, owners_of, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
+use gpurify_geom::ops::isqrt;
 use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
+use gpurify_geom::width::{narrowest_facing, narrowest_neck, narrowest_width2, poly_edges};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
@@ -219,6 +220,52 @@ pub(crate) fn cut_class(
         });
     }
     (Outcome::Ran, figures.len() as u64)
+}
+
+/// Allowed widths (sky130 rpm.1b-1f, LEF58 `WIDTHTABLE`'s exact widths): each
+/// merged figure's narrowest width, as `width` measures it, must be one of
+/// `allowed`, compared squared and so exactly. One violation per figure in
+/// none, at the centre of its first rectangle, measuring the width (floored)
+/// against the nearest allowed one. `examined` counts figures.
+pub(crate) fn allowed_width(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    allowed: &[Dbu],
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    for (idx, owner) in (0u32..).zip(owners) {
+        let width2 = narrowest_width2(s.layer_out.get(idx), &mut s.facing);
+        if allowed.iter().any(|&w| w.mul_wide(w) == width2) {
+            continue;
+        }
+        let width = isqrt(width2);
+        let nearest = allowed
+            .iter()
+            .copied()
+            .min_by_key(|w| (w.raw() - width.raw()).abs())
+            .expect("an allowed list is never empty");
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(s.rects[s.rect_start[idx as usize] as usize]),
+            measured: Measurement::Length(width),
+            limit: Measurement::Length(nearest),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
 }
 
 /// One violation per edge of the merged layer shorter than `limit`, at its

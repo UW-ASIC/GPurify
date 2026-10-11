@@ -141,7 +141,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-003 | Acute angles | partial | Same ceiling as DRC-002 |
 | DRC-004 | Self-intersecting / zero-area polygons | partial | Corpus VALID_SELF and VALID_ZERO are in the disagree list |
 | DRC-007 | Label / pin / text rules | partial | Pin-in-drawing is expressible. A label on no net aborts extraction (PortError::OrphanLabel in topology::port::bind_ports_into): caught, but fatal, not a rule. Pin centre spacing is not expressible |
-| DRC-015 | Discrete / allowed width set | missing | — |
+| DRC-015 | Discrete / allowed width set | partial | width(L; allowed: [..]) holds each merged figure's narrowest width to a list (sky130 rpm.1b-1f). Missing: LEF58 WIDTHTABLE's fracture into rectangles and its open-ended last width, and ASAP7 M4.W.3/W.4 (no even multiple of the minimum width) |
 | DRC-016 | Wrong-direction width or spacing | partial | width(E) and facing_space(E) on L.edges().horizontal() or .vertical() measure in one direction (ASAP7 M4.W.1, W.5, S.1, S.2); the PRL and NONEOL qualifiers of LEF58 WRONGDIRECTION spacing are missing |
 | DRC-020 | Minimum step / edge length / jog | partial | MINSTEP variants (INSIDECORNER, OUTSIDECORNER, LENGTHSUM, MAXEDGES, MINADJACENTLENGTH) are missing |
 | DRC-021 | Feature length min/max | partial | Edge length is length(E) (ASAP7 type L); a straight feature's length is its box's longer side, forbidden(L.with_bbox_max(< len)) (sky130 mf.2, IHP Rsil.f); a bent feature's length along its path is not measured |
@@ -184,7 +184,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
 | DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
 | DRC-086 | Shorts between labelled nets | partial | Reported in every run as lvs.net_seed_conflict, naming both labelled shapes, located at the first; no abort |
-| DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; device-parameter rules (exact resistor widths, varactor taps) are missing |
+| DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; exact resistor widths are width(L; allowed: [..]) (sky130 rpm.1b-1f) and channel length and width width(E) (DRC-011). Missing: licon counts per resistor terminal (rpm.1g-1k) and varactor taps (varac.2, varac.6) |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
 | DRC-095 | Seal ring | partial | Geometry through the generic kinds; one seal ring per chip (IHP Seal.m) is count(seal) <= 1 with >= 1, nothing outside it (Seal.l) forbidden(L not (seal or seal.holes())). Missing: the seal ring at the origin (sky130 x.19) and a partnum beside it (x.27) |
 | DRC-097 | Frame / die / cell-name rules | missing | sky130.deck left out |
