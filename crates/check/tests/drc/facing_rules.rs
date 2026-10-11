@@ -698,6 +698,64 @@ fn an_end_of_line_s_corners_are_exempt_on_either_shape() {
     );
 }
 
+// ---------------------------------------------------------------- exact_pitch
+
+/// ASAP7 FIN.S.1, "Exact vertical FIN pitch", 27 nm.
+const FIN_PITCH: Rule = Rule::ExactPitch {
+    layer: A,
+    vertical: true,
+    pitch: Dbu::new_unchecked(27),
+};
+
+/// Three 7 nm fins `p` apart.
+fn fins(p: i64) -> GeometryStore {
+    layout(&[
+        [0, 0, 1000, 7],
+        [0, p, 1000, p + 7],
+        [0, 2 * p, 1000, 2 * p + 7],
+    ])
+}
+
+/// Oracle: ASAP7 FIN.S.1, construct-from-answer for the markers. Fins 26
+/// apart are off the 27 pitch twice, each pair marked in the middle of its
+/// gap; at 27 they are clean. Both neighbouring pairs are examined either way.
+#[test]
+fn neighbouring_fins_off_the_pitch_are_reported_once_per_pair() {
+    let (out, runs) = run(&fins(26), FIN_PITCH, Vec::new());
+    assert_eq!(out.measured, [len(26), len(26)]);
+    assert_eq!(out.limit, [len(27), len(27)]);
+    let mut at = out.at.clone();
+    at.sort_by_key(|p| p.y);
+    assert_eq!(at, [point(500, 16), point(500, 42)]);
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
+
+    let (out, runs) = run(&fins(27), FIN_PITCH, Vec::new());
+    assert!(out.is_empty());
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
+}
+
+/// Oracle: construct-from-answer. A missing fin leaves its neighbours 54
+/// apart, a violation; a fin that does not overlap another across is no
+/// neighbour of it; a bent shape refuses the rule.
+#[test]
+fn a_missing_fin_is_a_double_pitch_and_a_bent_one_refuses() {
+    let missing = layout(&[[0, 0, 1000, 7], [0, 27, 1000, 34], [0, 81, 1000, 88]]);
+    assert_eq!(run(&missing, FIN_PITCH, Vec::new()).0.measured, [len(54)]);
+
+    let apart = layout(&[[0, 0, 1000, 7], [2000, 30, 3000, 37]]);
+    let (out, runs) = run(&apart, FIN_PITCH, Vec::new());
+    assert!(out.is_empty());
+    assert_eq!(only(&runs).examined, 0);
+
+    let mut builder = LayoutBuilder::new(1);
+    builder.push(A, &[0, 1000, 1000, 7, 7, 0], &[0, 0, 7, 7, 500, 500]);
+    let (bent, _) = builder.finish();
+    assert_eq!(
+        only(&run(&bent, FIN_PITCH, Vec::new()).1).outcome,
+        Outcome::Refused
+    );
+}
+
 // ---------------------------------------------------------------- the deck
 
 /// Oracle: construct-from-answer, the deck language (`docs/deck.md`). Each

@@ -90,6 +90,7 @@
 //! | `two_width_table(L; width: [..], prl: [..], space: [[..]])` | `two_width_spacing_table` | [`drc::Rule::TwoWidthSpacingTable`] | two shapes closer than the cell both their widths select | DRC-027 |
 //! | `span_length(L; x: [..], y: [..])` | `span_length` | [`drc::Rule::SpanLength`] | a span of a shape not on the list of legal spans | DRC-036 |
 //! | `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | `convex_corner_spacing` | [`drc::Rule::ConvexCornerSpacing`] | facing convex corners closer than the limit, by the larger axis gap, ends of line exempt | DRC-032 |
+//! | `pitch(L, vertical \| horizontal) == len` | `exact_pitch` | [`drc::Rule::ExactPitch`] | neighbouring rectangles whose centres are not exactly the pitch apart | DRC-035 |
 //!
 //! ## Electrical rules
 //!

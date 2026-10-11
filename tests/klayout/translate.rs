@@ -1347,6 +1347,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     vec![],
                 )
             }
+            Rule::ExactPitch { .. } => (
+                "exact_pitch",
+                Verdict::None("KLayout has no centre-to-centre pitch between neighbouring shapes"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::SpanLength { .. } => (
                 "span_length",
                 Verdict::None("KLayout measures widths between edges, not the set of a shape's chords"),

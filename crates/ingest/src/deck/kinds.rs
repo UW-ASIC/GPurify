@@ -644,6 +644,18 @@ pub(crate) const KINDS: &[Kind] = &[
             p("y", "y_spans", Dim::LengthList),
         ],
     ),
+    // The exact centre-to-centre pitch of neighbouring rectangles along one
+    // axis (ASAP7 FIN.S.1, GATE.S.1): `pitch(fin, vertical) == 27nm`.
+    Kind {
+        modifier: Some("vertical"),
+        fixed: &[("vertical", true)],
+        ..drc("pitch", Cmp::Eq, "exact_pitch", &[0], LIMIT, &[])
+    },
+    Kind {
+        modifier: Some("horizontal"),
+        fixed: &[("vertical", false)],
+        ..drc("pitch", Cmp::Eq, "exact_pitch", &[0], LIMIT, &[])
+    },
     // Another shape inside the keep-out box of an end of line
     // (`LEF58_EOLKEEPOUT eolWidth EXTENSION backward side forward`).
     drc(

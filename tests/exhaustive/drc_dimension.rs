@@ -77,6 +77,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         tip_spacing_table(depth),
         forbidden_spacing(depth),
         span_length(depth),
+        exact_pitch(depth),
         min_area(depth),
         min_enclosed_area(depth),
         off_grid(depth),
@@ -97,6 +98,21 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
 /// Repeats each fixture under every symmetry at every offset.
 pub fn every_placement(fixtures: Vec<Fixture>) -> Vec<Fixture> {
     every_placement_at(fixtures, &OFFSETS)
+}
+
+/// Repeats each fixture under the four symmetries of the square that keep
+/// the axes (no quarter turn) at every offset, for a rule tied to an axis:
+/// a quarter turn makes a vertical pitch a horizontal one.
+fn every_axis_placement(fixtures: &[Fixture]) -> Vec<Fixture> {
+    let mut out = Vec::new();
+    for fixture in fixtures {
+        for &(dx, dy) in &OFFSETS {
+            for &symmetry in Symmetry::ALL.iter().filter(|s| s.turns % 2 == 0) {
+                out.push(fixture.transformed(symmetry, dx, dy));
+            }
+        }
+    }
+    out
 }
 
 /// Repeats each fixture under every symmetry at each of `offsets`.
@@ -3367,6 +3383,102 @@ fn forbidden_spacing(depth: Depth) -> Vec<Fixture> {
     );
     let mut out = every_placement(cases);
     out.push(vacuous("forbidden_spacing", &["DRC-033"], RULE, &["f"]));
+    out
+}
+
+// ---------------------------------------------------------------- exact_pitch
+
+/// `pitch(met1, vertical) == 27nm` and `pitch(met1, horizontal) == 54nm`
+/// (`exact_pitch`, DRC-035), ASAP7 FIN.S.1 (7 nm fins, 27 nm pitch) and
+/// GATE.S.1 (20 nm gates, 54 nm pitch): each rectangle's nearest neighbours
+/// past it that overlap it across must have their centre lines exactly the
+/// pitch apart; one finding per pair off it, in the middle of their gap.
+///
+/// Three fins and three gates with the pitch swept one step either side
+/// (FR): both neighbouring pairs off the pitch, and none at it. A missing
+/// fin is a pitch of 54. Fins that do not overlap across are no neighbours.
+/// A bent shape refuses the rule. Placed under the symmetries that keep the
+/// axes: a quarter turn swaps a vertical pitch for a horizontal one.
+fn exact_pitch(depth: Depth) -> Vec<Fixture> {
+    let fins = one_layer_deck("rule p pitch(met1, vertical) == 27nm");
+    let gates = one_layer_deck("rule p pitch(met1, horizontal) == 54nm");
+    let mut cases = Vec::new();
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("exact_pitch/{shape}"),
+            &["DRC-035"],
+            deck,
+            layout,
+            vec![("p", findings)],
+        ));
+    };
+    for p in sweep(depth, 27).into_iter().filter(|&p| p > 7) {
+        let findings = if p == 27 {
+            Vec::new()
+        } else {
+            vec![
+                pin(Finding::length(p), 1000, p + 7),
+                pin(Finding::length(p), 1000, 3 * p + 7),
+            ]
+        };
+        case(
+            format!("fins/{}", side(p, 27)),
+            &fins,
+            met1(&[
+                [0, 0, 1000, 7],
+                [0, p, 1000, p + 7],
+                [0, 2 * p, 1000, 2 * p + 7],
+            ]),
+            findings,
+        );
+    }
+    for p in sweep(depth, 54).into_iter().filter(|&p| p > 20) {
+        let findings = if p == 54 {
+            Vec::new()
+        } else {
+            vec![
+                pin(Finding::length(p), p + 20, 1000),
+                pin(Finding::length(p), 3 * p + 20, 1000),
+            ]
+        };
+        case(
+            format!("gates/{}", side(p, 54)),
+            &gates,
+            met1(&[
+                [0, 0, 20, 1000],
+                [p, 0, p + 20, 1000],
+                [2 * p, 0, 2 * p + 20, 1000],
+            ]),
+            findings,
+        );
+    }
+    case(
+        "missing_fin".into(),
+        &fins,
+        met1(&[[0, 0, 1000, 7], [0, 27, 1000, 34], [0, 81, 1000, 88]]),
+        vec![pin(Finding::length(54), 1000, 115)],
+    );
+    case(
+        "no_overlap_across".into(),
+        &fins,
+        met1(&[[0, 0, 1000, 7], [2000, 30, 3000, 37]]),
+        Vec::new(),
+    );
+    let mut out = every_axis_placement(&cases);
+    out.push(
+        Fixture::new("exact_pitch/bent_is_refused", &["DRC-035"], &fins, DRC)
+            .layout(Layout::default().polygon(
+                "met1",
+                &[(0, 0), (1000, 0), (1000, 7), (7, 7), (7, 500), (0, 500)],
+            ))
+            .expect(Expect::outcome("p", Want::Refused)),
+    );
+    out.push(vacuous(
+        "exact_pitch",
+        &["DRC-035"],
+        "rule p pitch(met1, vertical) == 27nm",
+        &["p"],
+    ));
     out
 }
 

@@ -10,7 +10,7 @@
 //! two nearest offending edges face each other over.
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
-use super::{centre, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
+use super::{centre, mid, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
 use crate::drc::ruleset::{ClassTable, EolParallel, SpanTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
@@ -653,6 +653,87 @@ pub(crate) fn convex_corner_spacing(
             limit: Measurement::Length(limit),
             shapes: (owners[pair[0].0 as usize], Some(owners[pair[0].1 as usize])),
         });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// Exact pitch between neighbouring rectangles along one axis (ASAP7
+/// FIN.S.1, GATE.S.1): each rectangle's neighbours past it on the axis, the
+/// nearest that overlap it across, must have their centre lines exactly
+/// `pitch` apart. A layer with a figure that is not a rectangle is refused.
+/// `examined` counts the neighbouring pairs.
+pub(crate) fn exact_pitch(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    vertical: bool,
+    pitch: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(owners) = merged_owners(store, layer, s) else {
+        return REFUSED;
+    };
+    // Each rectangle as (lo, hi) along the pitch's axis, then (lo, hi)
+    // across it, and its figure.
+    let mut rects = Vec::with_capacity(s.layer_out.len());
+    for figure in 0..u32::try_from(s.layer_out.len()).expect("a layer indexes polygons with a u32")
+    {
+        let polygon = s.layer_out.get(figure);
+        if polygon.outer().coords().0.len() != 4 || polygon.holes().next().is_some() {
+            return REFUSED;
+        }
+        let b = polygon.bbox();
+        rects.push(if vertical {
+            (b.ylo, b.yhi, b.xlo, b.xhi, figure)
+        } else {
+            (b.xlo, b.xhi, b.ylo, b.yhi, figure)
+        });
+    }
+    rects.sort_unstable();
+    let mut examined = 0u64;
+    for &(lo, hi, across_lo, across_hi, figure) in &rects {
+        // ponytail: scans past every rectangle that starts beyond this one
+        // until the nearest overlapping row; quadratic for columns that never
+        // overlap across.
+        let first = rects.partition_point(|r| r.0 < hi);
+        let mut row = None;
+        for &(next_lo, next_hi, next_across_lo, next_across_hi, other) in &rects[first..] {
+            if row.is_some_and(|nearest| next_lo > nearest) {
+                break;
+            }
+            let (from, to) = (across_lo.max(next_across_lo), across_hi.min(next_across_hi));
+            if to <= from {
+                continue;
+            }
+            row = Some(next_lo);
+            examined += 1;
+            // Twice the distance between the centre lines, exact.
+            let twice = (next_lo.raw() + next_hi.raw()) - (lo.raw() + hi.raw());
+            if twice == 2 * pitch.raw() {
+                continue;
+            }
+            let (along, across) = (mid(hi, next_lo), mid(from, to));
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: if vertical {
+                    Point {
+                        x: across,
+                        y: along,
+                    }
+                } else {
+                    Point {
+                        x: along,
+                        y: across,
+                    }
+                },
+                measured: Measurement::Length(Dbu::new_unchecked(twice.div_euclid(2))),
+                limit: Measurement::Length(pitch),
+                shapes: (owners[figure as usize], Some(owners[other as usize])),
+            });
+        }
     }
     (Outcome::Ran, examined)
 }
