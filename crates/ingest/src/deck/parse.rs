@@ -6,7 +6,7 @@ use super::lex::{lex, Tok, Token};
 use super::{
     lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
     DeviceValue, LabelSource, LvsLimit, ParamSource, ParamValue, RuleSource, StackSource,
-    ToleranceSrc, ViaSource,
+    ToleranceSrc, ViaSource, MAX_CELL_SELECTIONS,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -306,6 +306,8 @@ struct Parser<'a> {
     touch: bool,
     /// Each `ignore gds(L, D)` pair, and where it was written.
     ignored_at: Vec<((u16, u16), (u32, u32))>,
+    /// `.in_cells` and `.not_in_cells` parsed so far, held to [`MAX_CELL_SELECTIONS`].
+    cell_selections: usize,
     out: DeckSource,
 }
 
@@ -338,6 +340,7 @@ impl<'a> Parser<'a> {
             inline: 0,
             touch: false,
             ignored_at: Vec::new(),
+            cell_selections: 0,
             out: DeckSource::default(),
         }
     }
@@ -780,6 +783,60 @@ impl<'a> Parser<'a> {
                     Some(false),
                     Some(LExpr::Layer(texts)),
                 )
+            }
+            "in_cells" | "not_in_cells" => {
+                let drawn = matches!(&receiver, LExpr::Layer(name)
+                    if self.out.layers.iter().any(|(drawn, _)| drawn == name));
+                if !drawn {
+                    return Err(self.err(
+                        span,
+                        &format!("`.{op}` selects a drawn layer's shapes by the cell they are drawn in; apply it to a `gds(..)` layer"),
+                    ));
+                }
+                self.expect("(")?;
+                let first = u32::try_from(self.out.texts.len()).expect("a deck has few patterns");
+                loop {
+                    let t = self.peek();
+                    if t.tok != Tok::Str {
+                        return Err(self.err_tok(
+                            t,
+                            &format!(
+                                "expected a cell-name pattern in quotes, found {}",
+                                self.found(t)
+                            ),
+                        ));
+                    }
+                    self.bump();
+                    let pattern = self.string(t)?;
+                    if pattern.is_empty() {
+                        return Err(self.err_tok(t, "an empty pattern matches no cell"));
+                    }
+                    // KLayout reads these as character classes, alternatives
+                    // and escapes; refused rather than matched differently.
+                    if pattern.contains(['[', ']', '{', '}', '\\']) {
+                        return Err(self.err_tok(
+                            t,
+                            "a cell-name pattern takes `*` and `?` only; `[`, `]`, `{`, `}` and `\\` are refused",
+                        ));
+                    }
+                    self.out.texts.push(pattern);
+                    if !self.eat(",") {
+                        break;
+                    }
+                }
+                self.expect(")")?;
+                let count =
+                    u32::try_from(self.out.texts.len()).expect("a deck has few patterns") - first;
+                // Each selection is one bit of a placement's tag (`layout.rs`).
+                if self.cell_selections >= MAX_CELL_SELECTIONS {
+                    return Err(self.err(
+                        span,
+                        &format!("a deck holds at most {MAX_CELL_SELECTIONS} `.in_cells` and `.not_in_cells` selections"),
+                    ));
+                }
+                self.cell_selections += 1;
+                let keep = op == "in_cells";
+                (DerivedOp::InCells { keep, first, count }, Some(false), None)
             }
             _ => return Err(self.err(span, &format!("unknown layer operation `.{op}`"))),
         };

@@ -513,6 +513,20 @@ impl Printer<'_> {
                 let method = if keep { "with_text" } else { "without_text" };
                 call(method, Some(format!("{}, {}", name(1)?, quoted(pattern)?)))
             }
+            DerivedOp::InCells { keep, first, count } => {
+                let patterns = first
+                    .checked_add(count)
+                    .and_then(|end| self.source.texts.get(first as usize..end as usize))
+                    .ok_or_else(|| {
+                        PrintError::Unprintable(format!("layer {}: no cell-name pattern", row.name))
+                    })?;
+                let quoted: Vec<String> = patterns
+                    .iter()
+                    .map(|p| quoted(p))
+                    .collect::<Result<_, _>>()?;
+                let method = if keep { "in_cells" } else { "not_in_cells" };
+                call(method, Some(quoted.join(", ")))
+            }
         }
     }
 

@@ -171,7 +171,8 @@ pub struct LayerTable {
     derived_start: u16,
     /// How each derived layer is computed, in id order. Operands fold left and only name lower ids.
     derived: Vec<(LayerId, DerivedOp, Vec<LayerId>)>,
-    /// The text patterns [`DerivedOp::WithText`] names, `*` any run, `?` one character.
+    /// The text patterns [`DerivedOp::WithText`] and the cell-name patterns
+    /// [`DerivedOp::InCells`] name, `*` any run, `?` one character.
     texts: Vec<String>,
     /// Stream pairs the deck says to drop (`ignore gds(L, D)`), sorted; never a declared pair.
     ignored: Vec<(u16, u16)>,
@@ -271,11 +272,23 @@ impl LayerTable {
         &self.derived
     }
 
-    /// Text pattern `text` of a [`DerivedOp::WithText`]: `*` matches any run of
+    /// Text pattern `text` of a [`DerivedOp::WithText`], or one of a
+    /// [`DerivedOp::InCells`]'s cell-name patterns: `*` matches any run of
     /// characters, `?` one, anything else itself, case included. Panics on an
-    /// index no `WithText` holds.
+    /// index no operation holds.
     pub fn text(&self, text: u32) -> &str {
         &self.texts[text as usize]
+    }
+
+    /// Each [`DerivedOp::InCells`]'s patterns, in id order: the `k`th is bit
+    /// `k` of a flattened shape's cell tag.
+    pub(crate) fn cell_selections(&self) -> impl Iterator<Item = &[String]> {
+        self.derived.iter().filter_map(|(_, op, _)| match *op {
+            DerivedOp::InCells { first, count, .. } => {
+                Some(&self.texts[first as usize..(first + count) as usize])
+            }
+            _ => None,
+        })
     }
 
     /// Add a derived layer above every existing id.
@@ -407,7 +420,32 @@ pub enum DerivedOp {
         /// Index of the pattern, for [`LayerTable::text`].
         text: u32,
     },
+    /// `in_cells` (`keep`) or `not_in_cells`: the drawn shapes of operand 0
+    /// (always a drawn layer) placed under a cell whose name matches one of
+    /// the patterns, the cell holding the shape and every cell above it on
+    /// its placement path counting, the root included. `not_in_cells` keeps
+    /// the others, so the two split the layer. Shapes are taken as drawn,
+    /// before merging: a shape and a touching one from another cell are
+    /// selected apart. This is `KLayout`'s `source.select("-", "+p")`
+    /// (`keep`) and `select("-p")`, whose cell filter enables or disables a
+    /// cell with its subtree (DRC reference, `Source#select`).
+    ///
+    /// A pattern is a glob over the whole name, case included: `*` any run,
+    /// `?` one character. A store built in memory has no cells, so there
+    /// `in_cells` is empty and `not_in_cells` is the whole layer.
+    InCells {
+        /// `true` keeps the shapes under a matching cell, `false` the others.
+        keep: bool,
+        /// Index of the first pattern, for [`LayerTable::text`].
+        first: u32,
+        /// How many patterns follow it; a cell matching any one counts.
+        count: u32,
+    },
 }
+
+/// The most `in_cells` and `not_in_cells` selections a deck may hold: each is
+/// one bit of the 64-bit tag a flattened shape carries.
+pub const MAX_CELL_SELECTIONS: usize = 64;
 
 impl DerivedOp {
     /// Whether the result is edges: `Some` when the op decides, `None` when it
@@ -424,7 +462,8 @@ impl DerivedOp {
             | Self::WithWidth(..)
             | Self::Rectangles { .. }
             | Self::WithBbox { .. }
-            | Self::WithText { .. } => Some(false),
+            | Self::WithText { .. }
+            | Self::InCells { .. } => Some(false),
             Self::And
             | Self::Or
             | Self::Not
