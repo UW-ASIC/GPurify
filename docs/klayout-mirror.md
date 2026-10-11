@@ -930,14 +930,16 @@ their boxes.
 **KLayout**
 
 ```ruby
-emit(id, E.width(LIM, projection, transparent))
+emit(id, E.width(LIM, projection))
 ```
 
 - On an edge layer `width` reports pairs in a "back to back" relation, "their inner sides face
   each other", the inside being the right of an edge (KLayout's hulls run clockwise; GPurify's
   edges carry their shape on the left, so both mean the shape's side) ([L]). `projection` measures
-  straight across overlapping parts, `transparent` turns off shielding as GPurify has none. Key
-  POINT, the gap's middle (as rule 34); the length compared.
+  straight across overlapping parts and drops a pair whose projections only touch, as GPurify
+  does (`var_near_part_of_edge`). Shielding is a polygon-layer option KLayout refuses on edges,
+  so every pair counts, as in GPurify. Key POINT, the gap's middle (as rule 34); the length
+  compared.
 
 ### 41. edge_facing_space — EXACT
 
@@ -947,7 +949,7 @@ each other (face to face).
 **KLayout**
 
 ```ruby
-emit(id, E.space(LIM, projection, transparent))
+emit(id, E.space(LIM, projection))
 ```
 
 - On an edge layer `space` reports pairs in a "face to face" relation, "their outer sides face
@@ -993,14 +995,15 @@ finding at the vertex.
 **KLayout**
 
 ```ruby
-emit(id, L.dup.raw.corners(as_dots, -180.0, LIMIT - 180.0 - 1e-6))
+emit(id, L.dup.raw.with_angle(0.0, LIMIT))
 ```
 
-- `corners` measures the turn, "positive angles indicate a left turn … since polygons are
-  oriented clockwise, … negative ones indicate convex (outer) corners" ([L]): an angle θ inside
-  the shape is a turn of θ − 180. The bound sits 1e-6 degree under the limit, so a corner exactly
-  at it is out whichever end KLayout includes. IHP's own deck checks 3.1 with the polygon form of
-  `with_angle(0, 87)`, which measures θ itself. Raw rows, as GPurify reads them. Key POINT, the
+- The polygon form of `with_angle` (deprecated, still in 0.30) measures the angle inside the
+  shape, 0 to 360, keeping `min <= a < max`, as IHP's own deck checks 3.1 with `with_angle(0,
+  87)`; each corner is an edge pair whose first edge ends at the vertex. On a raw layer it reads
+  the polygons as drawn, as GPurify does; a GDS keyhole's cut line adds only 90 and 180 degree
+  corners. `corners` measures the turn instead, with an inclusive bound resolved on the rounded
+  rotated edge, so a right angle could fall on either side of a limit of 90. Key POINT, the
   vertex; the angle is not compared.
 
 ### 45. polygon_validity — NONE: KLayout reports parts, not polygons

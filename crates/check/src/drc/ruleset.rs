@@ -1110,7 +1110,8 @@ pub enum Rule {
     /// edge's shape lies toward the other: `KLayout`'s "back to back" relation
     /// for `width` on an edge layer), with projections overlapping by a
     /// positive length, measured straight across. Every such pair counts:
-    /// an edge between them does not shield them (`KLayout`'s `transparent`).
+    /// an edge between them does not shield them, as on a `KLayout` edge
+    /// layer, where shielding does not apply.
     ///
     /// The edges choose the width measured. A transistor's channel length is
     /// the gap between the gate's sides inside the diffusion,
@@ -1241,8 +1242,8 @@ pub enum Rule {
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-003. Rules: IHP 3.1 ("shapes with acute angles <87 degree are not
     /// allowed on any layer"), GF180 SH.2 ("avoid … shapes with acute angles
-    /// (angles <90 deg)"); Calibre `FLAG ACUTE`; `KLayout` `corners` (by its
-    /// turn angle) and the polygon form of `with_angle`, as IHP's deck uses.
+    /// (angles <90 deg)"); Calibre `FLAG ACUTE`; `KLayout`'s polygon form of
+    /// `with_angle`, as IHP's deck uses it, and `corners` (by the turn).
     MinInteriorAngle {
         /// One layer's rows, or `None` for every drawn layer.
         layer: Option<LayerId>,
