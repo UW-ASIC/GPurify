@@ -6,10 +6,15 @@ report can be read for what it is.
 
 ## Geometry
 
-A layout with 45° edges loads, and the `angle` rule checks every edge of it.
-Every other rule that measures geometry validates its layer first and records
-`Refused` for a layer with a non-rectilinear edge, so diagonal routing is
-checked for its angles and nothing else.
+A layout with 45° edges loads, its derived layers are computed (booleans,
+`sized`, the selections and the edge operations all take 45° edges), and the
+`angle` rule checks every edge of it. A vertex a boolean would place between
+grid points, where two diagonals cross, is snapped onto the grid
+(`docs/deck.md`, "45-degree geometry"). Every other rule that measures
+geometry validates its layer first and records `Refused` for a layer with a
+non-rectilinear edge, so diagonal routing is checked for its angles and
+nothing else. Edges at angles other than multiples of 45° are refused by every
+derived layer as well.
 
 ## Rules that can pass a layout signoff would flag
 

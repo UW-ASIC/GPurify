@@ -8,7 +8,7 @@ use gpurify_geom::derive::{
     with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{Point, Seg};
-use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::view::{validate_layer_into, validate_layer_with, Angles, ValidatedLayer};
 use gpurify_geom::width::narrowest_neck;
 use gpurify_geom::{Dbu, GeometryStoreBuilder, LayerId, MAX_ABS_DBU};
 
@@ -437,9 +437,9 @@ fn with_width_selects_on_the_narrowest_width() {
     ]);
     // The range is on the squared width: `>= 3` is `9..`, `<= 2` is `..=4`.
     let mut got = ValidatedLayer::default();
-    with_width_into(&l, 9..=i128::MAX, &mut got);
+    with_width_into(&l, 9..=i128::MAX, &mut got).expect("rectilinear");
     assert_eq!(boxes(&got), [(20, 0, 23, 10)], "the L is 2 wide at its arm");
-    with_width_into(&l, 0..=4, &mut got);
+    with_width_into(&l, 0..=4, &mut got).expect("rectilinear");
     assert_eq!(boxes(&got), [(0, 0, 10, 10)]);
 }
 
@@ -455,13 +455,13 @@ fn with_width_counts_the_diagonal_neck_width_measures() {
     // would put it in `<= 2` and out of `> 2` (F65).
     let plates = rects(&[(0, 0, 10, 10), (8, 8, 18, 18)]);
     let mut got = ValidatedLayer::default();
-    with_width_into(&plates, 5..=i128::MAX, &mut got);
+    with_width_into(&plates, 5..=i128::MAX, &mut got).expect("rectilinear");
     assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is wider than 2");
-    with_width_into(&plates, 0..=9, &mut got);
+    with_width_into(&plates, 0..=9, &mut got).expect("rectilinear");
     assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is at most 3");
-    with_width_into(&plates, 0..=4, &mut got);
+    with_width_into(&plates, 0..=4, &mut got).expect("rectilinear");
     assert!(got.is_empty(), "the neck is not at most 2");
-    with_width_into(&plates, 9..=i128::MAX, &mut got);
+    with_width_into(&plates, 9..=i128::MAX, &mut got).expect("rectilinear");
     assert!(got.is_empty(), "nothing is 3 wide at the neck");
 }
 
@@ -546,8 +546,8 @@ fn butting_edges_are_the_coincident_parts_and_booleans_split_length() {
 }
 
 /// Oracle: hand-derived. `over` covers x 5..15, so the inside part is the right
-/// halves of the bottom and top and the whole right edge; the outside part is 5
-/// + 5 + 10. A butting square takes the right edge from both, leaving
+/// halves of the bottom and top and the whole right edge; the outside part is
+/// 5 + 5 + 10. A butting square takes the right edge from both, leaving
 /// 30 outside.
 #[test]
 fn edge_parts_split_at_the_other_layers_boundary_and_the_boundary_is_neither() {
@@ -629,4 +629,104 @@ fn intersection_and_difference_split_area() {
     intersection_into(&a, &b, &mut and).expect("rectilinear");
     subtraction_into(&a, &b, &mut not).expect("rectilinear");
     assert_eq!(area(&and) + area(&not), area(&a));
+}
+
+/// A merged layer from octilinear rings given as `(xs, ys)`.
+fn oct_layer(rings: &[(&[i64], &[i64])]) -> ValidatedLayer {
+    let mut builder = GeometryStoreBuilder::with_capacity(rings.len(), 0);
+    for (xs, ys) in rings {
+        let xs: Vec<Dbu> = xs.iter().map(|&v| d(v)).collect();
+        let ys: Vec<Dbu> = ys.iter().map(|&v| d(v)).collect();
+        builder.push(LayerId(0), &xs, &ys);
+    }
+    let (store, _) = builder.finish(1);
+    let mut raw = ValidatedLayer::default();
+    validate_layer_with(&store, LayerId(0), Angles::Octilinear, &mut raw)
+        .expect("valid octilinear test rings");
+    let mut out = ValidatedLayer::default();
+    merge_into(&raw, &mut out).expect("octilinear");
+    out
+}
+
+const DIAMOND: (&[i64], &[i64]) = (&[10, 0, -10, 0], &[0, 10, 0, -10]);
+
+/// Oracle: hand-derived Minkowski sums with the square `[-1, 1]²`. The
+/// radius-10 diamond (area 200) grows to the octagon inside the 22-square
+/// less four corner triangles of legs 10 (`484 - 4·50 = 284`), and erodes to
+/// the radius-8 diamond (`2·8² = 128`): the square moves each diagonal edge
+/// 1 in x and 1 in y.
+#[test]
+fn a_diamond_sizes_by_the_square_both_ways() {
+    let diamond = oct_layer(&[DIAMOND]);
+    let mut got = ValidatedLayer::default();
+    sized_into(&diamond, d(1), d(1), &mut got).expect("in range");
+    assert_eq!(area(&got), 284);
+    assert_eq!(boxes(&got), [(-11, -11, 11, 11)]);
+    sized_into(&diamond, d(-1), d(-1), &mut got).expect("in range");
+    assert_eq!(area(&got), 128);
+    assert_eq!(boxes(&got), [(-8, -8, 8, 8)]);
+}
+
+/// Oracle: hand-derived. A diamond's edges are its four diagonals, material
+/// on the left, each `10·√2 ≈ 14.14` long, so `14..=15` keeps all four and
+/// `15..` and `..=14` none. A box over `x ≥ 2` holds the parts of the right
+/// two edges from `x = 2`.
+#[test]
+fn diagonal_edges_measure_and_split_exactly() {
+    let diamond = oct_layer(&[DIAMOND]);
+    let all = edges(&diamond);
+    assert_eq!(
+        sorted(&all),
+        [
+            (-10, 0, 0, -10),
+            (0, -10, 10, 0),
+            (0, 10, -10, 0),
+            (10, 0, 0, 10)
+        ]
+    );
+    let mut kept = Vec::new();
+    with_length_into(&all, 14..=15, &mut kept);
+    assert_eq!(kept.len(), 4);
+    with_length_into(&all, 15..=i128::MAX, &mut kept);
+    assert!(kept.is_empty());
+    with_length_into(&all, 0..=14, &mut kept);
+    assert!(kept.is_empty());
+    let right = rects(&[(2, -20, 20, 20)]);
+    let mut inside = Vec::new();
+    edge_part_into(&all, &right, true, &mut inside);
+    assert_eq!(sorted(&inside), [(2, -8, 10, 0), (10, 0, 2, 8)]);
+}
+
+/// Oracle: hand-derived, and the snapping rule of `boolean::union_into`
+/// applied to an edge. The rising edge (0, 0)-(10, 10) meets the falling
+/// boundary `x + y = 7` of the other layer at (3.5, 3.5), between grid
+/// points; each part ends at the last grid point inside it.
+#[test]
+fn an_edge_cut_between_grid_points_ends_on_the_grid_inside_its_part() {
+    let a = vec![seg(0, 0, 10, 10)];
+    let b = oct_layer(&[(&[7, 30, 30, 0, 0], &[0, 0, 30, 30, 7])]);
+    let (mut inside, mut outside) = (Vec::new(), Vec::new());
+    edge_part_into(&a, &b, true, &mut inside);
+    edge_part_into(&a, &b, false, &mut outside);
+    assert_eq!(sorted(&inside), [(4, 4, 10, 10)]);
+    assert_eq!(sorted(&outside), [(0, 0, 3, 3)]);
+}
+
+/// Oracle: hand-derived selections. A diamond under a covering square is
+/// `inside` it and not `outside`; a square far off is the reverse; and
+/// `interacting` finds the diamond, whose right vertex a small square's
+/// corner touches.
+#[test]
+fn octilinear_selections_read_whole_shapes() {
+    let a = oct_layer(&[DIAMOND, (&[40, 50, 50, 40], &[0, 0, 10, 10])]);
+    let cover = rects(&[(-10, -10, 10, 10)]);
+    let (mut inside, mut outside) = (ValidatedLayer::default(), ValidatedLayer::default());
+    inside_into(&a, &cover, &mut inside).expect("octilinear");
+    outside_into(&a, &cover, &mut outside).expect("octilinear");
+    assert_eq!(boxes(&inside), [(-10, -10, 10, 10)]);
+    assert_eq!(boxes(&outside), [(40, 0, 50, 10)]);
+    let corner = rects(&[(10, 0, 12, 2)]);
+    let mut touching = ValidatedLayer::default();
+    interacting_into(&a, &corner, true, &mut touching);
+    assert_eq!(boxes(&touching), [(-10, -10, 10, 10)]);
 }

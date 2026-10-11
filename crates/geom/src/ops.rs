@@ -1,5 +1,7 @@
 //! Exact geometric predicates and measurements, integer-only (products in `i128`).
 
+use core::cmp::Ordering;
+
 use crate::view::RingRef;
 use crate::{Dbu, DbuArea, MAX_ABS_DBU};
 
@@ -41,6 +43,17 @@ fn cross(a: Point, b: Point, c: Point) -> i128 {
     let vx = i128::from(c.x.raw() - a.x.raw());
     let vy = i128::from(c.y.raw() - a.y.raw());
     ux * vy - uy * vx
+}
+
+/// The counter-clockwise order of two non-zero direction vectors by their
+/// angle from `+x` in `[0, 2π)`: exact, by half-plane and then by the sign of
+/// their cross product. Components up to `2^62` in magnitude.
+pub(crate) fn angle_cmp(a: (i64, i64), b: (i64, i64)) -> Ordering {
+    let lower = |(x, y): (i64, i64)| y < 0 || (y == 0 && x < 0);
+    lower(a).cmp(&lower(b)).then_with(|| {
+        let turn = i128::from(a.0) * i128::from(b.1) - i128::from(a.1) * i128::from(b.0);
+        0i128.cmp(&turn)
+    })
 }
 
 /// With a zero [`cross`], exactly "`p` is on the segment `s`".
@@ -223,38 +236,40 @@ fn meet_only_at_an_end(p: Seg, q: Seg) -> bool {
 }
 
 /// Whether every point a closed run visits more than once is a **pinch**,
-/// where two parts of one figure meet at a corner: visited exactly twice, the
-/// four edges there leaving along the four axis directions, and both visits
-/// corners turning the same way. Either way the run's material fills two
-/// opposite quadrants there (left turns pair each quadrant's own two edges,
-/// right turns cross from one quadrant to the other); turns that differ would
-/// wind some quadrant twice, and a straight pass is a crossing.
+/// where parts of one figure meet at a point: the edges out of it point in
+/// distinct directions, and taken counter-clockwise round it they alternate
+/// between a way back (toward a visit's previous vertex) and a way on.
+///
+/// Material lies left of travel, so going round the point it starts after
+/// each way on and ends after each way back: alternation is exactly "no point
+/// near the vertex is covered twice". Two visits as corners turning the same
+/// way alternate (a checkerboard corner, either way it is traced); a straight
+/// pass through a touch, turns that differ, or a crossing put two ways back,
+/// or two ways on, next to each other. Edges at any angle are read exactly.
 fn pinches_are_corners(xs: &[Dbu], ys: &[Dbu]) -> bool {
     let n = xs.len();
     let mut visits: Vec<(Dbu, Dbu, usize)> = (0..n).map(|i| (xs[i], ys[i], i)).collect();
     visits.sort_unstable();
-    let toward = |from: usize, to: usize| {
-        (
-            (xs[to] - xs[from]).raw().signum(),
-            (ys[to] - ys[from]).raw().signum(),
-        )
-    };
-    // The directions out of a visit, back along the run and on along it.
-    let rays = |i: usize| (toward(i, (i + n - 1) % n), toward(i, (i + 1) % n));
-    let turn = |(back, on): ((i64, i64), (i64, i64))| (back.0 * on.1 - back.1 * on.0).signum();
+    let toward = |from: usize, to: usize| ((xs[to] - xs[from]).raw(), (ys[to] - ys[from]).raw());
+    // Each ray out of the point, and whether it is a way on.
+    let mut rays: Vec<((i64, i64), bool)> = Vec::new();
     visits
         .chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
-        .all(|visit| match *visit {
-            [_] => true,
-            [(.., i), (.., j)] => {
-                let ((a, b), (c, d)) = (rays(i), rays(j));
-                let all = [a, b, c, d];
-                let axis = all.iter().all(|&(dx, dy)| (dx == 0) != (dy == 0));
-                let distinct = (0..4).all(|k| (k + 1..4).all(|m| all[k] != all[m]));
-                let turns = (turn((a, b)), turn((c, d)));
-                axis && distinct && turns.0 != 0 && turns.0 == turns.1
+        .all(|visit| {
+            if visit.len() < 2 {
+                return true;
             }
-            _ => false,
+            rays.clear();
+            for &(.., i) in visit {
+                rays.push((toward(i, (i + n - 1) % n), false));
+                rays.push((toward(i, (i + 1) % n), true));
+            }
+            rays.sort_by(|a, b| angle_cmp(a.0, b.0));
+            let m = rays.len();
+            (0..m).all(|k| {
+                let (here, next) = (rays[k], rays[(k + 1) % m]);
+                angle_cmp(here.0, next.0) != Ordering::Equal && here.1 != next.1
+            })
         })
 }
 

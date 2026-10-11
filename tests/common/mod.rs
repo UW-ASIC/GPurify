@@ -1047,6 +1047,7 @@ fn validity_variant(error: ValidityError) -> &'static str {
         ValidityError::SelfIntersecting(_) => "SelfIntersecting",
         ValidityError::OrphanHole(_) => "OrphanHole",
         ValidityError::NotRectilinear(_) => "NotRectilinear",
+        ValidityError::NotOctilinear(_) => "NotOctilinear",
     }
 }
 

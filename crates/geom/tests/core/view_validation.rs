@@ -10,7 +10,8 @@
 
 use gpurify_geom::ops::{self_intersects, winding_of, Winding};
 use gpurify_geom::view::{
-    ring_defect, validate_layer_into, RingRef, ValidatedLayer, ValidityError,
+    ring_defect, validate_layer_into, validate_layer_with, Angles, RingRef, ValidatedLayer,
+    ValidityError,
 };
 use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
@@ -375,5 +376,53 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
         first.len(),
         3,
         "five rows, two of them holes, is three polygons"
+    );
+}
+
+/// Oracle: the definition of `Angles`. A diamond's four edges are at 45
+/// degrees: the rectilinear validator refuses it, the octilinear one takes it
+/// as a layer that is not rectilinear, of area `2·10² = 200`. A triangle with
+/// a 2:1 edge is refused by both.
+#[test]
+fn octilinear_validation_takes_45_degree_edges_and_refuses_other_angles() {
+    let store = store_of(&[
+        (LAYER, vec![10, 0, -10, 0], vec![0, 10, 0, -10]),
+        (OTHER, vec![0, 20, 0], vec![0, 10, 10]),
+    ]);
+    assert_eq!(
+        validate(&store, LAYER).map(|_| ()),
+        Err(ValidityError::NotRectilinear(PolyId(0)))
+    );
+    let mut out = ValidatedLayer::default();
+    validate_layer_with(&store, LAYER, Angles::Octilinear, &mut out).expect("a diamond");
+    assert!(!out.is_rectilinear());
+    assert_eq!(total_area(&out), DbuArea::new(200));
+    assert_eq!(
+        validate_layer_with(&store, OTHER, Angles::Octilinear, &mut out),
+        Err(ValidityError::NotOctilinear(PolyId(1)))
+    );
+    let square = store_of(&[(LAYER, vec![0, 10, 10, 0], vec![0, 0, 10, 10])]);
+    validate_layer_with(&square, LAYER, Angles::Octilinear, &mut out).expect("a square");
+    assert!(
+        out.is_rectilinear(),
+        "a square validated octilinear is rectilinear"
+    );
+}
+
+/// Oracle: the pinch rule `ValidityError::SelfIntersecting` states, at 45
+/// degrees. Two triangles meeting tip to tip at (2, 2), drawn as one ring,
+/// leave the point along four directions that alternate in and out: valid,
+/// area `4 + 4`. The ring that passes the point straight once and turns
+/// there once puts two ways out side by side: refused.
+#[test]
+fn a_ring_meeting_itself_at_a_diagonal_vertex_is_a_pinch_only_if_it_alternates() {
+    let tips = store_of(&[(LAYER, vec![0, 4, 2, 4, 0, 2], vec![0, 0, 2, 4, 4, 2])]);
+    let mut out = ValidatedLayer::default();
+    validate_layer_with(&tips, LAYER, Angles::Octilinear, &mut out).expect("a pinch");
+    assert_eq!(total_area(&out), DbuArea::new(8));
+    let straight = store_of(&[(LAYER, vec![0, 2, 4, 4, 2, 0], vec![0, 2, 4, 0, 2, 4])]);
+    assert_eq!(
+        validate_layer_with(&straight, LAYER, Angles::Octilinear, &mut out),
+        Err(ValidityError::SelfIntersecting(PolyId(0)))
     );
 }

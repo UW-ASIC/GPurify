@@ -176,6 +176,31 @@ its shape was on. It combines only with other edge layers:
 A check that takes an edge layer says so (see [Edge checks](#edge-checks)).
 Every other check refuses one.
 
+### 45-degree geometry
+
+Layer operations take edges at 45° as well as horizontal and vertical ones;
+an edge at any other angle makes the layer's derived layers fail to compute.
+Every result keeps its vertices on the grid and its edges at multiples of 45°:
+
+- Where a rising and a falling 45° edge cross between grid points (at a
+  half-grid point), the result's vertex there is replaced by the two grid
+  points half a diagonal step from it along its edges, joined by a one-unit
+  horizontal or vertical edge. A convex corner loses, and a concave corner
+  gains, a quarter-unit triangle; two shapes meeting at such a point are
+  joined by a one-unit neck. IHP SG13G2 rule 3.1 states the same requirement
+  of drawn data ("all features are on a drawing grid"; "design elements,
+  which are snapped to grid must not violate any geometries"). KLayout rounds
+  such a point to the nearest grid point instead, so the two differ inside
+  that one unit square.
+- `.sized(len)` grows by the square `len` on each side, as for rectilinear
+  shapes: a 45° edge moves `len` in x and in y, which is `len·√2` along its
+  normal. KLayout's `sized` moves every edge `len` along its normal, so the
+  two differ on 45° edges.
+- `.with_length` measures a 45° edge exactly (`k` grid steps long is
+  `k·√2`), and `.inside_part` / `.outside_part` end a part cut between grid
+  points at the last grid point inside it.
+- `.with_width` refuses a layer with a 45° edge.
+
 Wherever a rule takes a layer, it can take a layer expression instead:
 `forbidden(licon and poly and (diff or tap))` is the same as declaring that
 layer and naming it.

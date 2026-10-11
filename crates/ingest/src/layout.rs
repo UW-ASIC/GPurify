@@ -21,7 +21,7 @@ use gpurify_geom::derive::{
     with_length_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
-use gpurify_geom::view::{validate_layer_into, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_geom::view::{validate_layer_with, Angles, PolygonRef, RingRef, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
 use gpurify_geom::LayerId;
@@ -259,9 +259,10 @@ fn derive_layers_into(
             continue;
         }
         let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
-        // An operand's polygons, merged: selections and sizing read whole shapes.
+        // An operand's polygons, merged: selections and sizing read whole
+        // shapes. Every operation takes edges at 45 degrees.
         let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
-            validate_layer_into(store, id, &mut raw)?;
+            validate_layer_with(store, id, Angles::Octilinear, &mut raw)?;
             merge_into(&raw, out)
         };
 
@@ -319,10 +320,10 @@ fn derive_layers_into(
 
         match *op {
             DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
-                validate_layer_into(store, operands[0], &mut folded)
+                validate_layer_with(store, operands[0], Angles::Octilinear, &mut folded)
                     .map_err(|why| blame(why.into()))?;
                 for &next in &operands[1..] {
-                    validate_layer_into(store, next, &mut operand)
+                    validate_layer_with(store, next, Angles::Octilinear, &mut operand)
                         .map_err(|why| blame(why.into()))?;
                     match op {
                         DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
@@ -369,10 +370,7 @@ fn derive_layers_into(
                         with_area_into(a, lo..=hi, &mut folded);
                         Ok(())
                     }
-                    DerivedOp::WithWidth(lo, hi) => {
-                        with_width_into(a, lo..=hi, &mut folded);
-                        Ok(())
-                    }
+                    DerivedOp::WithWidth(lo, hi) => with_width_into(a, lo..=hi, &mut folded),
                     DerivedOp::Rectangles { square, keep } => {
                         rectangles_into(a, square, keep, &mut folded);
                         Ok(())

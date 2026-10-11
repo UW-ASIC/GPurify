@@ -29,7 +29,17 @@ fn collect_ring(ring: RingRef<'_>, edges: &mut Vec<Span>, slabs: &mut Vec<Dbu>) 
 /// Decompose every polygon on a validated layer into disjoint rectangles by
 /// vertical slabs (canonical). Polygon `i` owns `rects[poly_start[i] ..
 /// poly_start[i + 1]]`; each slab's rectangles ascend in y.
+///
+/// # Panics
+///
+/// On a layer with an edge at 45 degrees
+/// ([`ValidatedLayer::is_rectilinear`]): it has no such decomposition, and a
+/// wrong one would be a silent wrong area.
 pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start: &mut Vec<u32>) {
+    assert!(
+        layer.is_rectilinear(),
+        "only a rectilinear layer decomposes into rectangles"
+    );
     rects.clear();
     poly_start.clear();
     poly_start.push(0);

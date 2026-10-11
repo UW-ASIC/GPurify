@@ -2,6 +2,7 @@
 
 mod bbox_laws;
 mod boolean_laws;
+mod boolean_octilinear;
 mod boolean_random;
 mod connectivity_components;
 mod corner_model;
