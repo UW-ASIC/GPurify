@@ -1379,6 +1379,70 @@ impl SpacingTable {
     pub(crate) fn at(&self, row: usize, column: usize) -> Dbu {
         self.space[row * self.prl.len() + column]
     }
+
+    /// The side of the square that makes a part of a shape wide enough for
+    /// `row`: one unit past the row's width, since a row holds what is
+    /// strictly wider. The check finds those parts with this square, and
+    /// [`Rule::required_spacing`] compares a width with it ([`is_wide`]).
+    pub(crate) fn row_square(&self, row: usize) -> Dbu {
+        self.width[row] + Dbu::new_unchecked(1)
+    }
+
+    /// The column a pair takes in `row`: the last whose run length the
+    /// pair's run strictly exceeds, the run read by `run_at` off the edges at
+    /// most that column's cell apart; column 0 when it exceeds none. The
+    /// check reads the run off the layout, [`Rule::required_spacing`] takes
+    /// the asked one.
+    pub(crate) fn column(&self, row: usize, run_at: impl Fn(Dbu) -> i64) -> usize {
+        (1..self.prl.len())
+            .rev()
+            .find(|&column| self.prl[column].raw() < run_at(self.at(row, column)))
+            .unwrap_or(0)
+    }
+}
+
+/// Whether a shape `width` wide holds an axis-aligned `side` square: the
+/// part a wide-spacing rule measures from ([`Rule::WideDependentSpacing`],
+/// and a [`Rule::SpacingTable`] row through
+/// [`row_square`](SpacingTable::row_square)). The checks find that part with
+/// the square; this is the same condition on a width.
+pub(crate) fn is_wide(width: Dbu, side: Dbu) -> bool {
+    width >= side
+}
+
+/// Whether two shapes whose facing edges run `run` grid units alongside each
+/// other are held to a [`Rule::PrlSpacing`] whose run is `threshold`.
+pub(crate) fn prl_holds(run: i64, threshold: Dbu) -> bool {
+    run >= threshold.raw()
+}
+
+/// Whether an edge `length` grid units long is an end of line to a
+/// [`Rule::EolSpacing`] of `eol_width`: strictly shorter.
+pub(crate) fn is_end_of_line(length: i64, eol_width: Dbu) -> bool {
+    length < eol_width.raw()
+}
+
+/// Two shapes on one layer, as the spacing rules tell them apart: what
+/// decides which of a layer's spacing limits the pair is held to
+/// ([`Rule::required_spacing`]).
+///
+/// A shape's width is the side of the largest axis-aligned square that fits
+/// in it (the narrower side of a rectangle), as the wide-spacing rules
+/// measure it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpacingQuery {
+    /// The width of one shape, in grid units.
+    pub width_a: Dbu,
+    /// The width of the other.
+    pub width_b: Dbu,
+    /// How far, in grid units, the shapes' facing edges project onto each
+    /// other.
+    pub run_length: Dbu,
+    /// The length of the edge facing the other shape, when it may be a line
+    /// end: an edge shorter than a rule's `eol_width` is that rule's end of
+    /// line. `None` when the shapes face along sides no end-of-line rule
+    /// reads.
+    pub end_of_line: Option<Dbu>,
 }
 
 /// Every DRC rule the deck configures, in deck order.
@@ -2356,6 +2420,75 @@ impl Rule {
         }
     }
 
+    /// The space this rule requires between two shapes on `layer` that
+    /// `query` describes: the `limit` its check reports for such a pair.
+    ///
+    /// `None` when the rule does not hold such a pair: it is not a same-layer
+    /// spacing rule on `layer` ([`Rule::MinSpacing`],
+    /// [`Rule::WideDependentSpacing`], [`Rule::AttachedWideSpacing`],
+    /// [`Rule::PrlSpacing`], [`Rule::EolSpacing`], [`Rule::SpacingTable`]),
+    /// or the pair is not wide enough, does not run far enough, or faces no
+    /// end of line short enough. Each condition is the function the check
+    /// itself calls, so a router reading this and the checker cannot
+    /// disagree. A [`Rule::SpacingTable`] names a table of `tables`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpurify_check::drc::ruleset::{Rule, SpacingQuery};
+    /// use gpurify_geom::{Dbu, LayerId};
+    ///
+    /// let nm = Dbu::new_unchecked;
+    /// let wide = Rule::WideDependentSpacing { layer: LayerId(0), width_threshold: nm(3000), limit: nm(400) };
+    /// let narrow = SpacingQuery { width_a: nm(140), width_b: nm(140), run_length: nm(5000), end_of_line: None };
+    /// assert_eq!(wide.required_spacing(LayerId(0), &[], &narrow), None);
+    /// let plate = SpacingQuery { width_a: nm(3000), ..narrow };
+    /// assert_eq!(wide.required_spacing(LayerId(0), &[], &plate), Some(nm(400)));
+    /// ```
+    pub fn required_spacing(
+        &self,
+        layer: LayerId,
+        tables: &[SpacingTable],
+        query: &SpacingQuery,
+    ) -> Option<Dbu> {
+        let wider = query.width_a.max(query.width_b);
+        match *self {
+            Rule::MinSpacing { layer: on, limit } if on == layer => Some(limit),
+            Rule::WideDependentSpacing {
+                layer: on,
+                width_threshold,
+                limit,
+            }
+            | Rule::AttachedWideSpacing {
+                layer: on,
+                width_threshold,
+                limit,
+                ..
+            } if on == layer => is_wide(wider, width_threshold).then_some(limit),
+            Rule::PrlSpacing {
+                layer: on,
+                prl_threshold,
+                limit,
+            } if on == layer => prl_holds(query.run_length.raw(), prl_threshold).then_some(limit),
+            Rule::EolSpacing {
+                layer: on,
+                eol_width,
+                limit,
+            } if on == layer => query
+                .end_of_line
+                .is_some_and(|edge| is_end_of_line(edge.raw(), eol_width))
+                .then_some(limit),
+            Rule::SpacingTable { layer: on, table } if on == layer => {
+                let table = &tables[table as usize];
+                (0..table.width.len())
+                    .filter(|&row| row == 0 || is_wide(wider, table.row_square(row)))
+                    .map(|row| table.at(row, table.column(row, |_| query.run_length.raw())))
+                    .max()
+            }
+            _ => None,
+        }
+    }
+
     /// The kind name a deck row resolves to for this variant, its entry of
     /// [`KINDS`]: `min_width` for [`Rule::MinWidth`].
     pub fn kind(&self) -> &'static str {
@@ -2398,8 +2531,10 @@ impl Rule {
         }
     }
 
-    /// Every layer the rule reads.
-    fn layers(&self) -> [Option<LayerId>; 2] {
+    /// Every layer the rule reads: one or two, `None` past them (an
+    /// [`Rule::OffGrid`] reads none of its own; an [`Rule::Angle`] without a
+    /// layer reads every drawn one).
+    pub fn layers(&self) -> [Option<LayerId>; 2] {
         match *self {
             Rule::MinWidth { layer, .. }
             | Rule::MaxWidth { layer, .. }

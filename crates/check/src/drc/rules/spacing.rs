@@ -11,7 +11,7 @@ use super::{
     ring_segs, seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
-use crate::drc::ruleset::SpacingTable;
+use crate::drc::ruleset::{is_end_of_line, prl_holds, SpacingTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use crate::topology::{NetId, NetTable};
@@ -343,7 +343,7 @@ pub(crate) fn eol_spacing(
     let mut ends: Vec<(Line, Seg)> = edges
         .into_iter()
         .map(|edge| (line_of(edge), edge))
-        .filter(|&((.., lo, hi), _)| hi - lo < eol_width.raw())
+        .filter(|&((.., lo, hi), _)| is_end_of_line(hi - lo, eol_width))
         .collect();
     ends.sort_unstable_by_key(|&(line, _)| line);
     // The nearest approach of either shape to an end of line the other lies on.
@@ -629,8 +629,8 @@ pub(crate) fn spacing_table(
     // Per width row above the first: each polygon's parts wider than the row's width.
     let mut rows = Vec::with_capacity(table.width.len() - 1);
     let mut wide = Vec::new();
-    for &width in &table.width[1..] {
-        if wide_rects_into(drawn, width + Dbu::new_unchecked(1), &mut wide).is_err() {
+    for row in 1..table.width.len() {
+        if wide_rects_into(drawn, table.row_square(row), &mut wide).is_err() {
             return REFUSED;
         }
         rows.push(wide_parts(
@@ -654,14 +654,8 @@ pub(crate) fn spacing_table(
         }
         examined += 1;
         // A row's column: the last whose run, within that row's cell, it exceeds.
-        let column = |row: usize| {
-            (1..table.prl.len())
-                .rev()
-                .find(|&c| {
-                    table.prl[c].raw() < run_within(&runs, label(a), label(b), table.at(row, c))
-                })
-                .unwrap_or(0)
-        };
+        let column =
+            |row: usize| table.column(row, |cell| run_within(&runs, label(a), label(b), cell));
         let (axs, ays) = store.poly_verts(a);
         let (bxs, bys) = store.poly_verts(b);
         let failed = (1..table.width.len()).rev().find_map(|row| {
@@ -719,7 +713,7 @@ pub(crate) fn prl_spacing(
         limit,
         s,
         out,
-        |a, b, d2| (run_within(&runs, label(a), label(b), limit) >= threshold.raw()).then_some(d2),
+        |a, b, d2| prl_holds(run_within(&runs, label(a), label(b), limit), threshold).then_some(d2),
         |a, b, d2| whole_at(store, (a, b), d2),
     );
     (Outcome::Ran, examined)

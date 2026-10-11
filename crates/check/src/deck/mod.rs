@@ -3,7 +3,9 @@
 //!
 //! Data in: deck text and the layout's grid ([`compile`]), or a parsed
 //! [`Deck`] ([`CompiledDeck::from_deck`]). Data out: a [`CompiledDeck`], which
-//! the engine runs as it is. The parser's rule table is an intermediate: once
+//! the engine runs as it is, and which a consumer queries for the limits the
+//! checker enforces ([`CompiledDeck::required_spacing`] and the methods
+//! beside it). The parser's rule table is an intermediate: once
 //! the rules are typed nothing reads it, so a deck that compiled names no rule
 //! kind the engine does not run and holds no limit the engine would refuse.
 //!
@@ -28,6 +30,10 @@
 //! assert!(compile(&zero, Grid::new(1000)?, &mut StrTable::default()).is_err());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+
+mod query;
+
+pub use query::{AntennaLimit, DensityLimit, EmLimit, Enclosure, FetLimits};
 
 use crate::{drc, erc};
 use gpurify_geom::{Grid, StrId, StrTable};
