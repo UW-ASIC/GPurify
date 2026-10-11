@@ -627,7 +627,9 @@ pub mod gds {
     /// Shapes are already normalised as parsed: every `BOUNDARY` and `BOX` is
     /// one counter-clockwise outer ring without its repeated closing point, a
     /// keyhole boundary (how GDSII writes a hole) is split into its outer and
-    /// clockwise holes, and every `PATH` is stroked into its outline, exactly.
+    /// clockwise holes, and every `PATH` is stroked into its outline, exactly
+    /// (an outline that revisits a vertex, a path running back over itself,
+    /// is split as a keyhole is, into the region it sweeps).
     /// Rings are not otherwise validated here: a diagonal or self-crossing
     /// boundary is refused where a check or derived layer reads its layer.
     #[derive(Default)]
@@ -993,6 +995,48 @@ pub mod gds {
         area2 < 0
     }
 
+    /// Decompose the ring `lib.xs/ys[first..]`, when it revisits a vertex (how
+    /// GDSII writes a hole), into its outer ring and holes, each pushed as an
+    /// element; returns whether it did. Only then: the sweep reorders vertices,
+    /// and vertex 0 is a shape's report point (`erc::first_vertex`). A ring
+    /// outside the domain, or one that fails to decompose or traces no ring, is
+    /// left untouched for the plain path, where `geom::view` names what is wrong.
+    fn push_keyhole(lib: &mut Library, first: usize, layer: u16, datatype: u16) -> bool {
+        if !(ring_revisits_a_vertex(&lib.xs[first..], &lib.ys[first..])
+            && ring_is_in_domain(&lib.xs[first..], &lib.ys[first..]))
+        {
+            return false;
+        }
+        let (mut rx, mut ry, mut starts) = (Vec::new(), Vec::new(), Vec::new());
+        if canonical_rings_into(
+            &lib.xs[first..],
+            &lib.ys[first..],
+            &mut rx,
+            &mut ry,
+            &mut starts,
+        )
+        .is_err()
+            || starts.len() < 2
+        {
+            return false;
+        }
+        lib.xs.truncate(first);
+        lib.ys.truncate(first);
+        for ring in starts.windows(2) {
+            let (lo, hi) = (ring[0] as usize, ring[1] as usize);
+            let ring_start = narrow(lib.xs.len());
+            lib.xs.extend_from_slice(&rx[lo..hi]);
+            lib.ys.extend_from_slice(&ry[lo..hi]);
+            lib.elems.push(Elem {
+                layer,
+                datatype,
+                vert_start: ring_start,
+                vert_len: narrow(lib.xs.len()) - ring_start,
+            });
+        }
+        true
+    }
+
     /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset past it.
     fn boundary(
         lib: &mut Library,
@@ -1045,41 +1089,8 @@ pub mod gds {
             return Err(LayoutError::UnsupportedRecord(kind, start));
         }
 
-        // A keyhole (a ring revisiting a vertex) is how GDSII writes a hole; decompose it
-        // into an outer ring plus holes. Only then: the sweep reorders vertices, and
-        // vertex 0 is a shape's report point (`erc::first_vertex`).
-        if ring_revisits_a_vertex(&lib.xs[first..], &lib.ys[first..])
-            && ring_is_in_domain(&lib.xs[first..], &lib.ys[first..])
-        {
-            let (mut rx, mut ry, mut starts) = (Vec::new(), Vec::new(), Vec::new());
-            // A failed decomposition, or one tracing no ring, falls through to the
-            // plain path, where `geom::view` names what is wrong.
-            if canonical_rings_into(
-                &lib.xs[first..],
-                &lib.ys[first..],
-                &mut rx,
-                &mut ry,
-                &mut starts,
-            )
-            .is_ok()
-                && starts.len() > 1
-            {
-                lib.xs.truncate(first);
-                lib.ys.truncate(first);
-                for ring in starts.windows(2) {
-                    let (lo, hi) = (ring[0] as usize, ring[1] as usize);
-                    let ring_start = narrow(lib.xs.len());
-                    lib.xs.extend_from_slice(&rx[lo..hi]);
-                    lib.ys.extend_from_slice(&ry[lo..hi]);
-                    lib.elems.push(Elem {
-                        layer,
-                        datatype,
-                        vert_start: ring_start,
-                        vert_len: narrow(lib.xs.len()) - ring_start,
-                    });
-                }
-                return Ok(end);
-            }
+        if push_keyhole(lib, first, layer, datatype) {
+            return Ok(end);
         }
 
         // Every BOUNDARY/BOX is an outer ring, stored counter-clockwise whatever the
@@ -1250,6 +1261,12 @@ pub mod gds {
         lib.ys.extend(stroke.right.iter().map(|p| p.1));
         lib.ys.extend(stroke.left.iter().rev().map(|p| p.1));
 
+        // A path that runs back over itself strokes an outline that revisits a
+        // vertex: read it as a written keyhole is, the region it sweeps, so a
+        // path and the boundary its outline is written as read back the same.
+        if push_keyhole(lib, first, layer, datatype) {
+            return Ok(end);
+        }
         lib.elems.push(Elem {
             layer,
             datatype,
@@ -2376,6 +2393,62 @@ mod tests {
             "outer minus hole; a decomposition that dropped the hole would \
              leave the whole square and still validate"
         );
+    }
+
+    /// N-c7-3 (found by the `gds` fuzz target's round trip on C7's branch):
+    /// a `PATH` that runs back over itself strokes an outline that revisits a
+    /// vertex, which was stored as drawn (one self-intersecting row, refused
+    /// by every check on its layer) while the same outline written as a
+    /// `BOUNDARY` read back as a keyhole: `parse -> write -> parse` changed
+    /// the store. Both now read as the region the path sweeps.
+    ///
+    /// Oracle: hand-derived. The centreline (0,0) (4000,0) (4000,3000)
+    /// (0,3000) (0,0), width 2000 with half-width end caps (`PATHTYPE` 2),
+    /// sweeps the box -1000..5000 x -1000..4000 less the hole 1000..3000 x
+    /// 1000..2000 the loop encloses: one polygon with one hole, area
+    /// 6000 x 5000 - 2000 x 1000.
+    #[test]
+    fn a_path_running_back_over_itself_reads_as_the_region_it_sweeps() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+        const PATH: u16 = 0x0900;
+        const WIDTH: u16 = 0x0F03;
+        const PATHTYPE: u16 = 0x2102;
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let mut bytes = Vec::new();
+        record(&mut bytes, HEADER, &600u16.to_be_bytes());
+        record(&mut bytes, BGNLIB, &[0u8; 24]);
+        record(&mut bytes, LIBNAME, &ascii("GPURIFY.DB"));
+        let mut units = Vec::with_capacity(16);
+        units.extend_from_slice(&gds_real(1e-3));
+        units.extend_from_slice(&gds_real(1e-9));
+        record(&mut bytes, UNITS, &units);
+        record(&mut bytes, BGNSTR, &[0u8; 24]);
+        record(&mut bytes, STRNAME, &ascii("TOP"));
+        record(&mut bytes, PATH, &[]);
+        record(&mut bytes, LAYER, &ROWS[0].1.to_be_bytes());
+        record(&mut bytes, DATATYPE, &ROWS[0].2.to_be_bytes());
+        record(&mut bytes, PATHTYPE, &2u16.to_be_bytes());
+        record(&mut bytes, WIDTH, &2000i32.to_be_bytes());
+        let mut xy = Vec::new();
+        for (x, y) in [(0i32, 0i32), (4000, 0), (4000, 3000), (0, 3000), (0, 0)] {
+            xy.extend_from_slice(&x.to_be_bytes());
+            xy.extend_from_slice(&y.to_be_bytes());
+        }
+        record(&mut bytes, XY, &xy);
+        record(&mut bytes, ENDEL, &[]);
+        record(&mut bytes, ENDSTR, &[]);
+        record(&mut bytes, ENDLIB, &[]);
+
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid)
+            .expect("the swept region is a valid polygon, not a self-crossing outline");
+        assert_eq!(valid.len(), 1, "one swept region");
+        let polygon = valid.get(0);
+        assert_eq!(polygon.holes().count(), 1, "the loop encloses one hole");
+        assert_eq!(polygon_area(polygon).raw(), 6000 * 5000 - 2000 * 1000);
     }
 
     /// One shape on a known layer and one on an unknown one: `Reject` names the
