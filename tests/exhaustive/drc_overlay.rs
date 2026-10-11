@@ -57,6 +57,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         chip_and_device(),
         chip_count(),
         chip_area(),
+        frame(),
         dangling_metal(),
         drc_warning(),
         multi_patterning(depth),
@@ -2415,6 +2416,67 @@ fn chip_count() -> Vec<Fixture> {
         &[("seal.out", areas(&[10_000, 10_000]))],
     ));
     every_placement(cases)
+}
+
+/// Frame and die rules the generic kinds express (DRC-097): sky130 x.23a
+/// "areaid.sl must not overlap diff" as `forbidden(sl and diff)`, x.23b "diff
+/// cannot straddle areaid.sl" as `forbidden((diff and sl).interacting(diff
+/// not sl))`, and IHP LBE.h "no LBE ring allowed" as `forbidden(lbe.holes())`,
+/// each finding reporting its shape's area.
+///
+/// Oracle: areas fixed by construction: a diffusion apart from the scribe
+/// marker (nothing), inside it (an overlap, no straddle), across its edge
+/// (both, on the 100 x 200 part inside); an LBE ring (its 400 square hole)
+/// and a solid LBE plate (nothing).
+fn frame() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["diff", "sl", "lbe"],
+        "rule x.23a forbidden(sl and diff)\n\
+         rule x.23b forbidden((diff and sl).interacting(diff not sl))\n\
+         rule LBE.h forbidden(lbe.holes())\n",
+    );
+    let case = |name: &str, layout: Layout, rows: [Vec<Finding>; 3]| {
+        let [a, b, h] = rows;
+        fixture(
+            &format!("frame/{name}"),
+            &["DRC-097"],
+            &deck,
+            layout.rect("sl", 0, 0, 1000, 1000),
+            &[("x.23a", a), ("x.23b", b), ("LBE.h", h)],
+        )
+    };
+    every_placement(vec![
+        case(
+            "diff_apart",
+            Layout::default().rect("diff", 2000, 0, 2500, 500),
+            [vec![], vec![], vec![]],
+        ),
+        case(
+            "diff_inside",
+            Layout::default().rect("diff", 100, 100, 300, 300),
+            [areas(&[40_000]), vec![], vec![]],
+        ),
+        case(
+            "diff_across",
+            Layout::default().rect("diff", 900, 100, 1100, 300),
+            [areas(&[20_000]), areas(&[20_000]), vec![]],
+        ),
+        case(
+            "lbe_ring",
+            ring(
+                Layout::default(),
+                "lbe",
+                (3000, 0, 4000, 1000),
+                (3300, 300, 3700, 700),
+            ),
+            [vec![], vec![], areas(&[160_000])],
+        ),
+        case(
+            "lbe_plate",
+            Layout::default().rect("lbe", 3000, 0, 4000, 1000),
+            [vec![], vec![], vec![]],
+        ),
+    ])
 }
 
 /// A total area per chip (`total_area`, DRC-091: IHP MIM.gR's total MIM

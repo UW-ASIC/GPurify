@@ -779,9 +779,9 @@ pub enum Rule {
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-005, DRC-006, DRC-018, DRC-050, DRC-074, DRC-090, DRC-095,
-    /// ERC-A10. Rules: sky130 x.8, licon.6, licon.17 and capm.7, IHP 3.2 and
-    /// Cnt.j, GF180 PL.9; LEF58 `RECTONLY`; `KLayout` `overlapping` and
-    /// `non_rectangles`.
+    /// DRC-097, ERC-A10. Rules: sky130 x.8, licon.6, licon.17, capm.7 and
+    /// x.23a, IHP 3.2, Cnt.j and LBE.h, GF180 PL.9; LEF58 `RECTONLY`;
+    /// `KLayout` `overlapping` and `non_rectangles`.
     ///
     /// Limits: device-family and seal-ring geometry is expressible through
     /// marker layers, but device-parameter rules and "one seal ring per chip,
