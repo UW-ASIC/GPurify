@@ -1093,9 +1093,20 @@ impl<'a> Parser<'a> {
         match control.as_str() {
             "tolerance" => self.lvs_tolerance(),
             "ignore_parameter" => self.lvs_ignore_parameter(),
+            "asymmetric" => {
+                let model = self.model()?;
+                if self.out.lvs.asymmetric.contains(&model) {
+                    return Err(self.err(span, &format!("\"{model}\" is already asymmetric")));
+                }
+                self.out.lvs.asymmetric.push(model);
+                Ok(())
+            }
             _ => Err(self.err(
                 span,
-                &format!("unknown lvs control `{control}`; expected tolerance or ignore_parameter"),
+                &format!(
+                    "unknown lvs control `{control}`; expected tolerance, ignore_parameter \
+                     or asymmetric"
+                ),
             )),
         }
     }

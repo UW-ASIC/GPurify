@@ -34,7 +34,9 @@
 //!   (LVS-014).
 //!
 //! A case whose deck states `lvs` controls (deck.md, "LVS controls") adds
-//! their Netgen form after the setup ([`netgen_controls`]).
+//! their Netgen form after the setup ([`netgen_controls`]), and the setup
+//! leaves out the `permute` of an asymmetric model's source and drain
+//! (LVS-031), which Netgen then keeps apart.
 //!
 //! **Netgen's verdict** is read from its log: "Netlists do not match" is a
 //! mismatch, and "Netlists match" a match unless property errors were found.
@@ -84,13 +86,17 @@ const THREE_TERMINAL: [&str; 3] = ["nmos", "pmos", "nmos_hvt"];
 const LIMIT: Duration = Duration::from_mins(2);
 
 /// The Netgen setup, every class guarded because a netlist may lack it;
-/// `TOL` is replaced by Netgen's tolerance.
+/// `TOL` is replaced by Netgen's tolerance. `$asymmetric`, which each case's
+/// setup file sets first, lists the MOS models whose source and drain do not
+/// permute.
 const SETUP: &str = "\
 foreach side {-circuit1 -circuit2} {
     set present [cells list -all $side]
     foreach mos {nmos pmos nmos_hvt nmosb} {
         if {[lsearch $present $mos] < 0} continue
-        permute \"$side $mos\" source drain
+        if {[lsearch $asymmetric $mos] < 0} {
+            permute \"$side $mos\" source drain
+        }
         property \"$side $mos\" parallel enable
         property \"$side $mos\" parallel {l critical}
         property \"$side $mos\" parallel {w add}
@@ -117,9 +123,9 @@ struct Case {
     reference: String,
     /// The documented difference that makes the verdicts differ here.
     differs: Option<&'static str>,
-    /// Netgen setup lines after [`SETUP`] that state the fixture's deck
-    /// controls ([`netgen_controls`]).
-    setup: String,
+    /// The fixture's deck controls, which Netgen reads as [`netgen_setup`]
+    /// writes them.
+    controls: Controls,
 }
 
 /// `text` as Netgen reads it: the bulk of every [`THREE_TERMINAL`] MOS on one
@@ -201,7 +207,7 @@ fn enumeration(c: &Circuit) -> Vec<Case> {
                 layout: layout.clone(),
                 reference,
                 differs: None,
-                setup: String::new(),
+                controls: Controls::default(),
             }
         })
         .collect()
@@ -220,7 +226,7 @@ fn curated() -> Vec<Case> {
         layout: for_netgen(&spice(&as_declared(layout, reference))),
         reference: for_netgen(&spice(reference)),
         differs,
-        setup: String::new(),
+        controls: Controls::default(),
     };
     let stack = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
     let long = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300)]);
@@ -385,7 +391,7 @@ fn controlled_case(
         layout: for_netgen(&spice(&as_declared(layout, reference))),
         reference: for_netgen(&spice(reference)),
         differs: None,
-        setup: netgen_controls(controls),
+        controls: controls.clone(),
     }
 }
 
@@ -395,6 +401,19 @@ fn on_each_side(model: &str, body: &str) -> String {
         "foreach side {{-circuit1 -circuit2}} {{\n    \
          if {{[lsearch [cells list -all $side] {model}] >= 0}} {{\n        \
          {body}\n    }}\n}}\n"
+    )
+}
+
+/// One case's setup file: its asymmetric models, which [`SETUP`] reads, the
+/// setup, then its other controls ([`netgen_controls`]). Every file sets
+/// `$asymmetric`, since one Netgen process runs a whole batch and a Tcl
+/// global would carry over from the case before.
+fn netgen_setup(setup: &str, controls: &Controls) -> String {
+    let asymmetric: Vec<&str> = controls.asymmetric.iter().map(|m| m.name()).collect();
+    format!(
+        "set asymmetric {{{}}}\n{setup}{}",
+        asymmetric.join(" "),
+        netgen_controls(controls)
     )
 }
 
@@ -429,11 +448,11 @@ fn netgen_controls(controls: &Controls) -> String {
 /// control changes.
 fn controlled() -> Vec<Case> {
     use Model::{N, P};
+    let mut out = asymmetric();
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
     // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
     let w_of = |w| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(w, 150)]);
-    let mut out = Vec::new();
     for (name, controls) in [
         ("tolerance/deck/w+3.85_relative_5pct", row(N, "w", 0.05)),
         ("tolerance/deck/w+3.85_relative_3pct", row(N, "w", 0.03)),
@@ -454,6 +473,40 @@ fn controlled() -> Vec<Case> {
             (&w_of(3000), &w_of(3120)),
             &controls,
         ));
+    }
+    out
+}
+
+/// LVS-031: an asymmetric `nmos` against Netgen with no `permute` of its
+/// source and drain. A `pmos` gated by n1 tells n1 from n2, so swapping the
+/// ends is another circuit; two in parallel merge only aligned. Each with
+/// and without the control.
+fn asymmetric() -> Vec<Case> {
+    use Model::{N, P};
+    let anchored = |dev: Dev| Circuit::new(3, vec![dev, Dev::mos(P, 1, 0, 0)]);
+    let same = anchored(Dev::mos(N, 0, 1, 2));
+    let swapped = anchored(Dev::mos(N, 0, 2, 1));
+    let aligned = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 1, 2)]);
+    let opposed = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);
+    let wide = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(2000, 150)]);
+    let mut out = Vec::new();
+    for (name, layout, reference) in [
+        ("sd_same", &same, &same),
+        ("sd_swapped", &same, &swapped),
+        ("parallel_aligned_vs_wide", &aligned, &wide),
+        ("parallel_opposed_vs_wide", &opposed, &wide),
+    ] {
+        for (label, controls) in [
+            ("symmetric", Controls::default()),
+            ("asymmetric", Controls::default().asymmetric(N)),
+        ] {
+            out.push(controlled_case(
+                &format!("asymmetric/{name}/{label}"),
+                &["LVS-031"],
+                (layout, reference),
+                &controls,
+            ));
+        }
     }
     out
 }
@@ -558,7 +611,7 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
         if has_device(&case.reference) {
             write(&format!("l{i}.spice"), &case.layout);
             write(&format!("r{i}.spice"), &case.reference);
-            write(&format!("s{i}.tcl"), &format!("{setup}{}", case.setup));
+            write(&format!("s{i}.tcl"), &netgen_setup(&setup, &case.controls));
             let _ = writeln!(
                 batch,
                 "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} s{i}.tcl o{i}.log"

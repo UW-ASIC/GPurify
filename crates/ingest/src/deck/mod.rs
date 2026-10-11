@@ -625,6 +625,9 @@ pub struct LvsControls {
     /// as if no card stated it and the layout measured none (catalog
     /// LVS-014). Never `m`, and never one with a tolerance row.
     pub ignore_parameter: Vec<(StrId, StrId)>,
+    /// `lvs asymmetric "model"`: MOS models whose source and drain are not
+    /// interchangeable, `KLayout`'s DMOS (catalog LVS-031), each once.
+    pub asymmetric: Vec<StrId>,
 }
 
 /// One `lvs tolerance` statement: how far apart one parameter of one model
@@ -697,6 +700,18 @@ fn build_lvs(
         }
     };
     let mut lvs = LvsControls::default();
+    for model in &declared.asymmetric {
+        known(model, "asymmetric")?;
+        if devices
+            .iter()
+            .any(|device| device.model == *model && device.kind != DeviceKind::Mos)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs asymmetric: \"{model}\" is not a mos device; only a transistor has a source and a drain"
+            )));
+        }
+        lvs.asymmetric.push(strings.intern(model));
+    }
     for (model, param) in &declared.ignore_parameter {
         known(model, "ignore_parameter")?;
         if let Some(row) = declared
@@ -731,6 +746,7 @@ pub struct LvsSrc {
     tolerance: Vec<ToleranceSrc>,
     /// `(model, parameter)`, the parameter lowercase.
     ignore_parameter: Vec<(String, String)>,
+    asymmetric: Vec<String>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

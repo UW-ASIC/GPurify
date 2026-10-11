@@ -682,22 +682,29 @@ fn crossed(a: &Reduced, b: &Reduced, map: impl Fn(usize) -> usize) -> bool {
     a.model.is_mos() && a.pins[1] != a.pins[2] && map(a.pins[2]) == b.pins[1]
 }
 
-/// Whether two devices of `model` land on the same nets role for role: a
-/// MOS's source and drain either way round, a resistor's ends either way,
-/// everything else in order; MOS gates and bulks are fixed. `a`'s nets are
-/// read through `map`.
-fn same_pins(model: Model, a: &[usize], b: &[usize], map: impl Fn(usize) -> usize) -> bool {
-    let a = |k: usize| map(a[k]);
-    let fixed = |from: usize| (from..b.len()).all(|k| a(k) == b[k]);
-    match model {
-        Model::N | Model::P | Model::H | Model::B => {
-            a(0) == b[0]
-                && fixed(3)
-                && ((a(1) == b[1] && a(2) == b[2]) || (a(1) == b[2] && a(2) == b[1]))
-        }
-        Model::R => (a(0) == b[0] && a(1) == b[1]) || (a(0) == b[1] && a(1) == b[0]),
-        Model::C | Model::D | Model::Q => fixed(0),
-    }
+/// Whether two devices of `model` land on the same nets role for role, up
+/// to exchanging the pins of one [`Controls::classes`] class: by default a
+/// MOS's source and drain either way round and a resistor's ends either way,
+/// everything else in order. `a`'s nets are read through `map`.
+fn same_pins(
+    model: Model,
+    (a, b): (&[usize], &[usize]),
+    map: impl Fn(usize) -> usize,
+    controls: &Controls,
+) -> bool {
+    a.len() == b.len()
+        && controls.classes(model).iter().all(|class| {
+            let on = |pins: &[usize], read: &dyn Fn(usize) -> usize| {
+                let mut nets: Vec<usize> = class
+                    .iter()
+                    .filter(|&&k| k < pins.len())
+                    .map(|&k| read(pins[k]))
+                    .collect();
+                nets.sort_unstable();
+                nets
+            };
+            on(a, &map) == on(b, &|n| n)
+        })
 }
 
 /// The parameter names a reference's cards state, per model: what the
@@ -746,8 +753,10 @@ impl Declared {
 ///   `L` summed; the net is consumed.
 ///
 /// A net no terminal lands on survives only as a port: a floating shape is
-/// not a node, and SPICE cannot even write one.
-fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
+/// not a node, and SPICE cannot even write one. Under `controls`, the pins a
+/// parallel merge may exchange are [`Controls::classes`], and an asymmetric
+/// transistor never merges in series.
+fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) -> Reduction {
     #[allow(clippy::cast_precision_loss, reason = "nanometre sizes are small")]
     let mut devs: Vec<Reduced> = c
         .devs
@@ -820,7 +829,10 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                     && a.area == b.area
                     && a.value == b.value
                     && a.params == b.params;
-                if a.model == b.model && params && same_pins(a.model, &a.pins, &b.pins, |n| n) {
+                if a.model == b.model
+                    && params
+                    && same_pins(a.model, (&a.pins, &b.pins), |n| n, controls)
+                {
                     let across = usize::from(crossed(a, b, |n| n));
                     let b = devs.remove(j);
                     let a = &mut devs[i];
@@ -849,6 +861,7 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let mergeable = i != j
                     && a.model.is_mos()
+                    && !controls.asymmetric.contains(&a.model)
                     && a.model == b.model
                     && a.pins[0] == b.pins[0]
                     && a.pins[3..] == b.pins[3..]
@@ -915,6 +928,8 @@ struct Controls {
     tolerance: Vec<(Model, &'static str, f64, Option<(&'static str, f64)>)>,
     /// `lvs ignore_parameter`: model and parameter.
     ignored: Vec<(Model, &'static str)>,
+    /// `lvs asymmetric`: MOS models whose source and drain do not swap.
+    asymmetric: Vec<Model>,
 }
 
 impl Controls {
@@ -935,6 +950,27 @@ impl Controls {
     fn ignore(mut self, model: Model, param: &'static str) -> Self {
         self.ignored.push((model, param));
         self
+    }
+
+    /// An `lvs asymmetric` row.
+    fn asymmetric(mut self, model: Model) -> Self {
+        self.asymmetric.push(model);
+        self
+    }
+
+    /// The pin positions of `model` (in [`Dev::pins`] order) as classes of
+    /// interchangeable pins: a MOS's source and drain (1, 2) unless the
+    /// model is asymmetric, a resistor's ends (0, 1), every other pin
+    /// alone.
+    fn classes(&self, model: Model) -> Vec<Vec<usize>> {
+        let symmetric = !self.asymmetric.contains(&model);
+        match model {
+            Model::N | Model::P | Model::H | Model::B if symmetric => {
+                vec![vec![0], vec![1, 2], vec![3]]
+            }
+            Model::R => vec![vec![0, 1]],
+            _ => (0..4).map(|k| vec![k]).collect(),
+        }
     }
 
     /// `c` with every parameter `lvs ignore_parameter` names dropped from
@@ -963,6 +999,9 @@ impl Controls {
         let mut out = String::new();
         for &(model, param) in &self.ignored {
             let _ = writeln!(out, "lvs ignore_parameter \"{}\" {param}", model.name());
+        }
+        for &model in &self.asymmetric {
+            let _ = writeln!(out, "lvs asymmetric \"{}\"", model.name());
         }
         for &(model, param, relative, absolute) in &self.tolerance {
             let _ = write!(out, "lvs tolerance \"{}\" {param}", model.name());
@@ -999,7 +1038,7 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize], controls: &Controls) -> bool {
     if a.model != b.model || a.mult != b.mult {
         return false;
     }
-    if !same_pins(a.model, &a.pins, &b.pins, |n| map[n]) {
+    if !same_pins(a.model, (&a.pins, &b.pins), |n| map[n], controls) {
         return false;
     }
     // The layout side always has its marker's area: what was drawn.
@@ -1125,8 +1164,8 @@ fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) 
     let reference = controls.strip(reference);
     let declared = Declared::of(&reference);
     matches(
-        &reduce(layout, &declared, true),
-        &reduce(&reference, &declared, false),
+        &reduce(layout, &declared, true, controls),
+        &reduce(&reference, &declared, false, controls),
         controls,
     )
 }
@@ -1318,7 +1357,7 @@ fn faults(c: &Circuit) -> Vec<(String, Circuit, &'static [&'static str])> {
 /// matches is kept, since that is where a false mismatch hides, and of those
 /// that must mismatch, one per kind, drawn from `pick`. Without it, all.
 fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
-    let reduced = reduce(c, &Declared::of(c), true);
+    let reduced = reduce(c, &Declared::of(c), true, &Controls::default());
     let mut seen = BTreeSet::from([key(c)]);
     // `(label, reference, catalog rows, matches)`; the first two keep `c`.
     let mut kept = vec![(
@@ -2365,6 +2404,38 @@ fn controlled() -> Vec<Fixture> {
             (layout, reference),
             &controls,
         ));
+    }
+    // LVS-031: an asymmetric `nmos`, whose source pairs only with a source.
+    // A `pmos` gated by n1 tells n1 from n2, so a card with source and drain
+    // swapped is another circuit once `nmos` is asymmetric, and the same one
+    // otherwise. Two in parallel merge source on source and not opposed; a
+    // stack of them stays two.
+    let anchored = |dev: Dev| Circuit::new(3, vec![dev, Dev::mos(P, 1, 0, 0)]);
+    let same = anchored(Dev::mos(N, 0, 1, 2));
+    let swapped = anchored(Dev::mos(N, 0, 2, 1));
+    let aligned = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 1, 2)]);
+    let opposed = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);
+    let stack = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
+    let long = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300)]);
+    for (name, layout, reference) in [
+        ("sd_same", &same, &same),
+        ("sd_swapped", &same, &swapped),
+        ("parallel_aligned_vs_wide", &aligned, &wide),
+        ("parallel_opposed_vs_wide", &opposed, &wide),
+        ("stack_vs_long", &stack, &long),
+        ("stack_vs_stack", &stack, &stack),
+    ] {
+        for (label, controls) in [
+            ("symmetric", Controls::default()),
+            ("asymmetric", Controls::default().asymmetric(N)),
+        ] {
+            out.push(compared_under(
+                &format!("asymmetric/{name}/{label}"),
+                &["LVS-031", "LVS-030"],
+                (layout, reference),
+                &controls,
+            ));
+        }
     }
     // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against
     // 210 ohm and 0.6 fF: 10 ohm and 40 aF apart, so within 15 ohm and
