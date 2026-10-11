@@ -74,6 +74,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         multi_patterning(depth),
         anchored_patterning(),
         colour_spacing(),
+        density_balance(),
         booleans(),
         sizing(),
         selections(),
@@ -3854,6 +3855,43 @@ fn multi_patterning(depth: Depth) -> Vec<Fixture> {
             .expect(Expect::outcome("mp3", Want::Skipped)),
     );
     every_placement(cases)
+}
+
+/// `density_balance(c1, c2, die; window: 1000nm, step: 1000nm) >= 0.5`
+/// (`density_balance`, DRC-104): in each window, the lesser of the two
+/// masks' coverage over the greater, and a window below 0.5 is one finding
+/// at its centre, measuring that balance.
+///
+/// The die is 3000 x 1000, three windows. The first holds 500 x 1000 of
+/// `c1` and `c2` 1000 tall and 249/250/251 wide (balance 0.498, 0.5, 0.502:
+/// one step either side of the limit); the second only `c1` (balance 0);
+/// the third neither (not judged). Windows anchor on the die's corner, so
+/// translations only.
+fn density_balance() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["die", "c1", "c2"],
+        "rule bal density_balance(c1, c2, die; window: 1000nm, step: 1000nm) >= 0.5\n",
+    );
+    let mut cases = Vec::new();
+    for (w, side) in sweep(250) {
+        let mut findings = vec![ratio(0.0, (1500, 500))];
+        if w < 250 {
+            // 249 x 1000 over 500 x 1000.
+            findings.push(ratio(0.498, (500, 500)));
+        }
+        cases.push(fixture(
+            &format!("density_balance/{side}"),
+            &["DRC-104"],
+            &deck,
+            Layout::default()
+                .rect("die", 0, 0, 3000, 1000)
+                .rect("c1", 0, 0, 500, 1000)
+                .rect("c2", 600, 0, 600 + w, 1000)
+                .rect("c1", 1000, 0, 1400, 1000),
+            &[("bal", findings)],
+        ));
+    }
+    every_offset(&cases)
 }
 
 /// Same-mask and different-mask spacing of pre-coloured shapes (DRC-102), as

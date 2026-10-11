@@ -57,6 +57,7 @@
 //! | `cheesing(L) <= area` | `cheesing` | [`drc::Rule::Cheesing`] | a shape larger than the limit with no slot | DRC-075, ERC-E12 |
 //! | `density(L[, boundary]; window: len, step: len) >= frac` | `density` | [`drc::Rule::Density`] | a window with coverage outside the limit | DRC-071 |
 //! | `global_density(L[, boundary]) >= frac` | `global_density` | [`drc::Rule::GlobalDensity`] | coverage of the whole die outside the limit | DRC-070 |
+//! | `density_balance(A, B[, boundary]; window: len, step: len) >= frac` | `density_balance` | [`drc::Rule::DensityBalance`] | a window where two masks' coverage is out of balance | DRC-104 |
 //! | `enclosure(inner, outer[; width: len, below: len]) >= len` | `min_enclosure` | [`drc::Rule::MinEnclosure`] | an inner shape not surrounded by the limit on every side | DRC-040, DRC-043, DRC-090, DRC-096 |
 //! | `enclosure(inner, outer, opposite[; width: len, below: len]) >= len` | `asymmetric_enclosure` | [`drc::Rule::AsymmetricEnclosure`] | an inner shape without the limit on two opposite sides | DRC-041, DRC-042, DRC-043 |
 //! | `enclosure(inner, outer, adjacent) >= len` | `adjacent_enclosure` | [`drc::Rule::AdjacentEnclosure`] | an inner shape with a corner where neither edge meeting it has the limit | DRC-042 |

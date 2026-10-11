@@ -84,7 +84,7 @@ DRC-100	drc	mpt	Colouring legality (odd cycle)	Kahng2008; Yu2011; YuPan2016; CAL
 DRC-101	drc	mpt	MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing)	CAL	multi_patterning, anchored_patterning	implemented	NV; MR; SY	Each Calibre class is its own row: patterning (odd cycle, self-conflict), patterning with anchor layers (anchor path, anchor self-conflict), notch (self-conflict located), space (minimum opposite-mask spacing)
 DRC-102	drc	mpt	Pre-coloured (MASK) same-/different-mask spacing	LEF:MASK; LEF58 SAMEMASK,PARALLELSAMEMASK; A7:M4.S.1	anchored_patterning	partial	NV; MR; SY	Mask shapes as layers: same-mask spacing is space(L and mask), different-mask space(L and m1, L and m2), mixed coloured and uncoloured shapes patterning with anchors; PARALLELSAMEMASK needs EOL PARALLELEDGE (DRC-029)
 DRC-103	drc	mpt	Stitch legality	CAL; ICV	-	missing	-	
-DRC-104	drc	mpt	Per-colour density and colour ratio	CAL	-	missing	CF	
+DRC-104	drc	mpt	Per-colour density and colour ratio	CAL	density_balance	implemented	TX:KL; MR; SY	Each mask's density is density(L and mask); the colour ratio is density_balance, the lesser over the greater per window
 DRC-105	drc	mpt	Trim / cut-metal layers	LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL; A7:GCUT	-	missing	FR	
 DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	deck:warning	implemented	FR; SY; MR	Any DRC row may be written warning; IHP TM2.bR is the fixture
 DRC-111	drc	dfm	DFM scoring of recommended rules	CAL:YieldAnalyzer	-	missing	-	

@@ -518,6 +518,43 @@ pub enum Rule {
         /// Whether `limit` is a minimum (deck `>=`) or a maximum (`<=`).
         sense: LimitSense,
     },
+    /// A window where two masks' coverage is out of balance.
+    ///
+    /// Deck: `density_balance(A, B[, boundary]; window: len, step: len) >=
+    /// frac`, kind `density_balance`. Windows tile the die as for
+    /// [`Rule::Density`]. In each, the balance is the lesser of the two
+    /// layers' covered areas (each merged) over the greater: 1 when the masks
+    /// cover alike, 0 when one is missing. A window neither covers is not
+    /// judged. Write each mask's own density as `density(A; ..)`.
+    ///
+    /// One violation per window whose balance is below `limit`, on layer `a`,
+    /// at the window's centre, naming no shape (`PolyId(u32::MAX)`).
+    /// `measured` and `limit` are fractions. `examined` counts windows; an
+    /// empty die is [`Outcome::Skipped`].
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-104. The colour density ratio of multi-patterning: "The density
+    /// ratio between the two colors may need to meet certain uniformity
+    /// requirements" (J. Abercrombie, "Balancing on the color density
+    /// tightrope", Siemens Calibre blog, 2015-05-26); Yu et al., ICCAD 2013
+    /// (arXiv:1402.2890, Def. 1), take a bin's "local density uniformity" as
+    /// `max{d_kc} / min{d_kc}` over the colours, of which this balance is the
+    /// reciprocal, so `>= 1/r` bounds it by `r`. No public source gives a
+    /// foundry value.
+    DensityBalance {
+        /// The first mask's layer; findings are reported on it.
+        a: LayerId,
+        /// The second mask's layer.
+        b: LayerId,
+        /// The layer whose extent is the die; `None` takes the drawn layers'.
+        boundary: Option<LayerId>,
+        /// The window side, in grid units; positive.
+        window: Dbu,
+        /// The window step, in grid units; positive.
+        step: Dbu,
+        /// The least balance, a fraction; positive and finite.
+        limit: f64,
+    },
     /// An `inner` shape not surrounded by `outer` by `limit` on every side.
     ///
     /// Deck: `enclosure(inner, outer) >= len`, kind `min_enclosure`. Each
@@ -2809,6 +2846,23 @@ impl RuleSet {
                         sense: sense(spec)?,
                     }
                 }
+                "density_balance" => {
+                    let (a, b, boundary) = match spec.layer_len {
+                        2 => (layer(spec, 0), layer(spec, 1), None),
+                        _ => {
+                            layers(spec, 3)?;
+                            (layer(spec, 0), layer(spec, 1), Some(layer(spec, 2)))
+                        }
+                    };
+                    Rule::DensityBalance {
+                        a,
+                        b,
+                        boundary,
+                        window: length(spec, "window")?,
+                        step: length(spec, "step")?,
+                        limit: ratio(spec, "limit")?,
+                    }
+                }
                 "min_enclosure" => {
                     let (outer, inner) = two(spec)?;
                     Rule::MinEnclosure {
@@ -3482,7 +3536,12 @@ impl RuleSet {
         // The last rule reading each layer; its validation is dropped after that rule.
         let mut last_use: Vec<usize> = Vec::new();
         for (at, (_, rule)) in self.rules.iter().enumerate() {
-            for layer in rule.layers().into_iter().chain(rule.anchors()).flatten() {
+            for layer in rule
+                .layers()
+                .into_iter()
+                .chain(rule.more_layers())
+                .flatten()
+            {
                 if last_use.len() <= layer.idx() {
                     last_use.resize(layer.idx() + 1, 0);
                 }
@@ -3577,6 +3636,22 @@ impl RuleSet {
                 } => {
                     area::global_density(store, id, (layer, boundary, drawn), limit, sense, s, out)
                 }
+                Rule::DensityBalance {
+                    a,
+                    b,
+                    boundary,
+                    window,
+                    step,
+                    limit,
+                } => area::density_balance(
+                    store,
+                    id,
+                    (a, b, boundary, drawn),
+                    (window, step),
+                    limit,
+                    s,
+                    out,
+                ),
                 Rule::MinEnclosure {
                     outer,
                     inner,
@@ -3929,7 +4004,7 @@ impl RuleSet {
                         .all(|&layer| declared.contains(&Some(layer))),
                 "rule {id:?} reports only on a layer it reads, {declared:?}"
             );
-            for layer in rule.layers().into_iter().chain(rule.anchors()).flatten() {
+            for layer in rule.layers().into_iter().chain(rule.more_layers()).flatten() {
                 if last_use[layer.idx()] == at {
                     s.validated.forget(layer);
                 }
@@ -3939,10 +4014,13 @@ impl RuleSet {
 }
 
 impl Rule {
-    /// The anchor layers of [`Rule::AnchoredPatterning`]; none for any other.
-    fn anchors(&self) -> [Option<LayerId>; 4] {
+    /// The layers a rule reads past [`Self::layers`]: the anchors of
+    /// [`Rule::AnchoredPatterning`], the boundary of
+    /// [`Rule::DensityBalance`].
+    fn more_layers(&self) -> [Option<LayerId>; 4] {
         match *self {
             Rule::AnchoredPatterning { anchors, .. } => anchors,
+            Rule::DensityBalance { boundary, .. } => [boundary, None, None, None],
             _ => [None; 4],
         }
     }
@@ -4369,6 +4447,7 @@ impl Rule {
             } => [Some(layer), boundary, None],
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::ProjectionSpacing { a, b, .. }
+            | Rule::DensityBalance { a, b, .. }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
                 outer: a, inner: b, ..
