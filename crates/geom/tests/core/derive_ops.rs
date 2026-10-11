@@ -8,6 +8,7 @@ use gpurify_geom::derive::{
 };
 use gpurify_geom::ops::{Point, Seg};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::width::narrowest_neck;
 use gpurify_geom::{Dbu, GeometryStoreBuilder, LayerId, MAX_ABS_DBU};
 
 fn d(v: i64) -> Dbu {
@@ -334,6 +335,22 @@ fn with_width_counts_the_diagonal_neck_width_measures() {
     assert!(got.is_empty(), "the neck is not at most 2");
     with_width_into(&plates, 9..=i128::MAX, &mut got);
     assert!(got.is_empty(), "nothing is 3 wide at the neck");
+}
+
+#[test]
+fn a_neck_past_two_to_the_53_is_floored_exactly() {
+    // Plates overlapping 98_000_000 x 14_000 at a corner: the concave corners
+    // (198_000_000, 200_000_000) and (100_000_000, 200_014_000) are
+    // sqrt(98e6² + 14e3²) apart, squared 9_604_000_196_000_000 = n² - 1 for
+    // n = 98_000_001, past 2^53. Its floor is n - 1. Every facing pair is
+    // wider than n. An f64 root rounds n² - 1 to n.
+    let plates = rects(&[
+        (0, 0, 198_000_000, 200_014_000),
+        (100_000_000, 200_000_000, 400_000_000, 400_000_000),
+    ]);
+    let (gap, at) = narrowest_neck(plates.get(0), d(98_000_001)).expect("a neck under n");
+    assert_eq!(gap, d(98_000_000));
+    assert_eq!((at.x, at.y), (d(149_000_000), d(200_007_000)));
 }
 
 fn seg(ax: i64, ay: i64, bx: i64, by: i64) -> Seg {

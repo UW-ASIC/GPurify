@@ -221,22 +221,15 @@ pub fn narrowest_width2(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Db
 /// between two concave corners facing each other across material, as at the
 /// inner corners of two overlapping rectangles (`KLayout`'s euclidean width).
 /// Facing edges whose projections overlap are [`narrowest_facing`]'s; this is
-/// the corner-to-corner case it cannot see. The gap is floored to a whole
-/// unit; the comparison against `limit` is exact. Returns the gap and its
-/// midpoint, or `None` when no such neck is narrower than `limit`.
+/// the corner-to-corner case it cannot see. The gap is the integer square
+/// root of the exact squared gap, floored at any size; the comparison against
+/// `limit` is exact. Returns the gap and its midpoint, or `None` when no such
+/// neck is narrower than `limit`.
 ///
 /// Over `k` concave corners, `O(k log k)` plus the pairs within `limit` in x:
 /// `O(k²)` only when every corner sits in one `limit`-wide column.
 pub fn narrowest_neck(poly: PolygonRef<'_>, limit: Dbu) -> Option<(Dbu, Point)> {
-    neck2(poly, limit).map(|(gap2, at)| {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_precision_loss,
-            reason = "a gap under the limit"
-        )]
-        let gap = (gap2 as f64).sqrt() as i64;
-        (Dbu::new_unchecked(gap), at)
-    })
+    neck2(poly, limit).map(|(gap2, at)| (isqrt(DbuArea::new(gap2)), at))
 }
 
 /// [`narrowest_neck`] with the gap squared, exact.
