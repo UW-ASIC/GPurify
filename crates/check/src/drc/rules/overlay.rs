@@ -8,15 +8,16 @@
 //! skipped. Extension and overlap measure the figures of the area the merged
 //! layers share, so shapes that only touch are never measured.
 
+use super::width::wide_rects_into;
 use super::{
     centre, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
 };
-use crate::drc::Scratch;
+use crate::drc::{Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
-use gpurify_geom::boolean::{intersection_into, union_into};
+use gpurify_geom::boolean::{intersection_into, union_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
@@ -172,6 +173,22 @@ fn side_midpoint(inner: Bbox, margin: Dbu, side: Side) -> Point {
     }
 }
 
+/// The part of `drawn` at least `width` wide, indexed for coverage; `None`
+/// for no width. `Err` is a failed boolean.
+fn wide_part(
+    drawn: &ValidatedLayer,
+    width: Option<Dbu>,
+) -> Result<Option<SortedRects<()>>, BooleanError> {
+    let Some(width) = width else {
+        return Ok(None);
+    };
+    let mut rects = Vec::new();
+    wide_rects_into(drawn, width, &mut rects)?;
+    Ok(Some(SortedRects::new(
+        rects.into_iter().map(|r| (r, ())).collect(),
+    )))
+}
+
 /// Below the most negative real margin (`-2 * MAX_ABS_DBU`): seeds the host fold.
 const UNHOSTED: i64 = -(1 << 42);
 
@@ -204,14 +221,12 @@ fn pair_layers(
 /// per inner polygon on its best host: a figure of the merged outer layer, so
 /// a ring drawn as abutting bands hosts a ring inside it. A host holds the
 /// inner only if it covers all of its area (holes and concave notches count).
-/// `examined` counts inner polygons.
-#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+/// Only the inner polygons `wire` selects are held. `examined` counts them.
 pub(crate) fn enclosure(
     store: &GeometryStore,
     rule: StrId,
-    outer: LayerId,
-    inner_layer: LayerId,
-    limit: Dbu,
+    (outer, inner_layer): (LayerId, LayerId),
+    (limit, wire): (Dbu, WireBand),
     asymmetric: bool,
     s: &mut Scratch,
     out: &mut Violations,
@@ -235,6 +250,13 @@ pub(crate) fn enclosure(
     if union_into(hosts, &ValidatedLayer::default(), merged).is_err() {
         return REFUSED;
     }
+    // The parts of the outer layer at least `from` and `below` wide.
+    let (Ok(from), Ok(below)) = (
+        wide_part(hosts, Some(wire.from).filter(|w| w.raw() > 0)),
+        wide_part(hosts, wire.below),
+    ) else {
+        return REFUSED;
+    };
     let drawn = validated.get(store, inner_layer).expect("validated above");
     inner_rects.build(store, inner_layer, drawn);
     let inner_boxes = drawn.bboxes();
@@ -257,11 +279,20 @@ pub(crate) fn enclosure(
         .collect();
 
     let limit = Measurement::Length(limit);
+    let mut examined = 0u64;
     for poly in 0..u32::try_from(inner_rects.len()).expect("a layer indexes polygons with a u32") {
         let inner = inner_rects.row[poly as usize];
         let inner_box = inner_boxes[poly as usize];
         let mine = inner_rects.of(poly);
         let area = covered_area(mine);
+        let on = |wide: &SortedRects<()>| {
+            let covered = mine.iter().flat_map(|&r| wide.overlapping(r));
+            covered.fold(DbuArea::new(0), |sum, (clip, ())| sum + clip.area()) == area
+        };
+        if from.as_ref().is_some_and(|wide| !on(wide)) || below.as_ref().is_some_and(on) {
+            continue;
+        }
+        examined += 1;
         let lo = pairs.partition_point(|&(a, _)| a < inner);
         let hi = pairs.partition_point(|&(a, _)| a <= inner);
         // Best host; `Reverse` breaks a tie toward the lowest row.
@@ -302,7 +333,7 @@ pub(crate) fn enclosure(
             shapes: (inner, hosted.then_some(PolyId(host))),
         });
     }
-    (Outcome::Ran, inner_rects.len() as u64)
+    (Outcome::Ran, examined)
 }
 
 /// The side of a gate edge `a -> b` the gate does not lie on: material is on

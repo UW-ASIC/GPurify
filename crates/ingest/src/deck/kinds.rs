@@ -244,6 +244,28 @@ const EOL_PARALLEL: &[Param] = &[
     p("space", "par_space", Dim::Length),
     p("within", "par_within", Dim::Length),
     p("two_edges", "two_edges", Dim::Bool),
+/// An enclosure's wire band: the wire widths the rule holds.
+const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
+const WIRE_BELOW: &[Param] = &[p("below", "wire_below", Dim::Length)];
+const WIRE: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+
+/// `enclosure(inner, outer, opposite) >= len` with `params`.
+const fn opposite(params: &'static [Param]) -> Kind {
+    Kind {
+        modifier: Some("opposite"),
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "asymmetric_enclosure",
+            &[1, 0],
+            Some(p("", "min_one_side", Dim::Length)),
+            params,
+        )
+    }
+}
 const ADJACENT: &[Param] = &[
     p("cuts", "adjacent", Dim::Count),
     p("within", "within", Dim::Length),
@@ -469,18 +491,31 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
     ),
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
+    // A wire band (`width:`, `below:`, LEF `ENCLOSURE ... WIDTH`) is one more
+    // row per combination, the plain row first: a row knowing every given
+    // name wins, the first on a tie.
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),
-    Kind {
-        modifier: Some("opposite"),
-        ..drc(
-            "enclosure",
-            Cmp::Ge,
-            "asymmetric_enclosure",
-            &[1, 0],
-            Some(p("", "min_one_side", Dim::Length)),
-            &[],
-        )
-    },
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_WIDTH,
+    ),
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_BELOW,
+    ),
+    drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, WIRE),
+    opposite(&[]),
+    opposite(WIRE_WIDTH),
+    opposite(WIRE_BELOW),
+    opposite(WIRE),
     drc("extension", Cmp::Ge, "min_extension", &[0, 1], LIMIT, &[]),
     drc("overlap", Cmp::Ge, "overlap", &[0, 1], LIMIT, &[]),
     drc(

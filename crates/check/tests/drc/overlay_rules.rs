@@ -5,7 +5,7 @@
 use crate::common;
 
 use common::{Sink, A, B, RULE};
-use gpurify_check::drc::Rule;
+use gpurify_check::drc::{Rule, WireBand};
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason, Violation};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
@@ -41,6 +41,7 @@ fn min_enclosure_table(limit: i64) -> Vec<(StrId, Rule)> {
             outer: B,
             inner: A,
             limit: dbu(limit),
+            wire: WireBand::ANY,
         },
     )]
 }
@@ -273,6 +274,7 @@ fn asymmetric_table(limit: i64) -> Vec<(StrId, Rule)> {
             outer: B,
             inner: A,
             min_one_side: dbu(limit),
+            wire: WireBand::ANY,
         },
     )]
 }
@@ -385,6 +387,48 @@ fn an_l_shaped_inner_is_measured_edge_by_edge_on_its_better_axis() {
             shapes: (ids.of(via), Some(ids.of(host))),
         },
     );
+}
+
+/// Oracle: construct-from-answer (DRC-043, LEF `ENCLOSURE ... WIDTH`). A
+/// 3000 plate with a 500 tab off its right side; one via 40 into the plate's
+/// corner, one 10 from the tab's top edge. A 2000 square fits around the
+/// first and no 1000 square around the second, so a rule from 2000 holds only
+/// the first (40 under 50) and one below 1000 only the second (10 under 50).
+/// Without a band both are held.
+#[test]
+fn a_wire_band_holds_only_the_inner_shapes_on_wires_of_its_widths() {
+    let mut layout = LayoutBuilder::new(2);
+    let corner = layout.rect(A, 40, 40, 240, 240);
+    let tab_via = layout.rect(A, 3_400, 1_150, 3_600, 1_490);
+    layout.rect(B, 0, 0, 3_000, 3_000);
+    layout.rect(B, 3_000, 1_000, 3_800, 1_500);
+    let (store, ids) = layout.finish();
+    let banded = |from: i64, below: Option<i64>| {
+        vec![(
+            RULE,
+            Rule::MinEnclosure {
+                outer: B,
+                inner: A,
+                limit: dbu(50),
+                wire: WireBand {
+                    from: dbu(from),
+                    below: below.map(dbu),
+                },
+            },
+        )]
+    };
+    for (from, below, held, measured) in [(2_000, None, corner, 40), (0, Some(1_000), tab_via, 10)]
+    {
+        let mut sink = Sink::default();
+        sink.run(&store, &banded(from, below));
+        assert_eq!(sink.out.len(), 1, "from {from}, below {below:?}");
+        assert_eq!(sink.out.shape_a[0], ids.of(held));
+        assert_eq!(sink.out.measured[0], Measurement::Length(dbu(measured)));
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    }
+    let mut sink = Sink::default();
+    sink.run(&store, &banded(0, None));
+    assert_eq!(sink.out.len(), 2);
 }
 
 /// A host's hole is not host. A via 100 clear of the pad's outer edge but 20

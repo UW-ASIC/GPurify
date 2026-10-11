@@ -492,15 +492,21 @@ pub enum Rule {
     /// from the inner polygon to the host's boundary, holes and concave
     /// corners included. An inner polygon no host covers measures 0.
     ///
+    /// `enclosure(inner, outer; width: len, below: len) >= len` (either bound
+    /// alone too) holds only the inner polygons its [`WireBand`] selects: LEF
+    /// `ENCLOSURE ... WIDTH minWidth`, an enclosure that applies by the width
+    /// of the wire around the cut.
+    ///
     /// One violation per offending inner polygon, reported on the `inner`
     /// layer. A rectangle is marked in the middle of the strip on its least
     /// enclosed side, any other shape at the centre of its bounding box.
     /// `shapes` is the inner row and the host's drawn row (`None` when
-    /// unhosted). `examined` counts inner polygons.
+    /// unhosted). `examined` counts the inner polygons the band holds.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-040, DRC-090, DRC-096. Rules: sky130 ct.4, m1.4 and licon.5a,
-    /// GF180 CO.3, IHP M1.c and V1.c, ASAP7 V3.M4.EN.2; LEF `ENCLOSURE`;
+    /// DRC-040, DRC-043, DRC-090, DRC-096. Rules: sky130 ct.4, m1.4 and
+    /// licon.5a, GF180 CO.3, IHP M1.c and V1.c, ASAP7 V3.M4.EN.2; LEF
+    /// `ENCLOSURE`, and `ENCLOSURE ... WIDTH` (LEF/DEF 5.8, Example 1-3);
     /// `KLayout` `enclosing`.
     MinEnclosure {
         /// The enclosing layer, merged; the deck's second argument.
@@ -509,6 +515,8 @@ pub enum Rule {
         inner: LayerId,
         /// The smallest legal enclosure, in grid units; positive.
         limit: Dbu,
+        /// The wire widths at which the rule holds an inner polygon.
+        wire: WireBand,
     },
     /// An `inner` shape without `min_one_side` of enclosure on both sides of
     /// at least one axis.
@@ -531,13 +539,17 @@ pub enum Rule {
     /// fall short exactly when one axis has the limit on both sides. sky130's
     /// own `KLayout` deck checks those rows as two opposite edges too.
     ///
+    /// With `width:` and `below:`, the rule holds only the inner polygons its
+    /// [`WireBand`] selects, as [`Rule::MinEnclosure`]'s: LEF `ENCLOSURE
+    /// overhang1 overhang2 WIDTH minWidth`.
+    ///
     /// One violation per offending inner polygon, on the `inner` layer, in the
     /// middle of the strip past the least enclosed edge of the better axis.
     /// `shapes` is the inner row and the host's drawn row (`None` when
-    /// unhosted). `examined` counts inner polygons.
+    /// unhosted). `examined` counts the inner polygons the band holds.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-041, DRC-042. Rules: sky130 m1.5, via.5a and licon.5c, ASAP7
+    /// DRC-041, DRC-042, DRC-043. Rules: sky130 m1.5, via.5a and licon.5c, ASAP7
     /// V1.M1.EN.1, IHP M1.c1 and V1.c1; LEF `ENCLOSURE` with two overhangs
     /// (LEF/DEF 5.8, "ENCLOSURE"); `KLayout` `enclosed` with `projection`.
     ///
@@ -550,6 +562,8 @@ pub enum Rule {
         inner: LayerId,
         /// The enclosure both sides of one axis need, in grid units; positive.
         min_one_side: Dbu,
+        /// The wire widths at which the rule holds an inner polygon.
+        wire: WireBand,
     },
     /// `layer` not extending past `reference` by `limit`, as poly past
     /// diffusion.
@@ -1818,6 +1832,36 @@ pub enum StepKind {
     Step,
 }
 
+/// The wire widths at which an enclosure rule holds an inner polygon (LEF
+/// `ENCLOSURE ... WIDTH minWidth`: "the enclosure rule only applies when the
+/// width of the routing layer is greater than or equal to minWidth").
+///
+/// An inner polygon lies on a wire at least `w` wide when the part of the
+/// merged outer layer where an axis-aligned `w` square fits (sky130's
+/// `sized(-w/2).sized(w/2)`, `KLayout`'s opening) covers all of it, as
+/// [`Rule::WideDependentSpacing`] reads a wide part. The band holds the inner
+/// polygons that lie on a wire at least `from` wide and not on one `below`
+/// wide. LEF applies "the largest minWidth rule that is still less than or
+/// equal to the wire width", so a deck writes one row per band, each `below`
+/// the next one's `from`, and every inner polygon falls in exactly one; one
+/// no host covers falls in the lowest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireBand {
+    /// The narrowest wire held, in grid units; 0 holds every width.
+    pub from: Dbu,
+    /// The wire width, in grid units and above `from`, at and above which an
+    /// inner polygon is no longer held; `None` for no upper bound.
+    pub below: Option<Dbu>,
+}
+
+impl WireBand {
+    /// Every wire width: the rule holds every inner polygon.
+    pub const ANY: Self = Self {
+        from: Dbu::new_unchecked(0),
+        below: None,
+    };
+}
+
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
 /// for a pair is `space[row][column]`, with `row` the last width exceeded by
 /// the wider shape and `column` the last run length exceeded by the pair; the
@@ -2156,6 +2200,22 @@ impl RuleSet {
                     _ => Err(wrong_type(spec, param)),
                 })
                 .collect()
+        // An enclosure's optional wire band, `width:` and `below:`.
+        let wire = |spec: &RuleSpec| -> Result<WireBand, DrcError> {
+            let bound =
+                |param: &'static str| match strings.get(param).and_then(|p| rules.param(spec, p)) {
+                    Some(_) => length(spec, param).map(Some),
+                    None => Ok(None),
+                };
+            let from = bound("wire_width")?.unwrap_or(Dbu::new_unchecked(0));
+            let below = bound("wire_below")?;
+            if let Some(below) = below.filter(|&below| below <= from) {
+                return Err(DrcError::NonPositiveLimit {
+                    rule: name_of(spec.id),
+                    limit: (below - from).raw(),
+                });
+            }
+            Ok(WireBand { from, below })
         };
         let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
             let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
@@ -2267,6 +2327,7 @@ impl RuleSet {
                         outer,
                         inner,
                         limit: length(spec, "limit")?,
+                        wire: wire(spec)?,
                     }
                 }
                 "asymmetric_enclosure" => {
@@ -2275,6 +2336,7 @@ impl RuleSet {
                         outer,
                         inner,
                         min_one_side: length(spec, "min_one_side")?,
+                        wire: wire(spec)?,
                     }
                 }
                 "min_extension" => {
@@ -2900,12 +2962,22 @@ impl RuleSet {
                     outer,
                     inner,
                     limit,
-                } => overlay::enclosure(store, id, outer, inner, limit, false, s, out),
+                    wire,
+                } => overlay::enclosure(store, id, (outer, inner), (limit, wire), false, s, out),
                 Rule::AsymmetricEnclosure {
                     outer,
                     inner,
                     min_one_side,
-                } => overlay::enclosure(store, id, outer, inner, min_one_side, true, s, out),
+                    wire,
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (min_one_side, wire),
+                    true,
+                    s,
+                    out,
+                ),
                 Rule::MinExtension {
                     layer,
                     reference,
