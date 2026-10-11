@@ -48,6 +48,10 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
     (
         "DRC-068",
         "tests/exhaustive/xor.rs::a_lost_and_a_slotted_cut_add_up_to_the_cut_area_lost",
+    )
+    (
+        "PEX-009",
+        "tests/exhaustive/pex.rs::a_qualification_of_rc_against_rcc_finds_every_net_s_totals_unchanged",
     ),
     // The harness writes one flat cell; flattening is proved where it is done.
     (
