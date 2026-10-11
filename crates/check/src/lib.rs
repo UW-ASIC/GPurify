@@ -82,7 +82,7 @@
 //! |---|---|---|---|---|
 //! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A11, ERC-A12 |
 //! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A5, ERC-A8 |
-//! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, ERC-B1 |
+//! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
 //! | `em_current_density(layers..; ..)` | `em_current_density` | [`erc::RuleSet::em_current_density`] | a wire or cut above its instantaneous current limit | ERC-C7, ERC-D4, ERC-E1, ERC-E2, ERC-E3, ERC-E10 |
 //! | `ir_drop()` | `ir_drop` | [`erc::RuleSet::ir_drop`] | a node whose drop exceeds its net's limit | ERC-E8 |

@@ -1009,7 +1009,8 @@ fn density_layout(metal: &[Rect]) -> Layout {
 /// `density_cmp` (ERC-B1) on four 2 µm windows of densities 0.25, 0.5, 0.75
 /// and 0.125: `min` and `max` swept across each density, `max_delta` across
 /// each neighbour gap (0.25, 0.5, 0.375, 0.625), the CMP excursion
-/// `|400 nm × (d - 0.5)|` (100, 0, 100, 150 nm) across each value. Window
+/// `|400 nm × (d - 0.5)|` (100, 0, 100, 150 nm) across each value; the gap
+/// and excursion cases also prove DRC-113's density-step and CMP hotspots. Window
 /// placement on 3 µm windows stepped by 2 µm: three of four are die-clipped
 /// and count only with `partial_windows`. Overlapping metal counts once.
 fn density() -> Vec<Fixture> {
@@ -1017,7 +1018,14 @@ fn density() -> Vec<Fixture> {
     let layout = density_layout(&DENSITY_METAL);
     let mut placed = Vec::new();
     let mut case = |name: String, row: DensityRow, window: i64, step: i64, place: bool| {
-        let f = Fixture::new(&name, &["ERC-B1"], &row.deck(window, step), ERC)
+        // A density step between neighbouring windows and a CMP thickness
+        // excursion are the CMP hotspots public models define (DRC-113).
+        let rows: &[&'static str] = if row.delta.is_some() || row.cmp.is_some() {
+            &["ERC-B1", "DRC-113"]
+        } else {
+            &["ERC-B1"]
+        };
+        let f = Fixture::new(&name, rows, &row.deck(window, step), ERC)
             .layout(layout.clone())
             .expect(Expect::rule(
                 "den",

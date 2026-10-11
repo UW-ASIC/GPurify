@@ -277,6 +277,15 @@ pub struct AntennaElectricalTable {
 /// [IHP SG13G2] MFil.h; [SKY130] m1.pd.2a/2b. Source tags are in
 /// [check-sources.md].
 ///
+/// Catalog DRC-113 (litho and CMP hotspots), in part: a density step between
+/// neighbours and the CMP excursion are the hotspots a public model defines.
+/// The excursion is the first-order form of the pattern-density model of
+/// Ouma et al., "Characterization and modeling of oxide chemical-mechanical
+/// polishing using planarization length and pattern density concepts",
+/// IEEE Trans. Semicond. Manuf. 15(2):232–244, 2002, with the window standing
+/// for the planarization length. Litho hotspots and a full polish simulation
+/// need a foundry's calibrated models and are not checked.
+///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf

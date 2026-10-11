@@ -169,6 +169,13 @@ doi:10.1007/978-3-319-20385-0. Liebmann, ISPD 2003, doi:10.1145/640000.640026
 doi:10.1109/TCAD.2010.2042882 (gridded design). The open foundry manuals here
 are single-patterning, apart from ASAP7's patterning-driven rules.
 
+CMP (`Ouma2002`): Ouma, Boning, Chung, Easter, Saxena, Misra, Crevasse,
+"Characterization and modeling of oxide chemical-mechanical polishing using
+planarization length and pattern density concepts", IEEE Trans. Semicond.
+Manuf. 15(2):232–244, 2002: post-polish thickness from pattern density
+averaged over the planarization length. Its parameters are process
+calibration; no open PDK publishes them.
+
 ## 3. Proprietary tools: public evidence only
 
 Tags: `CAL` Siemens Calibre (nmDRC, nmLVS, PERC, DFM, xACT, RealTime, Recon,

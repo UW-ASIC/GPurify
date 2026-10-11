@@ -34,6 +34,11 @@ result from them is weaker than it looks.
 - Spacing that depends on the voltage between two nets.
 - A way to state the voltage or domain of an input signal in the intent file,
   and checks for inputs driven from a powered-down domain.
+- Lithography hotspots (aerial-image or process-window simulation) and a full
+  CMP topography simulation: both need a foundry's calibrated optical, resist
+  or polish model, which no open PDK publishes. The CMP hotspots a public
+  model defines, a density step between neighbouring windows and a
+  first-order thickness excursion, are `density_cmp`'s.
 
 ## Power grid
 

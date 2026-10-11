@@ -89,7 +89,7 @@ DRC-105	drc	mpt	Trim / cut-metal layers	LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL
 DRC-110	drc	dfm	Recommended rules reported as warnings	IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE	deck:warning	partial	FR; SY	`warning` severity exists for ERC rows only (deck.md); a recommended DRC rule cannot be reported as a warning
 DRC-111	drc	dfm	DFM scoring of recommended rules	CAL:YieldAnalyzer	-	missing	-	
 DRC-112	drc	dfm	Critical area analysis	CAL:YieldAnalyzer	-	missing	CF	
-DRC-113	drc	dfm	Litho / CMP simulation hotspots	CAL:LFD,CMPAnalyzer; PEG	-	missing	-	In scope since 2026-10-11 (was: Needs foundry process models)
+DRC-113	drc	dfm	Litho / CMP simulation hotspots	CAL:LFD,CMPAnalyzer; PEG; Ouma2002	density_cmp	partial	CF; MR; SY	CMP hotspots a public model defines: a density step between neighbouring windows (max_delta) and a first-order thickness excursion, sensitivity x (density - target), over a window standing for the planarization length (density_cmp, Ouma2002). Litho hotspots (aerial-image, process-window simulation) and a full CMP topography simulation need a foundry's calibrated optical, resist and polish models, which no open PDK publishes; foundry hotspot pattern libraries are not public
 DRC-114	drc	dfm	Pattern-matching DRC	CAL; ICV; PEG; patents P1,P3	-	missing	SY	
 DRC-115	drc	dfm	Equation-based DRC	CAL:eqDRC; patents P10,P11	-	missing	CF	First candidate for Rust custom rules (testing-plan.md L9b)
 DRC-116	drc	dfm	Curvilinear / all-angle tolerance DRC	CAL; SIL; EMP	-	missing	-	In scope since 2026-10-11 (was: Rectilinear only)
