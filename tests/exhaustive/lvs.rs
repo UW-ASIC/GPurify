@@ -977,13 +977,16 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= TOLERANCE * a.abs().max(b.abs())
 }
 
+/// An absolute tolerance as the deck writes it and in SI, when stated.
+type Absolute = Option<(&'static str, f64)>;
+
 /// The deck's `lvs` statements a fixture states, as the oracle reads them
 /// from deck.md ("LVS controls"), and the deck lines that state them.
 #[derive(Debug, Clone, Default)]
 struct Controls {
     /// `lvs tolerance`: model, parameter, the relative part, and the
     /// absolute part as the deck writes it and in SI.
-    tolerance: Vec<(Model, &'static str, f64, Option<(&'static str, f64)>)>,
+    tolerance: Vec<(Model, &'static str, f64, Absolute)>,
     /// `lvs ignore_parameter`: model and parameter.
     ignored: Vec<(Model, &'static str)>,
     /// `lvs asymmetric`: MOS models whose source and drain do not swap.
@@ -1062,7 +1065,7 @@ impl Controls {
         let mut out = c.clone();
         out.devs.retain(|d| {
             let dummy = d.pins.iter().all(|&p| p == d.pins[0]);
-            !self.left_out.contains(&d.model) && !(dummy && self.dummies_out.contains(&d.model))
+            !(self.left_out.contains(&d.model) || dummy && self.dummies_out.contains(&d.model))
         });
         out
     }

@@ -278,7 +278,7 @@ fn unpaired_on_both_sides(found: &[Discrepancy]) -> bool {
 /// models aside. When that pairs every node and the only differences left
 /// are pairs of different models, those pairs are the report, each a
 /// [`Discrepancy::ModelMismatch`], as `KLayout` reports two devices
-/// "identified but [with] different device classes" (catalog LVS-013).
+/// "identified but have different device classes" (catalog LVS-013).
 /// Otherwise `None`, and the comparison by model stands. Either way the
 /// verdict is a mismatch.
 fn models_aside(

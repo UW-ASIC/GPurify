@@ -54,7 +54,7 @@
 //!    every device of one kind in one class, models aside: if that pairs
 //!    every node and only models differ, the report is those pairs, each a
 //!    [`Discrepancy::ModelMismatch`] (catalog LVS-013, `KLayout`'s devices
-//!    "identified but [with] different device classes"); otherwise the
+//!    "identified but have different device classes"); otherwise the
 //!    first report stands. The verdict is a mismatch either way.
 //!
 //! Roles decide which terminals are interchangeable. Positions never matter.

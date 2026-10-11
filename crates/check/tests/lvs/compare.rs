@@ -961,7 +961,7 @@ fn chain_of_two(second: StrId, extra: bool) -> Graph {
 }
 
 /// Oracle: construct-from-answer, and `KLayout`'s report of "two devices
-/// [that] are identified but have different device classes". The reference
+/// that are identified but have different device classes". The reference
 /// writes the second transistor `PCH`, the layout draws it `NCH`, and
 /// nothing else differs, so the report is that one pair with its two
 /// models, and nothing else; both ways round it is the mirror image. With a

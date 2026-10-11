@@ -98,7 +98,7 @@ impl Classes {
         if self.kind == DeviceKind::Resistor && class == 0b0011 {
             return TerminalRole::Pin(0);
         }
-        if class.count_ones() == 1 {
+        if class.is_power_of_two() {
             return match (self.asymmetric, position) {
                 (true, 1) => FIXED_SOURCE,
                 (true, 2) => FIXED_DRAIN,
