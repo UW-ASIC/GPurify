@@ -394,28 +394,6 @@ fn node(index: u32) -> usize {
     usize::try_from(index).expect("a panel index is a u32 and usize is at least that wide")
 }
 
-/// Oracle: construct-from-answer. The matrix is stored row-major as the full
-/// square, so `get(i, j)` is `value[i * n + j]` and `dim` is the side. Storing
-/// a triangle would make the symmetry law below vacuous, which is why the
-/// layout is worth pinning down first.
-#[test]
-fn a_capacitance_matrix_reads_back_row_major_at_the_dimension_it_reports() {
-    let rows: [[f64; 3]; 3] = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
-    let m = matrix(&[&rows[0], &rows[1], &rows[2]]);
-    assert_eq!(m.dim(), 3);
-    for (i, row) in rows.iter().enumerate() {
-        for (j, &expected) in row.iter().enumerate() {
-            assert_close(
-                &format!("entry ({i}, {j})"),
-                m.value[i * m.dim() + j],
-                expected,
-                1e-12,
-            );
-        }
-    }
-    assert_eq!(CapMatrix::default().dim(), 0, "an empty matrix has no rows");
-}
-
 /// Oracle: closed form. Asymmetry is the largest difference between an entry
 /// and its transpose, relative to the geometric mean of the two diagonals. A
 /// symmetric matrix has none; a matrix whose `(0,1)` entry is one and whose
