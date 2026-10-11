@@ -2755,4 +2755,55 @@ mod tests {
         }
         assert!(checked >= 20, "only {checked} nmos checked");
     }
+
+    /// Oracle: hand-derived from the drawing, testing-plan F100. Liberty's
+    /// circuit gives a MOS the diffusions LVS compares, topology's, not a
+    /// measure of its own. [`draw`]'s nmos, 1000 by 150 nm, its diffusion
+    /// redrawn round a 200 nm square hole at (150, 400) in its source: the
+    /// source, 500 by 1000 nm, has `as` = 500 · 1000 − 200 · 200 = 460 000
+    /// nm² and `ps` = 2 (500 + 1000) + 4 · 200 = 3800 nm, the hole's edge an
+    /// edge of the diffusion; the drain, whole, `ad` = 500 000 nm² and `pd`
+    /// = 3000 nm. Liberty used to measure the outer ring alone, 500 000 nm²
+    /// and 3000 nm at the source.
+    #[test]
+    fn liberty_reads_the_diffusions_lvs_compares() {
+        use gpurify::liberty::circuit::{build, Param, Wires};
+        let mut layout = draw(&Circuit::new(3, vec![Dev::mos(Model::N, 0, 1, 2)]));
+        layout.shapes.retain(|(layer, _)| layer.as_str() != "diff");
+        let layout = layout
+            .rect("diff", 0, 0, 1150, 400)
+            .rect("diff", 0, 600, 1150, 1000)
+            .rect("diff", 0, 400, 150, 600)
+            .rect("diff", 350, 400, 1150, 600);
+        let fixture =
+            Fixture::new("lvs/liberty_diffusions", &[], &full_deck(), NONE).layout(layout);
+        let ran = crate::harness::run(&fixture).expect("the drawing runs");
+        let spec = gpurify::liberty::spec::parse(
+            r#"{"cell": "TOP", "pins": [
+                {"name": "n0", "role": "input", "power": "n1", "ground": "n2"},
+                {"name": "n1", "role": "power"}, {"name": "n2", "role": "ground"}],
+                "corners": [{"name": "tt", "temperature": 25,
+                             "supplies": {"n1": 1.8, "n2": 0}, "models": []}]}"#,
+        )
+        .expect("a valid spec");
+        let built =
+            build(&ran.loaded, &ran.extracted, &spec, Wires::Lumped).expect("pins labelled");
+        let [mos] = &built.devices[..] else {
+            panic!("one transistor: {:?}", built.devices);
+        };
+        for (name, want) in [
+            ("as", Param::Area(4.6e-13)),
+            ("ps", Param::Length(3.8e-6)),
+            ("ad", Param::Area(5e-13)),
+            ("pd", Param::Length(3e-6)),
+        ] {
+            let got = mos.params.iter().find(|p| p.0 == name).map(|p| p.1);
+            let close = match (got, want) {
+                (Some(Param::Area(a)), Param::Area(b))
+                | (Some(Param::Length(a)), Param::Length(b)) => (a - b).abs() <= 1e-9 * b,
+                _ => false,
+            };
+            assert!(close, "{name}: {got:?}, want {want:?}");
+        }
+    }
 }

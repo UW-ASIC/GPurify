@@ -68,8 +68,10 @@ junction capacitance with no Miller term, averaged over the swing.
   are joined. A net whose resistor network still falls into pieces is
   refused by name, because a terminal on the detached piece would float.
 - Each device terminal sits on the rectangle touching its channel.
-- Each MOS gets its drain and source area and perimeter from its diffusions,
-  with shared diffusion split between the fingers that share it. It also gets
+- Each MOS gets its drain and source area and perimeter (`ad`, `pd`, `as`,
+  `ps`) as LVS measures them: shared diffusion split between the fingers
+  that share it, a hole out of the area and its edge in the perimeter, and
+  none for a source or drain drawn in pieces. It also gets
   its BSIM4 `sa`/`sb` (length-of-diffusion stress), the distance from each gate
   edge to the isolation edge. On sky130 that last one moves a delay by about
   15 %.
