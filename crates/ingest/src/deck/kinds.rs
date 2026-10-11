@@ -591,6 +591,7 @@ pub(crate) const KINDS: &[Kind] = &[
             opt("diode", "diode_layer", Dim::Layer),
             p("diode_credit", "diode_credit", Dim::Scalar),
             p("diode_bonus", "diode_bonus", Dim::Scalar),
+            p("area_minus_diode", "area_minus_diode", Dim::Scalar),
         ],
     ),
     erc(
