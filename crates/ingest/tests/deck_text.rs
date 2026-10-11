@@ -759,6 +759,49 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
     }
 }
 
+/// N-c7-2 (fixed on the base by D4 the same way): a decimal past `f64`'s range converts to infinity, which passed
+/// "positive" and "zero or more" alike, so `thickness 1e400nm` was a stack
+/// row of infinite thickness (and an infinite capacitance downstream). The
+/// stack's own invariant, every value finite (asserted where it is built,
+/// C7), refuses it at the value. Oracle: IEEE 754, `1e400` overflows
+/// binary64 (largest finite about `1.8e308`).
+#[test]
+fn a_pex_value_past_the_range_of_a_float_is_refused_at_the_value() {
+    let full = |key: &str, stated: &str| {
+        let row = [
+            ("thickness", "360nm"),
+            ("height", "1376nm"),
+            ("sheet", "0.125ohm"),
+            ("dielectric", "3.9"),
+            ("area_cap", "25.8aF/um2"),
+            ("fringe_cap", "40.5aF/um"),
+        ]
+        .map(|(k, v)| format!("{k} {}", if k == key { stated } else { v }));
+        format!("pex met1 {}\n", row.join(" "))
+    };
+    for (key, stated) in [
+        ("thickness", "1e400nm"),
+        ("height", "1e400nm"),
+        ("sheet", "1e400ohm"),
+        ("dielectric", "1e400"),
+        ("area_cap", "1e400aF/um2"),
+        ("fringe_cap", "1e400aF/um"),
+    ] {
+        let mut strings = StrTable::default();
+        let error = parse_deck(
+            &format!("{HEAD}{}", full(key, stated)),
+            grid(),
+            &mut strings,
+        )
+        .expect_err(key)
+        .to_string();
+        assert!(
+            error.contains(&format!("pex `met1`: {key} must be")) && error.contains("finite"),
+            "{key} {stated}: {error}"
+        );
+    }
+}
+
 /// F74: a `pex` row may leave its dielectric out, which states none: it
 /// lowers to `0.0`, the stack's "not stated", as a layer with no row does.
 /// Every other key stays required.
