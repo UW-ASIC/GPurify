@@ -67,7 +67,8 @@ was measured and the limit it broke.
 
 ## LVS reduction
 
-Before matching, both sides are reduced the way netgen reduces them:
+Before matching, both sides are reduced, mostly the way netgen reduces them
+(the differences are listed below):
 
 - **Parallel:** devices of one model with every terminal on the same nets
   become one device. Source and drain are interchangeable, and so are a
@@ -88,13 +89,30 @@ The parameter names are `w`, `l`, `nf` and `m`. The report lists every merge
 under `lvs merges:` with the device rows it joined, so a paired device can be
 traced back to what was drawn.
 
+Where netgen (1.5.323) differs, given the setup that otherwise states these
+rules (`tests/exhaustive/lvs/netgen.rs`, which checks every verdict against
+netgen's):
+
+- netgen never merges transistors in series, even with `series enable`, so a
+  stack matches one long transistor here and not in netgen;
+- netgen's `l critical` merges parallel transistors whose L agree within its
+  tolerance; here L must be equal;
+- netgen measures a parameter's difference against the mean of the two
+  values, and this tool against the larger, so netgen's `2t/(2 − t)`
+  (2.0202 % for 2 %) is this tool's `t`;
+- netgen matches the top cell's pins by name; this tool never compares names;
+- when the deck extracts no bulk, the reference's bulks are dropped here;
+  netgen has no such rule, so its setup must tie every bulk to one net on
+  both sides.
+
 ## LVS parameters
 
 The layout's devices are sized from what is drawn: transistor and resistor
 `w` and `l`, a transistor's `nf` (one per drawn channel), every device's
 `area` and `perim`, and a resistor's `r` and a capacitor's `c` where the deck
 gives their coefficients (see [deck.md](deck.md#devices)). Each parameter a
-schematic card states is compared on that device, within 2 %. A card that
+schematic card states is compared on that device, within 2 % of the larger
+value. A card that
 leaves a parameter out says nothing about it, whatever other cards of the
 same model state, and a parameter the layout does not measure is reported
 (`lvs.undeclared_param`) rather than passed.

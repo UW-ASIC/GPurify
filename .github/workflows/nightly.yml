@@ -27,7 +27,9 @@ jobs:
       # The exhaustive enumerations, the 10^5-case property twins and the
       # nightly golden field solves; a failing property prints its seed. The
       # differentials need the oracle shell and run in the `oracles` job.
-      - run: cargo test --workspace -- --ignored --skip klayout_mirror
+      - run: >-
+          cargo test --workspace -- --ignored --skip klayout_mirror
+          --skip netgen_differential
 
   oracles:
     name: differentials in the oracle shell
@@ -42,6 +44,12 @@ jobs:
       # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
       # random layouts. One test at a time; each runs at most four klayouts.
       - run: nix develop .#oracles --command cargo test --test klayout -- --ignored --test-threads=1
+      # Netgen on every circuit of the LVS enumeration with every single
+      # fault (4223 circuits; F3). One test at a time; each runs at most two
+      # tools at once (gpurify_testgen::oracle::MAX_RUNNING).
+      - run: >-
+          nix develop .#oracles --command cargo test --test exhaustive --
+          --ignored --test-threads=1 netgen_differential
 
   fuzz:
     name: fuzz ${{ matrix.target }}

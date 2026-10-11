@@ -29,7 +29,10 @@
 //!   diode's or capacitor's pins are not. A MOS whose source and drain share
 //!   a net merges like any other. This applies to every device kind and
 //!   consumes no net.
-//! - **Series** (catalog LVS-041; on by default, which Netgen's is not): two
+//!   Netgen's `l critical` merges parallel MOS whose `L` agree within its
+//!   tolerance; here they must be bit-identical, the conservative side.
+//! - **Series** (catalog LVS-041; on by default, while Netgen 1.5.323 never
+//!   merges MOS in series, `series enable` notwithstanding): two
 //!   devices of one kind and one model whose channels (`Source`/`Drain`) meet
 //!   at a net carrying exactly those two terminals, with every other terminal
 //!   on the same nets (gates strapped, one bulk; catalog LVS-045) and at least

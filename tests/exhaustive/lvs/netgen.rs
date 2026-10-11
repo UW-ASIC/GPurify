@@ -1,0 +1,490 @@
+//! LVS against Netgen (testing-plan §4 L6, ledger F3): every circuit of the
+//! enumeration against its own reference and every single fault of it, and a
+//! few curated cases for what the enumeration cannot reach, compared by
+//! `GPurify` and by `netgen -batch lvs`, verdict for verdict.
+//!
+//! **What each side reads.** `GPurify` runs the fixture as the enumeration
+//! does: the circuit drawn as GDS, extracted, and compared with the
+//! reference. Netgen reads the drawn circuit's own SPICE ([`spice`]) as its
+//! layout side, never a netlist `GPurify` extracted, so nothing it sees comes
+//! from the tool under test; a disagreement is in `GPurify`'s extraction or
+//! its comparison. Its reference is the fixture's own text. Both go through
+//! [`for_netgen`], which puts the bulk of every three-terminal MOS on one
+//! extra port: the deck extracts no bulk for those, so `GPurify` drops the
+//! reference's, and Netgen must see the same thing on both sides.
+//!
+//! **The setup** ([`SETUP`]) states `GPurify`'s documented semantics (the
+//! `lvs` module docs and `lvs::reduce`) in Netgen's terms:
+//!
+//! - MOS source and drain permute, and so do a resistor's ends; capacitor
+//!   plates and diode and bipolar pins do not (catalog LVS-030);
+//! - parallel devices merge: a MOS sums `w`, with `m` folded in and `l`
+//!   critical; a passive keeps its value and counts `m`, which is Netgen's
+//!   default for a device with no value (LVS-040, LVS-043, LVS-044, LVS-046);
+//! - passives never merge in series, as in `GPurify`; MOS do in `GPurify`
+//!   and cannot in Netgen (below);
+//! - MOS `w` and `l` agree within 2 %. Netgen measures a difference against
+//!   the mean of the two values and `GPurify` against the larger
+//!   (`CompareOptions::param_tolerance`), so Netgen is given `2t/(2 − t)` for
+//!   `GPurify`'s `t`, which puts the boundary in the same place exactly
+//!   (LVS-014).
+//!
+//! **Netgen's verdict** is read from its log: "Netlists do not match" is a
+//! mismatch, and "Netlists match" a match unless property errors were found.
+//! Its pin matching is not read: `GPurify` never compares net or port names
+//! (LVS-016, LVS-032), so it is left out on purpose.
+//!
+//! **Documented differences** ([`SERIES`], [`CRITICAL`]) are encoded per case
+//! ([`Case::differs`]): there the two verdicts must differ, and agreeing is
+//! reported as loudly as an undocumented disagreement. The enumeration makes
+//! every net a port, which no series merge crosses, and draws every length
+//! alike, so neither occurs there; the curated cases hold one of each.
+//!
+//! **Not compared:** a reference with no device left (a one-device circuit
+//! with its device deleted), which Netgen declines to check ("has no
+//! elements"). They are counted, and `GPurify` must call each a mismatch.
+
+use super::{circuits, compared, enumerated, polar, spice, Circuit, Dev, Model, TOLERANCE};
+use crate::harness::{self, Expect, Fixture};
+use gpurify::check::lvs::Verdict;
+use gpurify_testgen::{oracle, Rng};
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
+
+/// `GPurify` merges a MOS stack through a net that is no port into one device
+/// of the summed `L` (catalog LVS-041, on by default); Netgen does not merge
+/// MOS in series at all, `property ... series enable` notwithstanding.
+const SERIES: &str = "series MOS merge (LVS-041)";
+
+/// Netgen merges parallel MOS whose `l` agree within the tolerance (its
+/// `critical` property); `GPurify` merges only bit-identical ones
+/// (`lvs::reduce`), the conservative side.
+const CRITICAL: &str = "parallel MOS of near-equal L (LVS-040)";
+
+/// The MOS models whose recogniser lists three layers ([`super::MOS_DECK`],
+/// [`super::EXTRA_DECK`]), so that no bulk is extracted for them.
+const THREE_TERMINAL: [&str; 3] = ["nmos", "pmos", "nmos_hvt"];
+
+/// How long one Netgen batch, one circuit and its faults, may run; it takes
+/// well under a second.
+const LIMIT: Duration = Duration::from_mins(2);
+
+/// The Netgen setup, every class guarded because a netlist may lack it;
+/// `TOL` is replaced by Netgen's tolerance.
+const SETUP: &str = "\
+foreach side {-circuit1 -circuit2} {
+    set present [cells list -all $side]
+    foreach mos {nmos pmos nmos_hvt nmosb} {
+        if {[lsearch $present $mos] < 0} continue
+        permute \"$side $mos\" source drain
+        property \"$side $mos\" parallel enable
+        property \"$side $mos\" parallel {l critical}
+        property \"$side $mos\" parallel {w add}
+        property \"$side $mos\" tolerance {w TOL} {l TOL}
+    }
+    if {[lsearch $present rpoly] >= 0} {
+        permute \"$side rpoly\" end_a end_b
+    }
+    foreach passive {rpoly cmim dpn npn} {
+        if {[lsearch $present $passive] < 0} continue
+        property \"$side $passive\" parallel enable
+        property \"$side $passive\" series disable
+    }
+}
+";
+
+/// One comparison: the fixture `GPurify` runs, and the two netlists Netgen
+/// reads.
+struct Case {
+    fixture: Fixture,
+    /// The drawn circuit, through [`for_netgen`].
+    layout: String,
+    /// The fixture's reference, through [`for_netgen`].
+    reference: String,
+    /// The documented difference that makes the verdicts differ here.
+    differs: Option<&'static str>,
+}
+
+/// `text` as Netgen reads it: the bulk of every [`THREE_TERMINAL`] MOS on one
+/// extra port, `sub`.
+fn for_netgen(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let mut words: Vec<&str> = line.split_whitespace().collect();
+        if words.first() == Some(&".subckt") {
+            words.push("sub");
+        } else if line.starts_with('M') && THREE_TERMINAL.contains(&words[5]) {
+            words[4] = "sub";
+        }
+        out.push_str(&words.join(" "));
+        out.push('\n');
+    }
+    out
+}
+
+/// A card's nets: every word but the first and the model, up to the first
+/// parameter.
+fn card_nets(line: &str) -> Vec<&str> {
+    let words: Vec<&str> = line
+        .split_whitespace()
+        .take_while(|w| !w.contains('='))
+        .collect();
+    words[1..words.len() - 1].to_vec()
+}
+
+/// Whether every net a card of `text` lands on is a port: then no series
+/// merge applies.
+fn every_net_is_a_port(text: &str) -> bool {
+    let ports: Vec<&str> = text
+        .lines()
+        .find(|l| l.starts_with(".subckt"))
+        .map(|l| l.split_whitespace().skip(2).collect())
+        .unwrap_or_default();
+    text.lines()
+        .filter(|l| l.starts_with(['M', 'R', 'C', 'D', 'Q']))
+        .all(|l| card_nets(l).iter().all(|n| ports.contains(n)))
+}
+
+fn has_device(text: &str) -> bool {
+    text.lines()
+        .any(|l| l.starts_with(['M', 'R', 'C', 'D', 'Q']))
+}
+
+/// Circuit `c` against its own reference and every single fault of it, as
+/// the enumeration generates them, but every fault (the full product, not
+/// the nightly's thinning). The Spectre copy is left out: Netgen reads no
+/// Spectre, and its circuit is the base case's.
+fn enumeration(c: &Circuit) -> Vec<Case> {
+    let layout = for_netgen(&spice(c));
+    enumerated(c, None)
+        .into_iter()
+        .filter(|f| !f.name.ends_with("/spectre"))
+        .map(|fixture| {
+            let reference = for_netgen(fixture.reference.as_deref().expect("an LVS fixture"));
+            assert!(
+                every_net_is_a_port(&layout) && every_net_is_a_port(&reference),
+                "{}: a net that is no port could merge in series, which Netgen does not; \
+                 mark the case with SERIES",
+                fixture.name
+            );
+            Case {
+                fixture,
+                layout: layout.clone(),
+                reference,
+                differs: None,
+            }
+        })
+        .collect()
+}
+
+/// What the enumeration cannot reach: the documented differences, and each
+/// setup line the enumeration's MOS-only circuits do not exercise.
+fn curated() -> Vec<Case> {
+    use Model::{C, D, N, Q, R};
+    let case = |name: &str,
+                catalog: &[&'static str],
+                layout: &Circuit,
+                reference: &Circuit,
+                differs: Option<&'static str>| Case {
+        fixture: compared(&format!("netgen/{name}"), catalog, layout, reference),
+        layout: for_netgen(&spice(layout)),
+        reference: for_netgen(&spice(reference)),
+        differs,
+    };
+    let stack = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
+    let long = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300)]);
+    let two = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);
+    let wide = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(2000, 150)]);
+    let mut near = two.clone();
+    near.devs[1] = near.devs[1].clone().sized(1000, 151);
+    let m2 = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).times(2)]);
+    // 61 nm on 3000 is 1.99 % of the larger and 2.01 % of the mean: a match
+    // for GPurify's 2 %, and for Netgen only at the matching 2.02 %.
+    let sized = |w| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(w, 150)]);
+    let mut out = vec![
+        case("series/stack_vs_stack", &["LVS-041"], &stack, &stack, None),
+        case(
+            "series/stack_vs_long",
+            &["LVS-041"],
+            &stack,
+            &long,
+            Some(SERIES),
+        ),
+        case("parallel/mos_two_vs_wide", &["LVS-040"], &two, &wide, None),
+        case(
+            "parallel/mos_near_lengths_vs_wide",
+            &["LVS-040"],
+            &near,
+            &wide,
+            Some(CRITICAL),
+        ),
+        case("multiplier/mos_m2_vs_two", &["LVS-046"], &two, &m2, None),
+        case(
+            "tolerance/w+2.03_of_3000",
+            &["LVS-014"],
+            &sized(3000),
+            &sized(3061),
+            None,
+        ),
+        case(
+            "tolerance/w+2.07_of_3000",
+            &["LVS-014"],
+            &sized(3000),
+            &sized(3062),
+            None,
+        ),
+    ];
+    for model in [R, C, D] {
+        let letter = model.letter();
+        let one = polar(Dev::pins(model, &[0, 1]));
+        let mut two = one.clone();
+        two.devs.push(Dev::pins(model, &[0, 1]));
+        let counted = polar(Dev::pins(model, &[0, 1]).times(2));
+        let reversed = polar(Dev::pins(model, &[1, 0]));
+        out.extend([
+            case(
+                &format!("parallel/{letter}_two_vs_one"),
+                &["LVS-044"],
+                &two,
+                &one,
+                None,
+            ),
+            case(
+                &format!("parallel/{letter}_two_vs_m2"),
+                &["LVS-046"],
+                &two,
+                &counted,
+                None,
+            ),
+            case(
+                &format!("polarity/{letter}_reversed"),
+                &["LVS-030"],
+                &one,
+                &reversed,
+                None,
+            ),
+        ]);
+    }
+    let bjt = polar(Dev::pins(Q, &[0, 1, 2]));
+    let flipped = polar(Dev::pins(Q, &[0, 2, 1]));
+    out.push(case(
+        "polarity/Q_emitter_collector_swapped",
+        &["LVS-030"],
+        &bjt,
+        &flipped,
+        None,
+    ));
+    out
+}
+
+/// Netgen's verdict from its comparison log; `None` when it gave none.
+/// "Networks match locally but not globally" is its report of swapped
+/// connections, a mismatch.
+fn netgen_verdict(log: &str) -> Option<bool> {
+    if log.contains("Netlists do not match") || log.contains("match locally but not globally") {
+        Some(false)
+    } else if log.contains("Netlists match") {
+        Some(!log.contains("Property errors were found"))
+    } else {
+        None
+    }
+}
+
+/// `GPurify`'s verdict, or why it gave none.
+fn gpurify_verdict(fixture: &Fixture) -> Result<bool, String> {
+    match harness::run(fixture)?.lvs {
+        Some(Verdict::Match) => Ok(true),
+        Some(Verdict::Mismatch(_)) => Ok(false),
+        other => Err(format!("no verdict ({other:?})")),
+    }
+}
+
+/// The enumeration oracle's verdict, for the report.
+fn x5_verdict(fixture: &Fixture) -> Option<bool> {
+    fixture.expect.iter().find_map(|e| match e {
+        Expect::Lvs(matched) => Some(*matched),
+        _ => None,
+    })
+}
+
+/// What a batch of comparisons found.
+#[derive(Default)]
+struct Tally {
+    /// Every case of the batch.
+    cases: usize,
+    /// Both verdicts the same, where no difference is documented.
+    agreed: usize,
+    /// Of those, both a match.
+    matched: usize,
+    /// Verdicts that differ as documented, per difference.
+    differs: BTreeMap<&'static str, usize>,
+    /// References with no device, which Netgen does not check.
+    unchecked: usize,
+    /// Everything else, one line each.
+    broken: Vec<String>,
+}
+
+impl Tally {
+    fn add(&mut self, other: Tally) {
+        self.cases += other.cases;
+        self.agreed += other.agreed;
+        self.matched += other.matched;
+        for (why, n) in other.differs {
+            *self.differs.entry(why).or_default() += n;
+        }
+        self.unchecked += other.unchecked;
+        self.broken.extend(other.broken);
+    }
+}
+
+/// Compares every case with one Netgen process, in a scratch directory that
+/// is removed when nothing broke. Netgen keeps about 6 MB of every comparison
+/// until it exits, so a batch is one circuit's cases, a few dozen.
+fn differential(netgen: &Path, cases: &[Case]) -> Tally {
+    let dir = oracle::scratch("netgen");
+    let write = |name: &str, text: &str| {
+        std::fs::write(dir.join(name), text).expect("the scratch directory is writable");
+    };
+    let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
+    write("setup.tcl", &SETUP.replace("TOL", &tolerance.to_string()));
+    let mut tally = Tally {
+        cases: cases.len(),
+        ..Tally::default()
+    };
+    let mut batch = String::new();
+    for (i, case) in cases.iter().enumerate() {
+        if has_device(&case.reference) {
+            write(&format!("l{i}.spice"), &case.layout);
+            write(&format!("r{i}.spice"), &case.reference);
+            let _ = writeln!(
+                batch,
+                "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} setup.tcl o{i}.log"
+            );
+        }
+    }
+    write("batch.tcl", &batch);
+    oracle::run(netgen, &["-batch", "source", "batch.tcl"], &dir, LIMIT);
+    for (i, case) in cases.iter().enumerate() {
+        let name = &case.fixture.name;
+        let ours = gpurify_verdict(&case.fixture);
+        if !has_device(&case.reference) {
+            tally.unchecked += 1;
+            if ours != Ok(false) {
+                tally.broken.push(format!(
+                    "{name}: an empty reference, GPurify {ours:?}, want a mismatch"
+                ));
+            }
+            continue;
+        }
+        let path = dir.join(format!("o{i}.log"));
+        let log = std::fs::read_to_string(&path).unwrap_or_default();
+        let theirs = netgen_verdict(&log);
+        match (&ours, theirs, case.differs) {
+            (Ok(a), Some(b), None) if *a == b => {
+                tally.agreed += 1;
+                tally.matched += usize::from(b);
+            }
+            (Ok(a), Some(b), Some(why)) if *a != b => {
+                *tally.differs.entry(why).or_default() += 1;
+            }
+            _ => tally.broken.push(format!(
+                "{name}: GPurify {ours:?}, Netgen {theirs:?}, enumeration oracle {:?}{}; {}",
+                x5_verdict(&case.fixture),
+                case.differs
+                    .map(|why| format!(", documented to differ ({why})"))
+                    .unwrap_or_default(),
+                path.display()
+            )),
+        }
+    }
+    if tally.broken.is_empty() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    tally
+}
+
+/// Compares batch `batch(i)` for every `i < count`, each with one Netgen
+/// process, on [`oracle::MAX_RUNNING`] threads, and fails listing every case
+/// that broke. Returns the tally.
+fn compare_all(count: usize, batch: impl Fn(usize) -> Vec<Case> + Sync) -> Tally {
+    let netgen = oracle::tool("netgen");
+    let next = AtomicUsize::new(0);
+    let total = Mutex::new(Tally::default());
+    std::thread::scope(|scope| {
+        for _ in 0..oracle::MAX_RUNNING {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= count {
+                    break;
+                }
+                let found = differential(&netgen, &batch(i));
+                total.lock().expect("not poisoned").add(found);
+            });
+        }
+    });
+    let total = total.into_inner().expect("not poisoned");
+    println!(
+        "netgen: {} cases, {} verdicts agree ({} both a match), documented \
+         differences {:?}, {} empty references not checked, {} broken",
+        total.cases,
+        total.agreed,
+        total.matched,
+        total.differs,
+        total.unchecked,
+        total.broken.len()
+    );
+    let mut broken = total.broken.clone();
+    broken.sort();
+    assert!(
+        broken.is_empty(),
+        "{} cases broken (first 60):\n{}",
+        broken.len(),
+        broken[..broken.len().min(60)].join("\n")
+    );
+    for why in [SERIES, CRITICAL] {
+        assert!(
+            total.differs.contains_key(why),
+            "{why}: no case exercised it"
+        );
+    }
+    total
+}
+
+/// The curated cases and one circuit of the enumeration, drawn by seed, with
+/// every single fault of it: a few dozen comparisons, to run by hand.
+#[test]
+#[ignore = "release tier: needs netgen (nix develop .#oracles)"]
+fn netgen_differential_sample() {
+    let circuits = circuits();
+    let mut rng = Rng::new(0xF3);
+    let pick = usize::try_from(rng.below(circuits.len() as u64)).expect("few circuits");
+    println!("netgen: the sample circuit is {}", circuits[pick].code());
+    let total = compare_all(2, |i| match i {
+        0 => curated(),
+        _ => enumeration(&circuits[pick]),
+    });
+    assert!(total.agreed >= 20 && total.matched >= 5, "too few ran");
+}
+
+/// The full enumeration, 4223 circuits each with every single fault, and the
+/// curated cases: `GPurify` and Netgen agree on every verdict but the
+/// documented differences. The nightly `oracles` job runs it.
+#[test]
+#[ignore = "release tier: needs netgen (nix develop .#oracles)"]
+fn netgen_differential_every_small_circuit_and_single_fault() {
+    let circuits = circuits();
+    let total = compare_all(circuits.len() + 1, |i| match circuits.get(i) {
+        Some(c) => enumeration(c),
+        None => curated(),
+    });
+    assert_eq!(
+        total.agreed + total.differs.values().sum::<usize>() + total.unchecked,
+        total.cases,
+        "every case was compared"
+    );
+    assert!(total.agreed > 100_000, "the full enumeration ran");
+}

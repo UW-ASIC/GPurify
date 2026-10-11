@@ -31,6 +31,9 @@ pub struct CompareOptions {
     /// need the other parameters bit-identical.
     ///
     /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
+    /// Netgen measures the difference against the mean of the two values, not
+    /// the larger, so its `2 tol / (2 - tol)` is this `tol` exactly; the Netgen
+    /// differential (testing-plan F3) sets it so.
     pub param_tolerance: f64,
     /// Which parameters are `W`, `L`, `nf` and `m`, so sized devices can be
     /// merged in parallel and series. Default: none, and sized devices never

@@ -57,6 +57,24 @@
 //! Net names do not take part: they neither seed refinement nor are compared,
 //! so a misnamed or reordered port passes (catalog LVS-016, LVS-032).
 //!
+//! # Against Netgen
+//!
+//! The Netgen differential (`tests/exhaustive/lvs/netgen.rs`, testing-plan
+//! F3) states these rules in a Netgen setup and holds every verdict of the
+//! LVS enumeration to Netgen's. What no setup can state is encoded there as
+//! a documented difference:
+//!
+//! - **Series MOS:** [`reduce`] merges a stack through a net that is no port;
+//!   Netgen 1.5.323 does not merge MOS in series at all.
+//! - **Parallel MOS of near-equal `L`:** Netgen's `l critical` merges them
+//!   within its tolerance; [`reduce`] needs `L` bit-identical.
+//!
+//! And what the setup must say to agree: the parameter tolerance as Netgen
+//! measures it (see [`CompareOptions::param_tolerance`]), every bulk on one
+//! net on both sides when the layout extracts none (this module drops the
+//! reference's), and no reading of Netgen's pin matching, since names do not
+//! take part here.
+//!
 //! # Report
 //!
 //! [`check_layout`] adds checks on the layout's own graph, which need no

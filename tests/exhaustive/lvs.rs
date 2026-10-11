@@ -1890,6 +1890,8 @@ fn layout_rows() -> Vec<Fixture> {
     out
 }
 
+mod netgen;
+
 #[cfg(test)]
 mod tests {
     use super::*;
