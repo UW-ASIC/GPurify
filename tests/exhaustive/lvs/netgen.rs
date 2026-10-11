@@ -886,3 +886,60 @@ fn netgen_differential_every_small_circuit_and_single_fault() {
     );
     assert!(total.agreed > 100_000, "the full enumeration ran");
 }
+
+/// Multi-die stacks (catalog LVS-073): the tool reads two drawn dies and a
+/// hierarchical system netlist; Netgen reads the two circuits the test
+/// flattened, the dies joined through the bumps drawn and the netlist's cells
+/// through the bonds written (`super::system`). Every net is a port, so
+/// neither documented difference can arise, and every verdict must agree.
+///
+/// Oracle: differential against Netgen, an independent LVS, on the flattened
+/// system of every merge-depth stack with every die fault and every missing
+/// and swapped bump.
+#[test]
+#[ignore = "release tier: needs netgen (nix develop .#oracles)"]
+fn netgen_differential_system_stacks() {
+    let netgen = oracle::tool("netgen");
+    let cases = super::system::netgen_cases();
+    let dir = oracle::scratch("netgen-system");
+    let write = |name: &str, text: &str| {
+        std::fs::write(dir.join(name), text).expect("the scratch directory is writable");
+    };
+    let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
+    write("setup.tcl", &SETUP.replace("TOL", &tolerance.to_string()));
+    let mut batch = String::new();
+    for (i, (_, _, layout, reference)) in cases.iter().enumerate() {
+        write(&format!("l{i}.spice"), &for_netgen(&spice(layout)));
+        write(&format!("r{i}.spice"), &for_netgen(&spice(reference)));
+        let _ = writeln!(
+            batch,
+            "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} setup.tcl o{i}.log"
+        );
+    }
+    write("batch.tcl", &batch);
+    oracle::run(&netgen, &["-batch", "source", "batch.tcl"], &dir, LIMIT);
+    let mut broken = Vec::new();
+    let mut agreed = 0;
+    for (i, (name, ours, _, _)) in cases.iter().enumerate() {
+        let path = dir.join(format!("o{i}.log"));
+        let theirs = netgen_verdict(&std::fs::read_to_string(&path).unwrap_or_default());
+        match (ours, theirs) {
+            (Ok(a), Some(b)) if *a == b => agreed += 1,
+            _ => broken.push(format!(
+                "{name}: GPurify {ours:?}, Netgen {theirs:?}; {}",
+                path.display()
+            )),
+        }
+    }
+    println!("netgen system: {} cases, {agreed} agree", cases.len());
+    assert!(
+        broken.is_empty(),
+        "{} cases broken (first 60):\n{}",
+        broken.len(),
+        broken[..broken.len().min(60)].join("\n")
+    );
+    if broken.is_empty() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    assert!(agreed > 100, "the stacks ran");
+}
