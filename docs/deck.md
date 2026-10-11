@@ -119,7 +119,11 @@ layer butt      = nsdm.edges() and psdm.edges()
 ```
 
 Shapes that touch or overlap count as one shape before an operation looks at
-them. Operations on shapes:
+them. Meeting only at a corner is touching: two shapes that share just a
+corner point are one shape, joined there by a neck of width 0. Space does not
+pass through such a corner, so a ring of shapes closed only at a corner
+encloses a hole. Every operation, every check and net extraction read shapes
+this way. Operations on shapes:
 
 | Operation | Result |
 |---|---|
@@ -197,6 +201,12 @@ A name can be bound once. Loops only run over lists written in the deck, so a
 deck always finishes loading.
 
 ## Design rules
+
+A check that counts touching shapes as one counts shapes meeting only at a
+corner as one too (see [Layers](#layers)). So for two squares that touch at a
+corner, `width` reports 0 at the corner, `area` measures both together,
+`space` never measures between them, and a gap between two parts of such a
+shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 
 | Check | What it flags |
 |---|---|
