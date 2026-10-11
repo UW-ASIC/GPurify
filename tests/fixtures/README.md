@@ -6,7 +6,6 @@ One GDSII library, one deck, and two files of expectations.
 _source/conformance.gds   every cell, in one file
 drc/  erc/  lvs/  pex/    94 + 30 + 16 + 27 single-case extracts, generated at test time
 params.deck               the deck: layers, rules, limits, connectivity, process stack
-klayout/drc_oracle.rb     a KLayout script from the old tree; not used by this suite
 manifest.json             the OLD tree's answers. Historical record. Do not edit.
 expectations.json         the re-derived answers. What the harness reads.
 ```
@@ -136,6 +135,10 @@ positive cases the `measured` value and the `at` coordinate in dbu.
 for that case. A field absent from it was not derivable and must not be
 checked. `known_defects` and `blocking_findings` at the top of the file explain
 every case that is expected to fail, and name the file and function to fix.
+
+In the release tier, `tests/klayout` also runs every DRC cell through the
+KLayout mirror deck ([klayout-mirror.md](../../docs/klayout-mirror.md)) and
+compares rule by rule.
 
 `manifest.json` stays exactly as it is. It is the historical record and the
 thing `expectations.json` is checked against; overwriting it would destroy the
