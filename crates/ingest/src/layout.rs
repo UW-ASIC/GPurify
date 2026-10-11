@@ -14,9 +14,10 @@ use crate::deck::{DerivedOp, LayerTable};
 use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
-    edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
-    inside_into, interacting_into, merge_into, outside_into, rectangles_into, sized_into,
-    with_area_into, with_bbox_into, with_length_into, with_width_into, EdgeOp,
+    covering_into, edge_boolean_into, edge_interacting_into, edge_part_into, edges_into,
+    extents_into, holes_into, inside_into, interacting_into, merge_into, outside_into,
+    overlapping_into, rectangles_into, sized_into, with_area_into, with_bbox_into,
+    with_length_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
 use gpurify_geom::view::{validate_layer_into, PolygonRef, RingRef, ValidatedLayer};
@@ -321,6 +322,8 @@ fn derive_layers_into(
                     }
                     DerivedOp::Inside => inside_into(a, b, &mut folded),
                     DerivedOp::Outside => outside_into(a, b, &mut folded),
+                    DerivedOp::Overlapping => overlapping_into(a, b, true, &mut folded),
+                    DerivedOp::Covering(keep) => covering_into(a, b, keep, &mut folded),
                     DerivedOp::Holes => holes_into(a, &mut folded),
                     DerivedOp::Extents => extents_into(a, &mut folded),
                     DerivedOp::WithArea(lo, hi) => {

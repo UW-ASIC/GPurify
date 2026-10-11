@@ -500,6 +500,9 @@ impl Layers<'_> {
             DerivedOp::Interacting(false) => format!("{a}.not_interacting({})", b()),
             DerivedOp::Inside => format!("{a}.inside({})", b()),
             DerivedOp::Outside => format!("{a}.outside({})", b()),
+            DerivedOp::Overlapping => format!("{a}.overlapping({})", b()),
+            DerivedOp::Covering(true) => format!("{a}.covering({})", b()),
+            DerivedOp::Covering(false) => format!("{a}.not_covering({})", b()),
             DerivedOp::Holes => format!("{a}.holes"),
             DerivedOp::Extents => format!("{a}.extents"),
             DerivedOp::WithArea(lo, hi) => {

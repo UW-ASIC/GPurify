@@ -312,9 +312,44 @@ pub fn outside_into(
     b: &ValidatedLayer,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
+    overlapping_into(a, b, false, out)
+}
+
+/// `KLayout` `overlapping` (`keep`): polygons of `a` sharing area with `b`;
+/// touching is not overlapping. `!keep` is [`outside_into`].
+pub fn overlapping_into(
+    a: &ValidatedLayer,
+    b: &ValidatedLayer,
+    keep: bool,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
     let mut common = ValidatedLayer::default();
     crate::boolean::intersection_into(a, b, &mut common)?;
-    a.select_into(&free_of(a, &common), out);
+    let flags: Vec<bool> = free_of(a, &common)
+        .into_iter()
+        .map(|free| free != keep)
+        .collect();
+    a.select_into(&flags, out);
+    Ok(())
+}
+
+/// `KLayout` `covering` (`keep`) / `not_covering` (`!keep`): polygons of `a`
+/// that hold a whole polygon of `b`, which may touch `a`'s boundary from
+/// inside ([`inside_into`] with the operands swapped).
+pub fn covering_into(
+    a: &ValidatedLayer,
+    b: &ValidatedLayer,
+    keep: bool,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let mut held = ValidatedLayer::default();
+    inside_into(b, a, &mut held)?;
+    // Each held polygon is connected and inside `a`, so it lies in one polygon of `a`.
+    let flags: Vec<bool> = free_of(a, &held)
+        .into_iter()
+        .map(|free| free != keep)
+        .collect();
+    a.select_into(&flags, out);
     Ok(())
 }
 

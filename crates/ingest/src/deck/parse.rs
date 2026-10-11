@@ -685,7 +685,7 @@ impl<'a> Parser<'a> {
                 (DerivedOp::Sized(by), Some(false), None)
             }
             "interacting" | "not_interacting" | "inside" | "outside" | "inside_part"
-            | "outside_part" => {
+            | "outside_part" | "overlapping" | "not_overlapping" | "covering" | "not_covering" => {
                 self.expect("(")?;
                 let at = self.peek();
                 let other = self.layer_expr()?;
@@ -697,7 +697,10 @@ impl<'a> Parser<'a> {
                     "interacting" => (DerivedOp::Interacting(true), None),
                     "not_interacting" => (DerivedOp::Interacting(false), None),
                     "inside" => (DerivedOp::Inside, Some(false)),
-                    "outside" => (DerivedOp::Outside, Some(false)),
+                    "outside" | "not_overlapping" => (DerivedOp::Outside, Some(false)),
+                    "overlapping" => (DerivedOp::Overlapping, Some(false)),
+                    "covering" => (DerivedOp::Covering(true), Some(false)),
+                    "not_covering" => (DerivedOp::Covering(false), Some(false)),
                     "inside_part" => (DerivedOp::Part(true), Some(true)),
                     _ => (DerivedOp::Part(false), Some(true)),
                 };

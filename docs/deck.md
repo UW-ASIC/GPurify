@@ -134,7 +134,10 @@ this way. Operations on shapes:
 | `.interacting(L)` | The shapes that touch or overlap a shape on `L`. Sharing only a corner counts. |
 | `.not_interacting(L)` | The shapes that do not. |
 | `.inside(L)` | The shapes entirely covered by `L`. A shape may touch `L`'s boundary from inside. |
-| `.outside(L)` | The shapes sharing no area with `L`. A shape that only touches `L` is outside. |
+| `.outside(L)` | The shapes sharing no area with `L`. A shape that only touches `L` is outside. `.not_overlapping(L)` is the same. |
+| `.overlapping(L)` | The shapes sharing area with `L`, as KLayout's `overlapping`. Touching is not overlapping. |
+| `.covering(L)` | The shapes that hold a whole shape of `L`, as KLayout's `covering`. The shape of `L` may touch the holder's boundary from inside. |
+| `.not_covering(L)` | The shapes that do not. |
 | `.holes()` | Each hole, filled. A hole with an island in it is filled over the island. |
 | `.extents()` | The bounding box of each shape. Boxes that overlap stay separate shapes, as in KLayout: `forbidden` reports each, and an operation or a check that merges its layer merges them. |
 | `.with_area(bounds)` | The shapes whose area, not counting holes, is within the bounds. |
