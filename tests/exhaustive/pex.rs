@@ -1653,3 +1653,6 @@ fn spef_carries_the_closed_form_totals() {
         "{rows} *RES rows summing to {ohms} ohm, want 3 summing to {want_r}\n{spef}"
     );
 }
+
+mod fastcap;
+mod fasthenry;

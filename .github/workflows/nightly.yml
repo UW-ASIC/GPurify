@@ -29,7 +29,8 @@ jobs:
       # differentials need the oracle shell and run in the `oracles` job.
       - run: >-
           cargo test --workspace -- --ignored --skip klayout_mirror
-          --skip netgen_differential
+          --skip netgen_differential --skip fastcap_differential
+          --skip fasthenry_differential
 
   oracles:
     name: differentials in the oracle shell
@@ -45,11 +46,13 @@ jobs:
       # random layouts. One test at a time; each runs at most four klayouts.
       - run: nix develop .#oracles --command cargo test --test klayout -- --ignored --test-threads=1
       # Netgen on every circuit of the LVS enumeration with every single
-      # fault (4223 circuits; F3). One test at a time; each runs at most two
-      # tools at once (gpurify_testgen::oracle::MAX_RUNNING).
+      # fault (4223 circuits), and FastCap and FastHenry on X6's
+      # field-solved geometries (F3). One test at a time; each runs at most
+      # two tools at once (gpurify_testgen::oracle::MAX_RUNNING).
       - run: >-
           nix develop .#oracles --command cargo test --test exhaustive --
-          --ignored --test-threads=1 netgen_differential
+          --ignored --test-threads=1
+          netgen_differential fastcap_differential fasthenry_differential
 
   fuzz:
     name: fuzz ${{ matrix.target }}

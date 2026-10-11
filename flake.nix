@@ -50,6 +50,10 @@
             pkgs.magic-vlsi
             pkgs.netgen-vlsi
             pkgs.ngspice
+            # FastCap and FastHenry, MIT's field solvers; FasterCap, the
+            # plan's first choice for capacitance, is not packaged.
+            pkgs.fastcap
+            pkgs.fasthenry
           ];
         };
       }
