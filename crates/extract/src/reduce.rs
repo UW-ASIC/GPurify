@@ -21,8 +21,8 @@
 //! resistance: kept wherever R is.
 //!
 //! To ground a coupling capacitance is to replace it by a capacitance to
-//! ground of the same value at each of its two nodes, which is what OpenRCX
-//! does with coupling below its threshold (OpenROAD `extract_parasitics
+//! ground of the same value at each of its two nodes, which is what `OpenRCX`
+//! does with coupling below its threshold (`OpenROAD` `extract_parasitics
 //! -coupling_threshold`: "Coupling below this threshold is grounded"; its
 //! log: "coupling capacitance less than … fF will be grounded"). Every
 //! net keeps its total capacitance; what is lost is the other net's

@@ -121,7 +121,7 @@ fn rcc_keeps_the_whole_network() {
     assert_eq!(reduced(ExtractionKind::Rcc, 0.0), network());
 }
 
-/// Oracle: hand-derived (OpenRCX: "coupling below this threshold is
+/// Oracle: hand-derived (`OpenRCX`: "coupling below this threshold is
 /// grounded", strictly below). At 0.125 fF the 0.05 fF coupling between
 /// nodes 1 and 3 becomes 0.05 fF to ground on each, and the 0.125 fF one
 /// stays; every total holds. Fails if the threshold is ignored, grounds at

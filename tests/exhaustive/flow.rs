@@ -34,7 +34,7 @@ fn layout(narrow: bool) -> Layout {
 
 /// FLOW-002: a staged deck checks its stages in order and, once a stage
 /// finds an error, reports every later stage's rules skipped with nothing
-/// found (the early, dirty-design run of Calibre nmDRC-Recon and IC
+/// found (the early, dirty-design run of Calibre `nmDRC-Recon` and IC
 /// Validator Explorer). Oracle: hand-derived (one 50 nm width finding, one
 /// 150 nm gap finding), and laws: the same deck unstaged reports both, and a
 /// clean first stage lets the second run as it would unstaged; every case
