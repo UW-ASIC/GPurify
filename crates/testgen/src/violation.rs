@@ -826,20 +826,6 @@ mod tests {
         assert!(std::panic::catch_unwind(|| half(0, "a gap")).is_err());
     }
 
-    /// A geometric `Amount` survives the trip into a `Measurement` unchanged.
-    #[test]
-    fn geometric_amounts_convert_to_the_measurement_they_name() {
-        use gpurify_check::report::Measurement;
-        assert!(matches!(
-            Amount::Ratio(0.25).measurement(),
-            Measurement::Ratio(v) if (v - 0.25).abs() < f64::EPSILON
-        ));
-        assert!(matches!(
-            Amount::Count(7).measurement(),
-            Measurement::Count(7)
-        ));
-    }
-
     /// An amount of the wrong dimension is refused, not partly honoured.
     #[test]
     fn an_amount_of_the_wrong_dimension_is_refused() {

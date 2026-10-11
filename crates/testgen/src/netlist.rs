@@ -403,31 +403,13 @@ mod tests {
         }
     }
 
-    /// Every role gets a distinct conductor and cut layer, so the recogniser
-    /// can tell a gate from a source.
-    #[test]
-    fn every_role_gets_a_distinct_conductor_and_cut_layer() {
-        let layers = assign_layers(&two_transistors());
-        assert_eq!(layers.roles.len(), 6);
-
-        let mut all = vec![layers.rail, layers.marker];
-        all.extend(layers.role_layer.iter().copied());
-        all.extend(layers.cut_layer.iter().copied());
-        let mut sorted = all.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(
-            sorted.len(),
-            all.len(),
-            "two layers were assigned the same id"
-        );
-        assert_eq!(layers.count, all.len());
-    }
-
-    /// Assigned ids cover `0..count` with no gaps.
+    /// Each of the six roles (four MOS terminals, two resistor pins) gets its
+    /// own conductor and cut layer, and the ids cover `0..count` with no gaps
+    /// or repeats, so the recogniser can tell a gate from a source.
     #[test]
     fn assigned_layer_ids_are_dense() {
         let layers = assign_layers(&two_transistors());
+        assert_eq!(layers.roles.len(), 6);
         let mut all = vec![layers.rail.0, layers.marker.0];
         all.extend(layers.role_layer.iter().map(|l| l.0));
         all.extend(layers.cut_layer.iter().map(|l| l.0));

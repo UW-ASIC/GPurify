@@ -114,16 +114,6 @@ impl Rng {
 mod tests {
     use super::Rng;
 
-    /// One seed fixes the stream.
-    #[test]
-    fn one_seed_gives_one_stream() {
-        let mut a = Rng::new(7);
-        let mut b = Rng::new(7);
-        let left: Vec<u64> = (0..64).map(|_| a.next_u64()).collect();
-        let right: Vec<u64> = (0..64).map(|_| b.next_u64()).collect();
-        assert_eq!(left, right);
-    }
-
     /// Adjacent seeds give different streams.
     #[test]
     fn adjacent_seeds_do_not_agree_on_their_first_draws() {

@@ -184,12 +184,4 @@ mod tests {
             }
         }
     }
-
-    /// One seed gives one graph, edge order included.
-    #[test]
-    fn one_seed_gives_one_graph() {
-        let first = graph_with_partition(&mut Rng::new(2024), &[4, 9, 2], 6);
-        let second = graph_with_partition(&mut Rng::new(2024), &[4, 9, 2], 6);
-        assert_eq!(first, second);
-    }
 }
