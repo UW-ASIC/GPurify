@@ -22,8 +22,8 @@ use crate::report::Severity;
 use gpurify_geom::{Dbu, DbuArea, Grid, Length, Qty, StrTable};
 use gpurify_ingest::deck::{
     lower, ConnectivitySource, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind,
-    DeviceSource, DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource,
-    ViaSource,
+    DeviceSource, DeviceValue, LabelSource, LvsSrc, ParamSource, ParamValue, RuleSource,
+    StackSource, ViaSource,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::Location;
@@ -590,6 +590,8 @@ pub struct DeckBuilder<'s> {
     devices: Vec<DeviceSource>,
     pex: Vec<(String, StackSource)>,
     temperature: Option<(f64, f64)>,
+    /// The base deck's `lvs` statements, kept as they are.
+    lvs: LvsSrc,
     rules: Vec<Slot>,
     added: BTreeMap<String, RuleRow>,
     /// The base deck's provenance, by id.
@@ -634,6 +636,7 @@ impl<'s> DeckBuilder<'s> {
             devices: Vec::new(),
             pex: Vec::new(),
             temperature: None,
+            lvs: LvsSrc::default(),
             rules: Vec::new(),
             added: BTreeMap::new(),
             base_origin: HashMap::new(),
@@ -691,6 +694,7 @@ impl<'s> DeckBuilder<'s> {
             devices: source.devices,
             pex: source.pex,
             temperature: source.temperature,
+            lvs: source.lvs,
             rules: source.rules.into_iter().map(Slot::Kept).collect(),
             added: BTreeMap::new(),
             custom,
@@ -1344,6 +1348,7 @@ impl<'s> DeckBuilder<'s> {
             devices: self.devices,
             pex: self.pex,
             temperature: self.temperature,
+            lvs: self.lvs,
         };
         let deck = lower(&source, self.strings).map_err(CompileError::from)?;
         let mut compiled = CompiledDeck::from_deck(deck, self.grid, self.strings)?;

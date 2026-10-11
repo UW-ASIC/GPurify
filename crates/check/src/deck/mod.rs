@@ -45,8 +45,8 @@ pub use rules::RuleRow;
 use crate::{drc, erc};
 use gpurify_geom::{prefix, Grid, Qty, StrId, StrTable, Temperature};
 use gpurify_ingest::deck::{
-    parse_deck, Connectivity, Deck, DeckError, DeviceRecognition, LayerTable, PrintError,
-    ProcessStack, TemperatureLaw,
+    parse_deck, Connectivity, Deck, DeckError, DeviceRecognition, LayerTable, LvsControls,
+    PrintError, ProcessStack, TemperatureLaw,
 };
 
 /// A deck ready to run: what [`compile`] makes of deck text.
@@ -76,6 +76,8 @@ pub struct CompiledDeck {
     /// The `temperature` statement and the `pex` coefficients as written
     /// ([`TemperatureLaw`]), so the deck prints exactly.
     pub temperature_law: Option<TemperatureLaw>,
+    /// The `lvs` statements: how the comparison treats each device model.
+    pub lvs: LvsControls,
     /// Every DRC rule, typed, in deck order.
     pub drc: drc::RuleSet,
     /// Every ERC rule, typed, one table per kind.
@@ -227,6 +229,7 @@ impl CompiledDeck {
             stack,
             temperature,
             temperature_law,
+            lvs,
         } = deck;
         Ok(Self {
             grid,
@@ -236,6 +239,7 @@ impl CompiledDeck {
             stack,
             temperature,
             temperature_law,
+            lvs,
             drc,
             erc,
             custom: Vec::new(),

@@ -5,11 +5,13 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
+use crate::lvs::controls::{bound, drop_ignored_params};
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use crate::topology::TerminalRole;
+use gpurify_ingest::deck::LvsControls;
 use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
@@ -94,9 +96,11 @@ pub struct CompareOptions {
     /// `|a - b| <= tol * max(|a|, |b|)`. `NaN` never agrees. A count, the
     /// parameter [`ParamNames`] names `m` or `nf`, is a whole number and
     /// agrees only exactly (testing-plan F99): `m = 50` against `m = 51`,
-    /// 1.96 % apart, is a mismatch. It is the only tolerance: there is no
-    /// absolute or per-parameter one (catalog LVS-014), and it does not apply
-    /// to reduction, whose merges need the other parameters bit-identical.
+    /// 1.96 % apart, is a mismatch. A deck's `lvs tolerance` row replaces it
+    /// for one parameter of one model, with a relative part, an absolute
+    /// one, or both ([`compare_with`], catalog LVS-014), a count's too. It
+    /// does not apply to reduction, whose merges need the other parameters
+    /// bit-identical.
     ///
     /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
     /// Netgen measures the difference against the mean of the two values, not
@@ -189,6 +193,35 @@ pub fn compare_logged(
     reference: &Graph,
     options: CompareOptions,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    compare_with(layout, reference, options, &LvsControls::default())
+}
+
+/// [`compare_logged`] under the deck's `lvs` statements, which the `gpurify`
+/// binary passes from the deck it loaded. With no statement it is
+/// [`compare_logged`].
+///
+/// - **`lvs tolerance`** (catalog LVS-014): a paired device's parameter
+///   named by a row for its model agrees when `|a - b| <= absolute +
+///   relative * max(|a|, |b|)`, the row's parts in place of
+///   [`CompareOptions::param_tolerance`]; a part the row leaves out is zero.
+///   The two parts add, as in `KLayout`'s `tolerance` ("absolute and
+///   relative tolerances add"); Netgen's `property ... tolerance` is a
+///   relative one, measured against the mean of the two values. A
+///   symmetry's trial pairing is held to the same bound.
+/// - **`lvs ignore_parameter`** (catalog LVS-014): the parameter is dropped
+///   from every device of the model on both sides before reduction, so it
+///   is neither compared nor read by a merge, as `KLayout`'s
+///   `ignore_parameter` and Netgen's `property ... remove` leave it out.
+///
+/// # Panics
+///
+/// As [`compare`].
+pub fn compare_with(
+    layout: &Graph,
+    reference: &Graph,
+    options: CompareOptions,
+    controls: &LvsControls,
+) -> (Verdict, Vec<(Side, Merge)>) {
     debug_assert_graph!(layout);
     debug_assert_graph!(reference);
     let mut declared = reference.clone();
@@ -196,6 +229,8 @@ pub fn compare_logged(
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
     keep_declared_params(reference, &mut measured);
+    drop_ignored_params(&mut measured, controls);
+    drop_ignored_params(&mut declared, controls);
     let (mut layout, layout_merges) = reduce_with(&measured, options.params);
     let (mut reference, reference_merges) = reduce_with(&declared, options.params);
     if let Some(multiplier) = options.params.multiplier {
@@ -215,13 +250,13 @@ pub fn compare_logged(
     if !refine_into(
         (&layout, &reference),
         budget,
-        options.params,
+        (options.params, controls),
         &mut partition,
     ) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
     (
-        interpret((&layout, &reference), &partition, options),
+        interpret((&layout, &reference), &partition, (options, controls)),
         merges,
     )
 }
@@ -254,7 +289,7 @@ const UNPAIRED: u32 = u32::MAX;
 fn interpret(
     (layout, reference): (&Graph, &Graph),
     partition: &Partition,
-    options: CompareOptions,
+    (options, controls): (CompareOptions, &LvsControls),
 ) -> Verdict {
     let layout_devices = narrow(layout.device_count());
     let ref_devices = narrow(reference.device_count());
@@ -318,7 +353,7 @@ fn interpret(
         compare_params(
             (layout, reference),
             (layout_node, ref_node),
-            (options, crossed),
+            (options, controls, crossed),
             &mut scratch,
             &mut found,
         );
@@ -468,20 +503,22 @@ fn crossed(
 }
 
 /// The parameters the reference card states, each joined by name to the
-/// layout's and [agreeing](ParamNames::agree) with it, within the relative
-/// tolerance or, for a count, exactly, the layout's diffusions read the other
-/// way round when the pair is `crossed`. One the layout does
-/// not measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
-/// layout measures is not compared: presence is per device, and a card that
-/// omits a parameter states nothing about it (testing-plan F68).
+/// layout's within its tolerance (`NaN` fails): the deck's row for the
+/// reference model and that name, or the run's relative one, a count's
+/// exactly ([`ParamNames::tolerance`]). The layout's
+/// diffusions are read the other way round when the pair is `crossed`. One
+/// the layout does not measure is [`Discrepancy::UndeclaredParam`], never a
+/// pass. One only the layout measures is not compared: presence is per
+/// device, and a card that omits a parameter states nothing about it
+/// (testing-plan F68).
 fn compare_params(
     (layout, reference): (&Graph, &Graph),
     pair: (u32, u32),
-    (options, crossed): (CompareOptions, bool),
+    (options, controls, crossed): (CompareOptions, &LvsControls, bool),
     scratch: &mut JoinScratch,
     found: &mut Vec<Discrepancy>,
 ) {
-    let tolerance = options.param_tolerance;
+    let model = reference.device_model[pair.1 as usize];
     let (mine, theirs) = (&mut scratch.layout_params, &mut scratch.ref_params);
     mine.clear();
     mine.extend(
@@ -521,10 +558,13 @@ fn compare_params(
         at_mine += 1;
         at_theirs += 1;
 
-        let agree = options
-            .params
-            .agree(layout_param, (layout_value, ref_value), tolerance);
-        if !agree {
+        let within = bound(
+            controls,
+            options.params.tolerance(ref_param, options.param_tolerance),
+            model,
+            ref_param,
+        );
+        if !within.agree(layout_value, ref_value) {
             found.push(Discrepancy::ParameterMismatch {
                 layout_device: pair.0,
                 ref_device: pair.1,

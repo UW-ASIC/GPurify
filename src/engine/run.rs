@@ -432,10 +432,11 @@ fn run_lvs(
                 },
                 ..options.lvs
             };
-            let (verdict, merges) = gpurify_check::lvs::compare_logged(
+            let (verdict, merges) = gpurify_check::lvs::compare_with(
                 &layout,
                 &gpurify_check::lvs::graph::from_reference(reference, top),
                 lvs,
+                &loaded.deck.lvs,
             );
             out.lvs_merges = merges;
             verdict

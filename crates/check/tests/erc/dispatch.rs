@@ -25,7 +25,8 @@ use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
 use gpurify_geom::{prefix, Current, CurrentDensity, Qty, Resistance, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{
-    Connectivity, Deck, DeviceRecognition, LayerTable, ProcessStack, RuleSpec, RuleTable,
+    Connectivity, Deck, DeviceRecognition, LayerTable, LvsControls, ProcessStack, RuleSpec,
+    RuleTable,
 };
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_testgen::{dbu, LayoutBuilder};
@@ -597,6 +598,7 @@ fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) 
         stack: ProcessStack::default(),
         temperature: None,
         temperature_law: None,
+        lvs: LvsControls::default(),
     };
     (deck, ids)
 }

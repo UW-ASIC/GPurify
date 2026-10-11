@@ -8,6 +8,7 @@
 //! lowers to a deck the engines can trust as one parsed from text.
 
 use super::kinds::EDGE_KINDS;
+use super::{build_lvs, LvsSrc};
 use super::{
     Connectivity, Deck, DeckError, DerivedOp, DeviceKind, DeviceRecognition, DeviceValue,
     LayerTable, ParamValue, ProcessStack, RuleSpec, RuleTable, TemperatureLaw,
@@ -42,6 +43,8 @@ pub struct DeckSource {
     pub pex: Vec<(String, StackSource)>,
     /// `temperature T nominal T0`: `(T, T0)`, kelvin, both positive.
     pub temperature: Option<(f64, f64)>,
+    /// The `lvs` statements, as the parser reads them.
+    pub lvs: LvsSrc,
 }
 
 /// One derived layer: `name = layers[0] op layers[1] ..`.
@@ -251,6 +254,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     }
     let devices = build_devices(&doc.devices, &layers, strings)?;
     let stack = build_stack(&doc.pex, doc.temperature, &layers, strings)?;
+    let lvs = build_lvs(&doc.lvs, &doc.devices, strings)?;
     let temperature_law = match doc.temperature {
         None => None,
         Some((operating_k, nominal_k)) => {
@@ -282,6 +286,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
             .temperature
             .map(|(operating, _)| gpurify_geom::Qty::new(operating)),
         temperature_law,
+        lvs,
     })
 }
 

@@ -34,6 +34,8 @@ pub(crate) enum Dim {
     PerKelvin,
     /// 1/K², a second-order temperature coefficient (PEX only).
     PerKelvin2,
+    /// aF (an LVS tolerance on a capacitance).
+    Capacitance,
     /// 0..=1, written bare or as `%`.
     Fraction,
     /// deg, a whole number.
@@ -106,6 +108,9 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("fF/um", Dim::CapPerLength, 3),
     ("/K", Dim::PerKelvin, 0),
     ("/K2", Dim::PerKelvin2, 0),
+    ("aF", Dim::Capacitance, 0),
+    ("fF", Dim::Capacitance, 3),
+    ("pF", Dim::Capacitance, 6),
     ("%", Dim::Fraction, -2),
     ("deg", Dim::Angle, 0),
 ];
