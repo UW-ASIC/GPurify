@@ -319,7 +319,25 @@ fn ngspice_differential_inverter() {
         work: &work,
         tool_version: "test",
     };
-    let generated = generate(&loaded, &extracted, &request).expect("the inverter characterises");
+    let generated = match generate(&loaded, &extracted, &request) {
+        Ok(generated) => generated,
+        Err(why) => {
+            // The simulator's own words, and the deck it read, not only a path
+            // on a machine that is gone by the time anyone reads the report.
+            let deck = std::fs::read_to_string(work.join("LVS_INV__tt.cir")).unwrap_or_default();
+            let logs: Vec<String> = std::fs::read_dir(&work)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|entry| entry.path().extension().is_some_and(|e| e == "log"))
+                .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
+                .collect();
+            panic!(
+                "the inverter does not characterise: {why:?}\ndeck:\n{deck}\nlogs:\n{}",
+                logs.join("\n----\n")
+            );
+        }
+    };
     let lib = &generated.files[1].1;
     let deck = std::fs::read_to_string(work.join("LVS_INV__tt.cir")).expect("the deck is kept");
     let subckt = &deck[deck.find(".subckt LVS_INV").expect("the macro")..];
