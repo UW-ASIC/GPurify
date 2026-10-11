@@ -744,6 +744,53 @@ pub enum Rule {
         /// The smallest legal gap inside an array, in grid units; positive.
         limit: Dbu,
     },
+    /// Two cuts closer than `limit`, centre to centre or edge to edge, where
+    /// the rule holds either of them.
+    ///
+    /// Deck: `space(L, center) >= len` (LEF `SPACING CENTERTOCENTER`),
+    /// `adjacent_space(L; cuts: count, within: len) >= len` (LEF `SPACING
+    /// ADJACENTCUTS count WITHIN within`), and `adjacent_space(L, center;
+    /// cuts: count, within: len) >= len` (both), kind `cut_spacing`. Cuts are
+    /// the rows on the layer, as drawn and not merged. With `center`, every
+    /// distance is between the centres of the two cuts' bounding boxes (LEF
+    /// "computes the cutSpacing or cutWithin distances from cut-center to
+    /// cut-center"); without, it is boundary to boundary, 0 for cuts that
+    /// touch, overlap or nest. Without `cuts`, the rule holds every cut. With
+    /// it, a cut is held when at least `cuts` other cuts lie strictly closer
+    /// than `within` (LEF: "applies the spacing rule only when the cut has
+    /// two, three, or four via cuts that are less than cutWithin distance"),
+    /// so `cuts: 3` waives a 2x2 array and holds a 2x3 one whose diagonal is
+    /// beyond `within` (LEF/DEF 5.8, Figure 1-6). A pair is checked when
+    /// either cut is held.
+    ///
+    /// One violation per pair closer than `limit`, at the midpoint of its
+    /// measured points: the two centres, or the nearest points of the two
+    /// boundaries as the spacing family marks them. `measured` is the
+    /// distance floored. `examined` counts the cuts held. The layer is not
+    /// validated, so this rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-061, DRC-062. Rules: LEF cut-layer `SPACING` with `CENTERTOCENTER`
+    /// and `ADJACENTCUTS ... WITHIN` (LEF/DEF 5.8, "SPACING", Spacing Rule
+    /// Examples 2 to 4); `LEF58_SPACING ADJACENTCUTS` as `OpenROAD`'s
+    /// detailed router checks it (`checkLef58CutSpacing_spc_adjCut`).
+    ///
+    /// Limits: `EXCEPTSAMEPGNET` (the rule waived between cuts of one power
+    /// or ground net) is not modelled.
+    CutSpacing {
+        /// The cut layer.
+        layer: LayerId,
+        /// Distances between cut centres, else between cut boundaries.
+        center: bool,
+        /// How many other cuts closer than `within` hold a cut to `limit`; 0
+        /// holds every cut.
+        adjacent: u16,
+        /// The reach of `adjacent`, in grid units; positive when `adjacent`
+        /// is not 0, else unused.
+        within: Dbu,
+        /// The smallest legal distance, in grid units; positive.
+        limit: Dbu,
+    },
     /// Shapes that cannot be split onto `colors` masks with same-mask shapes
     /// at least `color_spacing` apart.
     ///
@@ -2310,6 +2357,33 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "cut_spacing" => {
+                    let layer = one(spec)?;
+                    let ParamValue::Flag(center) = value(spec, "center")? else {
+                        return Err(wrong_type(spec, "center"));
+                    };
+                    // No `adjacent` holds every cut.
+                    let stated = strings
+                        .get("adjacent")
+                        .and_then(|p| rules.param(spec, p))
+                        .is_some();
+                    let (adjacent, within) = if stated {
+                        let cuts = positive(spec, count(spec, "adjacent", u16::MAX.into())?)?;
+                        (
+                            u16::try_from(cuts).expect("checked against the ceiling"),
+                            length(spec, "within")?,
+                        )
+                    } else {
+                        (0, Dbu::new_unchecked(0))
+                    };
+                    Rule::CutSpacing {
+                        layer,
+                        center,
+                        adjacent,
+                        within,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "multi_patterning" => {
                     let layer = one(spec)?;
                     let colors = count(spec, "colors", u8::MAX.into())?;
@@ -2855,6 +2929,21 @@ impl RuleSet {
                     array_threshold,
                     limit,
                 } => via::via_array_spacing(store, id, layer, array_threshold, limit, s, out),
+                Rule::CutSpacing {
+                    layer,
+                    center,
+                    adjacent,
+                    within,
+                    limit,
+                } => via::cut_spacing(
+                    store,
+                    id,
+                    (layer, center),
+                    (adjacent, within),
+                    limit,
+                    s,
+                    out,
+                ),
                 Rule::MultiPatterning {
                     layer,
                     colors,
@@ -3388,6 +3477,7 @@ impl Rule {
             | Rule::Cheesing { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
+            | Rule::CutSpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. }
             | Rule::Forbidden { layer }
             | Rule::NetSpacing { layer, .. }

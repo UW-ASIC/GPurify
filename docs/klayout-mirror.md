@@ -271,6 +271,8 @@ explains (kind 30).
 
 34 kinds are EXACT, 13 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
+| 36 | cut_spacing | `space(L, center) >= l`, `adjacent_space(L[, center]; cuts, within) >= l` | ROW PAIR | EXACT (scripted) | exact | new |
+
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -1046,6 +1048,26 @@ oracle is LEF 5.8's own Example 1-16 and Figures 1-14 and 1-15, drawn as fixture
 staircase swept at the limit. OpenROAD's TritonRoute implements base `MINSTEP` runs, but its
 typed `INSIDECORNER`/`OUTSIDECORNER` branch never sets its corner flags (read from
 `FlexGC_main.cpp`), so it is not an oracle for them.
+### 36. cut_spacing — EXACT (scripted)
+
+**GPurify** (`via.rs` `cut_spacing`): LEF cut-layer `SPACING` with `CENTERTOCENTER` and
+`ADJACENTCUTS n WITHIN w`. On drawn cut rows, distances are between bounding-box centres or
+boundary to boundary (0 for cuts that touch, overlap or nest). A cut is held when at least `n`
+other cuts lie strictly closer than `w` (every cut when `n` is 0); a pair closer than the limit
+fails when either cut is held.
+
+**KLayout** has no centre-to-centre metric and no per-cut neighbour count, so the prelude's
+`cut_spacing` computes the definition over KLayout's raw polygons, independently of GPurify's
+code:
+
+```ruby
+emit("raw:" + C, C.dup.raw) ; cut_spacing(id, C.dup.raw, LIM, N, WITHIN, CENTER)
+# per pair: box centres (whole at x2) or poly_d2 (0 when Region(p).sized(1) & q is not empty,
+# else the least vertex-to-edge distance, exact); counts by `< WITHIN²`, failures by `< LIM²`
+```
+
+- Key ROW PAIR, both cuts by index into `raw:<layer>`; the measurement is not compared.
+- (d) `Polygon#each_edge`, `#each_point_hull`, `#bbox`, `Box#center` ([R]).
 
 ### 47. tip_spacing_table — EXACT
 

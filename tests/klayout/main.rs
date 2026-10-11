@@ -404,6 +404,9 @@ rule ext extension(met2, met1) >= 50nm
 rule ov overlap(met1, met2) >= 60nm
 rule rv redundant_via(via1; within: 200nm) >= 2
 rule vas via_array_space(via1; array: 2) >= 100nm
+rule c2c space(via1, center) >= 100nm
+rule adj adjacent_space(via1; cuts: 2, within: 150nm) >= 100nm
+rule adjc adjacent_space(via1, center; cuts: 1, within: 120nm) >= 110nm
 rule mc contains(met1, via1) >= 1
 rule mi inside(via1, met1)
 rule cs size(via1) == 50nm x 50nm

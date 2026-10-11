@@ -244,6 +244,9 @@ const EOL_PARALLEL: &[Param] = &[
     p("space", "par_space", Dim::Length),
     p("within", "par_within", Dim::Length),
     p("two_edges", "two_edges", Dim::Bool),
+const ADJACENT: &[Param] = &[
+    p("cuts", "adjacent", Dim::Count),
+    p("within", "within", Dim::Length),
 ];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
@@ -529,6 +532,36 @@ pub(crate) const KINDS: &[Kind] = &[
         LIMIT,
         &[p("array", "array_threshold", Dim::Count)],
     ),
+    // LEF cut-layer SPACING: `space(via1, center)` is CENTERTOCENTER, and
+    // `adjacent_space(via1; cuts: 3, within: 250nm)` ADJACENTCUTS 3 WITHIN.
+    Kind {
+        modifier: Some("center"),
+        fixed: &[("center", true)],
+        ..drc("space", Cmp::Ge, "cut_spacing", &[0], LIMIT, &[])
+    },
+    Kind {
+        fixed: &[("center", false)],
+        ..drc(
+            "adjacent_space",
+            Cmp::Ge,
+            "cut_spacing",
+            &[0],
+            LIMIT,
+            ADJACENT,
+        )
+    },
+    Kind {
+        modifier: Some("center"),
+        fixed: &[("center", true)],
+        ..drc(
+            "adjacent_space",
+            Cmp::Ge,
+            "cut_spacing",
+            &[0],
+            LIMIT,
+            ADJACENT,
+        )
+    },
     drc(
         "patterning",
         Cmp::Ge,

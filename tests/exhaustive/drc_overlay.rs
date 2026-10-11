@@ -45,6 +45,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cut_spacing(),
         redundant_via(),
         via_array_spacing(depth),
+        center_spacing(),
+        adjacent_cut_spacing(),
         global_density(),
         density(depth),
         cheesing(),
@@ -1469,6 +1471,206 @@ fn via_array_spacing(depth: Depth) -> Vec<Fixture> {
             }
         }
     }
+    every_placement(cases)
+}
+
+/// `space(cut, center) >= 300nm` (`cut_spacing`, DRC-061, LEF `SPACING
+/// CENTERTOCENTER`): one finding per pair of drawn cuts whose bounding-box
+/// centres are closer than the limit, measuring that distance floored.
+///
+/// Oracle: the cuts are drawn so their centres are a chosen distance apart;
+/// the diagonal pair at centre offsets (180, 239/240/241) is 299.2, 300 and
+/// 300.8 apart (a 180-240-300 triangle).
+///
+/// Shapes: two 100 nm squares, swept; a 100 nm and a 200 nm cut, swept, whose
+/// 150 nm edge gap an edge measure would flag at every step; a 101 nm and a
+/// 100 nm cut, whose centres are a half unit off the grid (299.5 floors to
+/// 299, 300.5 passes); the diagonal pair; overlapping cuts (50) and a cut
+/// nested in another (0); a row of three at a 250 nm pitch (the outer pair,
+/// 500 apart, passes); an empty layer.
+fn center_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 300;
+    let deck = new_deck(&["cut"], "rule c2c space(cut, center) >= 300nm\n");
+    let case = |name: &str, cuts: &[Rect], findings: Vec<Finding>| {
+        fixture(
+            &format!("center_spacing/{name}"),
+            &["DRC-061"],
+            &deck,
+            rects(Layout::default(), "cut", cuts),
+            &[("c2c", findings)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (d, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("squares/{side}"),
+            &[(0, 0, 100, 100), (d, 0, d + 100, 100)],
+            below(d, LIMIT),
+        ));
+        // Centres 50 and x + 100 apart by d: x = d - 50.
+        cases.push(case(
+            &format!("unequal/{side}"),
+            &[(0, 0, 100, 100), (d - 50, 0, d + 150, 100)],
+            below(d, LIMIT),
+        ));
+        // Centres 50.5 and x + 50 along x, both 50 along y: d - 0.5 apart
+        // for x = d, floored to d - 1.
+        cases.push(case(
+            &format!("half_unit/{side}"),
+            &[(0, 0, 101, 100), (d, 0, d + 100, 100)],
+            below(d - 1, LIMIT),
+        ));
+    }
+    for (dy, side, findings) in [
+        (239, "below", lengths(&[299])),
+        (240, "at", vec![]),
+        (241, "above", vec![]),
+    ] {
+        cases.push(case(
+            &format!("diagonal/{side}"),
+            &[(0, 0, 100, 100), (180, dy, 280, dy + 100)],
+            findings,
+        ));
+    }
+    cases.push(case(
+        "overlapping",
+        &[(0, 0, 100, 100), (50, 0, 150, 100)],
+        lengths(&[50]),
+    ));
+    cases.push(case(
+        "nested",
+        &[(0, 0, 300, 300), (100, 100, 200, 200)],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "row_of_three",
+        &[(0, 0, 100, 100), (250, 0, 350, 100), (500, 0, 600, 100)],
+        lengths(&[250, 250]),
+    ));
+    cases.push(fixture(
+        "center_spacing/empty",
+        &["DRC-061"],
+        &new_deck(&["cut", "other"], "rule c2c space(cut, center) >= 300nm\n"),
+        Layout::default().rect("other", 0, 0, 100, 100),
+        &[("c2c", vec![])],
+    ));
+    every_placement(cases)
+}
+
+/// `adjacent_space(cut; cuts: 3, within: 250nm) >= 220nm` (`cut_spacing`,
+/// DRC-062, LEF Spacing Rule Example 2 "SPACING 0.22 ADJACENTCUTS 3 WITHIN
+/// 0.25") on 200 nm cuts, and `adjacent_space(cut, center; cuts: 3, within:
+/// 300nm) >= 300nm` (DRC-061 and DRC-062, Example 4 "a cut can have only two
+/// other cuts with center-to-center spacing that is less than 0.30 um") on
+/// 100 nm cuts: a pair closer than the limit fails when either cut has at
+/// least three other cuts strictly closer than `within`.
+///
+/// Oracle: the manual's own Figure 1-6. With the diagonal beyond `within`, a
+/// cut of a 1 x n row or a 2 x 2 array has two adjacent cuts, a middle cut of
+/// a 2 x 3 array three, and the centre of a 3 x 3 four; so at a 219 nm gap a
+/// row and a 2 x 2 pass, a 2 x 3 fails on the five pairs that touch its
+/// middle cuts, and a 3 x 3 on all twelve side pairs.
+///
+/// Shapes: those arrays at gaps 219/220/221; a 2 x 3 array 219 apart along
+/// its rows with its rows 249, 250 and 251 apart (its middle cuts are held
+/// only at 249: `within` is strict); for the centre form, a T of four cuts at
+/// a 299/300/301 pitch (its middle has three neighbours) and a 2 x 2 at 299
+/// (two each, clean).
+fn adjacent_cut_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 220;
+    let deck = new_deck(
+        &["cut"],
+        "rule adj adjacent_space(cut; cuts: 3, within: 250nm) >= 220nm\n",
+    );
+    let case = |name: &str, cuts: Vec<Rect>, findings: Vec<Finding>| {
+        fixture(
+            &format!("adjacent_cut_spacing/{name}"),
+            &["DRC-062"],
+            &deck,
+            rects(Layout::default(), "cut", &cuts),
+            &[("adj", findings)],
+        )
+    };
+    // `cols` x `rows` cuts of 200 nm, `gx` apart along a row and `gy` apart
+    // between rows.
+    let array = |cols: i64, rows: i64, gx: i64, gy: i64| -> Vec<Rect> {
+        (0..cols)
+            .flat_map(|c| {
+                (0..rows).map(move |r| {
+                    let (x, y) = (c * (200 + gx), r * (200 + gy));
+                    (x, y, x + 200, y + 200)
+                })
+            })
+            .collect()
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(LIMIT) {
+        let close = |n: usize| {
+            if g < LIMIT {
+                lengths(&vec![g; n])
+            } else {
+                vec![]
+            }
+        };
+        cases.push(case(&format!("row4/{side}"), array(4, 1, g, g), vec![]));
+        cases.push(case(&format!("array2x2/{side}"), array(2, 2, g, g), vec![]));
+        cases.push(case(
+            &format!("array3x2/{side}"),
+            array(3, 2, g, g),
+            close(5),
+        ));
+        cases.push(case(
+            &format!("array3x3/{side}"),
+            array(3, 3, g, g),
+            close(12),
+        ));
+    }
+    for (gy, side, findings) in [
+        (249, "below", lengths(&[219; 4])),
+        (250, "at", vec![]),
+        (251, "above", vec![]),
+    ] {
+        cases.push(case(
+            &format!("rows_apart/{side}"),
+            array(3, 2, 219, gy),
+            findings,
+        ));
+    }
+    let deck_center = new_deck(
+        &["cut"],
+        "rule adjc adjacent_space(cut, center; cuts: 3, within: 300nm) >= 300nm\n",
+    );
+    let centred = |name: &str, cuts: &[Rect], findings: Vec<Finding>| {
+        fixture(
+            &format!("adjacent_cut_spacing/center/{name}"),
+            &["DRC-061", "DRC-062"],
+            &deck_center,
+            rects(Layout::default(), "cut", cuts),
+            &[("adjc", findings)],
+        )
+    };
+    for (p, side) in sweep(300) {
+        cases.push(centred(
+            &format!("tee/{side}"),
+            &[
+                (0, 0, 100, 100),
+                (-p, 0, 100 - p, 100),
+                (p, 0, 100 + p, 100),
+                (0, p, 100, 100 + p),
+            ],
+            if p < 300 { lengths(&[p; 3]) } else { vec![] },
+        ));
+    }
+    cases.push(centred(
+        "array2x2",
+        &[
+            (0, 0, 100, 100),
+            (299, 0, 399, 100),
+            (0, 299, 100, 399),
+            (299, 299, 399, 399),
+        ],
+        vec![],
+    ));
     every_placement(cases)
 }
 
