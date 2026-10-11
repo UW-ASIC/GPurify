@@ -2952,9 +2952,10 @@ mod tests {
         );
     }
 
-    /// `TOP` places `LEAF` four times, each mirrored and rotated one more
-    /// quarter turn. The composed linear part `R_q · diag(1, −1)` has
-    /// determinant −1 in all four, so all four rings reverse.
+    /// DRC-123, hierarchy flattened at load: `TOP` places `LEAF` four times,
+    /// each mirrored and rotated one more quarter turn. The composed linear
+    /// part `R_q · diag(1, −1)` has determinant −1 in all four, so all four
+    /// rings reverse.
     ///
     /// Oracle: hand-derived. Each placement is the drawn triangle through
     /// `R_q · diag(1, -1)` (GDSII reflects, then rotates) plus its offset,
