@@ -672,6 +672,7 @@ pub(crate) const KINDS: &[Kind] = &[
         &[p("labels_are_ports", "labels_are_ports", Dim::Bool)],
     ),
     erc("floating_well", &[0, 1], false, &[]),
+    erc("fanout", &[], false, &[p("max", "max_gates", Dim::Count)]),
     erc(
         "hv_domain",
         &[],

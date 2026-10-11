@@ -44,6 +44,92 @@ pub struct FloatingGateTable {
     pub labels_are_ports: Vec<bool>,
 }
 
+/// Fanout: deck kind `fanout`, written `fanout(; max: count)`.
+///
+/// A net that drives more than `max` transistor gates: the count of MOS
+/// gate terminals on the net, each transistor counted once per gate it has
+/// there. A large fanout slows the net's edges, the high-load, slow-ramp
+/// condition hot-carrier guidelines ask to be reviewed. Every net is
+/// counted, supplies included (a rail with many gates on it is tie-off
+/// fanout). Needs no design intent.
+///
+/// # Limits
+///
+/// The count is of gates, not of load: gate area, wire capacitance and the
+/// strength of the driver are not weighed.
+///
+/// Catalog: ERC-H4 in the [check catalog]. Defined by Synopsys IC Validator's
+/// programmable electrical rule checks (public product material only);
+/// [GF180MCU] §14.1.4.1 ("Review circuits with high capacitive load ... fan
+/// out"). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_manual/drm_14_1.html
+#[derive(Debug, Default)]
+pub struct FanoutTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the most gates a net may drive. Positive from a deck.
+    pub max_gates: Vec<u32>,
+}
+
+/// Runs every [`FanoutTable`] row.
+///
+/// `examined` counts the nets with a gate on them. A violation sits at the
+/// first vertex of the net's lowest-numbered polygon, on its layer,
+/// measuring the gate count against `max`; a net with no polygon is not
+/// reported. Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_fanout(
+    design: Design<'_>,
+    table: &FanoutTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    let devices = design.devices;
+    let mut gates = vec![0u32; design.nets.net_count()];
+    for device in 0..devices.len() {
+        if devices.kind[device] != gpurify_ingest::deck::DeviceKind::Mos {
+            continue;
+        }
+        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let (nets, roles) = devices.terminals_of(id);
+        for (&net, &role) in nets.iter().zip(roles) {
+            if role == TerminalRole::Gate && net != NetId::NONE && net.idx() < gates.len() {
+                gates[net.idx()] += 1;
+            }
+        }
+    }
+    let examined = gates.iter().filter(|&&count| count > 0).count() as u64;
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let limit = table.max_gates[row];
+        for (net, &count) in (0u32..).zip(&gates) {
+            if count <= limit {
+                continue;
+            }
+            let Some(&poly) = design.nets.polys_of(NetId(net)).first() else {
+                continue;
+            };
+            out.push(Violation {
+                rule,
+                layer: design.store.poly_layer(poly),
+                severity: table.head.severity[row],
+                at: first_vertex(design.store, poly),
+                measured: Measurement::Count(count),
+                limit: Measurement::Count(limit),
+                shapes: (poly, None),
+            });
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
 /// A well with no tap: deck kind `floating_well`, written
 /// `floating_well(well, tap)`.
 ///

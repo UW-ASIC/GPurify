@@ -343,6 +343,7 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `esd_latchup(pad, guard_ring; min_guard_ring_width: len, max_tap_distance: len, clamps: models)` | A guard ring too narrow or too far from a supply tap, and a pad net short of a clamp path (as `esd_topological`). Needs `--intent`. |
 | `esd_topological(pad; clamps: models)` | A pad net with no path through `clamps` devices to both a power and a ground supply. The path is a clamp from the pad to a supply, then any rail clamps between supplies. Needs `--intent`. |
 | `floating_gate(; labels_are_ports: bool)` | A net that only connects to gates. With `labels_are_ports: true`, a labelled net is a block input driven from outside the cell and is skipped. |
+| `fanout(; max: count)` | A net driving more than `max` transistor gates. |
 | `floating_well(well, tap)` | A well with no tap in it. |
 | `missing_tie(region, tap; max_distance: len)` | A point of a `region` shape (a device polarity's active area, say) further than `max_distance` from the nearest `tap` edge. |
 | `multiple_drivers(; max: count)` | A net driven by more than `max` separate drivers. A driver is a path through transistor channels from the net to a supply the intent file declares; networks that share a gate net (an inverter, a NAND's pull-up and pull-down) are one driver, and a pass gate that reaches no supply drives nothing by itself. Which end of a channel is the source does not matter. Needs `--intent`. |

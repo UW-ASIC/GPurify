@@ -102,6 +102,10 @@ fn every_kind() -> RuleSet {
             head: head(id_of("multiple_drivers")),
             max_drivers: vec![1],
         },
+        fanout: topology::FanoutTable {
+            head: head(id_of("fanout")),
+            max_gates: vec![4],
+        },
         unconnected_pin: topology::UnconnectedPinTable {
             head: head(id_of("unconnected_pin")),
             layer_start: vec![0, 1],

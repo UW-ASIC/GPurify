@@ -105,6 +105,7 @@
 //! | `esd_latchup(pad, guard_ring; ..)` | `esd_latchup` | [`erc::RuleSet::esd_latchup`] | a narrow or untapped guard ring, or an unclamped pad | ERC-C1, ERC-D2 |
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
+//! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
 //! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
 //! | `multiple_drivers(; max)` | `multiple_drivers` | [`erc::RuleSet::multiple_drivers`] | a net with too many drivers | ERC-G3 |

@@ -7,8 +7,9 @@
 //!   read from it) on generated supply grids, within a tolerance derived from
 //!   the solve's stopping rule ([`supply_grids_solve_as_a_dense_nodal_solve_does`]);
 //! - a breadth-first search over the extracted net graph of generated
-//!   circuits, against `floating_gate`, `esd_topological`, `multiple_drivers`
-//!   and `tie_high_low` ([`topology_rules_agree_with_a_search_of_the_extracted_graph`]);
+//!   circuits, against `floating_gate`, `esd_topological`, `multiple_drivers`,
+//!   `tie_high_low` and `fanout`
+//!   ([`topology_rules_agree_with_a_search_of_the_extracted_graph`]);
 //! - a brute-force sweep of the voltage propagation rules, gate conditions
 //!   included, against `erc::voltage` on the same generated circuits
 //!   ([`voltage_propagation_agrees_with_a_naive_sweep_of_the_extracted_graph`]).
@@ -33,7 +34,8 @@ use gpurify::check::erc::rules::supply::{
     check_esd_topological, check_tie_high_low, EsdTopologicalTable, TieHighLowTable,
 };
 use gpurify::check::erc::rules::topology::{
-    check_floating_gate, check_multiple_drivers, FloatingGateTable, MultipleDriversTable,
+    check_fanout, check_floating_gate, check_multiple_drivers, FanoutTable, FloatingGateTable,
+    MultipleDriversTable,
 };
 use gpurify::check::erc::ruleset::RuleHead;
 use gpurify::check::erc::voltage::{propagate_into, NetVoltage};
@@ -470,9 +472,10 @@ struct Expected {
     esd: Vec<(NetId, u32)>,
     drivers: Vec<(NetId, u32)>,
     tied: Vec<(NetId, u32)>,
+    fanout: Vec<(NetId, u32)>,
 }
 
-/// The four rules re-derived from their rustdoc over the extracted net graph.
+/// The five rules re-derived from their rustdoc over the extracted net graph.
 fn search(c: &Circuit, intent: &IntentMap, clamp: StrId) -> Expected {
     let nets = c.nets.net_count();
     let devices: Vec<(StrId, Vec<(NetId, TerminalRole)>)> = (0..c.devices.len())
@@ -615,11 +618,24 @@ fn search(c: &Circuit, intent: &IntentMap, clamp: StrId) -> Expected {
         .map(|n| (n, 0))
         .collect();
 
+    // fanout, at most one gate: the transistor gate terminals on each net.
+    let fanout = all()
+        .filter_map(|n| {
+            let gates = devices
+                .iter()
+                .flat_map(|d| &d.1)
+                .filter(|t| **t == (n, TerminalRole::Gate))
+                .count() as u32;
+            (gates > 1).then_some((n, gates))
+        })
+        .collect();
+
     Expected {
         floating,
         esd,
         drivers,
         tied,
+        fanout,
     }
 }
 
@@ -647,7 +663,7 @@ fn findings(c: &Circuit, out: &Violations, runs: &[RuleRun]) -> Vec<(NetId, u32)
 #[test]
 fn topology_rules_agree_with_a_search_of_the_extracted_graph() {
     let mut rng = Rng::new(0xc6_0002);
-    let mut nonempty = [0u32; 4];
+    let mut nonempty = [0u32; 5];
     for case in 0..300 {
         let mut strings = StrTable::default();
         let c = random_circuit(&mut rng, &mut strings);
@@ -733,11 +749,23 @@ fn topology_rules_agree_with_a_search_of_the_extracted_graph() {
                 runs,
             );
         });
+        let fanout = runs_of(&mut |out, runs| {
+            check_fanout(
+                design,
+                &FanoutTable {
+                    head: head(id),
+                    max_gates: vec![1],
+                },
+                out,
+                runs,
+            );
+        });
         for (k, (rule, got, want)) in [
             ("floating_gate", floating, want.floating),
             ("esd_topological", esd, want.esd),
             ("multiple_drivers", drivers, want.drivers),
             ("tie_high_low", tied, want.tied),
+            ("fanout", fanout, want.fanout),
         ]
         .into_iter()
         .enumerate()

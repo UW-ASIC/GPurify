@@ -1,4 +1,4 @@
-//! The twenty-seven tables, the deck parser that fills them, and the dispatcher.
+//! The twenty-eight tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -20,7 +20,7 @@ use gpurify_ingest::{StrId, StrTable};
 ///
 /// Each name is a [`RuleSet`] field of the same name; the crate's
 /// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 27] = [
+pub const KINDS: [&str; 28] = [
     "antenna",
     "antenna_electrical",
     "density_cmp",
@@ -30,6 +30,7 @@ pub const KINDS: [&str; 27] = [
     "em_current_density",
     "esd_latchup",
     "esd_topological",
+    "fanout",
     "floating_gate",
     "floating_well",
     "gate_oxide",
@@ -86,6 +87,8 @@ pub struct RuleSet {
     pub multiple_drivers: topology::MultipleDriversTable,
     /// `unconnected_pin` rows: [`topology::UnconnectedPinTable`].
     pub unconnected_pin: topology::UnconnectedPinTable,
+    /// `fanout` rows: [`topology::FanoutTable`].
+    pub fanout: topology::FanoutTable,
 
     /// `supply_short` rows: [`supply::SupplyShortTable`].
     pub supply_short: supply::SupplyShortTable,
@@ -688,6 +691,17 @@ impl RuleSet {
                     row.head(&mut set.floating_gate.head)?;
                     set.floating_gate.labels_are_ports.push(labels_are_ports);
                 }
+                "fanout" => {
+                    row.layers(0)?;
+                    let max_gates = row.count("max_gates")?;
+                    // Zero permitted gates flags every gate net.
+                    if max_gates == 0 {
+                        return Err(row.non_positive("max_gates"));
+                    }
+                    let table = &mut set.fanout;
+                    row.head(&mut table.head)?;
+                    table.max_gates.push(max_gates);
+                }
                 "floating_well" => {
                     let layers = row.layers(2)?;
                     let table = &mut set.floating_well;
@@ -821,6 +835,7 @@ impl RuleSet {
             &self.floating_well.head,
             &self.multiple_drivers.head,
             &self.unconnected_pin.head,
+            &self.fanout.head,
             &self.supply_short.head,
             &self.soft_connection.head,
             &self.missing_tie.head,
@@ -894,6 +909,7 @@ impl RuleSet {
             runs,
         );
         topology::check_unconnected_pin(design, facts, &self.unconnected_pin, out, runs);
+        topology::check_fanout(design, &self.fanout, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);

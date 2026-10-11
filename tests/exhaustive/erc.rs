@@ -2334,7 +2334,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 17] = [
+const TOPO_RULES: [(&str, &str, bool); 18] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -2344,6 +2344,7 @@ const TOPO_RULES: [(&str, &str, bool); 17] = [
     ("ss", "supply_short(ntap, ptap)", false),
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
     ("soft", "soft_connection(well)", false),
+    ("fo", "fanout(; max: 1)", false),
     (
         "gox",
         "gate_oxide(; models: [\"nfet\", \"nfet_b\", \"pfet_b\"], max: {gox})",
@@ -2368,7 +2369,7 @@ const TOPO_RULES: [(&str, &str, bool); 17] = [
 
 /// The catalog rows every board proves: the intent-free connectivity kinds,
 /// which judge every net of every board.
-const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9"];
+const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9", "ERC-H4"];
 /// The rows a board with intent proves too: the kinds the rails orient,
 /// propagation and the voltage kinds.
 const VOLTAGE_CATALOG: &[&str] = &[
@@ -2744,6 +2745,17 @@ impl Board {
         // soft_connection: every well here hangs off a riser that also holds
         // the rest of its net.
         out.push(Expect::clean("soft"));
+        // fanout(; max: 1): a net with two or more transistor gates on it,
+        // measuring the count.
+        out.push(Expect::rule(
+            "fo",
+            (0..NETS)
+                .filter_map(|n| {
+                    let gates = self.devs.iter().filter(|d| d.g == n).count() as u32;
+                    (gates > 1).then(|| count(gates))
+                })
+                .collect(),
+        ));
         if !self.with_intent {
             for (id, _, needs) in TOPO_RULES {
                 if needs {
