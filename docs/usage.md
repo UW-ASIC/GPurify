@@ -138,7 +138,8 @@ netgen's):
   (2.0202 % for 2 %) is this tool's `t`;
 - netgen matches the top cell's pins by name; this tool uses a net's label
   only to choose among nets nothing else tells apart (as KLayout's
-  `consider_net_names`), and never compares names;
+  `consider_net_names`), and compares port names only when the deck asks
+  (`lvs ports_by_name`);
 - when the deck extracts no bulk, the reference's bulks are dropped here;
   netgen has no such rule, so its setup must tie every bulk to one net on
   both sides.
@@ -180,7 +181,8 @@ any of its names, is refused.
 
 The deck's `lvs` statements change the comparison per device model (see
 [deck.md](deck.md#lvs-controls)): a parameter's tolerance, or leaving it out
-(`lvs tolerance`, `lvs ignore_parameter`); a transistor whose source and
+(`lvs tolerance`, `lvs ignore_parameter`); ports held to their labels
+(`lvs ports_by_name`); a transistor whose source and
 drain do not swap (`lvs asymmetric`); pins that do (`lvs permute`); and
 devices left out of the comparison altogether, fill or decap cells one side
 does not state (`lvs ignore`), or dummies with every terminal on one net

@@ -914,16 +914,21 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
         live,
         nets: c.nets(),
         models,
+        names: c.names.clone(),
+        ports: c.ports.clone(),
     }
 }
 
 /// A circuit reduced: its devices, the nets that survive, how many nets it
-/// had, and its devices' models sorted, the cheapest test there is.
+/// had, and its devices' models sorted, the cheapest test there is; and its
+/// nets' names and which are ports (labelled, in a layout).
 struct Reduction {
     devs: Vec<Reduced>,
     live: Vec<usize>,
     nets: usize,
     models: Vec<Model>,
+    names: Vec<String>,
+    ports: Vec<bool>,
 }
 
 /// `|a - b| <= tol * max(|a|, |b|)`, the definition in `CompareOptions`.
@@ -949,6 +954,9 @@ struct Controls {
     /// `lvs ignore_shorted`: models whose dummies, every pin on one net,
     /// are left out on both sides.
     dummies_out: Vec<Model>,
+    /// `lvs ports_by_name`: each reference port pairs only with the layout
+    /// net its name labels.
+    ports_by_name: bool,
 }
 
 impl Controls {
@@ -1081,6 +1089,9 @@ impl Controls {
         }
         for &model in &self.dummies_out {
             let _ = writeln!(out, "lvs ignore_shorted \"{}\"", model.name());
+        }
+        if self.ports_by_name {
+            out.push_str("lvs ports_by_name\n");
         }
         for &(model, a, b) in &self.permuted {
             let names = pin_names(model);
@@ -1266,13 +1277,24 @@ fn matches(a: &Reduction, b: &Reduction, controls: &Controls) -> bool {
     if a.live.len() != b.live.len() || a.models != b.models {
         return false;
     }
+    // Under `lvs ports_by_name`, deck.md's: each reference port pairs with
+    // the layout net its name labels, which must exist.
+    let port_of = |name: &str| (0..b.nets).find(|&r| b.ports[r] && b.names[r] == name);
+    let labelled = |r: usize| (0..a.nets).find(|&k| a.ports[k] && a.names[k] == b.names[r]);
+    if controls.ports_by_name && (0..b.nets).any(|r| b.ports[r] && labelled(r).is_none()) {
+        return false;
+    }
     let mut map = vec![usize::MAX; a.nets];
     permutations(a.live.len()).iter().any(|perm| {
         for (i, &k) in a.live.iter().enumerate() {
             map[k] = b.live[perm[i]];
         }
+        let named = !controls.ports_by_name
+            || a.live
+                .iter()
+                .all(|&k| !a.ports[k] || port_of(&a.names[k]).is_none_or(|r| map[k] == r));
         let used = &mut vec![false; b.devs.len()];
-        assign((&a.devs, &b.devs), (&map, controls), used, 0)
+        named && assign((&a.devs, &b.devs), (&map, controls), used, 0)
     })
 }
 
@@ -2727,6 +2749,45 @@ fn controlled() -> Vec<Fixture> {
             (&layout, &reference),
             &controls,
         ));
+    }
+    // LVS-016, LVS-001: ports by name. Two transistors, each its own gate
+    // and drain port, against a reference that wires gate n0 to the drain
+    // it names n3: the same circuit up to renaming, a mismatch once ports go
+    // by name. The same names match either way, and a layout with no labels
+    // matches only by structure.
+    let pair = Circuit::new(5, vec![Dev::mos(N, 0, 4, 2), Dev::mos(N, 1, 4, 3)]);
+    let mut crossed = pair.clone();
+    crossed.names.swap(2, 3);
+    let mut unlabelled = pair.clone();
+    unlabelled.ports = vec![false; 5];
+    let by_name = Controls {
+        ports_by_name: true,
+        ..Controls::default()
+    };
+    let named: [(&str, &Circuit, &Circuit, Controls); 6] = [
+        ("crossed", &pair, &crossed, Controls::default()),
+        ("crossed_by_name", &pair, &crossed, by_name.clone()),
+        ("same_by_name", &pair, &pair, by_name.clone()),
+        ("reordered_by_name", &pair, &pair, by_name.clone()),
+        ("unlabelled", &unlabelled, &pair, Controls::default()),
+        ("unlabelled_by_name", &unlabelled, &pair, by_name),
+    ];
+    for (name, layout, reference, controls) in named {
+        let mut fixture = compared_under(
+            &format!("ports/{name}"),
+            &["LVS-016", "LVS-001"],
+            (layout, reference),
+            &controls,
+        );
+        if name.starts_with("reordered") {
+            let text = fixture.reference.take().expect("a reference");
+            fixture.reference = Some(edited(
+                &text,
+                ".subckt TOP n0 n1 n2 n3 n4",
+                ".subckt TOP n4 n3 n2 n1 n0",
+            ));
+        }
+        out.push(fixture);
     }
     // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against
     // 210 ohm and 0.6 fF: 10 ohm and 40 aF apart, so within 15 ohm and

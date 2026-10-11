@@ -438,6 +438,7 @@ lvs asymmetric "nfet_ldmos"
 lvs permute "cmim" top bottom
 lvs ignore "sky130_fd_pr__decap"
 lvs ignore_shorted "nfet"
+lvs ports_by_name
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -499,6 +500,12 @@ too, unless it is a schematic port or carries a layout label, which must
 still pair. The model need not be a `device` of the deck, since a
 schematic may hold devices the layout has no recogniser for. The layout's
 own checks (`lvs.floating_net` and the others) still see the devices.
+
+**`lvs ports_by_name`** holds each port of the schematic's top cell to the
+layout net its name labels, as KLayout's `flag_missing_ports` does, so
+swapped pad labels or a missing label are reported (`lvs.unpaired_net`)
+rather than matched by structure. Without it, names only break ties between
+nets nothing else tells apart, and are never compared.
 
 **`lvs ignore_shorted "model"`** leaves out only the model's dummies: each
 device whose every terminal is on one net, as Netgen's `ignore shorted`

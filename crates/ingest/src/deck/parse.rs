@@ -1108,6 +1108,12 @@ impl<'a> Parser<'a> {
                 self.out.lvs.ignore.push(model);
                 Ok(())
             }
+            "ports_by_name" => {
+                if std::mem::replace(&mut self.out.lvs.ports_by_name, true) {
+                    return Err(self.err(span, "ports are already compared by name"));
+                }
+                Ok(())
+            }
             "ignore_shorted" => {
                 let model = self.model()?;
                 if self.out.lvs.ignore_shorted.contains(&model) {
@@ -1131,7 +1137,7 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric, permute, ignore or ignore_shorted"
+                     asymmetric, permute, ignore, ignore_shorted or ports_by_name"
                 ),
             )),
         }

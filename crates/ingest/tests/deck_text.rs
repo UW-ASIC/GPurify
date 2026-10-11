@@ -676,6 +676,18 @@ fn lvs_ignore_names_any_model_once() {
     );
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs ports_by_name`
+/// sets the flag, which is off without it; stated twice it is refused.
+#[test]
+fn lvs_ports_by_name_is_a_flag() {
+    assert!(!ok("").0.lvs.ports_by_name);
+    assert!(ok("lvs ports_by_name\n").0.lvs.ports_by_name);
+    one_error(
+        "lvs ports_by_name\nlvs ports_by_name\n",
+        "already compared by name",
+    );
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.

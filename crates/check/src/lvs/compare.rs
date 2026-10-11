@@ -6,7 +6,8 @@
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
 use crate::lvs::controls::{
-    assign_roles, bound, drop_ignored_devices, drop_ignored_params, report_roles, restore_rows,
+    assign_roles, bound, drop_ignored_devices, drop_ignored_params, port_names, port_seeds,
+    report_roles, restore_rows,
 };
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
@@ -173,6 +174,14 @@ pub fn compare_logged(
 ///   a net only those devices reached, unless it is a port of the reference
 ///   or a labelled layout net, which must still pair. A [`Merge`] still
 ///   lists rows of the graphs given.
+/// - **`lvs ports_by_name`** (catalog LVS-016, LVS-001): each port of the
+///   reference starts refinement in a class of its own with the layout nets
+///   its name labels, so it pairs with no other net, as `KLayout`'s
+///   `flag_missing_ports` holds a top circuit's pins to their labels ("this
+///   prevents swapping of port labels or pads"). A port with no label, or
+///   whose label sits on a net wired otherwise, is then unpaired
+///   ([`Discrepancy::UnpairedNet`]). Seeding only splits classes, so it
+///   never turns a mismatch into a match.
 /// - **`lvs ignore_shorted`** (catalog LVS-035): a device of the model with
 ///   every terminal it has on one net is dropped the same way, as Netgen's
 ///   `ignore shorted` removes dummies. Its terminals are those compared: a
@@ -188,6 +197,9 @@ pub fn compare_with(
     options: CompareOptions,
     controls: &LvsControls,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    // The reference's own ports, before a layout label makes another net a
+    // port, are what `lvs ports_by_name` pairs by.
+    let ports = controls.ports_by_name.then(|| port_names(reference));
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
     let reference_rows = drop_ignored_devices(&mut declared, controls);
@@ -212,12 +224,13 @@ pub fn compare_with(
         .map(|m| (Side::Layout, m))
         .chain(reference_merges.into_iter().map(|m| (Side::Reference, m)))
         .collect();
+    let seeds = ports.map_or_else(Vec::new, |names| port_seeds((&layout, &reference), &names));
     let mut partition = Partition::default();
     let budget = (options.max_rounds, options.param_tolerance);
     if !refine_into(
         (&layout, &reference),
         budget,
-        (options.params, controls),
+        (options.params, controls, &seeds),
         &mut partition,
     ) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);

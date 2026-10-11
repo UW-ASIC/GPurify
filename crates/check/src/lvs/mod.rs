@@ -67,7 +67,8 @@
 //! net its label names, as `KLayout`'s `consider_net_names` (on by default)
 //! resolves ambiguities, so a transistor whose two diffusions differ on
 //! otherwise symmetric nets is compared the way its labels say. Names are
-//! not compared, so a misnamed or reordered port passes (catalog LVS-016).
+//! not compared, so a misnamed or reordered port passes (catalog LVS-016),
+//! unless the deck asks for ports by name (below).
 //!
 //! # Deck controls
 //!
@@ -97,6 +98,9 @@
 //!   before reduction (catalog LVS-034; Netgen's `ignore class`, `KLayout`'s
 //!   `same_device_classes` with `nil`), and a net only they reached is no
 //!   node unless it is a port.
+//! - `lvs ports_by_name`: each reference port pairs only with the layout
+//!   net its name labels (catalog LVS-016, LVS-001; `KLayout`'s
+//!   `flag_missing_ports`), seeded as a class of its own.
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).

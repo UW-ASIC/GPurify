@@ -642,6 +642,10 @@ pub struct LvsControls {
     /// terminal on one net are left out on both sides, Netgen's `ignore
     /// shorted` (catalog LVS-035), each once; any model name, as `ignore`.
     pub ignore_shorted: Vec<StrId>,
+    /// `lvs ports_by_name`: each port of the reference's top cell pairs
+    /// only with the layout net its label names, `KLayout`'s
+    /// `flag_missing_ports` (catalog LVS-001, LVS-016).
+    pub ports_by_name: bool,
 }
 
 /// The names `lvs permute` gives the pins of a device of `kind`, in its
@@ -770,6 +774,7 @@ fn build_lvs(
     for model in &declared.ignore_shorted {
         lvs.ignore_shorted.push(strings.intern(model));
     }
+    lvs.ports_by_name = declared.ports_by_name;
     for model in &declared.asymmetric {
         known(model, "asymmetric")?;
         if devices
@@ -821,6 +826,7 @@ pub struct LvsSrc {
     permute: Vec<(String, String, String)>,
     ignore: Vec<String>,
     ignore_shorted: Vec<String>,
+    ports_by_name: bool,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

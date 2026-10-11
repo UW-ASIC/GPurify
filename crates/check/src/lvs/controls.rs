@@ -256,6 +256,42 @@ pub(crate) fn drop_ignored_devices(graph: &mut Graph, controls: &LvsControls) ->
     Some(kept)
 }
 
+/// The names of `reference`'s ports, ascending, each once: what `lvs
+/// ports_by_name` pairs by.
+pub(crate) fn port_names(reference: &Graph) -> Vec<StrId> {
+    let mut names: Vec<StrId> = reference
+        .port_net
+        .iter()
+        .filter_map(|&net| reference.net_name[net as usize])
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The refinement seed of every node of the two reduced graphs, layout
+/// nodes first, devices before nets on each side, as refinement numbers
+/// them: a layout net whose label is one of the port `names` and the
+/// reference port net of that name share the name's rank, so refinement
+/// starts them in a class of their own; every other node has none,
+/// `u32::MAX`.
+pub(crate) fn port_seeds((layout, reference): (&Graph, &Graph), names: &[StrId]) -> Vec<u32> {
+    let rank = |name: Option<StrId>| {
+        name.and_then(|name| names.binary_search(&name).ok())
+            .map_or(u32::MAX, narrow)
+    };
+    let split = layout.device_count() + layout.net_count();
+    let mut seeds = vec![u32::MAX; split + reference.device_count() + reference.net_count()];
+    for (net, &name) in layout.net_name.iter().enumerate() {
+        seeds[layout.device_count() + net] = rank(name);
+    }
+    for &net in &reference.port_net {
+        let net = net as usize;
+        seeds[split + reference.device_count() + net] = rank(reference.net_name[net]);
+    }
+    seeds
+}
+
 /// Rewrites each merge's device rows, rows of a graph [`drop_ignored_devices`]
 /// filtered, as rows of the graph it was given (`kept[row]`).
 pub(crate) fn restore_rows(merges: &mut [Merge], kept: Option<&[u32]>) {

@@ -445,3 +445,49 @@ fn an_ignored_dummy_is_one_with_every_terminal_on_one_net() {
     assert_eq!(verdict(&alone, &with(3), &shorted), Verdict::Match);
     assert_ne!(verdict(&with(0), &alone, &shorted), Verdict::Match);
 }
+
+/// Oracle: the definition (`KLayout`'s `flag_missing_ports`: ports "not
+/// labelled correspondingly in the layout" are errors, which "prevents
+/// swapping of port labels or pads"), by hand. Two transistors, each with
+/// its own gate and drain port, the reference wiring gate `in1` to drain
+/// `out2`: the same circuit up to renaming, so a match by structure, and a
+/// mismatch once ports go by name. Labels on the nets the reference names
+/// match either way, and a reference port no layout net is labelled with
+/// is unpaired. Breaks if names are not held to their ports, or are when
+/// the deck does not ask.
+#[test]
+fn ports_by_name_hold_each_port_to_its_label() {
+    let [in1, in2, out1, out2, vss] = [StrId(70), StrId(71), StrId(72), StrId(73), StrId(74)];
+    // Transistor `k` gated by `gates[k]` and draining into `drains[k]`,
+    // its source and bulk on `vss`; every named net is a port.
+    let pair = |gates: [StrId; 2], drains: [StrId; 2], labelled: bool| {
+        let mut builder = GraphBuilder::new(5);
+        for (net, name) in (0u32..).zip([gates[0], gates[1], drains[0], drains[1], vss]) {
+            if labelled {
+                builder.name_net(net, name);
+                builder.port(net);
+            }
+        }
+        for k in 0..2u32 {
+            builder.device(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, k), (Source, 4), (Drain, 2 + k), (Bulk, 4)],
+            );
+        }
+        builder.finish()
+    };
+    let by_name = LvsControls {
+        ports_by_name: true,
+        ..LvsControls::default()
+    };
+    let none = LvsControls::default();
+    let layout = pair([in1, in2], [out1, out2], true);
+    let crossed = pair([in1, in2], [out2, out1], true);
+    assert_eq!(verdict(&layout, &crossed, &none), Verdict::Match);
+    assert_ne!(verdict(&layout, &crossed, &by_name), Verdict::Match);
+    assert_eq!(verdict(&layout, &layout, &by_name), Verdict::Match);
+    let unlabelled = pair([in1, in2], [out1, out2], false);
+    assert_eq!(verdict(&unlabelled, &layout, &none), Verdict::Match);
+    assert_ne!(verdict(&unlabelled, &layout, &by_name), Verdict::Match);
+}

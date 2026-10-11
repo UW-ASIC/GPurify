@@ -126,7 +126,7 @@
 //! | Report id | Raised by | Flags | Catalog |
 //! |---|---|---|---|
 //! | `lvs.unpaired_device` | [`lvs::Discrepancy::UnpairedDevice`] | a device with no partner on the other side | LVS-011, LVS-012, LVS-013, LVS-049 |
-//! | `lvs.unpaired_net` | [`lvs::Discrepancy::UnpairedNet`] | a net with no partner on the other side | LVS-015, LVS-016 |
+//! | `lvs.unpaired_net` | [`lvs::Discrepancy::UnpairedNet`] | a net with no partner on the other side | LVS-001, LVS-015, LVS-016 |
 //! | `lvs.terminal_mismatch` | [`lvs::Discrepancy::TerminalMismatch`] | paired devices whose terminals reach different nets | LVS-015 |
 //! | `lvs.parameter_mismatch` | [`lvs::Discrepancy::ParameterMismatch`] | paired devices whose parameters differ beyond the tolerance | LVS-014 |
 //! | `lvs.undeclared_param` | [`lvs::Discrepancy::UndeclaredParam`] | a parameter the reference card states that the layout does not measure | LVS-020 |
