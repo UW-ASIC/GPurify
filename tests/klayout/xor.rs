@@ -171,7 +171,7 @@ fn random_layout_pairs_agree_with_klayout_xor() {
     );
     let disagree: Vec<String> = ours
         .iter()
-        .filter(|(key, area)| theirs.get(key) != Some(area))
+        .filter(|&(key, area)| theirs.get(key) != Some(area))
         .map(|(key, area)| format!("{key:?}: GPurify {area}, KLayout {:?}", theirs.get(key)))
         .collect();
     assert!(

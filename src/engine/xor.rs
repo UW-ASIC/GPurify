@@ -3,12 +3,12 @@
 //! For every drawn layer the deck declares, the region where exactly one of
 //! the two layouts has material, the symmetric difference `A xor B` of the
 //! layer's merged shapes, as `KLayout`'s `xor` computes it (its DRC `^` and
-//! `Region#^`, and its XOR tool; [KLayout DRC
+//! `Region#^`, and its XOR tool; [DRC
 //! reference](https://www.klayout.de/doc-qt5/about/drc_ref_layer.html#xor)).
 //! Each connected piece of that region is one violation, measured by its area
 //! (holes excluded), so a layer's total measured area is the area the two
 //! layouts disagree on. On a cut layer whose cuts in `B` lie within those
-//! of `A`, that total is the cut area `A` lost: SkyWater's IR-drop rules
+//! of `A`, that total is the cut area `A` lost: the sky130 IR-drop rules
 //! compare it between "the Al database and the slotted Cu database for the
 //! same product (2 gds files)" (sky130 periphery rules `ct.irdrop`,
 //! `via.irdrop`, and the `(IR)` note). Catalog DRC-068.
