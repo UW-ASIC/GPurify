@@ -641,3 +641,27 @@ fn an_island_inside_a_figure_is_not_named_for_it() {
     assert_eq!(owner_of(&sink, 70_000), ids.of(u));
     assert_eq!(owner_of(&sink, 6_000), ids.of(island));
 }
+
+/// F64: a density violation names an outer row, never a hole row. A ring
+/// `[0, 3000]` square with a `[1000, 2000]` hole, outer drawn first, under
+/// `density >= 50%` with 1000 windows stepping 1000: the die is the ring's
+/// extent, so the windows are the nine 1000 squares, and the centre one, over
+/// the hole, has density 0 and is the one violation, at `(1500, 1500)`. No
+/// outer row's box lies within it, so it names the lowest outer row, the ring.
+#[test]
+fn a_density_window_over_a_hole_names_the_ring_not_the_hole() {
+    let mut layout = LayoutBuilder::new(1);
+    let ring = layout.shape(A, &rect(0, 0, 3_000, 3_000));
+    layout.shape(A, &hole(1_000, 1_000, 2_000, 2_000));
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(
+        &store,
+        &density_table(1_000, 1_000, 0.5, LimitSense::Minimum),
+    );
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.at[0], point(1_500, 1_500));
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.0));
+    assert_eq!(sink.out.shape_a[0], ids.of(ring));
+}

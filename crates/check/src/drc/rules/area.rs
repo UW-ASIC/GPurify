@@ -13,7 +13,7 @@ use crate::report::{
 };
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::rects::{covered_area, decompose_into};
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::StrId;
 use std::ops::Range;
@@ -43,16 +43,17 @@ fn figure_owners(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Vec<
     owners_of(&s.layer_out, &s.rects_a)
 }
 
-/// A layer's boxes sorted by `xlo`, built on first use. A query scans only the
-/// boxes whose `xlo` lies in the region's x span.
+/// The boxes of a validated layer's outer rows (never a hole row) sorted by
+/// `xlo`, built on first use. A query scans only the boxes whose `xlo` lies
+/// in the region's x span.
 struct Owners<'a> {
     store: &'a GeometryStore,
-    layer: LayerId,
+    layer: &'a ValidatedLayer,
     by_xlo: Vec<(Bbox, u32)>,
 }
 
 impl<'a> Owners<'a> {
-    fn new(store: &'a GeometryStore, layer: LayerId) -> Self {
+    fn new(store: &'a GeometryStore, layer: &'a ValidatedLayer) -> Self {
         Self {
             store,
             layer,
@@ -60,12 +61,17 @@ impl<'a> Owners<'a> {
         }
     }
 
-    /// The lowest store row on the layer whose box `region` contains, or `u32::MAX`.
-    fn lowest_within(&mut self, region: Bbox) -> u32 {
+    /// The lowest outer row whose box `region` contains, else the lowest
+    /// outer row, else `u32::MAX` for an empty layer.
+    fn owner(&mut self, region: Bbox) -> u32 {
         if self.by_xlo.is_empty() {
-            let rows = self.store.polys_on_layer(self.layer);
-            let boxes = self.store.layer_bboxes(self.layer);
-            self.by_xlo.extend(boxes.iter().copied().zip(rows));
+            let outers = (0..self.layer.len()).map(|poly| {
+                let poly = u32::try_from(poly).expect("a layer indexes polygons with a u32");
+                self.layer.get(poly).provenance()
+            });
+            let store = self.store;
+            self.by_xlo
+                .extend(outers.map(|row| (store.poly_bbox(row), row.0)));
             self.by_xlo.sort_unstable_by_key(|&(b, _)| b.xlo);
         }
         let lo = self.by_xlo.partition_point(|&(b, _)| b.xlo < region.xlo);
@@ -75,6 +81,7 @@ impl<'a> Owners<'a> {
             .filter(|&&(b, _)| region.contains(b))
             .map(|&(_, row)| row)
             .min()
+            .or_else(|| self.by_xlo.iter().map(|&(_, row)| row).min())
             .unwrap_or(u32::MAX)
     }
 }
@@ -223,8 +230,7 @@ fn merge_within(store: &GeometryStore, layer: LayerId, die: Bbox, s: &mut Scratc
     true
 }
 
-/// A window no polygon claims is blamed on the layer's first row, or on no
-/// shape when the layer is empty.
+/// The layer's first row, or `u32::MAX` (no shape) for an empty layer.
 fn first_row_or_none(store: &GeometryStore, layer: LayerId) -> u32 {
     let rows = store.polys_on_layer(layer);
     if rows.is_empty() {
@@ -277,8 +283,11 @@ pub(crate) fn density(
     };
 
     let denominator = to_f64(i128::from(side) * i128::from(side));
-    let mut owners = Owners::new(store, layer);
-    let fallback = first_row_or_none(store, layer);
+    let validated = s
+        .validated
+        .get(store, layer)
+        .expect("merge_within validated the layer");
+    let mut owners = Owners::new(store, validated);
     let grid = WindowGrid {
         x0,
         y0,
@@ -292,10 +301,7 @@ pub(crate) fn density(
         if !Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
             return;
         }
-        let owner = match owners.lowest_within(window) {
-            u32::MAX => fallback,
-            row => row,
-        };
+        let owner = owners.owner(window);
         out.push(Violation {
             rule,
             layer,

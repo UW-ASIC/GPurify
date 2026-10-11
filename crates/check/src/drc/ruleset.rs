@@ -400,9 +400,10 @@ pub enum Rule {
     /// non-empty die has density 0 everywhere.
     ///
     /// One violation per offending window, at its centre. `measured` and
-    /// `limit` are fractions; `shapes.0` is the lowest row on the layer whose
-    /// box lies within the window, else the layer's first row, else
-    /// `PolyId(u32::MAX)` for an empty layer. `examined` counts windows.
+    /// `limit` are fractions; `shapes.0` is the lowest outer row on the layer
+    /// (a drawn polygon, never a hole) whose box lies within the window, else
+    /// the layer's lowest outer row, else `PolyId(u32::MAX)` for an empty
+    /// layer. `examined` counts windows.
     /// Records [`Outcome::Skipped`] with
     /// [`SkipReason::EmptyLayer`](crate::report::SkipReason::EmptyLayer) when
     /// the die is empty, and [`Outcome::Refused`] when the windows would
