@@ -55,6 +55,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_width_neck(depth),
         max_width(depth),
         cut_size(depth),
+        cut_class(depth),
         min_edge_length(depth),
         edge_length_of_edges(depth),
         notch(depth),
@@ -626,7 +627,8 @@ fn max_width(depth: Depth) -> Vec<Fixture> {
 /// Each side swept one step either side; a square cut; two 100 x 75 halves
 /// that merge into a legal cut, and two legal cuts that merge into an illegal
 /// slot; a corner bite and a hole (the right box, the wrong shape); a cut
-/// drawn twice. DRC-014: one rule per cut class flags every other class.
+/// drawn twice. Two rules of one size each flag each other's cuts: several
+/// legal sizes are `cut_class`'s (DRC-014).
 fn cut_size(depth: Depth) -> Vec<Fixture> {
     let deck = "grid 1nm\nlayer via = gds(68, 44)\nrule cs size(via) == 100nm x 150nm\n";
     let via = |boxes: &[[i64; 4]]| rects(Layout::default(), "via", boxes);
@@ -717,8 +719,8 @@ fn cut_size(depth: Depth) -> Vec<Fixture> {
         ]),
         vec![Finding::length(120).at(960, 75)],
     );
-    // DRC-014: a layer with two legal classes cannot be written; each rule
-    // flags the other class's cut by its long side.
+    // Two exact-size rules on one layer flag each other's cuts by the long
+    // side; two legal classes are one `cut_class` rule (DRC-014).
     cases.push(fixture(
         "cut_size/two_classes",
         &["DRC-013", "DRC-014"],
@@ -738,6 +740,112 @@ fn cut_size(depth: Depth) -> Vec<Fixture> {
          rule cs size(via) == 100nm x 150nm\n",
         met1(&[[0, 0, 1000, 1000]]),
         vec![("cs", Vec::new())],
+    ));
+    out
+}
+
+/// `size(via; allowed: [100nm x 100nm, 100nm x 200nm])` (`cut_class`,
+/// DRC-014: sky130 via.1b's three square via sizes, LEF58 `CUTCLASS`): every
+/// merged figure is a rectangle of one listed size, either way round; one
+/// finding per figure that is none, at its bounding box's centre, measuring
+/// `Count(0)`.
+///
+/// Oracle: sizes fixed by construction. Each class exactly (clean), and each
+/// side of each class one step either side (a finding); a 200 square, whose
+/// side is only a slot's long side (a check comparing sides one at a time
+/// passes it); two abutting squares that merge into the legal slot, and two
+/// abutting slots that merge into an illegal 200 x 200 square (a check
+/// reading drawn rows sees two legal cuts each time); a slot with a corner
+/// bite and one with a hole (the right box, no rectangle); one wrong cut in
+/// an array. The second rule writes the list in another order with a repeat,
+/// and finds the same.
+fn cut_class(depth: Depth) -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer via = gds(68, 44)\n\
+                rule cc size(via; allowed: [100nm x 100nm, 100nm x 200nm])\n\
+                rule cr size(via; allowed: [200nm x 100nm, 100nm x 100nm, 100nm x 100nm])\n";
+    let via = |boxes: &[[i64; 4]]| rects(Layout::default(), "via", boxes);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("cut_class/{shape}"),
+            &["DRC-014"],
+            deck,
+            layout,
+            vec![("cc", findings.clone()), ("cr", findings)],
+        ));
+    };
+    for (w, h) in [(100, 100), (100, 200)] {
+        for dw in sweep(depth, w) {
+            let findings = if dw == w {
+                Vec::new()
+            } else {
+                vec![pin(count(0), dw, h)]
+            };
+            case(
+                format!("{w}x{h}/width/{}", side(dw, w)),
+                via(&[[0, 0, dw, h]]),
+                findings,
+            );
+        }
+        for dh in sweep(depth, h) {
+            let findings = if dh == h {
+                Vec::new()
+            } else {
+                vec![pin(count(0), w, dh)]
+            };
+            case(
+                format!("{w}x{h}/height/{}", side(dh, h)),
+                via(&[[0, 0, w, dh]]),
+                findings,
+            );
+        }
+    }
+    case(
+        "square_of_a_long_side".into(),
+        via(&[[0, 0, 200, 200]]),
+        vec![count(0).at(100, 100)],
+    );
+    case(
+        "two_squares_make_a_slot".into(),
+        via(&[[0, 0, 100, 100], [100, 0, 200, 100]]),
+        Vec::new(),
+    );
+    case(
+        "two_slots_make_a_square".into(),
+        via(&[[0, 0, 100, 200], [100, 0, 200, 200]]),
+        vec![count(0).at(100, 100)],
+    );
+    case(
+        "corner_bite".into(),
+        Layout::default().polygon(
+            "via",
+            &[(0, 0), (100, 0), (100, 190), (90, 190), (90, 200), (0, 200)],
+        ),
+        vec![count(0).at(50, 100)],
+    );
+    case(
+        "holed".into(),
+        Layout::default().polygon("via", &holed([0, 0, 100, 200], [40, 40, 60, 160])),
+        vec![count(0).at(50, 100)],
+    );
+    case(
+        "array_with_one_wrong".into(),
+        via(&[
+            [0, 0, 100, 100],
+            [300, 0, 400, 200],
+            [600, 0, 700, 100],
+            [900, 0, 1000, 150],
+        ]),
+        vec![count(0).at(950, 75)],
+    );
+    let mut out = every_placement(cases);
+    out.push(fixture(
+        "cut_class/vacuous",
+        &["DRC-014"],
+        "grid 1nm\nlayer via = gds(68, 44)\nlayer met1 = gds(68, 20)\n\
+         rule cc size(via; allowed: [100nm x 100nm])\n",
+        met1(&[[0, 0, 1000, 1000]]),
+        vec![("cc", Vec::new())],
     ));
     out
 }

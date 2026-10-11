@@ -1093,6 +1093,32 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("total_area", Key::Point, Value::Area)
             }
+            Rule::CutClass { layer, classes } => {
+                fig(layer, &mut reads);
+                let wrong: Vec<String> = set.classes[classes as usize]
+                    .iter()
+                    .map(|&(short, long)| {
+                        format!(
+                            "if_any(bbox_min != {}, bbox_max != {})",
+                            2 * short.raw(),
+                            2 * long.raw()
+                        )
+                    })
+                    .collect();
+                // A figure fails when it is no rectangle, or every class
+                // rejects it.
+                let none = match wrong.as_slice() {
+                    [one] => one.clone(),
+                    _ => format!("if_all({})", wrong.join(", ")),
+                };
+                writeln!(
+                    body,
+                    "emit({q}, {}.drc(if_any(!rectangles, {none})))",
+                    var(layer)
+                )
+                .expect("a String");
+                exact("cut_class", Key::Point, Value::Ignore)
+            }
         };
         reads.sort();
         reads.dedup();

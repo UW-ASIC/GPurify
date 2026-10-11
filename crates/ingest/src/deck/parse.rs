@@ -1643,6 +1643,24 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::LengthPairList(second) => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, "a list of pairs `a x b` of lengths", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one pair")));
+                }
+                for item in items {
+                    let Val::Pair(a, b, _) = item else {
+                        return Err(self.wrong(item, "a pair `a x b` of lengths", label));
+                    };
+                    let a = self.length(a, label)?;
+                    let b = self.length(b, label)?;
+                    out.push((engine, ParamSrc::Value(ParamValue::Length(a))));
+                    out.push((second, ParamSrc::Value(ParamValue::Length(b))));
+                }
+                return Ok(());
+            }
             Dim::LengthRows => {
                 let Val::List(rows, _) = value else {
                     return Err(self.wrong(value, "a list of rows of lengths", label));
@@ -2101,5 +2119,6 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Nets => "same or different",
         Dim::LengthList => "a list of lengths",
         Dim::LengthRows => "a list of rows of lengths",
+        Dim::LengthPairList(_) => "a list of pairs of lengths",
     }
 }

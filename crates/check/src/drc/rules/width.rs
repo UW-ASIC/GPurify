@@ -177,6 +177,50 @@ pub(crate) fn cut_size(
     (Outcome::Ran, figures.len() as u64)
 }
 
+/// Cut classes (sky130 via.1b, LEF58 `CUTCLASS`): every merged figure must be
+/// a rectangle with no hole whose `(short, long)` sides are one of `classes`.
+/// One violation per figure in none, at its bounding box's centre, measuring
+/// the classes it matches (0) against 1. `examined` counts figures.
+pub(crate) fn cut_class(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    classes: &[(Dbu, Dbu)],
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let figures = &s.layer_out;
+    for (idx, owner) in (0..).zip(owners_of(figures, &s.rects_a)) {
+        let poly = figures.get(idx);
+        let b = poly.bbox();
+        let sides = (b.width().min(b.height()), b.width().max(b.height()));
+        let rectangle = poly.outer().coords().0.len() == 4 && poly.holes().next().is_none();
+        if rectangle && classes.contains(&sides) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: Point {
+                x: mid(b.xlo, b.xhi),
+                y: mid(b.ylo, b.yhi),
+            },
+            measured: Measurement::Count(0),
+            limit: Measurement::Count(1),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, figures.len() as u64)
+}
+
 /// One violation per edge of the merged layer shorter than `limit`, at its
 /// midpoint, on the lowest drawn row under its figure. `examined` counts the
 /// merged figures' edges.

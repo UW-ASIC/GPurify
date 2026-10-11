@@ -252,8 +252,9 @@ explains (kind 30).
 | 36 | count | `count(L) <= n` / `>= n` | POINT | EXACT | exact | new in H |
 | 37 | aspect_ratio | `aspect_ratio(L) <= r` | FIG by marker | EXACT | exact | new in H |
 | 38 | total_area | `total_area(L) <= a` | POINT | EXACT | exact | new in H |
+| 39 | cut_class | `size(L; allowed: [..])` | POINT | EXACT | exact | new in H |
 
-26 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+27 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -897,6 +898,21 @@ put({ rule: id, pt: [die.center.x, die.center.y], v: a / 4.0 }) if !die.empty? &
 
 - `area` on a layer is "the total area of all polygons", merged, so overlaps count once ([L]);
   IHP's own deck checks MIM.gR as `mim_drw.area > value`. At ×2 the area is four times GPurify's.
+
+### 39. cut_class — EXACT
+
+**GPurify** (`width.rs` `cut_class`): per merged figure, a rectangle with no hole whose short and
+long sides are one listed class's passes; any other figure is one finding at its bounding box's
+centre, `measured` `Count(0)`.
+
+**KLayout**
+
+```ruby
+emit(id, C.drc(if_any(!rectangles, if_all(if_any(bbox_min != S1, bbox_max != L1), if_any(bbox_min != S2, bbox_max != L2)))))
+```
+
+- The cut_size recipe (rule 3) once per class: a figure fails when it is no rectangle or every
+  class rejects it. Key POINT, the box centre; the measurement is not compared.
 
 ---
 

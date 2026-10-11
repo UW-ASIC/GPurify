@@ -10,7 +10,7 @@ DRC-010	drc	dimension	Minimum width	LEF:WIDTH,MINWIDTH; LEF58_MINWIDTH; IHP:M1.a
 DRC-011	drc	dimension	Device channel width / length	IHP:Gat.a1-a4; SKY:poly.1b,difftap.2,poly.13; GF:PL.2	-	missing	FR	Needs device W/L as a rule input (sky130.deck "needs W, not width")
 DRC-012	drc	dimension	Maximum width	LEF:MAXWIDTH; IHP:Slt.c,AFil.a; GF:DF.2b; SKY:m1.11; A7:M4.W.2; MAG:maxwidth	max_width	implemented	BM; FR; TX:KL; MR; SY	
 DRC-013	drc	dimension	Exact cut size	IHP:Cnt.a,V1.a; GF:CO.1,Vn.1; SKY:licon.1,ct.1,via.1a; LEF58_CUTCLASS	cut_size	implemented	FR; TX:KL; MR; SY	
-DRC-014	drc	dimension	Cut classes (several legal cut sizes)	SKY:via.1b; IHP:CntB.a; LEF58_CUTCLASS	cut_size	partial	FR; MR; SY; TX:KL	One exact size per rule; class-dependent spacing is DRC-063
+DRC-014	drc	dimension	Cut classes (several legal cut sizes)	SKY:via.1b; IHP:CntB.a; LEF58_CUTCLASS	cut_size,cut_class	implemented	FR; MR; SY; TX:KL	size(L; allowed: [w x h, ..]) takes every legal class (sky130 via.1b); class-dependent spacing is DRC-063
 DRC-015	drc	dimension	Discrete / allowed width set	A7:M4.W.3,M4.W.4; LEF58_WIDTHTABLE; SKY:rpm.1b-1f	-	missing	FR	
 DRC-016	drc	dimension	Wrong-direction width or spacing	A7:M4.W.1,M4.W.5,M4.S.1,M4.S.2; LEF58_WIDTH WRONGDIRECTION; LEF58_SPACING WRONGDIRSPACING; drt	-	missing	FR	Direction-dependent rules (limitations.md, "Shipped decks")
 DRC-017	drc	dimension	Minimum area	LEF:AREA; LEF58_AREA; IHP:M1.d; GF:Mn.3; SKY:m1.6; A7:M1.A.1; KL:with_area; MAG:area; drt	min_area	implemented	BM; FR; TX:KL; MR; SY	LEF58_AREA exceptions (EXCEPTMINWIDTH, EXCEPTRECTANGLE, ...) are not modelled

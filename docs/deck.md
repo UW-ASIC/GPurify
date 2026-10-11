@@ -216,6 +216,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `width(L) >= len` | A shape narrower than the limit anywhere. |
 | `width(L) <= len` | Any part of a shape wider than the limit in every direction, counting touching shapes as one (a plate with a thin tab is as wide as the plate). |
 | `size(L) == len x len` | A cut that is not exactly that rectangle, either way round. Touching cuts count as one shape, so two abutting squares are a slot. |
+| `size(L; allowed: [w x h, ..])` | A cut that is none of the listed sizes, each either way round: sky130 via.1b's three square via sizes, and LEF58 `CUTCLASS`. Touching cuts count as one shape. |
 | `edge_length(L) >= len` | An edge shorter than the limit. |
 | `notch(L) >= len` | A gap narrower than the limit between two parts of the same shape. |
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
