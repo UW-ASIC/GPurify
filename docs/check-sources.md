@@ -53,7 +53,7 @@ feature tag (`deck:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | `CF` | Closed-form physics or geometry |
 | `SE` | The standard's or manual's own worked example or formula |
 | `FR` | The foundry rule value, tested at the limit and at limit − 1 grid step |
-| `TX:<tool>` | Cross-check against an open tool: KL (KLayout), NG (Netgen), MAG (Magic), OR (OpenROAD), drt (TritonRoute), YOSYS, ngspice, FasterCap, FastHenry |
+| `TX:<tool>` | Cross-check against an open tool: KL (KLayout), NG (Netgen), MAG (Magic), OR (OpenROAD), drt (TritonRoute), YOSYS, ngspice, FastCap, FasterCap, FastHenry |
 | `SY` | A synthetic layout or netlist built from the source's definition, with a known answer |
 | `MR` | Metamorphic relation (plan L5) |
 | `NV` | Naive reference implementation (dense nodal solve, BFS, brute-force colouring) |

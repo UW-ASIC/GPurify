@@ -513,7 +513,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | E1 | `fuzz/` targets + stable regression replay (deck round trip needs D4) | L4 | done (the deck round trip waits for D4's printer) |
 | F1 | `.#oracles` nix shell; KLayout mirror-deck translator per [klayout-mirror.md](klayout-mirror.md) (23 kinds exact, 11 approximate, `multi_patterning` none); retire the stale `drc_oracle.rb` families | L6 | done: tests/klayout (release tier: corpus, merge-depth DRC fixtures, 3000 random layouts; 23 kinds exact, 11 approximate, multi_patterning none); reconciled with B24 (angle on drawn layers, with_width measured exactly); found F88 |
 | F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | todo |
-| F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | todo |
+| F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | done: netgen_differential (all 4223 X5 circuits × every single fault + 17 curated; series-MOS merge and near-equal-L parallel merge are documented differences), fastcap_differential (FastCap 2.0 with image conductors, 25 geometries / 74 entries, 2.5 % default mesh, 0.5 % fine cube), fasthenry_differential (12 geometries, R 1e-4, L 1 %), ngspice_differential (inverter, 16 table points within 0.5 % + 0.1 ps, leakage 1e-4); FastCap 2.0 is the reference (FasterCap is not packaged); the full Netgen run is nightly-only, and a disagreement it finds is triaged, never allowed |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | done; the bench gate is B28 |
 | H | Catalog gaps in the priority order of check-sources.md §4, one kind per commit | check-sources §4 | todo |
 
