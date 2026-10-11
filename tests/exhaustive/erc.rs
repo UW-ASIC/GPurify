@@ -4842,3 +4842,9 @@ fn em_thermal() -> Vec<Fixture> {
     }
     out
 }
+
+// The differentials against open tools (ledger O1), nightly in the oracle
+// shell: antenna ratios against KLayout and OpenROAD, the supply grid against
+// OpenROAD's PDNSim, floating gates against Yosys.
+mod antenna_board;
+mod klayout;
