@@ -41,6 +41,8 @@ jobs:
           --skip fasthenry_differential --skip ngspice_differential
           --skip magic_differential
           --skip foundry_deck
+          --skip klayout_antenna_differential --skip openroad_antenna_differential
+          --skip pdnsim_differential --skip yosys_differential
           --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
           --skip flattening_is_linear_in_the_placements
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
@@ -61,6 +63,14 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # ERC against open tools (O1): antenna ratios against KLayout's
+      # antenna_check and OpenROAD's check_antennas, the supply grid against
+      # PDNSim, floating gates against Yosys `check`. First, as the shortest.
+      - run: >-
+          nix develop .#oracles --command cargo test --test exhaustive --
+          --ignored --test-threads=1
+          klayout_antenna_differential openroad_antenna_differential
+          pdnsim_differential yosys_differential
       # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
       # random layouts; and `gpurify xor` against KLayout's XOR on 1000
       # random layout pairs. One test at a time; each runs at most four klayouts.

@@ -54,6 +54,10 @@
             # plan's first choice for capacitance, is not packaged.
             pkgs.fastcap
             pkgs.fasthenry
+            # OpenROAD's antenna checker and PDNSim, and Yosys `check`: the
+            # ERC differentials (ledger O1).
+            pkgs.openroad
+            pkgs.yosys
           ];
         };
       }
