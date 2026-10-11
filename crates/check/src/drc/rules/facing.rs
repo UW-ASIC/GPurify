@@ -1,6 +1,7 @@
 //! Spacing read off the edges of the merged layer: facing edges classed by
 //! their lengths, gaps in a forbidden range, and the space in front of an end
-//! of line as LEF defines it, keep-out boxes included.
+//! of line as LEF defines it, keep-out boxes included; and the spans of a
+//! figure, the chords lines across it cut, read off the same edges.
 //!
 //! Data in: one layer, validated and merged into `s.layer_out`; every rule
 //! here reads whole edges of the merged figures, so a side drawn as several
@@ -10,7 +11,7 @@
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
 use super::{centre, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
-use crate::drc::ruleset::{ClassTable, EolParallel};
+use crate::drc::ruleset::{ClassTable, EolParallel, SpanTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::derive::merge_into;
@@ -423,4 +424,105 @@ fn keep_out_box(end: &Edge, (backward, side, forward): (i64, i64, i64)) -> Bbox 
             yhi: at(across_hi),
         }
     }
+}
+
+/// Spans (`LEF58_SPANLENGTHTABLE`): every chord a horizontal or vertical line
+/// cuts from a merged figure must be a legal length on its axis's list. One
+/// finding per maximal region of an unchanged illegal chord. `examined`
+/// counts the regions of unchanged chord, both axes.
+pub(crate) fn span_length(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    spans: &SpanTable,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(owners) = merged_owners(store, layer, s) else {
+        return REFUSED;
+    };
+    let mut edges = figure_edges(&s.layer_out);
+    edges.sort_unstable_by_key(|e| (e.figure, e.vertical));
+    let mut examined = 0u64;
+    // A figure's vertical edges bound its horizontal chords, measured on the
+    // `x` list; its horizontal edges its vertical chords, on `y`.
+    for group in edges.chunk_by(|e, f| (e.figure, e.vertical) == (f.figure, f.vertical)) {
+        let (figure, across_x) = (group[0].figure, group[0].vertical);
+        let legal = if across_x { &spans.x } else { &spans.y };
+        for (lo, hi, from, to) in chords(group) {
+            examined += 1;
+            let Some(next) = SpanTable::next_legal(legal, hi - lo) else {
+                continue;
+            };
+            let at = |v: i64| Dbu::new_unchecked(v);
+            let region = if across_x {
+                Bbox {
+                    xlo: at(lo),
+                    ylo: at(from),
+                    xhi: at(hi),
+                    yhi: at(to),
+                }
+            } else {
+                Bbox {
+                    xlo: at(from),
+                    ylo: at(lo),
+                    xhi: at(to),
+                    yhi: at(hi),
+                }
+            };
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: centre(region),
+                measured: Measurement::Length(at(hi - lo)),
+                limit: Measurement::Length(at(next)),
+                shapes: (owners[figure as usize], None),
+            });
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The chords lines across one figure cut, from its edges of one orientation
+/// (`edges`, each with its line `pos` across the chords and its span along
+/// them): `(chord lo, chord hi, from, to)`, one per maximal stretch `from..to`
+/// of lines over which the chord `lo..hi` stays the same. The lines are read
+/// between consecutive ends of the edges, where no vertex lies, and the
+/// figure's material between two edges a line crosses alternates (its rings
+/// are simple but at pinches, which only meet at such ends).
+fn chords(edges: &[Edge]) -> Vec<(i64, i64, i64, i64)> {
+    let mut cuts: Vec<i64> = edges.iter().flat_map(|e| [e.lo, e.hi]).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let (mut regions, mut open) = (Vec::new(), Vec::<(i64, i64, i64)>::new());
+    let mut crossing = Vec::new();
+    for slab in cuts.windows(2) {
+        let (from, to) = (slab[0], slab[1]);
+        crossing.clear();
+        crossing.extend(
+            edges
+                .iter()
+                .filter(|e| e.lo <= from && e.hi >= to)
+                .map(|e| e.pos),
+        );
+        crossing.sort_unstable();
+        let (pairs, _) = crossing.as_chunks::<2>();
+        // A chord that stops here closes its region; a new one opens one.
+        open.retain(|&(lo, hi, start)| {
+            let goes_on = pairs.contains(&[lo, hi]);
+            if !goes_on {
+                regions.push((lo, hi, start, from));
+            }
+            goes_on
+        });
+        for &[lo, hi] in pairs {
+            if !open.iter().any(|&(l, h, _)| (l, h) == (lo, hi)) {
+                open.push((lo, hi, from));
+            }
+        }
+    }
+    let end = cuts.last().copied().unwrap_or_default();
+    regions.extend(open.into_iter().map(|(lo, hi, start)| (lo, hi, start, end)));
+    regions
 }

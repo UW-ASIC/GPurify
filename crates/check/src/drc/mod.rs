@@ -93,7 +93,9 @@ pub enum DrcError {
     /// Two deck rows, DRC or ERC, share this id.
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
-    /// The named row's spacing table fails
+    /// The named row's span table fails
+    /// [`SpanTable::is_valid`](ruleset::SpanTable::is_valid), its spacing
+    /// table fails
     /// [`SpacingTable::is_valid`](ruleset::SpacingTable::is_valid), its class
     /// table fails its kind's check
     /// ([`ClassTable::is_valid_tips`](ruleset::ClassTable::is_valid_tips),
