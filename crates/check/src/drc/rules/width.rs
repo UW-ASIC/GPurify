@@ -1,11 +1,12 @@
 //! Width family: min/max width and notch (facing parallel edge pairs of one
 //! polygon, found by a scanline sweep), and min edge length.
 //!
-//! Data in: one validated rectilinear layer. Data out: one violation per offending
-//! merged figure (per edge of one for min edge length). Exact on the whole
-//! input domain.
+//! Data in: one validated layer; `min_width`, `notch` and `min_edge_length`
+//! take edges at 45 degrees, the others refuse them. Data out: one violation
+//! per offending merged figure (per edge of one for min edge length). Exact
+//! on the whole input domain.
 
-use super::{centre, mid, owners_of, Verdict, REFUSED};
+use super::{centre, mid, owners_by_point, owners_of, Verdict, REFUSED};
 use crate::drc::ruleset::StepKind;
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
@@ -15,7 +16,9 @@ use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::width::{narrowest_facing, narrowest_neck, narrowest_width2, poly_edges};
+use gpurify_geom::width::{
+    narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_width2, poly_edges,
+};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
@@ -25,6 +28,12 @@ use gpurify_ingest::StrId;
 /// offending figure of the self-merged layer: touching rectangles are one U,
 /// and a rectangle drawn inside another adds no width of its own. `examined`
 /// is the pre-merge polygon count.
+///
+/// A layer with edges at 45 degrees is measured by
+/// [`narrowest_pair2`](gpurify_geom::width::narrowest_pair2): facing edges at
+/// their perpendicular distance, necks corner to corner, an acute tip 0 wide
+/// (DRC-038; IHP SG13G2 M1.g, Mn.g, Gat.g). The figure is named by the
+/// lowest drawn row inside it.
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
@@ -34,12 +43,31 @@ pub(crate) fn facing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(drawn) = s.validated.get_octilinear(store, layer) else {
         return REFUSED;
     };
     let polys = drawn.len() as u64;
     if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
         return REFUSED;
+    }
+    if !drawn.is_rectilinear() {
+        let owners = owners_by_point(&s.layer_out, drawn);
+        for (idx, owner) in (0..).zip(owners) {
+            let poly = s.layer_out.get(idx);
+            if let Some((twice, at)) = narrowest_pair2(poly, material_between, limit) {
+                out.push(Violation {
+                    rule,
+                    layer,
+                    severity: Severity::Error,
+                    at,
+                    // Floored: twice a square halved, then rooted.
+                    measured: Measurement::Length(isqrt(DbuArea::new(twice / 2))),
+                    limit: Measurement::Length(limit),
+                    shapes: (owner, None),
+                });
+            }
+        }
+        return (Outcome::Ran, polys);
     }
     // A merged figure's own provenance is a row of the boolean's scratch store.
     s.rects_a.build(store, layer, drawn);
@@ -271,7 +299,8 @@ pub(crate) fn allowed_width(
 
 /// One violation per edge of the merged layer shorter than `limit`, at its
 /// midpoint, on the lowest drawn row under its figure. `examined` counts the
-/// merged figures' edges.
+/// merged figures' edges. A 45-degree edge `k` steps long is `k·√2` long,
+/// compared exactly and reported floored.
 pub(crate) fn min_edge_length(
     store: &GeometryStore,
     rule: StrId,
@@ -280,20 +309,27 @@ pub(crate) fn min_edge_length(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(drawn) = s.validated.get_octilinear(store, layer) else {
         return REFUSED;
     };
     if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
         return REFUSED;
     }
-    s.rects_a.build(store, layer, drawn);
+    let owners = if drawn.is_rectilinear() {
+        s.rects_a.build(store, layer, drawn);
+        owners_of(&s.layer_out, &s.rects_a)
+    } else {
+        owners_by_point(&s.layer_out, drawn)
+    };
+    let limit2 = limit.mul_wide(limit);
     let mut examined = 0u64;
-    for (idx, owner) in (0..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+    for (idx, owner) in (0..).zip(owners) {
         for (a, b) in poly_edges(s.layer_out.get(idx)) {
             examined += 1;
-            // Rectilinear: one term is zero.
-            let length = (b.x - a.x).abs() + (b.y - a.y).abs();
-            if length < limit {
+            let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+            let length2 = dx.mul_wide(dx) + dy.mul_wide(dy);
+            if length2 < limit2 {
+                let length = isqrt(length2);
                 out.push(Violation {
                     rule,
                     layer,

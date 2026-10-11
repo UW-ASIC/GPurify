@@ -3233,20 +3233,32 @@
     "cell": "DRC_MW_DIAG_FAIL",
     "domain": "drc",
     "rule": "min_width",
-    "expect_violations": 0,
-    "expect_outcome": "Refused",
-    "examined": 0,
-    "examined_min": 0,
+    "expect_violations": 1,
+    "expect_outcome": "Ran",
+    "examined": 1,
+    "examined_min": 1,
     "examined_population": "validated_polygons",
-    "violations": [],
+    "violations": [
+     {
+      "measured": {
+       "kind": "Length",
+       "value": 80
+      },
+      "at": [
+       971,
+       1028
+      ]
+     }
+    ],
     "provenance": "derived_from_geometry",
-    "corroboration": "manifest_disagrees",
-    "dispute": "fixture_out_of_domain",
-    "strength": "refused",
+    "corroboration": "manifest_agrees",
+    "dispute": null,
+    "strength": "strong",
     "assert": [
      "violation_count",
      "outcome",
-     "examined_min"
+     "examined_min",
+     "measured"
     ],
     "manifest": {
      "expect_violations": 1,
@@ -3254,7 +3266,7 @@
       80
      ]
     },
-    "note": "`ValidityError::NotRectilinear(PolyId(0))`. The manifest states the physics (perpendicular offset 57*sqrt(2) = 80.61 < 100, isqrt -> 80) but this tree is rectilinear-only by design and fails closed. The fixture is out of domain."
+    "note": "A 1000-long bar at 45 degrees, its ends (0,0)-(-57,57) and (1000,1000)-(943,1057): the long sides lie on y = x and y = x + 114, so its width is the perpendicular 114/sqrt(2) = 57*sqrt(2) = 80.61 < 100, floored to 80, as the manifest states. Measured since H12 (min_width takes 45-degree edges); before, the layer was refused as non-rectilinear."
    },
    {
     "id": "DRC_MW_DIAG_PASS",
@@ -3262,15 +3274,15 @@
     "domain": "drc",
     "rule": "min_width",
     "expect_violations": 0,
-    "expect_outcome": "Refused",
-    "examined": 0,
-    "examined_min": 0,
+    "expect_outcome": "Ran",
+    "examined": 1,
+    "examined_min": 1,
     "examined_population": "validated_polygons",
     "violations": [],
     "provenance": "derived_from_geometry",
-    "corroboration": "manifest_count_only",
-    "dispute": "fixture_out_of_domain",
-    "strength": "refused",
+    "corroboration": "manifest_agrees",
+    "dispute": null,
+    "strength": "weak",
     "assert": [
      "violation_count",
      "outcome",
@@ -3280,7 +3292,7 @@
      "expect_violations": 0,
      "measured": []
     },
-    "note": "Same refusal. Physics: 142*sqrt(2) = 200.8 >= 100, clean. Assert `Refused`, not `Ran`; the count agrees with the manifest by coincidence."
+    "note": "The same bar with ends (0,0)-(-142,142): width 142*sqrt(2) = 200.8 >= 100, clean. Measured since H12; only `Outcome::Ran` with one polygon examined distinguishes this from a refusal."
    },
    {
     "id": "DRC_EOL_SIDE",

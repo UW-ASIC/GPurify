@@ -20,7 +20,7 @@ pub use ruleset::{CutClassTable, Rule, RuleSet, SpacingQuery, StepKind, WireBand
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
-use gpurify_geom::view::{validate_layer_into, ValidityError};
+use gpurify_geom::view::{validate_layer_with, Angles, ValidityError};
 use gpurify_geom::{Bbox, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
 
 /// Why a deck could not be turned into a [`RuleSet`]. Load time only: geometry a
@@ -141,15 +141,29 @@ pub(crate) struct Validated {
 }
 
 impl Validated {
-    /// `layer` validated, or `None` when it does not validate (the rule is `Refused`).
+    /// `layer` validated rectilinear, or `None` when it does not validate or
+    /// has an edge at 45 degrees (the rule is `Refused`): for a rule not yet
+    /// proved on 45-degree geometry.
     pub(crate) fn get(&mut self, store: &GeometryStore, layer: LayerId) -> Option<&ValidatedLayer> {
+        self.get_octilinear(store, layer)
+            .filter(|validated| validated.is_rectilinear())
+    }
+
+    /// `layer` validated with edges at 45 degrees allowed, or `None` when it
+    /// does not validate (the rule is `Refused`): for a rule proved on
+    /// octilinear geometry.
+    pub(crate) fn get_octilinear(
+        &mut self,
+        store: &GeometryStore,
+        layer: LayerId,
+    ) -> Option<&ValidatedLayer> {
         if self.slots.len() <= layer.idx() {
             self.slots.resize_with(layer.idx() + 1, || None);
         }
         self.slots[layer.idx()]
             .get_or_insert_with(|| {
                 let mut out = ValidatedLayer::default();
-                validate_layer_into(store, layer, &mut out).map(|()| out)
+                validate_layer_with(store, layer, Angles::Octilinear, &mut out).map(|()| out)
             })
             .as_ref()
             .ok()

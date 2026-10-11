@@ -424,3 +424,80 @@ pub fn seg_seg_dist2(p: Seg, q: Seg) -> DbuArea {
         .min(point_seg_dist2(q.a, p))
         .min(point_seg_dist2(q.b, p))
 }
+
+/// Twice the squared distance from `p` to the closed segment `seg`, and the
+/// segment's nearest point, both coordinates doubled.
+///
+/// Exact when the segment is horizontal, vertical or at 45 degrees: twice a
+/// squared distance to such a line through grid points is an integer, and
+/// the foot of the perpendicular is a half-grid point. For a segment at any
+/// other angle the distance is twice [`point_seg_dist2`] (rounded up) and the
+/// point is rounded.
+pub fn point_seg_near2(p: Point, seg: Seg) -> (i128, (i64, i64)) {
+    let (ax, ay) = (seg.a.x.raw(), seg.a.y.raw());
+    let (vx, vy) = (seg.b.x.raw() - ax, seg.b.y.raw() - ay);
+    let (wx, wy) = (p.x.raw() - ax, p.y.raw() - ay);
+    let to = |x: i64, y: i64| {
+        let (dx, dy) = (i128::from(p.x.raw() - x), i128::from(p.y.raw() - y));
+        (2 * (dx * dx + dy * dy), (2 * x, 2 * y))
+    };
+    let along = i128::from(vx) * i128::from(wx) + i128::from(vy) * i128::from(wy);
+    let len2 = i128::from(vx) * i128::from(vx) + i128::from(vy) * i128::from(vy);
+    if along <= 0 {
+        return to(ax, ay);
+    }
+    if along >= len2 {
+        return to(seg.b.x.raw(), seg.b.y.raw());
+    }
+    if vx == 0 || vy == 0 {
+        // The foot keeps `p`'s coordinate along the segment.
+        let (fx, fy) = if vx == 0 {
+            (ax, p.y.raw())
+        } else {
+            (p.x.raw(), ay)
+        };
+        return to(fx, fy);
+    }
+    if vx.abs() == vy.abs() {
+        let (sx, sy) = (vx.signum(), vy.signum());
+        // `v = k·s`: twice the squared offset is `(s × w)²`, and the foot,
+        // doubled, is `2a + (s·w)·s`.
+        let side = i128::from(sx * wy - sy * wx);
+        let t = sx * wx + sy * wy;
+        return (side * side, (2 * ax + t * sx, 2 * ay + t * sy));
+    }
+    let d2 = point_seg_dist2(p, seg).raw();
+    let scaled = |a: i64, v: i64| {
+        let num = 2 * along * i128::from(v);
+        i64::try_from(i128::from(2 * a) + num.div_euclid(len2)).expect("in domain")
+    };
+    (2 * d2, (scaled(ax, vx), scaled(ay, vy)))
+}
+
+/// Twice the squared distance between two closed segments, with a nearest
+/// point on each, doubled: `(twice d², on p, on q)`. Zero, at a shared point,
+/// when they touch or cross. Exact for horizontal, vertical and 45-degree
+/// segments, as [`point_seg_near2`].
+pub fn seg_seg_near2(p: Seg, q: Seg) -> (i128, (i64, i64), (i64, i64)) {
+    let doubled = |pt: Point| (2 * pt.x.raw(), 2 * pt.y.raw());
+    let candidates = [
+        (point_seg_near2(p.a, q), doubled(p.a), true),
+        (point_seg_near2(p.b, q), doubled(p.b), true),
+        (point_seg_near2(q.a, p), doubled(q.a), false),
+        (point_seg_near2(q.b, p), doubled(q.b), false),
+    ];
+    let ((d2, foot), end, from_p) = candidates
+        .into_iter()
+        .min_by_key(|&((d2, _), _, _)| d2)
+        .expect("four candidates");
+    if d2 > 0 && segments_intersect(p, q) {
+        // A proper crossing; its point is reported as the nearer ends' middle.
+        let mid = (i64::midpoint(end.0, foot.0), i64::midpoint(end.1, foot.1));
+        return (0, mid, mid);
+    }
+    if from_p {
+        (d2, end, foot)
+    } else {
+        (d2, foot, end)
+    }
+}

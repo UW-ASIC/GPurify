@@ -18,7 +18,7 @@ use crate::topology::{NetId, NetTable};
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::derive::{edges_into, merge_into};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, seg_seg_near2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
@@ -157,9 +157,32 @@ fn marker(
 
 /// [`marker`] for a pair measured boundary to boundary, whole shape to whole
 /// shape. Quadratic in the two ring sizes, as [`super::poly_dist2`]; only a
-/// violation pays it.
+/// violation pays it. A pair with an edge at 45 degrees is marked at the
+/// midpoint of one nearest pair of points (floored), the first in ring order.
 pub(super) fn whole_at(store: &GeometryStore, (a, b): (PolyId, PolyId), d2: DbuArea) -> Point {
-    let found = nearest(ring_pairs(store.poly_verts(a), store.poly_verts(b)));
+    let (ra, rb) = (store.poly_verts(a), store.poly_verts(b));
+    let diagonal =
+        |(xs, ys): (&[Dbu], &[Dbu])| ring_segs(xs, ys).any(|e| e.a.x != e.b.x && e.a.y != e.b.y);
+    if diagonal(ra) || diagonal(rb) {
+        let mut best: Option<(i128, Point)> = None;
+        for (p, q) in ring_pairs(ra, rb) {
+            let (twice, on_p, on_q) = seg_seg_near2(p, q);
+            if best.is_none_or(|(b, _)| twice < b) {
+                let at = Point {
+                    x: Dbu::new_unchecked((on_p.0 + on_q.0).div_euclid(4)),
+                    y: Dbu::new_unchecked((on_p.1 + on_q.1).div_euclid(4)),
+                };
+                best = Some((twice, at));
+            }
+        }
+        // Touching boundaries mark the touch; a nested pair (0 with its
+        // boundaries apart) falls back to the boxes, as `marker` does.
+        return match best {
+            Some((twice, at)) if (twice == 0) == (d2.raw() == 0) => at,
+            _ => gap_midpoint(store.poly_bbox(a), store.poly_bbox(b)),
+        };
+    }
+    let found = nearest(ring_pairs(ra, rb));
     marker(store, (a, b), d2, found)
 }
 
@@ -198,9 +221,15 @@ pub(super) fn spacing_violation(
 }
 
 /// Validate, index, prune at `limit`, measure every candidate pair, and label
-/// the layer's merged figures (pairs at distance zero). `false` is `Refused`.
+/// the layer's merged figures (pairs at distance zero). `false` is `Refused`,
+/// as is a layer with 45-degree edges.
 fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
-    if s.validated.get(store, layer).is_none() {
+    s.validated.get(store, layer).is_some() && prepare_octilinear(store, layer, limit, s)
+}
+
+/// [`prepare`] for a rule proved on 45-degree edges.
+fn prepare_octilinear(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
+    if s.validated.get_octilinear(store, layer).is_none() {
         return false;
     }
     let rows = store.polys_on_layer(layer);
@@ -268,6 +297,12 @@ fn judged_pairs(
 }
 
 /// Same-layer minimum spacing. `examined` counts every candidate pair.
+///
+/// Euclidean between the two shapes' boundaries at any octilinear angle
+/// (DRC-038; IHP SG13G2 M1.i, Mn.i "space of lines of which at least one is
+/// bent by 45 degree", which the PDK's `KLayout` deck checks as a Euclidean
+/// `sep`): a gap to a 45-degree edge whose square is a half unit is compared
+/// exactly ([`super::seg_dist2`]) and reported floored.
 pub(crate) fn min_spacing(
     store: &GeometryStore,
     rule: StrId,
@@ -276,7 +311,7 @@ pub(crate) fn min_spacing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !prepare(store, layer, limit, s) {
+    if !prepare_octilinear(store, layer, limit, s) {
         return REFUSED;
     }
     judged_pairs(
@@ -294,6 +329,7 @@ pub(crate) fn min_spacing(
 
 /// Cross-layer minimum spacing, reported on layer `a`. No merged-figure
 /// exemption: overlap *is* the violation. `examined` counts candidate pairs.
+/// Euclidean at any octilinear angle, as [`min_spacing`].
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn min_spacing_diff(
     store: &GeometryStore,
@@ -304,7 +340,9 @@ pub(crate) fn min_spacing_diff(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if s.validated.get(store, a_layer).is_none() || s.validated.get(store, b_layer).is_none() {
+    if s.validated.get_octilinear(store, a_layer).is_none()
+        || s.validated.get_octilinear(store, b_layer).is_none()
+    {
         return REFUSED;
     }
     SpatialIndex::build_into(store, a_layer, &mut s.index_a);

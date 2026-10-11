@@ -6,7 +6,7 @@
 //! its midpoint. Exact on the whole input domain, but a neck's length, which
 //! is floored to a whole unit ([`narrowest_width2`] keeps it exact, squared).
 
-use crate::ops::{isqrt, Point};
+use crate::ops::{isqrt, seg_seg_near2, Point, Seg};
 use crate::view::PolygonRef;
 use crate::{Dbu, DbuArea};
 
@@ -277,4 +277,152 @@ fn neck2(poly: PolygonRef<'_>, limit: Dbu) -> Option<(i128, Point)> {
         }
     }
     best
+}
+
+/// The narrowest width (`material_between`) or notch of a polygon whose
+/// edges may lie at 45 degrees, as twice its square, exact, and where it is:
+/// the midpoint of its two nearest points, floored. Only what is narrower
+/// than `limit` is looked for; `None` when there is none.
+///
+/// The width is the rectilinear one ([`narrowest_width`]) read at every
+/// octilinear angle, the least of:
+/// - two antiparallel edges facing each other across material over a stretch
+///   of positive length: their perpendicular distance (IHP SG13G2 M1.g/Mn.g,
+///   "45-degree bent width", which the PDK's `KLayout` deck checks as a
+///   Euclidean `width` between the 45-degree edges);
+/// - a neck: two concave corners each lying in the closed wedge opposite the
+///   other's empty sector (in rectilinear terms, concave corners whose empty
+///   quadrants point away from each other), corner to corner; a corner where
+///   the figure meets itself is a neck of width 0;
+/// - an acute tip, a corner of less than 90 degrees: width 0.
+///
+/// A corner of 90 degrees or more and two edges that merely converge (a
+/// chamfer's end and the far side) are not a width. A notch is two
+/// antiparallel edges facing across empty space over a stretch of positive
+/// length, as [`narrowest_facing`] reads one.
+///
+/// Over `n` edges and `k` concave corners, the pairs within `limit` in x:
+/// `O(n²)` only when every edge sits in one `limit`-wide column.
+pub fn narrowest_pair2(
+    poly: PolygonRef<'_>,
+    material_between: bool,
+    limit: Dbu,
+) -> Option<(i128, Point)> {
+    // ponytail: pairs within `limit` along x; a sweep by both axes if a figure
+    // with thousands of edges in one column makes this slow.
+    let mut best: Option<(i128, Point)> = None;
+    let bound = 2 * limit.mul_wide(limit).raw();
+    let mut keep = |d2: i128, at: Point| {
+        if d2 < bound && best.is_none_or(|(b, _)| d2 < b) {
+            best = Some((d2, at));
+        }
+    };
+    let mid4 = |p: (i64, i64), q: (i64, i64)| Point {
+        x: Dbu::new_unchecked((p.0 + q.0).div_euclid(4)),
+        y: Dbu::new_unchecked((p.1 + q.1).div_euclid(4)),
+    };
+
+    let mut edges: Vec<Seg> = poly_edges(poly)
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| Seg { a, b })
+        .collect();
+    edges.sort_unstable_by_key(|e| e.a.x.min(e.b.x));
+    for (i, &e) in edges.iter().enumerate() {
+        let reach = e.a.x.max(e.b.x).raw() + limit.raw();
+        for &f in &edges[i + 1..] {
+            if f.a.x.min(f.b.x).raw() > reach {
+                break;
+            }
+            if facing(e, f, material_between) {
+                let (d2, p, q) = seg_seg_near2(e, f);
+                keep(d2, mid4(p, q));
+            }
+        }
+    }
+    if !material_between {
+        return best;
+    }
+
+    // Each corner: its point, the ways back and on, and whether it is concave.
+    let mut concave: Vec<Corner> = Vec::new();
+    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        for i in 0..n {
+            let (p, c, q) = ((i + n - 1) % n, i, (i + 1) % n);
+            let (x, y) = (xs[c].raw(), ys[c].raw());
+            let back = (xs[p].raw() - x, ys[p].raw() - y);
+            let on = (xs[q].raw() - x, ys[q].raw() - y);
+            // Turning from the way in, `-back`, to the way out.
+            let turn =
+                i128::from(back.1) * i128::from(on.0) - i128::from(back.0) * i128::from(on.1);
+            let dot = i128::from(back.0) * i128::from(on.0) + i128::from(back.1) * i128::from(on.1);
+            if turn > 0 && dot > 0 {
+                // A left turn by more than 90 degrees: an acute tip.
+                keep(0, Point { x: xs[c], y: ys[c] });
+            } else if turn < 0 {
+                concave.push((x, y, back, on));
+            }
+        }
+    }
+    concave.sort_unstable();
+    for (i, &(x, y, back, on)) in concave.iter().enumerate() {
+        for &(x2, y2, back2, on2) in &concave[i + 1..] {
+            if x2 - x >= limit.raw() {
+                break;
+            }
+            let w = (x2 - x, y2 - y);
+            if opposite_empty(w, back, on) && opposite_empty((-w.0, -w.1), back2, on2) {
+                let d2 =
+                    2 * (i128::from(w.0) * i128::from(w.0) + i128::from(w.1) * i128::from(w.1));
+                keep(d2, mid4((2 * x, 2 * y), (2 * x2, 2 * y2)));
+            }
+        }
+    }
+    best
+}
+
+/// A concave corner: its point, its way back and its way on.
+type Corner = (i64, i64, (i64, i64), (i64, i64));
+
+/// Whether `w` lies in the closed wedge opposite a concave corner's empty
+/// sector, which runs counter-clockwise from its way back to its way on and
+/// spans less than 180 degrees. Zero lies in it.
+fn opposite_empty(w: (i64, i64), back: (i64, i64), on: (i64, i64)) -> bool {
+    let cross = |a: (i64, i64), b: (i64, i64)| {
+        i128::from(a.0) * i128::from(b.1) - i128::from(a.1) * i128::from(b.0)
+    };
+    let (from, to) = ((-back.0, -back.1), (-on.0, -on.1));
+    cross(from, w) >= 0 && cross(w, to) >= 0
+}
+
+/// Whether `(e, f)` face each other: antiparallel, each strictly on the
+/// other's material side (`material_between`) or empty side, over a stretch
+/// of positive length.
+fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
+    let dir = |s: Seg| (s.b.x.raw() - s.a.x.raw(), s.b.y.raw() - s.a.y.raw());
+    let ((ux, uy), (vx, vy)) = (dir(e), dir(f));
+    let (ux, uy, vx, vy) = (
+        i128::from(ux),
+        i128::from(uy),
+        i128::from(vx),
+        i128::from(vy),
+    );
+    if ux * vy != uy * vx || ux * vx + uy * vy >= 0 {
+        return false;
+    }
+    let want = if material_between { 1 } else { -1 };
+    // The side of `of`'s first end against `line`: + is its left, its material.
+    let side = |line: Seg, of: Point| {
+        let (lx, ly) = dir(line);
+        let (wx, wy) = (of.x.raw() - line.a.x.raw(), of.y.raw() - line.a.y.raw());
+        (i128::from(lx) * i128::from(wy) - i128::from(ly) * i128::from(wx)).signum()
+    };
+    if side(e, f.a) != want || side(f, e.a) != want {
+        return false;
+    }
+    let at = |p: Point| ux * i128::from(p.x.raw()) + uy * i128::from(p.y.raw());
+    let (e0, e1) = (at(e.a).min(at(e.b)), at(e.a).max(at(e.b)));
+    let (f0, f1) = (at(f.a).min(at(f.b)), at(f.a).max(at(f.b)));
+    e0.max(f0) < e1.min(f1)
 }

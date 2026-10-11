@@ -59,13 +59,13 @@ rather than pretending. `strength` grades each case:
 
 | `strength` | meaning | count |
 |---|---|---:|
-| `strong` | rule ran, jurisdiction non-empty, measurement approaches the limit | 122 |
+| `strong` | rule ran, jurisdiction non-empty, measurement approaches the limit | 123 |
 | `underivable` | nothing determines the answer | 11 |
 | `blocked` | derivation sound, corpus or frozen interface prevents reaching it | 9 |
 | `vacuous` | rule ran but never approached the limit | 7 |
 | `skipped` | rule recorded `Skipped`; a clean count here is a false clean | 7 |
-| `weak` | rule ran with a legitimately empty jurisdiction, or right for an unrelated reason | 6 |
-| `refused` | rule fails closed on this input; assert `Refused`, never a clean `Ran` | 5 |
+| `weak` | rule ran with a legitimately empty jurisdiction, or right for an unrelated reason | 7 |
+| `refused` | rule fails closed on this input; assert `Refused`, never a clean `Ran` | 3 |
 
 Nine cases (`DRC_WDS_PASS`, `DRC_VAS_PASS`, `DRC_EOL_SIDE`, `DRC_EOL_WIDE`,
 and five like them) have `examined = 0` for a *correct* reason: the rule
@@ -85,11 +85,11 @@ How each case's derived answer compares with the old implementation's
 
 | domain | cases | manifest agrees | count only | disagrees | partial | uncheckable | no manifest entry |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| drc | 94 | 71 | 11 | 12 | 0 | 0 | 0 |
+| drc | 94 | 73 | 10 | 11 | 0 | 0 | 0 |
 | erc | 30 | 11 | 6 | 11 | 0 | 0 | 2 |
 | lvs | 16 | 14 | 0 | 2 | 0 | 0 | 0 |
 | pex | 27 | 19 | 0 | 3 | 2 | 3 | 0 |
-| **total** | **167** | **115** | **17** | **28** | **2** | **3** | **2** |
+| **total** | **167** | **117** | **16** | **27** | **2** | **3** | **2** |
 
 "count only" means the manifest carried a violation count but no measurement,
 so only the count could be compared; the measurement in `expectations.json` is
@@ -105,14 +105,13 @@ while disagreeing with what it means. The split is the point:
 | `manifest_wrong` | the old implementation got it wrong; the derivation stands | 10 |
 | `convention` | the old tree reported per side where the frozen doc says per pair | 2 |
 | `not_a_rule` | the manifest states a claim that is not a rule kind | 2 |
-| `fixture_out_of_domain` | geometry outside what a rectilinear-only tree represents; it fails closed | 2 |
 | `code_wrong` | the manifest is physically right and the implementation cannot reach it (`known_defects`) | 3 |
 | `fixture_incomplete` | the fixture cannot express the premise (no cell draws a `licon`) | 5 |
 | `no_intent_fixture` | an intent-gated rule with no design-intent file | 14 |
 | `no_deck_coefficient` | a coupling value with no coefficient column in the process stack | 4 |
 | `deck_gap` | a tap that cannot be spelled as a derived layer | 1 |
 | `signature_defect` | a condition a frozen signature makes unsatisfiable | 1 |
-| **total** | | **43** |
+| **total** | | **41** |
 
 Cases expected to fail are explained under `known_defects` and
 `blocking_findings` at the top of `expectations.json`. Weakening them to match

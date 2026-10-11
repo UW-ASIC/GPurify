@@ -369,28 +369,50 @@ fn inside_scaled<'a>(
     inside
 }
 
-/// A point strictly inside a polygon, at eight times scale: one step into the
-/// material from its lowest, then leftmost, outer vertex, along the bisector
-/// of the corner there. That vertex is convex, and on the octilinear grid no
-/// edge but those through a vertex passes within `1/√2` of it, so a step of at
-/// most `√8 / 8` stays inside.
-fn interior_probe(poly: PolygonRef<'_>) -> (i64, i64) {
+/// A point strictly inside a polygon's material, at eight times scale: one
+/// step into the material from a convex corner of its outer ring, along the
+/// bisector of the corner, trying the corners lowest first. On the octilinear
+/// grid no edge but those through a vertex passes within `1/√2` of it, so a
+/// step of at most `√8 / 8` stays in the corner; the lowest, then leftmost,
+/// corner is convex, and only a hole touching it there can make it try the
+/// next.
+///
+/// # Panics
+///
+/// On a polygon with no such corner, which validation rules out.
+pub fn interior_point8(poly: PolygonRef<'_>) -> (i64, i64) {
     let (xs, ys) = poly.outer().coords();
     let n = xs.len();
-    let v = (0..n)
-        .min_by_key(|&i| (ys[i], xs[i]))
-        .expect("a validated ring has vertices");
-    let toward = |to: usize| {
-        (
-            (xs[to] - xs[v]).raw().signum(),
-            (ys[to] - ys[v]).raw().signum(),
-        )
-    };
-    let (back, on) = (toward((v + n - 1) % n), toward((v + 1) % n));
-    (
-        8 * xs[v].raw() + back.0 + on.0,
-        8 * ys[v].raw() + back.1 + on.1,
-    )
+    let mut corners: Vec<usize> = (0..n).collect();
+    corners.sort_unstable_by_key(|&i| (ys[i], xs[i]));
+    for v in corners {
+        let toward = |to: usize| {
+            (
+                (xs[to] - xs[v]).raw().signum(),
+                (ys[to] - ys[v]).raw().signum(),
+            )
+        };
+        let (back, on) = (toward((v + n - 1) % n), toward((v + 1) % n));
+        // Convex: turning left from the way in (`-back`) to the way out.
+        if back.1 * on.0 - back.0 * on.1 <= 0 {
+            continue;
+        }
+        let probe = (
+            8 * xs[v].raw() + back.0 + on.0,
+            8 * ys[v].raw() + back.1 + on.1,
+        );
+        if inside_scaled(std::iter::once(poly), probe.0, probe.1, 8) {
+            return probe;
+        }
+    }
+    panic!("a validated polygon has a convex corner with its material beside it")
+}
+
+/// Whether the point `(px / scale, py / scale)`, which must lie on none of
+/// its rings, is in a polygon's material: inside its outer and no hole.
+/// Exact at any angle.
+pub fn contains_scaled(poly: PolygonRef<'_>, px: i64, py: i64, scale: i64) -> bool {
+    inside_scaled(std::iter::once(poly), px, py, scale)
 }
 
 /// Whether two closed polygons share a point: their boundaries meet, or one
@@ -436,7 +458,7 @@ fn free_of(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
     let mut free = vec![true; a.len()];
     // One point inside each part: it lies inside exactly one polygon of `a`.
     let probes: Vec<(i64, i64)> = (0..narrow(parts.len()))
-        .map(|i| interior_probe(parts.get(i)))
+        .map(|i| interior_point8(parts.get(i)))
         .collect();
     let mut pairs = Vec::new();
     box_pairs(parts.bboxes(), a.bboxes(), &mut pairs);

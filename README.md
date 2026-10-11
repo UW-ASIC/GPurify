@@ -129,8 +129,8 @@ LVS   ██████                                  16
 ```
 
 Expected answers were derived from the geometry and the physics first, then
-compared against the previous implementation's output. 115 agree, so two
-independent routes reached the same number. 28 disagree, and each records which
+compared against the previous implementation's output. 117 agree, so two
+independent routes reached the same number. 27 disagree, and each records which
 side is wrong and why.
 
 ### The test that matters
@@ -152,13 +152,13 @@ A suite that reports only pass or fail flatters itself, so each case carries a
 grade for how much evidence is behind it:
 
 ```
-strong       ███████████████████████████████████  122   the rule ran, had real geometry to look at, and the measurement came close to the limit
+strong       ███████████████████████████████████  123   the rule ran, had real geometry to look at, and the measurement came close to the limit
 underivable  ███                                   11   nothing in the test data determines the answer
 blocked      ███                                    9   the expected answer is sound but the tool cannot currently reach it
 vacuous      ██                                     7   the rule ran but never came close to the limit
 skipped      ██                                     7   the rule reported skipped, and a clean count here would be a lie
-weak         ██                                     6   nothing to check, for a legitimate reason
-refused      █                                      5   the rule correctly refuses this input rather than guessing
+weak         ██                                     7   nothing to check, for a legitimate reason
+refused      █                                      3   the rule correctly refuses this input rather than guessing
 ```
 
 Nearly three quarters genuinely discriminates. The rest is accounted for by
@@ -176,12 +176,12 @@ GPurify  ███████████████████████�
 KLayout  ██████████████████████████████████████████   42 / 43
 ```
 
-That is not GPurify being more correct. The one difference is
-`DRC_MW_DIAG_FAIL`, a shape drawn at 45 degrees: KLayout measures it at 80.6 nm
-against a 100 nm limit and flags it, correctly, while GPurify is
-rectilinear-only and refuses the input. It scores the point only because
-refusing is the documented expectation. KLayout is right about the physics
-there, and GPurify cannot answer at all.
+That was not GPurify being more correct. The one difference was
+`DRC_MW_DIAG_FAIL`, a shape drawn at 45 degrees: KLayout measured it at 80.6 nm
+against a 100 nm limit and flagged it, correctly, while GPurify, then
+rectilinear-only, refused the input and scored the point only because refusing
+was the documented expectation. GPurify now measures that shape too (80 nm,
+floored), and the case expects the measurement.
 
 On the other 42, two independently written tools reach the same number.
 
@@ -257,8 +257,10 @@ what.
 ## What it cannot do yet
 
 This is a working tool that has not been proven against foundry signoff on
-production silicon. Do not tape out on its verdict alone. Layouts must be
-rectilinear, several rules measure less than a foundry deck does, and the
+production silicon. Do not tape out on its verdict alone. On a layout with
+45-degree edges only width, notch, space, area, hole area and edge length are
+measured (the other rules refuse such a layer), several rules measure less than
+a foundry deck does, and the
 shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
 every known gap.
 

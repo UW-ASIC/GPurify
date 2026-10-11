@@ -24,7 +24,8 @@ use crate::topology::net::{in_material, Holes};
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
-use gpurify_geom::ops::{seg_seg_dist2, Point, Seg};
+use gpurify_geom::derive::{contains_scaled, interior_point8};
+use gpurify_geom::ops::{seg_seg_dist2, seg_seg_near2, Point, Seg};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
@@ -165,6 +166,38 @@ pub(crate) fn owners_of(figures: &ValidatedLayer, drawn: &LayerRects) -> Vec<Pol
         .collect()
 }
 
+/// The lowest drawn row inside each figure of `figures`, the merge of
+/// `drawn`, where either may hold edges at 45 degrees: each drawn polygon
+/// lies in exactly one figure, found by a point inside it. `PolyId(u32::MAX)`
+/// for a figure no drawn polygon lies in. The octilinear twin of
+/// [`owners_of`], which cuts into rectangles.
+pub(crate) fn owners_by_point(figures: &ValidatedLayer, drawn: &ValidatedLayer) -> Vec<PolyId> {
+    let mut owner = vec![PolyId(u32::MAX); figures.len()];
+    let mut by_xlo: Vec<(Bbox, u32)> = figures.bboxes().iter().copied().zip(0..).collect();
+    by_xlo.sort_unstable_by_key(|&(b, _)| b.xlo);
+    let widest = by_xlo
+        .iter()
+        .map(|(b, _)| (b.xhi - b.xlo).raw())
+        .max()
+        .unwrap_or(0);
+    for poly in 0..u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32") {
+        let shape = drawn.get(poly);
+        let (x8, y8) = interior_point8(shape);
+        let b = shape.bbox();
+        // A figure holding the shape starts at or left of it and reaches past it.
+        let lo = by_xlo.partition_point(|&(f, _)| f.xlo.raw() < b.xhi.raw() - widest);
+        let hi = by_xlo.partition_point(|&(f, _)| f.xlo <= b.xlo);
+        let home = by_xlo[lo..hi.max(lo)]
+            .iter()
+            .find(|&&(f, figure)| f.contains(b) && contains_scaled(figures.get(figure), x8, y8, 8));
+        if let Some(&(_, figure)) = home {
+            let slot = &mut owner[figure as usize];
+            *slot = (*slot).min(shape.provenance());
+        }
+    }
+    owner
+}
+
 /// A layer validated and merged; `None` when it does not validate.
 pub(crate) fn merged(
     store: &GeometryStore,
@@ -234,8 +267,9 @@ const fn axis_gap(alo: Dbu, ahi: Dbu, blo: Dbu, bhi: Dbu) -> i128 {
     }
 }
 
-/// Exact squared distance between two store polygons' *boundaries*; zero exactly
-/// when they touch or cross. Quadratic in the two ring sizes.
+/// Squared distance between two store polygons' *boundaries*, as [`seg_dist2`]
+/// reads each pair of edges; zero exactly when they touch or cross. Quadratic
+/// in the two ring sizes.
 pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea {
     let (axs, ays) = store.poly_verts(a);
     let (bxs, bys) = store.poly_verts(b);
@@ -249,11 +283,29 @@ pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea
         }
         for sb in ring_segs(bxs, bys) {
             if bbox_gap2(box_a, seg_bbox(sb)) < best {
-                best = best.min(seg_seg_dist2(sa, sb));
+                best = best.min(seg_dist2(sa, sb));
             }
         }
     }
     best
+}
+
+/// Squared distance between two segments as the spacing family compares it.
+/// Exact for axis-parallel segments. Between segments at 45 degrees it can be
+/// a half unit (`7/√2` is `√24.5`); it is then floored, which compares
+/// against any whole squared limit exactly as the true value does (`24.5 <
+/// 25` and `24 < 25`), and a gap of `1/√2` reads 1, so only touching reads
+/// 0. At any other angle, rounded up ([`seg_seg_dist2`]).
+pub(crate) fn seg_dist2(p: Seg, q: Seg) -> DbuArea {
+    let delta = |s: Seg| (s.b.x.raw() - s.a.x.raw(), s.b.y.raw() - s.a.y.raw());
+    let axis = |(dx, dy): (i64, i64)| dx == 0 || dy == 0;
+    let octilinear = |(dx, dy): (i64, i64)| dx == 0 || dy == 0 || dx.abs() == dy.abs();
+    let (dp, dq) = (delta(p), delta(q));
+    if (axis(dp) && axis(dq)) || !(octilinear(dp) && octilinear(dq)) {
+        return seg_seg_dist2(p, q);
+    }
+    let twice = seg_seg_near2(p, q).0;
+    DbuArea::new(if twice == 0 { 0 } else { (twice / 2).max(1) })
 }
 
 /// Squared boundary distance for every pair, into `dists`: exact wherever it is

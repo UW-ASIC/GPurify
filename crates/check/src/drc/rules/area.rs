@@ -7,28 +7,42 @@
 //! offending figure, hole or window.
 
 use super::width::rects_layer;
-use super::{centre, owners_of, SortedRects, Verdict, REFUSED};
+use super::{centre, owners_by_point, owners_of, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_geom::boolean::union_into;
+use gpurify_geom::derive::interior_point8;
+use gpurify_geom::ops::Point;
 use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::StrId;
 use std::ops::Range;
 
-/// Merge a layer into `s.layer_out` and decompose it into `s.rects`, CSR by figure.
-/// `false` is `Refused`.
-fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> bool {
-    let Some(drawn) = s.validated.get(store, layer) else {
+/// Merge a layer into `s.layer_out` and, when it is rectilinear, decompose
+/// it into `s.rects`, CSR by figure (else `s.rect_start` is empty). With
+/// `octilinear`, a layer with edges at 45 degrees is taken. `false` is
+/// `Refused`.
+fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch, octilinear: bool) -> bool {
+    let drawn = if octilinear {
+        s.validated.get_octilinear(store, layer)
+    } else {
+        s.validated.get(store, layer)
+    };
+    let Some(drawn) = drawn else {
         return false;
     };
     if union_into(drawn, drawn, &mut s.layer_out).is_err() {
         return false;
     }
-    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    if drawn.is_rectilinear() {
+        decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    } else {
+        s.rects.clear();
+        s.rect_start.clear();
+    }
     true
 }
 
@@ -38,8 +52,11 @@ fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> bool {
 fn figure_owners(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Vec<PolyId> {
     let drawn = s
         .validated
-        .get(store, layer)
+        .get_octilinear(store, layer)
         .expect("merge_layer validated the layer");
+    if !drawn.is_rectilinear() {
+        return owners_by_point(&s.layer_out, drawn);
+    }
     s.rects_a.build(store, layer, drawn);
     owners_of(&s.layer_out, &s.rects_a)
 }
@@ -88,8 +105,11 @@ impl<'a> Owners<'a> {
 }
 
 /// One violation per merged figure `violates(area, has_hole)` rejects, at the
-/// centre of its first decomposed rectangle (always inside the figure).
-/// Returns the figure count.
+/// centre of its first decomposed rectangle (always inside the figure); on a
+/// layer with 45-degree edges, whose area can be a half unit, the area
+/// floored (which compares against a whole minimum exactly as the true area
+/// does) at a point within half a unit of the figure's material. Returns the
+/// figure count.
 fn report_figures(
     store: &GeometryStore,
     layer: LayerId,
@@ -101,10 +121,24 @@ fn report_figures(
 ) -> u64 {
     let owners = figure_owners(store, layer, s);
     for (figure, owner) in owners.into_iter().enumerate() {
-        let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
-        let area = covered_area(rects);
         let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
-        let has_hole = s.layer_out.get(index).holes().next().is_some();
+        let poly = s.layer_out.get(index);
+        let (area, at) = if s.rect_start.is_empty() {
+            let twice: i128 = std::iter::once(poly.outer())
+                .chain(poly.holes())
+                .map(|ring| ring.area2().raw())
+                .sum();
+            let (x8, y8) = interior_point8(poly);
+            let at = Point {
+                x: Dbu::new_unchecked(x8.div_euclid(8)),
+                y: Dbu::new_unchecked(y8.div_euclid(8)),
+            };
+            (DbuArea::new(twice.div_euclid(2)), at)
+        } else {
+            let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
+            (covered_area(rects), centre(rects[0]))
+        };
+        let has_hole = poly.holes().next().is_some();
         if !violates(area, has_hole) {
             continue;
         }
@@ -112,7 +146,7 @@ fn report_figures(
             rule,
             layer,
             severity: Severity::Error,
-            at: centre(rects[0]),
+            at,
             measured: Measurement::Area(area),
             limit: Measurement::Area(limit),
             shapes: (owner, None),
@@ -121,7 +155,9 @@ fn report_figures(
     s.layer_out.len() as u64
 }
 
-/// Minimum area of each merged figure. `examined` counts figures.
+/// Minimum area of each merged figure, 45-degree edges included (DRC-038
+/// scope: an area a half unit short of the limit is short). `examined`
+/// counts figures.
 pub(crate) fn min_area(
     store: &GeometryStore,
     rule: StrId,
@@ -130,7 +166,7 @@ pub(crate) fn min_area(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, true) {
         return REFUSED;
     }
     let examined = report_figures(store, layer, rule, limit, s, out, |area, _| {
@@ -148,7 +184,7 @@ pub(crate) fn cheesing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let examined = report_figures(store, layer, rule, limit, s, out, |area, has_hole| {
@@ -157,7 +193,8 @@ pub(crate) fn cheesing(
     (Outcome::Ran, examined)
 }
 
-/// Minimum hole area of the merged figures, reported at the hole's box centre.
+/// Minimum hole area of the merged figures, reported at the hole's box centre,
+/// 45-degree edges included (a hole's area floored, as `min_area`'s).
 /// `examined` counts holes.
 pub(crate) fn min_enclosed_area(
     store: &GeometryStore,
@@ -167,7 +204,7 @@ pub(crate) fn min_enclosed_area(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, true) {
         return REFUSED;
     }
     let mut examined = 0u64;
@@ -175,7 +212,7 @@ pub(crate) fn min_enclosed_area(
     for (index, owner) in (0..).zip(owners) {
         for hole in s.layer_out.get(index).holes() {
             examined += 1;
-            // A hole winds clockwise; a rectilinear ring's doubled area is even.
+            // A hole winds clockwise; its area floored, a half unit dropped.
             let area = DbuArea::new(-hole.area2().raw() / 2);
             if !Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Minimum) {
                 continue;
@@ -218,7 +255,7 @@ fn die_of(store: &GeometryStore, boundary: Option<LayerId>, drawn: usize) -> Bbo
 /// The merged layer's rectangles clipped to the die, into `s.rects`.
 /// `false` is `Refused`.
 fn merge_within(store: &GeometryStore, layer: LayerId, die: Bbox, s: &mut Scratch) -> bool {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return false;
     }
     s.rects.retain_mut(|r| match r.intersection(die) {
@@ -405,7 +442,7 @@ pub(crate) fn critical_area(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let r = radius.raw();
@@ -520,7 +557,7 @@ pub(crate) fn count(
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let figures =
@@ -555,7 +592,7 @@ pub(crate) fn total_area(
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let area = covered_area(&s.rects);
@@ -587,12 +624,12 @@ pub(crate) fn region_density(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, region, s) {
+    if !merge_layer(store, region, s, false) {
         return REFUSED;
     }
     let owners = figure_owners(store, region, s);
     let (regions, starts) = (s.rects.clone(), s.rect_start.clone());
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let material = SortedRects::new(s.rects.iter().map(|&r| (r, ())).collect());
@@ -631,7 +668,7 @@ pub(crate) fn aspect_ratio(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let owners = figure_owners(store, layer, s);

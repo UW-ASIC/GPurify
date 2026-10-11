@@ -10,7 +10,7 @@ use crate::topology::csr_run;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{segments_intersect, winding_of, Point, Seg, Winding};
-use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::view::{validate_layer_with, Angles, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
@@ -90,7 +90,9 @@ impl Holes {
                 let (xs, ys) = store.poly_verts(PolyId(row));
                 winding_of(xs, ys) == Some(Winding::Clockwise)
             });
-            if !clockwise || validate_layer_into(store, layer, &mut self.layer).is_err() {
+            if !clockwise
+                || validate_layer_with(store, layer, Angles::Octilinear, &mut self.layer).is_err()
+            {
                 continue;
             }
             for polygon in 0..u32::try_from(self.layer.len()).expect("a layer's polygons fit a u32")
