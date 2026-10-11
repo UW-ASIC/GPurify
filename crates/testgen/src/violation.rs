@@ -270,8 +270,9 @@ pub enum ShapeKind {
         grid: i64,
     },
 
-    /// A right triangle whose hypotenuse rises `run.1` over `run.0` at
-    /// `measured` degrees. `at` is the vertex that edge leaves from.
+    /// A right triangle, counter-clockwise, whose hypotenuse rises `run.1`
+    /// over `run.0` at `measured` degrees. `at` is the vertex that edge leaves
+    /// from.
     /// `measured`: an [`Amount::Ratio`] within 1e-9 of `atan2(run.1, run.0)`
     /// in degrees. Shapes: the triangle.
     Angle {
@@ -654,8 +655,19 @@ fn build(
                 (actual - degrees).abs() < 1e-9,
                 "the run {run:?} subtends {actual} degrees, not {degrees}"
             );
+            // The right angle sits on whichever leg keeps the triangle
+            // counter-clockwise, an outer ring; the hypotenuse still leaves `at`.
+            let corner = if run.0.signum() == run.1.signum() {
+                (ax, ay + run.1)
+            } else {
+                (ax + run.0, ay)
+            };
             (
-                layout.push(layer, &[ax, ax + run.0, ax + run.0], &[ay, ay + run.1, ay]),
+                layout.push(
+                    layer,
+                    &[ax, ax + run.0, corner.0],
+                    &[ay, ay + run.1, corner.1],
+                ),
                 None,
             )
         }
@@ -773,7 +785,38 @@ fn cell_area(side: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{half, Amount};
+    use super::{half, layout_with_violation, Amount, ShapeKind, ViolationShape};
+    use gpurify_check::report::Severity;
+    use gpurify_geom::{LayerId, PolyId, StrId};
+
+    /// F35: the `Angle` triangle is an outer ring, counter-clockwise, in every
+    /// quadrant: twice its signed area is `+|dx·dy|`, legs 300 and 200.
+    #[test]
+    fn the_angle_triangle_winds_counter_clockwise_in_every_quadrant() {
+        for run in [(300, 200), (-300, 200), (-300, -200), (300, -200)] {
+            #[allow(clippy::cast_precision_loss, reason = "small integers")]
+            let degrees = (run.1 as f64).atan2(run.0 as f64).to_degrees();
+            let case = layout_with_violation(
+                ViolationShape {
+                    rule: StrId(0),
+                    severity: Severity::Error,
+                    kind: ShapeKind::Angle {
+                        layer: LayerId(0),
+                        run,
+                    },
+                },
+                (1000, 1000),
+                Amount::Ratio(degrees),
+                Amount::Count(1),
+            );
+            let (xs, ys) = case.store.poly_verts(PolyId(0));
+            assert_eq!(
+                gpurify_geom::ops::area2(xs, ys).raw(),
+                60_000,
+                "run {run:?}"
+            );
+        }
+    }
 
     /// An odd span has no integer midpoint and is refused.
     #[test]

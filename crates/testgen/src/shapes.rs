@@ -361,18 +361,20 @@ pub fn spaced_pair(
 /// coverage.
 ///
 /// The region, `grid.cells` square cells of side `grid.cell` from `origin`,
-/// gets at most one square per cell. A cell is filled with probability
-/// `grid.density`, and every square has side `floor(cell * sqrt(density))`
-/// (at least 1), jittered inside its cell with at least one unit of clearance
-/// on each side. So no two squares touch, the expected covered fraction is
-/// about `density²`, and the returned [`RandomLayer`] states the exact
-/// figure. The same `rng` state gives the same layer.
+/// gets at most one square per cell. `density` is split evenly between the
+/// two random choices: a cell is filled with probability `sqrt(density)`, and
+/// every square covers `sqrt(density)` of its cell, side
+/// `floor(cell * density^(1/4))` (at least 1, at most `cell - 2`), jittered
+/// inside its cell with at least one unit of clearance on each side. So no two
+/// squares touch, the expected covered fraction is about `density`, and the
+/// returned [`RandomLayer`] states the exact figure. At 1.0 every cell is
+/// filled. The same `rng` state gives the same layer.
 ///
 /// # Panics
 ///
 /// Panics if `density` is outside `0.0..=1.0`, `cells` is zero, `cell` does
-/// not fit a `u32`, or a square plus two units of clearance does not fit a
-/// cell (always so at a density of 1.0).
+/// not fit a `u32`, or `cell` is under 3, too small for a square and its
+/// clearance.
 pub fn random_rectilinear_layer(
     layout: &mut LayoutBuilder,
     rng: &mut crate::Rng,
@@ -386,31 +388,31 @@ pub fn random_rectilinear_layer(
         grid.density
     );
     assert!(grid.cells > 0, "a layer needs at least one cell");
+    assert!(
+        grid.cell >= 3,
+        "cell {} cannot hold a square with a unit of clearance on each side",
+        grid.cell
+    );
     #[allow(
         clippy::cast_precision_loss,
         reason = "cell is a layout dimension, far below 2^53"
     )]
     let ideal = f64::from(u32::try_from(grid.cell).expect("cell side must fit a u32"))
-        * grid.density.sqrt();
+        * grid.density.sqrt().sqrt();
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "ideal is non-negative and below cell, which fits a u32"
+        reason = "ideal is non-negative and at most cell, which fits a u32"
     )]
-    let side = i64::from(ideal as u32).max(1);
     // One unit of clearance on each side is enough: shapes in adjacent cells
     // then have a gap of at least two, so they neither touch nor overlap.
+    let side = i64::from(ideal as u32).clamp(1, grid.cell - 2);
     let slack = grid.cell - side - 2;
-    assert!(
-        slack >= 0,
-        "cell {} cannot hold a shape of side {side} with clearance",
-        grid.cell
-    );
 
     let mut shapes = 0u32;
     for row in 0..grid.cells {
         for col in 0..grid.cells {
-            if rng.unit() >= grid.density {
+            if rng.unit() >= grid.density.sqrt() {
                 continue;
             }
             let jitter_x = if slack > 0 {
@@ -445,9 +447,9 @@ pub struct RandomLayerSpec {
     pub cells: u32,
     /// Side of one cell, in database units.
     pub cell: i64,
-    /// In `0.0..=1.0`: both the chance a cell is filled and the area fraction
-    /// of a filled cell its square covers, so the expected coverage is about
-    /// its square. [`RandomLayer::covered`] is exact.
+    /// In `0.0..=1.0`: the expected covered fraction. Its square root is both
+    /// the chance a cell is filled and the fraction of a filled cell its
+    /// square covers. [`RandomLayer::covered`] is exact.
     pub density: f64,
 }
 
@@ -466,7 +468,46 @@ pub struct RandomLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::{l_shape, l_shape_area, plus_shape, plus_shape_area, u_shape, u_shape_area};
+    use super::{
+        l_shape, l_shape_area, plus_shape, plus_shape_area, random_rectilinear_layer, u_shape,
+        u_shape_area, LayoutBuilder, RandomLayerSpec,
+    };
+    use gpurify_geom::LayerId;
+
+    /// F35: `density` is the expected coverage, applied once. At 1.0 every
+    /// cell holds the largest square its clearance allows (98 of 100); at 0.25
+    /// half the cells are filled with a 707-side square (√0.25 of a 1000 cell),
+    /// 0.2499 expected, 0.0025 standard deviation over 10⁴ cells.
+    #[test]
+    fn density_is_the_expected_coverage_and_one_fills_every_cell() {
+        let layer = |density, cells, cell| {
+            random_rectilinear_layer(
+                &mut LayoutBuilder::new(1),
+                &mut crate::Rng::new(5),
+                LayerId(0),
+                (0, 0),
+                RandomLayerSpec {
+                    cells,
+                    cell,
+                    density,
+                },
+            )
+        };
+        let full = layer(1.0, 4, 100);
+        assert_eq!(
+            (full.shapes, full.side, full.covered),
+            (16, 98, 16 * 98 * 98)
+        );
+
+        let quarter = layer(0.25, 100, 1000);
+        assert_eq!(quarter.side, 707);
+        #[allow(clippy::cast_precision_loss, reason = "under 2^53")]
+        let fraction = quarter.covered as f64 / 1e10;
+        assert!(
+            (fraction - 0.25).abs() < 0.01,
+            "covered {fraction} of the region"
+        );
+    }
 
     /// Twice the signed area of a run; positive is counter-clockwise.
     fn shoelace(shape: &(Vec<i64>, Vec<i64>)) -> i128 {
