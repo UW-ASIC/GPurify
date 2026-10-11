@@ -16,7 +16,7 @@ use gpurify_geom::{GeometryStore, Grid, LayerId};
 use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
-use gpurify_testgen::gds::write_store;
+use gpurify_testgen::gds::{write_library, write_store, Placement, Structure};
 use gpurify_testgen::shapes::LayoutBuilder;
 
 /// One nanometre per database unit.
@@ -111,6 +111,148 @@ fn at_limit_in(
         count > 0,
         "{id} passes a layout 5 nm inside the manual's limit"
     );
+}
+
+/// The violations sky130 rule `id` reports when `rects` are drawn in a cell
+/// named `cell`, which `TOP` places at the origin, and the rule's runs.
+fn run_in_cell(id: &str, cell: &str, rects: &[(&str, i64, i64, i64, i64)]) -> (u32, Vec<RuleRun>) {
+    let (deck, strings) = sky130();
+    let rect = |&(name, xlo, ylo, xhi, yhi): &(&str, i64, i64, i64, i64)| {
+        let layer = deck
+            .layers
+            .id(&strings, name)
+            .unwrap_or_else(|| panic!("the deck declares no layer {name}"));
+        let (l, d) = deck.layers.stream_of(layer);
+        let c = |v: i64| i32::try_from(v).expect("a test coordinate fits GDSII");
+        (l, d, [c(xlo), c(ylo), c(xhi), c(yhi)])
+    };
+    let cells = [
+        Structure {
+            name: "TOP".to_owned(),
+            rects: Vec::new(),
+            refs: vec![Placement {
+                cell: cell.to_owned(),
+                reflect: false,
+                quarter_turns: 0,
+                mag: 1,
+                at: (0, 0),
+                array: None,
+            }],
+        },
+        Structure {
+            name: cell.to_owned(),
+            rects: rects.iter().map(rect).collect(),
+            refs: Vec::new(),
+        },
+    ];
+    let mut bytes = Vec::new();
+    write_library(&cells, &mut bytes).expect("the hierarchy is writable");
+    let mut texts = StrTable::default();
+    let library = gds::Library::parse(&bytes, &mut texts).expect("the library parses");
+    let (store, _) = library
+        .flatten(&deck, &texts, UnknownLayers::Reject)
+        .expect("the layout reads back");
+    let rules = RuleSet::from_deck(&deck, &strings).expect("the DRC set builds");
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    rules.run(&store, &mut out, &mut runs);
+    let mine: Vec<RuleRun> = runs
+        .into_iter()
+        .filter(|r| strings.resolve(r.rule) == id)
+        .collect();
+    assert!(!mine.is_empty(), "the deck has no rule {id}");
+    (mine.iter().map(|r| r.violations).sum(), mine)
+}
+
+/// m1.4 / m1.4a (DRC-092): mcon enclosed by met1 by 0.030 um, except in the
+/// cells m1.4a names, where 0.005 um holds. A 5 nm enclosure passes m1.4a
+/// and is outside m1.4 in `s8fpls_pl8`; 2 nm fails m1.4a in `s8fs_cmux4_fm`;
+/// the same 5 nm in `s8fpls_pl8x`, a name m1.4a does not list, fails m1.4
+/// and is not m1.4a's; at the top, m1.4 holds at 30 nm and fails at 25.
+///
+/// Oracle: foundry example, sky130 m1.4 0.030 um and m1.4a 0.005 um for cell
+/// names `s8cell_ee_plus_sseln_a/b`, `s8cell_ee_plus_sselp_a/b`, `s8fpls_pl8` and
+/// `s8fs_cmux4_fm` (`SkyWater` SKY130 periphery rules, m1.4 "Rule exempted for
+/// cell names documented in rule m1.4a").
+#[test]
+fn m1_4a_holds_named_cells_to_5nm_and_m1_4_exempts_them() {
+    let with = |enclosure: i64| {
+        [
+            ("mcon", 0, 0, 170, 170),
+            (
+                "met1",
+                -enclosure,
+                -enclosure,
+                170 + enclosure,
+                170 + enclosure,
+            ),
+        ]
+    };
+    let ran = |runs: &[RuleRun]| runs.iter().all(|r| r.outcome == Outcome::Ran);
+    let (m14a, runs) = run_in_cell("m1.4a", "s8fpls_pl8", &with(5));
+    assert!(
+        ran(&runs) && runs.iter().any(|r| r.examined > 0),
+        "{runs:?}"
+    );
+    assert_eq!(m14a, 0, "m1.4a flags 5 nm in a named cell");
+    assert_eq!(
+        run_in_cell("m1.4", "s8fpls_pl8", &with(5)).0,
+        0,
+        "m1.4 reaches into a named cell"
+    );
+    assert!(
+        run_in_cell("m1.4a", "s8fs_cmux4_fm", &with(2)).0 > 0,
+        "m1.4a passes 2 nm"
+    );
+    assert!(
+        run_in_cell("m1.4", "s8fpls_pl8x", &with(5)).0 > 0,
+        "m1.4 skips a longer name"
+    );
+    assert_eq!(run_in_cell("m1.4a", "s8fpls_pl8x", &with(5)).0, 0);
+    at_limit("m1.4", &with(30), &with(25));
+}
+
+/// li.1 / li.1a (DRC-092): li 0.170 um wide, 0.140 um inside cells named
+/// `s8rf2_xcmvpp_hd5_*`.
+///
+/// Oracle: foundry example, sky130 li.1 0.170 um and li.1a 0.140 um "inside
+/// of cells with name `s8rf2_xcmvpp_hd5_*`" (`SkyWater` SKY130 periphery
+/// rules): 140 then 135 nm inside such a cell, and 140 nm outside one.
+#[test]
+fn li_1a_holds_vpp_cells_to_140nm() {
+    let bar = |w: i64| [("li", 0, 0, w, 2000)];
+    let (count, runs) = run_in_cell("li.1a", "s8rf2_xcmvpp_hd5_atlas", &bar(140));
+    assert!(
+        runs.iter()
+            .all(|r| r.outcome == Outcome::Ran && r.examined > 0),
+        "{runs:?}"
+    );
+    assert_eq!(count, 0);
+    assert_eq!(
+        run_in_cell("li.1", "s8rf2_xcmvpp_hd5_atlas", &bar(140)).0,
+        0
+    );
+    assert!(run_in_cell("li.1a", "s8rf2_xcmvpp_hd5_atlas", &bar(135)).0 > 0);
+    assert!(run_in_cell("li.1", "s8rf2_xcmvpp_hd4", &bar(140)).0 > 0);
+    at_limit("li.1", &bar(170), &bar(165));
+}
+
+/// x.25 (DRC-097): pnp.dg only within cells named `s8rf_pnp`, `s8rf_pnp5x`,
+/// `s8tesd_iref_pnp` or `stk14ecx_*`; and poly.12's exemption for cell
+/// `s8fgvr_n_fg2` (DRC-092).
+///
+/// Oracle: foundry example, sky130 x.25 and poly.12 (`SkyWater` SKY130
+/// periphery rules): pnp in `stk14ecx_9` passes and in `my_pnp` fails; poly
+/// over tap outside nwell fails in any cell but `s8fgvr_n_fg2`.
+#[test]
+fn x_25_keeps_pnp_to_its_cells_and_poly_12_exempts_its_cell() {
+    let pnp = [("pnp", 0, 0, 1000, 1000)];
+    assert_eq!(run_in_cell("x.25", "stk14ecx_9", &pnp).0, 0);
+    assert_eq!(run_in_cell("x.25", "s8rf_pnp5x", &pnp).0, 0);
+    assert!(run_in_cell("x.25", "my_pnp", &pnp).0 > 0);
+    assert!(run_in_cell("x.25", "s8rf_pnp5", &pnp).0 > 0);
+    let overlap = [("tap", 0, 0, 500, 500), ("poly", 200, -200, 350, 700)];
+    assert_eq!(run_in_cell("poly.12", "s8fgvr_n_fg2", &overlap).0, 0);
+    assert!(run_in_cell("poly.12", "s8fgvr_n_fg3", &overlap).0 > 0);
 }
 
 /// licon.5a: enclosure of licon by diff, 0.040 um.
