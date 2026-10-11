@@ -4,7 +4,8 @@
 //! boundary distances. Data out: under-served cuts, or too-close pairs inside
 //! an array cluster.
 
-use super::{centre, gap_midpoint, label_pairs_into, pair_distances_into, Verdict};
+use super::spacing::whole_at;
+use super::{centre, label_pairs_into, pair_distances_into, Verdict};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
@@ -62,7 +63,8 @@ pub(crate) fn redundant_via(
 }
 
 /// Clusters (components of "within `limit`") larger than `threshold` are arrays;
-/// every pair inside one is held to `limit`. One violation per offending pair.
+/// every pair inside one is held to `limit`. One violation per offending pair,
+/// at the midpoint of the pair's nearest points, as the spacing family marks.
 /// `examined` counts pairs inside a qualifying cluster.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn via_array_spacing(
@@ -118,7 +120,7 @@ pub(crate) fn via_array_spacing(
                 rule,
                 layer,
                 severity: Severity::Error,
-                at: gap_midpoint(store.poly_bbox(a), store.poly_bbox(b)),
+                at: whole_at(store, (a, b), d2),
                 measured: Measurement::Length(isqrt(d2)),
                 limit: Measurement::Length(limit),
                 shapes: (a, Some(b)),

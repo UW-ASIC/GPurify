@@ -1310,13 +1310,14 @@ fn redundant_via() -> Vec<Fixture> {
 /// `via_array_space(cut; array: 3) >= 100nm` (`via_array_spacing`, DRC-062):
 /// cuts joined by gaps of at most 100 nm form a cluster, a cluster of more
 /// than 3 is an array, and each pair in an array closer than 100 nm is one
-/// finding measuring its gap.
+/// finding measuring its gap, at the midpoint of its nearest points.
 ///
 /// Shapes: rows of 3 and 4 cuts at 99/100/101 (3 is not an array; at 100 the
 /// row is one array with no close pair; at 101 nothing joins); a 3 x 3 grid at
 /// 90 (12 side pairs; the diagonals are 127 apart); two close pairs joined
 /// into one array by a 100 nm gap, and kept apart by 101; an array with a cut
-/// drawn overlapping another (cuts are as drawn: a gap of 0); an empty layer.
+/// drawn overlapping another (cuts are as drawn: a gap of 0); an L-shaped cut
+/// marked on the stretch it measured, not its box (F82); an empty layer.
 /// Nightly: rows of 1 to 6 cuts at 95 to 105.
 fn via_array_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 100;
@@ -1382,6 +1383,41 @@ fn via_array_spacing(depth: Depth) -> Vec<Fixture> {
     let mut doubled = row(4, 100);
     doubled.push((-50, 0, 50, 100));
     cases.push(case("overlapping_cut", doubled, lengths(&[0])));
+    // F82: the second cut is an L, its foot x = 190..290 up to y = 50 and its
+    // stem x = 240..290 up to y = 200. The first cut's right side, x = 100,
+    // faces the foot's left side x = 190 only over y = 0..50: 90, marked at
+    // (145, 25). The boxes' gap is centred at (145, 50), beside the foot.
+    // The stem's right side faces the third cut over y = 0..100 at (335, 50),
+    // and the third the fourth at (525, 50).
+    cases.push(fixture(
+        "via_array_spacing/l_cut_beside_a_square",
+        &["DRC-062"],
+        &deck,
+        rects(
+            Layout::default().rect("other", -1000, -1000, -900, -900),
+            "cut",
+            &[(0, 0, 100, 100), (380, 0, 480, 100), (570, 0, 670, 100)],
+        )
+        .polygon(
+            "cut",
+            &[
+                (190, 0),
+                (290, 0),
+                (290, 200),
+                (240, 200),
+                (240, 50),
+                (190, 50),
+            ],
+        ),
+        &[(
+            "cnt.b1",
+            vec![
+                Finding::length(90).at(145, 25),
+                Finding::length(90).at(335, 50),
+                Finding::length(90).at(525, 50),
+            ],
+        )],
+    ));
     cases.push(case("empty", vec![], vec![]));
     if depth == Depth::Nightly {
         for n in 1..=6 {

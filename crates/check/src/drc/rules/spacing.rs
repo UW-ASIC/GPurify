@@ -96,7 +96,7 @@ fn marker(
 /// [`marker`] for a pair measured boundary to boundary, whole shape to whole
 /// shape. Quadratic in the two ring sizes, as [`super::poly_dist2`]; only a
 /// violation pays it.
-fn whole_at(store: &GeometryStore, (a, b): (PolyId, PolyId), d2: DbuArea) -> Point {
+pub(super) fn whole_at(store: &GeometryStore, (a, b): (PolyId, PolyId), d2: DbuArea) -> Point {
     let found = nearest(ring_pairs(store.poly_verts(a), store.poly_verts(b)));
     marker(store, (a, b), d2, found)
 }

@@ -699,8 +699,9 @@ pub enum Rule {
     /// array when it has more than `array_threshold` cuts.
     ///
     /// One violation per pair inside an array closer than `limit`, at the
-    /// middle of the gap between their bounding boxes. `examined` counts the
-    /// pairs inside arrays. The layer is not validated, so this rule never
+    /// midpoint of the measured points (as the spacing family; for a cut
+    /// that is not rectilinear, the middle of the gap between the boxes of
+    /// the two nearest edges). `examined` counts the pairs inside arrays. The layer is not validated, so this rule never
     /// records `Refused`.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
