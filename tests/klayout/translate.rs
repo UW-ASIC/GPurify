@@ -1135,6 +1135,24 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("cut_class", Key::Point, Value::Ignore)
             }
+            Rule::AllowedWidth { layer, widths } => {
+                let name = fig(layer, &mut reads);
+                let kept: Vec<String> = set.widths[widths as usize]
+                    .iter()
+                    .map(|w| {
+                        let w2 = 4 * i128::from(w.raw()) * i128::from(w.raw());
+                        format!("with_width2({}, {w2}, {})", var(layer), w2 + 1)
+                    })
+                    .collect();
+                writeln!(
+                    body,
+                    "emit({q}, {}.merged - [{}].inject(:+))",
+                    var(layer),
+                    kept.join(", ")
+                )
+                .expect("a String");
+                exact("allowed_width", Key::FigAt(name), Value::Ignore)
+            }
             Rule::RegionDensity {
                 layer,
                 region,

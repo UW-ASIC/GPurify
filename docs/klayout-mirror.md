@@ -256,8 +256,9 @@ explains (kind 30).
 | 40 | edge_width | `width(E) >= l` | POINT | EXACT | exact | new in H |
 | 41 | edge_facing_space | `facing_space(E) >= l` | POINT | EXACT | exact | new in H |
 | 42 | region_density | `region_density(L, R) <= f` | FIG by marker (`R`) | EXACT | exact | new in H |
+| 43 | allowed_width | `width(L; allowed: [..])` | FIG by marker | EXACT | exact (keys) | new in H |
 
-30 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+31 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -964,6 +965,21 @@ region_density(id, L, R, LIMIT, maximum)   # per p in R.data.merged: (L.data.mer
 
 - `Polygon#area` leaves holes out, as GPurify does; both ratios are the quotient of two whole
   areas at ×2, so the same double. Key FIG by marker on the region's figures; compared to 1e-9.
+
+### 43. allowed_width — EXACT
+
+**GPurify** (`width.rs` `allowed_width`): per merged figure, its narrowest width squared
+(`narrowest_width2`, facing edges and Euclidean necks, as rule 1 and `with_width`) against each
+listed width squared; a figure matching none is one finding at the centre of its first rectangle.
+
+**KLayout**
+
+```ruby
+emit(id, L.merged - [with_width2(L, W1², W1² + 1), with_width2(L, W2², W2² + 1)].inject(:+))
+```
+
+- `with_width2` (c) keeps the figures whose narrowest width squared is in the range, measured
+  exactly; the figures in no range are the findings. Key FIG by marker; the width is not compared.
 
 ---
 

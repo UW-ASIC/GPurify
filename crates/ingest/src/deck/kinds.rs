@@ -235,6 +235,16 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
     ),
     drc("edge_length", Cmp::Ge, "min_edge_length", &[0], LIMIT, &[]),
+    // A set of legal widths, `width(L; allowed: [350nm, 690nm])` (sky130
+    // rpm.1b-1f): each merged figure's narrowest width is one of them.
+    drc(
+        "width",
+        Cmp::Absent,
+        "allowed_width",
+        &[0],
+        None,
+        &[p("allowed", "width", Dim::LengthList)],
+    ),
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing_diff", &[0, 1], LIMIT, &[]),

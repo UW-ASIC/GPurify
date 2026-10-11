@@ -56,6 +56,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         max_width(depth),
         cut_size(depth),
         cut_class(depth),
+        allowed_width(depth),
         min_edge_length(depth),
         edge_length_of_edges(depth),
         notch(depth),
@@ -848,6 +849,72 @@ fn cut_class(depth: Depth) -> Vec<Fixture> {
          rule cc size(via; allowed: [100nm x 100nm])\n",
         met1(&[[0, 0, 1000, 1000]]),
         vec![("cc", Vec::new())],
+    ));
+    out
+}
+
+/// `width(met1; allowed: [100nm, 200nm])` (`allowed_width`, DRC-015 and
+/// DRC-090: sky130 rpm.1b-1f, a precision resistor's five legal widths): one
+/// finding per merged figure whose narrowest width is not listed, at the
+/// centre of its first rectangle, measuring that width.
+///
+/// Oracle: widths fixed by construction: bars at each listed width and one
+/// step either side; a 150 square, between the two; a 100 bar drawn as two
+/// abutting 50 halves (each 50 unmerged); an L of a 100 and a 200 arm,
+/// judged by its narrower; two plates overlapping 100 x 100 at a corner, a
+/// neck of √20000 (141 floored), which no facing pair sees.
+fn allowed_width(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck("rule aw width(met1; allowed: [100nm, 200nm])");
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("allowed_width/{name}"),
+            &["DRC-015", "DRC-090"],
+            &deck,
+            layout,
+            vec![("aw", findings)],
+        ));
+    };
+    for listed in [100, 200] {
+        for w in sweep(depth, listed) {
+            let findings = if w == listed {
+                Vec::new()
+            } else {
+                vec![pin(Finding::length(w), w, 1000)]
+            };
+            case(
+                format!("bar_{listed}/{}", side(w, listed)),
+                met1(&[[0, 0, w, 1000]]),
+                findings,
+            );
+        }
+    }
+    case(
+        "between".into(),
+        met1(&[[0, 0, 150, 150]]),
+        vec![Finding::length(150).at(75, 75)],
+    );
+    case(
+        "halves".into(),
+        met1(&[[0, 0, 50, 1000], [50, 0, 100, 1000]]),
+        Vec::new(),
+    );
+    case(
+        "l_of_two_widths".into(),
+        met1(&[[0, 0, 1000, 100], [0, 100, 200, 1000]]),
+        Vec::new(),
+    );
+    case(
+        "corner_neck".into(),
+        met1(&[[0, 0, 1000, 1000], [900, 900, 1900, 1900]]),
+        vec![Finding::length(141)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "allowed_width",
+        &["DRC-015"],
+        "rule aw width(met1; allowed: [100nm])",
+        &["aw"],
     ));
     out
 }
