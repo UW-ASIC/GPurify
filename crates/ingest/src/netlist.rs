@@ -23,7 +23,13 @@
 //!
 //! An `R` or `C` card may state its value positionally, between its nets and
 //! its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, and `C1 a b 1p cmim`
-//! is `C1 a b cmim c=1p`. Stating it both ways is refused.
+//! is `C1 a b cmim c=1p`. Stating it both ways is refused, as is any
+//! parameter stated twice.
+//!
+//! On an `R`, `C` or `D` card, SPICE parameters other tools name differently
+//! are read under the name LVS compares (testing-plan F87): ngspice's diode
+//! perimeter `pj`, and `KLayout`'s `A` and `P`, are `perim`, `area` and
+//! `perim`.
 //!
 //! An `R`, `C` or `D` card may leave its model out (`R1 a b 1k`, `C1 a b
 //! c=1p`, `D1 a b`). LVS pairs a device by its model, so such a card is the
@@ -167,7 +173,8 @@ pub struct Netlist {
     /// Interned name and value, in SI base units with scale suffixes already
     /// expanded: `w=1u` is `1e-6` and a bare `w=1` is one metre, except on an
     /// `X` card calling a deck device model, where a bare `w`/`l` is in µm
-    /// (the PDK convention, `.option scale=1u`). SPICE names are lowercased.
+    /// (the PDK convention, `.option scale=1u`). SPICE names are lowercased,
+    /// and a two-pin card's `pj`, `a` and `p` are `perim`, `area` and `perim`.
     /// An `R` or `C` card's positional value is its first parameter, `r` or
     /// `c`, in ohms or farads.
     pub param: Vec<(StrId, f64)>,
@@ -724,8 +731,8 @@ impl Build<'_> {
     fn param(
         &mut self,
         tok: Tok,
-        dialect: Dialect,
-        micron: bool,
+        kind: DeviceKind,
+        (dialect, micron): (Dialect, bool),
     ) -> Result<(StrId, f64), NetlistError> {
         let bad = || NetlistError::Unexpected(tok.span, tok.text.to_string());
         let (key, text) = tok.text.split_once('=').ok_or_else(bad)?;
@@ -734,10 +741,23 @@ impl Build<'_> {
         }
         let mut value = spice_number(text).ok_or_else(bad)?;
         // SPICE names are case-insensitive; the layout side compares as `w`.
-        let key = match dialect {
+        let mut key = match dialect {
             Dialect::Spice => key.to_ascii_lowercase(),
             Dialect::Spectre => key.to_string(),
         };
+        // Other tools' names for a two-pin device's area and perimeter:
+        // ngspice's diode `pj`, KLayout's `A` and `P` (testing-plan F87).
+        let two_pin = matches!(
+            kind,
+            DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Diode
+        );
+        if dialect == Dialect::Spice && two_pin {
+            match key.as_str() {
+                "a" => "area".clone_into(&mut key),
+                "p" | "pj" => "perim".clone_into(&mut key),
+                _ => {}
+            }
+        }
         let bare = text.ends_with(|c: char| c.is_ascii_digit() || c == '.');
         if micron && bare && (key == "w" || key == "l") {
             value *= 1e-6;
@@ -821,12 +841,16 @@ impl Build<'_> {
             let net = self.net(net.text, subckt);
             self.out.terminal_net.push(net);
         }
+        let first = self.out.param.len();
         self.out.param.extend(primary);
         for tok in params {
-            let param = self.param(*tok, dialect, micron)?;
-            // The value stated twice, positionally and by name: which one
-            // is meant is a guess.
-            if primary.is_some_and(|(name, _)| name == param.0) {
+            let param = self.param(*tok, kind, (dialect, micron))?;
+            // A parameter stated twice, the value positionally and by name or
+            // a perimeter as `perim` and `pj`: which one is meant is a guess.
+            if self.out.param[first..]
+                .iter()
+                .any(|&(name, _)| name == param.0)
+            {
                 return Err(NetlistError::Unexpected(tok.span, tok.text.to_string()));
             }
             self.out.param.push(param);

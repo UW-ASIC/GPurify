@@ -128,7 +128,11 @@ An `R` or `C` card may give its value positionally, between its nets and
 its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`. Devices are paired by
 model, so an `R`, `C` or `D` card that names none (`R1 a b 1k`, `D1 a b`)
 is the deck's one device of its kind; where the deck has none of that kind,
-or several, the card is refused, and the message names them.
+or several, the card is refused, and the message names them. On a
+resistor, capacitor or diode card, other tools' names for the area and
+perimeter are read as this tool's: KLayout's `A` and `P`, and ngspice's
+diode `pj`, are `area`, `perim` and `perim`. A parameter stated twice, under
+any of its names, is refused.
 
 ## Exit code
 

@@ -1699,6 +1699,40 @@ fn curated() -> Vec<Fixture> {
             .expect(Expect::Lvs(true)),
         );
     }
+    // F87 (fixed in B27): KLayout's `A`/`P` and ngspice's diode `pj` are the
+    // `area` and `perim` above: 0.32 um² and 2.4 um match, 2.64 um does not.
+    let aliased = |size: fn(Dev) -> Dev, names: &[(&str, &str)]| {
+        let mut text = spice(&sized(D, size));
+        for &(from, to) in names {
+            text = edited(&text, from, to);
+        }
+        text
+    };
+    for (case, text, matched) in [
+        (
+            "D_A_P_exact",
+            aliased(
+                |d| d.param("area", 3.2e-13).param("perim", 2.4e-6),
+                &[(" area=", " A="), (" perim=", " P=")],
+            ),
+            true,
+        ),
+        (
+            "D_pj_exact",
+            aliased(|d| d.param("perim", 2.4e-6), &[(" perim=", " pj=")]),
+            true,
+        ),
+        (
+            "D_pj_10pct_over",
+            aliased(|d| d.param("perim", 2.64e-6), &[(" perim=", " pj=")]),
+            false,
+        ),
+    ] {
+        out.push(
+            with_text(&format!("params/{case}"), &["LVS-063"], draw(&dio), text)
+                .expect(Expect::Lvs(matched)),
+        );
+    }
     // A deck that gives no sheet resistance computes no `r`, and a card
     // stating one is never taken as agreement.
     let deck = full_deck().replace(" sheet 100ohm", "");

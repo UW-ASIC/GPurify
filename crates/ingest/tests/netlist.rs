@@ -563,3 +563,36 @@ fn a_two_pin_card_with_no_model_is_the_decks_one_recogniser_of_its_kind() {
         }
     }
 }
+
+/// Oracle: construct-from-answer, testing-plan F87. Other tools' names for a
+/// two-pin device's area and perimeter read as the names LVS compares:
+/// `KLayout`'s `A=1p P=4u` is `area=1p perim=4u` and ngspice's diode `pj=4u` is
+/// `perim=4u`. A perimeter stated under two of its names is refused at the
+/// second, as a value stated twice is.
+#[test]
+fn a_diodes_pj_and_klayouts_a_and_p_are_its_area_and_perimeter() {
+    let mut strings = StrTable::default();
+    let read = |cards: &str, strings: &mut StrTable| {
+        spice::read(
+            &format!(".subckt top a b\n{cards}\n.ends\n"),
+            strings,
+            &DeviceRecognition::default(),
+        )
+    };
+    let aliased =
+        read("D1 a b dpn A=1p P=4u\nD2 a b dpn pj=4u", &mut strings).expect("the aliases read");
+    let named = read(
+        "D1 a b dpn area=1p perim=4u\nD2 a b dpn perim=4u",
+        &mut strings,
+    )
+    .expect("the names read");
+    let (area, perim) = (strings.intern("area"), strings.intern("perim"));
+    assert_eq!(aliased.param, [(area, 1e-12), (perim, 4e-6), (perim, 4e-6)]);
+    assert_eq!(aliased.param, named.param);
+    match read("D1 a b dpn perim=4u pj=4u", &mut strings) {
+        Err(NetlistError::Unexpected(span, token)) => {
+            assert_eq!((span.line, token.as_str()), (2, "pj=4u"));
+        }
+        other => panic!("a perimeter stated twice read as {other:?}"),
+    }
+}
