@@ -1490,7 +1490,7 @@ pub mod gds {
             let mut total = 0u64;
             for (index, &is_referenced) in referenced.iter().enumerate() {
                 if !is_referenced {
-                    let polygons =
+                    let (polygons, _) =
                         self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
                     total = total.saturating_add(polygons);
                 }
@@ -1516,21 +1516,27 @@ pub mod gds {
         }
 
         /// How many polygons `cell` flattens to: its own elements, plus each
-        /// placed child's count times the placement's array size, saturating.
-        /// Memoised in `counted`; refuses a cycle and a chain past the depth cap.
+        /// placed child's count times the placement's array size, saturating;
+        /// and how many levels it spans, itself included. Memoised in
+        /// `counted`, both, so a cell first met shallow and met again at
+        /// `depth` is held to the depth cap as walking it again would be.
+        /// Refuses a cycle and a chain past the depth cap.
         fn flat_count(
             &self,
             cell: u32,
             strings: &StrTable,
-            counted: &mut [Option<u64>],
+            counted: &mut [Option<(u64, u32)>],
             on_chain: &mut [bool],
             depth: u32,
-        ) -> Result<u64, LayoutError> {
+        ) -> Result<(u64, u32), LayoutError> {
             let index = cell as usize;
-            if let Some(count) = counted[index] {
-                return Ok(count);
-            }
             let name = || strings.resolve(self.cells[index].name).to_owned();
+            if let Some((count, levels)) = counted[index] {
+                if depth + levels - 1 > MAX_HIERARCHY_DEPTH {
+                    return Err(LayoutError::HierarchyTooDeep(name()));
+                }
+                return Ok((count, levels));
+            }
             if on_chain[index] {
                 return Err(LayoutError::CyclicHierarchy(name()));
             }
@@ -1540,15 +1546,17 @@ pub mod gds {
             on_chain[index] = true;
             let entry = &self.cells[index];
             let mut count = u64::from(entry.elem_end - entry.elem_start);
+            let mut levels = 1;
             for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
-                let child =
+                let (child, below) =
                     self.flat_count(reference.child, strings, counted, on_chain, depth + 1)?;
                 let copies = u64::from(reference.rows) * u64::from(reference.cols);
                 count = count.saturating_add(child.saturating_mul(copies));
+                levels = levels.max(below + 1);
             }
             on_chain[index] = false;
-            counted[index] = Some(count);
-            Ok(count)
+            counted[index] = Some((count, levels));
+            Ok((count, levels))
         }
     }
 
@@ -2361,6 +2369,49 @@ mod tests {
         assert!(matches!(
             read(&unreached, &deck, UnknownLayers::Reject),
             Err(LayoutError::CyclicHierarchy(name)) if name == "A"
+        ));
+    }
+
+    /// Found by the `gds_structured` fuzz target (E1): the flat count
+    /// memoised a cell's count, so a cell first reached from a shallow root
+    /// was not held to the depth cap when a deep chain reached it again.
+    /// `A` places `LEAF`, then `C0` … `C1023` each place the next and `C1023`
+    /// places `LEAF`: from `C0`, `LEAF` is level 1025, one past the cap,
+    /// though `A` counted it first at level 2.
+    #[test]
+    fn a_cell_counted_shallow_is_still_held_to_the_depth_cap_when_reached_deep() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let chain = super::MAX_HIERARCHY_DEPTH as usize;
+        let names: Vec<&'static str> = (0..chain)
+            .map(|level| &*Box::leak(format!("C{level}").into_boxed_str()))
+            .collect();
+        let square = [first_layer_square()];
+        let to_leaf = [sref("LEAF", 0, 0.0, 0, 0)];
+        let refs: Vec<[Ref; 1]> = (1..chain)
+            .map(|next| [sref(names[next], 0, 0.0, 0, 0)])
+            .collect();
+        let mut cells: Vec<(&str, &[Boundary], &[Ref])> = vec![("A", &[], &to_leaf)];
+        for (level, &name) in names.iter().enumerate() {
+            let placed: &[Ref] = if level + 1 == chain {
+                &to_leaf
+            } else {
+                &refs[level]
+            };
+            cells.push((name, &[], placed));
+        }
+        cells.push(("LEAF", &square, &[]));
+        let bytes = gds_hierarchy(&cells);
+        let mut library_strings = StrTable::default();
+        let library =
+            gds::Library::parse(&bytes, &mut library_strings).expect("the library parses");
+        assert!(matches!(
+            library.flat_polygons(&library_strings),
+            Err(LayoutError::HierarchyTooDeep(_))
+        ));
+        assert!(matches!(
+            read(&bytes, &deck, UnknownLayers::Reject),
+            Err(LayoutError::HierarchyTooDeep(_))
         ));
     }
 
