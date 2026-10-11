@@ -203,10 +203,23 @@ pub struct AntennaTable {
 /// Antenna ratio with protection-diode credit: deck kind `antenna_electrical`,
 /// written `antenna_electrical(gate, collectors..; max_ratio: n,
 /// sidewall: len | none, diode: layer | none, diode_credit: n,
-/// diode_bonus: n)`.
+/// diode_bonus: n, area_minus_diode: n)`.
 ///
-/// Nets, collectors, gates, the [`AntennaMeasure`] and the summed ratio are
-/// those of [`AntennaTable`]. The value compared with `max_ratio` is sky130's
+/// Nets, collectors, gates, the [`AntennaMeasure`] and the etch stages are
+/// those of [`AntennaTable`]. The ratio is LEF/DEF 5.8 Appendix C's
+/// cumulative antenna ratio: each collector layer adds the partial ratio of
+/// the gate's node on it, conductors before the cuts on them,
+///
+/// `PAR = (area - area_minus_diode * diode) / gate`,
+///
+/// every area the node's when that layer is etched, `diode` being the
+/// `diode` layer's (`ANTENNAAREAMINUSDIFF`, whose `diff_area` is the
+/// diffusion the node reaches through the current and lower layers). A layer
+/// with no shape on the gate's net adds nothing, and the running sum is
+/// truncated at zero after each layer, as LEF states ("if the resulting
+/// value is less than 0, it should be truncated to 0"; its Example 2 carries
+/// the 0 to the next layer). With `area_minus_diode: 0` the ratio is
+/// [`AntennaTable`]'s. The value compared with `max_ratio` is then sky130's
 /// etch gate area ratio with a diode,
 ///
 /// `EGAR = ratio - diode_credit * diode_area - diode_bonus`,
@@ -229,7 +242,7 @@ pub struct AntennaTable {
 /// gf180's additive model (ERC-A6) and LEF's piecewise-linear diffusion
 /// limits (ERC-A7) are missing.
 ///
-/// Catalog: ERC-A5 (partial), ERC-A8 in the [check catalog]. Defined by
+/// Catalog: ERC-A5, ERC-A8 in the [check catalog]. Defined by
 /// [SKY130] antenna EGAR and Table Ig; [LEF/DEF 5.8] `ANTENNAAREAMINUSDIFF`;
 /// [IHP SG13G2] Ant.b/e and Ant.d/f; [KLayout] `antenna_check` (its diode
 /// factor). Source tags are in [check-sources.md].
@@ -260,6 +273,10 @@ pub struct AntennaElectricalTable {
     /// Per row: a constant subtracted from the ratio of every gate with diode
     /// area on its net.
     pub diode_bonus: Vec<f64>,
+    /// Per row: LEF's `ANTENNAAREAMINUSDIFF`, the diode area subtracted, so
+    /// many times, from each layer's collecting area. Not negative from a
+    /// deck.
+    pub area_minus_diode: Vec<f64>,
     /// Per row: the largest allowed credited ratio. Positive from a deck.
     pub max_ratio: Vec<f64>,
     /// The deck's connectivity, shared by every row.
@@ -573,13 +590,25 @@ fn stage_nets(
     Some(nets.net_count())
 }
 
+/// LEF/DEF 5.8 Appendix C's partial antenna ratio of one collector layer on
+/// a gate's node, for an [`AntennaElectricalTable`] row: `(area - minus *
+/// diode) / gate`, every area the node's at that layer's etch.
+#[derive(Debug, Clone, Copy)]
+struct Par {
+    /// `ANTENNAAREAMINUSDIFF`.
+    minus: f64,
+}
+
 /// One antenna row. Each gate figure's ratio is summed over the row's etch
-/// stages: at each, the doubled collecting area of the collectors etched
-/// there on the gate's net over the doubled gate area on that net. `judge`
-/// receives the ratio and the diode area on the gate's net at the row's
-/// stage, and returns the value compared with `limit`, or `None` for a gate
-/// this row does not hold. Gates on one net at every stage share a ratio and
-/// are judged once, reported at their lowest gate polygon. `examined` is the
+/// stages. With no `par` (an [`AntennaTable`] row), a stage adds the doubled
+/// collecting area of the collectors etched there on the gate's net over the
+/// doubled gate area on that net. With one, each collector layer adds its own
+/// [`Par`], conductors before the cuts on them (the etch order), and the
+/// running sum is truncated at zero after each (LEF's CAR). `judge` receives
+/// the ratio and the diode area on the gate's net at the row's stage, and
+/// returns the value compared with `limit`, or `None` for a gate this row
+/// does not hold. Gates on one net at every stage share a ratio and are
+/// judged once, reported at their lowest gate polygon. `examined` is the
 /// number of such groups judged; `None` is `Refused` (a layer that will not
 /// validate or merge).
 #[allow(
@@ -593,6 +622,7 @@ fn antenna_row(
     (gate_layer, collectors, diode): (LayerId, &[LayerId], Option<LayerId>),
     measures: &[AntennaMeasure],
     stack: &Stack,
+    par: Option<Par>,
     limit: f64,
     judge: impl Fn(f64, DbuArea) -> Option<f64>,
     scratch: &mut Scratch,
@@ -648,10 +678,12 @@ fn antenna_row(
     let mut staged = std::mem::take(&mut scratch.staged_nets);
     for (s, &stage) in stages.iter().enumerate() {
         let last = s + 1 == stages.len();
-        let here: Vec<usize> = (0..read.len()).filter(|&c| etched[c] == stage).collect();
+        let mut here: Vec<usize> = (0..read.len()).filter(|&c| etched[c] == stage).collect();
+        // A cut is etched after the conductor it stands on.
+        here.sort_by_key(|&c| !stack.conductors.contains(&read[c].0));
         let mut layers: Vec<LayerId> = here.iter().map(|&c| read[c].0).collect();
         layers.push(gate_layer);
-        layers.extend(diode.filter(|_| last));
+        layers.extend(diode);
         layers.sort_unstable();
         layers.dedup();
         let Some(count) = stage_nets(
@@ -668,7 +700,6 @@ fn antenna_row(
         };
 
         let mut gate_area = vec![0i128; count];
-        let mut collect = vec![0i128; count];
         let gate_net = &mut key[s * n..(s + 1) * n];
         for (g, net) in gate_net.iter_mut().enumerate() {
             *net = gates.net(g, &net_of);
@@ -676,12 +707,24 @@ fn antenna_row(
                 gate_area[net.idx()] += gates.area2[g];
             }
         }
-        for &c in &here {
-            let figures = &collected[c];
+        // The doubled diode area on each net as this stage stands.
+        let mut on_net = vec![0i128; count];
+        if let Some(figures) = &diodes {
             for f in 0..figures.len() {
                 let net = figures.net(f, &net_of);
                 if net != NetId::NONE {
-                    collect[net.idx()] += match read[c].1 {
+                    on_net[net.idx()] += figures.area2[f];
+                }
+            }
+        }
+        let mut collect = vec![0i128; count];
+        for &c in &here {
+            let figures = &collected[c];
+            let mut mine = vec![0i128; count];
+            for f in 0..figures.len() {
+                let net = figures.net(f, &net_of);
+                if net != NetId::NONE {
+                    mine[net.idx()] += match read[c].1 {
                         AntennaMeasure::Area => figures.area2[f],
                         AntennaMeasure::Sidewall { thickness } => {
                             figures.perimeter2[f] * i128::from(thickness.raw())
@@ -689,24 +732,31 @@ fn antenna_row(
                     };
                 }
             }
+            let Some(par) = par else {
+                for (sum, area) in collect.iter_mut().zip(&mine) {
+                    *sum += area;
+                }
+                continue;
+            };
+            for (g, net) in gate_net.iter().enumerate() {
+                // A layer with nothing on the gate's net is no node of it.
+                if *net == NetId::NONE || mine[net.idx()] == 0 {
+                    continue;
+                }
+                let at = net.idx();
+                let numerator = mine[at] as f64 - par.minus * on_net[at] as f64;
+                ratio[g] = (ratio[g] + numerator / gate_area[at] as f64).max(0.0);
+            }
         }
         for (g, net) in gate_net.iter().enumerate() {
-            if *net != NetId::NONE {
+            if *net == NetId::NONE {
+                continue;
+            }
+            if par.is_none() {
                 ratio[g] += collect[net.idx()] as f64 / gate_area[net.idx()] as f64;
             }
-        }
-        if let (true, Some(figures)) = (last, &diodes) {
-            let mut on_net = vec![0i128; count];
-            for f in 0..figures.len() {
-                let net = figures.net(f, &net_of);
-                if net != NetId::NONE {
-                    on_net[net.idx()] += figures.area2[f];
-                }
-            }
-            for (g, net) in gate_net.iter().enumerate() {
-                if *net != NetId::NONE {
-                    diode_area[g] = on_net[net.idx()];
-                }
+            if last {
+                diode_area[g] = on_net[net.idx()];
             }
         }
     }
@@ -789,6 +839,7 @@ pub fn check_antenna(
             ),
             &table.collector_measure[span],
             &table.stack,
+            None,
             table.max_ratio[row],
             |ratio, diode| (diode.raw() == 0).then_some(ratio),
             scratch,
@@ -836,6 +887,9 @@ pub fn check_antenna_electrical(
             ),
             &table.collector_measure[span],
             &table.stack,
+            Some(Par {
+                minus: table.area_minus_diode[row],
+            }),
             table.max_ratio[row],
             #[allow(
                 clippy::cast_precision_loss,

@@ -808,7 +808,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/no_credit/{}", side(limit, 2.0)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_credit: 0, diode_bonus: 0)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0)"
                 )),
                 ERC,
             )
@@ -822,7 +822,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/bonus_with_diode/{}", side(limit, 1.5)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0.5)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0)"
                 )),
                 ERC,
             )
@@ -835,7 +835,7 @@ fn antenna_electrical() -> Vec<Fixture> {
             "erc/antenna_electrical/bonus_without_diode",
             &["ERC-A5"],
             &antenna_deck(
-                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0.5)",
+                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0)",
             ),
             ERC,
         )
@@ -843,8 +843,9 @@ fn antenna_electrical() -> Vec<Fixture> {
         .expect(Expect::rule("ae", vec![ratio(2.0).at(500, 500)])),
     );
     out.extend(sky130_table_ig());
+    out.extend(lef_minus_diode());
     let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
-rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0)";
+rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0)";
     out.push(
         Fixture::new(
             "erc/antenna_electrical/ihp_b_e/with_diode",
@@ -945,10 +946,10 @@ fn sky130_table_ig() -> Vec<Fixture> {
         credit: f64,
         max: f64,
     }
-    let mcon = "rule ae antenna_electrical(gate, via1; max_ratio: 3, sidewall: none, diode: diff, diode_credit: 18, diode_bonus: 0)";
-    let li = "rule ae antenna_electrical(gate, met1; max_ratio: 75, sidewall: 100nm, diode: diff, diode_credit: 450, diode_bonus: 0)";
-    let met1 = "rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, diode: diff, diode_credit: 400, diode_bonus: 2200)";
-    let via = "rule ae antenna_electrical(gate, via1; max_ratio: 6, sidewall: none, diode: diff, diode_credit: 36, diode_bonus: 0)";
+    let mcon = "rule ae antenna_electrical(gate, via1; max_ratio: 3, sidewall: none, diode: diff, diode_credit: 18, diode_bonus: 0, area_minus_diode: 0)";
+    let li = "rule ae antenna_electrical(gate, met1; max_ratio: 75, sidewall: 100nm, diode: diff, diode_credit: 450, diode_bonus: 0, area_minus_diode: 0)";
+    let met1 = "rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0)";
+    let via = "rule ae antenna_electrical(gate, via1; max_ratio: 6, sidewall: none, diode: diff, diode_credit: 36, diode_bonus: 0, area_minus_diode: 0)";
     let cuts = |n: usize, side: f64| n as f64 * side * side / 1e6;
     let side = |width: i64, length: i64, flt: i64| (2 * (length + width) * flt) as f64 / 1e6;
     let mut cases = Vec::new();
@@ -1028,6 +1029,103 @@ fn sky130_table_ig() -> Vec<Fixture> {
             ))
         })
         .collect()
+}
+
+/// LEF/DEF 5.8 Appendix C's cumulative ratio, one partial ratio per layer in
+/// etch order, each `(area - minus × diff_area) / gate_area` with the node's
+/// areas at that layer, the running sum truncated at zero after each layer
+/// (`ANTENNAAREAMINUSDIFF`, Example 2). `nodes` is `(area, diff_area,
+/// gate_area)` per layer.
+fn lef_car(minus: f64, nodes: &[(f64, f64, f64)]) -> f64 {
+    nodes.iter().fold(0.0, |car, &(area, diff, gate)| {
+        (car + (area - minus * diff) / gate).max(0.0)
+    })
+}
+
+/// `ANTENNAAREAMINUSDIFF` on Figure C-20 ([`lef_c20`]), every area factor 1,
+/// the row collecting cont, met1, via1, met2, via2 and met3. G1's nodes (µm²,
+/// as `(area, diff, gate)`): C1 (0.1, 0, 1), M1,2 (2, 0, 1), V1,2 + V1,3
+/// (0.2, 0, 1), M2 (9, 0.5, 3), V2 (0.2, 0.5, 3), M3 (15, 0.5, 3); G2's: C2
+/// (0.1, 0, 2), M1,3 (3, 0.5, 2) and V1,4 (0.1, 0.5, 2), D1 reaching M1,3
+/// through C3, then the shared nodes. With minus 4, G1 reads 8.367 and G2
+/// 6.067, G2's sum truncated to 0 at via1 (0.55 - 0.95); with Example 2's
+/// minus 100 both read 0 from met2 up, and a row ending at via1 reads G1's
+/// 2.3 (no diffusion on its node) and G2's 0. Each value is swept a part in a
+/// thousand either side. Without the truncation G2's minus-4 sum is 5.667;
+/// with the minus once per stage instead of per layer, G1's is 9.033.
+fn lef_minus_diode() -> Vec<Fixture> {
+    let g1 = (500, 500);
+    let g2 = (6500, 0);
+    let g1_nodes = [
+        (0.1, 0.0, 1.0),
+        (2.0, 0.0, 1.0),
+        (0.2, 0.0, 1.0),
+        (9.0, 0.5, 3.0),
+        (0.2, 0.5, 3.0),
+        (15.0, 0.5, 3.0),
+    ];
+    let g2_nodes = [
+        (0.1, 0.0, 2.0),
+        (3.0, 0.5, 2.0),
+        (0.1, 0.5, 2.0),
+        (9.0, 0.5, 3.0),
+        (0.2, 0.5, 3.0),
+        (15.0, 0.5, 3.0),
+    ];
+    let rows: [(&str, &str, f64, Vec<(f64, (i64, i64))>); 3] = [
+        (
+            "minus4",
+            "cont, met1, via1, met2, via2, met3",
+            4.0,
+            vec![(lef_car(4.0, &g1_nodes), g1), (lef_car(4.0, &g2_nodes), g2)],
+        ),
+        (
+            "example2",
+            "cont, met1, via1, met2, via2, met3",
+            100.0,
+            vec![
+                (lef_car(100.0, &g1_nodes), g1),
+                (lef_car(100.0, &g2_nodes), g2),
+            ],
+        ),
+        (
+            "example2_via1",
+            "cont, met1, via1",
+            100.0,
+            vec![
+                (lef_car(100.0, &g1_nodes[..3]), g1),
+                (lef_car(100.0, &g2_nodes[..3]), g2),
+            ],
+        ),
+    ];
+    let mut out = Vec::new();
+    for (name, collectors, minus, nets) in rows {
+        let positive: Vec<f64> = nets.iter().map(|n| n.0).filter(|&v| v > 0.0).collect();
+        // A value of zero is clean at any positive limit.
+        let limits: Vec<f64> = if positive.is_empty() {
+            vec![1e-3]
+        } else {
+            positive
+                .iter()
+                .flat_map(|&v| [v * 0.999, v * 1.001])
+                .collect()
+        };
+        for limit in limits {
+            out.push(
+                Fixture::new(
+                    &format!("erc/antenna_electrical/lef_minus_diode/{name}/{limit:.4}"),
+                    &["ERC-A5"],
+                    &antenna_deck(&format!(
+                        "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: {minus})"
+                    )),
+                    ERC,
+                )
+                .layout(lef_c20())
+                .expect(Expect::rule("ae", ratio_findings(&nets, limit, true))),
+            );
+        }
+    }
+    out
 }
 
 // ------------------------------------------------------------------ density
