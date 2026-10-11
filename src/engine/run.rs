@@ -71,8 +71,11 @@ pub enum StageStatus {
     /// For LVS, a comparison that did not conclude; for PEX, a conductor or
     /// via layer with no `pex` row
     /// ([`AnalyticalError`](gpurify_extract::analytical::AnalyticalError)), an
-    /// unknown net name or one on several nets, a capacitance matrix that is
-    /// not reciprocal, or an inductance solve that refused; for ERC, design
+    /// unknown net name or one on several nets, a field solve that refused
+    /// ([`SolveError`](gpurify_extract::quasistatic::solve::SolveError): a
+    /// layer it cannot mesh, named as the deck names it, or a column that did
+    /// not converge), a capacitance matrix that is not reciprocal, or an
+    /// inductance solve that refused; for ERC, design
     /// intent on a layout that shorts two labelled nets. Otherwise ERC refuses
     /// row by row (a supply grid that
     /// cannot be built or solved refuses the rows that read it), and those
@@ -216,9 +219,6 @@ fn reject_unknown_rule_kinds(loaded: &Loaded) -> Result<(), EngineError> {
 ///   knows (checked even when neither is selected), or DRC is selected and
 ///   its rules cannot be built.
 /// - [`EngineError::Erc`]: ERC is selected and its rules cannot be built.
-/// - [`EngineError::Solve`]: `quasistatic_nets` cannot be meshed, or a
-///   capacitance column does not converge. A net on a layer the stack does
-///   not describe fails here.
 pub fn run_checks(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -244,7 +244,7 @@ pub fn run_checks(
         StageStatus::NotSelected
     };
     let pex = if options.checks.pex {
-        run_pex(loaded, extracted, options, &mut out)?
+        run_pex(loaded, extracted, options, &mut out)
     } else {
         StageStatus::NotSelected
     };
@@ -465,7 +465,8 @@ fn run_lvs(
 }
 
 /// Analytical extraction of the whole design; with `quasistatic_nets`, those nets
-/// are field-solved and overlaid on it. A non-reciprocal solve is refused.
+/// are field-solved and overlaid on it. Every refusal on the way, a
+/// non-reciprocal solve included, is [`StageStatus::Refused`].
 ///
 /// ponytail: the solve's `CapMatrix`, `InductMatrix` and `Accuracy` are dropped,
 /// as `Outputs` has no slot for them; add fields there when a caller needs them.
@@ -474,7 +475,7 @@ fn run_pex(
     extracted: &Extracted,
     options: &RunOptions,
     out: &mut Outputs,
-) -> Result<StageStatus, EngineError> {
+) -> StageStatus {
     let grid = loaded.grid;
     // The names are the user's input, so they are refused before any
     // extraction is attempted.
@@ -488,16 +489,16 @@ fn run_pex(
         match *pieces {
             [net] => selected.push(net),
             [] => {
-                return Ok(StageStatus::Refused(format!(
+                return StageStatus::Refused(format!(
                     "no extracted net is named {name}, so it cannot be field solved"
-                )))
+                ))
             }
             _ => {
-                return Ok(StageStatus::Refused(format!(
+                return StageStatus::Refused(format!(
                     "{name} labels {} disconnected nets, an open, so no one net \
                      of that name can be field solved",
                     pieces.len()
-                )))
+                ))
             }
         }
     }
@@ -514,20 +515,12 @@ fn run_pex(
         grid,
         &mut network,
     ) {
-        let layer = if why.layer().idx() < loaded.deck.layers.len() {
-            loaded
-                .strings
-                .resolve(loaded.deck.layers.name(why.layer()))
-                .to_owned()
-        } else {
-            format!("{:?}", why.layer())
-        };
-        return Ok(StageStatus::Refused(format!("layer {layer}: {why}")));
+        return StageStatus::Refused(format!("layer {}: {why}", layer_name(loaded, why.layer())));
     }
     if !options.quasistatic_nets.is_empty() {
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
         let mut solved = ParasiticNetwork::default();
-        let accuracy = gpurify_extract::quasistatic::extract_into(
+        let accuracy = match gpurify_extract::quasistatic::extract_into(
             &loaded.store,
             &extracted.nets,
             &selected,
@@ -535,10 +528,13 @@ fn run_pex(
             grid,
             &mut matrix,
             &mut solved,
-        )?;
+        ) {
+            Ok(accuracy) => accuracy,
+            Err(why) => return StageStatus::Refused(solve_refusal(loaded, why)),
+        };
 
         if let Some(refusal) = reciprocity_refusal(&accuracy) {
-            return Ok(StageStatus::Refused(refusal));
+            return StageStatus::Refused(refusal);
         }
 
         let mut inductance = gpurify_extract::quasistatic::InductMatrix::default();
@@ -552,14 +548,38 @@ fn run_pex(
             &mut inductance,
             &mut solved,
         ) {
-            return Ok(StageStatus::Refused(refusal.to_string()));
+            return StageStatus::Refused(refusal.to_string());
         }
 
         gpurify_extract::quasistatic::overlay(&mut network, &solved);
     }
 
     out.parasitics = Some(network);
-    Ok(StageStatus::Ran)
+    StageStatus::Ran
+}
+
+/// A layer as the deck names it; the id for a layer past the deck's table.
+fn layer_name(loaded: &Loaded, layer: LayerId) -> String {
+    if layer.idx() < loaded.deck.layers.len() {
+        loaded
+            .strings
+            .resolve(loaded.deck.layers.name(layer))
+            .to_owned()
+    } else {
+        format!("{layer:?}")
+    }
+}
+
+/// Why a field solve produced no capacitance, naming the deck layer a mesh
+/// refusal is about.
+fn solve_refusal(loaded: &Loaded, why: gpurify_extract::quasistatic::solve::SolveError) -> String {
+    match why {
+        gpurify_extract::quasistatic::solve::SolveError::Mesh(mesh) => match mesh.layer() {
+            Some(layer) => format!("layer {}: {mesh}", layer_name(loaded, layer)),
+            None => format!("field solve: {mesh}"),
+        },
+        _ => format!("field solve: {why}"),
+    }
 }
 
 /// `Some(reason)` when the matrix is not reciprocal within the solve's own
@@ -609,9 +629,6 @@ pub enum EngineError {
     /// The deck's rules could not become ERC tables.
     #[error(transparent)]
     Erc(#[from] gpurify_check::erc::ErcError),
-    /// A field solve for `quasistatic_nets` could not be meshed or did not converge.
-    #[error(transparent)]
-    Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
 }
 
 /// [`reciprocity_refusal`] is private, so its check lives beside it.

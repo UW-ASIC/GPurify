@@ -141,8 +141,12 @@ nets that were not field-solved is kept. A field-solved net also gets its
 inductance, and its resistance and inductance follow the wire's centre line
 through every bend and every via, however the wire was cut into polygons. A
 field-solved net whose shapes do not join into one circuit (two pieces that
-meet only at a corner) is refused. The field solve holds the substrate at
-ground as a plane at height 0, so a field-solved net's capacitance to ground
+meet only at a corner) is refused, and so is one with a shape the solve
+cannot mesh (a layer whose `pex` line states no dielectric, or a diagonal
+edge), naming the layer, and a solve that does not converge: PEX reports
+the refusal and the rest of the report is still written. The field solve
+holds the substrate at ground as a plane at height 0, so a field-solved
+net's capacitance to ground
 is to the substrate, as the closed forms' is. A shape on a layer at height 0
 (a well or a diffusion) is a junction in that plane, whose capacitance is a
 depletion capacitance rather than a field: it is left out of the solve, and

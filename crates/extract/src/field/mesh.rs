@@ -65,15 +65,28 @@ pub enum MeshError {
     /// A selected polygon is on a layer the stack does not describe: no row,
     /// or a row whose thickness or permittivity is not positive or whose
     /// height is not finite. The smallest such layer id is named.
-    #[error("layer {0:?} has no thickness in the process stack")]
+    #[error(
+        "no pex row gives this layer a positive thickness and permittivity, so it cannot be meshed"
+    )]
     MissingThickness(LayerId),
     /// A selected net has no polygons.
     #[error("selected net has no geometry")]
     EmptyConductor,
     /// The layer's polygons fail validation as rectilinear geometry, so they
     /// cannot be cut into rectangles exactly.
-    #[error("layer {0:?} is not valid rectilinear geometry, so it cannot be meshed exactly")]
+    #[error("not valid rectilinear geometry, so it cannot be meshed exactly")]
     InvalidGeometry(LayerId),
+}
+
+impl MeshError {
+    /// The layer the refusal names, which its message leaves to the caller
+    /// to name as the deck does; `None` for a refusal about no one layer.
+    pub fn layer(self) -> Option<LayerId> {
+        match self {
+            Self::MissingThickness(layer) | Self::InvalidGeometry(layer) => Some(layer),
+            Self::TooManyPanels | Self::EmptyConductor => None,
+        }
+    }
 }
 
 /// Whether the stack puts `layer` on the substrate, at height 0 or below: a

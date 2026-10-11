@@ -53,7 +53,7 @@
 
 use crate::harness::{self, Depth, Expect, Fixture, Layout, Quantity, Ran, Symmetry, NONE};
 use gpurify::check::topology::NetId;
-use gpurify::engine::run::Checks;
+use gpurify::engine::run::{Checks, StageStatus};
 use gpurify::extract::field::CapMatrix;
 use gpurify::extract::network::NodeId;
 use gpurify::extract::{Parasitic, ParasiticNetwork};
@@ -1269,6 +1269,33 @@ fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
         + wire_ohm(JUNCTION.m2, 5_000, 1_000)
         + JUNCTION.v1.sheet;
     assert!(relative(ohm, series) <= MODEL, "R {ohm} ohm, want {series}");
+}
+
+/// PEX-005 (F75): a field-solved net the mesh cannot take is a PEX refusal
+/// naming the layer as the deck does, not an aborted run naming `LayerId`.
+/// An `m1` row with `dielectric 0` states no permittivity, which the closed
+/// forms read as no coupling and the field solve cannot mesh.
+#[test]
+fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {
+    let stack = Stack {
+        m1: Row {
+            k: 0.0,
+            ..COARSE.m1
+        },
+        ..COARSE
+    };
+    let bar = Layout::default()
+        .rect("m1", 0, 0, 4_000, 1_000)
+        .label("m1_label", 500, 500, "A");
+    let ran = run(&deck(stack, &[], ""), bar, PEX, &["A"]);
+    match &ran.summary.pex {
+        StageStatus::Refused(why) => assert!(
+            why.starts_with("layer m1: ") && !why.contains("LayerId"),
+            "{why}"
+        ),
+        status => panic!("PEX {status:?}, want a refusal naming m1"),
+    }
+    assert!(ran.outputs.parasitics.is_none() && !ran.summary.passed());
 }
 
 /// The three conductors the invariance laws solve: two parallel `m1` bars,
