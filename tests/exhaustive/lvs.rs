@@ -11,9 +11,10 @@
 //! the reductions of `docs/usage.md` ("LVS reduction"), a bijection of devices
 //! and nets preserves kind, model and terminal incidence up to the
 //! interchangeable roles, with every parameter within the 2 % relative
-//! tolerance of `CompareOptions`. Net names never take part (the `lvs` module
-//! docs), and neither does card order. It is a brute force over every net
-//! bijection, which is affordable because the circuits are small.
+//! tolerance of `CompareOptions` and every count equal (F99). Net names
+//! never take part (the `lvs` module docs), and neither does card order. It
+//! is a brute force over every net bijection, which is affordable because the
+//! circuits are small.
 //!
 //! Where the docs describe a defect rather than the intended semantics, the
 //! oracle follows the intended one and the fixture is marked with the finding.
