@@ -26,9 +26,10 @@ result from them is weaker than it looks.
 
 ## Checks that do not exist yet
 
-- Derived layers have no selection by net, angle or shape class
-  (rectangles, squares), no `covering`/`overlapping`, and `sized` grows both
-  axes by the same amount.
+- Derived layers have no selection by net or angle, no
+  `covering`/`overlapping`, and `sized` grows both axes by the same amount.
+  Shape class (`.rectangles()`, `.squares()`), direction (`.horizontal()`,
+  `.vertical()`) and bounding-box size (`.with_bbox_max()`) are selectable.
 - Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
   allowed to extend beyond their abutting edge" cannot be written.
 - Spacing that depends on the voltage between two nets.
@@ -69,9 +70,8 @@ None has been compared against foundry signoff results.
 
 - Rules that need a check the language does not have yet are written out,
   commented, near the end of each deck with the reason: net spacing between
-  two layers or on wells (no deck connects wells as nets), rules that depend
-  on direction, shape-class and exact-count rules, gate-length rules, and
-  maximum areas. Each deck also lists the manual rules it leaves out, and why.
+  two layers or on wells (no deck connects wells as nets) and maximum
+  areas. Each deck also lists the manual rules it leaves out, and why.
 - Only sky130 connects wells as nets: the p-substrate (`connect global
   psub`), each n-well through its n-taps, and each isolated p-well in deep
   n-well, so its transistors have a bulk terminal and it carries
@@ -174,9 +174,8 @@ says which foundry manual, standard or tool defines each one.
 | DRC-066 | Minimum cut count / redundant via | partial | Width-triggered MINIMUMCUT (FROMABOVE/BELOW, LENGTH WITHIN) is missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
 | DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked: the irdrop rules' tolerance per connector by cut count, whose text leaves unsettled what a connector is and the unit of its limit (um) |
-| DRC-072 | Local density over a device | missing | The boundary layer reduces to one extent for the whole layer (drc::Rule::Density), so density per device cannot be measured |
-| DRC-075 | Wide-metal slotting | partial | Slot required is a kind; slot geometry uses the generic kinds |
-| DRC-076 | Waffle-window density | missing | sky130.deck left out |
+| DRC-075 | Wide-metal slotting | partial | Slot required is a kind (cheesing); slot geometry uses the generic kinds; slit density over a plate is region_density (IHP Slt.i). Missing: a maximum slot spacing (GF180 MSLOT.4) and staggered slots (MSLOT.6) |
+| DRC-076 | Waffle-window density | missing | sky130's waffle rule (m1.- for met1 to met4, RC) holds a 700 um window's metal density to a floor set by how much of it cmm waffle-drop covers (70% when all of it, then 65/60/50/40/30% by band); the public text states neither the window step nor whether the band edges are inclusive, so it is not written |
 | DRC-081 | Net spacing between two layers / on wells | missing | Net spacing takes one layer; only sky130 connects wells as nets |
 | DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
 | DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
