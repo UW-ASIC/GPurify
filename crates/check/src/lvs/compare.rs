@@ -13,6 +13,70 @@ use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
+/// Debug-asserts the invariants [`Graph`] lists, at the seams that read a
+/// graph as given: column lengths, CSR offsets, net rows in range, and the
+/// net side the transpose of the device side. A macro, so the checks live
+/// only inside assertions, where cargo-mutants (which does not look inside
+/// macros) does not count them as code to test.
+macro_rules! debug_assert_graph {
+    ($graph:expr) => {{
+        let graph: &Graph = $graph;
+        let (devices, nets) = (graph.device_count(), graph.net_count());
+        debug_assert!(
+            {
+                // An empty table may leave its offsets empty (the `Default` graph).
+                let csr = |start: &[u32], rows: usize, len: usize| {
+                    (start.is_empty() && rows == 0 && len == 0)
+                        || (start.len() == rows + 1
+                            && start[0] == 0
+                            && start.windows(2).all(|w| w[0] <= w[1])
+                            && start[rows] as usize == len)
+                };
+                graph.device_model.len() == devices
+                    && graph.terminal_role.len() == graph.terminal_net.len()
+                    && csr(
+                        &graph.device_terminal_start,
+                        devices,
+                        graph.terminal_net.len(),
+                    )
+                    && csr(&graph.device_param_start, devices, graph.param.len())
+                    && csr(&graph.net_terminal_start, nets, graph.net_terminal.len())
+            },
+            "a graph's columns are as long as its tables, and its offsets CSR over them"
+        );
+        debug_assert!(
+            graph
+                .terminal_net
+                .iter()
+                .all(|&net| net == u32::MAX || (net as usize) < nets)
+                && graph.port_net.iter().all(|&net| (net as usize) < nets),
+            "every terminal is on a net row or on none, and every port is a net row"
+        );
+        debug_assert!(
+            (0..narrow(nets)).all(|net| {
+                let on = graph.terminals_on(net);
+                on.windows(2).all(|w| w[0].0 <= w[1].0)
+                    && on.iter().all(|&(device, role)| {
+                        (device as usize) < devices && {
+                            let (to, roles) = graph.terminals_of(device);
+                            to.iter().zip(roles).any(|(&n, &r)| n == net && r == role)
+                        }
+                    })
+            }),
+            "each net's terminals ascend by device and name a terminal of that device on it"
+        );
+        debug_assert_eq!(
+            graph.net_terminal.len(),
+            graph
+                .terminal_net
+                .iter()
+                .filter(|&&net| net != u32::MAX)
+                .count(),
+            "the net side lists every terminal on a net exactly once"
+        );
+    }};
+}
+
 /// How to run a comparison.
 ///
 /// The default is 1000 rounds, a 2% tolerance and no parameter names. The
@@ -125,8 +189,8 @@ pub fn compare_logged(
     reference: &Graph,
     options: CompareOptions,
 ) -> (Verdict, Vec<(Side, Merge)>) {
-    layout.debug_check();
-    reference.debug_check();
+    debug_assert_graph!(layout);
+    debug_assert_graph!(reference);
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
     protect_labelled(layout, &mut declared);
@@ -139,8 +203,8 @@ pub fn compare_logged(
         state_count(&mut reference, multiplier);
     }
     // Reduction returns graphs that keep the invariants refinement reads.
-    layout.debug_check();
-    reference.debug_check();
+    debug_assert_graph!(&layout);
+    debug_assert_graph!(&reference);
     let merges = layout_merges
         .into_iter()
         .map(|m| (Side::Layout, m))

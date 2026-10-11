@@ -316,35 +316,28 @@ fn prune_pairs<const SAME: bool>(
     // A box filed under several cells is gathered several times.
     out.sort_unstable();
     out.dedup();
-    if cfg!(debug_assertions) {
-        check_superset::<SAME>(store, built(index), layer, distance, out);
-    }
-}
-
-/// Debug check, on small inputs, that the grid missed no pair: every pair of
-/// rows whose boxes are within `distance` is in `pairs` (the brute-force scan
-/// the index exists to avoid).
-fn check_superset<const SAME: bool>(
-    store: &GeometryStore,
-    b_layer: LayerId,
-    a_layer: LayerId,
-    distance: Dbu,
-    pairs: &[(PolyId, PolyId)],
-) {
-    const SMALL: usize = 1 << 12;
-    let (a_rows, b_rows) = (store.polys_on_layer(a_layer), store.polys_on_layer(b_layer));
-    if a_rows.len() * b_rows.len() > SMALL {
-        return;
-    }
-    for a in a_rows.map(PolyId) {
-        for b in b_rows.clone().map(PolyId) {
-            let near = (!SAME || a < b) && store.poly_bbox(a).within(store.poly_bbox(b), distance);
-            debug_assert!(
-                !near || pairs.binary_search(&(a, b)).is_ok(),
-                "the candidate pairs hold every pair of boxes within the distance: {a:?}, {b:?} missing"
+    // On up to 4096 row pairs, the brute-force scan the index exists to
+    // avoid: the first pair of boxes within `distance` that is no candidate.
+    // Inside the assertion, so cargo-mutants does not count it as code.
+    debug_assert_eq!(
+        {
+            let (a_rows, b_rows) = (
+                store.polys_on_layer(layer),
+                store.polys_on_layer(built(index)),
             );
-        }
-    }
+            let small = a_rows.len() * b_rows.len() <= 1 << 12;
+            a_rows
+                .filter(|_| small)
+                .flat_map(|a| b_rows.clone().map(move |b| (PolyId(a), PolyId(b))))
+                .find(|&(a, b)| {
+                    (!SAME || a < b)
+                        && store.poly_bbox(a).within(store.poly_bbox(b), distance)
+                        && out.binary_search(&(a, b)).is_err()
+                })
+        },
+        None,
+        "the candidate pairs hold every pair of boxes within the distance"
+    );
 }
 
 /// Every row of one level that `a_box` grown by `distance` can reach, appended

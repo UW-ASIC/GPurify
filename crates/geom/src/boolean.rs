@@ -616,44 +616,43 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
         &mut sweep.link_start,
         &mut sweep.used,
     );
-    if cfg!(debug_assertions) {
-        check_traced(xs, region, sweep);
-    }
-}
-
-/// Debug check of [`trace`]'s rings against the region they bound: each ring
-/// is closed, its edges alternating horizontal and vertical with the closing
-/// edge included (so every collinear run was merged), and the rings' signed
-/// areas (outers CCW, holes CW) sum to exactly twice the region's area, so no
-/// boundary was lost, doubled or wound the wrong way.
-fn check_traced(xs: &[i64], region: &Slabs, sweep: &Sweep) {
-    let mut area2 = 0i128;
-    for run in sweep.link_start.windows(2) {
-        let (lo, hi) = (run[0] as usize, run[1] as usize);
-        let (rx, ry) = (&sweep.link_x[lo..hi], &sweep.link_y[lo..hi]);
-        let n = rx.len();
-        debug_assert!(
-            n >= 4 && n.is_multiple_of(2),
-            "a traced ring has an even count of at least four vertices, not {n}"
-        );
-        for i in 0..n {
-            let (j, k) = ((i + 1) % n, (i + 2) % n);
-            let horizontal = ry[i] == ry[j];
-            debug_assert!(
-                horizontal != (rx[i] == rx[j]),
-                "a traced edge is axis-parallel and not a point"
-            );
-            debug_assert!(
-                horizontal != (ry[j] == ry[k]),
-                "traced edges alternate horizontal and vertical"
-            );
-            area2 += i128::from(rx[i]) * i128::from(ry[j]) - i128::from(rx[j]) * i128::from(ry[i]);
-        }
-    }
+    // The checks live inside the assertions, where they cost nothing in
+    // release and cargo-mutants (which does not look inside macros) does not
+    // count them as code to test.
+    debug_assert!(
+        sweep.link_start.windows(2).all(|run| {
+            let (lo, hi) = (run[0] as usize, run[1] as usize);
+            let (rx, ry) = (&sweep.link_x[lo..hi], &sweep.link_y[lo..hi]);
+            let n = rx.len();
+            n >= 4
+                && n.is_multiple_of(2)
+                && (0..n).all(|i| {
+                    let (j, k) = ((i + 1) % n, (i + 2) % n);
+                    let horizontal = ry[i] == ry[j];
+                    horizontal != (rx[i] == rx[j]) && horizontal != (ry[j] == ry[k])
+                })
+        }),
+        "every traced ring is closed, of at least four vertices, its edges (the closing \
+         one included) alternating horizontal and vertical, so every collinear run merged"
+    );
     debug_assert_eq!(
-        area2,
+        sweep
+            .link_start
+            .windows(2)
+            .map(|run| {
+                let (lo, hi) = (run[0] as usize, run[1] as usize);
+                (lo..hi)
+                    .map(|i| {
+                        let j = if i + 1 == hi { lo } else { i + 1 };
+                        i128::from(sweep.link_x[i]) * i128::from(sweep.link_y[j])
+                            - i128::from(sweep.link_x[j]) * i128::from(sweep.link_y[i])
+                    })
+                    .sum::<i128>()
+            })
+            .sum::<i128>(),
         2 * region_area(xs, region),
-        "the traced rings enclose exactly the region's area"
+        "the traced rings' signed areas (outers CCW, holes CW) are twice the region's: \
+         no boundary lost, doubled or wound the wrong way"
     );
 }
 
