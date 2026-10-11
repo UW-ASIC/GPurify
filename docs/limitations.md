@@ -205,20 +205,16 @@ says which foundry manual, standard or tool defines each one.
 | DRC-036 | Span-length table | partial | span_length checks every chord against the x and y span lists (LEF58_SPANLENGTHTABLE with and without WRONGDIRECTION); ORTHOGONAL and EXCEPTOTHERSPAN are missing |
 | DRC-037 | Bent / 45-degree features | partial | angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer |
 | DRC-038 | Diagonal width / spacing | missing | In scope since 2026-10-11 (was: Needs non-rectilinear geometry) |
-| DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md, "Rules that can pass a layout signoff would flag") |
-| DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | Only the two-opposite-sides form; one-of-two-adjacent-sides and end-cap-only enclosures cannot be written |
-| DRC-043 | Width-dependent enclosure | missing | — |
-| DRC-044 | Maximum enclosure / min-and-max window | missing | sky130.deck "npc.5 (maximum enclosure)" |
-| DRC-045 | Extension / end-cap / overhang | partial | Each gate of merged A ∩ B measured per crossed axis; a gate that bends or carries a stub inside B measures 0 (fails closed) |
-| DRC-049 | Exact or maximum count | partial | Minimum count only (sky130.deck "an exact count") |
+| DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | One of two adjacent sides is the opposite form for a rectangle (sky130's own KLayout deck checks opposite edges), and IHP M1.c1's end cap reads the same; LEF58_ENCLOSURE EOL (an overhang only toward a metal end of line) is not modelled: no public source defines it beyond its syntax |
+| DRC-043 | Width-dependent enclosure | partial | WIDTH bands only: LEF EXCEPTEXTRACUT and LENGTH, and LEF58_ENCLOSURETABLE, are missing |
+| DRC-044 | Maximum enclosure / min-and-max window | partial | A maximum space (IHP Rppd.c, GF180 NP.3d "min/max space") is not written |
+| DRC-045 | Extension / end-cap / overhang | partial | Each gate of merged A ∩ B measured per crossed axis; a gate that bends or carries a stub inside B measures 0 (fails closed), and bend (gate_corner, DRC-052) reports the bend itself |
 | DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag") |
 | DRC-053 | Exact alignment / width match across layers | partial | ASAP7 V1.M2.AUX.2 only: LEF58_SPACING EXACTALIGNED (the spacing of exactly aligned line ends) is not modelled |
-| DRC-055 | Direction-dependent (S/D-direction) spacing | missing | — |
-| DRC-061 | Centre-to-centre cut spacing | missing | — |
-| DRC-062 | Array / adjacent-cut spacing | partial | ADJACENTCUTS WITHIN variants are unverified |
-| DRC-063 | Cut-class spacing tables | missing | — |
-| DRC-064 | Slotted / bar cut spacing by edge length | missing | sky130.deck left out |
-| DRC-065 | Via stacking / cross-layer cut spacing | partial | Cross-layer spacing works; the stack-count limit is missing |
+| DRC-055 | Direction-dependent (S/D-direction) spacing | partial | Facing edges in both axes, as sky130's own KLayout deck reads lvtn.3b; the S/D direction is not derived from the gate |
+| DRC-063 | Cut-class spacing tables | partial | Class-pair SIDE/END cells only: the PRL second value, CENTERTOCENTER and CENTERANDEDGE cells, SAMENET/SAMEMETAL and LAYER tables, EXACTALIGNEDSPACING and LEF SPACINGTABLE ORTHOGONAL are missing |
+| DRC-064 | Slotted / bar cut spacing by edge length | partial | sky130 licon.2b-2d are a cut-class table; IHP CntB bars of free length have no class (classes are exact sizes, as LEF58_CUTCLASS) |
+| DRC-065 | Via stacking / cross-layer cut spacing | partial | via_stack counts every cut as a single-cut via, so a double-cut via does not interrupt a stack (fails closed); LEF SPACING LAYER STACK (aligned same-net cuts exempt) is not modelled |
 | DRC-066 | Minimum cut count / redundant via | partial | LEF MINIMUMCUT's LENGTH ... WITHIN form (thin wires beside a wide one) and LEF58_MINIMUMCUT's cut classes and AREA are missing |
 | DRC-067 | Metal-width-dependent via choice | missing | — |
 | DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked, and not checkable from public sources: the irdrop tolerance per connector by cut count (ct.irdrop.1-3, via.irdrop.1-4 to via4.irdrop.1-4). Its flags are CU (Cu back end only, which sky130 does not offer) and IR (an Al layout against its slotted Cu twin); no public source defines a connector, and the unit (um) was added by a script (skywater-pdk 9039be3), not by SkyWater. No public deck implements it; see docs/limitations.md |
