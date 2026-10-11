@@ -608,6 +608,7 @@ pub(crate) const KINDS: &[Kind] = &[
                 "diode_max_ratio_area",
                 Dim::AreaTable("diode_max_ratio"),
             ),
+            opt("exempt", "exempt_layer", Dim::Layer),
         ],
     ),
     erc(

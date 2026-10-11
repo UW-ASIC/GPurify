@@ -475,6 +475,7 @@ impl RuleSet {
                     let reduce = row.area_table("diode_reduce_area", "diode_reduce")?;
                     let diode_max = row.area_table("diode_max_ratio_area", "diode_max_ratio")?;
                     let cut_factor = row.number("cut_factor")?;
+                    let exempt = row.opt_layer("exempt_layer")?;
                     let table = &mut set.antenna_electrical;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
@@ -490,6 +491,7 @@ impl RuleSet {
                     table.gate_plus_diode.push(plus);
                     table.diode_reduce.push(reduce);
                     table.diode_max_ratio.push(diode_max);
+                    table.exempt.push(exempt);
                     table.max_ratio.push(max_ratio);
                     close_csr(&mut table.collector_start, table.collector.len());
                 }

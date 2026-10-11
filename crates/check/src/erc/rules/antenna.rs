@@ -165,8 +165,10 @@ pub struct CmpModel {
 ///
 /// # Limits
 ///
-/// - Every net with gate area is checked: reaching diffusion or a tap
-///   exempts nothing (ERC-A13). Any area on the `diode` layer counts as a
+/// - Only the `diode` layer exempts a gate: reaching other diffusion or a
+///   tap does not. sky130's .ar.1 exemption for a net on a `pAntennaShort`
+///   is that layer named as the `diode`, or an [`AntennaElectricalTable`]
+///   row's `exempt` (ERC-A13). Any area on the `diode` layer counts as a
 ///   protection diode; IHP's minimum diode size (Ant.g, ERC-A9) is not
 ///   checked.
 /// - A MIM victim works as a gate layer, but gf180's deck leaves ANT.14/15
@@ -174,7 +176,7 @@ pub struct CmpModel {
 ///   layer) is [`AntennaElectricalTable`]'s.
 ///
 /// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A11 (partial),
-/// ERC-A12 in the [check catalog]. Defined by
+/// ERC-A12, ERC-A13 in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
 /// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
 /// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
@@ -214,7 +216,7 @@ pub struct AntennaTable {
 /// sidewall: len | none, cut_factor: n, diode: layer | none,
 /// diode_credit: n, diode_bonus: n, area_minus_diode: n,
 /// gate_plus_diode: n, diode_reduce: [(area, n), ..] | none,
-/// diode_max_ratio: [(area, n), ..] | none)`.
+/// diode_max_ratio: [(area, n), ..] | none, exempt: layer | none)`.
 ///
 /// Nets, collectors, gates, the [`AntennaMeasure`] and the etch stages are
 /// those of [`AntennaTable`]. The ratio is LEF/DEF 5.8 Appendix C's
@@ -265,8 +267,14 @@ pub struct AntennaTable {
 /// piecewise-linear table is linear between its points and holds its end
 /// values beyond them, LEF's points rising in diffusion area.
 ///
-/// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A12 in the
-/// [check catalog]. Defined by [SKY130] antenna EGAR and Table Ig, and the
+/// With an `exempt` layer, a gate whose net at the row's highest stage has
+/// area on it is not checked and not counted: SKY130's .ar.1, "antenna rules
+/// not checked for features connected to a pAntennaShort" (a p+ substrate
+/// tap). It is judged before any credit, so a row can exempt one layer and
+/// credit another (sky130's `AntennaDiode` excludes the `pAntennaShort`).
+///
+/// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A12, ERC-A13 in the
+/// [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1 and Table Ig, and the
 /// sky130 technology LEF's PWL tables; [LEF/DEF 5.8]
 /// `ANTENNACUMROUTINGPLUSCUT`,
 /// `ANTENNAAREAFACTOR`, `ANTENNAAREAMINUSDIFF`,
@@ -322,6 +330,9 @@ pub struct AntennaElectricalTable {
     /// its net, in place of `max_ratio`. Empty for `max_ratio` alone. Limits
     /// are positive from a deck.
     pub diode_max_ratio: Vec<Vec<(DbuArea, f64)>>,
+    /// Per row: the layer whose area on a gate's net at the row's highest
+    /// stage exempts the gate (sky130's `pAntennaShort`), or `None`.
+    pub exempt: Vec<Option<LayerId>>,
     /// Per row: the largest allowed credited ratio. Positive from a deck.
     pub max_ratio: Vec<f64>,
     /// The deck's connectivity, shared by every row.
@@ -527,6 +538,18 @@ impl Figures {
             .min()
             .unwrap_or(NetId::NONE)
     }
+
+    /// The doubled area of the figures on each of `count` nets.
+    fn area_per_net(&self, net_of: &[NetId], count: usize) -> Vec<i128> {
+        let mut on_net = vec![0i128; count];
+        for f in 0..self.len() {
+            let net = self.net(f, net_of);
+            if net != NetId::NONE {
+                on_net[net.idx()] += self.area2[f];
+            }
+        }
+        on_net
+    }
 }
 
 /// `layer` merged into [`Figures`]. `None` when the layer will not validate
@@ -690,6 +713,7 @@ fn antenna_row(
     design: Design<'_>,
     head: (&RuleHead, usize),
     (gate_layer, collectors, diode): (LayerId, &[LayerId], Option<LayerId>),
+    exempt: Option<LayerId>,
     measures: &[AntennaMeasure],
     stack: &Stack,
     par: Option<Par<'_>>,
@@ -719,6 +743,10 @@ fn antenna_row(
         Some(layer) => Some(merged(design, layer, scratch)?),
         None => None,
     };
+    let exempts = match exempt {
+        Some(layer) => Some(merged(design, layer, scratch)?),
+        None => None,
+    };
 
     // Each collector's etch stage. The row's stage is the highest; a layer the
     // stack does not place is etched with it. With no conductors every stage
@@ -743,6 +771,7 @@ fn antenna_row(
     let mut ratio = vec![0.0f64; n];
     let mut key = vec![NetId::NONE; n * stages.len()];
     let mut diode_area = vec![0i128; n];
+    let mut exempted = vec![false; n];
     let mut net_of = vec![NetId::NONE; store.poly_count()];
     let mut staged = std::mem::take(&mut scratch.staged_nets);
     for (s, &stage) in stages.iter().enumerate() {
@@ -753,6 +782,7 @@ fn antenna_row(
         let mut layers: Vec<LayerId> = here.iter().map(|&c| read[c].0).collect();
         layers.push(gate_layer);
         layers.extend(diode);
+        layers.extend(exempt.filter(|_| last));
         layers.sort_unstable();
         layers.dedup();
         let Some(count) = stage_nets(
@@ -777,15 +807,14 @@ fn antenna_row(
             }
         }
         // The doubled diode area on each net as this stage stands.
-        let mut on_net = vec![0i128; count];
-        if let Some(figures) = &diodes {
-            for f in 0..figures.len() {
-                let net = figures.net(f, &net_of);
-                if net != NetId::NONE {
-                    on_net[net.idx()] += figures.area2[f];
-                }
-            }
-        }
+        let on_net = diodes.as_ref().map_or_else(
+            || vec![0i128; count],
+            |figures| figures.area_per_net(&net_of, count),
+        );
+        let exempt_on = match (&exempts, last) {
+            (Some(figures), true) => figures.area_per_net(&net_of, count),
+            _ => vec![0i128; count],
+        };
         let mut collect = vec![0i128; count];
         for &c in &here {
             let figures = &collected[c];
@@ -837,6 +866,7 @@ fn antenna_row(
             }
             if last {
                 diode_area[g] = on_net[net.idx()];
+                exempted[g] = exempt_on[net.idx()] > 0;
             }
         }
     }
@@ -859,6 +889,9 @@ fn antenna_row(
     let mut examined = 0u64;
     for group in order.chunk_by(|a, b| cmp(a, b).is_eq()) {
         let first = group[0];
+        if exempted[first] {
+            continue;
+        }
         let Some((value, limit)) = judge(ratio[first], DbuArea::new(diode_area[first] / 2)) else {
             continue;
         };
@@ -917,6 +950,7 @@ pub fn check_antenna(
                 &table.collector[span.clone()],
                 table.diode[row],
             ),
+            None,
             &table.collector_measure[span],
             &table.stack,
             None,
@@ -967,6 +1001,7 @@ pub fn check_antenna_electrical(
                 &table.collector[span.clone()],
                 table.diode[row],
             ),
+            table.exempt[row],
             &table.collector_measure[span],
             &table.stack,
             Some(Par {
