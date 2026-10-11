@@ -716,6 +716,8 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
 /// plate and two coupled `m1` bars, the stack 7 up to `m1`'s top and 3.9
 /// over it, and an `m1` bar under a crossing `m2` bar, 7 up to `m1`'s top,
 /// 3.9 to `m2`'s bottom and 5 over it (two interfaces).
+/// Oracle: differential against `FastCap` 2.0, an independent
+/// multi-dielectric boundary-element solver given the same windows.
 #[test]
 #[ignore = "release tier: needs fastcap (nix develop .#oracles)"]
 fn fastcap_differential_stratified_dielectrics() {

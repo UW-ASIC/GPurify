@@ -1926,6 +1926,8 @@ fn the_multi_patterning_example_in_the_language_spec_parses() {
 /// without the line every element is kept. Each misuse is an error at the
 /// value: an unknown type, a threshold on a type that grounds or drops every
 /// coupling, a negative threshold, a second line.
+/// Oracle: hand-derived from the statement's definition (deck.md): each
+/// spelling's type, each unit's femtofarads, each misuse's message.
 #[test]
 fn an_extraction_line_names_a_type_and_an_optional_threshold() {
     use gpurify_ingest::deck::{Extraction, ExtractionKind};
@@ -2000,6 +2002,8 @@ fn an_extraction_line_names_a_type_and_an_optional_threshold() {
 /// place. Corners come in the order the deck first names them; each names a
 /// layer once, states at least one value, holds the `pex` row's bounds, and
 /// varies only a layer with a `pex` row.
+/// Oracle: construct-from-answer: every value a corner states lands on its
+/// row, every other is the nominal row's, bit for bit.
 #[test]
 fn a_corner_line_varies_the_nominal_pex_rows() {
     let rows = "pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 \
@@ -2069,6 +2073,8 @@ fn a_corner_line_varies_the_nominal_pex_rows() {
 /// FLOW-002: `stage` lines put the rules written after them in stages, in
 /// order, `for` loops included; a deck without one is not staged. A staged
 /// deck puts every rule in a stage and writes each stage once.
+/// Oracle: hand-derived: the stage of each of four rules as the deck writes
+/// them, and each misuse's message.
 #[test]
 fn stage_lines_put_every_rule_in_a_stage() {
     let (deck, strings) = ok("stage gross\n\
@@ -2108,6 +2114,8 @@ fn stage_lines_put_every_rule_in_a_stage() {
 /// FLOW-001: `waive <rule> <layer>` names a rule of the deck (its id
 /// interpolated as a rule's is) and a waiver layer; a waiver for a rule the
 /// deck does not have, or a pair stated twice, is refused.
+/// Oracle: hand-derived: the pairs as the deck writes them, a loop's id
+/// interpolated, and each misuse's message.
 #[test]
 fn a_waive_line_names_a_rule_of_the_deck_and_a_layer() {
     let (deck, strings) = ok("rule m1.1 width(met1) >= 140nm\n\

@@ -314,6 +314,8 @@ const MUTUAL: f64 = 1e-2;
 /// parallel `m2` bar. `GPurify`'s answer is the mean of `M₁₂` and `M₂₁`;
 /// `FastHenry`'s are compared each, so its matrix's own symmetry is checked
 /// too.
+/// Oracle: differential against `FastHenry` 3.0.1's two-port impedance
+/// matrix (`Zc.mat`), an independent partial-inductance solver.
 #[test]
 #[ignore = "release tier: needs fasthenry (nix develop .#oracles)"]
 fn fasthenry_differential_mutual_inductance() {
