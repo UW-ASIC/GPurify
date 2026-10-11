@@ -67,9 +67,11 @@ pub enum MeshError {
     /// The panels would exceed [`MeshOptions::max_panels`].
     #[error("mesh would exceed the panel limit")]
     TooManyPanels,
-    /// A selected polygon is on a layer the stack does not describe: no row,
-    /// or a row whose thickness or permittivity is not positive or whose
-    /// height is not finite. The smallest such layer id is named.
+    /// A selected polygon is on a layer the mesh panels and the stack does
+    /// not describe: no row, or a row whose thickness or permittivity is not
+    /// positive or whose height is not finite. The smallest such layer id is
+    /// named. A layer the mesh leaves out ([`build_into`]: a junction or a
+    /// global layer) needs none of these.
     #[error(
         "no pex row gives this layer a positive thickness and permittivity, so it cannot be meshed"
     )]
@@ -172,12 +174,13 @@ pub fn build_into(
             return Err(MeshError::EmptyConductor);
         }
         // Refuse by the smallest layer id the stack does not describe (a layer
-        // past the stack clamps onto the NaN sentinel row). A global layer
-        // needs no row.
+        // past the stack clamps onto the NaN sentinel row). Only a layer in
+        // the field is meshed, so only it needs a thickness and a
+        // permittivity: a junction and a global layer get no panels.
         let undescribed = polys
             .iter()
             .map(|&poly| store.poly_layer(poly))
-            .filter(|layer| !connectivity.global.contains(layer))
+            .filter(|&layer| in_field(stack, connectivity, layer))
             .filter(|layer| !(table[layer.idx().min(sentinel)].epsilon > 0.0))
             .min();
         if let Some(layer) = undescribed {

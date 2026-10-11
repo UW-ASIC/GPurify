@@ -177,8 +177,9 @@ inductance, and its resistance and inductance follow the wire's centre line
 through every bend and every via, however the wire was cut into polygons. A
 field-solved net whose shapes do not join into one circuit (two pieces that
 meet only at a corner) is refused, and so is one with a shape the solve
-cannot mesh (a layer whose `pex` line states no dielectric, or a diagonal
-edge), naming the layer, and a solve that does not converge: PEX reports
+cannot mesh (a layer above the substrate whose `pex` line states no
+dielectric, or a diagonal edge), naming the layer, and a solve that does not
+converge: PEX reports
 the refusal and the rest of the report is still written. The field solve
 holds the substrate at ground as a plane at height 0, so a field-solved
 net's capacitance to ground

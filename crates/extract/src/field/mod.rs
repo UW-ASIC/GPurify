@@ -120,8 +120,9 @@ pub struct Accuracy {
 /// # Errors
 ///
 /// [`solve::SolveError::Mesh`] when the selection cannot be meshed: a net
-/// with no polygons, a polygon off the global layers on a layer the stack
-/// gives no thickness, height or permittivity, a layer whose geometry (a
+/// with no polygons, a polygon in the field (off the global layers and above
+/// the substrate) on a layer the stack gives no thickness, height or
+/// permittivity, a layer whose geometry (a
 /// junction's included) does not validate as rectilinear, or too many
 /// panels. The other variants when a column does not converge, breaks down
 /// or goes non-finite.

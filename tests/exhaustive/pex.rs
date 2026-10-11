@@ -896,33 +896,47 @@ fn field(depth: Depth) -> Vec<Fixture> {
 
     // F73: a net on the substrate alone (a diffusion) has nothing in the
     // field: its ground capacitance is its closed form, and its resistance
-    // the bar's, as any filament's.
-    let mut junction = Fixture::new(
-        "pex/field/junction_only",
-        &["PEX-002", "PEX-005"],
-        &deck(JUNCTION, &[], ""),
-        PEX,
-    )
-    .layout(
-        Layout::default()
-            .rect("m1", 0, 0, 5_000, 1_000)
-            .label("m1_label", 500, 500, "A"),
-    )
-    .expect(claim(
-        "A",
-        Quantity::GroundCap,
-        ground_ff(JUNCTION.m1, 5e6, 12_000.0),
-        EXACT,
-    ))
-    .expect(claim(
-        "A",
-        Quantity::Resistance,
-        wire_ohm(JUNCTION.m1, 5_000, 1_000),
-        EXACT,
-    ))
-    .expect(Expect::Passes(true));
-    junction.quasistatic = vec!["A".into()];
-    out.push(junction);
+    // the bar's, as any filament's. F94: the mesh asks nothing of a layer it
+    // does not panel, so the junction needs no dielectric (the deck line
+    // without one).
+    let no_dielectric = Stack {
+        m1: Row {
+            k: 0.0,
+            ..JUNCTION.m1
+        },
+        ..JUNCTION
+    };
+    for (name, stack) in [
+        ("junction_only", JUNCTION),
+        ("junction_without_dielectric", no_dielectric),
+    ] {
+        let mut junction = Fixture::new(
+            &format!("pex/field/{name}"),
+            &["PEX-002", "PEX-005"],
+            &deck(stack, &[], ""),
+            PEX,
+        )
+        .layout(
+            Layout::default()
+                .rect("m1", 0, 0, 5_000, 1_000)
+                .label("m1_label", 500, 500, "A"),
+        )
+        .expect(claim(
+            "A",
+            Quantity::GroundCap,
+            ground_ff(JUNCTION.m1, 5e6, 12_000.0),
+            EXACT,
+        ))
+        .expect(claim(
+            "A",
+            Quantity::Resistance,
+            wire_ohm(JUNCTION.m1, 5_000, 1_000),
+            EXACT,
+        ))
+        .expect(Expect::Passes(true));
+        junction.quasistatic = vec!["A".into()];
+        out.push(junction);
+    }
 
     // The DRC row stands for "the run completed": an abort loses it, and both
     // a refusal and a deduplicated solve report it.
