@@ -94,10 +94,11 @@ pub enum DrcError {
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
     /// The named row's spacing table fails
-    /// [`SpacingTable::is_valid`](ruleset::SpacingTable::is_valid), or its class
+    /// [`SpacingTable::is_valid`](ruleset::SpacingTable::is_valid), its class
     /// table fails its kind's check
-    /// ([`ClassTable::is_valid_tips`](ruleset::ClassTable::is_valid_tips)).
-    #[error("rule {0}: its table is not well formed")]
+    /// ([`ClassTable::is_valid_tips`](ruleset::ClassTable::is_valid_tips)),
+    /// or its forbidden range starts above its end.
+    #[error("rule {0}: its table or range is not well formed")]
     BadTable(String),
 }
 

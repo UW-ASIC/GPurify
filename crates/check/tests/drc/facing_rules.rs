@@ -164,6 +164,72 @@ fn the_nearer_of_two_offending_steps_is_the_finding() {
     assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
 }
 
+// -------------------------------------------------------- forbidden_spacing
+
+/// A forbidden range of 100 to 150 for runs longer than 200.
+fn forbidden() -> Rule {
+    Rule::ForbiddenSpacing {
+        layer: A,
+        min: dbu(100),
+        max: dbu(150),
+        prl: dbu(200),
+    }
+}
+
+/// Two 1000 long bars `gap` apart.
+fn bars(gap: i64) -> GeometryStore {
+    layout(&[[0, 0, 100, 1000], [100 + gap, 0, 200 + gap, 1000]])
+}
+
+/// Oracle: `TritonRoute`'s `isForbiddenSpacing`, a closed range. Both ends
+/// of it are forbidden and reported against the narrowest legal gap above
+/// it, 151, at the middle of the gap; one step outside either end is legal
+/// though still examined.
+#[test]
+fn both_ends_of_the_range_are_forbidden_and_one_step_out_is_legal() {
+    for (gap, forbidden) in [(99, false), (100, true), (150, true), (151, false)] {
+        let (out, runs) = run(&bars(gap), forbidden(), Vec::new());
+        if forbidden {
+            assert_eq!(out.measured, [len(gap)], "gap {gap}");
+            assert_eq!(out.limit, [len(151)], "gap {gap}");
+            assert_eq!(out.at, [point((200 + gap) / 2, 500)], "gap {gap}");
+        } else {
+            assert!(out.is_empty(), "gap {gap}");
+        }
+        let examined = u64::from(gap <= 150);
+        assert_eq!(only(&runs).examined, examined, "gap {gap}");
+    }
+}
+
+/// Oracle: `TritonRoute`'s `isValidPrl`, a run strictly longer than `prl`.
+/// Two bars 120 apart overlapping by 200 are not judged at all; by 201 they
+/// are, and fail.
+#[test]
+fn a_run_must_be_longer_than_prl() {
+    let store = |run: i64| layout(&[[0, 0, 100, 1000], [220, 1000 - run, 320, 2000 - run]]);
+    let (out, runs) = run(&store(200), forbidden(), Vec::new());
+    assert!(out.is_empty());
+    assert_eq!(only(&runs).examined, 0);
+
+    let (out, runs) = run(&store(201), forbidden(), Vec::new());
+    assert_eq!(out.measured, [len(120)]);
+    assert_eq!(only(&runs).examined, 1);
+}
+
+/// Oracle: construct-from-answer. A figure faces a bar 90 away along one
+/// step (below the range: legal) and 130 along another (forbidden): the
+/// finding is the forbidden 130, marked in the middle of its stretch
+/// (165, 700), not the nearer legal gap.
+#[test]
+fn a_narrower_legal_gap_does_not_hide_a_forbidden_one() {
+    let store = layout(&[[0, 0, 100, 1000], [190, 0, 290, 400], [230, 400, 330, 1000]]);
+    let (out, runs) = run(&store, forbidden(), Vec::new());
+
+    assert_eq!(out.measured, [len(130)]);
+    assert_eq!(out.at, [point(165, 700)]);
+    assert_eq!(assert_rule_ran(&runs, RULE).examined, 2);
+}
+
 /// Oracle: the kind's contract. A layer the rule cannot represent exactly
 /// (a triangle) is refused, never read as clean.
 #[test]

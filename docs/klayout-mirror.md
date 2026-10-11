@@ -1049,6 +1049,27 @@ tip_table(id, L.isolated(REACH, projection, transparent, whole_edges), CLASSES, 
   the mirror: the ASAP7 M1.S.1 to M1.S.5 values at the limit and one step either side (FR), the
   hand-derived fixtures under the square's symmetries (SY, MR).
 
+### 37. forbidden_spacing — EXACT
+
+**GPurify** (`facing.rs` `forbidden_spacing`): facing edges as in rule 36 whose run (the overlap
+of their spans) is longer than `prl` and whose gap lies in `[min, max]`. One finding per pair of
+figures, its smallest forbidden gap.
+
+**KLayout**
+
+```ruby
+forbidden_gap(id, L.isolated(MAX + 1, projection, transparent, projection_limits(PRL + 1, nil)), MIN)
+# MAX = 2·max, PRL = 2·prl, MIN = 2·min: isolated keeps gaps under 2·max + 1 (at most max),
+# projection_limits runs of at least 2·prl + 1 (longer than prl), and the prelude's
+# forbidden_gap the pairs whose lines are at least MIN apart.
+```
+
+- (d) `projection_limits` filters an edge pair by its projected length, the overlap of the two
+  edges (rule 9's run, v t11 P3/P4).
+- Key PAIR, the smallest gap per pair of figures, compared exactly. Besides the mirror: both ends
+  of the range and the run swept one step either side (SY, MR); `TritonRoute`'s
+  `isForbiddenSpacing` and `isValidPrl` give the closed range and the strict run.
+
 ---
 
 ## (c) Derived layers, connectivity, antenna
@@ -1095,7 +1116,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 36, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 37, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest

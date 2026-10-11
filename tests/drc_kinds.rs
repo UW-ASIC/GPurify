@@ -495,6 +495,54 @@ fn an_asymmetric_tip_table_is_refused_at_load() {
     );
 }
 
+// ---------------------------------------------------------- forbidden range
+
+/// A forbidden range written as `LEF58_TWOWIRESFORBIDDENSPACING 0.10 0.15
+/// PRL 0.20`, which `TritonRoute` reads closed on both ends with the run
+/// strictly longer than 0.20 (`isForbiddenSpacing`, `isValidPrl`). Three
+/// pairs of 1 µm bars: 99 apart (below the range: legal), 100 (its lower
+/// end: forbidden) and 150 (its upper end: forbidden). The limit reported is
+/// the narrowest legal gap above the range, 151.
+#[test]
+fn a_forbidden_range_is_closed_at_both_ends() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule fs forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)\n",
+        &[
+            ("met1", [0, 0, 100, 1_000]),
+            ("met1", [199, 0, 299, 1_000]),
+            ("met1", [2_000, 0, 2_100, 1_000]),
+            ("met1", [2_200, 0, 2_300, 1_000]),
+            ("met1", [4_000, 0, 4_100, 1_000]),
+            ("met1", [4_250, 0, 4_350, 1_000]),
+        ],
+    );
+    let got = found.of("fs");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(count((len(100), len(151))), 1, "{got:?}");
+    assert_eq!(count((len(150), len(151))), 1, "{got:?}");
+}
+
+/// A range that ends before it starts forbids nothing a deck could mean,
+/// and is refused when the rules are built.
+#[test]
+fn a_forbidden_range_that_ends_before_it_starts_is_refused_at_load() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule fs forbidden_space(met1; min: 150nm, max: 100nm, prl: 0nm)\n",
+        grid(),
+        &mut strings,
+    )
+    .expect("parses");
+    let built = gpurify_check::drc::RuleSet::from_deck(&deck, &strings);
+    assert!(
+        matches!(&built, Err(gpurify_check::drc::DrcError::BadTable(id)) if id == "fs"),
+        "{built:?}"
+    );
+}
+
 // ---------------------------------------------------------- huge metal
 
 /// sky130 m1.3a "Min. spacing of features attached to or extending from

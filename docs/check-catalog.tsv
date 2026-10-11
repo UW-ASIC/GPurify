@@ -29,7 +29,7 @@ DRC-029	drc	spacing	End-of-line spacing	LEF:SPACING ENDOFLINE PARALLELEDGE TWOED
 DRC-030	drc	spacing	EOL extension / keep-out	LEF58_EOLEXTENSIONSPACING; LEF58_EOLKEEPOUT; drt	-	missing	TX:drt	
 DRC-031	drc	spacing	Tip-to-tip / tip-to-side by width class	A7:M1.S.2-S.5,M4.S.3,M4.S.4	eol_spacing, tip_spacing_table	partial	FR; MR; SY; TX:KL	tip_spacing_table classes both facing edges by length (A7 M1.S.1-S.5); M4.S.3 and M4.S.4, tip to tip between lines on adjacent tracks, are missing
 DRC-032	drc	spacing	Corner spacing (convex/concave, corner-to-corner)	LEF58_CORNERSPACING; A7:M1.S.6; GF:MT30.3; ISPD19; KL:corners; drt	corner_to_corner	partial	BM; FR; TX:KL; MR; SY	Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md, "Shipped decks")
-DRC-033	drc	spacing	Forbidden spacing ranges	LEF58_FORBIDDENSPACING; LEF58_TWOWIRESFORBIDDENSPACING; drt	-	missing	TX:drt	
+DRC-033	drc	spacing	Forbidden spacing ranges	LEF58_FORBIDDENSPACING; LEF58_TWOWIRESFORBIDDENSPACING; drt	forbidden_spacing	partial	MR; SY; TX:KL	forbidden_spacing holds a closed gap range between facing edges running longer than a PRL (LEF58_TWOWIRESFORBIDDENSPACING as drt reads it); its MINSPANLENGTH/MAXSPANLENGTH, LEF58_FORBIDDENSPACING's WIDTH/WITHIN/TWOEDGES, and a preferred direction are missing
 DRC-034	drc	spacing	Maximum spacing	LEF58_MAXSPACING; drt	-	missing	TX:drt	
 DRC-035	drc	spacing	Pitch / exact pitch / on-track	A7:FIN.S.1,GATE.S.1; LEF:PITCH; LEF58_PITCH; LEF58_RIGHTWAYONGRIDONLY; drt	-	missing	FR	Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010)
 DRC-036	drc	spacing	Span-length table	LEF58_SPANLENGTHTABLE	-	missing	SE	
