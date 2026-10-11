@@ -1736,3 +1736,38 @@ fn a_piecewise_linear_table_lowers_point_by_point_and_must_rise() {
     one_error(&row("[(0um2, 400, 1)]"), "(area, number) points");
     one_error(&row("[]"), "at least one point");
 }
+
+/// Oracle: deck.md's own multi-patterning example. It parses after the
+/// three layers it names are declared, and each row lowers to the kind the
+/// text says checks it.
+#[test]
+fn the_multi_patterning_example_in_the_language_spec_parses() {
+    let spec = include_str!("../../../docs/deck.md");
+    let start = spec.find("```\nrule M1.DP.opp").expect("the example") + 4;
+    let example = &spec[start..start + spec[start..].find("```").expect("closed")];
+    let text = format!(
+        "grid 1nm\nlayer m1 = gds(1, 0)\nlayer m1_c1 = gds(1, 1)\nlayer m1_c2 = gds(1, 2)\n{example}"
+    );
+    let mut strings = StrTable::default();
+    let deck = parse_deck(&text, grid(), &mut strings).unwrap_or_else(|why| panic!("{why}"));
+    let kinds: Vec<&str> = deck
+        .rules
+        .spec
+        .iter()
+        .map(|spec| strings.resolve(spec.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "min_spacing",
+            "notch",
+            "multi_patterning",
+            "anchored_patterning",
+            "min_spacing",
+            "min_spacing_diff",
+            "overlap",
+            "min_spacing_diff",
+            "density_balance",
+        ]
+    );
+}

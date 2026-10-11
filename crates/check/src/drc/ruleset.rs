@@ -3912,7 +3912,12 @@ impl RuleSet {
                         .all(|&layer| declared.contains(&Some(layer))),
                 "rule {id:?} reports only on a layer it reads, {declared:?}"
             );
-            for layer in rule.layers().into_iter().chain(rule.more_layers()).flatten() {
+            for layer in rule
+                .layers()
+                .into_iter()
+                .chain(rule.more_layers())
+                .flatten()
+            {
                 if last_use[layer.idx()] == at {
                     s.validated.forget(layer);
                 }

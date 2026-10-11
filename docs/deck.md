@@ -395,6 +395,31 @@ needs the larger of its two cells, and a pair that touches or overlaps the
 largest cell of its classes. Distances are edge to edge. The table must be
 symmetric.
 
+### Multi-patterning
+
+A multi-patterned layer is checked by one row per kind of error, so each is
+reported under its own id. With the layer `m1`, and its masks drawn or marked
+as `m1_c1` and `m1_c2`:
+
+```
+rule M1.DP.opp  space(m1) >= 40nm                          # closer than any two masks allow
+rule M1.DP.self notch(m1) >= 80nm                          # a shape too close to itself for one mask
+rule M1.DP.odd  patterning(m1; colors: 2) >= 80nm          # no split exists (an odd cycle)
+rule M1.DP.anc  patterning(m1, m1_c1, m1_c2; colors: 2) >= 80nm   # the pre-coloured shapes cannot be honoured
+rule M1.S.same  space(m1 and m1_c1) >= 80nm                # same-mask spacing of coloured shapes
+rule M1.S.diff  space(m1 and m1_c1, m1 and m1_c2) >= 40nm  # different-mask spacing
+rule M1.ST.ov   overlap(m1_c1, m1_c2) >= 10nm              # a stitch overlaps at least this far
+rule M1.ST.sp   space(m1_c1 and m1_c2, m1.not_interacting(m1_c1 and m1_c2)) >= 80nm   # and not near other shapes
+rule M1.D.bal   density_balance(m1_c1, m1_c2; window: 10um, step: 5um) >= 0.8   # the masks' coverage in balance
+```
+
+These follow the error classes Calibre publishes (minimum opposite-mask
+spacing, self-conflict, odd cycle, anchor path and anchor self-conflict),
+LEF/DEF's `MASK` and `SAMEMASK`, and the stitch overlap of the
+decomposition literature. A trim or cut layer is written with the ordinary
+checks, as ASAP7's gate cut: `extension(GCUT, GATE) >= 17nm` and
+`forbidden(GCUT.not_interacting(GATE))`.
+
 ### Edge checks
 
 These take an edge layer, such as the butting edges `tap.edges() and
