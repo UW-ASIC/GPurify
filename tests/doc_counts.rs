@@ -170,7 +170,8 @@ fn the_readme_accuracy_section_is_the_corpus() {
 }
 
 /// Oracle: the cases in `tests/fixtures/expectations.json`, counted per domain,
-/// strength and corroboration, against the fixtures README's table.
+/// strength, corroboration and the outcome and examined guard, against the
+/// fixtures README's table and sentences.
 #[test]
 fn the_fixtures_readme_is_the_corpus() {
     const NAME: &str = "tests/fixtures/README.md";
@@ -223,6 +224,21 @@ fn the_fixtures_readme_is_the_corpus() {
             "{NAME}: the {dispute} row"
         );
     }
+    // The no-vacuous-pass guard: a case without both can pass on a check
+    // that ran over nothing (testing-plan F6).
+    let guarded = cases
+        .iter()
+        .filter(|case| !case["expect_outcome"].is_null() && !case["examined_min"].is_null())
+        .count();
+    assert_says(
+        &doc,
+        NAME,
+        &format!(
+            "{guarded} of {} cases carry `expect_outcome` and `examined_min`",
+            cases.len()
+        ),
+    );
+
     let disputed = cases
         .iter()
         .filter(|case| case["dispute"].is_string())
