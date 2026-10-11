@@ -183,7 +183,7 @@ pub fn read_reference_text(
     strings: &mut StrTable,
 ) -> Result<Netlist, gpurify_ingest::netlist::NetlistError> {
     if spectre_by_opener(source).unwrap_or(spectre_by_name) {
-        gpurify_ingest::netlist::spectre::read(source, strings)
+        gpurify_ingest::netlist::spectre::read(source, strings, devices)
     } else {
         gpurify_ingest::netlist::spice::read(source, strings, devices)
     }
