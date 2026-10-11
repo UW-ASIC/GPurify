@@ -454,7 +454,11 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B17 | LVS: shorted-channel parallel merge, a tie break that cannot pair across unsplittable classes | F57, F58 | done |
 | B18 | ERC: IHP's per-layer cumulative antenna ratio, protection diodes on `antenna`, exact IR at the limit, `hv_domain` isolation on the marker's edge | F59, F60, F61, F62 | done |
 | B19 | PEX: closed forms over merged conductors; a field-solved polygon as its own filaments | F44, F45 | done |
-| B20 | Geometry: one corner model for booleans, connectivity and every rule | F38, F51, F53 | todo: needs the corner model chosen |
+| B20 | Geometry: one corner model for booleans, connectivity and every rule. **Decided: Connected** — corner contact joins material; a ring closed only at a corner encloses a hole; the touch point is a 0-width neck | F38, F51, F53 | todo |
+| B21 | LVS follow-ups: an unsized series merge is refused (decided); parameter presence per device (decided); a duplicated terminal binds by shape; floating_net and label_conflict located | F67, F68, F69, F70 | todo |
+| B22 | ERC follow-ups: drivers oriented by intent's rails, Skipped without intent (decided); an antenna gate joins only metal connected to it | F28, F72 | todo |
+| B23 | PEX follow-ups: wells and diffusion as closed-form junctions outside the field solve (decided); negative pex coefficients refused; an unmeshable net a PEX refusal; SPEF keeps every name of a shorted net | F71, F73, F74, F75 | todo |
+| B24 | DRC follow-ups: parallel run by facing-edge projection (decided); with_width keeps each bound's strictness (decided); angle on drawn layers; density and spacing markers on the measured shapes | F49, F63, F64, F65, F66 | todo |
 | C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | done |
 | C2 | testgen `prop`: seeds by property name, committed regression seeds replayed every run, greedy shrinking (rectangle layouts); `#[ignore]`d nightly twins instead of env knobs | F8, L3 | done |
 | C3 | Boolean laws over random operands | L3 | done |
