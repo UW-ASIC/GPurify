@@ -345,8 +345,17 @@ pub enum DerivedOp {
     /// The shapes of operand 0 entirely covered by operand 1, touching its
     /// boundary from inside allowed.
     Inside,
-    /// The shapes of operand 0 sharing no area with operand 1; touching is outside.
+    /// The shapes of operand 0 sharing no area with operand 1; touching is
+    /// outside. `KLayout`'s `outside`, and its `not_overlapping`.
     Outside,
+    /// `KLayout` `overlapping`: the shapes of operand 0 sharing area with
+    /// operand 1. Touching is not overlapping; [`DerivedOp::Outside`] is the
+    /// rest.
+    Overlapping,
+    /// `KLayout` `covering` (`true`): the shapes of operand 0 that hold a whole
+    /// shape of operand 1, which may touch the holder's boundary from inside.
+    /// `false` is `not_covering`, the rest.
+    Covering(bool),
     /// Each hole of each shape, filled; a hole holding an island covers it.
     Holes,
     /// The bounding box of each shape, one shape per box: boxes that overlap
@@ -418,6 +427,8 @@ impl DerivedOp {
             Self::Sized(_)
             | Self::Inside
             | Self::Outside
+            | Self::Overlapping
+            | Self::Covering(_)
             | Self::Holes
             | Self::Extents
             | Self::WithArea(..)

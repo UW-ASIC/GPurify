@@ -27,10 +27,10 @@ result from them is weaker than it looks.
 
 ## Checks that do not exist yet
 
-- Derived layers have no selection by net or angle, no
-  `covering`/`overlapping`, and `sized` grows both axes by the same amount.
-  Shape class (`.rectangles()`, `.squares()`), direction (`.horizontal()`,
-  `.vertical()`) and bounding-box size (`.with_bbox_max()`) are selectable.
+- Derived layers have no selection by net or angle, and `sized` grows both
+  axes by the same amount. Shape class (`.rectangles()`, `.squares()`),
+  direction (`.horizontal()`, `.vertical()`), bounding-box size
+  (`.with_bbox_max()`), `.covering()` and `.overlapping()` are selectable.
 - Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
   allowed to extend beyond their abutting edge" cannot be written.
 - A way to state the voltage or domain of an input signal for the whole run:

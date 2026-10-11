@@ -77,6 +77,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         selections(),
         shape_class(),
         feature_length(),
+        covering_overlapping(),
         edge_operations(),
     ]
     .concat()
@@ -4512,6 +4513,76 @@ fn selections() -> Vec<Fixture> {
         texts,
     ));
     every_placement(cases)
+}
+
+/// `covering`, `not_covering`, `overlapping` and `not_overlapping` (DRC-121),
+/// `KLayout`'s operations of those names: an `a` shape covers when it holds a
+/// whole `b` shape (touching its boundary from inside allowed), and overlaps
+/// when it shares area with one (touching is not). Each selected `a` shape is
+/// reported with its area, which names it.
+///
+/// `a` shapes: holding a `b` (1000000); with a `b` across its edge (900000);
+/// touched by a `b` from outside (800000); with a `b` touching its edge from
+/// inside (700000); holding a `b` drawn as two abutting halves (600000);
+/// drawn as two abutting halves holding a `b` across the seam (500000); a
+/// ring with a `b` island in its hole (840000); alone (400000); and inside a
+/// larger `b` (90000).
+fn covering_overlapping() -> Vec<Fixture> {
+    let layout = ring(
+        rects(
+            rects(
+                Layout::default(),
+                "a",
+                &[
+                    (0, 0, 1000, 1000),
+                    (2000, 0, 2900, 1000),
+                    (4000, 0, 4800, 1000),
+                    (6000, 0, 6700, 1000),
+                    (8000, 0, 8600, 1000),
+                    (10_000, 0, 10_250, 1000),
+                    (10_250, 0, 10_500, 1000),
+                    (14_000, 0, 14_400, 1000),
+                    (16_200, 200, 16_500, 500),
+                ],
+            ),
+            "b",
+            &[
+                (200, 200, 400, 400),
+                (2800, 400, 3000, 600),
+                (4800, 400, 5000, 600),
+                (6000, 400, 6200, 600),
+                (8100, 100, 8200, 300),
+                (8200, 100, 8300, 300),
+                (10_200, 400, 10_300, 600),
+                (12_400, 400, 12_600, 600),
+                (16_000, 0, 17_000, 1000),
+            ],
+        ),
+        "a",
+        (12_000, 0, 13_000, 1000),
+        (12_300, 300, 12_700, 700),
+    );
+    every_placement(vec![derived(
+        "derived/covering_overlapping",
+        &["DRC-121"],
+        &["a", "b"],
+        &[
+            (
+                "a.covering(b)",
+                areas(&[1_000_000, 700_000, 600_000, 500_000]),
+            ),
+            (
+                "a.not_covering(b)",
+                areas(&[900_000, 800_000, 840_000, 400_000, 90_000]),
+            ),
+            (
+                "a.overlapping(b)",
+                areas(&[1_000_000, 900_000, 700_000, 600_000, 500_000, 90_000]),
+            ),
+            ("a.not_overlapping(b)", areas(&[800_000, 840_000, 400_000])),
+        ],
+        layout,
+    )])
 }
 
 /// Rectangle-only and square-only shapes (DRC-005: sky130 capm.7 "only

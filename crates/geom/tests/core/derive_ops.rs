@@ -2,9 +2,10 @@
 
 use gpurify_geom::boolean::{intersection_into, subtraction_into, BooleanError};
 use gpurify_geom::derive::{
-    edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
-    inside_into, interacting_into, merge_into, outside_into, sized_into, with_area_into,
-    with_length_into, with_width_into, EdgeOp,
+    covering_into, edge_boolean_into, edge_interacting_into, edge_part_into, edges_into,
+    extents_into, holes_into, inside_into, interacting_into, merge_into, outside_into,
+    overlapping_into, rectangles_into, sized_into, with_area_into, with_length_into,
+    with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{Point, Seg};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
@@ -333,6 +334,72 @@ fn with_area_selects_on_the_area_net_of_holes() {
     assert_eq!(got.len(), 1, "4x4 minus 2x2 is 12");
     with_area_into(&holed, 16..=16, &mut got);
     assert!(got.is_empty(), "the hole is not area");
+}
+
+/// Oracle: `KLayout`'s `covering` and `overlapping` definitions, on four
+/// 10 x 10 squares each drawn with one `b` shape: held inside, across the
+/// edge, touching from outside, touching from inside. Covering takes the
+/// first and the last; overlapping all but the one touched from outside,
+/// which `outside` keeps.
+#[test]
+fn covering_holds_a_whole_shape_and_overlapping_shares_area() {
+    let a = rects(&[
+        (0, 0, 10, 10),
+        (20, 0, 30, 10),
+        (40, 0, 50, 10),
+        (60, 0, 70, 10),
+    ]);
+    let b = rects(&[(2, 2, 4, 4), (28, 4, 32, 6), (50, 4, 52, 6), (60, 4, 62, 6)]);
+    let mut got = ValidatedLayer::default();
+    covering_into(&a, &b, true, &mut got).expect("rectilinear");
+    assert_eq!(boxes(&got), [(0, 0, 10, 10), (60, 0, 70, 10)]);
+    covering_into(&a, &b, false, &mut got).expect("rectilinear");
+    assert_eq!(boxes(&got), [(20, 0, 30, 10), (40, 0, 50, 10)]);
+    overlapping_into(&a, &b, true, &mut got).expect("rectilinear");
+    assert_eq!(
+        boxes(&got),
+        [(0, 0, 10, 10), (20, 0, 30, 10), (60, 0, 70, 10)]
+    );
+    outside_into(&a, &b, &mut got).expect("rectilinear");
+    assert_eq!(boxes(&got), [(40, 0, 50, 10)]);
+}
+
+/// Oracle: `KLayout`'s `rectangles` / `squares` definition, on shapes drawn
+/// to be or not be a box: a square, a 3 x 2 box, two abutting squares that
+/// merge into a 4 x 2 box, a box one unit off square, an L, and a square with
+/// a hole (no box). The `non_` forms are the complement.
+#[test]
+fn rectangles_and_squares_select_holeless_boxes() {
+    let (hx, hy) = hole(41, 1, 43, 3);
+    let l = layer(&[
+        (&[0, 2, 2, 0], &[0, 0, 2, 2]),
+        (&[10, 13, 13, 10], &[0, 0, 2, 2]),
+        (&[20, 22, 22, 20], &[0, 0, 2, 2]),
+        (&[22, 24, 24, 22], &[0, 0, 2, 2]),
+        (&[30, 33, 33, 30], &[0, 0, 4, 4]),
+        (&[30, 34, 34, 30], &[10, 10, 13, 13]),
+        (&[50, 54, 54, 52, 52, 50], &[0, 0, 2, 2, 4, 4]),
+        (&[40, 44, 44, 40], &[0, 0, 4, 4]),
+        (&hx, &hy),
+    ]);
+    let mut got = ValidatedLayer::default();
+    rectangles_into(&l, false, true, &mut got);
+    assert_eq!(
+        boxes(&got),
+        [
+            (0, 0, 2, 2),
+            (10, 0, 13, 2),
+            (20, 0, 24, 2),
+            (30, 0, 33, 4),
+            (30, 10, 34, 13)
+        ]
+    );
+    rectangles_into(&l, false, false, &mut got);
+    assert_eq!(boxes(&got), [(40, 0, 44, 4), (50, 0, 54, 4)]);
+    rectangles_into(&l, true, true, &mut got);
+    assert_eq!(boxes(&got), [(0, 0, 2, 2)]);
+    rectangles_into(&l, true, false, &mut got);
+    assert_eq!(got.len(), 6, "every shape but the square");
 }
 
 /// Oracle: hand-derived. The L's narrowest width is its 2-wide arm and the bar
