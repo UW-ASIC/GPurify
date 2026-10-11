@@ -185,7 +185,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; exact resistor widths are width(L; allowed: [..]) (sky130 rpm.1b-1f) and channel length and width width(E) (DRC-011). Missing: licon counts per resistor terminal (rpm.1g-1k) and varactor taps (varac.2, varac.6) |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
 | DRC-095 | Seal ring | partial | Geometry through the generic kinds; one seal ring per chip (IHP Seal.m) is count(seal) <= 1 with >= 1, nothing outside it (Seal.l) forbidden(L not (seal or seal.holes())). Missing: the seal ring at the origin (sky130 x.19) and a partnum beside it (x.27) |
-| DRC-097 | Frame / die / cell-name rules | missing | sky130.deck left out |
+| DRC-097 | Frame / die / cell-name rules | partial | Frame, scribe and LBE geometry is expressible with the generic kinds (sky130 x.16, x.21, x.23a-d, x.28; IHP LBE.*), e.g. forbidden(sl and diff), forbidden(lbe.holes()). Missing: cell-name and pcell rules (x.12 exemptions, x.25-x.27) and the seal ring's corner at the origin (x.19) |
 | DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | Reports a colouring failure, not its class |
 | DRC-102 | Pre-coloured (MASK) same-/different-mask spacing | missing | — |
 | DRC-103 | Stitch legality | missing | — |
