@@ -66,7 +66,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | LVS | 17 | 1 | 16 | 14 | 0 | 0 |
 | ERC | 27 | 2 | 14 | 38 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
-| Flow | 0 | 0 | 1 | 9 | 0 | 0 |
+| Flow | 0 | 0 | 2 | 8 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).

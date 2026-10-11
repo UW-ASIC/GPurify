@@ -66,6 +66,9 @@
 //!
 //! The four decks in `pdks/` are compiled into the library as [`pdks`], so a
 //! consumer reads the deck the checker is tested with instead of a copy.
+//! A deck can also be built or overridden in Rust ([`deck::DeckBuilder`]),
+//! with rules of its own written as Rust functions ([`deck::CustomRule`]),
+//! and shipped in a binary of its own ([`cli::main_with`]).
 //!
 //! # Where every rule is defined
 //!
@@ -99,6 +102,7 @@
 
 pub use gpurify_check as check;
 pub use gpurify_check::deck;
+pub mod cli;
 pub use gpurify_geom as geom;
 pub mod engine;
 pub mod export;

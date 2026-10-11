@@ -365,7 +365,7 @@ says which foundry manual, standard or tool defines each one.
 | FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | missing | Cheap from LEF/DEF + GDS |
 | FLOW-004 | Interface DRC top vs blocks | missing | — |
 | FLOW-005 | In-design / live DRC | partial | Shared-deck library (Philis) is the first step |
-| FLOW-006 | User-programmable rules | missing | Rust decks + Rule::Custom (testing-plan.md L9b) |
+| FLOW-006 | User-programmable rules | partial | DRC custom rules as Rust fn pointers (deck::CustomRule via DeckBuilder::custom; runner owns accounting) and gpurify::cli::main_with for a binary with its own decks; ERC custom rules and a KLayout snippet per rule not yet (deck-library plan P5) |
 | FLOW-007 | Fill insertion (density-driven, timing-aware) | missing | DRC-073 checks fill; this generates it |
 | FLOW-008 | Incremental / ECO re-verification (changed regions or nets only) | missing | Metamorphic: an incremental run equals a full run |
 | FLOW-009 | Automated DRC-clean layout enhancement (via and power-grid insertion) | missing | — |

@@ -2,6 +2,7 @@
 //! and the printer, one module each.
 
 mod builder;
+mod custom;
 mod errors;
 mod kinds;
 mod printer;

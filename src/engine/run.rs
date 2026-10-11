@@ -4,6 +4,7 @@
 //! (violations, rule records, LVS verdict, parasitics) and a [`Summary`].
 
 use crate::engine::pipeline::{Extracted, Inputs, Loaded};
+use gpurify_check::deck::DeckFn;
 use gpurify_check::lvs::verdict::Inconclusive;
 use gpurify_check::lvs::Verdict;
 use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
@@ -20,7 +21,7 @@ use gpurify_geom::{Bbox, LayerId};
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checks {
-    /// Design rules: every DRC row of the deck.
+    /// Design rules: every DRC row of the deck, then its custom rules.
     pub drc: bool,
     /// Electrical rules: every ERC row of the deck.
     pub erc: bool,
@@ -297,6 +298,15 @@ fn run_drc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
             .deck
             .drc
             .run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
+        gpurify_check::deck::run_custom(
+            &loaded.deck.custom,
+            &loaded.store,
+            Some(&extracted.nets),
+            loaded.grid,
+            &loaded.strings,
+            violations,
+            runs,
+        );
     });
     StageStatus::Ran
 }
@@ -597,7 +607,21 @@ pub fn run(
     inputs: &Inputs,
     options: &RunOptions,
 ) -> Result<(Loaded, Extracted, Outputs, Summary), EngineError> {
-    let loaded = crate::engine::pipeline::load(inputs)?;
+    run_with(inputs, options, &[])
+}
+
+/// [`run`], with the decks a binary carries by name: `inputs.deck` naming one
+/// of `decks` builds it ([`load_with`](crate::engine::pipeline::load_with)).
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_with(
+    inputs: &Inputs,
+    options: &RunOptions,
+    decks: &[(&str, DeckFn)],
+) -> Result<(Loaded, Extracted, Outputs, Summary), EngineError> {
+    let loaded = crate::engine::pipeline::load_with(inputs, decks)?;
     let extracted = crate::engine::pipeline::extract(&loaded)?;
     let (outputs, summary) = run_checks(&loaded, &extracted, options)?;
     Ok((loaded, extracted, outputs, summary))

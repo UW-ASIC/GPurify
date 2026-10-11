@@ -15,12 +15,15 @@
 //! the base deck's sorted by id, and removing an id then adding it again is
 //! replacing it.
 
+use super::custom::{CustomCheck, CustomRule};
 use super::rules::{RowValue, RuleRow};
 use super::{CompileError, CompiledDeck, Origin};
+use crate::report::Severity;
 use gpurify_geom::{Dbu, DbuArea, Grid, Length, Qty, StrTable};
 use gpurify_ingest::deck::{
-    lower, ConnectivitySource, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
-    DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource, ViaSource,
+    lower, ConnectivitySource, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind,
+    DeviceSource, DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource,
+    ViaSource,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::Location;
@@ -515,6 +518,16 @@ forward! {
     with_bbox_min(bounds: &[Bound<Dbu>]);
 }
 
+/// A custom rule before its layers are ids.
+#[derive(Debug, Clone)]
+struct PendingCustom {
+    id: String,
+    inputs: Vec<String>,
+    severity: Severity,
+    check: CustomCheck,
+    origin: Origin,
+}
+
 /// One rule slot, in deck order.
 #[derive(Debug, Clone)]
 enum Slot {
@@ -581,6 +594,10 @@ pub struct DeckBuilder<'s> {
     added: BTreeMap<String, RuleRow>,
     /// The base deck's provenance, by id.
     base_origin: HashMap<String, Origin>,
+    /// Custom rules, in the order stated.
+    custom: Vec<PendingCustom>,
+    /// Whether this builder overrides a base deck, so what it states is added.
+    based: bool,
     errors: Vec<BuildDiagnostic>,
 }
 
@@ -620,6 +637,8 @@ impl<'s> DeckBuilder<'s> {
             rules: Vec::new(),
             added: BTreeMap::new(),
             base_origin: HashMap::new(),
+            custom: Vec::new(),
+            based: false,
             errors: Vec::new(),
         }
     }
@@ -628,10 +647,26 @@ impl<'s> DeckBuilder<'s> {
     /// table `base` was compiled into.
     pub fn from_deck(base: &CompiledDeck, strings: &'s mut StrTable) -> Self {
         let source = base.source(strings);
-        let base_origin = base
+        let base_origin: HashMap<String, Origin> = base
             .provenance
             .iter()
             .map(|&(id, origin)| (strings.resolve(id).to_owned(), origin))
+            .collect();
+        let custom = base
+            .custom
+            .iter()
+            .map(|rule| {
+                let id = strings.resolve(rule.id).to_owned();
+                PendingCustom {
+                    origin: base_origin.get(&id).copied().unwrap_or(Origin::Base),
+                    id,
+                    inputs: (rule.inputs.iter())
+                        .map(|&layer| strings.resolve(base.layers.name(layer)).to_owned())
+                        .collect(),
+                    severity: rule.severity,
+                    check: rule.check,
+                }
+            })
             .collect();
         let mut names: Vec<String> = source.layers.iter().map(|(name, _)| name.clone()).collect();
         names.extend(source.derived.iter().map(|row| row.name.clone()));
@@ -658,7 +693,9 @@ impl<'s> DeckBuilder<'s> {
             temperature: source.temperature,
             rules: source.rules.into_iter().map(Slot::Kept).collect(),
             added: BTreeMap::new(),
+            custom,
             base_origin,
+            based: true,
             errors: Vec::new(),
             strings,
         }
@@ -929,6 +966,7 @@ impl<'s> DeckBuilder<'s> {
     /// Whether some rule of the deck has `id`.
     fn has_rule(&self, id: &str) -> bool {
         self.added.contains_key(id)
+            || self.custom.iter().any(|rule| rule.id == id)
             || self
                 .rules
                 .iter()
@@ -974,6 +1012,43 @@ impl<'s> DeckBuilder<'s> {
         }
     }
 
+    /// A custom rule ([`CustomRule`]): `check`, a Rust function, reads
+    /// `inputs` and reports at `severity`, after the DRC rules. In a builder
+    /// started from a deck it is [`Origin::Added`]. Refused when the id is
+    /// taken or no input is given: a rule that reads nothing never runs.
+    #[track_caller]
+    pub fn custom(
+        &mut self,
+        id: &str,
+        inputs: &[LayerRef],
+        severity: Severity,
+        check: CustomCheck,
+    ) {
+        if !self.check_id(id) {
+            return;
+        }
+        if inputs.is_empty() {
+            self.refuse(format!("{id}: a custom rule reads at least one layer"));
+            return;
+        }
+        let mut names = Vec::with_capacity(inputs.len());
+        for &layer in inputs {
+            names.push(self.resolve(layer));
+        }
+        let origin = if self.based {
+            Origin::Added
+        } else {
+            Origin::Base
+        };
+        self.custom.push(PendingCustom {
+            id: id.to_owned(),
+            inputs: names,
+            severity,
+            check,
+            origin,
+        });
+    }
+
     /// Adds a rule over the base deck. Refused when the id is taken; an id
     /// [`remove`](Self::remove)d before is replaced in its place.
     #[track_caller]
@@ -997,10 +1072,17 @@ impl<'s> DeckBuilder<'s> {
     }
 
     /// Replaces the rule `id`, keeping its place; its kind may change.
-    /// Refused, never an add, when the deck has no rule `id`.
+    /// Refused, never an add, when the deck has no rule `id`, and for a
+    /// custom rule, which is [`remove`](Self::remove)d and stated again.
     #[track_caller]
     pub fn replace(&mut self, id: &str, row: RuleRow) {
         self.check_row(id, &row);
+        if self.custom.iter().any(|rule| rule.id == id) {
+            self.refuse(format!(
+                "replace of custom rule `{id}`: remove it and state the new one"
+            ));
+            return;
+        }
         if let Some(added) = self.added.get_mut(id) {
             *added = row;
             return;
@@ -1023,10 +1105,14 @@ impl<'s> DeckBuilder<'s> {
         }
     }
 
-    /// Removes the rule `id`. Refused when the deck has none.
+    /// Removes the rule `id`, custom or not. Refused when the deck has none.
     #[track_caller]
     pub fn remove(&mut self, id: &str) {
         if self.added.remove(id).is_some() {
+            return;
+        }
+        if let Some(at) = self.custom.iter().position(|rule| rule.id == id) {
+            self.custom.remove(at);
             return;
         }
         match self
@@ -1265,6 +1351,25 @@ impl<'s> DeckBuilder<'s> {
             if let Some(&stated) = origins.get(self.strings.resolve(*id)) {
                 *origin = stated;
             }
+        }
+        // Custom rules follow every typed rule, their ids interned last.
+        for rule in self.custom {
+            let mut inputs = Vec::with_capacity(rule.inputs.len());
+            for name in &rule.inputs {
+                let Some(layer) = compiled.layers.id(self.strings, name) else {
+                    let why = format!("{}: unknown layer {name}", rule.id);
+                    return Err(CompileError::from(DeckError::Malformed(why)).into());
+                };
+                inputs.push(layer);
+            }
+            let id = self.strings.intern(&rule.id);
+            compiled.custom.push(CustomRule {
+                id,
+                inputs,
+                severity: rule.severity,
+                check: rule.check,
+            });
+            compiled.provenance.push((id, rule.origin));
         }
         Ok(compiled)
     }
