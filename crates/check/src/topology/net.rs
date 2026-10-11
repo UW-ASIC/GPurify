@@ -280,7 +280,7 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
 /// Whether two of the store's polygons share at least one point, holes
 /// excluded. The exact re-test behind every bounding-box prune: merging on a
 /// box alone is fail-open. A hole row is never a polygon of its own here.
-fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -> bool {
+pub(crate) fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -> bool {
     if holes.is_hole(a) || holes.is_hole(b) {
         return false;
     }

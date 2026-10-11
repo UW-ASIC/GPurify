@@ -6,7 +6,7 @@
 
 use crate::drc::rules::{owners_of, LayerRects};
 use crate::topology::csr_run;
-use crate::topology::net::{retain_intersecting_into, NetId, NetTable};
+use crate::topology::net::{polys_intersect, retain_intersecting_into, NetId, NetTable};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::area2;
@@ -213,25 +213,28 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 ///
 /// Each polygon on a recogniser's marker layer is one candidate device. A
 /// terminal polygon is under the marker when the two share at least one
-/// point, touching included. More polygons under it than positions name
-/// their layer are terminals drawn twice when their nets are as many as the
-/// positions, which then take one net each in the order of each net's lowest
-/// polygon, or all one net, which then fills every position. Any other
-/// surplus refuses the marker, as two gates under one marker do, and so do
-/// too few polygons. Which copy of a terminal is numbered first does not
-/// matter (testing-plan F33). When two recognisers that share a marker layer
-/// both bind a marker, the earlier deck row wins; a marker none binds is
-/// listed in [`DeviceTable::refused`].
+/// point, touching included. Polygons under it that touch or overlap each
+/// other are one shape: a terminal drawn twice is still one terminal. Each
+/// position needs a shape of its own, so too few shapes refuse the marker: a
+/// channel with its source drawn twice and no drain is no device, not one
+/// with its source and drain shorted (testing-plan F69). More shapes than
+/// positions name their layer are terminals drawn apart when their nets are
+/// as many as the positions, which then take one net each in the order of
+/// each net's lowest shape, or all one net, which then fills every position.
+/// Any other surplus refuses the marker, as two gates under one marker do.
+/// Which copy of a terminal is numbered first does not matter (testing-plan
+/// F33). When two recognisers that share a marker layer both bind a marker,
+/// the earlier deck row wins; a marker none binds is listed in
+/// [`DeviceTable::refused`].
 /// `nets` must have been extracted from `store`; `out` is cleared and
 /// refilled.
 ///
 /// # Limits
 ///
 /// - Only MOS `W`/`L` and each marker's area are measured (testing-plan F16).
-/// - Duplicates are recognised by net, not by shape: a terminal drawn twice
-///   with its twin missing reads as both terminals on one net, a shorted
-///   device, and with three or more positions on one layer, a surplus that
-///   leaves some net to fill two of them refuses the marker.
+/// - With three or more positions on one layer, a surplus of shapes on fewer
+///   nets than positions refuses the marker, even when each position could
+///   have had a shape of its own.
 ///
 /// # Panics
 ///
@@ -262,6 +265,8 @@ pub fn recognise_into(
     let mut bind: Vec<NetId> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
     let mut distinct: Vec<NetId> = Vec::new();
+    let mut group: Vec<usize> = Vec::new();
+    let mut shapes: Vec<PolyId> = Vec::new();
     let mut matched: Vec<Match> = Vec::new();
     let mut bound: Vec<NetId> = Vec::new();
     let mut sd_axis: Vec<Axis> = Vec::new();
@@ -339,19 +344,41 @@ pub fn recognise_into(
                 if votes_axis && sd_axis[offset] == Axis::Unknown {
                     sd_axis[offset] = channel_axis(store, marker, run[0].1);
                 }
-                if run.len() <= positions.len() {
-                    // The r-th polygon fills the r-th position; too few leave
-                    // one unfilled, which refuses the marker.
-                    for (&position, &(_, terminal)) in positions.iter().zip(run) {
+                // Polygons that touch or overlap are one shape, one terminal
+                // however often it was drawn (testing-plan F69), named by its
+                // lowest polygon.
+                // ponytail: pairwise over one marker's polygons on one layer,
+                // a handful in practice; sweep them if a marker covers hundreds.
+                group.clear();
+                group.extend(0..run.len());
+                for i in 0..run.len() {
+                    for j in 0..i {
+                        if polys_intersect(store, &nets.holes, run[i].1, run[j].1) {
+                            let (a, b) = (root(&group, i), root(&group, j));
+                            group[a.max(b)] = a.min(b);
+                        }
+                    }
+                }
+                shapes.clear();
+                shapes.extend(
+                    (0..run.len())
+                        .filter(|&i| root(&group, i) == i)
+                        .map(|i| run[i].1),
+                );
+                if shapes.len() <= positions.len() {
+                    // The r-th shape fills the r-th position; too few leave
+                    // one with no shape of its own, which refuses the marker.
+                    for (&position, &terminal) in positions.iter().zip(&shapes) {
                         slots[position] = nets.net_of(terminal);
                     }
                     continue;
                 }
-                // More polygons than positions. Their nets, each at its lowest
-                // polygon, decide whether the surplus is terminals drawn twice
-                // (a well over a well), wherever the copies are numbered.
+                // More shapes than positions. Their nets, each at its lowest
+                // shape, decide whether the surplus is terminals drawn apart
+                // on one net (a well beside a well), wherever they are
+                // numbered.
                 distinct.clear();
-                for &(_, terminal) in run {
+                for &terminal in &shapes {
                     let net = nets.net_of(terminal);
                     if !distinct.contains(&net) {
                         distinct.push(net);
@@ -471,6 +498,15 @@ pub fn recognise_into(
     // Sorted by `(net, device)`, so the device column is already in CSR order.
     out.net_device
         .extend(attach.iter().map(|&(_, device)| device));
+}
+
+/// The group of entry `at` in a parent-pointer forest whose roots are their
+/// group's lowest entry.
+fn root(group: &[usize], mut at: usize) -> usize {
+    while group[at] != at {
+        at = group[at];
+    }
+    at
 }
 
 /// Every column emptied, both CSR columns reopened at zero.

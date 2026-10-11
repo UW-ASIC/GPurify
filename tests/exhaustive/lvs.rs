@@ -1661,7 +1661,26 @@ fn layout_rows() -> Vec<Fixture> {
     let mut first = draw(&res);
     first.shapes.insert(0, twice.clone());
     let mut last = draw(&res);
-    last.shapes.push(twice);
+    last.shapes.push(twice.clone());
+    // F69 (fixed in B21), LVS-004: the first pad drawn twice and the second
+    // missing is one shape for two ends. The resistor is no device and is
+    // reported, where it used to bind with both ends on the first pad's net.
+    let (x0, y0, x1, y1) = pad(0, 1);
+    let second = vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+    let mut lonely = draw(&res);
+    lonely
+        .shapes
+        .retain(|(layer, points)| !(layer == "pina" && *points == second));
+    lonely.shapes.push(twice);
+    out.push(
+        with_text(
+            "checks/pad_drawn_twice_other_missing",
+            &["LVS-004", "LVS-012"],
+            lonely,
+            spice(&res),
+        )
+        .expect(Expect::rule("lvs.terminal_net", vec![Finding::any()])),
+    );
     let rows = &["LVS-004", "LVS-012"];
     out.push(
         with_text("checks/pad_drawn_twice_last", rows, last, spice(&res)).expect(Expect::Lvs(true)),

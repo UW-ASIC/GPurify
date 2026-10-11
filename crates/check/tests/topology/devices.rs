@@ -543,6 +543,22 @@ fn a_channel_missing_its_drain_is_listed_as_refused() {
     assert_eq!(devices.refused, [(PolyId(0), 2, 3)]);
 }
 
+/// Oracle: construct-from-answer, testing-plan F69. A channel with its
+/// source drawn twice and no drain: the copies overlap, so they are one
+/// shape, and the drain's position has no polygon of its own. It is no
+/// device, listed as refused with the gate and the source bound of three,
+/// whether the copy coincides with the source or only overlaps it. It used
+/// to bind both copies, on one net, as a transistor with its source and
+/// drain shorted.
+#[test]
+fn a_source_drawn_twice_with_no_drain_is_refused_not_shorted() {
+    for active in [[(0, 200), (0, 200)], [(0, 200), (100, 200)]] {
+        let (devices, ..) = one_channel(&active);
+        assert_eq!(devices.len(), 0, "{active:?} bound a shorted device");
+        assert_eq!(devices.refused, [(PolyId(0), 2, 3)], "{active:?}");
+    }
+}
+
 /// Oracle: construct-from-answer. One channel whose bulk layer is drawn
 /// twice, two overlapping wells, as a top cell redrawing a tile's well does.
 /// The two wells are one net, so the bulk is one terminal: one device.
