@@ -212,7 +212,6 @@ says which foundry manual, standard or tool defines each one.
 | DRC-045 | Extension / end-cap / overhang | partial | Each gate of merged A ∩ B measured per crossed axis; a gate that bends or carries a stub inside B measures 0 (fails closed) |
 | DRC-049 | Exact or maximum count | partial | Minimum count only (sky130.deck "an exact count") |
 | DRC-051 | Abutment / butting edges | partial | Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag") |
-| DRC-052 | Gate-shape rules (no bends, no poly on inner diff corners) | missing | Needs corner/turn selection (sky130.deck) |
 | DRC-053 | Exact alignment / width match across layers | missing | — |
 | DRC-054 | Enclosure excluding coincident edges | missing | — |
 | DRC-055 | Direction-dependent (S/D-direction) spacing | missing | — |
