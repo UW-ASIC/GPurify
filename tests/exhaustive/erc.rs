@@ -4848,3 +4848,4 @@ fn em_thermal() -> Vec<Fixture> {
 // OpenROAD's PDNSim, floating gates against Yosys.
 mod antenna_board;
 mod klayout;
+mod openroad;
