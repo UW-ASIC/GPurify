@@ -853,6 +853,29 @@ pub mod gds {
                     }
                 };
             }
+            debug_assert!(
+                lib.xs.len() == lib.ys.len()
+                    && lib.elems.iter().all(|e| {
+                        e.vert_len >= 3
+                            && e.vert_start as usize + e.vert_len as usize <= lib.xs.len()
+                    }),
+                "every element is a ring of at least three vertices inside the coordinate columns"
+            );
+            debug_assert!(
+                lib.cells.iter().all(|c| {
+                    c.elem_start <= c.elem_end
+                        && c.elem_end as usize <= lib.elems.len()
+                        && c.ref_start <= c.ref_end
+                        && c.ref_end as usize <= lib.refs.len()
+                        && c.text_start <= c.text_end
+                        && c.text_end as usize <= lib.texts.len()
+                }) && lib
+                    .refs
+                    .iter()
+                    .all(|r| (r.child as usize) < lib.cells.len()),
+                "every cell's ranges lie in the element, reference and text lists, and every \
+                 reference names a cell"
+            );
             Ok(lib)
         }
     }

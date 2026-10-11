@@ -1220,7 +1220,56 @@ fn read_dialect(
             return Err(NetlistError::TerminalCount(span, name, got, want));
         }
     }
+    debug_assert!(
+        tables_hold(&b.out),
+        "every CSR column is one longer than its table, monotone and terminated, and \
+         every net and subcircuit id is a row"
+    );
     Ok(b.out)
+}
+
+/// Debug check of [`Netlist`]'s table invariants: each `*_start` column one
+/// longer than its table, monotone, ending at the column it indexes (the
+/// instance one empty when there are no instances), the parallel columns
+/// equally long, and every net and subcircuit id in range.
+fn tables_hold(netlist: &Netlist) -> bool {
+    let csr = |start: &[u32], rows: usize, len: usize| {
+        start.len() == rows + 1
+            && start.windows(2).all(|w| w[0] <= w[1])
+            && start[rows] as usize == len
+    };
+    let (subckts, devices, nets) = (
+        netlist.subckt_count(),
+        netlist.device_model.len(),
+        netlist.net_name.len(),
+    );
+    let instances = netlist.instance_of.len();
+    let net_ok = |net: &RefNetId| (net.0 as usize) < nets;
+    let subckt_ok = |subckt: &SubcktId| (subckt.0 as usize) < subckts;
+    csr(&netlist.subckt_port_start, subckts, netlist.port_net.len())
+        && csr(&netlist.subckt_device_start, subckts, devices)
+        && csr(
+            &netlist.device_terminal_start,
+            devices,
+            netlist.terminal_net.len(),
+        )
+        && csr(&netlist.device_param_start, devices, netlist.param.len())
+        && ((instances == 0 && netlist.instance_net_start.is_empty())
+            || csr(
+                &netlist.instance_net_start,
+                instances,
+                netlist.instance_net.len(),
+            ))
+        && netlist.device_kind.len() == devices
+        && netlist.instance_subckt.len() == instances
+        && netlist.instance_name.len() == instances
+        && netlist.net_subckt.len() == nets
+        && netlist.port_net.iter().all(net_ok)
+        && netlist.terminal_net.iter().all(net_ok)
+        && netlist.instance_net.iter().all(net_ok)
+        && netlist.net_subckt.iter().all(subckt_ok)
+        && netlist.instance_of.iter().all(subckt_ok)
+        && netlist.instance_subckt.iter().all(subckt_ok)
 }
 
 /// SPICE and CDL. The accepted subset is in the [module docs](super).
