@@ -41,7 +41,7 @@ jobs:
         if: failure()
         run: |
           find tests/golden -type f -delete
-          for pass in 1 2; do
+          for _ in 1 2; do
             cargo test --test golden || true
             cargo test --test catalog || true
           done
@@ -59,7 +59,9 @@ jobs:
     # mutant fails: kill it with a test in that crate.
     # Sharded so a large pull request still finishes: each shard takes every
     # eighth mutant of the diff, within GitHub's six-hour job limit.
-    if: github.event_name == 'pull_request'
+    # Only for pull requests into main: agent branches into the working
+    # branch get the build job, and the nightly tier runs mutation too.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
