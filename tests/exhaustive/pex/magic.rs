@@ -370,8 +370,8 @@ fn wires(seed: u64) -> Case {
         for (i, &(metal, [xlo, ylo, xhi, yhi])) in wires.iter().enumerate() {
             layout = layout.rect(metal.name(), xlo, ylo, xhi, yhi).label(
                 metal.label(),
-                (xlo + xhi) / 2,
-                (ylo + yhi) / 2,
+                i64::midpoint(xlo, xhi),
+                i64::midpoint(ylo, yhi),
                 &format!("W{i}"),
             );
         }
