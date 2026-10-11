@@ -7,7 +7,7 @@ use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use crate::report::Severity;
 use gpurify_geom::{LayerId, Qty, StrId, StrTable};
-use gpurify_ingest::deck::{DeckSource, LvsSrc, ParamSource, ParamValue, RuleSource};
+use gpurify_ingest::deck::{CornerSource, DeckSource, LvsSrc, ParamSource, ParamValue, RuleSource};
 use std::collections::HashMap;
 
 /// One rule's row as it is filed, in engine names.
@@ -69,6 +69,17 @@ impl CompiledDeck {
         source.lvs = LvsSrc::from_controls(&self.lvs, &source.devices, strings);
         // The default type with no threshold is what a deck without the
         // statement lowers to.
+        source.corners = self
+            .corners
+            .iter()
+            .flat_map(|corner| {
+                corner.stated.iter().map(|&(layer, values)| CornerSource {
+                    corner: strings.resolve(corner.name).to_owned(),
+                    layer: strings.resolve(self.layers.name(layer)).to_owned(),
+                    values,
+                })
+            })
+            .collect();
         source.extraction = (self.extraction != gpurify_ingest::deck::Extraction::default())
             .then_some(self.extraction);
         let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();

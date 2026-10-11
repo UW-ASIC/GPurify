@@ -807,6 +807,25 @@ Only resistance moves with temperature. Thickness variation from CMP,
 current-dependent via resistance and mask-shift (colour) effects need
 calibration data no open PDK publishes, and are not modelled.
 
+### Process corners
+
+```
+corner cmax met1 thickness 396nm sheet 0.11ohm area_cap 28.4aF/um2 fringe_cap 44.6aF/um
+corner cmin met1 thickness 324nm sheet 0.14ohm
+```
+
+A process corner (StarRC's and Calibre's word; OpenROAD's extractor calls
+them process corners too) is the stack at the edge of the process window.
+A `corner` line gives some of one layer's `pex` values at a named corner,
+in the keys and units of a `pex` line and within the same bounds; every
+value it does not give is the nominal row's. A corner names each layer at
+most once, states at least one value, and varies only a layer that has a
+`pex` line. `pex` extracts the nominal stack and every corner, the same
+nets the same way (`--quasistatic` too), and SPEF writes each value as the
+`min:typ:max` triplet of IEEE 1481: the smallest value at any corner or the
+nominal, the nominal, and the largest. DSPF, which has no triplets, is the
+nominal stack's.
+
 ### Extraction type
 
 ```

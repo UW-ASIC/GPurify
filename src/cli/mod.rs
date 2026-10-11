@@ -116,18 +116,26 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
                 );
                 return Err(ExitCode::FAILURE);
             };
-            let write = if spef {
-                parasitic::write_spef
+            if spef {
+                // The deck's process corners, if any, as min:typ:max triplets.
+                let corners: Vec<_> = outputs.corners.iter().map(|(_, network)| network).collect();
+                parasitic::write_spef_corners(
+                    network,
+                    &corners,
+                    &extracted.ports,
+                    &loaded.strings,
+                    &header,
+                    &mut text,
+                )
             } else {
-                parasitic::write_dspf
-            };
-            write(
-                network,
-                &extracted.ports,
-                &loaded.strings,
-                &header,
-                &mut text,
-            )
+                parasitic::write_dspf(
+                    network,
+                    &extracted.ports,
+                    &loaded.strings,
+                    &header,
+                    &mut text,
+                )
+            }
         }
     };
     written.map_err(|error| fail(&error))?;

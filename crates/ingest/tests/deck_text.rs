@@ -1994,3 +1994,74 @@ fn an_extraction_line_names_a_type_and_an_optional_threshold() {
         one_error(body, needle);
     }
 }
+
+/// PEX-006: a `corner` line states some of a layer's `pex` values at a
+/// process corner; the corner's stack is the nominal one with those in
+/// place. Corners come in the order the deck first names them; each names a
+/// layer once, states at least one value, holds the `pex` row's bounds, and
+/// varies only a layer with a `pex` row.
+#[test]
+fn a_corner_line_varies_the_nominal_pex_rows() {
+    let rows = "pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 \
+                area_cap 25.8aF/um2 fringe_cap 40.5aF/um\n\
+                pex met2 thickness 360nm height 2006nm sheet 0.125ohm dielectric 4.2 \
+                area_cap 17.5aF/um2 fringe_cap 37.8aF/um\n";
+    let (deck, strings) = ok(&format!(
+        "{rows}corner cmax met1 thickness 396nm sheet 0.11ohm\n\
+         corner cmin met1 thickness 324nm\n\
+         corner cmax met2 dielectric 4.4\n"
+    ));
+    let met1 = deck.layers.id(&strings, "met1").expect("met1").idx();
+    let met2 = deck.layers.id(&strings, "met2").expect("met2").idx();
+    let names: Vec<&str> = deck
+        .corners
+        .iter()
+        .map(|corner| strings.resolve(corner.name))
+        .collect();
+    assert_eq!(names, ["cmax", "cmin"]);
+    let (cmax, cmin) = (&deck.corners[0].stack, &deck.corners[1].stack);
+    let bits = |v: f64| v.to_bits();
+    assert_eq!(bits(cmax.thickness_nm[met1]), bits(396.0));
+    assert_eq!(bits(cmax.sheet_res_ohm_sq[met1]), bits(0.11));
+    assert_eq!(bits(cmax.dielectric_k[met2]), bits(4.4));
+    assert_eq!(bits(cmin.thickness_nm[met1]), bits(324.0));
+    // Everything a corner does not state is the nominal row's.
+    for (stack, name) in [(cmax, "cmax"), (cmin, "cmin")] {
+        assert_eq!(bits(stack.height_nm[met1]), bits(1376.0), "{name}");
+        assert_eq!(bits(stack.area_cap_af_um2[met2]), bits(17.5), "{name}");
+    }
+    assert_eq!(bits(cmin.sheet_res_ohm_sq[met1]), bits(0.125));
+    assert_eq!(bits(cmin.dielectric_k[met2]), bits(4.2));
+    assert_eq!(bits(deck.stack.thickness_nm[met1]), bits(360.0));
+    assert_eq!(ok(rows).0.corners.len(), 0);
+
+    for (body, needle) in [
+        (
+            "corner cmax met1 thickness 396nm\ncorner cmax met1 sheet 0.1ohm\n",
+            "corner `cmax` already states `met1`",
+        ),
+        (
+            "corner cmax met1\n",
+            "corner `cmax` states nothing for `met1`",
+        ),
+        ("corner cmax met1 width 1nm\n", "unknown pex key `width`"),
+        (
+            "corner cmax met1 thickness 0nm\n",
+            "pex `met1`: thickness must be positive",
+        ),
+        (
+            "corner cmax met1 sheet -1ohm\n",
+            "pex `met1`: sheet must be zero or more",
+        ),
+        ("corner cmax nolayer sheet 1ohm\n", "nolayer"),
+    ] {
+        one_error(&format!("{rows}{body}"), needle);
+    }
+    match parse("corner cmax met3 sheet 0.1ohm\n") {
+        Err(DeckError::Malformed(why)) => {
+            assert!(why.contains("met3 has no pex row"), "{why}");
+        }
+        Err(other) => panic!("a corner on a layer with no pex row: {other}"),
+        Ok(_) => panic!("a corner on a layer with no pex row was accepted"),
+    }
+}

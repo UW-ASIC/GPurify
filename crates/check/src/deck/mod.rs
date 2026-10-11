@@ -46,7 +46,7 @@ use crate::{drc, erc};
 use gpurify_geom::{prefix, Grid, Qty, StrId, StrTable, Temperature};
 use gpurify_ingest::deck::{
     parse_deck, Connectivity, Deck, DeckError, DeviceRecognition, Extraction, LayerTable,
-    LvsControls, PrintError, ProcessStack, TemperatureLaw,
+    LvsControls, PrintError, ProcessCorner, ProcessStack, TemperatureLaw,
 };
 
 /// A deck ready to run: what [`compile`] makes of deck text.
@@ -80,6 +80,8 @@ pub struct CompiledDeck {
     pub lvs: LvsControls,
     /// The `extraction` statement: which parasitics PEX writes out.
     pub extraction: Extraction,
+    /// The `corner` statements: each process corner's stack.
+    pub corners: Vec<ProcessCorner>,
     /// Every DRC rule, typed, in deck order.
     pub drc: drc::RuleSet,
     /// Every ERC rule, typed, one table per kind.
@@ -233,6 +235,7 @@ impl CompiledDeck {
             temperature_law,
             lvs,
             extraction,
+            corners,
         } = deck;
         Ok(Self {
             grid,
@@ -244,6 +247,7 @@ impl CompiledDeck {
             temperature_law,
             lvs,
             extraction,
+            corners,
             drc,
             erc,
             custom: Vec::new(),

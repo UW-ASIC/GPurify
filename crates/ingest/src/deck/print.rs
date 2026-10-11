@@ -11,7 +11,7 @@
 //! [`parse_source`]: super::parse_source
 //! [`lower`]: super::lower
 
-use super::kinds::{Cmp, Dim, Kind, Param, KINDS};
+use super::kinds::{Cmp, Dim, Kind, Param, KINDS, PEX};
 use super::{
     absolute_unit, DeckSource, DerivedOp, DerivedSource, DeviceKind, ExtractionKind, LvsLimit,
     ParamSource, ParamValue, RuleSource,
@@ -38,8 +38,8 @@ pub enum PrintError {
 /// The text states `grid` as the deck's grid, its drawn layers, ignored
 /// pairs, derived layers and rules in declaration order (each rule where its
 /// first inline layer was made, every other after the layers), then its
-/// connectivity, devices, `lvs` statements, parasitic stack and extraction
-/// type. `for` loops
+/// connectivity, devices, `lvs` statements, parasitic stack, process
+/// corners and extraction type. `for` loops
 /// and `let` bindings are not reconstructed: a loop's rules are written
 /// one by one.
 ///
@@ -265,6 +265,16 @@ impl Printer<'_> {
             }
             if let Some((tc1, tc2)) = row.tc {
                 let _ = write!(out, " tc1 {}/K tc2 {}/K2", number(tc1)?, number(tc2)?);
+            }
+            out.push('\n');
+        }
+        for line in &source.corners {
+            let _ = write!(out, "corner {} {}", line.corner, line.layer);
+            let units = ["nm", "nm", "ohm", "", "aF/um2", "aF/um", "/K", "/K2"];
+            for ((key, _), (value, unit)) in PEX.iter().zip(line.values.iter().zip(units)) {
+                if let Some(value) = value {
+                    let _ = write!(out, " {key} {}{unit}", number(*value)?);
+                }
             }
             out.push('\n');
         }
