@@ -1,6 +1,6 @@
 //! The independent tools the differential tests run against (testing-plan
-//! §4 L6): Netgen, `FastCap`, `FastHenry` and ngspice, all provided by
-//! `nix develop .#oracles`.
+//! §4 L6): Netgen, Magic, `FastCap`, `FastHenry` and ngspice, all provided
+//! by `nix develop .#oracles`.
 //!
 //! A differential test that cannot find its tool panics, naming the shell
 //! that provides it: a comparison that did not run must never read as one
@@ -10,7 +10,7 @@
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -79,7 +79,9 @@ impl Drop for Running {
 
 /// Runs `tool` with `args` in `dir`, once one of [`MAX_RUNNING`] slots is
 /// free, and returns its standard output. Its two output streams go to
-/// `stdout.txt` and `stderr.txt` in `dir`.
+/// `stdout.txt` and `stderr.txt` in `dir`; its input is empty, so a tool that
+/// falls back to reading commands (Magic after a failed script) ends instead
+/// of waiting on the terminal.
 ///
 /// # Panics
 ///
@@ -104,6 +106,7 @@ pub fn run(tool: &Path, args: &[&str], dir: &Path, limit: Duration) -> String {
     let spawned = Command::new(tool)
         .args(args)
         .current_dir(dir)
+        .stdin(Stdio::null())
         .stdout(stream("stdout.txt"))
         .stderr(stream("stderr.txt"))
         .spawn();
