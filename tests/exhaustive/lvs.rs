@@ -2434,14 +2434,89 @@ mod tests {
         );
     }
 
-    /// Counted independently by a brute force over every labelled circuit
-    /// (a canonical form by trying every net renaming, in Python).
+    /// The classes of one to three `nmos`/`pmos` on nets `0..nets`, not every
+    /// net used, under renaming nets and devices and swapping source with
+    /// drain, by Burnside's lemma: the mean, over the renamings of the nets,
+    /// of the circuits each one fixes. A circuit is a multiset of device types
+    /// (model, gate, unordered channel ends), and the multisets of `m` types a
+    /// renaming fixes are the `x^m` coefficient of the product, over its
+    /// cycles on the types, of `1 / (1 - x^length)` (Pólya). No canonical form
+    /// and none of [`key`], [`circuits`] or [`permutations`].
+    fn orbits(nets: usize) -> usize {
+        let mut types = Vec::new();
+        for model in 0..2 {
+            for g in 0..nets {
+                for s in 0..nets {
+                    for d in s..nets {
+                        types.push([model, g, s, d]);
+                    }
+                }
+            }
+        }
+        let (mut group, mut fixed) = (0, 0);
+        for code in 0..nets.pow(u32::try_from(nets).expect("few nets")) {
+            // Net k goes to digit k of `code` in base `nets`: every map of
+            // the nets, and a renaming where the digits are distinct.
+            let mut rest = code;
+            let rename: Vec<usize> = (0..nets)
+                .map(|_| {
+                    let digit = rest % nets;
+                    rest /= nets;
+                    digit
+                })
+                .collect();
+            if (0..nets).any(|k| rename[k + 1..].contains(&rename[k])) {
+                continue;
+            }
+            group += 1;
+            let image = |&[model, g, s, d]: &[usize; 4]| {
+                let (s, d) = (rename[s], rename[d]);
+                [model, rename[g], s.min(d), s.max(d)]
+            };
+            let mut seen = vec![false; types.len()];
+            let mut series = [1, 0, 0, 0];
+            for start in 0..types.len() {
+                let (mut at, mut length) = (start, 0);
+                while !seen[at] {
+                    seen[at] = true;
+                    length += 1;
+                    let next = image(&types[at]);
+                    at = types
+                        .iter()
+                        .position(|t| *t == next)
+                        .expect("a renaming permutes the types");
+                }
+                if length > 0 {
+                    for degree in length..series.len() {
+                        series[degree] += series[degree - length];
+                    }
+                }
+            }
+            fixed += series[1..].iter().sum::<usize>();
+        }
+        assert_eq!(fixed % group, 0, "Burnside: a whole number of orbits");
+        fixed / group
+    }
+
+    /// The enumeration has one circuit per class, for each count of nets.
     ///
-    /// Oracle: differential against an independent count, 4223, by a
-    /// brute-force canonical form over every net renaming of every labelled
-    /// circuit (a one-off Python computation).
+    /// Oracle: differential against an independent count, [`orbits`], by
+    /// Burnside's lemma rather than a canonical form. A class on nets `0..n`
+    /// uses some `k <= n` of them and is, renumbered, a class on `0..k` using
+    /// every net, which is what [`circuits`] lists for `k`: so it lists
+    /// `orbits(n) - orbits(n - 1)` for `n` nets, and `orbits(4)`, the 4223 the
+    /// module docs state, in all. A canonical form that splits a class or
+    /// merges two, or an enumeration that misses a circuit, changes a count.
     #[test]
     fn the_enumeration_has_every_canonical_circuit() {
-        assert_eq!(circuits().len(), 4223);
+        let all = circuits();
+        for nets in 1..=4 {
+            assert_eq!(
+                all.iter().filter(|c| c.nets() == nets).count(),
+                orbits(nets) - orbits(nets - 1),
+                "{nets} nets"
+            );
+        }
+        assert_eq!((all.len(), orbits(4)), (4223, 4223));
     }
 }
