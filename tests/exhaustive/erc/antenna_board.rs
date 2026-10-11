@@ -120,7 +120,7 @@ pub(super) fn deck() -> String {
 /// One gate: its marker, the poly under it, its one contact, and its diode.
 pub(super) struct Gate {
     /// The gate marker, inside its poly.
-    pub gate: Rect,
+    pub marker: Rect,
     /// The gate's poly line.
     pub poly: Rect,
     /// The contact from the poly to the gate's met1 stub.
@@ -201,7 +201,7 @@ impl Board {
                 )
             });
             gates.push(Gate {
-                gate: (x, y, x + w, y + h),
+                marker: (x, y, x + w, y + h),
                 poly: (x, y, x + w, y + 2000),
                 cont: (x, y + 1700, x + 200, y + 1900),
                 diode,
@@ -295,7 +295,7 @@ impl Board {
     pub fn layout(&self) -> Layout {
         let mut l = Layout::default();
         for g in &self.gates {
-            rect(&mut l, "gate", g.gate);
+            rect(&mut l, "gate", g.marker);
         }
         for g in &self.gates {
             rect(&mut l, "poly", g.poly);
@@ -326,6 +326,9 @@ impl Board {
         }
     }
 }
+
+/// `GPurify`'s violations of one row: `(ratio, at)` each.
+pub(super) type Findings = Vec<(f64, (i64, i64))>;
 
 /// A rectangle's area, nm².
 pub(super) fn area((xlo, ylo, xhi, yhi): Rect) -> i64 {

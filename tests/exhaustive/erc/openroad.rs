@@ -51,7 +51,7 @@
 //! and none otherwise; the two ratios agree to `0.0051 / 1000` (two printed
 //! decimals at the factor) plus 1e-9 relative.
 
-use super::antenna_board::{area, contains, Board, BoardRow, LIMIT, ROWS, THICKNESS};
+use super::antenna_board::{area, contains, Board, BoardRow, Findings, LIMIT, ROWS, THICKNESS};
 use super::Rect;
 use crate::harness;
 use gpurify::check::report::Measurement;
@@ -175,7 +175,7 @@ fn lef(boards: &[Board], verdict: bool) -> String {
             cell(
                 format!("G{k}_{g}"),
                 "ANTENNAGATEAREA",
-                area(gate.gate),
+                area(gate.marker),
                 gate.cont,
             );
             if let Some((diff, cont)) = gate.diode {
@@ -332,7 +332,7 @@ struct Tally {
 }
 
 /// One board's `GPurify` violations per row: `(ratio, at)`.
-fn gpurify(seed: u64) -> BTreeMap<String, Vec<(f64, (i64, i64))>> {
+fn gpurify(seed: u64) -> BTreeMap<String, Findings> {
     let fixture = super::klayout::board_fixture(seed);
     let ran = harness::run(&fixture).unwrap_or_else(|why| panic!("{}: {why}", fixture.name));
     for (id, outcome) in &ran.rows {
@@ -343,7 +343,7 @@ fn gpurify(seed: u64) -> BTreeMap<String, Vec<(f64, (i64, i64))>> {
             fixture.name
         );
     }
-    let mut out: BTreeMap<String, Vec<(f64, (i64, i64))>> = BTreeMap::new();
+    let mut out: BTreeMap<String, Findings> = BTreeMap::new();
     for (id, measured, at) in ran.findings {
         if let Measurement::Ratio(r) = measured {
             out.entry(id).or_default().push((r, at));
@@ -373,7 +373,8 @@ fn compare_row(
     }
     let mut hits: BTreeMap<(u8, usize), Vec<f64>> = BTreeMap::new();
     for &(ratio, point) in findings {
-        let Some(g) = (0..board.gates.len()).find(|&g| contains(board.gates[g].gate, point)) else {
+        let Some(g) = (0..board.gates.len()).find(|&g| contains(board.gates[g].marker, point))
+        else {
             tally.broken.push(at(format!(
                 "GPurify flags {ratio} at {point:?}, on no gate"
             )));
@@ -487,9 +488,7 @@ fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
     if tally.broken.is_empty() {
         let _ = std::fs::remove_dir_all(&dir);
     } else {
-        tally
-            .broken
-            .push(format!("(inputs and outputs kept in {})", dir.display()));
+        tally.broken.push(super::kept(&dir));
     }
     tally
 }

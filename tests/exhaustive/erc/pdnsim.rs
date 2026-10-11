@@ -152,7 +152,7 @@ impl Mesh {
     fn random(seed: u64) -> Mesh {
         let mut rng = Rng::new(seed);
         let width = |rng: &mut Rng| 100 * rng.range(4, 13);
-        let rails: Vec<(i64, i64)> = (0..1 + rng.range(0, 3))
+        let rails: Vec<(i64, i64)> = (0..=rng.range(0, 3))
             .map(|r| (3000 + 6000 * r, width(&mut rng)))
             .collect();
         let mut slots: Vec<i64> = (0..9).map(|k| 5000 + 4000 * k).collect();
@@ -185,7 +185,7 @@ impl Mesh {
             loads.extend(here.into_iter().map(|x| (r, x)));
         }
         let pad = match rails.get(1) {
-            Some(&(y1, _)) => (rails[0].0 + y1) / 2,
+            Some(&(y1, _)) => i64::midpoint(rails[0].0, y1),
             None => rails[0].0 + rails[0].1 / 2 + 600,
         };
         #[allow(clippy::cast_precision_loss, reason = "a small whole number")]
@@ -502,11 +502,11 @@ fn compare(openroad: &Path, mesh: &Mesh) -> Tally {
         (Ok(v), Ok(i)) => (v, i),
         (v, i) => {
             tally.broken.push(at(format!(
-                "PDNSim's files do not read: {:?} {:?} ({})",
+                "PDNSim's files do not read: {:?} {:?}",
                 v.err(),
-                i.err(),
-                dir.display()
+                i.err()
             )));
+            tally.broken.push(super::kept(&dir));
             return tally;
         }
     };
@@ -588,9 +588,7 @@ fn compare(openroad: &Path, mesh: &Mesh) -> Tally {
     if tally.broken.is_empty() {
         let _ = std::fs::remove_dir_all(&dir);
     } else {
-        tally
-            .broken
-            .push(format!("(inputs and outputs kept in {})", dir.display()));
+        tally.broken.push(super::kept(&dir));
     }
     tally
 }

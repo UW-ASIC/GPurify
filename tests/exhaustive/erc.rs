@@ -4851,3 +4851,20 @@ mod klayout;
 mod openroad;
 mod pdnsim;
 mod yosys;
+
+/// Where a failed differential left its files, and the tail of what the tool
+/// printed there (`oracle::run`'s `stdout.txt` and `stderr.txt`): the CI log
+/// is all a reader of a nightly failure gets.
+fn kept(dir: &std::path::Path) -> String {
+    let tail = |name: &str| {
+        let text = std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        lines[lines.len().saturating_sub(40)..].join("\n")
+    };
+    format!(
+        "(inputs and outputs kept in {})\n--- stdout (tail)\n{}\n--- stderr (tail)\n{}",
+        dir.display(),
+        tail("stdout.txt"),
+        tail("stderr.txt")
+    )
+}

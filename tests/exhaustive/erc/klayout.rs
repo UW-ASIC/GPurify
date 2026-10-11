@@ -45,7 +45,7 @@
 //! per area); a cumulative row with a diode (its skip is `GPurify`'s, at the
 //! row's last stage; `KLayout` defines none).
 
-use super::antenna_board::{self, contains, Board};
+use super::antenna_board::{self, contains, Board, Findings};
 use super::{Rect, ERC};
 use crate::harness::{self, Fixture};
 use gpurify::check::erc::rules::antenna::{AntennaMeasure, Stack};
@@ -117,7 +117,7 @@ struct Job {
     skipped: Vec<(String, &'static str)>,
     ruby: String,
     /// Per rule id: its outcome and `(ratio, at)` per violation.
-    gpurify: BTreeMap<String, (Outcome, Vec<(f64, (i64, i64))>)>,
+    gpurify: BTreeMap<String, (Outcome, Findings)>,
 }
 
 /// The etch stage of `layer` (an index into `stack.conductors`): a
@@ -388,7 +388,7 @@ fn job(fixture: &Fixture, dir: &Path, i: usize) -> Job {
         &path,
         &dir.join(format!("{i}.jsonl")),
     );
-    let mut gpurify: BTreeMap<String, (Outcome, Vec<(f64, (i64, i64))>)> = ran
+    let mut gpurify: BTreeMap<String, (Outcome, Findings)> = ran
         .rows
         .iter()
         .map(|(id, outcome)| (id.clone(), (*outcome, Vec::new())))
@@ -615,9 +615,7 @@ fn batch(klayout: &Path, fixtures: &[Fixture]) -> Tally {
     if tally.broken.is_empty() {
         let _ = std::fs::remove_dir_all(&dir);
     } else {
-        tally
-            .broken
-            .push(format!("(inputs and outputs kept in {})", dir.display()));
+        tally.broken.push(super::kept(&dir));
     }
     tally
 }
