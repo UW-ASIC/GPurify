@@ -307,3 +307,25 @@ fn one_unit_of_colour_spacing_separates_a_path_from_an_odd_cycle() {
         u64::from(case.shapes)
     );
 }
+
+/// Oracle: Calibre's self-conflict, worked by hand. A U drawn as three
+/// abutting rectangles is one figure whose arms face each other 100 apart
+/// across empty space: on one mask they are closer than a colour spacing of
+/// 101, so no number of masks splits it, while at 100 they are legal and the
+/// lone figure takes one mask.
+#[test]
+fn a_figure_whose_own_notch_is_below_the_colour_spacing_has_no_colouring() {
+    let mut layout = gpurify_testgen::shapes::LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 300, 100);
+    layout.rect(A, 0, 100, 100, 300);
+    layout.rect(A, 200, 100, 300, 300);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &patterning_table(3, 101));
+    assert_eq!(sink.out.rule.len(), 1, "the U conflicts with itself");
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 3);
+
+    sink.run(&store, &patterning_table(1, 100));
+    assert_clean(&sink.runs, &sink.out, RULE);
+}

@@ -1,14 +1,18 @@
 //! Multi-patterning: can a layer be split across `colors` masks?
 //!
 //! Data in: one layer; touching rows merge into one figure (node), figures
-//! closer than `color_spacing` conflict (edge). Data out: graph colouring —
+//! closer than `color_spacing` conflict (edge), and a figure whose own notch
+//! is narrower conflicts with itself (a loop). Data out: graph colouring —
 //! two masks by bipartiteness (never gives up), three or more by DSATUR with
 //! backtracking under a budget. Running out of budget is `Refused`, never clean.
 
-use super::{centre, join_nested, label_pairs_into, pair_distances_into, Verdict};
+use super::{centre, join_nested, label_pairs_into, owners_of, pair_distances_into, Verdict};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
+use gpurify_geom::boolean::union_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
+use gpurify_geom::view::ValidatedLayer;
+use gpurify_geom::width::narrowest_facing;
 use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
@@ -375,6 +379,23 @@ pub(crate) fn multi_patterning(
             let fb = labels[(b.0 - first_row) as usize].0;
             (d2 < limit2 && fa != fb).then_some((fa, fb))
         }));
+    // A figure whose own notch is narrower than `spacing` holds two parts
+    // closer than one mask allows (Calibre's self-conflict, "an odd cycle
+    // of one"): a loop on its node, which no palette colours.
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return (Outcome::Refused, examined);
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return (Outcome::Refused, examined);
+    }
+    s.rects_a.build(store, layer, drawn);
+    for (idx, owner) in (0..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        let notch = narrowest_facing(s.layer_out.get(idx), false, &mut s.facing);
+        if notch.is_some_and(|(gap, _)| gap < spacing) {
+            let node = s.labels[(owner.0 - first_row) as usize].0;
+            s.edges.push((node, node));
+        }
+    }
 
     let outcome = match color_into(node_count, &s.edges, colors, &mut s.bytes) {
         Coloring::Complete => Outcome::Ran,
