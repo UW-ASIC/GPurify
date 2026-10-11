@@ -336,6 +336,20 @@ pub(crate) const KINDS: &[Kind] = &[
         LIMIT,
         &[],
     ),
+    // `LEF58_CORNERSPACING CONVEXCORNER`: the larger axis gap between facing
+    // convex corners (or Euclidean, `CORNERTOCORNER`), ends of line exempt
+    // with `EXCEPTEOL`.
+    drc(
+        "corner_space",
+        Cmp::Ge,
+        "convex_corner_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("corner_to_corner", "corner_to_corner", Dim::Bool),
+            opt("except_eol", "except_eol", Dim::Length),
+        ],
+    ),
     drc(
         "wide_space",
         Cmp::Ge,

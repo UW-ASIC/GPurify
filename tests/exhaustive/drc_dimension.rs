@@ -68,6 +68,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         eol_keep_out(depth),
         prl_spacing(depth),
         corner_to_corner(depth),
+        convex_corner_spacing(depth),
         wide_spacing(depth),
         attached_wide_spacing(depth),
         net_spacing(depth),
@@ -2390,6 +2391,128 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
         &["DRC-032"],
         "rule cc corner_space(met1) >= 101nm",
         &["cc"],
+    ));
+    out
+}
+
+// ------------------------------------------------------ convex_corner_spacing
+
+/// `corner_space(met1; corner_to_corner: .., except_eol: ..) >= 101nm`.
+fn corner_deck(corner_to_corner: bool, except_eol: &str) -> String {
+    one_layer_deck(&format!(
+        "rule c corner_space(met1; corner_to_corner: {corner_to_corner}, except_eol: {except_eol}) \
+         >= 101nm"
+    ))
+}
+
+/// `corner_space(met1; corner_to_corner: .., except_eol: ..) >= 101nm`
+/// (`convex_corner_spacing`, DRC-032), `LEF58_CORNERSPACING CONVEXCORNER`:
+/// facing convex corners of different figures measured by the larger axis
+/// gap (`TritonRoute`'s `maxXY`), or Euclidean with `corner_to_corner`; one
+/// finding per pair of figures, midway between the nearest corners.
+///
+/// Diagonal pairs `d` apart on both axes: the larger gap is `d`, the
+/// Euclidean one `d·√2` (the same pairs as `corner_to_corner`). A pair 50
+/// apart on y with the x gap swept around 101: the larger gap is the x gap,
+/// and Euclidean it is clean at 100 (111.8). Side by side, no facing
+/// corners; touching at a corner, one figure. With `except_eol: 200nm`, a
+/// 100 wide line end's corners are exempt on either shape, and two wide
+/// squares' are not.
+fn convex_corner_spacing(depth: Depth) -> Vec<Fixture> {
+    let square = corner_deck(false, "none");
+    let euclid = corner_deck(true, "none");
+    let eol = corner_deck(false, "200nm");
+    let mut cases = Vec::new();
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("convex_corner_spacing/{shape}"),
+            &["DRC-032"],
+            deck,
+            layout,
+            vec![("c", findings)],
+        ));
+    };
+    for d in diagonals(depth) {
+        let (layout, euclidean) = diagonal_pair(("met1", "met1"), d);
+        let larger = if d < 101 {
+            vec![pin(Finding::length(d), 2000 + d, 2000 + d)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("diagonal/square/d{d}"),
+            &square,
+            layout.clone(),
+            larger,
+        );
+        case(
+            format!("diagonal/euclidean/d{d}"),
+            &euclid,
+            layout,
+            euclidean,
+        );
+    }
+    for d in sweep(depth, 101) {
+        let findings = if d < 101 {
+            vec![pin(Finding::length(d), 2000 + d, 2050)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("skewed/{}", side(d, 101)),
+            &square,
+            met1(&[[0, 0, 1000, 1000], [1000 + d, 1050, 2000 + d, 2050]]),
+            findings,
+        );
+    }
+    case(
+        "skewed_euclidean".into(),
+        &euclid,
+        met1(&[[0, 0, 1000, 1000], [1100, 1050, 2100, 2050]]),
+        Vec::new(),
+    );
+    case(
+        "side_by_side".into(),
+        &square,
+        met1(&[[0, 0, 1000, 1000], [1050, 0, 2050, 1000]]),
+        Vec::new(),
+    );
+    case(
+        "one_figure".into(),
+        &square,
+        met1(&[[0, 0, 1000, 1000], [1000, 1000, 2000, 2000]]),
+        Vec::new(),
+    );
+    case(
+        "except_eol/line_end".into(),
+        &eol,
+        met1(&[[0, 0, 100, 1000], [150, 1050, 1150, 2050]]),
+        Vec::new(),
+    );
+    case(
+        "except_eol/other_line_end".into(),
+        &eol,
+        met1(&[[0, 0, 1000, 1000], [1050, 1050, 1150, 2050]]),
+        Vec::new(),
+    );
+    case(
+        "except_eol/wide_corners".into(),
+        &eol,
+        met1(&[[0, 0, 1000, 1000], [1050, 1050, 2050, 2050]]),
+        vec![pin(Finding::length(50), 2050, 2050)],
+    );
+    case(
+        "line_end_without_except".into(),
+        &square,
+        met1(&[[0, 0, 100, 1000], [150, 1050, 1150, 2050]]),
+        vec![pin(Finding::length(50), 250, 2050)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "convex_corner_spacing",
+        &["DRC-032"],
+        "rule c corner_space(met1; corner_to_corner: false, except_eol: none) >= 101nm",
+        &["c"],
     ));
     out
 }

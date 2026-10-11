@@ -15,7 +15,7 @@ use crate::drc::ruleset::{ClassTable, EolParallel, SpanTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::derive::merge_into;
-use gpurify_geom::ops::Seg;
+use gpurify_geom::ops::{isqrt, Point, Seg};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::{
     Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer, MAX_ABS_DBU,
@@ -525,4 +525,134 @@ fn chords(edges: &[Edge]) -> Vec<(i64, i64, i64, i64)> {
     let end = cuts.last().copied().unwrap_or_default();
     regions.extend(open.into_iter().map(|(lo, hi, start)| (lo, hi, start, end)));
     regions
+}
+
+/// A convex corner of a merged figure: its vertex, the diagonal it faces out
+/// along (each component ±1), its figure, and whether it is a corner of an
+/// end of line.
+type Corner = (i64, i64, i64, i64, u32, bool);
+
+/// Every convex corner of `figures` (a merged layer), sorted; with `eol`, a
+/// corner on an edge strictly shorter than `eol` whose two corners are
+/// convex is marked as an end of line's.
+fn figure_corners(figures: &ValidatedLayer, eol: Option<i64>) -> Vec<Corner> {
+    let mut corners = Vec::new();
+    for figure in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
+        for ring in figures.poly_rings(figure) {
+            let (xs, ys) = ring.coords();
+            let n = xs.len();
+            let step = |i: usize| {
+                let next = (i + 1) % n;
+                (xs[next].raw() - xs[i].raw(), ys[next].raw() - ys[i].raw())
+            };
+            // Vertex `i` turns from edge `i - 1` into edge `i`; a left turn is
+            // convex, and its outward diagonal is along the edge coming in,
+            // against the one leaving.
+            let turn = |i: usize| {
+                let ((inx, iny), (outx, outy)) = (step((i + n - 1) % n), step(i));
+                let convex =
+                    i128::from(inx) * i128::from(outy) > i128::from(iny) * i128::from(outx);
+                (convex, (inx - outx).signum(), (iny - outy).signum())
+            };
+            // Edge `i` runs from vertex `i` to `i + 1`.
+            let end = |i: usize| {
+                let (dx, dy) = step(i);
+                eol.is_some_and(|w| dx.abs() + dy.abs() < w && turn(i).0 && turn((i + 1) % n).0)
+            };
+            for i in 0..n {
+                let (convex, sx, sy) = turn(i);
+                if convex {
+                    let on_end = end((i + n - 1) % n) || end(i);
+                    corners.push((xs[i].raw(), ys[i].raw(), sx, sy, figure, on_end));
+                }
+            }
+        }
+    }
+    corners.sort_unstable();
+    corners
+}
+
+/// `LEF58_CORNERSPACING CONVEXCORNER`: facing convex corners of different
+/// figures closer than `limit` by the larger axis gap, or Euclidean with
+/// `corner_to_corner`; with `except_eol`, an end of line's corners on either
+/// figure are exempt. `examined` counts the facing pairs of corners judged.
+pub(crate) fn convex_corner_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (corner_to_corner, except_eol): (bool, Option<Dbu>),
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(owners) = merged_owners(store, layer, s) else {
+        return REFUSED;
+    };
+    let corners = figure_corners(&s.layer_out, except_eol.map(Dbu::raw));
+    let reach = limit.raw();
+    let need = if corner_to_corner {
+        i128::from(reach) * i128::from(reach)
+    } else {
+        i128::from(reach)
+    };
+    let point = |x: i64, y: i64| {
+        let p = Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        };
+        Seg { a: p, b: p }
+    };
+    let (mut hits, mut examined) = (Vec::new(), 0u64);
+    // Each corner facing +x against the corners right of it, facing back.
+    for &(x, y, _, sy, figure, on_end) in corners.iter().filter(|c| c.2 > 0) {
+        let from = corners.partition_point(|c| c.0 <= x);
+        let near = corners[from..].iter().take_while(|c| c.0 - x < reach);
+        for &(cx, cy, csx, csy, other, other_on_end) in near {
+            let facing = csx < 0 && csy == -sy && (cy - y).signum() == sy;
+            if !facing || other == figure || on_end || other_on_end {
+                continue;
+            }
+            examined += 1;
+            let (dx, dy) = (i128::from(cx - x), i128::from((cy - y).abs()));
+            let gap = if corner_to_corner {
+                dx * dx + dy * dy
+            } else {
+                dx.max(dy)
+            };
+            if gap < need {
+                hits.push((
+                    figure.min(other),
+                    figure.max(other),
+                    gap,
+                    point(x, y),
+                    point(cx, cy),
+                ));
+            }
+        }
+    }
+    hits.sort_unstable_by_key(|&(a, b, gap, ..)| (a, b, gap));
+    for pair in hits.chunk_by(|p, q| (p.0, p.1) == (q.0, q.1)) {
+        let gap = pair[0].2;
+        let (_, at) = nearest(
+            pair.iter()
+                .take_while(|hit| hit.2 == gap)
+                .map(|hit| (hit.3, hit.4)),
+        )
+        .expect("a pair has a hit");
+        let measured = if corner_to_corner {
+            isqrt(DbuArea::new(gap))
+        } else {
+            Dbu::new_unchecked(i64::try_from(gap).expect("an axis gap under the limit"))
+        };
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at,
+            measured: Measurement::Length(measured),
+            limit: Measurement::Length(limit),
+            shapes: (owners[pair[0].0 as usize], Some(owners[pair[0].1 as usize])),
+        });
+    }
+    (Outcome::Ran, examined)
 }
