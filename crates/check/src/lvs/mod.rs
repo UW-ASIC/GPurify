@@ -111,6 +111,10 @@
 //! - `lvs range "model" param >= min <= max`: every layout device of the
 //!   model is held to the bounds on a measured parameter, a layout check of
 //!   its own ([`check_param_ranges`], catalog LVS-068).
+//! - `lvs topology relaxed`: a passive or bipolar stating its value merges
+//!   in parallel by the value's law, `r` harmonically and `c`, `area`, `ae`
+//!   by adding (catalog LVS-043, LVS-044, LVS-049; Netgen's `property
+//!   topology relaxed`); strict, the default, keeps a count.
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).
@@ -177,11 +181,12 @@
 //!   wrong pairing exposed only after a later tie-break, or a right one past
 //!   the eighth, is kept, and the verdict is then a false mismatch, never a
 //!   false match.
-//! - **Passive values are counted, not combined.** Parallel resistors,
-//!   capacitors and diodes merge into one device of the same value with a
-//!   count `m`, so two capacitors of `c` do not match one card of `2c`,
-//!   which `KLayout`, adding the capacitance, would pass ([`reduce`]). The
-//!   conservative side: a false mismatch, never a false match.
+//! - **Passive values are counted, not combined,** under the strict
+//!   policy, the default. Parallel resistors, capacitors and diodes merge
+//!   into one device of the same value with a count `m`, so two capacitors
+//!   of `c` do not match one card of `2c`, which `KLayout`, adding the
+//!   capacitance, would pass ([`reduce`]). The deck's `lvs topology
+//!   relaxed` combines them. Passives never merge in series.
 
 pub mod checks;
 mod compare;

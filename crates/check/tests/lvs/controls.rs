@@ -491,3 +491,55 @@ fn ports_by_name_hold_each_port_to_its_label() {
     assert_eq!(verdict(&unlabelled, &layout, &none), Verdict::Match);
     assert_ne!(verdict(&unlabelled, &layout, &by_name), Verdict::Match);
 }
+
+/// Oracle: closed form, Kirchhoff's laws for parallel elements, which the
+/// relaxed policy follows (Netgen's `property topology relaxed`: networks
+/// "numerically the same after series and parallel combinations"). Two
+/// capacitors of 1 fF on the same nets are one of 2 fF and two resistors of
+/// 100 ohm one of 50 ohm, with no count left; a capacitor of 1 fF and
+/// `m = 2` is one of 2 fF; capacitors stating no value keep a count of two.
+/// Under the strict policy two capacitors of 1 fF stay 1 fF with `m = 2`.
+/// Breaks if a value adds where it should combine harmonically, the count
+/// is kept beside a combined value, or `m` is not folded in.
+#[test]
+fn relaxed_parallel_passives_combine_their_value_by_its_law() {
+    use gpurify_check::lvs::reduce::reduce_with;
+    use gpurify_check::topology::TerminalRole::Pin;
+    let (r, c) = (StrId(42), StrId(43));
+    let names = |relaxed| ParamNames {
+        multiplier: Some(MULT),
+        values: [Some(r), Some(c), None, None, None, None],
+        relaxed,
+        ..ParamNames::default()
+    };
+    let parallel = |kind, model, params: &[&[(StrId, f64)]]| {
+        let mut builder = GraphBuilder::new(2);
+        for &stated in params {
+            let ends = if kind == DeviceKind::Resistor {
+                [(Pin(0), 0), (Pin(0), 1)]
+            } else {
+                [(Pin(0), 0), (Pin(1), 1)]
+            };
+            builder.device_with_params(kind, model, &ends, stated);
+        }
+        builder.finish()
+    };
+    let one = |graph: &Graph, names| {
+        let (out, _) = reduce_with(graph, names);
+        assert_eq!(out.device_count(), 1, "the parallel devices merged");
+        out.params_of(0).to_vec()
+    };
+    let caps = parallel(DeviceKind::Capacitor, CAP, &[&[(c, 1e-15)], &[(c, 1e-15)]]);
+    assert_eq!(one(&caps, names(true)), [(c, 2e-15)]);
+    assert_eq!(one(&caps, names(false)), [(c, 1e-15), (MULT, 2.0)]);
+    let res = parallel(
+        DeviceKind::Resistor,
+        common::RES,
+        &[&[(r, 100.0)], &[(r, 100.0)]],
+    );
+    assert_eq!(one(&res, names(true)), [(r, 50.0)]);
+    let counted = parallel(DeviceKind::Capacitor, CAP, &[&[(c, 1e-15), (MULT, 2.0)]]);
+    assert_eq!(one(&counted, names(true)), [(c, 2e-15)]);
+    let bare = parallel(DeviceKind::Capacitor, CAP, &[&[], &[]]);
+    assert_eq!(one(&bare, names(true)), [(MULT, 2.0)]);
+}

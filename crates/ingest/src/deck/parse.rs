@@ -1109,6 +1109,23 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             "range" => self.lvs_range(),
+            "topology" => {
+                let (policy, at) = self.ident("strict or relaxed")?;
+                let relaxed = match policy.as_str() {
+                    "strict" => false,
+                    "relaxed" => true,
+                    _ => {
+                        return Err(self.err(
+                            at,
+                            &format!("unknown topology `{policy}`; expected strict or relaxed"),
+                        ))
+                    }
+                };
+                if self.out.lvs.topology.replace(relaxed).is_some() {
+                    return Err(self.err(span, "the topology is already stated"));
+                }
+                Ok(())
+            }
             "ports_by_name" => {
                 if std::mem::replace(&mut self.out.lvs.ports_by_name, true) {
                     return Err(self.err(span, "ports are already compared by name"));
@@ -1138,7 +1155,7 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric, permute, ignore, ignore_shorted, ports_by_name or range"
+                     asymmetric, permute, ignore, ignore_shorted, ports_by_name, range or topology"
                 ),
             )),
         }

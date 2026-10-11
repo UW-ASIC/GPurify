@@ -807,6 +807,33 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
                 }
                 None => (None, m),
             };
+            // Relaxed, a resistor's or capacitor's value is what the layout
+            // measures where a card declares it, or what the card writes, and
+            // `m` folds into it: `r/m`, `m c`.
+            let (value, mult) = match controls.value_law(d.model) {
+                Some((name, harmonic)) => {
+                    let value = if drawn {
+                        declared
+                            .has(d.model, name)
+                            .then(|| measured(d.model, name))
+                            .flatten()
+                    } else {
+                        d.value
+                    };
+                    let folded = |v: f64| {
+                        if harmonic {
+                            v / f64::from(mult)
+                        } else {
+                            v * f64::from(mult)
+                        }
+                    };
+                    match value {
+                        Some(v) => (Some(folded(v)), 1),
+                        None => (None, mult),
+                    }
+                }
+                None => (d.value, mult),
+            };
             Reduced {
                 model: d.model,
                 pins: d.pins.clone(),
@@ -814,7 +841,7 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
                 l,
                 mult,
                 area: d.area,
-                value: d.value,
+                value,
                 params,
                 sd,
             }
@@ -834,12 +861,16 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
                     Some(_) => presence(a) == presence(b) && (stated == 0 || stated == 4),
                     None => a.sd == b.sd,
                 };
+                // Relaxed, two values of one law combine instead of agreeing.
+                let law = controls
+                    .value_law(a.model)
+                    .filter(|_| a.value.is_some() && b.value.is_some());
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let params = a.l == b.l
                     && a.w.is_some() == b.w.is_some()
                     && diffusions
                     && a.area == b.area
-                    && a.value == b.value
+                    && (a.value == b.value || law.is_some())
                     && a.params == b.params;
                 if a.model == b.model
                     && params
@@ -849,6 +880,16 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
                     let b = devs.remove(j);
                     let a = &mut devs[i];
                     match (&mut a.w, b.w) {
+                        _ if law.is_some() => {
+                            let harmonic = law.is_some_and(|(_, harmonic)| harmonic);
+                            a.value = a.value.zip(b.value).map(|(x, y)| {
+                                if harmonic {
+                                    1.0 / (1.0 / x + 1.0 / y)
+                                } else {
+                                    x + y
+                                }
+                            });
+                        }
                         (Some(w), Some(more)) => {
                             *w += more;
                             for k in 0..4 {
@@ -957,6 +998,9 @@ struct Controls {
     /// `lvs ports_by_name`: each reference port pairs only with the layout
     /// net its name labels.
     ports_by_name: bool,
+    /// `lvs topology relaxed`: parallel resistors and capacitors stating
+    /// their value combine by its law.
+    relaxed: bool,
 }
 
 impl Controls {
@@ -983,6 +1027,18 @@ impl Controls {
     fn asymmetric(mut self, model: Model) -> Self {
         self.asymmetric.push(model);
         self
+    }
+
+    /// The value a relaxed parallel merge combines on `model`, and whether
+    /// harmonically: a resistor's `r` (`1 / Σ 1/r`), a capacitor's `c`
+    /// (added), deck.md's; `None` under the strict policy and for any other
+    /// model.
+    fn value_law(&self, model: Model) -> Option<(&'static str, bool)> {
+        match model {
+            Model::R if self.relaxed => Some(("r", true)),
+            Model::C if self.relaxed => Some(("c", false)),
+            _ => None,
+        }
     }
 
     /// An `lvs ignore` row.
@@ -1093,6 +1149,9 @@ impl Controls {
         if self.ports_by_name {
             out.push_str("lvs ports_by_name\n");
         }
+        if self.relaxed {
+            out.push_str("lvs topology relaxed\n");
+        }
         for &(model, a, b) in &self.permuted {
             let names = pin_names(model);
             let _ = writeln!(
@@ -1168,8 +1227,16 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize], controls: &Controls) -> bool {
         .iter()
         .copied()
         .chain(b.value.map(|v| (primary, v)));
+    // Relaxed, the layout's value is the one its merges combined.
+    let law_value = controls
+        .value_law(model)
+        .and_then(|(name, _)| a.value.map(|v| (name, v)));
+    let drawn_value = |name: &str| match law_value {
+        Some((law, v)) if law == name => Some(v),
+        _ => measured(b.model, name),
+    };
     let sized = stated.into_iter().all(|(name, v)| {
-        measured(b.model, name).is_some_and(|d| controls.close(model, name, (d, v), 1.0))
+        drawn_value(name).is_some_and(|d| controls.close(model, name, (d, v), 1.0))
     });
     // A size the card writes, against the layout's, which measures it since
     // the card's model declares it, in nm (`si` 1e-9); a diffusion at its
@@ -2787,6 +2854,89 @@ fn controlled() -> Vec<Fixture> {
                 ".subckt TOP n4 n3 n2 n1 n0",
             ));
         }
+        out.push(fixture);
+    }
+    // LVS-043, LVS-044, LVS-049: relaxed topology. Two resistors drawn in
+    // parallel, 200 ohm each ([`measured`]), are one of 100 ohm, and two
+    // capacitors of 0.56 fF one of 1.12 fF, three one of 1.68 fF; a card's
+    // `m` folds in first, so `r=200 m=2` is 100 ohm. Strict, the default,
+    // they are two that match only a count of two. A card with no value
+    // keeps the count either way.
+    let relaxed = Controls {
+        relaxed: true,
+        ..Controls::default()
+    };
+    let parallel =
+        |model, count| Circuit::new(2, (0..count).map(|_| Dev::pins(model, &[0, 1])).collect());
+    let card = |dev: Dev| Circuit::new(2, vec![dev]);
+    let combined: [(&str, Circuit, Circuit); 8] = [
+        (
+            "R_two_vs_half",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1]).value(100.0)),
+        ),
+        (
+            "R_two_vs_m2",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1]).value(200.0).times(2)),
+        ),
+        (
+            "R_two_vs_one",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1]).value(200.0)),
+        ),
+        (
+            "R_two_vs_unvalued_one",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1])),
+        ),
+        (
+            "C_two_vs_double",
+            parallel(C, 2),
+            card(Dev::pins(C, &[0, 1]).value(1.12e-15)),
+        ),
+        (
+            "C_two_vs_m2",
+            parallel(C, 2),
+            card(Dev::pins(C, &[0, 1]).value(5.6e-16).times(2)),
+        ),
+        (
+            "C_three_vs_triple",
+            parallel(C, 3),
+            card(Dev::pins(C, &[0, 1]).value(1.68e-15)),
+        ),
+        (
+            "C_two_vs_one",
+            parallel(C, 2),
+            card(Dev::pins(C, &[0, 1]).value(5.6e-16)),
+        ),
+    ];
+    for (name, layout, reference) in combined {
+        for (label, controls) in [("relaxed", &relaxed), ("strict", &Controls::default())] {
+            out.push(compared_under(
+                &format!("topology/{name}/{label}"),
+                &["LVS-049", "LVS-043", "LVS-044"],
+                (&layout, &reference),
+                controls,
+            ));
+        }
+    }
+    // A diode's value is its area: two drawn in parallel, 0.32 um² each,
+    // are one of 0.64 um² relaxed, and two strict (derived by hand from
+    // [`draw_pins`]).
+    let diodes = Circuit::new(2, vec![Dev::pins(D, &[0, 1]), Dev::pins(D, &[0, 1])]);
+    let written = spice(&Circuit::new(2, vec![Dev::pins(D, &[0, 1]).area(640_000)]));
+    for (label, policy, matched) in [("relaxed", "relaxed", true), ("strict", "strict", false)] {
+        let deck = format!("{}lvs topology {policy}\n", full_deck());
+        let mut fixture = Fixture::new(
+            &format!("lvs/topology/D_two_vs_double_area/{label}"),
+            &["LVS-049", "LVS-044"],
+            &deck,
+            LVS,
+        )
+        .layout(draw(&diodes))
+        .expect(Expect::Lvs(matched));
+        fixture.reference = Some(written.clone());
         out.push(fixture);
     }
     // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against

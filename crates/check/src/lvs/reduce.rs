@@ -10,6 +10,7 @@
 //! | MOS stating `W` | sums `W`, `nf` and the diffusions `as`, `ad`, `ps`, `pd`, each to its channel end; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees; never with a diffusion stated | folded into `W` and the diffusions |
 //! | MOS stating no `W` | sums the count `m` (1 when the card states none); every other parameter agrees | as above | kept: that many in parallel |
 //! | resistor, capacitor, diode, bipolar | sums the count `m`; every other parameter agrees | never | kept |
+//! | the same, stating its value, under [`ParamNames::relaxed`] | combines the value by its law (a resistor's `r` harmonically, `1 / Σ 1/r`; a capacitor's `c`, a diode's `area`, a bipolar's `ae` by adding) and adds `w` (a resistor's), `area`, `perim` and `pe`; every other parameter agrees | never | folded into the value and what adds |
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
 //! comparison's tolerance plays no part here. A summed parameter must be
@@ -24,10 +25,10 @@
 //! F67). A MOS's diffusions belong to its channel ends, so a parallel merge
 //! adds each member's to the head's end on the same net, and one that states
 //! some of the four and not all never merges; a series merge would swallow
-//! the shared diffusion, and is refused (testing-plan F16). A
-//! passive's value is kept, not combined: two capacitors of one `c` in
-//! parallel are one of that `c` with `m = 2`, as a card stating `m = 2` is,
-//! and do not match one card of twice the `c`.
+//! the shared diffusion, and is refused (testing-plan F16). Under the strict
+//! policy, the default, a passive's value is kept, not combined: two
+//! capacitors of one `c` in parallel are one of that `c` with `m = 2`, as a
+//! card stating `m = 2` is, and do not match one card of twice the `c`.
 //!
 //! - **Parallel** (catalog LVS-040, LVS-043, LVS-044; `KLayout` and Netgen both
 //!   do it): devices of one kind and one model whose terminals land on the
@@ -49,6 +50,16 @@
 //!   net is named. [`compare`](crate::lvs::compare) makes a reference net a
 //!   port when a layout label names it, so a labelled node stops the merge on
 //!   both sides. In practice only MOS have a channel.
+//! - **Relaxed topology** (catalog LVS-043, LVS-044, LVS-049; Netgen's
+//!   `property topology relaxed`, "two networks may have different topology
+//!   as long as they are numerically the same after series and parallel
+//!   combinations"): with [`ParamNames::relaxed`], a resistor, capacitor,
+//!   diode or bipolar that states its value (`r`, `c`, `area`, `ae`) merges
+//!   in parallel by the value's law, so two capacitors of `c` are one of
+//!   `2c` and two resistors of `r` one of `r/2`, as Kirchhoff's laws make
+//!   them; its `m` is folded in first, `r/m` and `m` times the rest. One that
+//!   states no value has nothing to combine and keeps its count. Passives
+//!   still never merge in series.
 //! - **Multiplier** (catalog LVS-046): with both the `W` and `m` names given,
 //!   each MOS's `W` is multiplied by its `m` and the `m` is dropped, before
 //!   any merge. A MOS with no `W`, and every other device, keeps its `m`,
@@ -91,6 +102,72 @@ pub struct ParamNames {
     /// so where source and drain trade places, `as` trades with `ad` and `ps`
     /// with `pd`.
     pub diffusion: [Option<StrId>; 4],
+    /// `r`, `c`, `area`, `perim`, `ae` and `pe`, in that order: a passive's
+    /// or bipolar's value and what adds with it under [`Self::relaxed`].
+    pub values: [Option<StrId>; 6],
+    /// Whether a resistor, capacitor, diode or bipolar stating its value
+    /// merges in parallel by the value's law rather than keeping a count
+    /// (Netgen's `property topology relaxed`; the deck's `lvs topology
+    /// relaxed`). Off by default: the strict policy, where two devices are
+    /// never one of a combined value.
+    pub relaxed: bool,
+}
+
+/// How a relaxed parallel merge combines a passive's or bipolar's
+/// parameters ([`ParamNames::relaxed`]): the value, whether it combines
+/// harmonically (a resistance) or adds, and the others that add.
+#[derive(Debug, Clone, Copy)]
+struct Law {
+    value: StrId,
+    harmonic: bool,
+    adds: [Option<StrId>; 3],
+}
+
+impl Law {
+    /// The law for a device of `kind` stating `params`: `None` under the
+    /// strict policy, for a MOS, and for a device that states no value.
+    fn of(kind: DeviceKind, params: &[(StrId, f64)], names: ParamNames) -> Option<Self> {
+        if !names.relaxed {
+            return None;
+        }
+        let [r, c, area, perim, ae, pe] = names.values;
+        let (value, harmonic, adds) = match kind {
+            DeviceKind::Resistor => (r?, true, [names.width, area, perim]),
+            DeviceKind::Capacitor => (c?, false, [area, perim, None]),
+            DeviceKind::Diode => (area?, false, [perim, None, None]),
+            DeviceKind::Bjt => (ae?, false, [pe, area, perim]),
+            DeviceKind::Mos => return None,
+        };
+        params
+            .iter()
+            .any(|&(name, _)| name == value)
+            .then_some(Self {
+                value,
+                harmonic,
+                adds,
+            })
+    }
+
+    /// Whether the law combines `name`.
+    fn combines(self, name: StrId) -> bool {
+        name == self.value || self.adds.contains(&Some(name))
+    }
+
+    /// `name`'s value for `m` devices of `value` in parallel.
+    fn times(self, name: StrId, value: f64, m: f64) -> f64 {
+        if self.harmonic && name == self.value {
+            value / m
+        } else {
+            value * m
+        }
+    }
+
+    /// The names a parallel merge under this law combines, as
+    /// [`parallel_sums`] lists them.
+    fn sums(self) -> [Option<StrId>; 6] {
+        let [a, b, c] = self.adds;
+        [Some(self.value), a, b, c, None, None]
+    }
 }
 
 impl ParamNames {
@@ -424,20 +501,22 @@ fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
     for device in 0..narrow(src.device_count()) {
         let params = src.params_of(device);
         let m = count_of(params, multiplier);
-        let into = names
-            .width
-            .filter(|_| sums_width(src.device_kind[device as usize], params, names));
+        let kind = src.device_kind[device as usize];
+        let into = names.width.filter(|_| sums_width(kind, params, names));
+        let law = Law::of(kind, params, names);
         for &(name, value) in params {
             if name == multiplier {
                 // Folded, or a count of one: nothing left to say.
                 #[expect(clippy::float_cmp, reason = "1 is the count a card states exactly")]
-                if into.is_none() && m != 1.0 {
+                if into.is_none() && law.is_none() && m != 1.0 {
                     out.param.push((name, value));
                 }
             } else if into.is_some()
                 && (Some(name) == into || names.diffusion.contains(&Some(name)))
             {
                 out.param.push((name, value * m));
+            } else if let Some(law) = law.filter(|law| law.combines(name)) {
+                out.param.push((name, law.times(name, value, m)));
             } else {
                 out.param.push((name, value));
             }
@@ -520,14 +599,17 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         // name to be kept under (testing-plan F83); one with a `W` needs
         // nothing else (F84).
         let wide = sums_width(kind, params, names);
+        // A relaxed passive combines its value instead of counting.
+        let law = Law::of(kind, params, names);
         // Diffusions are summed end by end, which needs all four or none.
         let diffusions = names.diffusions_in(params);
         let whole = diffusions == 0 || diffusions == names.diffusion.len();
+        let counts = !wide && law.is_none() && names.multiplier.is_some();
         plan.parallel_ok
-            .push(bound & ((wide && whole) || (!wide && names.multiplier.is_some())));
-        let counted = names.multiplier.filter(|_| !wide);
-        plan.parallel_sig
-            .push(signature(params, &parallel_sums(wide, names), counted));
+            .push(bound & ((wide && whole) || law.is_some() || counts));
+        let counted = names.multiplier.filter(|_| !wide && law.is_none());
+        let sums = law.map_or_else(|| parallel_sums(wide, names), Law::sums);
+        plan.parallel_sig.push(signature(params, &sums, counted));
         let states_length = names
             .length
             .is_some_and(|length| params.iter().any(|&(name, _)| name == length));
@@ -850,10 +932,14 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
         } else {
             // The head's parameters, the summed ones totalled over the group,
             // which states each of them on every member or on none.
-            let wide = sums_width(src.device_kind[head as usize], src.params_of(head), names);
+            let head_kind = src.device_kind[head as usize];
+            let wide = sums_width(head_kind, src.params_of(head), names);
+            let law = Law::of(head_kind, src.params_of(head), names)
+                .filter(|_| plan.mode == Some(MergeKind::Parallel));
             let group = &plan.order[at..end];
-            let summed = match plan.mode {
-                Some(MergeKind::Series) => [names.length, None, None, None, None, None],
+            let summed = match (plan.mode, law) {
+                (Some(MergeKind::Series), _) => [names.length, None, None, None, None, None],
+                (_, Some(law)) => law.sums(),
                 _ => parallel_sums(wide, names),
             };
             // A member whose source is on the head's drain adds its `as` to
@@ -867,26 +953,29 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
             // last.
             let counted = names
                 .multiplier
-                .filter(|_| plan.mode == Some(MergeKind::Parallel) && !wide);
+                .filter(|_| plan.mode == Some(MergeKind::Parallel) && !wide && law.is_none());
             for &(name, value) in src.params_of(head) {
                 if Some(name) == counted {
                     continue;
                 }
                 let total = if summed.contains(&Some(name)) {
-                    group
-                        .iter()
-                        .flat_map(|&d| {
-                            let read = if crossed(d) {
-                                names.across(name)
-                            } else {
-                                Some(name)
-                            };
-                            src.params_of(d)
-                                .iter()
-                                .filter(move |&&(other, _)| Some(other) == read)
-                        })
-                        .map(|&(_, v)| v)
-                        .sum()
+                    let members = group.iter().flat_map(|&d| {
+                        let read = if crossed(d) {
+                            names.across(name)
+                        } else {
+                            Some(name)
+                        };
+                        src.params_of(d)
+                            .iter()
+                            .filter(move |&&(other, _)| Some(other) == read)
+                            .map(|&(_, v)| v)
+                    });
+                    // A resistance combines harmonically, `1 / Σ 1/r`.
+                    if law.is_some_and(|law| law.harmonic && law.value == name) {
+                        1.0 / members.map(|v| 1.0 / v).sum::<f64>()
+                    } else {
+                        members.sum()
+                    }
                 } else {
                     value
                 };
