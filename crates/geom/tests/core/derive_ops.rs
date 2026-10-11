@@ -66,7 +66,8 @@ fn same(got: &ValidatedLayer, want: &ValidatedLayer, what: &str) {
 
 fn sized(a: &ValidatedLayer, by: i64) -> ValidatedLayer {
     let mut out = ValidatedLayer::default();
-    sized_into(a, Dbu::new(by).expect("in domain"), &mut out).expect("in range");
+    let by = Dbu::new(by).expect("in domain");
+    sized_into(a, by, by, &mut out).expect("in range");
     out
 }
 
@@ -77,6 +78,30 @@ fn growing_a_square_adds_the_distance_on_every_side_with_square_corners() {
     let grown = sized(&rects(&[(0, 0, 10, 10)]), 2);
     same(&grown, &rects(&[(-2, -2, 12, 12)]), "grown square");
     assert_eq!(area(&grown), 14 * 14);
+}
+
+/// Oracle: the Minkowski sum with, and erosion by, the box `[-dx, dx] x
+/// [-dy, dy]` (`KLayout`'s `sized(dx, dy)`), worked by hand: a 10 x 6 box
+/// grown by (2, 3) is 14 x 12; shrunk by (1, 2) it is 8 x 2; shrunk by (1, 3)
+/// it is gone; and two boxes 4 apart across x merge when grown by (2, 0) but
+/// not by (1, 0) or (0, 5).
+#[test]
+fn sizing_each_axis_by_its_own_distance() {
+    let box_ = rects(&[(0, 0, 10, 6)]);
+    let mut out = ValidatedLayer::default();
+    sized_into(&box_, d(2), d(3), &mut out).expect("in range");
+    same(&out, &rects(&[(-2, -3, 12, 9)]), "grown box");
+    sized_into(&box_, d(-1), d(-2), &mut out).expect("in range");
+    same(&out, &rects(&[(1, 2, 9, 4)]), "shrunk box");
+    sized_into(&box_, d(-1), d(-3), &mut out).expect("in range");
+    assert!(out.is_empty(), "6 tall shrinks away under 2 x 3");
+    let pair = rects(&[(0, 0, 10, 6), (14, 0, 24, 6)]);
+    sized_into(&pair, d(2), d(0), &mut out).expect("in range");
+    assert_eq!(out.len(), 1, "the 4 gap closes");
+    sized_into(&pair, d(1), d(0), &mut out).expect("in range");
+    assert_eq!(out.len(), 2, "a 2 gap is left");
+    sized_into(&pair, d(0), d(5), &mut out).expect("in range");
+    assert_eq!(out.len(), 2, "growing in y leaves the x gap");
 }
 
 /// Oracle: hand-derived. Growing each side by 2 closes a gap of 4 (the edges
@@ -157,7 +182,7 @@ fn sizing_past_the_coordinate_domain_is_refused() {
     let edge = MAX_ABS_DBU - 1;
     let mut out = ValidatedLayer::default();
     assert_eq!(
-        sized_into(&rects(&[(0, 0, edge, 10)]), d(5), &mut out),
+        sized_into(&rects(&[(0, 0, edge, 10)]), d(5), d(5), &mut out),
         Err(BooleanError::OutOfRange)
     );
 }

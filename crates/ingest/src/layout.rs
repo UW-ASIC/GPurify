@@ -315,7 +315,7 @@ fn derive_layers_into(
                 }
                 let (a, b) = (&operand, &combined);
                 match *op {
-                    DerivedOp::Sized(by) => sized_into(a, by, &mut folded),
+                    DerivedOp::Sized(dx, dy) => sized_into(a, dx, dy, &mut folded),
                     DerivedOp::Interacting(keep) => {
                         interacting_into(a, b, keep, &mut folded);
                         Ok(())

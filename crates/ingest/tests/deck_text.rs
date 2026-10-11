@@ -1194,6 +1194,10 @@ fn a_layer_operation_checks_its_arguments() {
     );
     one_error("layer x = met1.with_area(>= 1um)\n", "needs an area");
     one_error("layer x = met1\n", "a derived layer needs an operator");
+    one_error(
+        "layer x = met1.sized(10nm, -10nm)\n",
+        "grows or shrinks both axes",
+    );
 }
 
 /// Oracle: `docs/deck.md`, Rules: the id is how violations are reported, so it
