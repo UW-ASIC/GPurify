@@ -51,7 +51,7 @@
 //! | `wide_space(L; width: len, attached: len) >= len` | `attached_wide_spacing` | [`drc::Rule::AttachedWideSpacing`] | the same, also from what is attached to the wide part | DRC-028 |
 //! | `space(L; nets: same \| different) >= len` | `net_spacing` | [`drc::Rule::NetSpacing`] | same-net or different-net shapes too close | DRC-080 |
 //! | `space_table(L; prl: [..], width: [..], space: [[..]])` | `spacing_table` | [`drc::Rule::SpacingTable`] | two shapes closer than their table cell | DRC-025, DRC-026, DRC-027 |
-//! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017 |
+//! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017, ERC-A9 |
 //! | `hole_area(L) >= area` | `min_enclosed_area` | [`drc::Rule::MinEnclosedArea`] | a hole smaller than the limit | DRC-019 |
 //! | `cheesing(L) <= area` | `cheesing` | [`drc::Rule::Cheesing`] | a shape larger than the limit with no slot | DRC-075, ERC-E12 |
 //! | `density(L[, boundary]; window: len, step: len) >= frac` | `density` | [`drc::Rule::Density`] | a window with coverage outside the limit | DRC-071 |
@@ -92,8 +92,8 @@
 //!
 //! | Deck | Kind | Checked by | Flags | Catalog |
 //! |---|---|---|---|---|
-//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A11, ERC-A12, ERC-A13 |
-//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A12, ERC-A13 |
+//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13 |
+//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13 |
 //! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
 //! | `em_current_density(layers..; ..)` | `em_current_density` | [`erc::RuleSet::em_current_density`] | a wire or cut above its instantaneous current limit | ERC-C7, ERC-D4, ERC-E1, ERC-E2, ERC-E3, ERC-E10 |

@@ -850,6 +850,7 @@ fn antenna_electrical() -> Vec<Fixture> {
     out.extend(lef_pwl_limit());
     out.extend(sky130_lef_agrees_with_egar());
     out.extend(sky130_ar1());
+    out.extend(ihp_ant_g());
     let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
 rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     out.push(
@@ -1457,6 +1458,72 @@ rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
             .layout(layout)
             .expect(Expect::rule("ae", ae))
             .expect(Expect::rule("an", an)),
+        );
+    }
+    out
+}
+
+/// IHP SG13G2 layout rules §7.1, Ant.g: "size of protection diode (µm²)
+/// 0.16", the least diode that lets a gate's net be held to Ant.e (with
+/// protection diode) instead of Ant.b. A deck writes it with the derived
+/// selection `diff.with_area(>= 0.16um2)` as the `diode` both rows read, and
+/// the size itself as a DRC `area` rule. A 1.0 µm² gate under 2.0 µm² of
+/// met1 (Ant.b scaled to 1.5, Ant.e to 100): a 0.15 µm² diode is too small,
+/// so Ant.b flags 2.0 and Ant.g flags the diode; a 0.16 µm² diode, the
+/// manual's minimum itself, protects the gate (IHP's own KLayout deck counts
+/// a diode only above 0.16, `area(d) > 0.16`: at exactly 0.16 the two
+/// differ), so both rows are clean, and so is Ant.g.
+fn ihp_ant_g() -> Vec<Fixture> {
+    let deck = antenna_deck(
+        "layer prot = diff.with_area(>= 0.16um2)
+rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: prot)
+rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: prot, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.g area(diff) >= 0.16um2",
+    );
+    let mut out = Vec::new();
+    for (name, diff, area) in [
+        ("0.15um2", (4000, 1650, 4500, 1950), 150_000),
+        ("0.16um2", (4000, 1600, 4400, 2000), 160_000),
+    ] {
+        let mut layout = gate_stub("gate");
+        rect(&mut layout, "met1", (0, 1600, 5000, 2000));
+        rect(&mut layout, "diff", diff);
+        rect(&mut layout, "cont", (4150, 1700, 4350, 1900));
+        let small = area < 160_000;
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna_electrical/ihp_ant_g/{name}/erc"),
+                &["ERC-A8", "ERC-A9"],
+                &deck,
+                ERC,
+            )
+            .layout(layout.clone())
+            .expect(Expect::rule(
+                "Ant.b",
+                if small {
+                    vec![ratio(2.0).at(500, 500)]
+                } else {
+                    Vec::new()
+                },
+            ))
+            .expect(Expect::clean("Ant.e")),
+        );
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna_electrical/ihp_ant_g/{name}/drc"),
+                &["ERC-A9"],
+                &deck,
+                DRC,
+            )
+            .layout(layout)
+            .expect(Expect::rule(
+                "Ant.g",
+                if small {
+                    vec![Finding::area(area)]
+                } else {
+                    Vec::new()
+                },
+            )),
         );
     }
     out
