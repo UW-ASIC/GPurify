@@ -3436,11 +3436,11 @@ layer tap = gds(4, 0)
 ";
 
 /// `floating_well` (ERC-G2): wells as unions of 1 µm cells on a 3 × 2 grid
-/// (every pattern whose cells meet edge to edge or not at all), a 200 nm tap
-/// at a cell's centre or across the edge between two side-by-side cells, or
-/// none. A well is a 4-connected group of cells; a tap ties it only when the
-/// well covers all of it. Named: a tap in a well's hole, in a notch, across
-/// its outer edge.
+/// (every pattern), a 200 nm tap at a cell's centre or across the edge
+/// between two side-by-side cells, or none. A well is an 8-connected group of
+/// cells: cells meeting only at a corner are one well, the corner model of
+/// the merge. A tap ties a well only when the well covers all of it. Named: a
+/// tap in a well's hole, in a notch, across its outer edge.
 fn floating_well(depth: Depth) -> Vec<Fixture> {
     let cell = |c: usize| ((c % 3) as i64 * 1000, (c / 3) as i64 * 1000);
     let adjacent = |a: usize, b: usize| {
@@ -3465,27 +3465,17 @@ fn floating_well(depth: Depth) -> Vec<Fixture> {
     let mut cases = Vec::new();
     for pattern in 1u32..64 {
         let cells: Vec<usize> = (0..6).filter(|&c| pattern >> c & 1 == 1).collect();
-        // Skip a pair that meets only at a corner, unless a shared neighbour
-        // joins them anyway: how a corner joins two figures is not the rule's.
-        let pinch = cells.iter().any(|&a| {
-            cells.iter().any(|&b| {
-                diagonal(a, b) && !cells.iter().any(|&c| adjacent(a, c) && adjacent(b, c))
-            })
-        });
-        if pinch {
-            continue;
-        }
         for tap in (0..=taps.len()).map(|t| taps.get(t).cloned()) {
             cases.push((cells.clone(), tap));
         }
     }
     let mut out = Vec::new();
     for (cells, tap) in sample(&cases, depth, 100, 0xf3_0001) {
-        // Components by edge adjacency.
+        // Components by edge or corner adjacency.
         let mut group: Vec<usize> = (0..6).collect();
         for &a in &cells {
             for &b in &cells {
-                if adjacent(a, b) {
+                if adjacent(a, b) || diagonal(a, b) {
                     let (ga, gb) = (group[a], group[b]);
                     for g in &mut group {
                         if *g == gb {

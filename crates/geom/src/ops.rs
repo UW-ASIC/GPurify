@@ -157,11 +157,18 @@ fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptE
 /// overlap: `O(n log n)` for typical rings, `O(n²)` when every edge spans a
 /// common x.
 pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
-    self_intersects_with(xs, ys, &mut Vec::new())
+    self_intersects_with(xs, ys, false, &mut Vec::new())
 }
 
-/// [`self_intersects`] with the edge buffer passed in, for a caller looping over rings.
-pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<SweptEdge>) -> bool {
+/// [`self_intersects`] with the edge buffer passed in, for a caller looping over
+/// rings. With `pinches`, a vertex the run passes twice as a pinch
+/// ([`pinches_are_corners`]) is a touch the run may make, not a crossing.
+pub(crate) fn self_intersects_with(
+    xs: &[Dbu],
+    ys: &[Dbu],
+    pinches: bool,
+    edges: &mut Vec<SweptEdge>,
+) -> bool {
     let n = xs.len();
     // Under four edges, every pair shares a vertex.
     if n < 4 {
@@ -176,7 +183,7 @@ pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<Swept
     edges.push(swept_edge(xs, ys, n - 1, 0, last));
     edges.sort_unstable_by_key(|e| e.xlo);
 
-    let mut found = false;
+    let (mut found, mut touched) = (false, false);
     for (i, &e) in edges.iter().enumerate() {
         let rest = &edges[i + 1..];
         let window = rest.partition_point(|o| o.xlo <= e.xhi);
@@ -184,11 +191,71 @@ pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<Swept
         for &o in &rest[..window] {
             let apart = e.id.abs_diff(o.id);
             let adjacent = (apart == 1) | (apart == last);
-            found |= !adjacent & segments_intersect(e.seg, o.seg);
+            let hit = !adjacent && segments_intersect(e.seg, o.seg);
+            let touch = hit && pinches && meet_only_at_an_end(e.seg, o.seg);
+            found |= hit & !touch;
+            touched |= touch;
         }
     }
 
-    found
+    // Edges meeting end to end put one point at two places in the run.
+    found || (touched && !pinches_are_corners(xs, ys))
+}
+
+/// Whether two segments share one endpoint of each and no other point: the
+/// shared end, and no stretch of a common line out of it.
+fn meet_only_at_an_end(p: Seg, q: Seg) -> bool {
+    let mut shared = 0;
+    let mut overlap = false;
+    for (end, far) in [(p.a, p.b), (p.b, p.a)] {
+        for (other_end, other_far) in [(q.a, q.b), (q.b, q.a)] {
+            if end == other_end {
+                shared += 1;
+                let along = i128::from(far.x.raw() - end.x.raw())
+                    * i128::from(other_far.x.raw() - end.x.raw())
+                    + i128::from(far.y.raw() - end.y.raw())
+                        * i128::from(other_far.y.raw() - end.y.raw());
+                overlap |= cross(end, far, other_far) == 0 && along > 0;
+            }
+        }
+    }
+    shared == 1 && !overlap
+}
+
+/// Whether every point a closed run visits more than once is a **pinch**,
+/// where two parts of one figure meet at a corner: visited exactly twice, the
+/// four edges there leaving along the four axis directions, and both visits
+/// corners turning the same way. Either way the run's material fills two
+/// opposite quadrants there (left turns pair each quadrant's own two edges,
+/// right turns cross from one quadrant to the other); turns that differ would
+/// wind some quadrant twice, and a straight pass is a crossing.
+fn pinches_are_corners(xs: &[Dbu], ys: &[Dbu]) -> bool {
+    let n = xs.len();
+    let mut visits: Vec<(Dbu, Dbu, usize)> = (0..n).map(|i| (xs[i], ys[i], i)).collect();
+    visits.sort_unstable();
+    let toward = |from: usize, to: usize| {
+        (
+            (xs[to] - xs[from]).raw().signum(),
+            (ys[to] - ys[from]).raw().signum(),
+        )
+    };
+    // The directions out of a visit, back along the run and on along it.
+    let rays = |i: usize| (toward(i, (i + n - 1) % n), toward(i, (i + 1) % n));
+    let turn = |(back, on): ((i64, i64), (i64, i64))| (back.0 * on.1 - back.1 * on.0).signum();
+    visits
+        .chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
+        .all(|visit| match *visit {
+            [_] => true,
+            [(.., i), (.., j)] => {
+                let ((a, b), (c, d)) = (rays(i), rays(j));
+                let all = [a, b, c, d];
+                let axis = all.iter().all(|&(dx, dy)| (dx == 0) != (dy == 0));
+                let distinct = (0..4).all(|k| (k + 1..4).all(|m| all[k] != all[m]));
+                let turns = (turn((a, b)), turn((c, d)));
+                axis && distinct && turns.0 != 0 && turns.0 == turns.1
+            }
+            _ => false,
+        })
 }
 
 /// Twice the signed area of a closed coordinate run, by the shoelace formula.

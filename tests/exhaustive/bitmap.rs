@@ -6,26 +6,30 @@
 //! if the tool merges them. The oracle works on the cells and is meant to be
 //! read, not to be fast. Its semantics, as the rustdoc states them:
 //!
-//! - **Figures.** Shapes that touch or overlap are one figure, and "touch" is
-//!   sharing an edge: the merge, `geom::boolean::union_into`, keeps two cells
-//!   meeting only at a corner as two polygons. So figures are the 4-connected
-//!   components of the filled cells, and empty space is 8-connected (a corner
-//!   contact is not a wall).
+//! - **Figures, and the corner model.** Shapes that touch or overlap are one
+//!   figure, and touching at a corner is touching: the merge,
+//!   `geom::boolean::union_into`, joins two cells that meet only at a corner
+//!   into one polygon. So figures are the 8-connected components of the
+//!   filled cells, and empty space is 4-connected: it does not pass a corner
+//!   where material meets, so a ring closed only at a corner encloses a hole.
 //! - **`min_width`** (DRC-010): per figure, the narrowest of (a) the gap
 //!   between parallel edges facing across material with overlapping
 //!   projections, on cells the shortest run of a row or column, and (b) the
 //!   Euclidean gap between two concave corners facing across material: voids
 //!   pointing away from each other, each corner on the other's material side.
+//!   Where two cells of a figure meet only at a corner, the corner is two
+//!   concave corners at one point with opposite voids: a neck of width 0.
 //!   One finding per figure under the limit.
 //! - **`min_spacing`** (DRC-023): every pair of drawn rows (cells) in different
-//!   figures, Euclidean, boundary to boundary. Cells of two figures meeting at
-//!   a corner measure 0.
+//!   figures, Euclidean, boundary to boundary. Two figures never touch, so no
+//!   pair measures 0.
 //! - **`notch`** (DRC-024): per figure, the narrowest gap between two of its
 //!   cells in one row or column with none of its cells between: parallel edges
 //!   facing across empty space with overlapping projections, holes included,
-//!   corner-to-corner gaps not measured.
+//!   corner-to-corner gaps not measured. A gap between two parts of a figure
+//!   joined only at corners is a notch (`.#.|#.#` has one of 100).
 //! - **`min_area`** (DRC-017): per figure, its cell count times `S²`.
-//! - **`min_enclosed_area`** (DRC-019): per figure, each bounded 8-connected
+//! - **`min_enclosed_area`** (DRC-019): per figure, each bounded 4-connected
 //!   component of the cells not in it, times `S²`.
 //! - **`min_enclosure`** (DRC-040): each inner cell, drawn inset by [`INSET`],
 //!   is its own polygon; its host is the outer figure under it, and its
@@ -40,21 +44,8 @@
 //! The nightly depth enumerates every 4×4 single-layer pattern (65 536, which
 //! hold every 3×3 pattern at the origin), every 3×3 two-layer enclosure
 //! pattern (2^18), and every pair of rectangles on a 5×5 lattice. The merge
-//! depth runs a fixed-seed sample of [`SAMPLE`] of each.
-//!
-//! Two disagreements are new findings, each marked on the patterns that show
-//! it (pictures are rows top to bottom):
-//! - F51: `min_spacing` treats two figures meeting at a corner as one,
-//!   while `notch`, `min_width` and `min_area` treat them as two, so the
-//!   corner and every gap between them go unreported. `.#.|#.#`, three cells,
-//!   has a 100 nm gap that neither `space >= 120nm` nor `notch >= 150nm` sees,
-//!   whichever reading of a corner contact one takes.
-//! - F53: a figure that meets itself at a corner (`###|#.#|.##`) closes a
-//!   ring there in the engine, which then reports the cell inside as a hole
-//!   and a width of 0 at the corner; this oracle, like `KLayout`'s default
-//!   merge, lets empty space pass through the corner, so there is no hole and
-//!   the width is the narrowest run. Until F52 was fixed (by C3), every rule
-//!   that merges the layer refused such a figure.
+//! depth runs a fixed-seed sample of [`SAMPLE`] of each. Pictures are rows
+//! top to bottom.
 
 use crate::drc_dimension::DRC;
 use crate::harness::{Depth, Expect, Finding, Fixture, Layout};
@@ -175,9 +166,9 @@ impl Pattern {
             .sum()
     }
 
-    /// The merged figures.
+    /// The merged figures: material joins across a corner.
     fn figures(self) -> Vec<Set> {
-        components(self.set(), false)
+        components(self.set(), true)
     }
 
     /// The cells as rectangles on `layer`, each inset by `inset`.
@@ -245,13 +236,16 @@ fn width2(fig: Set) -> i64 {
     // around them in the figure; the void points at the fourth. Lattice point
     // `(x, y)` is the bottom-left corner of cell `(x, y)` and takes its bit, so
     // shifting the figure by 1, 8 or 9 bits lines up the cell to its west,
-    // south or south-west with it.
+    // south or south-west with it. A lattice point with only two diagonal
+    // cells in the figure joins them, and is a concave corner of each with
+    // the voids on the other diagonal: two corners at one point, width 0.
     let (ne, nw, se, sw) = (fig, fig << 1, fig << 8, fig << 9);
+    let (rising, falling) = (ne & !nw & !se & sw, !ne & nw & se & !sw);
     let corners = [
-        ((1, 1), !ne & nw & se & sw),
-        ((-1, 1), ne & !nw & se & sw),
-        ((1, -1), ne & nw & !se & sw),
-        ((-1, -1), ne & nw & se & !sw),
+        ((1, 1), !ne & nw & se & sw | falling),
+        ((-1, 1), ne & !nw & se & sw | rising),
+        ((1, -1), ne & nw & !se & sw | rising),
+        ((-1, -1), ne & nw & se & !sw | falling),
     ];
     for (v, ps) in corners {
         for (w, qs) in corners {
@@ -310,7 +304,7 @@ fn min_area(figs: &[Set], _n: i64) -> Vec<i64> {
 fn min_enclosed_area(figs: &[Set], n: i64) -> Vec<i64> {
     let ring = padded(n) & !(padded(n - 2) << 9);
     figs.iter()
-        .flat_map(|&f| components(padded(n) & !f, true))
+        .flat_map(|&f| components(padded(n) & !f, false))
         .filter(|&hole| hole & ring == 0)
         .map(area)
         .collect()
@@ -331,12 +325,10 @@ struct Kind {
     /// What each finding-to-be measures before the limit, from the figures of
     /// an n×n pattern: a squared length or an area, both in nm².
     measure: fn(&[Set], i64) -> Vec<i64>,
-    /// The finding that makes a pattern with these figures fail today.
-    known: fn(&[Set]) -> Option<&'static str>,
 }
 
-/// Widths on cells: 100, 141 (√2·S), 200, 223 (√5·S), 282, 300, 400. Spacing
-/// adds 0 for a corner contact. Notches are 100 or 200. Areas and holes are
+/// Widths on cells: 0 (a corner contact), 100, 141 (√2·S), 200, 223 (√5·S),
+/// 282, 300, 400. Notches are 100 or 200. Areas and holes are
 /// multiples of 10 000 nm².
 const KINDS: &[Kind] = &[
     Kind {
@@ -346,7 +338,6 @@ const KINDS: &[Kind] = &[
         unit: "nm",
         limits: &[120, 150, 200, 250],
         measure: min_width,
-        known: pinched,
     },
     Kind {
         name: "min_spacing",
@@ -355,7 +346,6 @@ const KINDS: &[Kind] = &[
         unit: "nm",
         limits: &[50, 120, 150, 200, 250],
         measure: min_spacing,
-        known: corner_contact,
     },
     Kind {
         name: "notch",
@@ -364,7 +354,6 @@ const KINDS: &[Kind] = &[
         unit: "nm",
         limits: &[150, 200, 250],
         measure: notch,
-        known: never,
     },
     Kind {
         name: "min_area",
@@ -373,7 +362,6 @@ const KINDS: &[Kind] = &[
         unit: "nm2",
         limits: &[15_000, 20_000, 35_000, 50_000],
         measure: min_area,
-        known: never,
     },
     Kind {
         name: "min_enclosed_area",
@@ -382,55 +370,8 @@ const KINDS: &[Kind] = &[
         unit: "nm2",
         limits: &[15_000, 20_000, 25_000],
         measure: min_enclosed_area,
-        known: never,
     },
 ];
-
-/// F53 where it changes the holes: empty space that may not pass through a
-/// corner leaves a different set of holes in a 4×4 pattern than empty space
-/// that may.
-fn closes_at_a_corner(figs: &[Set]) -> Option<&'static str> {
-    let ring = padded(4) & !(padded(2) << 9);
-    let holes = |eight| {
-        let mut holes: Vec<Set> = figs
-            .iter()
-            .flat_map(|&f| components(padded(4) & !f, eight))
-            .filter(|&hole| hole & ring == 0)
-            .collect();
-        holes.sort_unstable();
-        holes
-    };
-    (holes(true) != holes(false)).then_some("F53")
-}
-
-/// No pattern of this kind is known to fail.
-fn never(_: &[Set]) -> Option<&'static str> {
-    None
-}
-
-/// F53: a figure with two diagonal cells sharing no neighbour in it meets
-/// itself at a corner, where the engine closes a ring the oracle leaves open.
-fn pinched(figs: &[Set]) -> Option<&'static str> {
-    let pinch = figs.iter().any(|&f| {
-        cells(f).any(|(x, y)| {
-            [(1, 1), (1, -1)].iter().any(|&(dx, dy)| {
-                has(f, (x + dx, y + dy)) && !has(f, (x + dx, y)) && !has(f, (x, y + dy))
-            })
-        })
-    });
-    pinch.then_some("F53")
-}
-
-/// F51: `min_spacing` takes two figures meeting at a corner as one, so
-/// neither the corner nor any gap between them is reported.
-fn corner_contact(figs: &[Set]) -> Option<&'static str> {
-    let diagonal = |s: Set| s << 7 | s >> 7 | s << 9 | s >> 9;
-    let contact = figs
-        .iter()
-        .enumerate()
-        .any(|(i, &a)| figs[i + 1..].iter().any(|&b| diagonal(a) & b != 0));
-    contact.then_some("F51")
-}
 
 /// The rule id for one limit of a kind.
 fn rule_id(kind: &str, limit: i64) -> String {
@@ -455,12 +396,7 @@ fn single_layer(kind: &Kind, depth: Depth) -> Vec<Fixture> {
     let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
     sample(depth, 1 << 16, kind.name)
         .into_iter()
-        .map(|bits| Pattern { n: 4, bits })
-        // A hole closed only at a corner is a hole or not by the corner model
-        // F53 has to choose, and the engine answers both ways today, so its
-        // patterns wait for that choice rather than presume one.
-        .filter(|p| kind.name != "min_enclosed_area" || closes_at_a_corner(&p.figures()).is_none())
-        .map(|p| single(kind, &deck, p))
+        .map(|bits| single(kind, &deck, Pattern { n: 4, bits }))
         .collect()
 }
 
@@ -471,8 +407,7 @@ fn single(kind: &Kind, deck: &str, p: Pattern) -> Fixture {
         "met1",
         0,
     ));
-    let figs = p.figures();
-    let values = (kind.measure)(&figs, p.n);
+    let values = (kind.measure)(&p.figures(), p.n);
     for &limit in kind.limits {
         let findings = values.iter().filter_map(|&v| {
             if kind.unit == "nm" {
@@ -484,10 +419,7 @@ fn single(kind: &Kind, deck: &str, p: Pattern) -> Fixture {
         let id = rule_id(kind.name, limit);
         fixture = fixture.expect(Expect::rule(&id, findings.collect()));
     }
-    match (kind.known)(&figs) {
-        Some(finding) => fixture.known(finding),
-        None => fixture,
-    }
+    fixture
 }
 
 // ------------------------------------------------------------ min_enclosure ---

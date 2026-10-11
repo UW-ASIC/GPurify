@@ -2,6 +2,7 @@
 
 mod area_rules;
 mod common;
+mod corner_model;
 mod determinism;
 mod grid_rules;
 mod overlay_laws;

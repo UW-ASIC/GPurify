@@ -5,8 +5,9 @@
 //! The closed forms and the inductance filaments read regions, not drawn
 //! polygons, so a wire is the same conductor however it was drawn: pieces
 //! that abut share no edge, and pieces that overlap count the overlap once
-//! (testing-plan F44, F45). Two pieces that meet only at a corner stay two
-//! regions, as [`merge_into`] leaves them.
+//! (testing-plan F44, F45). Two pieces that meet only at a corner are one
+//! region, as [`merge_into`] joins them (the corner model of
+//! [`gpurify_geom::boolean::union_into`]).
 
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::derive::merge_into;
@@ -190,12 +191,15 @@ mod tests {
         assert_eq!(l.perimeter[0].raw(), 64);
     }
 
-    /// Oracle: definition. Two bars meeting only at a corner are one net but
-    /// two regions, as the merge leaves them.
+    /// Oracle: definition (the corner model: material meeting at a corner is
+    /// joined). Two 4 x 1 bars meeting only at a corner are one net and one
+    /// region, whose area is both bars', 8, and whose outline walks round
+    /// both, `2 (4 + 1) + 2 (4 + 1) = 20`.
     #[test]
-    fn a_corner_touch_is_two_regions_of_one_net() {
+    fn a_corner_touch_is_one_region_of_one_net() {
         let regions = regions_of(&[(0, 0, 4, 1), (4, 1, 8, 2)]);
-        assert_eq!(regions.len(), 2);
-        assert_eq!(regions.net[0], regions.net[1]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions.area[0].raw(), 8);
+        assert_eq!(regions.perimeter[0].raw(), 20);
     }
 }

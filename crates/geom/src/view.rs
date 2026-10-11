@@ -1,5 +1,6 @@
-//! Validated geometry: simple rectilinear rings, canonical winding, holes bound to
-//! their innermost containing outer.
+//! Validated geometry: rectilinear rings, simple but where a figure meets itself
+//! at a corner, canonical winding, holes bound to their innermost containing
+//! outer.
 //!
 //! Data in: one layer of a [`GeometryStore`].
 //! Data out: [`ValidatedLayer`], one outer-plus-holes polygon per CCW ring.
@@ -19,7 +20,10 @@ pub enum ValidityError {
     /// signed area (a run that doubles back on itself).
     #[error("polygon {0:?} has fewer than three distinct vertices")]
     Degenerate(PolyId),
-    /// Two non-adjacent edges share a point, touching included. Checked before
+    /// Two non-adjacent edges share a point, touching included, other than a
+    /// pinch: a vertex the ring passes exactly twice, as two axis-aligned
+    /// corners turning the same way with its four edges leaving along the four
+    /// directions (two parts of one figure meeting at a corner). Checked before
     /// rectilinearity, so a skew bowtie is reported as this.
     #[error("polygon {0:?} has self-intersecting boundary")]
     SelfIntersecting(PolyId),
@@ -34,11 +38,17 @@ pub enum ValidityError {
 /// One layer's geometry, validated and grouped into outer-plus-holes polygons.
 /// [`PartialEq`] is structural (same rings in the same order), not region equality.
 ///
-/// Every ring is simple and rectilinear; each outer is counter-clockwise and
-/// each hole clockwise, inside its outer. Built by [`validate_layer_into`] or
-/// returned by a boolean. A layer straight from a store is *not* merged:
-/// overlapping or abutting shapes stay separate polygons until
-/// [`crate::derive::merge_into`] or a boolean.
+/// Every ring is rectilinear and simple but at its pinches: a ring may pass a
+/// vertex twice, as two corners turning the same way, where two parts of its
+/// figure meet ([`ValidityError::SelfIntersecting`] states the rule). Each
+/// outer is counter-clockwise and each hole clockwise, inside its outer; a hole
+/// may touch its outer, or another hole, at such a vertex. A boolean result
+/// has these touches exactly where its material meets at a corner
+/// ([`crate::boolean::union_into`]'s corner model). Built by
+/// [`validate_layer_into`] or returned by a boolean. Area, even-odd
+/// containment and the widths read such rings as they do simple ones. A layer
+/// straight from a store is *not* merged: overlapping or abutting shapes stay
+/// separate polygons until [`crate::derive::merge_into`] or a boolean.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ValidatedLayer {
     /// Owned: a boolean produces vertices no store row holds.
@@ -117,8 +127,8 @@ impl ValidatedLayer {
     }
 }
 
-/// A polygon that is known valid: simple rings, canonical winding, holes
-/// contained by their outer boundary.
+/// A polygon that is known valid: simple rings but at pinches, canonical
+/// winding, holes contained by their outer boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct PolygonRef<'a> {
     layer: &'a ValidatedLayer,
@@ -365,7 +375,7 @@ fn classify_ring<S: Simd>(
     if !distinct {
         return Err(ValidityError::Degenerate(poly));
     }
-    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, edges) {
+    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, true, edges) {
         return Err(ValidityError::SelfIntersecting(poly));
     }
     if !rectilinear {

@@ -17,7 +17,12 @@ use gpurify_ingest::{StrId, StrTable};
 ///   grid units. Every limit is positive; `from_deck` refuses anything else.
 /// - A value exactly at its limit passes. Only a strict excess violates.
 /// - "Merged" means that shapes on the layer that touch or overlap become one
-///   figure before the rule looks at them.
+///   figure before the rule looks at them. Meeting only at a corner is
+///   touching: the corner joins the two into one figure, as a neck of width
+///   0, and empty space does not pass it, so a ring closed only at a corner
+///   encloses a hole ([`gpurify_geom::boolean::union_into`]'s corner model).
+///   Every variant that groups shapes into figures, spacing included, reads
+///   them this way, and so does net extraction.
 /// - A distance between shapes is Euclidean, boundary to boundary, unless the
 ///   variant says otherwise. The comparison is exact. `measured` is floored to
 ///   a whole grid unit, so a report never overstates a gap.
@@ -48,7 +53,8 @@ pub enum Rule {
     /// edges facing each other across material with overlapping projections,
     /// and also the Euclidean gap between two concave corners facing each
     /// other across material (the neck where two rectangles overlap at a
-    /// corner, `KLayout`'s Euclidean width).
+    /// corner, `KLayout`'s Euclidean width). Where two parts of a figure meet
+    /// only at a corner, that neck is 0 wide.
     ///
     /// One violation per merged figure narrower than `limit`, at the middle of
     /// its narrowest gap. `measured` is that width, `shapes.0` the lowest drawn
@@ -142,7 +148,8 @@ pub enum Rule {
     /// between two separate shapes is spacing, not a notch. A notch is the gap
     /// between two parallel edges of one figure facing each other across empty
     /// space with overlapping projections; a hole narrower than `limit` is one
-    /// too. Corner-to-corner gaps are not measured.
+    /// too, and so is a gap between parts of a figure joined only at a
+    /// corner. Corner-to-corner gaps are not measured.
     ///
     /// One violation per merged figure, at the middle of its narrowest notch.
     /// `measured` is that gap, `shapes.0` the lowest drawn row under the
@@ -337,7 +344,7 @@ pub enum Rule {
     ///
     /// Deck: `hole_area(L) >= area`, kind `min_enclosed_area`. The holes are
     /// those of the merged layer, so a hole closed only by several touching
-    /// shapes counts.
+    /// shapes counts, and so does one closed only at a corner.
     ///
     /// One violation per small hole, at the centre of the hole's bounding
     /// box. `measured` is the hole's area, `shapes.0` the lowest drawn outer

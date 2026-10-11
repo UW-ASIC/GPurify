@@ -123,10 +123,10 @@ const CUT: u32 = u32::MAX;
 /// `nets` must have been traced from `store` with `connectivity`, and `stack`
 /// is indexed by [`LayerId`]. Each net's shapes on a non-global layer are
 /// merged, and each connected piece of the merge is one region (two pieces
-/// that meet only at a corner stay two): a bar drawn as abutting or
-/// overlapping polygons is one region with the outline's area and perimeter. Net `k`'s nodes follow
-/// those of nets `0..k`; a net of `n` regions has `n + 1` nodes, its regions
-/// ascending by layer. Region `i` contributes a ground capacitance on node
+/// that meet only at a corner are one, as the merge joins them): a bar drawn
+/// as abutting or overlapping polygons is one region with the outline's area
+/// and perimeter. Net `k`'s nodes follow those of nets `0..k`; a net of `n`
+/// regions has `n + 1` nodes, its regions ascending by layer. Region `i` contributes a ground capacitance on node
 /// `i` and a resistor from node `i` to `i + 1`, and node `i` is that region's
 /// node. A net with no region (shapes on global layers only) has no node.
 /// Coupling is measured between the regions' rectangles and joins the

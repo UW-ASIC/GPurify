@@ -28,12 +28,15 @@
 //!   A ring is stored open (its first vertex is not repeated at the end);
 //!   counter-clockwise is an outer boundary and clockwise a hole.
 //! - [`view::validate_layer_into`] turns one layer of the store into a
-//!   [`ValidatedLayer`]: rings checked simple and rectilinear, holes bound to
-//!   their innermost outer. Every algorithm below takes a validated layer, so
-//!   none of them re-checks its input. Arbitrary angles are refused, not
-//!   approximated.
+//!   [`ValidatedLayer`]: rings checked rectilinear and simple but where a
+//!   figure meets itself at a corner, holes bound to their innermost outer.
+//!   Every algorithm below takes a validated layer, so none of them re-checks
+//!   its input. Arbitrary angles are refused, not approximated.
 //! - [`boolean`] computes union, intersection and difference exactly by an
-//!   integer sweep; [`derive`](mod@derive) builds the deck's layer operations (sizing,
+//!   integer sweep. Its corner model is "connected": material that meets only
+//!   at a corner is one figure, joined there by a neck of width 0, and a ring
+//!   closed only at a corner encloses a hole ([`boolean::union_into`]).
+//!   [`derive`](mod@derive) builds the deck's layer operations (sizing,
 //!   selection by relation or measure, holes, extents, edge layers) on top.
 //! - [`width`] measures the narrowest width across a polygon's own material
 //!   ([`width::narrowest_width`]): between facing edges
