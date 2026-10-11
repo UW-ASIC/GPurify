@@ -72,7 +72,9 @@
 //! parallel pairs the centre-line closed form, and every other pair
 //! Gauss–Legendre quadrature. The filament network is then solved at 1 MHz,
 //! the way `FastHenry` does (Kamon, Tsuk & White, 1994), and each net's port
-//! impedance gives its series `L = Im(Z)/ω` and `R = Re(Z)`.
+//! impedance gives its series `L = Im(Z)/ω` and `R = Re(Z)`. The impedance
+//! between two nets' ports, each other port open, gives their mutual
+//! inductance `M = Im(Z_ij)/ω` ([`Parasitic::MutualInductance`]).
 //!
 //! # The network
 //!
@@ -134,9 +136,9 @@
 //!   (two pieces meeting only at a corner, or joined only through a global
 //!   layer, which carries no modelled current) is refused
 //!   (see [`field::henry::extract_inductance_into`]).
-//!   Only each net's own port impedance is computed, so mutual inductance
-//!   between nets never reaches the output. A single frequency (1 MHz) means
-//!   there is no skin effect.
+//!   Mutual inductance is computed between field-solved nets only: an
+//!   unselected net carries no current in the solve. A single frequency
+//!   (1 MHz) means there is no skin effect.
 //!
 //! # Against Magic's extractor
 //!
@@ -171,7 +173,7 @@
 //! | PEX-001 | Sheet R × squares, via R | implemented | [`analytical`] |
 //! | PEX-002 | Area + fringe C to substrate | implemented | [`analytical`] |
 //! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, over the substrate plane but without dielectric images |
-//! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net |
+//! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net, and the mutual L between every pair of them; no current crowding |
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
 //! | PEX-006 | Multi-corner extraction | missing | — |
 //! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R, colour-aware) | partial | temperature-dependent R, already in the deck's stack ([`ProcessStack::sheet_res_ohm_sq`](gpurify_ingest::deck::ProcessStack::sheet_res_ohm_sq)); the rest needs foundry calibration data |

@@ -293,6 +293,9 @@ pub enum Quantity {
     GroundCap,
     /// The sum of the net's inductance elements, in picohenries.
     Inductance,
+    /// The sum of the mutual inductances between the net and another, in
+    /// picohenries: every mutual element on either of its ends.
+    Mutual,
 }
 
 /// One claim about the run.
@@ -883,21 +886,37 @@ pub fn violations_of(fixture: &Fixture, ran: &Result<Ran, String>) -> Vec<String
 /// zero or more. This is element by element, which a passive network need
 /// not be (a Maxwell matrix may carry a slightly positive off-diagonal and
 /// stay positive definite), but the network SPEF carries is its elements.
+/// A mutual inductance is signed by its ports' orientation, so its law is
+/// the pair's: `M² ≤ L₁L₂`, the inductance matrix of the two positive
+/// semidefinite (each `L` the series inductance on the mutual's node).
 fn passivity(ran: &Ran) -> Vec<String> {
     let Some(network) = ran.outputs.parasitics.as_ref() else {
         return Vec::new();
+    };
+    let inductance_at = |node: gpurify::extract::network::NodeId| {
+        network
+            .value
+            .iter()
+            .zip(&network.from)
+            .find_map(|(value, &from)| match value {
+                Parasitic::Inductance(q) if from == node => Some(q.raw()),
+                _ => None,
+            })
+            .unwrap_or(f64::NAN)
     };
     network
         .value
         .iter()
         .enumerate()
-        .filter(|(_, value)| {
-            let raw = match value {
-                Parasitic::Resistance(q) => q.raw(),
-                Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.raw(),
-                Parasitic::Inductance(q) => q.raw(),
-            };
-            !(raw >= 0.0)
+        .filter(|&(row, value)| match value {
+            Parasitic::Resistance(q) => !(q.raw() >= 0.0),
+            Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => !(q.raw() >= 0.0),
+            Parasitic::Inductance(q) => !(q.raw() >= 0.0),
+            Parasitic::MutualInductance(q) => {
+                let first = inductance_at(network.from[row]);
+                let second = network.to[row].map_or(f64::NAN, inductance_at);
+                !(q.raw() * q.raw() <= first * second)
+            }
         })
         .map(|(row, value)| format!("pex: element {row}, {value:?}, is not passive"))
         .collect()
@@ -910,9 +929,13 @@ pub fn parasitic_total(ran: &Ran, net: &str, quantity: Quantity) -> Option<f64> 
     let net_id = ran.extracted.ports.net_of(wanted)?;
     let mut total = 0.0;
     let mut seen = false;
+    let on_net =
+        |node: gpurify::extract::network::NodeId| network.node_net[node.0 as usize] == net_id;
     for (index, value) in network.value.iter().enumerate() {
-        let from = network.from[index].0 as usize;
-        if network.node_net[from] != net_id {
+        let near = on_net(network.from[index]);
+        // A mutual inductance belongs to both of its nets.
+        let far = quantity == Quantity::Mutual && network.to[index].is_some_and(on_net);
+        if !near && !far {
             continue;
         }
         seen = true;
@@ -920,6 +943,7 @@ pub fn parasitic_total(ran: &Ran, net: &str, quantity: Quantity) -> Option<f64> 
             (Quantity::Resistance, Parasitic::Resistance(r)) => total += r.raw(),
             (Quantity::GroundCap, Parasitic::GroundCap(c)) => total += c.raw(),
             (Quantity::Inductance, Parasitic::Inductance(l)) => total += l.raw(),
+            (Quantity::Mutual, Parasitic::MutualInductance(m)) => total += m.raw(),
             _ => {}
         }
     }

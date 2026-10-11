@@ -30,6 +30,9 @@
 //!   point is counted is a modelling choice worth at most 2% at these lengths.
 //! - [`SAME_FIELD`], `1e-8` relative: one field solved twice, moved by a
 //!   symmetry or scaled; two orders above the solve's own `1e-10` residual.
+//! - [`MUTUAL`], `1e-3` relative: Grover's mutual inductance of two
+//!   filaments against two bars at least twelve widths apart, which their
+//!   cross-sections move by 4e-4.
 //! - The field-solve bounds (Thomson's principle: a flux tube's capacitance
 //!   is a lower bound) and monotone laws are inequalities, held exactly.
 //! - Mesh refinement (C6): the error against a cube's known capacitance
@@ -80,6 +83,10 @@ const GROVER: f64 = 1e-2;
 const MODEL: f64 = 5e-2;
 /// The same field, solved again after a symmetry or a scale.
 const SAME_FIELD: f64 = 1e-8;
+/// Grover's filament mutual inductance against two bars twelve widths apart:
+/// the bars' geometric-mean distance is `d` less `(w² − t²)/(12 d²)` of `ln d`,
+/// which moves `M` by 4e-4 at these sizes.
+const MUTUAL: f64 = 1e-3;
 
 /// ε₀ in aF/µm (CODATA 2018), the unit of the deck's capacitance coefficients.
 const EPSILON0_AF_PER_UM: f64 = 8.854_187_812_8;
@@ -299,6 +306,15 @@ fn grover_ph(length: f64, width: f64, thickness: f64) -> f64 {
     2e-7 * l * ((2.0 * l / wt).ln() + 0.5 + 0.2235 * wt / l) * 1e12
 }
 
+/// Grover's mutual inductance of two equal parallel filaments `length` long
+/// and `distance` apart, side by side (Grover, *Inductance Calculations*,
+/// 1946, ch. 6), in pH:
+/// `(µ₀/2π) l [asinh(l/d) − √(1 + d²/l²) + d/l]`, `µ₀/2π = 2e-7 H/m`.
+fn grover_mutual_ph(length: f64, distance: f64) -> f64 {
+    let (l, d) = (length * 1e-9, distance * 1e-9);
+    2e-7 * l * ((l / d).asinh() - (1.0 + (d / l).powi(2)).sqrt() + d / l) * 1e12
+}
+
 /// A polygon's area (nm²) and perimeter (nm), by the shoelace formula.
 fn outline(points: &[(i64, i64)]) -> (f64, f64) {
     let mut twice_area = 0_i128;
@@ -349,6 +365,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         vias(depth),
         stack_gaps(),
         field(depth),
+        mutual(depth),
     ]
     .concat()
 }
@@ -1034,6 +1051,35 @@ fn field(depth: Depth) -> Vec<Fixture> {
         .expect(Expect::Passes(true)),
     );
     out
+}
+
+/// PEX-004: the mutual inductance between two field-solved nets. Two
+/// parallel `m1` bars `l` long, each its own net, their centre lines `d`
+/// apart and at least twelve widths, are Grover's two filaments
+/// ([`grover_mutual_ph`]) on both nets, and positive: both ports run the
+/// same way along the pair, under every symmetry (each port's current enters
+/// at its lower end point).
+fn mutual(depth: Depth) -> Vec<Fixture> {
+    let cases: &[(i64, i64)] = match depth {
+        Depth::Merge => &[(20_000, 12_000)],
+        Depth::Nightly => &[(20_000, 12_000), (20_000, 16_000), (40_000, 12_000)],
+    };
+    let mut out = Vec::new();
+    for &(l, d) in cases {
+        let w = 1_000;
+        let m = grover_mutual_ph(l as f64, d as f64);
+        out.push(
+            solved(
+                &format!("pex/field/mutual/l{l}/d{d}"),
+                &["PEX-004"],
+                parallel(Metal::M1, l, w, d - w, 0),
+                &["A", "B"],
+            )
+            .expect(claim("A", Quantity::Mutual, m, MUTUAL))
+            .expect(claim("B", Quantity::Mutual, m, MUTUAL)),
+        );
+    }
+    every_placement(&out)
 }
 
 // Laws a fixture cannot state: coupling, the Maxwell matrix, SPEF.

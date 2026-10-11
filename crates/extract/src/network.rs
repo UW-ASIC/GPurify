@@ -23,6 +23,15 @@ pub enum Parasitic {
     /// Series inductance of a field-solved net, between its two nodes. Only
     /// the quasistatic path produces these.
     Inductance(Qty<Inductance, { prefix::PICO }>),
+    /// Mutual inductance between two field-solved nets' series inductances.
+    /// Its near node is the first net's, its far node the second's: each the
+    /// near node of that net's [`Parasitic::Inductance`], which is the end
+    /// its port current enters. Signed: positive when currents entering both
+    /// near nodes reinforce each other's flux, the SPICE dot convention with
+    /// each inductance's near node dotted. Only the quasistatic path
+    /// produces these
+    /// ([`InductMatrix::m_henry`](crate::field::henry::InductMatrix::m_henry)).
+    MutualInductance(Qty<Inductance, { prefix::PICO }>),
 }
 
 /// A node in the parasitic network: a net plus a position along it.
@@ -97,6 +106,7 @@ fn canonical_key(from: NodeId, to: Option<NodeId>, value: Parasitic) -> Canonica
         Parasitic::GroundCap(q) => (1u8, q.raw()),
         Parasitic::CouplingCap(q) => (2u8, q.raw()),
         Parasitic::Inductance(q) => (3u8, q.raw()),
+        Parasitic::MutualInductance(q) => (4u8, q.raw()),
     };
     let far = to.map_or(0, |node| u64::from(node.0) + 1);
     (from.0, far, tag, raw.to_bits())
@@ -194,7 +204,9 @@ impl ParasiticNetwork {
         for ((&from, &to), &value) in self.from.iter().zip(&self.to).zip(&self.value) {
             let ff = match value {
                 Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.raw(),
-                Parasitic::Resistance(_) | Parasitic::Inductance(_) => continue,
+                Parasitic::Resistance(_)
+                | Parasitic::Inductance(_)
+                | Parasitic::MutualInductance(_) => continue,
             };
             let near = net_of(from);
             let far = to.map_or(near, net_of);
@@ -209,8 +221,8 @@ impl ParasiticNetwork {
     }
 
     /// Sorts the elements into canonical order: by `from`, then far node with
-    /// ground first, then kind (R, ground C, coupling C, L), then the value's
-    /// bits.
+    /// ground first, then kind (R, ground C, coupling C, L, mutual L), then
+    /// the value's bits.
     ///
     /// The key is total, so any permutation of the same elements sorts to the
     /// same columns. The node columns are not touched. Takes *O*(e log e) time

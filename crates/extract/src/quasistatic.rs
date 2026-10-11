@@ -2,7 +2,8 @@
 //!
 //! Data in: the selected nets, solved by [`crate::field`].
 //! Data out: one node per net carrying the Maxwell matrix (row sum to ground,
-//! `-C_ij` coupling), plus a second node per net for series L and R when asked.
+//! `-C_ij` coupling), plus a second node per net for series L and R when asked,
+//! and a mutual inductance between every pair of those nets.
 //!
 //! The engine's order is [`extract_into`], then [`extract_inductance_into`] on
 //! the same network, then [`overlay`] onto the analytical network. What the
@@ -91,7 +92,10 @@ pub fn extract_into(
 /// debug builds catch. Each net gains a far node beside its anchor (node `i`
 /// becomes `2i`, its far node `2i + 1`), joined by the series L and R, so
 /// every [`NodeId`] read from `out` before this call is stale after it. The
-/// new elements break canonical order until the network is sorted or
+/// anchor is the end the net's port current enters. Every pair of nets
+/// `i < j` gains a [`Parasitic::MutualInductance`] from `i`'s anchor to
+/// `j`'s: the mean of `M_ij` and `M_ji`, which agree to round-off. The new
+/// elements break canonical order until the network is sorted or
 /// [`overlay`] sorts it.
 ///
 /// # Errors
@@ -151,6 +155,21 @@ pub fn extract_inductance_into(
             far,
             Parasitic::Resistance(Qty::new(matrix.r_ohm[row])),
         );
+    }
+    for row in 0..n {
+        for other in (row + 1)..n {
+            let (there, back) = (
+                matrix.m_henry[row * n + other],
+                matrix.m_henry[other * n + row],
+            );
+            // `0 + x`, so no pair reads −0 (F80).
+            let henry = 0.0 + 0.5 * (there + back) * PICOHENRIES_PER_HENRY;
+            out.push(
+                node(2 * row),
+                Some(node(2 * other)),
+                Parasitic::MutualInductance(Qty::new(henry)),
+            );
+        }
     }
     Ok(())
 }

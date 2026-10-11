@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::export::json::format_f64;
-use crate::export::parasitic::{check_finite, node_place, spice_card, DELIMITER};
+use crate::export::parasitic::{check_finite, mutual_couplings, node_place, spice_card, DELIMITER};
 use crate::export::{check_labels_one_to_one, narrow, Header, WriteError};
 use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
@@ -41,9 +41,9 @@ const fn card_rank(role: TerminalRole) -> u8 {
 pub enum Detail {
     /// Devices and their connectivity only.
     Schematic,
-    /// Devices plus every element of the parasitic network (R, C, and L
-    /// where a net was field-solved), with each device terminal on its net's
-    /// first node.
+    /// Devices plus every element of the parasitic network (R, C, and L and
+    /// mutual L where a net was field-solved), with each device terminal on
+    /// its net's first node.
     WithParasitics,
 }
 
@@ -58,7 +58,8 @@ pub enum Detail {
 /// order, and device sizes are integers in database units (the file says
 /// so, since no grid is passed). An unlabelled net is named `n` and its id,
 /// lengthened with `_` until no label has that name. Parasitic cards are
-/// `Rp`, `Cp` or `Lp` and the element's row.
+/// `Rp`, `Cp`, `Lp` or `Kp` and the element's row; a `Kp` card couples the
+/// two `Lp` cards of a mutual inductance by their coefficient `M / √(L₁L₂)`.
 ///
 /// A pin is one node, so the labels must name nets one to one: a label on
 /// several disconnected nets would join the pieces into one node and hide the
@@ -70,7 +71,9 @@ pub enum Detail {
 /// [`WriteError::SplitLabel`] for a label on several nets,
 /// [`WriteError::ShortedLabels`] for a net with several labels, and
 /// [`WriteError::Unrepresentable`] for a spliced network holding a NaN or
-/// infinite value, all checked before anything is written;
+/// infinite value, or a mutual inductance on a node no inductance starts at
+/// or larger than its two inductances allow, all checked before anything is
+/// written;
 /// [`WriteError::Unrepresentable`] for a port bound to a net outside the
 /// extraction, found
 /// after the `.subckt` line is written, or a parasitic element on a node
@@ -108,9 +111,13 @@ pub fn write_spice(
 
     let spliced = parasitics.filter(|_| detail == Detail::WithParasitics);
     check_labels_one_to_one((0..net_count).map(|net| NetId(narrow(net))), ports, strings)?;
-    if let Some(network) = spliced {
-        check_finite(network)?;
-    }
+    let couplings = match spliced {
+        Some(network) => {
+            check_finite(network)?;
+            mutual_couplings(network)?
+        }
+        None => Vec::new(),
+    };
 
     let _ = writeln!(out, "* {} SPICE netlist", header.tool_version);
     let _ = writeln!(out, "* deck: {}", header.deck_path);
@@ -242,6 +249,12 @@ pub fn write_spice(
         let elements = network.element_count();
 
         for row in 0..elements {
+            if let Some((a, b, k)) = couplings[row] {
+                let _ = write!(out, "Kp{row} Lp{a} Lp{b} ");
+                format_f64(k, out);
+                out.push('\n');
+                continue;
+            }
             // Through the same decision `write_dspf` cards an element with, so
             // the two files agree about both the letter and the scale factor.
             let (letter, _, magnitude, suffix) = spice_card(network.value[row]);

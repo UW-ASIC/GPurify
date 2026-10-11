@@ -376,3 +376,134 @@ fn a_layer_with_no_sheet_resistance_is_refused_by_name() {
         other => panic!("expected NoSheetResistance naming layer 0, got {other:?}"),
     }
 }
+
+/// Two bars on layer 0, each its own net: `(xlo, ylo, xhi, yhi)` per bar.
+fn two_nets(bars: [(i64, i64, i64, i64); 2]) -> (gpurify_geom::GeometryStore, NetTable) {
+    let mut builder = GeometryStoreBuilder::default();
+    for (xlo, ylo, xhi, yhi) in bars {
+        builder.push(
+            LayerId(0),
+            &[dbu(xlo), dbu(xhi), dbu(xhi), dbu(xlo)],
+            &[dbu(ylo), dbu(ylo), dbu(yhi), dbu(yhi)],
+        );
+    }
+    let (store, _) = builder.finish(1);
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0)],
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert_eq!(nets.net_count(), 2, "two bars apart are two nets");
+    (store, nets)
+}
+
+/// The inductance solve of both nets of [`two_nets`] together.
+fn solve_both(bars: [(i64, i64, i64, i64); 2]) -> InductMatrix {
+    let (store, nets) = two_nets(bars);
+    let mut out = InductMatrix::default();
+    extract_inductance_into(
+        &store,
+        &nets,
+        &Connectivity::default(),
+        &[NetId(0), NetId(1)],
+        &uniform_stack(1, 1.0, 0.25),
+        grid(),
+        &mut out,
+    )
+    .expect("two bars over a stated stack solve");
+    assert_eq!(out.net, [NetId(0), NetId(1)]);
+    assert_eq!(out.m_henry.len(), 4, "a 2 x 2 inductance matrix");
+    out
+}
+
+/// Two 20 µm × 1 µm bars along x, their centre lines `pitch` nm apart.
+fn side_by_side(pitch: i64) -> [(i64, i64, i64, i64); 2] {
+    [(0, 0, 20_000, 1_000), (0, pitch, 20_000, pitch + 1_000)]
+}
+
+/// Oracle: closed form (Grover, *Inductance Calculations*, 1946, ch. 6: two
+/// equal parallel filaments `l` long, `d` apart, side by side,
+/// `M = (µ₀/2π) l [asinh(l/d) − √(1 + d²/l²) + d/l]`). Bars 20 µm long, 1 µm
+/// wide and 100 nm thick, their centre lines 12 µm apart: their geometric-mean
+/// distance is `d` less `(w² − t²)/(12 d²)` of `ln d`, which moves `M` by
+/// 5e-4, inside the 1e-3 allowed. Fails if the mutual is not computed (zero),
+/// read off the wrong entry (the self inductance), or scaled wrongly.
+#[test]
+fn two_parallel_bars_have_grover_s_mutual_inductance() {
+    let out = solve_both(side_by_side(12_000));
+    let (l, d) = (20e-6_f64, 12e-6_f64);
+    let want = 2e-7 * l * ((l / d).asinh() - (1.0 + (d / l).powi(2)).sqrt() + d / l);
+    for got in [out.m_henry[1], out.m_henry[2]] {
+        let relative = ((got - want) / want).abs();
+        assert!(
+            relative < 1e-3,
+            "M = {got:e} H against Grover's {want:e} H, off by {relative:e}"
+        );
+    }
+}
+
+/// Oracle: laws. The port impedance matrix of a reciprocal network is
+/// symmetric, so `M₀₁ = M₁₀` to round-off; its diagonal is each net's own
+/// `L`; an open neighbour carries no current, so each bar's `L` and `R` are
+/// what it reads solved alone, to round-off; and the pair's inductance
+/// matrix is positive definite, `M² < L₀L₁`. Fails if a column is read for
+/// a row, or the other port is driven while one is measured.
+#[test]
+fn the_inductance_matrix_is_reciprocal_and_an_open_neighbour_changes_nothing() {
+    let pair = solve_both(side_by_side(2_000));
+    let (m01, m10) = (pair.m_henry[1], pair.m_henry[2]);
+    let scale = (pair.l_henry[0] * pair.l_henry[1]).sqrt();
+    assert!(
+        (m01 - m10).abs() <= 1e-9 * scale,
+        "M01 {m01:e}, M10 {m10:e}"
+    );
+    assert!(m01 * m01 < pair.l_henry[0] * pair.l_henry[1], "M {m01:e}");
+    assert_eq!(pair.m_henry[0].to_bits(), pair.l_henry[0].to_bits());
+    assert_eq!(pair.m_henry[3].to_bits(), pair.l_henry[1].to_bits());
+
+    let (store, nets) = two_nets(side_by_side(2_000));
+    for net in 0..2_u32 {
+        let mut alone = InductMatrix::default();
+        extract_inductance_into(
+            &store,
+            &nets,
+            &Connectivity::default(),
+            &[NetId(net)],
+            &uniform_stack(1, 1.0, 0.25),
+            grid(),
+            &mut alone,
+        )
+        .expect("one bar solves");
+        let i = net as usize;
+        for (what, got, want) in [
+            ("L", pair.l_henry[i], alone.l_henry[0]),
+            ("R", pair.r_ohm[i], alone.r_ohm[0]),
+        ] {
+            assert!(
+                ((got - want) / want).abs() < 1e-9,
+                "net {net}: {what} {got:e} with its neighbour, {want:e} alone"
+            );
+        }
+    }
+}
+
+/// Oracle: laws. Parallel bars' mutual inductance is positive (both ports
+/// run the same way along x) and falls as they move apart; perpendicular
+/// bars have none, since the Neumann integrand carries `û₁ · û₂ = 0`.
+#[test]
+fn mutual_inductance_falls_with_distance_and_vanishes_across() {
+    let mut last = f64::INFINITY;
+    for pitch in [2_000, 3_000, 4_000, 8_000, 12_000, 16_000] {
+        let m = solve_both(side_by_side(pitch)).m_henry[1];
+        assert!(m > 0.0 && m < last, "pitch {pitch}: M {m:e} after {last:e}");
+        last = m;
+    }
+    let across = solve_both([(0, 0, 20_000, 1_000), (25_000, -10_000, 26_000, 10_000)]);
+    let scale = (across.l_henry[0] * across.l_henry[1]).sqrt();
+    assert!(
+        across.m_henry[1].abs() <= 1e-12 * scale,
+        "perpendicular bars: M {:e}",
+        across.m_henry[1]
+    );
+}

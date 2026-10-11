@@ -61,6 +61,7 @@ pub fn serialise(network: &ParasiticNetwork) -> Vec<u8> {
             Parasitic::GroundCap(q) => (1u8, q.raw()),
             Parasitic::CouplingCap(q) => (2u8, q.raw()),
             Parasitic::Inductance(q) => (3u8, q.raw()),
+            Parasitic::MutualInductance(q) => (4u8, q.raw()),
         };
         out.push(tag);
         out.extend_from_slice(&raw.to_bits().to_le_bytes());
@@ -84,7 +85,9 @@ pub fn serialise_matrix(matrix: &CapMatrix) -> Vec<u8> {
 pub fn capacitance_ff(value: Parasitic) -> Option<f64> {
     match value {
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => Some(q.raw()),
-        Parasitic::Resistance(_) | Parasitic::Inductance(_) => None,
+        Parasitic::Resistance(_) | Parasitic::Inductance(_) | Parasitic::MutualInductance(_) => {
+            None
+        }
     }
 }
 
@@ -92,7 +95,10 @@ pub fn capacitance_ff(value: Parasitic) -> Option<f64> {
 pub fn resistance_ohm(value: Parasitic) -> Option<f64> {
     match value {
         Parasitic::Resistance(q) => Some(q.raw()),
-        Parasitic::GroundCap(_) | Parasitic::CouplingCap(_) | Parasitic::Inductance(_) => None,
+        Parasitic::GroundCap(_)
+        | Parasitic::CouplingCap(_)
+        | Parasitic::Inductance(_)
+        | Parasitic::MutualInductance(_) => None,
     }
 }
 

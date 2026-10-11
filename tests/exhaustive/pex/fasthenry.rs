@@ -88,43 +88,71 @@ impl Segment {
 /// `FastHenry`'s port impedance of `segments` in a chain, from the first's
 /// start to the last's end: `(R in Ω, L in pH)`.
 fn fasthenry(tool: &Path, segments: &[Segment]) -> (f64, f64) {
+    fasthenry_ports(tool, &[segments])[0][0]
+}
+
+/// `FastHenry`'s port impedance matrix of several chains, one port each
+/// from its first segment's start to its last's end, every other port open:
+/// entry `[q][p]` is `(Re Z, Im Z / ω)` in Ω and pH, the voltage across port
+/// `q` for a unit current through port `p`.
+fn fasthenry_ports(tool: &Path, chains: &[&[Segment]]) -> Vec<Vec<(f64, f64)>> {
     let um = |nm: i64| nm as f64 / 1e3;
     let mut input = String::from("* GPurify F3 differential\n.units um\n");
     let node = |out: &mut String, k: usize, p: [i64; 3]| {
         let _ = writeln!(out, "N{k} x={} y={} z={}", um(p[0]), um(p[1]), um(p[2]));
     };
-    node(&mut input, 0, segments[0].from);
-    for (k, s) in segments.iter().enumerate() {
-        node(&mut input, k + 1, s.to);
-        let _ = writeln!(
-            input,
-            "E{k} N{k} N{} w={} h={} sigma={} nwinc=1 nhinc=1",
-            k + 1,
-            um(s.width),
-            um(s.height),
-            s.sigma()
-        );
+    // Nodes and segments numbered across every chain; each chain's port.
+    let (mut next, mut ports) = (0, Vec::new());
+    for segments in chains {
+        let first = next;
+        node(&mut input, next, segments[0].from);
+        for s in *segments {
+            node(&mut input, next + 1, s.to);
+            let _ = writeln!(
+                input,
+                "E{next} N{next} N{} w={} h={} sigma={} nwinc=1 nhinc=1",
+                next + 1,
+                um(s.width),
+                um(s.height),
+                s.sigma()
+            );
+            next += 1;
+        }
+        ports.push((first, next));
+        next += 1;
+    }
+    for (from, to) in &ports {
+        let _ = writeln!(input, ".external N{from} N{to}");
     }
     let _ = write!(
         input,
-        ".external N0 N{}\n.freq fmin={FREQUENCY} fmax={FREQUENCY} ndec=1\n.end\n",
-        segments.len()
+        ".freq fmin={FREQUENCY} fmax={FREQUENCY} ndec=1\n.end\n"
     );
     let dir = oracle::scratch("fasthenry");
     std::fs::write(dir.join("in.inp"), input).expect("the scratch directory is writable");
     oracle::run(tool, &["in.inp"], &dir, Duration::from_mins(1));
     let zc = std::fs::read_to_string(dir.join("Zc.mat")).expect("FastHenry writes Zc.mat");
-    // The last line is the 1 x 1 impedance, `R +Xj`.
-    let words: Vec<&str> = zc
-        .lines()
-        .last()
-        .expect("an impedance")
-        .split_whitespace()
+    // The last n lines are the n x n impedance, each entry `R +Xj`.
+    let n = chains.len();
+    let lines: Vec<&str> = zc.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(lines.len() >= n, "an {n} x {n} matrix in Zc.mat:\n{zc}");
+    let matrix = lines[lines.len() - n..]
+        .iter()
+        .map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(words.len(), 2 * n, "a row of {n} entries: {line}");
+            words
+                .chunks(2)
+                .map(|entry| {
+                    let r: f64 = entry[0].parse().expect("a resistance");
+                    let x: f64 = entry[1].trim_end_matches('j').parse().expect("a reactance");
+                    (r, x / (2.0 * PI * FREQUENCY) * 1e12)
+                })
+                .collect()
+        })
         .collect();
-    let r: f64 = words[0].parse().expect("a resistance");
-    let x: f64 = words[1].trim_end_matches('j').parse().expect("a reactance");
     let _ = std::fs::remove_dir_all(&dir);
-    (r, x / (2.0 * PI * FREQUENCY) * 1e12)
+    matrix
 }
 
 /// One case: the layout `GPurify` solves, the segments `FastHenry` solves,
@@ -268,5 +296,82 @@ fn fasthenry_differential_every_inductance_geometry() {
         }
     }
     assert_eq!(cases.len(), 12, "every case ran");
+    assert!(broken.is_empty(), "{}", broken.join("\n"));
+}
+
+/// A mutual inductance against `FastHenry`: the two solvers integrate the
+/// same filaments' Neumann integral by different code (`GPurify` by the
+/// closed forms of `gpurify_extract::field::filament`, `FastHenry` by its
+/// own), so they agree to its five printed digits but for the cross-section
+/// of the closest pairs, which both integrate exactly (Hoer & Love).
+const MUTUAL: f64 = 1e-2;
+
+/// PEX-004: the mutual inductance between two field-solved nets against
+/// `FastHenry`'s two-port impedance matrix, `Im(Z₁₂)/ω` with each port from
+/// its bar's `x = 0` end, as `GPurify` orients its ports (from the lower end
+/// point). Pairs of 20 µm bars side by side on `m1` from a 500 nm gap to
+/// 11 µm (both solvers' close and far regimes), and an `m1` bar under a
+/// parallel `m2` bar. `GPurify`'s answer is the mean of `M₁₂` and `M₂₁`;
+/// `FastHenry`'s are compared each, so its matrix's own symmetry is checked
+/// too.
+#[test]
+#[ignore = "release tier: needs fasthenry (nix develop .#oracles)"]
+fn fasthenry_differential_mutual_inductance() {
+    let tool = oracle::tool("fasthenry");
+    let (m1, m2) = (COARSE.m1, COARSE.m2);
+    let (l, w) = (20_000, 1_000);
+    let mut pairs: Vec<(String, Layout, [Segment; 2])> = Vec::new();
+    for gap in [500, 1_000, 2_000, 4_000, 11_000] {
+        let y = w + gap + w / 2;
+        pairs.push((
+            format!("side_by_side/gap{gap}"),
+            super::parallel(Metal::M1, l, w, gap, 0),
+            [
+                Segment::wire(m1, [0, w / 2], [l, w / 2], w),
+                Segment::wire(m1, [0, y], [l, y], w),
+            ],
+        ));
+    }
+    pairs.push((
+        "stacked".into(),
+        Layout::default()
+            .rect("m1", 0, 0, l, w)
+            .rect("m2", 0, 0, l, w)
+            .label("m1_label", w / 2, w / 2, "A")
+            .label("m2_label", w / 2, w / 2, "B"),
+        [
+            Segment::wire(m1, [0, w / 2], [l, w / 2], w),
+            Segment::wire(m2, [0, w / 2], [l, w / 2], w),
+        ],
+    ));
+    let mut broken = Vec::new();
+    for (name, layout, [a, b]) in &pairs {
+        let z = fasthenry_ports(&tool, &[std::slice::from_ref(a), std::slice::from_ref(b)]);
+        let mut fixture = Fixture::new(
+            &format!("pex/fasthenry/mutual/{name}"),
+            &["PEX-004"],
+            &deck(COARSE, &[], ""),
+            PEX,
+        )
+        .layout(layout.clone());
+        fixture.quasistatic = vec!["A".into(), "B".into()];
+        let ran = harness::run(&fixture).unwrap_or_else(|why| panic!("{name}: {why}"));
+        let got = harness::parasitic_total(&ran, "A", Quantity::Mutual)
+            .unwrap_or_else(|| panic!("{name}: no mutual inductance"));
+        for want in [z[0][1].1, z[1][0].1] {
+            println!(
+                "{name}: M {got:.6} pH, FastHenry {want:.6} pH, {:+.3} %",
+                (got - want) / want * 100.0
+            );
+            if relative(got, want) > MUTUAL {
+                broken.push(format!(
+                    "{name}: M = {got} pH, FastHenry {want} pH ({:.3} % > {} %)",
+                    relative(got, want) * 100.0,
+                    MUTUAL * 100.0
+                ));
+            }
+        }
+    }
+    assert_eq!(pairs.len(), 6, "every pair ran");
     assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
