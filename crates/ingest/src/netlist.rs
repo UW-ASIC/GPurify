@@ -246,15 +246,17 @@ impl Netlist {
     ///
     /// # Time complexity
     ///
-    /// The count is linear in the netlist. The expansion is linear in the
-    /// devices, nets and instances it produces, times the netlist's nets and
-    /// instances per instance placed.
+    /// Linear in the netlist and in what the expansion produces, each net
+    /// name produced costing its instance path's length: each subcircuit's
+    /// instances and nets are indexed once, and one net map serves every
+    /// placement.
     pub fn flatten_top(
         &self,
         top: SubcktId,
         strings: &mut StrTable,
     ) -> Result<Netlist, NetlistError> {
-        let size = self.flat_size(top, strings)?;
+        let hierarchy = Hierarchy::of(self);
+        let size = self.flat_size(top, &hierarchy, strings)?;
         if size > MAX_FLAT_ELEMENTS {
             return Err(NetlistError::TooLarge(size));
         }
@@ -267,14 +269,10 @@ impl Netlist {
             ..Netlist::default()
         };
         // The caller's nets for `top`: its own, under their own names.
-        let own: Vec<RefNetId> = (0..narrow(self.net_name.len()))
-            .filter(|&row| self.net_subckt[row as usize] == top)
-            .map(RefNetId)
-            .collect();
         let mut map = vec![u32::MAX; self.net_name.len()];
-        for &net in &own {
-            map[net.0 as usize] = narrow(out.net_name.len());
-            out.net_name.push(self.net_name[net.0 as usize]);
+        for &net in hierarchy.nets_of(top) {
+            map[net as usize] = narrow(out.net_name.len());
+            out.net_name.push(self.net_name[net as usize]);
             out.net_subckt.push(SubcktId(0));
         }
         let ports = self.subckt_port_start[top.0 as usize] as usize
@@ -283,8 +281,7 @@ impl Netlist {
             out.port_net.push(RefNetId(map[port.0 as usize]));
         }
         out.subckt_port_start.push(narrow(out.port_net.len()));
-        let mut on_chain = vec![false; self.subckt_count()];
-        self.expand(top, &map, "", strings, &mut on_chain, &mut out)?;
+        self.expand(top, &hierarchy, &mut map, "", strings, &mut out);
         out.subckt_device_start.push(narrow(out.device_model.len()));
         Ok(out)
     }
@@ -293,25 +290,24 @@ impl Netlist {
     /// its devices, its nets and the instances it places, all the way down,
     /// saturating. `top`'s own nets are all in the result; each instance adds
     /// its callee's nets that are not on a port.
-    fn flat_size(&self, top: SubcktId, strings: &StrTable) -> Result<u64, NetlistError> {
+    fn flat_size(
+        &self,
+        top: SubcktId,
+        hierarchy: &Hierarchy,
+        strings: &StrTable,
+    ) -> Result<u64, NetlistError> {
         let cells = self.subckt_count();
-        let mut calls = vec![Vec::new(); cells];
-        for (&caller, &callee) in self.instance_subckt.iter().zip(&self.instance_of) {
-            calls[caller.0 as usize].push(callee);
-        }
-        let mut on_port = vec![false; self.net_name.len()];
-        for &port in &self.port_net {
-            on_port[port.0 as usize] = true;
-        }
-        let (mut nets, mut inner) = (vec![0u64; cells], vec![0u64; cells]);
-        for (net, &cell) in self.net_subckt.iter().enumerate() {
-            nets[cell.0 as usize] += 1;
-            inner[cell.0 as usize] += u64::from(!on_port[net]);
-        }
+        let inner: Vec<u64> = (0..narrow(cells))
+            .map(|cell| {
+                let nets = hierarchy.nets_of(SubcktId(cell));
+                let inner = nets.iter().filter(|&&net| !hierarchy.on_port[net as usize]);
+                inner.count() as u64
+            })
+            .collect();
         let (mut counted, mut on_chain) = (vec![None; cells], vec![false; cells]);
-        let walk = (&calls[..], &inner[..], strings);
+        let walk = (hierarchy, &inner[..], strings);
         let (below, _) = self.flat_below(top, 1, walk, &mut counted, &mut on_chain)?;
-        Ok(nets[top.0 as usize].saturating_add(below))
+        Ok((hierarchy.nets_of(top).len() as u64).saturating_add(below))
     }
 
     /// The devices and instances below one placement of `cell`, `depth`
@@ -320,12 +316,13 @@ impl Netlist {
     /// `cell` spans, itself included. Both memoised in `counted`, so a cell
     /// first counted shallow and met again deep is held to the depth cap as
     /// walking it again would be. Refuses a cycle, naming the subcircuit met
-    /// twice on one chain, as `expand` would, and a chain past the cap.
+    /// twice on one chain, and a chain past the cap, so `expand` meets
+    /// neither.
     fn flat_below(
         &self,
         cell: SubcktId,
         depth: u32,
-        (calls, inner, strings): (&[Vec<SubcktId>], &[u64], &StrTable),
+        (hierarchy, inner, strings): (&Hierarchy, &[u64], &StrTable),
         counted: &mut [Option<(u64, u32)>],
         on_chain: &mut [bool],
     ) -> Result<(u64, u32), NetlistError> {
@@ -346,8 +343,9 @@ impl Netlist {
         on_chain[row] = true;
         let devices = self.devices_of(cell);
         let (mut count, mut levels) = (u64::from(devices.end - devices.start), 1);
-        for &callee in &calls[row] {
-            let walk = (calls, inner, strings);
+        for &instance in hierarchy.instances_of(cell) {
+            let callee = self.instance_of[instance as usize];
+            let walk = (hierarchy, inner, strings);
             let (below, spans) = self.flat_below(callee, depth + 1, walk, counted, on_chain)?;
             count = count
                 .saturating_add(1 + inner[callee.0 as usize])
@@ -360,24 +358,19 @@ impl Netlist {
     }
 
     /// Append `cell`'s devices to `out`, its nets mapped by `map` (indexed by
-    /// this netlist's net ids, `u32::MAX` for none yet), then each instance in
-    /// it, recursively, under `path`.
+    /// this netlist's net ids), then each instance in it, recursively, under
+    /// `path`. An instance writes only its callee's rows of `map`, and no
+    /// subcircuit is on the chain twice, so every caller's rows stay as they
+    /// were: one map serves every placement.
     fn expand(
         &self,
         cell: SubcktId,
-        map: &[u32],
+        hierarchy: &Hierarchy,
+        map: &mut [u32],
         path: &str,
         strings: &mut StrTable,
-        on_chain: &mut [bool],
         out: &mut Netlist,
-    ) -> Result<(), NetlistError> {
-        let row = cell.0 as usize;
-        if on_chain[row] {
-            return Err(NetlistError::CyclicHierarchy(
-                strings.resolve(self.subckt_name[row]).to_owned(),
-            ));
-        }
-        on_chain[row] = true;
+    ) {
         for device in self.devices_of(cell) {
             let device = device as usize;
             out.device_model.push(self.device_model[device]);
@@ -394,10 +387,8 @@ impl Netlist {
             out.param.extend_from_slice(&self.param[params]);
             out.device_param_start.push(narrow(out.param.len()));
         }
-        for instance in 0..self.instance_of.len() {
-            if self.instance_subckt[instance] != cell {
-                continue;
-            }
+        for &instance in hierarchy.instances_of(cell) {
+            let instance = instance as usize;
             let callee = self.instance_of[instance];
             let name = strings.resolve(self.instance_name[instance]).to_owned();
             let inner = if path.is_empty() {
@@ -405,29 +396,27 @@ impl Netlist {
             } else {
                 format!("{path}.{name}")
             };
-            let mut child = vec![u32::MAX; self.net_name.len()];
             // Ports first: each takes the caller's net the instance passes.
             let passed = self.instance_net_start[instance] as usize
                 ..self.instance_net_start[instance + 1] as usize;
             let ports = self.subckt_port_start[callee.0 as usize] as usize
                 ..self.subckt_port_start[callee.0 as usize + 1] as usize;
             for (&port, &net) in self.port_net[ports].iter().zip(&self.instance_net[passed]) {
-                child[port.0 as usize] = map[net.0 as usize];
+                map[port.0 as usize] = map[net.0 as usize];
             }
             // Every other net of the callee is new, named under the path.
-            for (net, slot) in child.iter_mut().enumerate() {
-                if self.net_subckt[net] == callee && *slot == u32::MAX {
+            for &net in hierarchy.nets_of(callee) {
+                let net = net as usize;
+                if !hierarchy.on_port[net] {
                     let local = strings.resolve(self.net_name[net]).to_owned();
-                    *slot = narrow(out.net_name.len());
+                    map[net] = narrow(out.net_name.len());
                     out.net_name
                         .push(strings.intern(&format!("{inner}.{local}")));
                     out.net_subckt.push(SubcktId(0));
                 }
             }
-            self.expand(callee, &child, &inner, strings, on_chain, out)?;
+            self.expand(callee, hierarchy, map, &inner, strings, out);
         }
-        on_chain[row] = false;
-        Ok(())
     }
 
     /// The one subcircuit nothing instantiates. `None` when not unique, or
@@ -443,6 +432,69 @@ impl Netlist {
             _ => None,
         }
     }
+}
+
+/// What both walks of [`Netlist::flatten_top`] read per subcircuit, indexed
+/// once: its instances in file order and its nets in row order, each a CSR
+/// run, and whether each net is on a port. Without it each placement
+/// scanned every instance and every net of the netlist (testing-plan F95).
+struct Hierarchy {
+    instance_start: Vec<u32>,
+    instance: Vec<u32>,
+    net_start: Vec<u32>,
+    net: Vec<u32>,
+    on_port: Vec<bool>,
+}
+
+impl Hierarchy {
+    fn of(netlist: &Netlist) -> Self {
+        let cells = netlist.subckt_count();
+        let (instance_start, instance) = group(&netlist.instance_subckt, cells);
+        let (net_start, net) = group(&netlist.net_subckt, cells);
+        let mut on_port = vec![false; netlist.net_name.len()];
+        for &port in &netlist.port_net {
+            on_port[port.0 as usize] = true;
+        }
+        Self {
+            instance_start,
+            instance,
+            net_start,
+            net,
+            on_port,
+        }
+    }
+
+    /// The instance rows `cell` places, in file order.
+    fn instances_of(&self, cell: SubcktId) -> &[u32] {
+        let row = cell.0 as usize;
+        &self.instance[self.instance_start[row] as usize..self.instance_start[row + 1] as usize]
+    }
+
+    /// The net rows of `cell`, ascending.
+    fn nets_of(&self, cell: SubcktId) -> &[u32] {
+        let row = cell.0 as usize;
+        &self.net[self.net_start[row] as usize..self.net_start[row + 1] as usize]
+    }
+}
+
+/// The rows of `owner` grouped by the subcircuit each names, ascending
+/// within a group: a CSR start column over `cells` subcircuits, and the rows.
+fn group(owner: &[SubcktId], cells: usize) -> (Vec<u32>, Vec<u32>) {
+    let mut start = vec![0u32; cells + 1];
+    for &cell in owner {
+        start[cell.0 as usize + 1] += 1;
+    }
+    for at in 1..start.len() {
+        start[at] += start[at - 1];
+    }
+    let mut next = start.clone();
+    let mut rows = vec![0u32; owner.len()];
+    for (row, &cell) in owner.iter().enumerate() {
+        let at = &mut next[cell.0 as usize];
+        rows[*at as usize] = narrow(row);
+        *at += 1;
+    }
+    (start, rows)
 }
 
 // The shared reader: lex to cards, collect the definitions, then read each card.

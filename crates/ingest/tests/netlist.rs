@@ -455,6 +455,104 @@ fn a_reference_over_the_flat_cap_is_refused_before_it_is_expanded() {
     assert!(started.elapsed().as_secs() < 5, "refused without expanding");
 }
 
+/// Oracle: construct-from-answer, testing-plan F95. One net map serves
+/// every placement, so a placement must leave its callers' nets alone and
+/// a later placement of the same cell must not read an earlier one's. `top`
+/// places `mid` (`Xa`), `leaf` (`Xb`), then `mid` again on `b` (`Xc`);
+/// `mid` places `leaf` on its port `x` and on its inner net `y`; `leaf` is a
+/// resistor from its port `p` to an inner net `q`. Derived by hand, a
+/// cell's devices before its instances, instances in file order: `top`'s
+/// R1 a–b, then `Xa`'s R1 a–Xa.y, its leaves a–Xa.X1.q and Xa.y–Xa.X2.q,
+/// `Xb` a–Xb.q, `Xc`'s R1 b–Xc.y, its leaves b–Xc.X1.q and Xc.y–Xc.X2.q.
+#[test]
+fn flattening_keeps_each_placements_nets_apart() {
+    let mut strings = StrTable::default();
+    let source = "\
+.subckt leaf p
+R1 p q rpoly
+.ends
+.subckt mid x
+X1 x leaf
+X2 y leaf
+R1 x y rpoly
+.ends
+.subckt top a
+Xa a mid
+Xb a leaf
+Xc b mid
+R1 a b rpoly
+.ends
+";
+    let netlist = spice::read(source, &mut strings, &DeviceRecognition::default())
+        .expect("a three-level netlist reads");
+    let top = netlist.top().expect("top is the one top");
+    let flat = netlist.flatten_top(top, &mut strings).expect("no cycle");
+    let net = |id: RefNetId| strings.resolve(flat.net_name[id.0 as usize]).to_owned();
+    let devices: Vec<[String; 2]> = (0..flat.device_model.len())
+        .map(|device| {
+            let ends = terminals_of(&flat, device);
+            [net(ends[0]), net(ends[1])]
+        })
+        .collect();
+    let want = [
+        ["a", "b"],
+        ["a", "Xa.y"],
+        ["a", "Xa.X1.q"],
+        ["Xa.y", "Xa.X2.q"],
+        ["a", "Xb.q"],
+        ["b", "Xc.y"],
+        ["b", "Xc.X1.q"],
+        ["Xc.y", "Xc.X2.q"],
+    ];
+    assert_eq!(devices, want.map(|ends| ends.map(str::to_owned)));
+    assert_eq!(flat.net_name.len(), 9, "a, b and seven inner nets");
+}
+
+/// Oracle: the cost model, testing-plan F95. `top` placing `n` leaves, each
+/// a resistor to an inner net of its own, flattens to `n` devices and
+/// `n + 1` nets. A flatten linear in what it produces takes about twice as
+/// long at `2n` as at `n`; one that scans every instance card per
+/// placement, as it did, four times. Each size is timed three times,
+/// interleaved, the fastest kept, and the bound, three times, sits between.
+#[test]
+#[ignore = "nightly: flattens 10^5 and 2 x 10^5 placements, timed"]
+fn flattening_is_linear_in_the_placements() {
+    use std::fmt::Write;
+    use std::time::{Duration, Instant};
+
+    let read = |n: usize| {
+        let mut text = String::from(".subckt leaf p\nR1 p q rpoly\n.ends\n.subckt top a\n");
+        for i in 0..n {
+            writeln!(text, "X{i} a leaf").expect("a String takes any text");
+        }
+        text.push_str(".ends\n");
+        let mut strings = StrTable::default();
+        let netlist = spice::read(&text, &mut strings, &DeviceRecognition::default())
+            .expect("the placements read");
+        (netlist, strings)
+    };
+    let sizes = [100_000, 200_000];
+    let mut best = [Duration::MAX; 2];
+    for _ in 0..3 {
+        for (slot, n) in best.iter_mut().zip(sizes) {
+            let (netlist, mut strings) = read(n);
+            let top = netlist.top().expect("top is the one top");
+            let start = Instant::now();
+            let flat = netlist
+                .flatten_top(top, &mut strings)
+                .expect("within the cap");
+            *slot = (*slot).min(start.elapsed());
+            assert_eq!((flat.device_model.len(), flat.net_name.len()), (n, n + 1));
+        }
+    }
+    assert!(
+        best[1] < 3 * best[0],
+        "{:?} at 2 x 10^5 placements, {:?} at 10^5: over three times",
+        best[1],
+        best[0]
+    );
+}
+
 /// Oracle: the stated cap, testing-plan F96, as the layout's
 /// (`MAX_HIERARCHY_DEPTH`, 1024 levels, the top included). Subcircuits `c0`
 /// (the top) to `c{n-1}` each place the next once, and `c{n-1}` holds one
