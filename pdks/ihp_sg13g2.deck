@@ -8,7 +8,9 @@
 #        ihp-sg13g2/libs.doc/doc/SG13G2_os_process_spec.pdf, last changed in commit 5de3340987
 #        (supply voltages §1, sheet and via resistances §2.13/2.14, current limits
 #        §2.15, layer thicknesses §2.16, measured capacitance §2.17, εr Fig. 1.1.1).
-#  [DRC] Open KLayout deck, ihp-sg13g2/libs.tech/klayout/tech/drc, last changed in commit 3e4a6c5021
+#  [DRC] Open KLayout deck, ihp-sg13g2/libs.tech/klayout/tech/drc, last changed in commit 3e4a6c5021;
+#        AFil.d, AFil.j and MIM.h follow it at 5e6d592e4002 and its unit cells
+#        (testing/testcases/unit; ledger docs/xcheck/ihp_sg13g2.tsv)
 #        (layers_def.drc for GDS numbers, density.drc for window step and die
 #        boundary, docs/main_rules.md + extra_rules.md cross-checked against [LR]).
 #  [LVS] Open KLayout LVS, ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks, last changed in commit 6ff43baf32
@@ -258,11 +260,15 @@ rule AFil.b  space(activ_filler) >= 420nm
 rule AFil.c.Cont    space(activ_filler, cont) >= 1.1um
 rule AFil.c.GatPoly space(activ_filler, gatpoly) >= 1.1um
 rule AFil.c1 space(activ_filler, activ) >= 420nm
-rule AFil.d.NWell   space(activ_filler, nwell) >= 1um
-rule AFil.d.nBuLay  space(activ_filler, nbl) >= 1um
+# AFil.d holds the filler 1 um from the well's edges, outside or inside it
+# ([DRC] 5_6_activfiller.drc: separation, and NWell/nBuLay enclosing the filler).
+rule AFil.d.NWell   space(activ_filler.edges(), nwell.edges()) >= 1um
+rule AFil.d.nBuLay  space(activ_filler.edges(), nbl.edges()) >= 1um
 rule AFil.e  space(activ_filler, trans) >= 1um
-rule AFil.j.nSDblock  enclosure(afil_in_pwb, nsd_block) >= 250nm
-rule AFil.j.SalBlock  enclosure(afil_in_pwb, salblock) >= 250nm
+# Each block layer encloses the fillers it covers; a filler under SalBlock
+# alone passes ([DRC] 5_6_activfiller.drc AFil.j, and the unit cell's PASS).
+rule AFil.j.nSDblock  enclosure(afil_in_pwb.interacting(nsd_block), nsd_block) >= 250nm
+rule AFil.j.SalBlock  enclosure(afil_in_pwb.interacting(salblock), salblock) >= 250nm
 rule AFil.g  global_density(activ_den, prboundary) >= 35%
 rule AFil.g1 global_density(activ_den, prboundary) <= 55%
 # Window 800 um, step half a window ([DRC] density.drc), tiled over prBoundary.
@@ -792,6 +798,9 @@ rule Cnt.h  inside(cont, metal1)
 rule Cnt.j  forbidden(cont and gate)
 rule nSDB.e forbidden(nsd_block and cont)
 rule MIM.h  forbidden(topvia1.interacting(mim) not mim)
+# And every MIM holds a TopVia1 ([DRC] sg13g2_maximal.drc MIM.h: MIM not
+# covering a TopVia1; the unit cell's FAIL is a MIM with none).
+rule MIM.h.via contains(mim, topvia1) >= 1
 rule Pad.i  inside(dfpad, topmetal2)
 layer metal1_pin = gds(8, 2)
 rule Pin.e  inside(metal1_pin, metal1)
