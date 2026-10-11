@@ -3502,6 +3502,8 @@ const SPANS: &str =
 /// one region however many vertices the right arm adds beside it, and the
 /// base's 100 one region across the step. A ring's band, four regions. A
 /// 200 long piece drawn as two 100 long halves is one legal span.
+/// Placed under the symmetries that keep the axes: a quarter turn moves a
+/// span from one list to the other.
 fn span_length(_depth: Depth) -> Vec<Fixture> {
     let deck = one_layer_deck(SPANS);
     let mut cases = Vec::new();
@@ -3564,7 +3566,7 @@ fn span_length(_depth: Depth) -> Vec<Fixture> {
         met1(&[[0, 0, 100, 120], [100, 0, 200, 120]]),
         Vec::new(),
     );
-    let mut out = every_placement(cases);
+    let mut out = every_axis_placement(&cases);
     out.push(vacuous("span_length", &["DRC-036"], SPANS, &["s"]));
     out
 }
