@@ -1176,7 +1176,7 @@ fn a_piecewise_linear_table_lowers_point_by_point_and_must_rise() {
         format!(
             "rule ae antenna_electrical(poly, met1; max_ratio: 400, sidewall: none, cut_factor: 1, diode: diff,
     diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
-    diode_reduce: none, diode_max_ratio: {table})\n"
+    diode_reduce: none, diode_max_ratio: {table}, exempt: none)\n"
         )
     };
     let (deck, strings) = ok(&row("[(0um2, 400), (0.0125um2, 400), (22.5um2, 11600)]"));

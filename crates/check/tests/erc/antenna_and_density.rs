@@ -185,6 +185,7 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
             gate_plus_diode: vec![0.0],
             diode_reduce: vec![Vec::new()],
             diode_max_ratio: vec![Vec::new()],
+            exempt: vec![None],
             max_ratio: vec![3.0],
             stack: Stack::default(),
         },

@@ -808,7 +808,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/no_credit/{}", side(limit, 2.0)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: none, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: none, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                 )),
                 ERC,
             )
@@ -822,7 +822,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/bonus_with_diode/{}", side(limit, 1.5)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                 )),
                 ERC,
             )
@@ -835,7 +835,7 @@ fn antenna_electrical() -> Vec<Fixture> {
             "erc/antenna_electrical/bonus_without_diode",
             &["ERC-A5"],
             &antenna_deck(
-                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)",
+                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)",
             ),
             ERC,
         )
@@ -849,8 +849,9 @@ fn antenna_electrical() -> Vec<Fixture> {
     out.extend(lef_example4());
     out.extend(lef_pwl_limit());
     out.extend(sky130_lef_agrees_with_egar());
+    out.extend(sky130_ar1());
     let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
-rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)";
+rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     out.push(
         Fixture::new(
             "erc/antenna_electrical/ihp_b_e/with_diode",
@@ -951,10 +952,10 @@ fn sky130_table_ig() -> Vec<Fixture> {
         credit: f64,
         max: f64,
     }
-    let mcon = "rule ae antenna_electrical(gate, via1; max_ratio: 3, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 18, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)";
-    let li = "rule ae antenna_electrical(gate, met1; max_ratio: 75, sidewall: 100nm, cut_factor: 1, diode: diff, diode_credit: 450, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)";
-    let met1 = "rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)";
-    let via = "rule ae antenna_electrical(gate, via1; max_ratio: 6, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 36, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)";
+    let mcon = "rule ae antenna_electrical(gate, via1; max_ratio: 3, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 18, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let li = "rule ae antenna_electrical(gate, met1; max_ratio: 75, sidewall: 100nm, cut_factor: 1, diode: diff, diode_credit: 450, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let met1 = "rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let via = "rule ae antenna_electrical(gate, via1; max_ratio: 6, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 36, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     let cuts = |n: usize, side: f64| n as f64 * side * side / 1e6;
     let side = |width: i64, length: i64, flt: i64| (2 * (length + width) * flt) as f64 / 1e6;
     let mut cases = Vec::new();
@@ -1142,7 +1143,7 @@ fn lef_c20_cumulative() -> Vec<Fixture> {
                 format!("rule ae antenna(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: none)")
             } else {
                 format!(
-                    "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: {cut}, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: {minus}, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)"
+                    "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: {cut}, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: {minus}, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                 )
             };
             out.push(
@@ -1188,7 +1189,7 @@ fn lef_gate_plus_diode() -> Vec<Fixture> {
                         ),
                         &["ERC-A6"],
                         &antenna_deck(&format!(
-                            "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 2, diode_reduce: none, diode_max_ratio: none)"
+                            "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 2, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                         )),
                         ERC,
                     )
@@ -1233,7 +1234,7 @@ fn gf180_ant16() -> Vec<Fixture> {
                     &format!("erc/antenna_electrical/gf180_ant16/{id}/{}", side(limit, value)),
                     &["ERC-A6", "ERC-A12"],
                     &antenna_deck(&format!(
-                        "rule ae antenna_electrical({layer}, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: {mf}, diode_reduce: none, diode_max_ratio: none)"
+                        "rule ae antenna_electrical({layer}, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: {mf}, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                     )),
                     ERC,
                 )
@@ -1256,7 +1257,7 @@ fn pwl_row(
     diode_max: &str,
 ) -> String {
     format!(
-        "rule {id} antenna_electrical(gate, {collectors}; max_ratio: {max}, sidewall: {sidewall}, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: {reduce}, diode_max_ratio: {diode_max})"
+        "rule {id} antenna_electrical(gate, {collectors}; max_ratio: {max}, sidewall: {sidewall}, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: {reduce}, diode_max_ratio: {diode_max}, exempt: none)"
     )
 }
 
@@ -1368,7 +1369,7 @@ fn lef_pwl_limit() -> Vec<Fixture> {
 /// µm. Each row reports its own form: EGAR the credited ratio against 400,
 /// the LEF row the plain ratio against its interpolated limit.
 fn sky130_lef_agrees_with_egar() -> Vec<Fixture> {
-    let egar = "rule egar antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none)";
+    let egar = "rule egar antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     let lef = pwl_row(
         "lef",
         "met1",
@@ -1407,6 +1408,55 @@ fn sky130_lef_agrees_with_egar() -> Vec<Fixture> {
             .layout(line(diode, 140, um * 1000))
             .expect(Expect::rule("egar", found(ratio_of - credit)))
             .expect(Expect::rule("lef", found(ratio_of))),
+        );
+    }
+    out
+}
+
+/// SKY130 antenna rule .ar.1, "antenna rules not checked for features
+/// connected to a pAntennaShort" (a p+ tap shorting to the substrate,
+/// `(tap AndNot poly) AndNot nwell`), with AntennaDiode excluding it. Table
+/// Ig's met1 row on a 4286 µm line with a 1 µm² diode reads 400.298 against
+/// 400 ([`sky130_table_ig`]); a 1 µm² `ptap` contacted to the same line
+/// exempts the gate from `antenna_electrical`'s `exempt` and from
+/// `antenna`'s `diode`, which skips the same way: both rows are clean.
+/// Without the tap both flag the gate, `antenna` at the plain ratio
+/// 3000.298.
+fn sky130_ar1() -> Vec<Fixture> {
+    let rules = "layer ptap = gds(13, 0)
+layer adiode = diff not ptap
+rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: adiode, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: ptap)
+rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
+    let ratio_of = (2 * (4_286_000 + 140) * 350) as f64 / 1e6;
+    let mut out = Vec::new();
+    for tap in [false, true] {
+        let mut layout = line(Some(1.0), 140, 4_286_000);
+        if tap {
+            rect(&mut layout, "diff", (2000, 1300, 3000, 2300));
+            rect(&mut layout, "ptap", (2000, 1300, 3000, 2300));
+            rect(&mut layout, "cont", (2450, 1750, 2550, 1850));
+        }
+        let (ae, an) = if tap {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                vec![ratio(ratio_of - 2600.0).at(500, 500)],
+                vec![ratio(ratio_of).at(500, 500)],
+            )
+        };
+        out.push(
+            Fixture::new(
+                &format!(
+                    "erc/antenna_electrical/sky130_ar1/{}",
+                    if tap { "tap_exempts" } else { "no_tap" }
+                ),
+                &["ERC-A13"],
+                &antenna_deck(rules),
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("ae", ae))
+            .expect(Expect::rule("an", an)),
         );
     }
     out
