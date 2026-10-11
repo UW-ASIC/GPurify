@@ -467,6 +467,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B23 | PEX follow-ups: wells and diffusion as closed-form junctions outside the field solve (decided); negative pex coefficients refused; an unmeshable net a PEX refusal; SPEF keeps every name of a shorted net | F71, F73, F74, F75 | done |
 | B24 | DRC follow-ups: parallel run by facing-edge projection (decided); with_width keeps each bound's strictness (decided); angle on drawn layers; density and spacing markers on the measured shapes | F49, F63, F64, F65, F66 | done |
 | B25 | PEX and deck follow-ups: an optional dielectric with 0 refused; global layers out of the mesh; layer names in `lib`'s refusals; no −0.0 coupling; near-panel integrals; closed-form R of a corner-joined conductor | F74, F76, F77, F78, F79, F80 | todo |
+| B26 | Small follow-ups: an antenna gate's conductor from the MOS device rows; via_array_spacing markers on the measured pair; ties broken symmetrically; an exact integer neck | F81, F82 | todo |
 | C1 | GDS hierarchy depth limit; adversarial-size inputs | F3, L7 | done |
 | C2 | testgen `prop`: seeds by property name, committed regression seeds replayed every run, greedy shrinking (rectangle layouts); `#[ignore]`d nightly twins instead of env knobs | F8, L3 | done |
 | C3 | Boolean laws over random operands | L3 | done |
