@@ -480,7 +480,7 @@ mod tests {
     /// Oracle: closed form. The Neumann integral carries the factor `u1 . u2`,
     /// which is exactly 0 for perpendicular filaments.
     #[test]
-    #[expect(
+    #[allow(
         clippy::float_cmp,
         reason = "û₁·û₂ is exactly 0.0, so the quadrature returns an exact 0.0"
     )]

@@ -466,6 +466,17 @@ pub struct RandomLayer {
     pub extent: i64,
 }
 
+/// Area of a validated polygon: the outer ring minus its holes. Positive for
+/// the canonical winding, which validation establishes.
+#[must_use]
+pub fn polygon_area(poly: PolygonRef<'_>) -> DbuArea {
+    // Holes wind CW, so their doubled areas are already negative.
+    let doubled = poly
+        .holes()
+        .fold(poly.outer().area2(), |total, hole| total + hole.area2());
+    DbuArea::new(doubled.raw() / 2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -572,15 +583,4 @@ mod tests {
         assert!(plus_shape_area(100, 30) < 200 * 200);
         assert!(u_shape_area(100, 20, 40) < (2 * 20 + 40) * 100);
     }
-}
-
-/// Area of a validated polygon: the outer ring minus its holes. Positive for
-/// the canonical winding, which validation establishes.
-#[must_use]
-pub fn polygon_area(poly: PolygonRef<'_>) -> DbuArea {
-    // Holes wind CW, so their doubled areas are already negative.
-    let doubled = poly
-        .holes()
-        .fold(poly.outer().area2(), |total, hole| total + hole.area2());
-    DbuArea::new(doubled.raw() / 2)
 }

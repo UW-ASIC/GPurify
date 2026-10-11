@@ -84,9 +84,12 @@ fn figures(layer: &ValidatedLayer) -> Vec<(i128, Vec<i128>)> {
     out
 }
 
+/// A map of the `n`-square onto itself, on cells: `(n, x, y)` to `(x, y)`.
+type CellMap = fn(i64, i64, i64) -> (i64, i64);
+
 /// The eight symmetries of the `n`-square, on cells.
 fn symmetries(cells: &[(i64, i64)], n: i64) -> Vec<Vec<(i64, i64)>> {
-    let maps: [fn(i64, i64, i64) -> (i64, i64); 8] = [
+    let maps: [CellMap; 8] = [
         |_, x, y| (x, y),
         |n, x, y| (n - 1 - y, x),
         |n, x, y| (n - 1 - x, n - 1 - y),

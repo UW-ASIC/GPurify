@@ -503,7 +503,7 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
 /// A gate sits on its poly, not on the well under it. The well is a net (tied
 /// to a tap carrying a 10 um2 metal plate) listed below poly in the stack; the
 /// gate overlaps both. Attached to the well it would read a ratio of 10; on
-/// its own poly, which collects nothing, it is clean. The Philis rc_filter
+/// its own poly, which collects nothing, it is clean. The Philis `rc_filter`
 /// fixture's false sky130 ar.licon.1 once the n-well became a net.
 ///
 /// Oracle: construct-from-answer. The gate's poly collects no metal, so the
