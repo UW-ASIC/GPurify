@@ -38,6 +38,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         wire_enclosure(),
         noncoincident_enclosure(),
         full_width(),
+        projection_spacing(),
         max_enclosure(),
         min_extension(depth),
         gate_corner(),
@@ -759,6 +760,79 @@ fn full_width() -> Vec<Fixture> {
         "off_wire",
         wire().rect("v1", 3000, 0, 3100, 100),
         vec![],
+    ));
+    every_placement(cases)
+}
+
+/// `space(lvtn, sd, projection) >= 235nm` (`projection_spacing`, DRC-055,
+/// sky130 lvtn.3b as its KLayout deck writes it) beside the Euclidean
+/// `space(lvtn, sd) >= 235nm`: a pair is measured across facing edges that
+/// overlap in projection, so a pair offset diagonally passes the first.
+///
+/// Oracle: drawn gaps; a diagonal pair at offsets (100, 100) is 141 apart by
+/// Euclid and has no facing edges.
+///
+/// lvtn is `[0, 500]^2`. Shapes: sd beside it at 234/235/236; sd diagonally
+/// off its corner (100, 100) away (clean here, 141 there); sd overlapping
+/// lvtn's side by 1 nm of projection, 100 away (100); sd whose projection
+/// only meets lvtn's at a point, 50 away (clean here, 50 there); sd touching
+/// (0 for both) and overlapping lvtn (0 for both).
+fn projection_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 235;
+    let deck = new_deck(
+        &["lvtn", "sd"],
+        "rule lvtn.3b space(lvtn, sd, projection) >= 235nm\n\
+         rule euclid space(lvtn, sd) >= 235nm\n",
+    );
+    let case = |name: &str, sd: Rect, projection: Vec<Finding>, euclid: Vec<Finding>| {
+        fixture(
+            &format!("projection_spacing/{name}"),
+            &["DRC-055"],
+            &deck,
+            Layout::default()
+                .rect("lvtn", 0, 0, 500, 500)
+                .rect("sd", sd.0, sd.1, sd.2, sd.3),
+            &[("lvtn.3b", projection), ("euclid", euclid)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("beside/{side}"),
+            (500 + g, 100, 900 + g, 400),
+            below(g, LIMIT),
+            below(g, LIMIT),
+        ));
+    }
+    cases.push(case(
+        "diagonal",
+        (600, 600, 900, 900),
+        vec![],
+        lengths(&[141]),
+    ));
+    cases.push(case(
+        "one_unit_of_projection",
+        (600, 499, 900, 900),
+        lengths(&[100]),
+        lengths(&[100]),
+    ));
+    cases.push(case(
+        "projection_meets_at_a_point",
+        (550, 500, 900, 900),
+        vec![],
+        lengths(&[50]),
+    ));
+    cases.push(case(
+        "touching",
+        (500, 100, 900, 400),
+        lengths(&[0]),
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "overlapping",
+        (400, 100, 900, 400),
+        lengths(&[0]),
+        lengths(&[0]),
     ));
     every_placement(cases)
 }

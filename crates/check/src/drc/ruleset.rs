@@ -232,6 +232,39 @@ pub enum Rule {
         /// The smallest legal gap, in grid units; positive.
         limit: Dbu,
     },
+    /// A shape on `a` closer than `limit` to a shape on `b` across facing
+    /// edges.
+    ///
+    /// Deck: `space(A, B, projection) >= len`, kind `projection_spacing`:
+    /// `KLayout`'s `projection` metric, the reading sky130's own `KLayout`
+    /// deck gives lvtn.3b "Min spacing of lvtn to pfet along the S/D
+    /// direction" (`lvtn.separation(diff.and(nwell).not(poly), 0.235,
+    /// projection)`). Shapes are as drawn. A pair is measured across each
+    /// edge of one and each edge of the other that are parallel, face each
+    /// other across the gap and overlap in projection by a positive length;
+    /// the pair's distance is the least such gap. Corner to corner is not
+    /// measured, so shapes offset diagonally pass however close. A pair that
+    /// touches, overlaps or nests measures 0, as [`Rule::MinSpacingDiff`].
+    ///
+    /// One violation per offending pair, reported on layer `a`, midway
+    /// between the two edges at the middle of their shared projection (where
+    /// the boundaries meet, for a pair at 0). `examined` counts pairs whose
+    /// boxes come within `limit`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-055. Rules: sky130 lvtn.3b as its `KLayout` deck writes it;
+    /// `KLayout` `separation` with `projection`.
+    ///
+    /// Limits: the S/D direction is not derived from the gate: facing edges
+    /// are measured along both axes, as sky130's own deck measures them.
+    ProjectionSpacing {
+        /// The first layer; findings are reported on it.
+        a: LayerId,
+        /// The second layer.
+        b: LayerId,
+        /// The smallest legal gap, in grid units; positive.
+        limit: Dbu,
+    },
     /// Too little space in front of an end of line.
     ///
     /// Deck: `eol_space(L; eol_width: len) >= len`, kind `eol_spacing`. An end
@@ -2609,6 +2642,14 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "projection_spacing" => {
+                    let (a, b) = two(spec)?;
+                    Rule::ProjectionSpacing {
+                        a,
+                        b,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "eol_spacing" => Rule::EolSpacing {
                     layer: one(spec)?,
                     eol_width: length(spec, "eol_width")?,
@@ -3330,6 +3371,9 @@ impl RuleSet {
                 }
                 Rule::MinSpacingDiff { a, b, limit } => {
                     spacing::min_spacing_diff(store, id, a, b, limit, s, out)
+                }
+                Rule::ProjectionSpacing { a, b, limit } => {
+                    spacing::projection_spacing(store, id, (a, b), limit, s, out)
                 }
                 Rule::EolSpacing {
                     layer,
@@ -4084,6 +4128,7 @@ impl Rule {
                 layer, boundary, ..
             } => [Some(layer), boundary, None],
             Rule::MinSpacingDiff { a, b, .. }
+            | Rule::ProjectionSpacing { a, b, .. }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
                 outer: a, inner: b, ..

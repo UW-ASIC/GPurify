@@ -279,6 +279,7 @@ explains (kind 30).
 | 41 | noncoincident_enclosure | `enclosure(i, o, noncoincident) >= l` | FIG by shape (inner) | APPROX | KLayout ⊆ GPurify | new |
 | 42 | via_stack | `via_stack(C1, C2, ..) <= n` | ROW | EXACT (scripted) | exact | new |
 | 43 | full_width | `full_width(i, o)` | FIG by shape (inner) | EXACT (scripted) | exact | new |
+| 44 | projection_spacing | `space(A, B, projection) >= l` | PAIR | APPROX | KLayout ⊆ GPurify | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1337,6 +1338,22 @@ full_width(id, O, I)   # each merged I figure covered by an O figure, failing on
 ```
 
 - Key FIG by shape (inner); the measurement is not compared.
+
+### 44. projection_spacing — APPROX (KLayout ⊆ GPurify)
+
+**GPurify** (`spacing.rs` `projection_spacing`, `facing_gap`): drawn shapes of A and B; a pair
+measures the least gap between parallel edges facing each other across it with a positive
+projection overlap, 0 when the shapes touch, overlap or nest.
+
+**KLayout**
+
+```ruby
+emit(id, A.separation(B, LIM, projection, transparent)) ; emit(id, A & B)
+```
+
+- (d) [L] "separation" with the `projection` metric. Key PAIR as `min_spacing_diff`; the
+  measurement is not compared, and the comparison is the safe bracket until a run settles how
+  KLayout pairs edges that meet only at a projection's end.
 
 ---
 
