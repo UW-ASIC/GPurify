@@ -177,6 +177,10 @@ perimeter are read as this tool's: KLayout's `A` and `P`, and ngspice's
 diode `pj`, are `area`, `perim` and `perim`. A parameter stated twice, under
 any of its names, is refused.
 
+A device drawn with the wrong model, or written with one, but wired as
+its counterpart is reported as one `lvs.model_mismatch` naming both
+models, when nothing else differs; otherwise the devices are unpaired.
+
 ## LVS controls
 
 The deck's `lvs` statements change the comparison per device model (see

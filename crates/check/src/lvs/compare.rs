@@ -230,16 +230,69 @@ pub fn compare_with(
     if !refine_into(
         (&layout, &reference),
         budget,
-        (options.params, controls, &seeds),
+        (options.params, controls, &seeds, false),
         &mut partition,
     ) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
     let mut verdict = interpret((&layout, &reference), &partition, (options, controls));
+    if let Verdict::Mismatch(found) = &verdict {
+        if unpaired_on_both_sides(found) {
+            let sides = (&layout, &reference);
+            if let Some(found) = models_aside(sides, budget, (options, controls, &seeds)) {
+                verdict = Verdict::Mismatch(found);
+            }
+        }
+    }
     if let Verdict::Mismatch(found) = &mut verdict {
         report_roles(found, &reference, controls);
     }
     (verdict, merges)
+}
+
+/// Whether `found` holds an unpaired device on each side: what a device
+/// whose model alone differs leaves, since refinement starts devices of
+/// different models apart.
+fn unpaired_on_both_sides(found: &[Discrepancy]) -> bool {
+    let unpaired = |want: Side| {
+        found
+            .iter()
+            .any(|d| matches!(d, Discrepancy::UnpairedDevice { side, .. } if *side == want))
+    };
+    unpaired(Side::Layout) && unpaired(Side::Reference)
+}
+
+/// The comparison again with every device of one kind starting in one class,
+/// models aside. When that pairs every node and the only differences left
+/// are pairs of different models, those pairs are the report, each a
+/// [`Discrepancy::ModelMismatch`], as `KLayout` reports two devices
+/// "identified but [with] different device classes" (catalog LVS-013).
+/// Otherwise `None`, and the comparison by model stands. Either way the
+/// verdict is a mismatch.
+fn models_aside(
+    sides: (&Graph, &Graph),
+    budget: (u32, f64),
+    (options, controls, seeds): (CompareOptions, &LvsControls, &[u32]),
+) -> Option<Vec<Discrepancy>> {
+    let mut partition = Partition::default();
+    if !refine_into(
+        sides,
+        budget,
+        (options.params, controls, seeds, true),
+        &mut partition,
+    ) {
+        return None;
+    }
+    match interpret(sides, &partition, (options, controls)) {
+        Verdict::Mismatch(found)
+            if found
+                .iter()
+                .all(|d| matches!(d, Discrepancy::ModelMismatch { .. })) =>
+        {
+            Some(found)
+        }
+        _ => None,
+    }
 }
 
 /// Writes the count every card has, `m = 1`, on each device that states
@@ -308,7 +361,7 @@ fn interpret(
     // A proposed pairing is a candidate until terminals and parameters agree.
     let mut scratch = JoinScratch::default();
     for &(layout_node, ref_node) in pairs.iter().filter(|pair| pair.0 < layout_devices) {
-        compare_identity(layout, reference, (layout_node, ref_node), &mut found);
+        let same_model = compare_identity(layout, reference, (layout_node, ref_node), &mut found);
         compare_terminals(
             layout,
             reference,
@@ -324,13 +377,16 @@ fn interpret(
             (layout_devices, ref_devices),
             &layout_mate,
         );
-        compare_params(
-            (layout, reference),
-            (layout_node, ref_node),
-            (options, controls, crossed),
-            &mut scratch,
-            &mut found,
-        );
+        // Two models' parameters are not one model's to compare.
+        if same_model {
+            compare_params(
+                (layout, reference),
+                (layout_node, ref_node),
+                (options, controls, crossed),
+                &mut scratch,
+                &mut found,
+            );
+        }
     }
 
     report_unpaired(layout, &layout_mate, Side::Layout, &mut found);
@@ -353,17 +409,31 @@ struct JoinScratch {
 }
 
 /// A paired device must also agree on kind and model (a hash agreeing is not a
-/// comparison); if not, both sides are reported unpaired.
+/// comparison). Two of one kind and different models are a
+/// [`Discrepancy::ModelMismatch`], which only a refinement with models aside
+/// pairs; two of different kinds, which no refinement pairs, are both
+/// reported unpaired. Returns whether the models agree, so the parameters
+/// are comparable.
 fn compare_identity(
     layout: &Graph,
     reference: &Graph,
     pair: (u32, u32),
     found: &mut Vec<Discrepancy>,
-) {
+) -> bool {
     let (mine, theirs) = (pair.0 as usize, pair.1 as usize);
     let (layout_model, ref_model) = (layout.device_model[mine], reference.device_model[theirs]);
-    if layout.device_kind[mine] == reference.device_kind[theirs] && layout_model == ref_model {
-        return;
+    let same_kind = layout.device_kind[mine] == reference.device_kind[theirs];
+    if same_kind && layout_model == ref_model {
+        return true;
+    }
+    if same_kind {
+        found.push(Discrepancy::ModelMismatch {
+            layout_device: pair.0,
+            ref_device: pair.1,
+            layout_model,
+            ref_model,
+        });
+        return false;
     }
     found.push(Discrepancy::UnpairedDevice {
         side: Side::Layout,
@@ -375,6 +445,7 @@ fn compare_identity(
         device: pair.1,
         model: ref_model,
     });
+    false
 }
 
 const fn unmatched_terminal(pair: (u32, u32), role: TerminalRole) -> Discrepancy {

@@ -489,6 +489,17 @@ pub fn flip(discrepancy: &Discrepancy) -> Discrepancy {
             ref_device: layout_device,
             param,
         },
+        Discrepancy::ModelMismatch {
+            layout_device,
+            ref_device,
+            layout_model,
+            ref_model,
+        } => Discrepancy::ModelMismatch {
+            layout_device: ref_device,
+            ref_device: layout_device,
+            layout_model: ref_model,
+            ref_model: layout_model,
+        },
         Discrepancy::ClassImbalance {
             layout_nodes,
             ref_nodes,
