@@ -565,6 +565,18 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
         }
     }
 
+    // Every unknown reaches a pad through branches of positive conductance.
+    debug_assert!(
+        diag.iter().all(|&d| d > 0.0),
+        "the reduced Laplacian's diagonal is positive"
+    );
+    debug_assert!(
+        cursor
+            .iter()
+            .zip(&row_start[1..])
+            .all(|(&filled, &end)| filled == end),
+        "every row's off-diagonal slots are filled exactly"
+    );
     inv_diag.clear();
     inv_diag.reserve(unknowns);
     for i in 0..unknowns {

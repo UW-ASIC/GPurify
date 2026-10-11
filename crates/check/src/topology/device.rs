@@ -637,6 +637,12 @@ pub fn recognise_into(
 
     attach.sort_unstable();
     attach.dedup();
+    debug_assert!(
+        out.terminal_net
+            .iter()
+            .all(|&net| net.idx() < nets.net_count()),
+        "a recognised device's every terminal is bound to a net of `nets`"
+    );
 
     out.net_start.resize(nets.net_count() + 1, 0);
     for &(net, _) in &attach {
@@ -648,6 +654,12 @@ pub fn recognise_into(
     // Sorted by `(net, device)`, so the device column is already in CSR order.
     out.net_device
         .extend(attach.iter().map(|&(_, device)| device));
+    debug_assert!(
+        out.terminal_start.last().map(|&end| end as usize) == Some(out.terminal_net.len())
+            && out.param_start.last().map(|&end| end as usize) == Some(out.param.len())
+            && out.net_start.last().map(|&end| end as usize) == Some(out.net_device.len()),
+        "each CSR offset column ends at the length of the column it indexes"
+    );
 }
 
 /// A polygon's area with its holes taken out, and the length of all its
@@ -660,6 +672,11 @@ fn area_and_perimeter(store: &GeometryStore, holes: &Holes, poly: PolyId) -> (Db
         doubled += sign * area2(xs, ys).raw().abs();
         perimeter += ring_length(xs, ys).raw();
     }
+    // Bound holes lie inside their outer and apart from one another.
+    debug_assert!(
+        doubled >= 0,
+        "a polygon's area net of its holes is non-negative"
+    );
     (DbuArea::new(doubled / 2), Dbu::new_unchecked(perimeter))
 }
 

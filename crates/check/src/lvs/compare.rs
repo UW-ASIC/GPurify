@@ -125,6 +125,8 @@ pub fn compare_logged(
     reference: &Graph,
     options: CompareOptions,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    layout.debug_check();
+    reference.debug_check();
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
     protect_labelled(layout, &mut declared);
@@ -136,6 +138,9 @@ pub fn compare_logged(
         state_count(&mut layout, multiplier);
         state_count(&mut reference, multiplier);
     }
+    // Reduction returns graphs that keep the invariants refinement reads.
+    layout.debug_check();
+    reference.debug_check();
     let merges = layout_merges
         .into_iter()
         .map(|m| (Side::Layout, m))
@@ -212,6 +217,13 @@ fn interpret(
         .filter(|&(_, class)| resolved[class.0 as usize])
         .map(|(node, class)| (narrow(node), partition.ref_first[class.0 as usize]))
         .collect();
+    // Classes seed devices apart from nets and only ever split.
+    debug_assert!(
+        pairs.iter().all(|&(layout_node, ref_node)| {
+            ref_node != u32::MAX && (layout_node < layout_devices) == (ref_node < ref_devices)
+        }),
+        "a resolved class pairs a device with a device and a net with a net"
+    );
 
     let mut layout_mate = vec![UNPAIRED; layout.device_count() + layout.net_count()];
     let mut ref_mate = vec![UNPAIRED; reference.device_count() + reference.net_count()];

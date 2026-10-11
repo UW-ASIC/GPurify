@@ -309,6 +309,47 @@ impl Partition {
         self.hopeless = false;
     }
 
+    /// Debug check of the partition: `member` is a permutation of the nodes
+    /// that `slot` inverts; the classes, none empty, tile it with each member
+    /// labelled by its own class; `layout_size` counts each class's layout
+    /// members; and `deficit` counts the short classes.
+    fn check(&self, split: u32) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let nodes = self.class.len();
+        debug_assert!(
+            self.member.len() == nodes
+                && self.slot.len() == nodes
+                && (0..nodes).all(|at| self.slot[self.member[at] as usize] as usize == at),
+            "`member` is a permutation of the nodes and `slot` its inverse"
+        );
+        let mut tiled = 0usize;
+        for class in 0..self.start.len() {
+            let from = self.start[class] as usize;
+            let run = &self.member[from..from + self.size[class] as usize];
+            tiled += run.len();
+            debug_assert!(
+                !run.is_empty()
+                    && run
+                        .iter()
+                        .all(|&node| self.class[node as usize] as usize == class),
+                "class {class} is non-empty and its run holds only its own nodes"
+            );
+            debug_assert_eq!(
+                run.iter().filter(|&&node| node < split).count(),
+                self.layout_size[class] as usize,
+                "class {class}'s layout size counts its layout members"
+            );
+        }
+        debug_assert_eq!(tiled, nodes, "the classes tile the nodes, each node in one");
+        debug_assert_eq!(
+            self.deficit as usize,
+            (0..self.start.len()).filter(|&c| self.short(c)).count(),
+            "`deficit` counts the classes short of layout nodes"
+        );
+    }
+
     /// Whether `class` holds more reference nodes than layout nodes.
     fn short(&self, class: usize) -> bool {
         self.size[class] > 2 * self.layout_size[class]
@@ -576,6 +617,10 @@ impl Partition {
     /// of their own whose two nodes are dirty.
     fn pair(&mut self, node: u32, mate: u32, split: u32) {
         let class = self.class[node as usize];
+        debug_assert!(
+            node < split && mate >= split && self.class[mate as usize] == class,
+            "a tie-break pairs a layout node with a reference node of its own class"
+        );
         let end = self.start[class as usize] + self.size[class as usize];
         self.place(node, end - 2);
         self.place(mate, end - 1);
@@ -655,6 +700,7 @@ impl Partition {
             }
             self.undo();
             self.deficit = deficit;
+            self.check(sides.split);
             let others = ranked.get_or_insert_with(|| self.ranked(node, sides, closest));
             let Some(&next) = others.get(tried) else {
                 break;
@@ -671,6 +717,7 @@ impl Partition {
 
     /// Per-class tallies and the layout classes, as the verdict reads them.
     fn publish(&mut self, split: u32) {
+        self.check(split);
         self.layout_tally.clone_from(&self.layout_size);
         self.ref_tally.clear();
         self.ref_tally.extend(

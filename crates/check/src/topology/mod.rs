@@ -29,7 +29,12 @@ pub use port::{bind_ports_into, PortTable};
 
 /// One row's run in a CSR offset column; a row past the table panics.
 pub(crate) fn csr_run(start: &[u32], row: usize) -> (usize, usize) {
-    (start[row] as usize, start[row + 1] as usize)
+    let (from, to) = (start[row] as usize, start[row + 1] as usize);
+    debug_assert!(
+        from <= to,
+        "CSR offsets are monotone: row {row} runs {from}..{to}"
+    );
+    (from, to)
 }
 
 /// The three extracted tables, borrowed together.
