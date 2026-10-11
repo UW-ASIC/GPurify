@@ -137,8 +137,6 @@ None has been compared against foundry signoff results.
   least 0.16 µm² as a protection diode (Ant.e/f), where IHP's own KLayout
   deck sums a net's diode area and counts it above 0.16 µm², so a net
   protected only by several small pieces is held to the no-diode limit here.
-- gf180mcu: the antenna rows pool thin and thick gates and take no ANT.16
-  diode credit, so a gate with a diode can over-report.
 - `generic_finfet` is ASAP7, a predictive process no fab builds. It
   recognises no transistors and extracts no capacitance: the manual gives no
   resistance for the gate and local-interconnect layers and no capacitance at

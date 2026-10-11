@@ -570,3 +570,58 @@ fn the_ihp_antenna_rows_switch_on_a_protection_diode() {
         }
     }
 }
+
+/// Oracle: GF180MCU DRM tables 27 and 28. ANT.1-ANT.15 limit the ratio to the
+/// "related gate oxide area", one row per oxide (thin `gate_thin`, thick
+/// `gate_hv` suffixed `.DG`); ANT.16 adds MF times the COMP area on the node
+/// to the gate area for a metal or via ratio, MF 2 thin and 15 thick, while
+/// the poly and contact rows take no credit.
+#[test]
+fn the_gf180_antenna_rows_credit_comp_by_oxide() {
+    let (deck, strings) = load(GF180);
+    let rule = |id: &str| {
+        deck.rules
+            .spec
+            .iter()
+            .find(|rule| strings.resolve(rule.id) == id)
+            .unwrap_or_else(|| panic!("the gf180 deck has no {id}"))
+    };
+    let ratio = |id: &str, name: &str| match strings
+        .get(name)
+        .and_then(|name| deck.rules.param(rule(id), name))
+    {
+        Some(gpurify_ingest::deck::ParamValue::Ratio(value)) => Some(value),
+        _ => None,
+    };
+    let gate_of = |id: &str| deck.rules.layers_of(rule(id))[0];
+    let thin = deck.layers.id(&strings, "gate_thin");
+    let thick = deck.layers.id(&strings, "gate_hv");
+    let rows: [(&str, f64, bool); 13] = [
+        ("ANT.1", 200.0, false),
+        ("ANT.2", 400.0, true),
+        ("ANT.3", 400.0, true),
+        ("ANT.4", 400.0, true),
+        ("ANT.5", 400.0, true),
+        ("ANT.6", 400.0, true),
+        ("ANT.7", 400.0, true),
+        ("ANT.8", 10.0, false),
+        ("ANT.9", 20.0, true),
+        ("ANT.10", 20.0, true),
+        ("ANT.11", 20.0, true),
+        ("ANT.12", 20.0, true),
+        ("ANT.13", 20.0, true),
+    ];
+    for (id, limit, credited) in rows {
+        let dg = format!("{id}.DG");
+        for (row, gate, mf) in [(id, thin, 2.0), (dg.as_str(), thick, 15.0)] {
+            assert_eq!(
+                ratio(row, "max_ratio"),
+                Some(limit),
+                "{row}: the DRM's limit"
+            );
+            assert_eq!(Some(gate_of(row)), gate, "{row}: its own oxide's gates");
+            let want = credited.then_some(mf);
+            assert_eq!(ratio(row, "gate_plus_diode"), want, "{row}: ANT.16's MF");
+        }
+    }
+}
