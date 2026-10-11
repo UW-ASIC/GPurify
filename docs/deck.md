@@ -223,6 +223,29 @@ for (m, w) in metals {
 A name can be bound once. Loops only run over lists written in the deck, so a
 deck always finishes loading.
 
+### Stages
+
+```
+stage gross
+rule m1.1 width(met1) >= 140nm
+rule m1.2 space(met1) >= 140nm
+stage signoff
+rule m1.eol eol_space(met1; eol_width: 200nm) >= 170nm
+```
+
+A `stage` line starts a stage: the rules written after it, up to the next
+`stage` line, are checked together, stages in the order written. Once a
+stage finds an error, the rules of every later stage are not checked and
+report `skipped`, an earlier stage having found errors: on an early, dirty
+design you fix the gross errors first and the report does not bury them
+under thousands of fine ones. This is the early run of Calibre
+nmDRC-Recon and IC Validator Explorer, with the subset written in the deck
+rather than picked by the tool. A staged deck puts every rule in a stage
+(no rule before the first `stage` line) and writes each stage's rules
+together (a stage name once). A deck with no `stage` line checks every rule.
+DRC stops running at its first stage with an error; ERC runs whole and the
+later stages' ERC results are withdrawn.
+
 ## Design rules
 
 A check that counts touching shapes as one counts shapes meeting only at a

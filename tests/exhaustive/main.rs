@@ -21,6 +21,7 @@ mod drc_dimension;
 mod drc_overlay;
 mod erc;
 mod erc_reference;
+mod flow;
 mod harness;
 mod lvs;
 mod pex;
@@ -82,6 +83,7 @@ fn all(depth: Depth) -> Vec<Fixture> {
         erc::fixtures(depth),
         lvs::fixtures(depth),
         pex::fixtures(depth),
+        flow::fixtures(depth),
         corpus::fixtures(depth),
     ]
     .concat()

@@ -179,6 +179,7 @@ fn outcome_name(outcome: Outcome) -> &'static str {
         Outcome::Skipped(SkipReason::NoDesignIntent) => "skipped:no_design_intent",
         Outcome::Skipped(SkipReason::NotInDeck) => "skipped:not_in_deck",
         Outcome::Skipped(SkipReason::EmptyLayer) => "skipped:empty_layer",
+        Outcome::Skipped(SkipReason::EarlierStage) => "skipped:earlier_stage",
         Outcome::Refused => "refused",
     }
 }

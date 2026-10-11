@@ -255,6 +255,10 @@ pub enum SkipReason {
     /// measure against: for DRC, a density rule's die, a tap-distance rule's
     /// wells, or a multi-patterning layer.
     EmptyLayer,
+    /// The deck is staged and an earlier stage found an error, so this
+    /// rule's stage was not checked: a dirty design is fixed stage by stage
+    /// (`gpurify_ingest::deck::Stages`).
+    EarlierStage,
 }
 
 /// Close out one rule row: append its [`RuleRun`] with the violation count

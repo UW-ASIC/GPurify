@@ -80,6 +80,19 @@ impl CompiledDeck {
                 })
             })
             .collect();
+        source.stages = self
+            .stages
+            .name
+            .iter()
+            .enumerate()
+            .map(|(at, &name)| {
+                let ids = (self.stages.of_rule.iter())
+                    .filter(|&&(_, stage)| usize::from(stage) == at)
+                    .map(|&(id, _)| strings.resolve(id).to_owned())
+                    .collect();
+                (strings.resolve(name).to_owned(), ids)
+            })
+            .collect();
         source.extraction = (self.extraction != gpurify_ingest::deck::Extraction::default())
             .then_some(self.extraction);
         let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();

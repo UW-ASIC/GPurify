@@ -118,6 +118,8 @@ pub struct Deck {
     /// The `corner` statements: each process corner's whole stack, in the
     /// order the deck first names them. Empty: the nominal stack alone.
     pub corners: Vec<ProcessCorner>,
+    /// The `stage` statements: the order a staged run checks the rules in.
+    pub stages: Stages,
     /// The `temperature` statement and the `pex` rows' coefficients as
     /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
     /// `None` when the deck states no temperature.
@@ -153,6 +155,37 @@ impl AsRef<LayerTable> for Deck {
 impl AsRef<LayerTable> for LayerTable {
     fn as_ref(&self) -> &LayerTable {
         self
+    }
+}
+
+/// A staged deck's stages (`stage <name>` lines, each heading the rules
+/// written after it): a run checks them in order, and once a stage finds an
+/// error the later stages are not checked. The early, dirty-design run of
+/// Calibre nmDRC-Recon and IC Validator Explorer, with the subset written in
+/// the deck: Siemens' public description of Recon is a run of selected
+/// checks that leaves out those "runtime-intensive and/or unlikely to
+/// provide actionable results" on an early design.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Stages {
+    /// Each stage's name, in deck order. Empty: the deck is not staged.
+    pub name: Vec<StrId>,
+    /// Each staged rule's id and its stage, an index into [`Self::name`], in
+    /// deck order. A rule of a staged deck that no stage lists (one added in
+    /// Rust) is in the last stage.
+    pub of_rule: Vec<(StrId, u16)>,
+}
+
+impl Stages {
+    /// The stage `rule` is checked in: its own, or the last one for a rule
+    /// no stage lists; `None` when the deck is not staged.
+    pub fn of(&self, rule: StrId) -> Option<u16> {
+        let last = u16::try_from(self.name.len().checked_sub(1)?).unwrap_or(u16::MAX);
+        Some(
+            self.of_rule
+                .iter()
+                .find(|&&(id, _)| id == rule)
+                .map_or(last, |&(_, stage)| stage),
+        )
     }
 }
 

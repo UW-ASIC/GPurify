@@ -219,6 +219,7 @@ pub fn run_checks(
     options: &RunOptions,
 ) -> Result<(Outputs, Summary), EngineError> {
     let mut out = Outputs::default();
+    let staged = !loaded.deck.stages.name.is_empty();
     let drc = if options.checks.drc {
         run_drc(loaded, extracted, &mut out)
     } else {
@@ -229,6 +230,9 @@ pub fn run_checks(
     } else {
         StageStatus::NotSelected
     };
+    if staged {
+        hold_back_later_stages(loaded, &mut out);
+    }
     let lvs = if options.checks.lvs {
         run_lvs(loaded, extracted, options, &mut out)
     } else {
@@ -295,6 +299,42 @@ fn count<T>(items: impl Iterator<Item = T>, keep: impl FnMut(&T) -> bool) -> u32
     u32::try_from(items.filter(keep).count()).expect("a table indexes rows with a u32")
 }
 
+/// A staged deck ([`gpurify_ingest::deck::Stages`]): stage by stage in deck
+/// order, the first stage whose DRC or ERC rules report an error is the last
+/// one reported. Every rule of a later stage becomes
+/// [`SkipReason::EarlierStage`](gpurify_check::report::SkipReason::EarlierStage),
+/// its findings withdrawn, so the run fails and says what it did not check.
+/// DRC has already stopped at its own first dirty stage ([`run_drc`]); this
+/// carries an ERC rule's error to the DRC and ERC rules of later stages.
+///
+/// ponytail: ERC runs whole and its later stages are withdrawn, so they cost
+/// their runtime; split the ERC tables by stage if that runtime matters.
+fn hold_back_later_stages(loaded: &Loaded, out: &mut Outputs) {
+    let stage_of = |rule| loaded.deck.stages.of(rule);
+    let dirty = (0..out.violations.len())
+        .filter(|&row| out.violations.severity[row] == Severity::Error)
+        .filter_map(|row| stage_of(out.violations.rule[row]))
+        .min();
+    let Some(dirty) = dirty else {
+        return;
+    };
+    let held = |rule| stage_of(rule).is_some_and(|stage| stage > dirty);
+    let mut kept = Violations::default();
+    for row in 0..out.violations.len() {
+        if !held(out.violations.rule[row]) {
+            kept.push(out.violations.get(row));
+        }
+    }
+    out.violations = kept;
+    for run in &mut out.runs {
+        if held(run.rule) {
+            run.outcome = Outcome::Skipped(gpurify_check::report::SkipReason::EarlierStage);
+            run.examined = 0;
+            run.violations = 0;
+        }
+    }
+}
+
 /// Run one rule set into fresh buffers (DRC and ERC clear what they are
 /// handed), then append them to `out`.
 fn append_stage(out: &mut Outputs, run: impl FnOnce(&mut Violations, &mut Vec<RuleRun>)) {
@@ -305,14 +345,17 @@ fn append_stage(out: &mut Outputs, run: impl FnOnce(&mut Violations, &mut Vec<Ru
     out.runs.append(&mut runs);
 }
 
+/// Every DRC rule, the deck's custom rules after them; in a staged deck,
+/// stage by stage (a custom rule in the last), and once a stage finds an
+/// error the later stages' rules are not run but recorded
+/// [`SkipReason::EarlierStage`](gpurify_check::report::SkipReason::EarlierStage).
 fn run_drc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageStatus {
-    append_stage(out, |violations, runs| {
-        loaded
-            .deck
-            .drc
-            .run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
+    let deck = &loaded.deck;
+    let custom = |rules: &[gpurify_check::deck::CustomRule],
+                  violations: &mut Violations,
+                  runs: &mut Vec<RuleRun>| {
         gpurify_check::deck::run_custom(
-            &loaded.deck.custom,
+            rules,
             &loaded.store,
             Some(&extracted.nets),
             loaded.grid,
@@ -320,7 +363,48 @@ fn run_drc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
             violations,
             runs,
         );
-    });
+    };
+    let stages = deck.stages.name.len();
+    if stages == 0 {
+        append_stage(out, |violations, runs| {
+            deck.drc
+                .run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
+            custom(&deck.custom, violations, runs);
+        });
+        return StageStatus::Ran;
+    }
+    let mut rules = deck.drc.clone();
+    let mut dirty = false;
+    for stage in 0..stages {
+        let here = |id| deck.stages.of(id).map(usize::from) == Some(stage);
+        rules.rules = (deck.drc.rules.iter())
+            .filter(|(id, _)| here(*id))
+            .copied()
+            .collect();
+        let customs: Vec<_> = (deck.custom.iter())
+            .filter(|rule| here(rule.id))
+            .cloned()
+            .collect();
+        if dirty {
+            let ids =
+                (rules.rules.iter().map(|&(id, _)| id)).chain(customs.iter().map(|rule| rule.id));
+            for rule in ids {
+                out.runs.push(RuleRun {
+                    rule,
+                    outcome: Outcome::Skipped(gpurify_check::report::SkipReason::EarlierStage),
+                    examined: 0,
+                    violations: 0,
+                });
+            }
+            continue;
+        }
+        let before = out.violations.len();
+        append_stage(out, |violations, runs| {
+            rules.run_with_nets(&loaded.store, Some(&extracted.nets), violations, runs);
+            custom(&customs, violations, runs);
+        });
+        dirty = out.violations.severity[before..].contains(&Severity::Error);
+    }
     StageStatus::Ran
 }
 
