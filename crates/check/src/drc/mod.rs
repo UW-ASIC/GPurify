@@ -16,7 +16,7 @@
 pub mod rules;
 pub mod ruleset;
 
-pub use ruleset::{Rule, RuleSet};
+pub use ruleset::{Rule, RuleSet, SpacingQuery};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
