@@ -65,6 +65,7 @@ use gpurify::engine::run::{Checks, StageStatus};
 use gpurify::extract::field::CapMatrix;
 use gpurify::extract::network::NodeId;
 use gpurify::extract::{Parasitic, ParasiticNetwork};
+use std::fmt::Write as _;
 
 /// PEX alone.
 const PEX: Checks = Checks { pex: true, ..NONE };
@@ -412,7 +413,7 @@ fn temperature() -> Vec<Fixture> {
             .iter()
             .find(|(layer, ..)| line.starts_with(&format!("pex {layer} ")))
         {
-            deck_text.push_str(&format!(" tc1 {tc1}/K tc2 {tc2}/K2"));
+            write!(deck_text, " tc1 {tc1}/K tc2 {tc2}/K2").expect("a String takes any write");
         }
         deck_text.push('\n');
     }
@@ -1789,6 +1790,7 @@ fn a_field_solve_is_invariant_under_symmetry_and_covariant_under_scale() {
             .iter()
             .map(|(layer, x, y, text)| (layer.clone(), 2 * x, 2 * y, text.clone()))
             .collect(),
+        ..Layout::default()
     };
     let (c, _) = maxwell(doubled, &labels, 2.0);
     broken.extend(differences("doubled", &c, &reference, 2.0));

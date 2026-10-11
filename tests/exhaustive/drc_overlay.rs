@@ -65,6 +65,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         tap_distance(),
         labelled_short(),
         exemption(),
+        cell_selections(),
         chip_and_device(),
         chip_count(),
         chip_area(),
@@ -3267,6 +3268,208 @@ fn exemption() -> Vec<Fixture> {
         lengths(&[50]),
     ));
     every_placement(cases)
+}
+
+/// A hierarchy for the cell-name selections: `TOP` holds a 100 × 50 bar and
+/// places `PAD_1` (turned 90°), `core` (mirrored) and `INNER` (turned 180°);
+/// `PAD_1` holds a 300 × 100 bar and places `INNER`, a 100 × 100 square;
+/// `core` holds a 200 × 200 square. No two placed shapes touch.
+fn cell_tree(core: &str) -> Layout {
+    let r = |turns: u8, mirror: bool| Symmetry { turns, mirror };
+    Layout::default()
+        .rect("a", -5000, -5000, -4900, -4950)
+        .place("PAD_1", r(1, false), 0, 0)
+        .place(core, r(0, true), 0, 5000)
+        .place("INNER", r(2, false), 5000, 0)
+        .cell(
+            "PAD_1",
+            Layout::default()
+                .rect("a", 0, 0, 300, 100)
+                .place("INNER", Symmetry::IDENTITY, 1000, 0),
+        )
+        .cell(core, Layout::default().rect("a", 0, 0, 200, 200))
+        .cell("INNER", Layout::default().rect("a", 0, 0, 100, 100))
+}
+
+/// Cell-name selections (DRC-092): `in_cells` keeps the shapes placed under
+/// a matching cell, nested ones included (`INNER` under `PAD_1`), and
+/// `not_in_cells` the rest (`INNER` placed by `TOP`); several patterns are
+/// a union, the root's own name counts, and the glob is case-sensitive.
+/// Then the rules the selections state: a width exempted inside `PAD*`
+/// cells, swept, and sky130 x.25's "pnp.dg must be only within cell name
+/// `s8rf_pnp`, `s8rf_pnp5x`, `s8tesd_iref_pnp`, `stk14ecx_*`" (DRC-097), where a
+/// longer name does not match a whole-name pattern. Every case is placed
+/// under all eight symmetries, which turn each placement with the design.
+fn cell_selections() -> Vec<Fixture> {
+    let mut cases = vec![derived(
+        "derived/in_cells/tree",
+        &["DRC-092", "DRC-120"],
+        &["a"],
+        &[
+            ("a.in_cells(\"PAD_*\")", areas(&[30_000, 10_000])),
+            ("a.not_in_cells(\"PAD_*\")", areas(&[5_000, 40_000, 10_000])),
+            (
+                "a.in_cells(\"core\", \"T?P\")",
+                areas(&[5_000, 30_000, 10_000, 40_000, 10_000]),
+            ),
+            ("a.in_cells(\"pad_*\")", vec![]),
+        ],
+        cell_tree("core"),
+    )];
+
+    let deck = new_deck(
+        &["met1"],
+        "rule m1.w width(met1.not_in_cells(\"PAD*\")) >= 100nm\n\
+         rule m1.wa width(met1.in_cells(\"PAD*\")) >= 40nm\n",
+    );
+    for (w, side) in sweep(100) {
+        let bar = |layout: Layout| layout.rect("met1", 0, 0, w, 1000);
+        cases.push(fixture(
+            &format!("cell_exemption/top/{side}"),
+            &["DRC-092"],
+            &deck,
+            bar(Layout::default()),
+            &[("m1.w", below(w, 100)), ("m1.wa", vec![])],
+        ));
+        cases.push(fixture(
+            &format!("cell_exemption/in_pad/{side}"),
+            &["DRC-092"],
+            &deck,
+            Layout::default()
+                .place("PADX", Symmetry::IDENTITY, 0, 0)
+                .cell("PADX", bar(Layout::default())),
+            &[("m1.w", vec![]), ("m1.wa", vec![])],
+        ));
+    }
+    for (w, side) in sweep(40) {
+        cases.push(fixture(
+            &format!("cell_exemption/in_pad_narrow/{side}"),
+            &["DRC-092"],
+            &deck,
+            Layout::default()
+                .place("PAD", Symmetry::IDENTITY, 0, 0)
+                .cell("PAD", Layout::default().rect("met1", 0, 0, w, 1000)),
+            &[("m1.w", vec![]), ("m1.wa", below(w, 40))],
+        ));
+    }
+
+    let x25 = new_deck(
+        &["pnp"],
+        "rule x.25 forbidden(pnp.not_in_cells(\"s8rf_pnp\", \"s8rf_pnp5x\", \"s8tesd_iref_pnp\", \"stk14ecx_*\"))\n",
+    );
+    let square = || Layout::default().rect("pnp", 0, 0, 100, 100);
+    let r0 = Symmetry::IDENTITY;
+    cases.push(fixture(
+        "cell_exemption/x25",
+        &["DRC-097", "DRC-092"],
+        &x25,
+        Layout::default()
+            .rect("pnp", -1000, -1000, -900, -800)
+            .place("s8rf_pnp", r0, 0, 0)
+            .place("stk14ecx_12", r0, 1000, 0)
+            .place("wrapper", r0, 2000, 0)
+            .place("s8rf_pnp_big", r0, 3000, 0)
+            .place("my_pnp", r0, 4000, 0)
+            .cell("s8rf_pnp", square())
+            .cell("stk14ecx_12", square())
+            .cell(
+                "wrapper",
+                Layout::default().place("s8tesd_iref_pnp", r0, 0, 0),
+            )
+            .cell("s8tesd_iref_pnp", square())
+            .cell("s8rf_pnp_big", square())
+            .cell("my_pnp", Layout::default().rect("pnp", 0, 0, 200, 100)),
+        &[("x.25", areas(&[20_000, 10_000, 20_000]))],
+    ));
+    every_placement(cases)
+}
+
+/// The harness writes a placement as GDS `STRANS` and quarter turns
+/// (`Symmetry::gds`); the reader must land an off-centre rectangle where the
+/// harness's own symmetry puts its corners.
+///
+/// Oracle: round trip through the GDS writer (`write_library`) and reader,
+/// against `Symmetry::apply` on the corners, the map every flat fixture is
+/// transformed by.
+#[test]
+fn a_placed_cell_lands_where_its_symmetry_maps_it() {
+    for symmetry in Symmetry::ALL {
+        let fixture = Fixture::new("placement", &["DRC-092"], &new_deck(&["a"], ""), DRC).layout(
+            Layout::default()
+                .place("C", symmetry, 7, 11)
+                .cell("C", Layout::default().rect("a", 100, 200, 400, 300)),
+        );
+        let ran = crate::harness::run(&fixture).expect("runs");
+        let store = &ran.loaded.store;
+        let layer = ran
+            .loaded
+            .deck
+            .layers
+            .id(&ran.loaded.strings, "a")
+            .expect("declared");
+        let rows: Vec<_> = store.polys_on_layer(layer).collect();
+        assert_eq!(rows.len(), 1, "{}", symmetry.name());
+        let b = store.poly_bbox(gpurify::geom::PolyId(rows[0]));
+        let corners = [(100, 200), (400, 300)].map(|p| symmetry.apply(p));
+        let want = (
+            corners[0].0.min(corners[1].0) + 7,
+            corners[0].1.min(corners[1].1) + 11,
+            corners[0].0.max(corners[1].0) + 7,
+            corners[0].1.max(corners[1].1) + 11,
+        );
+        assert_eq!(
+            (b.xlo.raw(), b.ylo.raw(), b.xhi.raw(), b.yhi.raw()),
+            want,
+            "{}",
+            symmetry.name()
+        );
+    }
+}
+
+/// Renaming a cell the patterns do not match changes no finding, and
+/// renaming it into a pattern moves its shape from `not_in_cells` to
+/// `in_cells` and nothing else (DRC-092).
+///
+/// Oracle: metamorphic: a cell's name is read only by the selections; the
+/// predicted report is the original one with `core`'s finding (the only
+/// 200 × 200 square) moved from rule `f1` to rule `f0`.
+#[test]
+fn renaming_a_cell_changes_only_what_its_name_selects() {
+    let deck = new_deck(
+        &["a"],
+        "layer d0 = a.in_cells(\"PAD_*\")\nrule f0 forbidden(d0)\n\
+         layer d1 = a.not_in_cells(\"PAD_*\")\nrule f1 forbidden(d1)\n",
+    );
+    let findings = |core: &str| {
+        let fixture = Fixture::new("rename", &["DRC-092"], &deck, DRC).layout(cell_tree(core));
+        let mut out: Vec<String> = crate::harness::run(&fixture)
+            .expect("runs")
+            .findings
+            .into_iter()
+            .map(|(rule, measured, at)| format!("{rule} {measured:?} {at:?}"))
+            .collect();
+        out.sort();
+        out
+    };
+    let before = findings("core");
+    assert_eq!(findings("other_core"), before);
+    let core = Measurement::Area(gpurify::geom::DbuArea::new(40_000));
+    let mut predicted: Vec<String> = before
+        .iter()
+        .map(|line| {
+            if line.starts_with(&format!("f1 {core:?} ")) {
+                line.replacen("f1", "f0", 1)
+            } else {
+                line.clone()
+            }
+        })
+        .collect();
+    predicted.sort();
+    assert_ne!(
+        predicted, before,
+        "core's finding is in f1 before the rename"
+    );
+    assert_eq!(findings("PAD_core"), predicted);
 }
 
 /// Chip and device geometry the deck expresses with the generic kinds: a pad
