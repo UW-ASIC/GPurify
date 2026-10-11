@@ -1384,6 +1384,8 @@ pub mod gds {
         provenance: Provenance,
         /// Cells on the current root-to-here chain, for the cycle check.
         on_chain: Vec<bool>,
+        /// Each cell's flat polygon count, from [`Library::flat_counts`].
+        polygons: Vec<u64>,
         level: Level,
         /// Per-element scratch.
         rx: Vec<i64>,
@@ -1407,6 +1409,11 @@ pub mod gds {
         ///
         /// The returned [`Provenance`] holds the placed labels, bound to no
         /// shape yet: call [`Provenance::resolve_labels`] next.
+        ///
+        /// The walk costs the flat polygon count times the depth: a
+        /// placement of a cell holding no polygon is skipped, never expanded
+        /// (with [`LabelDepth::All`], whose sub-cell texts it would place, it
+        /// is walked, which is unbounded for a text-only array).
         ///
         /// # Errors
         ///
@@ -1438,7 +1445,7 @@ pub mod gds {
             unknown: UnknownLayers,
             labels: LabelDepth,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
-            let total = self.flat_polygons(strings)?;
+            let (total, polygons) = self.flat_counts(strings)?;
             if total > MAX_FLAT_POLYGONS {
                 return Err(LayoutError::TooManyPolygons(total));
             }
@@ -1452,6 +1459,7 @@ pub mod gds {
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
+                polygons,
                 level: Level::new(),
                 rx: Vec::new(),
                 ry: Vec::new(),
@@ -1484,6 +1492,11 @@ pub mod gds {
         /// itself, whether a root reaches it or not, and
         /// [`LayoutError::HierarchyTooDeep`].
         pub fn flat_polygons(&self, strings: &StrTable) -> Result<u64, LayoutError> {
+            self.flat_counts(strings).map(|(total, _)| total)
+        }
+
+        /// [`Self::flat_polygons`], and what each cell flattens to.
+        fn flat_counts(&self, strings: &StrTable) -> Result<(u64, Vec<u64>), LayoutError> {
             let referenced = self.referenced();
             let mut counted = vec![None; self.cells.len()];
             let mut on_chain = vec![false; self.cells.len()];
@@ -1503,7 +1516,8 @@ pub mod gds {
                     self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
                 }
             }
-            Ok(total)
+            let each = counted.iter().map(|c| c.map_or(0, |(count, _)| count));
+            Ok((total, each.collect()))
         }
 
         /// Whether each cell is placed by some reference; the roots are the rest.
@@ -1597,6 +1611,12 @@ pub mod gds {
                 }
             }
             for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                // Below the root only polygons are placed, so a cell holding
+                // none, at any depth, is not walked: an array of an empty cell
+                // is up to 32767² placements no budget counts.
+                if self.labels == LabelDepth::Top && self.polygons[reference.child as usize] == 0 {
+                    continue;
+                }
                 for r in 0..reference.rows {
                     for c in 0..reference.cols {
                         let placed = Xform {
@@ -2415,22 +2435,56 @@ mod tests {
         ));
     }
 
+    /// Found by the `gds_structured` fuzz target (E1): flattening walked
+    /// every placement of a cell holding nothing, uncounted by the polygon
+    /// budget. `SQUARE` holds the square; `TOP` is a 32767 × 32767 array of
+    /// `MID`, itself a 32767 × 32767 array of the empty `EMPTY`: about 10^18
+    /// placements and one polygon, which flattening must return at once.
+    #[test]
+    fn arrays_of_an_empty_cell_are_not_walked() {
+        let mut bytes = gds_hierarchy(&[
+            ("SQUARE", &[first_layer_square()], &[]),
+            ("EMPTY", &[], &[]),
+        ]);
+        bytes.truncate(bytes.len() - 4);
+        append_array(&mut bytes, "MID", "EMPTY", i16::MAX, i16::MAX);
+        append_array(&mut bytes, "TOP", "MID", i16::MAX, i16::MAX);
+        record(&mut bytes, ENDLIB, &[]);
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let mut layout_strings = StrTable::default();
+        let library = gds::Library::parse(&bytes, &mut layout_strings).expect("it parses");
+        let (store, _) = library
+            .flatten(&deck, &layout_strings, UnknownLayers::Reject)
+            .expect("one square flattens");
+        assert_eq!(store.poly_count(), 1);
+    }
+
     /// A two-cell library: `TOP` holds one `AREF` of `cols` × `rows` copies of
     /// `UNIT`, which holds the deck's first-layer square.
     fn gds_array(cols: i16, rows: i16) -> Vec<u8> {
-        const AREF: u16 = 0x0B00;
-        const COLROW: u16 = 0x1302;
         let mut out = gds_hierarchy(&[("UNIT", &[first_layer_square()], &[])]);
         // Drop the ENDLIB the helper wrote, and append TOP.
         out.truncate(out.len() - 4);
-        record(&mut out, BGNSTR, &[0u8; 24]);
-        record(&mut out, STRNAME, &ascii("TOP"));
-        record(&mut out, AREF, &[]);
-        record(&mut out, SNAME, &ascii("UNIT"));
+        append_array(&mut out, "TOP", "UNIT", cols, rows);
+        record(&mut out, ENDLIB, &[]);
+        out
+    }
+
+    /// Appends structure `cell` holding one `AREF` of `cols` × `rows` copies
+    /// of `child`, 1000 apart.
+    fn append_array(out: &mut Vec<u8>, cell: &str, child: &str, cols: i16, rows: i16) {
+        const AREF: u16 = 0x0B00;
+        const COLROW: u16 = 0x1302;
+        record(out, BGNSTR, &[0u8; 24]);
+        record(out, STRNAME, &ascii(cell));
+        record(out, AREF, &[]);
+        record(out, SNAME, &ascii(child));
         let mut colrow = Vec::new();
         colrow.extend_from_slice(&cols.to_be_bytes());
         colrow.extend_from_slice(&rows.to_be_bytes());
-        record(&mut out, COLROW, &colrow);
+        record(out, COLROW, &colrow);
         let pitch = 1_000i32;
         let mut xy = Vec::new();
         for (x, y) in [
@@ -2441,11 +2495,9 @@ mod tests {
             xy.extend_from_slice(&x.to_be_bytes());
             xy.extend_from_slice(&y.to_be_bytes());
         }
-        record(&mut out, XY, &xy);
-        record(&mut out, ENDEL, &[]);
-        record(&mut out, ENDSTR, &[]);
-        record(&mut out, ENDLIB, &[]);
-        out
+        record(out, XY, &xy);
+        record(out, ENDEL, &[]);
+        record(out, ENDSTR, &[]);
     }
 
     /// Oracle: the count, `cols × rows` squares, against
