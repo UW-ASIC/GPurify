@@ -84,6 +84,7 @@ Numbers carry units. `140nm`, `0.14um` and `0.00014mm` are the same length.
 | temperature coefficient | `/K` (first order), `/K2` (second order) |
 | energy | `eV` |
 | time | `h` |
+| electric field | `V/um`, `V/nm`, `MV/cm` |
 | fraction | `%`, or a bare number from 0 to 1 |
 | angle | `deg` |
 
@@ -358,6 +359,8 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `well_bias(; pmos: models \| none, nmos: models \| none)` | A `pmos` device whose well can sit below its source or drain, or an `nmos` device whose substrate can sit above them. Needs `--intent`. |
 | `missing_level_shifter(; shifters: models \| none)` | A transistor whose gate is driven from a power domain its source and drain are not in, unless its model is one of `shifters`. Needs `--intent`. |
 | `domain_crossing()` | A device whose source-to-drain path joins two power domains. Needs `--intent`. |
+| `dielectric_field(L; max_field: f)` | Two shapes on `L` on different nets whose worst-case voltage apart, over their gap, exceeds `max_field`: the gap is below `ΔV / max_field`. Reported as the gap against that limit, rounded up to the grid. Needs `--intent`. |
+| `dielectric_field(A, B; max_field: f)` | The same between a shape on `A` and one on `B`, through the dielectric between the two layers: the separation is `sqrt(gap² + t²)`, `t` the upper layer's `pex` height less the lower layer's height and thickness, so both need a `pex` row. A pair whose voltage `t` alone holds needs no gap. |
 | `voltage_space(L; voltage: [v, ..], space: [len, ..])` | Two shapes on `L` on different nets closer than the space the voltage between their nets needs (see below). Needs `--intent`. |
 | `voltage_space(A, B; voltage: [v, ..], space: [len, ..])` | The same between a shape on `A` and one on `B`, overlap included. |
 

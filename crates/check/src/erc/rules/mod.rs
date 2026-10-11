@@ -1,4 +1,4 @@
-//! The thirty rule tables and their transforms, grouped by what they need.
+//! The thirty-one rule tables and their transforms, grouped by what they need.
 //!
 //! Each ERC kind is one table type, one row per deck rule of that kind, and one
 //! `check_*` function that runs every row. [`RuleSet`](crate::erc::RuleSet)
@@ -13,7 +13,7 @@
 //! | [`antenna`] | `antenna`, `antenna_electrical`, `density_cmp` | geometry, the deck's connectivity, the die box |
 //! | [`electrical`] | `p2p_resistance`, `ir_drop`, `em_current_density`, `electromigration` | per-net resistor networks, the solved supply grid |
 //! | [`reliability`] | `reliability`, `hv_domain`, `esd_latchup` | the solved supply grid, propagated voltages, the intent |
-//! | [`domain`] | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing`, `voltage_spacing`, `hv_tag`, `undriven_gate`, `missing_isolation` | propagated voltages, the intent; `voltage_spacing` and `hv_tag` also geometry; `undriven_gate` and `missing_isolation` also each power state's |
+//! | [`domain`] | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing`, `voltage_spacing`, `dielectric_field`, `hv_tag`, `undriven_gate`, `missing_isolation` | propagated voltages, the intent; `voltage_spacing`, `dielectric_field` and `hv_tag` also geometry; `undriven_gate` and `missing_isolation` also each power state's |
 //!
 //! # Tables
 //!

@@ -120,6 +120,7 @@
 //! | `well_bias(; pmos, nmos)` | `well_bias` | [`erc::RuleSet::well_bias`] | a well that can forward-bias a junction | ERC-D3, ERC-F12 |
 //! | `missing_level_shifter(; shifters)` | `missing_level_shifter` | [`erc::RuleSet::missing_level_shifter`] | a gate driven from another power domain | ERC-F6 |
 //! | `domain_crossing()` | `domain_crossing` | [`erc::RuleSet::domain_crossing`] | a channel joining two power domains | ERC-F9 |
+//! | `dielectric_field(L[, L2]; max_field)` | `dielectric_field` | [`erc::RuleSet::dielectric_field`] | two nets' shapes whose voltage over their separation exceeds the field limit | ERC-F13 |
 //! | `voltage_space(L[, L2]; voltage: [..], space: [..])` | `voltage_spacing` | [`erc::RuleSet::voltage_spacing`] | shapes on two nets closer than the voltage between them allows | DRC-082, ERC-F11 |
 //!
 //! ## Layout against schematic

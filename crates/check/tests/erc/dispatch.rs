@@ -41,7 +41,8 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 18] = [
+const INTENT_GATED: [&str; 19] = [
+    "dielectric_field",
     "domain_crossing",
     "drain_source",
     "electromigration",
@@ -274,6 +275,13 @@ fn every_kind() -> RuleSet {
             head: head(id_of("missing_isolation")),
             isolation_start: vec![0, 0],
             isolation: Vec::new(),
+        },
+        dielectric_field: domain::DielectricFieldTable {
+            head: head(id_of("dielectric_field")),
+            layer: vec![base],
+            other: vec![None],
+            max_field: vec![100.0],
+            vertical_nm: vec![Some(0.0)],
         },
         hv_tag: domain::HvTagTable {
             head: head(id_of("hv_tag")),

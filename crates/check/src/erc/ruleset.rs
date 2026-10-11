@@ -1,4 +1,4 @@
-//! The thirty tables, the deck parser that fills them, and the dispatcher.
+//! The thirty-one tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -12,7 +12,7 @@ use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
 use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
-use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, RuleSpec, RuleTable};
+use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, ProcessStack, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule kind this crate implements, as the deck spells it. Any other
@@ -20,10 +20,11 @@ use gpurify_ingest::{StrId, StrTable};
 ///
 /// Each name is a [`RuleSet`] field of the same name; the crate's
 /// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 30] = [
+pub const KINDS: [&str; 31] = [
     "antenna",
     "antenna_electrical",
     "density_cmp",
+    "dielectric_field",
     "domain_crossing",
     "drain_source",
     "electromigration",
@@ -148,6 +149,8 @@ pub struct RuleSet {
     pub undriven_gate: domain::UndrivenGateTable,
     /// `missing_isolation` rows: [`domain::MissingIsolationTable`].
     pub missing_isolation: domain::MissingIsolationTable,
+    /// `dielectric_field` rows: [`domain::DielectricFieldTable`].
+    pub dielectric_field: domain::DielectricFieldTable,
 }
 
 /// Everything one run reads, borrowed.
@@ -182,6 +185,23 @@ pub struct RunInputs<'a> {
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
     pub operating_temperature: Qty<Temperature, { prefix::BASE }>,
+}
+
+/// The dielectric between two layers of the `pex` stack, nm: the upper
+/// layer's height less the lower layer's height and thickness. `None` when
+/// the stack does not state both layers (no row, or a thickness of 0) or
+/// they overlap in height.
+fn vertical_gap(stack: &ProcessStack, a: LayerId, b: LayerId) -> Option<f64> {
+    let row = |layer: LayerId| {
+        let thickness = *stack.thickness_nm.get(layer.idx())?;
+        (thickness > 0.0).then(|| (stack.height_nm[layer.idx()], thickness))
+    };
+    let (mut lower, mut upper) = (row(a)?, row(b)?);
+    if upper.0 < lower.0 {
+        std::mem::swap(&mut lower, &mut upper);
+    }
+    let gap = upper.0 - (lower.0 + lower.1);
+    (gap > 0.0).then_some(gap)
 }
 
 fn narrow(len: usize) -> u32 {
@@ -695,6 +715,21 @@ impl RuleSet {
                     table.layer.push(layers[0]);
                     table.tag.push(layers[1]);
                 }
+                "dielectric_field" => {
+                    let count = narrow(row.rules.layers_of(row.spec).len());
+                    let layers = row.layers_where(2, (1..=2).contains(&count))?;
+                    let max_field = row.positive("max_field")?;
+                    let vertical = match layers.get(1) {
+                        None => Some(0.0),
+                        Some(&b) => vertical_gap(&deck.stack, layers[0], b),
+                    };
+                    let table = &mut set.dielectric_field;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.other.push(layers.get(1).copied());
+                    table.max_field.push(max_field);
+                    table.vertical_nm.push(vertical);
+                }
                 "voltage_spacing" => {
                     let count = narrow(row.rules.layers_of(row.spec).len());
                     let layers = row.layers_where(2, (1..=2).contains(&count))?;
@@ -883,6 +918,7 @@ impl RuleSet {
             &self.hv_tag.head,
             &self.undriven_gate.head,
             &self.missing_isolation.head,
+            &self.dielectric_field.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -999,6 +1035,15 @@ impl RuleSet {
         domain::check_domain_crossing(design, intent, voltage, &self.domain_crossing, out, runs);
         domain::check_voltage_spacing(design, intent, voltage, &self.voltage_spacing, out, runs);
         domain::check_hv_tag(design, intent, voltage, &self.hv_tag, out, runs);
+        domain::check_dielectric_field(
+            design,
+            intent,
+            voltage,
+            grid,
+            &self.dielectric_field,
+            out,
+            runs,
+        );
         domain::check_undriven_gate(
             design,
             intent,

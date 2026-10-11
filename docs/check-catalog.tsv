@@ -219,7 +219,7 @@ ERC-F9	erc	voltage	DC / sneak path between domains	CAL:datasheet; CAL:WP 81822	d
 ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10; GF:DV.9	hv_domain, mixed_tag	implemented	FR; SY; MR	mixed_tag: an untagged figure on a net (joined through resistors) that holds a tagged one, hvnwell.10, without its lv_net text exemption; hv_domain: the domain span across a device; hvnwell.9 and GF DV.9 are DRC rules on derived layers (inside, forbidden of nwell.interacting)
 ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	voltage_spacing	implemented	SY; MR	Same row as DRC-082
 ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY; NV	Only sky130 connects wells (limitations.md, "Shipped decks")
-ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	-	missing	FR	
+ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	dielectric_field	implemented	CF; SY; MR	Field = worst-case voltage between two nets over their separation: the lateral gap on one layer, sqrt(gap² + t²) between two with t from the pex stack; a field limit, not JEP159A's TDDB lifetime; the lateral limit is rounded up to the grid
 ERC-F14	erc	voltage	Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares)	IEEE1801	-	missing	SY	Needs UPF input; IEEE 1801 not read (check-sources.md §5)
 ERC-G1	erc	classic	Floating / undriven gate	CAL:WP 81822; YOSYS:check	floating_gate	implemented	SY; NV; TX:YOSYS; MR	
 ERC-G2	erc	classic	Floating well	SKY:nwell.4	floating_well	implemented	FR; SY; MR	

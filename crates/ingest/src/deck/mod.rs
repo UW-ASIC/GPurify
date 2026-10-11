@@ -650,7 +650,7 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
     for rule in &doc.rules {
         // Every layer of a spacing by net; the judged layer of a tag rule.
         let judged: &[String] = match rule.kind {
-            "net_spacing" | "voltage_spacing" => &rule.layers[..],
+            "net_spacing" | "voltage_spacing" | "dielectric_field" => &rule.layers[..],
             "hv_tag" | "mixed_tag" => &rule.layers[..1],
             _ => &[],
         };

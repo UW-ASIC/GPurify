@@ -2169,6 +2169,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Temperature => "a temperature",
         Dim::Energy => "an energy",
         Dim::Time => "a time",
+        Dim::Field => "an electric field",
         Dim::CapPerArea => "a capacitance per area",
         Dim::CapPerLength => "a capacitance per length",
         Dim::PerKelvin => "a coefficient per kelvin",

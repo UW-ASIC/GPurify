@@ -24,6 +24,8 @@ pub(crate) enum Dim {
     Energy,
     /// h.
     Time,
+    /// V/um, an electric field (numerically mV/nm).
+    Field,
     /// aF/um2 (PEX only).
     CapPerArea,
     /// aF/um (PEX only).
@@ -92,6 +94,9 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("K", Dim::Temperature, 0),
     ("eV", Dim::Energy, 0),
     ("h", Dim::Time, 0),
+    ("V/um", Dim::Field, 0),
+    ("V/nm", Dim::Field, 3),
+    ("MV/cm", Dim::Field, 2),
     ("aF/um2", Dim::CapPerArea, 0),
     ("fF/um2", Dim::CapPerArea, 3),
     ("aF/um", Dim::CapPerLength, 0),
@@ -777,6 +782,20 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
         false,
         &[opt("isolation", "isolation", Dim::Models)],
+    ),
+    // The field across the dielectric between two nets' shapes (JEP159A,
+    // IC Validator): lateral on one layer, through the stack between two.
+    erc(
+        "dielectric_field",
+        &[0],
+        false,
+        &[p("max_field", "max_field", Dim::Field)],
+    ),
+    erc(
+        "dielectric_field",
+        &[0, 1],
+        false,
+        &[p("max_field", "max_field", Dim::Field)],
     ),
     // Spacing that grows with the worst-case voltage between two nets
     // (LEF58_VOLTAGESPACING, sky130 hvnwell.8): one layer, or two.

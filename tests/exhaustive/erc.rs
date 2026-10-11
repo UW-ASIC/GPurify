@@ -89,6 +89,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(voltage_spacing());
     out.extend(hv_tag());
     out.extend(mixed_tag());
+    out.extend(dielectric_field());
     out
 }
 
@@ -4603,6 +4604,116 @@ fn mixed_tag() -> Vec<Fixture> {
             .layout(layout)
             .expect(Expect::rule("mix", findings)),
         );
+    }
+    every_placement(&cases)
+}
+
+// ---------------------------------------------------------- dielectric_field
+
+/// Two labelled metals in a stack: met1 from 1000 to 1300 nm, met2 from
+/// 1700 nm, so 400 nm of dielectric between them; met3 states no stack row.
+/// Each table allows 10 V/µm (10 mV per nm).
+const FIELD_DECK: &str = "grid 1nm
+layer met1 = gds(1, 0)
+layer m1txt = gds(1, 1)
+layer met2 = gds(2, 0)
+layer m2txt = gds(2, 1)
+layer met3 = gds(3, 0)
+connect conductors [met1, met2, met3]
+connect touch_within_layer
+connect label m1txt names met1
+connect label m2txt names met2
+pex met1 thickness 300nm height 1000nm sheet 0.1ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex met2 thickness 300nm height 1700nm sheet 0.1ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+rule df dielectric_field(met1; max_field: 10V/um)
+rule df2 dielectric_field(met1, met2; max_field: 10V/um)
+rule df3 dielectric_field(met1, met3; max_field: 10V/um)
+";
+
+/// `dielectric_field` (ERC-F13). Oracle: the closed form, field = ΔV over
+/// the separation (CF), by hand: on met1, nets 3 V apart need
+/// 3000 mV / (10 mV/nm) = 300 nm, and 3.01 V apart 301 nm; between met1
+/// and met2, 400 nm of dielectric under nets 5 V apart needs a 500 nm
+/// separation, a lateral 300 nm (the 3-4-5 triangle), and 4 V is exactly
+/// held by the 400 nm alone, 4.001 V not (a lateral 9 nm: sqrt(400.1² -
+/// 400²) = 8.94, rounded up). A pair is flagged, measuring its lateral gap,
+/// below its limit. met3 has no stack row: refused. Every case under every
+/// symmetry and offset.
+fn dielectric_field() -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let bars = |layer_b: &str, text_b: &str, gap: i64| {
+        Layout::default()
+            .rect("met1", 0, 0, 1000, 500)
+            .rect(layer_b, 1000 + gap, 0, 2000 + gap, 500)
+            .label("m1txt", 500, 250, "A")
+            .label(text_b, 1500 + gap, 250, "B")
+    };
+    for (delta, gap, flagged) in [
+        (3000, 299, true),
+        (3000, 300, false),
+        (3010, 300, true),
+        (2990, 299, false),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/dielectric_field/one_layer/{delta}mV/{gap}nm"),
+            &["ERC-F13"],
+            FIELD_DECK,
+            ERC,
+        )
+        .layout(bars("met1", "m1txt", gap))
+        .expect(Expect::rule(
+            "df",
+            if flagged {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ))
+        .expect(Expect::clean("df2"))
+        .expect(Expect::outcome("df3", Want::Refused));
+        f.intent = Some(vs_intent(delta));
+        cases.push(f);
+    }
+    for (delta, gap, flagged) in [(5000, 299, true), (5000, 300, false)] {
+        let mut f = Fixture::new(
+            &format!("erc/dielectric_field/two_layers/{delta}mV/{gap}nm"),
+            &["ERC-F13"],
+            FIELD_DECK,
+            ERC,
+        )
+        .layout(bars("met2", "m2txt", gap))
+        .expect(Expect::clean("df"))
+        .expect(Expect::rule(
+            "df2",
+            if flagged {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(vs_intent(delta));
+        cases.push(f);
+    }
+    for (delta, flagged) in [(4000, false), (4001, true)] {
+        let mut f = Fixture::new(
+            &format!("erc/dielectric_field/crossing/{delta}mV"),
+            &["ERC-F13"],
+            FIELD_DECK,
+            ERC,
+        )
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met2", 400, -1000, 600, 1500)
+                .label("m1txt", 100, 250, "A")
+                .label("m2txt", 500, 1400, "B"),
+        )
+        .expect(Expect::rule(
+            "df2",
+            if flagged { vec![length(0)] } else { Vec::new() },
+        ));
+        f.intent = Some(vs_intent(delta));
+        cases.push(f);
     }
     every_placement(&cases)
 }
