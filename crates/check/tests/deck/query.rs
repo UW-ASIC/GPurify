@@ -329,6 +329,9 @@ fn via_case(deck: &CompiledDeck, layer: LayerId, threshold: u16, what: &str) {
 /// query is the limit the checker reports. Rules of other kinds (maximum
 /// width, cut size, density, ...) are counted, so the loop is known not to
 /// have skipped what it claims to cover.
+/// Oracle: differential against the checker on construct-from-answer
+/// layouts: at the queried value it passes, one grid step under it it flags
+/// with that value as its `limit`.
 #[test]
 fn every_query_is_the_limit_the_checker_reports() {
     for (name, text) in DECKS {
@@ -410,9 +413,9 @@ fn every_query_is_the_limit_the_checker_reports() {
 }
 
 /// The ERC queries read the rows the checks read: each against a value a
-/// shipped deck states (oracle: the deck text, `pdks/sky130.deck`'s
-/// `ar.met1.1`, `EM.met1_mcon`, `vgs.esd_nfet`, `vds.d10v5`, `vgs.01v8` and
-/// `vds.01v8`).
+/// shipped deck states.
+/// Oracle: the deck text, `pdks/sky130.deck`'s `ar.met1.1`, `EM.met1_mcon`,
+/// `vgs.esd_nfet`, `vds.d10v5`, `vgs.01v8` and `vds.01v8`.
 #[test]
 fn the_electrical_queries_read_what_the_deck_states() {
     let (deck, strings) = shipped(DECKS[3].1);
