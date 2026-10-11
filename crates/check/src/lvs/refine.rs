@@ -235,9 +235,8 @@ impl Sides<'_> {
 
     /// Whether layout node `layout` and reference node `reference` would pass
     /// the verdict's parameter comparison: every name the reference states
-    /// stated by the layout too, each value within `tolerance` of the other
-    /// relatively (`NaN` never is), diffusions either way round. Nets always
-    /// do.
+    /// stated by the layout too, each value [agreeing](ParamNames::agree)
+    /// with the other, diffusions either way round. Nets always do.
     fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
         let reference = reference - self.split;
         if layout >= narrow(self.layout.device_count())
@@ -253,7 +252,7 @@ impl Sides<'_> {
             theirs.iter().all(|&(name, b)| {
                 let read = self.read(name, crossed);
                 mine.iter().any(|&(other, a)| {
-                    Some(other) == read && (a - b).abs() <= tolerance * a.abs().max(b.abs())
+                    Some(other) == read && self.names.agree(name, (a, b), tolerance)
                 })
             })
         };

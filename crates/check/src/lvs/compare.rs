@@ -25,11 +25,14 @@ pub struct CompareOptions {
     /// restarts at each symmetry tie-break, and at each pairing a tie-break
     /// tries, so the number of symmetries does not spend it.
     pub max_rounds: u32,
-    /// Relative tolerance `tol` for every parameter of a paired device: values
-    /// `a` and `b` agree when `|a - b| <= tol * max(|a|, |b|)`. `NaN` never
-    /// agrees. It is the only tolerance: there is no absolute or per-parameter
-    /// one (catalog LVS-014), and it does not apply to reduction, whose merges
-    /// need the other parameters bit-identical.
+    /// Relative tolerance `tol` for every parameter of a paired device but
+    /// its counts: values `a` and `b` agree when
+    /// `|a - b| <= tol * max(|a|, |b|)`. `NaN` never agrees. A count, the
+    /// parameter [`ParamNames`] names `m` or `nf`, is a whole number and
+    /// agrees only exactly (testing-plan F99): `m = 50` against `m = 51`,
+    /// 1.96 % apart, is a mismatch. It is the only tolerance: there is no
+    /// absolute or per-parameter one (catalog LVS-014), and it does not apply
+    /// to reduction, whose merges need the other parameters bit-identical.
     ///
     /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
     /// Netgen measures the difference against the mean of the two values, not
@@ -389,8 +392,9 @@ fn crossed(
 }
 
 /// The parameters the reference card states, each joined by name to the
-/// layout's within relative tolerance (`NaN` fails), the layout's diffusions
-/// read the other way round when the pair is `crossed`. One the layout does
+/// layout's and [agreeing](ParamNames::agree) with it, within the relative
+/// tolerance or, for a count, exactly, the layout's diffusions read the other
+/// way round when the pair is `crossed`. One the layout does
 /// not measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
 /// layout measures is not compared: presence is per device, and a card that
 /// omits a parameter states nothing about it (testing-plan F68).
@@ -441,9 +445,9 @@ fn compare_params(
         at_mine += 1;
         at_theirs += 1;
 
-        let spread = (layout_value - ref_value).abs();
-        let scale = layout_value.abs().max(ref_value.abs());
-        let agree = spread <= tolerance * scale;
+        let agree = options
+            .params
+            .agree(layout_param, (layout_value, ref_value), tolerance);
         if !agree {
             found.push(Discrepancy::ParameterMismatch {
                 layout_device: pair.0,
