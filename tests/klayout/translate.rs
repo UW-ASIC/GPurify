@@ -361,6 +361,35 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# Each merged `inner` figure a merged `outer` figure covers, unless one axis
+# of its edges all read 0 straight out to the nearest host edge facing them
+# (projection). KLayout hulls are clockwise: the material is on the right of
+# travel, so an edge faces to its left.
+def full_width(rule, outer, inner)
+  hosts = outer.data.merged.each.to_a
+  inner.data.merged.each do |p|
+    h = hosts.find { |o| (RBA::Region.new(p) - RBA::Region.new(o)).is_empty? }
+    next if h.nil?
+    he = []
+    h.each_edge { |e| he << e }
+    most = [0, 0]
+    p.each_edge do |e|
+      vertical = e.x1 == e.x2
+      lo, hi = vertical ? [e.y1, e.y2].minmax : [e.x1, e.x2].minmax
+      at = vertical ? e.x1 : e.y1
+      sign = vertical ? (e.y2 > e.y1 ? -1 : 1) : (e.x2 > e.x1 ? 1 : -1)
+      runs = he.select { |f| (f.x1 == f.x2) == vertical }.filter_map do |f|
+        flo, fhi = vertical ? [f.y1, f.y2].minmax : [f.x1, f.x2].minmax
+        fat = vertical ? f.x1 : f.y1
+        d = (fat - at) * sign
+        d if flo < hi && fhi > lo && d >= 0
+      end
+      axis = vertical ? 0 : 1
+      most[axis] = [most[axis], runs.min || 2**60].max
+    end
+    put({ rule: rule }.merge(poly(p))) if most.min > 0
+  end
+end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
 # two corners is irrational, so each width pair under the bound is measured
@@ -843,6 +872,13 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("min_enclosure", Key::FigRow(name, 1), Value::Length)
+            }
+            Rule::FullWidth { outer, inner } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                writeln!(body, "full_width({q}, {}, {})", var(outer), var(inner))
+                    .expect("a String");
+                exact("full_width", Key::FigRow(name, 0), Value::Ignore)
             }
             Rule::NoncoincidentEnclosure {
                 outer,

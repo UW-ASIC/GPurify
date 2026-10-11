@@ -114,6 +114,9 @@ pub(crate) enum Mode {
     /// Facing parallel edges, coincident ones exempt
     /// (`noncoincident_enclosure`).
     NonCoincident,
+    /// The better axis's widest straight-out reading, which must be 0
+    /// (`full_width`).
+    FullWidth,
 }
 
 /// The least Euclidean distance between an edge of `inner` and a parallel
@@ -177,6 +180,23 @@ fn enclosure_of(
             || (far(), None),
             |(d2, at)| (isqrt(DbuArea::new(saturate(d2.raw()))), Some(at)),
         );
+    }
+    if mode == Mode::FullWidth {
+        // Per axis (vertical edges, horizontal edges): the most enclosed edge.
+        let mut most: [Option<(Dbu, Side, Bbox)>; 2] = [None; 2];
+        for (a, b) in poly_edges(inner) {
+            let edge = Bbox::point(a.x, a.y).include(b.x, b.y);
+            let side = outward(a, b);
+            let (run, _) = strips(edge, host)[side as usize];
+            let axis = &mut most[usize::from(a.y == b.y)];
+            if axis.is_none_or(|(d, s, _)| (run, Reverse(side)) > (d, Reverse(s))) {
+                *axis = Some((run, side, edge));
+            }
+        }
+        let edges = "a validated polygon has edges along both axes";
+        let (x, y) = (most[0].expect(edges), most[1].expect(edges));
+        let (run, side, edge) = if x.0 <= y.0 { x } else { y };
+        return (run, Some(side_midpoint(edge, run, side)));
     }
     if mode == Mode::Opposite {
         // Per axis (vertical edges, horizontal edges): the least enclosed edge.
@@ -371,14 +391,37 @@ pub(crate) fn enclosure(
                 continue;
             }
             let (value, at) = enclosure_of(drawn.get(poly), mine, merged.get(figure), mode);
-            acc = acc.max((value.raw(), Reverse(host.0), at));
+            // A full-width reading is a maximum: the best host has the least.
+            let score = if mode == Mode::FullWidth {
+                -value.raw()
+            } else {
+                value.raw()
+            };
+            acc = acc.max((score, Reverse(host.0), at));
         }
         let (best, Reverse(host), at) = acc;
+        let hosted = best > UNHOSTED;
+        if mode == Mode::FullWidth {
+            // An unhosted inner is `must_be_inside`'s; a host spanned is met.
+            if !hosted || best == 0 {
+                continue;
+            }
+            let measured = Measurement::Length(Dbu::new_unchecked((-best).min(MAX_ABS_DBU)));
+            out.push(Violation {
+                rule,
+                layer: inner_layer,
+                severity: Severity::Error,
+                at: at.unwrap_or_else(|| centre(inner_box)),
+                measured,
+                limit: Measurement::Length(Dbu::new_unchecked(0)),
+                shapes: (inner, Some(PolyId(host))),
+            });
+            continue;
+        }
         let measured = Measurement::Length(Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)));
         if !measured.violates(limit, LimitSense::Minimum) {
             continue;
         }
-        let hosted = best >= 0;
         let at = match at {
             Some(at) if hosted => at,
             _ => centre(inner_box),

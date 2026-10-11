@@ -48,7 +48,7 @@ DRC-049	drc	overlay	Exact or maximum count	SKY:rpm.1g-1k; SKY:via.13	must_contai
 DRC-050	drc	overlay	Forbidden overlap / straddle / partial overlap	IHP:Cnt.j; SKY:licon.6,licon.17,x.23a-f; GF:PL.9; KL:overlapping,in_and_out; MAG:no_overlap,exact_overlap	forbidden	implemented	FR; TX:KL; MR; SY	Written as forbidden(derived layer)
 DRC-051	drc	overlay	Abutment / butting edges	IHP:pSD.e-g; GF:DF.3b,NP.3d; SKY:difftap.4-7,licon.5b; MAG:edge4way	edge_min_length,edge_spacing,edge_enclosure	partial	FR; SY; MR; TX:KL	Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag")
 DRC-052	drc	overlay	Gate-shape rules (no bends, no poly on inner diff corners)	SKY:poly.10,poly.11; IHP:Gat.f; A7:GATE.AUX.1; GF:PL.6	gate_corner	implemented	FR; MR; SY; TX:KL	
-DRC-053	drc	overlay	Exact alignment / width match across layers	A7:V1.M2.AUX.2; LEF58_SPACING EXACTALIGNED	-	missing	FR	
+DRC-053	drc	overlay	Exact alignment / width match across layers	A7:V1.M2.AUX.2; LEF58_SPACING EXACTALIGNED	full_width	partial	FR; MR; SY; TX:KL	ASAP7 V1.M2.AUX.2 only: LEF58_SPACING EXACTALIGNED (the spacing of exactly aligned line ends) is not modelled
 DRC-054	drc	overlay	Enclosure excluding coincident edges	SKY:lvtn.10	noncoincident_enclosure	implemented	FR; MR; SY; TX:KL	
 DRC-055	drc	overlay	Direction-dependent (S/D-direction) spacing	SKY:lvtn.3b	-	missing	FR	
 DRC-060	drc	cut	Cut-to-cut spacing	LEF:cut SPACING; IHP:Cnt.b,V1.b; GF:CO.2a; SKY:ct.2,via.2; A7:V1.S.1; drt	min_spacing	implemented	BM; FR; TX:KL; MR; SY	

@@ -972,3 +972,39 @@ fn a_maximum_enclosure_measures_the_furthest_reach_of_the_host() {
         assert_eq!(sink.out.measured, want, "two cuts {gap} apart");
     }
 }
+
+// -------------------------------------------------------------- full_width
+
+/// Oracle: construct-from-answer (ASAP7 V1.M2.AUX.2). A 100 via in a 100
+/// wide horizontal wire, 1 short of its top edge: along y it reads 0 below
+/// and 1 above, along x 500 and 900, so the better axis reads 1, reported in
+/// the 1 nm strip above the via at `(50, 99)`. Spanning the wire, it passes.
+#[test]
+fn a_via_must_span_its_wire_along_one_axis() {
+    let table = vec![(RULE, Rule::FullWidth { outer: B, inner: A })];
+    let mut layout = LayoutBuilder::new(2);
+    let via = layout.rect(A, 0, 0, 100, 99);
+    let wire = layout.rect(B, -500, 0, 1_000, 100);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table);
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(50, 99),
+            measured: Measurement::Length(dbu(1)),
+            limit: Measurement::Length(dbu(0)),
+            shapes: (ids.of(via), Some(ids.of(wire))),
+        },
+    );
+
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 100, 100);
+    layout.rect(B, -500, 0, 1_000, 100);
+    let (store, _) = layout.finish();
+    sink.run(&store, &table);
+    assert_clean(&sink.runs, &sink.out, RULE);
+}

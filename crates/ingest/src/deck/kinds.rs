@@ -525,6 +525,9 @@ pub(crate) const KINDS: &[Kind] = &[
             &[],
         )
     },
+    // The inner spans its host along one axis: `full_width(V1, M2)` (ASAP7
+    // V1.M2.AUX.2).
+    drc("full_width", Cmp::Absent, "full_width", &[1, 0], None, &[]),
     // A maximum enclosure, `enclosure(licon, npc) <= 95nm` (sky130 npc.5).
     drc("enclosure", Cmp::Le, "max_enclosure", &[1, 0], LIMIT, &[]),
     opposite(&[]),
