@@ -571,6 +571,24 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "min_count", Dim::Count)),
         &[],
     ),
+    // At most `count` (sky130 rpm.1g "only 1 licon is allowed in ..."), or
+    // exactly `count`.
+    drc(
+        "contains",
+        Cmp::Le,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "max_count", Dim::Count)),
+        &[],
+    ),
+    drc(
+        "contains",
+        Cmp::Eq,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "count", Dim::Count)),
+        &[],
+    ),
     // Every inner shape lies entirely inside the outer layer: `inside(poly_licon, npc)`.
     drc("inside", Cmp::Absent, "must_be_inside", &[0, 1], None, &[]),
     // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b).

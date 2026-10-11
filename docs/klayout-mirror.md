@@ -241,7 +241,7 @@ explains (kind 30).
 | 25 | via_array_spacing | `via_array_space(L; array) >= l` | ROW PAIR | APPROX | lo ⊆ GPurify ⊆ hi | 67 |
 | 26 | multi_patterning | `patterning(L; colors) >= l` | — | NONE | reported as not mirrored | — |
 | 27 | forbidden | `forbidden(L)` | ROW / EDGE | EXACT | exact | 3964 |
-| 28 | must_contain | `contains(o, i) >= n` | FIG by marker (outer) | EXACT | exact | 3236 |
+| 28 | must_contain | `contains(o, i) >= n` (`<=`, `==`) | FIG by marker (outer) | EXACT | exact | 3236 |
 | 29 | must_be_inside | `inside(i, o)` | FIG by marker (inner) | EXACT | exact | 3107 |
 | 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT with `touch_within_layer`, else NONE | exact | 1141 / 10 (F88) |
 | 31 | spacing_table | `space_table(L; …)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 1209 |
@@ -734,13 +734,19 @@ emit(id, E)               # edge layer: maximal runs (a2)
 
 **GPurify** (`presence.rs` `must_contain`): merged inner and outer figures; an inner figure is
 held by the outer figure that covers all of it (straddling the boundary, by none); each outer
-figure holding fewer than `min_count` fails, `measured` the count it holds.
+figure holding fewer than `min_count` or more than `max_count` fails, `measured` the count it
+holds. `>=` sets the minimum, `<=` the maximum, `==` both.
 
 **KLayout**
 
 ```ruby
-emit(id, O.not_covering(I.inside(O), MIN_COUNT)) { |p| { v: I.data.merged.inside(RBA::Region.new(p)).count } }
+emit(id, O.not_covering(I.inside(O), MIN_COUNT)) { |p| { v: I.data.merged.inside(RBA::Region.new(p)).count } }   # a minimum
+emit(id, O.covering(I.inside(O), MAX_COUNT + 1)) { |p| { v: … } }                                                # a maximum
 ```
+
+- Too few and too many are disjoint, so a `==` row emits both lines and no figure twice. The
+  maximum reuses the counted `covering` the minimum is verified on ([L] "covering": "only
+  selected when covering a given number of shapes").
 
 - `covering` drops an outer figure that any inner shape straddles, whatever else it holds (v t18
   Z4; random layout 133). Counting only inners that some outer holds restores the definition.

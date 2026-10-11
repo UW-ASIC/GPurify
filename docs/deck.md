@@ -271,6 +271,8 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |
 | `forbidden(L)` | Every shape on `L`, reported with its area. Write the forbidden overlap as the layer: `forbidden(licon and poly and (diff or tap))`. On an edge layer, every edge. |
 | `contains(outer, inner) >= count` | An `outer` shape holding fewer than `count` `inner` shapes entirely, as sky130 licon.16 "every tap must enclose at least one licon". An inner shape across the outer's edge is not held, and touching inner shapes count as one. |
+| `contains(outer, inner) <= count` | An `outer` shape holding more than `count` `inner` shapes, counted the same way, as sky130 rpm.1g "only 1 licon is allowed in xhrpoly_0p35 prec_resistor_terminal". |
+| `contains(outer, inner) == count` | An `outer` shape holding any other number of `inner` shapes than `count`. |
 | `inside(inner, outer)` | An `inner` shape not entirely inside `outer`, reported with the area left outside, as licon.18 "npc must enclose poly_licon". Touching `outer`'s edge from inside is inside. |
 
 A spacing table, as a LEF `SPACINGTABLE PARALLELRUNLENGTH` or IHP Metal1

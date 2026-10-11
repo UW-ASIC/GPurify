@@ -796,31 +796,37 @@ pub enum Rule {
         /// The layer, or edge layer, that must be empty.
         layer: LayerId,
     },
-    /// An `outer` shape holding fewer than `min_count` `inner` shapes.
+    /// An `outer` shape holding fewer than `min_count`, or more than
+    /// `max_count`, `inner` shapes.
     ///
-    /// Deck: `contains(outer, inner) >= count`, kind `must_contain`. Both
+    /// Deck: `contains(outer, inner) >= count` (a minimum), `<= count` (a
+    /// maximum) or `== count` (exactly that many), kind `must_contain`. Both
     /// layers are merged, so touching inner shapes count as one. An inner
     /// figure is held when one outer figure covers all of it; one across the
     /// outer's edge is held by none.
     ///
-    /// One violation per outer figure holding too few, on the `outer` layer,
-    /// at the centre of one of its rectangles. `measured` is the count held,
-    /// `shapes.0` the lowest drawn outer row under the figure. `examined`
-    /// counts outer figures.
+    /// One violation per outer figure holding too few or too many, on the
+    /// `outer` layer, at the centre of one of its rectangles. `measured` is
+    /// the count held and `limit` the bound it broke, `shapes.0` the lowest
+    /// drawn outer row under the figure. `examined` counts outer figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-048, DRC-049, DRC-085. Rules: sky130 licon.4, licon.16 and
-    /// nwell.4, IHP Cnt.g and Cnt.h, GF180 DN.3; `KLayout` `covering`.
-    ///
-    /// Limits: a minimum count only. An exact or maximum count (sky130 rpm.1g
-    /// to rpm.1k, via.13) cannot be written.
+    /// nwell.4, IHP Cnt.g and Cnt.h, GF180 DN.3; the maximum is sky130 rpm.1g
+    /// to rpm.1k ("only 1 licon is allowed in xhrpoly_0p35
+    /// prec_resistor_terminal"); `KLayout` `covering` and `not_covering` with
+    /// a count range.
     MustContain {
         /// The holding layer; findings are reported on it.
         outer: LayerId,
         /// The held layer.
         inner: LayerId,
-        /// The fewest inner figures each outer figure must hold; at least 1.
+        /// The fewest inner figures each outer figure must hold; 0 for no
+        /// minimum.
         min_count: u32,
+        /// The most it may hold, at least `min_count` and at least 1;
+        /// `u32::MAX` for no maximum.
+        max_count: u32,
     },
     /// An `inner` shape not entirely inside `outer`.
     ///
@@ -2306,10 +2312,29 @@ impl RuleSet {
                 "forbidden" => Rule::Forbidden { layer: one(spec)? },
                 "must_contain" => {
                     let (outer, inner) = two(spec)?;
+                    // `==` states `count`, `>=` `min_count`, `<=` `max_count`.
+                    let bound = |param: &'static str| match strings
+                        .get(param)
+                        .and_then(|p| rules.param(spec, p))
+                    {
+                        Some(_) => positive(spec, count(spec, param, u32::MAX)?).map(Some),
+                        None => Ok(None),
+                    };
+                    let (min_count, max_count) = match bound("count")? {
+                        Some(exact) => (Some(exact), Some(exact)),
+                        None => (bound("min_count")?, bound("max_count")?),
+                    };
+                    if min_count.is_none() && max_count.is_none() {
+                        return Err(DrcError::MissingParam {
+                            rule: name_of(spec.id),
+                            param: "min_count",
+                        });
+                    }
                     Rule::MustContain {
                         outer,
                         inner,
-                        min_count: count(spec, "min_count", u32::MAX)?,
+                        min_count: min_count.unwrap_or(0),
+                        max_count: max_count.unwrap_or(u32::MAX),
                     }
                 }
                 "must_be_inside" => {
@@ -2830,7 +2855,15 @@ impl RuleSet {
                     outer,
                     inner,
                     min_count,
-                } => presence::must_contain(store, id, outer, inner, min_count, s, out),
+                    max_count,
+                } => presence::must_contain(
+                    store,
+                    id,
+                    (outer, inner),
+                    (min_count, max_count),
+                    s,
+                    out,
+                ),
                 Rule::MustBeInside { inner, outer } => {
                     presence::must_be_inside(store, id, inner, outer, s, out)
                 }
