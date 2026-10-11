@@ -1138,15 +1138,16 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
             Rule::MinInteriorAngle { layer, limit } => {
                 // With no layer, the drawn layers only, as for `angle`.
                 let targets = layer.map_or_else(|| drawn.clone(), |layer| vec![layer]);
-                // `corners` measures the turn, which is 180 less the angle
-                // inside; a hair under the bound keeps a corner exactly at the
-                // limit out whichever end of the range KLayout includes.
+                // The polygon form of `with_angle` measures the angle inside
+                // the shape, 0 to 360, in `[min, max)`, as IHP's deck uses it
+                // for 3.1; `corners` measures the turn with an inclusive bound
+                // resolved on the rounded rotated edge, so a right angle can
+                // fall on either side of a limit of 90.
                 for layer in targets {
                     writeln!(
                         body,
-                        "emit({q}, {}.dup.raw.corners(as_dots, -180.0, {:?}))",
-                        var(layer),
-                        limit - 180.0 - 1e-6
+                        "emit({q}, {}.dup.raw.with_angle(0.0, {limit:?}))",
+                        var(layer)
                     )
                     .expect("a String");
                 }
@@ -1207,7 +1208,7 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 };
                 writeln!(
                     body,
-                    "emit({q}, {}.{check}({}, projection, transparent))",
+                    "emit({q}, {}.{check}({}, projection))",
                     var(layer),
                     lim(limit)
                 )

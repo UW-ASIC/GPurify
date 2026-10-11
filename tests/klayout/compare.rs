@@ -436,6 +436,10 @@ impl Ctx<'_> {
                 {
                     gap_mid(seg_box(*e), seg_box(*f))
                 }
+                // A corner of `with_angle`: the first edge arrives at it.
+                Item::Pair(e, ..) if self.m.kind == "min_interior_angle" => {
+                    vec![half(e[2]), half(e[3])]
+                }
                 Item::Pair(e, ..) => vec![half(e[0]), half(e[1])],
                 Item::Poly(p, ..) => {
                     let b = bbox(&p.hull);
