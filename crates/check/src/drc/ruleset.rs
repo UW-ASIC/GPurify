@@ -1108,7 +1108,10 @@ pub enum Rule {
     ///
     /// Deck: `patterning(L; colors: count) >= len`, kind `multi_patterning`.
     /// Shapes that touch, overlap or nest print as one and are one figure;
-    /// two figures closer than `color_spacing` conflict. Two masks are decided
+    /// two figures closer than `color_spacing` conflict, and a figure whose
+    /// own notch (two of its edges facing across empty space, as
+    /// [`Rule::Notch`] measures it) is narrower than `color_spacing`
+    /// conflicts with itself, so no number of masks splits it. Two masks are decided
     /// exactly by bipartiteness. Three or more are decided exactly by a search
     /// with a step budget, `max(2^20, 64 * rows)`, and running out of it
     /// records [`Outcome::Refused`], never a pass.
@@ -1124,10 +1127,15 @@ pub enum Rule {
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-100, DRC-101. Defined by Kahng et al. (2008) and the commercial
     /// decks (Calibre, IC Validator); no open foundry manual or `KLayout` deck
-    /// has a colouring rule.
+    /// has a colouring rule. The self-conflict, a polygon with "notch spaces
+    /// between themselves that violate minimum same-mask spacing", "an odd
+    /// cycle error of one", is Calibre's (J. Abercrombie, "Five Steps to
+    /// Double Patterning Debug Success", Siemens Calibre blog, 2016-03-02).
     ///
-    /// Limits: reports that no colouring exists, not its class (anchor path,
-    /// self-conflict, same-mask spacing). Pre-coloured `MASK` shapes (DRC-102)
+    /// Limits: one finding says that no colouring exists, not which class
+    /// of error stops it. Write each class as its own row to have it located:
+    /// `notch(L) >= len` for self-conflicts and `space(L) >= len` for the
+    /// minimum opposite-mask spacing. Pre-coloured `MASK` shapes (DRC-102)
     /// and stitches are not modelled.
     MultiPatterning {
         /// The layer to split.

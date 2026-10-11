@@ -3694,7 +3694,10 @@ fn bar_cycle(n: i64, gap: i64) -> Layout {
 /// lower shapes abut, merging into one figure (2); two squares touching only
 /// at a corner (one figure, 1); a shape drawn inside another, 50 nm from its
 /// boundary (one figure, 1), and that pair beside a third (2); an island
-/// 50 nm inside a ring's hole (a real gap, 2); one shape (1); none.
+/// 50 nm inside a ring's hole (a real gap, 2); one shape (1); none. A figure
+/// whose own notch is below 100 nm conflicts with itself (Calibre's
+/// self-conflict) and no palette colours it: a U whose arms are 99/100/101
+/// apart, and a ring whose slot hole is (one figure, 1, at 100 and above).
 /// Nightly: cycles of 4 to 15 bars.
 fn multi_patterning(depth: Depth) -> Vec<Fixture> {
     let deck = new_deck(
@@ -3738,6 +3741,34 @@ fn multi_patterning(depth: Depth) -> Vec<Fixture> {
             &format!("triangle/{side}"),
             triangle(g),
             if conflicts { 3 } else { 1 },
+        ));
+        let notched = if conflicts { u32::MAX } else { 1 };
+        cases.push(case(
+            &format!("u_notch/{side}"),
+            Layout::default().polygon(
+                "met1",
+                &[
+                    (0, 0),
+                    (1000 + g, 0),
+                    (1000 + g, 2000),
+                    (500 + g, 2000),
+                    (500 + g, 500),
+                    (500, 500),
+                    (500, 2000),
+                    (0, 2000),
+                ],
+            ),
+            notched,
+        ));
+        cases.push(case(
+            &format!("slot_hole/{side}"),
+            ring(
+                Layout::default(),
+                "met1",
+                (0, 0, 2000, 2000),
+                (900, 500, 900 + g, 1500),
+            ),
+            notched,
         ));
         cases.push(case(
             &format!("pair/{side}"),
