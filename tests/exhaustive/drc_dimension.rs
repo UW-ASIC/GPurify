@@ -58,6 +58,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cut_class(depth),
         allowed_width(depth),
         min_edge_length(depth),
+        min_step(depth),
         edge_length_of_edges(depth),
         notch(depth),
         min_spacing(depth),
@@ -1041,6 +1042,157 @@ fn min_edge_length(depth: Depth) -> Vec<Fixture> {
         &["el"],
     ));
     out
+}
+
+/// LEF `MINSTEP` variants (`min_step`, DRC-020) at a minStepLength of 50 nm:
+/// `corner: outside` with and without `length_sum: 80nm`, `corner: inside`,
+/// `corner: step`, `max_edges: 1` and `max_edges: 2`. One finding per run of
+/// edges shorter than 50 that its row rejects, at the centre of the run's
+/// vertices, measuring the run's edge count (or its length, with
+/// `length_sum`).
+///
+/// Oracle: LEF 5.8's own examples. Its Figure 1-14 a (two 40 nm edges at an
+/// outside corner, 80 in all) and d (four, 160): "MINSTEP 0.05" rejects both,
+/// and "MINSTEP 0.05 LENGTHSUM 0.08" passes a and rejects d (Example 1-16).
+/// Figure 1-15's MAXEDGES: more short edges in a row than allowed is a
+/// violation, as many is not. Beside them, by construction: two short edges
+/// at an inside corner (`inside` only), one short jog between two edges
+/// running the same way (`step` only), a 40 nm wide line whose short ends are
+/// no corner and no step, and the outside staircase swept at 49, 50 and 51.
+fn min_step(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(
+        "rule out min_step(met1; corner: outside, length_sum: none) >= 50nm\n\
+         rule sum min_step(met1; corner: outside, length_sum: 80nm) >= 50nm\n\
+         rule in min_step(met1; corner: inside, length_sum: none) >= 50nm\n\
+         rule st min_step(met1; corner: step, length_sum: none) >= 50nm\n\
+         rule e1 min_step(met1; max_edges: 1) >= 50nm\n\
+         rule e2 min_step(met1; max_edges: 2) >= 50nm",
+    );
+    let ids = ["out", "sum", "in", "st", "e1", "e2"];
+    let mut cases = Vec::new();
+    let mut case = |name: String, points: &[(i64, i64)], rows: [Vec<Finding>; 6]| {
+        let mut fixture = Fixture::new(&format!("min_step/{name}"), &["DRC-020"], &deck, DRC)
+            .layout(Layout::default().polygon("met1", points));
+        for (id, findings) in ids.iter().zip(rows) {
+            fixture = fixture.expect(Expect::rule(id, findings));
+        }
+        cases.push(fixture);
+    };
+    // A 1000 square whose top right corner is a staircase of two edges `s`.
+    let outside_two = |s: i64| {
+        vec![
+            (0, 0),
+            (1000, 0),
+            (1000, 1000 - s),
+            (1000 - s, 1000 - s),
+            (1000 - s, 1000),
+            (0, 1000),
+        ]
+    };
+    for s in sweep(depth, 50).into_iter().filter(|&s| s > 0 && s < 500) {
+        let rows = if s < 50 {
+            let at = |f: Finding| pin(f, 2000 - s, 2000 - s);
+            let sum = if 2 * s > 80 {
+                vec![at(Finding::length(2 * s))]
+            } else {
+                vec![]
+            };
+            [
+                vec![at(count(2))],
+                sum,
+                vec![],
+                vec![],
+                vec![at(count(2))],
+                vec![],
+            ]
+        } else {
+            Default::default()
+        };
+        case(
+            format!("outside_two/{}", side(s, 50)),
+            &outside_two(s),
+            rows,
+        );
+    }
+    case(
+        "lef_figure_a".into(),
+        &outside_two(40),
+        [
+            vec![count(2).at(980, 980)],
+            vec![],
+            vec![],
+            vec![],
+            vec![count(2).at(980, 980)],
+            vec![],
+        ],
+    );
+    case(
+        "lef_figure_d".into(),
+        &[
+            (0, 0),
+            (1000, 0),
+            (1000, 920),
+            (960, 920),
+            (960, 960),
+            (920, 960),
+            (920, 1000),
+            (0, 1000),
+        ],
+        [
+            vec![count(4).at(960, 960)],
+            vec![Finding::length(160).at(960, 960)],
+            vec![],
+            vec![],
+            vec![count(4).at(960, 960)],
+            vec![count(4).at(960, 960)],
+        ],
+    );
+    case(
+        "inside_two".into(),
+        &[
+            (0, 0),
+            (1000, 0),
+            (1000, 500),
+            (540, 500),
+            (540, 540),
+            (500, 540),
+            (500, 1000),
+            (0, 1000),
+        ],
+        [
+            vec![],
+            vec![],
+            vec![count(2).at(520, 520)],
+            vec![],
+            vec![count(2).at(520, 520)],
+            vec![],
+        ],
+    );
+    case(
+        "step".into(),
+        &[
+            (0, 0),
+            (1000, 0),
+            (1000, 500),
+            (500, 500),
+            (500, 540),
+            (0, 540),
+        ],
+        [
+            vec![],
+            vec![],
+            vec![],
+            vec![count(1).at(500, 520)],
+            vec![],
+            vec![],
+        ],
+    );
+    case(
+        "line_end".into(),
+        &[(0, 0), (1000, 0), (1000, 40), (0, 40)],
+        Default::default(),
+    );
+    every_placement(cases)
 }
 
 /// `length(met1.edges()) >= 101nm` (`edge_min_length`) and

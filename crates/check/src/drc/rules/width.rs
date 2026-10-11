@@ -6,6 +6,7 @@
 //! input domain.
 
 use super::{centre, mid, owners_of, Verdict, REFUSED};
+use crate::drc::ruleset::StepKind;
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
@@ -303,6 +304,120 @@ pub(crate) fn min_edge_length(
                     },
                     measured: Measurement::Length(length),
                     limit: Measurement::Length(limit),
+                    shapes: (owner, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The direction an axis-aligned edge runs, as signs along x and y.
+fn heading(a: Point, b: Point) -> (i64, i64) {
+    ((b.x - a.x).raw().signum(), (b.y - a.y).raw().signum())
+}
+
+/// LEF `MINSTEP` variants (DRC-020): runs of consecutive edges shorter than
+/// `limit` along each ring of the merged layer, classified by the long edges
+/// on either side, rejected by `kind` and `length_sum` as
+/// [`Rule::MinStep`](crate::drc::Rule::MinStep) states. One violation per
+/// run at the centre of its vertices' box. `examined` counts runs.
+pub(crate) fn min_step(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (limit, kind, length_sum): (Dbu, StepKind, Option<Dbu>),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let mut examined = 0u64;
+    let (mut points, mut short) = (Vec::new(), Vec::new());
+    for (idx, owner) in (0u32..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        let poly = s.layer_out.get(idx);
+        for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+            let (xs, ys) = ring.coords();
+            points.clear();
+            points.extend(xs.iter().zip(ys).map(|(&x, &y)| Point { x, y }));
+            let n = points.len();
+            let length = |i: usize| {
+                let (a, b) = (points[i], points[(i + 1) % n]);
+                (b.x - a.x).abs() + (b.y - a.y).abs()
+            };
+            short.clear();
+            short.extend((0..n).map(|i| length(i) < limit));
+            // Each run starts after a long edge; a ring with none is one run.
+            let first_long = (0..n).find(|&i| !short[i]);
+            let start = first_long.map_or(0, |i| i + 1);
+            let mut i = 0;
+            while i < n {
+                let at = (start + i) % n;
+                if !short[at] {
+                    i += 1;
+                    continue;
+                }
+                let mut count = 0usize;
+                let mut sum = Dbu::new_unchecked(0);
+                let mut bbox = Bbox::point(points[at].x, points[at].y);
+                while i < n && short[(start + i) % n] {
+                    let edge = (start + i) % n;
+                    let end = points[(edge + 1) % n];
+                    bbox = bbox.include(end.x, end.y);
+                    sum = sum + length(edge);
+                    count += 1;
+                    i += 1;
+                }
+                examined += 1;
+                // The long edges on either side, when the ring has one.
+                let corner = first_long.map(|_| {
+                    let before = (at + n - 1) % n;
+                    let after = (at + count) % n;
+                    let d1 = heading(points[before], points[(before + 1) % n]);
+                    let d2 = heading(points[after], points[(after + 1) % n]);
+                    let cross = d1.0 * d2.1 - d1.1 * d2.0;
+                    let dot = d1.0 * d2.0 + d1.1 * d2.1;
+                    match (cross.signum(), dot.signum()) {
+                        (1, _) => Some(StepKind::OutsideCorner),
+                        (-1, _) => Some(StepKind::InsideCorner),
+                        (_, 1) => Some(StepKind::Step),
+                        _ => None,
+                    }
+                });
+                let run = u32::try_from(count).expect("a ring's edges fit a u32");
+                let (measured, limit) = match kind {
+                    StepKind::MaxEdges(most) if run > u32::from(most) => {
+                        (Measurement::Count(run), Measurement::Count(u32::from(most)))
+                    }
+                    StepKind::MaxEdges(_) => continue,
+                    _ if corner.flatten() != Some(kind) => continue,
+                    _ => {
+                        let fewest = if kind == StepKind::Step { 1 } else { 2 };
+                        match length_sum {
+                            _ if run < fewest => continue,
+                            Some(allowed) if sum <= allowed => continue,
+                            Some(allowed) => {
+                                (Measurement::Length(sum), Measurement::Length(allowed))
+                            }
+                            None => (Measurement::Count(run), Measurement::Count(fewest - 1)),
+                        }
+                    }
+                };
+                out.push(Violation {
+                    rule,
+                    layer,
+                    severity: Severity::Error,
+                    at: Point {
+                        x: mid(bbox.xlo, bbox.xhi),
+                        y: mid(bbox.ylo, bbox.yhi),
+                    },
+                    measured,
+                    limit,
                     shapes: (owner, None),
                 });
             }

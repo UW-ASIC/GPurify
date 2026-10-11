@@ -1153,6 +1153,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 }
                 exact("min_interior_angle", Key::Point, Value::Ignore)
             }
+            Rule::MinStep { .. } => (
+                "min_step",
+                Verdict::None("KLayout has no check on runs of short edges"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::PolygonValidity { .. } => (
                 "polygon_validity",
                 Verdict::None(

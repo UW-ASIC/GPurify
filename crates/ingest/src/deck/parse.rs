@@ -1645,6 +1645,16 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::Word(words) => match value {
+                Val::Word { name, .. } if words.contains(&name.as_str()) => {
+                    let at = words
+                        .iter()
+                        .position(|word| *word == name.as_str())
+                        .expect("listed");
+                    ParamSrc::Value(ParamValue::Count(u32::try_from(at).expect("few words")))
+                }
+                other => return Err(self.wrong(other, &words.join(" or "), label)),
+            },
             Dim::Nets => match value {
                 Val::Word { name, .. } if name == "same" || name == "different" => {
                     ParamSrc::Value(ParamValue::Flag(name == "same"))
@@ -2134,5 +2144,6 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::LengthList => "a list of lengths",
         Dim::LengthRows => "a list of rows of lengths",
         Dim::LengthPairList(_) => "a list of pairs of lengths",
+        Dim::Word(_) => "one of the listed words",
     }
 }
