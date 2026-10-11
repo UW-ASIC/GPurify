@@ -79,7 +79,10 @@ jobs:
 
   fuzz:
     name: fuzz ${{ matrix.target }}
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
+    # Not on a pull request: the nightly run on the base branch covers it,
+    # and a pull request's heavy tier proves only its differentials and the
+    # slow tests, which keeps the runners free for the merge tier.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -136,7 +139,10 @@ jobs:
 
   mutants:
     name: cargo mutants (geom, check)
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
+    # Not on a pull request: the nightly run on the base branch covers it,
+    # and a pull request's heavy tier proves only its differentials and the
+    # slow tests, which keeps the runners free for the merge tier.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -182,7 +188,10 @@ jobs:
 
   coverage:
     name: coverage floor (geom, check)
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
+    # Not on a pull request: the nightly run on the base branch covers it,
+    # and a pull request's heavy tier proves only its differentials and the
+    # slow tests, which keeps the runners free for the merge tier.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
