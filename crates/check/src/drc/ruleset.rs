@@ -667,7 +667,8 @@ pub enum Rule {
     ///
     /// Limits: a gate that bends or carries a stub inside B has edges inside
     /// B along both axes, so A crosses B along neither and the gate measures
-    /// 0 (fails closed).
+    /// 0 (fails closed); [`Rule::GateCorner`]'s `bend` reports the bend
+    /// itself.
     MinExtension {
         /// The extending layer (A); findings are reported on it.
         layer: LayerId,
