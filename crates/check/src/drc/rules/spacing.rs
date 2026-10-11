@@ -2,8 +2,9 @@
 //!
 //! Data in: one layer (two for `min_spacing_diff`), indexed and pruned at the
 //! rule's own limit — never narrower, or a dropped pair reports clean.
-//! Data out: one violation per offending pair, at the midpoint of the gap. Pairs
-//! within one merged figure (touching shapes) have no gap and are skipped.
+//! Data out: one violation per offending pair, at the midpoint of the pair of
+//! points it measured (`nearest`). Pairs within one merged figure (touching
+//! shapes) have no gap and are skipped.
 
 use super::{
     gap_midpoint, join_nested, label_pairs_into, owners_of, pair_distances_into, rects_ring_dist2,
@@ -21,20 +22,112 @@ use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_ingest::StrId;
+use std::cmp::Reverse;
+
+/// The nearest approach among `pairs` of axis-parallel segments: its squared
+/// distance and the midpoint of the two nearest points (floored). Where the
+/// two nearest segments run alongside each other at that distance, the
+/// nearest points are a stretch of pairs, and the midpoint is that stretch's
+/// middle; among several nearest pairs, the longest stretch wins (a facing
+/// run over a corner), then the first. `None` when `pairs` is empty.
+fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
+    pairs
+        .map(|(p, q)| {
+            let (pb, qb) = (seg_bbox(p), seg_bbox(q));
+            let along = |lo: Dbu, hi: Dbu, other_lo: Dbu, other_hi: Dbu| {
+                (hi.min(other_hi) - lo.max(other_lo)).raw()
+            };
+            let run = along(pb.xlo, pb.xhi, qb.xlo, qb.xhi)
+                .max(along(pb.ylo, pb.yhi, qb.ylo, qb.yhi))
+                .max(0);
+            // For axis-parallel segments, the middle of their boxes' gap.
+            (seg_seg_dist2(p, q), Reverse(run), gap_midpoint(pb, qb))
+        })
+        .min_by_key(|&(d2, run, _)| (d2, run))
+        .map(|(d2, _, at)| (d2, at))
+}
+
+/// Every edge of one ring paired with every edge of another.
+fn ring_pairs<'a>(
+    (axs, ays): (&'a [Dbu], &'a [Dbu]),
+    (bxs, bys): (&'a [Dbu], &'a [Dbu]),
+) -> impl Iterator<Item = (Seg, Seg)> + 'a {
+    ring_segs(axs, ays).flat_map(move |p| ring_segs(bxs, bys).map(move |q| (p, q)))
+}
+
+/// Every side of each of `rects` paired with every edge of a ring.
+fn rect_ring_pairs<'a>(
+    rects: &'a [Bbox],
+    ring: (&'a [Dbu], &'a [Dbu]),
+) -> impl Iterator<Item = (Seg, Seg)> + 'a {
+    rects.iter().flat_map(move |r| {
+        let corner = |x, y| Point { x, y };
+        let c = [
+            corner(r.xlo, r.ylo),
+            corner(r.xhi, r.ylo),
+            corner(r.xhi, r.yhi),
+            corner(r.xlo, r.yhi),
+        ];
+        (0..4)
+            .map(move |i| Seg {
+                a: c[i],
+                b: c[(i + 1) % 4],
+            })
+            .flat_map(move |side| ring_segs(ring.0, ring.1).map(move |e| (side, e)))
+    })
+}
+
+/// Where a pair measured `d2` apart is reported: the midpoint of `found`, its
+/// nearest approach ([`nearest`]), when that measures `d2`; else (a pair
+/// nested one in the other, measured 0 with its boundaries apart) the middle
+/// of the overlap of the two rows' boxes.
+fn marker(
+    store: &GeometryStore,
+    (a, b): (PolyId, PolyId),
+    d2: DbuArea,
+    found: Option<(DbuArea, Point)>,
+) -> Point {
+    found.filter(|&(near, _)| near == d2).map_or_else(
+        || gap_midpoint(store.poly_bbox(a), store.poly_bbox(b)),
+        |(_, at)| at,
+    )
+}
+
+/// [`marker`] for a pair measured boundary to boundary, whole shape to whole
+/// shape. Quadratic in the two ring sizes, as [`super::poly_dist2`]; only a
+/// violation pays it.
+fn whole_at(store: &GeometryStore, (a, b): (PolyId, PolyId), d2: DbuArea) -> Point {
+    let found = nearest(ring_pairs(store.poly_verts(a), store.poly_verts(b)));
+    marker(store, (a, b), d2, found)
+}
+
+/// [`marker`] for a pair measured from the wide parts of either shape to the
+/// other's ring.
+fn wide_at(
+    store: &GeometryStore,
+    (a, b): (PolyId, PolyId),
+    (wide_a, wide_b): (&[Bbox], &[Bbox]),
+    d2: DbuArea,
+) -> Point {
+    let found = nearest(
+        rect_ring_pairs(wide_a, store.poly_verts(b))
+            .chain(rect_ring_pairs(wide_b, store.poly_verts(a))),
+    );
+    marker(store, (a, b), d2, found)
+}
 
 fn spacing_violation(
-    store: &GeometryStore,
     rule: StrId,
     layer: LayerId,
     (a, b): (PolyId, PolyId),
-    dist2: DbuArea,
+    (dist2, at): (DbuArea, Point),
     limit: Dbu,
 ) -> Violation {
     Violation {
         rule,
         layer,
         severity: Severity::Error,
-        at: gap_midpoint(store.poly_bbox(a), store.poly_bbox(b)),
+        at,
         // `isqrt` rounds toward zero: a report never overstates the gap.
         measured: Measurement::Length(isqrt(dist2)),
         limit: Measurement::Length(limit),
@@ -79,10 +172,11 @@ fn prepare_merged(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scr
 }
 
 /// The one same-layer kernel: every candidate pair in two different figures
-/// that `measure` judges is examined, and reported when closer than `limit`.
-/// `measure` takes the pair and its distance and returns the distance to
-/// judge, `None` for a pair the rule does not judge. Returns the examined
-/// count.
+/// that `measure` judges is examined, and reported when closer than `limit`,
+/// at the point `at` gives. `measure` takes the pair and its distance and
+/// returns the distance to judge, `None` for a pair the rule does not judge;
+/// `at` takes the pair and the judged distance. Returns the examined count.
+#[allow(clippy::too_many_arguments, reason = "the rule row, then two closures")]
 fn judged_pairs(
     store: &GeometryStore,
     rule: StrId,
@@ -91,6 +185,7 @@ fn judged_pairs(
     s: &Scratch,
     out: &mut Violations,
     measure: impl Fn(PolyId, PolyId, DbuArea) -> Option<DbuArea>,
+    at: impl Fn(PolyId, PolyId, DbuArea) -> Point,
 ) -> u64 {
     let first_row = store.polys_on_layer(layer).start;
     let limit2 = limit.mul_wide(limit);
@@ -102,7 +197,8 @@ fn judged_pairs(
         if let Some(d2) = measure(a, b, whole) {
             examined += 1;
             if d2 < limit2 {
-                out.push(spacing_violation(store, rule, layer, (a, b), d2, limit));
+                let found = (d2, at(a, b, d2));
+                out.push(spacing_violation(rule, layer, (a, b), found, limit));
             }
         }
     }
@@ -121,7 +217,16 @@ pub(crate) fn min_spacing(
     if !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    judged_pairs(store, rule, layer, limit, s, out, |_, _, d2| Some(d2));
+    judged_pairs(
+        store,
+        rule,
+        layer,
+        limit,
+        s,
+        out,
+        |_, _, d2| Some(d2),
+        |a, b, d2| whole_at(store, (a, b), d2),
+    );
     (Outcome::Ran, s.pairs.len() as u64)
 }
 
@@ -149,7 +254,8 @@ pub(crate) fn min_spacing_diff(
     let limit2 = limit.mul_wide(limit);
     for (&pair, &d2) in s.pairs.iter().zip(&s.dists) {
         if d2 < limit2 {
-            out.push(spacing_violation(store, rule, a_layer, pair, d2, limit));
+            let found = (d2, whole_at(store, pair, d2));
+            out.push(spacing_violation(rule, a_layer, pair, found, limit));
         }
     }
     (Outcome::Ran, s.pairs.len() as u64)
@@ -178,10 +284,23 @@ pub(crate) fn eol_spacing(
         .filter(|&((.., lo, hi), _)| hi - lo < eol_width.raw())
         .collect();
     ends.sort_unstable_by_key(|&(line, _)| line);
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, _| {
-        let hit = |eol, other| eol_hit(store, eol, other, &ends, eol_width, limit);
-        hit(a, b).into_iter().chain(hit(b, a)).min()
-    });
+    // The nearest approach of either shape to an end of line the other lies on.
+    let approach = |a, b| {
+        let mut hits = Vec::new();
+        eol_hits(store, (a, b), &ends, (eol_width, limit), &mut hits);
+        eol_hits(store, (b, a), &ends, (eol_width, limit), &mut hits);
+        nearest(hits.into_iter())
+    };
+    let examined = judged_pairs(
+        store,
+        rule,
+        layer,
+        limit,
+        s,
+        out,
+        |a, b, _| approach(a, b).map(|(d2, _)| d2),
+        |a, b, d2| marker(store, (a, b), d2, approach(a, b)),
+    );
     (Outcome::Ran, examined)
 }
 
@@ -222,22 +341,21 @@ fn eol_zone(edge: Seg, depth: Dbu) -> Bbox {
     }
 }
 
-/// Closest approach of `other` to an end of line `eol` lies on, inside that
-/// end's keep-out, measured from the part of the end `eol` draws. `ends` are
-/// the merged layer's ends of line (edges shorter than `eol_width`), sorted by
-/// line; a drawn edge lies on one when they share a line, a direction and a
-/// stretch of it. `None` when no edge of `other` reaches into such a keep-out.
-fn eol_hit(
+/// The pairs of segments an end-of-line pair measures, into `out`: each part
+/// of an end of line `eol` draws, with each edge of `other` reaching into that
+/// end's keep-out. `ends` are the merged layer's ends of line (edges shorter
+/// than `eol_width`), sorted by line; a drawn edge lies on one when they share
+/// a line, a direction and a stretch of it. Nothing when no edge of `other`
+/// reaches into such a keep-out.
+fn eol_hits(
     store: &GeometryStore,
-    eol: PolyId,
-    other: PolyId,
+    (eol, other): (PolyId, PolyId),
     ends: &[(Line, Seg)],
-    eol_width: Dbu,
-    limit: Dbu,
-) -> Option<DbuArea> {
+    (eol_width, limit): (Dbu, Dbu),
+    out: &mut Vec<(Seg, Seg)>,
+) {
     let (xs, ys) = store.poly_verts(eol);
     let (oxs, oys) = store.poly_verts(other);
-    let mut best: Option<DbuArea> = None;
     for edge in ring_segs(xs, ys) {
         let (vertical, pos, forward, lo, hi) = line_of(edge);
         // An end overlapping `edge` is shorter than `eol_width`: it starts past this.
@@ -253,15 +371,13 @@ fn eol_hit(
         for &((.., start, end), end_of_line) in on_edge {
             let zone = eol_zone(end_of_line, limit);
             let piece = on_line(vertical, pos, start.max(lo), end.min(hi));
-            for far in ring_segs(oxs, oys) {
-                if zone.overlaps(seg_bbox(far)) {
-                    let dist2 = seg_seg_dist2(piece, far);
-                    best = Some(best.map_or(dist2, |seen| seen.min(dist2)));
-                }
-            }
+            out.extend(
+                ring_segs(oxs, oys)
+                    .filter(|&far| zone.overlaps(seg_bbox(far)))
+                    .map(|far| (piece, far)),
+            );
         }
     }
-    best
 }
 
 /// The segment from `from` to `to` along the line `pos`.
@@ -411,9 +527,16 @@ pub(crate) fn net_spacing(
     if unnetted || !prepare(store, layer, limit, s) {
         return REFUSED;
     }
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
-        (nets.same_net(a, b) == same_net).then_some(d2)
-    });
+    let examined = judged_pairs(
+        store,
+        rule,
+        layer,
+        limit,
+        s,
+        out,
+        |a, b, d2| (nets.same_net(a, b) == same_net).then_some(d2),
+        |a, b, d2| whole_at(store, (a, b), d2),
+    );
     (Outcome::Ran, examined)
 }
 
@@ -488,12 +611,16 @@ pub(crate) fn spacing_table(
             }
             let d2 = rects_ring_dist2(wide_a, bxs, bys).min(rects_ring_dist2(wide_b, axs, ays));
             let need = table.at(row, column(row));
-            (d2 < need.mul_wide(need).raw()).then_some((DbuArea::new(d2), need))
+            let d2 = DbuArea::new(d2);
+            (d2 < need.mul_wide(need))
+                .then(|| ((d2, wide_at(store, (a, b), (wide_a, wide_b), d2)), need))
         });
         let need = table.at(0, column(0));
-        let failed = failed.or_else(|| (whole < need.mul_wide(need)).then_some((whole, need)));
-        if let Some((d2, need)) = failed {
-            out.push(spacing_violation(store, rule, layer, (a, b), d2, need));
+        let failed = failed.or_else(|| {
+            (whole < need.mul_wide(need)).then(|| ((whole, whole_at(store, (a, b), whole)), need))
+        });
+        if let Some((found, need)) = failed {
+            out.push(spacing_violation(rule, layer, (a, b), found, need));
         }
     }
     (Outcome::Ran, examined)
@@ -523,9 +650,16 @@ pub(crate) fn prl_spacing(
     let runs = facing_runs(store, layer, limit, s);
     let first_row = store.polys_on_layer(layer).start;
     let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, d2| {
-        (run_within(&runs, label(a), label(b), limit) >= threshold.raw()).then_some(d2)
-    });
+    let examined = judged_pairs(
+        store,
+        rule,
+        layer,
+        limit,
+        s,
+        out,
+        |a, b, d2| (run_within(&runs, label(a), label(b), limit) >= threshold.raw()).then_some(d2),
+        |a, b, d2| whole_at(store, (a, b), d2),
+    );
     (Outcome::Ran, examined)
 }
 
@@ -553,9 +687,16 @@ pub(crate) fn corner_to_corner(
         })
         .collect();
     corners.sort_unstable();
-    let examined = judged_pairs(store, rule, layer, limit, s, out, |a, b, _| {
-        corner_gap(store, a, b, &corners)
-    });
+    let examined = judged_pairs(
+        store,
+        rule,
+        layer,
+        limit,
+        s,
+        out,
+        |a, b, _| corner_gap(store, a, b, &corners).map(|(d2, _)| d2),
+        |a, b, d2| marker(store, (a, b), d2, corner_gap(store, a, b, &corners)),
+    );
     (Outcome::Ran, examined)
 }
 
@@ -582,26 +723,35 @@ fn convex_corners<'a>(xs: &'a [Dbu], ys: &'a [Dbu]) -> impl Iterator<Item = Corn
     })
 }
 
-/// Squared distance between the nearest convex corners of the merged layer
-/// (`corners`, sorted) that face each other, one at a vertex of `a` and one at
-/// a vertex of `b`: each beyond the other on both axes, out along its own
-/// diagonal. `None` when there are none.
-fn corner_gap(store: &GeometryStore, a: PolyId, b: PolyId, corners: &[Corner]) -> Option<DbuArea> {
+/// The nearest convex corners of the merged layer (`corners`, sorted) that
+/// face each other, one at a vertex of `a` and one at a vertex of `b`: each
+/// beyond the other on both axes, out along its own diagonal. Their squared
+/// distance and midpoint ([`nearest`]), or `None` when there are none.
+fn corner_gap(
+    store: &GeometryStore,
+    a: PolyId,
+    b: PolyId,
+    corners: &[Corner],
+) -> Option<(DbuArea, Point)> {
     let merged = |row: PolyId| {
         let (xs, ys) = store.poly_verts(row);
         convex_corners(xs, ys).filter(move |corner| corners.binary_search(corner).is_ok())
     };
     let theirs: Vec<Corner> = merged(b).collect();
-    merged(a)
-        .flat_map(|(x, y, sx, sy)| {
-            theirs.iter().filter_map(move |&(bx, by, bsx, bsy)| {
-                let facing =
-                    (bx - x).signum() == sx && (by - y).signum() == sy && (bsx, bsy) == (-sx, -sy);
-                let (dx, dy) = (i128::from(bx - x), i128::from(by - y));
-                facing.then(|| DbuArea::new(dx * dx + dy * dy))
-            })
+    let point = |x: i64, y: i64| {
+        let p = Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        };
+        Seg { a: p, b: p }
+    };
+    nearest(merged(a).flat_map(|(x, y, sx, sy)| {
+        theirs.iter().filter_map(move |&(bx, by, bsx, bsy)| {
+            let facing =
+                (bx - x).signum() == sx && (by - y).signum() == sy && (bsx, bsy) == (-sx, -sy);
+            facing.then(|| (point(x, y), point(bx, by)))
         })
-        .min()
+    }))
 }
 
 /// Wide-metal spacing, measured from the wide part of a shape: the region
@@ -658,14 +808,9 @@ pub(crate) fn wide_dependent(
         let (bxs, bys) = ring(b);
         let d2 = rects_ring_dist2(wide_a, bxs, bys).min(rects_ring_dist2(wide_b, axs, ays));
         if d2 < limit2 {
-            out.push(spacing_violation(
-                store,
-                rule,
-                layer,
-                (a, b),
-                DbuArea::new(d2),
-                limit,
-            ));
+            let d2 = DbuArea::new(d2);
+            let found = (d2, wide_at(store, (a, b), (wide_a, wide_b), d2));
+            out.push(spacing_violation(rule, layer, (a, b), found, limit));
         }
     }
     (Outcome::Ran, examined)

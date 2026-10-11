@@ -124,8 +124,11 @@ How keys are compared:
 - Keys compare per rule id, as sets. GPurify emits one violation per drawn-row pair and KLayout
   one per edge pair, so both sides dedupe first.
 - **Secondary check 1, marker.** GPurify's `at` lies in the closed KLayout figure of its key, to
-  within one grid step. This does not apply to spacing: there `at` is the midpoint of the gap
-  between the two rows' bboxes (`gap_midpoint`), which is not a geometric point of the violation.
+  within one grid step. For the spacing kinds (`spacing.rs`) `at` is in the gap instead: the
+  midpoint of the two nearest points the pair measured, the middle of their stretch where they
+  run alongside (`nearest`; F66, fixed in B24); a pair nested in the other (`min_spacing_diff`
+  only) is at the middle of the overlap of the two rows' bboxes. Comparing it with the midpoint
+  of KLayout's nearest edge pair is not verified (how `isolated` trims an edge pair is open).
 - **Secondary check 2, measured value.** For distance kinds, GPurify's `measured` (rounded down
   to whole DBU, `isqrt`) equals the minimum `EdgePair#distance / 2` over the key, to within 1 DBU.
 
@@ -385,7 +388,8 @@ emit(id, L.notch(LIM, projection, without_touching_corners))
 - Every candidate pair from two different components whose exact Euclidean boundary distance is
   < limit is one violation, keyed by the row pair.
 - An island inside a hole is measured to the hole ring.
-- `at` is the gap midpoint of the two rows' bboxes; `examined` counts every candidate pair.
+- `at` is the midpoint of the nearest points of the two rows (see a4, secondary check 1);
+  `examined` counts every candidate pair.
 
 **KLayout**
 

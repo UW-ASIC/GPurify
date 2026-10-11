@@ -26,6 +26,13 @@ use gpurify_ingest::{StrId, StrTable};
 /// - A distance between shapes is Euclidean, boundary to boundary, unless the
 ///   variant says otherwise. The comparison is exact. `measured` is floored to
 ///   a whole grid unit, so a report never overstates a gap.
+/// - A pair's "measured points" are the two nearest points of what the
+///   variant measured between the pair, one on each side, and the finding
+///   sits at their midpoint (floored to the grid). Where the two run
+///   alongside each other at that distance, the nearest points are a
+///   stretch, and the finding sits at its middle; among several nearest
+///   stretches the longest, then the first found. So a marker lies in the
+///   gap that was measured, not where the shapes' bounding boxes face.
 /// - `shapes` names store rows ([`PolyId`](gpurify_geom::PolyId)). A hole of a
 ///   drawn polygon is a row of its own, so a pair may name a hole's ring.
 /// - Every finding is a [`Severity::Error`](crate::report::Severity::Error).
@@ -171,9 +178,9 @@ pub enum Rule {
     /// inside another shape's hole keeps its gap to the hole's edge.
     ///
     /// One violation per pair of rows in different figures closer than
-    /// `limit`, at the middle of the gap between their bounding boxes
-    /// (`shapes` is the pair). `examined` counts every pair of rows whose boxes
-    /// come within `limit`, pairs inside one figure included.
+    /// `limit`, at the midpoint of its measured points (`shapes` is the
+    /// pair). `examined` counts every pair of rows whose boxes come within
+    /// `limit`, pairs inside one figure included.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-023, DRC-060. Rules: sky130 m1.2 and ct.2, GF180 Mn.2a, IHP M1.b,
@@ -190,8 +197,10 @@ pub enum Rule {
     /// exempt: a pair that touches or overlaps, or one nested in the other,
     /// measures 0 and is a violation.
     ///
-    /// One violation per offending pair, reported on layer `a`, at the middle
-    /// of the gap between their bounding boxes. `examined` counts pairs whose
+    /// One violation per offending pair, reported on layer `a`, at the
+    /// midpoint of its measured points: for a pair that touches or crosses,
+    /// where the boundaries meet; for one nested in the other, the middle of
+    /// the overlap of their bounding boxes. `examined` counts pairs whose
     /// boxes come within `limit`.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
@@ -221,8 +230,9 @@ pub enum Rule {
     /// the keep-out of an end of line the other lies on, and the pair measures
     /// the nearest such approach, from the part of the end that shape draws.
     ///
-    /// One violation per pair closer than `limit`, at the middle of the gap
-    /// between their bounding boxes. `examined` counts the pairs.
+    /// One violation per pair closer than `limit`, at the midpoint of its
+    /// measured points (on the end of line and the edge in its keep-out).
+    /// `examined` counts the pairs.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-029, DRC-031. Rules: ASAP7 M1.S.2 to M1.S.5; LEF
@@ -255,9 +265,8 @@ pub enum Rule {
     /// runs only where it comes closer. A pair whose figures run at least
     /// `prl_threshold` is held to `limit`.
     ///
-    /// One violation per offending pair, at the middle of the gap between
-    /// their bounding boxes. `examined` counts pairs whose run reaches
-    /// `prl_threshold`.
+    /// One violation per offending pair, at the midpoint of its measured
+    /// points. `examined` counts pairs whose run reaches `prl_threshold`.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-026. Rules: IHP CntB.b1; LEF `SPACINGTABLE PARALLELRUNLENGTH`;
@@ -283,8 +292,8 @@ pub enum Rule {
     /// are [`Rule::MinSpacing`]'s; for two rectangles, those are the pairs
     /// whose bounding boxes overlap on an axis.
     ///
-    /// One violation per offending pair, at the middle of the gap between
-    /// their bounding boxes. `examined` counts the pairs with facing corners.
+    /// One violation per offending pair, midway between its nearest facing
+    /// corners. `examined` counts the pairs with facing corners.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-032. Rules: ASAP7 M1.S.6, GF180 MT30.3; `LEF58_CORNERSPACING`;
@@ -309,8 +318,8 @@ pub enum Rule {
     /// held to this limit. Pairs are shapes in different merged figures where
     /// either has a wide part, measured from that part to the other shape.
     ///
-    /// One violation per offending pair, at the middle of the gap between
-    /// their bounding boxes. `examined` counts the pairs.
+    /// One violation per offending pair, at the midpoint of its measured
+    /// points (one on a wide part). `examined` counts the pairs.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-025. Rules: sky130 m1.3b and m3.3c, GF180 Mn.2b, IHP M1.e and
@@ -825,9 +834,8 @@ pub enum Rule {
     /// `L` must be a conductor. Pairs are shapes in different merged figures
     /// whose net relation is the one asked for.
     ///
-    /// One violation per offending pair, at the middle of the gap between
-    /// their bounding boxes. `examined` counts the pairs of the asked
-    /// relation. Records [`Outcome::Refused`] when the run has no nets
+    /// One violation per offending pair, at the midpoint of its measured
+    /// points. `examined` counts the pairs of the asked relation. Records [`Outcome::Refused`] when the run has no nets
     /// ([`RuleSet::run`]) or a shape on the layer carries no net.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
@@ -858,8 +866,7 @@ pub enum Rule {
     ///
     /// One violation per pair, at its highest failing row, with `limit` that
     /// row's cell and `measured` the distance that row measured, at the
-    /// middle of the gap between their bounding boxes. `examined` counts the
-    /// pairs.
+    /// midpoint of the points that row measured. `examined` counts the pairs.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-025, DRC-026, DRC-027. Rules: IHP M1.b, M1.e and M1.f; LEF
@@ -883,9 +890,9 @@ pub enum Rule {
     /// limit too (sky130 m1.3a "features attached to or extending from
     /// `huge_met1` for a distance of up to 0.28 um").
     ///
-    /// One violation per offending pair, at the middle of the gap between
-    /// their bounding boxes. `examined` counts pairs where either shape has a
-    /// wide part.
+    /// One violation per offending pair, at the midpoint of its measured
+    /// points (one on a grown wide part). `examined` counts pairs where either
+    /// shape has a wide part.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-028. Rules: sky130 m1.3a; LEF `SPACING RANGE INFLUENCE`.

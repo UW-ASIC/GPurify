@@ -1039,7 +1039,7 @@ fn diagonals(depth: Depth) -> Vec<i64> {
 }
 
 /// Two 1000 squares `d` apart on both axes, and what a Euclidean minimum of
-/// 101 finds: the floored gap, at the middle of the gap between the boxes.
+/// 101 finds: the floored gap, midway between the facing corners.
 fn diagonal_pair(layers: (&str, &str), d: i64) -> (Layout, Vec<Finding>) {
     let layout = Layout::default().rect(layers.0, 0, 0, 1000, 1000).rect(
         layers.1,
@@ -1057,9 +1057,31 @@ fn diagonal_pair(layers: (&str, &str), d: i64) -> (Layout, Vec<Finding>) {
     (layout, findings)
 }
 
+/// The square `[0, 1000]²` and a hook beside it: the hook's left side,
+/// x = 1050, runs down from y = 500 to -500, facing the square's right edge
+/// 50 away over y = 0..500; its inner corner (1060, 1060) faces the square's
+/// corner (1000, 1000) diagonally, √7200 = 84.9 away. The hook's box spans
+/// y = -500..1500, so the boxes' gap is centred at (1025, 500), on neither.
+fn hook_beside_a_square() -> Layout {
+    Layout::default().rect("met1", 0, 0, 1000, 1000).polygon(
+        "met1",
+        &[
+            (1050, -500),
+            (1600, -500),
+            (1600, 1500),
+            (1060, 1500),
+            (1060, 1060),
+            (1500, 1060),
+            (1500, 500),
+            (1050, 500),
+        ],
+    )
+}
+
 /// `space(met1) >= 101nm` (`min_spacing`, DRC-023): one finding per pair of
 /// rows in different merged figures closer than the limit, Euclidean, at the
-/// middle of the gap between their boxes. At the limit is legal.
+/// midpoint of the nearest points (the middle of the stretch where the two
+/// run alongside at that distance). At the limit is legal.
 ///
 /// Side by side and corner to corner (Euclidean: a Chebyshev or Manhattan gap
 /// reads differently); touching, overlapping, corner-touching and nested
@@ -1068,7 +1090,8 @@ fn diagonal_pair(layers: (&str, &str), d: i64) -> (Layout, Vec<Finding>) {
 /// edge), and in a hole closed by four bands (one finding per band); a square
 /// tucked into an L's corner (the boxes overlap, the shapes do not); a figure
 /// drawn as two halves near a bar (one finding per row pair); three bars with
-/// two short gaps.
+/// two short gaps; a hook beside a square, marked on the 50 gap it measures,
+/// not on its box (F66).
 fn min_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 101;
     let deck = one_layer_deck("rule s space(met1) >= 101nm");
@@ -1164,6 +1187,13 @@ fn min_spacing(depth: Depth) -> Vec<Fixture> {
         let (layout, findings) = diagonal_pair(("met1", "met1"), d);
         case(format!("diagonal/d{d}"), layout, findings);
     }
+    // The nearest points are x = 1000 and x = 1050 over y = 0..500: marked
+    // at the middle of that stretch (the corners' 84.9 is no nearer).
+    case(
+        "hook_beside_a_square".into(),
+        hook_beside_a_square(),
+        vec![pin(Finding::length(50), 1000 + 1050, 500)],
+    );
     for (shape, layout) in [
         ("touching", met1(&[[0, 0, 500, 2000], [500, 0, 1000, 2000]])),
         (
@@ -1204,8 +1234,8 @@ fn min_spacing(depth: Depth) -> Vec<Fixture> {
 
 /// `space(poly, diff) >= 101nm` and the same rule with the layers swapped
 /// (`min_spacing_diff`, DRC-047): one finding per pair of a poly and a diff
-/// shape closer than the limit, Euclidean, at the middle of the gap between
-/// their boxes. Nothing is exempt: touching, overlapping, nested and
+/// shape closer than the limit, Euclidean, at the midpoint of the nearest
+/// points. Nothing is exempt: touching, overlapping, nested and
 /// corner-touching pairs measure 0. Shapes are not merged, so a diff drawn as
 /// two halves is two pairs. Two poly shapes near each other are not measured.
 /// The distance is symmetric, so both rules find the same.
@@ -1319,7 +1349,7 @@ fn min_spacing_diff(depth: Depth) -> Vec<Fixture> {
 /// DRC-031): an edge strictly shorter than 200 is an end of line; its
 /// keep-out is its own span pushed 101 straight out. One finding per pair of
 /// separate figures with an edge in a keep-out, measuring the nearest
-/// approach, at the middle of the gap between their boxes.
+/// approach, at its midpoint.
 ///
 /// Tip to tip and tip to side (not told apart), the gap swept; the line width
 /// swept around `eol_width` at a gap of 50 (a 200-wide end is not an end of
@@ -1427,7 +1457,8 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
     ));
     // A square hole with a 100-wide, 50-deep slot in its top. The slot's top
     // edge is an end of line whose keep-out is pushed out of the material,
-    // down into the hole, where an 800-wide island's top edge sits 90 below it.
+    // down into the hole, where an 800-wide island's top edge sits 90 below it:
+    // marked between the two, at (500, 1005), not in the island (F66).
     cases.push(fixture(
         "eol_spacing/hole_end_of_line",
         &["DRC-029"],
@@ -1454,7 +1485,7 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
                 ],
             )
             .rect("met1", 100, 100, 900, 960),
-        vec![("eol", vec![Finding::length(90)])],
+        vec![("eol", vec![pin(Finding::length(90), 450 + 550, 1050 + 960)])],
     ));
     // The other way: a 100-wide slot hole in a ring whose band past the
     // slot's end is 50 thick, and a wide shape 30 beyond the band. The slot's
@@ -1484,8 +1515,8 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
 /// `prl_space(met1; prl: 500nm) >= 101nm` (`prl_spacing`, DRC-026): pairs in
 /// different figures whose run (the longest length over which edges of their
 /// merged figures facing each other at most 101 apart project onto each other)
-/// is at least 500 are held to 101. One finding per pair, at the middle of
-/// the gap between their boxes.
+/// is at least 500 are held to 101. One finding per pair, at the midpoint of
+/// the nearest points.
 ///
 /// The run swept around 500 at a gap of 100 (at 500 the limit applies); the
 /// gap swept at a long run; an L whose box would overstate the run against a
@@ -1600,7 +1631,7 @@ fn prl_spacing(depth: Depth) -> Vec<Fixture> {
 /// `corner_space(met1) >= 101nm` (`corner_to_corner`, DRC-032): pairs in
 /// different figures with convex corners of the merged layer facing each other
 /// (each beyond the other on both axes), measured between the nearest such
-/// corners, Euclidean, at the middle of the gap between the boxes.
+/// corners, Euclidean, midway between those corners.
 ///
 /// The diagonal swept; a pair 50 apart on x and 1 on y (apart on both: 50.01,
 /// reported 50); the same with no gap on y (facing across an edge:
@@ -1654,7 +1685,8 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
     );
     // An L with a 100-thick arm along the bottom to x = 1000, and a square
     // whose corner (1050, 150) is 50 past the arm's corner (1000, 100) on both
-    // axes: √5000, 70. The L's box reaches y = 1000, past the square's.
+    // axes: √5000, 70, marked midway between the corners (F66). The L's box
+    // reaches y = 1000, past the square's.
     case(
         "l_corner_inside_its_box".into(),
         Layout::default()
@@ -1670,28 +1702,17 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
                 ],
             )
             .rect("met1", 1050, 150, 1150, 250),
-        vec![pin(Finding::length(70), 2050, 400)],
+        vec![pin(Finding::length(70), 1000 + 1050, 100 + 150)],
     );
     // A hook whose left side faces the square's right edge 50 away, below
     // y = 500, and whose inner corner (1060, 1060) faces the square's corner
-    // (1000, 1000): √7200, 84. The edge gap is `min_spacing`'s; the corners
-    // are this rule's.
+    // (1000, 1000): √7200, 84, marked midway between the corners, not on the
+    // edge gap (F66). The edge gap is `min_spacing`'s; the corners are this
+    // rule's.
     case(
         "corner_beside_an_edge_gap".into(),
-        Layout::default().rect("met1", 0, 0, 1000, 1000).polygon(
-            "met1",
-            &[
-                (1050, -500),
-                (1600, -500),
-                (1600, 1500),
-                (1060, 1500),
-                (1060, 1060),
-                (1500, 1060),
-                (1500, 500),
-                (1050, 500),
-            ],
-        ),
-        vec![pin(Finding::length(84), 2050, 1000)],
+        hook_beside_a_square(),
+        vec![pin(Finding::length(84), 1000 + 1060, 1000 + 1060)],
     );
     // A square with a 10-thick bar on top, flush with its right side: the
     // square's corner (1000, 1000) is a stretch of the figure's right edge,
@@ -1721,14 +1742,15 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
 /// `wide_space(met1; width: 1000nm) >= 301nm` (`wide_dependent_spacing`,
 /// DRC-025): the wide part is where a 1000 square fits (exactly 1000 wide
 /// counts); pairs in different figures where either has one, measured from
-/// that part, at the middle of the gap between their boxes.
+/// that part, at the midpoint of the nearest points.
 ///
 /// The plate width swept around the threshold beside a line 200 off; the gap
 /// swept at a wide plate; a thin tab of a wide plate 200 from a line that is
 /// 500 from the plate (not held); a 1200 x 1000 plate drawn as two 1200 x 500
 /// halves, neither wide alone (two row pairs, both held); two thin lines; a
 /// thin line between the plate and another line (the far pair has no wide
-/// part).
+/// part); a thin staircase 100 from the plate over y = 1500..2000 whose box
+/// reaches far below, marked on the gap it measures (F66).
 fn wide_spacing(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 301;
     let deck = one_layer_deck("rule wd wide_space(met1; width: 1000nm) >= 301nm");
@@ -1819,6 +1841,27 @@ fn wide_spacing(depth: Depth) -> Vec<Fixture> {
             [2400, 0, 2500, 2000],
         ]),
         vec![Finding::length(100).at(2050, 1000)],
+    );
+    // A 100-wide staircase: up from y = 1500 at x = 2100..2200, and an arm
+    // x = 2200..2300 down to y = -1000. The plate's side x = 2000 faces it
+    // nearest, 100, over y = 1500..2000 (the arm is 200 off): marked at
+    // (2050, 1750). The boxes' gap is centred at (2050, 1000).
+    case(
+        "staircase_beside_the_plate".into(),
+        Layout::default().rect("met1", 0, 0, 2000, 2000).polygon(
+            "met1",
+            &[
+                (2100, 1500),
+                (2200, 1500),
+                (2200, -1000),
+                (2300, -1000),
+                (2300, 1600),
+                (2200, 1600),
+                (2200, 4000),
+                (2100, 4000),
+            ],
+        ),
+        vec![pin(Finding::length(100), 2000 + 2100, 1500 + 2000)],
     );
     let mut out = every_placement(cases);
     out.push(vacuous(
@@ -1927,8 +1970,8 @@ rule dn space(met1; nets: different) >= 301nm
 ";
 
 /// `space(met1; nets: same) >= 301nm` and `nets: different` (`net_spacing`,
-/// DRC-080): pairs in different figures, by extracted net, at the middle of
-/// the gap between their boxes.
+/// DRC-080): pairs in different figures, by extracted net, at the midpoint of
+/// the nearest points.
 ///
 /// Two bars `g` apart, strapped through vias and `met2` (one net: only the
 /// same-net rule holds them) or not (two nets); labels with different names
@@ -2032,7 +2075,7 @@ const TABLE: &str = "rule t space_table(met1;
 /// facing each other at most that column's cell apart, the row of the last
 /// `width` the wider shape strictly exceeds (measured on its part that wide),
 /// the first row always applied to whole shapes. One finding per pair,
-/// measuring its distance, at the middle of the gap between the boxes.
+/// measuring its distance, at the midpoint of the points it measured.
 ///
 /// A `wa`-wide line beside a 100-wide one, `g` apart with a run `r`: the width
 /// swept around 300 (exactly 300 is the first row), the run around 1000
