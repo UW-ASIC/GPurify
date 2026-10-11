@@ -542,6 +542,8 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | B32 | LVS and PEX cases carry the no-vacuous-pass guard DRC and ERC have (expected outcome, minimum examined) | F6 | doing (agent/b32) |
 | R2 | Catalog refresh: public commercial-tool material (Calibre, ICV, Pegasus, StarRC, Quantus, RedHawk, Voltus, PathFinder datasheets, public user-guide excerpts, papers; never leaked manuals) compared against the catalog; missing checks added as rows with their sources | catalog | todo |
 | S2 | Shipped decks gain the foundry rules the new kinds make expressible (each with its source), checked by F2's foundry cross-check | F4, limitations | todo: after the H branches merge |
+| R3 | Settle DRC-076 (sky130 waffle-window step and band edges) and DRC-068 (sky130 per-connector cut-area tolerance) from public sources and the public decks implementing them; implement what they settle, record what they do not | catalog | doing (agent/r3) |
+| H14 | Cell-name scoping and exemptions (DRC-092; with it DRC-097's cell-name and pcell rules): each flattened polygon keeps the cell it came from | catalog | doing (agent/h14) |
 
 **How code on this branch is written:**
 - **Data-oriented.** Answer the six questions (data in/out, how many, how wide, access pattern, lifetime, parallelism) before writing. SoA tables, the narrowest type the range allows, caller-owned `_into` buffers, indices not pointers, as the existing crates do.
