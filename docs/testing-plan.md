@@ -503,7 +503,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | todo |
 | D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | todo |
 | E1 | `fuzz/` targets + stable regression replay (deck round trip needs D4) | L4 | done (the deck round trip waits for D4's printer) |
-| F1 | `.#oracles` nix shell; KLayout mirror-deck translator per [klayout-mirror.md](klayout-mirror.md) (24 kinds exact, 10 approximate, `multi_patterning` none); retire the stale `drc_oracle.rb` families | L6 | done: tests/klayout (release tier: corpus, merge-depth DRC fixtures, 3000 random layouts); found F88 |
+| F1 | `.#oracles` nix shell; KLayout mirror-deck translator per [klayout-mirror.md](klayout-mirror.md) (23 kinds exact, 11 approximate, `multi_patterning` none); retire the stale `drc_oracle.rb` families | L6 | done: tests/klayout (release tier: corpus, merge-depth DRC fixtures, 3000 random layouts; 23 kinds exact, 11 approximate, multi_patterning none); reconciled with B24 (angle on drawn layers, with_width measured exactly); found F88 |
 | F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | todo |
 | F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | todo |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | done; the bench gate is B28 |
