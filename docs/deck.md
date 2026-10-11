@@ -406,16 +406,18 @@ transistor's `as`, `ad`, `ps` and `pd`.
 pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
 ```
 
-One line per conducting layer, with all six values: thickness, height above
-the substrate, sheet resistance per square, the dielectric constant around it,
-and the area and fringe capacitance to substrate.
+One line per conducting layer: thickness, height above the substrate, sheet
+resistance per square, the dielectric constant around it, and the area and
+fringe capacitance to substrate. Every value is required but the dielectric,
+which a process that does not publish one leaves out.
 
-Every value must be one a process can have: the thickness positive, the rest
-zero or more. A zero means the deck does not state that value: a dielectric
-of 0 gives no closed-form coupling and a layer the field solve refuses (how
-`generic_finfet` says it extracts no capacitance), and a layer whose sheet
-resistance is not stated is refused when PEX reads it. A negative value is
-an error at the value, rather than a capacitance or gap that drops out.
+Every value must be one a process can have: the thickness positive, a stated
+dielectric positive, the rest zero or more. A zero means the deck does not
+state that value, and a layer whose sheet resistance is not stated is refused
+when PEX reads it. A line with no dielectric gives no closed-form coupling and
+a layer the field solve refuses (how `generic_finfet` says it extracts no
+capacitance). A negative value, or a dielectric of 0, is an error at the
+value, rather than a capacitance or gap that drops out.
 
 A layer at height 0 (a well or a diffusion) is a junction in the substrate:
 its `area_cap` and `fringe_cap` are its junction capacitance, which a field

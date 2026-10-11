@@ -537,10 +537,11 @@ pub enum DeviceKind {
 /// [`LayerTable::len`] long otherwise. A layer with no `pex` row reads `0.0`
 /// in every column, which means "not stated", not a measured zero.
 ///
-/// A parsed row is physical: its thickness is positive and every other
-/// value zero or more (a zero again reads as "not stated"); the parser
-/// refuses anything else, naming the value. A stack built in code is not
-/// checked.
+/// A parsed row is physical: its thickness is positive, its dielectric
+/// positive when the row states one (a row may leave it out, and then reads
+/// `0.0`, not stated), and every other value zero or more (a zero again reads
+/// as "not stated"); the parser refuses anything else, naming the value. A
+/// stack built in code is not checked.
 #[derive(Debug, Default)]
 pub struct ProcessStack {
     /// Conductor thickness, nm.
@@ -553,7 +554,8 @@ pub struct ProcessStack {
     pub area_cap_af_um2: Vec<f64>,
     /// Fringe capacitance to substrate, aF/µm of edge.
     pub fringe_cap_af_um: Vec<f64>,
-    /// Relative permittivity of the surrounding dielectric.
+    /// Relative permittivity of the surrounding dielectric; `0.0` where the
+    /// row leaves it out.
     pub dielectric_k: Vec<f64>,
 }
 

@@ -1,7 +1,7 @@
 //! Deck text to the parsed deck the lowering reads. `let` and `for` are
 //! expanded here; every error carries a span, and parsing continues past one.
 
-use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, PEX, UNITS};
+use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEY, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
     build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, DeviceValue,
@@ -1090,9 +1090,11 @@ impl<'a> Parser<'a> {
             let value = self.value()?;
             let dim = PEX[at].1;
             let number = self.quantity(&value, dim, &key)?.f64();
-            // A conductor has a thickness; nothing else here can be below
-            // zero, and a zero reads as "not stated" (`ProcessStack`).
-            let (physical, bound) = if key == "thickness" {
+            // A conductor has a thickness, and a dielectric that is stated
+            // has a permittivity: both are positive. Nothing else here can be
+            // below zero, and a zero reads as "not stated" (`ProcessStack`);
+            // an unstated dielectric is left out of the row instead.
+            let (physical, bound) = if key == "thickness" || key == OPTIONAL_PEX_KEY {
                 (number > 0.0, "positive")
             } else {
                 (number >= 0.0, "zero or more")
@@ -1110,7 +1112,7 @@ impl<'a> Parser<'a> {
         let missing: Vec<&str> = PEX
             .iter()
             .zip(&row)
-            .filter(|(_, v)| v.is_none())
+            .filter(|(&(name, _), v)| v.is_none() && name != OPTIONAL_PEX_KEY)
             .map(|(&(name, _), _)| name)
             .collect();
         if !missing.is_empty() {

@@ -618,9 +618,10 @@ fn errors_are_collected_and_capped_at_fifty() {
 
 /// F74: a `pex` row that no process has is refused at the value, not read
 /// as a capacitance or a gap that silently drops out. A conductor has a
-/// thickness, so zero is refused there; every other value only below zero,
-/// since a zero is "not stated" (a dielectric of 0 is how `generic_finfet`
-/// says it extracts no capacitance).
+/// thickness and a stated dielectric a permittivity, so zero is refused at
+/// both; every other value only below zero, since a zero is "not stated".
+/// A dielectric is not stated by leaving it out (how `generic_finfet` says
+/// it extracts no capacitance), never by writing 0.
 #[test]
 fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
     let row = |value: &str| {
@@ -636,7 +637,8 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
         ("thickness -360nm", "thickness must be positive"),
         ("height -1nm", "height must be zero or more"),
         ("sheet -0.125ohm", "sheet must be zero or more"),
-        ("dielectric -3.9", "dielectric must be zero or more"),
+        ("dielectric -3.9", "dielectric must be positive"),
+        ("dielectric 0", "dielectric must be positive"),
         ("area_cap -25aF/um2", "area_cap must be zero or more"),
         ("fringe_cap -40aF/um", "fringe_cap must be zero or more"),
     ] {
@@ -659,12 +661,30 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
     for value in [
         "height 0nm",
         "sheet 0ohm",
-        "dielectric 0",
         "area_cap 0aF/um2",
         "fringe_cap 0aF/um",
     ] {
         ok(&row(value));
     }
+}
+
+/// F74: a `pex` row may leave its dielectric out, which states none: it
+/// lowers to `0.0`, the stack's "not stated", as a layer with no row does.
+/// Every other key stays required.
+#[test]
+fn a_pex_row_may_leave_its_dielectric_out_and_nothing_else() {
+    let (deck, strings) = ok("pex met1 thickness 36nm height 0nm sheet 1.2675ohm \
+                              area_cap 0aF/um2 fringe_cap 0aF/um\n");
+    let met1 = deck.layers.id(&strings, "met1").expect("met1").idx();
+    assert_eq!(deck.stack.dielectric_k[met1].to_bits(), 0.0f64.to_bits());
+    assert_eq!(
+        deck.stack.sheet_res_ohm_sq[met1].to_bits(),
+        1.2675f64.to_bits()
+    );
+    one_error(
+        "pex met1 thickness 36nm height 0nm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n",
+        "pex `met1` is missing sheet",
+    );
 }
 
 #[test]

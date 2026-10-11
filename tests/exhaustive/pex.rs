@@ -87,7 +87,8 @@ const EPSILON0_AF_PER_UM: f64 = 8.854_187_812_8;
 const OFFSETS: [(i64, i64); 2] = [(0, 0), (-1_234_567, 987_654)];
 
 /// One `pex` row: lengths in nm, sheet in Ω/□ (Ω per cut on a via layer),
-/// area capacitance in aF/µm², fringe in aF/µm.
+/// area capacitance in aF/µm², fringe in aF/µm. A `k` of zero is a row that
+/// states no dielectric, which the deck says by leaving the key out.
 #[derive(Debug, Clone, Copy)]
 struct Row {
     thickness: f64,
@@ -101,10 +102,15 @@ struct Row {
 impl Row {
     /// The deck line for `layer`.
     fn line(self, layer: &str) -> String {
+        let dielectric = if self.k == 0.0 {
+            String::new()
+        } else {
+            format!(" dielectric {}", self.k)
+        };
         format!(
-            "pex {layer} thickness {}nm height {}nm sheet {}ohm dielectric {} area_cap {}aF/um2 \
+            "pex {layer} thickness {}nm height {}nm sheet {}ohm{dielectric} area_cap {}aF/um2 \
              fringe_cap {}aF/um\n",
-            self.thickness, self.height, self.sheet, self.k, self.area, self.fringe
+            self.thickness, self.height, self.sheet, self.area, self.fringe
         )
     }
 
@@ -1280,7 +1286,7 @@ fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
 
 /// PEX-005 (F75): a field-solved net the mesh cannot take is a PEX refusal
 /// naming the layer as the deck does, not an aborted run naming `LayerId`.
-/// An `m1` row with `dielectric 0` states no permittivity, which the closed
+/// An `m1` row with no `dielectric` states no permittivity, which the closed
 /// forms read as no coupling and the field solve cannot mesh.
 #[test]
 fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {

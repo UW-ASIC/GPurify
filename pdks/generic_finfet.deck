@@ -338,25 +338,26 @@ connect label M9_LABEL names M9
 #          height of M1 above the substrate and the capping layers between
 #          levels are not published, so heights are relative to M1.
 #   dielectric, area_cap, fringe_cap: not published in readable form (the
-#          QRC tech file in asap7sc7p5t_28 is compiled). Written as 0, so
+#          QRC tech file in asap7sc7p5t_28 is compiled). The dielectric is
+#          left out and the capacitances written as 0 (not stated), so
 #          capacitance is not extracted from this deck; resistance is.
-pex M1 thickness 36nm height 0nm sheet 1.2675ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V1 thickness 36nm height 36nm sheet 17.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M2 thickness 36nm height 72nm sheet 0.534829ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V2 thickness 36nm height 108nm sheet 17.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M3 thickness 36nm height 144nm sheet 0.563166ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V3 thickness 36nm height 180nm sheet 17.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M4 thickness 48nm height 216nm sheet 0.432876ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V4 thickness 48nm height 264nm sheet 11.8ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M5 thickness 48nm height 312nm sheet 0.455844ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V5 thickness 48nm height 360nm sheet 11.8ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M6 thickness 64nm height 408nm sheet 0.380147ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V6 thickness 64nm height 472nm sheet 8.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M7 thickness 64nm height 536nm sheet 0.400307ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V7 thickness 64nm height 600nm sheet 8.2ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M8 thickness 80nm height 664nm sheet 0.337906ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex V8 thickness 80nm height 744nm sheet 6.3ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
-pex M9 thickness 80nm height 824nm sheet 0.355822ohm dielectric 0 area_cap 0aF/um2 fringe_cap 0aF/um
+pex M1 thickness 36nm height 0nm sheet 1.2675ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V1 thickness 36nm height 36nm sheet 17.2ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M2 thickness 36nm height 72nm sheet 0.534829ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V2 thickness 36nm height 108nm sheet 17.2ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M3 thickness 36nm height 144nm sheet 0.563166ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V3 thickness 36nm height 180nm sheet 17.2ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M4 thickness 48nm height 216nm sheet 0.432876ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V4 thickness 48nm height 264nm sheet 11.8ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M5 thickness 48nm height 312nm sheet 0.455844ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V5 thickness 48nm height 360nm sheet 11.8ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M6 thickness 64nm height 408nm sheet 0.380147ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V6 thickness 64nm height 472nm sheet 8.2ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M7 thickness 64nm height 536nm sheet 0.400307ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V7 thickness 64nm height 600nm sheet 8.2ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M8 thickness 80nm height 664nm sheet 0.337906ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex V8 thickness 80nm height 744nm sheet 6.3ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex M9 thickness 80nm height 824nm sheet 0.355822ohm area_cap 0aF/um2 fringe_cap 0aF/um
 
 # needs: directional (a limit along x or y only). The stricter halves of the
 # pairs written above at the smaller limit:

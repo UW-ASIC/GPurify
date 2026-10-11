@@ -604,7 +604,8 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("domain_crossing", &[], false, &[]),
 ];
 
-/// The six PEX keys, each required once per `pex` statement.
+/// The six PEX keys, each given at most once per `pex` statement, and every
+/// one but [`OPTIONAL_PEX_KEY`] required.
 pub(crate) const PEX: [(&str, Dim); 6] = [
     ("thickness", Dim::Length),
     ("height", Dim::Length),
@@ -613,6 +614,10 @@ pub(crate) const PEX: [(&str, Dim); 6] = [
     ("area_cap", Dim::CapPerArea),
     ("fringe_cap", Dim::CapPerLength),
 ];
+
+/// The one [`PEX`] key a row may leave out: a dielectric the process does not
+/// state. Stated, it must be positive (testing-plan F74).
+pub(crate) const OPTIONAL_PEX_KEY: &str = "dielectric";
 
 /// Engine kinds whose layer arguments may be edge layers, and what each engine
 /// layer slot takes: `Some(true)` edges, `Some(false)` polygons, `None` either.
