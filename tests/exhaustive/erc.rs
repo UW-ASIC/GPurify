@@ -4849,3 +4849,4 @@ fn em_thermal() -> Vec<Fixture> {
 mod antenna_board;
 mod klayout;
 mod openroad;
+mod pdnsim;
