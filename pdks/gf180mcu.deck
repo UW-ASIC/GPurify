@@ -14,6 +14,10 @@
 #         https://github.com/google/globalfoundries-pdk-libs-gf180mcu_fd_pr/tree/main/rules/klayout
 #         (gf180mcu.drc, gf180mcu_antenna.drc, gf180mcu_density.drc, gf180mcu.lvs): rule ids,
 #         the 3.3 V / 5 V split, derived layers and device recognition.
+#   [PV]  GF180MCU KLayout DRC deck and its unit test structures,
+#         fossi-foundation/globalfoundries-pdk-libs-gf180mcu_fd_pv @ b390a163ab86205006038a4a7eff73b17d54b814
+#         klayout/drc (rule_decks/*.rb, generic_layers.rb; testing/unit/*.gds, whose pass and
+#         fail boxes on 2/222 and 3/222 say what each rule must flag; ledger docs/xcheck/gf180mcu.tsv).
 #   [SPEC] GF180MCU analog specs, google/gf180mcu-pdk @ df0f549, docs/analog/layout/inter_specs
 #         tables 3 (conductor thickness), 4 (dielectric k), 5 (sheet resistance);
 #         docs/analog/model_parameters/LV tables 03, 06, 07 (model names).
@@ -21,6 +25,12 @@
 #         RTimothyEdwards/open_pdks @ 931e0cf509908b1fa8d222bbd8e24e4a36526157 (file last changed 2026-06-15)
 #         https://github.com/RTimothyEdwards/open_pdks/blob/master/gf180mcu/magic/gf180mcu.tech
 #         (layer heights, contact resistance, substrate area and fringe caps, typical corner).
+#
+# Each intra-layer spacing rule is KLayout `space` in [PV], which also
+# measures a notch inside one polygon, and the fd_pv unit structures
+# (klayout/drc/testing/unit) draw notches as fails; GPurify's `space` pairs
+# distinct figures, so each such rule has a `<id>.notch` row (not PRES.2 and
+# LRES.2, which [PV] checks with `isolated`, nor the cut layers).
 #
 # Rule ids are the manual's. Where the manual gives different 3.3 V and 5 V/6 V
 # limits the id carries the KLayout deck's `_3.3V` / `_5V` suffix; the 3.3 V
@@ -85,6 +95,7 @@ layer drc_bjt = gds(127, 5)
 layer esd_mk = gds(24, 5)
 layer ldmos_xtor = gds(226, 0)
 layer plfuse = gds(125, 5)
+layer otp_mk = gds(173, 5)
 layer metal1_res = gds(110, 11)
 layer metal2_res = gds(110, 12)
 layer metal3_res = gds(110, 13)
@@ -105,8 +116,14 @@ layer dnwell_hv = dnwell.interacting(dualgate)
 layer nwell_out_dn = nwell.outside(dnwell)
 layer nwell_in_dn = nwell.interacting(dnwell)
 layer lvpwell_in_dn = lvpwell.inside(dnwell)
+# LVPWELL touching DNWELL, which LPW.3 holds; LVPWELL wholly outside is LPW.11's [PV generic_layers.rb lvpwell_dn].
+layer lvpwell_dn = lvpwell.interacting(dnwell)
 layer lvpwell_out_dn = lvpwell.outside(dnwell)
-layer nwell_res = (nwell_out_dn and res_mk) not comp not poly2
+# An Nwell resistor is Nwell under a RES_MK that reaches past the well [PV
+# nwell.rb nw_res_mk]; its taps' COMP stays in it, so NW.1b measures the
+# resistor's full width, not the strips beside the taps.
+layer nw_res_mk = res_mk.interacting(nwell) not res_mk.inside(nwell)
+layer nwell_res = nwell_out_dn and nw_res_mk
 layer comp_moscap = comp and mos_cap_mk
 layer comp_in_moscap = comp.inside(mos_cap_mk)
 layer comp_nocap = comp not comp_in_moscap
@@ -157,26 +174,33 @@ layer ncomp_out_nw = ncomp.outside(nwell)
 layer ncomp_out_nw_hv = ncomp_out_nw.interacting(dualgate)
 layer comp_out_dv = comp.outside(dualgate)
 layer comp_dv = comp_hv not ptap
-layer poly2_field = poly2.not_interacting(comp)
+# Poly2 sharing no area with COMP; one touching COMP only at a corner is
+# field poly 0 um from it [DRM PL.5a; PV poly2.rb].
+layer poly2_field = poly2.outside(comp)
 layer comp_hv_noext = comp_hv.outside(mvsd).outside(mvpsd)
 
 # Implant, SAB and ESD classes [KL]
 layer poly_sab = poly2 and sab
-layer poly_sab_nonp = poly_sab.not_interacting(nplus)
-layer poly_sab_nopp = poly_sab.not_interacting(pplus)
+# Unrelated unsalicided Poly2 shares no area with the implant; touching it at
+# a corner is 0 um from it [PV nplus.rb NP.7, pplus.rb PP.7].
+layer poly_sab_nonp = poly_sab.outside(nplus)
+layer poly_sab_nopp = poly_sab.outside(pplus)
 layer poly_sab_np = poly_sab.interacting(nplus)
 layer poly_sab_pp = poly_sab.not_interacting(resistor).interacting(pplus)
 layer comp_sab = comp and sab
 layer comp_sab_np = comp_sab.interacting(nplus)
 layer comp_sab_pp = comp_sab.interacting(pplus)
-layer sab_field = sab.outside(comp)
+# The OTP section states its own SAB rules (O.SB.*): SB.2-SB.5b, SB.9 and
+# SB.11-SB.13 hold SAB outside OTP_MK [PV sab.rb sab_out_otp].
+layer sab_main = sab.outside(otp_mk)
+layer sab_field = sab_main.outside(comp)
 layer comp_nosab = comp.outside(sab)
 layer poly2_on_field = poly2 not comp
-layer sab_off_pf = sab.outside(poly2_on_field)
+layer sab_off_pf = sab_main.outside(poly2_on_field)
 layer pf_nosab = poly2_on_field.outside(sab)
-layer sab_off_gate = sab.outside(gate)
+layer sab_off_gate = sab_main.outside(gate)
 layer gate_nosab = gate.outside(sab)
-layer sab_noesd = sab.outside(esd_mk)
+layer sab_noesd = sab_main.outside(esd_mk)
 layer poly2_noesd = poly2.outside(esd_mk)
 layer ncomp_out_esd = ncomp.outside(esd)
 layer implant = nplus or pplus
@@ -252,19 +276,23 @@ layer tm9k_r = metaltop and metal6_res
 # --- DNWELL [DRM 11, KL] ---
 rule DN.1 width(dnwell) >= 1.7um
 rule DN.2a space(dnwell) >= 2.5um
+rule DN.2a.notch notch(dnwell) >= 2.5um
 
 # --- LVPWELL [DRM 12, KL] ---
 rule LPW.1_3.3V width(lvpwell) >= 600nm
 rule LPW.1_5V width(lvpwell_hv) >= 740nm
 rule LPW.2b space(lvpwell) >= 860nm
-rule LPW.3 enclosure(lvpwell, dnwell) >= 2.5um
+rule LPW.2b.notch notch(lvpwell) >= 860nm
+rule LPW.3 enclosure(lvpwell_dn, dnwell) >= 2.5um
 rule LPW.11 space(lvpwell_out_dn, dnwell) >= 1.5um
 
 # --- Nwell [DRM 13, KL] ---
 rule NW.1a width(nwell) >= 860nm
 rule NW.1b width(nwell_res) >= 2um
 rule NW.2a_3.3V space(nwell) >= 600nm
+rule NW.2a_3.3V.notch notch(nwell) >= 600nm
 rule NW.2a_5V space(nwell_hv) >= 740nm
+rule NW.2a_5V.notch notch(nwell_hv) >= 740nm
 rule NW.3 space(nwell_out_dn, dnwell) >= 3.1um
 rule NW.5 enclosure(nwell_in_dn, dnwell) >= 500nm
 
@@ -272,14 +300,19 @@ rule NW.5 enclosure(nwell_in_dn, dnwell) >= 500nm
 rule DF.1a_3.3V width(comp) >= 220nm
 rule DF.1a_5V width(comp_hv) >= 300nm
 rule DF.1c width(comp_moscap) >= 1um
-# DF.2a is channel width; a gate's length is never below it (PL.2, NAT.4), so
-# the narrowest width of the gate shape is the channel width's lower bound.
-rule DF.2a_3.3V width(gate) >= 220nm
-rule DF.2a_5V width(gate_hv) >= 300nm
+# DF.2a is channel width W: a gate's edges on Poly2's edges run across the
+# channel, so their length is W (its edges on COMP's are L, PL.2). The gate's
+# narrowest width would read a 0.11 um L as W [PV comp.rb DF.2a: COMP not
+# Poly2 edges on the gate's].
+rule DF.2a_3.3V length(gate.edges() and poly2.edges()) >= 220nm
+rule DF.2a_5V length(gate_hv.edges() and poly2.edges()) >= 300nm
 rule DF.2b width(comp_nocap) <= 100um
 rule DF.3a_3.3V space(comp) >= 280nm
+rule DF.3a_3.3V.notch notch(comp) >= 280nm
 rule DF.3a_5V space(comp_hv) >= 360nm
+rule DF.3a_5V.notch notch(comp_hv) >= 360nm
 rule DF.3c_3.3V space(comp_bjt) >= 320nm
+rule DF.3c_3.3V.notch notch(comp_bjt) >= 320nm
 rule DF.4a_3.3V space(ntap_dn, lvpwell_in_dn) >= 120nm
 rule DF.4a_5V space(ntap_dn_hv, lvpwell_in_dn) >= 160nm
 rule DF.4b_3.3V enclosure(ncomp_dn, dnwell) >= 620nm
@@ -299,7 +332,9 @@ rule DF.7_5V space(pcomp_dn_nolvp_hv, lvpwell_in_dn) >= 600nm
 rule DF.8_3.3V enclosure(ncomp_lvp, lvpwell_in_dn) >= 430nm
 rule DF.8_5V enclosure(ncomp_lvp_hv, lvpwell_in_dn) >= 600nm
 rule DF.9 area(comp) >= 0.2025um2
-rule DF.10 hole_area(comp) >= 0.26um2
+# Field area: the empty area a COMP encloses, less any COMP island in it
+# [PV comp.rb DF.10 comp.holes.not(comp)]; hole_area counts the island.
+rule DF.10 area(comp.holes() not comp) >= 0.26um2
 rule DF.13_3.3V tap_distance(pcomp_in_nw, ntap) <= 20um
 rule DF.13_5V tap_distance(pcomp_in_nw_hv, ntap) <= 15um
 rule DF.14_3.3V tap_distance(ncomp_out_nw, ptap) <= 20um
@@ -315,6 +350,7 @@ rule DF.19_5V space(ncomp_psub_hv, dnwell) >= 3.28um
 # --- Dualgate [DRM 15, KL] ---
 rule DV.1 enclosure(dnwell_hv, dualgate) >= 500nm
 rule DV.2 space(dualgate) >= 440nm
+rule DV.2.notch notch(dualgate) >= 440nm
 rule DV.3 space(dualgate, comp_out_dv) >= 240nm
 rule DV.5 width(dualgate) >= 700nm
 rule DV.6 enclosure(comp_dv, dualgate) >= 240nm
@@ -331,6 +367,7 @@ rule PL.2_3.3V length(gate.edges() and comp.edges()) >= 280nm
 rule PL.2_5V_n length((ngate and dualgate).edges() and comp.edges()) >= 600nm
 rule PL.2_5V_p length((pgate and dualgate).edges() and comp.edges()) >= 500nm
 rule PL.3a space(poly2) >= 240nm
+rule PL.3a.notch notch(poly2) >= 240nm
 rule PL.4 extension(poly2, comp) >= 220nm
 # PL.5a/5b hold field poly to COMP; this covers poly shapes with no gate at all.
 rule PL.5a_3.3V space(poly2_field, comp) >= 100nm
@@ -340,6 +377,7 @@ rule PL.8 global_density(poly2_fill) >= 14%
 # --- Nplus / Pplus [DRM 17, 18, KL] ---
 rule NP.1 width(nplus) >= 400nm
 rule NP.2 space(nplus) >= 400nm
+rule NP.2.notch notch(nplus) >= 400nm
 rule NP.5a enclosure(ngate, nplus) >= 230nm
 rule NP.7 space(nplus, poly_sab_nonp) >= 180nm
 rule NP.8a area(nplus) >= 0.35um2
@@ -348,6 +386,7 @@ rule NP.9 enclosure(poly_sab_np, nplus) >= 180nm
 rule NP.10 enclosure(comp_sab_np, nplus) >= 180nm
 rule PP.1 width(pplus) >= 400nm
 rule PP.2 space(pplus) >= 400nm
+rule PP.2.notch notch(pplus) >= 400nm
 rule PP.5a enclosure(pgate, pplus) >= 230nm
 rule PP.7 space(pplus, poly_sab_nopp) >= 180nm
 rule PP.8a area(pplus) >= 0.35um2
@@ -357,22 +396,24 @@ rule PP.10 enclosure(comp_sab_pp, pplus) >= 180nm
 
 # --- SAB [DRM 19, KL] ---
 rule SB.1 width(sab) >= 420nm
-rule SB.2 space(sab) >= 420nm
+rule SB.2 space(sab_main) >= 420nm
+rule SB.2.notch notch(sab_main) >= 420nm
 rule SB.3 space(sab_field, comp_nosab) >= 220nm
-rule SB.4 space(sab, contact) >= 150nm
+rule SB.4 space(sab_main, contact) >= 150nm
 rule SB.5a space(sab_off_pf, pf_nosab) >= 300nm
 rule SB.5b space(sab_off_gate, gate_nosab) >= 280nm
 rule SB.6 extension(sab, comp) >= 220nm
 rule SB.7 extension(comp, sab) >= 220nm
-rule SB.9 extension(sab, poly2) >= 220nm
+rule SB.9 extension(sab_main, poly2) >= 220nm
 rule SB.10 extension(poly2, sab) >= 220nm
-rule SB.11 overlap(sab, comp) >= 220nm
+rule SB.11 overlap(sab_main, comp) >= 220nm
 rule SB.12 overlap(sab_noesd, poly2_noesd) >= 220nm
-rule SB.13 area(sab) >= 2um2
+rule SB.13 area(sab_main) >= 2um2
 
 # --- ESD implant [DRM 20, KL] ---
 rule ESD.1 width(esd) >= 600nm
 rule ESD.2 space(esd) >= 600nm
+rule ESD.2.notch notch(esd) >= 600nm
 rule ESD.3a space(esd, ncomp_out_esd) >= 600nm
 rule ESD.4b overlap(esd, comp) >= 450nm
 rule ESD.5a area(esd) >= 0.49um2
@@ -397,6 +438,7 @@ let metals = [(M1, metal1, metal1_fill, 230nm), (M2, metal2, metal2_fill, 280nm)
 for (id, m, fill, w) in metals {
     rule {id}.1 width(m) >= w
     rule {id}.2a space(m) >= w
+    rule {id}.2a.notch notch(m) >= w
     rule {id}.2b wide_space(m; width: 10um) >= 300nm
     rule {id}.3 area(m) >= 0.1444um2
     rule {id}.4 global_density(fill) >= 30%
@@ -422,6 +464,7 @@ for (id, v, below) in vias_up {
 # --- MetalTop, 9 kA [DRM 24; KL METAL_TOP == "9K"] ---
 rule MT.1 width(metaltop) >= 440nm
 rule MT.2a space(metaltop) >= 460nm
+rule MT.2a.notch notch(metaltop) >= 460nm
 rule MT.2b wide_space(metaltop; width: 10um) >= 600nm
 rule MT.3 global_density(metaltop_fill) >= 30%
 rule MT.4 area(metaltop) >= 0.5625um2
@@ -433,6 +476,7 @@ rule MIMTM.3 enclosure(fusetop, mimtm_virtual) >= 600nm
 rule MIMTM.4 enclosure(via5_top, fusetop) >= 400nm
 rule MIMTM.5 space(fusetop, via5_nomim) >= 400nm
 rule MIMTM.6 space(fusetop) >= 600nm
+rule MIMTM.6.notch notch(fusetop) >= 600nm
 rule MIMTM.8a area(fusetop) >= 25um2
 rule MIMTM.9 space(via5_in_top) >= 500nm
 
@@ -441,6 +485,7 @@ rule NAT.1 enclosure(ncomp_nat, nat) >= 2um
 rule NAT.2 space(nat, comp_out_nat) >= 300nm
 rule NAT.3 space(nat, nwell) >= 500nm
 rule NAT.7 space(nat) >= 740nm
+rule NAT.7.notch notch(nat) >= 740nm
 
 # --- Poly2 resistors [DRM 33, KL] ---
 rule PRES.1 width(pres_poly) >= 800nm
@@ -456,8 +501,10 @@ rule LRES.4 space(lres_poly, poly2_nosab) >= 600nm
 rule LRES.5 enclosure(lres_poly, nplus) >= 300nm
 rule LRES.7 space(contact_lres, sab) >= 220nm
 rule HRES.1 space(resistor_h) >= 400nm
+rule HRES.1.notch notch(resistor_h) >= 400nm
 rule HRES.2 width(hres_poly) >= 1um
 rule HRES.3 space(hres_poly) >= 400nm
+rule HRES.3.notch notch(hres_poly) >= 400nm
 rule HRES.4 enclosure(hres_poly, resistor) >= 400nm
 rule HRES.5 space(resistor_h, poly2_nosab) >= 300nm
 rule HRES.6 space(resistor_h, comp) >= 300nm
@@ -620,7 +667,8 @@ pex metaltop_con thickness 1002.5nm height 7280nm sheet 0.04ohm dielectric 4 are
 # --- Presence rules ---
 rule LPW.12 forbidden(lvpwell and nwell)
 rule NW.4 forbidden(nwell and lvpwell)
-rule NW.6 forbidden(nwell_res.interacting(dnwell))
+# An Nwell inside RES_MK and over DNWELL [PV nwell.rb NW.6]; nwell_res is outside DNWELL by construction.
+rule NW.6 forbidden(nwell.inside(res_mk) and dnwell)
 rule DV.7 forbidden(comp_dv not dualgate)
 rule PL.9 forbidden((poly2 and dualgate).interacting(poly2 not dualgate))
 rule PL.11 forbidden(v5_xtor.not_interacting(dualgate))
@@ -634,7 +682,8 @@ rule CO.11 forbidden(contact not (comp or poly2))
 rule MIMTM.10 forbidden(via4.interacting(metal5_mim))
 rule NAT.10 forbidden(nwell.inside(nat))
 rule NAT.11 forbidden((ncomp and nat).outside(poly2))
-rule NAT.12 forbidden(poly2.interacting(nat).not_interacting(comp and nat))
+# Poly2 inside NAT, not poly that only touches it [PV nat.rb NAT.12].
+rule NAT.12 forbidden((poly2 and nat).not_interacting(comp) or (poly2 and nat and res_mk))
 rule V1.3a inside(via1, metal1)
 rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
 
