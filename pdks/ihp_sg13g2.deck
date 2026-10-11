@@ -354,6 +354,9 @@ rule Sal.e space(salblock, cont) >= 200nm
 # 5.14 Cont (min and max width 0.16 also admits a 0.16 um wide ContBar, 5.15)
 rule Cnt.a     width(cont) >= 160nm
 rule Cnt.a.max width(cont) <= 160nm
+# CntB.a1: "any Cont shape not being a square shape is considered a ContBar",
+# and a ContBar is at least 0.34 um long (its width is Cnt.a's 0.16 um).
+rule CntB.a1 forbidden(cont.non_squares().with_bbox_max(< 340nm))
 rule Cnt.b  space(cont) >= 180nm
 # "More than 4 rows and more than 4 columns" read as more than 24 cuts in a cluster:
 # every 5x5 array is held, and so is a 4xN (N >= 7) one, which is stricter than the manual.
@@ -758,8 +761,10 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 # rule TM2.bR space_table(topmetal2; prl: [0um, 50um], width: [0um, 5um], space: [[2um, 2um], [2um, 5um]])
 # Pin.a/b/f/g/h: the other pin layers, as Pin.e.
 
-# needs: shape class, identical layers, full-crossing extension
-# rule Gat.f  rectangles_only(gate)               # no 45 or 90 degree bends on Activ
+# Gat.f, no 45 or 90 degree bends on Activ: every gate is a rectangle.
+rule Gat.f forbidden(gate.non_rectangles())
+
+# needs: identical layers, full-crossing extension
 # rule Rhi.b  identical(psd.interacting(rhigh_body), nsd)
 # rule Rsil.c extension(res, gatpoly) >= 0nm      # RES must reach across the GatPoly
 
@@ -797,8 +802,8 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 #   two well nets. npn13G2/L/V (npnG2.*) need emitter-window layers and
 #   substrate as a net. Metal resistors res_metal1..res_topmetal2 need each
 #   metal split at its :res marker.
-# - Cnt.b1, V*.b1 are approximated by cut counts (see above). ContBar rules
-#   CntB.* need a square/bar shape class; Cnt.a admits 0.16 um wide bars.
+# - Cnt.b1, V*.b1 are approximated by cut counts (see above). Cnt.a admits
+#   0.16 um wide bars, which are ContBars (CntB.a1 holds their length).
 # - Seal.e/f/k/l/m/n, Padb.*, Padc.* (bump/pillar options), Pad.*R, npn*.bR/cR,
 #   MIM.gR, TM2.bR and other "R" rules are recommended or option-specific.
 # - Slt.i (6 % slit density in plates over 35 x 35 um), GFil.i (GatPoly:nofill
