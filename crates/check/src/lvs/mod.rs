@@ -30,9 +30,10 @@
 //!    nodes on each side, by pairing its lowest layout node with the
 //!    reference node of the class whose parameters are closest, for a net
 //!    the one whose pairing puts the diffusions of the transistors already
-//!    paired closest at each channel end (testing-plan F98), the lowest on a
-//!    tie, then refines again. This is how Netgen resolves symmetries by
-//!    property value (catalog LVS-018). Refinement
+//!    paired closest at each channel end (testing-plan F98); on a tie the
+//!    net named as the layout net's label, then the lowest; then refines
+//!    again. This is how Netgen resolves symmetries by property value
+//!    (catalog LVS-018). Refinement
 //!    cannot always tell apart nodes no relabelling exchanges, so while a
 //!    match is still possible the pairing is a trial: kept when no class is
 //!    left with more reference nodes than layout nodes and every device pair
@@ -61,8 +62,12 @@
 //! That is catalog LVS-030; the deck's `lvs asymmetric` and `lvs permute`
 //! change it per model (below).
 //!
-//! Net names do not take part: they neither seed refinement nor are compared,
-//! so a misnamed or reordered port passes (catalog LVS-016, LVS-032).
+//! Net names break ties and nothing more (catalog LVS-032): where refinement
+//! leaves nets interchangeable, a layout net pairs first with the reference
+//! net its label names, as `KLayout`'s `consider_net_names` (on by default)
+//! resolves ambiguities, so a transistor whose two diffusions differ on
+//! otherwise symmetric nets is compared the way its labels say. Names are
+//! not compared, so a misnamed or reordered port passes (catalog LVS-016).
 //!
 //! # Deck controls
 //!
@@ -148,11 +153,11 @@
 //!   channel end the net pairing puts it on. Where nothing tells two
 //!   channel nets apart, the tie-break pairs them the way the diffusions of
 //!   the transistors already paired agree, all of a net's transistors
-//!   weighed together (testing-plan F98); where no one pairing suits them
-//!   all, the closest is kept and the verdict is a false mismatch, never a
-//!   false match. A parallel merge sums diffusions end by end; a series
-//!   merge of transistors stating them is refused, so such a stack never
-//!   matches one long card.
+//!   weighed together (testing-plan F98), then by label where the nets
+//!   carry one; where no one pairing suits them all, the closest is kept
+//!   and the verdict is a false mismatch, never a false match. A parallel
+//!   merge sums diffusions end by end; a series merge of transistors
+//!   stating them is refused, so such a stack never matches one long card.
 //! - **Bounded symmetry search.** A tie-break takes back only a pairing whose
 //!   own refinement shows it wrong, and tries at most eight candidates; a
 //!   wrong pairing exposed only after a later tie-break, or a right one past

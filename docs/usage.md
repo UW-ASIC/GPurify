@@ -136,7 +136,9 @@ netgen's):
 - netgen measures a parameter's difference against the mean of the two
   values, and this tool against the larger, so netgen's `2t/(2 − t)`
   (2.0202 % for 2 %) is this tool's `t`;
-- netgen matches the top cell's pins by name; this tool never compares names;
+- netgen matches the top cell's pins by name; this tool uses a net's label
+  only to choose among nets nothing else tells apart (as KLayout's
+  `consider_net_names`), and never compares names;
 - when the deck extracts no bulk, the reference's bulks are dropped here;
   netgen has no such rule, so its setup must tie every bulk to one net on
   both sides.

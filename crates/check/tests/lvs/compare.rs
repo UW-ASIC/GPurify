@@ -880,3 +880,55 @@ fn two_buffers_sized_apart_match_themselves_reversed() {
     );
     assert_eq!(verdict, Verdict::Match, "{verdict:?}");
 }
+
+/// Oracle: `KLayout`'s `consider_net_names` ("employ net names to resolve
+/// ambiguities"), by hand. One transistor whose source net `a` has a 1 pm²
+/// diffusion and drain net `b` a 2 pm² one; nothing but names tells `a`
+/// from `b`, so they stall. The reference lists `b` first, so the lowest
+/// reference net is `b`: paired by row order, the layout's source would be
+/// read against the card's drain, 1 pm² against 2 pm², a false mismatch.
+/// Paired by name, it matches, and a card with the diffusions exchanged
+/// (as 2, ad 1 at the same nets) is then reported. Breaks if names do not
+/// break the tie.
+#[test]
+fn nets_nothing_else_tells_apart_pair_by_name() {
+    use gpurify_check::lvs::ParamNames;
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let [area_s, area_d, perim_s, perim_d] = [StrId(50), StrId(51), StrId(52), StrId(53)];
+    let [a, b, g, bulk] = [StrId(60), StrId(61), StrId(62), StrId(63)];
+    let options = CompareOptions {
+        params: ParamNames {
+            diffusion: [Some(area_s), Some(area_d), Some(perim_s), Some(perim_d)],
+            ..ParamNames::default()
+        },
+        ..decisive()
+    };
+    // `names[k]` names net `k`; the transistor's source is on `a`.
+    let mos = |names: [StrId; 4], diffusions: [f64; 2]| {
+        let at = |name: StrId| {
+            let net = names.iter().position(|&n| n == name).expect("named");
+            u32::try_from(net).expect("four nets")
+        };
+        let mut builder = GraphBuilder::new(4);
+        for (net, &name) in (0u32..).zip(&names) {
+            builder.name_net(net, name);
+        }
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[
+                (Gate, at(g)),
+                (Source, at(a)),
+                (Drain, at(b)),
+                (Bulk, at(bulk)),
+            ],
+            &[(area_s, diffusions[0]), (area_d, diffusions[1])],
+        );
+        builder.finish()
+    };
+    let layout = mos([a, b, g, bulk], [1e-12, 2e-12]);
+    let reference = mos([b, a, g, bulk], [1e-12, 2e-12]);
+    assert_eq!(compare(&layout, &reference, options), Verdict::Match);
+    let exchanged = mos([b, a, g, bulk], [2e-12, 1e-12]);
+    assert_ne!(compare(&layout, &exchanged, options), Verdict::Match);
+}

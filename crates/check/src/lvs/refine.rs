@@ -7,11 +7,11 @@
 //! only the neighbours of nodes that changed class in the pass before. A balanced
 //! stall is broken by pairing the lowest layout node of the stalled class holding
 //! it with the reference node of that class whose parameters are closest (netgen's
-//! "resolving symmetries by property value"), the lowest such on a tie, one class
-//! per stall. A net has no parameters of its own: its closest is the one whose
-//! pairing puts the diffusions of the transistors already paired closest at each
-//! channel end, so symmetric channel nets pair the way the diffusions agree
-//! (testing-plan F98).
+//! "resolving symmetries by property value"), on a tie the net of the layout net's
+//! label (`KLayout`'s `consider_net_names`), then the lowest, one class per stall.
+//! A net has no parameters of its own: its closest is the one whose pairing puts
+//! the diffusions of the transistors already paired closest at each channel end,
+//! so symmetric channel nets pair the way the diffusions agree (testing-plan F98).
 //!
 //! Refinement cannot always split nodes that no relabelling exchanges, so the
 //! closest node can be the wrong one (testing-plan F58). A pairing is a trial
@@ -269,6 +269,25 @@ impl Sides<'_> {
                 .sum()
         };
         apart(false).min(apart(true))
+    }
+
+    /// Whether layout node `layout` and reference node `reference` are other
+    /// than two nets of one name, the layout net's label being the reference
+    /// net's name. A symmetry between nets is broken toward the named one
+    /// first, as `KLayout`'s `consider_net_names` "employ[s] net names to
+    /// resolve ambiguities" (catalog LVS-032). Devices, and a layout net with
+    /// no label, are always apart.
+    fn named_apart(self, layout: u32, reference: u32) -> bool {
+        let reference = reference - self.split;
+        let (layout_devices, ref_devices) = (
+            narrow(self.layout.device_count()),
+            narrow(self.reference.device_count()),
+        );
+        if layout < layout_devices || reference < ref_devices {
+            return true;
+        }
+        let label = self.layout.net_name[(layout - layout_devices) as usize];
+        label.is_none() || label != self.reference.net_name[(reference - ref_devices) as usize]
     }
 
     /// The layout name a reference parameter `name` is read under: itself,
@@ -599,8 +618,9 @@ impl Partition {
         apart
     }
 
-    /// The reference node of `node`'s class that is [closest](Self::apart),
-    /// the lowest on a tie.
+    /// The reference node of `node`'s class that is [closest](Self::apart);
+    /// on a tie, a net of the name `node` carries ([`Sides::named_apart`]),
+    /// then the lowest.
     ///
     /// ponytail: O(class size) per stall; keep members sorted per class if a
     /// huge class of isolated nodes ever shows up in a profile.
@@ -608,23 +628,30 @@ impl Partition {
         self.mates(node, sides.split)
             .min_by(|&a, &b| {
                 let (da, db) = (self.apart(node, a, sides), self.apart(node, b, sides));
-                da.total_cmp(&db).then(a.cmp(&b))
+                let (na, nb) = (sides.named_apart(node, a), sides.named_apart(node, b));
+                da.total_cmp(&db).then(na.cmp(&nb)).then(a.cmp(&b))
             })
             .expect("a stalled class holds reference nodes")
     }
 
     /// The next [`TRIES`] − 1 reference nodes of `node`'s class after
-    /// `closest`, in the same order: closest parameters first, lowest first
-    /// on a tie.
+    /// `closest`, in the same order: closest parameters first, then a net of
+    /// `node`'s name, then the lowest.
     fn ranked(&self, node: u32, sides: Sides, closest: u32) -> Vec<u32> {
-        let mut ranked: Vec<(f64, u32)> = self
+        let mut ranked: Vec<(f64, bool, u32)> = self
             .mates(node, sides.split)
             .filter(|&mate| mate != closest)
-            .map(|mate| (self.apart(node, mate, sides), mate))
+            .map(|mate| {
+                (
+                    self.apart(node, mate, sides),
+                    sides.named_apart(node, mate),
+                    mate,
+                )
+            })
             .collect();
-        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
         ranked.truncate(TRIES - 1);
-        ranked.into_iter().map(|(_, mate)| mate).collect()
+        ranked.into_iter().map(|(_, _, mate)| mate).collect()
     }
 
     /// Pair `node` with `mate`, a reference node of its class, as a new class
