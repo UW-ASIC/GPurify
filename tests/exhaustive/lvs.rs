@@ -944,6 +944,8 @@ struct Controls {
     asymmetric: Vec<Model>,
     /// `lvs permute`: model and two pin positions in [`Dev::pins`] order.
     permuted: Vec<(Model, usize, usize)>,
+    /// `lvs ignore`: models whose devices are left out on both sides.
+    left_out: Vec<Model>,
 }
 
 impl Controls {
@@ -970,6 +972,21 @@ impl Controls {
     fn asymmetric(mut self, model: Model) -> Self {
         self.asymmetric.push(model);
         self
+    }
+
+    /// An `lvs ignore` row.
+    fn leave_out(mut self, model: Model) -> Self {
+        self.left_out.push(model);
+        self
+    }
+
+    /// `c` without the devices the controls leave out, as if never drawn
+    /// or written; its nets stay, and [`reduce`] keeps only those a device
+    /// or a port holds.
+    fn kept(&self, c: &Circuit) -> Circuit {
+        let mut out = c.clone();
+        out.devs.retain(|d| !self.left_out.contains(&d.model));
+        out
     }
 
     /// An `lvs permute` row: pins at positions `a` and `b` of [`Dev::pins`].
@@ -1044,6 +1061,9 @@ impl Controls {
         }
         for &model in &self.asymmetric {
             let _ = writeln!(out, "lvs asymmetric \"{}\"", model.name());
+        }
+        for &model in &self.left_out {
+            let _ = writeln!(out, "lvs ignore \"{}\"", model.name());
         }
         for &(model, a, b) in &self.permuted {
             let names = pin_names(model);
@@ -1215,8 +1235,9 @@ fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
 fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) -> bool {
     let reference = controls.strip(reference);
     let declared = Declared::of(&reference);
+    let (layout, reference) = (controls.kept(layout), controls.kept(&reference));
     matches(
-        &reduce(layout, &declared, true, controls),
+        &reduce(&layout, &declared, true, controls),
         &reduce(&reference, &declared, false, controls),
         controls,
     )
@@ -2572,6 +2593,49 @@ fn controlled() -> Vec<Fixture> {
             &format!("permute/{name}"),
             &["LVS-030"],
             (&layout, &reference),
+            &controls,
+        ));
+    }
+    // LVS-034: an ignored model's devices are left out on both sides. A
+    // capacitor from n0 to n1 beside the `nmos`, drawn and not written or
+    // written and not drawn, matches once `cmim` is ignored; ignoring
+    // `nmos` instead leaves it unpaired. A capacitor to an internal net
+    // n3 takes that net with it; one to a port n3 leaves the port, which
+    // must still pair.
+    let bare = polar(Dev::mos(P, 1, 0, 2));
+    let mut capped = bare.clone();
+    capped.devs.push(Dev::pins(C, &[0, 1]));
+    let mut to_internal = bare.clone();
+    to_internal.names.push("n3".to_owned());
+    to_internal.ports.push(false);
+    to_internal.devs.push(Dev::pins(C, &[1, 3]));
+    let mut to_port = to_internal.clone();
+    to_port.ports[3] = true;
+    let ignore_c = Controls::default().leave_out(C);
+    let ignored: [(&str, &Circuit, &Circuit, Controls); 7] = [
+        ("drawn_only", &capped, &bare, ignore_c.clone()),
+        ("written_only", &bare, &capped, ignore_c.clone()),
+        ("drawn_only_default", &capped, &bare, Controls::default()),
+        (
+            "drawn_only_nmos_ignored",
+            &capped,
+            &bare,
+            Controls::default().leave_out(N),
+        ),
+        (
+            "internal_net_written_only",
+            &bare,
+            &to_internal,
+            ignore_c.clone(),
+        ),
+        ("port_written_only", &bare, &to_port, ignore_c.clone()),
+        ("both", &capped, &capped, ignore_c),
+    ];
+    for (name, layout, reference, controls) in ignored {
+        out.push(compared_under(
+            &format!("ignore/{name}"),
+            &["LVS-034"],
+            (layout, reference),
             &controls,
         ));
     }

@@ -173,6 +173,16 @@ perimeter are read as this tool's: KLayout's `A` and `P`, and ngspice's
 diode `pj`, are `area`, `perim` and `perim`. A parameter stated twice, under
 any of its names, is refused.
 
+## LVS controls
+
+The deck's `lvs` statements change the comparison per device model (see
+[deck.md](deck.md#lvs-controls)): a parameter's tolerance, or leaving it out
+(`lvs tolerance`, `lvs ignore_parameter`); a transistor whose source and
+drain do not swap (`lvs asymmetric`); pins that do (`lvs permute`); and
+devices left out of the comparison altogether, fill or decap cells one side
+does not state (`lvs ignore`). The layout's own checks still see every
+device.
+
 ## Exit code
 
 `0` only when every selected check ran, no rule was skipped or refused, and

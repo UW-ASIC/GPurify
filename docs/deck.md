@@ -436,6 +436,7 @@ lvs tolerance "rpoly" r absolute 10ohm
 lvs ignore_parameter "nfet" as
 lvs asymmetric "nfet_ldmos"
 lvs permute "cmim" top bottom
+lvs ignore "sky130_fd_pr__decap"
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -488,6 +489,15 @@ makes all three of gate, source and drain interchangeable. Devices whose
 interchangeable pins are other than a transistor's source and drain merge
 in parallel either way round, and never in series. An asymmetric
 transistor's source and drain cannot be permuted.
+
+**`lvs ignore "model"`** leaves every device of the model out of LVS on
+both sides, as Netgen's `ignore class` and KLayout's `same_device_classes`
+with `nil` do: fill, decap or tap cells that one side draws and the other
+does not state. A net that only those devices touched is then left out
+too, unless it is a schematic port or carries a layout label, which must
+still pair. The model need not be a `device` of the deck, since a
+schematic may hold devices the layout has no recogniser for. The layout's
+own checks (`lvs.floating_net` and the others) still see the devices.
 
 ## Parasitic stack
 

@@ -88,6 +88,10 @@
 //!   `KLayout`'s `equivalent_pins`); a class other than a transistor's
 //!   channel is no channel, so it merges in parallel either way round and
 //!   never in series.
+//! - `lvs ignore "model"`: the model's devices are dropped from both sides
+//!   before reduction (catalog LVS-034; Netgen's `ignore class`, `KLayout`'s
+//!   `same_device_classes` with `nil`), and a net only they reached is no
+//!   node unless it is a port.
 //!
 //! # Against Netgen
 //!

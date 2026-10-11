@@ -318,3 +318,96 @@ fn permuted_pins_are_interchangeable() {
     assert_ne!(run(&none), Verdict::Match);
     assert_eq!(run(&permute(CAP, 0, 1)), Verdict::Match);
 }
+
+/// Oracle: the definition (Netgen's `ignore class`, `KLayout`'s
+/// `same_device_classes(nil, ...)`): an ignored model's devices are not
+/// compared on either side, and a net only they reached is no node unless
+/// it is a port. A transistor beside a capacitor on its gate and an
+/// internal net 4 matches the transistor alone once the capacitor's model
+/// is ignored, and not before; ignoring the transistor's model instead
+/// leaves the capacitor unpaired. With net 4 a reference port, the port
+/// must still pair, and does not. A parallel merge on the layout lists the
+/// rows the layout was given, past the dropped capacitor. Breaks if the
+/// model's devices are compared, an orphaned internal net is still
+/// required, a port is not, or merge rows are those of the filtered graph.
+#[test]
+fn an_ignored_model_s_devices_and_their_private_nets_are_left_out() {
+    use gpurify_check::topology::TerminalRole::Pin;
+    let ignore = |model| LvsControls {
+        ignore: vec![model],
+        ..LvsControls::default()
+    };
+    let with_cap = |port: bool| {
+        let mut builder = GraphBuilder::new(5);
+        builder.device(DeviceKind::Capacitor, CAP, &[(Pin(0), 0), (Pin(1), 4)]);
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+        );
+        for net in 0..4 {
+            builder.port(net);
+        }
+        builder.name_net(4, StrId(42));
+        if port {
+            builder.port(4);
+        }
+        builder.finish()
+    };
+    let alone = {
+        let mut builder = GraphBuilder::new(4);
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+        );
+        for net in 0..4 {
+            builder.port(net);
+        }
+        builder.finish()
+    };
+    let none = LvsControls::default();
+    assert_ne!(verdict(&alone, &with_cap(false), &none), Verdict::Match);
+    assert_eq!(
+        verdict(&alone, &with_cap(false), &ignore(CAP)),
+        Verdict::Match
+    );
+    assert_eq!(
+        verdict(&with_cap(false), &alone, &ignore(CAP)),
+        Verdict::Match
+    );
+    assert_ne!(
+        verdict(&alone, &with_cap(false), &ignore(NCH)),
+        Verdict::Match
+    );
+    assert_ne!(
+        verdict(&alone, &with_cap(true), &ignore(CAP)),
+        Verdict::Match,
+        "a reference port must pair even when its devices are ignored"
+    );
+
+    let options = CompareOptions {
+        params: ParamNames {
+            multiplier: Some(MULT),
+            ..ParamNames::default()
+        },
+        ..CompareOptions::default()
+    };
+    let mut drawn = GraphBuilder::new(4);
+    drawn.device(DeviceKind::Capacitor, CAP, &[(Pin(0), 0), (Pin(1), 3)]);
+    for _ in 0..2 {
+        drawn.device(
+            DeviceKind::Resistor,
+            common::RES,
+            &[(Pin(0), 1), (Pin(0), 2)],
+        );
+    }
+    let drawn = drawn.finish();
+    let (_, merges) = compare_with(&drawn, &drawn, options, &ignore(CAP));
+    let layout_rows: Vec<&[u32]> = merges
+        .iter()
+        .filter(|(side, _)| *side == gpurify_check::lvs::verdict::Side::Layout)
+        .map(|(_, merge)| merge.devices.as_slice())
+        .collect();
+    assert_eq!(layout_rows, [&[1u32, 2][..]]);
+}

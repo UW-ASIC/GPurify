@@ -421,11 +421,18 @@ fn netgen_setup(setup: &str, controls: &Controls) -> String {
 /// the model: a relative `lvs tolerance` is `property ... tolerance`, given
 /// as `2t/(2 - t)` since Netgen measures against the mean (as [`SETUP`]
 /// does for the default), and `lvs ignore_parameter` is `property ...
-/// remove`, and `lvs permute` is `permute` with Netgen's pin names, which
-/// are the deck's. An absolute part has no Netgen counterpart for a
-/// real-valued property, so no case states one.
+/// remove`, `lvs permute` is `permute` with Netgen's pin names, which are
+/// the deck's, and `lvs ignore` is `ignore class`. An absolute part has no
+/// Netgen counterpart for a real-valued property, so no case states one.
 fn netgen_controls(controls: &Controls) -> String {
     let mut out = String::new();
+    for &model in &controls.left_out {
+        let model = model.name();
+        out.push_str(&on_each_side(
+            model,
+            &format!("ignore class \"$side {model}\""),
+        ));
+    }
     for &(model, a, b) in &controls.permuted {
         let names = pin_names(model);
         let model = model.name();
@@ -459,6 +466,7 @@ fn controlled() -> Vec<Case> {
     use Model::{N, P};
     let mut out = asymmetric();
     out.extend(permuted());
+    out.extend(ignored());
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
     // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
@@ -563,6 +571,39 @@ fn permuted() -> Vec<Case> {
                 &format!("permute/{name}/{label}"),
                 &["LVS-030"],
                 (&layout, &reference),
+                &controls,
+            ));
+        }
+    }
+    out
+}
+
+/// LVS-034: a capacitor drawn and not written, written and not drawn, and
+/// written to an internal net nothing else touches, against Netgen's
+/// `ignore class`, each with and without the control.
+fn ignored() -> Vec<Case> {
+    use Model::{C, P};
+    let bare = polar(Dev::mos(P, 1, 0, 2));
+    let mut capped = bare.clone();
+    capped.devs.push(Dev::pins(C, &[0, 1]));
+    let mut to_internal = bare.clone();
+    to_internal.names.push("n3".to_owned());
+    to_internal.ports.push(false);
+    to_internal.devs.push(Dev::pins(C, &[1, 3]));
+    let mut out = Vec::new();
+    for (name, layout, reference) in [
+        ("drawn_only", &capped, &bare),
+        ("written_only", &bare, &capped),
+        ("internal_net_written_only", &bare, &to_internal),
+    ] {
+        for (label, controls) in [
+            ("ignored", Controls::default().leave_out(C)),
+            ("default", Controls::default()),
+        ] {
+            out.push(controlled_case(
+                &format!("ignore/{name}/{label}"),
+                &["LVS-034"],
+                (layout, reference),
                 &controls,
             ));
         }
