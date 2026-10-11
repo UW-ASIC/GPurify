@@ -429,6 +429,7 @@ rule capm.2a space(capm) >= 840nm
 rule capm.3 enclosure(capm, met3) >= 140nm
 rule capm.4 enclosure(via3.interacting(capm), capm) >= 140nm
 rule capm.11 space(capm_m3_free, capm) >= 500nm
+rule capm.7 forbidden(capm.non_rectangles())
 rule cap2m.1 width(cap2m) >= 1um
 rule cap2m.2a space(cap2m) >= 840nm
 rule cap2m.3 enclosure(cap2m, met4) >= 140nm
@@ -678,7 +679,6 @@ rule poly.6 space(gate, tap.interacting(diff)) >= 300nm
 rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 
 # --- Rules waiting on a check kind ---
-# capm.7 "only rectangular capacitors": no selection by shape class.
 # licon.16 on source diff: needs the source terminal as a layer.
 # rpm.1g-1k "only N licons in the prec_resistor_terminal": an exact count and
 #   the terminal layers.

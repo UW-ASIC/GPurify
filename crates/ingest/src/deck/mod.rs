@@ -317,6 +317,19 @@ pub enum DerivedOp {
     /// kept exactly: `with_width(> 70nm)` is `4901..` and holds a `√5000`
     /// neck, `with_width(<= 70nm)` is `..=4900` and does not.
     WithWidth(i128, i128),
+    /// `rectangles` (`keep`), `squares` (`keep` and `square`),
+    /// `non_rectangles` or `non_squares`: the shapes that are, or are not, one
+    /// axis-aligned box with no hole, a square having equal sides, as
+    /// `KLayout`'s selections of those names and LEF58 `RECTONLY` define them.
+    /// Shapes are read merged, so abutting pieces that make one box are a
+    /// rectangle, and two boxes meeting only at a corner are one shape that is
+    /// not.
+    Rectangles {
+        /// Squares only.
+        square: bool,
+        /// `true` keeps the matching shapes, `false` the others.
+        keep: bool,
+    },
     /// Polygons to their boundary edges, each directed with the material on
     /// its left. The result is an edge layer.
     Edges,
@@ -350,6 +363,7 @@ impl DerivedOp {
             | Self::Extents
             | Self::WithArea(..)
             | Self::WithWidth(..)
+            | Self::Rectangles { .. }
             | Self::WithText { .. } => Some(false),
             Self::And
             | Self::Or

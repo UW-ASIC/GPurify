@@ -149,6 +149,24 @@ pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mu
     a.select_into(&keep, out);
 }
 
+/// `KLayout` `rectangles` and `squares` (`keep`), or `non_rectangles` and
+/// `non_squares`: the polygons of `a` that are, or are not, one axis-aligned
+/// box with no hole, and with `square` a box with equal sides. `a` must be
+/// merged: then a rectangle drawn as abutting pieces is one rectangle, and two
+/// boxes meeting only at a corner are one polygon that is none.
+pub fn rectangles_into(a: &ValidatedLayer, square: bool, keep: bool, out: &mut ValidatedLayer) {
+    let keep: Vec<bool> = (0..narrow(a.len()))
+        .map(|idx| {
+            let poly = a.get(idx);
+            let b = poly.bbox();
+            // A merged ring has no collinear vertex: four corners are a box.
+            let boxed = poly.outer().coords().0.len() == 4 && poly.holes().next().is_none();
+            (boxed && (!square || b.width() == b.height())) == keep
+        })
+        .collect();
+    a.select_into(&keep, out);
+}
+
 /// Every `(i, j)` whose boxes share a point, `i` into `a`, `j` into `b`.
 fn box_pairs(a: &[Bbox], b: &[Bbox], out: &mut Vec<(u32, u32)>) {
     out.clear();

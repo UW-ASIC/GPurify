@@ -60,6 +60,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         booleans(),
         sizing(),
         selections(),
+        shape_class(),
         edge_operations(),
     ]
     .concat()
@@ -3148,6 +3149,71 @@ fn selections() -> Vec<Fixture> {
         texts,
     ));
     every_placement(cases)
+}
+
+/// Rectangle-only and square-only shapes (DRC-005: sky130 capm.7 "only
+/// rectangular capacitors", LEF58 `RECTONLY`), as `forbidden(L.non_rectangles())`
+/// and the other three selections, each shape reported with its area.
+///
+/// Oracle: hand-derived areas of shapes whose class is fixed by construction,
+/// read merged as `KLayout`'s `rectangles` and `squares` read them. A square
+/// and a 100 x 200 bar; a square drawn as two abutting halves, which only the
+/// merged layer sees as one square; a bar drawn twice, and as two overlapping
+/// boxes (one box each); an L; two squares meeting only at a corner (one shape
+/// under the corner model, no rectangle); and a square ring, whose box is
+/// square but whose hole makes it none. A check that reads drawn rows calls
+/// the halves two non-squares; one blind to holes calls the ring a square.
+fn shape_class() -> Vec<Fixture> {
+    let layout = ring(
+        rects(
+            Layout::default(),
+            "a",
+            &[
+                (0, 0, 100, 100),
+                (300, 0, 400, 200),
+                (600, 0, 650, 100),
+                (650, 0, 700, 100),
+                (500, 500, 600, 600),
+                (600, 600, 700, 700),
+                (1500, 0, 1700, 100),
+                (1550, 0, 1650, 100),
+                (2000, 0, 2100, 100),
+                (2050, 0, 2150, 100),
+            ],
+        )
+        .polygon(
+            "a",
+            &[
+                (0, 500),
+                (300, 500),
+                (300, 600),
+                (100, 600),
+                (100, 800),
+                (0, 800),
+            ],
+        ),
+        "a",
+        (1000, 0, 1300, 300),
+        (1100, 100, 1200, 200),
+    );
+    every_placement(vec![derived(
+        "derived/shape_class",
+        &["DRC-005"],
+        &["a"],
+        &[
+            (
+                "a.rectangles()",
+                areas(&[10_000, 20_000, 10_000, 20_000, 15_000]),
+            ),
+            ("a.non_rectangles()", areas(&[50_000, 20_000, 80_000])),
+            ("a.squares()", areas(&[10_000, 10_000])),
+            (
+                "a.non_squares()",
+                areas(&[20_000, 20_000, 15_000, 50_000, 20_000, 80_000]),
+            ),
+        ],
+        layout,
+    )])
 }
 
 /// Edge layers (DRC-122): `.edges()` (a rectangle, the same drawn as two
