@@ -189,6 +189,25 @@ fn fixture(
     )
 }
 
+/// A fixture expecting rule `id` to run, find exactly `findings`, and examine
+/// every shape of `layout`: for the kinds whose `examined` counts drawn
+/// polygons (`drc::Rule::MinWidth`, `drc::Rule::MaxWidth`), when every shape
+/// is one polygon on the measured layer. A rule that skips the layer, or
+/// counts merged figures, fails it.
+fn counted(
+    name: &str,
+    catalog: &[&'static str],
+    deck: &str,
+    layout: Layout,
+    id: &str,
+    findings: Vec<Finding>,
+) -> Fixture {
+    let drawn = layout.shapes.len() as u64;
+    Fixture::new(name, catalog, deck, DRC)
+        .layout(layout)
+        .expect(Expect::rule(id, findings).examined(drawn))
+}
+
 /// `rules` on an empty `met1`, with a `met2` shape so the layout is not
 /// empty: each rule runs and finds nothing.
 fn vacuous(kind: &str, catalog: &[&'static str], rules: &str, ids: &[&str]) -> Fixture {
@@ -242,12 +261,13 @@ fn min_width(depth: Depth) -> Vec<Fixture> {
             }
         };
         let mut case = |shape: &str, layout: Layout, findings: Vec<Finding>| {
-            cases.push(fixture(
+            cases.push(counted(
                 &format!("min_width/{shape}/{}", side(w, LIMIT)),
                 &["DRC-010"],
                 &deck,
                 layout,
-                vec![("w", findings)],
+                "w",
+                findings,
             ));
         };
         case("bar", met1(&[[0, 0, w, 2000]]), one(w, 2000));
@@ -449,12 +469,13 @@ fn min_width_neck(depth: Depth) -> Vec<Fixture> {
             ),
         ];
         for (drawn, layout) in drawings {
-            cases.push(fixture(
+            cases.push(counted(
                 &format!("min_width/neck_{drawn}/d{d}/limit{limit}"),
                 &["DRC-010"],
                 &deck,
                 layout,
-                vec![("w", findings.clone())],
+                "w",
+                findings.clone(),
             ));
         }
     };
@@ -493,12 +514,13 @@ fn max_width(depth: Depth) -> Vec<Fixture> {
             }
         };
         let mut case = |shape: &str, layout: Layout, findings: Vec<Finding>| {
-            cases.push(fixture(
+            cases.push(counted(
                 &format!("max_width/{shape}/{}", side(w, LIMIT)),
                 &["DRC-012"],
                 &deck,
                 layout,
-                vec![("mx", findings)],
+                "mx",
+                findings,
             ));
         };
         case("bar", met1(&[[0, 0, w, 5000]]), one(w, 5000));
@@ -562,7 +584,7 @@ fn max_width(depth: Depth) -> Vec<Fixture> {
             },
         );
     }
-    cases.push(fixture(
+    cases.push(counted(
         "max_width/dumbbell",
         &["DRC-012"],
         &deck,
@@ -571,17 +593,15 @@ fn max_width(depth: Depth) -> Vec<Fixture> {
             [3000, 0, 5000, 2000],
             [2000, 900, 3000, 1000],
         ]),
-        vec![(
-            "mx",
-            vec![
-                Finding::length(2000).at(1000, 1000),
-                Finding::length(2000).at(4000, 1000),
-            ],
-        )],
+        "mx",
+        vec![
+            Finding::length(2000).at(1000, 1000),
+            Finding::length(2000).at(4000, 1000),
+        ],
     ));
     // The bar is wide too, so the plates and the bar are one region, and its
     // narrowest gap is the bar's height.
-    cases.push(fixture(
+    cases.push(counted(
         "max_width/dumbbell_wide_bar",
         &["DRC-012"],
         &deck,
@@ -590,20 +610,19 @@ fn max_width(depth: Depth) -> Vec<Fixture> {
             [3000, 0, 5000, 2000],
             [2000, 500, 3000, 1502],
         ]),
-        vec![("mx", vec![Finding::length(1002).at(2500, 1001)])],
+        "mx",
+        vec![Finding::length(1002).at(2500, 1001)],
     ));
-    cases.push(fixture(
+    cases.push(counted(
         "max_width/two_plates",
         &["DRC-012"],
         &deck,
         met1(&[[0, 0, 1500, 1500], [3000, 0, 4600, 1600]]),
-        vec![(
-            "mx",
-            vec![
-                Finding::length(1500).at(750, 750),
-                Finding::length(1600).at(3800, 800),
-            ],
-        )],
+        "mx",
+        vec![
+            Finding::length(1500).at(750, 750),
+            Finding::length(1600).at(3800, 800),
+        ],
     ));
     let mut out = every_placement(cases);
     out.push(vacuous(

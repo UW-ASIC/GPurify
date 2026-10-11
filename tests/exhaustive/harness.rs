@@ -254,6 +254,10 @@ pub enum Expect {
         outcome: Want,
         /// Exactly these findings.
         findings: Vec<Finding>,
+        /// Exactly this many items examined (`RuleRun::examined`), where the
+        /// fixture's definition fixes the count: a clean row from a rule that
+        /// examined nothing is not a clean layout. `None` claims nothing.
+        examined: Option<u64>,
     },
     /// The LVS verdict: matched, or not.
     Lvs(bool),
@@ -279,6 +283,7 @@ impl Expect {
             id: id.to_owned(),
             outcome: Want::Ran,
             findings,
+            examined: None,
         }
     }
 
@@ -293,7 +298,23 @@ impl Expect {
             id: id.to_owned(),
             outcome,
             findings: Vec::new(),
+            examined: None,
         }
+    }
+
+    /// This rule claim, also claiming the row examined exactly `count`
+    /// items. A symmetry or translation keeps the count, so
+    /// [`Fixture::transformed`] leaves it.
+    ///
+    /// # Panics
+    ///
+    /// On a claim that is not [`Expect::Rule`]: only a rule row examines.
+    pub fn examined(mut self, count: u64) -> Self {
+        match &mut self {
+            Expect::Rule { examined, .. } => *examined = Some(count),
+            other => panic!("only a rule row has an examined count, not {other:?}"),
+        }
+        self
     }
 }
 
@@ -409,8 +430,8 @@ fn offset_name(dx: i64, dy: i64) -> String {
 
 /// What a run produced, with names resolved.
 pub struct Ran {
-    /// Each rule row: `(id, outcome)`.
-    pub rows: Vec<(String, Outcome)>,
+    /// Each rule row: `(id, outcome, examined)`.
+    pub rows: Vec<(String, Outcome, u64)>,
     /// Each finding: `(rule id, measured, at in nm)`.
     pub findings: Vec<(String, Measurement, (i64, i64))>,
     /// The LVS verdict, if LVS ran to one.
@@ -504,7 +525,7 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
     let rows = outputs
         .runs
         .iter()
-        .map(|run| (name(run.rule), run.outcome))
+        .map(|run| (name(run.rule), run.outcome, run.examined))
         .collect();
     Ok(Ran {
         rows,
@@ -623,15 +644,16 @@ pub fn violations_of(fixture: &Fixture, ran: &Result<Ran, String>) -> Vec<String
                 id,
                 outcome,
                 findings,
+                examined,
             } => {
-                let rows: Vec<&Outcome> = ran
+                let rows: Vec<(Outcome, u64)> = ran
                     .rows
                     .iter()
-                    .filter(|(rule, _)| rule == id)
-                    .map(|(_, outcome)| outcome)
+                    .filter(|(rule, ..)| rule == id)
+                    .map(|&(_, outcome, examined)| (outcome, examined))
                     .collect();
-                let got = match rows.as_slice() {
-                    [one] => **one,
+                let (got, got_examined) = match rows.as_slice() {
+                    [one] => *one,
                     [] => {
                         broken.push(format!("{id}: no row"));
                         continue;
@@ -649,6 +671,9 @@ pub fn violations_of(fixture: &Fixture, ran: &Result<Ran, String>) -> Vec<String
                 );
                 if !matches {
                     broken.push(format!("{id}: outcome {got:?}, want {outcome:?}"));
+                }
+                if let Some(want) = examined.filter(|&want| want != got_examined) {
+                    broken.push(format!("{id}: examined {got_examined}, want {want}"));
                 }
                 let mut actual: Vec<(Measurement, (i64, i64))> = ran
                     .findings
