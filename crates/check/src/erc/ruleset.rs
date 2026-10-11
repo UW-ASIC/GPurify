@@ -1,4 +1,4 @@
-//! The twenty-four tables, the deck parser that fills them, and the dispatcher.
+//! The twenty-six tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -80,6 +80,10 @@ pub struct RuleSet {
     pub em_current_density: electrical::EmCurrentDensityTable,
     /// `electromigration` rows: [`electrical::ElectromigrationTable`].
     pub electromigration: electrical::ElectromigrationTable,
+    /// `dynamic_ir_drop` rows: [`electrical::DynamicIrDropTable`].
+    pub dynamic_ir_drop: electrical::DynamicIrDropTable,
+    /// `em_thermal` rows: [`electrical::EmThermalTable`].
+    pub em_thermal: electrical::EmThermalTable,
 
     /// `reliability` rows: [`reliability::ReliabilityTable`].
     pub reliability: reliability::ReliabilityTable,
@@ -649,6 +653,41 @@ impl RuleSet {
                     row.layers(0)?;
                     row.head(&mut set.ir_drop.head)?;
                 }
+                "dynamic_ir_drop" => {
+                    row.layers(0)?;
+                    row.head(&mut set.dynamic_ir_drop.head)?;
+                }
+                "em_thermal" => {
+                    let layers = row.layers_from(1)?;
+                    let max_density = Qty::new(row.number("max_density")?);
+                    let per_cut = Qty::new(row.number("max_current_per_cut")?);
+                    let blech = Qty::new(row.number("blech_limit")?);
+                    let reference = Qty::new(row.number("reference_temperature")?);
+                    let activation = row.number("activation_energy_ev")?;
+                    let exponent = row.number("current_exponent")?;
+                    let conductivity = row.number("thermal_conductivity")?;
+                    let spreading = row.number("heat_spreading")?;
+                    let sigma = row.number("sigma")?;
+                    let limit_failure = row.number("limit_failure")?;
+                    let max_failure = row.number("max_failure")?;
+                    let table = &mut set.em_thermal;
+                    row.head(&mut table.head)?;
+                    table.layer.extend_from_slice(layers);
+                    table.max_density.extend(layers.iter().map(|_| max_density));
+                    table
+                        .max_current_per_cut
+                        .extend(layers.iter().map(|_| per_cut));
+                    table.blech_limit.extend(layers.iter().map(|_| blech));
+                    table.reference_temperature.push(reference);
+                    table.activation_energy_ev.push(activation);
+                    table.current_exponent.push(exponent);
+                    table.thermal_conductivity.push(conductivity);
+                    table.heat_spreading.push(spreading);
+                    table.sigma.push(sigma);
+                    table.limit_failure.push(limit_failure);
+                    table.max_failure.push(max_failure);
+                    close_csr(&mut table.layer_start, table.layer.len());
+                }
                 "missing_tie" => {
                     let layers = row.layers(2)?;
                     let max_distance = row.length("max_distance")?;
@@ -729,6 +768,7 @@ impl RuleSet {
             set.check_row(kind, filed, strings)?;
         }
         set.soft_connection.connectivity = deck.connectivity.clone();
+        set.em_thermal.height_nm.clone_from(&deck.stack.height_nm);
         for stack in [&mut set.antenna.stack, &mut set.antenna_electrical.stack] {
             let from = &deck.connectivity;
             stack.conductors.clone_from(&from.conductors);
@@ -800,6 +840,8 @@ impl RuleSet {
             "drain_source" => &self.drain_source.head,
             "electromigration" => &self.electromigration.head,
             "em_current_density" => &self.em_current_density.head,
+            "dynamic_ir_drop" => &self.dynamic_ir_drop.head,
+            "em_thermal" => &self.em_thermal.head,
             "esd_latchup" => &self.esd_latchup.head,
             "esd_topological" => &self.esd_topological.head,
             "floating_gate" => &self.floating_gate.head,
@@ -907,6 +949,42 @@ impl RuleSet {
                     }
                 }
             }
+            "em_thermal" => {
+                let t = &self.em_thermal;
+                for at in span(&t.layer_start) {
+                    c.positive("max_density", t.max_density[at].raw())?;
+                    c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;
+                    c.positive("blech_limit", t.blech_limit[at].raw())?;
+                }
+                c.positive("reference_temperature", t.reference_temperature[r].raw())?;
+                c.positive("activation_energy_ev", t.activation_energy_ev[r])?;
+                c.positive("current_exponent", t.current_exponent[r])?;
+                c.positive("thermal_conductivity", t.thermal_conductivity[r])?;
+                c.positive("sigma", t.sigma[r])?;
+                // Zero spreading is a one-dimensional heat path; less is no
+                // geometry.
+                c.finite("heat_spreading", t.heat_spreading[r])?;
+                if t.heat_spreading[r] < 0.0 {
+                    return Err(c.non_positive("heat_spreading"));
+                }
+                // A characterisation at 0 or 1 has no quantile; a budget of 0
+                // flags any wire that carries current.
+                for (param, value) in [
+                    ("limit_failure", t.limit_failure[r]),
+                    ("max_failure", t.max_failure[r]),
+                ] {
+                    c.fraction(param, value)?;
+                    if value <= 0.0 {
+                        return Err(c.non_positive(param));
+                    }
+                }
+                if t.limit_failure[r] >= 1.0 {
+                    return Err(ErcError::NotAFraction {
+                        rule: c.rule.to_owned(),
+                        param: "limit_failure",
+                    });
+                }
+            }
             "esd_latchup" => {
                 let t = &self.esd_latchup;
                 c.length("min_guard_ring_width", t.min_guard_ring_width[r])?;
@@ -991,6 +1069,8 @@ impl RuleSet {
             &self.ir_drop.head,
             &self.em_current_density.head,
             &self.electromigration.head,
+            &self.dynamic_ir_drop.head,
+            &self.em_thermal.head,
             &self.reliability.head,
             &self.hv_domain.head,
             &self.esd_latchup.head,
@@ -1090,6 +1170,16 @@ impl RuleSet {
             grid,
             operating_temperature,
             &self.electromigration,
+            out,
+            runs,
+        );
+        electrical::check_dynamic_ir_drop(power, intent, &self.dynamic_ir_drop, scratch, out, runs);
+        electrical::check_em_thermal(
+            power,
+            intent,
+            grid,
+            operating_temperature,
+            &self.em_thermal,
             out,
             runs,
         );

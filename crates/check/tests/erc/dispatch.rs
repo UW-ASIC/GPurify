@@ -7,9 +7,9 @@
 //! indistinguishable from a rule that found nothing.
 //!
 //! Oracle: construct-from-answer. The rule set below is written out by hand
-//! with one row of each of the nineteen kinds, so both the expected number of
-//! run rows and the expected split between the thirteen that always run and the
-//! six that need design intent are decided before anything executes.
+//! with one row of each kind in `KINDS`, so both the expected number of run
+//! rows and the expected split between the kinds that always run and the
+//! `INTENT_GATED` ones are decided before anything executes.
 
 use crate::common;
 
@@ -37,15 +37,17 @@ fn id_of(kind: &str) -> StrId {
         .iter()
         .position(|&k| k == kind)
         .unwrap_or_else(|| panic!("{kind} is not a kind this crate implements"));
-    rule(u32::try_from(index).expect("twenty-four kinds"))
+    rule(u32::try_from(index).expect("a few dozen kinds"))
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 14] = [
+const INTENT_GATED: [&str; 16] = [
     "domain_crossing",
     "drain_source",
+    "dynamic_ir_drop",
     "electromigration",
     "em_current_density",
+    "em_thermal",
     "esd_latchup",
     "esd_topological",
     "gate_oxide",
@@ -199,6 +201,26 @@ fn every_kind() -> RuleSet {
             reference_temperature: vec![kelvin(358.15)],
             activation_energy_ev: vec![0.7],
             current_exponent: vec![2.0],
+        },
+        dynamic_ir_drop: electrical::DynamicIrDropTable {
+            head: head(id_of("dynamic_ir_drop")),
+        },
+        em_thermal: electrical::EmThermalTable {
+            head: head(id_of("em_thermal")),
+            layer_start: vec![0, 1],
+            layer: vec![LayerId(0)],
+            max_density: vec![density(1e9)],
+            max_current_per_cut: vec![microamps(200.0)],
+            blech_limit: vec![microamps(1.0)],
+            reference_temperature: vec![kelvin(358.15)],
+            activation_energy_ev: vec![0.7],
+            current_exponent: vec![2.0],
+            thermal_conductivity: vec![1.4],
+            heat_spreading: vec![0.88],
+            sigma: vec![0.5],
+            limit_failure: vec![0.001],
+            max_failure: vec![0.001],
+            height_nm: Vec::new(),
         },
 
         reliability: reliability::ReliabilityTable {
@@ -397,14 +419,16 @@ fn without_intent_exactly_the_gated_kinds_record_themselves_skipped() {
 ///
 /// Oracle: `erc::power::Power`'s contract ("those rows are refused; every
 /// other rule still runs"), as a differential against the same rule set over
-/// a solved grid: the four grid kinds turn `Refused`, every other outcome is
+/// a solved grid: the six grid kinds turn `Refused`, every other outcome is
 /// the solved run's.
 #[test]
 fn a_failed_solve_refuses_only_the_grid_rules() {
-    const GRID: [&str; 4] = [
+    const GRID: [&str; 6] = [
         "ir_drop",
+        "dynamic_ir_drop",
         "em_current_density",
         "electromigration",
+        "em_thermal",
         "reliability",
     ];
     let rules = every_kind();
@@ -728,4 +752,66 @@ fn a_multi_layer_electromigration_row_gives_every_layer_its_blech_limit() {
             "row {row}"
         );
     }
+}
+
+/// A process with met1 1.2 µm above the substrate and one `em_thermal` row
+/// on it and its cut; `{limit}` and `{spreading}` are filled per case.
+const THERMAL_DECK: &str = "grid 5nm
+layer met1 = gds(1, 0)
+layer via1 = gds(2, 0)
+layer met2 = gds(3, 0)
+connect conductors [met1, met2]
+connect via via1 [met1, met2]
+pex met1 thickness 350nm height 1200nm sheet 0.1ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+rule em.hot warning em_thermal(met1, via1; max_density: 1mA/um, max_current_per_cut: 0.2mA, blech_limit: 2000uA, reference_temperature: 110C, activation_energy: 0.9eV, current_exponent: 2, thermal_conductivity: 1.4W/mK, spreading: {spreading}, sigma: 0.4, limit_failure: {limit}, max_failure: 0.01%)
+";
+
+/// Oracle: construct-from-answer, against `docs/deck.md`'s spelling of
+/// `em_thermal`: every value lands in its column in the engine's unit (A/m,
+/// µA, K, W/(m·K), fractions), the table carries the deck's `pex` heights,
+/// and a characterisation at 100 % failed or a negative spreading is refused.
+#[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "a value read from the deck is the value written, bit for bit"
+)]
+fn an_em_thermal_row_reads_into_its_columns() {
+    let parse = |limit: &str, spreading: &str| {
+        let mut strings = StrTable::default();
+        let text = THERMAL_DECK
+            .replace("{limit}", limit)
+            .replace("{spreading}", spreading);
+        let deck = gpurify_ingest::deck::parse_deck(&text, manufacturing_grid(), &mut strings)
+            .expect("the deck parses");
+        RuleSet::from_deck(&deck, &strings)
+    };
+    let rules = parse("0.1%", "0.88").expect("the row is valid");
+    let t = &rules.em_thermal;
+    assert_eq!(t.head.len(), 1);
+    assert_eq!(t.head.severity, vec![Severity::Warning]);
+    assert_eq!(t.layer.len(), 2);
+    assert_eq!(t.layer_start, vec![0, 2]);
+    assert!(t.max_density.iter().all(|d| d.raw() == 1000.0));
+    assert!(t.max_current_per_cut.iter().all(|c| c.raw() == 200.0));
+    assert!(t.blech_limit.iter().all(|b| b.raw() == 2000.0));
+    assert_eq!(t.reference_temperature[0].raw(), 110.0 + 273.15);
+    assert_eq!(t.activation_energy_ev, vec![0.9]);
+    assert_eq!(t.current_exponent, vec![2.0]);
+    assert_eq!(t.thermal_conductivity, vec![1.4]);
+    assert_eq!(t.heat_spreading, vec![0.88]);
+    assert_eq!(t.sigma, vec![0.4]);
+    assert_eq!(t.limit_failure, vec![0.001]);
+    assert_eq!(t.max_failure, vec![0.0001]);
+    assert!(t.height_nm.contains(&1200.0), "{:?}", t.height_nm);
+    assert!(matches!(
+        parse("100%", "0.88"),
+        Err(ErcError::NotAFraction {
+            param: "limit_failure",
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse("0.1%", "-1"),
+        Err(ErcError::NonPositiveLimit { .. })
+    ));
 }

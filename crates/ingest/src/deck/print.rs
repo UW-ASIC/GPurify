@@ -606,6 +606,7 @@ impl Printer<'_> {
                         Dim::Resistance => "ohm",
                         Dim::Temperature => "K",
                         Dim::Energy => "eV",
+                        Dim::ThermalConductivity => "W/mK",
                         Dim::Time => "h",
                         Dim::CapPerArea => "aF/um2",
                         Dim::CapPerLength => "aF/um",

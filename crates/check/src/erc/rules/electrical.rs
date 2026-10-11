@@ -1,8 +1,8 @@
 //! Rules over a solved resistive network.
 //!
 //! Data in: per-net networks (p2p resistance, which needs no intent) and the
-//! solved supply grid (the other three, skipped without intent). Every kind
-//! here is refused when its network could not be built.
+//! solved supply grid (the others, skipped without intent). Every kind here
+//! is refused when its network could not be built.
 //! Data out: violations and one run per row.
 
 use crate::erc::facts::IntentMap;
@@ -10,6 +10,7 @@ use crate::erc::power::{
     discarded_budget, effective_resistance_into, EdgeKind, NetNetworks, Power, PowerError,
     PowerGrid, PowerSolution, Solved,
 };
+use crate::erc::power::{transient_into, Stimulus};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{fill_rows, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
@@ -85,7 +86,7 @@ pub struct P2pResistanceTable {
 /// shape, so a rail fed from several pads reads more drop near that point than
 /// it has. A net's budget is shared equally among its device terminals, so a
 /// device drawing more than its share reads cooler than it is. Static only:
-/// dynamic and vectorless IR are out of scope (ERC-E11).
+/// the vectorless dynamic drop is [`DynamicIrDropTable`]'s (ERC-E11).
 ///
 /// Catalog: ERC-E8 in the [check catalog]. Defined by [OpenROAD psm];
 /// [Weste & Harris] §13.3.2; `RedHawk`, Voltus and `mPower` (public material
@@ -228,6 +229,58 @@ pub struct ElectromigrationTable {
     pub activation_energy_ev: Vec<f64>,
     /// `n` in Black's equation.
     pub current_exponent: Vec<f64>,
+}
+
+/// Vectorless dynamic IR drop on the supply grid: deck kind
+/// `dynamic_ir_drop`, written `dynamic_ir_drop()`.
+///
+/// The stimulus and the limit are per net, in the design intent's `limits`
+/// entry under `dynamic` ([`Switching`](gpurify_ingest::intent::Switching)),
+/// beside the net's `budget_current_ua`; nothing is in the deck. Vectorless:
+/// no switching vectors are read. In the worst cycle every load on the net
+/// switches at once, at the clock edge, and each draws the charge of its
+/// share of the budget over the cycles it switches in, `Q = I T / α` (share
+/// `I`, clock period `T`, toggle rate `α`), as a triangular current pulse of
+/// base `t_r` (the rise time) and peak `2 Q / t_r`. The net's `decap_pf`
+/// ties each load's node to an ideal reference, shared in proportion to its
+/// current. The grid is [`IrDropTable`]'s, and it starts the cycle at its
+/// static drop, the average activity of the cycles before; the pulses'
+/// response over the longest stated clock period
+/// ([`transient_into`]) adds to it. A
+/// row flags a node whose drop, static plus dynamic, is above `max_drop_mv`:
+/// nominal minus voltage on a power net, the rise above 0 V on a ground net.
+///
+/// # Limits
+///
+/// An RC grid: no package, bump or wire inductance (no `L di/dt`), and each
+/// supply's one feed point (as for [`IrDropTable`]) is ideal. Every load
+/// switches in phase, with no timing windows, which errs high, and a net's
+/// budget is shared equally among its device terminals, so a load drawing
+/// more than its share reads cooler than it is. Only the worst cycle is
+/// followed: when decap holds charge longer than a period, the cycles before
+/// count only through their average, the static drop. Backward Euler at
+/// [`STEPS_PER_RISE`](crate::erc::power::STEPS_PER_RISE) steps per rise reads
+/// the peak of an RC node's response low by at most 0.61 %.
+///
+/// Catalog: ERC-E11 in the [check catalog]. Defined by `RedHawk`, Voltus,
+/// `mPower` and Totem (public material only: vectorless dynamic analysis from
+/// toggle rates, switching current and decap); [Kouroussis & Najm], who
+/// verify an RC grid vectorlessly by backward Euler; [Weste & Harris] §13.3
+/// (power distribution). The open IR tool, [OpenROAD psm], is static only, so
+/// no open tool computes this. Source tags are in [check-sources.md]; the
+/// intent file is described in [usage.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [usage.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md#design-intent
+/// [Kouroussis & Najm]: https://doi.org/10.1145/775832.775861
+/// [Weste & Harris]: https://pages.hmc.edu/harris/cmosvlsi/4e/cmosvlsidesign_4e_fm.pdf
+/// [OpenROAD psm]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DynamicIrDropTable {
+    /// Rule id and severity per row. Rows differ only in id and severity: the
+    /// stimulus and limits come from the intent.
+    pub head: RuleHead,
 }
 
 /// Runs every [`P2pResistanceTable`] row over the per-net networks.
@@ -404,6 +457,89 @@ pub fn check_ir_drop(
             if let Some(limit) = limits.max_overvoltage {
                 report_node(out, grid, node, head, -drop, limit);
             }
+        }
+        record_run(runs, out, before, head.0, Outcome::Ran, examined);
+    }
+}
+
+/// The switching event of every node whose net states `dynamic`: the charge
+/// of its share of the budget over the cycles it switches in, as a triangle
+/// of base the rise time, and the net's decap in proportion to its share.
+fn worst_cycle(grid: &PowerGrid, intent: &IntentMap) -> Stimulus {
+    let mut stimulus = Stimulus::default();
+    for (&net, &load) in grid.node_net.iter().zip(&grid.node_load) {
+        let limits = intent.limits_of(net);
+        let (mut peak, mut rise, mut cap) = (0.0, 0.0, 0.0);
+        if let (Some(switching), Some(budget)) = (limits.dynamic, limits.budget_current_ua) {
+            // µA · ps: attocoulombs, signed as the load.
+            let charge = load.raw() * switching.clock_period_ps / switching.toggle_rate;
+            peak = 2.0 * charge / switching.rise_time_ps;
+            rise = switching.rise_time_ps;
+            cap = switching.decap_pf * load.raw().abs() / budget;
+            stimulus.window_ps = stimulus.window_ps.max(switching.clock_period_ps);
+        }
+        stimulus.node_peak.push(Qty::new(peak));
+        stimulus.node_rise_ps.push(rise);
+        stimulus.node_cap_pf.push(cap);
+    }
+    stimulus
+}
+
+/// Runs every [`DynamicIrDropTable`] row over the solved supply grid and its
+/// response to the worst cycle.
+///
+/// `examined` counts grid nodes whose net states a `dynamic` limit. A
+/// violation sits at the node, on its shape's layer, measuring the drop,
+/// static plus dynamic, in mV against `max_drop_mv`. The response is
+/// simulated once for every row, and every row is refused when that fails
+/// (a step that does not converge). Otherwise skipped and refused as
+/// [`check_ir_drop`] is.
+pub fn check_dynamic_ir_drop(
+    power: Power<'_>,
+    intent: &IntentMap,
+    table: &DynamicIrDropTable,
+    scratch: &mut Scratch,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if table.head.is_empty() {
+        return;
+    }
+    let Some(solved) = solved_or_fill(power, intent, &table.head, out, runs) else {
+        return;
+    };
+    let grid = solved.grid;
+    let mut response = Vec::new();
+    if transient_into(
+        grid,
+        &worst_cycle(grid, intent),
+        &mut scratch.solve,
+        &mut response,
+    )
+    .is_err()
+    {
+        fill_rows(&table.head, Outcome::Refused, out, runs);
+        return;
+    }
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let head = (table.head.rule[row], table.head.severity[row]);
+        let mut examined = 0u64;
+        for (node, (&net, &dynamic)) in grid.node_net.iter().zip(&response).enumerate() {
+            let Some(switching) = intent.limits_of(net).dynamic else {
+                continue;
+            };
+            examined += 1;
+            let (role, _) = intent
+                .supply(net)
+                .expect("every grid node is on a declared supply");
+            // Superposition: the static drop, then the cycle's response.
+            let drop = solved.solution.node_drop[node] + dynamic;
+            let drop = match role {
+                SupplyRole::Power => drop,
+                SupplyRole::Ground => -drop,
+            };
+            report_node(out, grid, node, head, drop, switching.max_drop);
         }
         record_run(runs, out, before, head.0, Outcome::Ran, examined);
     }
@@ -736,4 +872,431 @@ pub fn check_electromigration(
         out,
         runs,
     );
+}
+
+/// Thermal-aware and statistical electromigration with self-heating: deck
+/// kind `em_thermal`, written `em_thermal(layers..; max_density: current per
+/// width, max_current_per_cut: current, blech_limit: current,
+/// reference_temperature: temp, activation_energy: eV, current_exponent: n,
+/// thermal_conductivity: W/mK, spreading: n, sigma: n, limit_failure: frac,
+/// max_failure: frac)`.
+///
+/// The limits, the derating and the Blech exemption are
+/// [`ElectromigrationTable`]'s, but each segment is derated by Black's
+/// equation to its own temperature: the run's (the intent's `temperature_c`)
+/// plus the rise its own Joule heat gives it, [Banerjee et al.]'s eqs. 7, 8,
+/// 10 and 14,
+///
+/// `T = T_run + I² R θ`, `θ = t / (K L (W + φ t))`,
+///
+/// with `I` the segment's current, `R` its resistance, `L` its length and
+/// `W` its width; `t` its layer's height above the substrate (the deck's
+/// `pex` `height`: the dielectric the heat crosses to the substrate, which
+/// sits at `T_run`); `K` that dielectric's `thermal_conductivity` and `φ` the
+/// heat-`spreading` factor (0.88 for Banerjee's quasi-one-dimensional model,
+/// 2.45 as Banerjee measured on narrow lines, 0 for none, which errs hot). A
+/// layer at height 0 is in the substrate and does not heat. A cut is as hot
+/// as the hotter metal at its two ends. A row flags a segment or cut that is
+/// not Blech-immortal and carries more than its limit derated to its own
+/// temperature.
+///
+/// Statistically, a segment's time to failure is lognormal with shape
+/// `sigma` ([JEP122]; JESD63) about Black's median, so a segment exactly at
+/// its derated limit has failed by the limits' lifetime with probability
+/// `limit_failure`, the fraction they were characterised at, and one
+/// carrying `u` times its derated limit with probability
+/// `F = Φ(Φ⁻¹(limit_failure) + (n / σ) ln u)`. The chip fails when any
+/// segment does, the weakest link of statistical EM budgeting (J. Kitchin,
+/// VLSI Circuits Symposium 1995, pp. 115-116): `1 - Π (1 - F)` over every
+/// segment and cut the row limits that is not immortal. A row also flags,
+/// once, a chip whose failure probability by that lifetime is above
+/// `max_failure`.
+///
+/// # Limits
+///
+/// The current is the static budget's, so `I` is its RMS too; AC RMS, peak
+/// and Joule limits on signal lines are ERC-E7. A segment heats only itself:
+/// heat from neighbouring wires, heat carried along the line to cooler vias,
+/// and a resistance that rises with temperature are not modelled, so a lone
+/// line errs hot and a dense bundle reads cool. Every probability is at the
+/// lifetime the limits were characterised for.
+///
+/// Catalog: ERC-E13 in the [check catalog]. Defined by [Banerjee et al.];
+/// [Black 1969]; [JEP122]; JESD63; Kitchin 1995; `RedHawk`, Totem and Voltus
+/// (public material only: thermal-aware and statistical EM). No open tool
+/// computes it. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [Banerjee et al.]: https://doi.org/10.1145/309847.310093
+/// [Black 1969]: https://doi.org/10.1109/T-ED.1969.16754
+/// [JEP122]: https://www.jedec.org/standards-documents/docs/jep-122e
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EmThermalTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per-layer CSR, as in [`EmCurrentDensityTable`].
+    pub layer_start: Vec<u32>,
+    /// Limited layers, metal or cut, CSR by `layer_start`.
+    pub layer: Vec<LayerId>,
+    /// Parallel to `layer`: current per width of metal at the reference
+    /// temperature, A/m.
+    pub max_density: Vec<Qty<CurrentDensity, { prefix::BASE }>>,
+    /// Parallel to `layer`: current per via cut at the reference
+    /// temperature, µA.
+    pub max_current_per_cut: Vec<Qty<Current, { prefix::MICRO }>>,
+    /// Parallel to `layer`: the Blech product at or below which a segment is
+    /// immortal, as in [`ElectromigrationTable`].
+    pub blech_limit: Vec<Qty<Current, { prefix::MICRO }>>,
+    /// Per row: the Arrhenius reference point, absolute.
+    pub reference_temperature: Vec<Qty<Temperature, { prefix::BASE }>>,
+    /// Per row: `Ea` in Black's equation, eV.
+    pub activation_energy_ev: Vec<f64>,
+    /// Per row: `n` in Black's equation.
+    pub current_exponent: Vec<f64>,
+    /// Per row: `K`, the thermal conductivity of the dielectric under the
+    /// metal, W/(m·K). Not positive and finite refuses the row.
+    pub thermal_conductivity: Vec<f64>,
+    /// Per row: `φ`, the heat-spreading factor. Negative refuses the row.
+    pub heat_spreading: Vec<f64>,
+    /// Per row: the lognormal shape of a segment's time to failure. Not
+    /// positive and finite refuses the row.
+    pub sigma: Vec<f64>,
+    /// Per row: the fraction failed that the limits were characterised at,
+    /// `0 < p < 1`.
+    pub limit_failure: Vec<f64>,
+    /// Per row: the largest chip failure probability allowed, `0 < p <= 1`.
+    pub max_failure: Vec<f64>,
+    /// Per layer id, shared by every row: the layer's height above the
+    /// substrate, nm, from the deck's `pex` rows; a layer past the end is at
+    /// height 0.
+    pub height_nm: Vec<f64>,
+}
+
+/// One [`EmThermalTable`] row, borrowed.
+struct ThermalRow<'a> {
+    head: (StrId, Severity),
+    layer: &'a [LayerId],
+    max_density: &'a [Qty<CurrentDensity, { prefix::BASE }>],
+    max_current_per_cut: &'a [Qty<Current, { prefix::MICRO }>],
+    blech_limit: &'a [Qty<Current, { prefix::MICRO }>],
+    reference: Qty<Temperature, { prefix::BASE }>,
+    activation_energy_ev: f64,
+    current_exponent: f64,
+    sigma: f64,
+    /// `Φ⁻¹(limit_failure)`.
+    limit_z: f64,
+    max_failure: f64,
+}
+
+/// Each edge's temperature, K: `run` plus the rise its own Joule heat gives
+/// a metal segment, `I² R θ` with `θ = t / (K L (W + φ t))`; a cut takes the
+/// larger rise of the metal at its two nodes. A segment with no heat, or at
+/// height 0, does not rise; one with no width and no spreading is infinitely
+/// hot.
+fn edge_temperatures(
+    solved: Solved<'_>,
+    grid: Grid,
+    height_nm: &[f64],
+    (conductivity, spreading): (f64, f64),
+    run: f64,
+) -> Vec<f64> {
+    let (power, solution) = (solved.grid, solved.solution);
+    let metal = |edge: usize| power.edge_kind[edge] == EdgeKind::Metal;
+    let mut rise = vec![0.0f64; power.edge_count()];
+    let mut node_rise = vec![0.0f64; power.node_count()];
+    for edge in (0..power.edge_count()).filter(|&edge| metal(edge)) {
+        // Everything in SI: amperes, ohms, metres.
+        let height = height_nm
+            .get(power.edge_layer[edge].idx())
+            .copied()
+            .unwrap_or(0.0)
+            * 1e-9;
+        let amps = solution.branch_current[edge].base();
+        let heat = amps * amps * power.edge_resistance[edge].raw();
+        if !(height > 0.0 && heat > 0.0) {
+            continue;
+        }
+        let length = grid.to_length(power.edge_length[edge]).base();
+        let width = grid.to_length(power.edge_width[edge]).base();
+        let theta = height / (conductivity * length * (width + spreading * height));
+        rise[edge] = heat * theta;
+        for node in [power.edge_from[edge], power.edge_to[edge]] {
+            let at = &mut node_rise[node as usize];
+            *at = at.max(rise[edge]);
+        }
+    }
+    for edge in (0..power.edge_count()).filter(|&edge| !metal(edge)) {
+        let (from, to) = (power.edge_from[edge] as usize, power.edge_to[edge] as usize);
+        rise[edge] = node_rise[from].max(node_rise[to]);
+    }
+    rise.into_iter().map(|rise| run + rise).collect()
+}
+
+/// One row over every edge on its layers: a violation per hot segment or cut
+/// above its derated limit, then the chip's failure probability against
+/// `max_failure`. Returns `examined`: in-scope edges the Blech exemption did
+/// not remove.
+fn check_thermal_branches(
+    solved: Solved<'_>,
+    grid: Grid,
+    row: &ThermalRow<'_>,
+    (blech, temperature): (&[f64], &[f64]),
+    out: &mut Violations,
+) -> u64 {
+    let (power, solution) = (solved.grid, solved.solution);
+    let mut examined = 0u64;
+    // The log of the probability that no segment has failed, and the
+    // segment likeliest to have.
+    let mut survives = 0.0f64;
+    let mut likeliest: Option<(usize, f64)> = None;
+    for edge in 0..power.edge_count() {
+        // First mention of a repeated layer wins; other layers are out of scope.
+        let Some(at) = row.layer.iter().position(|&l| l == power.edge_layer[edge]) else {
+            continue;
+        };
+        if blech[edge] <= row.blech_limit[at].raw() {
+            continue;
+        }
+        examined += 1;
+        // Too hot for any finite derating carries nothing.
+        let derate = arrhenius_derating(
+            Qty::new(temperature[edge]),
+            row.reference,
+            row.activation_energy_ev,
+            row.current_exponent,
+        )
+        .unwrap_or(0.0);
+        let allowed = allowed_current(
+            power.edge_kind[edge],
+            power.edge_width[edge],
+            grid,
+            row.max_density[at],
+            row.max_current_per_cut[at],
+        ) * derate;
+        let current = solution.branch_current[edge].raw().abs();
+        let (measured, limit) = (
+            Measurement::Current(Qty::new(current)),
+            Measurement::Current(allowed),
+        );
+        if measured.violates(limit, LimitSense::Maximum) {
+            out.push(edge_violation(power, edge, row.head, measured, limit));
+        }
+        // A segment that carries nothing does not wear.
+        if current > 0.0 {
+            let usage = current / allowed.raw();
+            let failed = normal_cdf(row.limit_z + row.current_exponent / row.sigma * usage.ln());
+            survives += (-failed).ln_1p();
+            if likeliest.is_none_or(|(_, most)| failed > most) {
+                likeliest = Some((edge, failed));
+            }
+        }
+    }
+    if let Some((edge, _)) = likeliest {
+        let (measured, limit) = (
+            Measurement::Ratio(-survives.exp_m1()),
+            Measurement::Ratio(row.max_failure),
+        );
+        if measured.violates(limit, LimitSense::Maximum) {
+            out.push(edge_violation(power, edge, row.head, measured, limit));
+        }
+    }
+    examined
+}
+
+/// A finding on one edge: at its first node, on its layer, naming the shapes
+/// at both ends.
+fn edge_violation(
+    power: &PowerGrid,
+    edge: usize,
+    head: (StrId, Severity),
+    measured: Measurement,
+    limit: Measurement,
+) -> Violation {
+    let (from, to) = (power.edge_from[edge] as usize, power.edge_to[edge] as usize);
+    Violation {
+        rule: head.0,
+        layer: power.edge_layer[edge],
+        severity: head.1,
+        at: power.node_at[from],
+        measured,
+        limit,
+        shapes: (power.node_poly[from], Some(power.node_poly[to])),
+    }
+}
+
+/// Runs every [`EmThermalTable`] row over the solved supply grid's branch
+/// currents, each edge at its own temperature above `operating_temperature`
+/// (absolute).
+///
+/// `examined` counts grid segments and cuts on the row's layers that are not
+/// Blech-immortal. A segment's violation reports as
+/// [`check_em_current_density`]'s, against its limit derated to its own
+/// temperature. The chip's comes after them, at the first node of the
+/// segment likeliest to fail, on its layer, naming the shapes at both ends,
+/// and measures the chip's failure probability as a ratio against
+/// `max_failure`. A row is refused when its parameters are not usable: as
+/// [`check_electromigration`]'s at the run temperature, or a `sigma`,
+/// conductivity, spreading or failure fraction outside its range. Otherwise
+/// skipped and refused as [`check_ir_drop`] is.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_em_thermal(
+    power: Power<'_>,
+    intent: &IntentMap,
+    grid: Grid,
+    operating_temperature: Qty<Temperature, { prefix::BASE }>,
+    table: &EmThermalTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if table.head.is_empty() {
+        return;
+    }
+    let Some(solved) = solved_or_fill(power, intent, &table.head, out, runs) else {
+        return;
+    };
+    let blech = blech_products(solved.grid, solved.solution);
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let id = table.head.rule[row];
+        let (sigma, limit_failure, max_failure) = (
+            table.sigma[row],
+            table.limit_failure[row],
+            table.max_failure[row],
+        );
+        let heat = (table.thermal_conductivity[row], table.heat_spreading[row]);
+        let usable = arrhenius_derating(
+            operating_temperature,
+            table.reference_temperature[row],
+            table.activation_energy_ev[row],
+            table.current_exponent[row],
+        )
+        .is_some()
+            && sigma.is_finite()
+            && sigma > 0.0
+            && heat.0.is_finite()
+            && heat.0 > 0.0
+            && heat.1.is_finite()
+            && heat.1 >= 0.0
+            && limit_failure > 0.0
+            && limit_failure < 1.0
+            && max_failure > 0.0
+            && max_failure <= 1.0;
+        if !usable {
+            record_run(runs, out, before, id, Outcome::Refused, 0);
+            continue;
+        }
+        let span = table.layer_start[row] as usize..table.layer_start[row + 1] as usize;
+        let thermal = ThermalRow {
+            head: (id, table.head.severity[row]),
+            layer: &table.layer[span.clone()],
+            max_density: &table.max_density[span.clone()],
+            max_current_per_cut: &table.max_current_per_cut[span.clone()],
+            blech_limit: &table.blech_limit[span],
+            reference: table.reference_temperature[row],
+            activation_energy_ev: table.activation_energy_ev[row],
+            current_exponent: table.current_exponent[row],
+            sigma,
+            limit_z: normal_quantile(limit_failure),
+            max_failure,
+        };
+        let temperature = edge_temperatures(
+            solved,
+            grid,
+            &table.height_nm,
+            heat,
+            operating_temperature.raw(),
+        );
+        let examined = check_thermal_branches(solved, grid, &thermal, (&blech, &temperature), out);
+        record_run(runs, out, before, id, Outcome::Ran, examined);
+    }
+}
+
+/// The standard normal distribution function, `Φ(z) = erfc(-z / √2) / 2`,
+/// within about `1e-13` relative wherever it does not underflow (against the
+/// C library's `erfc`).
+fn normal_cdf(z: f64) -> f64 {
+    let x = -z * std::f64::consts::FRAC_1_SQRT_2;
+    let tail = 0.5 * erfc_of_magnitude(x.abs());
+    if x >= 0.0 {
+        tail
+    } else {
+        1.0 - tail
+    }
+}
+
+/// `erfc(x)` for `x >= 0`: below 1.5 one minus the power series of
+/// Abramowitz and Stegun 7.1.6, whose terms are all positive, and from 1.5
+/// their continued fraction 7.1.14, evaluated from its 80th term back.
+fn erfc_of_magnitude(x: f64) -> f64 {
+    let gauss = (-x * x).exp();
+    if x < 1.5 {
+        let (mut term, mut sum) = (x, x);
+        for n in 1..50u32 {
+            term *= 2.0 * x * x / f64::from(2 * n + 1);
+            sum += term;
+        }
+        return 1.0 - std::f64::consts::FRAC_2_SQRT_PI * gauss * sum;
+    }
+    let mut fraction = x;
+    for k in (1..=80u32).rev() {
+        fraction = x + f64::from(k) / 2.0 / fraction;
+    }
+    0.5 * std::f64::consts::FRAC_2_SQRT_PI * gauss / fraction
+}
+
+/// `z` with `Φ(z) = p`, for `0 < p < 1`: bisection on [`normal_cdf`] down to
+/// adjacent floats, so `Φ(Φ⁻¹(p))` is `p` to the last bits `Φ` resolves.
+fn normal_quantile(p: f64) -> f64 {
+    let (mut lo, mut hi) = (-40.0f64, 40.0f64);
+    loop {
+        let mid = 0.5 * (lo + hi);
+        if mid <= lo || mid >= hi {
+            return hi;
+        }
+        if normal_cdf(mid) < p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normal_cdf, normal_quantile};
+
+    /// Oracle: published values of the standard normal distribution
+    /// (Abramowitz and Stegun Table 26.1 and its quantiles, to the digits the
+    /// C library's `erfc` gives): `Φ(1)`, `Φ(-5)`, `Φ(-8)` deep in the tail,
+    /// `Φ(0) = 1/2`, and the 0.1 % and 2.5 % quantiles. The series and the
+    /// continued fraction meet at `|z| = 1.5 √2`, so one value sits each
+    /// side of it.
+    #[test]
+    fn the_normal_distribution_matches_its_tables() {
+        for (z, p) in [
+            (1.0, 0.841_344_746_068_542_9),
+            (0.0, 0.5),
+            (-2.0, 0.022_750_131_948_179_21),
+            (-2.2, 0.013_903_447_513_498_597),
+            (-5.0, 2.866_515_718_791_939e-7),
+            (-8.0, 6.220_960_574_271_784e-16),
+        ] {
+            let got = normal_cdf(z);
+            assert!(
+                ((got - p) / p).abs() <= 1e-12,
+                "Φ({z}) = {got}, the table {p}"
+            );
+        }
+        for (p, z) in [
+            (0.001, -3.090_232_306_167_813),
+            (0.025, -1.959_963_984_540_054),
+        ] {
+            let got = normal_quantile(p);
+            assert!((got - z).abs() <= 1e-12, "Φ⁻¹({p}) = {got}, the table {z}");
+        }
+    }
 }

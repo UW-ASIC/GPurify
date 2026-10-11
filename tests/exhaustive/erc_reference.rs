@@ -6,6 +6,9 @@
 //!   incomplete-Cholesky conjugate-gradient solve and the `ir_drop` findings
 //!   read from it) on generated supply grids, within a tolerance derived from
 //!   the solve's stopping rule ([`supply_grids_solve_as_a_dense_nodal_solve_does`]);
+//! - the same dense elimination stepped by backward Euler through one
+//!   switching event, against the engine's transient
+//!   ([`switching_grids_step_as_a_dense_backward_euler_does`]);
 //! - a breadth-first search over the extracted net graph of generated
 //!   circuits, against `floating_gate`, `esd_topological`, `multiple_drivers`
 //!   and `tie_high_low` ([`topology_rules_agree_with_a_search_of_the_extracted_graph`]).
@@ -350,6 +353,163 @@ fn supply_grids_solve_as_a_dense_nodal_solve_does() {
         checked += 1;
     }
     assert!(checked >= 30, "only {checked} grids had a limit to sweep");
+}
+
+// ------------------------------------------------ the transient, stepped
+
+/// One switching event on a generated grid: every node's load times three as
+/// its triangle's peak, a rise of 50 or 100 ps, 0 to 5 pF of decap, followed
+/// for 300 ps.
+fn switching(rng: &mut Rng, grid: &PowerGrid) -> power::Stimulus {
+    let n = grid.node_count();
+    power::Stimulus {
+        node_peak: grid
+            .node_load
+            .iter()
+            .map(|l| Qty::new(3.0 * l.raw()))
+            .collect(),
+        node_rise_ps: (0..n)
+            .map(|_| if rng.below(2) == 0 { 50.0 } else { 100.0 })
+            .collect(),
+        node_cap_pf: (0..n).map(|_| 5.0 * rng.unit()).collect(),
+        window_ps: 300.0,
+    }
+}
+
+/// Each node's drop of largest magnitude through the event, by backward Euler
+/// on the dense matrix `G + C/h`, every step solved by [`gauss`], and the
+/// tolerance the engine is held to.
+///
+/// The step is the shortest rise over the engine's documented
+/// `STEPS_PER_RISE`, every pulse a triangle sampled on that grid of steps, and
+/// the walk runs the whole window (the engine may stop early, where no node
+/// can grow). Pads hold, so their drop is zero. `A = G + C/h` is a diagonally
+/// dominant M-matrix, so `A⁻¹ ≥ 0`, and `A⁻¹ C/h` has row sums at most one: a
+/// step's solve error is not amplified by the steps after it, and the errors
+/// add. Each step's is bounded as in [`dense_nodal_solve`], from the
+/// engine's warm start (the previous step's response), so
+/// `tolerance = steps ‖A⁻¹‖∞ (1e-10 max ‖r₀‖₂ + 6 n ε ‖A‖∞ max ‖r‖∞)`.
+fn dense_transient(grid: &PowerGrid, stimulus: &power::Stimulus) -> (Vec<f64>, f64) {
+    let n = grid.node_count();
+    let mut unknown = vec![usize::MAX; n];
+    let mut node_of = Vec::new();
+    for (node, slot) in unknown.iter_mut().enumerate() {
+        if !grid.source_node.contains(&(node as u32)) {
+            *slot = node_of.len();
+            node_of.push(node);
+        }
+    }
+    let m = node_of.len();
+    let steps_per_rise = f64::from(power::STEPS_PER_RISE);
+    let shortest = (0..n)
+        .filter(|&node| stimulus.node_peak[node].raw() != 0.0)
+        .map(|node| stimulus.node_rise_ps[node])
+        .fold(f64::INFINITY, f64::min);
+    let h = shortest / steps_per_rise;
+    let c: Vec<f64> = node_of
+        .iter()
+        .map(|&node| 1000.0 * stimulus.node_cap_pf[node] / h)
+        .collect();
+    let span: Vec<f64> = node_of
+        .iter()
+        .map(|&node| steps_per_rise * (stimulus.node_rise_ps[node] / shortest))
+        .collect();
+    let mut a = vec![0.0; m * m];
+    for (row, &cap) in c.iter().enumerate() {
+        a[row * m + row] += cap;
+    }
+    for e in 0..grid.edge_count() {
+        let (i, j) = (grid.edge_from[e] as usize, grid.edge_to[e] as usize);
+        let g = UA_PER_MV_PER_SIEMENS / grid.edge_resistance[e].raw();
+        for (here, there) in [(i, j), (j, i)] {
+            let row = unknown[here];
+            if row == usize::MAX {
+                continue;
+            }
+            a[row * m + row] += g;
+            if unknown[there] != usize::MAX {
+                a[row * m + unknown[there]] -= g;
+            }
+        }
+    }
+    let times = |x: &[f64]| -> Vec<f64> {
+        (0..m)
+            .map(|row| (0..m).map(|col| a[row * m + col] * x[col]).sum())
+            .collect()
+    };
+    let last = stimulus.window_ps / h;
+    let (mut r, mut best) = (vec![0.0; m], vec![0.0f64; n]);
+    let (mut start_residual, mut largest) = (0.0f64, 0.0f64);
+    let mut k = 0u32;
+    while f64::from(k) < last {
+        k += 1;
+        let rhs: Vec<f64> = (0..m)
+            .map(|row| {
+                let fraction = f64::from(k) / span[row];
+                let shape = if fraction <= 1.0 {
+                    1.0 - (2.0 * fraction - 1.0).abs()
+                } else {
+                    0.0
+                };
+                c[row] * r[row] + stimulus.node_peak[node_of[row]].raw() * shape
+            })
+            .collect();
+        let warm = times(&r);
+        let residual = rhs
+            .iter()
+            .zip(&warm)
+            .map(|(b, ax)| (b - ax).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        start_residual = start_residual.max(residual);
+        r = gauss(a.clone(), rhs);
+        for (row, &value) in r.iter().enumerate() {
+            largest = largest.max(value.abs());
+            let node = node_of[row];
+            if value.abs() > best[node].abs() {
+                best[node] = value;
+            }
+        }
+    }
+    let norm_a = (0..m)
+        .map(|row| (0..m).map(|col| a[row * m + col].abs()).sum::<f64>())
+        .fold(0.0, f64::max);
+    let inverse_norm = gauss(a.clone(), vec![1.0; m])
+        .into_iter()
+        .fold(0.0, f64::max);
+    let per_step =
+        inverse_norm * (1e-10 * start_residual + 6.0 * m as f64 * f64::EPSILON * norm_a * largest);
+    (best, f64::from(k) * per_step)
+}
+
+/// Oracle: a dense backward-Euler reference. On forty generated supply grids,
+/// power and ground, 2 × 2 to 8 × 8, with mixed rise times and random decap,
+/// every node's largest drop through one switching event is within the
+/// tolerance [`dense_transient`] derives of the dense walk's, and every pad's
+/// is zero. A decap term on the wrong side, a pulse on the wrong step, or an
+/// early stop before a node peaks puts nodes outside it.
+#[test]
+fn switching_grids_step_as_a_dense_backward_euler_does() {
+    let mut rng = Rng::new(0xe1_1001);
+    for case in 0..40u32 {
+        let power = case % 2 == 0;
+        let k = 2 + case / 2 % 7;
+        let grid = supply_grid(&mut rng, k, power);
+        let stimulus = switching(&mut rng, &grid);
+        let (reference, tolerance) = dense_transient(&grid, &stimulus);
+        let mut scratch = power::SolveScratch::default();
+        let mut got = Vec::new();
+        power::transient_into(&grid, &stimulus, &mut scratch, &mut got)
+            .unwrap_or_else(|why| panic!("grid {case} did not step: {why}"));
+        for (node, &want) in reference.iter().enumerate() {
+            let have = got[node].raw();
+            assert!(
+                (have - want).abs() <= tolerance,
+                "grid {case}, node {node}: the engine peaks at {have} mV, the dense walk at \
+                 {want} mV, more than {tolerance:e} mV apart"
+            );
+        }
+    }
 }
 
 // ------------------------------------------------- the extracted net graph

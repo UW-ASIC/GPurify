@@ -550,6 +550,31 @@ impl CompiledDeck {
         for r in 0..erc.ir_drop.head.len() {
             file(&erc.ir_drop.head, r, Row::new("ir_drop", &[]));
         }
+        for r in 0..erc.dynamic_ir_drop.head.len() {
+            file(
+                &erc.dynamic_ir_drop.head,
+                r,
+                Row::new("dynamic_ir_drop", &[]),
+            );
+        }
+        let t = &erc.em_thermal;
+        for r in 0..t.head.len() {
+            let layers = span(&t.layer_start, r);
+            let first = layers.start;
+            let row = Row::new("em_thermal", &t.layer[layers])
+                .number("max_density", t.max_density[first].raw())
+                .number("max_current_per_cut", t.max_current_per_cut[first].raw())
+                .number("blech_limit", t.blech_limit[first].raw())
+                .number("reference_temperature", t.reference_temperature[r].raw())
+                .number("activation_energy_ev", t.activation_energy_ev[r])
+                .number("current_exponent", t.current_exponent[r])
+                .number("thermal_conductivity", t.thermal_conductivity[r])
+                .number("heat_spreading", t.heat_spreading[r])
+                .number("sigma", t.sigma[r])
+                .number("limit_failure", t.limit_failure[r])
+                .number("max_failure", t.max_failure[r]);
+            file(&t.head, r, row);
+        }
         let t = &erc.missing_level_shifter;
         for r in 0..t.head.len() {
             let mut row = Row::new("missing_level_shifter", &[]);

@@ -179,14 +179,16 @@ missing input, a file that could not be read.
 ## Design intent
 
 Some electrical rules need facts about the chip that no process deck can know:
-`ir_drop`, `em_current_density`, `electromigration`, `reliability`,
-`hv_domain`, `esd_latchup`, `esd_topological`, `gate_oxide`, `drain_source`,
-`well_bias`, `missing_level_shifter`, `domain_crossing`, and
-`multiple_drivers` and `tie_high_low`, which read the supplies as the rails
-that orient each transistor channel. Without `--intent` they report skipped.
+`ir_drop`, `dynamic_ir_drop`, `em_current_density`, `electromigration`,
+`em_thermal`, `reliability`, `hv_domain`, `esd_latchup`, `esd_topological`,
+`gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`,
+`domain_crossing`, and `multiple_drivers` and `tie_high_low`, which read the
+supplies as the rails that orient each transistor channel. Without
+`--intent` they report skipped.
 
 ```json
 {
+  "temperature_c": 105,
   "domains":  { "core": { "voltage_mv": 1800 } },
   "supplies": [
     { "net": "VDD", "domain": "core", "role": "power" },
@@ -194,7 +196,10 @@ that orient each transistor channel. Without `--intent` they report skipped.
   ],
   "limits": [
     { "net": "VDD", "max_drop_mv": 90, "max_drop_fraction": 0.05,
-      "max_overvoltage_mv": 100, "budget_current_ua": 2000 }
+      "max_overvoltage_mv": 100, "budget_current_ua": 2000,
+      "dynamic": { "max_drop_mv": 180, "toggle_rate": 0.2,
+                   "clock_period_ps": 2000, "rise_time_ps": 100,
+                   "decap_pf": 50 } }
   ]
 }
 ```
@@ -205,6 +210,16 @@ its domain's voltage for either role. A limit you leave out on a net
 means that net is not checked for it, not that it is unlimited. A current
 budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.
+
+`temperature_c` is the junction temperature the electromigration and
+reliability rules run at; without it they run at 85 °C. A net's `dynamic`
+entry is what `dynamic_ir_drop` simulates: in the net's worst clock cycle
+every load switches at once, each drawing its share of `budget_current_ua`
+over the fraction `toggle_rate` of cycles it switches in, as a triangular
+pulse `rise_time_ps` wide, while `decap_pf` (zero if left out) holds the
+net up. `max_drop_mv` there is the limit on the static drop plus that
+cycle's. It needs the net's `budget_current_ua`; a toggle rate above 1, or a
+rise longer than the clock period, is refused.
 
 The supplies also set the voltages the overstress and domain rules check. A
 power net sits at its domain's voltage and a ground net at 0 V. Every other

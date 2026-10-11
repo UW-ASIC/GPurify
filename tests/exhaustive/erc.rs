@@ -1,11 +1,14 @@
-//! Electrical rules: all twenty-four ERC kinds, each against an oracle written
+//! Electrical rules: all twenty-six ERC kinds, each against an oracle written
 //! here from its definition, never from a run.
 //!
 //! - Electrical kinds against closed forms worked out in this file: Ohm's law
 //!   on resistor ladders and a current divider (`ir_drop`, `p2p_resistance`),
 //!   current per width and per cut (`em_current_density`), Black's equation
 //!   with the Blech exemption and the GF180MCU §14.2.2 derating table
-//!   (`electromigration`), the inverse power law times Arrhenius
+//!   (`electromigration`), the static drop plus one RC node's backward-Euler
+//!   response to its switching pulse (`dynamic_ir_drop`), Banerjee's
+//!   self-heating and a lognormal wire (`em_thermal`), the inverse power law
+//!   times Arrhenius
 //!   (`reliability`), the antenna ratios of LEF/DEF 5.8 Appendix C and IHP
 //!   SG13G2 §7.1 (`antenna`, `antenna_electrical`), and window densities
 //!   (`density_cmp`). Each is swept below, at and above its limit.
@@ -74,6 +77,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(ir_drop(depth));
     out.extend(em_current_density(depth));
     out.extend(electromigration());
+    out.extend(dynamic_ir_drop());
+    out.extend(em_thermal());
     out.extend(reliability());
     out.extend(p2p(depth));
     out.extend(grid_outcomes());
@@ -2846,7 +2851,7 @@ fn p2p(depth: Depth) -> Vec<Fixture> {
 }
 
 /// Every kind that needs design intent, with the deck spelling of one row.
-const INTENT_ROWS: [(&str, &str); 12] = [
+const INTENT_ROWS: [(&str, &str); 14] = [
     ("s.ir", "ir_drop()"),
     (
         "s.emcd",
@@ -2871,6 +2876,11 @@ const INTENT_ROWS: [(&str, &str); 12] = [
     ("s.wb", "well_bias(; pmos: [\"load\"], nmos: none)"),
     ("s.ls", "missing_level_shifter(; shifters: none)"),
     ("s.xing", "domain_crossing()"),
+    ("s.dir", "dynamic_ir_drop()"),
+    (
+        "s.emt",
+        "em_thermal(met1; max_density: 1mA/um, max_current_per_cut: 1mA, blech_limit: 1nA, reference_temperature: 85C, activation_energy: 0.9eV, current_exponent: 2, thermal_conductivity: 1.4W/mK, spreading: 0.88, sigma: 0.5, limit_failure: 0.1%, max_failure: 0.1%)",
+    ),
 ];
 
 /// `rule <id> <row>` lines.
@@ -2897,7 +2907,7 @@ fn grid_outcomes() -> Vec<Fixture> {
     rail(&mut layout, "VDD", 20_000, 0, 1000, &[18_000]);
     let catalog: &[&'static str] = &[
         "ERC-E8", "ERC-E1", "ERC-E4", "ERC-F5", "ERC-F10", "ERC-D2", "ERC-C1", "ERC-F2", "ERC-F3",
-        "ERC-F12", "ERC-F6", "ERC-F9",
+        "ERC-F12", "ERC-F6", "ERC-F9", "ERC-E11", "ERC-E13",
     ];
     for (name, intent_text) in [
         ("no_intent", None),
@@ -4594,6 +4604,241 @@ fn expressible() -> Vec<Fixture> {
             .layout(layout)
             .expect(Expect::rule("slot", findings)),
         );
+    }
+    out
+}
+
+// ------------------------------------------------- dynamic drop, thermal EM
+
+/// One rail's `dynamic` intent: `budget` µA switching a quarter of 1000 ps
+/// cycles as 100 ps pulses, `decap` pF, limited to `limit` mV.
+fn dynamic_intent(net: &str, role: &str, budget: f64, decap: f64, limit: f64) -> String {
+    intent(
+        &[("core", 1800.0)],
+        &[(net, "core", role)],
+        &[format!(
+            r#"{{"net":"{net}","budget_current_ua":{budget},"dynamic":{{"max_drop_mv":{limit},"toggle_rate":0.25,"clock_period_ps":1000,"rise_time_ps":100,"decap_pf":{decap}}}}}"#
+        )],
+    )
+}
+
+/// One switching event's charge as a peak: `2 (I T / α) / t_r` for this
+/// file's 1000 ps period, toggle rate 0.25 and 100 ps rise.
+fn switching_peak(share: f64) -> f64 {
+    2.0 * share * 1000.0 / 0.25 / 100.0
+}
+
+/// The peak of one RC node's backward-Euler recurrence at the engine's
+/// documented `STEPS_PER_RISE`, mV: `r[k+1] = (c r[k] + i[k+1]) / (c + g)`,
+/// `c = 1000 C / h` and `g = 1000 / R` in µA per mV.
+fn rc_recurrence_peak(ohm: f64, cap_pf: f64, peak_ua: f64, rise_ps: f64) -> f64 {
+    let steps = gpurify::check::erc::power::STEPS_PER_RISE;
+    let h = rise_ps / f64::from(steps);
+    let (c, g) = (1000.0 * cap_pf / h, 1000.0 / ohm);
+    let (mut r, mut best) = (0.0f64, 0.0f64);
+    for k in 1..=10 * steps {
+        let fraction = f64::from(k) / f64::from(steps);
+        let shape = if fraction <= 1.0 {
+            1.0 - (2.0 * fraction - 1.0).abs()
+        } else {
+            0.0
+        };
+        r = (c * r + peak_ua * shape) / (c + g);
+        best = best.max(r);
+    }
+    best
+}
+
+/// `dynamic_ir_drop` (ERC-E11): the static drop plus the worst cycle's.
+///
+/// - One load 8 µm from the feed of a 1 µm met1 rail (1 Ω) drawing 1 mA: its
+///   event is `1 mA × 1000 ps / 0.25` of charge over 100 ps, an 80 mA peak.
+///   Without decap the cycle adds 80 mV (81 mV in all); with 10 pF it adds
+///   the RC recurrence's peak. On a power and a ground rail, the limit a part
+///   in a million either side, under every placement.
+/// - The three-load ladder of `ir_drop` (3 mA): without decap each node's
+///   response is the static drop of every load at its 80 mA peak, so its
+///   drop is 81 times the ladder's; swept between every pair of nodes.
+fn dynamic_ir_drop() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let mut placed = Vec::new();
+    for (decap, dynamic) in [
+        (0.0, 80.0),
+        (
+            10.0,
+            rc_recurrence_peak(1.0, 10.0, switching_peak(1000.0), 100.0),
+        ),
+    ] {
+        let total = 1.0 + dynamic;
+        for (net, role) in [("VDD", "power"), ("VSS", "ground")] {
+            let mut layout = Layout::default();
+            rail(&mut layout, net, 20_000, 0, 1000, &[18_000]);
+            for factor in [1.0 - 1e-6, 1.0 + 1e-6] {
+                let limit = total * factor;
+                let mut f = Fixture::new(
+                    &format!(
+                        "erc/dynamic_ir_drop/one_load/{role}/decap_{decap}/{}",
+                        side(limit, total)
+                    ),
+                    &["ERC-E11"],
+                    &rail_deck("rule dir dynamic_ir_drop()"),
+                    ERC,
+                )
+                .layout(layout.clone())
+                .expect(Expect::rule(
+                    "dir",
+                    if limit < total {
+                        vec![millivolts(total).at(18_000, 500)]
+                    } else {
+                        Vec::new()
+                    },
+                ));
+                f.intent = Some(dynamic_intent(net, role, 1000.0, decap, limit));
+                if role == "power" && limit < total {
+                    placed.push(f.clone());
+                }
+                out.push(f);
+            }
+        }
+    }
+    for mut f in placed {
+        f.name = format!("{}/placed", f.name);
+        out.extend(every_placement(&[f]));
+    }
+
+    let loads = [12_000, 14_000, 18_000];
+    let (drops, _) = ladder(20_000, 1000, &loads, 3000.0);
+    let scale = 1.0 + switching_peak(1000.0) / 1000.0;
+    let values: Vec<f64> = drops
+        .iter()
+        .map(|d| d.1 * scale)
+        .filter(|&d| d > 0.0)
+        .collect();
+    let mut layout = Layout::default();
+    rail(&mut layout, "VDD", 20_000, 0, 1000, &loads);
+    for limit in between(&values) {
+        let mut f = Fixture::new(
+            &format!("erc/dynamic_ir_drop/ladder/{limit}"),
+            &["ERC-E11"],
+            &rail_deck("rule dir dynamic_ir_drop()"),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "dir",
+            drops
+                .iter()
+                .filter(|(_, d)| d * scale > limit)
+                .map(|&(x, d)| millivolts(d * scale).at(x, 500))
+                .collect(),
+        ));
+        f.intent = Some(dynamic_intent("VDD", "power", 3000.0, 0.0, limit));
+        out.push(f);
+    }
+    out
+}
+
+/// `Φ(z)` for `z < 0` by composite Simpson's rule on the normal density over
+/// `[z - 12, z]`, 20 000 panels: the definition, integrated, independent of
+/// the engine's series and continued fraction.
+fn normal_cdf_by_simpson(z: f64) -> f64 {
+    let (a, n) = (z - 12.0, 20_000u32);
+    let h = (z - a) / f64::from(n);
+    let density = |t: f64| (-0.5 * t * t).exp() / (2.0 * std::f64::consts::PI).sqrt();
+    let mut sum = density(a) + density(z);
+    for i in 1..n {
+        let weight = if i % 2 == 1 { 4.0 } else { 2.0 };
+        sum += weight * density(a + h * f64::from(i));
+    }
+    sum * h / 3.0
+}
+
+/// `em_thermal` (ERC-E13) on the one-load rail: the 8 µm × 1 µm met1 segment
+/// (1 Ω) 100 nm above the substrate, `K` 0.05 W/(m·K), spreading 0.88, rated
+/// 10 mA/µm at 125 °C (Ea 0.9 eV, n 2), the run at the intent's 105 °C.
+///
+/// - Self-heating (Banerjee 1999): `ΔT = I² R t / (K L (W + φ t))`, so the
+///   segment fails above the current `I*` that solves
+///   `I = 10 mA × exp(Ea / (n k) (1/(T + ΔT(I)) - 1/T_ref))`, found here by
+///   bisection: a budget a part in a thousand under it passes, one over is
+///   flagged at that current, under every placement.
+/// - Statistics: at 90 % of `I*` the wire carries `u` of its self-heated limit
+///   and fails with probability `Φ(z_0.1% + (n / σ) ln u)`, the normal
+///   distribution integrated here by Simpson's rule; a chip budget a part in
+///   a million under that is flagged once, measured at it; one over passes.
+fn em_thermal() -> Vec<Fixture> {
+    let (run, t_ref, ea, n) = (105.0 + 273.15, 125.0 + 273.15, 0.9, 2.0);
+    let rated = 10_000.0;
+    // R θ in K per µA²: 1 Ω, t = 100 nm, L = 8 µm, W = 1 µm.
+    let (t, length, width) = (100e-9, 8e-6, 1e-6);
+    let heat = 1.0 * t / (0.05 * length * (width + 0.88 * t)) * 1e-12;
+    let allowed = |current: f64| {
+        rated * (ea / (n * K_EV) * (1.0 / (run + heat * current * current) - 1.0 / t_ref)).exp()
+    };
+    let (mut lo, mut hi) = (0.0f64, 1e6f64);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if mid > allowed(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let threshold = 0.5 * (lo + hi);
+    let row = |max_failure: f64| {
+        format!(
+            "rule hot em_thermal(met1; max_density: 10mA/um, max_current_per_cut: 1mA, blech_limit: 1nA, reference_temperature: 125C, activation_energy: 0.9eV, current_exponent: 2, thermal_conductivity: 0.05W/mK, spreading: 0.88, sigma: 0.5, limit_failure: 0.1%, max_failure: {max_failure})"
+        )
+    };
+    let warm = |budget: f64| vdd_intent(budget).replacen('{', r#"{"temperature_c":105,"#, 1);
+    let mut layout = Layout::default();
+    rail(&mut layout, "VDD", 20_000, 0, 1000, &[18_000]);
+    let mut out = Vec::new();
+    for factor in [0.999, 1.001] {
+        let budget = threshold * factor;
+        let mut f = Fixture::new(
+            &format!("erc/em_thermal/self_heating/{}", side(factor, 1.0)),
+            &["ERC-E13"],
+            &rail_deck(&row(1.0)),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "hot",
+            // The segment's first node is whichever end the chain orders
+            // first, so the marker moves between its ends with the
+            // placement; the chip case below pins it unrotated.
+            if factor > 1.0 {
+                vec![microamps(budget)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(warm(budget));
+        out.extend(every_placement(&[f]));
+    }
+    let budget = 0.9 * threshold;
+    let usage = budget / allowed(budget);
+    let failed = normal_cdf_by_simpson(-3.090_232_306_167_813 + n / 0.5 * usage.ln());
+    for factor in [1.0 - 1e-6, 1.0 + 1e-6] {
+        let chip_budget = failed * factor;
+        let mut f = Fixture::new(
+            &format!("erc/em_thermal/chip/{}", side(chip_budget, failed)),
+            &["ERC-E13"],
+            &rail_deck(&row(chip_budget)),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "hot",
+            if chip_budget < failed {
+                vec![ratio(failed).at(10_000, 500)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(warm(budget));
+        out.push(f);
     }
     out
 }
