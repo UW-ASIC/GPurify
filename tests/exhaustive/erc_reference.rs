@@ -876,15 +876,16 @@ fn bias_and_shifters(
     [bias, shifters]
 }
 
-/// ERC-D3, ERC-F12, ERC-F6. Oracle: a naive reference over the extracted
-/// graph of three hundred generated circuits ([`reach`], a breadth-first
-/// search from each net, and [`bias_and_shifters`], the rules' rustdoc),
-/// each MOS a `pmos`, an `nmos` or a level shifter at random and each
-/// supply in one of three domains at 1.8, 3.3 or 5 V. `well_bias` and
-/// `missing_level_shifter`, fed by the engine's own propagation
-/// (`erc::voltage::propagate_into`: components and folds, not a search),
-/// flag exactly the devices, with the measures, that the reference derives,
-/// and examine as many. A supply that propagates onward, a gate or bulk that
+/// ERC-D3, ERC-F12, ERC-F6: `well_bias` and `missing_level_shifter`, fed by
+/// the engine's own propagation (`erc::voltage::propagate_into`: components
+/// and folds, not a search), flag exactly the devices, with the measures,
+/// that a search derives, and examine as many.
+///
+/// Oracle: a naive reference over the extracted graph of three hundred
+/// generated circuits ([`reach`], a breadth-first search from each net, and
+/// [`bias_and_shifters`], the rules' rustdoc), each MOS a `pmos`, an `nmos`
+/// or a level shifter at random and each supply in one of three domains at
+/// 1.8, 3.3 or 5 V. A supply that propagates onward, a gate or bulk that
 /// conducts, or a bias or domain test the wrong way round breaks it.
 #[test]
 fn voltage_rules_agree_with_a_search_from_each_net() {
