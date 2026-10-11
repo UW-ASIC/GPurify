@@ -1826,5 +1826,371 @@ fn spef_carries_the_closed_form_totals() {
     );
 }
 
+/// One element a SPEF file states: its section, its node names, and its
+/// value in SI (farads, ohms, henries).
+#[derive(Debug, Clone)]
+struct SpefElement {
+    section: &'static str,
+    nodes: Vec<String>,
+    value: f64,
+}
+
+/// One `*D_NET` block: the net's name, its total capacitance in farads, and
+/// its elements.
+#[derive(Debug)]
+struct SpefNet {
+    name: String,
+    total: f64,
+    elements: Vec<SpefElement>,
+}
+
+/// A SPEF file as [`read_spef`] reads it: the SI size of one written unit of
+/// capacitance, resistance and inductance, the node delimiter, and the nets.
+#[derive(Debug)]
+struct Spef {
+    units: [f64; 3],
+    delimiter: String,
+    nets: Vec<SpefNet>,
+}
+
+/// The tokens of SPEF text: `//` comments dropped, a quoted string one
+/// token with its quotes. (ponytail: a `//` inside a quoted string is not
+/// read; no file here writes one.)
+fn spef_tokens(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    for line in text.lines() {
+        let mut rest = line.split("//").next().unwrap_or_default().trim_start();
+        while !rest.is_empty() {
+            let end = if let Some(quoted) = rest.strip_prefix('"') {
+                quoted.find('"').map_or(rest.len(), |at| at + 2)
+            } else {
+                rest.find(char::is_whitespace).unwrap_or(rest.len())
+            };
+            tokens.push(&rest[..end]);
+            rest = rest[end..].trim_start();
+        }
+    }
+    tokens
+}
+
+/// A reader of the SPEF that IEEE 1481 defines (the 1998 edition the writer
+/// names), written from the standard's grammar as the public OpenSTA parser
+/// (`parasitics/SpefParse.yy`) transcribes it, and sharing nothing with
+/// `gpurify::export`:
+///
+/// - `header_def`: `*SPEF`, `*DESIGN`, `*DATE`, `*VENDOR`, `*PROGRAM` and
+///   `*VERSION`, each with one quoted string, then `*DESIGN_FLOW` with one or
+///   more, in that order and every one required; `*DIVIDER` and
+///   `*DELIMITER`, each an `hchar` (`.` `/` `:` `|`); `*BUS_DELIMITER` with
+///   an opening bracket and an optional closing one; `*T_UNIT` (`NS`, `PS`),
+///   `*C_UNIT` (`PF`, `FF`), `*R_UNIT` (`OHM`, `KOHM`) and `*L_UNIT`
+///   (`HENRY`, `MH`, `UH`), each a positive number and a unit;
+/// - `internal_def`: one or more `*D_NET net total_cap`, then an optional
+///   `*CONN` with one or more `*P` or `*I` connections, each a name and a
+///   direction (`I`, `O`, `B`), then the optional `*CAP`, `*RES` and
+///   `*INDUC` sections in that order, then `*END`. A `*CAP` element is
+///   `id node [node] value`, a `*RES` or `*INDUC` element `id node node
+///   value`, the id a non-negative integer.
+///
+/// The optional header sections (`*NAME_MAP`, power and ground nets, ports,
+/// `*DEFINE`), reduced nets, routing confidence, connection attributes and
+/// value triplets are refused, not skipped: the writer states none of them,
+/// so a reader that skipped them could pass a file it did not read.
+fn read_spef(text: &str) -> Result<Spef, String> {
+    let mut p = SpefParser {
+        tokens: spef_tokens(text),
+        at: 0,
+    };
+    for keyword in [
+        "*SPEF",
+        "*DESIGN",
+        "*DATE",
+        "*VENDOR",
+        "*PROGRAM",
+        "*VERSION",
+        "*DESIGN_FLOW",
+    ] {
+        p.keyword(keyword)?;
+        p.qstring()?;
+    }
+    while p.peek().starts_with('"') {
+        p.qstring()?;
+    }
+    p.keyword("*DIVIDER")?;
+    p.one_of(&[".", "/", ":", "|"])?;
+    p.keyword("*DELIMITER")?;
+    let delimiter = p.one_of(&[".", "/", ":", "|"])?.to_owned();
+    p.keyword("*BUS_DELIMITER")?;
+    p.one_of(&["[", "{", "(", "<", ":", "."])?;
+    if ["]", "}", ")", ">"].contains(&p.peek()) {
+        p.take()?;
+    }
+    let mut units = [0.0; 4];
+    let tables: [(&str, &[(&str, f64)]); 4] = [
+        ("*T_UNIT", &[("NS", 1e-9), ("PS", 1e-12)]),
+        ("*C_UNIT", &[("PF", 1e-12), ("FF", 1e-15)]),
+        ("*R_UNIT", &[("OHM", 1.0), ("KOHM", 1e3)]),
+        ("*L_UNIT", &[("HENRY", 1.0), ("MH", 1e-3), ("UH", 1e-6)]),
+    ];
+    for (slot, (keyword, table)) in units.iter_mut().zip(tables) {
+        p.keyword(keyword)?;
+        let scale = p.number()?;
+        if scale <= 0.0 {
+            return Err(format!("{keyword} {scale} is not positive"));
+        }
+        let unit = p.take()?;
+        let (_, si) = table
+            .iter()
+            .find(|(name, _)| *name == unit)
+            .ok_or_else(|| format!("{keyword} {unit} is not a unit IEEE 1481 defines"))?;
+        *slot = scale * si;
+    }
+    let mut nets = Vec::new();
+    while !p.peek().is_empty() {
+        p.keyword("*D_NET")?;
+        let name = p.take()?.to_owned();
+        let total = p.number()? * units[1];
+        if p.peek() == "*CONN" {
+            p.take()?;
+            p.one_of(&["*P", "*I"])?;
+            p.take()?;
+            p.one_of(&["I", "O", "B"])?;
+            while ["*P", "*I"].contains(&p.peek()) {
+                p.take()?;
+                p.take()?;
+                p.one_of(&["I", "O", "B"])?;
+            }
+        }
+        let mut elements = Vec::new();
+        let sections = [
+            ("*CAP", units[1], false),
+            ("*RES", units[2], true),
+            ("*INDUC", units[3], true),
+        ];
+        for (section, unit, two) in sections {
+            if p.peek() != section {
+                continue;
+            }
+            p.take()?;
+            while !p.peek().is_empty() && p.peek().bytes().all(|b| b.is_ascii_digit()) {
+                p.take()?;
+                let mut nodes = vec![p.take()?.to_owned()];
+                if two || p.peek().parse::<f64>().is_err() {
+                    nodes.push(p.take()?.to_owned());
+                }
+                elements.push(SpefElement {
+                    section,
+                    nodes,
+                    value: p.number()? * unit,
+                });
+            }
+        }
+        p.keyword("*END")?;
+        nets.push(SpefNet {
+            name,
+            total,
+            elements,
+        });
+    }
+    if nets.is_empty() {
+        return Err("internal_def needs one net at least".to_owned());
+    }
+    Ok(Spef {
+        units: [units[1], units[2], units[3]],
+        delimiter,
+        nets,
+    })
+}
+
+/// [`read_spef`]'s cursor over the tokens.
+struct SpefParser<'a> {
+    tokens: Vec<&'a str>,
+    at: usize,
+}
+
+impl<'a> SpefParser<'a> {
+    /// The next token, or `""` at the end.
+    fn peek(&self) -> &'a str {
+        self.tokens.get(self.at).copied().unwrap_or_default()
+    }
+
+    fn take(&mut self) -> Result<&'a str, String> {
+        let token = self.peek();
+        if token.is_empty() {
+            return Err("unexpected end of file".to_owned());
+        }
+        self.at += 1;
+        Ok(token)
+    }
+
+    fn keyword(&mut self, want: &str) -> Result<(), String> {
+        let token = self.take()?;
+        if token == want {
+            Ok(())
+        } else {
+            Err(format!("want {want}, have {token}"))
+        }
+    }
+
+    fn one_of(&mut self, allowed: &[&str]) -> Result<&'a str, String> {
+        let token = self.take()?;
+        if allowed.contains(&token) {
+            Ok(token)
+        } else {
+            Err(format!("{token} is none of {allowed:?}"))
+        }
+    }
+
+    fn qstring(&mut self) -> Result<&'a str, String> {
+        let token = self.take()?;
+        if token.len() >= 2 && token.starts_with('"') && token.ends_with('"') {
+            Ok(token)
+        } else {
+            Err(format!("{token} is not a quoted string"))
+        }
+    }
+
+    fn number(&mut self) -> Result<f64, String> {
+        let token = self.take()?;
+        token
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| format!("{token} is not a number"))
+    }
+}
+
+/// PEX-010: SPEF as IEEE 1481 defines it, read back by a reader written from
+/// the standard ([`read_spef`]), states the extracted network.
+///
+/// Oracle: the standard's grammar (SE) and a round trip. On an analytical
+/// network with resistance and capacitance, one with lateral coupling, and
+/// a field-solved one with inductance, the file the writer produces (with no
+/// timestamp, as the CLI writes it) parses under the standard's header and
+/// net grammar; every element of the network appears exactly once, under
+/// the section of its kind, in the `*D_NET` of its first node, named
+/// `net<delimiter>index` by its index in its net, at its value to the six
+/// written decimals; and each `*D_NET` total is the sum of every
+/// capacitance with a node on the net, coupling included, which is what the
+/// standard's `total_cap` is. A missing `*DATE`, a unit the standard does
+/// not define, an element lost, moved or scaled, or a total without its
+/// coupling breaks it.
+#[test]
+fn spef_reads_back_through_an_independent_reader_as_the_network() {
+    let joined = joint(
+        Layout::default()
+            .rect("m1", 0, 0, 5_000, 1_000)
+            .rect("m2", 4_000, 0, 9_000, 1_000)
+            .label("m1_label", 500, 500, "A"),
+        0,
+        2,
+    );
+    let bars = parallel(Metal::M1, 3_000, 500, 500, 0);
+    let runs = [
+        ("joint", run(&deck(PARAMS, &[], ""), joined, PEX, &[])),
+        (
+            "coupled",
+            run(&deck(PARAMS, &[], ""), bars.clone(), PEX, &[]),
+        ),
+        (
+            "solved",
+            run(&deck(COARSE, &[], ""), bars, PEX, &["A", "B"]),
+        ),
+    ];
+    let header = gpurify::export::Header {
+        tool_version: "test",
+        deck_path: "pex.deck".into(),
+        layout_path: "pex.gds".into(),
+        timestamp: None,
+    };
+    let mut kinds = [false; 3];
+    for (case, ran) in &runs {
+        let network = ran.outputs.parasitics.as_ref().expect("PEX ran");
+        let mut text = String::new();
+        gpurify::export::parasitic::write_spef(
+            network,
+            &ran.extracted.ports,
+            &ran.loaded.strings,
+            &header,
+            &mut text,
+        )
+        .expect("SPEF writes");
+        let spef = read_spef(&text).unwrap_or_else(|why| panic!("{case}: {why}\n{text}"));
+
+        let net_name = |net: NetId| {
+            let name = ran.extracted.ports.name_of(net).expect("a labelled net");
+            ran.loaded.strings.resolve(name).to_owned()
+        };
+        let node_name = |node: NodeId| {
+            let row = node.0 as usize;
+            let net = network.node_net[row];
+            let first = network
+                .node_net
+                .iter()
+                .position(|&n| n == net)
+                .expect("its net");
+            format!("{}{}{}", net_name(net), spef.delimiter, row - first)
+        };
+        let mut read: Vec<(String, SpefElement)> = spef
+            .nets
+            .iter()
+            .flat_map(|net| net.elements.iter().map(|e| (net.name.clone(), e.clone())))
+            .collect();
+        for (k, value) in network.value.iter().enumerate() {
+            let (section, slot, si) = match *value {
+                Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => ("*CAP", 0, q.raw() * 1e-15),
+                Parasitic::Resistance(q) => ("*RES", 1, q.raw()),
+                Parasitic::Inductance(q) => ("*INDUC", 2, q.raw() * 1e-12),
+            };
+            kinds[slot] = true;
+            let near = network.from[k];
+            let mut nodes = vec![node_name(near)];
+            nodes.extend(network.to[k].map(node_name));
+            let tolerance = 5.1e-7 * spef.units[slot];
+            let found = read.iter().position(|(block, e)| {
+                *block == net_name(network.node_net[near.0 as usize])
+                    && e.section == section
+                    && e.nodes == nodes
+                    && (e.value - si).abs() <= tolerance
+            });
+            let Some(found) = found else {
+                panic!("{case}: no {section} {nodes:?} {si:e} in {read:?}\n{text}");
+            };
+            read.swap_remove(found);
+        }
+        assert!(
+            read.is_empty(),
+            "{case}: elements no network row states: {read:?}"
+        );
+
+        assert_eq!(
+            spef.nets.len(),
+            network.node_net.chunk_by(|a, b| a == b).count(),
+            "{case}: one *D_NET per net"
+        );
+        for net in &spef.nets {
+            let (sum, count) = spef
+                .nets
+                .iter()
+                .flat_map(|n| &n.elements)
+                .filter(|e| {
+                    e.section == "*CAP"
+                        && e.nodes.iter().any(|node| {
+                            node.rsplit_once(spef.delimiter.as_str())
+                                .is_some_and(|(owner, _)| owner == net.name)
+                        })
+                })
+                .fold((0.0, 0.0), |(sum, count), e| (sum + e.value, count + 1.0));
+            assert!(
+                (net.total - sum).abs() <= 5.1e-7 * spef.units[0] * (count + 1.0),
+                "{case}: *D_NET {} total {:e} F, its capacitances sum to {sum:e} F\n{text}",
+                net.name,
+                net.total
+            );
+        }
+    }
+    assert_eq!(kinds, [true; 3], "every section is exercised");
+}
+
 mod fastcap;
 mod fasthenry;
