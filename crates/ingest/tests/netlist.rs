@@ -455,6 +455,42 @@ fn a_reference_over_the_flat_cap_is_refused_before_it_is_expanded() {
     assert!(started.elapsed().as_secs() < 5, "refused without expanding");
 }
 
+/// Oracle: the stated cap, testing-plan F96, as the layout's
+/// (`MAX_HIERARCHY_DEPTH`, 1024 levels, the top included). Subcircuits `c0`
+/// (the top) to `c{n-1}` each place the next once, and `c{n-1}` holds one
+/// resistor, so a chain of `n` subcircuits is `n` levels deep. At 1024 it
+/// flattens to the resistor and two nets, the top's `a` and the leaf's own
+/// `b`; at 1025, `c1024` is level 1025 and is named in the refusal, as it
+/// is at 10 000, which overflowed the stack before any error was returned.
+#[test]
+fn a_reference_deeper_than_the_layouts_depth_cap_is_refused_not_overflowed() {
+    use gpurify_ingest::layout::MAX_HIERARCHY_DEPTH;
+    use std::fmt::Write;
+
+    let flatten = |n: u32| {
+        let mut text = String::new();
+        for k in 0..n - 1 {
+            writeln!(text, ".subckt c{k} a\nX1 a c{}\n.ends", k + 1).expect("a String takes text");
+        }
+        writeln!(text, ".subckt c{} a\nR1 a b rpoly\n.ends", n - 1).expect("and more");
+        let mut strings = StrTable::default();
+        let netlist = spice::read(&text, &mut strings, &DeviceRecognition::default())
+            .expect("a chain of subcircuits reads");
+        let top = netlist.top().expect("c0 is the one top");
+        netlist
+            .flatten_top(top, &mut strings)
+            .map(|flat| (flat.device_model.len(), flat.net_name.len()))
+    };
+    assert_eq!(MAX_HIERARCHY_DEPTH, 1024);
+    assert_eq!(flatten(1024).expect("at the cap"), (1, 2));
+    for n in [1025, 10_000] {
+        match flatten(n) {
+            Err(NetlistError::TooDeep(name)) => assert_eq!(name, "c1024", "{n} levels"),
+            other => panic!("{n} levels: {other:?}, want TooDeep(c1024)"),
+        }
+    }
+}
+
 /// Oracle: SPICE's own card syntax (ngspice manual, "Resistors" and
 /// "Capacitors": `RXXXXXXX n+ n- <value> <mname>`). A value written between
 /// a card's nets and its model is the device's `r` or `c`, so the positional
