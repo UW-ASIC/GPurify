@@ -383,10 +383,9 @@ const OPEN_TOOLS: [&str; 9] = [
 const INDEPENDENT: [&str; 7] = ["CF", "SE", "FR", "SY", "NV", "BM", "MR"];
 
 /// Rows beyond open source that still rest on fewer than two independent
-/// oracles. Ledger P1 adds the second; this list may only shrink.
-const EVIDENCE_GAPS: [&str; 8] = [
-    "ERC-D3", "ERC-F12", "ERC-F6", "FLOW-005", "LVS-020", "LVS-066", "LVS-071", "PEX-010",
-];
+/// oracles. Ledger P1 gave the eight it held their second; a row joins only
+/// when it is new, and the list may only shrink.
+const EVIDENCE_GAPS: [&str; 0] = [];
 
 fn codes(oracle: &str) -> BTreeSet<&str> {
     oracle
