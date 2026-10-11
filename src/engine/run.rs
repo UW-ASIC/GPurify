@@ -98,8 +98,9 @@ pub struct Outputs {
     /// Every series or parallel merge LVS made on either side.
     pub lvs_merges: Vec<(gpurify_check::lvs::verdict::Side, gpurify_check::lvs::Merge)>,
     /// The extracted parasitics, analytical with any field-solved nets laid
-    /// over them, in canonical order. `Some` only when PEX ran; a refused
-    /// PEX stage leaves `None`, not a partial network.
+    /// over them, reduced to the deck's extraction type
+    /// ([`gpurify_extract::reduce`]), in canonical order. `Some` only when
+    /// PEX ran; a refused PEX stage leaves `None`, not a partial network.
     pub parasitics: Option<ParasiticNetwork>,
 }
 
@@ -484,8 +485,9 @@ fn run_lvs(
 }
 
 /// Analytical extraction of the whole design; with `quasistatic_nets`, those nets
-/// are field-solved and overlaid on it. Every refusal on the way, a
-/// non-reciprocal solve included, is [`StageStatus::Refused`].
+/// are field-solved and overlaid on it; then the network is reduced to the
+/// deck's extraction type. Every refusal on the way, a non-reciprocal solve
+/// included, is [`StageStatus::Refused`].
 ///
 /// ponytail: the solve's `CapMatrix`, `InductMatrix` and `Accuracy` are dropped,
 /// as `Outputs` has no slot for them; add fields there when a caller needs them.
@@ -574,6 +576,7 @@ fn run_pex(
         gpurify_extract::quasistatic::overlay(&mut network, &solved);
     }
 
+    gpurify_extract::reduce::reduce(&mut network, loaded.deck.extraction);
     out.parasitics = Some(network);
     StageStatus::Ran
 }

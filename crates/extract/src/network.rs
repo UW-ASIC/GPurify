@@ -164,7 +164,7 @@ impl ParasiticNetwork {
             self.value.iter().all(|value| match *value {
                 Parasitic::Resistance(q) => q.is_finite(),
                 Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.is_finite(),
-                Parasitic::Inductance(q) => q.is_finite(),
+                Parasitic::Inductance(q) | Parasitic::MutualInductance(q) => q.is_finite(),
             }),
             "every element's value is finite"
         );

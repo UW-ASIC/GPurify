@@ -1920,3 +1920,77 @@ fn the_multi_patterning_example_in_the_language_spec_parses() {
         ]
     );
 }
+
+/// PEX-008: `extraction` names one of Calibre's types and, for a type that
+/// keeps coupling, OpenRCX's coupling threshold in any capacitance unit;
+/// without the line every element is kept. Each misuse is an error at the
+/// value: an unknown type, a threshold on a type that grounds or drops every
+/// coupling, a negative threshold, a second line.
+#[test]
+fn an_extraction_line_names_a_type_and_an_optional_threshold() {
+    use gpurify_ingest::deck::{Extraction, ExtractionKind};
+    let (deck, _) = ok("");
+    assert_eq!(deck.extraction, Extraction::default());
+    assert_eq!(deck.extraction.kind, ExtractionKind::Rcc);
+    for (line, kind, af) in [
+        ("extraction r", ExtractionKind::R, 0.0),
+        ("extraction c", ExtractionKind::C, 0.0),
+        ("extraction cc", ExtractionKind::Cc, 0.0),
+        ("extraction rc", ExtractionKind::Rc, 0.0),
+        ("extraction rcc", ExtractionKind::Rcc, 0.0),
+        (
+            "extraction rcc coupling_threshold 0.1fF",
+            ExtractionKind::Rcc,
+            100.0,
+        ),
+        (
+            "extraction cc coupling_threshold 250aF",
+            ExtractionKind::Cc,
+            250.0,
+        ),
+        (
+            "extraction rcc coupling_threshold 0.002pF",
+            ExtractionKind::Rcc,
+            2000.0,
+        ),
+        (
+            "extraction rc coupling_threshold 0fF",
+            ExtractionKind::Rc,
+            0.0,
+        ),
+    ] {
+        let (deck, _) = ok(&format!("{line}\n"));
+        assert_eq!(deck.extraction.kind, kind, "{line}");
+        assert!(
+            (deck.extraction.coupling_threshold_af - af).abs() <= 1e-12 * af.max(1.0),
+            "{line}: {}",
+            deck.extraction.coupling_threshold_af
+        );
+    }
+    for (body, needle) in [
+        ("extraction rlc\n", "unknown extraction type `rlc`"),
+        (
+            "extraction rc coupling_threshold 0.1fF\n",
+            "`rc` keeps no coupling",
+        ),
+        (
+            "extraction c coupling_threshold 1fF\n",
+            "`c` keeps no coupling",
+        ),
+        (
+            "extraction rcc coupling_threshold -0.1fF\n",
+            "coupling_threshold must be zero or more",
+        ),
+        (
+            "extraction rcc coupling_threshold 0.1fF/um\n",
+            "coupling_threshold needs a capacitance",
+        ),
+        ("extraction rcc threshold 0.1fF\n", "unknown extraction key"),
+        (
+            "extraction rc\nextraction rcc\n",
+            "the extraction type is already stated",
+        ),
+    ] {
+        one_error(body, needle);
+    }
+}

@@ -11,6 +11,10 @@
 //!   partial-inductance solve ([`field::henry`]), and
 //!   [`quasistatic::overlay`] puts the result over the analytical network.
 //!
+//! [`reduce`] then cuts the network to the deck's extraction type (`r`, `c`,
+//! `cc`, `rc` or `rcc`, Calibre's names) and grounds coupling below its
+//! threshold, as OpenRCX does.
+//!
 //! Data in: the layout ([`GeometryStore`](gpurify_geom::GeometryStore)), its
 //! nets ([`NetTable`](gpurify_check::topology::NetTable)), and the deck's
 //! `pex` lines ([`ProcessStack`](gpurify_ingest::deck::ProcessStack), one row
@@ -177,7 +181,7 @@
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
 //! | PEX-006 | Multi-corner extraction | missing | — |
 //! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R, colour-aware) | partial | temperature-dependent R, already in the deck's stack ([`ProcessStack::sheet_res_ohm_sq`](gpurify_ingest::deck::ProcessStack::sheet_res_ohm_sq)); the rest needs foundry calibration data |
-//! | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | one fixed output |
+//! | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | implemented | [`reduce`]: the deck's `extraction` type and coupling threshold |
 //! | PEX-009 | PEX netlist diff and qualification | missing | — |
 //! | PEX-010 | SPEF output | implemented | `gpurify::export::parasitic::write_spef` |
 //!
@@ -189,5 +193,6 @@ mod conductor;
 pub mod field;
 pub mod network;
 pub mod quasistatic;
+pub mod reduce;
 
 pub use network::{Parasitic, ParasiticNetwork};

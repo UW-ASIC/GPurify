@@ -13,8 +13,8 @@
 
 use super::kinds::{Cmp, Dim, Kind, Param, KINDS};
 use super::{
-    absolute_unit, DeckSource, DerivedOp, DerivedSource, DeviceKind, LvsLimit, ParamSource,
-    ParamValue, RuleSource,
+    absolute_unit, DeckSource, DerivedOp, DerivedSource, DeviceKind, ExtractionKind, LvsLimit,
+    ParamSource, ParamValue, RuleSource,
 };
 use gpurify_geom::{DbuArea, Grid};
 use std::collections::HashMap;
@@ -38,7 +38,8 @@ pub enum PrintError {
 /// The text states `grid` as the deck's grid, its drawn layers, ignored
 /// pairs, derived layers and rules in declaration order (each rule where its
 /// first inline layer was made, every other after the layers), then its
-/// connectivity, devices, `lvs` statements and parasitic stack. `for` loops
+/// connectivity, devices, `lvs` statements, parasitic stack and extraction
+/// type. `for` loops
 /// and `let` bindings are not reconstructed: a loop's rules are written
 /// one by one.
 ///
@@ -264,6 +265,24 @@ impl Printer<'_> {
             }
             if let Some((tc1, tc2)) = row.tc {
                 let _ = write!(out, " tc1 {}/K tc2 {}/K2", number(tc1)?, number(tc2)?);
+            }
+            out.push('\n');
+        }
+        if let Some(extraction) = source.extraction {
+            let kind = match extraction.kind {
+                ExtractionKind::R => "r",
+                ExtractionKind::C => "c",
+                ExtractionKind::Cc => "cc",
+                ExtractionKind::Rc => "rc",
+                ExtractionKind::Rcc => "rcc",
+            };
+            let _ = write!(out, "extraction {kind}");
+            if extraction.coupling_threshold_af != 0.0 {
+                let _ = write!(
+                    out,
+                    " coupling_threshold {}aF",
+                    number(extraction.coupling_threshold_af)?
+                );
             }
             out.push('\n');
         }
