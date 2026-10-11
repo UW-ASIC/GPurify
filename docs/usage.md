@@ -83,13 +83,16 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
   their gates strapped, become one device whose L is the sum, if every other
   parameter agrees. Both must state L: with no length to add, two transistors
   in series stay two, so a stack does not match one unsized transistor.
-- **Multiplier:** a transistor card's `m` multiplies its `W`, and `m` is then
-  dropped (`nf` is untouched). Any other card's `m` is its count of devices
-  in parallel, so `m=2` matches two drawn devices and not one. `m=1` is the
+- **Multiplier:** a transistor card's `m` multiplies its `W` where it states
+  one, and `m` is then dropped (`nf` is untouched). Any other card's `m`, an
+  unsized transistor's included, is its count of devices in parallel, so `m=2` matches two drawn devices and not one. `m=1` is the
   same as no `m`, and a card without `m` is one device whatever other cards
   state.
 
-The parameter names are `w`, `l`, `nf` and `m`. The report lists every merge
+The parameter names are `w`, `l`, `nf` and `m`. Each merge needs only what
+it adds: transistors stating W merge in parallel whether or not anything
+states L, and transistors stating L merge in series whether or not anything
+states W. The report lists every merge
 under `lvs merges:` with the device rows it joined, so a paired device can be
 traced back to what was drawn.
 

@@ -585,6 +585,42 @@ fn sized_fingers_merge_summing_width_when_told_which_parameter_is_width() {
     assert_eq!(merges[0].devices, [0, 1]);
 }
 
+/// Oracle: construct-from-answer, testing-plan F84. Each law needs only the
+/// name of what it sums. Told only which parameter is `L`, two 150 nm
+/// channels stacked through an internal node are one of 300 nm; told only
+/// which is `W`, two 2 µm fingers in parallel are one of 4 µm. They used to
+/// need both names, so a reference stating only `L` (or only `W`) left both
+/// sides unmerged.
+#[test]
+fn each_merge_needs_only_the_name_of_what_it_sums() {
+    use gpurify_check::lvs::reduce::reduce_with;
+    use gpurify_check::lvs::{MergeKind, ParamNames};
+    let only = |width, length| ParamNames {
+        width,
+        length,
+        ..ParamNames::default()
+    };
+    let (out, merges) = reduce_with(&series_pair_tight(), only(None, Some(LENGTH)));
+    assert_eq!(out.device_count(), 1);
+    assert_eq!(out.params_of(0), [(LENGTH, 3e-7)]);
+    assert_eq!(merges[0].kind, MergeKind::Series);
+
+    // Two fingers stating `W` alone, the upper with source and drain swapped.
+    let mut fingers = GraphBuilder::new(4);
+    for (source, drain) in [(1, 2), (2, 1)] {
+        fingers.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 3)],
+            &[(WIDTH, 2e-6)],
+        );
+    }
+    let (out, merges) = reduce_with(&fingers.finish(), only(Some(WIDTH), None));
+    assert_eq!(out.device_count(), 1);
+    assert_eq!(out.params_of(0), [(WIDTH, 4e-6)]);
+    assert_eq!(merges[0].kind, MergeKind::Parallel);
+}
+
 /// Different lengths are different transistors, however they are wired.
 #[test]
 fn fingers_of_different_length_do_not_merge() {

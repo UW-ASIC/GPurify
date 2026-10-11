@@ -1,0 +1,6 @@
+* LVS_PARALLEL (case LVS_PARALLEL_MERGE) as one card stating its width alone:
+* the cell's two 200 by 50 nm channels side by side are one of W = 400 nm,
+* and a parallel merge needs only W (testing-plan F84).
+.subckt LVS_PARALLEL D A S
+M0 D A S S nfet_01v8 W=400n
+.ends

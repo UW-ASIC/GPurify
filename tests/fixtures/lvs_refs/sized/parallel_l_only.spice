@@ -1,0 +1,6 @@
+* LVS_PARALLEL (case LVS_PARALLEL_MERGE) as one card stating its length
+* alone: with no W to sum and no m to count in, the two stay two
+* transistors (testing-plan F83).
+.subckt LVS_PARALLEL D A S
+M0 D A S S nfet_01v8 L=50n
+.ends

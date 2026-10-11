@@ -13,14 +13,15 @@
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
 //! comparison's tolerance plays no part here. A summed parameter must be
-//! stated by every member or by none, so no member's share is dropped. A MOS
-//! stating `W` merges only when [`ParamNames`] says which parameter is `W`
-//! and which is `L`; any other device, a MOS with no `W` to sum included,
-//! only when it names `m`, the parameter its count is kept in, so two
-//! unsized transistors in parallel are one with `m = 2`, not one transistor
-//! (testing-plan F83). A series merge also needs `L` stated on both devices:
-//! with no length to sum, two transistors in series would read as one and
-//! the stack count would be lost, so they stay two (testing-plan F67). A
+//! stated by every member or by none, so no member's share is dropped. Each
+//! law needs only the name of what it sums (testing-plan F84): a parallel
+//! merge of MOS stating `W` needs [`ParamNames`] to name `W`, and any other
+//! parallel merge, a MOS with no `W` to sum included, the `m` its count is
+//! kept in, so two unsized transistors in parallel are one with `m = 2`, not
+//! one transistor (testing-plan F83). A series merge needs `L` stated on both
+//! devices: with no length to sum, two transistors in series would read as
+//! one and the stack count would be lost, so they stay two (testing-plan
+//! F67). A
 //! passive's value is kept, not combined: two capacitors of one `c` in
 //! parallel are one of that `c` with `m = 2`, as a card stating `m = 2` is,
 //! and do not match one card of twice the `c`.
@@ -69,11 +70,10 @@ use gpurify_ingest::StrId;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ParamNames {
     /// `W`: summed by a parallel merge of MOS that state it, multiplied by
-    /// `m`. With `length`, it lets such MOS merge at all.
+    /// `m`. Without it, no MOS has a `W` to sum and each keeps its count.
     pub width: Option<StrId>,
     /// `L`: summed by a series merge, which needs it stated on both devices,
-    /// so without this name nothing merges in series. With `width`, it lets
-    /// MOS stating `W` merge at all.
+    /// so without this name nothing merges in series.
     pub length: Option<StrId>,
     /// `nf`: summed by a parallel merge of MOS stating `W`.
     pub fingers: Option<StrId>,
@@ -220,11 +220,8 @@ struct Plan {
     /// `new_net[old]` is the surviving net's row, or `u32::MAX` for a consumed
     /// one. Ascending over the survivors, so their relative order is the input's.
     new_net: Vec<u32>,
-    /// Devices that may merge in series: no terminal on no net, and a MOS
-    /// stating a parameter only with the `W` and `L` names given.
-    mergeable: Vec<bool>,
     /// Devices that may merge in parallel: no terminal on no net, and a `W`
-    /// to sum with the `L` name given, or else the `m` name to count in.
+    /// to sum or else the `m` name to count in.
     parallel_ok: Vec<bool>,
     /// Each device's terminals as [`terminal_key`]s, ascending, CSR into `key`.
     key_start: Vec<u32>,
@@ -236,8 +233,8 @@ struct Plan {
     series: Vec<(u32, u32, u32)>,
     /// Per device: the parameters a parallel merge needs equal (all but `W`,
     /// `nf`) and a series merge needs equal (all but `L`). A device that
-    /// states no `L` has no series signature: it has nothing for a series
-    /// merge to sum, so it never merges in series (testing-plan F67).
+    /// states no `L`, or has a terminal on no net, has no series signature:
+    /// it never merges in series (testing-plan F67).
     parallel_sig: Vec<Vec<(StrId, u64)>>,
     series_sig: Vec<Option<Vec<(StrId, u64)>>>,
     /// Which law this pass applies.
@@ -457,8 +454,6 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
     plan.key_start.clear();
     plan.key_start.reserve(devices + 1);
     plan.key_start.push(0);
-    plan.mergeable.clear();
-    plan.mergeable.reserve(devices);
     plan.parallel_ok.clear();
     plan.parallel_ok.reserve(devices);
     plan.parallel_sig.clear();
@@ -476,22 +471,13 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         // Every refusal is stated in the module comment.
         let params = src.params_of(device);
         let kind = src.device_kind[device as usize];
-        let sized = names.width.is_some() && names.length.is_some();
-        let free = match kind {
-            DeviceKind::Mos => params.is_empty() || sized,
-            _ => names.multiplier.is_some(),
-        };
         let bound = !terminal_nets.contains(&u32::MAX);
-        plan.mergeable.push(free & bound);
         // A merge with no `W` to sum keeps the count, which needs the `m`
-        // name to be kept under (testing-plan F83).
+        // name to be kept under (testing-plan F83); one with a `W` needs
+        // nothing else (F84).
         let wide = sums_width(kind, params, names);
-        let room = if wide {
-            sized
-        } else {
-            names.multiplier.is_some()
-        };
-        plan.parallel_ok.push(room & bound);
+        plan.parallel_ok
+            .push(bound & (wide || names.multiplier.is_some()));
         let counted = names.multiplier.filter(|_| !wide);
         plan.parallel_sig
             .push(signature(params, &parallel_sums(wide, names), counted));
@@ -499,7 +485,7 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
             .length
             .is_some_and(|length| params.iter().any(|&(name, _)| name == length));
         plan.series_sig
-            .push(states_length.then(|| signature(params, &[names.length], None)));
+            .push((states_length && bound).then(|| signature(params, &[names.length], None)));
     }
 }
 
@@ -580,11 +566,9 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
         if !(is_channel(first_role) & is_channel(second_role)) {
             continue;
         }
-        if !(plan.mergeable[first as usize] & plan.mergeable[second as usize]) {
-            continue;
-        }
         // Two stacked devices are one only as long as the two lengths: with
         // no `L` on either, the stack count would be lost (testing-plan F67).
+        // A device with a terminal on no net has no signature either.
         if (src.device_kind[first as usize] != src.device_kind[second as usize])
             || (src.device_model[first as usize] != src.device_model[second as usize])
             || plan.series_sig[first as usize].is_none()

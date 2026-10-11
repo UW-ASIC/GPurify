@@ -260,6 +260,39 @@ fn a_block_placed_by_instance_is_compared_like_one_drawn_flat() {
     );
 }
 
+/// Oracle: construct-from-answer, testing-plan F84. `LVS_SERIES` draws two
+/// 200 by 50 nm channels stacked through an unlabelled node with their gates
+/// strapped, and `LVS_PARALLEL` two such channels side by side (their case
+/// notes). Each merge needs only the size it sums: the stack is one card of
+/// `L=100n` with no `W` written, and the pair one card of `W=400n` with no
+/// `L`. The other size alone leaves nothing to sum, so the two stay two and
+/// do not match one card.
+#[test]
+fn a_merge_needs_only_the_size_it_sums() {
+    let lvs = Checks {
+        drc: false,
+        erc: false,
+        lvs: true,
+        pex: false,
+    };
+    let verdict = |id: &str, reference: &str| {
+        common::run_case_with_reference("lvs", id, lvs, reference)
+            .expect("the cell and the reference load")
+            .outputs
+            .lvs
+            .map(|verdict| matches!(verdict, gpurify::check::lvs::Verdict::Match))
+    };
+    for (id, reference, matched) in [
+        ("LVS_SERIES_MERGE", "series_l_only", true),
+        ("LVS_SERIES_MERGE", "series_w_only", false),
+        ("LVS_PARALLEL_MERGE", "parallel_w_only", true),
+        ("LVS_PARALLEL_MERGE", "parallel_l_only", false),
+    ] {
+        let path = format!("lvs_refs/sized/{reference}.spice");
+        assert_eq!(verdict(id, &path), Some(matched), "{id} against {path}");
+    }
+}
+
 /// Oracle: construct-from-answer. A real extraction and a real reference netlist
 /// through the LVS stage, and the five run rows that say which of its checks
 /// executed.

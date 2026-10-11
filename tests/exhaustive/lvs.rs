@@ -1339,6 +1339,17 @@ fn curated() -> Vec<Fixture> {
             with_text(name, &["LVS-041"], draw(&inner), reference).expect(Expect::Lvs(matched)),
         );
     }
+    // F84 (fixed in B27): a series merge needs `l` and nothing else, so the
+    // stack is one card writing `l` alone; one writing `w` alone has no
+    // length to sum, and the stack stays two.
+    let long_only =
+        |w, l| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300).writes(w, l)]);
+    for (name, reference) in [
+        ("series/stack_vs_long_l_only", long_only(false, true)),
+        ("series/stack_vs_long_w_only", long_only(true, false)),
+    ] {
+        out.push(compared(name, &["LVS-041"], &inner, &reference));
+    }
 
     // LVS-040 and F57 (fixed in B17): parallel MOS, source and drain shorted too.
     let two = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);
@@ -1380,6 +1391,17 @@ fn curated() -> Vec<Fixture> {
         ),
     ] {
         out.push(compared(name, &["LVS-040", "LVS-046"], &two, &reference));
+    }
+    // F84 (fixed in B27): a parallel merge needs `w` and nothing else, so the
+    // pair is one card writing `w` alone; one writing `l` alone has no width
+    // to sum, so the pair is counted, two against its one.
+    let wide_only =
+        |w, l| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(2000, 150).writes(w, l)]);
+    for (name, reference) in [
+        ("parallel/mos_two_vs_wide_w_only", wide_only(true, false)),
+        ("parallel/mos_two_vs_wide_l_only", wide_only(false, true)),
+    ] {
+        out.push(compared(name, &["LVS-040"], &two, &reference));
     }
 
     // F20 (fixed in B9), LVS-043, LVS-044: parallel passives keep their count.
@@ -2070,6 +2092,29 @@ mod tests {
         assert!(
             equivalent(&two, &bare(Dev::mos(N, 0, 1, 2).times(2))),
             "but they are one of m = 2"
+        );
+        let sized_only = |w, l, size: (i64, i64)| {
+            Circuit::new(
+                3,
+                vec![Dev::mos(N, 0, 1, 2).sized(size.0, size.1).writes(w, l)],
+            )
+        };
+        assert!(
+            equivalent(&two, &sized_only(true, false, (2000, 150))),
+            "W alone sums"
+        );
+        assert!(
+            !equivalent(&two, &sized_only(false, true, (2000, 150))),
+            "L alone counts two"
+        );
+        let inner = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
+        assert!(
+            equivalent(&inner, &sized_only(false, true, (1000, 300))),
+            "L alone stacks"
+        );
+        assert!(
+            !equivalent(&inner, &sized_only(true, false, (1000, 300))),
+            "W alone does not"
         );
         let one = |dev: Dev| Circuit::new(2, vec![dev]);
         let res = one(Dev::pins(R, &[0, 1]));
