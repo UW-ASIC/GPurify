@@ -276,6 +276,7 @@ explains (kind 30).
 | 38 | minimum_cut | `min_cuts(C, W, O; width[, within]) >= n` | ROW | EXACT (scripted) | exact | new |
 | 39 | gate_corner | `bend(A, B)`, `covers_corner(A, B)` | POINT | EXACT | exact | new |
 | 40 | max_enclosure | `enclosure(i, o) <= l` | FIG by marker (outer) | EXACT | exact | new |
+| 41 | noncoincident_enclosure | `enclosure(i, o, noncoincident) >= l` | FIG by shape (inner) | APPROX | KLayout ⊆ GPurify | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1285,6 +1286,24 @@ max_enclosure(id, O, I, LIM)   # per merged O figure: held = merged I figures in
 
 - Key FIG by marker over the outer figures; the measurement is not compared. `sized` grows a
   rectilinear region with square corners, as `.sized()` in a derived layer (c).
+
+### 41. noncoincident_enclosure — APPROX (KLayout ⊆ GPurify)
+
+**GPurify** (`overlay.rs` `apart_enclosure`): each inner edge against each host edge parallel to
+it, facing the same way at or beyond it, Euclidean; pairs that touch are not measured; the least
+of the rest is the enclosure, 0 when unhosted.
+
+**KLayout**
+
+```ruby
+emit(id, O.enclosing(I, LIM, euclidian, transparent, without_touching_edges)) ; emit(id, I.not_inside(O))
+```
+
+- (d) [L] "without_touching_edges": "coincident edges will not yield errors"; it also drops
+  touching corners, as GPurify's touching pairs. `enclosing` pairs edges by its own angle and
+  orientation filter, which this repository has not run against the per-edge definition, so the
+  comparison is the safe bracket until a run settles it. Key FIG by shape (inner); the
+  measurement is not compared.
 
 ---
 

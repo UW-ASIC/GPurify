@@ -36,6 +36,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_enclosure(depth),
         asymmetric_enclosure(depth),
         wire_enclosure(),
+        noncoincident_enclosure(),
         max_enclosure(),
         min_extension(depth),
         gate_corner(),
@@ -605,6 +606,91 @@ fn wire_enclosure() -> Vec<Fixture> {
         "unhosted",
         via().rect("met2", 5000, 5000, 6000, 6000),
         [lengths(&[0]), vec![], vec![]],
+    ));
+    every_placement(cases)
+}
+
+/// `enclosure(lvtn, nwell, noncoincident) >= 380nm` (`noncoincident_enclosure`,
+/// DRC-054, sky130 lvtn.10 "(exclude coincident edges)") beside the plain
+/// `enclosure(lvtn, nwell) >= 380nm`: an lvtn edge lying on the nwell's edge,
+/// or an lvtn corner touching it, is exempt from the first and measures 0
+/// under the second.
+///
+/// Oracle: drawn margins; the touching pairs are drawn to coincide.
+///
+/// lvtn is `[0, 1000]^2`. Shapes: concentric at 379/380/381 (both rules
+/// alike); the left edge on the nwell's left edge with the other margins
+/// swept, and also the bottom edge; the left edge on the nwell's edge for
+/// its lower half only, the nwell stepping 400 out above it (exempt, then
+/// 400); lvtn in an L nwell's concave corner, touching it only at that
+/// corner (exempt; 600 elsewhere); an unhosted lvtn (0 for both).
+fn noncoincident_enclosure() -> Vec<Fixture> {
+    const LIMIT: i64 = 380;
+    let deck = new_deck(
+        &["lvtn", "nwell"],
+        "rule lvtn.10 enclosure(lvtn, nwell, noncoincident) >= 380nm\n\
+         rule plain enclosure(lvtn, nwell) >= 380nm\n",
+    );
+    let case = |name: &str, layout: Layout, apart: Vec<Finding>, plain: Vec<Finding>| {
+        fixture(
+            &format!("noncoincident_enclosure/{name}"),
+            &["DRC-054"],
+            &deck,
+            layout,
+            &[("lvtn.10", apart), ("plain", plain)],
+        )
+    };
+    let lvtn = || Layout::default().rect("lvtn", 0, 0, 1000, 1000);
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("concentric/{side}"),
+            lvtn().rect("nwell", -m, -m, 1000 + m, 1000 + m),
+            below(m, LIMIT),
+            below(m, LIMIT),
+        ));
+        cases.push(case(
+            &format!("left_on_edge/{side}"),
+            lvtn().rect("nwell", 0, -m, 1000 + m, 1000 + m),
+            below(m, LIMIT),
+            lengths(&[0]),
+        ));
+        cases.push(case(
+            &format!("corner_on_edges/{side}"),
+            lvtn().rect("nwell", 0, 0, 1000 + m, 1000 + m),
+            below(m, LIMIT),
+            lengths(&[0]),
+        ));
+    }
+    cases.push(case(
+        "partly_on_edge",
+        lvtn().polygon(
+            "nwell",
+            &[
+                (0, -400),
+                (1400, -400),
+                (1400, 1400),
+                (-400, 1400),
+                (-400, 500),
+                (0, 500),
+            ],
+        ),
+        vec![],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "kissing_corner",
+        Layout::default()
+            .rect("lvtn", 600, 600, 1000, 1000)
+            .polygon("nwell", &L_HOST),
+        vec![],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "unhosted",
+        lvtn().rect("nwell", 2000, 2000, 3000, 3000),
+        lengths(&[0]),
+        lengths(&[0]),
     ));
     every_placement(cases)
 }

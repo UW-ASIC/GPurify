@@ -818,6 +818,30 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("min_enclosure", Key::FigRow(name, 1), Value::Length)
             }
+            Rule::NoncoincidentEnclosure {
+                outer,
+                inner,
+                limit,
+            } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {o}.enclosing({i}, {}, euclidian, transparent, without_touching_edges)) ; \
+                     emit({q}, {i}.not_inside({o}))",
+                    lim(limit),
+                    o = var(outer),
+                    i = var(inner)
+                )
+                .expect("a String");
+                approx(
+                    "noncoincident_enclosure",
+                    Compare::KlayoutWithin,
+                    Key::FigRow(name.clone(), 1),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
             Rule::AsymmetricEnclosure {
                 outer,
                 inner,

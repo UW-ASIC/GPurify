@@ -11,7 +11,8 @@
 use super::presence::{hosts, inside_point, rects_of};
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    centre, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
+    centre, gap_midpoint, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects,
+    Verdict, REFUSED,
 };
 use crate::drc::{Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
@@ -20,7 +21,7 @@ use crate::report::{
 };
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{isqrt, Point};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
 use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
@@ -45,15 +46,18 @@ fn lesser(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
     }
 }
 
+/// The widest margin the domain holds, 2^41: no real one exceeds it. Built by
+/// `Sub`, as every margin is, since `new_unchecked` asserts 2^40.
+fn far() -> Dbu {
+    Dbu::new_unchecked(MAX_ABS_DBU) - Dbu::new_unchecked(-MAX_ABS_DBU)
+}
+
 /// How far the host reaches past a rectangular `inner` on each side, read
 /// along the side's own strip (projection metric): the nearest host edge,
 /// holes included, facing that side. Exact for any rectilinear host that
 /// contains `inner`.
 fn strips(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Side); 4] {
-    // The widest margin the domain holds, 2^41: no real one exceeds it. Built
-    // by `Sub`, as every margin is, since `new_unchecked` asserts 2^40.
-    let far = Dbu::new_unchecked(MAX_ABS_DBU) - Dbu::new_unchecked(-MAX_ABS_DBU);
-    let [mut l, mut r, mut b, mut t] = [far; 4];
+    let [mut l, mut r, mut b, mut t] = [far(); 4];
     for ring in std::iter::once(host.outer()).chain(host.holes()) {
         let (xs, ys) = ring.coords();
         for e in ring_segs(xs, ys) {
@@ -100,8 +104,56 @@ fn boundary_dist2(inner: &[Bbox], host: PolygonRef<'_>) -> i128 {
         .fold(i128::MAX, i128::min)
 }
 
+/// How an enclosure rule reads an inner polygon in its host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// The Euclidean distance to the host's boundary (`min_enclosure`).
+    EverySide,
+    /// The better axis of straight-out readings (`asymmetric_enclosure`).
+    Opposite,
+    /// Facing parallel edges, coincident ones exempt
+    /// (`noncoincident_enclosure`).
+    NonCoincident,
+}
+
+/// The least Euclidean distance between an edge of `inner` and a parallel
+/// edge of `host` facing the same way at or beyond it, over the pairs that
+/// do not touch, and the middle of the gap between that pair's boxes; `None`
+/// when every such pair touches (an inner polygon whose every edge lies on
+/// its host's boundary).
+fn apart_enclosure(inner: PolygonRef<'_>, host: PolygonRef<'_>) -> Option<(DbuArea, Point)> {
+    let mut best: Option<(DbuArea, Point)> = None;
+    for (a, b) in poly_edges(inner) {
+        let (side, e) = (outward(a, b), Seg { a, b });
+        for (c, d) in poly_edges(host) {
+            if outward(c, d) != side {
+                continue;
+            }
+            let beyond = match side {
+                Side::Left => c.x <= a.x,
+                Side::Right => c.x >= a.x,
+                Side::Bottom => c.y <= a.y,
+                Side::Top => c.y >= a.y,
+            };
+            let d2 = seg_seg_dist2(e, Seg { a: c, b: d });
+            if !beyond || d2.raw() == 0 || best.is_some_and(|(least, _)| least <= d2) {
+                continue;
+            }
+            let boxes = (
+                Bbox::point(a.x, a.y).include(b.x, b.y),
+                Bbox::point(c.x, c.y).include(d.x, d.y),
+            );
+            best = Some((d2, gap_midpoint(boxes.0, boxes.1)));
+        }
+    }
+    best
+}
+
 /// A contained inner polygon's enclosure in `host` and where to report it
 /// (`None`: at the centre of its box).
+///
+/// Non-coincident: [`apart_enclosure`], reported in the middle of the gap
+/// of the pair that measured it; past every limit when every pair touches.
 ///
 /// All sides: the euclidean distance to the host's boundary, reported in the
 /// strip on the least enclosed side of a rectangle.
@@ -118,9 +170,15 @@ fn enclosure_of(
     inner: PolygonRef<'_>,
     rects: &[Bbox],
     host: PolygonRef<'_>,
-    asymmetric: bool,
+    mode: Mode,
 ) -> (Dbu, Option<Point>) {
-    if asymmetric {
+    if mode == Mode::NonCoincident {
+        return apart_enclosure(inner, host).map_or_else(
+            || (far(), None),
+            |(d2, at)| (isqrt(DbuArea::new(saturate(d2.raw()))), Some(at)),
+        );
+    }
+    if mode == Mode::Opposite {
         // Per axis (vertical edges, horizontal edges): the least enclosed edge.
         let mut least: [Option<(Dbu, Side, Bbox)>; 2] = [None; 2];
         for (a, b) in poly_edges(inner) {
@@ -218,7 +276,8 @@ fn pair_layers(
     true
 }
 
-/// Min enclosure (every side) or asymmetric enclosure (two opposite sides),
+/// Min enclosure (every side, or apart from coincident edges) or asymmetric
+/// enclosure (two opposite sides),
 /// per inner polygon on its best host: a figure of the merged outer layer, so
 /// a ring drawn as abutting bands hosts a ring inside it. A host holds the
 /// inner only if it covers all of its area (holes and concave notches count).
@@ -228,7 +287,7 @@ pub(crate) fn enclosure(
     rule: StrId,
     (outer, inner_layer): (LayerId, LayerId),
     (limit, wire): (Dbu, WireBand),
-    asymmetric: bool,
+    mode: Mode,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
@@ -311,7 +370,7 @@ pub(crate) fn enclosure(
             if covered != area {
                 continue;
             }
-            let (value, at) = enclosure_of(drawn.get(poly), mine, merged.get(figure), asymmetric);
+            let (value, at) = enclosure_of(drawn.get(poly), mine, merged.get(figure), mode);
             acc = acc.max((value.raw(), Reverse(host.0), at));
         }
         let (best, Reverse(host), at) = acc;

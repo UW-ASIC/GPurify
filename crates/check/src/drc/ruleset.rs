@@ -518,6 +518,42 @@ pub enum Rule {
         /// The wire widths at which the rule holds an inner polygon.
         wire: WireBand,
     },
+    /// An `inner` shape closer than `limit` to `outer`'s boundary, edges that
+    /// coincide with it apart.
+    ///
+    /// Deck: `enclosure(inner, outer, noncoincident) >= len`, kind
+    /// `noncoincident_enclosure`, as sky130 lvtn.10 "Min enclosure of lvtn by
+    /// (nwell not overlapping Var_channel) (exclude coincident edges)". Hosts
+    /// are chosen as for [`Rule::MinEnclosure`]. Each edge of the inner
+    /// polygon is measured to each edge of the host that is parallel to it,
+    /// faces the same way and lies at or beyond its line, Euclidean, end to
+    /// end too (`KLayout`'s `enclosing` edge pairs, `euclidian`); a pair that
+    /// touches measures nothing, so an inner edge on the host's boundary, and
+    /// an inner corner on it, are exempt (`KLayout`'s
+    /// `without_touching_edges`, "coincident edges will not yield errors").
+    /// Without such contact this is [`Rule::MinEnclosure`]'s distance: a
+    /// rectilinear host's nearest boundary point faces an inner edge along a
+    /// parallel host edge, or is a concave corner of the host where two meet.
+    /// An inner polygon whose every edge lies on its host's boundary passes;
+    /// one no host covers measures 0.
+    ///
+    /// One violation per offending inner polygon, on the `inner` layer, in the
+    /// middle of the gap between the boxes of the pair that measured it, or
+    /// at the centre of its box when unhosted. `shapes` is the inner row and
+    /// the host's drawn row (`None` when unhosted). `examined` counts inner
+    /// polygons.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-054. Rules: sky130 lvtn.10; `KLayout` `enclosing` with
+    /// `without_touching_edges`.
+    NoncoincidentEnclosure {
+        /// The enclosing layer, merged; the deck's second argument.
+        outer: LayerId,
+        /// The enclosed layer; findings are reported on it.
+        inner: LayerId,
+        /// The smallest legal enclosure, in grid units; positive.
+        limit: Dbu,
+    },
     /// An `inner` shape without `min_one_side` of enclosure on both sides of
     /// at least one axis.
     ///
@@ -2568,6 +2604,14 @@ impl RuleSet {
                         wire: wire(spec)?,
                     }
                 }
+                "noncoincident_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::NoncoincidentEnclosure {
+                        outer,
+                        inner,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "asymmetric_enclosure" => {
                     let (outer, inner) = two(spec)?;
                     Rule::AsymmetricEnclosure {
@@ -3266,7 +3310,28 @@ impl RuleSet {
                     inner,
                     limit,
                     wire,
-                } => overlay::enclosure(store, id, (outer, inner), (limit, wire), false, s, out),
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (limit, wire),
+                    overlay::Mode::EverySide,
+                    s,
+                    out,
+                ),
+                Rule::NoncoincidentEnclosure {
+                    outer,
+                    inner,
+                    limit,
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (limit, WireBand::ANY),
+                    overlay::Mode::NonCoincident,
+                    s,
+                    out,
+                ),
                 Rule::AsymmetricEnclosure {
                     outer,
                     inner,
@@ -3277,7 +3342,7 @@ impl RuleSet {
                     id,
                     (outer, inner),
                     (min_one_side, wire),
-                    true,
+                    overlay::Mode::Opposite,
                     s,
                     out,
                 ),
@@ -3930,6 +3995,9 @@ impl Rule {
                 outer: a, inner: b, ..
             }
             | Rule::MaxEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::NoncoincidentEnclosure {
                 outer: a, inner: b, ..
             }
             | Rule::MinExtension {
