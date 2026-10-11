@@ -1607,8 +1607,8 @@ pub enum Rule {
     /// Two shapes whose facing convex corners are closer than `limit`, as
     /// `LEF58_CORNERSPACING CONVEXCORNER` measures them.
     ///
-    /// Deck: `corner_space(L; corner_to_corner: bool, except_eol: len | none)
-    /// >= len`, kind `convex_corner_spacing`. Corners are as for
+    /// Deck: `corner_space(L; corner_to_corner: bool, except_eol: len | none) >= len`,
+    /// kind `convex_corner_spacing`. Corners are as for
     /// [`Rule::CornerToCorner`]: convex corners of the merged layer, of
     /// different merged figures, facing each other (each beyond the other on
     /// both axes, out along opposite diagonals). Their distance is the larger

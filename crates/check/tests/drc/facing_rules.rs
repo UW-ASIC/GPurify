@@ -195,7 +195,7 @@ fn both_ends_of_the_range_are_forbidden_and_one_step_out_is_legal() {
         if in_range {
             assert_eq!(out.measured, [len(gap)], "gap {gap}");
             assert_eq!(out.limit, [len(151)], "gap {gap}");
-            assert_eq!(out.at, [point((200 + gap) / 2, 500)], "gap {gap}");
+            assert_eq!(out.at, [point(i64::midpoint(200, gap), 500)], "gap {gap}");
         } else {
             assert!(out.is_empty(), "gap {gap}");
         }
@@ -249,12 +249,12 @@ fn lef_eol(parallel: Option<EolParallel>, end_to_end: Option<i64>) -> Rule {
 }
 
 /// `PARALLELEDGE 1.1 WITHIN 0.5`, with or without `TWOEDGES`.
-fn parallel_edge(two_edges: bool) -> Option<EolParallel> {
-    Some(EolParallel {
+fn parallel_edge(two_edges: bool) -> EolParallel {
+    EolParallel {
         space: dbu(1100),
         within: dbu(500),
         two_edges,
-    })
+    }
 }
 
 /// A 1000 wide line ending at y = 0, so its top is an end of line.
@@ -331,7 +331,7 @@ fn an_edge_with_a_concave_corner_is_no_end() {
 /// less than 500 behind the end's line (-499 does, -500 does not).
 #[test]
 fn a_parallel_edge_beside_the_line_triggers_the_rule() {
-    let rule = lef_eol(parallel_edge(false), None);
+    let rule = lef_eol(Some(parallel_edge(false)), None);
     let with = |neighbour: [i64; 4]| run(&layout(&[LINE, BAR, neighbour]), rule, Vec::new()).0;
 
     assert_eq!(with([-3099, -5000, -1099, 0]).measured, [len(1000)]);
@@ -345,7 +345,7 @@ fn a_parallel_edge_beside_the_line_triggers_the_rule() {
 /// is not enough; one on each side is.
 #[test]
 fn two_edges_needs_a_parallel_edge_on_both_sides() {
-    let rule = lef_eol(parallel_edge(true), None);
+    let rule = lef_eol(Some(parallel_edge(true)), None);
     let left = [-2500, -5000, -500, 0];
     let right = [1500, -5000, 3500, 0];
 
@@ -783,7 +783,7 @@ fn the_deck_spells_each_kind_s_parameters() {
                 layer: A,
                 eol_width: dbu(1300),
                 within: dbu(600),
-                parallel: parallel_edge(true),
+                parallel: Some(parallel_edge(true)),
                 end_to_end: Some(dbu(1400)),
                 limit: dbu(1200),
             },
@@ -857,7 +857,7 @@ fn every_new_kind_refuses_a_layer_that_does_not_validate() {
             TIPS,
             Rule::TwoWidthSpacingTable { layer: A, table: 1 },
             forbidden(),
-            lef_eol(parallel_edge(false), Some(1400)),
+            lef_eol(Some(parallel_edge(false)), Some(1400)),
             KEEP_OUT,
             lef_spans(),
             corners(false, Some(200)),
