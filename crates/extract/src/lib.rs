@@ -82,10 +82,13 @@
 //! [`field::STRATIFIED_RECIPROCITY`].
 //!
 //! [`field::henry`] merges each selected net's shapes per layer, as the
-//! closed forms do, cuts them into rectangles, and makes each rectangle a
-//! straight filament along its centre line; rectangles that share an edge
-//! are joined through the middle of it, so a bend reads its centre line,
-//! and each via cut joins the two layers it lands on.
+//! closed forms do, and cuts them into rectangles. A lone rectangle is a
+//! straight filament along its centre line; a region of several, where the
+//! wire bends or changes width, is a grid of cells four across its narrowest
+//! part, joined face to face, so the current crowds at the inner corner as
+//! it does on silicon (a bend's corner square reads about 0.62 squares,
+//! converging to the 0.559 of Hall's conformal map as the grid refines). Each
+//! via cut joins the two layers it lands on.
 //! It builds their partial-inductance matrix (Ruehli, 1972). Self
 //! terms use Grover's closed form ([`field::filament::self_inductance_bar`]),
 //! close parallel pairs the exact brick formula of Hoer & Love (1965), far
@@ -152,12 +155,14 @@
 //!   the panel edge, at which small wires read 0.2–1% low.
 //! - **Only selected nets are in the field.** Coupling from a solved net to an
 //!   unselected one is the analytical estimate, which `overlay` keeps.
-//! - **Inductance** models each rectangle of a net's merged shapes as one
-//!   filament, uniform across its width, so current crowding at a corner or
-//!   a step in width is not modelled: a junction between two rectangles is a
-//!   filament as wide as their shared edge. A via cut is one filament
-//!   between the two centre lines it lands on, carrying the stack's
-//!   resistance per cut. A net whose pieces do not join into one circuit
+//! - **Inductance** models a lone rectangle as one filament, uniform across
+//!   its width, and grids a region of several, four cells across its
+//!   narrowest part: the crowding at a bend or a step in width is resolved
+//!   to that grid (a corner square reads 0.62 squares against the limit's
+//!   0.559). A via cut is one filament between the two landings it makes (a
+//!   centre line, or the cell under it), carrying the stack's resistance per
+//!   cut, so the spreading around a cut is not resolved; a straight wire
+//!   with a via on it stays a filament. A net whose pieces do not join into one circuit
 //!   (two pieces meeting only at a corner, or joined only through a global
 //!   layer, which carries no modelled current) is refused
 //!   (see [`field::henry::extract_inductance_into`]).
@@ -198,7 +203,7 @@
 //! | PEX-001 | Sheet R × squares, via R | implemented | [`analytical`] |
 //! | PEX-002 | Area + fringe C to substrate | implemented | [`analytical`] |
 //! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, over the substrate plane and through the stack's horizontal dielectric interfaces, windowed; no conformal dielectrics |
-//! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net, and the mutual L between every pair of them; no current crowding |
+//! | PEX-004 | Partial self and mutual inductance | implemented | [`field::henry`]: one series L per selected net, and the mutual L between every pair of them; crowding at bends and width steps on a grid |
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
 //! | PEX-006 | Multi-corner extraction | implemented | the deck's `corner` lines ([`gpurify_ingest::deck::ProcessCorner`]): the engine runs both methods once per corner's stack; SPEF writes `min:typ:max` triplets |
 //! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R, colour-aware) | partial | temperature-dependent R, already in the deck's stack ([`ProcessStack::sheet_res_ohm_sq`](gpurify_ingest::deck::ProcessStack::sheet_res_ohm_sq)); the rest needs foundry calibration data |

@@ -902,7 +902,8 @@ fn field(depth: Depth) -> Vec<Fixture> {
 
     // An L with legs of 20 and 16 um, 1 um wide. Its legs are perpendicular, so
     // they have no mutual partial inductance: L is the sum of the legs'
-    // self-inductances along the centre line, and R is Lc/w squares.
+    // self-inductances along the centre line, and R is Lc/w squares less what
+    // the crowded corner saves (about 0.4 of a square, inside MODEL).
     let (a, b, w) = (20_000, 16_000, 1_000);
     let (points, centre) = bend("l", a, b, w);
     let (wf, af, bf) = (w as f64, a as f64, b as f64);

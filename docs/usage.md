@@ -290,8 +290,12 @@ writes a DSPF file for a simulator. Every net is extracted with closed-form
 resistance and capacitance. Nets named with `--quasistatic` are solved from
 the field instead, which is slower and more accurate, and their coupling to
 nets that were not field-solved is kept. A field-solved net also gets its
-inductance, and its resistance and inductance follow the wire's centre line
-through every bend and every via, however the wire was cut into polygons.
+inductance, and its resistance and inductance follow the wire through
+every bend and every via, however the wire was cut into polygons: a
+straight wire as one filament, and a bend or a change of width as a grid
+of cells, so the current crowds at the inner corner (a right-angle corner
+counts about 0.62 squares, against the one square of its centre line and
+the 0.559 of the exact answer).
 Every two field-solved nets also get their mutual inductance, from one
 solve of all of them: the open-circuit coupling between their ports (each
 port's current enters at the end of the net that comes first by x, then

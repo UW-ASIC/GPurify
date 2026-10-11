@@ -1,11 +1,12 @@
 //! Quasi-static inductance: `GeometryStore` polygons in, per-net series L and R out.
 //!
 //! Data in: selected nets. Each net's shapes are merged per layer and cut into
-//! disjoint rectangles, as the closed forms read them; each rectangle is a
-//! filament along its long axis (short side × layer thickness), and two
-//! rectangles that share an edge are joined by a short filament through the
-//! middle of that edge. One port per net runs across its two most distant
-//! filament end points.
+//! disjoint rectangles, as the closed forms read them. A region of one
+//! rectangle is a filament along its long axis (short side × layer
+//! thickness), its current uniform; a region of several, where the wire
+//! turns or changes width and the current crowds, is a grid of cells joined
+//! face to face. One port per net runs across its two most
+//! distant rectangle ends.
 //! Data out: [`InductMatrix`] — the port impedance matrix at one frequency:
 //! each net's `L = Im(Z_ii)/ω` and `R = Re(Z_ii)`, and the mutual inductance
 //! `M_ij = Im(Z_ij)/ω` between every pair of nets, from a dense nodal solve
@@ -32,7 +33,7 @@
 use crate::conductor::Regions;
 use crate::field::filament::{self, default_wdir, Filament, Vec3};
 use gpurify_check::topology::{NetId, NetTable};
-use gpurify_geom::{Bbox, GeometryStore, Grid, LayerId, PolyId};
+use gpurify_geom::{Bbox, Dbu, GeometryStore, Grid, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use num_complex::Complex64;
 use rayon::prelude::*;
@@ -159,25 +160,6 @@ impl Line {
     }
 }
 
-/// The midpoint (doubled units) and length (database units) of the edge two
-/// disjoint rectangles share, if they share one of positive length; `None`
-/// for a corner touch or a gap.
-fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
-    let (ax0, ax1, ay0, ay1) = (a.xlo.raw(), a.xhi.raw(), a.ylo.raw(), a.yhi.raw());
-    let (bx0, bx1, by0, by1) = (b.xlo.raw(), b.xhi.raw(), b.ylo.raw(), b.yhi.raw());
-    let (ylo, yhi) = (ay0.max(by0), ay1.min(by1));
-    if (ax1 == bx0 || bx1 == ax0) && yhi > ylo {
-        let x = if ax1 == bx0 { ax1 } else { ax0 };
-        return Some((2 * x, ylo + yhi, yhi - ylo));
-    }
-    let (xlo, xhi) = (ax0.max(bx0), ax1.min(bx1));
-    if (ay1 == by0 || by1 == ay0) && xhi > xlo {
-        let y = if ay1 == by0 { ay1 } else { ay0 };
-        return Some((xlo + xhi, 2 * y, xhi - xlo));
-    }
-    None
-}
-
 /// Solve per-net L and R, and the mutual inductance between every pair of
 /// nets, for `selected` in one magnetoquasistatic solve.
 ///
@@ -188,24 +170,32 @@ fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
 ///
 /// Each selected net's shapes are merged per layer and cut into disjoint
 /// rectangles (vertical slabs), as the closed forms read them, so a wire is
-/// the same conductor however it was drawn. Each rectangle is a filament
-/// along its centre line, end to end along its long side (a square runs
-/// along x), the short side wide and the layer thickness deep. Two
-/// rectangles that share an edge are joined through the middle of it: a
-/// filament from where that midpoint projects onto one centre line to where
-/// it projects onto the other, as wide as the shared edge. A centre line is
-/// split wherever a junction lands on it, and a stub past the last landing
-/// carries no current. So a bend of constant width `w` and centre-line
-/// length `Lc` reads `Lc / w` squares, its corner counted once. Pieces that
-/// meet only at a corner are not joined.
+/// the same conductor however it was drawn. A region of one rectangle is a
+/// filament along its centre line, end to end along its long side (a square
+/// runs along x), the short side wide and the layer thickness deep: a
+/// straight run carries its current uniformly. A region of several
+/// rectangles turns or changes width, and there the current crowds toward
+/// the inner corner and the narrow side: it is a grid through every
+/// rectangle edge, four cells across its narrowest rectangle, growing by
+/// half again along straight runs away from them, each cell a node and each
+/// two neighbouring cells a filament through their shared face (the
+/// five-point discretisation of the plane's current, as `FastHenry`'s
+/// uniform planes are meshed). So a right-angle bend's corner square reads
+/// close to the 0.559 squares of Hall's conformal map (*Thin Solid Films*
+/// 1(4), 1967), not the centre line's one. Pieces that meet only at a
+/// corner are not joined.
 ///
 /// Layers join through vias ([`Connectivity::via_cut`]): each cut whose box
 /// shares a point with the net's rectangles on both of its plates lands on
-/// the rectangle it overlaps most on each (the lowest on a tie), and is a
-/// filament from where its centre projects onto one centre line to where it
-/// projects onto the other, the cut wide and long, carrying the layer's
-/// resistance per cut. Cuts of one array are so many filaments in parallel.
-/// A net's port runs between its two most distant end points. Shapes on a
+/// the rectangle it overlaps most on each (the lowest on a tie), on a
+/// filament where its centre projects onto the centre line, on a grid in
+/// the cell under the middle of what the cut and the rectangle share, and
+/// is a filament between its two landings, the cut wide and long, carrying
+/// the layer's resistance per cut. Cuts of one array are so many filaments
+/// in parallel. A net's port runs between its two most distant end points:
+/// of a net of lines, its filaments' ends; of a net with a grid, its
+/// rectangles' ends, a gridded rectangle's end a terminal joined to every
+/// cell along that edge, an equipotential contact. Shapes on a
 /// global layer ([`Connectivity::global`], the substrate as a net) carry no
 /// modelled current: they are left out and need no stack row, so a net
 /// whose pieces join only through one is not one circuit.
@@ -226,8 +216,8 @@ fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
 ///
 /// # Time complexity
 ///
-/// A merge per net and layer; a check of every pair of one region's
-/// rectangles for a shared edge; a scan of each via layer's cuts per net;
+/// A merge per net and layer; a tensor grid per region of several
+/// rectangles; a scan of each via layer's cuts per net;
 /// then *O*(B²) filament-pair integrals and an *O*(B³) complex factorisation
 /// for B filament pieces, then an *O*(N³) one for N filament nodes.
 pub fn extract_inductance_into(
@@ -289,14 +279,15 @@ pub fn extract_inductance_into(
     let mut set = FilamentSet::default();
     let mut ports: Vec<(usize, usize)> = Vec::new();
     // Per net, reused: each rectangle's line and layer, the stops on each
-    // line (`(rectangle, along)`), the junctions and the node keys.
+    // line (`(rectangle, along)`) and the node keys.
     let mut lines: Vec<(Line, u16)> = Vec::new();
     let mut stops: Vec<(usize, i64)> = Vec::new();
-    let mut junctions: Vec<(NodeKey, NodeKey, i64)> = Vec::new();
-    let mut vias: Vec<(NodeKey, NodeKey, Bbox, f64)> = Vec::new();
+    let mut vias: Vec<(Landing, Landing, Bbox, f64)> = Vec::new();
     let mut keys: Vec<NodeKey> = Vec::new();
     // Each net's node range, for the one-circuit check.
     let mut spans: Vec<(NetId, usize, usize)> = Vec::new();
+    #[expect(clippy::cast_precision_loss, reason = "|side| < 2^41, exact in f64")]
+    let metres = |dbu: i64| dbu as f64 * scale;
     for &net in &order {
         let mut regions = Regions::default();
         regions
@@ -311,34 +302,30 @@ pub fn extract_inductance_into(
             conductor(layer.0)?;
         }
 
+        // A region of several rectangles turns or changes width, where the
+        // current crowds: it is gridded. One rectangle carries its current
+        // uniformly, as one filament.
+        let gridded: Vec<bool> = (0..regions.len())
+            .map(|region| regions.rect_range(region).len() > 1)
+            .collect();
+        let mut region_of = vec![0_usize; regions.rects.len()];
+        for region in 0..regions.len() {
+            for rect in regions.rect_range(region) {
+                region_of[rect] = region;
+            }
+        }
+
         lines.clear();
         stops.clear();
-        junctions.clear();
         for region in 0..regions.len() {
             let layer = regions.layer[region].0;
-            let range = regions.rect_range(region);
-            for &rect in &regions.rects[range.clone()] {
+            for &rect in regions.rects_of(region) {
                 let line = Line::of(rect);
-                stops.push((lines.len(), line.lo));
-                stops.push((lines.len(), line.hi));
-                lines.push((line, layer));
-            }
-            // ponytail: every pair of one region's rectangles; a sweep over
-            // slab boundaries if regions grow to thousands of rectangles.
-            for i in range.clone() {
-                for j in i + 1..range.end {
-                    let Some((x, y, edge)) = shared_edge(regions.rects[i], regions.rects[j]) else {
-                        continue;
-                    };
-                    let (a, b) = (lines[i].0, lines[j].0);
-                    let (at_a, at_b) = (a.project(x, y), b.project(x, y));
-                    stops.push((i, at_a));
-                    stops.push((j, at_b));
-                    let (from, to) = (a.key(at_a, layer), b.key(at_b, layer));
-                    if from != to {
-                        junctions.push((from, to, edge));
-                    }
+                if !gridded[region] {
+                    stops.push((lines.len(), line.lo));
+                    stops.push((lines.len(), line.hi));
                 }
+                lines.push((line, layer));
             }
         }
         // A line's index is its rectangle's index in `regions.rects`.
@@ -387,16 +374,31 @@ pub fn extract_inductance_into(
                     .filter(|&ohm| ohm > 0.0 && ohm.is_finite())
                     .ok_or(InductanceError::NoSheetResistance(cut_layer.0))?;
                 let (x, y) = (cut.xlo.raw() + cut.xhi.raw(), cut.ylo.raw() + cut.yhi.raw());
-                let ((line_a, layer_a), (line_b, layer_b)) = (lines[a], lines[b]);
-                let (at_a, at_b) = (line_a.project(x, y), line_b.project(x, y));
-                stops.push((a, at_a));
-                stops.push((b, at_b));
-                vias.push((
-                    line_a.key(at_a, layer_a),
-                    line_b.key(at_b, layer_b),
-                    cut,
-                    ohm,
-                ));
+                // On a gridded region, the cell under the middle of what the
+                // cut and the rectangle share; on a line, its projection.
+                let mut landing = |rect: usize| {
+                    if gridded[region_of[rect]] {
+                        let r = regions.rects[rect];
+                        let shared = cut.intersection(r).unwrap_or(r);
+                        // Half a unit inside the rectangle, so a cut that
+                        // only touches its edge still lands on its own cell.
+                        let inside = |at: i64, lo: Dbu, hi: Dbu| {
+                            at.clamp(2 * lo.raw() + 1, 2 * hi.raw() - 1)
+                        };
+                        Landing::Cell(
+                            rect,
+                            inside(shared.xlo.raw() + shared.xhi.raw(), r.xlo, r.xhi),
+                            inside(shared.ylo.raw() + shared.yhi.raw(), r.ylo, r.yhi),
+                        )
+                    } else {
+                        let (line, layer) = lines[rect];
+                        let along = line.project(x, y);
+                        stops.push((rect, along));
+                        Landing::Key(line.key(along, layer))
+                    }
+                };
+                let (from, to) = (landing(a), landing(b));
+                vias.push((from, to, cut, ohm));
             }
         }
         stops.sort_unstable();
@@ -418,8 +420,6 @@ pub fn extract_inductance_into(
                 .expect("every stop was pushed as a key")
         };
 
-        #[expect(clippy::cast_precision_loss, reason = "|side| < 2^41, exact in f64")]
-        let metres = |dbu: i64| dbu as f64 * scale;
         for run in stops.chunk_by(|a, b| a.0 == b.0) {
             let (line, layer) = lines[run[0].0];
             let (sigma, thickness_m) = conductor(layer)?;
@@ -430,26 +430,77 @@ pub fn extract_inductance_into(
                 set.push(nodes[n1], nodes[n2], w, thickness_m, sigma, n1, n2);
             }
         }
-        for &(from, to, edge) in &junctions {
-            let (sigma, thickness_m) = conductor(from.2)?;
-            let (n1, n2) = (node_of(from), node_of(to));
-            set.push(
-                nodes[n1],
-                nodes[n2],
-                metres(edge),
-                thickness_m,
-                sigma,
-                n1,
-                n2,
+
+        // Every gridded region's cells and the filaments between them.
+        let mut grids: Vec<Option<CellGrid>> = Vec::with_capacity(regions.len());
+        for region in 0..regions.len() {
+            if !gridded[region] {
+                grids.push(None);
+                continue;
+            }
+            let layer = regions.layer[region].0;
+            let (sigma, thickness_m) = conductor(layer)?;
+            let z = position((0, 0, layer)).z;
+            let grid = CellGrid::build(regions.rects_of(region), nodes.len());
+            nodes.extend(
+                grid.centres
+                    .iter()
+                    .map(|&(x, y)| Vec3::new(x * scale, y * scale, z)),
             );
+            grid.filaments_into(scale, thickness_m, sigma, &nodes, &mut set);
+            grids.push(Some(grid));
         }
         for &(from, to, cut, ohm) in &vias {
-            let (n1, n2) = (node_of(from), node_of(to));
+            let resolve = |landing: Landing| match landing {
+                Landing::Key(key) => node_of(key),
+                Landing::Cell(rect, x2, y2) => grids[region_of[rect]]
+                    .as_ref()
+                    .and_then(|grid| grid.cell_at(x2, y2))
+                    .expect("a cut lands inside the rectangle it overlaps"),
+            };
+            let (n1, n2) = (resolve(from), resolve(to));
             let (w, h) = (metres(cut.width().raw()), metres(cut.height().raw()));
             set.push_ohm(nodes[n1], nodes[n2], w, h, ohm, n1, n2);
         }
 
-        let (pa, pb) = most_distant_pair(&nodes[base..]);
+        let (pa, pb) = if gridded.iter().any(|&g| g) {
+            // The two most distant ends of any rectangle, lower key first; a
+            // gridded rectangle's end is a terminal across its whole edge.
+            let mut ends: Vec<(NodeKey, usize)> = Vec::with_capacity(2 * lines.len());
+            for (rect, &(line, layer)) in lines.iter().enumerate() {
+                ends.push((line.key(line.lo, layer), rect));
+                ends.push((line.key(line.hi, layer), rect));
+            }
+            ends.sort_unstable();
+            ends.dedup();
+            let at: Vec<Vec3> = ends.iter().map(|&(key, _)| position(key)).collect();
+            let (i, j) = most_distant_pair(&at);
+            let mut terminal = |(key, rect): (NodeKey, usize)| -> Result<usize, InductanceError> {
+                let region = region_of[rect];
+                let Some(grid) = grids[region].as_ref() else {
+                    return Ok(node_of(key));
+                };
+                let (sigma, thickness_m) = conductor(lines[rect].1)?;
+                let node = nodes.len();
+                nodes.push(position(key));
+                grid.terminal_into(
+                    regions.rects[rect],
+                    key,
+                    node,
+                    scale,
+                    thickness_m,
+                    sigma,
+                    &nodes,
+                    &mut set,
+                );
+                Ok(node)
+            };
+            let first = terminal(ends[i])?;
+            let second = if j == i { first } else { terminal(ends[j])? };
+            (first - base, second - base)
+        } else {
+            most_distant_pair(&nodes[base..])
+        };
         ports.push((base + pa, base + pb));
         spans.push((net, base, nodes.len()));
         out.net.push(net);
@@ -474,6 +525,250 @@ pub fn extract_inductance_into(
     }
     out.m_henry.extend(z.iter().map(|&zqp| henry(zqp)));
     Ok(())
+}
+
+/// Where a via cut lands: a node key on a line, or a point (doubled
+/// database units) on a gridded rectangle.
+#[derive(Debug, Clone, Copy)]
+enum Landing {
+    /// A stop on a rectangle's centre line.
+    Key(NodeKey),
+    /// `(rectangle, x, y)`: the cell of a gridded region under the point.
+    Cell(usize, i64, i64),
+}
+
+/// Cells across a gridded region's narrowest rectangle: the resolution of
+/// the current's spread across a wire where it turns or changes width.
+const CROWDING_CELLS: u32 = 4;
+
+/// How much each cell grows over the last away from a region's edges and
+/// corners, along a straight run where the current is uniform again.
+const CELL_GROWTH: f64 = 1.5;
+
+/// A gridded region: a tensor grid through every edge of its rectangles,
+/// each cell inside them a node, each two neighbouring cells joined by a
+/// filament through their shared face: the five-point discretisation of
+/// the current's spread in the plane, as `FastHenry`'s uniform planes do
+/// (Kamon, Tsuk & White, 1994). Coordinates in database units.
+#[derive(Debug)]
+struct CellGrid {
+    /// The node of the first cell; the rest follow in `centres` order.
+    first: usize,
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    /// The node of cell `(i, j)` at `i · (ys.len() − 1) + j`, if inside.
+    cell: Vec<Option<usize>>,
+    /// Each node's cell centre, in node order.
+    centres: Vec<(f64, f64)>,
+}
+
+/// Grid lines through every edge in `edges` (ascending, distinct): between
+/// two neighbours `ceil(gap / step)` equal cells when that is at most twice
+/// [`CROWDING_CELLS`], else cells growing by [`CELL_GROWTH`] from both ends
+/// toward the middle.
+fn cell_lines(edges: &[i64], step: f64) -> Vec<f64> {
+    let mut out = Vec::new();
+    for pair in edges.windows(2) {
+        #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+        let (a, b) = (pair[0] as f64, pair[1] as f64);
+        out.push(a);
+        let gap = b - a;
+        let pieces = (gap / step - 1e-9).ceil().max(1.0);
+        if pieces <= 2.0 * f64::from(CROWDING_CELLS) {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "at most twice CROWDING_CELLS"
+            )]
+            let pieces = pieces as u32;
+            for k in 1..pieces {
+                out.push(a + gap * f64::from(k) / f64::from(pieces));
+            }
+        } else {
+            let (mut low, mut high, mut size) = (a, b, step);
+            let mut upper = Vec::new();
+            while high - low > 3.0 * size {
+                low += size;
+                high -= size;
+                out.push(low);
+                upper.push(high);
+                size *= CELL_GROWTH;
+            }
+            out.extend(upper.into_iter().rev());
+        }
+    }
+    #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+    let last = edges.last().map(|&e| e as f64);
+    out.extend(last);
+    out
+}
+
+impl CellGrid {
+    /// The grid of the region of `rects` (disjoint, rectilinear), its nodes
+    /// numbered from `first`. The cell size near every edge is the
+    /// narrowest rectangle's short side over [`CROWDING_CELLS`].
+    fn build(rects: &[Bbox], first: usize) -> Self {
+        let edges = |lo: fn(&Bbox) -> i64, hi: fn(&Bbox) -> i64| {
+            let mut out: Vec<i64> = rects.iter().flat_map(|r| [lo(r), hi(r)]).collect();
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+        let narrowest = rects
+            .iter()
+            .map(|r| r.width().raw().min(r.height().raw()))
+            .min()
+            .unwrap_or(1)
+            .max(1);
+        #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+        let step = narrowest as f64 / f64::from(CROWDING_CELLS);
+        let xs = cell_lines(&edges(|r| r.xlo.raw(), |r| r.xhi.raw()), step);
+        let ys = cell_lines(&edges(|r| r.ylo.raw(), |r| r.yhi.raw()), step);
+        let (nx, ny) = (xs.len() - 1, ys.len() - 1);
+        let mut cell = vec![None; nx * ny];
+        let mut centres = Vec::new();
+        for i in 0..nx {
+            for j in 0..ny {
+                let (cx, cy) = ((xs[i] + xs[i + 1]) / 2.0, (ys[j] + ys[j + 1]) / 2.0);
+                #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+                let inside = rects.iter().any(|r| {
+                    (r.xlo.raw() as f64) < cx
+                        && cx < r.xhi.raw() as f64
+                        && (r.ylo.raw() as f64) < cy
+                        && cy < r.yhi.raw() as f64
+                });
+                if inside {
+                    cell[i * ny + j] = Some(first + centres.len());
+                    centres.push((cx, cy));
+                }
+            }
+        }
+        CellGrid {
+            first,
+            xs,
+            ys,
+            cell,
+            centres,
+        }
+    }
+
+    /// The node of the cell under the point `(x2, y2)` in doubled database
+    /// units, `None` when no cell of the region is there.
+    fn cell_at(&self, x2: i64, y2: i64) -> Option<usize> {
+        #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^41, exact in f64")]
+        let (x, y) = (x2 as f64 / 2.0, y2 as f64 / 2.0);
+        let i = self.xs.partition_point(|&l| l <= x).checked_sub(1)?;
+        let j = self.ys.partition_point(|&l| l <= y).checked_sub(1)?;
+        let ny = self.ys.len() - 1;
+        if i >= self.xs.len() - 1 || j >= ny {
+            return None;
+        }
+        self.cell[i * ny + j]
+    }
+
+    /// A filament between every two neighbouring cells, centre to centre,
+    /// as wide as their shared face.
+    fn filaments_into(
+        &self,
+        scale: f64,
+        thickness: f64,
+        sigma: f64,
+        nodes: &[Vec3],
+        set: &mut FilamentSet,
+    ) {
+        let (nx, ny) = (self.xs.len() - 1, self.ys.len() - 1);
+        for i in 0..nx {
+            for j in 0..ny {
+                let Some(here) = self.cell[i * ny + j] else {
+                    continue;
+                };
+                if let Some(right) = (i + 1 < nx).then(|| self.cell[(i + 1) * ny + j]).flatten() {
+                    let width = (self.ys[j + 1] - self.ys[j]) * scale;
+                    set.push(
+                        nodes[here],
+                        nodes[right],
+                        width,
+                        thickness,
+                        sigma,
+                        here,
+                        right,
+                    );
+                }
+                if let Some(up) = (j + 1 < ny).then(|| self.cell[i * ny + j + 1]).flatten() {
+                    let width = (self.xs[i + 1] - self.xs[i]) * scale;
+                    set.push(nodes[here], nodes[up], width, thickness, sigma, here, up);
+                }
+            }
+        }
+    }
+
+    /// A port terminal: `node`, at the end `key` of rectangle `rect`'s
+    /// centre line (doubled units), joined to every cell of the rectangle
+    /// along that end's edge by a filament from the edge to the cell's
+    /// centre, as wide as the cell: the edge is one equipotential contact,
+    /// as a wire's end is.
+    fn terminal_into(
+        &self,
+        rect: Bbox,
+        key: NodeKey,
+        node: usize,
+        scale: f64,
+        thickness: f64,
+        sigma: f64,
+        nodes: &[Vec3],
+        set: &mut FilamentSet,
+    ) {
+        let line = Line::of(rect);
+        let z = nodes[node].z;
+        #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^41, exact in f64")]
+        let edge = (if line.along_x { key.0 } else { key.1 }) as f64 / 2.0;
+        #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+        let (xlo, xhi, ylo, yhi) = (
+            rect.xlo.raw() as f64,
+            rect.xhi.raw() as f64,
+            rect.ylo.raw() as f64,
+            rect.yhi.raw() as f64,
+        );
+        let ny = self.ys.len() - 1;
+        for i in 0..self.xs.len() - 1 {
+            for j in 0..ny {
+                let Some(cell) = self.cell[i * ny + j] else {
+                    continue;
+                };
+                let (cx, cy) = self.centres[cell - self.first];
+                let in_rect = xlo < cx && cx < xhi && ylo < cy && cy < yhi;
+                let (touches, width, from) = if line.along_x {
+                    // Grid lines and edges are whole units: a quarter is equality.
+                    let touches =
+                        (self.xs[i] - edge).abs() < 0.25 || (self.xs[i + 1] - edge).abs() < 0.25;
+                    (
+                        touches,
+                        self.ys[j + 1] - self.ys[j],
+                        Vec3::new(edge * scale, cy * scale, z),
+                    )
+                } else {
+                    let touches =
+                        (self.ys[j] - edge).abs() < 0.25 || (self.ys[j + 1] - edge).abs() < 0.25;
+                    (
+                        touches,
+                        self.xs[i + 1] - self.xs[i],
+                        Vec3::new(cx * scale, edge * scale, z),
+                    )
+                };
+                if in_rect && touches {
+                    set.push(
+                        from,
+                        nodes[cell],
+                        width * scale,
+                        thickness,
+                        sigma,
+                        node,
+                        cell,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The two most distant nodes; ties keep the first pair in scan order.
