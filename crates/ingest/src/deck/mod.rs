@@ -37,6 +37,7 @@
 
 use crate::narrow;
 use gpurify_geom::LayerId;
+use gpurify_geom::{prefix, Qty, Temperature};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{StrId, StrTable};
 
@@ -101,6 +102,10 @@ pub struct Deck {
     pub devices: DeviceRecognition,
     /// The `pex` statements: the parasitic stack, per layer.
     pub stack: ProcessStack,
+    /// The `temperature` statement's operating temperature, absolute; `None`
+    /// when the deck states none. [`ProcessStack::sheet_res_ohm_sq`] is
+    /// already at it.
+    pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
 }
 
 /// Layer names and stream pairs to ids, and back.
@@ -548,7 +553,14 @@ pub struct ProcessStack {
     pub thickness_nm: Vec<f64>,
     /// Height above the substrate, nm.
     pub height_nm: Vec<f64>,
-    /// Sheet resistance, ohms per square.
+    /// Sheet resistance, ohms per square (per cut on a via layer), at the
+    /// deck's operating temperature ([`Deck::temperature`]): a row's `sheet`
+    /// is stated at the `nominal` temperature `T₀` and read at `T` as
+    /// `R(T) = R(T₀)·(1 + tc1·(T − T₀) + tc2·(T − T₀)²)`, the law of the
+    /// ngspice resistor model (ngspice manual, "Resistors", temperature
+    /// coefficients) and of the PDKs' published coefficients, such as
+    /// sky130's `tc1rm1`/`tc2rm1` at `tnom = 30` (`sky130_fd_pr` model file
+    /// `sky130_fd_pr__model__r+c.model.spice`). Catalog PEX-007.
     pub sheet_res_ohm_sq: Vec<f64>,
     /// Area capacitance to substrate, aF/µm².
     pub area_cap_af_um2: Vec<f64>,
@@ -608,7 +620,7 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
         }
     }
     let devices = build_devices(&doc.devices, &layers, strings);
-    let stack = build_stack(&doc.pex, &layers, strings);
+    let stack = build_stack(&doc.pex, doc.temperature, &layers, strings)?;
 
     Ok(Deck {
         layers,
@@ -616,6 +628,7 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
         connectivity,
         devices,
         stack,
+        temperature: doc.temperature.map(|(operating, _)| Qty::new(operating)),
     })
 }
 
@@ -757,13 +770,21 @@ fn build_devices(
 ///
 /// Every column is `layers.len()` long once any `pex` row exists;
 /// `pex::stack_row` indexes it directly. A layer with no row keeps its zero.
+/// Each row's sheet resistance is moved from `temperature`'s nominal to its
+/// operating value ([`ProcessStack::sheet_res_ohm_sq`]).
+///
+/// A deck that states a temperature gives every row both coefficients, and
+/// one that states none gives none: a coefficient left out would be a silent
+/// zero, and one with no temperature would change nothing. The law must keep
+/// the resistance positive.
 fn build_stack(
     declared: &[(String, StackSrc)],
+    temperature: Option<(f64, f64)>,
     layers: &LayerTable,
     strings: &StrTable,
-) -> ProcessStack {
+) -> Result<ProcessStack, DeckError> {
     if declared.is_empty() {
-        return ProcessStack::default();
+        return Ok(ProcessStack::default());
     }
     let rows = layers.len();
     let mut stack = ProcessStack {
@@ -775,15 +796,41 @@ fn build_stack(
         dielectric_k: vec![0.0; rows],
     };
     for (name, row) in declared {
+        let factor = match (temperature, row.tc) {
+            (None, None) => 1.0,
+            (Some((operating, nominal)), Some((tc1, tc2))) => {
+                let delta = operating - nominal;
+                let factor = 1.0 + tc1 * delta + tc2 * delta * delta;
+                if !(factor.is_finite() && factor > 0.0) {
+                    return Err(DeckError::Malformed(format!(
+                        "pex {name}: tc1 and tc2 scale its resistance by {factor} at the \
+                         deck's temperature; a resistance stays positive"
+                    )));
+                }
+                factor
+            }
+            (None, Some(_)) => {
+                return Err(DeckError::Malformed(format!(
+                    "pex {name}: tc1 and tc2 need a `temperature` statement to say how far \
+                     from nominal the run is"
+                )))
+            }
+            (Some(_), None) => {
+                return Err(DeckError::Malformed(format!(
+                    "pex {name}: the deck states a temperature, so the row needs tc1 and tc2 \
+                     (0/K and 0/K2 for a resistance that does not vary)"
+                )))
+            }
+        };
         let at = layer_of(layers, strings, name).idx();
         stack.thickness_nm[at] = row.thickness_nm;
         stack.height_nm[at] = row.height_nm;
-        stack.sheet_res_ohm_sq[at] = row.sheet_res_ohm_sq;
+        stack.sheet_res_ohm_sq[at] = row.sheet_res_ohm_sq * factor;
         stack.area_cap_af_um2[at] = row.area_cap_af_um2;
         stack.fringe_cap_af_um[at] = row.fringe_cap_af_um;
         stack.dielectric_k[at] = row.dielectric_k;
     }
-    stack
+    Ok(stack)
 }
 
 /// The deck as the parser states it: names unresolved, values converted.
@@ -801,6 +848,8 @@ struct DeckSrc {
     connectivity: ConnectivitySrc,
     devices: Vec<DeviceSrc>,
     pex: Vec<(String, StackSrc)>,
+    /// `temperature T nominal T0`: `(T, T0)`, kelvin, both positive.
+    temperature: Option<(f64, f64)>,
 }
 
 struct RuleSrc {
@@ -860,6 +909,8 @@ struct StackSrc {
     area_cap_af_um2: f64,
     fringe_cap_af_um: f64,
     dielectric_k: f64,
+    /// `(tc1 per K, tc2 per K²)`, given together or not at all.
+    tc: Option<(f64, f64)>,
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.

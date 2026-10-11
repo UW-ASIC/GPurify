@@ -28,6 +28,10 @@ pub(crate) enum Dim {
     CapPerArea,
     /// aF/um (PEX only).
     CapPerLength,
+    /// 1/K, a first-order temperature coefficient (PEX only).
+    PerKelvin,
+    /// 1/K², a second-order temperature coefficient (PEX only).
+    PerKelvin2,
     /// 0..=1, written bare or as `%`.
     Fraction,
     /// deg, a whole number.
@@ -85,6 +89,8 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("fF/um2", Dim::CapPerArea, 3),
     ("aF/um", Dim::CapPerLength, 0),
     ("fF/um", Dim::CapPerLength, 3),
+    ("/K", Dim::PerKelvin, 0),
+    ("/K2", Dim::PerKelvin2, 0),
     ("%", Dim::Fraction, -2),
     ("deg", Dim::Angle, 0),
 ];
@@ -604,20 +610,24 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("domain_crossing", &[], false, &[]),
 ];
 
-/// The six PEX keys, each given at most once per `pex` statement, and every
-/// one but [`OPTIONAL_PEX_KEY`] required.
-pub(crate) const PEX: [(&str, Dim); 6] = [
+/// The PEX keys, each given at most once per `pex` statement, and every one
+/// but the [`OPTIONAL_PEX_KEYS`] required.
+pub(crate) const PEX: [(&str, Dim); 8] = [
     ("thickness", Dim::Length),
     ("height", Dim::Length),
     ("sheet", Dim::Resistance),
     ("dielectric", Dim::Scalar),
     ("area_cap", Dim::CapPerArea),
     ("fringe_cap", Dim::CapPerLength),
+    ("tc1", Dim::PerKelvin),
+    ("tc2", Dim::PerKelvin2),
 ];
 
-/// The one [`PEX`] key a row may leave out: a dielectric the process does not
-/// state. Stated, it must be positive (testing-plan F74).
-pub(crate) const OPTIONAL_PEX_KEY: &str = "dielectric";
+/// The [`PEX`] keys a row may leave out: a dielectric the process does not
+/// state (stated, it must be positive, testing-plan F74), and the temperature
+/// coefficients, which a row gives together and exactly when the deck states
+/// a `temperature`.
+pub(crate) const OPTIONAL_PEX_KEYS: [&str; 3] = ["dielectric", "tc1", "tc2"];
 
 /// Engine kinds whose layer arguments may be edge layers, and what each engine
 /// layer slot takes: `Some(true)` edges, `Some(false)` polygons, `None` either.

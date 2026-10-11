@@ -1805,6 +1805,40 @@ fn electromigration() -> Vec<Fixture> {
             ));
         }
     }
+    // The deck's `temperature` is the one Black's derating reads: rated at
+    // 105 °C, run at 125 °C (398.15 K), not at the 85 °C a deck without one
+    // gets. The coefficients are zero, so the rail's resistance does not move.
+    let hot = format!(
+        "temperature 125C nominal 25C\n{}",
+        rail_deck(&em("1mA/um", "1nA", "105C", 0.9, 2.0)).replace(
+            " fringe_cap 1aF/um\n",
+            " fringe_cap 1aF/um tc1 0/K tc2 0/K2\n"
+        )
+    );
+    let allowed = 1000.0 * (0.9 / (2.0 * K_EV) * (1.0 / 398.15 - 1.0 / 378.15)).exp();
+    for factor in [0.999, 1.001] {
+        let budget = allowed * factor;
+        let mut f = Fixture::new(
+            &format!(
+                "erc/electromigration/deck_temperature/{}",
+                side(factor, 1.0)
+            ),
+            &["ERC-E4", "ERC-E5"],
+            &hot,
+            ERC,
+        )
+        .layout(line.clone())
+        .expect(Expect::rule(
+            "em",
+            if factor > 1.0 {
+                vec![microamps(budget).at(10_000, 500)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(vdd_intent(budget));
+        out.push(f);
+    }
     // Blech: 1 mA over an 8 µm edge 1 µm wide is 8000 µA; a 4 µm edge (load
     // at 14 µm) 4000 µA; a 2 µm-wide line 4000 µA.
     for (name, loads, width, product) in [

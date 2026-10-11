@@ -81,6 +81,7 @@ Numbers carry units. `140nm`, `0.14um` and `0.00014mm` are the same length.
 | capacitance per area | `aF/um2`, `fF/um2` |
 | capacitance per length | `aF/um`, `fF/um` |
 | temperature | `K`, or `C` |
+| temperature coefficient | `/K` (first order), `/K2` (second order) |
 | energy | `eV` |
 | time | `h` |
 | fraction | `%`, or a bare number from 0 to 1 |
@@ -417,10 +418,12 @@ pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25
 One line per conducting layer: thickness, height above the substrate, sheet
 resistance per square, the dielectric constant around it, and the area and
 fringe capacitance to substrate. Every value is required but the dielectric,
-which a process that does not publish one leaves out.
+which a process that does not publish one leaves out, and the temperature
+coefficients `tc1` and `tc2` (see [Temperature](#temperature)).
 
 Every value must be one a process can have: the thickness positive, a stated
-dielectric positive, the rest zero or more. A zero means the deck does not
+dielectric positive, a temperature coefficient of either sign, the rest zero
+or more. A zero means the deck does not
 state that value, and a layer whose sheet resistance is not stated is refused
 when PEX reads it. A line with no dielectric gives no closed-form coupling and,
 above the substrate, a layer the field solve refuses (how `generic_finfet`
@@ -431,6 +434,36 @@ A layer at height 0 (a well or a diffusion) is a junction in the substrate:
 its `area_cap` and `fringe_cap` are its junction capacitance, which a field
 solve (`--quasistatic`) adds in closed form rather than solving, so it needs
 no dielectric.
+
+### Temperature
+
+```
+temperature 85C nominal 30C
+pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um tc1 3.179e-3/K tc2 3.094e-7/K2
+```
+
+`temperature T nominal T0` says the run is signed off at `T`, and that every
+`sheet` is the value at `T0`. Each `pex` row then gives its temperature
+coefficients, and its resistance is read at `T` as
+
+    R(T) = R(T0) · (1 + tc1·(T − T0) + tc2·(T − T0)²)
+
+the law of the ngspice resistor model and of the coefficients PDKs publish:
+the example is sky130's met1 (`tc1rm1`, `tc2rm1` at `tnom = 30` in
+`sky130_fd_pr__model__r+c.model.spice`). Extraction, the power grid and
+`lib` all read the resistance at `T`, and `electromigration` and
+`reliability` derate to `T`. A deck without a `temperature` reads every
+`sheet` as written and derates to 85 °C.
+
+Stated, the temperature needs `tc1` and `tc2` on every `pex` row (write
+`tc1 0/K tc2 0/K2` for a resistance that does not vary); without it, no row
+may give them. Either coefficient may be negative, but not so far that a
+resistance reaches zero at `T`. `lib` extracts once, at `T`, whatever
+temperatures its corners name.
+
+Only resistance moves with temperature. Thickness variation from CMP,
+current-dependent via resistance and mask-shift (colour) effects need
+calibration data no open PDK publishes, and are not modelled.
 
 ## Errors
 

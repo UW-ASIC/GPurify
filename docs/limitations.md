@@ -48,7 +48,18 @@ result from them is weaker than it looks.
 - A net's current budget is shared equally among the devices on it, so one
   device that draws more than its share reads cooler than it is.
 - `electromigration` and `reliability` use one temperature for the whole run,
-  85 °C, with no self-heating.
+  the deck's `temperature` (85 °C when it states none), with no self-heating.
+
+## Parasitics
+
+- Resistance moves with the deck's `temperature` by each layer's `tc1` and
+  `tc2`. Nothing else does: metal thickness does not follow CMP (pattern
+  density), via resistance does not depend on current, and mask shifts
+  between colours are not modelled. The models exist (density-step CMP,
+  Ouma et al., IEEE TSM 15(2), 2002), but their parameters are foundry
+  calibration data no open PDK publishes.
+- `lib` extracts once, at the deck's temperature, whatever temperatures its
+  corners name.
 
 ## Shipped decks
 

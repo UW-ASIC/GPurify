@@ -1038,3 +1038,116 @@ fn an_ignored_pair_is_listed_and_may_not_repeat_or_be_declared() {
         "expected `gds(layer, datatype)`, found `met1`",
     );
 }
+
+/// sky130's metal rows as `pex` lines: `sheet` at the models' `tnom`, 30 °C,
+/// with the models' `tc1rm1`/`tc2rm1` and `tc1rm2`/`tc2rm2`.
+const SKY130_METALS: &str = "\
+pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um tc1 3.179e-3/K tc2 3.094e-7/K2
+pex met2 thickness 360nm height 2006nm sheet 0.125ohm dielectric 3.9 area_cap 17.5aF/um2 fringe_cap 37.6aF/um tc1 3.161e-3/K tc2 -7.272e-7/K2
+";
+
+/// PEX-007: a deck's `temperature` moves each `pex` row's sheet resistance
+/// from the nominal temperature it is stated at to the operating one, by the
+/// row's own coefficients, and becomes the run's operating temperature.
+///
+/// Oracle: closed form `R(T) = R0 (1 + tc1 ΔT + tc2 ΔT²)` (ngspice's resistor
+/// law), evaluated by hand with sky130's published met1 and met2 coefficients
+/// (`sky130_fd_pr__model__r+c.model.spice`, `tnom = 30`) at 85 °C, ΔT = 55 K:
+/// met1 `0.125 × (1 + 0.174845 + 0.000935935) = 0.146972616875 Ω`, met2
+/// `0.125 × (1 + 0.173855 − 0.00219978) = 0.1464569025 Ω`; and 85 °C is
+/// 358.15 K. Dropping `tc2` (0.08 % and 0.19 % off), or reading ΔT from 0 °C,
+/// misses far past the 1e-12 tolerance.
+#[test]
+fn a_temperature_moves_each_sheet_resistance_by_its_own_coefficients() {
+    let (deck, strings) = ok(&format!("temperature 85C nominal 30C\n{SKY130_METALS}"));
+    for (layer, want) in [("met1", 0.146_972_616_875), ("met2", 0.146_456_902_5)] {
+        let at = deck.layers.id(&strings, layer).expect("declared").idx();
+        let got = deck.stack.sheet_res_ohm_sq[at];
+        assert!(
+            (got / want - 1.0).abs() < 1e-12,
+            "{layer}: {got} ohm, the closed form says {want}"
+        );
+    }
+    let kelvin = deck.temperature.expect("stated").raw();
+    assert!((kelvin - 358.15).abs() < 1e-9, "{kelvin} K");
+}
+
+/// PEX-007: at its nominal temperature a deck reads every sheet resistance
+/// exactly as written, so stating the temperature changes nothing there.
+///
+/// Oracle: metamorphic relation: the deck run at `T = T0` and the same deck
+/// with no temperature and no coefficients give bit-identical stacks (ΔT is
+/// exactly 0, so the factor is exactly 1), each sheet the 0.125 Ω written.
+#[test]
+fn at_its_nominal_temperature_a_deck_reads_its_sheets_as_written() {
+    let (hot, strings) = ok(&format!("temperature 30C nominal 30C\n{SKY130_METALS}"));
+    let plain = SKY130_METALS
+        .lines()
+        .map(|line| format!("{}\n", &line[..line.find(" tc1").expect("a tc1")]))
+        .collect::<String>();
+    let (cold, _) = ok(&plain);
+    let bits = |stack: &[f64]| stack.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let met1 = hot.layers.id(&strings, "met1").expect("met1").idx();
+    assert_eq!(
+        hot.stack.sheet_res_ohm_sq[met1].to_bits(),
+        0.125f64.to_bits()
+    );
+    assert_eq!(
+        bits(&hot.stack.sheet_res_ohm_sq),
+        bits(&cold.stack.sheet_res_ohm_sq)
+    );
+    assert!(cold.temperature.is_none());
+}
+
+/// A temperature and its coefficients come together or not at all, and every
+/// value has its unit.
+///
+/// Oracle: `docs/deck.md`, Parasitic stack: with a `temperature` every row
+/// gives `tc1` and `tc2`, without one none does, both or neither on a row,
+/// coefficients in `/K` and `/K2`, the resistance positive at temperature
+/// (`1 − 0.02 × 55 = −0.1` here), one statement, above absolute zero.
+#[test]
+fn a_temperature_and_its_coefficients_come_together() {
+    let malformed = |body: &str, needle: &str| match parse(body) {
+        Err(DeckError::Malformed(message)) => {
+            assert!(message.contains(needle), "{message}");
+        }
+        Err(other) => panic!("{body}: {other}"),
+        Ok(_) => panic!("accepted:\n{body}"),
+    };
+    malformed(
+        SKY130_METALS,
+        "pex met1: tc1 and tc2 need a `temperature` statement",
+    );
+    let row = "pex met1 thickness 360nm height 1376nm sheet 0.125ohm area_cap 0aF/um2 \
+               fringe_cap 0aF/um";
+    malformed(
+        &format!("temperature 85C nominal 30C\n{row}\n"),
+        "pex met1: the deck states a temperature, so the row needs tc1 and tc2",
+    );
+    malformed(
+        &format!("temperature 85C nominal 30C\n{row} tc1 -0.02/K tc2 0/K2\n"),
+        "a resistance stays positive",
+    );
+    one_error(
+        &format!("temperature 85C nominal 30C\n{row} tc1 3e-3/K\n"),
+        "pex `met1` gives one of tc1 and tc2; give both, or neither",
+    );
+    one_error(
+        &format!("temperature 85C nominal 30C\n{row} tc1 3e-3 tc2 0/K2\n"),
+        "tc1 needs a coefficient per kelvin",
+    );
+    one_error(
+        &format!("temperature 85C nominal 30C\n{row} tc1 3e-3/K tc2 3e-7/K\n"),
+        "tc2 needs a coefficient per kelvin squared",
+    );
+    one_error(
+        "temperature 85C nominal 30C\ntemperature 85C nominal 30C\n",
+        "the temperature is already stated",
+    );
+    one_error(
+        "temperature -300C nominal 30C\n",
+        "temperature must be above absolute zero",
+    );
+    one_error("temperature 85C\n", "expected `nominal`");
+}

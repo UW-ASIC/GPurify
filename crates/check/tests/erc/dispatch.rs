@@ -563,6 +563,7 @@ fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) 
         connectivity: Connectivity::default(),
         devices: DeviceRecognition::default(),
         stack: ProcessStack::default(),
+        temperature: None,
     };
     (deck, ids)
 }

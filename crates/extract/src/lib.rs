@@ -174,7 +174,7 @@
 //! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net |
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
 //! | PEX-006 | Multi-corner extraction | missing | — |
-//! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R) | out of scope | needs foundry models |
+//! | PEX-007 | Process effects (CMP thickness, temperature-dependent R, nonlinear via R, colour-aware) | partial | temperature-dependent R, already in the deck's stack ([`ProcessStack::sheet_res_ohm_sq`](gpurify_ingest::deck::ProcessStack::sheet_res_ohm_sq)); the rest needs foundry calibration data |
 //! | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | one fixed output |
 //! | PEX-009 | PEX netlist diff and qualification | missing | — |
 //! | PEX-010 | SPEF output | implemented | `gpurify::export::parasitic::write_spef` |

@@ -144,12 +144,10 @@ impl Summary {
     }
 }
 
-/// The temperature every ERC derating is computed at.
-///
-/// ponytail: 85 °C hard-coded, as nothing carries a sign-off corner; add a
-/// `RunOptions` field when one is needed.
-fn sign_off_temperature() -> Qty<Temperature, { prefix::BASE }> {
-    celsius(85.0)
+/// The temperature every ERC derating is computed at: the deck's
+/// `temperature` statement, else 85 °C.
+fn sign_off_temperature(loaded: &Loaded) -> Qty<Temperature, { prefix::BASE }> {
+    loaded.deck.temperature.unwrap_or_else(|| celsius(85.0))
 }
 
 /// Layer names a deck may declare its die outline under, first match wins.
@@ -374,7 +372,7 @@ fn run_erc(
             connectivity: &loaded.deck.connectivity,
         },
         die,
-        temperature: sign_off_temperature(),
+        temperature: sign_off_temperature(loaded),
     };
     let mut result = Ok(());
     append_stage(out, |violations, runs| {

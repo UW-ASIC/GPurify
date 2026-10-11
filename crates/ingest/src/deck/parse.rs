@@ -1,7 +1,7 @@
 //! Deck text to the parsed deck the lowering reads. `let` and `for` are
 //! expanded here; every error carries a span, and parsing continues past one.
 
-use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEY, PEX, UNITS};
+use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
     build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, DeviceValue,
@@ -453,10 +453,11 @@ impl<'a> Parser<'a> {
             "connect" => self.connect(),
             "device" => self.device(),
             "pex" => self.pex(),
+            "temperature" => self.temperature(span),
             "ignore" => self.ignore(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device or pex"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex or temperature"),
             )),
         }
     }
@@ -1091,13 +1092,14 @@ impl<'a> Parser<'a> {
             let dim = PEX[at].1;
             let number = self.quantity(&value, dim, &key)?.f64();
             // A conductor has a thickness, and a dielectric that is stated
-            // has a permittivity: both are positive. Nothing else here can be
-            // below zero, and a zero reads as "not stated" (`ProcessStack`);
-            // an unstated dielectric is left out of the row instead.
-            let (physical, bound) = if key == "thickness" || key == OPTIONAL_PEX_KEY {
-                (number > 0.0, "positive")
-            } else {
-                (number >= 0.0, "zero or more")
+            // has a permittivity: both are positive. A temperature
+            // coefficient takes either sign. Nothing else here can be below
+            // zero, and a zero reads as "not stated" (`ProcessStack`); an
+            // unstated dielectric is left out of the row instead.
+            let (physical, bound) = match key.as_str() {
+                "thickness" | "dielectric" => (number > 0.0, "positive"),
+                "tc1" | "tc2" => (number.is_finite(), "finite"),
+                _ => (number >= 0.0, "zero or more"),
             };
             if !physical {
                 return Err(self.err(
@@ -1112,7 +1114,7 @@ impl<'a> Parser<'a> {
         let missing: Vec<&str> = PEX
             .iter()
             .zip(&row)
-            .filter(|(&(name, _), v)| v.is_none() && name != OPTIONAL_PEX_KEY)
+            .filter(|(&(name, _), v)| v.is_none() && !OPTIONAL_PEX_KEYS.contains(&name))
             .map(|(&(name, _), _)| name)
             .collect();
         if !missing.is_empty() {
@@ -1122,20 +1124,59 @@ impl<'a> Parser<'a> {
                 &format!("pex `{layer}` is missing {}", missing.join(", ")),
             ));
         }
-        let [thickness_nm, height_nm, sheet_res_ohm_sq, dielectric_k, area_cap_af_um2, fringe_cap_af_um] =
-            row.map(Option::unwrap_or_default);
+        let [thickness_nm, height_nm, sheet_res_ohm_sq, dielectric_k, area_cap_af_um2, fringe_cap_af_um, tc1, tc2] =
+            row;
+        // One coefficient alone is a resistance law half written.
+        let tc = match (tc1, tc2) {
+            (Some(tc1), Some(tc2)) => Some((tc1, tc2)),
+            (None, None) => None,
+            _ => {
+                let t = self.peek();
+                return Err(self.err_tok(
+                    t,
+                    &format!("pex `{layer}` gives one of tc1 and tc2; give both, or neither"),
+                ));
+            }
+        };
         self.out.pex.push((
             layer,
             StackSrc {
-                thickness_nm,
-                height_nm,
-                sheet_res_ohm_sq,
-                area_cap_af_um2,
-                fringe_cap_af_um,
-                dielectric_k,
+                thickness_nm: thickness_nm.unwrap_or_default(),
+                height_nm: height_nm.unwrap_or_default(),
+                sheet_res_ohm_sq: sheet_res_ohm_sq.unwrap_or_default(),
+                area_cap_af_um2: area_cap_af_um2.unwrap_or_default(),
+                fringe_cap_af_um: fringe_cap_af_um.unwrap_or_default(),
+                dielectric_k: dielectric_k.unwrap_or_default(),
+                tc,
             },
         ));
         Ok(())
+    }
+
+    /// `temperature <operating> nominal <nominal>`: the temperature the run is
+    /// signed off at, and the one the `pex` rows' `sheet` values are stated at.
+    fn temperature(&mut self, span: (u32, u32)) -> R<()> {
+        let operating = self.kelvin("temperature")?;
+        self.expect("nominal")?;
+        let nominal = self.kelvin("nominal")?;
+        if self.out.temperature.replace((operating, nominal)).is_some() {
+            return Err(self.err(span, "the temperature is already stated"));
+        }
+        Ok(())
+    }
+
+    /// A temperature value, absolute, above absolute zero.
+    fn kelvin(&mut self, label: &str) -> R<f64> {
+        let value = self.value()?;
+        let kelvin = self.physical(&value, Dim::Temperature, label)?;
+        if kelvin > 0.0 {
+            Ok(kelvin)
+        } else {
+            Err(self.err(
+                value.span(),
+                &format!("{label} must be above absolute zero"),
+            ))
+        }
     }
 
     // ---- rules ----
@@ -2034,6 +2075,8 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Time => "a time",
         Dim::CapPerArea => "a capacitance per area",
         Dim::CapPerLength => "a capacitance per length",
+        Dim::PerKelvin => "a coefficient per kelvin",
+        Dim::PerKelvin2 => "a coefficient per kelvin squared",
         Dim::Fraction => "a fraction",
         Dim::Angle => "an angle",
         Dim::Scalar => "a number",

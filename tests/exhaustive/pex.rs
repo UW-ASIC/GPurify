@@ -342,6 +342,7 @@ fn every_placement(fixtures: &[Fixture]) -> Vec<Fixture> {
 pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     [
         bars(depth),
+        temperature(),
         bends(depth),
         pieces(),
         vias(depth),
@@ -388,6 +389,64 @@ fn bars(depth: Depth) -> Vec<Fixture> {
                     )),
                 );
             }
+        }
+    }
+    every_placement(&out)
+}
+
+/// PEX-007: [`bars`] at 85 °C, each `pex` row stated at 30 °C with sky130's
+/// coefficients for met1, via and met2 (`tc1rm1`/`tc2rm1`, `tc1rvia`/
+/// `tc2rvia`, `tc1rm2`/`tc2rm2`; met2's `tc2` is negative). R is the closed
+/// form `Rs (1 + tc1 ΔT + tc2 ΔT²) L/W` with ΔT = 55 K; the ground
+/// capacitance does not move with temperature.
+fn temperature() -> Vec<Fixture> {
+    let coefficients = [
+        ("m1", 3.179e-3, 3.094e-7),
+        ("v1", 1.081e-3, -1.903e-7),
+        ("m2", 3.161e-3, -7.272e-7),
+    ];
+    let mut deck_text = String::from("temperature 85C nominal 30C\n");
+    for line in deck(PARAMS, &[], "").lines() {
+        deck_text.push_str(line);
+        if let Some((_, tc1, tc2)) = coefficients
+            .iter()
+            .find(|(layer, ..)| line.starts_with(&format!("pex {layer} ")))
+        {
+            deck_text.push_str(&format!(" tc1 {tc1}/K tc2 {tc2}/K2"));
+        }
+        deck_text.push('\n');
+    }
+    let mut out = Vec::new();
+    for (metal, (_, tc1, tc2)) in [(Metal::M1, coefficients[0]), (Metal::M2, coefficients[2])] {
+        let row = metal.row(PARAMS);
+        let factor = 1.0 + tc1 * 55.0 + tc2 * 55.0 * 55.0;
+        for (w, l) in [(100, 1000), (1000, 1000)] {
+            out.push(
+                Fixture::new(
+                    &format!("pex/temperature/{}/w{w}/l{l}", metal.name()),
+                    &["PEX-007"],
+                    &deck_text,
+                    PEX,
+                )
+                .layout(Layout::default().rect(metal.name(), 0, 0, l, w).label(
+                    metal.label(),
+                    l / 2,
+                    w / 2,
+                    "A",
+                ))
+                .expect(claim(
+                    "A",
+                    Quantity::Resistance,
+                    wire_ohm(row, l, w) * factor,
+                    EXACT,
+                ))
+                .expect(claim(
+                    "A",
+                    Quantity::GroundCap,
+                    ground_ff(row, (l * w) as f64, (2 * (l + w)) as f64),
+                    EXACT,
+                )),
+            );
         }
     }
     every_placement(&out)
