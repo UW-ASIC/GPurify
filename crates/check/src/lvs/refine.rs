@@ -279,8 +279,8 @@ impl Sides<'_> {
     /// Whether layout node `layout` and reference node `reference` are other
     /// than two nets of one name, the layout net's label being the reference
     /// net's name. A symmetry between nets is broken toward the named one
-    /// first, as `KLayout`'s `consider_net_names` "employ[s] net names to
-    /// resolve ambiguities" (catalog LVS-032). Devices, and a layout net with
+    /// first, as `KLayout`'s `consider_net_names` "will employ net names
+    /// to resolve ambiguities" (catalog LVS-032). Devices, and a layout net with
     /// no label, are always apart.
     fn named_apart(self, layout: u32, reference: u32) -> bool {
         let reference = reference - self.split;

@@ -103,8 +103,8 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   the first vertex of the first, on its layer. Measured 2 against a limit
 ///   of 1. Examines every net. A label `controls` makes must-connect (`lvs
 ///   connect_implicit`, `lvs connect_explicit`) is a warning, as `KLayout`
-///   raises one for a top cell's must-connect nets, which it "assumes ...
-///   [are connected] later". Catalog: LVS-001, LVS-002.
+///   raises one for top cells, "for which it is assumed that this
+///   connection is made later". Catalog: LVS-001, LVS-002.
 /// - `lvs.net_seed_conflict`: several label texts on one net, a short between
 ///   named nets. One row per pair of consecutive names on the net in
 ///   [`StrId`] order, so `n` names give `n - 1` rows. Shapes: the lowest
@@ -225,7 +225,7 @@ pub fn check_param_ranges(
             for (bound, least) in [(range.min, true), (range.max, false)] {
                 let Some(bound) = bound else { continue };
                 match out_of_bounds(measure, bound, least) {
-                    Some(Some((measured, limit))) => {
+                    Ok(Some((measured, limit))) => {
                         let row = Violation {
                             measured,
                             limit,
@@ -233,8 +233,8 @@ pub fn check_param_ranges(
                         };
                         out.push(on_first_shape(design.store, row));
                     }
-                    Some(None) => {}
-                    None => unmeasured = true,
+                    Ok(None) => {}
+                    Err(Incomparable) => unmeasured = true,
                 }
             }
         }
@@ -269,15 +269,15 @@ fn measured_param(strings: &StrTable, name: StrId) -> Option<DeviceParam> {
 }
 
 /// Whether `measure` breaks `bound`, the least legal value when `least`, the
-/// greatest otherwise: `Some(Some((measured, limit)))` as the row reports
-/// them when it does, `Some(None)` when it does not, and `None` when the two
-/// are of different kinds and cannot be compared. A share of `ways` is
-/// compared exactly, its bound scaled by `ways`.
+/// greatest otherwise: `Ok(Some((measured, limit)))` as the row reports
+/// them when it does, `Ok(None)` when it does not, and `Err(Incomparable)`
+/// when the two are of different kinds. A share of `ways` is compared
+/// exactly, its bound scaled by `ways`.
 fn out_of_bounds(
     measure: DeviceMeasure,
     bound: LvsLimit,
     least: bool,
-) -> Option<Option<(Measurement, Measurement)>> {
+) -> Result<Option<(Measurement, Measurement)>, Incomparable> {
     let breaks = |value: i128, limit: i128| if least { value < limit } else { value > limit };
     #[expect(
         clippy::cast_precision_loss,
@@ -312,10 +312,13 @@ fn out_of_bounds(
                 )
             })
         }
-        _ => return None,
+        _ => return Err(Incomparable),
     };
-    Some(report)
+    Ok(report)
 }
+
+/// A measure and a bound of different kinds, a length against an area.
+struct Incomparable;
 
 /// One error row per discrepancy, which is how a mismatch fails the run.
 ///
@@ -473,7 +476,7 @@ fn check_label_conflicts(
 /// located at the first's first vertex on its layer, measured the step's
 /// number against the path's step count; two labels on one polygon are one
 /// row on it, measured 1 against 1. This is where the short runs, as
-/// Calibre's LVS ISOLATE SHORTS and ICV's ShortFinder trace it (catalog
+/// Calibre's `LVS ISOLATE SHORTS` and ICV's `ShortFinder` trace it (catalog
 /// LVS-005). The row examines one pair per conflict, and is refused when a
 /// pair's path cannot be traced. No row is recorded when no net carries two
 /// names, so a run without a short reports nothing more.
