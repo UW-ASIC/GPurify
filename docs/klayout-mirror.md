@@ -272,6 +272,7 @@ explains (kind 30).
 34 kinds are EXACT, 13 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 | 36 | cut_spacing | `space(L, center) >= l`, `adjacent_space(L[, center]; cuts, within) >= l` | ROW PAIR | EXACT (scripted) | exact | new |
+| 37 | cut_class_spacing | `cut_class_space(L; short, long, space)` | ROW PAIR | EXACT (scripted) | exact | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1214,6 +1215,22 @@ none relates the centre lines of neighbouring shapes or flags a distance that is
 as too small. The oracles: ASAP7's own values (FIN.S.1 27 nm on 7 nm fins, GATE.S.1 54 nm on 20 nm
 gates) at the pitch and one step either side (FR), a missing line, rows that do not overlap, and a
 bent shape refused, hand-derived under the four symmetries that keep the axes (SY, MR).
+### 37. cut_class_spacing — EXACT (scripted)
+
+**GPurify** (`via.rs` `cut_class_spacing`): a `LEF58_SPACINGTABLE` of `CUTCLASS` SIDE/END
+cells. A drawn cut's class is the `short` x `long` its bounding box matches. Apart along y, a cut
+faces with its SIDE when wider than tall; along x, when taller than wide; apart along both, the
+larger cell; touching or overlapping, the class pair's largest cell. Edge-to-edge distance.
+
+**KLayout** has no cut classes, so the prelude's `cut_class_spacing` reads the same table over
+KLayout's raw boxes:
+
+```ruby
+emit("raw:" + C, C.dup.raw) ; cut_class_spacing(id, C.dup.raw, [[S0, L0], ..], [[cells x2], ..])
+```
+
+- Key ROW PAIR; the measurement is not compared.
+
 ---
 
 ## (c) Derived layers, connectivity, antenna

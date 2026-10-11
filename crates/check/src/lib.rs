@@ -66,6 +66,7 @@
 //! | `redundant_via(L; within: len) >= count` | `redundant_via` | [`drc::Rule::RedundantVia`] | a cut with too few neighbours | DRC-066, DRC-117 |
 //! | `via_array_space(L; array: count) >= len` | `via_array_spacing` | [`drc::Rule::ViaArraySpacing`] | cuts in a large cluster too close | DRC-062 |
 //! | `space(L, center) >= len`, `adjacent_space(L[, center]; cuts: count, within: len) >= len` | `cut_spacing` | [`drc::Rule::CutSpacing`] | cut centres too close, or cuts with many close neighbours too close | DRC-061, DRC-062 |
+//! | `cut_class_space(L; short: [..], long: [..], space: [[..]])` | `cut_class_spacing` | [`drc::Rule::CutClassSpacing`] | two cuts closer than their cut-class cell | DRC-063, DRC-064 |
 //! | `patterning(L; colors: count) >= len` | `multi_patterning` | [`drc::Rule::MultiPatterning`] | shapes that cannot be split onto that many masks | DRC-100, DRC-101 |
 //! | `forbidden(L)` | `forbidden` | [`drc::Rule::Forbidden`] | every shape on `L` | DRC-005, DRC-006, DRC-018, DRC-050, DRC-074, DRC-090, DRC-095, DRC-097, ERC-A10 |
 //! | `contains(outer, inner) >= count` (or `<=`, `==`) | `must_contain` | [`drc::Rule::MustContain`] | an outer shape holding too few, or too many, inner shapes | DRC-048, DRC-049, DRC-085 |

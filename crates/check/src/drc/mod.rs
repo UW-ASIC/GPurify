@@ -18,6 +18,7 @@ pub mod ruleset;
 
 pub use ruleset::{Rule, RuleSet, SpacingQuery, StepKind};
 pub use ruleset::{Rule, RuleSet, WireBand};
+pub use ruleset::{CutClassTable, Rule, RuleSet, WireBand};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
@@ -103,6 +104,10 @@ pub enum DrcError {
     /// [`ClassTable::is_valid_two_widths`](ruleset::ClassTable::is_valid_two_widths)),
     /// or its forbidden range starts above its end.
     #[error("rule {0}: its table or range is not well formed")]
+    /// The named row's spacing table fails
+    /// [`SpacingTable::is_valid`](ruleset::SpacingTable::is_valid), or its
+    /// cut-class table [`CutClassTable::is_valid`].
+    #[error("rule {0}: the spacing table is not complete and monotone")]
     BadTable(String),
 }
 

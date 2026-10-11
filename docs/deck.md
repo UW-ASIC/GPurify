@@ -272,6 +272,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `space(L, center) >= len` | Two cuts whose centres are closer than the limit (LEF `SPACING CENTERTOCENTER`). Cuts are taken as drawn; the centre is the middle of a cut's bounding box. |
 | `adjacent_space(L; cuts: count, within: len) >= len` | Two cuts closer than the limit, where either has at least `cuts` other cuts strictly closer than `within` (LEF `SPACING ADJACENTCUTS count WITHIN within`): `cuts: 3` lets a 2x2 array keep tight spacing and holds a 2x3 one. Distances are boundary to boundary. |
 | `adjacent_space(L, center; cuts: count, within: len) >= len` | The same, with every distance centre to centre. |
+| `cut_class_space(L; short: [len, ..], long: [len, ..], space: [[len, ..], ..])` | Two cuts closer than their cell of a cut-class table (LEF58 `SPACINGTABLE` with `CUTCLASS`; see below). |
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |
 | `forbidden(L)` | Every shape on `L`, reported with its area. Write the forbidden overlap as the layer: `forbidden(licon and poly and (diff or tap))`. On an edge layer, every edge. |
 | `contains(outer, inner) >= count` | An `outer` shape holding fewer than `count` `inner` shapes entirely, as sky130 licon.16 "every tap must enclose at least one licon". An inner shape across the outer's edge is not held, and touching inner shapes count as one. |
@@ -347,6 +348,29 @@ class is the last `length` it reaches, here below 24 nm, 24 to 36 nm, or
 `length` starts at 0 and rises, `space` has one row and one column per class,
 and the table is symmetric; it need not rise. Edges that meet only at a
 diagonal do not face: `corner_space` measures those.
+A cut-class table, as sky130 licon.2 to licon.2d (square licons 170 nm
+apart; slotted 0.19 x 2.0 µm licons 350 nm apart end to end, 510 nm
+otherwise, and 510 nm from a square licon):
+
+```
+rule licon.2 cut_class_space(licon;
+    short: [170nm, 190nm],
+    long:  [170nm, 2000nm],
+    space: [[170nm, 170nm, 510nm, 510nm],
+            [170nm, 170nm, 510nm, 510nm],
+            [510nm, 510nm, 350nm, 510nm],
+            [510nm, 510nm, 510nm, 510nm]])
+```
+
+Each class is a cut size, `short` x `long` either way round; a cut of no
+class is not checked by this rule. `space` has two rows and two columns per
+class, in class order: its END, then its SIDE. Two cuts apart along y face
+each other with the sides across y, so a cut faces with its SIDE (a long side)
+when it is wider than tall, and otherwise with its END (a square always does);
+apart along x, the same with taller than wide. A pair apart along both axes
+needs the larger of its two cells, and a pair that touches or overlaps the
+largest cell of its classes. Distances are edge to edge. The table must be
+symmetric.
 
 ### Edge checks
 
