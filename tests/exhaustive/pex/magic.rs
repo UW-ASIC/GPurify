@@ -63,7 +63,10 @@
 //!   an SI unit (`esSIvalue`): of fF below 100 fF, within 5e-6 fF; of pF
 //!   above, within 5e-6 pF, at most 5e-5 of the value. The `.ext` it reads
 //!   carries six significant digits (5e-6), and Magic's µm-to-λ factor is a
-//!   single-precision 0.001 (1e-7).
+//!   single-precision 0.001 (1e-7). Below 1 aF `esSIvalue` gives no suffix
+//!   and five decimals of farads, so prints zero: a capacitance under
+//!   [`ATTO`] may read as zero ([`c_abs`]). Only couplings of random wires a
+//!   few µm apart along a few hundred nm come that low.
 //! - [`R_REL`] 1e-4 and [`R_ABS`] 2 mΩ: `extSetResist` solves the rectangle in
 //!   single precision, which loses about 5e-8 per square of `L/W` (the
 //!   `2^-24` of `P² − 16A` carried into `P − s = 4W`), 5e-5 at the 1000
@@ -88,6 +91,17 @@ use std::time::Duration;
 const C_REL: f64 = 1e-4;
 /// A capacitance against Magic, absolute, in fF.
 const C_ABS: f64 = 5e-6;
+/// 1 aF in fF: below it `ext2spice` prints a capacitance as zero.
+const ATTO: f64 = 1e-3;
+
+/// The absolute tolerance of a capacitance whose closed form is `want` fF.
+fn c_abs(want: f64) -> f64 {
+    if want.abs() < ATTO {
+        ATTO
+    } else {
+        C_ABS
+    }
+}
 /// A resistance against Magic, relative.
 const R_REL: f64 = 1e-4;
 /// A resistance against Magic, absolute, in Ω.
@@ -732,7 +746,7 @@ fn magic_differential_every_analytical_geometry() {
             let want = ours.ground.get(&n).copied().unwrap_or(0.0)
                 - STACK.m2.area * shield.get(net).copied().unwrap_or(0.0) / 1e3;
             let got = theirs.ground.get(&n).copied().unwrap_or(0.0);
-            if !ground.check(&what, got, want, C_REL, C_ABS) {
+            if !ground.check(&what, got, want, C_REL, c_abs(want)) {
                 broken.push(format!("{what}: ground C {got} fF, want {want}"));
             }
             if let Some(via) = case.r {
@@ -753,7 +767,7 @@ fn magic_differential_every_analytical_geometry() {
                 }
                 let want = if case.at_halo { 0.0 } else { gpurify };
                 let got = theirs.coupling.get(&key).copied().unwrap_or(0.0);
-                if !coupling.check(&what, got, want, C_REL, C_ABS) {
+                if !coupling.check(&what, got, want, C_REL, c_abs(want)) {
                     broken.push(format!("{what}: coupling {got} fF, want {want}"));
                 }
             }
