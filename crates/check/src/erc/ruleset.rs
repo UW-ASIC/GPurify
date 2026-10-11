@@ -423,7 +423,7 @@ impl RuleSet {
         let mut seen: Vec<StrId> = Vec::with_capacity(deck.rules.spec.len());
         // A cut collects by its area whatever the row's measure: LEF's cut
         // layers "do not use side area modelling".
-        let cut_by_area = |layer: LayerId, measure| {
+        let cut_by_area = |layer: LayerId, measure: antenna::AntennaMeasure| {
             if deck.connectivity.via_cut.contains(&layer) {
                 antenna::AntennaMeasure::Area
             } else {
