@@ -763,8 +763,10 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
 /// "positive" and "zero or more" alike, so `thickness 1e400nm` was a stack
 /// row of infinite thickness (and an infinite capacitance downstream). The
 /// stack's own invariant, every value finite (asserted where it is built,
-/// C7), refuses it at the value. Oracle: IEEE 754, `1e400` overflows
-/// binary64 (largest finite about `1.8e308`).
+/// C7), refuses it at the value.
+///
+/// Oracle: IEEE 754, `1e400` overflows binary64 (largest finite about
+/// `1.8e308`).
 #[test]
 fn a_pex_value_past_the_range_of_a_float_is_refused_at_the_value() {
     let full = |key: &str, stated: &str| {
