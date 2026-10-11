@@ -38,9 +38,16 @@ jobs:
     # Mutants only in the lines a pull request changes in geom or check, each
     # tested against its own crate's tests, as the nightly score is. A missed
     # mutant fails: kill it with a test in that crate.
+    # Sharded so a large pull request still finishes: each shard takes every
+    # eighth mutant of the diff, within GitHub's six-hour job limit.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    name: mutants-in-diff (shard ${{ matrix.shard }}/8)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,5 +60,6 @@ jobs:
       - run: git diff "origin/${{ github.base_ref }}...HEAD" -- crates/geom crates/check > pr.diff
       - run: |
           if [ -s pr.diff ]; then
-            cargo mutants --in-diff pr.diff -p gpurify-geom -p gpurify-check -j 2
+            cargo mutants --in-diff pr.diff -p gpurify-geom -p gpurify-check -j 2 \
+              --shard ${{ matrix.shard }}/8
           fi
