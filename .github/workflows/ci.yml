@@ -1,5 +1,6 @@
 name: CI
 
+# The merge tier of docs/testing-plan.md §5; the nightly tier is nightly.yml.
 on:
   push:
     branches: [main]
@@ -21,5 +22,36 @@ jobs:
       # Workspace lints already deny clippy::correctness; pedantic stays at warn
       # (repo policy), so no blanket -D warnings here.
       - run: cargo clippy --workspace --all-targets
+      # The suite: corpus, goldens, determinism, properties at the merge
+      # count, metamorphic relations, doc counts, the catalog, and every
+      # committed fuzz crasher and seed (tests/fuzz_regressions.rs).
       - run: cargo test --workspace
+      # missing_docs and the intra-doc link lints are deny; rustdoc is what
+      # checks the links.
+      - run: cargo doc --workspace --no-deps
+      # The fuzz crate is its own workspace and runs only nightly; this keeps
+      # it compiling on stable in between.
+      - run: cargo check --manifest-path fuzz/Cargo.toml --bins
       - run: cargo build --workspace --release
+
+  mutants-in-diff:
+    # Mutants only in the lines a pull request changes in geom or check, each
+    # tested against its own crate's tests, as the nightly score is. A missed
+    # mutant fails: kill it with a test in that crate.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - run: git diff "origin/${{ github.base_ref }}...HEAD" -- crates/geom crates/check > pr.diff
+      - run: |
+          if [ -s pr.diff ]; then
+            cargo mutants --in-diff pr.diff -p gpurify-geom -p gpurify-check -j 2
+          fi
