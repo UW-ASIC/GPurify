@@ -86,6 +86,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(floating_well(depth));
     out.extend(missing_tie());
     out.extend(expressible());
+    out.extend(voltage_spacing());
     out
 }
 
@@ -3991,5 +3992,200 @@ fn expressible() -> Vec<Fixture> {
             .expect(Expect::rule("slot", findings)),
         );
     }
+    out
+}
+
+// ---------------------------------------------------------- voltage_spacing
+
+/// Two labelled metals with a via between them, and two voltage tables:
+/// met1 to met1 needs 200 nm from 0 V, 400 nm from 1.5 V and 800 nm from 3 V;
+/// met1 to met2 needs 500 nm from 1 V.
+const VS_DECK: &str = "grid 1nm
+layer met1 = gds(1, 0)
+layer m1txt = gds(1, 1)
+layer met2 = gds(2, 0)
+layer m2txt = gds(2, 1)
+layer v1 = gds(3, 0)
+connect conductors [met1, met2]
+connect touch_within_layer
+connect via v1 [met1, met2]
+connect label m1txt names met1
+connect label m2txt names met2
+rule vs voltage_space(met1; voltage: [0V, 1.5V, 3V], space: [200nm, 400nm, 800nm])
+rule vs2 voltage_space(met1, met2; voltage: [1V], space: [500nm])
+";
+
+const VS_CATALOG: &[&str] = &["DRC-082", "ERC-F11"];
+
+/// The space `vs` needs between two nets `delta` mV apart, read off the
+/// table in its definition: the last step whose voltage `delta` reaches.
+fn vs_need(delta: i64) -> Option<i64> {
+    [(0, 200), (1500, 400), (3000, 800)]
+        .iter()
+        .rev()
+        .find(|&&(volts, _)| volts <= delta)
+        .map(|&(_, space)| space)
+}
+
+/// Intent putting net A at `1000 + delta` mV (domain `hi`) and net B at
+/// 1000 mV (domain `lo`), both power: `delta` apart at worst.
+fn vs_intent(delta: i64) -> String {
+    intent(
+        &[("hi", (1000 + delta) as f64), ("lo", 1000.0)],
+        &[("A", "hi", "power"), ("B", "lo", "power")],
+        &[],
+    )
+}
+
+/// `voltage_space` (DRC-082, ERC-F11) on two met1 bars `gap` apart, nets A
+/// and B `delta` mV apart, swept against both: every step's voltage a
+/// millivolt either side, every step's space and one nanometre under it.
+/// Oracle: the table by hand ([`vs_need`]); a pair is flagged, measuring its
+/// gap, exactly when the gap is below the space the voltage needs. The
+/// boundary of each delta's own step is placed under every symmetry and
+/// offset. Then: a net no supply reaches and two shapes of one net are not
+/// judged however close; a met1 shape on A and a met2 shape on B, 1 V apart
+/// or a millivolt less, overlapping or `499`/`500` nm apart (`vs2`); a ground
+/// at 0 V against 3 V; and no intent, Skipped.
+fn voltage_spacing() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    for delta in [0, 1499, 1500, 1501, 2999, 3000, 3001, 5000] {
+        let need = vs_need(delta).expect("the first step is at 0 V");
+        for gap in [199, 200, 399, 400, 799, 800] {
+            let mut f = Fixture::new(
+                &format!("erc/voltage_spacing/{delta}mV/{gap}nm"),
+                VS_CATALOG,
+                VS_DECK,
+                ERC,
+            )
+            .layout(
+                Layout::default()
+                    .rect("met1", 0, 0, 1000, 500)
+                    .rect("met1", 1000 + gap, 0, 2000 + gap, 500)
+                    .label("m1txt", 500, 250, "A")
+                    .label("m1txt", 1500 + gap, 250, "B"),
+            )
+            .expect(Expect::rule(
+                "vs",
+                if gap < need {
+                    vec![length(gap)]
+                } else {
+                    Vec::new()
+                },
+            ))
+            .expect(Expect::clean("vs2"));
+            f.intent = Some(vs_intent(delta));
+            if gap == need || gap == need - 1 {
+                out.extend(every_placement(&[f]));
+            } else {
+                out.push(f);
+            }
+        }
+    }
+    // A, then 100 nm off it an unlabelled bar no supply reaches; B far away.
+    let mut f = Fixture::new("erc/voltage_spacing/unreached", VS_CATALOG, VS_DECK, ERC)
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met1", 1100, 0, 2100, 500)
+                .rect("met1", 20_000, 0, 21_000, 500)
+                .label("m1txt", 500, 250, "A")
+                .label("m1txt", 20_500, 250, "B"),
+        )
+        .expect(Expect::clean("vs"))
+        .expect(Expect::clean("vs2"));
+    f.intent = Some(vs_intent(5000));
+    out.extend(every_placement(&[f]));
+    // Two met1 bars of A 100 nm apart, bridged on met2 through vias: one
+    // net, at one voltage, so neither table judges them.
+    let mut f = Fixture::new("erc/voltage_spacing/same_net", VS_CATALOG, VS_DECK, ERC)
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met1", 1100, 0, 2100, 500)
+                .rect("met2", 0, 0, 2100, 500)
+                .rect("v1", 400, 200, 500, 300)
+                .rect("v1", 1600, 200, 1700, 300)
+                .rect("met1", 20_000, 0, 21_000, 500)
+                .label("m1txt", 200, 250, "A")
+                .label("m1txt", 20_500, 250, "B"),
+        )
+        .expect(Expect::clean("vs"))
+        .expect(Expect::clean("vs2"));
+    f.intent = Some(vs_intent(5000));
+    out.extend(every_placement(&[f]));
+    // met1 on A against met2 on B: a cross (overlap, distance 0), or a met2
+    // bar 499 or 500 nm off the met1 bar's end.
+    for delta in [999, 1000] {
+        for (name, met2, gap) in [
+            ("overlap", (400, -1000, 600, 1500), 0),
+            ("499nm", (1499, 0, 2499, 500), 499),
+            ("500nm", (1500, 0, 2500, 500), 500),
+        ] {
+            let mut layout = Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .label("m1txt", 200, 250, "A");
+            rect(&mut layout, "met2", met2);
+            let layout = layout.label("m2txt", met2.2 - 50, 250, "B");
+            let mut f = Fixture::new(
+                &format!("erc/voltage_spacing/two_layers/{delta}mV/{name}"),
+                VS_CATALOG,
+                VS_DECK,
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::clean("vs"))
+            .expect(Expect::rule(
+                "vs2",
+                if delta >= 1000 && gap < 500 {
+                    vec![length(gap)]
+                } else {
+                    Vec::new()
+                },
+            ));
+            f.intent = Some(vs_intent(delta));
+            out.extend(every_placement(&[f]));
+        }
+    }
+    // A ground at 0 V against a 3 V power net: 3 V apart, 800 nm needed.
+    for gap in [799, 800] {
+        let mut f = Fixture::new(
+            &format!("erc/voltage_spacing/ground/{gap}nm"),
+            VS_CATALOG,
+            VS_DECK,
+            ERC,
+        )
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met1", 1000 + gap, 0, 2000 + gap, 500)
+                .label("m1txt", 500, 250, "A")
+                .label("m1txt", 1500 + gap, 250, "B"),
+        )
+        .expect(Expect::rule(
+            "vs",
+            if gap < 800 {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(intent(
+            &[("hi", 3000.0), ("lo", 1800.0)],
+            &[("A", "hi", "power"), ("B", "lo", "ground")],
+            &[],
+        ));
+        out.push(f);
+    }
+    out.push(
+        Fixture::new("erc/voltage_spacing/no_intent", VS_CATALOG, VS_DECK, ERC)
+            .layout(
+                Layout::default()
+                    .rect("met1", 0, 0, 1000, 500)
+                    .rect("met1", 1100, 0, 2100, 500),
+            )
+            .expect(Expect::outcome("vs", Want::Skipped))
+            .expect(Expect::outcome("vs2", Want::Skipped)),
+    );
     out
 }

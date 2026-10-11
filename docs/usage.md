@@ -176,8 +176,8 @@ missing input, a file that could not be read.
 Some electrical rules need facts about the chip that no process deck can know:
 `ir_drop`, `em_current_density`, `electromigration`, `reliability`,
 `hv_domain`, `esd_latchup`, `esd_topological`, `gate_oxide`, `drain_source`,
-`well_bias`, `missing_level_shifter`, `domain_crossing`, and
-`multiple_drivers` and `tie_high_low`, which read the supplies as the rails
+`well_bias`, `missing_level_shifter`, `domain_crossing`, `voltage_spacing`,
+and `multiple_drivers` and `tie_high_low`, which read the supplies as the rails
 that orient each transistor channel. Without `--intent` they report skipped.
 
 ```json
@@ -205,7 +205,9 @@ The supplies also set the voltages the overstress and domain rules check. A
 power net sits at its domain's voltage and a ground net at 0 V. Every other
 net can reach anything between the lowest and highest supply connected to it
 through transistor source and drain, resistors, diodes and bipolar
-transistors; gates and capacitors pass nothing. Each power net's domain is
+transistors; gates and capacitors pass nothing. A transistor whose deck row
+states a gate condition (`on_gate_min`, `on_gate_max`) passes voltage only
+while the range its gate can reach turns it on. Each power net's domain is
 the power domain of the signals it drives, so give every separately powered
 supply its own domain. A file may declare at most 64 domains.
 

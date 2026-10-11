@@ -69,7 +69,7 @@ DRC-075	drc	density	Wide-metal slotting	IHP:Slt.a-i; GF:MSLOT; SKY:m1.11,m1.12	c
 DRC-076	drc	density	Waffle-window density	SKY:m1.X.1-m4.X.1	-	missing	FR	Not implemented, by decision: the rule text (SKY m1.- to m4.-, flag RC) gives a 700 um window and coverage bands but no window step, and no public deck codes it. Cadence's public SKY130 DRM (2025-07-22) lists it as obsolete and removed and cmm*/waffleDrop as unsupported; see docs/limitations.md
 DRC-080	drc	net	Same-net vs different-net spacing, one layer	LEF:SPACING SAMENET; GF:NW.2a,NW.2b,DN.2a; IHP:NW.b; KL:nets+props_eq/props_ne; drt	net_spacing	implemented	FR; TX:KL; MR; SY	
 DRC-081	drc	net	Net spacing between two layers / on wells	SKY:nwell.7,hvnwell.8,hv.nwell.1,vhvi.8; IHP:NW.b1,NBL.c	-	missing	FR	Net spacing takes one layer; only sky130 connects wells as nets
-DRC-082	drc	net	Voltage-dependent spacing (VA-DRC)	SKY:hvnwell.8,hv.*; GF:DV.9; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP	-	missing	FR; CF	Top cross-source gap; needs ERC-F1 voltage propagation
+DRC-082	drc	net	Voltage-dependent spacing (VA-DRC)	SKY:hvnwell.8,hv.*; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP	voltage_spacing	implemented	SY; MR	Two shapes on different nets need the space of the last table step their nets' worst-case voltage difference reaches (ERC-F1 ranges); one layer or two (LEF58 TOCUT as the two-layer form); a net no supply reaches is not judged; tag layers (sky130 HV n-well) cannot be named; no shipped deck carries a table
 DRC-083	drc	net	HV tag propagation (shorted to HV becomes HV)	SKY:hv.X.1-hv.X.6	hv_domain	partial	FR; SY; MR	hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV
 DRC-084	drc	net	Floating interconnect / must-join ports	SKY:x.22; LEF58_MUSTJOINALLPORTS	unconnected_pin	partial	SY; MR	Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled
 DRC-085	drc	net	Tap presence per well	SKY:nwell.4; GF:DN.3; IHP:nmosi.d	floating_well,must_contain	implemented	FR; SY; MR	
@@ -216,8 +216,8 @@ ERC-F6	erc	voltage	Missing level shifter	CAL:WP 81822; IEEE1801	missing_level_sh
 ERC-F7	erc	voltage	Missing isolation at switchable-domain outputs	IEEE1801; CPF	-	missing	SY	Needs power states
 ERC-F8	erc	voltage	Power-state-dependent undriven gates	CAL:WP 81822; IEEE1801; IA	-	missing	SE; SY	
 ERC-F9	erc	voltage	DC / sneak path between domains	CAL:datasheet; CAL:WP 81822	domain_crossing	implemented	SE:WP Fig2; SY	
-ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10	hv_domain	partial	FR; SY; MR	The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not
-ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	-	missing	FR	Same row as DRC-082
+ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10; GF:DV.9	hv_domain	partial	FR; SY; MR	The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not
+ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	voltage_spacing	implemented	SY; MR	Same row as DRC-082
 ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY; NV	Only sky130 connects wells (limitations.md, "Shipped decks")
 ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	-	missing	FR	
 ERC-F14	erc	voltage	Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares)	IEEE1801	-	missing	SY	Needs UPF input; IEEE 1801 not read (check-sources.md §5)

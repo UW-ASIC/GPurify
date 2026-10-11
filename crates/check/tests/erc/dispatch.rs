@@ -41,7 +41,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 14] = [
+const INTENT_GATED: [&str; 15] = [
     "domain_crossing",
     "drain_source",
     "electromigration",
@@ -55,6 +55,7 @@ const INTENT_GATED: [&str; 14] = [
     "multiple_drivers",
     "reliability",
     "tie_high_low",
+    "voltage_spacing",
     "well_bias",
 ];
 
@@ -245,6 +246,14 @@ fn every_kind() -> RuleSet {
         },
         domain_crossing: domain::DomainCrossingTable {
             head: head(id_of("domain_crossing")),
+        },
+        voltage_spacing: domain::VoltageSpacingTable {
+            head: head(id_of("voltage_spacing")),
+            layer: vec![base],
+            other: vec![None],
+            step_start: vec![0, 1],
+            voltage: vec![millivolts(0.0)],
+            space: vec![dbu(100)],
         },
     }
 }
@@ -696,6 +705,73 @@ rule em_met2 electromigration(met2, via1; max_density: 1000A/m, max_current_per_
 rule em_met3_met4 electromigration(met3, via2, met4, via3; max_density: 2350A/m, max_current_per_cut: 110uA, blech_limit: 126750uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
 rule em_met5 electromigration(met5, via4; max_density: 3500A/m, max_current_per_cut: 1800uA, blech_limit: 189000uA, reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
 ";
+
+/// Oracle: construct-from-answer, on the deck grammar (docs/deck.md,
+/// `voltage_space`). A table lowers to its steps in mV and grid units, on one
+/// layer or two; a table whose voltages fall, repeat or go negative, whose
+/// spaces fall, or whose lists differ in length is refused by name.
+#[test]
+fn a_voltage_table_lowers_by_step_and_an_unordered_one_is_refused() {
+    let head = "grid 5nm
+layer met1 = gds(1, 0)
+layer met2 = gds(2, 0)
+connect conductors [met1, met2]
+";
+    let parse = |rows: &str| {
+        let mut strings = StrTable::default();
+        let deck = gpurify_ingest::deck::parse_deck(
+            &format!("{head}{rows}"),
+            manufacturing_grid(),
+            &mut strings,
+        )
+        .expect("the deck parses");
+        RuleSet::from_deck(&deck, &strings)
+    };
+    let rules = parse(
+        "rule vs voltage_space(met1; voltage: [0V, 3.3V], space: [200nm, 450nm])
+rule vs2 voltage_space(met1, met2; voltage: [1.5V], space: [1um])
+",
+    )
+    .expect("both tables are in order");
+    let table = &rules.voltage_spacing;
+    assert_eq!(table.head.len(), 2);
+    assert_eq!(table.step_start, [0, 2, 3]);
+    let volts: Vec<f64> = table.voltage.iter().map(|v| v.raw()).collect();
+    assert_eq!(volts, [0.0, 3_300.0, 1_500.0]);
+    assert_eq!(table.space, [dbu(200), dbu(450), dbu(1_000)]);
+    assert_eq!(table.layer, [LayerId(0), LayerId(0)]);
+    assert_eq!(table.other, [None, Some(LayerId(1))]);
+    for (rows, why) in [
+        (
+            "rule vs voltage_space(met1; voltage: [3.3V, 1V], space: [200nm, 450nm])\n",
+            "rise strictly",
+        ),
+        (
+            "rule vs voltage_space(met1; voltage: [1V, 1V], space: [200nm, 450nm])\n",
+            "rise strictly",
+        ),
+        (
+            "rule vs voltage_space(met1; voltage: [-1V], space: [200nm])\n",
+            "rise strictly",
+        ),
+        (
+            "rule vs voltage_space(met1; voltage: [0V, 1V], space: [450nm, 200nm])\n",
+            "never fall",
+        ),
+        (
+            "rule vs voltage_space(met1; voltage: [0V, 1V], space: [200nm])\n",
+            "one space per voltage",
+        ),
+    ] {
+        match parse(rows) {
+            Err(ErcError::BadTable { rule, why: said }) => {
+                assert_eq!(rule, "vs");
+                assert!(said.contains(why), "{rows}: {said}");
+            }
+            other => panic!("{rows}: {other:?}"),
+        }
+    }
+}
 
 /// Oracle: construct-from-answer. `electromigration` rows spanning 2 and 4
 /// layers; every layer must carry its own row's Blech limit.

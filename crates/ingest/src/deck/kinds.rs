@@ -56,6 +56,8 @@ pub(crate) enum Dim {
     Nets,
     /// `[a, b, ..]`, lengths; one engine param per element.
     LengthList,
+    /// `[a, b, ..]`, voltages; one engine param per element, in mV.
+    VoltageList,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
     /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
@@ -218,6 +220,12 @@ const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
 const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
 /// MINSTEP's corner kinds, in the order of the engine's index.
 const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
+/// A voltage-dependent spacing table: the step voltages and the spacing from
+/// each one up.
+const VOLTAGE_SPACE: &[Param] = &[
+    p("voltage", "voltage", Dim::VoltageList),
+    p("space", "space", Dim::LengthList),
+];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -741,6 +749,16 @@ pub(crate) const KINDS: &[Kind] = &[
         &[opt("shifters", "shifter", Dim::Models)],
     ),
     erc("domain_crossing", &[], false, &[]),
+    // Spacing that grows with the worst-case voltage between two nets
+    // (LEF58_VOLTAGESPACING, sky130 hvnwell.8): one layer, or two.
+    Kind {
+        engine: "voltage_spacing",
+        ..erc("voltage_space", &[0], false, VOLTAGE_SPACE)
+    },
+    Kind {
+        engine: "voltage_spacing",
+        ..erc("voltage_space", &[0, 1], false, VOLTAGE_SPACE)
+    },
 ];
 
 /// The PEX keys, each given at most once per `pex` statement, and every one

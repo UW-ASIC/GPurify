@@ -194,6 +194,16 @@ pub enum ErcError {
     /// attributed by id.
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
+    /// A table out of order: a `voltage_spacing` row whose voltages are
+    /// negative or do not rise strictly, whose spacings fall as the voltage
+    /// rises, or whose two lists differ in length.
+    #[error("rule {rule}: {why}")]
+    BadTable {
+        /// The deck's rule id.
+        rule: String,
+        /// What is out of order.
+        why: &'static str,
+    },
 }
 
 pub use crate::Design;

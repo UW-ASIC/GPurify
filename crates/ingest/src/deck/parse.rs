@@ -1715,6 +1715,19 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::VoltageList => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, "a list of voltages", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one voltage")));
+                }
+                for item in items {
+                    let millivolts = self.quantity(item, Dim::Voltage, label)?.f64();
+                    out.push((engine, ParamSrc::Value(ParamValue::Ratio(millivolts))));
+                }
+                return Ok(());
+            }
             Dim::LengthRows => {
                 let Val::List(rows, _) = value else {
                     return Err(self.wrong(value, "a list of rows of lengths", label));
@@ -2175,5 +2188,6 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::LengthRows => "a list of rows of lengths",
         Dim::LengthPairList(_) => "a list of pairs of lengths",
         Dim::Word(_) => "one of the listed words",
+        Dim::VoltageList => "a list of voltages",
     }
 }

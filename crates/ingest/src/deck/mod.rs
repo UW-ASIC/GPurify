@@ -647,16 +647,21 @@ fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
     // Only a conductor's shapes carry a net; any other layer would read as all
     // different nets, or none the same.
-    for rule in doc.rules.iter().filter(|rule| rule.kind == "net_spacing") {
-        let layer = &rule.layers[0];
-        if !connectivity
-            .conductors
-            .contains(&layer_of(&layers, strings, layer))
-        {
-            return Err(DeckError::Malformed(format!(
-                "rule {}: net spacing on {layer}, which is not a conductor",
-                rule.id
-            )));
+    for rule in doc
+        .rules
+        .iter()
+        .filter(|rule| matches!(rule.kind, "net_spacing" | "voltage_spacing"))
+    {
+        for layer in &rule.layers {
+            if !connectivity
+                .conductors
+                .contains(&layer_of(&layers, strings, layer))
+            {
+                return Err(DeckError::Malformed(format!(
+                    "rule {}: net spacing on {layer}, which is not a conductor",
+                    rule.id
+                )));
+            }
         }
     }
     let devices = build_devices(&doc.devices, &layers, strings);

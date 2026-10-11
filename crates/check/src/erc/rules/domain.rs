@@ -10,7 +10,7 @@ use crate::erc::voltage::{is_channel, NetVoltage};
 use crate::erc::{first_vertex, record_run, skip_rows, Design};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::{DeviceId, NetId, TerminalRole};
-use gpurify_geom::{prefix, Qty, Voltage};
+use gpurify_geom::{prefix, Dbu, LayerId, Qty, Voltage};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
 
@@ -151,6 +151,65 @@ pub struct MissingLevelShifterTable {
 pub struct DomainCrossingTable {
     /// Rule id and severity per row. Rows differ only in id and severity.
     pub head: RuleHead,
+}
+
+/// Voltage-dependent spacing: deck kind `voltage_spacing`, written
+/// `voltage_space(L; voltage: [v, ..], space: [len, ..])`, or
+/// `voltage_space(A, B; ..)` between two layers.
+///
+/// A row is a table of steps: from each step's `voltage` up, two shapes on
+/// different nets need that step's `space`. A pair is held to the step with
+/// the largest voltage its nets can reach apart, the worst case
+/// [`NetVoltage::worst_delta`]: the top of one net's range minus the bottom
+/// of the other's. A pair whose voltage difference is below the first step
+/// needs nothing from the row. "From the step up" is inclusive: a difference
+/// exactly at a step's voltage needs that step's space, and a gap exactly at
+/// the space passes. On one layer the pairs are shapes in different merged
+/// figures; across two layers every pair, overlap included (a distance of
+/// 0), reported on the first layer. Ranges come from the declared supplies
+/// ([`NetVoltage`]).
+///
+/// # Limits
+///
+/// Shapes on one net are not judged: they sit at one voltage, and same-net
+/// spacing is `space(L; nets: same)`'s. A pair with a net no supply reaches
+/// is not judged. Ranges over-report as [`ModelLimitTable`]'s do, so two
+/// nets that only ever move together read their full swing apart. The
+/// layers must be conductors, so a pair is judged on extracted nets, not on
+/// marker or tag layers (sky130 hvnwell.8's HV n-well is the n-well under
+/// `hvi`). A cut-to-metal variant (LEF58 `TOCUT ABOVE | BELOW`) is the
+/// two-layer form with the cut layer named.
+///
+/// Catalog: DRC-082, ERC-F11 in the [check catalog]. Defined by
+/// [LEF58_VOLTAGESPACING] (`VOLTAGESPACING [TOCUT [ABOVE | BELOW]]
+/// {voltage spacing} ... ;`, as `OpenROAD` parses it); voltage-aware DRC in
+/// Calibre, IC Validator, Pegasus and Empyrean (public product material
+/// only: "different spacings based on ... the difference in voltages
+/// between different geometries", Siemens Calibre blog, 2015); [SKY130]
+/// hvnwell.8 ("Min space between HV_nwell and any nwell on different nets",
+/// whose HV n-well is a tag, not a voltage). Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [LEF58_VOLTAGESPACING]: https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/odb/src/lefin/lefTechLayerVoltageSpacing.cpp
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+#[derive(Debug, Default)]
+pub struct VoltageSpacingTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the layer measured, and the one findings are reported on.
+    pub layer: Vec<LayerId>,
+    /// Per row: the second layer, `None` for spacing within `layer`.
+    pub other: Vec<Option<LayerId>>,
+    /// `voltage[step_start[i] .. step_start[i + 1]]` and the same range of
+    /// `space` are row `i`'s steps; at least one per row.
+    pub step_start: Vec<u32>,
+    /// Each step's voltage, mV: zero or more, rising strictly within a row.
+    pub voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
+    /// Each step's spacing, database units: positive, never falling within a
+    /// row.
+    pub space: Vec<Dbu>,
 }
 
 /// Row `row` of a CSR column; an empty column (no rows pushed) answers empty.
@@ -495,5 +554,75 @@ pub fn check_domain_crossing(
             }
         }
         record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// The space a pair needs whose nets can reach `delta` mV apart: the step
+/// with the largest voltage at or below `delta`, `None` below the first.
+fn step_space(
+    voltage: &[Qty<Voltage, { prefix::MILLI }>],
+    space: &[Dbu],
+    delta: f64,
+) -> Option<Dbu> {
+    voltage
+        .iter()
+        .rposition(|step| step.raw() <= delta)
+        .map(|step| space[step])
+}
+
+/// Runs every [`VoltageSpacingTable`] row.
+///
+/// `examined` counts the pairs judged: shapes on two different nets that
+/// some supply reaches, within the row's largest space of each other (on one
+/// layer, in different merged figures). A violation sits at the midpoint of
+/// the pair's nearest points, on the first layer, measuring the gap against
+/// the step's space, with both shapes named. Every row is skipped without
+/// usable intent; a row is refused when a layer will not validate or holds a
+/// shape on no net.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_voltage_spacing(
+    design: Design<'_>,
+    intent: &IntentMap,
+    voltage: &NetVoltage,
+    table: &VoltageSpacingTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if !intent.is_usable() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let mut scratch = crate::drc::Scratch::default();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let steps = table.step_start[row] as usize..table.step_start[row + 1] as usize;
+        let (volts, spaces) = (&table.voltage[steps.clone()], &table.space[steps]);
+        let widest = *spaces.iter().max().expect("a row has a step");
+        let need = |a: NetId, b: NetId| {
+            if a == b {
+                return None;
+            }
+            let delta = voltage.worst_delta(a, b)?;
+            Some(step_space(volts, spaces, delta))
+        };
+        let (outcome, examined) = crate::drc::rules::spacing::net_pair_spacing(
+            design.store,
+            design.nets,
+            rule,
+            (table.layer[row], table.other[row]),
+            widest,
+            &mut scratch,
+            out,
+            need,
+        );
+        let severity = table.head.severity[row];
+        for at in &mut out.severity[before..] {
+            *at = severity;
+        }
+        record_run(runs, out, before, rule, outcome, examined);
     }
 }

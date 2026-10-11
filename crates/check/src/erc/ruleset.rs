@@ -1,4 +1,4 @@
-//! The twenty-four tables, the deck parser that fills them, and the dispatcher.
+//! The twenty-five tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -10,7 +10,7 @@ use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
-use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
@@ -20,7 +20,7 @@ use gpurify_ingest::{StrId, StrTable};
 ///
 /// Each name is a [`RuleSet`] field of the same name; the crate's
 /// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 24] = [
+pub const KINDS: [&str; 25] = [
     "antenna",
     "antenna_electrical",
     "density_cmp",
@@ -44,6 +44,7 @@ pub const KINDS: [&str; 24] = [
     "supply_short",
     "tie_high_low",
     "unconnected_pin",
+    "voltage_spacing",
     "well_bias",
 ];
 
@@ -130,6 +131,8 @@ pub struct RuleSet {
     pub missing_level_shifter: domain::MissingLevelShifterTable,
     /// `domain_crossing` rows: [`domain::DomainCrossingTable`].
     pub domain_crossing: domain::DomainCrossingTable,
+    /// `voltage_spacing` rows: [`domain::VoltageSpacingTable`].
+    pub voltage_spacing: domain::VoltageSpacingTable,
 }
 
 /// Everything one run reads, borrowed.
@@ -362,6 +365,63 @@ impl Row<'_> {
         }
     }
 
+    /// A voltage-dependent spacing table: the repeated `voltage` (mV) and
+    /// `space` parameters, one step each, in deck order. The voltages are
+    /// zero or more and rise strictly; the spaces are positive and never
+    /// fall; there is one space per voltage.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the two columns of one table, returned together"
+    )]
+    fn voltage_table(&self) -> Result<(Vec<Qty<Voltage, { prefix::MILLI }>>, Vec<Dbu>), ErcError> {
+        let (voltage_key, space_key) = (self.strings.get("voltage"), self.strings.get("space"));
+        let (mut voltage, mut space) = (Vec::new(), Vec::new());
+        for &(key, value) in self.rules.params_of(self.spec) {
+            if Some(key) == voltage_key {
+                match value {
+                    ParamValue::Ratio(millivolts) if millivolts.is_finite() => {
+                        voltage.push(millivolts);
+                    }
+                    _ => return Err(self.wrong_type("voltage")),
+                }
+            } else if Some(key) == space_key {
+                match value {
+                    ParamValue::Length(length) => space.push(length),
+                    _ => return Err(self.wrong_type("space")),
+                }
+            }
+        }
+        for (empty, param) in [(voltage.is_empty(), "voltage"), (space.is_empty(), "space")] {
+            if empty {
+                return Err(ErcError::MissingParam {
+                    rule: self.name(),
+                    param,
+                });
+            }
+        }
+        let bad = |why| ErcError::BadTable {
+            rule: self.name(),
+            why,
+        };
+        if voltage.len() != space.len() {
+            return Err(bad("a voltage table needs one space per voltage"));
+        }
+        if voltage[0] < 0.0 || voltage.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(bad(
+                "a voltage table's voltages start at 0 V or more and rise strictly",
+            ));
+        }
+        if space.iter().any(|length| length.raw() <= 0) {
+            return Err(self.non_positive("space"));
+        }
+        if space.windows(2).any(|pair| pair[1] < pair[0]) {
+            return Err(bad(
+                "a voltage table's spaces never fall as the voltage rises",
+            ));
+        }
+        Ok((voltage.into_iter().map(Qty::new).collect(), space))
+    }
+
     /// Push the row's head; `warning = true` demotes it from `Error`. Parsed
     /// before either column is pushed.
     fn head(&self, head: &mut RuleHead) -> Result<(), ErcError> {
@@ -588,6 +648,18 @@ impl RuleSet {
                     row.layers(0)?;
                     row.head(&mut set.domain_crossing.head)?;
                 }
+                "voltage_spacing" => {
+                    let count = narrow(row.rules.layers_of(row.spec).len());
+                    let layers = row.layers_where(2, (1..=2).contains(&count))?;
+                    let (voltage, space) = row.voltage_table()?;
+                    let table = &mut set.voltage_spacing;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.other.push(layers.get(1).copied());
+                    table.voltage.extend(voltage);
+                    table.space.extend(space);
+                    close_csr(&mut table.step_start, table.space.len());
+                }
                 "floating_gate" => {
                     row.layers(0)?;
                     let labels_are_ports = row.flag("labels_are_ports", false)?;
@@ -747,6 +819,7 @@ impl RuleSet {
             &self.well_bias.head,
             &self.missing_level_shifter.head,
             &self.domain_crossing.head,
+            &self.voltage_spacing.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -858,5 +931,6 @@ impl RuleSet {
             runs,
         );
         domain::check_domain_crossing(design, intent, voltage, &self.domain_crossing, out, runs);
+        domain::check_voltage_spacing(design, intent, voltage, &self.voltage_spacing, out, runs);
     }
 }

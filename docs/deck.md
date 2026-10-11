@@ -352,6 +352,25 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `well_bias(; pmos: models \| none, nmos: models \| none)` | A `pmos` device whose well can sit below its source or drain, or an `nmos` device whose substrate can sit above them. Needs `--intent`. |
 | `missing_level_shifter(; shifters: models \| none)` | A transistor whose gate is driven from a power domain its source and drain are not in, unless its model is one of `shifters`. Needs `--intent`. |
 | `domain_crossing()` | A device whose source-to-drain path joins two power domains. Needs `--intent`. |
+| `voltage_space(L; voltage: [v, ..], space: [len, ..])` | Two shapes on `L` on different nets closer than the space the voltage between their nets needs (see below). Needs `--intent`. |
+| `voltage_space(A, B; voltage: [v, ..], space: [len, ..])` | The same between a shape on `A` and one on `B`, overlap included. |
+
+A voltage table, as LEF `LEF58_VOLTAGESPACING`:
+
+```
+rule m1.vs voltage_space(met1; voltage: [0V, 3.3V, 5V], space: [140nm, 300nm, 600nm])
+```
+
+From each voltage up, two shapes on different nets need the space in the same
+place in `space`: here 140 nm below 3.3 V, 300 nm from 3.3 V, and 600 nm from
+5 V. The voltage between two nets is the worst case of the ranges the intent's
+supplies give them: the highest one can reach minus the lowest the other can.
+A difference exactly at a step's voltage needs that step's space, and a gap
+exactly at the space passes. A pair whose difference is below the first
+voltage needs nothing from the row, and a pair with a net no supply reaches is
+not checked. Voltages start at 0 V or more and rise, spaces never fall, and
+there is one space per voltage. Like `space(L; nets: ..)`, the layers must be
+conductors.
 
 ## Connectivity
 
