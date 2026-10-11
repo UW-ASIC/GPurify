@@ -99,6 +99,9 @@ fn engine(bytes: &[u8]) -> Duration {
     elapsed
 }
 
+/// Oracle: complexity law. A cost linear in the input keeps ns per polygon
+/// flat, so the 16x layout's must stay within `FACTOR` of the 1x layout's, both
+/// timed in the same run.
 #[test]
 #[ignore = "nightly: the bench gate, a few seconds of a debug build"]
 fn the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size() {

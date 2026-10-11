@@ -443,6 +443,9 @@ fn random_fixtures(count: u64) -> Vec<harness::Fixture> {
         .collect()
 }
 
+/// Oracle: differential against `KLayout`, through the mirror deck
+/// `docs/klayout-mirror.md` documents, compared per rule as that rule's verdict
+/// (EXACT or APPROX) states, on 3000 random layouts.
 #[test]
 #[ignore = "release tier: needs klayout (nix develop .#oracles)"]
 fn random_layouts_agree_with_the_klayout_mirror() {
@@ -453,12 +456,19 @@ fn random_layouts_agree_with_the_klayout_mirror() {
     );
 }
 
+/// Oracle: differential against `KLayout`, through the mirror deck
+/// `docs/klayout-mirror.md` documents, compared per rule as that rule's verdict
+/// (EXACT or APPROX) states, on every corpus cell.
 #[test]
 #[ignore = "release tier: needs klayout (nix develop .#oracles)"]
 fn every_corpus_cell_agrees_with_the_klayout_mirror() {
     differential("corpus", std::iter::once(corpus_jobs()));
 }
 
+/// Oracle: differential against `KLayout`, through the mirror deck
+/// `docs/klayout-mirror.md` documents, compared per rule as that rule's verdict
+/// (EXACT or APPROX) states, on every merge-depth DRC fixture under its
+/// symmetries and translations.
 #[test]
 #[ignore = "release tier: needs klayout (nix develop .#oracles)"]
 fn the_exhaustive_drc_fixtures_agree_with_the_klayout_mirror() {
@@ -481,6 +491,10 @@ fn the_exhaustive_drc_fixtures_agree_with_the_klayout_mirror() {
 
 /// Every deck the repository ships translates, and each DRC rule is either
 /// mirrored or named as not mirrored with its reason.
+///
+/// Oracle: law. The Ruby script and the verdict table describe one translation:
+/// a rule appears in the script exactly when its verdict is not `None`, for
+/// every shipped deck.
 #[test]
 fn every_shipped_deck_translates() {
     let mut decks: Vec<PathBuf> = std::fs::read_dir(repo().join("pdks"))

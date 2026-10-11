@@ -396,6 +396,9 @@ fn run_staged(
 /// 0.2 um wire on a 1 um2 gate collects 2 * 1000.2 um * 0.55 um = 1100.22
 /// um2, a ratio of 1100.22. The old rule refused every sidewall row and saw no
 /// net on a derived gate.
+///
+/// Oracle: foundry example, gf180 ANT.2, by hand: 2 x 1000.2 um x 0.55 um =
+/// 1100.22 um2 of sidewall over a 1 um2 gate, a ratio of 1100.22.
 #[test]
 fn gf180_ant_2_sidewall_area_of_metal1_over_a_derived_gate() {
     let (poly, gate, contact, metal1) = (LayerId(0), LayerId(1), LayerId(2), LayerId(3));
@@ -444,6 +447,10 @@ fn gf180_ant_2_sidewall_area_of_metal1_over_a_derived_gate() {
 /// CAR): A reads 6/1 + 6/2 = 9, B reads 1/1 + 6/2 = 4, exactly at the limit,
 /// so only A fails. Pooling 13 um2 over the 2 um2 of gate at metal2 would read
 /// 6.5 for the net (F59).
+///
+/// Oracle: hand-derived, with the per-etch-step convention of SVRF/`KLayout`
+/// decks and LEF CAR: at metal1 gate A alone reads 6; summed over the stages A
+/// reads 6/1 + 6/2 = 9 and B 1/1 + 6/2 = 4, at the limit.
 #[test]
 fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() {
     let (poly, contact, metal1, via1, metal2) =
@@ -498,6 +505,10 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
 /// gate overlaps both. Attached to the well it would read a ratio of 10; on
 /// its own poly, which collects nothing, it is clean. The Philis rc_filter
 /// fixture's false sky130 ar.licon.1 once the n-well became a net.
+///
+/// Oracle: construct-from-answer. The gate's poly collects no metal, so the
+/// gate is clean under a ratio of 1; joined to the well instead it would read
+/// the tap's 10 um2.
 #[test]
 fn a_gate_joins_its_poly_not_the_well_it_sits_in() {
     let (well, tap, tie, poly, gate, contact, metal1) = (

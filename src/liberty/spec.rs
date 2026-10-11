@@ -760,6 +760,9 @@ mod tests {
                      "supplies": {"VPWR": 1.8, "VGND": 0}, "models": []}]
     }"#;
 
+    /// Oracle: construct-from-answer. `INVERTER` drives `A` low in its first
+    /// case, and with no `characterization` block the slews are the documented
+    /// default, `sky130_fd_sc_hd`'s seven-point table.
     #[test]
     fn an_inverter_spec_parses() {
         let spec = parse(INVERTER).expect("valid");
@@ -768,6 +771,11 @@ mod tests {
     }
 
     /// Each refusal is a spec that would otherwise characterize the wrong thing.
+    ///
+    /// Oracle: the relations `parse` documents. Each edit breaks one (a supply
+    /// pin with no corner voltage, a combinational case with no `edge`, a first
+    /// vector leaving an input undriven, a ground pin turned input, a level
+    /// that is not one, an unknown arc kind), so each is refused.
     #[test]
     fn every_broken_relation_is_refused() {
         for (from, to) in [

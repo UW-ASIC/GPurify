@@ -881,6 +881,9 @@ pub(crate) mod tests {
     pub(crate) const ROWS: [(&str, u16, u16); 3] =
         [("met1", 68, 20), ("via1", 67, 44), ("poly", 66, 20)];
 
+    /// Oracle: construct-from-answer. The table is built from `ROWS`, so each
+    /// name resolves to its row index, and `met9`, interned but never declared,
+    /// and a name never interned resolve to nothing.
     #[test]
     fn a_name_the_deck_does_not_declare_resolves_to_no_layer_at_all() {
         let mut strings = StrTable::default();
@@ -916,6 +919,9 @@ pub(crate) mod tests {
         );
     }
 
+    /// Oracle: construct-from-answer. Each `ROWS` pair maps to its row index;
+    /// 69/20 is undeclared, 68/21 shares only the layer number, and 66/44 mixes
+    /// two rows' halves, so none maps.
     #[test]
     fn stream_pairs_map_only_where_the_deck_declares_them() {
         let mut strings = StrTable::default();

@@ -492,6 +492,10 @@ mod tests {
 
     /// Differential: the capped path equals the exact i128 one below the cap,
     /// never reads under it above, and non-rectilinear pairs fall back.
+    ///
+    /// Oracle: differential against the exact i128 path (`GAP_CAP` itself as
+    /// the cap): equal below the cap, never under it above, over random
+    /// staircases and free rings.
     #[test]
     fn capped_distances_agree_with_poly_dist2() {
         let mut r = Rng(0x2545_f491_4f6c_dd1d);
@@ -530,6 +534,9 @@ mod tests {
 
     /// Differential: the SIMD kernel equals its scalar oracle for every edge
     /// count `0 ..= 3 * 4 + 1` on either side.
+    ///
+    /// Oracle: differential against `capped_dist2_scalar`, at every edge count
+    /// 0 to 13 on either side.
     #[test]
     fn capped_dist2_simd_matches_scalar() {
         let mut r = Rng(0x9e37_79b9_7f4a_7c15);

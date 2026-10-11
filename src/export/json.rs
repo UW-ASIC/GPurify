@@ -192,8 +192,8 @@ fn write_json_str(text: &str, out: &mut String) {
 ///
 /// Six decimals of the unit the caller writes in: 1 zF for a capacitance in
 /// fF, 1 µΩ for ohms. A non-finite value prints as `NaN` or `inf`, which no
-/// format here can carry: [`write_report`] refuses one, and the parasitic
-/// writers do not check.
+/// format here can carry: [`write_report`] and the parasitic writers refuse
+/// one before writing.
 pub fn format_f64(value: f64, out: &mut String) {
     let _ = write!(out, "{value:.6}");
 }

@@ -627,6 +627,9 @@ fn each_merge_needs_only_the_name_of_what_it_sums() {
 }
 
 /// Different lengths are different transistors, however they are wired.
+///
+/// Oracle: netgen's parallel law, which merges only devices of one length:
+/// 0.15 um against 0.3 um, so two devices and no merge.
 #[test]
 fn fingers_of_different_length_do_not_merge() {
     let fingers = sized_fingers(&[(WIDTH, 2e-6), (LENGTH, 3e-7)]);
@@ -661,6 +664,9 @@ fn a_sized_stack_merges_summing_length() {
 
 /// A reference card with `m = 2` is two fingers of its width: it pairs with a
 /// layout that drew them.
+///
+/// Oracle: netgen's parallel law and SPICE's `m`: a card of `m = 2` at 2 um is
+/// two 2 um fingers in parallel, which is what the layout drew.
 #[test]
 fn a_multiplier_card_matches_the_fingers_it_stands_for() {
     let layout = sized_fingers(&[(WIDTH, 2e-6), (LENGTH, 1.5e-7)]);

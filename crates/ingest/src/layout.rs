@@ -2189,6 +2189,11 @@ mod tests {
 
     /// One rectangle written at chosen coordinates: the store has a known
     /// answer down to the vertex.
+    ///
+    /// Oracle: construct-from-answer. The square was written at (0, 0) to
+    /// (400, 400) on the deck's first layer, so the store holds those four
+    /// vertices, without the closing point a GDSII BOUNDARY repeats, and one
+    /// layer range per deck layer.
     #[test]
     fn a_boundary_reads_back_on_the_layer_and_at_the_coordinates_it_was_written_at() {
         let mut strings = StrTable::default();
@@ -2328,6 +2333,11 @@ mod tests {
 
     /// One shape on a known layer and one on an unknown one: `Reject` names the
     /// undeclared stream pair, `Drop` keeps exactly the declared shape.
+    ///
+    /// Oracle: construct-from-answer, against the documented `UnknownLayers`:
+    /// the shape on 99/7, which the deck does not declare, refuses the read
+    /// under `Reject` naming 99/7 and is removed under `Drop`, which keeps the
+    /// declared square as written.
     #[test]
     fn an_undeclared_layer_is_refused_under_reject_and_dropped_under_drop() {
         let mut strings = StrTable::default();
@@ -2406,6 +2416,10 @@ mod tests {
     /// `TOP` places nothing, and `A` and `B` place each other: `TOP` is the
     /// only root, the count then starts at `A` (the first cell left), and the
     /// chain `A`, `B`, `A` closes at `A`.
+    ///
+    /// Oracle: construct-from-answer. `A` and `B` place each other and no root
+    /// reaches them, so the hierarchy is cyclic by construction, and the
+    /// count's documented start after the roots is `A`.
     #[test]
     fn a_reference_cycle_no_root_reaches_is_refused() {
         let mut strings = StrTable::default();
@@ -2426,6 +2440,11 @@ mod tests {
     /// `A` places `LEAF`, then `C0` … `C1023` each place the next and `C1023`
     /// places `LEAF`: from `C0`, `LEAF` is level 1025, one past the cap,
     /// though `A` counted it first at level 2.
+    ///
+    /// Oracle: construct-from-answer. The chain is built one level past
+    /// `MAX_HIERARCHY_DEPTH` (1024), so `LEAF` reached from `C0` is past the
+    /// cap whatever the walk memoised from `A`; both the flat count and the
+    /// read must say `HierarchyTooDeep`.
     #[test]
     fn a_cell_counted_shallow_is_still_held_to_the_depth_cap_when_reached_deep() {
         let mut strings = StrTable::default();
@@ -2468,6 +2487,10 @@ mod tests {
     /// budget. `SQUARE` holds the square; `TOP` is a 32767 × 32767 array of
     /// `MID`, itself a 32767 × 32767 array of the empty `EMPTY`: about 10^18
     /// placements and one polygon, which flattening must return at once.
+    ///
+    /// Oracle: construct-from-answer. The arrays place only the empty cell, so
+    /// the flat store is the one square of `SQUARE`; the test finishing at all
+    /// is the other half, since the placements number about 10^18.
     #[test]
     fn arrays_of_an_empty_cell_are_not_walked() {
         let mut bytes = gds_hierarchy(&[
@@ -2549,11 +2572,13 @@ mod tests {
         assert!(started.elapsed().as_secs() < 5, "refused without expanding");
     }
 
-    /// Testing-plan F90. Oracle: the count, `cols × rows` labels, against
-    /// [`super::MAX_FLAT_POLYGONS`]. Under [`super::LabelDepth::All`], which
-    /// `read` asks for, an array of a cell holding one `TEXT` and no polygon
-    /// is walked to place its labels: 3 × 2 places 6, and the largest array
-    /// GDSII can state, 32767², is refused before anything is expanded.
+    /// Testing-plan F90. Under [`super::LabelDepth::All`], which `read` asks
+    /// for, an array of a cell holding one `TEXT` and no polygon is walked to
+    /// place its labels: 3 × 2 places 6, and the largest array GDSII can
+    /// state, 32767², is refused before anything is expanded.
+    ///
+    /// Oracle: the count, `cols × rows` labels, against
+    /// [`super::MAX_FLAT_POLYGONS`].
     #[test]
     fn an_array_of_text_over_the_flat_budget_is_refused_before_it_is_expanded() {
         let texts = |cols, rows| {
@@ -2583,6 +2608,10 @@ mod tests {
     /// The deck's ignore list drops a stream pair even under `Reject`: the deck,
     /// not the run, decides which layers a signoff may skip. A pair neither
     /// declared nor ignored is still refused.
+    ///
+    /// Oracle: the deck's documented `ignore` (`docs/deck.md`, Layers: an
+    /// ignored pair's shapes are dropped, an undeclared one refuses the
+    /// layout): the met1 square survives, 99/7 is dropped, 99/8 is refused.
     #[test]
     fn an_ignored_pair_is_dropped_even_under_reject() {
         let mut strings = StrTable::default();
@@ -2647,6 +2676,10 @@ mod tests {
     }
 
     /// A grid the deck cannot be converted onto is refused before any deck is read.
+    ///
+    /// Oracle: hand-derived. A unit of 3e-9 m is 333.3 units per um and 2e-6 m
+    /// half a unit per um, neither a whole number, and a library with no UNITS
+    /// record states no grid at all.
     #[test]
     fn a_missing_or_fractional_unit_is_refused() {
         let grid = |metres| {
@@ -2667,6 +2700,10 @@ mod tests {
 
     /// `UnknownLayers` is not a correctness switch: where every layer is
     /// declared, both settings produce the same store.
+    ///
+    /// Oracle: law, as a differential between the two settings. `UnknownLayers`
+    /// decides only what happens to an undeclared pair, so with all three
+    /// layers declared `Reject` and `Drop` give the same store.
     #[test]
     fn the_two_unknown_layer_settings_agree_when_every_layer_is_declared() {
         let mut strings = StrTable::default();
@@ -2698,6 +2735,10 @@ mod tests {
 
     /// A record whose declared length runs past the end of the file is a
     /// truncation, reported at an offset inside the file.
+    ///
+    /// Oracle: construct-from-answer. One byte is cut from a well-formed
+    /// library, so its last record's header states a length the file does not
+    /// hold: a truncation, at an offset inside the file.
     #[test]
     fn a_record_running_past_the_end_of_the_file_is_a_truncation_not_a_short_read() {
         let mut strings = StrTable::default();
@@ -2720,6 +2761,11 @@ mod tests {
 
     /// The reader has to turn the GDSII library into the builder-made store,
     /// vertex by vertex. Asserting the whole store also pins push order.
+    ///
+    /// Oracle: construct-from-answer. `corpus` states one layout twice, as a
+    /// store built with `LayoutBuilder` and as the GDSII library the Stream
+    /// Format specification says holds it; reading the second must give the
+    /// first, row for row.
     #[test]
     fn a_library_holding_a_known_layout_reads_back_as_that_exact_store() {
         let mut strings = StrTable::default();
@@ -2734,6 +2780,10 @@ mod tests {
     }
 
     /// Stream properties are accepted and leave the geometry as it was.
+    ///
+    /// Oracle: metamorphic relation. Tagging every element of `corpus` with
+    /// PROPATTR/PROPVALUE records leaves the geometry alone, so the store is
+    /// still the builder-made store of the untagged layout.
     #[test]
     fn stream_properties_are_accepted_and_change_no_geometry() {
         let mut strings = StrTable::default();
@@ -2755,6 +2805,10 @@ mod tests {
 
     /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
     /// the vertex transform (three). Either is a refusal, never a wrapped coordinate.
+    ///
+    /// Oracle: hand-derived. Four levels of magnification 1e6 compose to 1e24,
+    /// and three put a 400 dbu vertex at 4e20 dbu; both are past i64's 9.2e18,
+    /// so the only correct answer is `UnsupportedTransform`.
     #[test]
     fn a_magnification_chain_past_i64_is_refused_rather_than_wrapped() {
         let mut strings = StrTable::default();
@@ -2804,6 +2858,11 @@ mod tests {
     /// `TOP` places `LEAF` twice, plain and under `STRANS 0x8000`. The mirrored
     /// copy is `(x, −y)` shifted by the reference point — determinant −1, so the
     /// ring reverses.
+    ///
+    /// Oracle: hand-derived. STRANS 0x8000 reflects about x before rotation, so
+    /// the triangle (0, 0), (200, 0), (0, 100) under (x, -y) + (1000, 0) is
+    /// clockwise, and the store's counter-clockwise rings with vertex 0 fixed
+    /// give the listed vertices, reversed from vertex 1.
     #[test]
     fn a_mirrored_instance_keeps_the_orientation_the_cell_was_drawn_with() {
         use gpurify_geom::ops::{winding_of, Winding};
@@ -2861,6 +2920,9 @@ mod tests {
     /// Two reflections compose to a rotation, so the doubly nested copy must be
     /// the cell as drawn, vertex for vertex. The parity path: a fix that
     /// reversed per level rather than on the composed transform fails here.
+    ///
+    /// Oracle: law. Two reflections compose to the identity, so the nested copy
+    /// is the direct copy vertex for vertex, order included.
     #[test]
     fn a_doubly_mirrored_instance_is_the_cell_as_drawn() {
         let mut strings = StrTable::default();
@@ -2893,6 +2955,11 @@ mod tests {
     /// `TOP` places `LEAF` four times, each mirrored and rotated one more
     /// quarter turn. The composed linear part `R_q · diag(1, −1)` has
     /// determinant −1 in all four, so all four rings reverse.
+    ///
+    /// Oracle: hand-derived. Each placement is the drawn triangle through
+    /// `R_q · diag(1, -1)` (GDSII reflects, then rotates) plus its offset,
+    /// worked out by hand, reversed from vertex 1 because the determinant is
+    /// -1; every ring winds counter-clockwise.
     #[test]
     fn a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise() {
         use gpurify_geom::ops::{winding_of, Winding};
@@ -2947,6 +3014,10 @@ mod tests {
     /// rotation, so `F · R₉₀ · p = (−y, −x)` and `R₉₀ · F · p = (y, x)`. A
     /// composition that *added* the quadrants would give both the same answer;
     /// the `assert_ne!` carries that asymmetry. Both determinants are −1.
+    ///
+    /// Oracle: hand-derived. `F · R90` maps a point to (-y, -x) and `R90 · F`
+    /// to (y, x); the triangle through each, offset and reversed from vertex 1,
+    /// is worked out in the comments, and the two must differ.
     #[test]
     fn a_mirror_and_a_rotation_split_across_two_levels_do_not_commute() {
         use gpurify_geom::ops::{winding_of, Winding};
@@ -3064,6 +3135,9 @@ mod tests {
 
     /// The label is written inside a square the test chose, so which polygon it
     /// must name is known before the reader runs.
+    ///
+    /// Oracle: construct-from-answer. The one label is drawn at (200, 200),
+    /// inside the one 400 square, so it names that polygon.
     #[test]
     fn a_text_inside_a_shape_names_the_net_that_shape_is_on() {
         let mut strings = StrTable::default();
@@ -3082,6 +3156,10 @@ mod tests {
     /// The boundary counts as inside: pin labels are routinely written at a
     /// corner or an edge midpoint. All four cases the half-open ray cast alone
     /// answers `false` for.
+    ///
+    /// Oracle: the label binding's documented contract (`provenance.rs`: "The
+    /// boundary counts as inside"): each label sits on the square's boundary,
+    /// so each names polygon 0.
     #[test]
     fn a_text_on_a_shapes_edge_or_corner_still_names_it() {
         let mut strings = StrTable::default();
@@ -3108,6 +3186,10 @@ mod tests {
 
     /// A text on a layer no `connectivity.labels` row pairs is documentation,
     /// not a net label, and is passed over in silence.
+    ///
+    /// Oracle: the label binding's documented contract (`provenance.rs`: "A
+    /// text on a layer no pairing row names binds nothing"): 68/20 is paired
+    /// with nothing.
     #[test]
     fn a_text_on_an_unpaired_layer_is_documentation_and_binds_nothing() {
         let mut strings = StrTable::default();
@@ -3130,6 +3212,10 @@ mod tests {
 
     /// A label the deck *claims* that lands on no shape is refused: a dropped
     /// one leaves the net with its geometry and without its name.
+    ///
+    /// Oracle: the label binding's documented contract (`provenance.rs`:
+    /// `Unplaced` "for a claimed label on no shape"): (9000, 9000) is far from
+    /// the only square (0..400), so the refusal names that point.
     #[test]
     fn a_claimed_label_on_no_shape_is_refused_rather_than_dropped() {
         let mut strings = StrTable::default();
@@ -3159,6 +3245,10 @@ mod tests {
     /// at y 600..1000 and the label at (200, 800), so a reader leaving it in the
     /// child's frame refuses it. A shift of 400 would be worthless — (200, 200)
     /// is a fixed point of `y ↦ 400 − y`.
+    ///
+    /// Oracle: hand-derived. The reflection with offset (0, 1000) maps y to
+    /// 1000 - y: the square to y 600..1000 and the label to (200, 800), inside
+    /// it, so the label binds polygon 0.
     #[test]
     fn a_label_under_a_mirrored_instance_moves_with_the_shape_it_names() {
         let mut strings = StrTable::default();
@@ -3195,6 +3285,10 @@ mod tests {
 
     /// By default a sub-cell's label is not a design label: the same library
     /// that binds `VDD` under [`super::LabelDepth::All`] binds nothing.
+    ///
+    /// Oracle: the documented `LabelDepth`: `Top` (root cells only, Calibre's
+    /// `TEXT DEPTH PRIMARY` default) places no `CHILD` text, and `All` places
+    /// the one there is.
     #[test]
     fn a_sub_cell_label_is_not_placed_by_default() {
         let mut strings = StrTable::default();
@@ -3348,6 +3442,9 @@ mod tests {
     /// `Err(LayoutError::CoordinateOutOfRange(_))` is a pass — `W` may leave the
     /// representable domain — but only that one variant, since a reader refusing
     /// every wrapped library would otherwise satisfy the law.
+    ///
+    /// Oracle: metamorphic relation, transform equivariance: clauses (a) to (c)
+    /// above, the unwrapped result through `W`.
     #[test]
     fn wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store() {
         use gpurify_geom::MAX_ABS_DBU;
@@ -3562,6 +3659,9 @@ mod tests {
 
     /// The placement kernels match their scalar oracles at every length around the
     /// lane count, on random and edge values.
+    ///
+    /// Oracle: differential against `max_abs_scalar` and `shift_scalar`, at
+    /// every length 0 to 13 around the lane count, on random and edge values.
     #[test]
     fn the_placement_kernels_agree_with_their_scalar_versions() {
         use fearless_simd::{dispatch, Level};
@@ -3603,6 +3703,10 @@ mod tests {
     /// `met2` holds s1 inside the L, s2 touching its 4 um arm from outside, s3
     /// far away, and s4 straddling the 2 um arm's end. Expected areas and
     /// lengths are worked out by hand from those coordinates.
+    ///
+    /// Oracle: hand-derived. Each derived layer's areas and lengths are worked
+    /// out from the coordinates above under the operation's definition in
+    /// `docs/deck.md`, Layers.
     #[test]
     fn every_derived_operation_reads_through_the_deck_into_the_store() {
         let deck_text = "grid 1nm
@@ -3721,6 +3825,11 @@ rule huge.w width(huge) >= 1um
     /// "npn13G2L" match the glob; "pnpMPA" does not. An L whose label sits in
     /// its notch, inside its bounding box but off the shape, holds no text, and
     /// a matching string on another text layer is not read.
+    ///
+    /// Oracle: construct-from-answer, under `with_text` as `docs/deck.md`
+    /// defines it (`*` any run, `?` one character, a text on the edge counts,
+    /// `T` a drawn layer): the squares at 0 and 200 hold a match, the others do
+    /// not.
     #[test]
     fn with_text_keeps_the_shapes_holding_a_matching_text() {
         let mut strings = StrTable::default();
@@ -3774,6 +3883,9 @@ layer rest = activ.without_text(text, \"npn13G2*\")
         );
     }
 
+    /// Oracle: the glob `docs/deck.md` documents for `with_text`: `*` any run,
+    /// `?` one character, every other character itself, case included, over the
+    /// whole text; each pair is decided by hand (`[V]DD` is literal).
     #[test]
     fn a_glob_matches_the_whole_text() {
         use super::glob_matches;

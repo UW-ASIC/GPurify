@@ -446,6 +446,9 @@ mod tests {
     }
 
     /// Differential: every window's sum equals clipping every rectangle to it.
+    ///
+    /// Oracle: differential against clipping every rectangle to every window
+    /// (`clipped_area`), over 2000 random grids and disjoint rectangle sets.
     #[test]
     fn window_areas_match_clipping_every_rect() {
         let mut seed = 0x9e37_79b9_7f4a_7c15u64;

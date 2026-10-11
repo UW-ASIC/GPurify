@@ -166,6 +166,10 @@ mod tests {
 
     /// The whole text report for one small run, byte for byte. On a 2000 dbu/um
     /// grid one dbu is 0.5 nm, so 48 dbu^2 is 12 nm^2.
+    ///
+    /// Oracle: golden, written by hand in the format `docs/usage.md` shows,
+    /// with the units converted by hand: on a 2000 dbu/um grid (4200, 8600) is
+    /// (2100 nm, 4300 nm), 4 dbu is 2 nm and 48 dbu^2 is 12 nm^2.
     #[test]
     fn a_run_renders_to_this_exact_text() {
         let mut strings = StrTable::default();

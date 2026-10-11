@@ -599,6 +599,9 @@ fn spatial_cmp(a: Panel, b: Panel) -> Ordering {
 mod tests {
     use super::{morton3, quantise, spread3, uncovered, MORTON_BITS, MORTON_MAX, MORTON_SPAN};
 
+    /// Oracle: hand-derived. 0..10 less 2..4, 3..6 and 9..20 leaves 0..2 and
+    /// 6..9; an empty cover leaves the span, a cover past both ends leaves
+    /// nothing.
     #[test]
     fn uncovered_is_the_span_less_every_cover() {
         assert_eq!(uncovered((0, 10), &[]), [(0, 10)]);
@@ -612,6 +615,10 @@ mod tests {
     /// An L whose bounding box swallows a second conductor in its notch: the
     /// L's panels must stay on the L, and its footprint must be its area,
     /// not its box's. Meshing boxes put the L's top face over the square.
+    ///
+    /// Oracle: hand-derived. The L's top face is 1000 x 400 + 400 x 600 nm2,
+    /// and no panel of it may lie over the square in its notch (600..900 on
+    /// both axes).
     #[test]
     fn a_concave_conductor_is_meshed_as_drawn_not_as_its_box() {
         use gpurify_check::topology::{net::extract_nets_into, NetId, NetTable};
@@ -688,6 +695,8 @@ mod tests {
         );
     }
 
+    /// Oracle: the definition in `spread3`'s doc: bit `i` lands at bit `3i`,
+    /// for every `i`, and bits above the axis width are masked off.
     #[test]
     fn spreading_moves_bit_i_to_bit_three_i() {
         for i in 0..MORTON_BITS {
@@ -702,6 +711,8 @@ mod tests {
         );
     }
 
+    /// Oracle: round trip. Gathering every third bit of the key from offsets 0,
+    /// 1 and 2 gives back `x`, `y` and `z`.
     #[test]
     fn a_key_keeps_all_three_axes_in_disjoint_bits() {
         let (x, y, z) = (0b1011, 0b0110, 0b1101);
@@ -719,6 +730,9 @@ mod tests {
         );
     }
 
+    /// Oracle: hand-derived from `quantise`'s doc (saturating, NaN to zero):
+    /// 0 maps to 0, the span's end to `MORTON_MAX`, a quarter to a quarter of
+    /// it, and out-of-range, NaN and infinite inputs to the ends.
     #[test]
     fn quantising_is_monotone_and_total() {
         let scale = MORTON_SPAN / 4.0;

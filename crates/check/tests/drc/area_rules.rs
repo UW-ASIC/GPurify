@@ -74,6 +74,9 @@ fn a_figure_one_square_unit_under_the_limit_is_reported_at_its_centre() {
     assert_eq!(run.violations, 1);
 }
 
+/// Oracle: construct-from-answer. The figure is drawn at exactly the
+/// 40 000 limit, and a minimum is violated only below it, so one figure
+/// examined and none reported.
 #[test]
 fn a_figure_exactly_at_the_area_limit_is_clean() {
     let case = area_case(40_000, 40_000);
@@ -196,6 +199,8 @@ fn a_hole_one_square_unit_under_the_limit_is_reported_at_the_hole() {
     assert_eq!(run.violations, 1);
 }
 
+/// Oracle: construct-from-answer. The hole is drawn at exactly the
+/// 20 000 limit, and a minimum is violated only below it.
 #[test]
 fn a_hole_exactly_at_the_enclosed_area_limit_is_clean() {
     let case = layout_with_violation(
@@ -268,6 +273,8 @@ fn an_unslotted_plate_one_square_unit_over_the_limit_is_reported_at_its_centre()
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
 }
 
+/// Oracle: hand-derived. The unslotted plate is 500 x 400 = 200 000, exactly
+/// the cheesing limit, which flags only a larger one.
 #[test]
 fn a_plate_exactly_at_the_unslotted_limit_is_clean() {
     let mut layout = LayoutBuilder::new(1);
@@ -448,6 +455,10 @@ fn the_minimum_sense_flags_the_sparse_windows_the_maximum_sense_ignores() {
 /// An empty layer on a non-empty die has density zero everywhere: a maximum
 /// rule runs clean over every window and a minimum rule flags every one. Only
 /// an empty layout, with no die at all, is `Skipped`.
+///
+/// Oracle: hand-derived. The die is A's 2000 x 1000 extent, two 1000 windows of
+/// density 0 on the empty B: a maximum passes both, a minimum flags both; with
+/// no die at all the documented outcome is `Skipped(EmptyLayer)`.
 #[test]
 fn an_empty_layer_has_density_zero_over_the_die() {
     let mut layout = LayoutBuilder::new(2);
@@ -489,6 +500,10 @@ fn an_empty_layer_has_density_zero_over_the_die() {
 /// the metal's own extent. Metal filling the left half of a 4 x 2 um die at
 /// 100 % passes a 30 % minimum when only its own extent is windowed; the empty
 /// right half of the die fails it.
+///
+/// Oracle: foundry example, IHP M1.j and gf180 M1.4 tile the chip boundary; by
+/// hand, two 2000 windows over the 4 x 2 um die, the left full, the right
+/// empty: one violation, at (3000, 1000), measuring 0.
 #[test]
 fn ihp_m1_j_density_windows_tile_the_die_not_the_layer() {
     let mut layout = LayoutBuilder::new(2);
@@ -521,6 +536,10 @@ fn ihp_m1_j_density_windows_tile_the_die_not_the_layer() {
 
 /// gf180 M1.4: "Metal1 minimum density 30 % over the entire die". A die
 /// 20 % covered fails; the same metal on a die half the size (40 %) passes.
+///
+/// Oracle: foundry example, gf180 M1.4 (30 % over the die), by hand: 2000 of
+/// 10 000 is 0.2 and fails, reported at the die's centre; 2000 of 5000 is
+/// 0.4 and passes.
 #[test]
 fn gf180_m1_4_whole_die_density() {
     let rule = |boundary| {
@@ -554,6 +573,10 @@ fn gf180_m1_4_whole_die_density() {
 /// 700 x 1000 of a `[0, 1000]^2` marker, 0.7, which fails a 60 % maximum. A
 /// derived layer grown 500 past met1 is not layout: counted, it would widen
 /// the die to 1700 x 2000 and read 700 000 / 3 400 000 = 0.206, clean.
+///
+/// Oracle: hand-derived, with `docs/deck.md`'s rule that a derived layer does
+/// not widen the die: 700 x 1000 of the 1000 square marker is 0.7, over a 60 %
+/// maximum, at the die's centre.
 #[test]
 fn a_derived_layer_does_not_widen_the_boundary_less_die() {
     let halo = LayerId(2);
@@ -592,6 +615,10 @@ fn a_derived_layer_does_not_widen_the_boundary_less_die() {
 /// the 10 000 hole under a 20 000 minimum names the ring. A U, 300 square
 /// with a 100 x 200 gap (70 000), around a 60 x 100 island (6 000): above a
 /// 5 000 unslotted limit both fail cheesing, each naming itself.
+///
+/// Oracle: hand-derived areas, as above, and construct-from-answer for the
+/// owner: each island is drawn as the lowest row under itself, so each
+/// violation must name the shape it measured.
 #[test]
 fn an_island_inside_a_figure_is_not_named_for_it() {
     let mut layout = LayoutBuilder::new(1);
@@ -648,6 +675,9 @@ fn an_island_inside_a_figure_is_not_named_for_it() {
 /// extent, so the windows are the nine 1000 squares, and the centre one, over
 /// the hole, has density 0 and is the one violation, at `(1500, 1500)`. No
 /// outer row's box lies within it, so it names the lowest outer row, the ring.
+///
+/// Oracle: hand-derived, as above: nine 1000 windows over the 3000 ring, the
+/// centre one over the hole at density 0, at (1500, 1500), naming the ring.
 #[test]
 fn a_density_window_over_a_hole_names_the_ring_not_the_hole() {
     let mut layout = LayoutBuilder::new(1);

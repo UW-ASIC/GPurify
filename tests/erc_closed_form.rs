@@ -265,6 +265,9 @@ fn ladder_at_limit(net: &'static str, role: &str, limit: f64, expect: usize) {
 /// clockwise row of its own. That row is no conductor, so it is no grid node:
 /// made one, nothing links it and the whole ERC stage is refused as an island.
 /// Reported by the Philis session (a VDD guard ring).
+///
+/// Oracle: construct-from-answer. The ring is one conductor with a hole, so the
+/// grid is the pad and the one load tap: the stage runs and examines 2.
 #[test]
 fn a_supply_ring_with_a_hole_solves() {
     let report = erc(
@@ -294,6 +297,10 @@ fn a_supply_ring_with_a_hole_solves() {
 /// Every per-net network is built for `p2p_resistance`, so this ran into a
 /// shape index the network never assigned. Reported by the Philis session (a
 /// p-tap ring tied to sky130's `psub`).
+///
+/// Oracle: `docs/deck.md`, Connectivity: a global layer is "net-only, not a
+/// conductor: it carries no modelled current", so a tie into it adds no grid
+/// link and `ir_drop` runs.
 #[test]
 fn a_via_into_a_global_layer_is_no_grid_link() {
     let report = erc(
@@ -319,6 +326,10 @@ fn a_via_into_a_global_layer_is_no_grid_link() {
 /// process that publishes none) is unknown, never zero: the rows that read a
 /// resistance are refused, and the stage still runs every other row.
 /// Reported by the Philis session (ASAP7 front-end layers).
+///
+/// Oracle: construct-from-answer. `li` has no `pex` row, so its resistance is
+/// unknown: `ir_drop` and `p2p_resistance` read one and are refused,
+/// `multiple_drivers` reads none and runs.
 #[test]
 fn a_conductor_without_a_sheet_resistance_refuses_only_the_rows_that_read_one() {
     let report = erc(

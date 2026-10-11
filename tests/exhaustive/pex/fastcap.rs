@@ -379,6 +379,9 @@ fn geometries() -> Vec<Geometry> {
 
 /// Every entry of every geometry's matrix within its tolerance of
 /// `FastCap`'s.
+///
+/// Oracle: differential against `FastCap`, an independent field solver, entry by
+/// entry within each geometry's tolerance.
 #[test]
 #[ignore = "release tier: needs fastcap (nix develop .#oracles)"]
 fn fastcap_differential_every_field_solved_geometry() {
@@ -432,6 +435,9 @@ fn fastcap_differential_every_field_solved_geometry() {
 /// `FastCap` with this module's mesh and images, on the cube alone, is
 /// within 0.3 % of the cube's known capacitance: the reference is converged
 /// well inside the tolerances it is used with.
+///
+/// Oracle: published value: the cube's capacitance, 0.66068 · 4πε₀a with its
+/// image in the plane, which `FastCap` must reach within 0.3 %.
 #[test]
 #[ignore = "release tier: needs fastcap (nix develop .#oracles)"]
 fn fastcap_differential_reference_is_converged_on_the_cube() {

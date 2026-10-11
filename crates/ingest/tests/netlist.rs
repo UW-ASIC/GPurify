@@ -325,6 +325,11 @@ fn an_x_card_calling_a_deck_model_is_the_same_device_as_the_m_card() {
 
 /// Flattening places every leaf device under the top, wired through the
 /// instance's port nets, with internal nets named by path.
+///
+/// Oracle: hand-derived. Flattening `BUF` by hand: two `INV` placements of two
+/// devices each, ports `IN OUT VDD VSS`, `X1`'s nfet on drain `n1`, gate `IN`,
+/// source `X1.mid` (the internal net named by path), bulk `VSS`, and `X2`'s on
+/// `OUT`, `n1`, `X2.mid`.
 #[test]
 fn flattening_wires_instances_through_their_ports() {
     let mut strings = StrTable::default();
@@ -362,6 +367,9 @@ X2 n1 OUT VDD VSS INV
 }
 
 /// A subcircuit that places itself is refused, not expanded forever.
+///
+/// Oracle: construct-from-answer. `A` places `B` and `B` places `A`, so the
+/// hierarchy under `TOP` is cyclic by construction.
 #[test]
 fn flattening_refuses_a_cycle() {
     let mut strings = StrTable::default();
@@ -399,6 +407,10 @@ X1 x A
 ///
 /// At `n = 3` each flattens to what it counts: 8 devices and 2 nets, and 0
 /// devices and 3 + 6 nets. At `n = 30` each is refused with its count at once.
+///
+/// Oracle: closed form. The counts above, 3·2ⁿ and 3·2ⁿ − 1, against
+/// `MAX_FLAT_ELEMENTS`; at `n = 3` the hand-expanded netlists (8 devices and
+/// 2 nets; 0 devices and 9 nets).
 #[test]
 fn a_reference_over_the_flat_cap_is_refused_before_it_is_expanded() {
     use gpurify_ingest::netlist::MAX_FLAT_ELEMENTS;

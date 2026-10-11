@@ -114,6 +114,10 @@ fn at_limit_in(
 }
 
 /// licon.5a: enclosure of licon by diff, 0.040 um.
+///
+/// Oracle: foundry example, sky130 licon.5a 0.040 um (`SkyWater` SKY130 periphery
+/// rules): licon drawn 40 then 35 nm inside diff, so the pass layout sits on
+/// the limit and the fail layout 5 nm inside it.
 #[test]
 fn licon_5a_diff_encloses_licon_by_40nm() {
     let base = [("diff", 0, 0, 1000, 500), ("nsdm", -200, -200, 1200, 700)];
@@ -123,6 +127,10 @@ fn licon_5a_diff_encloses_licon_by_40nm() {
 }
 
 /// licon.14: spacing of `poly_licon` to diff or tap, 0.190 um.
+///
+/// Oracle: foundry example, sky130 licon.14 0.190 um (`SkyWater` SKY130 periphery
+/// rules): diff drawn 190 then 185 nm from the poly licon, so the pass layout
+/// sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn licon_14_poly_licon_to_diff_190nm() {
     let base = [("poly", 0, 0, 500, 500), ("licon", 165, 165, 335, 335)];
@@ -132,6 +140,10 @@ fn licon_14_poly_licon_to_diff_190nm() {
 }
 
 /// npc.4: spacing, no overlap, of npc to gate, 0.090 um.
+///
+/// Oracle: foundry example, sky130 npc.4 0.090 um (`SkyWater` SKY130 periphery
+/// rules): npc drawn 90 then 85 nm from the gate, so the pass layout sits on
+/// the limit and the fail layout 5 nm inside it.
 #[test]
 fn npc_4_npc_to_gate_90nm() {
     let base = [("diff", 0, 0, 1000, 420), ("poly", 400, -200, 550, 620)];
@@ -141,6 +153,10 @@ fn npc_4_npc_to_gate_90nm() {
 }
 
 /// difftap.10: enclosure of n+ tap by n-well, 0.180 um.
+///
+/// Oracle: foundry example, sky130 difftap.10 0.180 um (`SkyWater`
+/// SKY130 periphery rules): nwell drawn 180 then 175 nm round the n+ tap, so
+/// the pass layout sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn difftap_10_nwell_encloses_ntap_by_180nm() {
     let base = [("tap", 0, 0, 500, 500), ("nsdm", -130, -130, 630, 630)];
@@ -150,6 +166,10 @@ fn difftap_10_nwell_encloses_ntap_by_180nm() {
 }
 
 /// rpm.6: spacing, no overlap, of rpm to nsdm, 0.200 um.
+///
+/// Oracle: foundry example, sky130 rpm.6 0.200 um (`SkyWater` SKY130 periphery
+/// rules): nsdm drawn 200 then 195 nm from rpm, so the pass layout sits on the
+/// limit and the fail layout 5 nm inside it.
 #[test]
 fn rpm_6_rpm_to_nsdm_200nm() {
     let pass = [("rpm", 0, 0, 2000, 2000), ("nsdm", 2200, 0, 3000, 1000)];
@@ -158,6 +178,10 @@ fn rpm_6_rpm_to_nsdm_200nm() {
 }
 
 /// poly.3: minimum poly resistor width (poly under `poly_rs`), 0.330 um.
+///
+/// Oracle: foundry example, sky130 poly.3 0.330 um (`SkyWater` SKY130 periphery
+/// rules): the resistor poly drawn 330 then 325 nm wide, so the pass layout
+/// sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn poly_3_poly_resistor_width_330nm() {
     let pass = [("poly", 0, 0, 330, 2000), ("poly_rs", -100, 500, 430, 1500)];
@@ -184,6 +208,10 @@ fn devices(rects: &[(&str, i64, i64, i64, i64)]) -> Vec<(String, Vec<u32>)> {
 /// A 1.8 V nfet is one device whose gate, source, drain and bulk are four
 /// nets: the gate is on poly, source and drain are the n+ diffusion either
 /// side, and the bulk is the substrate under it.
+///
+/// Oracle: construct-from-answer against `pdks/sky130.deck`'s device rows: poly
+/// over n+ diffusion is one `sky130_fd_pr__nfet_01v8`, and its gate, source,
+/// drain and bulk are four different nets.
 #[test]
 fn a_plain_nfet_extracts_as_nfet_01v8_with_four_nets() {
     let found = devices(&[
@@ -203,6 +231,10 @@ fn a_plain_nfet_extracts_as_nfet_01v8_with_four_nets() {
 
 /// A generic poly resistor: the body under `poly_rs` is cut out of the poly
 /// conductor, so the two heads are two nets.
+///
+/// Oracle: construct-from-answer against `pdks/sky130.deck`'s
+/// `sky130_fd_pr__res_generic_po` row: the body under `poly_rs` is cut out of
+/// the poly, so the two heads are two nets.
 #[test]
 fn a_poly_resistor_has_two_distinct_heads() {
     let found = devices(&[
@@ -217,6 +249,10 @@ fn a_poly_resistor_has_two_distinct_heads() {
 }
 
 /// difftap.4: min tap bound by one diffusion, the butting edge, 0.290 um.
+///
+/// Oracle: foundry example, sky130 difftap.4 0.290 um (`SkyWater`
+/// SKY130 periphery rules): the butting edge drawn 290 then 285 nm long, so the
+/// pass layout sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn difftap_4_butting_edge_290nm() {
     let pass = [("diff", 0, 0, 1000, 500), ("tap", 1000, 0, 1500, 290)];
@@ -226,6 +262,10 @@ fn difftap_4_butting_edge_290nm() {
 
 /// nsd.5a on a diff butting a tap: enclosure by nsdm of every edge but the
 /// butting one, 0.125 um. The nsdm stops at the butting edge.
+///
+/// Oracle: foundry example, sky130 nsd.5a 0.125 um (`SkyWater` SKY130 periphery
+/// rules): nsdm drawn 125 then 120 nm round every edge but the butting one, so
+/// the pass layout sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn nsd_5a_butted_diff_enclosed_by_125nm() {
     let base = [("diff", 0, 0, 1000, 500), ("tap", 1000, 0, 1300, 500)];
@@ -236,6 +276,11 @@ fn nsd_5a_butted_diff_enclosed_by_125nm() {
 
 /// m1.3a: spacing of met1 attached to huge met1 within 0.28 um, 0.280 um. The
 /// line is 280 above the plate and 280 beside the finger's attached part.
+///
+/// Oracle: foundry example, sky130 m1.3a 0.280 um (`SkyWater` SKY130 periphery
+/// rules): the line drawn 280 then 275 nm from the finger attached to huge
+/// met1, so the pass layout sits on the limit and the fail layout 5 nm inside
+/// it.
 #[test]
 fn m1_3a_attached_to_huge_metal_280nm() {
     let base = [("met1", 0, 0, 4000, 4000), ("met1", 1000, 4000, 1140, 5000)];
@@ -246,6 +291,10 @@ fn m1_3a_attached_to_huge_metal_280nm() {
 
 /// licon.16: every tap encloses a licon; one touching the tap's edge from
 /// inside is enclosed, one 5 nm across it is not.
+///
+/// Oracle: foundry example, sky130 licon.16 (every tap encloses a licon,
+/// `SkyWater` SKY130 periphery rules): a licon touching the tap's edge from
+/// inside is enclosed, one 5 nm across it is not.
 #[test]
 fn licon_16_tap_encloses_a_licon() {
     let pass = [("tap", 0, 0, 500, 500), ("licon", 330, 165, 500, 335)];
@@ -254,6 +303,10 @@ fn licon_16_tap_encloses_a_licon() {
 }
 
 /// gf180 DF.11: min length of a butting COMP edge (N+ COMP to P+ COMP), 0.3 um.
+///
+/// Oracle: foundry example, gf180 DF.11 0.3 um (`GlobalFoundries` GF180MCU design
+/// rules): the butting COMP edge drawn 300 then 295 nm long, so the pass layout
+/// sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn gf180_df_11_butting_comp_edge_300nm() {
     let implants = [
@@ -267,6 +320,10 @@ fn gf180_df_11_butting_comp_edge_300nm() {
 
 /// IHP M1.e: 0.22 um between Metal1 lines when one is wider than 0.3 um and
 /// they run alongside for more than 1 um.
+///
+/// Oracle: foundry example, IHP M1.e 0.22 um (IHP SG13G2 layout rules): a
+/// 305 nm wide line with a 1005 nm run, its neighbour 220 then 215 nm away, so
+/// the pass layout sits on the limit and the fail layout 5 nm inside it.
 #[test]
 fn ihp_m1_e_wide_line_long_run_220nm() {
     let wide = ("metal1", 0, 0, 305, 1005);
@@ -276,6 +333,10 @@ fn ihp_m1_e_wide_line_long_run_220nm() {
 }
 
 /// IHP Cnt.h: Cont must be covered by Metal1 (enclosure 0).
+///
+/// Oracle: foundry example, IHP Cnt.h (Metal1 covers Cont, enclosure 0; IHP
+/// SG13G2 layout rules): metal1 exactly over the contact passes, shifted 5 nm
+/// it leaves an edge uncovered.
 #[test]
 fn ihp_cnt_h_metal1_covers_cont() {
     let pass = [("cont", 0, 0, 160, 160), ("metal1", 0, 0, 160, 160)];
@@ -286,6 +347,11 @@ fn ihp_cnt_h_metal1_covers_cont() {
 /// capm.4: a via3 on the MiM top plate is enclosed by capm by 0.140 um. The
 /// pass layout also carries a plain met3-met4 via3 with no capm over it, which
 /// the rule must leave alone.
+///
+/// Oracle: foundry example, sky130 capm.4 0.140 um (`SkyWater` SKY130 periphery
+/// rules): via3 drawn 140 then 135 nm inside capm, so the pass layout sits on
+/// the limit and the fail layout 5 nm inside it. A via3 with no capm over it is
+/// not the rule's.
 #[test]
 fn capm_4_capm_encloses_via3_on_the_plate_by_140nm() {
     let plain = ("via3", 5000, 0, 5200, 200);
@@ -308,6 +374,11 @@ fn capm_4_capm_encloses_via3_on_the_plate_by_140nm() {
 }
 
 /// cap2m.4: the same for via4 on cap2m, 0.200 um.
+///
+/// Oracle: foundry example, sky130 cap2m.4 0.200 um (`SkyWater` SKY130 periphery
+/// rules): via4 drawn 200 then 195 nm inside cap2m, so the pass layout sits on
+/// the limit and the fail layout 5 nm inside it. A via4 with no cap2m over it
+/// is not the rule's.
 #[test]
 fn cap2m_4_cap2m_encloses_via4_on_the_plate_by_200nm() {
     let plain = ("via4", 5000, 0, 5800, 800);
@@ -332,6 +403,10 @@ fn cap2m_4_cap2m_encloses_via4_on_the_plate_by_200nm() {
 /// m1.1 on the field report's repro (`neck.gds`): two 300 nm met1 squares
 /// overlapping at a corner leave a 134.5 nm diagonal neck. KLayout reports it
 /// as two edge pairs; here it is one violation on the one merged figure.
+///
+/// Oracle: foundry example, sky130 m1.1 (0.14 um), by hand: the concave corners
+/// are 90 by 100 apart, a neck of sqrt(18 100) = 134.5 nm, one violation; moved
+/// 10 nm, 100 by 100, 141.4 nm, clean.
 #[test]
 fn m1_1_diagonal_neck_at_overlapping_rectangles() {
     let neck = [

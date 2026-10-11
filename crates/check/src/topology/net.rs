@@ -593,6 +593,9 @@ mod tests {
     use gpurify_geom::Dbu;
     use gpurify_geom::PolyId;
 
+    /// Oracle: construct-from-answer. Polygons 1 and 4 are on net 0 and 0 and
+    /// 2 on net 1, so the index is two nets of two, each ascending; markers
+    /// alone give no net.
     #[test]
     fn a_stated_assignment_builds_the_reverse_index_it_implies() {
         let none = NetId::NONE;
@@ -641,6 +644,10 @@ mod tests {
 
     /// The sweep and the exhaustive scan compute one predicate, so they must
     /// agree on every input.
+    ///
+    /// Oracle: differential against `rings_meet_direct`, the exhaustive scan,
+    /// on star pairs either side of the pair budget, meeting and apart; and the
+    /// law that meeting is symmetric.
     #[test]
     fn the_sweep_and_the_exhaustive_scan_agree_on_every_ring_pair() {
         // The sizes below are chosen against the budget.

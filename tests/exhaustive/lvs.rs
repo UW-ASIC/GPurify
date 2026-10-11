@@ -2316,6 +2316,10 @@ mod tests {
     use super::*;
 
     /// The oracle on cases derived by hand from the documented semantics.
+    ///
+    /// Oracle: hand-derived from the documented semantics, case by case: source
+    /// and drain swap and device order are free, a short is not, W within 2 %
+    /// matches, parallel devices add width and series ones length.
     #[test]
     fn the_oracle_agrees_with_hand_derivations() {
         use Model::{C, D, N, P, R};
@@ -2432,6 +2436,10 @@ mod tests {
 
     /// Counted independently by a brute force over every labelled circuit
     /// (a canonical form by trying every net renaming, in Python).
+    ///
+    /// Oracle: differential against an independent count, 4223, by a
+    /// brute-force canonical form over every net renaming of every labelled
+    /// circuit (a one-off Python computation).
     #[test]
     fn the_enumeration_has_every_canonical_circuit() {
         assert_eq!(circuits().len(), 4223);

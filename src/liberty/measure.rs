@@ -890,6 +890,10 @@ mod tests {
     /// A leakage state of one vector is a DC operating point and a sequence
     /// a transient, so a missing supply current names the analysis that
     /// produced neither (F35: it always blamed the operating point).
+    ///
+    /// Oracle: `docs/liberty.md`, Leakage: "A one-vector state is a DC
+    /// operating point. A sequence is simulated", so each message names its own
+    /// analysis.
     #[test]
     fn a_missing_leakage_names_the_analysis_it_came_from() {
         let vector = crate::liberty::spec::Vector::new();
@@ -902,6 +906,9 @@ mod tests {
         );
     }
 
+    /// Oracle: hand-derived from `set`'s doc: the first point is the value from
+    /// time zero, a change at 2 ns holds 0 until then and reaches 1.8
+    /// `PREP_RAMP` later, and setting 1.8 again adds no point.
     #[test]
     fn a_wave_holds_then_ramps_and_skips_a_repeat() {
         let mut wave = Vec::new();
@@ -914,6 +921,8 @@ mod tests {
         );
     }
 
+    /// Oracle: closed form. The sample standard deviation (n - 1) of {1, 3} is
+    /// sqrt(2), and of {5, 5} is 0.
     #[test]
     fn sigma_is_the_sample_standard_deviation() {
         let s = sigma(&[vec![1.0, 5.0], vec![3.0, 5.0]]);

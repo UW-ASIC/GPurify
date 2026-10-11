@@ -443,6 +443,10 @@ mod tests {
 
     /// Every distinct 4-ring over a 3x3 grid: the shortcut claims no ring the
     /// sweep would call self-intersecting.
+    ///
+    /// Oracle: differential against the self-intersection sweep, exhaustive
+    /// over every 4-ring on a 3 x 3 grid: no ring the shortcut calls a
+    /// rectangle is one the sweep rejects.
     #[test]
     fn a_rectangle_never_self_intersects() {
         let mut rects = 0;
@@ -467,6 +471,10 @@ mod tests {
 
     /// Rings over a three-value alphabet, so equal neighbours (duplicates, axis
     /// edges) and skew edges all turn up, at every length `1 ..= 13`.
+    ///
+    /// Oracle: differential against `edge_flags_scalar`, at every length 1 to
+    /// 13, over rings drawn from three values so that duplicates, axis edges
+    /// and skew edges all occur.
     #[test]
     fn edge_flags_match_the_scalar_loop() {
         for n in 1..=13usize {

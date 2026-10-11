@@ -478,6 +478,10 @@ mod tests {
     /// cell holds the largest square its clearance allows (98 of 100); at 0.25
     /// half the cells are filled with a 707-side square (√0.25 of a 1000 cell),
     /// 0.2499 expected, 0.0025 standard deviation over 10⁴ cells.
+    ///
+    /// Oracle: hand-derived, as above: at density 1.0 all 16 cells hold a
+    /// 98 square; at 0.25 about half the cells hold a 707 square, 707^2 /
+    /// 1000^2 = 0.4998 each, 0.2499 expected coverage.
     #[test]
     fn density_is_the_expected_coverage_and_one_fills_every_cell() {
         let layer = |density, cells, cell| {
@@ -521,6 +525,9 @@ mod tests {
         twice
     }
 
+    /// Oracle: closed form, `thickness * (2 * arm - thickness)`, against the
+    /// shoelace of the drawn vertices, whose positive sign is
+    /// counter-clockwise.
     #[test]
     fn l_shape_area_matches_its_closed_form_and_winds_counter_clockwise() {
         for &(arm, thickness) in &[(100, 30), (7, 1), (1_000_000, 999_999)] {
@@ -530,6 +537,9 @@ mod tests {
         }
     }
 
+    /// Oracle: closed form, `4 * arm * thickness - thickness^2` (two bars less
+    /// their double-counted crossing), against the shoelace of the drawn
+    /// vertices, whose positive sign is counter-clockwise.
     #[test]
     fn plus_shape_area_matches_its_closed_form_and_winds_counter_clockwise() {
         for &(arm, thickness) in &[(100, 30), (50, 2), (1_000, 998)] {
@@ -539,6 +549,9 @@ mod tests {
         }
     }
 
+    /// Oracle: closed form, `thickness * (2 * arm + gap)` (the bounding box
+    /// less the notch), against the shoelace of the drawn vertices, whose
+    /// positive sign is counter-clockwise.
     #[test]
     fn u_shape_area_matches_its_closed_form_and_winds_counter_clockwise() {
         for &(arm, thickness, gap) in &[(100, 20, 40), (9, 1, 3), (500, 499, 2)] {
@@ -549,6 +562,10 @@ mod tests {
     }
 
     /// A bounding box overstates every non-convex shape here.
+    ///
+    /// Oracle: hand-derived. The L is 30 * 170 = 5100 against 100^2, the plus 4
+    /// * 100 * 30 - 900 = 11 100 against 200^2, the U 20 * 240 = 4800 against
+    /// 80 * 100.
     #[test]
     fn non_convex_shapes_are_smaller_than_their_bounding_box() {
         assert!(l_shape_area(100, 30) < 100 * 100);

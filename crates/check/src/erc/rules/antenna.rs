@@ -1201,6 +1201,11 @@ mod tests {
     /// At an etch step only the conductors up to it exist: metal2's via row is
     /// cut, so a diode or gate reachable only through metal2 is not on the net
     /// yet. A cut collector stands on its lower conductor.
+    ///
+    /// Oracle: the etch-step model `docs/deck.md` states for `antenna` (each
+    /// term counts what is connected when that layer is etched), by hand: at
+    /// met1 the conductors through met1 and the licon and mcon rows exist,
+    /// via1 does not, and a cut stands on its lower conductor.
     #[test]
     fn a_stage_holds_the_conductors_up_to_its_etch_and_the_vias_between_them() {
         let [diff, poly, li, met1, met2] = [0, 1, 2, 3, 4].map(LayerId);
@@ -1266,6 +1271,10 @@ mod tests {
     /// area, and a box past the die's far edge is clipped away rather than
     /// folded onto the border window. Both are in the table, along with
     /// overlapping and non-overlapping steps.
+    ///
+    /// Oracle: differential against `owner_by_scan`, the linear scan it
+    /// replaced, on every window of five window/step layouts, with edge-on,
+    /// clipped and off-die boxes.
     #[test]
     fn the_owner_grid_answers_what_the_linear_scan_did() {
         let die = bbox(0, 0, 300, 200);

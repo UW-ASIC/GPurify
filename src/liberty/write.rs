@@ -546,6 +546,9 @@ mod tests {
     use super::{num, write_blackbox};
     use crate::liberty::spec::{PinSpec, Role};
 
+    /// Oracle: hand-derived from `num`'s format: zero bare, ten decimals in
+    /// fixed point from 1e-3 up (1.5 is 1.5000000000), and a nine-digit
+    /// mantissa below (1.25e-5 is 1.250000000e-5).
     #[test]
     fn numbers_keep_their_digits_at_every_scale() {
         for (value, text) in [
@@ -563,6 +566,10 @@ mod tests {
 
     /// A trailing comma after the last port is a Verilog syntax error, and an
     /// empty signal list after the power block is the case that would make one.
+    ///
+    /// Oracle: the Verilog grammar (IEEE 1364-2005): a port list is
+    /// comma-separated with no comma after the last port, so the expected text
+    /// is written by hand for both cases.
     #[test]
     fn the_blackbox_has_no_trailing_comma() {
         let pin = |name: &str, role| PinSpec {

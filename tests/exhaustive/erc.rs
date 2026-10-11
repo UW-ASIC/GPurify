@@ -1703,6 +1703,10 @@ fn black_derating(t_ref: f64, ea: f64, n: f64) -> f64 {
 /// The oracle itself: the §14.2.2 formula reproduces Table 14.3's 85 °C
 /// column from its 110 °C (T0) and 125 °C columns within the table's
 /// rounding, at worst 1.64 % (`MetalTop` 6 kÅ and 30 kÅ).
+///
+/// Oracle: foundry example. GF180MCU's own Table 14.3: the §14.2.2 formula must
+/// reproduce its 85 C column from the 110 C and 125 C columns within the
+/// table's rounding.
 #[test]
 fn the_gf180_derating_formula_reproduces_its_table() {
     let (t85, t110, t125) = (358.15, 383.15, 398.15);

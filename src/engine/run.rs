@@ -661,6 +661,10 @@ mod tests {
 
     /// The three answers that are not "reciprocal", and the one that is. The
     /// non-finite pair is the whole reason this is not a `>` comparison.
+    ///
+    /// Oracle: `reciprocity_refusal`'s doc: refused when the asymmetry exceeds
+    /// the solve's own tolerance (1e-10 here) or is not finite, so 1e-11 and
+    /// 0 pass and 1e-9, infinity and NaN are refused.
     #[test]
     fn a_matrix_that_is_not_reciprocal_is_refused_and_a_non_finite_one_too() {
         assert!(reciprocity_refusal(&accuracy(1e-11)).is_none());

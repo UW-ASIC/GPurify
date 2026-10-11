@@ -116,6 +116,9 @@ fn an_inner_shape_in_a_concave_hosts_notch_is_not_enclosed_by_it() {
 /// rule that calls every concave host a miss. Same L, an inner square well
 /// inside the horizontal arm: 50 clear below, 50 above in a 200-thick arm, and
 /// further than that from either end.
+///
+/// Oracle: construct-from-answer. The inner square clears the arm by 50 above
+/// and below and more from either end, so a 50 enclosure is met.
 #[test]
 fn an_inner_shape_inside_a_concave_hosts_arm_is_enclosed_by_it() {
     let mut layout = LayoutBuilder::new(2);
@@ -138,6 +141,9 @@ fn an_inner_shape_inside_a_concave_hosts_arm_is_enclosed_by_it() {
 ///
 /// Containment therefore has to be an edge-crossing test rather than a vertex
 /// test, which is the whole reason this case is written down.
+///
+/// Oracle: construct-from-answer. The bar's middle lies over the U's opening,
+/// outside the host, so it is not enclosed: one violation, measuring 0.
 #[test]
 fn a_bar_bridging_a_hosts_opening_is_not_enclosed_though_its_corners_are() {
     let mut layout = LayoutBuilder::new(2);
@@ -164,6 +170,9 @@ fn a_bar_bridging_a_hosts_opening_is_not_enclosed_though_its_corners_are() {
     assert_eq!(sink.out.measured[0], Measurement::Length(dbu(0)));
 }
 
+/// Oracle: construct-from-answer. The enclosure is drawn at exactly the
+/// 40 limit, and a minimum is violated only below it, so one inner shape is
+/// examined and none reported.
 #[test]
 fn an_enclosure_exactly_at_the_limit_is_clean() {
     let case = enclosure_case(40, 40);
@@ -273,6 +282,10 @@ fn asymmetric_table(limit: i64) -> Vec<(StrId, Rule)> {
 /// the left and bottom and 55 nm on the right and top, has no axis with 60 on
 /// both sides, so it fails. The old `min(max(L, R), max(B, T))` read 85 and
 /// passed it.
+///
+/// Oracle: foundry example, sky130 m1.5 ("enclosed by Met1 on two opposite
+/// sides by 0.060 um"), by hand: 85 and 55 on each axis, so neither axis has
+/// 60 on both sides; the worse side of the first axis, 55, at (282, 170).
 #[test]
 fn sky130_m1_5_an_mcon_pushed_into_a_pad_corner_fails_two_opposite_sides() {
     let mut layout = LayoutBuilder::new(2);
@@ -300,6 +313,9 @@ fn sky130_m1_5_an_mcon_pushed_into_a_pad_corner_fails_two_opposite_sides() {
 
 /// sky130 m1.4 + m1.5 at their minimum: 60 on the left and right, 30 on the
 /// bottom and top. One axis has 60 on both sides, so m1.5 is met.
+///
+/// Oracle: foundry example, sky130 m1.4 and m1.5 at their minimums: 60 on the
+/// left and right, so one axis meets m1.5 whatever the other two are.
 #[test]
 fn sky130_m1_5_sixty_on_two_opposite_sides_passes_with_thirty_on_the_others() {
     let mut layout = LayoutBuilder::new(2);
@@ -316,6 +332,10 @@ fn sky130_m1_5_sixty_on_two_opposite_sides_passes_with_thirty_on_the_others() {
 /// A host's hole is not host. A via 100 clear of the pad's outer edge but 20
 /// from a slot on its right and another above has 20 on both axes' near side.
 /// Measured on bounding boxes it read 100 and passed.
+///
+/// Oracle: hand-derived. The slots sit 20 right of and 20 above the via, so
+/// each axis has 20 on its near side: one violation measuring 20, naming the
+/// via and the pad.
 #[test]
 fn an_opposite_sides_enclosure_counts_the_hosts_holes() {
     let mut layout = LayoutBuilder::new(2);
@@ -336,6 +356,9 @@ fn an_opposite_sides_enclosure_counts_the_hosts_holes() {
 
 /// A via sitting in a hole of its pad is on no metal at all: enclosure zero.
 /// The old containment test read only the outer ring and passed it.
+///
+/// Oracle: construct-from-answer. The via lies wholly in the pad's hole, on no
+/// metal: enclosure 0, with no host to name.
 #[test]
 fn an_inner_shape_inside_a_hosts_hole_is_not_enclosed() {
     let mut layout = LayoutBuilder::new(2);
@@ -356,6 +379,10 @@ fn an_inner_shape_inside_a_hosts_hole_is_not_enclosed() {
 /// margin at worst, the metal itself only 42 at the notch's corner (the via's
 /// corner (170, 170) is 30 by 30 from it). All-sides enclosure is euclidean to
 /// the real boundary.
+///
+/// Oracle: hand-derived. The via's corner (170, 170) is 30 by 30 from the notch
+/// corner (200, 200), sqrt(1800) = 42.4, floored to 42: clean at 42, reported
+/// as 42 at 43.
 #[test]
 fn a_min_enclosure_in_an_l_measures_to_the_inner_corner() {
     let mut layout = LayoutBuilder::new(2);
@@ -439,6 +466,8 @@ fn an_extension_one_unit_under_the_limit_is_reported_at_the_overhang() {
     );
 }
 
+/// Oracle: construct-from-answer. The extension is drawn at exactly the
+/// 60 limit, and a minimum is violated only below it, so nothing is reported.
 #[test]
 fn an_extension_exactly_at_the_limit_is_clean() {
     let case = extension_case(60, 60);
@@ -534,6 +563,9 @@ fn an_overlap_one_unit_under_the_limit_is_reported_inside_the_intersection() {
     );
 }
 
+/// Oracle: construct-from-answer. The overlap is drawn at exactly the 80 limit,
+/// and a minimum is violated only below it, so one pair is examined and none
+/// reported.
 #[test]
 fn an_overlap_exactly_at_the_limit_is_clean() {
     let case = overlap_case(80, 80);
@@ -615,6 +647,8 @@ fn a_well_corner_one_unit_beyond_reach_of_a_tap_is_reported_at_that_corner() {
     );
 }
 
+/// Oracle: closed form. `untied_well`'s far corner is a 3-4-5 triangle from the
+/// tap, exactly 500, and a maximum is violated only above it.
 #[test]
 fn a_well_corner_exactly_at_the_reach_limit_is_clean() {
     let (store, _well) = untied_well();
@@ -698,6 +732,9 @@ fn an_empty_well_layer_is_skipped_rather_than_reported_clean() {
 /// substrate tie 20 um" (`nact.not(ptap.sized(20))`). A 46 um strip tied at
 /// both ends has every vertex inside a tie, but its middle is 21 um from
 /// either one. The old rule measured vertices only and passed it.
+///
+/// Oracle: foundry example, IHP LU.a (20 um to the nearest tie), by hand: the
+/// 46 um strip's middle, x 23 um, is 21 um from either 2 um tie.
 #[test]
 fn ihp_lu_a_the_middle_of_a_well_tied_at_both_ends_is_too_far() {
     let mut layout = LayoutBuilder::new(2);

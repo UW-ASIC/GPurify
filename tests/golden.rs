@@ -213,12 +213,17 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Oracle: golden, the reviewed snapshots under `tests/golden/`, and
+/// determinism: every run made twice, byte-identical (module doc).
 #[test]
 fn every_corpus_output_is_its_golden_and_deterministic() {
     check_all(false);
 }
 
 /// The nightly depth: the one-thread run for every quasistatic cell.
+///
+/// Oracle: determinism. Every quasistatic cell on a one-thread pool must give
+/// the bytes of its golden (module doc).
 #[test]
 #[ignore = "nightly: ~6 CPU-minutes of single-thread field solves"]
 fn every_field_solve_is_the_same_on_one_thread() {

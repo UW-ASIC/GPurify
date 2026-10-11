@@ -758,6 +758,9 @@ mod tests {
 
     /// `DbuArea` is the tree's area type and this module's own laws are stated
     /// over it; a rectilinear region's doubled area is even.
+    ///
+    /// Oracle: law, inclusion-exclusion: area(A or B) + area(A and B) = area(A)
+    /// + area(B), with the overlap hand-derived as 50 x 50 and the union one L.
     #[test]
     fn a_union_conserves_area_against_its_intersection() {
         let mut builder = GeometryStoreBuilder::with_capacity(2, 8);
@@ -838,6 +841,10 @@ mod tests {
     /// A ring that is already simple survives decomposition unchanged in area
     /// and in ring count, so a reader may run every boundary through this
     /// without inventing geometry.
+    ///
+    /// Oracle: construct-from-answer. A 400 square is already simple, so its
+    /// decomposition is one ring of four corners, shoelace area 400^2, positive
+    /// (counter-clockwise).
     #[test]
     fn a_simple_ring_decomposes_to_itself() {
         let xs = [0, 400, 400, 0];

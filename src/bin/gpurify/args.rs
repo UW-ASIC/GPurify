@@ -229,6 +229,9 @@ mod tests {
         parse(&argv).map_err(|error| error.to_string())
     }
 
+    /// Oracle: construct-from-answer, against `docs/usage.md`: every value
+    /// reads back as given, `--quasistatic` repeats in order, and `all` selects
+    /// all four checks.
     #[test]
     fn a_full_command_line_reaches_every_field() {
         let cli = parse_str(
@@ -245,6 +248,9 @@ mod tests {
         assert!(all.inputs.reference.is_some() && all.inputs.intent.is_some());
     }
 
+    /// Oracle: `docs/liberty.md`: `--accuracy all` is the five levels, `2` is
+    /// `field` (levels 0 to 4 from `interface`), and `docs/usage.md`: `lib`
+    /// runs no check.
     #[test]
     fn lib_takes_its_spec_accuracy_and_directory() {
         let cli =
@@ -269,6 +275,8 @@ mod tests {
         );
     }
 
+    /// Oracle: `docs/usage.md`: `--format` defaults to `text`, and `all` is all
+    /// four checks.
     #[test]
     fn the_default_format_is_text() {
         let cli = parse_str("drc t --deck d").expect("legal");
@@ -279,6 +287,10 @@ mod tests {
         );
     }
 
+    /// Oracle: the command line `docs/usage.md` documents. Each line breaks one
+    /// of its rules (a missing or unknown subcommand, option or value, an
+    /// option the command does not take, an option the docs moved elsewhere),
+    /// and the expected message names that rule.
     #[test]
     fn every_malformed_command_line_is_refused_with_its_message() {
         let cases = [
