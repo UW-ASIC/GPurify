@@ -682,6 +682,18 @@ fn crossed(a: &Reduced, b: &Reduced, map: impl Fn(usize) -> usize) -> bool {
     a.model.is_mos() && a.pins[1] != a.pins[2] && map(a.pins[2]) == b.pins[1]
 }
 
+/// The names deck.md gives `lvs permute` a pin of `model`, in [`Dev::pins`]
+/// order.
+fn pin_names(model: Model) -> &'static [&'static str] {
+    match model {
+        Model::N | Model::P | Model::H | Model::B => &["gate", "source", "drain", "bulk"],
+        Model::R => &["end_a", "end_b"],
+        Model::C => &["top", "bottom"],
+        Model::D => &["anode", "cathode"],
+        Model::Q => &["base", "emitter", "collector"],
+    }
+}
+
 /// Whether two devices of `model` land on the same nets role for role, up
 /// to exchanging the pins of one [`Controls::classes`] class: by default a
 /// MOS's source and drain either way round and a resistor's ends either way,
@@ -861,7 +873,7 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let mergeable = i != j
                     && a.model.is_mos()
-                    && !controls.asymmetric.contains(&a.model)
+                    && controls.series(a.model)
                     && a.model == b.model
                     && a.pins[0] == b.pins[0]
                     && a.pins[3..] == b.pins[3..]
@@ -930,6 +942,8 @@ struct Controls {
     ignored: Vec<(Model, &'static str)>,
     /// `lvs asymmetric`: MOS models whose source and drain do not swap.
     asymmetric: Vec<Model>,
+    /// `lvs permute`: model and two pin positions in [`Dev::pins`] order.
+    permuted: Vec<(Model, usize, usize)>,
 }
 
 impl Controls {
@@ -958,19 +972,47 @@ impl Controls {
         self
     }
 
+    /// An `lvs permute` row: pins at positions `a` and `b` of [`Dev::pins`].
+    fn permute(mut self, model: Model, a: usize, b: usize) -> Self {
+        self.permuted.push((model, a, b));
+        self
+    }
+
     /// The pin positions of `model` (in [`Dev::pins`] order) as classes of
-    /// interchangeable pins: a MOS's source and drain (1, 2) unless the
-    /// model is asymmetric, a resistor's ends (0, 1), every other pin
-    /// alone.
+    /// interchangeable pins, deck.md's: a MOS's source and drain (1, 2)
+    /// unless the model is asymmetric, a resistor's ends (0, 1), joined with
+    /// every `lvs permute` pair of the model and closed under chaining.
     fn classes(&self, model: Model) -> Vec<Vec<usize>> {
-        let symmetric = !self.asymmetric.contains(&model);
-        match model {
-            Model::N | Model::P | Model::H | Model::B if symmetric => {
-                vec![vec![0], vec![1, 2], vec![3]]
+        let mut class: Vec<usize> = (0..4).collect();
+        let mut join = |a: usize, b: usize| {
+            let (keep, gone) = (class[a].min(class[b]), class[a].max(class[b]));
+            for c in &mut class {
+                if *c == gone {
+                    *c = keep;
+                }
             }
-            Model::R => vec![vec![0, 1]],
-            _ => (0..4).map(|k| vec![k]).collect(),
+        };
+        if model.is_mos() && !self.asymmetric.contains(&model) {
+            join(1, 2);
         }
+        if model == Model::R {
+            join(0, 1);
+        }
+        for &(m, a, b) in &self.permuted {
+            if m == model {
+                join(a, b);
+            }
+        }
+        (0..4)
+            .filter(|&k| class[k] == k)
+            .map(|k| (0..4).filter(|&p| class[p] == k).collect())
+            .collect()
+    }
+
+    /// Whether transistors of `model` merge in series: only while their
+    /// classes are the default ones, the channel the only pair.
+    fn series(&self, model: Model) -> bool {
+        self.classes(model) == [vec![0], vec![1, 2], vec![3]]
     }
 
     /// `c` with every parameter `lvs ignore_parameter` names dropped from
@@ -1002,6 +1044,16 @@ impl Controls {
         }
         for &model in &self.asymmetric {
             let _ = writeln!(out, "lvs asymmetric \"{}\"", model.name());
+        }
+        for &(model, a, b) in &self.permuted {
+            let names = pin_names(model);
+            let _ = writeln!(
+                out,
+                "lvs permute \"{}\" {} {}",
+                model.name(),
+                names[a],
+                names[b]
+            );
         }
         for &(model, param, relative, absolute) in &self.tolerance {
             let _ = write!(out, "lvs tolerance \"{}\" {param}", model.name());
@@ -2336,7 +2388,7 @@ fn curated() -> Vec<Fixture> {
 /// The deck's `lvs` statements (deck.md, "LVS controls"), each verdict the
 /// oracle's under the statements the fixture's deck adds.
 fn controlled() -> Vec<Fixture> {
-    use Model::{C, N, P, R};
+    use Model::{C, D, N, P, Q, R};
     let mut out = Vec::new();
     let row = |model, param, relative, absolute| {
         Controls::default().tolerance(model, param, relative, absolute)
@@ -2436,6 +2488,92 @@ fn controlled() -> Vec<Fixture> {
                 &controls,
             ));
         }
+    }
+    // LVS-030: pins the deck permutes. A capacitor or diode reversed, and a
+    // bipolar with emitter and collector exchanged, are other circuits by
+    // default (F15) and the same once those pins permute; base with emitter
+    // is not emitter with collector. The bipolar's base is on n1 and its
+    // emitter on n0, which the `nmos` gate fixes, since the `nmos` channel
+    // alone would let n1 and n2 trade places. Two capacitors in opposite directions
+    // merge into one of m = 2 once the plates permute. A `pmos` with gate
+    // and source exchanged is the same once gate permutes with source,
+    // which chains with source-drain; a stack of such `nmos` no longer
+    // merges in series.
+    let two_pin = |model, pins: &[usize]| polar(Dev::pins(model, pins));
+    let bjt = |pins: &[usize]| polar(Dev::pins(Q, pins));
+    let mut caps_opposed = polar(Dev::pins(C, &[0, 1]));
+    caps_opposed.devs.push(Dev::pins(C, &[1, 0]));
+    let cap_m2 = polar(Dev::pins(C, &[0, 1]).times(2));
+    let p_of = |g, s| polar(Dev::mos(P, g, s, 2));
+    let permuted: [(&str, Circuit, Circuit, Controls); 10] = [
+        (
+            "C_reversed",
+            two_pin(C, &[0, 1]),
+            two_pin(C, &[1, 0]),
+            Controls::default().permute(C, 0, 1),
+        ),
+        (
+            "D_reversed",
+            two_pin(D, &[0, 1]),
+            two_pin(D, &[1, 0]),
+            Controls::default().permute(D, 0, 1),
+        ),
+        (
+            "Q_emitter_collector_swapped",
+            bjt(&[1, 0, 2]),
+            bjt(&[1, 2, 0]),
+            Controls::default().permute(Q, 1, 2),
+        ),
+        (
+            "Q_emitter_collector_swapped_base_permuted",
+            bjt(&[1, 0, 2]),
+            bjt(&[1, 2, 0]),
+            Controls::default().permute(Q, 0, 1),
+        ),
+        (
+            "C_opposed_vs_m2",
+            caps_opposed.clone(),
+            cap_m2.clone(),
+            Controls::default().permute(C, 0, 1),
+        ),
+        (
+            "C_opposed_vs_m2_unpermuted",
+            caps_opposed,
+            cap_m2,
+            Controls::default(),
+        ),
+        (
+            "P_gate_source_swapped",
+            p_of(0, 1),
+            p_of(1, 0),
+            Controls::default().permute(P, 0, 1),
+        ),
+        (
+            "P_gate_source_swapped_unpermuted",
+            p_of(0, 1),
+            p_of(1, 0),
+            Controls::default(),
+        ),
+        (
+            "stack_vs_long_gate_permuted",
+            stack.clone(),
+            long.clone(),
+            Controls::default().permute(N, 0, 1),
+        ),
+        (
+            "C_same",
+            two_pin(C, &[0, 1]),
+            two_pin(C, &[0, 1]),
+            Controls::default().permute(C, 0, 1),
+        ),
+    ];
+    for (name, layout, reference, controls) in permuted {
+        out.push(compared_under(
+            &format!("permute/{name}"),
+            &["LVS-030"],
+            (&layout, &reference),
+            &controls,
+        ));
     }
     // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against
     // 210 ohm and 0.6 fF: 10 ohm and 40 aF apart, so within 15 ohm and

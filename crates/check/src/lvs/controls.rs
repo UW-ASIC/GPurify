@@ -1,12 +1,13 @@
 //! What the deck's `lvs` statements change in a comparison
-//! ([`LvsControls`]): per-parameter tolerances, ignored parameters and
-//! asymmetric transistors.
+//! ([`LvsControls`]): per-parameter tolerances, ignored parameters,
+//! asymmetric transistors and permuted pins.
 //!
 //! Data in: the controls and the two graphs. Data out: the graphs as the
 //! controls leave them, and the bound a paired parameter must meet.
 
 use crate::lvs::graph::{narrow, transpose_into, Graph};
 use crate::lvs::verdict::Discrepancy;
+use crate::topology::device::role_at;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::{DeviceKind, LvsControls};
 use gpurify_ingest::StrId;
@@ -16,35 +17,135 @@ use gpurify_ingest::StrId;
 const FIXED_SOURCE: TerminalRole = TerminalRole::Pin(0);
 /// The role an asymmetric transistor's drain is compared under.
 const FIXED_DRAIN: TerminalRole = TerminalRole::Pin(1);
+/// Pins `lvs permute` joins share `Pin(PERMUTED + p)`, `p` the lowest
+/// position of the class: past every role a recogniser or card gives a
+/// device of four pins, and no channel.
+const PERMUTED: u8 = 8;
 
-/// Whether `device` is a transistor of a model `lvs asymmetric` names.
-fn is_asymmetric(graph: &Graph, device: usize, controls: &LvsControls) -> bool {
-    graph.device_kind[device] == DeviceKind::Mos
-        && controls.asymmetric.contains(&graph.device_model[device])
+/// The pins of one device as `lvs asymmetric` and `lvs permute` leave them:
+/// `root[p]` is the lowest position interchangeable with position `p`, in
+/// `device` statement order (see `gpurify_ingest::deck::DeviceRecognition`).
+#[derive(Debug, Clone, Copy)]
+struct Classes {
+    kind: DeviceKind,
+    root: [u8; 4],
+    asymmetric: bool,
 }
 
-/// Gives an asymmetric transistor's source and drain roles of their own,
-/// [`FIXED_SOURCE`] and [`FIXED_DRAIN`], which share no role code (so
-/// refinement and the terminal comparison tell them apart) and are no
-/// channel (so a parallel merge needs source on source and drain on drain,
-/// and no series merge takes them). With no asymmetric model, untouched.
-pub(crate) fn fix_channels(graph: &mut Graph, controls: &LvsControls) {
-    if controls.asymmetric.is_empty() {
+impl Classes {
+    /// The classes of a device of `kind` and `model`: the default ones (a
+    /// transistor's source and drain, unless asymmetric, and a resistor's
+    /// ends) joined with every `lvs permute` pair of the model. `None` when
+    /// no control names the model, and the roles stay as built.
+    fn of(kind: DeviceKind, model: StrId, controls: &LvsControls) -> Option<Self> {
+        let asymmetric = kind == DeviceKind::Mos && controls.asymmetric.contains(&model);
+        let permuted = controls.permute.iter().any(|row| row.0 == model);
+        if !asymmetric && !permuted {
+            return None;
+        }
+        let mut classes = Self {
+            kind,
+            root: [0, 1, 2, 3],
+            asymmetric,
+        };
+        match kind {
+            DeviceKind::Mos if !asymmetric => classes.join(1, 2),
+            DeviceKind::Resistor => classes.join(0, 1),
+            _ => {}
+        }
+        for &(_, a, b) in controls.permute.iter().filter(|row| row.0 == model) {
+            classes.join(a, b);
+        }
+        Some(classes)
+    }
+
+    /// Joins the classes of positions `a` and `b`; a position past four is
+    /// no pin of any kind and is ignored.
+    fn join(&mut self, a: u8, b: u8) {
+        let (Some(&ra), Some(&rb)) = (self.root.get(usize::from(a)), self.root.get(usize::from(b)))
+        else {
+            return;
+        };
+        let (low, high) = (ra.min(rb), ra.max(rb));
+        for root in &mut self.root {
+            if *root == high {
+                *root = low;
+            }
+        }
+    }
+
+    /// The positions in `position`'s class, as a bit mask.
+    fn class(self, position: u8) -> u8 {
+        let root = self.root[usize::from(position)];
+        (0..4u8)
+            .filter(|&p| self.root[usize::from(p)] == root)
+            .fold(0, |mask, p| mask | 1 << p)
+    }
+
+    /// The role position `position` is compared under. The default classes
+    /// keep the builders' roles (a transistor's channel stays `Source` and
+    /// `Drain`, a resistor's ends `Pin(0)`), an asymmetric transistor's
+    /// lone ends are [`FIXED_SOURCE`] and [`FIXED_DRAIN`], any other lone
+    /// pin keeps its role, and every other class is
+    /// `Pin(PERMUTED + lowest position)`.
+    fn role(self, position: u8) -> TerminalRole {
+        let class = self.class(position);
+        if self.kind == DeviceKind::Mos && class == 0b0110 {
+            return role_at(self.kind, position);
+        }
+        if self.kind == DeviceKind::Resistor && class == 0b0011 {
+            return TerminalRole::Pin(0);
+        }
+        if class.count_ones() == 1 {
+            return match (self.asymmetric, position) {
+                (true, 1) => FIXED_SOURCE,
+                (true, 2) => FIXED_DRAIN,
+                _ => role_at(self.kind, position),
+            };
+        }
+        TerminalRole::Pin(PERMUTED + self.root[usize::from(position)])
+    }
+
+    /// The role a terminal compared under `role` is reported as: a fixed
+    /// end as the end it is, a permuted class as its lowest pin.
+    fn reported(self, role: TerminalRole) -> TerminalRole {
+        match role {
+            FIXED_SOURCE if self.asymmetric => TerminalRole::Source,
+            FIXED_DRAIN if self.asymmetric => TerminalRole::Drain,
+            TerminalRole::Pin(pin) if pin >= PERMUTED => role_at(self.kind, pin - PERMUTED),
+            other => other,
+        }
+    }
+}
+
+/// The position a built role stands at for `kind`, the inverse of
+/// [`role_at`]; a resistor's ends, both built `Pin(0)`, read as position 0.
+fn position_of(kind: DeviceKind, role: TerminalRole) -> Option<u8> {
+    (0..4u8).find(|&position| role_at(kind, position) == role)
+}
+
+/// Gives every device of a model `lvs asymmetric` or `lvs permute` names
+/// the roles [`Classes::role`] says, so refinement, the terminal comparison
+/// and a parallel merge treat the pins of one class as one, and an
+/// asymmetric transistor's ends as two. A class other than the default
+/// channel is no channel, so no series merge takes it. With neither
+/// control, untouched.
+pub(crate) fn assign_roles(graph: &mut Graph, controls: &LvsControls) {
+    if controls.asymmetric.is_empty() && controls.permute.is_empty() {
         return;
     }
     let mut changed = false;
     for device in 0..graph.device_count() {
-        if !is_asymmetric(graph, device, controls) {
+        let kind = graph.device_kind[device];
+        let Some(classes) = Classes::of(kind, graph.device_model[device], controls) else {
             continue;
-        }
+        };
         let from = graph.device_terminal_start[device] as usize;
         let to = graph.device_terminal_start[device + 1] as usize;
         for role in &mut graph.terminal_role[from..to] {
-            *role = match *role {
-                TerminalRole::Source => FIXED_SOURCE,
-                TerminalRole::Drain => FIXED_DRAIN,
-                other => other,
-            };
+            if let Some(position) = position_of(kind, *role) {
+                *role = classes.role(position);
+            }
         }
         changed = true;
     }
@@ -54,22 +155,20 @@ pub(crate) fn fix_channels(graph: &mut Graph, controls: &LvsControls) {
     }
 }
 
-/// Names an asymmetric transistor's terminal in `found` by the role it was
-/// drawn and written with again: [`FIXED_SOURCE`] is its `Source` and
-/// [`FIXED_DRAIN`] its `Drain`. `reference` is the reduced reference graph
-/// the rows index.
-pub(crate) fn unfix_roles(found: &mut [Discrepancy], reference: &Graph, controls: &LvsControls) {
+/// Names each terminal mismatch in `found` by a role its device was drawn
+/// and written with: an asymmetric transistor's end as that end, and a pin
+/// of a permuted class as the class's lowest pin. `reference` is the
+/// reduced reference graph the rows index.
+pub(crate) fn report_roles(found: &mut [Discrepancy], reference: &Graph, controls: &LvsControls) {
     for discrepancy in found {
         if let Discrepancy::TerminalMismatch {
             ref_device, role, ..
         } = discrepancy
         {
-            if is_asymmetric(reference, *ref_device as usize, controls) {
-                *role = match *role {
-                    FIXED_SOURCE => TerminalRole::Source,
-                    FIXED_DRAIN => TerminalRole::Drain,
-                    other => other,
-                };
+            let device = *ref_device as usize;
+            let kind = reference.device_kind[device];
+            if let Some(classes) = Classes::of(kind, reference.device_model[device], controls) {
+                *role = classes.reported(*role);
             }
         }
     }
@@ -140,10 +239,10 @@ pub(crate) fn bound(controls: &LvsControls, default: f64, model: StrId, param: S
 
 #[cfg(test)]
 mod tests {
-    use super::{fix_channels, unfix_roles, FIXED_DRAIN, FIXED_SOURCE};
+    use super::{assign_roles, report_roles, Classes, FIXED_DRAIN, FIXED_SOURCE};
     use crate::lvs::graph::{transpose_into, Graph};
     use crate::lvs::verdict::Discrepancy;
-    use crate::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    use crate::topology::TerminalRole::{Bulk, Drain, Gate, Pin, Source};
     use gpurify_ingest::deck::{DeviceKind, LvsControls};
     use gpurify_ingest::StrId;
 
@@ -178,7 +277,7 @@ mod tests {
             ..LvsControls::default()
         };
         let mut graph = two_mos();
-        fix_channels(&mut graph, &controls);
+        assign_roles(&mut graph, &controls);
         assert_eq!(
             graph.terminals_of(0).1,
             [Gate, FIXED_SOURCE, FIXED_DRAIN, Bulk]
@@ -192,7 +291,46 @@ mod tests {
             role,
         };
         let mut found = vec![mismatch(0, FIXED_DRAIN), mismatch(1, FIXED_DRAIN)];
-        unfix_roles(&mut found, &graph, &controls);
+        report_roles(&mut found, &graph, &controls);
         assert_eq!(found, [mismatch(0, Drain), mismatch(1, FIXED_DRAIN)]);
+    }
+
+    /// Oracle: the definition (deck.md: "permutations chain"). Permuting a
+    /// transistor's gate with its source joins the default source-drain
+    /// class, so gate, source and drain are one class under `Pin(8)` and the
+    /// bulk stays; on an asymmetric transistor the same row joins only gate
+    /// and source, and the drain stays fixed. A capacitor's permuted plates
+    /// are `Pin(8)` and report as `Pin(0)`. Breaks if classes do not chain,
+    /// or if asymmetry is lost under a permutation.
+    #[test]
+    fn permutations_chain_with_the_default_classes() {
+        let roles = |kind, controls: &LvsControls| {
+            let classes = Classes::of(kind, DMOS, controls).expect("a control names DMOS");
+            (0..4).map(|p| classes.role(p)).collect::<Vec<_>>()
+        };
+        let gate_source = LvsControls {
+            permute: vec![(DMOS, 0, 1)],
+            ..LvsControls::default()
+        };
+        assert_eq!(
+            roles(DeviceKind::Mos, &gate_source),
+            [Pin(8), Pin(8), Pin(8), Bulk]
+        );
+        let asymmetric = LvsControls {
+            asymmetric: vec![DMOS],
+            ..gate_source.clone()
+        };
+        assert_eq!(
+            roles(DeviceKind::Mos, &asymmetric),
+            [Pin(8), Pin(8), FIXED_DRAIN, Bulk]
+        );
+        let plates = LvsControls {
+            permute: vec![(DMOS, 1, 0)],
+            ..LvsControls::default()
+        };
+        let classes = Classes::of(DeviceKind::Capacitor, DMOS, &plates).expect("named");
+        assert_eq!((classes.role(0), classes.role(1)), (Pin(8), Pin(8)));
+        assert_eq!(classes.reported(Pin(8)), Pin(0));
+        assert!(Classes::of(DeviceKind::Mos, NMOS, &plates).is_none());
     }
 }

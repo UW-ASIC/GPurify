@@ -1093,6 +1093,13 @@ impl<'a> Parser<'a> {
         match control.as_str() {
             "tolerance" => self.lvs_tolerance(),
             "ignore_parameter" => self.lvs_ignore_parameter(),
+            "permute" => {
+                let model = self.model()?;
+                let (a, _) = self.ident("a pin name")?;
+                let (b, _) = self.ident("a pin name")?;
+                self.out.lvs.permute.push((model, a, b));
+                Ok(())
+            }
             "asymmetric" => {
                 let model = self.model()?;
                 if self.out.lvs.asymmetric.contains(&model) {
@@ -1104,8 +1111,8 @@ impl<'a> Parser<'a> {
             _ => Err(self.err(
                 span,
                 &format!(
-                    "unknown lvs control `{control}`; expected tolerance, ignore_parameter \
-                     or asymmetric"
+                    "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
+                     asymmetric or permute"
                 ),
             )),
         }

@@ -493,6 +493,7 @@ lvs tolerance "nfet" l relative 0.5% absolute 5nm
 lvs tolerance "rpoly" r absolute 10ohm
 lvs ignore_parameter "nfet" as
 lvs asymmetric "nfet_ldmos"
+lvs permute "cmim" top bottom
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -525,6 +526,26 @@ where any other transistor's two ends trade places freely. Such transistors
 merge in parallel only source on source and drain on drain, and never in
 series, so a drawn stack of them does not match one long schematic device.
 The model must be a `mos` device.
+
+**`lvs permute "model" pin pin`** makes two pins of the model's devices
+interchangeable, as Netgen's `permute` and KLayout's `equivalent_pins` do:
+a symmetric capacitor's plates, say, or a bipolar whose emitter and
+collector may be wired either way. Pins are named as Netgen names them:
+
+| Kind | Pins |
+|---|---|
+| `mos` | `gate`, `source`, `drain`, `bulk` |
+| `bjt` | `base`, `emitter`, `collector` |
+| `resistor` | `end_a`, `end_b` |
+| `capacitor` | `top`, `bottom` |
+| `diode` | `anode`, `cathode` |
+
+Pins already interchangeable stay so (a transistor's source and drain, a
+resistor's ends), and permutations chain: permuting `gate` with `source`
+makes all three of gate, source and drain interchangeable. Devices whose
+interchangeable pins are other than a transistor's source and drain merge
+in parallel either way round, and never in series. An asymmetric
+transistor's source and drain cannot be permuted.
 
 ## Parasitic stack
 

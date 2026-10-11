@@ -95,7 +95,8 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
 - **Parallel:** devices of one model with every terminal on the same nets
   become one device. Source and drain are interchangeable, except on a
   model the deck declares `lvs asymmetric` (see
-  [deck.md](deck.md#lvs-controls)), and so are a resistor's ends. For transistors, W and `nf` are summed, and every other
+  [deck.md](deck.md#lvs-controls)), and so are a resistor's ends and any
+  pins the deck declares with `lvs permute`. For transistors, W and `nf` are summed, and every other
   parameter, L included, must agree. Any other device keeps its value and
   counts: two equal capacitors in parallel are one with `m=2`, which matches
   a card with `m=2` but not one card of twice the capacitance. A transistor

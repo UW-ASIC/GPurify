@@ -603,6 +603,53 @@ device resistor met1 model \"rpoly\" terminals [met1, met1]
     }
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls", Netgen's pin names).
+/// `lvs permute` lowers each pin to its position in the device statement's
+/// terminal order: a capacitor's `top` and `bottom` are 0 and 1, a
+/// bipolar's `emitter` and `collector` 1 and 2, a transistor's `gate` and
+/// `bulk` 0 and 3. A pin the kind lacks, a pin with itself, an asymmetric
+/// transistor's source and drain, and an undeclared model are refused.
+#[test]
+fn lvs_permute_names_pins_by_kind() {
+    use gpurify_ingest::deck::pin_names;
+    use gpurify_ingest::deck::DeviceKind;
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]
+device mos met2 model \"ldmos\" terminals [poly, diff, diff]
+device bjt met3 model \"npn\" terminals [met1, met2, met3]
+device capacitor met2 model \"cmim\" terminals [met2, met1]
+";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs permute \"cmim\" bottom top
+lvs permute \"npn\" emitter collector
+lvs permute \"nfet\" gate bulk
+"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(
+        deck.lvs.permute,
+        [(id("cmim"), 1, 0), (id("npn"), 1, 2), (id("nfet"), 0, 3)]
+    );
+    assert_eq!(pin_names(DeviceKind::Diode), ["anode", "cathode"]);
+    for body in [
+        "lvs permute \"cmim\" top gate\n",
+        "lvs permute \"cmim\" top top\n",
+        "lvs asymmetric \"ldmos\"\nlvs permute \"ldmos\" drain source\n",
+        "lvs permute \"pnp\" emitter collector\n",
+    ] {
+        assert!(
+            matches!(
+                parse(&format!("{devices}{body}")),
+                Err(DeckError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+    one_error(
+        &format!("{devices}lvs permute \"cmim\" top\n"),
+        "a pin name",
+    );
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.
