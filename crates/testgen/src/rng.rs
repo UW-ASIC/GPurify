@@ -114,16 +114,50 @@ impl Rng {
 mod tests {
     use super::Rng;
 
-    /// Adjacent seeds give different streams.
+    /// Adjacent seeds start unrelated streams, as [`Rng::new`] documents: over
+    /// the first 64 draws of seeds `s` and `s + 1`, the two windows share no
+    /// value, and each output bit of position-matched draws differs about half
+    /// the time.
     ///
-    /// Oracle: law. Distinct seeds give distinct streams; here the first draw
-    /// of seed 1 against that of seed 2 (each drawn from a fresh generator
-    /// eight times).
+    /// Oracle: law, the avalanche property the `SplitMix64` finaliser is built
+    /// for (Steele, Lea and Flood, "Fast Splittable Pseudorandom Number
+    /// Generators", OOPSLA 2014; its constants are Stafford's Mix13, "Better
+    /// Bit Mixing", 2011): a changed input flips each output bit with
+    /// probability 1/2. Over 256 adjacent pairs each (draw, bit) cell counts
+    /// the pairs that differ there, Binomial(256, 1/2) for unrelated streams:
+    /// mean 128, sd 8, and the test allows 6 sd. And `x * SCRAMBLE` is a
+    /// bijection (the multiplier is odd), so a value common to both windows is
+    /// a common state: one stream the other shifted by under 64 draws.
     #[test]
-    fn adjacent_seeds_do_not_agree_on_their_first_draws() {
-        let first: Vec<u64> = (0..8).map(|_| Rng::new(1).next_u64()).collect();
-        let second: Vec<u64> = (0..8).map(|_| Rng::new(2).next_u64()).collect();
-        assert_ne!(first, second);
+    fn adjacent_seeds_start_unrelated_streams() {
+        const SEEDS: u64 = 256;
+        const DRAWS: usize = 64;
+        let window = |seed: u64| {
+            let mut rng = Rng::new(seed);
+            [(); DRAWS].map(|()| rng.next_u64())
+        };
+        let mut differ = [[0u32; 64]; DRAWS];
+        for seed in 0..SEEDS {
+            let (a, b) = (window(seed), window(seed + 1));
+            assert!(
+                !a.iter().any(|x| b.contains(x)),
+                "seeds {seed} and {} share a state within {DRAWS} draws",
+                seed + 1
+            );
+            for (cells, (x, y)) in differ.iter_mut().zip(a.iter().zip(&b)) {
+                for (bit, count) in cells.iter_mut().enumerate() {
+                    *count += u32::from(((x ^ y) >> bit) & 1 == 1);
+                }
+            }
+        }
+        for (draw, cells) in differ.iter().enumerate() {
+            for (bit, &count) in cells.iter().enumerate() {
+                assert!(
+                    (80..=176).contains(&count),
+                    "draw {draw}, bit {bit}: {count} of {SEEDS} adjacent pairs differ"
+                );
+            }
+        }
     }
 
     /// `below(n)` is in `0..n` for every draw and every bound.
