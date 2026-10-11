@@ -423,7 +423,10 @@ fn m1_1_diagonal_neck_at_overlapping_rectangles() {
 /// five-metal flow, row by row: `MAX_EGAR` without a diode, and `FLT`, the film
 /// thickness the sidewall area is defined with. The deck once took met3 from
 /// Table Ic (the three-metal S8TM flow, FLT 2.0 um) and met4/met5 from Magic's
-/// drawn thicknesses; neither is the rule.
+/// drawn thicknesses; neither is the rule. Then the diode columns, `K` (per
+/// µm² of `AntennaDiode`) and `Diode bonus`: li 450, mcon 18, the metals 400
+/// with a 2200 bonus, the vias 36, and none for poly and licon, whose rows
+/// only skip a net on a `pAntennaShort` (.ar.1).
 #[test]
 fn the_sky130_antenna_rows_are_table_ig() {
     let mut strings = StrTable::default();
@@ -476,5 +479,33 @@ fn the_sky130_antenna_rows_are_table_ig() {
             sidewall, sidewall_nm,
             "{id}: sidewall FLT in nm on a 1 nm grid"
         );
+        let ratio_of = |name: &str| match param(rule, name) {
+            Some(gpurify_ingest::deck::ParamValue::Ratio(value)) => Some(value),
+            _ => None,
+        };
+        let (k, bonus) = match id {
+            "ar.poly.1" | "ar.licon.1" => (None, None),
+            "ar.li.1" => (Some(450.0), Some(0.0)),
+            "ar.mcon.1" => (Some(18.0), Some(0.0)),
+            id if id.starts_with("ar.met") => (Some(400.0), Some(2200.0)),
+            _ => (Some(36.0), Some(0.0)),
+        };
+        assert_eq!(ratio_of("diode_credit"), k, "{id}: Table Ig's K");
+        assert_eq!(
+            ratio_of("diode_bonus"),
+            bonus,
+            "{id}: Table Ig's diode bonus"
+        );
+        let named = |name: &str| match param(rule, name) {
+            Some(gpurify_ingest::deck::ParamValue::Layer(layer)) => Some(layer),
+            _ => None,
+        };
+        let short = deck.layers.id(&strings, "pantenna_short");
+        let exempt = if k.is_some() {
+            named("exempt_layer")
+        } else {
+            named("diode_layer")
+        };
+        assert_eq!(exempt, short, "{id}: .ar.1 exempts a pAntennaShort net");
     }
 }
