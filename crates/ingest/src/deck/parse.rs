@@ -472,11 +472,12 @@ impl<'a> Parser<'a> {
             "extraction" => self.extraction(span),
             "corner" => self.corner(),
             "stage" => self.stage(span),
+            "waive" => self.waive(),
             "ignore" => self.ignore(),
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs, extraction, corner or stage"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs, extraction, corner, stage or waive"),
             )),
         }
     }
@@ -1704,6 +1705,33 @@ impl<'a> Parser<'a> {
                 &format!("{label} must be above absolute zero"),
             ))
         }
+    }
+
+    /// `waive <rule id> <layer>`: a violation of the rule whose marker lies
+    /// on a shape of the layer is waived. The rule must be the deck's
+    /// (checked when the deck is built, since it may come later); a rule may
+    /// have several waiver layers, each named once.
+    fn waive(&mut self) -> R<()> {
+        let t = self.peek();
+        if t.tok != Tok::RuleId {
+            return Err(self.err_tok(t, "expected the id of the rule to waive"));
+        }
+        self.bump();
+        let rule = self.rule_id(t)?;
+        let layer = self.layer_word()?;
+        if self
+            .out
+            .waivers
+            .iter()
+            .any(|(have, on)| *have == rule && *on == layer)
+        {
+            return Err(self.err_tok(
+                self.toks[self.pos - 1],
+                &format!("`{rule}` is already waived by `{layer}`"),
+            ));
+        }
+        self.out.waivers.push((rule, layer));
+        Ok(())
     }
 
     // ---- rules ----

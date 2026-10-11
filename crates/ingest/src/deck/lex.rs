@@ -99,7 +99,7 @@ pub(crate) fn lex(source: &str, errors: &mut Vec<Diagnostic>) -> Vec<Token> {
                     at += 1;
                 }
                 push(&mut out, Tok::Ident, start, at);
-                if &source[start..at] == "rule" {
+                if matches!(&source[start..at], "rule" | "waive") {
                     // The id: everything up to the next blank.
                     while at < bytes.len() && matches!(bytes[at], b' ' | b'\t') {
                         at += 1;

@@ -400,6 +400,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_five_run_rows()
                 timestamp: None,
             },
             violations: &run.outputs.violations,
+            waived: &run.outputs.waived,
             runs: &run.outputs.runs,
             strings: &run.loaded.strings,
             grid: run.loaded.grid,

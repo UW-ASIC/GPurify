@@ -75,6 +75,7 @@ fn report(decks: &[(&str, DeckFn)], deck: &str) -> String {
         &json::Report {
             header: &header,
             violations: &outputs.violations,
+            waived: &outputs.waived,
             runs: &outputs.runs,
             strings: &loaded.strings,
             grid: loaded.grid,

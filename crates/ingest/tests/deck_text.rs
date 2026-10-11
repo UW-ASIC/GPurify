@@ -2104,3 +2104,38 @@ fn stage_lines_put_every_rule_in_a_stage() {
         "stage `one` is already stated",
     );
 }
+
+/// FLOW-001: `waive <rule> <layer>` names a rule of the deck (its id
+/// interpolated as a rule's is) and a waiver layer; a waiver for a rule the
+/// deck does not have, or a pair stated twice, is refused.
+#[test]
+fn a_waive_line_names_a_rule_of_the_deck_and_a_layer() {
+    let (deck, strings) = ok("rule m1.1 width(met1) >= 140nm\n\
+         for m in [met2] {\n    rule {m}.w width(m) >= 140nm\n    waive {m}.w met3\n}\n\
+         waive m1.1 met3\nwaive m1.1 li\n");
+    let waivers: Vec<(&str, String)> = deck
+        .waivers
+        .iter()
+        .map(|&(rule, layer)| (strings.resolve(rule), layer_name(&deck, &strings, layer)))
+        .collect();
+    assert_eq!(
+        waivers,
+        [
+            ("met2.w", "met3".to_owned()),
+            ("m1.1", "met3".to_owned()),
+            ("m1.1", "li".to_owned())
+        ]
+    );
+    one_error(
+        "rule m1.1 width(met1) >= 140nm\nwaive m1.1 met3\nwaive m1.1 met3\n",
+        "`m1.1` is already waived by `met3`",
+    );
+    one_error("waive m1.1 nolayer\n", "nolayer");
+    match parse("rule m1.1 width(met1) >= 140nm\nwaive m1.2 met3\n") {
+        Err(DeckError::Malformed(why)) => {
+            assert!(why.contains("waive m1.2: no rule of the deck"), "{why}");
+        }
+        Err(other) => panic!("a waiver for no rule: {other}"),
+        Ok(_) => panic!("a waiver for no rule was accepted"),
+    }
+}
