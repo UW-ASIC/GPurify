@@ -246,6 +246,11 @@ pub fn compare_logged(
 ///   whose label sits on a net wired otherwise, is then unpaired
 ///   ([`Discrepancy::UnpairedNet`]). Seeding only splits classes, so it
 ///   never turns a mismatch into a match.
+/// - **`lvs topology relaxed`** (catalog LVS-043, LVS-044, LVS-049):
+///   [`ParamNames::relaxed`], so a passive or bipolar stating its value
+///   merges in parallel by the value's law ([`reduce`](crate::lvs::reduce)),
+///   Netgen's `property topology relaxed`; the strict policy, the default,
+///   counts instead.
 /// - **`lvs ignore_shorted`** (catalog LVS-035): a device of the model with
 ///   every terminal it has on one net is dropped the same way, as Netgen's
 ///   `ignore shorted` removes dummies. Its terminals are those compared: a
@@ -263,6 +268,13 @@ pub fn compare_with(
 ) -> (Verdict, Vec<(Side, Merge)>) {
     debug_assert_graph!(layout);
     debug_assert_graph!(reference);
+    let options = CompareOptions {
+        params: ParamNames {
+            relaxed: options.params.relaxed || controls.relaxed,
+            ..options.params
+        },
+        ..options
+    };
     // The reference's own ports, before a layout label makes another net a
     // port, are what `lvs ports_by_name` pairs by.
     let ports = controls.ports_by_name.then(|| port_names(reference));

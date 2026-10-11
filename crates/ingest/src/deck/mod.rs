@@ -649,6 +649,11 @@ pub struct LvsControls {
     /// `lvs range "model" param >= min <= max`, one row per statement, at
     /// most one per model and parameter (catalog LVS-068).
     pub range: Vec<LvsRange>,
+    /// `lvs topology relaxed`: a passive or bipolar stating its value merges
+    /// in parallel by the value's law, Netgen's `property topology relaxed`
+    /// (catalog LVS-043, LVS-044, LVS-049); `lvs topology strict`, the
+    /// default, keeps a count instead.
+    pub relaxed: bool,
 }
 
 /// One `lvs range` statement: the bounds a parameter measured on every
@@ -806,6 +811,7 @@ fn build_lvs(
         lvs.ignore_shorted.push(strings.intern(model));
     }
     lvs.ports_by_name = declared.ports_by_name;
+    lvs.relaxed = declared.topology == Some(true);
     for (model, param, min, max) in &declared.range {
         known(model, "range")?;
         lvs.range.push(LvsRange {
@@ -869,6 +875,8 @@ pub struct LvsSrc {
     ports_by_name: bool,
     /// `(model, parameter, min, max)`, the parameter lowercase.
     range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
+    /// `lvs topology`, once: `Some(true)` relaxed, `Some(false)` strict.
+    topology: Option<bool>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

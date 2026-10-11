@@ -501,6 +501,7 @@ lvs ignore "sky130_fd_pr__decap"
 lvs ignore_shorted "nfet"
 lvs ports_by_name
 lvs range "nfet" w >= 420nm <= 100um
+lvs topology relaxed
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -578,6 +579,18 @@ legal. A device out of range is reported as `lvs.param_range` on its
 marker; one whose parameter could not be measured (a source drawn in
 pieces) makes the row refused rather than passed. The row exists only in
 a deck that states a range, and runs with LVS.
+
+**`lvs topology relaxed`** lets parallel passives match by value, as
+Netgen's `property topology relaxed` does: a resistor, capacitor, diode or
+bipolar whose schematic states its value (`r`, `c`, `area`, `ae`) merges
+with others of its model on the same nets into one of the combined value,
+resistances harmonically (two of 200 ohm are one of 100) and the rest by
+adding (two of 0.5 fF are one of 1 fF); a resistor's `w`, and `area`,
+`perim` and `pe`, add along. A card's `m` folds into the value first, so
+`c=0.5f m=2` is `c=1f`. One that states no value keeps its count. `lvs
+topology strict`, the default, never combines values: two capacitors are
+one of the same value with `m=2`. Passives never merge in series either
+way.
 
 **`lvs ignore_shorted "model"`** leaves out only the model's dummies: each
 device whose every terminal is on one net, as Netgen's `ignore shorted`

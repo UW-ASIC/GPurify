@@ -429,9 +429,10 @@ fn run_lvs(
         // Guessing which subcircuit was meant is the one thing a comparison must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
         Some(top) => {
-            // The SPICE names of width, length, fingers, multiplier and the
-            // source and drain diffusions, as both netlists intern them, so
-            // sized fingers merge like netgen's.
+            // The SPICE names of width, length, fingers, multiplier, the
+            // source and drain diffusions and the passive values, as both
+            // netlists intern them, so sized fingers merge like netgen's.
+            // `compare_with` reads the deck's topology policy.
             let name = |n: &str| loaded.strings.get(n);
             let lvs = gpurify_check::lvs::CompareOptions {
                 params: gpurify_check::lvs::ParamNames {
@@ -440,6 +441,15 @@ fn run_lvs(
                     fingers: name("nf"),
                     multiplier: name("m"),
                     diffusion: [name("as"), name("ad"), name("ps"), name("pd")],
+                    values: [
+                        name("r"),
+                        name("c"),
+                        name("area"),
+                        name("perim"),
+                        name("ae"),
+                        name("pe"),
+                    ],
+                    relaxed: false,
                 },
                 ..options.lvs
             };

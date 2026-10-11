@@ -677,11 +677,21 @@ fn lvs_ignore_names_any_model_once() {
 }
 
 /// Oracle: the language spec (deck.md, "LVS controls"). `lvs ports_by_name`
-/// sets the flag, which is off without it; stated twice it is refused.
+/// sets the flag, which is off without it; stated twice it is refused. `lvs
+/// topology` is strict unless it says relaxed, takes one of the two words,
+/// and is stated once.
 #[test]
 fn lvs_ports_by_name_is_a_flag() {
     assert!(!ok("").0.lvs.ports_by_name);
     assert!(ok("lvs ports_by_name\n").0.lvs.ports_by_name);
+    assert!(!ok("").0.lvs.relaxed);
+    assert!(ok("lvs topology relaxed\n").0.lvs.relaxed);
+    assert!(!ok("lvs topology strict\n").0.lvs.relaxed);
+    one_error("lvs topology loose\n", "unknown topology `loose`");
+    one_error(
+        "lvs topology strict\nlvs topology relaxed\n",
+        "the topology is already stated",
+    );
     one_error(
         "lvs ports_by_name\nlvs ports_by_name\n",
         "already compared by name",

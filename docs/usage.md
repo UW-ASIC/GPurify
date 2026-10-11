@@ -99,7 +99,9 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
   pins the deck declares with `lvs permute`. For transistors, W and `nf`
   are summed, and every other parameter, L included, must agree. Any other device keeps its value and
   counts: two equal capacitors in parallel are one with `m=2`, which matches
-  a card with `m=2` but not one card of twice the capacitance. A transistor
+  a card with `m=2` but not one card of twice the capacitance, unless the
+  deck relaxes the topology (`lvs topology relaxed`), when they combine by
+  value. A transistor
   whose card states no W has no width to sum and counts the same way: two
   unsized transistors in parallel match a card with `m=2`, not a card
   without it. A transistor's source and drain diffusions (`as`, `ad`, `ps`,
