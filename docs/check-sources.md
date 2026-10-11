@@ -267,9 +267,10 @@ All are `missing` or `partial` in the catalog.
 6. **Shape-class and count selection**: rectangles and squares, exact or
    maximum count, aspect ratio, channel W/L (DRC-005, 011, 022, 049). sky130,
    gf180 and IHP each leave rules out of the shipped decks for lack of these.
-7. **Antenna credit models**: gf180's additive model, LEF PWL, IHP minimum
-   diode size, hierarchical pins (ERC-A5–A7, A9, A14). Today a diode row with
-   credit is refused.
+7. **Antenna hierarchy**: LEF's macro-pin antenna values (ERC-A14) need a
+   LEF reader and abstract cells. The credit models (sky130's EGAR per µm²,
+   gf180's additive model, LEF's PWL and minus/plus factors, IHP's minimum
+   diode, ERC-A5–A7, A9) are in `antenna_electrical`.
 8. **LVS equivalence controls**: black boxes, ignore class, shorted dummies,
    per-parameter tolerance, asymmetric devices, R/C/D/BJT reduction
    (LVS-031–035, 043, 044, 014).
