@@ -842,21 +842,35 @@ pub enum Rule {
     },
     /// Two shapes on the same net, or on different nets, closer than `limit`.
     ///
-    /// Deck: `space(L; nets: same | different) >= len`, kind `net_spacing`.
-    /// Nets are the extracted ones, joined through vias and other layers, so
-    /// `L` must be a conductor. Pairs are shapes in different merged figures
-    /// whose net relation is the one asked for.
+    /// Deck: `space(L; nets: same | different) >= len`, kind `net_spacing`,
+    /// or `space(A, B; nets: different) >= len` between two layers. Nets are
+    /// the extracted ones, joined through vias and other layers, so every
+    /// layer must be a conductor. On one layer the pairs are shapes in
+    /// different merged figures; across two, every pair of a shape on
+    /// `layer` and one on `other`, overlap included (a distance of 0), as
+    /// [`Rule::MinSpacingDiff`] measures them. Either way only pairs whose
+    /// net relation is the one asked for are judged. Two layers take only
+    /// `nets: different` ([`DrcError::WrongParamType`] on `same_net`): one
+    /// net's shapes overlap wherever a cut joins them.
     ///
     /// One violation per offending pair, at the midpoint of its measured
-    /// points. `examined` counts the pairs of the asked relation. Records [`Outcome::Refused`] when the run has no nets
-    /// ([`RuleSet::run`]) or a shape on the layer carries no net.
+    /// points, on `layer`. `examined` counts the pairs of the asked relation. Records [`Outcome::Refused`] when the run has no nets
+    /// ([`RuleSet::run`]) or a shape on a layer carries no net.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-080. Rules: GF180 NW.2a, NW.2b and DN.2a, IHP NW.b; LEF
-    /// `SPACING SAMENET`; `KLayout` `nets` with `props_eq` or `props_ne`.
+    /// DRC-080, DRC-081. Rules: GF180 NW.2a, NW.2b and DN.2a, IHP NW.b; LEF
+    /// `SPACING SAMENET`; `KLayout` `nets` with `props_eq` or `props_ne`;
+    /// between two layers, sky130 nwell.7 ("Min spacing between nwell and
+    /// deep nwell on separate nets") and hvnwell.8, IHP NW.b1 and NBL.c.
+    ///
+    /// Limits: a layer that is no conductor carries no nets, so a rule on a
+    /// derived or tag layer (sky130's deep n-well, its HV n-well under
+    /// `hvi`) cannot be written.
     NetSpacing {
-        /// The conductor layer measured.
+        /// The conductor layer measured, and the one findings are reported on.
         layer: LayerId,
+        /// The second conductor layer; `None` for pairs within `layer`.
+        other: Option<LayerId>,
         /// `true` checks pairs on one net (deck `nets: same`), `false` pairs
         /// on different nets.
         same_net: bool,
@@ -1741,12 +1755,19 @@ impl RuleSet {
                     Rule::MustBeInside { inner, outer }
                 }
                 "net_spacing" => {
-                    let layer = one(spec)?;
+                    let (layer, other) = bounded(spec)?;
                     let ParamValue::Flag(same_net) = value(spec, "same_net")? else {
                         return Err(wrong_type(spec, "same_net"));
                     };
+                    // One net's shapes on two layers overlap wherever a cut
+                    // joins them, and overlap is a distance of 0: across two
+                    // layers only different nets are spaced.
+                    if same_net && other.is_some() {
+                        return Err(wrong_type(spec, "same_net"));
+                    }
                     Rule::NetSpacing {
                         layer,
+                        other,
                         same_net,
                         limit: length(spec, "limit")?,
                     }
@@ -2149,12 +2170,20 @@ impl RuleSet {
                 }
                 Rule::NetSpacing {
                     layer,
+                    other,
                     same_net,
                     limit,
                 } => match nets {
-                    Some(nets) => {
-                        spacing::net_spacing(store, nets, id, layer, same_net, limit, s, out)
-                    }
+                    Some(nets) => spacing::net_spacing(
+                        store,
+                        nets,
+                        id,
+                        (layer, other),
+                        same_net,
+                        limit,
+                        s,
+                        out,
+                    ),
                     None => (Outcome::Refused, 0),
                 },
                 Rule::SpacingTable { layer, table } => {
@@ -2256,7 +2285,6 @@ impl Rule {
             | Rule::ViaArraySpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. }
             | Rule::Forbidden { layer }
-            | Rule::NetSpacing { layer, .. }
             | Rule::SpacingTable { layer, .. }
             | Rule::AttachedWideSpacing { layer, .. }
             | Rule::EdgeMinLength { layer, .. }
@@ -2268,7 +2296,10 @@ impl Rule {
             | Rule::EdgeFacingSpace { layer, .. }
             | Rule::AllowedWidth { layer, .. }
             | Rule::MinStep { layer, .. } => [Some(layer), None],
-            Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
+            Rule::EdgeSpacing { a, b, .. }
+            | Rule::NetSpacing {
+                layer: a, other: b, ..
+            } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
             }

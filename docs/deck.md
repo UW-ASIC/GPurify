@@ -234,6 +234,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `wide_space(L; width: len, attached: len) >= len` | The same, also from the rest of the shape within `attached` of its wide part, as sky130 m1.3a "features attached to or extending from huge_met1 for a distance of up to 0.28 µm". |
 | `space(L; nets: same) >= len` | Two shapes on the same net closer than the limit, as gf180 NW.2a. Nets are the extracted ones, joined through vias and other layers. `L` must be a conductor. |
 | `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
+| `space(A, B; nets: different) >= len` | The same between a shape on `A` and one on `B`, overlap included, as sky130 nwell.7 "nwell and deep nwell on separate nets". Both layers must be conductors. `nets: same` is refused here: one net's shapes on two layers overlap wherever a cut joins them. |
 | `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |

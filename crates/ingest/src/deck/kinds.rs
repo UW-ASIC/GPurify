@@ -524,12 +524,21 @@ pub(crate) const KINDS: &[Kind] = &[
     ),
     // Every inner shape lies entirely inside the outer layer: `inside(poly_licon, npc)`.
     drc("inside", Cmp::Absent, "must_be_inside", &[0, 1], None, &[]),
-    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b).
+    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b),
+    // on one layer or between two (sky130 nwell.7).
     drc(
         "space",
         Cmp::Ge,
         "net_spacing",
         &[0],
+        LIMIT,
+        &[p("nets", "same_net", Dim::Nets)],
+    ),
+    drc(
+        "space",
+        Cmp::Ge,
+        "net_spacing",
+        &[0, 1],
         LIMIT,
         &[p("nets", "same_net", Dim::Nets)],
     ),

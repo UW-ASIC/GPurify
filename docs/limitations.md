@@ -69,8 +69,9 @@ numbers come from, pinned to a release or commit. Rule ids are the foundry's.
 None has been compared against foundry signoff results.
 
 - Rules that need a check the language does not have yet are written out,
-  commented, near the end of each deck with the reason: net spacing between
-  two layers or on wells (no deck connects wells as nets) and maximum
+  commented, near the end of each deck with the reason: net spacing on
+  layers that are not conductors (wells in every deck but sky130, and
+  sky130's deep n-well and HV n-well) and maximum
   areas. Each deck also lists the manual rules it leaves out, and why.
 - Only sky130 connects wells as nets: the p-substrate (`connect global
   psub`), each n-well through its n-taps, and each isolated p-well in deep

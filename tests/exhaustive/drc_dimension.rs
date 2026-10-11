@@ -69,6 +69,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         wide_spacing(depth),
         attached_wide_spacing(depth),
         net_spacing(depth),
+        net_spacing_two_layers(depth),
         spacing_table(depth),
         min_area(depth),
         min_enclosed_area(depth),
@@ -2455,6 +2456,105 @@ fn net_spacing(depth: Depth) -> Vec<Fixture> {
         .layout(met1(&[[0, 0, 500, 2000]]))
         .expect(Expect::Passes(false)),
     );
+    out
+}
+
+/// `space(met1, met2; nets: different) >= 301nm` (`net_spacing` between two
+/// layers, DRC-081, as sky130 nwell.7 "nwell and deep nwell on separate
+/// nets"). Oracle: the rule's definition by hand. A met1 bar and a met2 bar
+/// `g` apart on two nets (unlabelled, or labelled A and B) are flagged at
+/// the midpoint of the gap when `g` is below the limit; the same bars on one
+/// net, the met2 bar run over the met1 bar's end through a via, are not
+/// judged however close; a met2 bar crossing the met1 bar on another net
+/// overlaps it, a distance of 0. A non-conductor layer and `nets: same`
+/// across two layers are refused.
+fn net_spacing_two_layers(depth: Depth) -> Vec<Fixture> {
+    const LIMIT: i64 = 301;
+    let deck = "grid 1nm
+layer met1 = gds(68, 20)
+layer via1 = gds(68, 44)
+layer met2 = gds(69, 20)
+layer met1_label = gds(68, 5)
+layer met2_label = gds(69, 5)
+layer poly = gds(66, 20)
+connect conductors [met1, met2]
+connect touch_within_layer
+connect via via1 [met1, met2]
+connect label met1_label names met1
+connect label met2_label names met2
+rule dn2 space(met1, met2; nets: different) >= 301nm
+";
+    let mut cases = Vec::new();
+    for g in sweep(depth, LIMIT) {
+        let near = if g < LIMIT {
+            vec![pin(Finding::length(g), 1000 + g, 2000)]
+        } else {
+            Vec::new()
+        };
+        let bars = rects(
+            met1(&[[0, 0, 500, 2000]]),
+            "met2",
+            &[[500 + g, 0, 1000 + g, 2000]],
+        );
+        let joined = rects(
+            rects(bars.clone(), "met2", &[[0, 2000, 1000 + g, 2500]]),
+            "met1",
+            &[[0, 2000, 500, 2500]],
+        );
+        let joined = rects(joined, "via1", &[[200, 2200, 300, 2300]]);
+        let tag = side(g, LIMIT);
+        for (shape, layout, findings) in [
+            ("apart", bars.clone(), near.clone()),
+            (
+                "labelled_apart",
+                bars.label("met1_label", 250, 1000, "A")
+                    .label("met2_label", 750 + g, 1000, "B"),
+                near.clone(),
+            ),
+            ("one_net", joined, Vec::new()),
+        ] {
+            cases.push(fixture(
+                &format!("net_spacing/two_layers/{shape}/{tag}"),
+                &["DRC-081"],
+                deck,
+                layout,
+                vec![("dn2", findings)],
+            ));
+        }
+    }
+    cases.push(fixture(
+        "net_spacing/two_layers/crossing",
+        &["DRC-081"],
+        deck,
+        rects(
+            met1(&[[0, 0, 500, 2000]]),
+            "met2",
+            &[[-500, 900, 1000, 1100]],
+        ),
+        vec![("dn2", vec![Finding::length(0)])],
+    ));
+    let mut out = every_placement(cases);
+    for (name, rule) in [
+        (
+            "not_a_conductor",
+            "rule dn2 space(met1, poly; nets: different) >= 301nm",
+        ),
+        (
+            "same_nets",
+            "rule sn2 space(met1, met2; nets: same) >= 301nm",
+        ),
+    ] {
+        out.push(
+            Fixture::new(
+                &format!("net_spacing/two_layers/{name}"),
+                &["DRC-081"],
+                &deck.replace("rule dn2 space(met1, met2; nets: different) >= 301nm", rule),
+                DRC,
+            )
+            .layout(met1(&[[0, 0, 500, 2000]]))
+            .expect(Expect::Passes(false)),
+        );
+    }
     out
 }
 

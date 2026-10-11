@@ -687,8 +687,9 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 # rpm.1g-1k "only N licons in the prec_resistor_terminal": an exact count and
 #   the terminal layers.
 # nwell.7 (nwell to dnwell on separate nets, 4.5um), nwell.8 (hv_nwell to
-#   nwell, 2um), hv.nwell.1 (2.5um), vhvi.8 (11.24um): net spacing takes one
-#   layer.
+#   nwell, 2um), hv.nwell.1 (2.5um), vhvi.8 (11.24um): net spacing needs
+#   conductors, and dnwell and the HV n-well (nwell under hvi, or tagged
+#   shv_nwell / vhvi) are not.
 
 # --- Left out ---
 # Not expressible yet: difftap.16 (tap bound by diffusion), poly.10/11 (corner and turn

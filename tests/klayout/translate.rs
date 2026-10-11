@@ -922,8 +922,17 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("must_be_inside", Key::FigAt(name), Value::Area)
             }
+            Rule::NetSpacing { other: Some(_), .. } => (
+                "net_spacing",
+                Verdict::None("net spacing between two layers is not mirrored"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::NetSpacing {
                 layer,
+                other: None,
                 same_net,
                 limit,
             } => {

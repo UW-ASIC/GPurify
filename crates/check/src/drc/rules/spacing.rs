@@ -569,37 +569,23 @@ fn wide_parts(
     (parts, part_start)
 }
 
-/// Same-net or different-net spacing (gf180 NW.2a/2b), nets as extracted.
-/// `Refused` when a shape on the layer carries no net. `examined` counts the
-/// separate pairs of the asked relation.
+/// Same-net or different-net spacing (gf180 NW.2a/2b), nets as extracted, on
+/// one layer or between two ([`net_pair_spacing`]). `Refused` when a shape on
+/// a layer carries no net. `examined` counts the pairs of the asked relation.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn net_spacing(
     store: &GeometryStore,
     nets: &NetTable,
     rule: StrId,
-    layer: LayerId,
+    layers: (LayerId, Option<LayerId>),
     same_net: bool,
     limit: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let unnetted = store
-        .polys_on_layer(layer)
-        .any(|row| nets.net_of(PolyId(row)) == NetId::NONE);
-    if unnetted || !prepare(store, layer, limit, s) {
-        return REFUSED;
-    }
-    let examined = judged_pairs(
-        store,
-        rule,
-        layer,
-        limit,
-        s,
-        out,
-        |a, b, d2| (nets.same_net(a, b) == same_net).then_some(d2),
-        |a, b, d2| whole_at(store, (a, b), d2),
-    );
-    (Outcome::Ran, examined)
+    net_pair_spacing(store, nets, rule, layers, limit, s, out, |a, b| {
+        ((a == b) == same_net).then_some(Some(limit))
+    })
 }
 
 /// Spacing between shapes that their two nets decide. On one layer (`b` is
