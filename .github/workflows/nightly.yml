@@ -41,9 +41,14 @@ jobs:
           --skip fasthenry_differential --skip ngspice_differential
           --skip magic_differential
           --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
+          --skip flattening_is_linear_in_the_placements
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
-      # size within 3x of 1x's, on an otherwise idle runner.
+      # size within 3x of 1x's, on an otherwise idle runner; and the
+      # reference flattening's, 2 x 10^5 placements within 3x of 10^5's.
       - run: cargo test --test scaling -- --ignored --test-threads=1
+      - run: >-
+          cargo test -p gpurify-ingest --test netlist --
+          --ignored --test-threads=1 flattening_is_linear_in_the_placements
 
   oracles:
     name: differentials in the oracle shell
