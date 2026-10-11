@@ -175,21 +175,33 @@ pub(crate) fn report_roles(found: &mut [Discrepancy], reference: &Graph, control
     }
 }
 
-/// Drops every device `lvs ignore` names, as if it were not drawn or
-/// written, and every net that lost its last terminal with them and is no
-/// port: no netlist could state such a net, while a port must still pair.
-/// Surviving nets keep their order. Returns the rows of `graph` the kept
-/// devices were, ascending, or `None` when nothing was dropped.
+/// Whether `lvs ignore` or `lvs ignore_shorted` leaves `device` out: its
+/// model is ignored, or ignored when shorted and every terminal it has is
+/// on one net.
+fn left_out(graph: &Graph, device: u32, controls: &LvsControls) -> bool {
+    let model = graph.device_model[device as usize];
+    if controls.ignore.contains(&model) {
+        return true;
+    }
+    let nets = graph.terminals_of(device).0;
+    controls.ignore_shorted.contains(&model)
+        && nets
+            .first()
+            .is_some_and(|&first| first != u32::MAX && nets.iter().all(|&net| net == first))
+}
+
+/// Drops every device `lvs ignore` or `lvs ignore_shorted` leaves out
+/// ([`left_out`]), as if it were not drawn or written, and every net that
+/// lost its last terminal with them and is no port: no netlist could state
+/// such a net, while a port must still pair. Surviving nets keep their
+/// order. Returns the rows of `graph` the kept devices were, ascending, or
+/// `None` when nothing was dropped.
 pub(crate) fn drop_ignored_devices(graph: &mut Graph, controls: &LvsControls) -> Option<Vec<u32>> {
-    if controls.ignore.is_empty() {
+    if controls.ignore.is_empty() && controls.ignore_shorted.is_empty() {
         return None;
     }
     let kept: Vec<u32> = (0..narrow(graph.device_count()))
-        .filter(|&device| {
-            !controls
-                .ignore
-                .contains(&graph.device_model[device as usize])
-        })
+        .filter(|&device| !left_out(graph, device, controls))
         .collect();
     if kept.len() == graph.device_count() {
         return None;

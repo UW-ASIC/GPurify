@@ -236,6 +236,11 @@ pub fn compare_logged(
 ///   a net only those devices reached, unless it is a port of the reference
 ///   or a labelled layout net, which must still pair. A [`Merge`] still
 ///   lists rows of the graphs given.
+/// - **`lvs ignore_shorted`** (catalog LVS-035): a device of the model with
+///   every terminal it has on one net is dropped the same way, as Netgen's
+///   `ignore shorted` removes dummies. Its terminals are those compared: a
+///   reference bulk the layout does not extract is already gone, so a dummy
+///   with gate, source and drain on one net is shorted on both sides.
 ///
 /// # Panics
 ///

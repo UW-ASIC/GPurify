@@ -411,3 +411,37 @@ fn an_ignored_model_s_devices_and_their_private_nets_are_left_out() {
         .collect();
     assert_eq!(layout_rows, [&[1u32, 2][..]]);
 }
+
+/// Oracle: the definition (Netgen's `ignore shorted`: "instances ... which
+/// have all pins shorted"). A dummy transistor with every terminal on net 3
+/// beside a real one is left out on either side once its model ignores
+/// shorted devices, and not before; one with its gate on net 0 is no dummy
+/// and stays. Breaks if a partly shorted device is dropped, or a shorted one
+/// is compared.
+#[test]
+fn an_ignored_dummy_is_one_with_every_terminal_on_one_net() {
+    let shorted = LvsControls {
+        ignore_shorted: vec![NCH],
+        ..LvsControls::default()
+    };
+    let with = |gate: u32| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+        );
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, gate), (Source, 3), (Drain, 3), (Bulk, 3)],
+        );
+        builder.finish()
+    };
+    let alone = one_mos(&[]);
+    let none = LvsControls::default();
+    assert_ne!(verdict(&with(3), &alone, &none), Verdict::Match);
+    assert_eq!(verdict(&with(3), &alone, &shorted), Verdict::Match);
+    assert_eq!(verdict(&alone, &with(3), &shorted), Verdict::Match);
+    assert_ne!(verdict(&with(0), &alone, &shorted), Verdict::Match);
+}

@@ -495,6 +495,7 @@ lvs ignore_parameter "nfet" as
 lvs asymmetric "nfet_ldmos"
 lvs permute "cmim" top bottom
 lvs ignore "sky130_fd_pr__decap"
+lvs ignore_shorted "nfet"
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -556,6 +557,12 @@ too, unless it is a schematic port or carries a layout label, which must
 still pair. The model need not be a `device` of the deck, since a
 schematic may hold devices the layout has no recogniser for. The layout's
 own checks (`lvs.floating_net` and the others) still see the devices.
+
+**`lvs ignore_shorted "model"`** leaves out only the model's dummies: each
+device whose every terminal is on one net, as Netgen's `ignore shorted`
+does. The terminals counted are those LVS compares, so where the deck
+extracts no bulk, a transistor with its gate, source and drain on one net
+is a dummy whatever its schematic bulk is.
 
 ## Parasitic stack
 

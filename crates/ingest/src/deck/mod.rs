@@ -638,6 +638,10 @@ pub struct LvsControls {
     /// each once. The model need not be a deck device: a schematic may hold
     /// devices no recogniser draws.
     pub ignore: Vec<StrId>,
+    /// `lvs ignore_shorted "model"`: models whose devices with every
+    /// terminal on one net are left out on both sides, Netgen's `ignore
+    /// shorted` (catalog LVS-035), each once; any model name, as `ignore`.
+    pub ignore_shorted: Vec<StrId>,
 }
 
 /// The names `lvs permute` gives the pins of a device of `kind`, in its
@@ -763,6 +767,9 @@ fn build_lvs(
     for model in &declared.ignore {
         lvs.ignore.push(strings.intern(model));
     }
+    for model in &declared.ignore_shorted {
+        lvs.ignore_shorted.push(strings.intern(model));
+    }
     for model in &declared.asymmetric {
         known(model, "asymmetric")?;
         if devices
@@ -813,6 +820,7 @@ pub struct LvsSrc {
     /// `(model, pin, pin)`, the pins as written.
     permute: Vec<(String, String, String)>,
     ignore: Vec<String>,
+    ignore_shorted: Vec<String>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

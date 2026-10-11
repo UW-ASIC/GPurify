@@ -1108,6 +1108,17 @@ impl<'a> Parser<'a> {
                 self.out.lvs.ignore.push(model);
                 Ok(())
             }
+            "ignore_shorted" => {
+                let model = self.model()?;
+                if self.out.lvs.ignore_shorted.contains(&model) {
+                    return Err(self.err(
+                        span,
+                        &format!("shorted \"{model}\" devices are already ignored"),
+                    ));
+                }
+                self.out.lvs.ignore_shorted.push(model);
+                Ok(())
+            }
             "asymmetric" => {
                 let model = self.model()?;
                 if self.out.lvs.asymmetric.contains(&model) {
@@ -1120,7 +1131,7 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric, permute or ignore"
+                     asymmetric, permute, ignore or ignore_shorted"
                 ),
             )),
         }

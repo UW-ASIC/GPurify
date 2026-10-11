@@ -946,6 +946,9 @@ struct Controls {
     permuted: Vec<(Model, usize, usize)>,
     /// `lvs ignore`: models whose devices are left out on both sides.
     left_out: Vec<Model>,
+    /// `lvs ignore_shorted`: models whose dummies, every pin on one net,
+    /// are left out on both sides.
+    dummies_out: Vec<Model>,
 }
 
 impl Controls {
@@ -980,12 +983,23 @@ impl Controls {
         self
     }
 
+    /// An `lvs ignore_shorted` row.
+    fn leave_out_dummies(mut self, model: Model) -> Self {
+        self.dummies_out.push(model);
+        self
+    }
+
     /// `c` without the devices the controls leave out, as if never drawn
-    /// or written; its nets stay, and [`reduce`] keeps only those a device
-    /// or a port holds.
+    /// or written: every one of an ignored model, and each dummy (every pin
+    /// on one net, [`Dev::pins`] holding exactly the pins compared) of a
+    /// model ignored when shorted. Its nets stay, and [`reduce`] keeps only
+    /// those a device or a port holds.
     fn kept(&self, c: &Circuit) -> Circuit {
         let mut out = c.clone();
-        out.devs.retain(|d| !self.left_out.contains(&d.model));
+        out.devs.retain(|d| {
+            let dummy = d.pins.iter().all(|&p| p == d.pins[0]);
+            !self.left_out.contains(&d.model) && !(dummy && self.dummies_out.contains(&d.model))
+        });
         out
     }
 
@@ -1064,6 +1078,9 @@ impl Controls {
         }
         for &model in &self.left_out {
             let _ = writeln!(out, "lvs ignore \"{}\"", model.name());
+        }
+        for &model in &self.dummies_out {
+            let _ = writeln!(out, "lvs ignore_shorted \"{}\"", model.name());
         }
         for &(model, a, b) in &self.permuted {
             let names = pin_names(model);
@@ -2409,7 +2426,7 @@ fn curated() -> Vec<Fixture> {
 /// The deck's `lvs` statements (deck.md, "LVS controls"), each verdict the
 /// oracle's under the statements the fixture's deck adds.
 fn controlled() -> Vec<Fixture> {
-    use Model::{C, D, N, P, Q, R};
+    use Model::{B, C, D, N, P, Q, R};
     let mut out = Vec::new();
     let row = |model, param, relative, absolute| {
         Controls::default().tolerance(model, param, relative, absolute)
@@ -2636,6 +2653,44 @@ fn controlled() -> Vec<Fixture> {
             &format!("ignore/{name}"),
             &["LVS-034"],
             (layout, reference),
+            &controls,
+        ));
+    }
+    // LVS-035: dummies, every pin on one net, are left out once their model
+    // ignores shorted devices: an `nmos` with gate, source and drain on n0
+    // (its bulk, which the deck does not extract, written on its source),
+    // and an `nmosb` with all four on n3. One with its gate elsewhere is no
+    // dummy.
+    let real = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+    let with_dummy = |gate| {
+        let mut c = real.clone();
+        c.devs.push(Dev::mos(N, gate, 0, 0));
+        c
+    };
+    let real_b = Circuit::new(4, vec![Dev::mos(B, 0, 1, 2).bulk(3)]);
+    let mut dummy_b = real_b.clone();
+    dummy_b.devs.push(Dev::mos(B, 3, 3, 3).bulk(3));
+    let skip_n = Controls::default().leave_out_dummies(N);
+    let skip_b = Controls::default().leave_out_dummies(B);
+    let shorted: [(&str, Circuit, Circuit, Controls); 7] = [
+        ("N_drawn", with_dummy(0), real.clone(), skip_n.clone()),
+        ("N_written", real.clone(), with_dummy(0), skip_n.clone()),
+        (
+            "N_drawn_default",
+            with_dummy(0),
+            real.clone(),
+            Controls::default(),
+        ),
+        ("N_gate_elsewhere", with_dummy(1), real.clone(), skip_n),
+        ("B_drawn", dummy_b.clone(), real_b.clone(), skip_b.clone()),
+        ("B_written", real_b.clone(), dummy_b.clone(), skip_b),
+        ("B_drawn_default", dummy_b, real_b, Controls::default()),
+    ];
+    for (name, layout, reference, controls) in shorted {
+        out.push(compared_under(
+            &format!("ignore_shorted/{name}"),
+            &["LVS-035"],
+            (&layout, &reference),
             &controls,
         ));
     }
