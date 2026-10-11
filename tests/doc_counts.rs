@@ -121,6 +121,47 @@ fn the_readme_counts_the_rule_kinds_the_code_has() {
     );
 }
 
+/// The README's shipped-deck table, recomputed from the decks `gpurify::pdks`
+/// compiles in: how many ship, and per deck its drawn layers, rules (each
+/// `for` iteration a rule) and device recognisers. Breaks when a deck gains
+/// or loses a layer, rule or device and the README row does not follow.
+/// Oracle: the decks as the parser reads them.
+#[test]
+fn the_readme_deck_table_is_the_shipped_decks() {
+    use gpurify::geom::{Grid, LayerId, StrTable};
+
+    const WORDS: [&str; 10] = [
+        "No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    ];
+    let readme = read("README.md");
+    let shipped = gpurify::pdks::ALL;
+    assert_says(
+        &readme,
+        "README.md",
+        &format!("{} decks ship in `pdks/`", WORDS[shipped.len()]),
+    );
+    let grid = Grid::new(1000).expect("1000 database units per micrometre is a grid");
+    for (name, text) in shipped {
+        let mut strings = StrTable::default();
+        let deck = gpurify::ingest::deck::parse_deck(text, grid, &mut strings)
+            .unwrap_or_else(|why| panic!("{name} does not parse: {why}"));
+        let drawn = (0..deck.layers.len())
+            .map(|id| LayerId(u16::try_from(id).expect("a LayerId is a u16")))
+            .filter(|&layer| !deck.layers.is_derived(layer))
+            .count();
+        let want = [drawn, deck.rules.spec.len(), deck.devices.kind.len()].map(|n| n as u64);
+        let row = numbers(line(&readme, "README.md", &format!("| `{name}`")));
+        assert_eq!(
+            row[row.len().saturating_sub(3)..],
+            want,
+            "README.md: the {name} row should state {} drawn layers, {} rules and {} devices",
+            want[0],
+            want[1],
+            want[2]
+        );
+    }
+}
+
 /// Oracle: the cases in `tests/fixtures/expectations.json`, counted in total
 /// and per domain, against the numbers README states.
 #[test]

@@ -63,6 +63,9 @@
 //! `xor` compares two layouts layer by layer instead of checking one
 //! ([`engine::xor`]).
 //!
+//! The four decks in `pdks/` are compiled into the library as [`pdks`], so a
+//! consumer reads the deck the checker is tested with instead of a copy.
+//!
 //! # Where every rule is defined
 //!
 //! The [rule reference](check#rule-reference) lists every rule kind a deck can
@@ -98,5 +101,6 @@ pub use gpurify_geom as geom;
 pub mod engine;
 pub mod export;
 pub mod liberty;
+pub mod pdks;
 pub use gpurify_extract as extract;
 pub use gpurify_ingest as ingest;

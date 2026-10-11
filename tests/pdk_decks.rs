@@ -102,6 +102,65 @@ fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
     }
 }
 
+/// The file stem of a deck path: the name `gpurify::pdks::ALL` gives it.
+fn stem_of(path: &Path) -> &str {
+    path.file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("<unnameable deck>")
+}
+
+/// Oracle: the files themselves. Each deck in `pdks/` is shipped as a
+/// `gpurify::pdks` constant holding its exact bytes, and no constant names a
+/// file that is not there, so a consumer compiling a constant compiles the
+/// deck every other test here reads. Breaks if a deck is added without its
+/// constant, or a constant points at another file.
+#[test]
+fn every_deck_file_is_a_shipped_constant_byte_for_byte() {
+    let files: Vec<(String, String)> = deck_files()
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+            (stem_of(path).to_owned(), text)
+        })
+        .collect();
+    let shipped: Vec<(String, String)> = gpurify::pdks::ALL
+        .iter()
+        .map(|&(name, text)| (name.to_owned(), text.to_owned()))
+        .collect();
+    let names = |decks: &[(String, String)]| -> Vec<String> {
+        decks.iter().map(|(name, _)| name.clone()).collect()
+    };
+    assert_eq!(
+        names(&shipped),
+        names(&files),
+        "gpurify::pdks::ALL must name every deck in pdks/, sorted, and nothing else"
+    );
+    for ((name, constant), (_, file)) in shipped.iter().zip(&files) {
+        assert!(
+            constant == file,
+            "gpurify::pdks constant {name} is not the bytes of pdks/{name}.deck"
+        );
+    }
+}
+
+/// Oracle: construct-from-answer. Each shipped constant is a deck: it parses,
+/// and both domains build a rule set from it, as a consumer compiling it
+/// from the library would.
+#[test]
+fn every_shipped_constant_compiles() {
+    let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
+    for (name, text) in gpurify::pdks::ALL {
+        let mut strings = StrTable::default();
+        let deck = gpurify::ingest::deck::parse_deck(text, grid, &mut strings)
+            .unwrap_or_else(|why| panic!("gpurify::pdks {name} does not parse: {why}"));
+        gpurify::check::drc::RuleSet::from_deck(&deck, &strings)
+            .unwrap_or_else(|why| panic!("gpurify::pdks {name}: the DRC rule set: {why}"));
+        gpurify::check::erc::RuleSet::from_deck(&deck, &strings)
+            .unwrap_or_else(|why| panic!("gpurify::pdks {name}: the ERC rule set: {why}"));
+    }
+}
+
 /// Oracle: construct-from-answer. A deck configures at least one rule, and
 /// every rule it configures is filed by exactly one domain.
 #[test]
