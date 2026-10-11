@@ -190,6 +190,9 @@ struct Sides<'a> {
     names: ParamNames,
     /// The deck's per-parameter tolerances.
     controls: &'a LvsControls,
+    /// Each node's seed, layout nodes first: nodes of one seed start in a
+    /// class of their own; `u32::MAX`, or a node past the end, has none.
+    seeds: &'a [u32],
 }
 
 impl Sides<'_> {
@@ -346,7 +349,14 @@ impl Partition {
             }
             let devices = graph.device_count();
             for net in 0..graph.net_count() {
-                key.push((u64::MAX, offset + narrow(devices + net)));
+                let node = offset + narrow(devices + net);
+                // Below every unseeded net and above every device key.
+                let seed = sides.seeds.get(node as usize).copied();
+                let class = match seed {
+                    Some(seed) if seed != u32::MAX => u64::MAX - 1 - u64::from(seed),
+                    _ => u64::MAX,
+                };
+                key.push((class, node));
             }
         }
         key.sort_unstable();
@@ -787,11 +797,12 @@ impl Partition {
 /// stall, which says nothing about whether the graphs match. The count restarts
 /// at each tie-break and each trial of one, so the number of symmetries does
 /// not spend it. `tolerance` and the deck's `controls` are the verdict's,
-/// which a trial pairing's devices must meet.
+/// which a trial pairing's devices must meet. Nets sharing a `seeds` entry
+/// (indexed by node, layout nodes first) start in a class of their own.
 pub(crate) fn refine_into(
     (layout, reference): (&Graph, &Graph),
     (max_rounds, tolerance): (u32, f64),
-    (names, controls): (ParamNames, &LvsControls),
+    (names, controls, seeds): (ParamNames, &LvsControls, &[u32]),
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -801,6 +812,7 @@ pub(crate) fn refine_into(
         split,
         names,
         controls,
+        seeds,
     };
     out.seed(sides);
 

@@ -40,8 +40,9 @@
 //!
 //! **Netgen's verdict** is read from its log: "Netlists do not match" is a
 //! mismatch, and "Netlists match" a match unless property errors were found.
-//! Its pin matching is not read: `GPurify` never compares net or port names
-//! (LVS-016, LVS-032), so it is left out on purpose.
+//! Its pin matching is not read: `GPurify` compares port names only under
+//! the deck's `lvs ports_by_name` (LVS-016, LVS-032), which no case here
+//! states, so it is left out on purpose.
 //!
 //! **Documented differences** ([`SERIES`], [`CRITICAL`]) are encoded per case
 //! ([`Case::differs`]): there the two verdicts must differ, and agreeing is

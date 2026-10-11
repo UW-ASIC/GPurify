@@ -88,10 +88,11 @@ pub enum Discrepancy {
     },
     /// A net that carries a terminal or a name and that no other-side net
     /// could be paired with. A reference port with nothing attached shows here
-    /// too; port names themselves are never compared (catalog LVS-016 is
-    /// partial).
+    /// too, and so, under the deck's `lvs ports_by_name`, does a port whose
+    /// name labels no layout net, or labels one wired otherwise (catalog
+    /// LVS-016, LVS-001); without it, port names are not compared.
     ///
-    /// Report id `lvs.unpaired_net`. Catalog: LVS-015, LVS-016. `KLayout`:
+    /// Report id `lvs.unpaired_net`. Catalog: LVS-001, LVS-015, LVS-016. `KLayout`:
     /// `net_mismatch`. Netgen: listed under "NET mismatches".
     UnpairedNet {
         /// Which netlist holds the net.
