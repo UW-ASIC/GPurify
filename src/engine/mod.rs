@@ -7,6 +7,7 @@
 
 pub mod pipeline;
 pub mod run;
+pub mod system;
 pub mod xor;
 
 pub use pipeline::{Extracted, Inputs, Loaded};

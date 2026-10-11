@@ -11,6 +11,7 @@
 //! | The flattened layout | [`gds::Library::flatten`](layout::gds::Library::flatten) | a [`GeometryStore`](gpurify_geom::GeometryStore) with the deck's derived layers, and the placed labels in a [`Provenance`] |
 //! | Reference netlist, SPICE/CDL or Spectre | [`netlist::spice::read`], [`netlist::spectre::read`] | a [`netlist::Netlist`], hierarchy intact |
 //! | Design intent JSON ([schema](https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md#design-intent)) | [`intent::read_intent`] | a [`DesignIntent`] |
+//! | System description JSON ([schema](https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md#multi-die-systems)) | [`system::read_system`] | a [`system::System`]: dies, placements, bonded faces |
 //!
 //! # Order matters
 //!
@@ -53,6 +54,7 @@ pub mod intent;
 pub mod layout;
 pub mod netlist;
 pub mod provenance;
+pub mod system;
 
 /// A row count as the `u32` every table here is indexed by. Panics past `u32::MAX`.
 pub(crate) fn narrow(rows: usize) -> u32 {

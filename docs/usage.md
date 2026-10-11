@@ -13,6 +13,7 @@ gpurify <command> <layout.gds> --deck <process.deck> [options] > report
 | `all` | All four | a check whose input is missing is reported as skipped, never as passed |
 | `lib` | Nothing: writes a macro's Liberty files, see [liberty.md](liberty.md) | `--spec`, `--output-dir` |
 | `xor` | Two layouts against each other: every region where a layer differs, see [below](#comparing-two-layouts) | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
+| `system` | Several dies as one assembly: system LVS and package and system ESD, see [below](#multi-die-systems) | a system file in place of the layout, `--reference <system netlist>`; no `--deck` |
 
 ## Options
 
@@ -282,6 +283,71 @@ supply at its voltage (a ground at 0 V). Voltages are propagated again for
 each state, gate conditions included, so a disabled tristate driver leaves its
 output floating. A state may only turn off a declared supply, names are
 unique, and an input is held once per state.
+
+## Multi-die systems
+
+```sh
+gpurify system stack.json --reference system.spice [--format json]
+```
+
+A 2.5D or 3D assembly (dies on an interposer, a die stack, chiplets) is
+checked as one: each die is read with its own deck, placed, bonded to the
+dies it faces, and the whole is compared with a system netlist. The system
+file says what Calibre 3DSTACK's configuration says: which dies, where each
+sits, and which layers meet. Paths in it are relative to the file.
+
+```json
+{
+  "dies": [
+    { "name": "Xint", "layout": "interposer.gds", "deck": "interposer.deck" },
+    { "name": "Xcpu", "layout": "cpu.gds", "deck": "cpu.deck",
+      "intent": "cpu.json", "origin_nm": [120000, 40000],
+      "rotate": 90, "mirror": true }
+  ],
+  "bonds": [
+    { "a": { "die": "Xint", "layer": "ubump_pad" },
+      "b": { "die": "Xcpu", "layer": "ubump" } }
+  ],
+  "package": { "die": "Xint", "layer": "c4" },
+  "esd": { "clamps": ["esd_diode", "rail_clamp"],
+           "system_clamps": ["iec_scr"], "system_pins": ["usb_dp"] }
+}
+```
+
+- **Placement.** A die is reflected in its x axis when `mirror` (flipped face
+  down), turned counter-clockwise by `rotate` (0, 90, 180 or 270), then its
+  origin moved to `origin_nm`, as a GDS reference places a cell. Every die
+  must be on the same grid.
+- **Bonds.** Each bond names a layer of one die and a layer of another. Every
+  shape on those layers is a bump, and must be a rectangle on a conductor of
+  its deck. Two bumps bond where they overlap with some area; touching is not
+  bonding. A through-silicon via is a `connect via` of its die's deck between
+  its front and back layers.
+- **The system netlist** (SPICE or Spectre) has one top subcircuit. It places
+  one instance per active die, named as the die (`Xcpu`), and its ports are
+  the package pins. A die no instance names, such as a passive interposer, is
+  wiring only.
+
+Rows of a system run:
+
+| Row | Flags |
+|---|---|
+| `system.unbonded_bump` | a bump that bonds nothing on the die it faces: missing, or misaligned |
+| `system.open` | a pin of the netlist (a die instance's port, or a top port, labelled on the package face's die) on no labelled net, or a netlist net whose pins the assembly leaves in pieces |
+| `system.short` | an assembled net carrying pins of two netlist nets |
+| `lvs.*` | the assembled dies, flat, against the flattened system netlist, device by device, as `lvs` compares one die |
+| `system.esd_d2d` | a die-to-die bump that does not reach clamps to a power and a ground rail on its own die (it is exposed only before bonding, JEP196) |
+| `system.esd_package` | a package pin that does not reach clamps to a power and a ground rail anywhere in the assembly |
+| `system.esd_iec` | a pin named in `system_pins` that does not reach both rails through `system_clamps` devices |
+
+Pins are compared by name: the label at a die's bump is its pin, so a bus
+wired in the wrong order is a short and an open even where the devices alone
+would match. The ESD rows need `esd`, a package face, and each die's
+`intent`, whose supplies are the rails; a clamp is any device of a listed
+model, however it is wired. They check that a protection path exists, not
+its resistance or the clamps' size, and nothing about the board: what a
+system-level (IEC 61000-4-2) zap delivers to a pin depends on the board's
+protection and needs simulation.
 
 ## Parasitics
 
