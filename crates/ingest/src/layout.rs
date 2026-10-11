@@ -74,6 +74,15 @@ pub enum LayoutError {
          holds; GPurify flattens every placement and array"
     )]
     TooManyPolygons(u64),
+    /// Under [`LabelDepth::All`], a layout that would place more than
+    /// [`MAX_FLAT_POLYGONS`] labels, every cell's texts once per placement,
+    /// counted from the hierarchy before anything is expanded. Labels are
+    /// held to the polygons' cap.
+    #[error(
+        "the layout places {0} labels, over the {MAX_FLAT_POLYGONS} a flat run \
+         holds; every cell's labels were asked for, once per placement"
+    )]
+    TooManyLabels(u64),
     /// A placement chain deeper than [`MAX_HIERARCHY_DEPTH`] levels, refused
     /// rather than walked: flattening recurses once per level.
     #[error("cell hierarchy is deeper than {MAX_HIERARCHY_DEPTH} levels at {0}")]
@@ -1384,8 +1393,9 @@ pub mod gds {
         provenance: Provenance,
         /// Cells on the current root-to-here chain, for the cycle check.
         on_chain: Vec<bool>,
-        /// Each cell's flat polygon count, from [`Library::flat_counts`].
-        polygons: Vec<u64>,
+        /// Each cell's flat polygon and text counts, from
+        /// [`Library::flat_counts`].
+        counts: Vec<[u64; 2]>,
         level: Level,
         /// Per-element scratch.
         rx: Vec<i64>,
@@ -1411,14 +1421,15 @@ pub mod gds {
         /// shape yet: call [`Provenance::resolve_labels`] next.
         ///
         /// The walk costs the flat polygon count times the depth: a
-        /// placement of a cell holding no polygon is skipped, never expanded
-        /// (with [`LabelDepth::All`], whose sub-cell texts it would place, it
-        /// is walked, which is unbounded for a text-only array).
+        /// placement of a cell holding no polygon is skipped, never expanded.
         ///
         /// # Errors
         ///
-        /// [`LayoutError::UnknownLayer`] (under [`UnknownLayers::Reject`]),
+        /// From the count, before anything is expanded:
         /// [`LayoutError::CyclicHierarchy`],
+        /// [`LayoutError::HierarchyTooDeep`] and
+        /// [`LayoutError::TooManyPolygons`]. Then
+        /// [`LayoutError::UnknownLayer`] (under [`UnknownLayers::Reject`]),
         /// [`LayoutError::UnsupportedTransform`] or
         /// [`LayoutError::CoordinateOutOfRange`] while placing, and
         /// [`LayoutError::Derived`] while computing derived layers.
@@ -1433,11 +1444,16 @@ pub mod gds {
 
         /// [`Self::flatten`], placing the labels `labels` selects: with
         /// [`LabelDepth::All`], every cell's `TEXT`s, transformed into the root
-        /// frame.
+        /// frame. Those are counted with the polygons and held to the same
+        /// cap, and the walk then also expands a placement of a cell that
+        /// holds only text: it costs the flat polygon and label counts times
+        /// the depth.
         ///
         /// # Errors
         ///
-        /// As [`Self::flatten`].
+        /// As [`Self::flatten`], and with [`LabelDepth::All`]
+        /// [`LayoutError::TooManyLabels`] from the count, after
+        /// [`LayoutError::TooManyPolygons`].
         pub fn flatten_labels(
             &self,
             deck: &Deck,
@@ -1445,9 +1461,12 @@ pub mod gds {
             unknown: UnknownLayers,
             labels: LabelDepth,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
-            let (total, polygons) = self.flat_counts(strings)?;
-            if total > MAX_FLAT_POLYGONS {
-                return Err(LayoutError::TooManyPolygons(total));
+            let ([polygons, texts], counts) = self.flat_counts(strings)?;
+            if polygons > MAX_FLAT_POLYGONS {
+                return Err(LayoutError::TooManyPolygons(polygons));
+            }
+            if labels == LabelDepth::All && texts > MAX_FLAT_POLYGONS {
+                return Err(LayoutError::TooManyLabels(texts));
             }
 
             let mut walk = Flatten {
@@ -1459,7 +1478,7 @@ pub mod gds {
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
-                polygons,
+                counts,
                 level: Level::new(),
                 rx: Vec::new(),
                 ry: Vec::new(),
@@ -1492,20 +1511,24 @@ pub mod gds {
         /// itself, whether a root reaches it or not, and
         /// [`LayoutError::HierarchyTooDeep`].
         pub fn flat_polygons(&self, strings: &StrTable) -> Result<u64, LayoutError> {
-            self.flat_counts(strings).map(|(total, _)| total)
+            self.flat_counts(strings).map(|([polygons, _], _)| polygons)
         }
 
-        /// [`Self::flat_polygons`], and what each cell flattens to.
-        fn flat_counts(&self, strings: &StrTable) -> Result<(u64, Vec<u64>), LayoutError> {
+        /// The flat `[polygons, texts]` of the roots, as
+        /// [`Self::flat_polygons`] counts them, and of each cell.
+        fn flat_counts(
+            &self,
+            strings: &StrTable,
+        ) -> Result<([u64; 2], Vec<[u64; 2]>), LayoutError> {
             let referenced = self.referenced();
             let mut counted = vec![None; self.cells.len()];
             let mut on_chain = vec![false; self.cells.len()];
-            let mut total = 0u64;
+            let mut total = [0u64; 2];
             for (index, &is_referenced) in referenced.iter().enumerate() {
                 if !is_referenced {
-                    let (polygons, _) =
+                    let (count, _) =
                         self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
-                    total = total.saturating_add(polygons);
+                    total = [0, 1].map(|k| total[k].saturating_add(count[k]));
                 }
             }
             // A cycle no root reaches is as malformed as one a root reaches:
@@ -1516,7 +1539,7 @@ pub mod gds {
                     self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
                 }
             }
-            let each = counted.iter().map(|c| c.map_or(0, |(count, _)| count));
+            let each = counted.iter().map(|c| c.map_or([0; 2], |(count, _)| count));
             Ok((total, each.collect()))
         }
 
@@ -1529,20 +1552,20 @@ pub mod gds {
             referenced
         }
 
-        /// How many polygons `cell` flattens to: its own elements, plus each
-        /// placed child's count times the placement's array size, saturating;
-        /// and how many levels it spans, itself included. Memoised in
-        /// `counted`, both, so a cell first met shallow and met again at
-        /// `depth` is held to the depth cap as walking it again would be.
-        /// Refuses a cycle and a chain past the depth cap.
+        /// How many `[polygons, texts]` `cell` flattens to: its own elements
+        /// and texts, plus each placed child's counts times the placement's
+        /// array size, saturating; and how many levels it spans, itself
+        /// included. Memoised in `counted`, both, so a cell first met shallow
+        /// and met again at `depth` is held to the depth cap as walking it
+        /// again would be. Refuses a cycle and a chain past the depth cap.
         fn flat_count(
             &self,
             cell: u32,
             strings: &StrTable,
-            counted: &mut [Option<(u64, u32)>],
+            counted: &mut [Option<([u64; 2], u32)>],
             on_chain: &mut [bool],
             depth: u32,
-        ) -> Result<(u64, u32), LayoutError> {
+        ) -> Result<([u64; 2], u32), LayoutError> {
             let index = cell as usize;
             let name = || strings.resolve(self.cells[index].name).to_owned();
             if let Some((count, levels)) = counted[index] {
@@ -1559,13 +1582,16 @@ pub mod gds {
             }
             on_chain[index] = true;
             let entry = &self.cells[index];
-            let mut count = u64::from(entry.elem_end - entry.elem_start);
+            let mut count = [
+                u64::from(entry.elem_end - entry.elem_start),
+                u64::from(entry.text_end - entry.text_start),
+            ];
             let mut levels = 1;
             for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
                 let (child, below) =
                     self.flat_count(reference.child, strings, counted, on_chain, depth + 1)?;
                 let copies = u64::from(reference.rows) * u64::from(reference.cols);
-                count = count.saturating_add(child.saturating_mul(copies));
+                count = [0, 1].map(|k| count[k].saturating_add(child[k].saturating_mul(copies)));
                 levels = levels.max(below + 1);
             }
             on_chain[index] = false;
@@ -1611,10 +1637,12 @@ pub mod gds {
                 }
             }
             for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
-                // Below the root only polygons are placed, so a cell holding
-                // none, at any depth, is not walked: an array of an empty cell
-                // is up to 32767² placements no budget counts.
-                if self.labels == LabelDepth::Top && self.polygons[reference.child as usize] == 0 {
+                // Below the root only polygons are placed, and texts under
+                // `All`, so a cell holding neither, at any depth, is not
+                // walked: an array of an empty cell is up to 32767²
+                // placements no budget counts.
+                let [polygons, texts] = self.counts[reference.child as usize];
+                if polygons == 0 && (self.labels == LabelDepth::Top || texts == 0) {
                     continue;
                 }
                 for r in 0..reference.rows {
@@ -2517,6 +2545,37 @@ mod tests {
             matches!(refused, Err(LayoutError::TooManyPolygons(count)) if count == 32_767 * 32_767),
             "{:?}",
             refused.map(|layout| layout.store.poly_count())
+        );
+        assert!(started.elapsed().as_secs() < 5, "refused without expanding");
+    }
+
+    /// Testing-plan F90. Oracle: the count, `cols × rows` labels, against
+    /// [`super::MAX_FLAT_POLYGONS`]. Under [`super::LabelDepth::All`], which
+    /// `read` asks for, an array of a cell holding one `TEXT` and no polygon
+    /// is walked to place its labels: 3 × 2 places 6, and the largest array
+    /// GDSII can state, 32767², is refused before anything is expanded.
+    #[test]
+    fn an_array_of_text_over_the_flat_budget_is_refused_before_it_is_expanded() {
+        let texts = |cols, rows| {
+            let unit = label(ROWS[0].1, ROWS[0].2, 100, 100, "A");
+            let mut out = gds_labelled("UNIT", &[], &[unit]);
+            // Drop the ENDLIB, and append TOP.
+            out.truncate(out.len() - 4);
+            append_array(&mut out, "TOP", "UNIT", cols, rows);
+            record(&mut out, ENDLIB, &[]);
+            out
+        };
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let small = read(&texts(3, 2), &deck, UnknownLayers::Reject).expect("6 labels");
+        assert_eq!(small.provenance.placed().len(), 6);
+
+        let started = std::time::Instant::now();
+        let refused = read(&texts(i16::MAX, i16::MAX), &deck, UnknownLayers::Reject);
+        assert!(
+            matches!(refused, Err(LayoutError::TooManyLabels(count)) if count == 32_767 * 32_767),
+            "{:?}",
+            refused.map(|layout| layout.provenance.placed().len())
         );
         assert!(started.elapsed().as_secs() < 5, "refused without expanding");
     }
