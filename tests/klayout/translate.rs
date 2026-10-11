@@ -544,6 +544,22 @@ impl Layers<'_> {
                     rb(pattern)
                 )
             }
+            // `Source#select`: "-" disables the top cell, "+p" enables a
+            // matching cell with its subtree, "-p" disables one; a cell no
+            // filter names inherits its parent's state.
+            DerivedOp::InCells { keep, first, count } => {
+                let operand = self.deck.layers.operands(layer)[0];
+                let (l, d) = self.deck.layers.stream_of(operand);
+                let mut filters = Vec::new();
+                if keep {
+                    filters.push(rb("-"));
+                }
+                for k in first..first + count {
+                    let sign = if keep { "+" } else { "-" };
+                    filters.push(rb(&format!("{sign}{}", self.deck.layers.text(k))));
+                }
+                format!("src.select({}).polygons({l}, {d})", filters.join(", "))
+            }
         }
     }
 }

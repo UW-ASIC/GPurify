@@ -1377,6 +1377,8 @@ Each operation runs on merged operands at the default coherence (a3).
 | `.rectangles()`, `.squares()` and their `non_` forms | One box with no hole (`rectangles_into`); a square has equal sides | `.rectangles`, `.squares`, `.non_rectangles`, `.non_squares` ([L]) | Both read merged figures at the default coherence, so corner-joined boxes are one non-rectangle (x; fixture `derived/shape_class`) |
 | `.with_text(T, "p")` | A text point on the material or its edge; glob `*` and `?` only; case-sensitive | `.interacting(src.labels(T).texts(pattern("p")))` | Text on an edge and on a corner count (v T14, T18). KLayout globs also have `[…]`, `{a,b}` and `\` escapes (Q3) |
 | `.without_text(…)` | | `.not_interacting(…)` | |
+| `.in_cells("p", …)` | The drawn rows whose placement path (root included) holds a cell matching a pattern; glob `*` and `?` only, case-sensitive; `[`, `]`, `{`, `}` and `\` refused at parse | `src.select("-", "+p", …).polygons(L)` ([S] `Source#select`: a filter enables or disables a cell with its subtree; a cell no filter names inherits its parent's state; `"-"` is the top cell) | Same set by the select rule; the hierarchical fixtures `derived/in_cells/*` run through the mirror |
+| `.not_in_cells("p", …)` | The other rows | `src.select("-p", …).polygons(L)` | |
 | `.edges()` | Merged boundary, kept as directed runs, material on the left | `.edges` | KLayout edges are clockwise: same side, opposite direction. Compare edges undirected. |
 | `E and F`, `not` | Coincidence ignores direction; each piece keeps its own direction | `E & F`, `E - F` | Same (v T13) |
 | `E or F` | Every operand's edges, a shared part once | `E + (F - E)` | `E \| F` cancels coincident edges of opposite direction (v t18 Z6; fixture `derived/edge_booleans`) |

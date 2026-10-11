@@ -25,7 +25,7 @@ use gpurify::geom::{Dbu, Grid, LayerId};
 use gpurify_ingest::deck::{parse_deck, Deck};
 use gpurify_ingest::layout::{gds, UnknownLayers};
 use gpurify_ingest::StrTable;
-use gpurify_testgen::gds::{write_store_labelled, Label};
+use gpurify_testgen::gds::{write_library, write_store_labelled, Label, Placement, Structure};
 use gpurify_testgen::LayoutBuilder;
 
 /// The grid every fixture is drawn on: 1 nm, the GDS writer's `UNITS`.
@@ -47,6 +47,13 @@ pub struct Layout {
     pub shapes: Vec<(String, Vec<(i64, i64)>)>,
     /// `(layer, x, y, text)`: a text label naming the net under it.
     pub labels: Vec<(String, i64, i64, String)>,
+    /// Placements in this layout's frame: `(cell, orientation, dx, dy)`, the
+    /// cell's points mapped by the orientation, then moved.
+    pub instances: Vec<(String, Symmetry, i64, i64)>,
+    /// The cells `instances` name, each in its own frame, with the cells
+    /// their own instances name. A layout with neither is written as one
+    /// flat cell; with them, as a GDS hierarchy under `TOP`.
+    pub cells: Vec<(String, Layout)>,
 }
 
 impl Layout {
@@ -69,6 +76,18 @@ impl Layout {
     /// Adds a text label.
     pub fn label(mut self, layer: &str, x: i64, y: i64, text: &str) -> Self {
         self.labels.push((layer.to_owned(), x, y, text.to_owned()));
+        self
+    }
+
+    /// Defines a cell this layout, or a cell below it, may place.
+    pub fn cell(mut self, name: &str, layout: Layout) -> Self {
+        self.cells.push((name.to_owned(), layout));
+        self
+    }
+
+    /// Places a cell: its points under `orientation`, then moved by `(dx, dy)`.
+    pub fn place(mut self, cell: &str, orientation: Symmetry, dx: i64, dy: i64) -> Self {
+        self.instances.push((cell.to_owned(), orientation, dx, dy));
         self
     }
 
@@ -99,6 +118,17 @@ impl Layout {
                     (layer.clone(), x, y, text.clone())
                 })
                 .collect(),
+            // Each placement composes with the transform; a cell's own
+            // frame is untouched.
+            instances: self
+                .instances
+                .iter()
+                .map(|(cell, orientation, x, y)| {
+                    let (x, y) = map((*x, *y));
+                    (cell.clone(), orientation.then(symmetry), x, y)
+                })
+                .collect(),
+            cells: self.cells.clone(),
         }
     }
 }
@@ -167,6 +197,28 @@ impl Symmetry {
     /// Whether it reverses orientation.
     pub fn mirrors(self) -> bool {
         self.mirror
+    }
+
+    /// `self`, then `outer`: the one of the eight that maps both unit
+    /// vectors as the two in turn do.
+    pub fn then(self, outer: Symmetry) -> Symmetry {
+        let both = |p| outer.apply(self.apply(p));
+        *Symmetry::ALL
+            .iter()
+            .find(|s| s.apply((1, 0)) == both((1, 0)) && s.apply((0, 1)) == both((0, 1)))
+            .expect("the eight symmetries are closed under composition")
+    }
+
+    /// As a GDS placement: `STRANS` reflects about the x axis before the
+    /// quarter turns. A mirror in y after `t` turns is the reflection
+    /// followed by `2 - t` turns, since `x → -x` is a half turn after
+    /// `y → -y`, and a reflection reverses the turns it passes.
+    pub fn gds(self) -> (bool, u8) {
+        if self.mirror {
+            (true, (6 - self.turns) % 4)
+        } else {
+            (false, self.turns)
+        }
     }
 
     /// A short name for fixture names: `r0`, `r90`, `m180`, ...
@@ -553,6 +605,14 @@ pub fn written(fixture: &Fixture) -> Result<(Vec<u8>, Deck, StrTable), String> {
     let deck =
         parse_deck(&fixture.deck, grid, &mut strings).map_err(|why| format!("deck: {why}"))?;
 
+    if !fixture.layout.instances.is_empty() || !fixture.layout.cells.is_empty() {
+        let mut cells = Vec::new();
+        structures("TOP", &fixture.layout, &deck, &strings, &mut cells)?;
+        let mut bytes = Vec::new();
+        write_library(&cells, &mut bytes).map_err(|why| format!("gds write: {why}"))?;
+        return Ok((bytes, deck, strings));
+    }
+
     let mut builder = LayoutBuilder::new(deck.layers.len());
     for (layer, points) in &fixture.layout.shapes {
         let id = deck
@@ -590,6 +650,81 @@ pub fn written(fixture: &Fixture) -> Result<(Vec<u8>, Deck, StrTable), String> {
     write_store_labelled(&store, &deck.layers, &labels, "TOP", &mut bytes)
         .map_err(|why| format!("gds write: {why}"))?;
     Ok((bytes, deck, strings))
+}
+
+/// `layout` as the structure `name`, then every cell it defines, each name
+/// once: a hierarchy for `write_library`. Only rectangles are written, and
+/// no labels.
+fn structures(
+    name: &str,
+    layout: &Layout,
+    deck: &Deck,
+    strings: &StrTable,
+    out: &mut Vec<Structure>,
+) -> Result<(), String> {
+    if !layout.labels.is_empty() {
+        return Err(format!(
+            "layout: {name}: a hierarchical layout carries no labels"
+        ));
+    }
+    let coordinate =
+        |v: i64| i32::try_from(v * NM).map_err(|_| format!("layout: {name}: {v} is past i32"));
+    let mut rects = Vec::new();
+    for (layer, points) in &layout.shapes {
+        let id = deck
+            .layers
+            .id(strings, layer)
+            .ok_or_else(|| format!("layout: {layer} is not a deck layer"))?;
+        let (gds_layer, datatype) = deck.layers.stream_of(id);
+        let (xs, ys): (Vec<i64>, Vec<i64>) = points.iter().copied().unzip();
+        let (xlo, xhi) = (
+            *xs.iter().min().expect("a shape"),
+            *xs.iter().max().expect("a shape"),
+        );
+        let (ylo, yhi) = (
+            *ys.iter().min().expect("a shape"),
+            *ys.iter().max().expect("a shape"),
+        );
+        let corners = [(xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi)];
+        if points.len() != 4 || !corners.iter().all(|c| points.contains(c)) {
+            return Err(format!(
+                "layout: {name}: a hierarchical cell holds rectangles only"
+            ));
+        }
+        rects.push((
+            gds_layer,
+            datatype,
+            [
+                coordinate(xlo)?,
+                coordinate(ylo)?,
+                coordinate(xhi)?,
+                coordinate(yhi)?,
+            ],
+        ));
+    }
+    let mut refs = Vec::new();
+    for (cell, orientation, dx, dy) in &layout.instances {
+        let (reflect, quarter_turns) = orientation.gds();
+        refs.push(Placement {
+            cell: cell.clone(),
+            reflect,
+            quarter_turns,
+            mag: 1,
+            at: (coordinate(*dx)?, coordinate(*dy)?),
+            array: None,
+        });
+    }
+    out.push(Structure {
+        name: name.to_owned(),
+        rects,
+        refs,
+    });
+    for (cell, inner) in &layout.cells {
+        if !out.iter().any(|s| s.name == *cell) {
+            structures(cell, inner, deck, strings, out)?;
+        }
+    }
+    Ok(())
 }
 
 /// A measurement as one number, for sorting and tolerant comparison.
